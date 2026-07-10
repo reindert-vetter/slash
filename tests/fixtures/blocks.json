@@ -1,0 +1,101 @@
+[
+  {
+    "pr": 12903,
+    "file": "app/Actions/CreatePaymentAction.php",
+    "class": "CreatePaymentAction",
+    "name": "execute",
+    "category": "ACTION",
+    "line": 26,
+    "endLine": 39,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 12903,
+    "file": "app/Actions/CreatePaymentAction.php",
+    "class": "CreatePaymentAction",
+    "name": "findOrCreateCustomer",
+    "category": "ACTION",
+    "line": 40,
+    "endLine": 58,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 12903,
+    "file": "app/Actions/ProcessCartAction.php",
+    "class": "ProcessCartAction",
+    "name": "handle",
+    "category": "ACTION",
+    "line": 55,
+    "endLine": 120,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 12903,
+    "file": "app/Enums/AddressType.php",
+    "class": "AddressType",
+    "name": "fromString",
+    "category": "ENUM",
+    "line": 8,
+    "endLine": 14,
+    "status": "added",
+    "side": "new"
+  },
+  {
+    "pr": 12903,
+    "file": "app/Http/Controllers/Api/ContractController.php",
+    "class": "ContractController",
+    "name": "index",
+    "category": "CONTROLLER",
+    "line": 30,
+    "endLine": 52,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 12903,
+    "file": "app/Models/Address.php",
+    "class": "Address",
+    "name": "billingAddress",
+    "category": "MODEL",
+    "line": 120,
+    "endLine": 126,
+    "status": "added",
+    "side": "new"
+  },
+  {
+    "pr": 12903,
+    "file": "app/Models/Order.php",
+    "class": "Order",
+    "name": "address",
+    "category": "MODEL",
+    "line": 88,
+    "endLine": 94,
+    "status": "removed",
+    "side": "old"
+  },
+  {
+    "pr": 12903,
+    "file": "database/migrations/2026_07_06_120000_add_type_to_addresses_table.php",
+    "class": "",
+    "name": "up",
+    "category": "MIGRATION",
+    "line": 12,
+    "endLine": 20,
+    "status": "added",
+    "side": "new"
+  },
+  {
+    "pr": 12903,
+    "file": "tests/Feature/Addresses/AddressTypeTest.php",
+    "class": "AddressTypeTest",
+    "name": "test_it_casts_type",
+    "category": "TEST",
+    "line": 20,
+    "endLine": 34,
+    "status": "added",
+    "side": "new"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "name": "pr-review-tree",
+  "version": "0.0.0",
+  "private": true,
+  "description": "PR Review Tree — Playwright tests only; no build step, no runtime npm deps.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
+}

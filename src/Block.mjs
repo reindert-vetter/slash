@@ -1,0 +1,487 @@
+// Block — the detail card for a single block, shown to the right of the list.
+// A component: takes one block object (from state.blocks) plus display options
+// and returns an arrow.js template. It mirrors the sidebar row but with the full
+// header, file:line and the approve toggle. Code goes underneath later.
+
+import { html } from './vendor/arrow.js'
+import { categoryClass } from './BlockList.mjs'
+import Prism from './vendor/prism.js'
+
+// highlight turns raw PHP source into Prism-tokenised HTML (keywords, strings,
+// variables, …). Prism.highlight escapes the text itself, so the result is safe
+// to feed to .innerHTML. Blocks are usually bare function bodies without a
+// `<?php` tag, which the php grammar still tokenises fine. If the grammar is
+// somehow missing we fall back to an escaped plain string — never raw innerHTML.
+function highlight(code) {
+  const grammar = Prism.languages.php
+  if (!grammar) return escapeHtml(code)
+  return Prism.highlight(code, grammar, 'php')
+}
+
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+// The word shown top-right of the header, per change status.
+const STATUS_WORD = {
+  added: 'text-emerald-600',
+  modified: 'text-amber-600',
+  removed: 'text-rose-600',
+}
+
+function statusColor(status) {
+  return STATUS_WORD[status] || 'text-slate-500'
+}
+
+// singleSide returns which pane to show when a block is one-sided: an added block
+// has no old source (show only 'right'/new), a removed block has no new source
+// (show only 'left'/old). Modified blocks keep both panes (null). This lets the
+// card drop the empty pane and render narrower. Driven by status so the width is
+// stable even before b.code loads.
+function singleSide(b) {
+  if (b.status === 'added') return 'right'
+  if (b.status === 'removed') return 'left'
+  return null
+}
+
+/**
+ * @param {object} b - one block from state.blocks (reactive).
+ * @param {object} [opts] - { preview: boolean } dims the look-ahead card.
+ * @returns arrow.js template — call with a mount target to render.
+ */
+export default function Block(b, opts = {}) {
+  const preview = !!opts.preview
+  // activeGroup is a function returning the currently-navigated change group
+  // ({ start, end } row indices) for this block, or null. It's a function (not a
+  // value) so the pane's .innerHTML binding re-runs when the navigation state it
+  // reads changes — see home.mjs. Preview cards never highlight.
+  const activeGroup = opts.activeGroup || (() => null)
+  // hintsEnabled is a function returning whether the out-of-view change hints may
+  // show for this card. They only make sense for the block the reviewer is
+  // actually stepping through: the selected card, in diff mode. Preview cards and
+  // list mode pass a falsey predicate, so their hints stay hidden. Reactive (a
+  // function) so flipping mode re-evaluates without re-rendering the diff.
+  const hintsEnabled = opts.hintsEnabled || (() => false)
+  return html`
+    <article
+      class="${() =>
+        'flex min-h-0 max-w-full flex-col overflow-hidden rounded-xl border bg-white transition ' +
+        (singleSide(b) ? 'w-[42rem] ' : 'w-[76rem] ') +
+        (preview
+          ? 'max-h-72 border-slate-200 opacity-50'
+          : 'flex-1 border-slate-300 ring-1 ring-black/5')}"
+    >
+      <div class="flex items-center gap-3 border-b border-slate-100 px-4 py-2.5">
+        <span
+          class="${() =>
+            'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wide ' +
+            categoryClass(b.category)}"
+          >${() => b.category}</span
+        >
+        <h2 class="flex-1 truncate font-mono text-sm font-semibold text-slate-800">
+          ${() => b.label}
+        </h2>
+        <span class="${() => 'shrink-0 text-xs font-medium ' + statusColor(b.status)}"
+          >${() => b.status}</span
+        >
+      </div>
+
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2">
+        <span class="font-mono text-xs text-slate-500"
+          >${() => b.file + ':' + b.line}</span
+        >
+        <span class="flex-1"></span>
+        ${() =>
+          b.tests === false
+            ? html`<span
+                class="rounded bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-600"
+                >⚑ geen tests</span
+              >`
+            : ''}
+        ${() =>
+          b.author
+            ? html`<span
+                class="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600"
+                >${b.author}</span
+              >`
+            : ''}
+        <label class="flex cursor-pointer items-center gap-1 text-xs text-slate-600">
+          <input
+            type="checkbox"
+            class="h-3.5 w-3.5 rounded border-slate-300"
+            checked="${() => b.approved}"
+            @change="${() => (b.approved = !b.approved)}"
+          />
+          approve
+        </label>
+      </div>
+
+      ${() =>
+        b.description
+          ? html`<p class="border-t border-slate-100 px-4 py-3 text-sm leading-relaxed text-slate-600">
+              ${b.description}
+            </p>`
+          : ''}
+
+      ${() => codeDiff(b, activeGroup, hintsEnabled)}
+    </article>
+  `
+}
+
+// codeDiff renders the old/new source side by side under the block info. Old on
+// the left, new on the right. The two sides are line-aligned by an LCS diff
+// (alignRows, below) so unchanged lines sit on the same row, a removed line
+// leaves a blank filler on the right, and an added line leaves a blank filler on
+// the left. Changed lines are tinted red (old) / green (new). This is a pure
+// text diff — no AI. `b.code` is filled lazily by home.mjs: undefined (not
+// requested), null (loading), { old, new } or { error }.
+function codeDiff(b, activeGroup, hintsEnabled = () => false) {
+  const c = b.code
+  if (c === undefined) return ''
+  if (c === null) {
+    return html`<div
+      class="border-t border-slate-100 px-4 py-3 text-xs italic text-slate-400"
+      data-testid="code-diff"
+    >
+      loading code…
+    </div>`
+  }
+  if (c.error) {
+    return html`<div
+      class="border-t border-slate-100 px-4 py-3 text-xs text-rose-500"
+      data-testid="code-diff"
+    >
+      ${c.error}
+    </div>`
+  }
+  const rows = blockRows(b)
+  const only = singleSide(b)
+  // One-sided blocks (added / removed) show just their non-empty pane at full
+  // width — no divider, no empty counterpart.
+  if (only === 'right') {
+    return html`
+      <div
+        class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100"
+        data-testid="code-diff"
+        data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
+      >
+        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 bg-emerald-50 text-emerald-700', activeGroup, 'w-full')}
+        ${scrollHint('up')}
+        ${scrollHint('down')}
+      </div>
+    `
+  }
+  if (only === 'left') {
+    return html`
+      <div
+        class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100"
+        data-testid="code-diff"
+        data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
+      >
+        ${codePane('old', c.old, rows, 'left', 'border-rose-100 bg-rose-50 text-rose-600', activeGroup, 'w-full')}
+        ${scrollHint('up')}
+        ${scrollHint('down')}
+      </div>
+    `
+  }
+  return html`
+    <div
+      class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100"
+      data-testid="code-diff"
+      data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
+    >
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 bg-rose-50 text-rose-600', activeGroup, 'w-1/2')}
+      <div class="w-px shrink-0 bg-slate-100"></div>
+      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 bg-emerald-50 text-emerald-700', activeGroup, 'w-1/2')}
+      ${scrollHint('up')}
+      ${scrollHint('down')}
+    </div>
+  `
+}
+
+// scrollHint is the little floating bar at the top/bottom edge of the diff body
+// that tells the reviewer there are still changed lines out of view in that
+// direction (so scrolling reveals more). It starts hidden (opacity 0) and is
+// switched on/off — and positioned right below the pane headers / above the
+// bottom edge — imperatively by updateHints on every scroll and refresh. It's
+// pointer-events-none so it never eats a scroll or click.
+function scrollHint(dir) {
+  const down = dir === 'down'
+  // A chevron pointing the way you can scroll. Static SVG string, fed through the
+  // .innerHTML binding (arrow.js sets the property instead of escaping) — the
+  // markup is our own, so it's safe.
+  const chevron = down
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="h-3 w-3"><path d="M6 9l6 6 6-6"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="h-3 w-3"><path d="M18 15l-6-6-6 6"/></svg>'
+  return html`
+    <div
+      data-hint="${dir}"
+      style="opacity:0"
+      class="${'pointer-events-none absolute inset-x-0 z-10 flex h-7 items-center justify-center transition-opacity duration-150 ' +
+      (down
+        ? 'bottom-0 bg-gradient-to-t'
+        : 'top-0 bg-gradient-to-b') +
+      ' from-white/95 via-white/70 to-transparent'}"
+    >
+      <span
+        class="flex h-4 w-6 items-center justify-center rounded-full bg-emerald-500 text-white shadow-sm ring-1 ring-black/5"
+        .innerHTML="${() => chevron}"
+      ></span>
+    </div>
+  `
+}
+
+// updateHints toggles and positions the up/down scroll hints of one diff. A row
+// is "out of view" when its box sits fully above the visible top or below the
+// visible bottom of the (equal to both panes) left scroll body; if any changed
+// row is out of view in a direction, that hint shows. The hints are anchored to
+// the scroll body's edges (top sits below the pane headers) so they float over
+// the code, not over the OLD/NEW header row.
+export function updateHints(container) {
+  const pane = container.querySelector('[data-scrollsync]')
+  const up = container.querySelector('[data-hint="up"]')
+  const down = container.querySelector('[data-hint="down"]')
+  if (!pane || !up || !down) return
+  // Only the selected block in diff mode opts in (data-hints="on"); everything
+  // else — preview cards, list mode — keeps both hints hidden.
+  if (container.getAttribute('data-hints') !== 'on') {
+    up.style.opacity = '0'
+    down.style.opacity = '0'
+    return
+  }
+  const vRect = pane.getBoundingClientRect()
+  let above = false
+  let below = false
+  for (const el of pane.querySelectorAll('[data-changed]')) {
+    const r = el.getBoundingClientRect()
+    if (r.bottom <= vRect.top + 0.5) above = true
+    else if (r.top >= vRect.bottom - 0.5) below = true
+    if (above && below) break
+  }
+  const cRect = container.getBoundingClientRect()
+  up.style.top = vRect.top - cRect.top + 'px'
+  down.style.bottom = cRect.bottom - vRect.bottom + 'px'
+  up.style.opacity = above ? '1' : '0'
+  down.style.opacity = below ? '1' : '0'
+}
+
+// syncScroll keeps the old (left) and new (right) panes in lockstep on both axes:
+// scrolling one — sideways or up/down — scrolls the other to the same position.
+// Each pane scrolls on its own (they can hold lines of different length), so
+// without this they drift apart. The rows are line-aligned and equal-height, so
+// scrollTop maps 1:1. The `!==` guards stop the mirrored write from bouncing
+// back — once both panes share a value the loop is a no-op. This also carries
+// home.mjs's scrollIntoView (which scrolls only the left pane) over to the right.
+function syncScroll(e) {
+  const src = e.target
+  const container = src.closest('[data-testid="code-diff"]')
+  if (!container) return
+  for (const p of container.querySelectorAll('[data-scrollsync]')) {
+    if (p === src) continue
+    if (p.scrollLeft !== src.scrollLeft) p.scrollLeft = src.scrollLeft
+    if (p.scrollTop !== src.scrollTop) p.scrollTop = src.scrollTop
+  }
+  // Scrolling may have moved changed lines in or out of view — re-evaluate the
+  // up/down hints. Covers both manual scroll and home.mjs's programmatic
+  // scrollTop (which fires a scroll event too).
+  updateHints(container)
+}
+
+// codePane is one half of the diff: a fixed-width, horizontally scrolling column
+// with a tinted header. `data` is a codeSide ({ start, end, text }) used only for
+// the L-range in the header. The body is the shared aligned `rows`, projected to
+// this side (`left` = old, `right` = new). Both panes render the same number of
+// rows at the same line-height, so they line up vertically without any JS.
+function codePane(side, data, rows, sideKey, headerCls, activeGroup, widthCls = 'w-1/2') {
+  const range = data && data.text ? ` · L${data.start}–${data.end}` : ''
+  return html`
+    <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}">
+      <div
+        class="${'border-b px-3 py-1 text-[10px] font-bold uppercase tracking-wide ' +
+        headerCls}"
+      >
+        ${side}${range}
+      </div>
+      <div class="no-scrollbar min-h-0 flex-1 overflow-auto" data-scrollsync @scroll="${syncScroll}">
+        <code
+          class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700"
+          .innerHTML="${() => paneHTML(rows, sideKey, activeGroup())}"
+        ></code>
+      </div>
+    </div>
+  `
+}
+
+// paneHTML builds the innerHTML string of one pane's <code>: one <div> per
+// aligned row. Present lines are Prism-highlighted (which escapes the text);
+// blank/filler lines get a non-breaking space so the row keeps its height. The
+// only unescaped bits are our own static class strings, so the result is safe to
+// hand to the .innerHTML binding.
+function paneHTML(rows, sideKey, group) {
+  return rows
+    .map((r, i) => {
+      const text = sideKey === 'left' ? r.left : r.right
+      const mark = sideKey === 'left' ? r.leftMark : r.rightMark
+      // A row-level flag (either side changed) so a single pane's rows carry the
+      // full set of changes — updateHints scans just the left pane. Del rows are
+      // marked on the left, ins rows via their filler row, so both are covered.
+      const changed = !!(r.leftMark || r.rightMark)
+      const active = group && i >= group.start && i <= group.end
+      let cls = 'block whitespace-pre px-3'
+      if (active) {
+        // Brighter tint + an inset left bar (box-shadow, so it adds no width and
+        // the bars of adjacent active rows merge into one continuous accent).
+        cls += ' shadow-[inset_3px_0_0_#6366f1]'
+        if (mark === 'del') cls += ' bg-rose-200'
+        else if (mark === 'ins') cls += ' bg-emerald-200'
+        else cls += ' bg-indigo-50'
+      } else if (mark === 'del') cls += ' bg-rose-100'
+      else if (mark === 'ins') cls += ' bg-emerald-100'
+      else if (text === null) cls += ' bg-slate-50' // filler for the missing side
+      const body = text ? highlight(text) : '&nbsp;'
+      // Anchor the first row of the active group so home.mjs can scroll it to
+      // the vertical centre of the diff viewport.
+      const anchor = active && i === group.start ? ' data-change-active="1"' : ''
+      const flag = changed ? ' data-changed="1"' : ''
+      return `<div class="${cls}"${anchor}${flag}>${body}</div>`
+    })
+    .join('')
+}
+
+// dedent4 strips one level of leading indent from the diff: only when every
+// non-blank line of BOTH sides starts with 4 spaces does it drop those 4 spaces
+// everywhere. Blocks are usually one method deep inside a class, so this removes
+// the dead indent and lets the code sit flush in the panes. The all-or-nothing
+// check keeps old/new stripped by the same amount, so alignRows still lines up.
+// Blank lines are left as-is. Returns [old, new].
+function dedent4(oldText, newText) {
+  const lines = (oldText + '\n' + newText).split('\n').filter((l) => l.trim() !== '')
+  if (lines.length === 0 || !lines.every((l) => l.startsWith('    '))) {
+    return [oldText, newText]
+  }
+  const strip = (t) =>
+    t
+      .split('\n')
+      .map((l) => (l.startsWith('    ') ? l.slice(4) : l))
+      .join('\n')
+  return [strip(oldText), strip(newText)]
+}
+
+// blockRows produces the aligned diff rows for a loaded block (b.code === {old,new}).
+// Returns [] when the code isn't loaded or errored. Shared by codeDiff (rendering)
+// and home.mjs (change navigation) so both agree on the exact same row list.
+export function blockRows(b) {
+  const c = b && b.code
+  if (!c || c.error) return []
+  const [oldText, newText] = dedent4(
+    (c.old && c.old.text) || '',
+    (c.new && c.new.text) || '',
+  )
+  return alignRows(oldText, newText)
+}
+
+// changeGroups collapses runs of consecutive changed rows (del/ins) into
+// navigation targets: one group per run, but a run longer than MAX_GROUP rows is
+// split into successive groups of that size. Each group is { start, end }
+// (inclusive row indices into `rows`). Unchanged rows break a run.
+const MAX_GROUP = 5
+export function changeGroups(rows) {
+  const groups = []
+  let run = null
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
+    const changed = !!(r.leftMark || r.rightMark)
+    if (!changed) {
+      run = null
+      continue
+    }
+    if (!run || run.end - run.start + 1 >= MAX_GROUP) {
+      run = { start: i, end: i }
+      groups.push(run)
+    } else {
+      run.end = i
+    }
+  }
+  return groups
+}
+
+// alignRows turns the old and new source into a list of aligned rows. Each row is
+// { left, right, leftMark, rightMark }: `left`/`right` are the line text (or null
+// when that side has no line on this row), and the marks ('del'/'ins'/null) drive
+// the tint. Unchanged lines pair up; a run of removals is paired line-by-line
+// with the following run of additions (so a modified line lines up with its
+// replacement), and any overflow becomes one-sided rows.
+function alignRows(oldText, newText) {
+  const a = oldText ? oldText.split('\n') : []
+  const b = newText ? newText.split('\n') : []
+  const ops = diffLines(a, b)
+
+  const rows = []
+  let dels = []
+  let inss = []
+  const flush = () => {
+    const n = Math.max(dels.length, inss.length)
+    for (let i = 0; i < n; i++) {
+      const left = i < dels.length ? dels[i] : null
+      const right = i < inss.length ? inss[i] : null
+      rows.push({
+        left,
+        right,
+        leftMark: left !== null ? 'del' : null,
+        rightMark: right !== null ? 'ins' : null,
+      })
+    }
+    dels = []
+    inss = []
+  }
+  for (const op of ops) {
+    if (op.op === 'eq') {
+      flush()
+      rows.push({ left: op.left, right: op.right, leftMark: null, rightMark: null })
+    } else if (op.op === 'del') {
+      dels.push(op.left)
+    } else {
+      inss.push(op.right)
+    }
+  }
+  flush()
+  return rows
+}
+
+// diffLines is a classic LCS line diff: it returns a sequence of ops that turn
+// `a` into `b` — { op: 'eq', left, right } for a shared line, { op: 'del', left }
+// for a line only in `a`, { op: 'ins', right } for a line only in `b`. Blocks are
+// function-sized, so the O(n·m) table is cheap.
+function diffLines(a, b) {
+  const n = a.length
+  const m = b.length
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1))
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] =
+        a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const ops = []
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      ops.push({ op: 'eq', left: a[i], right: b[j] })
+      i++
+      j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ op: 'del', left: a[i] })
+      i++
+    } else {
+      ops.push({ op: 'ins', right: b[j] })
+      j++
+    }
+  }
+  while (i < n) ops.push({ op: 'del', left: a[i++] })
+  while (j < m) ops.push({ op: 'ins', right: b[j++] })
+  return ops
+}

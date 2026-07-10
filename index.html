@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PR Review Tree</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* Keep programmatic scrolling (scrollIntoView for keyboard nav) but hide
+         the scrollbar chrome — the panels read as clean floating blocks. */
+      .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+
+      /* Prism token colours only — scoped to the code panes. We deliberately drop
+         Prism's own container rules (padding/background/margins on
+         pre|code[class*=language-]) so they can't fight the Tailwind layout in
+         Block.mjs; only the syntax colours come from the vendored theme.
+
+         Higher-contrast light palette (GitHub-light inspired): each category gets
+         a clearly distinct, saturated hue so variables, keywords, functions,
+         strings and numbers pull apart at a glance instead of blending into the
+         muted default (magenta props ~= numbers, olive strings, brown operators). */
+      [data-testid='code-diff'] .token.comment,
+      [data-testid='code-diff'] .token.prolog,
+      [data-testid='code-diff'] .token.doctype,
+      [data-testid='code-diff'] .token.cdata {
+        color: #6a737d; /* gray — recedes */
+        font-style: italic;
+      }
+      [data-testid='code-diff'] .token.punctuation {
+        color: #24292e; /* near-black, not washed-out gray */
+      }
+      [data-testid='code-diff'] .token.namespace {
+        opacity: 0.7;
+      }
+      /* object properties / accessors & variables — their own steady orange, no
+         longer the same magenta as numbers, so `->id`/`$order` read as one kind */
+      [data-testid='code-diff'] .token.property,
+      [data-testid='code-diff'] .token.variable,
+      [data-testid='code-diff'] .token.regex,
+      [data-testid='code-diff'] .token.tag,
+      [data-testid='code-diff'] .token.symbol,
+      [data-testid='code-diff'] .token.deleted {
+        color: #e36209; /* orange */
+      }
+      [data-testid='code-diff'] .token.boolean,
+      [data-testid='code-diff'] .token.number,
+      [data-testid='code-diff'] .token.constant {
+        color: #005cc5; /* blue */
+      }
+      [data-testid='code-diff'] .token.selector,
+      [data-testid='code-diff'] .token.attr-name,
+      [data-testid='code-diff'] .token.string,
+      [data-testid='code-diff'] .token.char,
+      [data-testid='code-diff'] .token.builtin,
+      [data-testid='code-diff'] .token.inserted {
+        color: #22863a; /* green */
+      }
+      [data-testid='code-diff'] .token.operator,
+      [data-testid='code-diff'] .token.entity,
+      [data-testid='code-diff'] .token.url,
+      [data-testid='code-diff'] .token.atrule,
+      [data-testid='code-diff'] .token.attr-value,
+      [data-testid='code-diff'] .token.keyword {
+        color: #d73a49; /* red — keywords & operators */
+      }
+      [data-testid='code-diff'] .token.function,
+      [data-testid='code-diff'] .token.class-name {
+        color: #6f42c1; /* purple — calls & types */
+      }
+      [data-testid='code-diff'] .token.important,
+      [data-testid='code-diff'] .token.bold {
+        font-weight: 700;
+      }
+      [data-testid='code-diff'] .token.italic {
+        font-style: italic;
+      }
+    </style>
+  </head>
+  <body class="h-screen overflow-hidden bg-slate-50 text-slate-900 antialiased">
+    <div id="app"></div>
+    <!-- White footer strip; the panels above reserve 100px for it. -->
+    <footer
+      class="fixed bottom-0 left-0 right-0 z-20 h-[100px] border-t border-slate-200 bg-white"
+      data-testid="footer"
+    ></footer>
+    <script type="module" src="/src/home.mjs"></script>
+  </body>
+</html>

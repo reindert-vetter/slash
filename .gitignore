@@ -27,6 +27,16 @@ go.work.sum
 # env file
 .env
 
+# PR Review Tree: local data, worktrees and test artifacts
+/slash
+data/*.db
+data/*.db-*
+data/worktrees/
+node_modules/
+test-results/
+playwright-report/
+tests/.tmp/
+
 # Editor/IDE
 # .idea/
 # .vscode/
