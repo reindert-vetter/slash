@@ -554,7 +554,7 @@ function DetailPanel(state) {
         return out
       }}
       </div>
-      ${() => RelatedPanel(ui).key('related-panel')}
+      ${() => RelatedPanel(ui, state).key('related-panel')}
     </main>
   `
 }

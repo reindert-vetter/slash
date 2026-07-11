@@ -308,25 +308,54 @@ niets van PR's, blocks of gh; hou het zo.
 - **Tests:** `tembed/*_test.go` (activity-replay, signals, buffered signal,
   durable timer, activity-failure, SQLite+JSONL combinatie).
 
-### De eerste slash-task: review-comment workflow (`review.go`)
+### Harde regel: alleen workflows muteren state
 
-De eerste concrete taak draait op tembed: **commentaar geven op een regel code**,
-dan de thread levend houden. `review.go` (package main) registreert de
-`reviewComment`-workflow + activities `postLineComment`/`replyComment` op een
-engine en draait een **poller** die GitHub op replies pollt en elke nieuwe reply
-als `reply`-**signaal** aan de workflow levert; de workflow antwoordt met een
-extra comment tot de reviewer de thread sluit (`Done`/`/resolve`). Omdat het op
-tembed loopt overleeft het gesprek een herstart: de root-comment wordt nooit
-opnieuw geplaatst.
+**Workflows zijn de enige schrijvers.** State verandert uitsluitend via een
+Workflow Execution; al het andere is **read-only van buitenaf**:
 
-- `GitHubReviewer`-interface abstraheert gh (`PostLineComment`/`Reply`/
-  `FetchReplies`); `ghReviewer` shelt uit naar `gh api`, de test gebruikt een
-  fake. `NewReviewManager(engine, gh, interval)` bedraadt alles;
-  `StartReview(ctx, in)` plaatst de comment (synchroon in `StartWorkflow`) en
-  start de poller. `newReviewEngine(dataDir)` bouwt een engine op een
-  `MultiStore(SQLite data/tembed.db, JSONL data/tembed/)`.
-- Tests: `review_test.go` (volledige poll→signal→reply-lus met fake gh, plus een
-  restart-durability-test).
+- **Modules** (`modules/*`, b.v. `comments`, `github`) zijn de dingen die "kunnen
+  gebeuren in een workflow" — ze worden **alleen** door workflow-Activities
+  aangeroepen. Hun schrijf-methodes (`Save`, `AddReaction`, `PostLineComment`, …)
+  hoor je nergens anders aan te roepen; hun **read**-methodes (`List`, …) voeden
+  de UI.
+- De **HTTP-API** schrijft alleen via workflow-endpoints (een Execution starten
+  of een Signal sturen). Alle andere endpoints en de **UI zijn read-only**.
+- Waarom: de workflow-event-history is de bron van waarheid (durable, herspeelbaar,
+  overleeft herstart). Een module-tabel is een afgeleide read-model. Zie
+  `.claude/rules/workflows-write-boundary.md` en `…/workflow-determinism.md`.
+
+### De eerste slash-task: `task_code_comment` (`workflows.go` + `modules/`)
+
+De eerste concrete taak draait op tembed: **een comment op een regel code
+plaatsen** en de thread levend houden. Termen volgen Temporal — een **Workflow
+Type** `task_code_comment`, gestart als **Workflow Execution** (met een **Run ID**,
+dat tevens de comment-id is), die **Activities** draait en op **Signals** reageert.
+
+- **Twee modules** die de workflow als Activity aandrijft:
+  - `modules/comments` — de comments-module met een **eigen SQLite read-model**
+    (`comments`/`reactions`, `data/comments.db`). "Doet zijn eigen ding": telt
+    reacties (`reaction_count`) en zet `status` op `resolved` bij `/resolve`.
+    Write (`Save`/`AddReaction`) = workflow-only; `List` = read voor de UI.
+  - `modules/github` — de GitHub-communicatie (`gh api`): `PostLineComment`,
+    `Reply`, `FetchReplies`. Interface `github.Client` + `github.Fake` voor tests.
+- **Flow:** `saveComment` (comments) + `postGithubComment` (github, best-effort),
+  dan een lus op `reply`-**Signals**. Een reactie komt binnen via de **UI**
+  (`POST /api/workflows/{runID}/signals/reply`) én via een **poller die GitHub
+  elke minuut checkt** (`pollInterval = time.Minute`); beide worden als hetzelfde
+  Signal geleverd. Elke reactie wordt opgeslagen (comments) en een UI-reactie
+  wordt gespiegeld naar GitHub; `Done`/`/resolve` sluit de thread.
+- **Opslag:** de tembed-engine gebruikt `MultiStore(SQLite data/workflows.db,
+  JSONL data/workflows/)` — comments leven dus zowel in de workflow-history als in
+  **jsonl-bestanden**. Daarnaast houdt de comments-module zijn eigen read-model.
+- **Endpoints** (`tasks_api.go`): `POST /api/workflows/task_code_comment` (start),
+  `GET` (lijst), `POST /api/workflows/{runID}/signals/reply` (UI-reactie),
+  `GET /api/workflows/{runID}` (status), en read-only `GET /api/comments?pr=N`.
+  Bootstrap + recovery + hervatten van pollers: `newTasks(ctx, dataDir, repo)` in
+  `tasks_api.go`, aangeroepen in `runServe`.
+- **Nieuwe workflow of module toevoegen:** skills `add-workflow` / `add-module`
+  (+ templates `.claude/templates/workflow.go` / `module.go`).
+- Tests: `workflows_test.go` (UI-reactie + gh-poll→signal + resolve, en een
+  restart-durability-test); modules zijn puur en los testbaar.
 
 ## Conventies (ingevuld door dit scaffold — corrigeer waar nodig)
 

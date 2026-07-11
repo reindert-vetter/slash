@@ -356,3 +356,19 @@ func (e *Engine) History(runID string) ([]Event, error) {
 	_, hist, err := e.store.LoadRun(runID)
 	return hist, err
 }
+
+// Runs returns every run's metadata (for building read-models or resuming
+// per-run side work such as pollers after a restart).
+func (e *Engine) Runs() ([]RunRecord, error) { return e.store.ListRuns() }
+
+// Input returns the JSON-encoded input a run was started with.
+func (e *Engine) Input(runID string) ([]byte, error) {
+	_, hist, err := e.store.LoadRun(runID)
+	if err != nil {
+		return nil, err
+	}
+	if len(hist) > 0 && hist[0].Type == EventWorkflowStarted {
+		return hist[0].Payload, nil
+	}
+	return nil, nil
+}

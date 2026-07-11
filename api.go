@@ -14,6 +14,7 @@ import (
 type server struct {
 	db      *sql.DB
 	dataDir string
+	tasks   *tasks // workflow engine + comments read-model (nil in headless tools)
 }
 
 // routes builds the ServeMux: static files + the /api/* bridge.
@@ -22,6 +23,9 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	mux.HandleFunc("/api/blocks", s.handleBlocks)
 	mux.HandleFunc("/api/code", s.handleCode)
 	mux.HandleFunc("/api/ingest", s.handleIngest)
+	if s.tasks != nil {
+		s.routesTasks(mux)
+	}
 	mux.Handle("/", http.FileServer(http.Dir(staticDir)))
 	return mux
 }

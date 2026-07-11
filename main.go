@@ -53,7 +53,15 @@ func runServe(args []string) {
 	}
 	defer db.Close()
 
-	srv := &server{db: db, dataDir: "data"}
+	// Workflow engine + modules (comments/github). Pollers live for the process
+	// lifetime, so a background context is fine here.
+	tk, closeTasks, err := newTasks(context.Background(), "data", repoSlug)
+	if err != nil {
+		log.Fatalf("init workflows: %v", err)
+	}
+	defer closeTasks()
+
+	srv := &server{db: db, dataDir: "data", tasks: tk}
 	log.Printf("PR Review Tree listening on http://%s", *addr)
 	if err := http.ListenAndServe(*addr, srv.routes(*staticDir)); err != nil {
 		log.Fatal(err)
