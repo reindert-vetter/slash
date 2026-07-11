@@ -273,6 +273,61 @@ vallen worden geclamped (`loadBlocks` clamp't `selected`, `ensureCode` clamp't
 `change` en valt terug naar `mode:'list'` bij een block zonder wijzigingen). Zie
 skill `url-state`.
 
+## Tembed: durable workflows (`tembed/`)
+
+`tembed/` is een **embeddable durable-workflow engine** — "Temporal, maar een Go-
+package". Het staat als **git subtree** (prefix `tembed/`) in deze repo en is
+tegelijk zijn eigen module (`github.com/reindert-vetter/tembed`), zodat andere
+projecten het los kunnen inladen. **`tembed/` is bewust abstract** — het weet
+niets van PR's, blocks of gh; hou het zo.
+
+- **Subtree-flow:** binnenhalen met `git subtree add --prefix=tembed
+  https://github.com/reindert-vetter/tembed main --squash`; wijzigingen
+  terugduwen naar de tembed-repo met `git subtree push --prefix=tembed <url>
+  main`, updates ophalen met `git subtree pull`. slash importeert het via een
+  `replace github.com/reindert-vetter/tembed => ./tembed` in `go.mod`.
+- **Kern (event-sourcing + replay):** elke run heeft een append-only
+  event-history; de engine draait de workflow-functie telkens **vanaf het begin**
+  opnieuw tegen die history. Een `ExecuteActivity` waarvan het resultaat al in de
+  history staat geeft de opgeslagen waarde terug (activity draait dus **één keer**),
+  anders draait de activity nú en wordt het resultaat weggeschreven. Een
+  `WaitSignal` die zijn signaal nog niet heeft **yield't** (interne panic-
+  sentinel), wordt als `waiting` gepersisteerd en opnieuw gedreven zodra het
+  signaal/timer binnenkomt. **Workflow-code moet deterministisch zijn** — alle
+  non-determinisme via het `*Workflow`-handle (`ExecuteActivity`, `WaitSignal`,
+  `Sleep`, `SideEffect`, `Now`).
+- **Signals** zijn gebufferd: een signaal dat vóór de `WaitSignal` aankomt wacht
+  tot de workflow erom vraagt. **Timers** (`Sleep`) zijn durable (absolute
+  fire-time in de history, herpland bij `Recover`).
+- **Opslag** via de `Store`-interface: `MemoryStore` (tests), `JSONLStore` (één
+  leesbaar bestand per run), `SQLiteStore` (pure-Go `modernc.org/sqlite`, geen
+  cgo) en `MultiStore` om te combineren (SQLite voor queries + JSONL als
+  audit-trail). Enige runtime-dependency is `modernc.org/sqlite`.
+- **Recovery:** `engine.Recover()` bij startup dry-vt elke `running`/`waiting`
+  run opnieuw (herplant timers, her-blokkeert op signals).
+- **Tests:** `tembed/*_test.go` (activity-replay, signals, buffered signal,
+  durable timer, activity-failure, SQLite+JSONL combinatie).
+
+### De eerste slash-task: review-comment workflow (`review.go`)
+
+De eerste concrete taak draait op tembed: **commentaar geven op een regel code**,
+dan de thread levend houden. `review.go` (package main) registreert de
+`reviewComment`-workflow + activities `postLineComment`/`replyComment` op een
+engine en draait een **poller** die GitHub op replies pollt en elke nieuwe reply
+als `reply`-**signaal** aan de workflow levert; de workflow antwoordt met een
+extra comment tot de reviewer de thread sluit (`Done`/`/resolve`). Omdat het op
+tembed loopt overleeft het gesprek een herstart: de root-comment wordt nooit
+opnieuw geplaatst.
+
+- `GitHubReviewer`-interface abstraheert gh (`PostLineComment`/`Reply`/
+  `FetchReplies`); `ghReviewer` shelt uit naar `gh api`, de test gebruikt een
+  fake. `NewReviewManager(engine, gh, interval)` bedraadt alles;
+  `StartReview(ctx, in)` plaatst de comment (synchroon in `StartWorkflow`) en
+  start de poller. `newReviewEngine(dataDir)` bouwt een engine op een
+  `MultiStore(SQLite data/tembed.db, JSONL data/tembed/)`.
+- Tests: `review_test.go` (volledige poll→signal→reply-lus met fake gh, plus een
+  restart-durability-test).
+
 ## Conventies (ingevuld door dit scaffold — corrigeer waar nodig)
 
 - Frontend-modules zijn `.mjs`, één component per bestand, PascalCase voor

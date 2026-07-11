@@ -1,12 +1,6 @@
-module slash
+module github.com/reindert-vetter/tembed
 
 go 1.25.0
-
-// tembed is vendored into this repo via git subtree (prefix tembed/) so it can
-// also be pulled into other projects as its own module.
-require github.com/reindert-vetter/tembed v0.0.0
-
-replace github.com/reindert-vetter/tembed => ./tembed
 
 require modernc.org/sqlite v1.53.0
 
