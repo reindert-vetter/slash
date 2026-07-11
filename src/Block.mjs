@@ -12,7 +12,7 @@ import Prism from './vendor/prism.js'
 // to feed to .innerHTML. Blocks are usually bare function bodies without a
 // `<?php` tag, which the php grammar still tokenises fine. If the grammar is
 // somehow missing we fall back to an escaped plain string — never raw innerHTML.
-function highlight(code) {
+export function highlight(code) {
   const grammar = Prism.languages.php
   if (!grammar) return escapeHtml(code)
   return Prism.highlight(code, grammar, 'php')
@@ -261,6 +261,10 @@ export function updateHints(container) {
     else if (r.top >= vRect.bottom - 0.5) below = true
     if (above && below) break
   }
+  // This green in-block chevron only ever means "there are more changed lines
+  // out of view in this direction — scroll to reveal them". Stepping to the
+  // next / previous block is a separate, grey chevron rendered *outside* the
+  // card by home.mjs (stepChevron), so it never lights up here.
   const cRect = container.getBoundingClientRect()
   up.style.top = vRect.top - cRect.top + 'px'
   down.style.bottom = cRect.bottom - vRect.bottom + 'px'
@@ -325,23 +329,47 @@ function paneHTML(rows, sideKey, group) {
     .map((r, i) => {
       const text = sideKey === 'left' ? r.left : r.right
       const mark = sideKey === 'left' ? r.leftMark : r.rightMark
-      // A row-level flag (either side changed) so a single pane's rows carry the
-      // full set of changes — updateHints scans just the left pane. Del rows are
-      // marked on the left, ins rows via their filler row, so both are covered.
-      const changed = !!(r.leftMark || r.rightMark)
-      const active = group && i >= group.start && i <= group.end
+      const ws = wsOnly(r)
+      // A row-level flag (a real change on either side) so a single pane's rows
+      // carry the full set of changes — updateHints scans just the left pane. Del
+      // rows are marked on the left, ins rows via their filler row, so both are
+      // covered. Whitespace-only re-alignments don't count (see rowChanged/wsOnly).
+      const changed = rowChanged(r)
+      const active = changed && group && i >= group.start && i <= group.end
+      // At call granularity the active unit is a single row plus the char indices
+      // of the one call segment being navigated; underline those (per side) so the
+      // exact segment within the line is marked. null at group/line granularity.
+      const underline =
+        active && group.char ? (sideKey === 'left' ? group.left : group.right) : null
+      // Backgrounds are ~20% lighter than the raw Tailwind rose/emerald shades
+      // (mixed 20% toward white) so the tint reads as an accent, not a fill.
       let cls = 'block whitespace-pre px-3'
       if (active) {
         // Brighter tint + an inset left bar (box-shadow, so it adds no width and
         // the bars of adjacent active rows merge into one continuous accent).
         cls += ' shadow-[inset_3px_0_0_#6366f1]'
-        if (mark === 'del') cls += ' bg-rose-200'
-        else if (mark === 'ins') cls += ' bg-emerald-200'
+        if (mark === 'del') cls += ' bg-[#fed7dc]' // rose-200 +20% white
+        else if (mark === 'ins') cls += ' bg-[#b9f5d9]' // emerald-200 +20% white
         else cls += ' bg-indigo-50'
-      } else if (mark === 'del') cls += ' bg-rose-100'
-      else if (mark === 'ins') cls += ' bg-emerald-100'
+      } else if (ws) {
+        // Whitespace-only re-alignment: no full-line tint (it isn't a real change).
+        // Only the shifted whitespace itself is coloured, in the body below.
+      } else if (mark === 'del') cls += ' bg-[#ffe9eb]' // rose-100 +20% white
+      else if (mark === 'ins') cls += ' bg-[#dafbea]' // emerald-100 +20% white
       else if (text === null) cls += ' bg-slate-50' // filler for the missing side
-      const body = text ? highlight(text) : '&nbsp;'
+      // A row modified on both sides (a del paired with an ins) gets an intra-line
+      // char diff so the reviewer sees *what* changed — the inserted/removed
+      // characters are marked, not just the whole line. One-sided rows (a pure
+      // add or remove) have nothing to diff against, so they highlight plainly.
+      const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
+      let body
+      if (text === null) body = '&nbsp;'
+      else if (paired) body = highlightChanges(r, sideKey, ws, underline)
+      else if (underline && underline.size)
+        // A one-sided change (pure add / remove): its whole line is the single
+        // edit, so underline it end to end.
+        body = markChars(highlight(text), (pi) => (underline.has(pi) ? UNDERLINE_CLS : ''))
+      else body = highlight(text)
       // Anchor the first row of the active group so home.mjs can scroll it to
       // the vertical centre of the diff viewport.
       const anchor = active && i === group.start ? ' data-change-active="1"' : ''
@@ -349,6 +377,203 @@ function paneHTML(rows, sideKey, group) {
       return `<div class="${cls}"${anchor}${flag}>${body}</div>`
     })
     .join('')
+}
+
+// wsOnly reports whether a row differs on both sides purely in whitespace
+// (indentation / alignment): same tokens, just re-spaced. Re-indenting a whole
+// block makes diffLines pair every line as del/ins even though nothing really
+// changed — these rows are noise, so we skip them for navigation and don't tint
+// the whole line, only the shifted whitespace.
+function wsOnly(r) {
+  return (
+    r.leftMark === 'del' &&
+    r.rightMark === 'ins' &&
+    r.left != null &&
+    r.right != null &&
+    r.left.replace(/\s+/g, '') === r.right.replace(/\s+/g, '')
+  )
+}
+
+// rowChanged reports whether a row counts as a change for navigation and hints:
+// it carries a del/ins mark and isn't a whitespace-only re-alignment.
+function rowChanged(r) {
+  return !!(r.leftMark || r.rightMark) && !wsOnly(r)
+}
+
+// UNDERLINE_CLS is the thin underline that marks the *active* call segment when
+// the reviewer has drilled navigation down to the finest level (gran === 'call').
+// Its colour is the same indigo (#6366f1) as the inset left bar of an active row,
+// so "the selected segment within the line" reads as the finest step of the same
+// accent.
+export const UNDERLINE_CLS = 'underline decoration-2 decoration-[#6366f1] underline-offset-2'
+
+// highlightChanges renders one side of a modified row: Prism-highlighted like any
+// line, but with the characters that differ from the other side wrapped in a
+// coloured marker (rose on old, emerald on new) so the exact edit stands out —
+// e.g. the inserted `_` in `firstname` → `first_name`. `ws` picks the marker
+// weight: a whitespace-only re-alignment sits on an untinted row and gets the
+// softer 200 shade; a real content change sits on a tinted row and needs the
+// stronger 300 shade to read against it. `underline` is an optional Set of char
+// indices (the active char-edit) that additionally get the indigo underline.
+function highlightChanges(r, sideKey, ws, underline) {
+  const text = sideKey === 'left' ? r.left : r.right
+  const { leftMarked, rightMarked } = charDiffSides(r.left, r.right)
+  const marked = sideKey === 'left' ? leftMarked : rightMarked
+  const markCls = ws
+    ? sideKey === 'left'
+      ? 'bg-rose-200'
+      : 'bg-emerald-200'
+    : sideKey === 'left'
+      ? 'bg-rose-300'
+      : 'bg-emerald-300'
+  return markChars(highlight(text), (pi) => {
+    const parts = []
+    if (marked.has(pi)) parts.push(markCls)
+    if (underline && underline.has(pi)) parts.push(UNDERLINE_CLS)
+    return parts.join(' ')
+  })
+}
+
+// charDiffSides diffs the two sides at *token* granularity and returns, per side,
+// the set of character indices belonging to a token present on only that side.
+// A token is a whole `[A-Za-z0-9]` run (an identifier / number) or a single other
+// character, so a word is matched as a unit — `address` → `billingAddress` marks
+// the whole `address` / `billingAddress`, not just the differing letters. The
+// per-token char ranges are unioned back so wrapChangedChars can still wrap by
+// character offset.
+function charDiffSides(left, right) {
+  const a = tokenize(left || '')
+  const b = tokenize(right || '')
+  const ops = diffChars(
+    a.map((t) => t.text),
+    b.map((t) => t.text),
+  )
+  const leftMarked = new Set()
+  const rightMarked = new Set()
+  const markToken = (set, tok) => {
+    for (let k = 0; k < tok.text.length; k++) set.add(tok.start + k)
+  }
+  let ai = 0
+  let bi = 0
+  for (const op of ops) {
+    if (op === 'eq') {
+      ai++
+      bi++
+    } else if (op === 'del') {
+      markToken(leftMarked, a[ai++])
+    } else {
+      markToken(rightMarked, b[bi++])
+    }
+  }
+  return { leftMarked, rightMarked }
+}
+
+// tokenize splits a line into { text, start } tokens: each maximal `[A-Za-z0-9]`
+// run is one token (so identifiers/numbers match whole), and every other
+// character (operators, punctuation, each whitespace char) is its own token.
+function tokenize(s) {
+  const toks = []
+  const re = /[A-Za-z0-9]+|[^A-Za-z0-9]/g
+  let m
+  while ((m = re.exec(s)) !== null) {
+    toks.push({ text: m[0], start: m.index })
+  }
+  return toks
+}
+
+// diffChars is diffLines over an arbitrary sequence (characters or tokens): a
+// classic LCS returning 'eq'/'del'/'ins' ops turning `a` into `b`, comparing
+// elements with `===`. Lines are short, so the O(n·m) table is cheap.
+function diffChars(a, b) {
+  const n = a.length
+  const m = b.length
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1))
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] =
+        a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const ops = []
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      ops.push('eq')
+      i++
+      j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push('del')
+      i++
+    } else {
+      ops.push('ins')
+      j++
+    }
+  }
+  while (i < n) {
+    ops.push('del')
+    i++
+  }
+  while (j < m) {
+    ops.push('ins')
+    j++
+  }
+  return ops
+}
+
+// markChars wraps the characters of a Prism-highlighted HTML string in marker
+// spans, where `classOf(plaintextIndex)` returns the class string for that source
+// char (`''` for none). It walks the HTML tracking the plaintext offset — copying
+// tags verbatim (they don't advance the offset) and counting each entity
+// (`&amp;` etc.) as one source char — so the indices from charDiffSides (offsets
+// into the raw line) line up with the escaped output. Consecutive chars that map
+// to the *same* class string share one span, and a span is always closed before a
+// tag, so a marker never straddles a Prism token boundary (it nests inside or sits
+// between tokens) and the markup stays well-formed. Because a whole class string
+// (e.g. background + underline) is compared as one unit, overlapping markers just
+// produce a span carrying both classes.
+export function markChars(html, classOf) {
+  let out = ''
+  let pi = 0 // plaintext index into the original line
+  let i = 0
+  let open = '' // the class string of the currently-open span ('' = none)
+  const ensure = (cls) => {
+    if (cls === open) return
+    if (open) out += '</span>'
+    open = ''
+    if (cls) {
+      out += `<span class="${cls}">`
+      open = cls
+    }
+  }
+  while (i < html.length) {
+    const ch = html[i]
+    if (ch === '<') {
+      // A tag — copy it whole, and never let a marker span straddle it.
+      ensure('')
+      const end = html.indexOf('>', i)
+      const to = end === -1 ? html.length : end + 1
+      out += html.slice(i, to)
+      i = to
+      continue
+    }
+    if (ch === '&') {
+      // An HTML entity stands for a single source char.
+      const end = html.indexOf(';', i)
+      const to = end === -1 ? i + 1 : end + 1
+      ensure(classOf(pi))
+      out += html.slice(i, to)
+      pi++
+      i = to
+      continue
+    }
+    ensure(classOf(pi))
+    out += ch
+    pi++
+    i++
+  }
+  ensure('')
+  return out
 }
 
 // dedent4 strips one level of leading indent from the diff: only when every
@@ -383,22 +608,38 @@ export function blockRows(b) {
   return alignRows(oldText, newText)
 }
 
+// unitsFor maps a granularity ('group' | 'line' | 'call') to its navigation-unit
+// list for the given rows: whole change runs (changeGroups), individual changed
+// lines (changeLines), or single call-chain segments within a line (changeCalls).
+// Shared by home.mjs (diff navigation) and Footer.mjs (the one-line preview) so
+// both agree on what the currently-selected unit is.
+export function unitsFor(rows, gran) {
+  if (gran === 'line') return changeLines(rows)
+  if (gran === 'call') return changeCalls(rows)
+  return changeGroups(rows)
+}
+
 // changeGroups collapses runs of consecutive changed rows (del/ins) into
 // navigation targets: one group per run, but a run longer than MAX_GROUP rows is
 // split into successive groups of that size. Each group is { start, end }
 // (inclusive row indices into `rows`). Unchanged rows break a run.
+//
+// The MAX_GROUP split only happens on a row that carries an actual letter (A-z):
+// a changed row whose text is just braces/punctuation (e.g. `}` or `{`) is
+// pulled into the current group instead of starting a fresh one, so a group
+// never ends right before — or begins on — a bare bracket line.
 const MAX_GROUP = 5
 export function changeGroups(rows) {
   const groups = []
   let run = null
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]
-    const changed = !!(r.leftMark || r.rightMark)
+    const changed = rowChanged(r)
     if (!changed) {
       run = null
       continue
     }
-    if (!run || run.end - run.start + 1 >= MAX_GROUP) {
+    if (!run || (run.end - run.start + 1 >= MAX_GROUP && hasLetter(r))) {
       run = { start: i, end: i }
       groups.push(run)
     } else {
@@ -406,6 +647,128 @@ export function changeGroups(rows) {
     }
   }
   return groups
+}
+
+// changeLines is the line-granularity navigation list: one unit per changed row
+// that carries *new* code, each a single-row range { start: i, end: i }. Same
+// shape as a changeGroups entry so the two are interchangeable for range
+// highlighting. Only the new side (the right pane) is navigable — a pure
+// deletion (a removed line with no replacement, rightMark !== 'ins') has no new
+// code to select, so it's skipped. Added and modified rows both keep their
+// right side, so they stay.
+export function changeLines(rows) {
+  const units = []
+  for (let i = 0; i < rows.length; i++) {
+    if (rowChanged(rows[i]) && rows[i].rightMark === 'ins') units.push({ start: i, end: i })
+  }
+  return units
+}
+
+// changeCalls is the call-granularity navigation list: one unit per call-chain
+// segment of a changed row. Unlike the coarser levels this cuts a line by its
+// *structure* (the calls it makes), not by what the diff changed — so later each
+// segment can be tied to the function it calls (an edge in the call-graph). A
+// line is split on `->`, `.` and `;` (segmentCalls), and — unlike changeLines —
+// the WHOLE new line is walked: every non-empty segment is landable, changed or
+// not. Each unit is a single-row range { start: i, end: i } tagged `char: true`
+// with `left`/`right` Sets of the char indices to underline on each side.
+//
+// Only new code (the right pane) is segmented: a row that adds new text
+// (rightMark === 'ins') is split into its call segments. A removed line with no
+// replacement still gets one unit — an empty new segment (nothing right) with the
+// whole old line underlined — so you can land on it as a blank row marking what's
+// gone.
+export function changeCalls(rows) {
+  const units = []
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
+    if (!rowChanged(r)) continue
+    if (r.rightMark === 'ins' && r.right != null) {
+      const segs = segmentCalls(r.right).filter(
+        (s) => r.right.slice(s.start, s.end).trim() !== '',
+      )
+      // A blank added line has no segment; keep it landable as the whole (empty)
+      // line so the run stays walkable.
+      if (segs.length === 0) {
+        units.push({ start: i, end: i, char: true, left: new Set(), right: fullSet(r.right) })
+      } else {
+        for (const s of segs)
+          units.push({
+            start: i,
+            end: i,
+            char: true,
+            left: new Set(),
+            right: rangeSet(r.right, s.start, s.end),
+          })
+      }
+    } else {
+      // A removed line with no replacement: land on it as an empty new segment,
+      // underlining the whole removed line on the old side so you see what's gone.
+      units.push({ start: i, end: i, char: true, left: fullSet(r.left || ''), right: new Set() })
+    }
+  }
+  return units
+}
+
+// segmentCalls splits a line into call-chain segments. A new segment begins at
+// each `->` or `.` (the operator starts the call it introduces) and `;` closes
+// the current one (a statement boundary, kept at the end of its call). The
+// segments tile the whole line with no gaps — `$order->customer()->name();`
+// becomes `$order`, `->customer()`, `->name();` — so every part of a line is walkable.
+// The `.` boundary is there for Vue/JS property access (`order.customer.name`) as
+// much as PHP concatenation. Returns [{ start, end }] half-open char ranges.
+function segmentCalls(text) {
+  const segs = []
+  let start = 0
+  const push = (end) => {
+    if (end > start) segs.push({ start, end })
+    start = end
+  }
+  let i = 0
+  while (i < text.length) {
+    if (text[i] === '-' && text[i + 1] === '>') {
+      push(i) // end current here; `->` starts the next segment
+      i += 2
+    } else if (text[i] === '.') {
+      push(i)
+      i += 1
+    } else if (text[i] === ';') {
+      i += 1
+      push(i) // include `;` in the current segment, then start fresh after it
+    } else {
+      i += 1
+    }
+  }
+  push(text.length)
+  return segs
+}
+
+// rangeSet returns the set of char indices in the half-open range [start, end),
+// with leading and trailing whitespace trimmed off so the underline hugs the
+// segment's text and never runs across the empty indent before it (or a trailing
+// gap). `text` is the full line the range indexes into. Interior whitespace stays
+// underlined so a segment reads as one continuous mark.
+function rangeSet(text, start, end) {
+  let s = start
+  let e = end
+  while (s < e && /\s/.test(text[s])) s++
+  while (e > s && /\s/.test(text[e - 1])) e--
+  const set = new Set()
+  for (let k = s; k < e; k++) set.add(k)
+  return set
+}
+
+// fullSet returns the set of every non-outer-whitespace char index of a string
+// (leading/trailing whitespace trimmed, like rangeSet over the whole line).
+function fullSet(s) {
+  return rangeSet(s, 0, s.length)
+}
+
+// hasLetter reports whether either side of a row contains an ASCII letter (A-z).
+// Bracket/punctuation-only rows return false, so they never act as a split
+// boundary in changeGroups.
+function hasLetter(r) {
+  return /[a-z]/i.test(r.left || '') || /[a-z]/i.test(r.right || '')
 }
 
 // alignRows turns the old and new source into a list of aligned rows. Each row is
@@ -440,7 +803,15 @@ function alignRows(oldText, newText) {
   for (const op of ops) {
     if (op.op === 'eq') {
       flush()
-      rows.push({ left: op.left, right: op.right, leftMark: null, rightMark: null })
+      if (op.left === op.right) {
+        rows.push({ left: op.left, right: op.right, leftMark: null, rightMark: null })
+      } else {
+        // Equal but for whitespace: a pure re-indent. Emit it as a paired del/ins
+        // row so wsOnly catches it downstream — only the shifted whitespace gets
+        // the soft tint, the (unchanged) words are never marked. flush() ran first,
+        // so this stays 1:1 aligned and never drifts into the positional pairing.
+        rows.push({ left: op.left, right: op.right, leftMark: 'del', rightMark: 'ins' })
+      }
     } else if (op.op === 'del') {
       dels.push(op.left)
     } else {
@@ -454,22 +825,29 @@ function alignRows(oldText, newText) {
 // diffLines is a classic LCS line diff: it returns a sequence of ops that turn
 // `a` into `b` — { op: 'eq', left, right } for a shared line, { op: 'del', left }
 // for a line only in `a`, { op: 'ins', right } for a line only in `b`. Blocks are
-// function-sized, so the O(n·m) table is cheap.
+// function-sized, so the O(n·m) table is cheap. Lines are matched
+// whitespace-insensitively (via `key`, à la `git diff -w`): a line that only got
+// re-indented still pairs with its counterpart and comes back as an `eq` op whose
+// `left`/`right` differ only in whitespace, so alignRows can show it as a soft
+// re-alignment instead of drifting into the positional del/ins pairing.
 function diffLines(a, b) {
   const n = a.length
   const m = b.length
+  const key = (s) => s.replace(/\s+/g, '')
+  const ka = a.map(key)
+  const kb = b.map(key)
   const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1))
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
       dp[i][j] =
-        a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+        ka[i] === kb[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
     }
   }
   const ops = []
   let i = 0
   let j = 0
   while (i < n && j < m) {
-    if (a[i] === b[j]) {
+    if (ka[i] === kb[j]) {
       ops.push({ op: 'eq', left: a[i], right: b[j] })
       i++
       j++

@@ -1,0 +1,97 @@
+// Footer — the fixed bottom bar under the sidebar and detail panel. It holds a
+// placeholder for a future description of the selected change, and — only when
+// the active change is a single line — the inline diff of that one line
+// (- removed / + added). The panels above reserve 100px for it.
+
+import { html } from './vendor/arrow.js'
+import { blockRows, unitsFor, highlight, markChars, UNDERLINE_CLS } from './Block.mjs'
+
+// line builds the innerHTML for one footer diff line: a non-selectable +/- gutter
+// followed by the Prism-highlighted PHP, so it reads exactly like a row in the
+// block's code panes. `underline`, when given, is a Set of char indices (the active
+// call segment) that get the indigo underline — so the footer mirrors the pane's
+// `'call'`-granularity marker. `highlight` escapes the text, the gutter is our own
+// static markup, so the string is safe for the .innerHTML binding.
+function line(mark, text, underline) {
+  const gutter = mark === 'del' ? 'text-rose-500' : 'text-emerald-500'
+  const code = underline
+    ? markChars(highlight(text), (pi) => (underline.has(pi) ? UNDERLINE_CLS : ''))
+    : highlight(text)
+  return `<span class="select-none ${gutter}">${mark === 'del' ? '-' : '+'} </span>${code}`
+}
+
+// activeUnit returns the single aligned row the reviewer has selected together
+// with the active unit's underline sets (`ulLeft`/`ulRight` — the char indices of
+// the active call segment, only present on a `'call'` unit), but only when the
+// active unit spans exactly one row. For multi-line selections it returns null, so
+// the footer shows no inline diff — we only preview one-liners. It follows the
+// *current* granularity: list mode previews the first change group, diff mode
+// follows state.change through the units of state.gran. Since a line- or
+// call-granularity unit is always a single row, refining a selection with f down to
+// one line (or one segment) always surfaces it here.
+function activeUnit(state) {
+  const b = state.blocks[state.selected]
+  if (!b) return null
+  const rows = blockRows(b)
+  const gran = state.mode === 'diff' ? state.gran : 'group'
+  const idx = state.mode === 'diff' ? state.change : 0
+  const g = unitsFor(rows, gran)[idx]
+  if (!g || g.start !== g.end) return null
+  const row = rows[g.start]
+  if (!row) return null
+  return { row, ulLeft: g.left || null, ulRight: g.right || null }
+}
+
+// WIDE_AT is the char-count past which a diff line no longer comfortably fits in
+// the centred max-w-5xl column (~1024px at the 11px mono font, minus the +/-
+// gutter). Above it we drop the max-width so the footer uses the full width and
+// you can read (or scroll) more of the line before it clips.
+const WIDE_AT = 150
+
+// wrapClass picks the inner column width: centred (max-w-5xl) for short lines so
+// it stays aligned with the panels above, full width once the active line is long.
+function wrapClass(state) {
+  const u = activeUnit(state)
+  const r = u && u.row
+  const len = r ? Math.max((r.left || '').length, (r.right || '').length) : 0
+  const width = len > WIDE_AT ? 'max-w-none' : 'max-w-5xl'
+  return `flex w-full ${width} flex-col gap-1.5`
+}
+
+export default function Footer(state) {
+  return html`
+    <footer
+      class="fixed bottom-0 left-0 right-0 z-20 flex h-[100px] justify-center border-t border-slate-200 bg-white px-6 py-2.5"
+      data-testid="footer"
+    >
+      <div class="${() => wrapClass(state)}">
+        <p
+          class="shrink-0 truncate text-xs italic text-slate-400"
+          data-testid="footer-description"
+        >
+          Description coming soon…
+        </p>
+        <div
+          class="no-scrollbar min-h-0 flex-1 overflow-auto"
+          data-testid="footer-diff"
+        >
+          <code
+            class="language-php m-0 block font-mono text-[11px] leading-relaxed text-slate-700"
+            data-testid="code-diff"
+            .innerHTML="${() => {
+              const u = activeUnit(state)
+              if (!u) return ''
+              const r = u.row
+              let s = ''
+              if (r.left !== null)
+                s += `<div class="block whitespace-pre bg-rose-100">${line('del', r.left, u.ulLeft)}</div>`
+              if (r.right !== null)
+                s += `<div class="block whitespace-pre bg-emerald-100">${line('ins', r.right, u.ulRight)}</div>`
+              return s
+            }}"
+          ></code>
+        </div>
+      </div>
+    </footer>
+  `
+}

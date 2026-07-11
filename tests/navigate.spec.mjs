@@ -13,9 +13,14 @@ test.describe('PR Review Tree — change navigation', () => {
     await page.waitForLoadState('networkidle')
     const groups = await page.evaluate(async () => {
       const { changeGroups } = await import('/src/Block.mjs')
+      // Changed rows carry letter text so the MAX_GROUP split is allowed to fall
+      // on them (the split only lands on a row with an actual letter — see
+      // hasLetter in Block.mjs).
       const mk = (n, changed) =>
-        Array.from({ length: n }, () =>
-          changed ? { leftMark: 'del', rightMark: 'ins' } : { leftMark: null, rightMark: null },
+        Array.from({ length: n }, (_, i) =>
+          changed
+            ? { left: `old${i}`, right: `new${i}`, leftMark: 'del', rightMark: 'ins' }
+            : { left: 'kept', right: 'kept', leftMark: null, rightMark: null },
         )
       // 8 changed rows, an unchanged gap, then 2 more changed rows.
       const rows = [...mk(8, true), ...mk(1, false), ...mk(2, true)]
@@ -27,6 +32,28 @@ test.describe('PR Review Tree — change navigation', () => {
       { start: 5, end: 7 },
       { start: 9, end: 10 },
     ])
+  })
+
+  test('a long run of bracket-only rows is NOT split (needs a letter to break)', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const groups = await page.evaluate(async () => {
+      const { changeGroups } = await import('/src/Block.mjs')
+      // 7 changed rows whose text is just braces — over MAX_GROUP, but none carries
+      // a letter, so the split is suppressed and they stay one group. The two
+      // sides must differ (`{` vs `}`), else it reads as a whitespace-only
+      // re-alignment and wouldn't count as a change at all (wsOnly).
+      const rows = Array.from({ length: 7 }, () => ({
+        left: '{',
+        right: '}',
+        leftMark: 'del',
+        rightMark: 'ins',
+      }))
+      return changeGroups(rows)
+    })
+    expect(groups).toEqual([{ start: 0, end: 6 }])
   })
 
   test('an active group is highlighted with an anchor on both panes', async ({ page }) => {
@@ -61,12 +88,13 @@ test.describe('PR Review Tree — change navigation', () => {
     const host = page.locator('#nav-host')
     // One anchor per pane (first row of the group), so two in total.
     await expect(host.locator('[data-change-active]')).toHaveCount(2)
-    // Brighter tints replace the base rose-100/emerald-100 for active rows.
-    await expect(host.locator('.bg-rose-200')).toHaveCount(2)
-    await expect(host.locator('.bg-emerald-200')).toHaveCount(3)
+    // Active rows get the brighter hex tints (rose-200/emerald-200 mixed 20%
+    // toward white) — #fed7dc = active del, #b9f5d9 = active ins. See paneHTML.
+    await expect(host.locator('div[class*="#fed7dc"]')).toHaveCount(2)
+    await expect(host.locator('div[class*="#b9f5d9"]')).toHaveCount(3)
   })
 
-  test('→ steps into the diff and highlights the first change, ← steps back out', async ({
+  test('→ steps into the diff (panel expands, first change stays highlighted), ← steps back out', async ({
     page,
   }) => {
     await page.goto('/')
@@ -76,15 +104,274 @@ test.describe('PR Review Tree — change navigation', () => {
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
 
-    // No highlight while browsing the list.
-    await expect(page.locator('[data-change-active]')).toHaveCount(0)
+    // In list mode the selected block already *previews* its first change (the
+    // very group → steps onto), and the panel sits in its narrow list layout.
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await expect(panel).toHaveClass(/left-\[29rem\]/)
 
-    // → steps in: the first change of block 0 gets highlighted.
+    // → steps in: mode flips to diff, the panel expands to full width, and the
+    // first change is still highlighted.
     await page.keyboard.press('ArrowRight')
+    await expect(panel).toHaveClass(/left-6/)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
-    // ← steps back out: highlight clears.
+    // ← steps back out: the panel returns to the narrow list layout.
     await page.keyboard.press('ArrowLeft')
-    await expect(page.locator('[data-change-active]')).toHaveCount(0)
+    await expect(panel).toHaveClass(/left-\[29rem\]/)
+  })
+
+  // Cross-block flow only continues within the SAME file. In the fixture blocks
+  // 0 and 1 are both CreatePaymentAction.php (linked by the connector) while
+  // block 2 is a different file (ProcessCartAction.php). Walking ↓ off the end of
+  // block 0 should flow into block 1, but must stop at the file boundary before
+  // block 2. Walking ↑ off the top of block 1 flows back into block 0 and stops.
+  const selected = (page, i) => expect(page.locator(`[data-idx="${i}"]`))
+
+  test('↓ flows into the next same-file block but stops at the file boundary', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    const panel = page.getByTestId('detail-panel')
+    await expect(panel.locator('code.language-php').first()).toBeVisible()
+
+    // Step into block 0's diff, then walk down well past its changes. More presses
+    // than either block can have groups, so we're guaranteed to reach the boundary.
+    await page.keyboard.press('ArrowRight')
+    for (let n = 0; n < 40; n++) await page.keyboard.press('ArrowDown')
+
+    // Landed on block 1 (same file) and never crossed into block 2 (other file).
+    await selected(page, 1).toHaveClass(/bg-indigo-50/)
+    await selected(page, 2).not.toHaveClass(/bg-indigo-50/)
+  })
+
+  test('↑ flows back into the previous same-file block and stops at the top', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    // Select block 1 (findOrCreateCustomer, same file as block 0) and step in.
+    await page.locator('[data-idx="1"]').click()
+    await selected(page, 1).toHaveClass(/bg-indigo-50/)
+    const panel = page.getByTestId('detail-panel')
+    await expect(panel.locator('code.language-php').first()).toBeVisible()
+
+    await page.keyboard.press('ArrowRight')
+    for (let n = 0; n < 40; n++) await page.keyboard.press('ArrowUp')
+
+    // Flowed back into block 0 and stopped there (no previous same-file block).
+    await selected(page, 0).toHaveClass(/bg-indigo-50/)
+  })
+
+  // Enter jumps to the chat by selecting the top task in the RelatedPanel (its
+  // thread opens). A "+ Nieuwe taak" button sits first in the list. See home.mjs
+  // (onKeydown → ui.task = 0) + RelatedPanel (newTaskButton / shared ui).
+  test('Enter selects the top task; the new-task button leads the list', async ({ page }) => {
+    await page.goto('/')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+
+    const panel = page.getByTestId('related-panel')
+    const rows = panel.getByTestId('task-row')
+    const active = /bg-indigo-50/
+
+    // The new-task button is the first item in the task list.
+    await expect(panel.getByTestId('new-task')).toBeVisible()
+
+    // Move the task selection off the top by clicking the second task…
+    await rows.nth(1).click()
+    await expect(rows.nth(1)).toHaveClass(active)
+    await expect(rows.nth(0)).not.toHaveClass(active)
+
+    // …then Enter jumps back to the top task and its chat header follows.
+    await page.keyboard.press('Enter')
+    await expect(rows.nth(0)).toHaveClass(active)
+    await expect(rows.nth(1)).not.toHaveClass(active)
+    await expect(panel.getByTestId('chat')).toContainText('billingAddress-wissel checken')
+  })
+
+  // Selection granularity: f refines group → line → call, d coarsens back. See
+  // home.mjs (setGran/GRANS/unitsFor) + Block.mjs (changeLines/changeCalls).
+  test('changeLines and changeCalls split a group into lines then call segments', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const out = await page.evaluate(async () => {
+      const { changeGroups, changeLines, changeCalls } = await import('/src/Block.mjs')
+      // A modified row (its new line is a two-call chain), a one-sided added row,
+      // and a pure deletion (old removed, no replacement).
+      const rows = [
+        { left: '$order->name();', right: '$order->customer()->name();', leftMark: 'del', rightMark: 'ins' },
+        { left: null, right: '$extra = 1;', leftMark: null, rightMark: 'ins' },
+        { left: '$gone->bye();', right: null, leftMark: 'del', rightMark: null },
+      ]
+      const calls = changeCalls(rows)
+      return {
+        groups: changeGroups(rows),
+        lines: changeLines(rows),
+        // A call unit is a single-row range carrying char() + underline sets.
+        calls: calls.map((e) => ({
+          row: e.start,
+          char: !!e.char,
+          left: [...e.left].length,
+          right: [...e.right].length,
+        })),
+      }
+    })
+    // One group spanning all three rows; lines cover only the new-code rows.
+    expect(out.groups).toEqual([{ start: 0, end: 2 }])
+    expect(out.lines).toEqual([
+      { start: 0, end: 0 },
+      { start: 1, end: 1 },
+    ])
+    // Row 0 splits into its whole-line call segments (`$order`, `->customer()`,
+    // `->name();`) — every segment, not just the changed one; the `;` rides along
+    // with its call. Row 1 is one segment ending in `;`. Row 2 (pure deletion) is
+    // a single empty-new unit.
+    const byRow = (r) => out.calls.filter((c) => c.row === r)
+    expect(byRow(0).length).toBe(3)
+    expect(byRow(1).length).toBe(1)
+    expect(byRow(2).length).toBe(1)
+    // Every new-code segment marks new (right) chars; the deletion marks only old.
+    for (const c of byRow(0)) expect(c.right).toBeGreaterThan(0)
+    expect(byRow(2)[0]).toMatchObject({ char: true, right: 0 })
+    expect(byRow(2)[0].left).toBeGreaterThan(0)
+  })
+
+  test('a call-granularity unit underlines only its segment (indigo), not the rest', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    await page.evaluate(async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const mod = await import('/src/Block.mjs')
+      const Block = mod.default
+      const b = reactive({
+        category: 'RESOURCE',
+        label: 'Foo::toArray',
+        status: 'modified',
+        file: 'app/Foo.php',
+        line: 13,
+        approved: false,
+        code: {
+          // One modified line whose new side is a call chain; changeCalls splits it
+          // into segments `'city' => $this`, `->resource`, `->city,`.
+          old: { start: 1, end: 1, text: "'city' => $address->city," },
+          new: { start: 1, end: 1, text: "'city' => $this->resource->city," },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'char-host'
+      document.body.appendChild(host)
+      // Select the `->resource` segment (index 1). paneHTML underlines its chars.
+      const seg = mod.changeCalls(mod.blockRows(b))[1]
+      Block(b, { activeGroup: () => seg })(host)
+    })
+
+    const host = page.locator('#char-host')
+    const ul = 'span[class*="decoration-[#6366f1]"]'
+    // The active segment is underlined on the new pane…
+    await expect(host.locator(ul).first()).toBeVisible()
+    await expect(host.locator(`${ul}`, { hasText: 'resource' })).not.toHaveCount(0)
+    // …but the neighbouring `city` segment is never underlined.
+    await expect(host.locator(`${ul}`, { hasText: 'city' })).toHaveCount(0)
+  })
+
+  test('f on a single-line group jumps straight to call; d coarsens back', async ({
+    page,
+  }) => {
+    // Use the default-selected block 0 (proven to load in the other nav tests).
+    // Its first change group spans a single row, so refining it with f has no
+    // meaningful 'line' step (line == the whole group) and jumps straight to
+    // 'call'. See home.mjs (setGran).
+    await page.goto('/')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    const panel = page.getByTestId('detail-panel')
+    await expect(panel.locator('code.language-php').first()).toBeVisible()
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+
+    // Active rows (any granularity) carry the inset indigo left bar; count them
+    // across both panes as a granularity-agnostic "how many rows are selected".
+    const activeRows = panel.locator('div[class*="inset_3px_0_0"]')
+    const underline = panel.locator('span[class*="decoration-[#6366f1]"]')
+
+    // Step in at the default (group) granularity — a single row here.
+    await page.keyboard.press('ArrowRight')
+    await expect(page).toHaveURL(/mode=diff/)
+    await expect(page).not.toHaveURL(/gran=/) // group is the default → omitted
+    await expect(activeRows.first()).toBeVisible()
+    const groupCount = await activeRows.count()
+    expect(groupCount).toBe(2) // a single-row group: one row × two panes
+
+    // f → call directly (skipping line): gran=call, still one row, and now the
+    // segment's chars carry the indigo underline (same colour as the inset bar).
+    await page.keyboard.press('f')
+    await expect(page).toHaveURL(/gran=call/)
+    await expect(activeRows).toHaveCount(2)
+    await expect(underline.first()).toBeVisible()
+
+    // d walks back down the levels one step at a time: call → line (no underline).
+    await page.keyboard.press('d')
+    await expect(page).toHaveURL(/gran=line/)
+    await expect(underline).toHaveCount(0)
+
+    // d → group: gran param drops back to the default and the group count returns.
+    await page.keyboard.press('d')
+    await expect(page).not.toHaveURL(/gran=/)
+    await expect(activeRows).toHaveCount(groupCount)
+  })
+
+  // On the finest 'call' level f no longer zooms in — it steps to the *next* call
+  // (fKey → nextChange, the same flow as ↓). s always zooms straight back out
+  // (sKey → setGran(-1)), never walking the calls. See home.mjs.
+  test('on the call level f steps to the next call and s zooms back out', async ({ page }) => {
+    await page.goto('/')
+    const panel = page.getByTestId('detail-panel')
+    await expect(panel.locator('code.language-php').first()).toBeVisible()
+
+    // Step in and zoom to a single call segment (single-row group → straight to call).
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('f')
+    await expect(page).toHaveURL(/gran=call/)
+    await expect(page).not.toHaveURL(/chg=/) // first call → index 0, omitted
+
+    // On 'call', f advances to the next call segment instead of zooming further.
+    await page.keyboard.press('f')
+    await expect(page).toHaveURL(/gran=call/)
+    await expect(page).toHaveURL(/chg=1/)
+
+    // s zooms straight back out to line, dropping to the coarser level.
+    await page.keyboard.press('s')
+    await expect(page).toHaveURL(/gran=line/)
+  })
+
+  // The footer shows the selected change as an inline diff, but only when the
+  // active unit spans a single row. Refining with f down to a line (or call
+  // segment) always yields a single-row unit, so the footer always surfaces it, and
+  // on a 'call' unit it mirrors the pane's indigo segment underline. See Footer.mjs
+  // (activeUnit via unitsFor, line() with the underline set).
+  test('the footer surfaces the selected change and underlines the active call segment', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    const panel = page.getByTestId('detail-panel')
+    await expect(panel.locator('code.language-php').first()).toBeVisible()
+    const footer = page.getByTestId('footer')
+    const footerDiff = footer.getByTestId('code-diff')
+
+    // Step into the diff of the default block (single-row first group) and refine:
+    // f jumps straight to call, still one row, so the footer shows the +/- diff and
+    // the active segment carries the same indigo underline as the pane.
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('f')
+    await expect(page).toHaveURL(/gran=call/)
+    await expect(footerDiff.locator('div.block')).not.toHaveCount(0)
+    await expect(footer.locator('span[class*="decoration-[#6366f1]"]').first()).toBeVisible()
+
+    // Coarsen to line: still one row, footer keeps showing, underline gone.
+    await page.keyboard.press('d')
+    await expect(page).toHaveURL(/gran=line/)
+    await expect(footerDiff.locator('div.block')).not.toHaveCount(0)
+    await expect(footer.locator('span[class*="decoration-[#6366f1]"]')).toHaveCount(0)
   })
 })

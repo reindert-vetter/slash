@@ -50,11 +50,13 @@ test.describe('PR Review Tree — code diff alignment', () => {
     await expect(right).toHaveCount(4)
 
     // Old side: two removed lines (red) + one blank filler for the extra new line.
-    await expect(panes.nth(0).locator('.bg-rose-100')).toHaveCount(2)
+    // Row tints are hex (rose-100/emerald-100 mixed 20% toward white) — see
+    // paneHTML in Block.mjs; #ffe9eb = del, #dafbea = ins.
+    await expect(panes.nth(0).locator('div[class*="#ffe9eb"]')).toHaveCount(2)
     await expect(panes.nth(0).locator('.bg-slate-50')).toHaveCount(1)
 
     // New side: three added lines (green), no filler.
-    await expect(panes.nth(1).locator('.bg-emerald-100')).toHaveCount(3)
+    await expect(panes.nth(1).locator('div[class*="#dafbea"]')).toHaveCount(3)
     await expect(panes.nth(1).locator('.bg-slate-50')).toHaveCount(0)
 
     // The shared closing brace is untinted on both sides (an equal row).
@@ -98,13 +100,97 @@ test.describe('PR Review Tree — code diff alignment', () => {
     await expect(panes).toHaveCount(1)
     await expect(panes.first()).toHaveClass(/language-php/)
 
-    // Its three added lines are green, no fillers (nothing was removed).
-    await expect(panes.first().locator('.bg-emerald-100')).toHaveCount(3)
+    // Its three added lines are green (hex #dafbea = emerald-100 +20% white), no
+    // fillers (nothing was removed).
+    await expect(panes.first().locator('div[class*="#dafbea"]')).toHaveCount(3)
     await expect(panes.first().locator('.bg-slate-50')).toHaveCount(0)
 
     // The card is the narrow width, not the wide two-pane width.
     const card = page.locator('#added-host article')
     await expect(card).toHaveClass(/w-\[42rem\]/)
     await expect(card).not.toHaveClass(/w-\[76rem\]/)
+  })
+
+  // Re-indent regression: wrapping an array in array_merge([...]) pushes the
+  // inner lines 4 spaces deeper. Those lines are identical in content, so the
+  // whitespace-insensitive line diff must pair them and show them as a soft
+  // whitespace-only re-alignment — the words ('amount'/'taxes') must never be
+  // char-marked, and only the genuinely new structure stays tinted.
+  test('re-indented lines are a soft ws hint, not a content change', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await expect(page.getByTestId('block-row').first()).toBeVisible()
+
+    await page.evaluate(async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const b = reactive({
+        category: 'RESOURCE',
+        label: 'ShippingResource::dryRun',
+        status: 'modified',
+        file: 'app/Http/Resources/ShippingResource.php',
+        line: 31,
+        name: 'dryRun',
+        class: 'ShippingResource',
+        approved: false,
+        code: {
+          old: {
+            start: 25,
+            end: 32,
+            text:
+              'public static function dryRun(): array\n' +
+              '{\n' +
+              '    return [\n' +
+              "        'amount'          => 100,\n" +
+              "        'amount_with_tax' => 121,\n" +
+              "        'taxes'           => [TaxResource::dryRun()],\n" +
+              '    ];\n' +
+              '}',
+          },
+          new: {
+            start: 31,
+            end: 41,
+            text:
+              'public static function dryRun(): array\n' +
+              '{\n' +
+              '    return array_merge(\n' +
+              '        [\n' +
+              "            'amount'          => 100,\n" +
+              "            'amount_with_tax' => 121,\n" +
+              "            'taxes'           => [TaxResource::dryRun()],\n" +
+              '        ],\n' +
+              '        AddressInfoResource::dryRun(),\n' +
+              '    );\n' +
+              '}',
+          },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'reindent-host'
+      document.body.appendChild(host)
+      Block(b)(host)
+    })
+
+    const panes = page.locator('#reindent-host code.language-php')
+    await expect(panes).toHaveCount(2)
+    const markers = '[class*="bg-emerald-"], [class*="bg-rose-"]'
+
+    // Regression: the unchanged words are never wrapped in a char-diff marker.
+    for (const word of ['taxes', 'amount', 'amount_with_tax']) {
+      await expect(panes.locator(`span${markers}`, { hasText: word })).toHaveCount(0)
+    }
+
+    // The genuinely new structure is still marked as a real change.
+    await expect(
+      panes.nth(1).locator('span[class*="bg-emerald-"]', { hasText: 'array_merge' }),
+    ).not.toHaveCount(0)
+
+    // The re-indented 'taxes' row is a whitespace-only re-alignment: no full-line
+    // tint (#… hex classes) and not counted as a change for navigation.
+    const taxesRow = panes.nth(1).locator(':scope > div', { hasText: 'taxes' })
+    await expect(taxesRow).toHaveCount(1)
+    await expect(taxesRow).not.toHaveClass(/bg-\[#/)
+    await expect(taxesRow).not.toHaveAttribute('data-changed', '1')
   })
 })

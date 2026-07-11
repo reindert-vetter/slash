@@ -84,11 +84,8 @@
   </head>
   <body class="h-screen overflow-hidden bg-slate-50 text-slate-900 antialiased">
     <div id="app"></div>
-    <!-- White footer strip; the panels above reserve 100px for it. -->
-    <footer
-      class="fixed bottom-0 left-0 right-0 z-20 h-[100px] border-t border-slate-200 bg-white"
-      data-testid="footer"
-    ></footer>
+    <!-- The footer strip (100px, reserved by the panels above) is mounted by
+         home.mjs — see Footer.mjs. -->
     <script type="module" src="/src/home.mjs"></script>
   </body>
 </html>
