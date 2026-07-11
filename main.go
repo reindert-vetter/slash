@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
 func main() {
@@ -47,15 +48,16 @@ func runServe(args []string) {
 	if err := os.MkdirAll("data", 0o755); err != nil {
 		log.Fatalf("mkdir data: %v", err)
 	}
-	db, err := openDB(dbPath(*dbFlag))
+	resolvedDB := dbPath(*dbFlag)
+	db, err := openDB(resolvedDB)
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
 
-	// Workflow engine + modules (comments/github). Pollers live for the process
-	// lifetime, so a background context is fine here.
-	tk, closeTasks, err := newTasks(context.Background(), "data", repoSlug)
+	// Workflow/comments stores live next to the DB, so a test DB isolates its
+	// workflow state too. (The worktree data dir stays "data" — see server.)
+	tk, closeTasks, err := newTasks(context.Background(), filepath.Dir(resolvedDB), repoSlug)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)
 	}

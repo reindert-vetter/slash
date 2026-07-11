@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -40,7 +41,14 @@ func newTasks(ctx context.Context, dataDir, repo string) (*tasks, func() error, 
 		sq.Close()
 		return nil, nil, err
 	}
-	mgr := NewTaskManager(engine, github.New(repo), cs)
+
+	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
+	// real repo; otherwise talk to GitHub via gh.
+	var gh github.Client = github.New(repo)
+	if os.Getenv("SLASH_GITHUB") == "off" {
+		gh = &github.Fake{}
+	}
+	mgr := NewTaskManager(engine, gh, cs)
 
 	if err := engine.Recover(); err != nil {
 		return nil, nil, err

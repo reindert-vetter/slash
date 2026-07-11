@@ -162,30 +162,43 @@ test.describe('PR Review Tree — change navigation', () => {
     await selected(page, 0).toHaveClass(/bg-indigo-50/)
   })
 
-  // Enter jumps to the chat by selecting the top task in the RelatedPanel (its
-  // thread opens). A "+ Nieuwe taak" button sits first in the list. See home.mjs
-  // (onKeydown → ui.task = 0) + RelatedPanel (newTaskButton / shared ui).
-  test('Enter selects the top task; the new-task button leads the list', async ({ page }) => {
-    await page.goto('/')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  // Enter jumps to the comments panel by selecting the top comment (its thread
+  // opens). Comments are the task_code_comment workflow; seeding one is the only
+  // write path (POST /api/workflows/task_code_comment). A "+ Comment op deze
+  // regel" button leads the list. See home.mjs (onKeydown → selectTopComment) +
+  // RelatedPanel (commentsSection). The server runs with SLASH_GITHUB=off so
+  // seeding never touches a real repo.
+  test('Enter selects the top comment; the new-comment button leads the list', async ({
+    page,
+    request,
+  }) => {
+    // Seed two comments on PR 12903 (the default PR the UI opens).
+    for (const body of ['first review comment', 'second review comment']) {
+      const res = await request.post('/api/workflows/task_code_comment', {
+        data: { pr: 12903, file: 'seed.php', line: 1, author: 'test', body },
+      })
+      expect(res.ok()).toBeTruthy()
+    }
 
+    await page.goto('/')
     const panel = page.getByTestId('related-panel')
-    const rows = panel.getByTestId('task-row')
+    const items = panel.getByTestId('comment-item')
     const active = /bg-indigo-50/
 
-    // The new-task button is the first item in the task list.
-    await expect(panel.getByTestId('new-task')).toBeVisible()
+    // The new-comment button leads the list, and both seeded comments show.
+    await expect(panel.getByTestId('new-comment')).toBeVisible()
+    await expect(items).toHaveCount(2)
 
-    // Move the task selection off the top by clicking the second task…
-    await rows.nth(1).click()
-    await expect(rows.nth(1)).toHaveClass(active)
-    await expect(rows.nth(0)).not.toHaveClass(active)
+    // Move the selection off the top by clicking the second comment…
+    await items.nth(1).click()
+    await expect(items.nth(1)).toHaveClass(active)
+    await expect(items.nth(0)).not.toHaveClass(active)
 
-    // …then Enter jumps back to the top task and its chat header follows.
+    // …then Enter jumps back to the top comment and its thread header follows.
     await page.keyboard.press('Enter')
-    await expect(rows.nth(0)).toHaveClass(active)
-    await expect(rows.nth(1)).not.toHaveClass(active)
-    await expect(panel.getByTestId('chat')).toContainText('billingAddress-wissel checken')
+    await expect(items.nth(0)).toHaveClass(active)
+    await expect(items.nth(1)).not.toHaveClass(active)
+    await expect(panel.getByTestId('comment-thread')).toContainText('first review comment')
   })
 
   // Selection granularity: f refines group → line → call, d coarsens back. See

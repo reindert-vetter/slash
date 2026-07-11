@@ -6,7 +6,7 @@ import { reactive, html } from './vendor/arrow.js'
 import BlockList from './BlockList.mjs'
 import Footer from './Footer.mjs'
 import Block, { blockRows, changeGroups, unitsFor, updateHints } from './Block.mjs'
-import RelatedPanel from './RelatedPanel.mjs'
+import RelatedPanel, { selectTopComment } from './RelatedPanel.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 
 const PR = 12903
@@ -34,11 +34,6 @@ const state = reactive({
   error: '',
   onIngest: ingest,
 })
-
-// ui — local, non-persisted panel state shared with the RelatedPanel. `task` is
-// the index of the selected task whose chat thread is shown; pressing Enter jumps
-// to the chat by selecting the top task. Not in the URL (see RelatedPanel).
-const ui = reactive({ task: 0 })
 
 // Persist the navigation position in the URL so a refresh (or a shared link)
 // reopens the same PR, selected block, mode and change. Bare params are the main
@@ -391,11 +386,11 @@ function enterDiff() {
 }
 
 function onKeydown(e) {
-  // Enter jumps to the chat with claude by selecting the top task in the list, so
-  // its thread is shown. Works regardless of block-navigation mode.
+  // Enter jumps to the comments panel by selecting the top comment, so its
+  // thread is shown. Works regardless of block-navigation mode.
   if (e.key === 'Enter') {
     e.preventDefault()
-    ui.task = 0
+    selectTopComment()
     return
   }
 
@@ -554,7 +549,7 @@ function DetailPanel(state) {
         return out
       }}
       </div>
-      ${() => RelatedPanel(ui, state).key('related-panel')}
+      ${() => RelatedPanel(state).key('related-panel')}
     </main>
   `
 }
