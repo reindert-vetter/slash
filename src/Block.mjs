@@ -668,7 +668,8 @@ export function changeLines(rows) {
 // segment of a changed row. Unlike the coarser levels this cuts a line by its
 // *structure* (the calls it makes), not by what the diff changed — so later each
 // segment can be tied to the function it calls (an edge in the call-graph). A
-// line is split on `->`, `.` and `;` (segmentCalls), and — unlike changeLines —
+// line is split on `->`, `.`, `;` and the binary separators `??`/`&&`/`||`/
+// comparisons (segmentCalls), and — unlike changeLines —
 // the WHOLE new line is walked: every non-empty segment is landable, changed or
 // not. Each unit is a single-row range { start: i, end: i } tagged `char: true`
 // with `left`/`right` Sets of the char indices to underline on each side.
@@ -710,13 +711,30 @@ export function changeCalls(rows) {
   return units
 }
 
+// CALL_SEPARATORS are binary operators that join two *independent* operands —
+// each side is its own call chain — so they break a segment and lead the next one
+// (like `->`/`.`). `$a->x ?? $b->y` must split at `??` so `$a->x` and `$b->y` are
+// separate segments (each later tied to its own call-graph edge), otherwise `??`
+// gets swallowed into one caller's segment. Besides `??` (null-coalesce) this
+// covers the logical `&&`/`||` and the comparisons — all glue two callers.
+// Matched longest-first so `===` beats `==` and `!==` beats `!=`.
+//
+// Deliberately NOT separators (would over-split real chains): `=>` (array
+// key=>value stays one segment — see the toArray test), `::` (static call, part
+// of a chain), the ternary `?`/`:` (collide with the `?->` nullsafe operator and
+// `::`), a bare `<`/`>` (collide with `->` and `=>`), and arithmetic (rarely a
+// caller boundary, and `-`/`/` collide with `->`/`//`).
+const CALL_SEPARATORS = ['===', '!==', '??', '&&', '||', '==', '!=', '<=', '>=']
+
 // segmentCalls splits a line into call-chain segments. A new segment begins at
-// each `->` or `.` (the operator starts the call it introduces) and `;` closes
-// the current one (a statement boundary, kept at the end of its call). The
-// segments tile the whole line with no gaps — `$order->customer()->name();`
-// becomes `$order`, `->customer()`, `->name();` — so every part of a line is walkable.
-// The `.` boundary is there for Vue/JS property access (`order.customer.name`) as
-// much as PHP concatenation. Returns [{ start, end }] half-open char ranges.
+// each `->` or `.`, or a CALL_SEPARATORS operator (the operator starts the call it
+// introduces), and `;` closes the current one (a statement boundary, kept at the
+// end of its call). The segments tile the whole line with no gaps —
+// `$order->customer()->name();` becomes `$order`, `->customer()`, `->name();`, and
+// `$a->x ?? $b->y` becomes `$a`, `->x `, `?? $b`, `->y` — so every part of a line
+// is walkable. The `.` boundary is there for Vue/JS property access
+// (`order.customer.name`) as much as PHP concatenation. Returns [{ start, end }]
+// half-open char ranges.
 function segmentCalls(text) {
   const segs = []
   let start = 0
@@ -736,7 +754,13 @@ function segmentCalls(text) {
       i += 1
       push(i) // include `;` in the current segment, then start fresh after it
     } else {
-      i += 1
+      const op = CALL_SEPARATORS.find((o) => text.startsWith(o, i))
+      if (op) {
+        push(i) // end current before the operator; it leads the next segment
+        i += op.length
+      } else {
+        i += 1
+      }
     }
   }
   push(text.length)

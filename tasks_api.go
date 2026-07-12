@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -11,20 +12,22 @@ import (
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/comments"
 	"slash/modules/github"
+	"slash/modules/inbox"
 )
 
-// tasks holds the workflow engine + the comments module read side. It is built
-// once at server start.
+// tasks holds the workflow engine + the module read sides. It is built once at
+// server start.
 type tasks struct {
 	engine   *tembed.Engine
 	manager  *TaskManager
 	comments *comments.Module
+	inbox    *inbox.Module
 }
 
 // newTasks builds the tembed engine (SQLite + JSONL, so comments live in the
 // workflow event history AND in jsonl files), the comments module, and the
 // github module, then recovers in-flight executions and resumes their pollers.
-func newTasks(ctx context.Context, dataDir, repo string) (*tasks, func() error, error) {
+func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, func() error, error) {
 	sq, err := tembed.NewSQLiteStore(dataDir + "/workflows.db")
 	if err != nil {
 		return nil, nil, err
@@ -41,6 +44,12 @@ func newTasks(ctx context.Context, dataDir, repo string) (*tasks, func() error, 
 		sq.Close()
 		return nil, nil, err
 	}
+	ib, err := inbox.Open(dataDir + "/inbox.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -48,18 +57,22 @@ func newTasks(ctx context.Context, dataDir, repo string) (*tasks, func() error, 
 	if os.Getenv("SLASH_GITHUB") == "off" {
 		gh = &github.Fake{}
 	}
-	mgr := NewTaskManager(engine, gh, cs)
+	mgr := NewTaskManager(engine, gh, cs, ib, db, repo)
 
 	if err := engine.Recover(); err != nil {
 		return nil, nil, err
 	}
 	mgr.ResumePolling(ctx)
+	// Own the PR inbox via the workflow: fetch an initial snapshot into the
+	// read-model and start the refresh poller (the UI reads only the read-model).
+	mgr.EnsureInbox(ctx)
 
 	closeFn := func() error {
 		_ = sq.Close()
+		_ = ib.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -84,7 +97,12 @@ func (m *TaskManager) ResumePolling(ctx context.Context) {
 		}
 		rootID, _ := m.rootID(r.ID)
 		if rootID != 0 {
-			go m.poll(ctx, r.ID, input.PR, rootID)
+			prRunID, err := m.ensurePRStatus(input.PR)
+			if err != nil {
+				m.logf("task_code_comment: resume ensure pr_status pr=%d: %v", input.PR, err)
+				prRunID = ""
+			}
+			go m.poll(ctx, r.ID, input.PR, rootID, prRunID)
 		}
 	}
 }
@@ -100,6 +118,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	mux.HandleFunc("/api/workflows/task_code_comment", s.handleTaskCodeComment)
 	// GET /api/comments?pr=N → read-only comments + reactions for the UI
 	mux.HandleFunc("/api/comments", s.handleComments)
+	// The inbox is owned by the pr_inbox workflow; these endpoints read its
+	// read-model (never GitHub directly).
+	mux.HandleFunc("/api/inbox", s.handleInbox)
+	mux.HandleFunc("/api/inbox/status", s.handleInboxStatus)
 }
 
 // handleTaskCodeComment starts a code-comment Workflow Execution (POST) or lists
@@ -151,10 +173,33 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(rest, "/")
 	runID := parts[0]
 
+	// POST /api/workflows/{runID}/heartbeat — the UI marks a thread as actively
+	// viewed so the server keeps fast-polling GitHub. Writes no state (only
+	// in-memory poll timing), so it sits outside the workflow write-boundary.
+	if len(parts) == 2 && parts[1] == "heartbeat" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.tasks.manager.Heartbeat(runID)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "beat"})
+		return
+	}
+
 	// POST /api/workflows/{runID}/signals/{signalName}
 	if len(parts) == 3 && parts[1] == "signals" {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// The inbox "refresh" signal carries no payload — it just asks the
+		// pr_inbox workflow to re-fetch now (the UI's on-load re-check).
+		if parts[2] == SignalRefresh {
+			if err := s.tasks.manager.RefreshInbox(runID); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "refreshing"})
 			return
 		}
 		if parts[2] != SignalReply {

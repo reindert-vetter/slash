@@ -23,11 +23,53 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	mux.HandleFunc("/api/blocks", s.handleBlocks)
 	mux.HandleFunc("/api/code", s.handleCode)
 	mux.HandleFunc("/api/ingest", s.handleIngest)
+	mux.HandleFunc("/api/prs", s.handlePRs)
+	mux.HandleFunc("/api/prs/search", s.handleSearch)
 	if s.tasks != nil {
 		s.routesTasks(mux)
 	}
-	mux.Handle("/", http.FileServer(http.Dir(staticDir)))
+
+	fileServer := http.FileServer(http.Dir(staticDir))
+	// App pages are served as static HTML shells; the front-end reads the PR id
+	// from the path (/pr/<id>) and the overview lists the PRs (/pr-overview).
+	mux.HandleFunc("/pr/", serveFile(staticDir, "index.html"))
+	mux.HandleFunc("/pr-overview", serveFile(staticDir, "overview.html"))
+	// Everything else is a static asset (/src/*, /overview.html, …); bare "/"
+	// has no PR, so send it to the overview.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/pr-overview", http.StatusFound)
+			return
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 	return mux
+}
+
+// serveFile returns a handler that always serves one file from staticDir — the
+// SPA shell for the /pr/<id> and /pr-overview routes.
+func serveFile(staticDir, name string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(staticDir, name))
+	}
+}
+
+// handlePRs serves GET /api/prs — every ingested PR with its counts, for the
+// overview page.
+func (s *server) handlePRs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	prs, err := listPRs(s.db)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if prs == nil {
+		prs = []PRSummary{}
+	}
+	writeJSON(w, http.StatusOK, prs)
 }
 
 // handleBlocks serves GET /api/blocks?pr=N — the blocks of one PR (a delta).

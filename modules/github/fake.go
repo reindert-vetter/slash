@@ -12,6 +12,7 @@ type Fake struct {
 	nextID  int64
 	Posted  []string // bodies posted (root + replies), in order
 	replies []Reply
+	prState string // "" reads as "open"
 }
 
 func (f *Fake) PostLineComment(_ context.Context, pr int, file string, line int, body string) (int64, error) {
@@ -36,6 +37,22 @@ func (f *Fake) FetchReplies(_ context.Context, pr int, rootID int64) ([]Reply, e
 	out := make([]Reply, len(f.replies))
 	copy(out, f.replies)
 	return out, nil
+}
+
+func (f *Fake) PRState(_ context.Context, pr int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.prState == "" {
+		return "open", nil
+	}
+	return f.prState, nil
+}
+
+// SetPRState makes the next PRState calls report state ("open"|"merged"|"closed").
+func (f *Fake) SetPRState(state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prState = state
 }
 
 // EnqueueReply makes r visible to the next FetchReplies (as if it appeared on

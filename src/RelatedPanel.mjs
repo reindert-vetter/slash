@@ -31,9 +31,44 @@ async function loadComments(pr) {
   }
 }
 
+// Activity tracking: a tab being *visible* is not the same as the reviewer being
+// *active* — a tab left open in the foreground while the reviewer walked away
+// would otherwise keep heartbeating forever. We only beat on genuine engagement:
+// visible + focused + input within ACTIVITY_WINDOW. No input for that long ⇒ we
+// stop beating, and the server backs off to its slow cadence.
+const ACTIVITY_WINDOW = 120000 // 2 min without input ⇒ treat the reviewer as away
+let lastActivity = 0
+if (typeof window !== 'undefined') {
+  const mark = () => {
+    lastActivity = Date.now()
+  }
+  ;['pointerdown', 'pointermove', 'keydown', 'scroll', 'wheel', 'focus'].forEach((ev) =>
+    window.addEventListener(ev, mark, { passive: true })
+  )
+}
+
+function tabActive() {
+  if (typeof document === 'undefined' || document.visibilityState !== 'visible') return false
+  if (typeof document.hasFocus === 'function' && !document.hasFocus()) return false
+  return Date.now() - lastActivity < ACTIVITY_WINDOW
+}
+
+// beat tells the server the reviewer is actively viewing the selected open
+// thread, so its GitHub poller keeps its fast cadence (server backs off to a
+// 10-min cadence without a heartbeat within the last 10 min). It only fires while
+// the tab is genuinely active (see tabActive) and writes no state.
+function beat() {
+  if (!tabActive()) return
+  const c = cs.list[cs.sel]
+  if (!c || !c.runId || c.status !== 'open') return
+  fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/heartbeat', { method: 'POST' }).catch(() => {})
+}
+
 // syncComments refetches when the PR changes and starts a slow refresh so
-// GitHub-polled reactions (server-side, once a minute) surface in the UI.
+// GitHub-polled reactions (server-side) surface in the UI, plus a heartbeat so
+// the server keeps fast-polling the thread you are looking at.
 let refreshTimer = null
+let heartbeatTimer = null
 function syncComments(pr) {
   if (cs.pr !== pr) {
     cs.pr = pr
@@ -42,6 +77,9 @@ function syncComments(pr) {
   }
   if (!refreshTimer) {
     refreshTimer = setInterval(() => cs.pr != null && loadComments(cs.pr), 5000)
+  }
+  if (!heartbeatTimer) {
+    heartbeatTimer = setInterval(beat, 60000)
   }
 }
 
@@ -96,7 +134,10 @@ function commentRow(c, i) {
         'flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left transition ' +
         (cs.sel === i ? 'bg-indigo-50 ring-1 ring-indigo-200' : 'hover:bg-slate-50')}"
       data-testid="comment-item"
-      @click="${() => (cs.sel = i)}"
+      @click="${() => {
+        cs.sel = i
+        beat()
+      }}"
     >
       <span class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300')}"></span>
       <span class="flex min-w-0 flex-col gap-0.5">

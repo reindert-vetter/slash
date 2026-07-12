@@ -28,6 +28,8 @@ type Client interface {
 	PostLineComment(ctx context.Context, pr int, file string, line int, body string) (int64, error)
 	Reply(ctx context.Context, pr int, inReplyTo int64, body string) (int64, error)
 	FetchReplies(ctx context.Context, pr int, rootID int64) ([]Reply, error)
+	// PRState reports the lifecycle state of a PR: "open", "merged", or "closed".
+	PRState(ctx context.Context, pr int) (string, error)
 }
 
 // Module is the production Client: it shells out to `gh api` against repo.
@@ -125,6 +127,27 @@ func (m *Module) headSHA(ctx context.Context, pr int) (string, error) {
 		return "", err
 	}
 	return meta.Head.Sha, nil
+}
+
+// PRState reports whether a PR is "open", "merged", or "closed" (a merged PR
+// reports "merged", not "closed").
+func (m *Module) PRState(ctx context.Context, pr int) (string, error) {
+	out, err := m.api(ctx, "GET",
+		fmt.Sprintf("repos/%s/pulls/%d", m.repo, pr))
+	if err != nil {
+		return "", err
+	}
+	var meta struct {
+		State  string `json:"state"` // "open" | "closed"
+		Merged bool   `json:"merged"`
+	}
+	if err := json.Unmarshal(out, &meta); err != nil {
+		return "", err
+	}
+	if meta.Merged {
+		return "merged", nil
+	}
+	return meta.State, nil
 }
 
 func (m *Module) api(ctx context.Context, method, endpoint string, args ...string) ([]byte, error) {

@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test'
 // Block.mjs (changeGroups / paneHTML active highlight).
 test.describe('PR Review Tree — change navigation', () => {
   test('changeGroups collapses runs and splits every 5 rows', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     // Let the app's initial module load + lazy fetches settle; otherwise an
     // in-page evaluate() can race the load and hit "context destroyed".
     await page.waitForLoadState('networkidle')
@@ -37,7 +37,7 @@ test.describe('PR Review Tree — change navigation', () => {
   test('a long run of bracket-only rows is NOT split (needs a letter to break)', async ({
     page,
   }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
     const groups = await page.evaluate(async () => {
       const { changeGroups } = await import('/src/Block.mjs')
@@ -57,7 +57,7 @@ test.describe('PR Review Tree — change navigation', () => {
   })
 
   test('an active group is highlighted with an anchor on both panes', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -97,7 +97,7 @@ test.describe('PR Review Tree — change navigation', () => {
   test('→ steps into the diff (panel expands, first change stays highlighted), ← steps back out', async ({
     page,
   }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
 
     // Wait for the selected block's diff to load.
@@ -130,7 +130,7 @@ test.describe('PR Review Tree — change navigation', () => {
   test('↓ flows into the next same-file block but stops at the file boundary', async ({
     page,
   }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
@@ -148,7 +148,7 @@ test.describe('PR Review Tree — change navigation', () => {
   test('↑ flows back into the previous same-file block and stops at the top', async ({
     page,
   }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     // Select block 1 (findOrCreateCustomer, same file as block 0) and step in.
     await page.locator('[data-idx="1"]').click()
     await selected(page, 1).toHaveClass(/bg-indigo-50/)
@@ -180,7 +180,7 @@ test.describe('PR Review Tree — change navigation', () => {
       expect(res.ok()).toBeTruthy()
     }
 
-    await page.goto('/')
+    await page.goto('/pr/12903')
     const panel = page.getByTestId('related-panel')
     const items = panel.getByTestId('comment-item')
     const active = /bg-indigo-50/
@@ -206,7 +206,7 @@ test.describe('PR Review Tree — change navigation', () => {
   test('changeLines and changeCalls split a group into lines then call segments', async ({
     page,
   }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
     const out = await page.evaluate(async () => {
       const { changeGroups, changeLines, changeCalls } = await import('/src/Block.mjs')
@@ -250,10 +250,45 @@ test.describe('PR Review Tree — change navigation', () => {
     expect(byRow(2)[0].left).toBeGreaterThan(0)
   })
 
+  // A `??` (and its siblings `&&`/`||`/comparisons) joins two independent call
+  // chains, so segmentCalls must break there — otherwise the operator gets
+  // swallowed into one caller's segment and the two callers can't be separated.
+  test('changeCalls splits a line at `??` so the two callers are separate segments', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+    const segs = await page.evaluate(async () => {
+      const { changeCalls } = await import('/src/Block.mjs')
+      const rows = [
+        {
+          left: '$contract->address->company ?? $contract->address->full_name,',
+          right: '$contract->billingAddress->company ?? $contract->billingAddress->full_name,',
+          leftMark: 'del',
+          rightMark: 'ins',
+        },
+      ]
+      // Return the trimmed text each unit underlines on the new (right) side.
+      return changeCalls(rows).map((u) =>
+        rows[0].right
+          .split('')
+          .filter((_, i) => u.right.has(i))
+          .join('')
+          .trim(),
+      )
+    })
+    // `$contract` / `->billingAddress` / `->company` / `?? $contract` / … — the
+    // `??` starts a fresh segment (`?? $contract`), splitting the two callers.
+    expect(segs).toContain('?? $contract')
+    // The first caller's tail ends at `??`, never spanning across it.
+    expect(segs.some((s) => s.includes('??') && s !== '?? $contract')).toBe(false)
+    expect(segs).toContain('->company')
+  })
+
   test('a call-granularity unit underlines only its segment (indigo), not the rest', async ({
     page,
   }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -297,7 +332,7 @@ test.describe('PR Review Tree — change navigation', () => {
     // Its first change group spans a single row, so refining it with f has no
     // meaningful 'line' step (line == the whole group) and jumps straight to
     // 'call'. See home.mjs (setGran).
-    await page.goto('/')
+    await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
@@ -338,7 +373,7 @@ test.describe('PR Review Tree — change navigation', () => {
   // (fKey → nextChange, the same flow as ↓). s always zooms straight back out
   // (sKey → setGran(-1)), never walking the calls. See home.mjs.
   test('on the call level f steps to the next call and s zooms back out', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
 
@@ -366,7 +401,7 @@ test.describe('PR Review Tree — change navigation', () => {
   test('the footer surfaces the selected change and underlines the active call segment', async ({
     page,
   }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
     const footer = page.getByTestId('footer')

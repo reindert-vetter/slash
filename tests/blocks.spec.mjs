@@ -17,7 +17,7 @@ const EXPECTED_LABELS = [
 
 test.describe('PR Review Tree — block list', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row')).toHaveCount(EXPECTED_LABELS.length)
   })
 

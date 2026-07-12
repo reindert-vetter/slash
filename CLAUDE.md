@@ -146,9 +146,15 @@ niveau als vorige-call fungeert (zie onder):
   dan de grovere niveaus knipt dit niet op *wat* er gewijzigd is maar op de
   **structuur** — de aanroepen die de regel doet — zodat je later elk segment aan
   de functie die het aanroept kunt koppelen (een edge in de call-graph). Een regel
-  wordt gesplitst op `->`, `.` en `;` (`segmentCalls`; de `;` blijft aan zijn
-  aanroep vast): `$order->customer()->name();` wordt `$order` / `->customer()` /
-  `->name();`. De `.`-grens is er vooral voor
+  wordt gesplitst op `->`, `.`, `;` en de **binaire scheiders** `??`, `&&`, `||`
+  en de vergelijkers (`==`/`===`/`!=`/`!==`/`<=`/`>=`) (`segmentCalls`; de `;`
+  blijft aan zijn aanroep vast, de scheiders leiden — net als `->`/`.` — het
+  volgende segment in): `$order->customer()->name();` wordt `$order` /
+  `->customer()` / `->name();`, en `$a->x ?? $b->y` wordt `$a` / `->x ` / `?? $b` /
+  `->y` zodat de twee callers rond de `??` gescheiden blijven. **Géén** scheider
+  (zou echte chains kapotknippen): `=>` (array `key => value` blijft één segment),
+  `::` (static call, hoort bij de chain), de ternary `?`/`:` (botsen met `?->` en
+  `::`) en een kale `<`/`>` (botst met `->`/`=>`). De `.`-grens is er vooral voor
   Vue/JS property-access (`order.customer.name`), naast PHP-concatenatie. De gekozen
   segment-tekens krijgen een **smalle underline** in dezelfde indigo (`#6366f1`,
   `UNDERLINE_CLS`) als de inset-linkerbalk van de actieve rij.
@@ -255,6 +261,104 @@ De block-kaart heeft `max-w-full` dus hij krimpt om ruimte te maken voor het
 paneel; in `'diff'`-mode (`left-6`) vult de block-kolom de resterende breedte
 i.p.v. de vaste 76rem.
 
+## Pagina's & routing
+
+De app heeft twee pagina's, beide statische HTML-shells zonder build-stap; de
+Go-server (`api.go`, `routes`) bepaalt welke shell een route krijgt:
+
+- **`/pr/<id>`** — de review-pagina van één PR (`index.html` → `home.mjs`). De
+  PR-id komt uit het **pad**, niet uit de query-string: `home.mjs` leest 'm met
+  `prFromPath()` (regex `^/pr/(\d+)`) en zet 'm in `state.pr`. Zonder geldige
+  id in het pad doet `home.mjs` een `location.replace('/pr-overview')`.
+- **`/pr-overview`** — de **PR-inbox**: een live GitHub-dashboard van PR's die je
+  aandacht nodig hebben (`overview.html` → `src/overview.mjs`). Zie de sectie
+  **PR-inbox** hieronder. Een geïngeste PR (`hasGraph`) linkt naar `/pr/<id>`; de
+  read-only "recent gegenereerd"-lade voedt nog steeds uit **`GET /api/prs`**
+  (`handlePRs` → `listPRs`, block/file-counts per PR uit `PRSummary`).
+- **`/`** redirect (302) naar `/pr-overview`; alle overige paden
+  (`/src/*`, `/overview.html`, …) worden statisch geserveerd door de
+  `http.FileServer`. De `/pr/`- en `/pr-overview`-routes serveren hun shell via
+  `serveFile(staticDir, name)`.
+
+## PR-inbox (`/pr-overview`)
+
+De startpagina is een **GitHub-inbox**, nagebouwd op GitHub's eigen
+`github.com/pulls`-dashboard: dezelfde secties en taal ("Ready to merge", "Needs
+your review", …), met per rij review-status, CI-checks, reviewers en diff-stats.
+Hij is **volledig read-only** — de inbox muteert nooit state (conform
+`workflows-write-boundary.md`). Een geïngeste PR opent de tree op `/pr/<n>`; een
+niet-geïngeste rij biedt alleen *Open op GitHub* / *Open Jira-ticket* (géén
+ingest-actie vanuit de overview).
+
+### GitHub-toegang loopt via een workflow (niet rechtstreeks)
+
+**De pagina roept GitHub nooit zelf aan.** De PR-lijst wordt gefetcht en beheerd
+door het **`pr_inbox`-Workflow** (één Execution per repo, zie tembed-sectie); dat
+schrijft de laatste staat in de **`inbox`-module** (een read-model), en de
+HTTP-handlers lezen **alleen** dat read-model. Dit is de kanonieke
+write-boundary-vorm: alleen een workflow praat met GitHub en muteert state.
+
+- **`pr_inbox`-workflow** (`workflows.go`): een `for`-lus op een `refresh`-**Signal**
+  → één `refreshInbox`-**Activity**. De Activity draait `buildInboxSnapshot`
+  (fetch + `statusesFor`), slaat het op in de `inbox`-module, en geeft alléén een
+  klein `{updatedAt, prs}`-summary terug — de data zelf staat in de module, dus de
+  event-history blijft compact ook al refresht de workflow eindeloos.
+- **Poller-cadans (heartbeat-gedreven, net als de comment-poller):** `pollInbox`
+  stuurt een `refresh`-Signal op de **snelle** cadans (`pollInterval`, 1 min)
+  zolang er binnen `heartbeatWindow` een heartbeat kwam, anders op de **trage**
+  cadans (`idlePollInterval`, 10 min). Bij startup stuurt `EnsureInbox` één
+  **synchrone** refresh, zodat het read-model gevuld is vóór de server serveert;
+  na herstart hergebruikt `EnsureInbox` de bestaande Execution (`findInboxRun`).
+- **De UI drijft de cadans:** bij laden stuurt `overview.mjs` een `refresh`-Signal
+  (`POST /api/workflows/{runID}/signals/refresh`) zodat de workflow meteen opnieuw
+  checkt, plus een **heartbeat** (`POST …/heartbeat`) — maar **alleen als het
+  tabblad zichtbaar én gefocust is** (`activeTab()`), zodat een geparkeerd tabblad
+  vanzelf naar de trage cadans zakt. Daarna pollt de UI het read-model periodiek
+  (`reloadSnapshot`) om de nieuwste snapshot te tonen. De heartbeat mutert geen
+  durable state (alleen in-memory poll-timing) en valt dus buiten de
+  write-boundary — precies zoals bij de comments.
+
+De GitHub-fetch zelf (`inbox.go`): `gh api graphql`-`search`-calls (géén nieuwe
+dependency). `lightFields` tekent de rij, `heavyFields` (`mergeable
+reviewDecision`, `reviewRequests`, `latestReviews`, `statusCheckRollup`) vult de
+pills. `hasGraph` wordt overlayd uit de `blocks`-tabel (`ingestedSet`).
+`inboxSections` spiegelen `/pulls` (qualifiers 1-op-1 uit dash' `INBOX_SECTIONS`,
+incl. `archived:false`, de copilot-query en de **COMMENTED-catch** `keep`-filter);
+queries draaien parallel en worden deterministisch hersamengesteld.
+`mergeReviewers` en `statusesFor` (één aliased call) zoals voorheen.
+
+**Endpoints:**
+
+| Endpoint | Doet |
+|---|---|
+| `GET /api/inbox` | Leest het read-model → `{ok,live,repo,generatedFor,updatedAt,runId,sections}`. `runId` = het `pr_inbox`-Run ID (voor refresh/heartbeat). Nog geen snapshot → `{ok:false}`. |
+| `GET /api/inbox/status?prs=12,13` | De pills, óók uit het read-model-snapshot (géén GitHub-call). |
+| `POST /api/workflows/{runID}/signals/refresh` | Refresh-Signal (UI bij laden). Start alleen de fetch-Activity. |
+| `POST /api/workflows/{runID}/heartbeat` | Operationele ping (poll-cadans), geen state-write. |
+| `GET /api/prs/search?q=…` | **Nog wél een directe** live gh-`search` (`inbox_api.go`) — een ephemere, geparametriseerde read, geen persistente lijst. Kaal getal → `<n> in:title`. |
+| `GET /api/prs` | (bestaand) geïngeste PR's + counts, voor de recent-lade. |
+
+### Offline / test-modus
+
+Onder **`SLASH_GITHUB=off`** raakt niets het netwerk: `buildInboxSnapshot` (de
+Activity) serveert de **fixture** uit `SLASH_INBOX` (`tests/fixtures/inbox.json`,
+shape `{repo,generatedFor,sections,statuses}`). Bij startup vult de synchrone
+refresh het read-model, dus `GET /api/inbox` heeft meteen data (geen race in
+tests). `hasGraph` komt uit de DB, dus de geseedde PR (12903) linkt naar
+`/pr/12903`. Faalt de eerste fetch (geen fixture, geen snapshot) → `/api/inbox`
+`{ok:false}` → client valt terug op `GET /data/inbox.json` (label "cached").
+
+### Client (`src/overview.mjs`, arrow.js, dark-zinc, Nederlands)
+
+Twee-fasen render via een reactieve `state.statuses` (skeleton → pills, geen
+layout-shift). Features: gesecteerde lijst, debounced zoeken (aparte
+resultaten-regio, sequence-guard), **stacks** (PR wiens `baseRefName` = een
+in-view PR's `headRefName` → ingesprongen groep bovenaan), reviewer-avatars,
+review/CI-chips, "recent gegenereerd"-lade (lazy `GET /api/prs`), en
+toetsenbord-nav (↑/↓/Home/End/Enter/`/`/→, met de hover-vs-keyboard-flag zodat
+`scrollIntoView` de selectie niet kaapt). UI-proza is Nederlands; de
+GitHub-sectietitels blijven Engels.
+
 ## URL-state (refresh-restore & deep-links)
 
 De navigatie-positie leeft in de **query-string** zodat een refresh of gedeelde
@@ -262,8 +366,9 @@ link precies terugkomt waar je was. `src/urlState.mjs` biedt `bindUrlState(state
 fields, { ns })`: het herstelt bij load de opgegeven keys uit de URL naar de
 reactive `state` en schrijft daarna elke wijziging terug via
 `history.replaceState` (een arrow.js `watch`, dus geen history-spam). `home.mjs`
-bindt de hoofd-navigatie (`pr`→`pr`, `selected`→`sel`, `mode`, `change`→`chg`,
-`gran`→`gran`); een `default`-waarde wordt uit de URL weggelaten zodat die
+bindt de hoofd-navigatie (`selected`→`sel`, `mode`, `change`→`chg`,
+`gran`→`gran`); de **PR zit in het pad** (`/pr/<id>`, zie hierboven), niet in de
+query. Een `default`-waarde wordt uit de URL weggelaten zodat die
 kort/canoniek blijft (dus `gran` verschijnt alleen bij `line`/`call`, niet bij de
 default `group`).
 Elk **extra venster/paneel** krijgt een eigen `ns` (b.v. `{ ns: 'diff' }` →
@@ -313,7 +418,7 @@ niets van PR's, blocks of gh; hou het zo.
 **Workflows zijn de enige schrijvers.** State verandert uitsluitend via een
 Workflow Execution; al het andere is **read-only van buitenaf**:
 
-- **Modules** (`modules/*`, b.v. `comments`, `github`) zijn de dingen die "kunnen
+- **Modules** (`modules/*`, b.v. `comments`, `github`, `inbox`) zijn de dingen die "kunnen
   gebeuren in een workflow" — ze worden **alleen** door workflow-Activities
   aangeroepen. Hun schrijf-methodes (`Save`, `AddReaction`, `PostLineComment`, …)
   hoor je nergens anders aan te roepen; hun **read**-methodes (`List`, …) voeden
@@ -337,25 +442,55 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
     reacties (`reaction_count`) en zet `status` op `resolved` bij `/resolve`.
     Write (`Save`/`AddReaction`) = workflow-only; `List` = read voor de UI.
   - `modules/github` — de GitHub-communicatie (`gh api`): `PostLineComment`,
-    `Reply`, `FetchReplies`. Interface `github.Client` + `github.Fake` voor tests.
+    `Reply`, `FetchReplies`, `PRState` (`open`/`merged`/`closed`). Interface
+    `github.Client` + `github.Fake` (met `SetPRState`) voor tests.
 - **Flow:** `saveComment` (comments) + `postGithubComment` (github, best-effort),
   dan een lus op `reply`-**Signals**. Een reactie komt binnen via de **UI**
-  (`POST /api/workflows/{runID}/signals/reply`) én via een **poller die GitHub
-  elke minuut checkt** (`pollInterval = time.Minute`); beide worden als hetzelfde
-  Signal geleverd. Elke reactie wordt opgeslagen (comments) en een UI-reactie
-  wordt gespiegeld naar GitHub; `Done`/`/resolve` sluit de thread.
+  (`POST /api/workflows/{runID}/signals/reply`) én via een **per-thread poller**;
+  beide worden als hetzelfde Signal geleverd. Elke reactie wordt opgeslagen
+  (comments) en een UI-reactie wordt gespiegeld naar GitHub; `Done`/`/resolve`
+  sluit de thread.
+- **Poller-cadans (heartbeat-gedreven):** de poller checkt GitHub **snel**
+  (`pollInterval = time.Minute`) zolang er in de laatste `heartbeatWindow`
+  (10 min) een **heartbeat** binnenkwam — de UI pingt
+  `POST /api/workflows/{runID}/heartbeat` voor de **taak die je op dat moment
+  bekijkt** (per-actieve-taak, geen state-mutatie: enkel in-memory poll-timing,
+  dus buiten de write-boundary). De UI pingt **alleen bij echte activiteit**:
+  tabblad zichtbaar **én** gefocust **én** input in de laatste `ACTIVITY_WINDOW`
+  (2 min) — een open-maar-verlaten tabblad stopt dus vanzelf met heartbeaten
+  (`tabActive`/`beat` in `RelatedPanel.mjs`). Zonder recente heartbeat valt hij terug op een
+  **trage** cadans (`idlePollInterval = 10 min`); **alleen** op die trage cadans
+  checkt hij ook of de PR gemerged/closed is en **stopt** hij dan. De poller
+  waakt op de snelle tick maar gate't de echte GitHub-calls op de gewenste cadans,
+  zodat een heartbeat mid-idle meteen naar snel schakelt.
+- **`pr_status`-workflow (per PR):** een tweede Workflow Type, één Execution per
+  PR, die `state`-**Signals** van de pollers ontvangt en **completet** zodra de PR
+  merged/closed is. Dat is de durabele bron-van-waarheid die pollers lezen om te
+  stoppen (schrijven blijft dus binnen een workflow). `ensurePRStatus(pr)` start/
+  hergebruikt één tracker per PR (ook na herstart, via `Runs()`+`Input()`).
+- **`pr_inbox`-workflow (per repo):** een derde Workflow Type dat de PR-inbox
+  bezit — het is de **enige** die GitHub voor het overzicht leest. Een
+  `refresh`-Signal (van de UI bij laden én van `pollInbox` op de
+  heartbeat-cadans) drijft de `refreshInbox`-Activity, die de inbox fetcht en in
+  de **`inbox`-module** (read-model) schrijft. `EnsureInbox` start/hergebruikt één
+  Execution per repo en doet een synchrone eerste refresh bij startup. Zie de
+  sectie **PR-inbox**.
 - **Opslag:** de tembed-engine gebruikt `MultiStore(SQLite data/workflows.db,
   JSONL data/workflows/)` — comments leven dus zowel in de workflow-history als in
   **jsonl-bestanden**. Daarnaast houdt de comments-module zijn eigen read-model.
 - **Endpoints** (`tasks_api.go`): `POST /api/workflows/task_code_comment` (start),
   `GET` (lijst), `POST /api/workflows/{runID}/signals/reply` (UI-reactie),
+  `POST /api/workflows/{runID}/heartbeat` (UI-heartbeat, geen state-write),
   `GET /api/workflows/{runID}` (status), en read-only `GET /api/comments?pr=N`.
-  Bootstrap + recovery + hervatten van pollers: `newTasks(ctx, dataDir, repo)` in
-  `tasks_api.go`, aangeroepen in `runServe`.
+  Voor de inbox: `POST /api/workflows/{runID}/signals/refresh` +
+  read-only `GET /api/inbox` (leest het `inbox`-read-model).
+  Bootstrap + recovery + hervatten van pollers + `EnsureInbox`:
+  `newTasks(ctx, db, dataDir, repo)` in `tasks_api.go`, aangeroepen in `runServe`.
 - **Nieuwe workflow of module toevoegen:** skills `add-workflow` / `add-module`
   (+ templates `.claude/templates/workflow.go` / `module.go`).
-- Tests: `workflows_test.go` (UI-reactie + gh-poll→signal + resolve, en een
-  restart-durability-test); modules zijn puur en los testbaar.
+- Tests: `workflows_test.go` (UI-reactie + gh-poll→signal + resolve, een
+  restart-durability-test, `pr_status`-stop-bij-merge, heartbeat-houdt-snel, plus
+  `pr_inbox`-refresh-vult-read-model); modules zijn puur en los testbaar.
 
 ## Conventies (ingevuld door dit scaffold — corrigeer waar nodig)
 

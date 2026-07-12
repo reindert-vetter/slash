@@ -5,10 +5,10 @@ import { test, expect } from '@playwright/test'
 // reopens the exact same spot. See src/urlState.mjs + home.mjs (bindUrlState).
 test.describe('PR Review Tree — URL state persistence', () => {
   test('navigation writes the query string and survives a reload', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
 
-    // pr=12903 is the default → stays out of the URL. Step down once in the list.
+    // The PR lives in the path (/pr/12903), not the query. Step down once in the list.
     await page.keyboard.press('ArrowDown')
     await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe('1')
 
@@ -35,7 +35,7 @@ test.describe('PR Review Tree — URL state persistence', () => {
   })
 
   test('stepping back to defaults clears the params again', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
 
     await page.keyboard.press('ArrowDown')

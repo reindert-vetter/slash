@@ -22,10 +22,10 @@ export default defineConfig({
   webServer: {
     command:
       'mkdir -p tests/.tmp && go build -o tests/.tmp/slash . && ' +
-      'rm -f tests/.tmp/test.db tests/.tmp/comments.db tests/.tmp/workflows.db && ' +
+      'rm -f tests/.tmp/test.db tests/.tmp/comments.db tests/.tmp/workflows.db tests/.tmp/inbox.db && ' +
       'rm -rf tests/.tmp/workflows && ' +
       'tests/.tmp/slash seed -db tests/.tmp/test.db -from tests/fixtures/blocks.json && ' +
-      `SLASH_GITHUB=off tests/.tmp/slash -db tests/.tmp/test.db -addr 127.0.0.1:${PORT} -static .`,
+      `SLASH_GITHUB=off SLASH_INBOX=tests/fixtures/inbox.json tests/.tmp/slash -db tests/.tmp/test.db -addr 127.0.0.1:${PORT} -static .`,
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,

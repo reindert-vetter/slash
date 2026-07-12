@@ -1,0 +1,119 @@
+{
+  "repo": "plug-and-pay/plug-and-pay",
+  "generatedFor": "reindert-vetter",
+  "sections": [
+    {
+      "title": "Needs your review",
+      "prs": [
+        {
+          "number": 12888,
+          "title": "Fix webhook retry backoff (PP-1421)",
+          "author": "dave",
+          "updatedAt": "2026-07-11T08:00:00Z",
+          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/12888",
+          "isDraft": false,
+          "baseRefName": "develop",
+          "headRefName": "fix/webhook-backoff",
+          "additions": 18,
+          "deletions": 4,
+          "changedFiles": 2,
+          "comments": 3,
+          "hasGraph": false
+        },
+        {
+          "number": 12903,
+          "title": "Refactor checkout address handling",
+          "author": "alice",
+          "updatedAt": "2026-07-10T09:00:00Z",
+          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/12903",
+          "isDraft": false,
+          "baseRefName": "develop",
+          "headRefName": "feature/address-base",
+          "additions": 42,
+          "deletions": 12,
+          "changedFiles": 3,
+          "comments": 2,
+          "hasGraph": false
+        },
+        {
+          "number": 12904,
+          "title": "Address handling follow-up",
+          "author": "alice",
+          "updatedAt": "2026-07-10T10:00:00Z",
+          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/12904",
+          "isDraft": false,
+          "baseRefName": "feature/address-base",
+          "headRefName": "feature/address-followup",
+          "additions": 10,
+          "deletions": 1,
+          "changedFiles": 1,
+          "comments": 0,
+          "hasGraph": false
+        }
+      ]
+    },
+    {
+      "title": "Ready to merge",
+      "prs": [
+        {
+          "number": 12801,
+          "title": "Bump invoice PDF renderer",
+          "author": "reindert-vetter",
+          "updatedAt": "2026-07-09T14:00:00Z",
+          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/12801",
+          "isDraft": false,
+          "baseRefName": "develop",
+          "headRefName": "chore/pdf-bump",
+          "additions": 5,
+          "deletions": 5,
+          "changedFiles": 2,
+          "comments": 1,
+          "hasGraph": false
+        }
+      ]
+    }
+  ],
+  "statuses": {
+    "12888": {
+      "mergeable": "MERGEABLE",
+      "reviewDecision": "CHANGES_REQUESTED",
+      "state": "OPEN",
+      "reviewers": [
+        { "login": "reindert-vetter", "avatarUrl": "", "state": "CHANGES_REQUESTED", "team": false }
+      ],
+      "checksState": "FAILURE",
+      "checksTotal": 9
+    },
+    "12903": {
+      "mergeable": "MERGEABLE",
+      "reviewDecision": "REVIEW_REQUIRED",
+      "state": "OPEN",
+      "reviewers": [
+        { "login": "bob", "avatarUrl": "", "state": "APPROVED", "team": false },
+        { "login": "reindert-vetter", "avatarUrl": "", "state": "PENDING", "team": false }
+      ],
+      "checksState": "SUCCESS",
+      "checksTotal": 12
+    },
+    "12904": {
+      "mergeable": "UNKNOWN",
+      "reviewDecision": "REVIEW_REQUIRED",
+      "state": "OPEN",
+      "reviewers": [
+        { "login": "reindert-vetter", "avatarUrl": "", "state": "PENDING", "team": false }
+      ],
+      "checksState": "PENDING",
+      "checksTotal": 8
+    },
+    "12801": {
+      "mergeable": "MERGEABLE",
+      "reviewDecision": "APPROVED",
+      "state": "OPEN",
+      "reviewers": [
+        { "login": "carol", "avatarUrl": "", "state": "APPROVED", "team": false }
+      ],
+      "checksState": "SUCCESS",
+      "checksTotal": 10
+    }
+  }
+}

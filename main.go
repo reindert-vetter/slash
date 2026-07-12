@@ -57,7 +57,7 @@ func runServe(args []string) {
 
 	// Workflow/comments stores live next to the DB, so a test DB isolates its
 	// workflow state too. (The worktree data dir stays "data" — see server.)
-	tk, closeTasks, err := newTasks(context.Background(), filepath.Dir(resolvedDB), repoSlug)
+	tk, closeTasks, err := newTasks(context.Background(), db, filepath.Dir(resolvedDB), repoSlug)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)
 	}

@@ -9,7 +9,7 @@ test.describe('PR Review Tree — code diff alignment', () => {
   test('aligns old/new line-by-line with red/green tints and fillers', async ({
     page,
   }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
 
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -67,7 +67,7 @@ test.describe('PR Review Tree — code diff alignment', () => {
   // An added block has no old source, so the card drops the OLD pane and renders
   // just the NEW pane at full width (and the card itself is narrower).
   test('an added block shows only the new pane', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     // Let the app's own load settle before injecting, so our evaluate's dynamic
     // import doesn't race a client re-render.
     await expect(page.getByTestId('block-row').first()).toBeVisible()
@@ -119,7 +119,7 @@ test.describe('PR Review Tree — code diff alignment', () => {
   test('re-indented lines are a soft ws hint, not a content change', async ({
     page,
   }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toBeVisible()
 
     await page.evaluate(async () => {

@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test'
 // in Block.mjs, and the scoped token colours in index.html together.
 test.describe('PR Review Tree — code highlighting', () => {
   test('renders Prism-tokenised PHP in both code panes', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
 
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

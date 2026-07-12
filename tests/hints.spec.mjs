@@ -11,7 +11,7 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
   test('shows a down hint when a change is below the fold and an up hint when it is above', async ({
     page,
   }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
 
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -78,7 +78,7 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
   })
 
   test('shows no hints when the whole diff fits in view', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
 
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -117,7 +117,7 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
   test('shows no hints for a non-selected card even when its diff overflows', async ({
     page,
   }) => {
-    await page.goto('/')
+    await page.goto('/pr/12903')
 
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

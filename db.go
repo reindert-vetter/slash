@@ -98,6 +98,37 @@ func blockFileExists(db *sql.DB, pr int, file string) (bool, error) {
 	return n > 0, nil
 }
 
+// PRSummary is one row of the PR overview: a PR and how many blocks it holds.
+type PRSummary struct {
+	PR     int `json:"pr"`
+	Blocks int `json:"blocks"`
+	Files  int `json:"files"`
+}
+
+// listPRs returns every ingested PR with its block/file counts, newest PR first.
+// Feeds the /pr-overview page.
+func listPRs(db *sql.DB) ([]PRSummary, error) {
+	rows, err := db.Query(`
+		SELECT pr, COUNT(*) AS blocks, COUNT(DISTINCT file) AS files
+		FROM blocks
+		GROUP BY pr
+		ORDER BY pr DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []PRSummary
+	for rows.Next() {
+		var s PRSummary
+		if err := rows.Scan(&s.PR, &s.Blocks, &s.Files); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // blocksByPR reads all blocks of one PR, stably sorted by (file, line).
 func blocksByPR(db *sql.DB, pr int) ([]Block, error) {
 	rows, err := db.Query(`

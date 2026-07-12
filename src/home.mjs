@@ -9,7 +9,16 @@ import Block, { blockRows, changeGroups, unitsFor, updateHints } from './Block.m
 import RelatedPanel, { selectTopComment } from './RelatedPanel.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 
-const PR = 12903
+// The PR under review comes from the path: /pr/<id>. Without one there's nothing
+// to show, so bounce to the overview page that lists the ingested PRs.
+function prFromPath() {
+  const m = location.pathname.match(/^\/pr\/(\d+)/)
+  return m ? parseInt(m[1], 10) : null
+}
+const PR = prFromPath()
+if (PR == null) {
+  location.replace('/pr-overview')
+}
 
 const state = reactive({
   pr: PR,
@@ -36,12 +45,12 @@ const state = reactive({
 })
 
 // Persist the navigation position in the URL so a refresh (or a shared link)
-// reopens the same PR, selected block, mode and change. Bare params are the main
-// navigation; future extra windows bind their own state with their own `ns` so
-// their params sit alongside these in the same query string. Do this before the
-// first render so restored values are already in `state`.
+// reopens the same selected block, mode and change. The PR itself lives in the
+// path (/pr/<id>), not the query string. Bare params are the main navigation;
+// future extra windows bind their own state with their own `ns` so their params
+// sit alongside these in the same query string. Do this before the first render
+// so restored values are already in `state`.
 bindUrlState(state, [
-  { key: 'pr', param: 'pr', parse: num(PR), default: PR },
   { key: 'selected', param: 'sel', parse: num(0), default: 0 },
   { key: 'mode', param: 'mode', default: 'list' },
   { key: 'change', param: 'chg', parse: num(0), default: 0 },

@@ -25,6 +25,16 @@ Dit is een harde architectuur-regel voor slash, geen suggestie.
   state alleen veranderen door een workflow te starten of te signalen. De UI
   schrijft nooit direct naar een tabel of module.
 
+## Uitzondering: operationele pings zonder state
+
+Een endpoint dat **géén state muteert** valt buiten deze regel, ook al is het een
+`POST`. Concreet: `POST /api/workflows/{runID}/heartbeat` zet alléén een
+in-memory tijdstip in de `TaskManager` (poll-cadans), schrijft niets naar de
+event-history, een module of een tabel, en overleeft een herstart niet (het is
+puur operationeel). Zo'n ping mag dus rechtstreeks vanuit de UI. **Twijfel je?**
+Raakt het iets durabels (history/read-model/DB) → dan moet het via een
+workflow (start/signal); raakt het niks → dan mag het.
+
 ## Waarom
 
 De workflow-event-history is de **bron van waarheid**: durable, herspeelbaar,
@@ -37,8 +47,8 @@ kun je gedrag deterministisch herspelen.
 
 - Roept een HTTP-handler een module-write aan? → **fout**, laat het via een
   workflow (start/signal) lopen.
-- Schrijft de UI/JS ergens direct naartoe (anders dan een start/signal-POST)? →
-  **fout**.
+- Schrijft de UI/JS ergens direct naartoe (anders dan een start/signal-POST, of
+  een state-loze operationele ping zoals `heartbeat`)? → **fout**.
 - Zit er nieuwe mutatie-logica buiten een workflow/Activity? → verplaats 'm.
 
 Zie ook `workflow-determinism.md`.
