@@ -29,7 +29,13 @@ CREATE TABLE IF NOT EXISTS comments (
   body           TEXT NOT NULL,
   created_at     TEXT NOT NULL,
   reaction_count INTEGER NOT NULL DEFAULT 0,
-  status         TEXT NOT NULL DEFAULT 'open'
+  status         TEXT NOT NULL DEFAULT 'open',
+  code           TEXT NOT NULL DEFAULT '',
+  gran           TEXT NOT NULL DEFAULT '',
+  label          TEXT NOT NULL DEFAULT '',
+  row_start      INTEGER NOT NULL DEFAULT -1,
+  row_end        INTEGER NOT NULL DEFAULT -1,
+  seg            TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS reactions (
@@ -47,17 +53,32 @@ CREATE INDEX IF NOT EXISTS idx_reactions_comment ON reactions(comment_id);
 
 // Comment is a review comment on one line of code, with its reactions.
 type Comment struct {
-	ID            string     `json:"id"`
-	RunID         string     `json:"runId"`
-	PR            int        `json:"pr"`
-	File          string     `json:"file"`
-	Line          int        `json:"line"`
-	Author        string     `json:"author"`
-	Body          string     `json:"body"`
-	CreatedAt     string     `json:"createdAt"`
-	ReactionCount int        `json:"reactionCount"`
-	Status        string     `json:"status"` // open | resolved
-	Reactions     []Reaction `json:"reactions,omitempty"`
+	ID            string `json:"id"`
+	RunID         string `json:"runId"`
+	PR            int    `json:"pr"`
+	File          string `json:"file"`
+	Line          int    `json:"line"`
+	Author        string `json:"author"`
+	Body          string `json:"body"`
+	CreatedAt     string `json:"createdAt"`
+	ReactionCount int    `json:"reactionCount"`
+	Status        string `json:"status"` // open | resolved
+	// Code is the source snippet the comment is attached to (the exact
+	// navigation unit at placement time), with Gran/Label describing it —
+	// so the thread can show what the comment is about, like the composer does.
+	Code  string `json:"code,omitempty"`
+	Gran  string `json:"gran,omitempty"`
+	Label string `json:"label,omitempty"`
+	// RowStart/RowEnd/Seg pin the comment to its exact navigation unit within the
+	// block's aligned diff rows, so the comment index can be filtered to the units
+	// under the current selection (call ⊂ line ⊂ group ⊂ block). RowStart/RowEnd
+	// are inclusive row indices into blockRows; Seg identifies the one call
+	// segment for a 'call'-granularity comment (empty otherwise). RowStart < 0
+	// means "unknown" (legacy/seeded comment) — always shown within its block.
+	RowStart  int        `json:"rowStart"`
+	RowEnd    int        `json:"rowEnd"`
+	Seg       string     `json:"seg,omitempty"`
+	Reactions []Reaction `json:"reactions,omitempty"`
 }
 
 // Reaction is one reply/reaction hooked onto a comment.
@@ -84,6 +105,7 @@ func Open(path string) (*Module, error) {
 		db.Close()
 		return nil, fmt.Errorf("comments: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
 }
 
@@ -92,7 +114,25 @@ func New(db *sql.DB) (*Module, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("comments: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
+}
+
+// migrate adds columns introduced after the first schema so an existing
+// comments.db picks them up. CREATE TABLE IF NOT EXISTS never alters an
+// existing table, so the code/gran/label columns need explicit ADDs; a
+// duplicate-column error just means the DB is already up to date.
+func migrate(db *sql.DB) {
+	for _, col := range []string{
+		`ALTER TABLE comments ADD COLUMN code TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE comments ADD COLUMN gran TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE comments ADD COLUMN label TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE comments ADD COLUMN row_start INTEGER NOT NULL DEFAULT -1`,
+		`ALTER TABLE comments ADD COLUMN row_end INTEGER NOT NULL DEFAULT -1`,
+		`ALTER TABLE comments ADD COLUMN seg TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, _ = db.Exec(col) // ignore "duplicate column name"
+	}
 }
 
 func (m *Module) Close() error { return m.db.Close() }
@@ -109,11 +149,13 @@ func (m *Module) Save(ctx context.Context, c Comment) error {
 	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO comments
-		   (id, run_id, pr, file, line, author, body, created_at, reaction_count, status)
+		   (id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg)
 		 VALUES (?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT reaction_count FROM comments WHERE id = ?), 0),
-		   COALESCE((SELECT status FROM comments WHERE id = ?), ?))`,
-		c.ID, c.RunID, c.PR, c.File, c.Line, c.Author, c.Body, c.CreatedAt, c.ID, c.ID, c.Status)
+		   COALESCE((SELECT status FROM comments WHERE id = ?), ?),
+		   ?,?,?,?,?,?)`,
+		c.ID, c.RunID, c.PR, c.File, c.Line, c.Author, c.Body, c.CreatedAt, c.ID, c.ID, c.Status,
+		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg)
 	return err
 }
 
@@ -154,10 +196,25 @@ func (m *Module) AddReaction(ctx context.Context, r Reaction) error {
 	return tx.Commit()
 }
 
+// SetStatus updates a comment's status directly (e.g. to "deleting", the
+// transient state shown while a delete is in flight before the row is
+// actually removed). WRITE — workflow-driven only.
+func (m *Module) SetStatus(ctx context.Context, id, status string) error {
+	_, err := m.db.ExecContext(ctx, `UPDATE comments SET status = ? WHERE id = ?`, status, id)
+	return err
+}
+
+// Delete removes a comment and its reactions (ON DELETE CASCADE). WRITE —
+// workflow-driven only, the final step of the delete flow (see SetStatus).
+func (m *Module) Delete(ctx context.Context, id string) error {
+	_, err := m.db.ExecContext(ctx, `DELETE FROM comments WHERE id = ?`, id)
+	return err
+}
+
 // List returns the comments of one PR (or all PRs if pr <= 0), each with its
 // reactions. READ — safe for the UI.
 func (m *Module) List(ctx context.Context, pr int) ([]Comment, error) {
-	q := `SELECT id, run_id, pr, file, line, author, body, created_at, reaction_count, status
+	q := `SELECT id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg
 	      FROM comments`
 	var args []any
 	if pr > 0 {
@@ -176,7 +233,8 @@ func (m *Module) List(ctx context.Context, pr int) ([]Comment, error) {
 	for rows.Next() {
 		var c Comment
 		if err := rows.Scan(&c.ID, &c.RunID, &c.PR, &c.File, &c.Line, &c.Author,
-			&c.Body, &c.CreatedAt, &c.ReactionCount, &c.Status); err != nil {
+			&c.Body, &c.CreatedAt, &c.ReactionCount, &c.Status, &c.Code, &c.Gran, &c.Label,
+			&c.RowStart, &c.RowEnd, &c.Seg); err != nil {
 			return nil, err
 		}
 		byID[c.ID] = len(out)

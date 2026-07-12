@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 90,
+    "file": "app/Actions/PlaceOrderAction.php",
+    "class": "PlaceOrderAction",
+    "name": "execute",
+    "category": "ACTION",
+    "line": 20,
+    "endLine": 34,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 90,
+    "file": "app/Listeners/SendOrderMail.php",
+    "class": "SendOrderMail",
+    "name": "handle",
+    "category": "LISTENER",
+    "line": 12,
+    "endLine": 20,
+    "status": "modified",
+    "side": "new"
+  }
+]

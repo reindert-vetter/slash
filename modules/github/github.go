@@ -14,6 +14,13 @@ import (
 	"strings"
 )
 
+// Meta is lightweight PR metadata (its title and web URL), fetched by the
+// pr_status tracker at start and stored in the prmeta read-model.
+type Meta struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
 // Reply is one reply/reaction on a review-comment thread.
 type Reply struct {
 	ID     int64  `json:"id"`
@@ -30,6 +37,10 @@ type Client interface {
 	FetchReplies(ctx context.Context, pr int, rootID int64) ([]Reply, error)
 	// PRState reports the lifecycle state of a PR: "open", "merged", or "closed".
 	PRState(ctx context.Context, pr int) (string, error)
+	// PRMeta fetches the PR's title and web URL.
+	PRMeta(ctx context.Context, pr int) (Meta, error)
+	// DeleteComment removes a review comment (the root of a thread) from the PR.
+	DeleteComment(ctx context.Context, pr int, commentID int64) error
 }
 
 // Module is the production Client: it shells out to `gh api` against repo.
@@ -148,6 +159,30 @@ func (m *Module) PRState(ctx context.Context, pr int) (string, error) {
 		return "merged", nil
 	}
 	return meta.State, nil
+}
+
+// PRMeta fetches the PR's title and web URL (one `gh api` call).
+func (m *Module) PRMeta(ctx context.Context, pr int) (Meta, error) {
+	out, err := m.api(ctx, "GET",
+		fmt.Sprintf("repos/%s/pulls/%d", m.repo, pr))
+	if err != nil {
+		return Meta{}, err
+	}
+	var meta struct {
+		Title   string `json:"title"`
+		HTMLURL string `json:"html_url"`
+	}
+	if err := json.Unmarshal(out, &meta); err != nil {
+		return Meta{}, err
+	}
+	return Meta{Title: meta.Title, URL: meta.HTMLURL}, nil
+}
+
+// DeleteComment removes the review comment commentID from pr.
+func (m *Module) DeleteComment(ctx context.Context, pr int, commentID int64) error {
+	_, err := m.api(ctx, "DELETE",
+		fmt.Sprintf("repos/%s/pulls/comments/%d", m.repo, commentID))
+	return err
 }
 
 func (m *Module) api(ctx context.Context, method, endpoint string, args ...string) ([]byte, error) {

@@ -1,7 +1,8 @@
 // RelatedPanel — the column to the right of the selected block. Two stacked
-// cards: on top the live **comments** on lines of code (wired to the
-// task_code_comment workflow), below the related/underlying code the block calls
-// into (still dummy — fed from the call-graph edges later).
+// cards: on top the underlying code the block calls into — its child blocks
+// from the relations read-model (GET /api/relations), passed down by home.mjs —
+// below the live **comments** on lines of code (wired to the task_code_comment
+// workflow).
 
 import { html } from './vendor/arrow.js'
 import { reactive } from './vendor/arrow.js'
@@ -13,19 +14,358 @@ import { highlight } from './Block.mjs'
 // (POST /api/workflows/{runId}/signals/reply). Everything else here is read-only
 // (GET /api/comments?pr=N). Per the write-boundary rule, the UI only ever writes
 // by starting or signalling a workflow — never straight to a store.
-const cs = reactive({ pr: null, list: [], sel: 0, composing: false, busy: false })
+// focus/threadPos drive the keyboard navigation of this right-hand panel (see
+// home.mjs → onKeydown). focus is which region owns the arrows: null (the diff/
+// list has the keyboard), 'code' (the related-code block, light-blue border), 'new'
+// (the "+ Comment op deze regel" button), 'comment' (a comment row in the index,
+// cs.sel), or 'thread' (inside the selected comment's thread). threadPos indexes
+// the thread bottom-up: 0 = the reply field (typing), 1..n = the n-th message
+// from the bottom (1 = newest), so ↑ walks to older messages and ↓ back down.
+// A thread's messages are the comment's own body (its opening message) followed
+// by its reactions — see threadMessages.
+// `scope` is the current selection context (from home.mjs, pushed via
+// setCommentScope): { file, label, mode, gran, rowStart, rowEnd, seg } or null.
+// It lives on cs — RelatedPanel's own reactive — on purpose: the index render
+// reads cs and reliably re-renders on cs changes, whereas reading home.mjs'
+// `state` across the module boundary from inside this list binding did not
+// retrigger it. home.mjs bridges state→cs.scope with an arrow.js watch.
+const cs = reactive({ pr: null, list: [], view: [], sel: 0, composing: false, busy: false, focus: null, threadPos: 0, scope: null, scopeSig: '' })
 
-// selectTopComment jumps the selection to the first comment — home.mjs calls it
-// on Enter (the shared bit of navigation state).
-export function selectTopComment() {
-  cs.sel = 0
+// ── Index scoping (filter by the selected navigation unit) ────────────────────
+// The index shows only the comments *under* what's selected in the diff: a whole
+// group's comments include its lines' and calls'; a line's include its calls'; a
+// call's are only that call. It's always scoped to the selected block (a group/
+// line/call is a block-internal notion), so in list mode the block's whole set
+// shows.
+
+// setCommentScope receives the live selection context from home.mjs (via a watch
+// on the navigation state) and stores it on cs, so the index re-filters as the
+// reviewer moves. Skips a redundant write (same signature) so an unrelated
+// reactive tick doesn't needlessly re-render the list.
+export function setCommentScope(scope) {
+  const sig = scope
+    ? [scope.file, scope.label, scope.mode, scope.gran, scope.rowStart, scope.rowEnd, scope.seg].join('|')
+    : ''
+  if (sig === cs.scopeSig) return
+  cs.scopeSig = sig
+  cs.scope = scope
+  recomputeView()
+}
+
+// commentUnder reports whether comment c sits at or below the selected unit t in
+// the same block: c's aligned-row range ⊆ t's range and — when t is a single
+// 'call' segment — the same call (gran + seg). A comment with an unknown anchor
+// (rowStart < 0: legacy/seeded) is always shown within its block.
+function commentUnder(c, t) {
+  if (c.rowStart == null || c.rowStart < 0) return true
+  if (c.rowStart < t.rowStart || c.rowEnd > t.rowEnd) return false
+  if (t.gran === 'call') return c.gran === 'call' && c.seg === t.seg
+  return true
+}
+
+// recomputeView derives the visible list from cs.list + cs.scope and reassigns
+// cs.view. Reassigning a reactive *array* property is the pattern that reliably
+// re-renders arrow.js keyed lists (cs.list itself works that way) — computing the
+// filter lazily inside the render binding did not re-run it when only cs.scope
+// changed (e.g. navigating between blocks). Called whenever the list or the scope
+// changes (loadComments / setCommentScope).
+function recomputeView() {
+  const s = cs.scope
+  if (!s) {
+    cs.view = cs.list
+    return
+  }
+  const inBlock = cs.list.filter((c) => c.file === s.file && c.label === s.label)
+  cs.view = s.mode !== 'diff' || s.rowStart < 0 ? inBlock : inBlock.filter((c) => commentUnder(c, s))
+}
+
+// visibleComments is the current filtered index — the scoped/​narrowed comments
+// under the selection (see recomputeView). Bindings read cs.view (reactive), so
+// they re-render whenever the list or scope changes.
+function visibleComments() {
+  void cs.list // subscribe the binding to cs.list — its reassignment is what
+  // reliably patches the keyed list (see setCommentScope); cs.view holds the
+  // actual filtered result.
+  return cs.view
+}
+
+// selI clamps cs.sel onto the visible list (cs.sel indexes the *visible* list),
+// so a shrinking filter never leaves the selection dangling past the end.
+function selI() {
+  const n = visibleComments().length
+  return n ? Math.min(cs.sel, n - 1) : 0
+}
+
+// selComment is the currently-selected comment within the visible list.
+function selComment() {
+  return visibleComments()[selI()]
+}
+
+// commentRowSet returns the aligned-diff rows of block b that carry a comment, so
+// Block can mark them with a 💬 (presence only — the count doesn't matter). Reads
+// cs.list, so it re-runs as comments load. Comments with an unknown anchor
+// (rowStart < 0) sit on no row, so they're skipped here (they still show in the
+// index). Exported for home.mjs → Block(commentedRows).
+export function commentRowSet(b) {
+  const set = new Set()
+  if (!b) return set
+  for (const c of cs.list) {
+    if (c.file !== b.file || c.label !== b.label) continue
+    if (c.rowStart == null || c.rowStart < 0) continue
+    for (let i = c.rowStart; i <= c.rowEnd; i++) set.add(i)
+  }
+  return set
+}
+
+// ── Keyboard focus in the right-hand panel ────────────────────────────────────
+// home.mjs owns the single keydown listener and, once the reviewer steps into
+// this panel (→ from the diff), routes the arrows here via handleRelatedKey. The
+// focus state is ephemeral (like the command palette) — it never touches the URL
+// or any durable store, so the write-boundary rule is unaffected.
+
+// relatedActive reports whether this panel currently owns the keyboard.
+export function relatedActive() {
+  return cs.focus !== null
+}
+
+// enterRelated hands the keyboard to the panel, starting on the related-code
+// block (the light-blue-bordered card). Called by home.mjs on → from the diff.
+export function enterRelated() {
+  cs.composing = false
+  cs.focus = 'code'
+}
+
+// exitRelated releases the keyboard back to the diff and drops any input focus /
+// half-typed new comment.
+function exitRelated() {
+  cs.focus = null
+  cs.composing = false
+  const el = document.activeElement
+  if (el && el.blur) el.blur()
+}
+
+// focusEl focuses a right-pane input a frame later (once the reactive re-render
+// has swapped in the matching view: the new-comment composer or the reply field).
+function focusEl(sel) {
+  requestAnimationFrame(() => {
+    const el = document.querySelector(sel)
+    if (el) el.focus()
+  })
+}
+
+// toCode / toNew / toComment land on a left-column item. Landing already opens the
+// right pane and drops the caret in it — the reviewer types straight away, no →
+// needed: 'new' shows an empty new-comment composer; a comment shows its history
+// with the reply field focused. 'code' has no input, so it just blurs.
+function toCode() {
+  cs.composing = false
+  cs.focus = 'code'
+  const el = document.activeElement
+  if (el && el.blur) el.blur()
+}
+
+function toNew() {
+  cs.composing = true
+  cs.focus = 'new'
+  focusEl('[data-testid=comment-compose]')
+}
+
+function toComment() {
+  cs.composing = false
+  cs.focus = 'comment'
+  scrollCommentIntoView()
+  focusEl('[data-testid=reaction-compose]')
+}
+
+// threadMessages builds the rendered thread of a comment: its own body as the
+// first message (the reviewer's opening, shown as their own bubble) followed by
+// every reaction. So the comment that titles the thread also reads back as its
+// first chat message. The synthetic opening carries source 'ui' so it renders on
+// the reviewer's side, like the composer that placed it.
+function threadMessages(c) {
+  if (!c) return []
+  const origin = { id: 'origin:' + c.id, source: 'ui', author: c.author, body: c.body }
+  return [origin, ...(c.reactions || [])]
+}
+
+// reactionCount is the number of bubbles the thread renders (opening + reactions)
+// — the upper bound the keyboard walks to when stepping up through the history.
+function reactionCount() {
+  return threadMessages(selComment()).length
+}
+
+// scrollCommentIntoView / scrollReactionIntoView keep the active row / bubble in
+// view while walking with the arrows (deferred a frame so the DOM has the new
+// highlight class first), mirroring scrollSelectedIntoView in home.mjs.
+function scrollCommentIntoView() {
+  requestAnimationFrame(() => {
+    const el = document.querySelectorAll('[data-testid=comment-item]')[selI()]
+    if (el) el.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+function scrollReactionIntoView() {
+  requestAnimationFrame(() => {
+    // threadPos counts from the bottom (1 = newest), so the array index is
+    // reactions.length - threadPos.
+    const j = reactionCount() - cs.threadPos
+    const el = document.querySelectorAll('[data-testid=reaction-bubble]')[j]
+    if (el) el.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+// focusThread puts the caret in the reply field at the bottom of the thread
+// (threadPos 0, ready to type) or, once the reviewer walks up into the history,
+// blurs it and scrolls the selected older message into view.
+function focusThread() {
+  requestAnimationFrame(() => {
+    const input = document.querySelector('[data-testid=reaction-compose]')
+    if (cs.threadPos === 0) {
+      if (input) input.focus()
+    } else {
+      if (input && document.activeElement === input) input.blur()
+      scrollReactionIntoView()
+    }
+  })
+}
+
+// enterThread steps into the selected comment's thread, landing on the reply
+// field so the reviewer can type straight away (→ from a comment row).
+function enterThread() {
+  cs.composing = false
+  cs.focus = 'thread'
+  cs.threadPos = 0
+  focusThread()
+}
+
+// The left column is one flat vertical list the arrows walk: the related-code
+// card (row 0), the "+ Comment op deze regel" button (row 1), then one row per
+// comment (row 2 + i). Modelling it as a single cursor — instead of per-region
+// special cases — is what keeps ↑/↓ deterministic: the same key always moves one
+// row, whatever path you took to get there.
+function rowCount() {
+  return 2 + visibleComments().length
+}
+
+// currentRow maps the live focus/selection back to that flat index.
+function currentRow() {
+  if (cs.focus === 'code') return 0
+  if (cs.focus === 'new') return 1
+  return 2 + selI()
+}
+
+// gotoRow lands on row `n` (clamped into range) via the matching landing action,
+// so the right pane and input focus follow the cursor. Rows ≥ 2 are comments.
+function gotoRow(n) {
+  n = Math.max(0, Math.min(n, rowCount() - 1))
+  if (n === 0) toCode()
+  else if (n === 1) toNew()
+  else {
+    cs.sel = n - 2
+    toComment()
+  }
+}
+
+// handleRelatedKey drives the panel for one arrow/Escape press and returns 'exit'
+// when focus leaves the panel back to the diff (else true). The left column is a
+// flat row walk (gotoRow); the thread is the one region where ↑/↓ mean something
+// else — they walk the message history — and ← steps back out to the comment row.
+export function handleRelatedKey(key) {
+  if (key === 'Escape') {
+    exitRelated()
+    return 'exit'
+  }
+  if (cs.focus === 'thread') {
+    if (key === 'ArrowUp') {
+      cs.threadPos = Math.min(cs.threadPos + 1, reactionCount())
+      focusThread()
+    } else if (key === 'ArrowDown') {
+      cs.threadPos = Math.max(cs.threadPos - 1, 0)
+      focusThread()
+    } else if (key === 'ArrowLeft') {
+      toComment()
+    }
+    return true
+  }
+  if (key === 'ArrowDown') gotoRow(currentRow() + 1)
+  else if (key === 'ArrowUp') gotoRow(currentRow() - 1)
+  else if (key === 'ArrowLeft') {
+    exitRelated()
+    return 'exit'
+  } else if (key === 'ArrowRight' && cs.focus === 'comment' && selComment()) {
+    // → steps into the thread so ↑ walks the old messages instead of the index.
+    enterThread()
+  }
+  return true
+}
+
+// startComment opens the "new comment on this line" composer — the command menu
+// (home.mjs) calls it so the reviewer can start a comment task from `/`. It only
+// flips the local composing flag; placing the comment still goes through the
+// workflow (placeComment), so the write-boundary is unchanged.
+export function startComment() {
+  cs.composing = true
+}
+
+// isCommentFocused reports whether a placed comment's row currently owns the
+// keyboard (landed on via ↑/↓ or a click, reply field focused but not yet
+// stepped into the thread). home.mjs uses this to decide whether Enter should
+// open the delete menu instead of falling through to the reply field.
+export function isCommentFocused() {
+  return cs.focus === 'comment' && selComment() != null
+}
+
+// commentReplyEmpty reports whether the focused comment's reply field is
+// empty. Landing on a comment row already focuses that field (see toComment),
+// so Enter must only open the delete menu when there's nothing typed to send
+// — otherwise it would hijack the "type a quick reply, hit Enter" flow.
+export function commentReplyEmpty() {
+  const el = document.querySelector('[data-testid=reaction-compose]')
+  return !el || el.value.trim() === ''
+}
+
+// commentSelIndex is the index of the focused comment row, for anchoring the
+// delete menu under the right element (home.mjs has no access to cs directly).
+export function commentSelIndex() {
+  return selI()
+}
+
+// deleteFocusedComment sends the "delete" signal for the focused comment's
+// Workflow Execution. This is the only write path: the workflow first flips
+// the comment's status to "deleting", then removes it from GitHub and from
+// the read-model — the UI just asks and reloads once it's done.
+export async function deleteFocusedComment() {
+  const c = selComment()
+  if (!c || !c.runId) return
+  cs.busy = true
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ author: 'reviewer' }),
+    })
+    await loadComments(cs.pr)
+  } finally {
+    cs.busy = false
+  }
 }
 
 async function loadComments(pr) {
   if (pr == null) return
   try {
     const res = await fetch('/api/comments?pr=' + encodeURIComponent(pr))
-    if (res.ok) cs.list = await res.json()
+    if (res.ok) {
+      cs.list = await res.json()
+      recomputeView()
+      // A delete (or a shrinking list generally) can leave cs.sel pointing past
+      // the end, or the focused/threaded row can vanish entirely — clamp back
+      // onto the list and drop out of a now-dangling focus/thread.
+      if (cs.sel >= cs.list.length) cs.sel = Math.max(0, cs.list.length - 1)
+      if ((cs.focus === 'comment' || cs.focus === 'thread') && cs.list.length === 0) {
+        cs.focus = 'new'
+        cs.threadPos = 0
+      }
+    }
   } catch (_) {
     // keep the last good list on a transient error
   }
@@ -59,7 +399,7 @@ function tabActive() {
 // the tab is genuinely active (see tabActive) and writes no state.
 function beat() {
   if (!tabActive()) return
-  const c = cs.list[cs.sel]
+  const c = selComment()
   if (!c || !c.runId || c.status !== 'open') return
   fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/heartbeat', { method: 'POST' }).catch(() => {})
 }
@@ -83,29 +423,103 @@ function syncComments(pr) {
   }
 }
 
-async function placeComment(state) {
-  const b = state && state.blocks && state.blocks[state.selected]
-  const el = document.querySelector('[data-testid=comment-compose]')
-  const body = el && el.value.trim()
-  if (!b || !body) return
+// createComment starts a comment task (Workflow Execution) on the given line with
+// `body`. Shared by the composer (placeComment) and the command menu's fallback
+// ("Maak hiermee een comment", which uses the typed text as the comment). It writes
+// only by starting the workflow (POST), so the write-boundary holds. On success it
+// reloads the read-model and selects the fresh comment.
+export async function createComment({ pr, file, line, body, code, gran, label, rowStart, rowEnd, seg }) {
+  if (pr == null || !file || !body) return
   cs.busy = true
   try {
     await fetch('/api/workflows/task_code_comment', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: state.pr, file: b.file, line: b.line, author: 'reviewer', body }),
+      body: JSON.stringify({
+        pr,
+        file,
+        line,
+        author: 'reviewer',
+        body,
+        code,
+        gran,
+        label,
+        rowStart: rowStart == null ? -1 : rowStart,
+        rowEnd: rowEnd == null ? -1 : rowEnd,
+        seg: seg || '',
+      }),
     })
-    el.value = ''
-    cs.composing = false
-    await loadComments(state.pr)
-    cs.sel = Math.max(0, cs.list.length - 1)
+    await loadComments(pr)
+    // The fresh comment sits on the unit we just placed it on, so it's the last
+    // entry of the (order-preserving) visible list — land the selection there.
+    cs.sel = Math.max(0, visibleComments().length - 1)
   } finally {
     cs.busy = false
   }
 }
 
+async function placeComment(state, commentTarget) {
+  const b = state && state.blocks && state.blocks[state.selected]
+  const el = document.querySelector('[data-testid=comment-compose]')
+  const body = el && el.value.trim()
+  if (!b || !body) return
+  // Capture the exact unit the composer is previewing so the placed comment's
+  // thread can show the same code (see composeTargetHint / the thread hint).
+  const t = (commentTarget && commentTarget()) || null
+  await createComment({
+    pr: state.pr,
+    file: b.file,
+    line: b.line,
+    body,
+    code: t ? t.code : '',
+    gran: t ? t.gran : '',
+    label: t ? t.label : '',
+    rowStart: t ? t.rowStart : -1,
+    rowEnd: t ? t.rowEnd : -1,
+    seg: t ? t.seg : '',
+  })
+  el.value = ''
+  cs.composing = false
+}
+
+// GRAN_LABEL — how each navigation granularity is described in the composer's
+// "linked to" hint (see composeTargetHint), coarsest to finest.
+const GRAN_LABEL = {
+  group: 'een groep wijzigingen',
+  line: 'deze regel',
+  call: 'deze aanroep',
+}
+
+// composeTargetHint renders what the in-progress comment is linked to: the
+// granularity (group/line/call) plus the block's class::method and a code
+// example of the exact unit — so the reviewer sees the link *while* typing,
+// before the comment is placed. `target` is the `commentTarget()` result passed
+// down from home.mjs (null until a block is selected).
+function composeTargetHint(target) {
+  if (!target) return ''
+  return html`
+    <div
+      class="rounded-lg border border-indigo-100 bg-indigo-50/60 px-2.5 py-2 text-[11px]"
+      data-testid="comment-target"
+    >
+      <div class="flex items-center gap-1.5 text-indigo-600">
+        <span class="font-medium">${() => GRAN_LABEL[target.gran] || target.gran}</span>
+        <span class="text-indigo-300">·</span>
+        <span class="truncate font-mono font-semibold">${() => target.label}</span>
+      </div>
+      ${() =>
+        target.code
+          ? html`<code
+              class="language-php mt-1 block max-h-16 overflow-auto whitespace-pre rounded bg-white/70 px-2 py-1 font-mono text-[11px] leading-relaxed text-slate-700"
+              .innerHTML="${() => highlight(target.code)}"
+            ></code>`
+          : ''}
+    </div>
+  `
+}
+
 async function sendReaction(done) {
-  const c = cs.list[cs.sel]
+  const c = selComment()
   if (!c) return
   const el = document.querySelector('[data-testid=reaction-compose]')
   const body = (el && el.value.trim()) || (done ? '/resolve' : '')
@@ -132,10 +546,18 @@ function commentRow(c, i) {
     <button
       class="${() =>
         'flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left transition ' +
-        (cs.sel === i ? 'bg-indigo-50 ring-1 ring-indigo-200' : 'hover:bg-slate-50')}"
+        (selI() === i && cs.focus === 'comment'
+          ? 'bg-indigo-50 ring-1 ring-indigo-200'
+          : selI() === i && (cs.focus === 'thread' || cs.focus === 'comment')
+          ? // still the comment whose thread is open in the chat on the right,
+            // just not the row the keyboard is on right now: a lighter border
+            // keeps it marked without competing with an actively-focused row.
+            'bg-indigo-50/40 ring-1 ring-indigo-100'
+          : 'hover:bg-slate-50')}"
       data-testid="comment-item"
       @click="${() => {
         cs.sel = i
+        toComment()
         beat()
       }}"
     >
@@ -150,14 +572,21 @@ function commentRow(c, i) {
   `
 }
 
-function reactionBubble(r) {
+// reactionBubble — one message in the thread. `i`/`total` let it light up when it
+// is the one the reviewer walked up to (cs.threadPos counts from the bottom).
+function reactionBubble(r, i, total) {
   const mine = r.source === 'ui'
   return html`
     <div class="${() => 'flex ' + (mine ? 'justify-end' : 'justify-start')}">
       <div
-        class="${() =>
-          'max-w-[85%] rounded-2xl px-3 py-1.5 text-xs leading-relaxed ' +
-          (mine ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-700')}"
+        class="${() => {
+          const sel = cs.focus === 'thread' && cs.threadPos === total - i
+          return (
+            'max-w-[85%] rounded-2xl px-3 py-1.5 text-xs leading-relaxed ' +
+            (mine ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-700') +
+            (sel ? ' ring-2 ring-indigo-400' : '')
+          )
+        }}"
         data-testid="reaction-bubble"
       >
         ${() => r.body}
@@ -169,7 +598,7 @@ function reactionBubble(r) {
 // commentsSection — the wired panel: placed comments on the left, the selected
 // comment's reactions + a working composer on the right, and a "+ Comment op deze
 // regel" button that starts a new Execution on the current block.
-function commentsSection(state) {
+function commentsSection(state, commentTarget) {
   syncComments(state ? state.pr : null)
   const target = () => {
     const b = state && state.blocks && state.blocks[state.selected]
@@ -177,7 +606,7 @@ function commentsSection(state) {
   }
   return html`
     <section
-      class="flex min-h-0 flex-1 flex-row overflow-hidden rounded-xl border border-slate-300 bg-white ring-1 ring-black/5"
+      class="flex max-h-[28rem] min-h-[16rem] flex-row overflow-hidden rounded-xl border border-slate-300 bg-white ring-1 ring-black/5"
       data-testid="comments-panel"
     >
       <div class="flex w-56 shrink-0 flex-col overflow-hidden border-r border-slate-100">
@@ -187,7 +616,11 @@ function commentsSection(state) {
         </div>
         <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto p-1.5">
           <button
-            class="flex w-full items-center gap-2 rounded-md border border-dashed border-slate-200 px-2.5 py-2 text-left text-slate-400 transition hover:border-indigo-200 hover:text-indigo-500"
+            class="${() =>
+              'flex w-full items-center gap-2 rounded-md border border-dashed px-2.5 py-2 text-left transition ' +
+              (cs.focus === 'new'
+                ? 'border-indigo-400 text-indigo-600 ring-1 ring-indigo-300'
+                : 'border-slate-200 text-slate-400 hover:border-indigo-200 hover:text-indigo-500')}"
             data-testid="new-comment"
             @click="${() => (cs.composing = !cs.composing)}"
           >
@@ -197,9 +630,9 @@ function commentsSection(state) {
             >
             <span class="text-xs font-medium">Comment op deze regel</span>
           </button>
-          ${() => cs.list.map((c, i) => commentRow(c, i).key('comment:' + c.id))}
+          ${() => visibleComments().map((c, i) => commentRow(c, i).key('comment:' + c.id))}
           ${() =>
-            cs.list.length === 0
+            visibleComments().length === 0
               ? html`<p class="px-2.5 py-3 text-[11px] text-slate-400">Nog geen comments.</p>`
               : null}
         </div>
@@ -208,7 +641,7 @@ function commentsSection(state) {
       <div class="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="comment-thread">
         <div class="border-b border-slate-100 px-4 py-2.5">
           <h2 class="truncate text-sm font-semibold text-slate-800">
-            ${() => (cs.composing ? 'Nieuwe comment · ' + target() : cs.list[cs.sel] ? cs.list[cs.sel].body : 'Comments')}
+            ${() => (cs.composing ? 'Nieuwe comment · ' + target() : selComment() ? selComment().body : 'Comments')}
           </h2>
           <p class="text-[11px] text-slate-400">
             ${() => (cs.composing ? 'start een task op deze regel' : 'reacties hooken hier op de comment in')}
@@ -219,9 +652,10 @@ function commentsSection(state) {
           cs.composing
             ? html`
                 <div class="flex min-h-0 flex-1 flex-col gap-2 p-3">
+                  ${() => composeTargetHint(commentTarget ? commentTarget() : null)}
                   <textarea
                     class="min-h-24 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none"
-                    placeholder="Je comment op ${() => target()}…"
+                    placeholder="Je comment op deze regel…"
                     data-testid="comment-compose"
                   ></textarea>
                   <div class="flex items-center justify-end gap-2">
@@ -236,7 +670,7 @@ function commentsSection(state) {
                         'rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
                         (cs.busy ? 'opacity-50' : 'hover:bg-indigo-600')}"
                       data-testid="comment-send"
-                      @click="${() => placeComment(state)}"
+                      @click="${() => placeComment(state, commentTarget)}"
                     >
                       Plaats comment
                     </button>
@@ -245,14 +679,20 @@ function commentsSection(state) {
               `
             : html`
                 <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
+                  ${() => {
+                    const c = selComment()
+                    return c && c.code
+                      ? composeTargetHint({ gran: c.gran, label: c.label, code: c.code })
+                      : ''
+                  }}
                   ${() =>
-                    (cs.list[cs.sel] ? cs.list[cs.sel].reactions || [] : []).map((r) =>
-                      reactionBubble(r).key('reaction:' + r.id)
+                    threadMessages(selComment()).map((r, i, arr) =>
+                      reactionBubble(r, i, arr.length).key('msg:' + r.id)
                     )}
                 </div>
                 <div class="flex items-center gap-2 border-t border-slate-100 p-2.5">
                   <input
-                    class="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none"
+                    class="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300"
                     placeholder="Reageer op deze comment…"
                     data-testid="reaction-compose"
                     @keydown="${(e) => e.key === 'Enter' && sendReaction(false)}"
@@ -278,71 +718,75 @@ function commentsSection(state) {
   `
 }
 
-// ── Related code (placeholder — call-graph edges later) ───────────────────────
-const RELATED = [
-  {
-    label: 'PaymentResource::toArray',
-    file: 'app/Http/Resources/PaymentResource.php',
-    line: 18,
-    code:
-      "public function toArray($request): array\n" +
-      "{\n" +
-      "    return [\n" +
-      "        'id'     => $this->id,\n" +
-      "        'amount' => $this->amount,\n" +
-      "    ];\n" +
-      "}",
-  },
-  {
-    label: 'Money::fromCents',
-    file: 'app/Support/Money.php',
-    line: 42,
-    code:
-      "public static function fromCents(int $cents): self\n" +
-      "{\n" +
-      "    return new self($cents);\n" +
-      "}",
-  },
-]
+// ── Underlying code (real, from the relations read-model) ─────────────────────
+// The children of the selected block: the blocks it is coupled to (e.g. the
+// Listener::handle for an event it dispatches). They are pulled out of the left
+// list and shown here, top-right of the block. Fed by home.mjs' relatedChildren
+// (GET /api/relations), which lazily loads each child's code.
 
-// relatedCard renders one callee: a header (label + file:line) and a short,
-// non-interactive code excerpt highlighted like the block panes.
+// KIND_LABEL names the relation on a child card.
+const KIND_LABEL = { event_listener: 'listener' }
+
+// relatedCard renders one child block: a header (label + file:line + relation
+// kind) and a short, non-interactive code excerpt highlighted like the panes.
 function relatedCard(r) {
   return html`
     <div class="rounded-lg border border-slate-200 bg-slate-50/60" data-testid="related-item">
       <div class="flex items-baseline gap-2 border-b border-slate-100 px-3 py-1.5">
         <span class="truncate font-mono text-xs font-semibold text-slate-700">${r.label}</span>
+        ${() =>
+          KIND_LABEL[r.kind]
+            ? html`<span
+                class="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-indigo-500"
+                >${KIND_LABEL[r.kind]}</span
+              >`
+            : ''}
         <span class="ml-auto shrink-0 font-mono text-[10px] text-slate-400"
           >${r.file}:${r.line}</span
         >
       </div>
-      <code
-        class="language-php m-0 block overflow-x-auto whitespace-pre px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700"
-        .innerHTML="${() => highlight(r.code)}"
-      ></code>
+      ${() =>
+        r.code
+          ? html`<code
+              class="language-php m-0 block overflow-x-auto whitespace-pre px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700"
+              .innerHTML="${() => highlight(r.code)}"
+            ></code>`
+          : html`<p class="px-3 py-2 text-[11px] text-slate-400">code laden…</p>`}
     </div>
   `
 }
 
-// RelatedPanel — the fixed-width right column: live comments on top, related
-// code below.
-export default function RelatedPanel(state) {
+// RelatedPanel — the fixed-width right column: the selected block's underlying
+// (child) code on top, live comments below. `commentTarget` (from home.mjs)
+// reports what an in-progress comment would attach to at the current navigation
+// granularity; passed through to the composer. `children` (also from home.mjs)
+// returns the descriptors of the selected block's child blocks.
+export default function RelatedPanel(state, commentTarget, children) {
+  const kids = () => (children ? children() : [])
   return html`
     <aside class="flex w-[38rem] min-h-0 shrink-0 flex-col gap-3" data-testid="related-panel">
-      ${commentsSection(state)}
-
       <section
-        class="flex min-h-0 max-h-[40%] flex-col overflow-hidden rounded-xl border border-slate-300 bg-white ring-1 ring-black/5"
+        class="${() =>
+          'flex min-h-0 max-h-[40%] flex-col overflow-hidden rounded-xl border bg-white ring-1 ' +
+          (cs.focus === 'code'
+            ? 'border-indigo-300 ring-indigo-200'
+            : 'border-slate-300 ring-black/5')}"
         data-testid="related-code"
       >
         <div class="border-b border-slate-100 px-4 py-2.5">
-          <h2 class="text-sm font-semibold text-slate-800">Gerelateerde code</h2>
-          <p class="text-[11px] text-slate-400">Functies die dit blok aanroept · dummy</p>
+          <h2 class="text-sm font-semibold text-slate-800">Onderliggende code</h2>
+          <p class="text-[11px] text-slate-400">Code die dit blok aanroept</p>
         </div>
         <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
-          ${() => RELATED.map((r) => relatedCard(r).key('related:' + r.label))}
+          ${() => kids().map((r) => relatedCard(r).key('related:' + r.id))}
+          ${() =>
+            kids().length === 0
+              ? html`<p class="px-1 py-2 text-[11px] text-slate-400">Geen onderliggende code.</p>`
+              : null}
         </div>
       </section>
+
+      ${commentsSection(state, commentTarget)}
     </aside>
   `
 }

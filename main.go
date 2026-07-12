@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"slash/modules/relations"
 )
 
 func main() {
@@ -19,6 +21,9 @@ func main() {
 			return
 		case "seed":
 			runSeedCmd(os.Args[2:])
+			return
+		case "relations":
+			runRelationsCmd(os.Args[2:])
 			return
 		}
 	}
@@ -104,16 +109,69 @@ func runIngestCmd(args []string) {
 	fmt.Println(string(out))
 }
 
+// runRelationsCmd re-runs the block-relation detectors for a PR against the
+// already-ingested blocks + head worktree, persists them into relations.db, and
+// prints what it found: `slash relations <pr> [-db path]`. Headless twin of the
+// build_relations workflow's Activity — handy to re-derive relations without a
+// full re-ingest.
+func runRelationsCmd(args []string) {
+	fs := flag.NewFlagSet("relations", flag.ExitOnError)
+	dbFlag := fs.String("db", "", "path to the SQLite DB (or SLASH_DB env)")
+	_ = fs.Parse(args)
+
+	rest := fs.Args()
+	if len(rest) < 1 {
+		log.Fatal("usage: slash relations <pr> [-db path]")
+	}
+	var pr int
+	if _, err := fmt.Sscan(rest[0], &pr); err != nil || pr <= 0 {
+		log.Fatalf("invalid pr: %q", rest[0])
+	}
+
+	resolvedDB := dbPath(*dbFlag)
+	dataDir := filepath.Dir(resolvedDB)
+	db, err := openDB(resolvedDB)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	blocks, err := blocksByPR(db, pr)
+	if err != nil {
+		log.Fatalf("load blocks: %v", err)
+	}
+	rels := buildRelations(dataDir, pr, blocks)
+
+	rel, err := relations.Open(filepath.Join(dataDir, "relations.db"))
+	if err != nil {
+		log.Fatalf("open relations db: %v", err)
+	}
+	defer rel.Close()
+	if err := rel.Replace(context.Background(), pr, rels); err != nil {
+		log.Fatalf("save relations: %v", err)
+	}
+
+	label := map[string]string{}
+	for _, b := range blocks {
+		label[b.ID()] = b.Label
+	}
+	fmt.Printf("PR %d: %d block(s), %d relation(s)\n", pr, len(blocks), len(rels))
+	for _, r := range rels {
+		fmt.Printf("  [%s] %s  →  %s\n", r.Kind, label[r.ParentID], label[r.ChildID])
+	}
+}
+
 // runSeedCmd loads blocks from a JSON fixture into a DB (no network) for tests:
 // `slash seed -db <path> -from <blocks.json>`.
 func runSeedCmd(args []string) {
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
 	dbFlag := fs.String("db", "", "path to the SQLite DB to seed")
 	from := fs.String("from", "", "path to a blocks JSON fixture")
+	relFrom := fs.String("relations", "", "optional path to a relations JSON fixture (seeded into relations.db)")
 	_ = fs.Parse(args)
 
 	if *from == "" {
-		log.Fatal("usage: slash seed -db <path> -from <blocks.json>")
+		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>]")
 	}
 	raw, err := os.ReadFile(*from)
 	if err != nil {
@@ -141,4 +199,39 @@ func runSeedCmd(args []string) {
 		}
 	}
 	log.Printf("seeded %d blocks from %s", len(blocks), *from)
+
+	if *relFrom != "" {
+		seedRelations(dbPath(*dbFlag), *relFrom)
+	}
+}
+
+// seedRelations loads relations from a JSON fixture into the relations.db that
+// sits next to the blocks DB (same dataDir the server uses), so tests can render
+// nested children without a workflow run.
+func seedRelations(dbPath, from string) {
+	raw, err := os.ReadFile(from)
+	if err != nil {
+		log.Fatalf("read relations fixture: %v", err)
+	}
+	var rels []relations.Relation
+	if err := json.Unmarshal(raw, &rels); err != nil {
+		log.Fatalf("parse relations fixture: %v", err)
+	}
+	rel, err := relations.Open(filepath.Join(filepath.Dir(dbPath), "relations.db"))
+	if err != nil {
+		log.Fatalf("open relations db: %v", err)
+	}
+	defer rel.Close()
+
+	byPR := map[int][]relations.Relation{}
+	for _, r := range rels {
+		byPR[r.PR] = append(byPR[r.PR], r)
+	}
+	ctx := context.Background()
+	for pr, rs := range byPR {
+		if err := rel.Replace(ctx, pr, rs); err != nil {
+			log.Fatalf("seed relations pr %d: %v", pr, err)
+		}
+	}
+	log.Printf("seeded %d relations from %s", len(rels), from)
 }

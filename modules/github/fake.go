@@ -11,8 +11,10 @@ type Fake struct {
 	mu      sync.Mutex
 	nextID  int64
 	Posted  []string // bodies posted (root + replies), in order
+	Deleted []int64  // comment IDs deleted, in order
 	replies []Reply
 	prState string // "" reads as "open"
+	prMeta  Meta   // returned by PRMeta (SetPRMeta overrides)
 }
 
 func (f *Fake) PostLineComment(_ context.Context, pr int, file string, line int, body string) (int64, error) {
@@ -55,6 +57,19 @@ func (f *Fake) SetPRState(state string) {
 	f.prState = state
 }
 
+func (f *Fake) PRMeta(_ context.Context, pr int) (Meta, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.prMeta, nil
+}
+
+// SetPRMeta makes the next PRMeta calls report m.
+func (f *Fake) SetPRMeta(m Meta) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prMeta = m
+}
+
 // EnqueueReply makes r visible to the next FetchReplies (as if it appeared on
 // GitHub).
 func (f *Fake) EnqueueReply(r Reply) {
@@ -68,4 +83,18 @@ func (f *Fake) PostedCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.Posted)
+}
+
+func (f *Fake) DeleteComment(_ context.Context, pr int, commentID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Deleted = append(f.Deleted, commentID)
+	return nil
+}
+
+// DeletedCount returns how many comments have been deleted.
+func (f *Fake) DeletedCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.Deleted)
 }

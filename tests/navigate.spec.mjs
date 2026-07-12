@@ -162,25 +162,39 @@ test.describe('PR Review Tree — change navigation', () => {
     await selected(page, 0).toHaveClass(/bg-indigo-50/)
   })
 
-  // Enter jumps to the comments panel by selecting the top comment (its thread
-  // opens). Comments are the task_code_comment workflow; seeding one is the only
-  // write path (POST /api/workflows/task_code_comment). A "+ Comment op deze
-  // regel" button leads the list. See home.mjs (onKeydown → selectTopComment) +
-  // RelatedPanel (commentsSection). The server runs with SLASH_GITHUB=off so
-  // seeding never touches a real repo.
-  test('Enter selects the top comment; the new-comment button leads the list', async ({
+  // Comments are the task_code_comment workflow; seeding one is the only write
+  // path (POST /api/workflows/task_code_comment). A "+ Comment op deze regel"
+  // button leads the list; clicking a comment opens its thread. See RelatedPanel
+  // (commentsSection). The server runs with SLASH_GITHUB=off so seeding never
+  // touches a real repo.
+  test('the new-comment button leads the list; clicking a comment opens its thread', async ({
     page,
     request,
   }) => {
-    // Seed two comments on PR 12903 (the default PR the UI opens).
-    for (const body of ['first review comment', 'second review comment']) {
+    // Seed two comments on a PR of this test's own (the comments read-model is
+    // shared across the parallel run, so seeding the default 12903 would collide
+    // with the other comment specs). This test only exercises the comment panel,
+    // not the diff, so it needs no ingested blocks. The first comment carries a
+    // code snippet so we can assert the thread shows it (like the composer
+    // preview) — a comment without code shows no hint.
+    const pr = 970002
+    const seeds = [
+      {
+        body: 'first review comment',
+        code: '$upsellOrder->billingAddress()->save($order->billingAddress);',
+        gran: 'line',
+        label: 'AddUpsell::execute',
+      },
+      { body: 'second review comment' },
+    ]
+    for (const s of seeds) {
       const res = await request.post('/api/workflows/task_code_comment', {
-        data: { pr: 12903, file: 'seed.php', line: 1, author: 'test', body },
+        data: { pr, file: 'seed.php', line: 1, author: 'test', ...s },
       })
       expect(res.ok()).toBeTruthy()
     }
 
-    await page.goto('/pr/12903')
+    await page.goto('/pr/' + pr)
     const panel = page.getByTestId('related-panel')
     const items = panel.getByTestId('comment-item')
     const active = /bg-indigo-50/
@@ -189,16 +203,19 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(panel.getByTestId('new-comment')).toBeVisible()
     await expect(items).toHaveCount(2)
 
-    // Move the selection off the top by clicking the second comment…
-    await items.nth(1).click()
-    await expect(items.nth(1)).toHaveClass(active)
-    await expect(items.nth(0)).not.toHaveClass(active)
-
-    // …then Enter jumps back to the top comment and its thread header follows.
-    await page.keyboard.press('Enter')
+    // Clicking a comment selects it and its thread header follows; a comment
+    // with a snippet shows the code hint in its thread (like the composer).
+    await items.nth(0).click()
     await expect(items.nth(0)).toHaveClass(active)
     await expect(items.nth(1)).not.toHaveClass(active)
-    await expect(panel.getByTestId('comment-thread')).toContainText('first review comment')
+    const thread = panel.getByTestId('comment-thread')
+    await expect(thread).toContainText('first review comment')
+    await expect(thread.getByTestId('comment-target')).toBeVisible()
+    await expect(thread.getByTestId('comment-target')).toContainText('billingAddress')
+
+    // The second comment has no snippet, so its thread shows no code hint.
+    await items.nth(1).click()
+    await expect(thread.getByTestId('comment-target')).toHaveCount(0)
   })
 
   // Selection granularity: f refines group → line → call, d coarsens back. See

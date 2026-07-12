@@ -56,9 +56,41 @@ navigeerbare lijst tonen.
 
 - **Opslag:** de `blocks`-tabel (dit ís de `nodes`/functie-tabel uit de graph,
   hernoemd + uitgebreid met `class/category/end_line/status/side/pr`). De kolom
-  `approved` (0/1) markeert of de reviewer een block heeft goedgekeurd. `edges`
-  blijft voor de latere call-graph. Schema: `.claude/templates/schema.sql` (in sync
-  met de `schemaDDL`-constante in `db.go`).
+  `approved` (0/1) markeert of de reviewer een block heeft goedgekeurd. Goedkeuring
+  is echter **granulair** (voorlopig client-side): niet één blok-vlag maar een set
+  goedgekeurde **gewijzigde regels** — `b.approvedRows`, een array van rij-indices
+  in `blockRows(b)`. Elke granulariteit reduceert daartoe (een groep keurt al zijn
+  regels goed, een `line`/`call` de ene rij waarop hij staat), zodat "is het hele
+  block goedgekeurd?" simpelweg "zijn álle gewijzigde regels goedgekeurd?" is
+  (`blockApproved`/`blockPartlyApproved`/`changedRows`/`approvedRowSet` in
+  `Block.mjs`). De top-checkbox op de block-kaart is dus **afgeleid**: aangevinkt bij
+  `blockApproved`, indeterminate bij deels, met een `approve <done>/<total>`-teller;
+  klikken keurt alles goed of wist alles. Een volledig goedgekeurde rij toont een
+  klein emerald **vinkje** in de linker-marge (de actieve indigo-balk wint zolang de
+  cursor erop staat). Op `call`-niveau kan één rij **meerdere** call-segmenten
+  bevatten (`segmentCalls`); goedkeuring is daar dus fijnmaziger dan de rij:
+  `b.approvedCalls`, een array van `${row}:${segStart}`-keys (`callKey`/
+  `approvedCallSet`/`rowCallSegments` in `Block.mjs`) naast `b.approvedRows`. Zijn
+  alle segmenten van een rij goedgekeurd, dan **gradueert** die rij in
+  `b.approvedRows` (en verdwijnen zijn keys uit `approvedCalls`) zodat de grovere
+  group/line-goedkeuring en de blok-checkbox het gewoon zien; het omgekeerde
+  (één segment van een volledig goedgekeurde rij intrekken) splitst 'm weer terug
+  in expliciete keys (`toggleCallApprove` in `home.mjs`). Zolang een rij *deels*
+  goedgekeurd is (niet 0, niet alles) toont hij per segment een bolletje op een
+  tweede, compacte rij eronder — uitgelijnd onder de segment-kolom via
+  letterlijke spaties (werkt zonder JS-meting omdat de code monospace is): een
+  reeds goedgekeurd segment krijgt een **vol groen** bolletje, een nog wachtend
+  segment een **open** bolletje, zodat de rij in één oogopslag als
+  voortgangsstrip leest. Is niks goedgekeurd, dan tonen we niks; is alles
+  goedgekeurd, dan verdwijnen de bolletjes en komt het vinkje terug
+  (`partialCallApproval`/`circleRowHTML` in `Block.mjs`). Beide panes berekenen
+  die bolletjes-rij met exact dezelfde (deterministische) input, dus ze voegen
+  'm op dezelfde rij-index
+  toe en blijven regel-voor-regel uitgelijnd. `b.approvedRows`/`b.approvedCalls`
+  worden altijd **hertoegewezen** (nooit in-place gemuteerd) zodat arrow.js de
+  checkbox en de indicators her-rendert. `edges` blijft voor de latere call-graph.
+  Schema: `.claude/templates/schema.sql` (in sync met de `schemaDDL`-constante in
+  `db.go`).
 - **Pipeline:** `gh pr view` → `git fetch` (pull-ref + develop, fallback by-sha) →
   twee detached worktrees onder `data/worktrees/pr-<pr>-{base,head}` (**absolute
   paden**!) → `git diff --unified=0` → PHP-scanner (`phpscan.go`, brace-lexer, geen
@@ -86,10 +118,107 @@ navigeerbare lijst tonen.
 ## Toetsenbord-navigatie (twee modes)
 
 De keyboard-flow zit in `home.mjs` (`onKeydown`) en heeft twee modes via
-`state.mode`. Los daarvan springt **`Enter`** naar de **chat**: het selecteert de
-**bovenste taak** in het `RelatedPanel` (`ui.task = 0`) zodat die thread opent.
-`ui` is een gedeelde `reactive({ task: 0 })` in `home.mjs` die aan `RelatedPanel`
-wordt doorgegeven, zodat de navigatie de taakselectie kan sturen.
+`state.mode`.
+
+**`Enter`** opent een **command-palette** (`src/CommandMenu.mjs`,
+`data-testid=command-menu`): een doorzoekbaar commando-menu dat als **drijvende
+popover net onder de huidige selectie** verschijnt, over de rest van de pagina heen
+— overal in de tree, in welk block dan ook. `home.mjs` (`menuOverlay`) rendert het
+één keer op `<main>`-niveau als `position:fixed` element (`data-testid=
+command-anchor`) met een full-screen catch-laag (`data-testid=command-overlay`) die
+bij een klik buiten het menu sluit. `positionMenu` ankert het net **onder** de
+selectie én geeft het de **breedte van de rechter (NEW) pane** — dus **halve
+breedte, over de rechterkant** (de nieuwe code die je reviewt). De verticale positie
+komt van `menuAnchor()` (de actieve wijzigings-rij `[data-change-active]`, aanwezig
+in zowel list-preview als diff-mode; anders de block-kaart, anders de sidebar-rij);
+de breedte + linkerrand van `menuRegion()` (de `[data-pane="new"]`-pane van het
+geselecteerde block; fallback `[data-pane="old"]` voor een verwijderd block, dan de
+hele block-kolom — de `data-pane`-hook zit op `codePane` in `Block.mjs`). **Past het
+niet onder het scherm, dan klapt het erboven** (en wordt sowieso in de viewport
+geklemd). Het start `visibility:hidden` tot `positionMenu` het geplaatst heeft (geen
+flits linksboven), en herpositioneert bij resize, scroll (capture, ook
+inner-scrollers), na elke toets (de filter-lijst verandert de hoogte) en 220ms na
+openen (de panel-breedte animeert 200ms bij het instappen in de diff). Het menu
+leeft in een losse `reactive({ open, query, sel })` in `home.mjs` (bewust **niet**
+in de URL — efemeer, dus buiten `bindUrlState`). Terwijl het open is **bezit het menu het
+toetsenbord**: `onKeydown` handelt `↑`/`↓` (selectie), `Enter` (uitvoeren via
+`runCommand`, dat eerst sluit en dan de actie draait), `Esc` (sluiten) af en de
+block-navigatie is opgeschort; getypte tekens vloeien in de gefocuste input
+(`data-testid=command-input`, two-way met `menu.query`). Filteren gaat via een
+**subsequence-fuzzy-match** (`filterCommands`, geëxporteerd uit `CommandMenu.mjs`
+zodat de keyboard-handler exact dezelfde gefilterde lijst als de render doorloopt —
+`menu.sel` en de zichtbare rijen blijven in sync). De `COMMANDS`-lijst leeft in
+`home.mjs` en bevat **block-acties**: approve togglen en comment op deze regel (via
+`startComment` uit `RelatedPanel.mjs`) en **Open GitHub**. De approve-actie is
+**gescoped op de huidige navigatie-unit** (`toggleApprove`/`approveTargetRows`): in
+list-mode het hele block, in diff-mode de geselecteerde groep/regel/call — hij
+keurt exact de rijen van die unit goed (of trekt ze in als ze al goedgekeurd zijn).
+Het label is een functie zodat het live meebeweegt én de unit benoemt
+(`approveNoun`): "Keur dit block goed" (list), "Keur deze regels goed" (group),
+"Keur deze regel goed" (line), "Keur deze call goed" (call), en "Trek goedkeuring
+van … in" wanneer die unit al goedgekeurd is. Zie de granulaire-goedkeuring-uitleg
+in de Blocks-sectie. Bewust **géén** navigatie-items (stap in diff / volgende /
+vorige) — die doe je met de pijltjes/`f`/`d`/`s`, niet via het menu. Een commando
+mag **`children`** hebben: kiezen opent dan geen actie maar een **submenu** met die
+kinderen i.p.v. de menu te sluiten (`runCommand` → `enterSubmenu`, die query/selectie
+reset en herpositioneert). `Esc` stapt eerst terug naar de root en sluit pas daarna
+het menu; `menu.sub` (in de efemere `menu`-reactive) houdt de open kinderlijst vast,
+`resolveCommands` filtert die i.p.v. `COMMANDS` (zonder de comment-fallback). Zo hangt
+**Open GitHub** twee targets onder zich: *Regel in Files changed* — deep-linkt naar de
+actieve regel in de Files-changed-diff (`openGithubLine`: het GitHub-anker
+`#diff-<sha256(pad)><R|L><regel>`, waarbij de regel de `start` van de code-side plus de
+offset van de actieve unit is; nieuwe kant = `R`, verwijderd block = `L`) — en
+*PR-pagina* (de PR-overzichtspagina, zoals voorheen). Levert het
+filter **niets** op voor een niet-lege query, dan valt het menu terug op één item
+**"Maak hiermee een comment"** dat de gettypte tekst rechtstreeks als comment-task
+op de geselecteerde regel start (`createComment` uit `RelatedPanel.mjs` → `POST
+/api/workflows/task_code_comment`, dus binnen de write-boundary). De filter +
+fallback zitten in `resolveCommands(query)` in `home.mjs`, gedeeld door de
+menu-render én de keyboard-handler zodat beide dezelfde lijst zien. `CommandMenu`
+zelf is puur presentatie: het krijgt `menu`, een `resolve(query)`-functie en `onRun`,
+en bevat geen filter- of navigatielogica.
+
+Hetzelfde menu-mechanisme bedient ook een **comment-scoped** variant: staat de
+keyboard op een geplaatste comment-rij in `RelatedPanel` (`cs.focus === 'comment'`,
+vóór het instappen in de thread) én is het reply-veld nog **leeg**, dan opent
+`Enter` niet de block-palette maar een menu met alleen **"Verwijder comment"**
+(`menu.mode = 'comment'`, `COMMENT_COMMANDS` in `home.mjs`; `resolveCommands`
+schakelt op `menu.mode` om, `openMenu(mode)` zet 'm, `closeMenu` reset 'm terug
+naar `'block'`). Een **niet-leeg** reply-veld laat `Enter` met rust — dan wint het
+eigen `keydown` van het reply-veld (`sendReaction`), zodat "typ een snelle reactie,
+druk Enter" blijft werken (`isCommentFocused`/`commentReplyEmpty` in
+`RelatedPanel.mjs` bewaken dat onderscheid). `menuAnchor`/`menuRegion` ankeren in
+die mode op de gefocuste comment-rij resp. de thread-pane i.p.v. de diff. Kiezen
+van **"Verwijder comment"** roept `deleteFocusedComment` aan: die stuurt een
+**`delete`-Signal** (`POST /api/workflows/{runID}/signals/delete`) naar de
+comment's Workflow Execution — de enige schrijf-weg, binnen de write-boundary.
+De workflow (`taskCodeCommentWorkflow` in `workflows.go`) zet de comment eerst op
+status **`deleting`** (Activity `markCommentDeleting`), verwijdert 'm dan van
+GitHub (Activity `deleteGithubComment`, best-effort, net als het posten) en tot
+slot uit het eigen read-model (Activity `deleteComment`, cascadeert de reacties),
+en rondt de Execution af. Een `delete`-verzoek rijdt mee op hetzelfde
+`reply`-Signal als een reactie (`ReactionSignal.Action`, "" = reactie, "delete" =
+verwijderen) — een workflow kan namelijk maar op één Signal-naam tegelijk
+`WaitSignal`-en, dus dit moet als een te onderscheiden variant van de bestaande
+reacties-lus binnenkomen, niet als een eigen Signal-naam.
+
+**`/`** opent een **algemeen, PR-breed tree-menu** (`menu.mode = 'pr'`,
+`PR_COMMANDS` in `home.mjs`) — hetzelfde `CommandMenu`-overlay als `Enter`, maar
+i.p.v. block-acties zijn dit acties op de **hele PR**. Drie root-items: **"Naar
+PR-overzicht"** (navigeert naar `/pr-overview`), **"GitHub"** en **"Jira"**, de
+laatste twee als **submenu** (via het bestaande `children`-mechanisme). Onder
+GitHub: *Open op GitHub* (opent de PR-pagina) en *Comment plaatsen* (hergebruikt
+de regel-comment-composer `startComment`, net als de block-palette). Onder Jira:
+*Openen in nieuw tab* (deep-link naar het ticket), *Comment plaatsen* en *Subtask
+maken* — die laatste twee zijn **placeholders** (nog geen Jira-write-integratie).
+Een getypt `/` in een gefocust invoerveld (comment-composer/reply) bereikt deze
+handler niet — de `relatedActive()`-tak vangt 'm eerder af, dus het teken vloeit
+gewoon in het veld. De Jira/GitHub-links leunen op **PR-metadata** (titel + URL,
+en de daaruit afgeleide `KEY-123`-ticket-key): die komt uit het **`prmeta`-read-
+model** via `GET /api/pr?pr=N`, gevuld door het `pr_status`-workflow (zie de
+tembed-sectie). `home.mjs` (`loadPRMeta`) zorgt bij het laden dat de tracker draait
+(`POST /api/workflows/pr_status`) en leest daarna de metadata; ontbreekt die (nog),
+dan vallen de links terug op de kale PR-URL resp. de Jira-base.
 
 - **`'list'`** (start): `↑`/`↓` kiezen een block in de sidebar, `→` stapt de diff
   van het geselecteerde block in.
@@ -226,18 +355,31 @@ underline).
 ## Detail-layout & gerelateerd paneel (placeholder)
 
 Rechts van de sidebar staat de `DetailPanel` (`home.mjs`): een `<main>` als
-**flex-row** met twee kolommen. Links de **block-kolom** (`data-testid=
-block-column`, `flex-1`) met de kaart van het geselecteerde block plus de
+**flex-row** die zijn kolommen **vanaf links inpakt** (`justify-start`, geen
+uitrekken) en horizontaal scrolt (`overflow-x-auto`) zodra ze samen breder zijn
+dan het scherm. Links de **block-kolom** (`data-testid=block-column`,
+**`shrink-0`** — niet `flex-1`, dus op zijn **natuurlijke diff-breedte**
+(`w-[76rem]`, of `w-[42rem]` voor een één-zijdig block) i.p.v. de resterende
+ruimte op te vullen) met de kaart van het geselecteerde block plus de
 look-ahead-preview van het volgende block (dashed connector als ze uit hetzelfde
-bestand komen). Rechts, náást het geselecteerde block, een vaste kolom van 384px
-(`w-96`): `RelatedPanel` (`src/RelatedPanel.mjs`, `data-testid=related-panel`).
+bestand komen). **Direct náást** die kolom (niet aan de rechterrand van het
+scherm) `RelatedPanel` (`src/RelatedPanel.mjs`, `data-testid=related-panel`,
+`w-[38rem] shrink-0`). Zo lijnt het comment/gerelateerd-paneel altijd tegen de
+diff aan; er is bewust ruimte rechts voor **latere extra blokken** (elk een eigen
+`shrink-0`-kolom die van links verder inpakt).
 
 `RelatedPanel` is **puur placeholder met dummy data** — nog geen `/api`-koppeling.
 Twee gestapelde kaarten:
 
-- **Gerelateerde code** (boven, `data-testid=related-code`): de onderliggende
-  functies die het block aanroept, elk als kleine Prism-highlighted PHP-excerpt
-  (`data-testid=related-item`). Voedt later uit de `edges`-tabel (de call-graph).
+- **Onderliggende code** (boven, `data-testid=related-code`): de **child-blokken**
+  van het geselecteerde block — de blokken waaraan het gekoppeld is (nu: de
+  `Listener::handle` van een event dat het dispatcht). Elk als kleine
+  Prism-highlighted PHP-excerpt (`data-testid=related-item`) met een `kind`-badge.
+  Gevoed uit het relations-read-model via `GET /api/relations?pr=N`; `home.mjs`
+  (`childrenOf`/`relatedChildren`) haalt de children uit `state.allBlocks` en laadt
+  hun code lazy. Een child wordt **uit de linkerlijst gehaald** (`state.blocks` =
+  `allBlocks` minus alle `childId`s) en hier getoond; wat overblijft staat links.
+  Zie de sectie **Relaties tussen blokken**.
 - **Taken + chat** (onder, `data-testid=tasks`): een **flex-row**. Links een
   takenlijst (`data-testid=task-list`, rijen met `data-testid=task-row`). Elke
   rij is twee-regelig: een status-dot + **titel** en daaronder een **note-label**
@@ -252,14 +394,14 @@ Twee gestapelde kaarten:
   bubbles (`data-testid=chat-bubble`, rechts = reviewer, links = claude) en een
   **uitgeschakelde** composer onderaan. De chat hoort dus bij een taak — klik een
   andere taak en de thread wisselt. De selectie leeft in een gedeelde `reactive`
-  (`ui.task`), niet in de URL; `home.mjs` bezit die en geeft 'm aan `RelatedPanel`
-  door zodat **`Enter`** (zie Toetsenbord-navigatie) de bovenste taak kan
-  selecteren. Koppelt later aan echte work-items + de `/api/claude`-bridge (één
-  thread per taak).
+  (`ui.task`), niet in de URL. Koppelt later aan echte work-items + de
+  `/api/claude`-bridge (één thread per taak).
 
-De block-kaart heeft `max-w-full` dus hij krimpt om ruimte te maken voor het
-paneel; in `'diff'`-mode (`left-6`) vult de block-kolom de resterende breedte
-i.p.v. de vaste 76rem.
+De block-kaart houdt zijn vaste `w-[76rem]`/`w-[42rem]`-breedte (geen `flex-1`
+meer), zodat de diff niet uitrekt en het paneel er strak naast blijft liggen. In
+`'list'`-mode start `<main>` op `left-[29rem]` (naast de sidebar), in `'diff'`-mode
+op `left-6` (meer ruimte); de kolommen blijven in beide gevallen vanaf links
+inpakken.
 
 ## Pagina's & routing
 
@@ -440,7 +582,44 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   - `modules/comments` — de comments-module met een **eigen SQLite read-model**
     (`comments`/`reactions`, `data/comments.db`). "Doet zijn eigen ding": telt
     reacties (`reaction_count`) en zet `status` op `resolved` bij `/resolve`.
-    Write (`Save`/`AddReaction`) = workflow-only; `List` = read voor de UI.
+    Write (`Save`/`AddReaction`) = workflow-only; `List` = read voor de UI. Elke
+    comment bewaart ook het **codefragment** waarop hij hangt (`code`/`gran`/
+    `label`-kolommen, meegegeven in `CodeCommentInput`) — de exacte navigatie-unit
+    op het moment van plaatsen — zodat de thread later dezelfde code toont als de
+    composer. `RelatedPanel.mjs` deelt daarvoor één `composeTargetHint`-box (het
+    kader met granulariteit + `class::method` + Prism-highlighted fragment): de
+    composer voedt 'm uit `commentTarget()` (live navigatie), de geplaatste-comment-
+    thread uit de opgeslagen `code`/`gran`/`label`. Een comment zónder `code` (b.v.
+    oude of geseede) toont geen kader. Een lichte `migrate` voegt die kolommen toe
+    aan een bestaande DB (`ALTER TABLE … ADD COLUMN`, dubbele-kolom-fout genegeerd).
+    Naast het fragment bewaart een comment ook zijn **navigatie-anker**
+    (`row_start`/`row_end`/`seg`, meegegeven in `CodeCommentInput`): de aligned-row-
+    range binnen het block plus — voor een `call`-comment — de segment-sleutel
+    (`segKey` in `home.mjs`). Daarmee is de **comment-index gescoped op het
+    geselecteerde block én genest op de selectie-unit** (call ⊂ line ⊂ group ⊂
+    block): staat de cursor op een call dan toont de index enkel die call, op een
+    line die line + zijn calls, op een group al zijn lines/calls, en in list-mode
+    het hele block. `RelatedPanel.mjs` filtert via `commentUnder`/`visibleComments`
+    (gedeeld door render én keyboard-nav; `cs.view` is de gefilterde lijst,
+    `cs.scope` de huidige unit). De scope komt uit `home.mjs`: een `watch` op de
+    navigatie-state duwt 'm via `setCommentScope` naar `RelatedPanel` (de index kan
+    `state` niet cross-module observeren vanuit z'n eigen list-binding). `row_start
+    < 0` = onbekend anker (oude/geseede comment) → altijd zichtbaar binnen z'n
+    block. **Let op:** de index herfiltert betrouwbaar bij (her)laden/deep-link
+    (`?sel=`), maar arrow.js her-patcht de keyed comment-lijst niet altijd bij een
+    *live* block-wissel met pijltjes — dit hangt samen met hoe `RelatedPanel` maar
+    één keer (op `pr`) rendert i.p.v. mee te renderen met de selectie. Los dit op
+    wanneer de RelatedPanel-render herzien wordt. Los van de index markeert de diff
+    zelf elke regel met een comment met een **💬** (`commentRowSet` → `Block`'s
+    `commentedRows` → `paneHTML`, presence-only, aantal maakt niet uit).
+    De **thread** opent bovendien met de comment zélf als **eerste bericht**: de
+    body die de comment titelt verschijnt óók als eerste chat-bubble (aan de kant
+    van de reviewer), gevolgd door de reacties. `RelatedPanel.mjs` bouwt dat met
+    `threadMessages(c)` = de synthetische opening (`{source:'ui', body:c.body}`,
+    key `origin:<id>`) + `c.reactions`; de keyboard-nav (`reactionCount`/`threadPos`)
+    telt die opening mee, dus `↑` loopt door tot de opening bovenaan. Een **klik**
+    op een comment-rij landt er ook echt op (`toComment()` → highlight + thread
+    open + reply-veld gefocust), net als de toetsenbord-landing.
   - `modules/github` — de GitHub-communicatie (`gh api`): `PostLineComment`,
     `Reply`, `FetchReplies`, `PRState` (`open`/`merged`/`closed`). Interface
     `github.Client` + `github.Fake` (met `SetPRState`) voor tests.
@@ -468,6 +647,15 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   merged/closed is. Dat is de durabele bron-van-waarheid die pollers lezen om te
   stoppen (schrijven blijft dus binnen een workflow). `ensurePRStatus(pr)` start/
   hergebruikt één tracker per PR (ook na herstart, via `Runs()`+`Input()`).
+  **Bij start** (synchroon in `StartWorkflow`, vóór de signal-lus) draait hij één
+  keer de **`fetchPRMeta`-Activity**: die haalt de **PR-titel + URL** op via de
+  github-module (`PRMeta`, best-effort — geen gh = leeg) en schrijft ze in de
+  **`prmeta`-module** (`modules/prmeta`, `data/prmeta.db`, read-model met
+  `Save`/`Get`). De UI (`/`-menu, zie Toetsenbord-navigatie) leest dat via
+  `GET /api/pr?pr=N` voor de Jira/GitHub-deep-links; de titel levert de
+  `KEY-123`-ticket-key. `EnsurePRStatus` is de geëxporteerde ensure-wrapper die de
+  UI via `POST /api/workflows/pr_status {pr}` bij het laden aanroept (een Execution
+  starten = sanctioned write-weg).
 - **`pr_inbox`-workflow (per repo):** een derde Workflow Type dat de PR-inbox
   bezit — het is de **enige** die GitHub voor het overzicht leest. Een
   `refresh`-Signal (van de UI bij laden én van `pollInbox` op de
@@ -482,15 +670,58 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   `GET` (lijst), `POST /api/workflows/{runID}/signals/reply` (UI-reactie),
   `POST /api/workflows/{runID}/heartbeat` (UI-heartbeat, geen state-write),
   `GET /api/workflows/{runID}` (status), en read-only `GET /api/comments?pr=N`.
-  Voor de inbox: `POST /api/workflows/{runID}/signals/refresh` +
+  Voor de PR-metadata: `POST /api/workflows/pr_status {pr}` (ensure de tracker,
+  die synchroon de titel fetcht) + read-only `GET /api/pr?pr=N` (leest het
+  `prmeta`-read-model: `{ok,pr,title,url,updatedAt}`; `{ok:false}` zolang nog niet
+  gefetcht). Voor de inbox: `POST /api/workflows/{runID}/signals/refresh` +
   read-only `GET /api/inbox` (leest het `inbox`-read-model).
   Bootstrap + recovery + hervatten van pollers + `EnsureInbox`:
   `newTasks(ctx, db, dataDir, repo)` in `tasks_api.go`, aangeroepen in `runServe`.
 - **Nieuwe workflow of module toevoegen:** skills `add-workflow` / `add-module`
   (+ templates `.claude/templates/workflow.go` / `module.go`).
 - Tests: `workflows_test.go` (UI-reactie + gh-poll→signal + resolve, een
-  restart-durability-test, `pr_status`-stop-bij-merge, heartbeat-houdt-snel, plus
-  `pr_inbox`-refresh-vult-read-model); modules zijn puur en los testbaar.
+  restart-durability-test, `pr_status`-stop-bij-merge, heartbeat-houdt-snel,
+  `pr_status`-fetcht-PR-meta, plus `pr_inbox`-refresh-vult-read-model);
+  `tests/pr-menu.spec.mjs` (Playwright: het `/`-menu en zijn submenu's); modules
+  zijn puur en los testbaar.
+
+### Relaties tussen blokken (`build_relations` + `modules/relations`)
+
+Een vierde Workflow Type, **`build_relations`** (één Execution per PR), leidt
+**many-to-many relaties** tussen blokken af — de call-graph-edges, maar
+betekenis-gedreven i.p.v. tekstueel. De eerste relatie-`kind`:
+**`event_listener`** — een gewijzigd blok dat een event dispatcht wordt de
+**parent** van de `Listener::handle` voor dat event, **mits die handle óók in
+deze PR gewijzigd is** (beide kanten moeten wijzigen om te koppelen).
+
+- **`modules/relations`** (`data/relations.db`): het read-model,
+  `relations(pr, parent_id, child_id, kind)` (block-id = `<pr>:<file>:<symbol>`).
+  Write `Replace(pr, rels)` (workflow-only, full-swap per PR → replay-safe), read
+  `List(pr)`. `kind` houdt de tabel open voor latere relatietypes.
+- **Analyse-service `relations.go`** (package main, géén module — leest de
+  head-worktree = side-effect): `buildRelations(dataDir, pr, blocks)` draait een
+  lijst **detectors** (nu `eventListenerDetector`). De event→listener-map komt
+  robuust uit drie bronnen (union): de `handle(EventType $e)`-type-hint, het
+  `$listen`-array in een `*ServiceProvider.php`, en `Event::listen(...)`-calls;
+  dispatch-sites worden per blok-body gescand (`event(new X`, `X::dispatch(`, …).
+  Herbruikt `extractBlockSource` (code.go) om block-bodies te lezen.
+- **Workflow** (`workflows.go`): `buildRelationsWorkflow` draait de
+  `buildRelations`-Activity één keer bij start (synchroon in `StartWorkflow`) en
+  opnieuw op elk **`rebuild`**-Signal. `EnsureRelations(ctx, pr)` (spiegelt
+  `ensurePRStatus`) start/hergebruikt één Execution per PR; **na een geslaagde
+  ingest** roept `handleIngest` (`api.go`) 'm aan.
+- **Endpoints:** read-only `GET /api/relations?pr=N` (leest het read-model);
+  `POST /api/workflows/{runID}/signals/rebuild`. Block-JSON draagt nu een
+  computed **`id`** (`model.go` `MarshalJSON`) zodat de frontend `parentId`/
+  `childId` aan blokken matcht.
+- **Frontend:** `home.mjs` laadt de relaties in `loadBlocks`, splitst
+  `state.blocks` (top-level = `allBlocks` minus children) van `state.allBlocks`;
+  de sidebar + navigatie draaien op `state.blocks`, children renderen in de
+  **Onderliggende code**-kaart (zie boven).
+- Tests: `relations_test.go` (detector met beide mapping-bronnen, de
+  beide-kanten-eis, module round-trip, en de workflow-end-to-end);
+  `tests/relations.spec.mjs` (Playwright: child weg uit de lijst, wél in het
+  paneel — geseed via `slash seed -relations`).
 
 ## Conventies (ingevuld door dit scaffold — corrigeer waar nodig)
 

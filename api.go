@@ -156,6 +156,11 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	// Build the block relations (event→listener, …) now that blocks are stored.
+	// The workflow is the only writer; the initial build runs synchronously.
+	if s.tasks != nil {
+		s.tasks.manager.EnsureRelations(ctx, req.PR)
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 

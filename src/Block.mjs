@@ -65,6 +65,25 @@ export default function Block(b, opts = {}) {
   // list mode pass a falsey predicate, so their hints stay hidden. Reactive (a
   // function) so flipping mode re-evaluates without re-rendering the diff.
   const hintsEnabled = opts.hintsEnabled || (() => false)
+  // diffActive is a function returning whether the reviewer is currently stepping
+  // through this block's code diff (the selected card, in diff mode). When true the
+  // card border turns light blue — the same indigo as a selected row in the comment
+  // index — as an at-a-glance cue that the keyboard now drives the diff.
+  const diffActive = opts.diffActive || (() => false)
+  // approvedRows is a function returning the Set of approved row indices for this
+  // block, so the panes re-tint (an emerald left bar) as the reviewer approves
+  // units. A function (not a value) so the .innerHTML binding re-runs when
+  // b.approvedRows changes. Defaults to nothing approved.
+  const approvedFn = opts.approvedRows || (() => new Set())
+  // commentedRows is a function returning the Set of rows that carry a comment,
+  // so the panes mark them with a 💬 (presence only). A function so the binding
+  // re-runs as comments load/change. Defaults to no comments.
+  const commentedFn = opts.commentedRows || (() => new Set())
+  // approvedCalls is a function returning the Set of approved call-segment keys
+  // (finer than approvedRows — see callKey), so a row with more than one call
+  // segment can show its per-segment progress before the whole row is signed
+  // off. Defaults to nothing approved.
+  const approvedCallsFn = opts.approvedCalls || (() => new Set())
   return html`
     <article
       class="${() =>
@@ -72,7 +91,9 @@ export default function Block(b, opts = {}) {
         (singleSide(b) ? 'w-[42rem] ' : 'w-[76rem] ') +
         (preview
           ? 'max-h-72 border-slate-200 opacity-50'
-          : 'flex-1 border-slate-300 ring-1 ring-black/5')}"
+          : diffActive()
+          ? 'border-indigo-300 ring-1 ring-indigo-200'
+          : 'border-slate-300 ring-1 ring-black/5')}"
     >
       <div class="flex items-center gap-3 border-b border-slate-100 px-4 py-2.5">
         <span
@@ -112,21 +133,22 @@ export default function Block(b, opts = {}) {
           <input
             type="checkbox"
             class="h-3.5 w-3.5 rounded border-slate-300"
-            checked="${() => b.approved}"
-            @change="${() => (b.approved = !b.approved)}"
+            checked="${() => blockApproved(b)}"
+            .indeterminate="${() => blockPartlyApproved(b)}"
+            @change="${() => toggleBlockApproval(b)}"
           />
-          approve
+          ${() => approveSummary(b)}
         </label>
       </div>
 
-      ${() =>
-        b.description
-          ? html`<p class="border-t border-slate-100 px-4 py-3 text-sm leading-relaxed text-slate-600">
-              ${b.description}
-            </p>`
-          : ''}
+      <p class="border-t border-slate-100 px-4 py-3 text-sm leading-relaxed">
+        <span class="font-semibold text-slate-500">Goal:</span>
+        <span class="${() => (b.description ? 'text-slate-600' : 'italic text-slate-400')}"
+          >${() => b.description || 'nog geen omschrijving'}</span
+        >
+      </p>
 
-      ${() => codeDiff(b, activeGroup, hintsEnabled)}
+      ${() => codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn)}
     </article>
   `
 }
@@ -138,7 +160,14 @@ export default function Block(b, opts = {}) {
 // the left. Changed lines are tinted red (old) / green (new). This is a pure
 // text diff — no AI. `b.code` is filled lazily by home.mjs: undefined (not
 // requested), null (loading), { old, new } or { error }.
-function codeDiff(b, activeGroup, hintsEnabled = () => false) {
+function codeDiff(
+  b,
+  activeGroup,
+  hintsEnabled = () => false,
+  approvedFn = () => new Set(),
+  commentedFn = () => new Set(),
+  approvedCallsFn = () => new Set(),
+) {
   const c = b.code
   if (c === undefined) return ''
   if (c === null) {
@@ -168,7 +197,7 @@ function codeDiff(b, activeGroup, hintsEnabled = () => false) {
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 bg-emerald-50 text-emerald-700', activeGroup, 'w-full')}
+        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 bg-emerald-50 text-emerald-700', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn)}
         ${scrollHint('up')}
         ${scrollHint('down')}
       </div>
@@ -181,7 +210,7 @@ function codeDiff(b, activeGroup, hintsEnabled = () => false) {
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('old', c.old, rows, 'left', 'border-rose-100 bg-rose-50 text-rose-600', activeGroup, 'w-full')}
+        ${codePane('old', c.old, rows, 'left', 'border-rose-100 bg-rose-50 text-rose-600', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn)}
         ${scrollHint('up')}
         ${scrollHint('down')}
       </div>
@@ -193,9 +222,9 @@ function codeDiff(b, activeGroup, hintsEnabled = () => false) {
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
-      ${codePane('old', c.old, rows, 'left', 'border-rose-100 bg-rose-50 text-rose-600', activeGroup, 'w-1/2')}
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 bg-rose-50 text-rose-600', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn)}
       <div class="w-px shrink-0 bg-slate-100"></div>
-      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 bg-emerald-50 text-emerald-700', activeGroup, 'w-1/2')}
+      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 bg-emerald-50 text-emerald-700', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn)}
       ${scrollHint('up')}
       ${scrollHint('down')}
     </div>
@@ -299,20 +328,25 @@ function syncScroll(e) {
 // the L-range in the header. The body is the shared aligned `rows`, projected to
 // this side (`left` = old, `right` = new). Both panes render the same number of
 // rows at the same line-height, so they line up vertically without any JS.
-function codePane(side, data, rows, sideKey, headerCls, activeGroup, widthCls = 'w-1/2') {
-  const range = data && data.text ? ` · L${data.start}–${data.end}` : ''
+function codePane(
+  side,
+  data,
+  rows,
+  sideKey,
+  headerCls,
+  activeGroup,
+  widthCls = 'w-1/2',
+  approvedFn = () => new Set(),
+  commentedFn = () => new Set(),
+  approvedCallsFn = () => new Set(),
+) {
   return html`
-    <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}">
-      <div
-        class="${'border-b px-3 py-1 text-[10px] font-bold uppercase tracking-wide ' +
-        headerCls}"
-      >
-        ${side}${range}
-      </div>
+    <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}" data-pane="${side}">
       <div class="no-scrollbar min-h-0 flex-1 overflow-auto" data-scrollsync @scroll="${syncScroll}">
         <code
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700"
-          .innerHTML="${() => paneHTML(rows, sideKey, activeGroup())}"
+          .innerHTML="${() =>
+            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn())}"
         ></code>
       </div>
     </div>
@@ -324,59 +358,148 @@ function codePane(side, data, rows, sideKey, headerCls, activeGroup, widthCls = 
 // blank/filler lines get a non-breaking space so the row keeps its height. The
 // only unescaped bits are our own static class strings, so the result is safe to
 // hand to the .innerHTML binding.
-function paneHTML(rows, sideKey, group) {
-  return rows
-    .map((r, i) => {
-      const text = sideKey === 'left' ? r.left : r.right
-      const mark = sideKey === 'left' ? r.leftMark : r.rightMark
-      const ws = wsOnly(r)
-      // A row-level flag (a real change on either side) so a single pane's rows
-      // carry the full set of changes — updateHints scans just the left pane. Del
-      // rows are marked on the left, ins rows via their filler row, so both are
-      // covered. Whitespace-only re-alignments don't count (see rowChanged/wsOnly).
-      const changed = rowChanged(r)
-      const active = changed && group && i >= group.start && i <= group.end
-      // At call granularity the active unit is a single row plus the char indices
-      // of the one call segment being navigated; underline those (per side) so the
-      // exact segment within the line is marked. null at group/line granularity.
-      const underline =
-        active && group.char ? (sideKey === 'left' ? group.left : group.right) : null
-      // Backgrounds are ~20% lighter than the raw Tailwind rose/emerald shades
-      // (mixed 20% toward white) so the tint reads as an accent, not a fill.
-      let cls = 'block whitespace-pre px-3'
-      if (active) {
-        // Brighter tint + an inset left bar (box-shadow, so it adds no width and
-        // the bars of adjacent active rows merge into one continuous accent).
-        cls += ' shadow-[inset_3px_0_0_#6366f1]'
-        if (mark === 'del') cls += ' bg-[#fed7dc]' // rose-200 +20% white
-        else if (mark === 'ins') cls += ' bg-[#b9f5d9]' // emerald-200 +20% white
-        else cls += ' bg-indigo-50'
-      } else if (ws) {
-        // Whitespace-only re-alignment: no full-line tint (it isn't a real change).
-        // Only the shifted whitespace itself is coloured, in the body below.
+function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Set(), approvedCalls = new Set()) {
+  const parts = []
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
+    const text = sideKey === 'left' ? r.left : r.right
+    const mark = sideKey === 'left' ? r.leftMark : r.rightMark
+    const ws = wsOnly(r)
+    // A row-level flag (a real change on either side) so a single pane's rows
+    // carry the full set of changes — updateHints scans just the left pane. Del
+    // rows are marked on the left, ins rows via their filler row, so both are
+    // covered. Whitespace-only re-alignments don't count (see rowChanged/wsOnly).
+    const changed = rowChanged(r)
+    const active = changed && group && i >= group.start && i <= group.end
+    // At call granularity the active unit is a single row plus the char indices
+    // of the one call segment being navigated; underline those (per side) so the
+    // exact segment within the line is marked. null at group/line granularity.
+    const underline =
+      active && group.char ? (sideKey === 'left' ? group.left : group.right) : null
+    // A fully-approved changed row gets a small checkmark in the left gutter —
+    // see approveHere below for which side draws it. The active (indigo)
+    // highlight takes precedence visually while the cursor is on the row.
+    const isApproved = changed && approved.has(i)
+    // Backgrounds are ~20% lighter than the raw Tailwind rose/emerald shades
+    // (mixed 20% toward white) so the tint reads as an accent, not a fill.
+    let cls = 'relative block whitespace-pre px-3'
+    if (active) {
+      // Brighter tint + an inset left bar (box-shadow, so it adds no width and
+      // the bars of adjacent active rows merge into one continuous accent).
+      cls += ' shadow-[inset_3px_0_0_#6366f1]'
+      if (mark === 'del') cls += ' bg-[#fed7dc]' // rose-200 +20% white
+      else if (mark === 'ins') cls += ' bg-[#b9f5d9]' // emerald-200 +20% white
+      else cls += ' bg-indigo-50'
+    } else {
+      if (ws) {
+        // Whitespace-only re-alignment: no full-line tint (it isn't a real
+        // change). Only the shifted whitespace itself is coloured, in the body.
       } else if (mark === 'del') cls += ' bg-[#ffe9eb]' // rose-100 +20% white
       else if (mark === 'ins') cls += ' bg-[#dafbea]' // emerald-100 +20% white
       else if (text === null) cls += ' bg-slate-50' // filler for the missing side
-      // A row modified on both sides (a del paired with an ins) gets an intra-line
-      // char diff so the reviewer sees *what* changed — the inserted/removed
-      // characters are marked, not just the whole line. One-sided rows (a pure
-      // add or remove) have nothing to diff against, so they highlight plainly.
-      const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
-      let body
-      if (text === null) body = '&nbsp;'
-      else if (paired) body = highlightChanges(r, sideKey, ws, underline)
-      else if (underline && underline.size)
-        // A one-sided change (pure add / remove): its whole line is the single
-        // edit, so underline it end to end.
-        body = markChars(highlight(text), (pi) => (underline.has(pi) ? UNDERLINE_CLS : ''))
-      else body = highlight(text)
-      // Anchor the first row of the active group so home.mjs can scroll it to
-      // the vertical centre of the diff viewport.
-      const anchor = active && i === group.start ? ' data-change-active="1"' : ''
-      const flag = changed ? ' data-changed="1"' : ''
-      return `<div class="${cls}"${anchor}${flag}>${body}</div>`
-    })
-    .join('')
+    }
+    // A row modified on both sides (a del paired with an ins) gets an intra-line
+    // char diff so the reviewer sees *what* changed — the inserted/removed
+    // characters are marked, not just the whole line. One-sided rows (a pure
+    // add or remove) have nothing to diff against, so they highlight plainly.
+    const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
+    let body
+    if (text === null) body = '&nbsp;'
+    else if (paired) body = highlightChanges(r, sideKey, ws, underline)
+    else if (underline && underline.size)
+      // A one-sided change (pure add / remove): its whole line is the single
+      // edit, so underline it end to end.
+      body = markChars(highlight(text), (pi) => (underline.has(pi) ? UNDERLINE_CLS : ''))
+    else body = highlight(text)
+    // A 💬 marks a row that carries a comment — presence only (the count
+    // doesn't matter). Shown once per row: on the new (right) pane for a normal
+    // row, on the old (left) pane only for a pure deletion (no right side), so a
+    // modified row doesn't get the marker twice. Appended after the code so it
+    // trails the line and scrolls with it.
+    const commentedHere =
+      text !== null && commented.has(i) && (sideKey === 'right' || r.right == null)
+    const marker = commentedHere
+      ? ' <span class="select-none opacity-60" data-comment="1" title="Er zit een comment op deze regel">💬</span>'
+      : ''
+    // Anchor the first row of the active group so home.mjs can scroll it to
+    // the vertical centre of the diff viewport.
+    const anchor = active && i === group.start ? ' data-change-active="1"' : ''
+    const flag = changed ? ' data-changed="1"' : ''
+    // approveHere mirrors commentedHere: the approve mark for a row belongs on
+    // the new (right) pane normally, and on the old (left) pane only for a pure
+    // deletion (no right side) — so a modified row never gets it twice.
+    const approveHere = sideKey === 'right' || r.right == null
+    const check =
+      isApproved && approveHere
+        ? ' <span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600" title="Goedgekeurd">✓</span>'
+        : ''
+    parts.push(`<div class="${cls}"${anchor}${flag}>${check}${body}${marker}</div>`)
+
+    // Partial call approval: once at least one — but not all — of this row's
+    // call segments is approved, an open circle marks every segment still
+    // waiting, positioned under it via a second monospace row. Both panes
+    // evaluate the exact same (row, approval-state) inputs, so they insert this
+    // extra row at the same index on both sides and stay line-for-line aligned:
+    // only the side that actually shows the segments draws the dots, the other
+    // gets a blank filler row of equal height.
+    const partial = partialCallApproval(rows, i, approved, approvedCalls)
+    if (partial) {
+      parts.push(
+        approveHere ? circleRowHTML(text, partial.segs, partial.approvedStarts) : BLANK_MARK_ROW,
+      )
+    }
+  }
+  return parts.join('')
+}
+
+// BLANK_MARK_ROW is the filler used on the pane that doesn't draw the
+// call-approval circles, so both panes keep the same row count and stay
+// vertically aligned (see paneHTML).
+const BLANK_MARK_ROW = '<div class="block whitespace-pre px-3 leading-none">&nbsp;</div>'
+
+// partialCallApproval decides whether row `i` should show the per-segment
+// open-circle indicator: it has more than one call segment (rowCallSegments),
+// isn't already fully approved (that gets the plain checkmark instead), and at
+// least one — but not all — of its segments is approved. Returns null when
+// nothing is approved yet (nothing to show) or everything is (checkmark
+// covers it), matching the "niks → niks, deels → bolletjes, alles → vinkje"
+// rule.
+function partialCallApproval(rows, i, approved, approvedCalls) {
+  if (!rowChanged(rows[i])) return null
+  if (approved.has(i)) return null
+  const segs = rowCallSegments(rows, i)
+  if (segs.length <= 1) return null
+  const prefix = i + ':'
+  const approvedStarts = new Set(
+    [...approvedCalls]
+      .filter((k) => k.startsWith(prefix))
+      .map((k) => Number(k.slice(prefix.length))),
+  )
+  const done = segs.filter((s) => approvedStarts.has(s.start)).length
+  if (done === 0 || done >= segs.length) return null
+  return { segs, approvedStarts }
+}
+
+// circleRowHTML renders the per-segment progress row: one dot under every call
+// segment, positioned at its (whitespace-trimmed) start column via literal
+// leading spaces — works without any JS measurement because the row shares the
+// exact same monospace font/size as the code line above it, so columns line up
+// 1:1. An already-approved segment gets a solid green dot, a still-waiting one
+// a hollow (open) one — so the row reads at a glance as a progress strip.
+function circleRowHTML(text, segs, approvedStarts) {
+  let out = ''
+  let col = 0
+  for (const s of segs) {
+    let start = s.start
+    while (start < s.end && /\s/.test(text[start])) start++
+    if (start < col) continue
+    out += ' '.repeat(start - col)
+    out += approvedStarts.has(s.start)
+      ? '<span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 align-middle" title="Goedgekeurd"></span>'
+      : '<span class="inline-block h-1.5 w-1.5 rounded-full border border-emerald-500 align-middle" title="Nog niet goedgekeurd"></span>'
+    col = start + 1
+  }
+  return `<div class="block whitespace-pre px-3 leading-none">${out || '&nbsp;'}</div>`
 }
 
 // wsOnly reports whether a row differs on both sides purely in whitespace
@@ -619,6 +742,87 @@ export function unitsFor(rows, gran) {
   return changeGroups(rows)
 }
 
+// ── Approval ───────────────────────────────────────────────────────────────
+// Approval is tracked per *changed row*: `b.approvedRows` is an array of row
+// indices (into blockRows) the reviewer has signed off. Every granularity's
+// approval reduces to these rows — approving a group marks all its rows, a line
+// or call marks the one row it sits on — so "is the whole block approved?" is
+// simply "are all changed rows approved?". The array is always reassigned (never
+// mutated in place) so arrow.js re-renders the checkbox and the pane bars.
+
+// changedRows returns the indices of every navigable (changed, non-ws-only) row —
+// the full set a reviewer must approve for the block to count as approved.
+export function changedRows(rows) {
+  const out = []
+  for (let i = 0; i < rows.length; i++) if (rowChanged(rows[i])) out.push(i)
+  return out
+}
+
+// approvedRowSet reads a block's approved-row indices as a Set (empty when none).
+export function approvedRowSet(b) {
+  return new Set(Array.isArray(b && b.approvedRows) ? b.approvedRows : [])
+}
+
+// approvedCallSet reads a block's approved call-segment keys as a Set (empty
+// when none). A key is `${row}:${segStart}` (see callKey/rowCallSegments) —
+// finer than approvedRows, used only while a row's segments aren't *all*
+// approved yet (once they are, the row graduates into approvedRows instead —
+// see toggleCallApprove in home.mjs — so the two sets never overlap for a row).
+export function approvedCallSet(b) {
+  return new Set(Array.isArray(b && b.approvedCalls) ? b.approvedCalls : [])
+}
+
+// callKey builds the approvedCalls key for one call segment: its row plus the
+// segment's untrimmed start char offset, stable because rowCallSegments always
+// splits the same source text the same way.
+export function callKey(row, segStart) {
+  return row + ':' + segStart
+}
+
+// callUnitApproved reports whether one call-granularity unit (as produced by
+// changeCalls) currently counts as approved: its whole row is approved (a
+// coarser group/line approval, or a call approval that graduated once every
+// segment of the row was approved), or its own segment key is in approvedCalls.
+export function callUnitApproved(b, unit) {
+  if (!unit) return false
+  if (approvedRowSet(b).has(unit.start)) return true
+  return approvedCallSet(b).has(callKey(unit.start, unit.segStart))
+}
+
+// blockApproved — the derived top-level state: a block is approved once it has at
+// least one change and *every* changed row is approved.
+export function blockApproved(b) {
+  const all = changedRows(blockRows(b))
+  if (!all.length) return false
+  const set = approvedRowSet(b)
+  return all.every((i) => set.has(i))
+}
+
+// blockPartlyApproved — some but not all changed rows approved (the checkbox's
+// indeterminate state).
+export function blockPartlyApproved(b) {
+  const all = changedRows(blockRows(b))
+  const set = approvedRowSet(b)
+  const done = all.filter((i) => set.has(i)).length
+  return done > 0 && done < all.length
+}
+
+// toggleBlockApproval flips the whole block from the top checkbox: approve every
+// changed row, or (if already fully approved) clear them all.
+function toggleBlockApproval(b) {
+  b.approvedRows = blockApproved(b) ? [] : changedRows(blockRows(b))
+}
+
+// approveSummary is the checkbox label: plain "approve" for a block with no
+// navigable changes, else "approve <done>/<total>" so approval progress is legible.
+function approveSummary(b) {
+  const all = changedRows(blockRows(b))
+  if (!all.length) return 'approve'
+  const set = approvedRowSet(b)
+  const done = all.filter((i) => set.has(i)).length
+  return `approve ${done}/${all.length}`
+}
+
 // changeGroups collapses runs of consecutive changed rows (del/ins) into
 // navigation targets: one group per run, but a run longer than MAX_GROUP rows is
 // split into successive groups of that size. Each group is { start, end }
@@ -685,30 +889,48 @@ export function changeCalls(rows) {
     const r = rows[i]
     if (!rowChanged(r)) continue
     if (r.rightMark === 'ins' && r.right != null) {
-      const segs = segmentCalls(r.right).filter(
-        (s) => r.right.slice(s.start, s.end).trim() !== '',
-      )
-      // A blank added line has no segment; keep it landable as the whole (empty)
-      // line so the run stays walkable.
-      if (segs.length === 0) {
-        units.push({ start: i, end: i, char: true, left: new Set(), right: fullSet(r.right) })
-      } else {
-        for (const s of segs)
-          units.push({
-            start: i,
-            end: i,
-            char: true,
-            left: new Set(),
-            right: rangeSet(r.right, s.start, s.end),
-          })
-      }
+      for (const s of rowCallSegments(rows, i))
+        units.push({
+          start: i,
+          end: i,
+          char: true,
+          left: new Set(),
+          right: rangeSet(r.right, s.start, s.end),
+          segStart: s.start,
+        })
     } else {
       // A removed line with no replacement: land on it as an empty new segment,
       // underlining the whole removed line on the old side so you see what's gone.
-      units.push({ start: i, end: i, char: true, left: fullSet(r.left || ''), right: new Set() })
+      units.push({
+        start: i,
+        end: i,
+        char: true,
+        left: fullSet(r.left || ''),
+        right: new Set(),
+        segStart: 0,
+      })
     }
   }
   return units
+}
+
+// rowCallSegments lists the call-chain segments of one row's *display* text —
+// the new (right) text for a normal/added row, the old (left) text for a pure
+// deletion with no replacement — mirroring changeCalls' own split. A segment's
+// (untrimmed) start offset is used as its stable per-row approval key (see
+// callKey). A row with nothing to split (a blank added line, or no real call
+// structure) still yields exactly one segment spanning the whole text, so a
+// row always has at least one segment — the fully-approved/none-approved cases
+// stay binary and only rows with 2+ segments can be partly approved.
+export function rowCallSegments(rows, i) {
+  const r = rows[i]
+  if (r.rightMark === 'ins' && r.right != null) {
+    const segs = segmentCalls(r.right).filter(
+      (s) => r.right.slice(s.start, s.end).trim() !== '',
+    )
+    return segs.length ? segs : [{ start: 0, end: r.right.length }]
+  }
+  return [{ start: 0, end: (r.left || '').length }]
 }
 
 // CALL_SEPARATORS are binary operators that join two *independent* operands —

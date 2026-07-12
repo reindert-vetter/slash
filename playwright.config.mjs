@@ -22,9 +22,12 @@ export default defineConfig({
   webServer: {
     command:
       'mkdir -p tests/.tmp && go build -o tests/.tmp/slash . && ' +
-      'rm -f tests/.tmp/test.db tests/.tmp/comments.db tests/.tmp/workflows.db tests/.tmp/inbox.db && ' +
+      // Wipe every DB plus its WAL/SHM sidecars — a leftover -wal from a
+      // killed run makes a fresh open fail with a SQLite disk-I/O error.
+      'rm -f tests/.tmp/*.db tests/.tmp/*.db-wal tests/.tmp/*.db-shm && ' +
       'rm -rf tests/.tmp/workflows && ' +
       'tests/.tmp/slash seed -db tests/.tmp/test.db -from tests/fixtures/blocks.json && ' +
+      'tests/.tmp/slash seed -db tests/.tmp/test.db -from tests/fixtures/relations-blocks.json -relations tests/fixtures/relations.json && ' +
       `SLASH_GITHUB=off SLASH_INBOX=tests/fixtures/inbox.json tests/.tmp/slash -db tests/.tmp/test.db -addr 127.0.0.1:${PORT} -static .`,
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,

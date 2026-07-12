@@ -13,6 +13,8 @@ import (
 	"slash/modules/comments"
 	"slash/modules/github"
 	"slash/modules/inbox"
+	"slash/modules/prmeta"
+	"slash/modules/relations"
 )
 
 // This file wires the first task as a durable tembed Workflow. Terminology
@@ -36,6 +38,11 @@ const (
 	// from GitHub and writes it into the inbox read-model. It is the only path
 	// that reads GitHub for the overview — the HTTP handlers read the read-model.
 	WorkflowPRInbox = "pr_inbox"
+	// WorkflowBuildRelations is the Workflow Type that derives block relations
+	// (the call-graph edges): one Execution per PR. It runs a build once on start
+	// and again on each "rebuild" Signal (re-ingest). Designed to be extended with
+	// more relation detectors later.
+	WorkflowBuildRelations = "build_relations"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -44,6 +51,13 @@ const (
 	// SignalRefresh asks the pr_inbox workflow to re-fetch the inbox now (sent by
 	// the UI on page load and by the poller on its cadence).
 	SignalRefresh = "refresh"
+	// SignalRebuild asks the build_relations workflow to recompute a PR's
+	// relations now (sent after a re-ingest).
+	SignalRebuild = "rebuild"
+	// SignalDelete is the URL-level signal name the UI posts to delete a
+	// comment. It is delivered to the workflow as a ReactionSignal (Action:
+	// "delete") under SignalReply — see ReactionSignal's doc comment.
+	SignalDelete = "delete"
 
 	// pollInterval is the fast cadence the GitHub poller uses while the reviewer
 	// is actively viewing the thread (a heartbeat arrived within heartbeatWindow).
@@ -64,16 +78,32 @@ type CodeCommentInput struct {
 	Line   int    `json:"line"`
 	Author string `json:"author"`
 	Body   string `json:"body"`
+	// Code is the source snippet the comment attaches to, with Gran/Label
+	// describing it — carried so the thread shows the same code the composer did.
+	Code  string `json:"code"`
+	Gran  string `json:"gran"`
+	Label string `json:"label"`
+	// RowStart/RowEnd/Seg pin the comment to its exact navigation unit within the
+	// block (aligned-diff row range + call segment) so the comment index can be
+	// filtered to the units under the current selection. RowStart < 0 = unknown.
+	RowStart int    `json:"rowStart"`
+	RowEnd   int    `json:"rowEnd"`
+	Seg      string `json:"seg"`
 }
 
-// ReactionSignal is the payload of a "reply" Signal — a reaction hooking onto
-// the comment, from the UI or from GitHub.
+// ReactionSignal is the payload of a "reply" Signal. It carries either a
+// reaction hooking onto the comment (Action "" / "reply", from the UI or from
+// GitHub) or a request to delete the comment (Action "delete") — both ride the
+// same Signal because a workflow can only WaitSignal on one name at a time
+// (see taskCodeCommentWorkflow's reactions loop), so a delete request has to
+// be delivered as a distinguishable reply rather than a signal of its own.
 type ReactionSignal struct {
 	ID     string `json:"id"`
 	Source string `json:"source"` // ui | github
 	Author string `json:"author"`
 	Body   string `json:"body"`
-	Done   bool   `json:"done"` // resolves the thread
+	Done   bool   `json:"done"`   // resolves the thread
+	Action string `json:"action"` // "" (reply, default) | "delete"
 }
 
 // postResult carries the GitHub root comment ID (0 when GitHub is unavailable).
@@ -97,6 +127,12 @@ type PRInboxInput struct {
 	Repo string `json:"repo"`
 }
 
+// BuildRelationsInput starts (and re-signals) a build_relations Execution — one
+// per PR.
+type BuildRelationsInput struct {
+	PR int `json:"pr"`
+}
+
 // inboxRefreshResult is the small summary the refreshInbox Activity returns — the
 // actual data lives in the inbox read-model, so the event history stays compact
 // even though this workflow refreshes indefinitely.
@@ -108,28 +144,32 @@ type inboxRefreshResult struct {
 // TaskManager registers the workflows + their activities on a tembed engine and
 // runs the per-execution GitHub poller.
 type TaskManager struct {
-	engine   *tembed.Engine
-	gh       github.Client
-	comments *comments.Module
-	inbox    *inbox.Module
-	db       *sql.DB
-	repo     string
-	interval time.Duration // fast cadence (reviewer active)
-	idle     time.Duration // slow cadence + PR-state check (reviewer idle)
-	logf     func(string, ...any)
+	engine    *tembed.Engine
+	gh        github.Client
+	comments  *comments.Module
+	inbox     *inbox.Module
+	relations *relations.Module
+	prmeta    *prmeta.Module
+	db        *sql.DB
+	dataDir   string
+	repo      string
+	interval  time.Duration // fast cadence (reviewer active)
+	idle      time.Duration // slow cadence + PR-state check (reviewer idle)
+	logf      func(string, ...any)
 
-	mu       sync.Mutex           // guards lastBeat + prRuns + inboxRun
+	mu       sync.Mutex           // guards lastBeat + prRuns + relRuns + inboxRun
 	lastBeat map[string]time.Time // code-comment/inbox Run ID → last heartbeat
 	prRuns   map[int]string       // PR → pr_status Run ID
+	relRuns  map[int]string       // PR → build_relations Run ID
 	inboxRun string               // pr_inbox Run ID (one per repo/process)
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
-func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, db *sql.DB, repo string) *TaskManager {
+func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, db *sql.DB, dataDir, repo string) *TaskManager {
 	m := &TaskManager{
-		engine: engine, gh: gh, comments: cs, inbox: ib, db: db, repo: repo,
+		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
-		lastBeat: map[string]time.Time{}, prRuns: map[int]string{},
+		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{},
 		logf: log.Printf,
 	}
 
@@ -191,6 +231,50 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, cs.AddReaction(ctx, r)
 	})
 
+	// Activity: mark the comment as being deleted (write, workflow-driven). The
+	// first step of the delete flow, so the UI can show "Aan het verwijderen"
+	// while the actual removal (GitHub + the row itself) is still in flight.
+	engine.RegisterActivity("markCommentDeleting", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return nil, cs.SetStatus(ctx, arg.ID, "deleting")
+	})
+
+	// Activity: delete the GitHub review comment (best-effort — a failure must
+	// not block removing our own record of it).
+	engine.RegisterActivity("deleteGithubComment", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR     int   `json:"pr"`
+			RootID int64 `json:"rootId"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if arg.RootID == 0 {
+			return nil, nil
+		}
+		if err := gh.DeleteComment(ctx, arg.PR, arg.RootID); err != nil {
+			m.logf("task_code_comment: github delete skipped: %v", err)
+		}
+		return nil, nil
+	})
+
+	// Activity: the comments module removes the comment (write, workflow-driven)
+	// — the final step of the delete flow, cascading its reactions.
+	engine.RegisterActivity("deleteComment", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return nil, cs.Delete(ctx, arg.ID)
+	})
+
 	// Activity: reply on GitHub to a UI reaction (best-effort).
 	engine.RegisterActivity("replyGithub", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
@@ -210,9 +294,51 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, nil
 	})
 
+	// Activity: analyse the PR's blocks into relations and store them (write,
+	// workflow-driven). Reads the head worktree; the relations module is the only
+	// writer of the relations read-model.
+	engine.RegisterActivity("buildRelations", func(ctx context.Context, in []byte) ([]byte, error) {
+		var input BuildRelationsInput
+		if err := json.Unmarshal(in, &input); err != nil {
+			return nil, err
+		}
+		blocks, err := blocksByPR(m.db, input.PR)
+		if err != nil {
+			return nil, fmt.Errorf("build_relations: load blocks: %w", err)
+		}
+		rels := buildRelations(m.dataDir, input.PR, blocks)
+		if err := m.relations.Replace(ctx, input.PR, rels); err != nil {
+			return nil, fmt.Errorf("build_relations: save: %w", err)
+		}
+		return json.Marshal(map[string]int{"relations": len(rels)})
+	})
+
+	// Activity: fetch the PR's metadata (title + URL) from GitHub and store it in
+	// the prmeta read-model (write, workflow-driven). Best-effort: a GitHub hiccup
+	// or a nil store (tests) must not sink the pr_status tracker.
+	engine.RegisterActivity("fetchPRMeta", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg PRStatusInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.prmeta == nil {
+			return nil, nil
+		}
+		meta, err := gh.PRMeta(ctx, arg.PR)
+		if err != nil {
+			m.logf("pr_status: fetch meta pr=%d skipped: %v", arg.PR, err)
+			return nil, nil
+		}
+		if err := m.prmeta.Save(ctx, prmeta.Meta{PR: arg.PR, Title: meta.Title, URL: meta.URL}); err != nil {
+			return nil, fmt.Errorf("save pr meta: %w", err)
+		}
+		return nil, nil
+	})
+
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
+	engine.RegisterWorkflow(WorkflowBuildRelations, buildRelationsWorkflow)
 	return m
 }
 
@@ -231,6 +357,27 @@ func prInboxWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 }
 
+// buildRelationsWorkflow derives a PR's block relations. It is deterministic:
+// the build (which reads the worktree + writes the read-model) is an Activity.
+// It builds once on start, then rebuilds on each "rebuild" Signal (re-ingest),
+// so it stays a long-lived per-PR tracker we can extend with more detectors.
+func buildRelationsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in BuildRelationsInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	if err := w.ExecuteActivity("buildRelations", in, nil); err != nil {
+		return nil, fmt.Errorf("build relations: %w", err)
+	}
+	for {
+		var s json.RawMessage
+		w.WaitSignal(SignalRebuild, &s)
+		if err := w.ExecuteActivity("buildRelations", in, nil); err != nil {
+			return nil, fmt.Errorf("rebuild relations: %w", err)
+		}
+	}
+}
+
 // prStatusWorkflow is the per-PR lifecycle tracker. It is deterministic: it only
 // consumes "state" Signals (fed by the pollers) and records them in its history.
 // The Execution completes once the PR is no longer open (merged or closed) — that
@@ -239,6 +386,12 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in PRStatusInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, err
+	}
+	// Fetch the PR's metadata (title + URL) once at start (synchronously, inside
+	// StartWorkflow), so the read-model is filled before the tracker parks on the
+	// first state Signal. The UI reads it via GET /api/pr for the `/` menu.
+	if err := w.ExecuteActivity("fetchPRMeta", in, nil); err != nil {
+		return nil, fmt.Errorf("fetch pr meta: %w", err)
 	}
 	for {
 		var s PRStateSignal
@@ -262,6 +415,8 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	comment := comments.Comment{
 		ID: runID, RunID: runID, PR: in.PR, File: in.File, Line: in.Line,
 		Author: in.Author, Body: in.Body,
+		Code: in.Code, Gran: in.Gran, Label: in.Label,
+		RowStart: in.RowStart, RowEnd: in.RowEnd, Seg: in.Seg,
 	}
 	if err := w.ExecuteActivity("saveComment", comment, nil); err != nil {
 		return nil, fmt.Errorf("save comment: %w", err)
@@ -272,13 +427,31 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 
 	// Reactions loop: each "reply" Signal (UI or GitHub) is stored, mirrored to
-	// the other side, and closes the thread when Done.
+	// the other side, and closes the thread when Done. A "delete" Action instead
+	// removes the comment — first flipping its status to "deleting", then
+	// deleting it on GitHub (best-effort) and from our own store — and completes
+	// the execution, ending the thread.
 	reactions := 0
 	for {
 		var r ReactionSignal
 		w.WaitSignal(SignalReply, &r)
-		reactions++
 
+		if r.Action == "delete" {
+			if err := w.ExecuteActivity("markCommentDeleting", map[string]any{"id": runID}, nil); err != nil {
+				return nil, fmt.Errorf("mark comment deleting: %w", err)
+			}
+			if err := w.ExecuteActivity("deleteGithubComment", map[string]any{
+				"pr": in.PR, "rootId": posted.RootID,
+			}, nil); err != nil {
+				return nil, fmt.Errorf("delete github comment: %w", err)
+			}
+			if err := w.ExecuteActivity("deleteComment", map[string]any{"id": runID}, nil); err != nil {
+				return nil, fmt.Errorf("delete comment: %w", err)
+			}
+			return json.Marshal(map[string]any{"comment": runID, "deleted": true})
+		}
+
+		reactions++
 		if err := w.ExecuteActivity("saveReaction", comments.Reaction{
 			ID: r.ID, CommentID: runID, Source: r.Source, Author: r.Author, Body: r.Body, Resolves: r.Done,
 		}, nil); err != nil {
@@ -335,6 +508,15 @@ func (m *TaskManager) Heartbeat(runID string) {
 	m.mu.Unlock()
 }
 
+// EnsurePRStatus ensures a pr_status tracker exists for pr (starting one, whose
+// start synchronously fetches the PR's metadata into the prmeta read-model) and
+// returns its Run ID. The UI calls this on page load so the `/` menu's
+// Jira/GitHub links have the PR title. Starting/reusing an Execution is the
+// sanctioned UI write path.
+func (m *TaskManager) EnsurePRStatus(pr int) (string, error) {
+	return m.ensurePRStatus(pr)
+}
+
 // ensurePRStatus returns the Run ID of the pr_status tracker for pr, starting one
 // if none is live yet (one tracker per PR, reused across restarts).
 func (m *TaskManager) ensurePRStatus(pr int) (string, error) {
@@ -375,6 +557,63 @@ func (m *TaskManager) findPRStatusLocked(pr int) string {
 			continue
 		}
 		var pin PRStatusInput
+		if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
+			return r.ID
+		}
+	}
+	return ""
+}
+
+// EnsureRelations makes sure a build_relations Execution exists for pr and has
+// (re)built its relations. It starts one if none is live (the initial build runs
+// synchronously inside StartWorkflow); otherwise it signals a rebuild. One
+// Execution per PR, reused across restarts. Called after a successful ingest.
+func (m *TaskManager) EnsureRelations(ctx context.Context, pr int) {
+	m.mu.Lock()
+	runID := m.relRuns[pr]
+	if runID == "" {
+		runID = m.findBuildRelationsLocked(pr)
+	}
+	m.mu.Unlock()
+
+	if runID == "" {
+		id, err := m.engine.StartWorkflow(WorkflowBuildRelations, BuildRelationsInput{PR: pr})
+		if err != nil {
+			m.logf("build_relations: start pr=%d: %v", pr, err)
+			return
+		}
+		m.mu.Lock()
+		m.relRuns[pr] = id
+		m.mu.Unlock()
+		return
+	}
+	m.mu.Lock()
+	m.relRuns[pr] = runID
+	m.mu.Unlock()
+	if err := m.engine.SignalWorkflow(runID, SignalRebuild, json.RawMessage("{}")); err != nil {
+		m.logf("build_relations: rebuild signal pr=%d: %v", pr, err)
+	}
+}
+
+// findBuildRelationsLocked scans for a running/waiting build_relations Execution
+// for pr. Reads only the engine, so it is safe to call while holding m.mu.
+func (m *TaskManager) findBuildRelationsLocked(pr int) string {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowBuildRelations {
+			continue
+		}
+		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var pin BuildRelationsInput
 		if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
 			return r.ID
 		}

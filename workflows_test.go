@@ -11,6 +11,8 @@ import (
 	"slash/modules/comments"
 	"slash/modules/github"
 	"slash/modules/inbox"
+	"slash/modules/prmeta"
+	"slash/modules/relations"
 )
 
 // testInbox opens a throwaway inbox read-model for the manager under test.
@@ -22,6 +24,28 @@ func testInbox(t *testing.T) *inbox.Module {
 	}
 	t.Cleanup(func() { ib.Close() })
 	return ib
+}
+
+// testRelations opens a throwaway relations read-model for the manager.
+func testRelations(t *testing.T) *relations.Module {
+	t.Helper()
+	rel, err := relations.Open(filepath.Join(t.TempDir(), "relations.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rel.Close() })
+	return rel
+}
+
+// testPRMeta opens a throwaway prmeta read-model for the manager.
+func testPRMeta(t *testing.T) *prmeta.Module {
+	t.Helper()
+	pm, err := prmeta.Open(filepath.Join(t.TempDir(), "prmeta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pm.Close() })
+	return pm
 }
 
 func waitFor(t *testing.T, cond func() bool) {
@@ -45,7 +69,7 @@ func newTestManager(t *testing.T) (*TaskManager, *github.Fake, *comments.Module)
 	t.Cleanup(func() { cs.Close() })
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), nil, "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, "", "test/repo")
 	m.interval = 3 * time.Millisecond // fast poll for the test
 	m.idle = 3 * time.Millisecond     // idle cadence too, so tests never wait 10m
 	return m, gh, cs
@@ -107,6 +131,104 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 	}
 	if len(l[0].Reactions) != 3 {
 		t.Fatalf("reactions = %d, want 3", len(l[0].Reactions))
+	}
+}
+
+// Deleting a comment flips its status to "deleting" first (markCommentDeleting),
+// then removes it from GitHub (best-effort) and from our own store, and
+// completes the execution.
+func TestTaskCodeCommentDelete(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reindert", Body: "please look at this",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A reaction first, so the delete also has to cascade a real reaction row.
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-1", Source: "ui", Author: "reindert", Body: "ack"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && l[0].ReactionCount == 1
+	})
+
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-2", Source: "ui", Author: "reindert", Action: "delete"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The execution completes as part of the delete flow (SignalWorkflow drives
+	// the workflow synchronously to its next block point).
+	if s, _ := m.engine.Status(runID); s != tembed.StatusCompleted {
+		t.Fatalf("status = %q, want completed", s)
+	}
+	// The comment (and its cascaded reaction) is gone from the read-model.
+	list, err := cs.List(ctx, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("comments = %+v, want none after delete", list)
+	}
+	// GitHub's copy was removed too (best-effort call still happened).
+	if gh.DeletedCount() != 1 {
+		t.Fatalf("github deleted %d, want 1", gh.DeletedCount())
+	}
+
+	// The status must have flipped to "deleting" before the row itself was
+	// removed — assert the two activities ran in that order in the history.
+	hist, err := m.engine.History(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var markIdx, deleteIdx = -1, -1
+	for i, ev := range hist {
+		if ev.Type != tembed.EventActivityCompleted {
+			continue
+		}
+		switch ev.Name {
+		case "markCommentDeleting":
+			markIdx = i
+		case "deleteComment":
+			deleteIdx = i
+		}
+	}
+	if markIdx == -1 || deleteIdx == -1 || markIdx >= deleteIdx {
+		t.Fatalf("expected markCommentDeleting (idx %d) before deleteComment (idx %d)", markIdx, deleteIdx)
+	}
+}
+
+// A comment can be deleted before it ever receives a reaction.
+func TestTaskCodeCommentDeleteWithoutReactions(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 43, File: "src/Order.php", Line: 3, Author: "reindert", Body: "typo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-1", Source: "ui", Action: "delete"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if s, _ := m.engine.Status(runID); s != tembed.StatusCompleted {
+		t.Fatalf("status = %q, want completed", s)
+	}
+	list, _ := cs.List(ctx, 43)
+	if len(list) != 0 {
+		t.Fatalf("comments = %+v, want none after delete", list)
+	}
+	if gh.DeletedCount() != 1 {
+		t.Fatalf("github deleted %d, want 1", gh.DeletedCount())
 	}
 }
 
@@ -196,7 +318,7 @@ func TestPRInboxRefreshPopulatesReadModel(t *testing.T) {
 
 	ib := testInbox(t)
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, ib, db, repoSlug)
+	m := NewTaskManager(engine, &github.Fake{}, nil, ib, testRelations(t), testPRMeta(t), db, "", repoSlug)
 
 	runID, err := engine.StartWorkflow(WorkflowPRInbox, PRInboxInput{Repo: repoSlug})
 	if err != nil {
@@ -242,7 +364,7 @@ func TestTaskSurvivesRestart(t *testing.T) {
 
 	ib := testInbox(t)
 	e1 := tembed.New(store)
-	NewTaskManager(e1, gh, cs, ib, nil, "test/repo")
+	NewTaskManager(e1, gh, cs, ib, testRelations(t), testPRMeta(t), nil, "", "test/repo")
 	runID, err := e1.StartWorkflow(WorkflowTaskCodeComment, CodeCommentInput{PR: 1, File: "a.php", Line: 1, Body: "q"})
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +375,7 @@ func TestTaskSurvivesRestart(t *testing.T) {
 
 	// Restart: a new engine over the same store must not re-post the comment.
 	e2 := tembed.New(store)
-	NewTaskManager(e2, gh, cs, ib, nil, "test/repo")
+	NewTaskManager(e2, gh, cs, ib, testRelations(t), testPRMeta(t), nil, "", "test/repo")
 	if err := e2.Recover(); err != nil {
 		t.Fatal(err)
 	}
@@ -266,5 +388,35 @@ func TestTaskSurvivesRestart(t *testing.T) {
 	}
 	if s, _ := e2.Status(runID); s != tembed.StatusCompleted {
 		t.Fatalf("status = %s, want completed", s)
+	}
+}
+
+// TestPRStatusFetchesMeta asserts the pr_status tracker fetches the PR's
+// metadata (title + URL) into the prmeta read-model at start (synchronously,
+// inside EnsurePRStatus → StartWorkflow), which is what feeds the `/` menu.
+func TestPRStatusFetchesMeta(t *testing.T) {
+	pm := testPRMeta(t)
+	cs, err := comments.Open(filepath.Join(t.TempDir(), "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+	gh := &github.Fake{}
+	gh.SetPRMeta(github.Meta{Title: "PS-123 fix the thing", URL: "https://github.com/x/y/pull/7"})
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, "", "test/repo")
+
+	if _, err := m.EnsurePRStatus(7); err != nil {
+		t.Fatal(err)
+	}
+	meta, ok, err := pm.Get(context.Background(), 7)
+	if err != nil || !ok {
+		t.Fatalf("meta not stored (ok=%v err=%v)", ok, err)
+	}
+	if meta.Title != "PS-123 fix the thing" {
+		t.Fatalf("title = %q, want %q", meta.Title, "PS-123 fix the thing")
+	}
+	if meta.URL == "" {
+		t.Fatalf("url empty, want stored")
 	}
 }

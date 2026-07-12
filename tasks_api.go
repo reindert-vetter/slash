@@ -13,15 +13,19 @@ import (
 	"slash/modules/comments"
 	"slash/modules/github"
 	"slash/modules/inbox"
+	"slash/modules/prmeta"
+	"slash/modules/relations"
 )
 
 // tasks holds the workflow engine + the module read sides. It is built once at
 // server start.
 type tasks struct {
-	engine   *tembed.Engine
-	manager  *TaskManager
-	comments *comments.Module
-	inbox    *inbox.Module
+	engine    *tembed.Engine
+	manager   *TaskManager
+	comments  *comments.Module
+	inbox     *inbox.Module
+	relations *relations.Module
+	prmeta    *prmeta.Module
 }
 
 // newTasks builds the tembed engine (SQLite + JSONL, so comments live in the
@@ -50,6 +54,21 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, fu
 		cs.Close()
 		return nil, nil, err
 	}
+	rel, err := relations.Open(dataDir + "/relations.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		return nil, nil, err
+	}
+	pm, err := prmeta.Open(dataDir + "/prmeta.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -57,7 +76,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, fu
 	if os.Getenv("SLASH_GITHUB") == "off" {
 		gh = &github.Fake{}
 	}
-	mgr := NewTaskManager(engine, gh, cs, ib, db, repo)
+	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, db, dataDir, repo)
 
 	if err := engine.Recover(); err != nil {
 		return nil, nil, err
@@ -70,9 +89,11 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, fu
 	closeFn := func() error {
 		_ = sq.Close()
 		_ = ib.Close()
+		_ = rel.Close()
+		_ = pm.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -116,8 +137,16 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET  /api/workflows/{runID}                       → execution status
 	mux.HandleFunc("/api/workflows/", s.handleWorkflows)
 	mux.HandleFunc("/api/workflows/task_code_comment", s.handleTaskCodeComment)
+	// POST /api/workflows/pr_status {pr} → ensure the per-PR lifecycle tracker
+	// (its start fetches the PR's metadata into the prmeta read-model).
+	mux.HandleFunc("/api/workflows/pr_status", s.handlePRStatusStart)
+	// GET /api/pr?pr=N → read-only PR metadata (title + URL) from the prmeta
+	// read-model — for the `/` command menu's Jira/GitHub deep-links.
+	mux.HandleFunc("/api/pr", s.handlePR)
 	// GET /api/comments?pr=N → read-only comments + reactions for the UI
 	mux.HandleFunc("/api/comments", s.handleComments)
+	// GET /api/relations?pr=N → read-only block relations (edges) for the UI
+	mux.HandleFunc("/api/relations", s.handleRelations)
 	// The inbox is owned by the pr_inbox workflow; these endpoints read its
 	// read-model (never GitHub directly).
 	mux.HandleFunc("/api/inbox", s.handleInbox)
@@ -166,7 +195,7 @@ func (s *server) handleTaskCodeComment(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" {
 		http.NotFound(w, r)
 		return
 	}
@@ -200,6 +229,34 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "refreshing"})
+			return
+		}
+		// The build_relations "rebuild" signal carries no payload — it asks the
+		// workflow to recompute the PR's relations now.
+		if parts[2] == SignalRebuild {
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalRebuild, json.RawMessage("{}")); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "rebuilding"})
+			return
+		}
+		// The delete signal carries no comment body — it just asks the workflow
+		// to mark the comment "deleting" and remove it (see ReactionSignal).
+		if parts[2] == SignalDelete {
+			var body struct {
+				Author string `json:"author"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body) // author is optional
+			sig := ReactionSignal{
+				ID: "ui-" + newUIReactionID(), Source: "ui",
+				Author: body.Author, Action: "delete",
+			}
+			if err := s.tasks.manager.Signal(runID, sig); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "deleting"})
 			return
 		}
 		if parts[2] != SignalReply {
@@ -260,4 +317,75 @@ func (s *server) handleComments(w http.ResponseWriter, r *http.Request) {
 		list = []comments.Comment{}
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// handleRelations serves GET /api/relations?pr=N — the read-only block-relations
+// read-model (parent→child edges) the UI uses to nest children under a block.
+func (s *server) handleRelations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr := 0
+	if v := r.URL.Query().Get("pr"); v != "" {
+		pr, _ = strconv.Atoi(v)
+	}
+	list, err := s.tasks.relations.List(r.Context(), pr)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []relations.Relation{}
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// handlePRStatusStart starts (or reuses) the per-PR pr_status tracker. Starting
+// an Execution is the sanctioned UI write path; its start synchronously fetches
+// the PR's metadata into the prmeta read-model. The UI calls this on page load.
+func (s *server) handlePRStatusStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		PR int `json:"pr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 {
+		http.Error(w, "invalid pr", http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.EnsurePRStatus(in.PR)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handlePR serves GET /api/pr?pr=N — the read-only PR metadata (title + URL)
+// from the prmeta read-model. {ok:false} while the pr_status tracker hasn't
+// fetched it yet.
+func (s *server) handlePR(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr := 0
+	if v := r.URL.Query().Get("pr"); v != "" {
+		pr, _ = strconv.Atoi(v)
+	}
+	meta, ok, err := s.tasks.prmeta.Get(r.Context(), pr)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "pr": pr})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "pr": meta.PR, "title": meta.Title, "url": meta.URL, "updatedAt": meta.UpdatedAt,
+	})
 }

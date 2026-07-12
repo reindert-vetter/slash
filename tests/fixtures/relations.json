@@ -1,0 +1,8 @@
+[
+  {
+    "pr": 90,
+    "parentId": "90:app/Actions/PlaceOrderAction.php:PlaceOrderAction::execute",
+    "childId": "90:app/Listeners/SendOrderMail.php:SendOrderMail::handle",
+    "kind": "event_listener"
+  }
+]

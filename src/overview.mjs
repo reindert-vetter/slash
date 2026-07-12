@@ -790,11 +790,19 @@ async function loadInbox() {
   state.loading = false
 }
 
+// normalizeSections guarantees every section has a prs array. The Go API
+// marshals an empty section's prs slice as null, which would crash the
+// .length/.forEach calls that iterate sections.
+function normalizeSections(sections) {
+  if (!Array.isArray(sections)) return []
+  return sections.map((s) => ({ ...s, prs: Array.isArray(s.prs) ? s.prs : [] }))
+}
+
 function applyLive(body) {
   state.repo = body.repo || ''
   state.generatedFor = body.generatedFor || ''
   state.inboxRunId = body.runId || ''
-  state.sections = Array.isArray(body.sections) ? body.sections : []
+  state.sections = normalizeSections(body.sections)
   state.cached = false
   state.loading = false
   // The list comes from the pr_inbox workflow's read-model, never a direct
@@ -1044,7 +1052,7 @@ async function reloadSnapshot() {
       state.repo = body.repo || state.repo
       state.generatedFor = body.generatedFor || state.generatedFor
       state.inboxRunId = body.runId || state.inboxRunId
-      state.sections = Array.isArray(body.sections) ? body.sections : []
+      state.sections = normalizeSections(body.sections)
       state.cached = false
       kickOffStatuses(gen)
     }

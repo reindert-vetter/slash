@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Status of a block relative to the PR.
 const (
@@ -34,6 +37,16 @@ type Block struct {
 // ID is stable per (pr, file, symbol) so re-ingest is idempotent.
 func (b Block) ID() string {
 	return fmt.Sprintf("%d:%s:%s", b.PR, b.File, b.symbol())
+}
+
+// MarshalJSON emits the block plus its computed "id" so the frontend can match
+// relation parent/child ids to blocks.
+func (b Block) MarshalJSON() ([]byte, error) {
+	type alias Block
+	return json.Marshal(struct {
+		alias
+		ID string `json:"id"`
+	}{alias(b), b.ID()})
 }
 
 // symbol is the key old and new blocks are matched on.
