@@ -85,6 +85,26 @@ verwijderen) — een workflow kan namelijk maar op één Signal-naam tegelijk
 `WaitSignal`-en, dus dit moet als een te onderscheiden variant van de bestaande
 reacties-lus binnenkomen, niet als een eigen Signal-naam.
 
+Datzelfde `CommandMenu`-mechanisme bedient ook een **comment-soort-menu**
+(`menu.mode = 'compose'`, `COMPOSE_COMMANDS` in `home.mjs`): staat de composer
+open én is er tekst getypt, dan opent **`Enter`** (en de composer-knop
+**"Plaats…"**, via de `openCompose`-prop van `RelatedPanel`) niet meteen de
+comment, maar een menu met vier keuzes wat ermee moet gebeuren: *Claude commando*
+(placeholder), *Laat Claude dit implementeren (groep/regel/call)* — placeholder,
+label benoemt de huidige unit via `granNoun()` uit `commentTarget()` —, *Alleen
+voor mijzelf* en *Jira* (een submenu met *Comment op ticket* / *Subtaak aanmaken* /
+*Nieuwe taak aanmaken*, alle drie placeholder). Alleen **"Alleen voor mijzelf"**
+plaatst echt: `placeComment(state, commentTarget, { local: true })` → een
+**privé-notitie** die wél als comment wordt opgeslagen maar niet naar GitHub gaat
+(zie de `local`-vlag in `.claude/rules/tembed-workflows.md`). De Enter-tak zit
+in `onKeydown` **vóór** de `relatedActive()`-tak (`isComposeOpen()` +
+`composeHasText()`, beide uit `RelatedPanel.mjs`), zodat hij werkt of de composer
+nu via toetsenbord (`cs.focus==='new'`) of via de knop geopend is; **Shift+Enter**
+valt erbuiten en blijft dus een newline in de composer. Belangrijk: dit was de
+eerste flow die een menu **over** de open composer opent — daardoor kwam een
+latente arrow.js-wees-binding-bug boven (menu-heropen-crash), opgelost met de
+verse-`ms`-state-split, zie `.claude/rules/conventions.md`.
+
 **`/`** opent een **algemeen, PR-breed tree-menu** (`menu.mode = 'pr'`,
 `PR_COMMANDS` in `home.mjs`) — hetzelfde `CommandMenu`-overlay als `Enter`, maar
 i.p.v. block-acties zijn dit acties op de **hele PR**. Drie root-items: **"Naar

@@ -97,6 +97,11 @@ type CodeCommentInput struct {
 	RowStart int    `json:"rowStart"`
 	RowEnd   int    `json:"rowEnd"`
 	Seg      string `json:"seg"`
+	// Local marks a private note: it is stored as a comment but never posted to
+	// GitHub. The workflow then skips postGithubComment, so posted.RootID stays 0
+	// and every downstream github call (poller, reply mirror, delete) no-ops via
+	// its existing RootID == 0 guard.
+	Local bool `json:"local"`
 }
 
 // ReactionSignal is the payload of a "reply" Signal. It carries either a
@@ -637,9 +642,14 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	if err := w.ExecuteActivity("saveComment", comment, nil); err != nil {
 		return nil, fmt.Errorf("save comment: %w", err)
 	}
+	// A local (private) note is never posted to GitHub — posted stays the
+	// zero-value (RootID 0), so the poller isn't started and reply/delete mirrors
+	// no-op. Gating on in.Local (input, not live state) keeps replay deterministic.
 	var posted postResult
-	if err := w.ExecuteActivity("postGithubComment", in, &posted); err != nil {
-		return nil, fmt.Errorf("post github comment: %w", err)
+	if !in.Local {
+		if err := w.ExecuteActivity("postGithubComment", in, &posted); err != nil {
+			return nil, fmt.Errorf("post github comment: %w", err)
+		}
 	}
 
 	// Reactions loop: each "reply" Signal (UI or GitHub) is stored, mirrored to

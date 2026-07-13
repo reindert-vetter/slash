@@ -104,6 +104,16 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   beide worden als hetzelfde Signal geleverd. Elke reactie wordt opgeslagen
   (comments) en een UI-reactie wordt gespiegeld naar GitHub; `Done`/`/resolve`
   sluit de thread.
+- **Privé-notitie (`local`-vlag):** `CodeCommentInput` draagt een
+  `Local bool`-vlag. Is die gezet — de UI stuurt 'm bij de keuze **"Alleen voor
+  mijzelf"** in het comment-soort-menu (zie `.claude/rules/keyboard-navigation.md`)
+  — dan **slaat de workflow `postGithubComment` over** (`if !in.Local`). De comment
+  wordt dus wél in het read-model opgeslagen maar nooit naar GitHub gepost. Dat is
+  replay-deterministisch: het aantal `ExecuteActivity`-calls hangt van de **input**
+  af, niet van live state. Verdere zorg is er niet: `posted` blijft de zero-value
+  (`RootID == 0`), dus `StartCodeComment` start geen poller en de bestaande
+  `RootID == 0`-guards maken `deleteGithubComment`/`replyGithub` no-op — reageren op
+  of verwijderen van een privé-notitie raakt GitHub dus nooit.
 - **Poller-cadans (heartbeat-gedreven):** de poller checkt GitHub **snel**
   (`pollInterval = time.Minute`) zolang er in de laatste `heartbeatWindow`
   (10 min) een **heartbeat** binnenkwam — de UI pingt

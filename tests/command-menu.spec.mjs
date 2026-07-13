@@ -14,7 +14,7 @@ test.describe('PR Review Tree — command palette', () => {
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     const menu = page.getByTestId('command-menu')
-    await expect(menu).toHaveCount(0)
+    await expect(menu).not.toBeVisible()
 
     await page.keyboard.press('Enter')
 
@@ -36,7 +36,7 @@ test.describe('PR Review Tree — command palette', () => {
     expect(menuTop).toBeGreaterThanOrEqual(selTop - 1)
 
     await page.keyboard.press('Escape')
-    await expect(menu).toHaveCount(0)
+    await expect(menu).not.toBeVisible()
   })
 
   test('typing fuzzy-filters and Enter runs the selected command', async ({ page }) => {
@@ -57,7 +57,7 @@ test.describe('PR Review Tree — command palette', () => {
 
     // Enter runs it: the menu closes and the block is approved.
     await page.keyboard.press('Enter')
-    await expect(page.getByTestId('command-menu')).toHaveCount(0)
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await expect(approve).toBeChecked()
   })
 
@@ -87,24 +87,81 @@ test.describe('PR Review Tree — command palette', () => {
     // typed text already in the textarea, ready to keep typing — nothing is
     // posted until the reviewer explicitly sends it.
     await page.keyboard.press('Enter')
-    await expect(page.getByTestId('command-menu')).toHaveCount(0)
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeVisible()
     await expect(composer).toHaveValue('dit klopt niet helemaal')
     await expect(composer).toBeFocused()
     expect(posted).toBeNull()
 
-    // Sending it now does place the comment task, with the (possibly extended)
-    // text.
+    // Finishing now opens the comment-kind menu (the send button no longer places
+    // directly); choosing "Alleen voor mijzelf" places the comment task as a
+    // private note (local:true) with the (possibly extended) text.
     await composer.type(' extra.')
     await page.getByTestId('comment-send').click()
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await page.getByTestId('command-row').filter({ hasText: 'Alleen voor mijzelf' }).click()
     await expect.poll(() => posted && posted.body).toBe('dit klopt niet helemaal extra.')
     expect(posted.pr).toBe(12903)
     expect(posted.file).toBeTruthy()
+    expect(posted.local).toBe(true)
     // The placement carries the previewed snippet so the placed comment's thread
     // can show the same code the composer did (see composeTargetHint reuse).
     expect(posted.code).toBeTruthy()
     expect(posted.label).toBeTruthy()
+  })
+
+  // The comment-kind menu: Enter (or the send button) on a filled composer opens
+  // a menu to choose what to do with the comment — a Claude command / git-commit
+  // (both placeholders), a private note ("alleen voor mijzelf"), or Jira (a
+  // submenu). Reuses the CommandMenu overlay via menu mode 'compose'. See
+  // COMPOSE_COMMANDS in home.mjs.
+  test('Enter on a filled composer opens the comment-kind menu (with a Jira submenu)', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+
+    let posted = null
+    await page.route('**/api/workflows/task_code_comment', async (route) => {
+      posted = route.request().postDataJSON()
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    })
+
+    // Open the composer via the command palette's comment action and type text.
+    await page.keyboard.press('Enter')
+    await page.getByTestId('command-input').fill('comment')
+    await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).first().click()
+    const composer = page.getByTestId('comment-compose')
+    await expect(composer).toBeVisible()
+    await composer.fill('dit is een notitie')
+
+    // Enter opens the kind-menu (not a newline, not a direct place).
+    await composer.focus()
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    const rows = page.getByTestId('command-row')
+    await expect(rows.filter({ hasText: 'Claude commando' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'implementeren' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'Alleen voor mijzelf' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'Jira' })).toHaveCount(1)
+
+    // Jira opens a submenu with three items; nothing posted yet.
+    await rows.filter({ hasText: 'Jira' }).click()
+    await expect(menu).toBeVisible()
+    await expect(rows.filter({ hasText: 'Comment op ticket' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'Subtaak aanmaken' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'Nieuwe taak aanmaken' })).toHaveCount(1)
+    expect(posted).toBeNull()
+
+    // Esc backs out of the submenu to the root, then choose the private note.
+    await page.keyboard.press('Escape')
+    await expect(rows.filter({ hasText: 'Alleen voor mijzelf' })).toHaveCount(1)
+    await rows.filter({ hasText: 'Alleen voor mijzelf' }).click()
+    await expect(menu).not.toBeVisible()
+    await expect.poll(() => posted && posted.body).toBe('dit is een notitie')
+    expect(posted.local).toBe(true)
   })
 
   test('the approve command toggles the selected block', async ({ page }) => {
@@ -117,7 +174,7 @@ test.describe('PR Review Tree — command palette', () => {
     await page.getByTestId('command-input').fill('keur')
     await page.getByTestId('command-row').first().click()
 
-    await expect(page.getByTestId('command-menu')).toHaveCount(0)
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await expect(approve).toBeChecked()
   })
 
@@ -221,7 +278,7 @@ test.describe('PR Review Tree — command palette', () => {
 
     // A second Esc closes the palette.
     await page.keyboard.press('Escape')
-    await expect(page.getByTestId('command-menu')).toHaveCount(0)
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
   })
 
   test('the menu covers the right (new) pane — half width, right side', async ({ page }) => {

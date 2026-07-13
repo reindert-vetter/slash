@@ -871,18 +871,33 @@ function enterDiff() {
 
 // ── Command palette (`/`) ─────────────────────────────────────────────────────
 // The `/` key opens a searchable command menu overlaid on the next-block preview
-// slot (see DetailPanel). `menu` is a small reactive owning its open/query/selection
-// state; it stays out of the URL (not in the bindUrlState list) since it's
-// ephemeral. COMMANDS close over the navigation functions above, so the menu drives
-// the same actions the keyboard does — plus block actions (approve, comment, GitHub).
+// slot (see DetailPanel). The state is split across two reactives on purpose:
+//
+//   `menu`  — only `open`. Stable for the app's lifetime, so the top-level
+//             `${() => menu.open ? menuOverlay() : ''}` binding keeps working.
+//   `ms`    — the volatile per-open state (query/sel/sub/mode). openMenu REPLACES
+//             it with a fresh reactive object each time the palette opens.
+//
+// Why the split: when the overlay is torn down on close, arrow.js does not fully
+// dispose CommandMenu's reactive expressions — its list/row bindings stay
+// subscribed to the state object they were built against. If that object is later
+// mutated (a cross-mode reopen changing mode, or entering a submenu changing sub),
+// those orphaned bindings fire against freed expression slots → the "W[t] is not a
+// function" use-after-free. By handing each open a *brand-new* `ms`, the orphans
+// from a previous open point at an object we never touch again, so they never
+// fire; only the live menu's bindings (built against the current `ms`) run.
+// Both stay out of the URL (not in bindUrlState) since they're ephemeral.
+//
 // `sub` holds a parent command's children while a submenu is open (null at the
 // root). Choosing a command with `children` (e.g. "Open GitHub") swaps the list to
 // those children instead of running; Esc backs out to the root.
 // `mode` selects which command list resolveCommands shows: 'block' (the
 // default, the block palette opened by Enter), 'comment' (opened by Enter on a
-// focused, not-yet-replied-to comment row — see COMMENT_COMMANDS), or 'pr' (the
-// general PR-wide tree menu opened by `/` — see PR_COMMANDS).
-const menu = reactive({ open: false, query: '', sel: 0, sub: null, mode: 'block' })
+// focused, not-yet-replied-to comment row — see COMMENT_COMMANDS), 'pr' (the
+// general PR-wide tree menu opened by `/` — see PR_COMMANDS), or 'compose' (the
+// comment-kind menu opened on a filled composer — see COMPOSE_COMMANDS).
+const menu = reactive({ open: false })
+let ms = reactive({ query: '', sel: 0, sub: null, mode: 'block' })
 
 // COMMENT_COMMANDS — shown when Enter is pressed on a focused comment row
 // (not mid-reply): currently just deleting it. Kept separate from COMMANDS
@@ -1418,17 +1433,17 @@ async function openGithubLine() {
 function resolveCommands(query) {
   // The comment-scoped menu (Enter on a focused comment row) is just its own
   // small list — no submenu, no make-a-comment fallback.
-  if (menu.mode === 'comment') return filterCommands(COMMENT_COMMANDS, query)
+  if (ms.mode === 'comment') return filterCommands(COMMENT_COMMANDS, query)
   // In a submenu we only show (and filter) that parent's children — no
   // make-a-comment fallback, since the submenu is a plain choice list.
-  if (menu.sub) return filterCommands(menu.sub, query)
+  if (ms.sub) return filterCommands(ms.sub, query)
   // The PR-wide tree menu (opened with `/`) is a plain command list too — no
   // block actions, no comment fallback.
-  if (menu.mode === 'pr') return filterCommands(PR_COMMANDS, query)
+  if (ms.mode === 'pr') return filterCommands(PR_COMMANDS, query)
   // The comment-kind menu (Enter/button on a filled composer): choose Claude /
-  // Git / private / Jira. The menu.sub check above already handles its Jira
+  // Git / private / Jira. The ms.sub check above already handles its Jira
   // submenu, so we only reach here at the root list.
-  if (menu.mode === 'compose') return filterCommands(COMPOSE_COMMANDS, query)
+  if (ms.mode === 'compose') return filterCommands(COMPOSE_COMMANDS, query)
   const list = filterCommands(COMMANDS, query)
   const q = (query || '').trim()
   if (list.length === 0 && q) {
@@ -1461,15 +1476,14 @@ function repositionMenu() {
 window.addEventListener('resize', repositionMenu)
 window.addEventListener('scroll', repositionMenu, true) // capture: catch inner scrollers too
 
-// openMenu opens the palette, resets the query/selection, then a frame later
-// (once it's rendered and its size is known) focuses the input and positions it
-// just beneath the current selection. `mode` picks the command list (see
-// resolveCommands): 'block' (default) or 'comment'.
+// openMenu opens the palette, then a frame later (once it's rendered and its size
+// is known) focuses the input and positions it just beneath the current selection.
+// `mode` picks the command list (see resolveCommands): 'block' (default),
+// 'comment', 'pr' or 'compose'. It installs a FRESH `ms` reactive so the previous
+// open's (undisposed) CommandMenu bindings can't fire when this menu mutates its
+// state — see the note on the menu/ms split.
 function openMenu(mode = 'block') {
-  menu.mode = mode
-  menu.query = ''
-  menu.sel = 0
-  menu.sub = null
+  ms = reactive({ query: '', sel: 0, sub: null, mode })
   menu.open = true
   requestAnimationFrame(() => {
     // Position first — the palette starts visibility:hidden, and a hidden element
@@ -1484,20 +1498,19 @@ function openMenu(mode = 'block') {
 }
 
 function closeMenu() {
+  // Only flip `open`; the volatile state is replaced wholesale on the next
+  // openMenu, and leaving this (now orphaned) `ms` untouched is exactly what keeps
+  // the torn-down menu's bindings from firing against freed slots.
   menu.open = false
-  menu.query = ''
-  menu.sel = 0
-  menu.sub = null
-  menu.mode = 'block'
 }
 
 // enterSubmenu swaps the visible list to a parent command's children without
 // closing the palette, resetting the query/selection and repositioning (the list
 // height changes). Esc later backs out via the keyboard handler.
 function enterSubmenu(children) {
-  menu.sub = children
-  menu.query = ''
-  menu.sel = 0
+  ms.sub = children
+  ms.query = ''
+  ms.sel = 0
   requestAnimationFrame(() => {
     positionMenu()
     const el = document.querySelector('[data-testid="command-input"]')
@@ -1528,26 +1541,26 @@ function onKeydown(e) {
   // focused input (we don't preventDefault those). Block navigation is suspended.
   // Shift+Enter is left alone so the textarea inserts a newline instead of running.
   if (menu.open) {
-    const list = resolveCommands(menu.query)
+    const list = resolveCommands(ms.query)
     if (e.key === 'Escape') {
       e.preventDefault()
       // Esc first backs out of a submenu to the root, then closes the palette.
-      if (menu.sub) {
-        menu.sub = null
-        menu.query = ''
-        menu.sel = 0
+      if (ms.sub) {
+        ms.sub = null
+        ms.query = ''
+        ms.sel = 0
       } else {
         closeMenu()
       }
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
-      menu.sel = Math.min(menu.sel + 1, Math.max(0, list.length - 1))
+      ms.sel = Math.min(ms.sel + 1, Math.max(0, list.length - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      menu.sel = Math.max(menu.sel - 1, 0)
+      ms.sel = Math.max(ms.sel - 1, 0)
     } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      if (list[menu.sel]) runCommand(list[menu.sel])
+      if (list[ms.sel]) runCommand(list[ms.sel])
     }
     // Typing filters the list, which changes the palette's height — reposition a
     // frame later (once re-rendered) so it stays snug under the selection, even
@@ -1739,13 +1752,13 @@ function stepChevron(dir) {
 // on-screen so the menu opens under whatever is selected.
 function menuAnchor() {
   // The comment-kind menu ('compose') anchors under the composer textarea.
-  if (menu.mode === 'compose') {
+  if (ms.mode === 'compose') {
     return (
       document.querySelector('[data-testid="comment-compose"]') ||
       document.querySelector('[data-testid="comments-panel"]')
     )
   }
-  if (menu.mode === 'comment') {
+  if (ms.mode === 'comment') {
     return (
       document.querySelectorAll('[data-testid="comment-item"]')[commentSelIndex()] ||
       document.querySelector('[data-testid="comments-panel"]')
@@ -1766,7 +1779,7 @@ function menuAnchor() {
 // (a removed block has no new pane), then the whole block column.
 function menuRegion() {
   // Both comment-scoped menus sit over the comment thread pane.
-  if (menu.mode === 'comment' || menu.mode === 'compose') {
+  if (ms.mode === 'comment' || ms.mode === 'compose') {
     return (
       document.querySelector('[data-testid="comment-thread"]') ||
       document.querySelector('[data-testid="comments-panel"]')
@@ -1825,7 +1838,7 @@ function menuOverlay() {
         data-testid="command-anchor"
         @click="${(e) => e.stopPropagation()}"
       >
-        ${CommandMenu(menu, resolveCommands, runCommand)}
+        ${CommandMenu(ms, resolveCommands, runCommand)}
       </div>
     </div>
   `

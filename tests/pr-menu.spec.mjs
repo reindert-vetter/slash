@@ -11,7 +11,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     const menu = page.getByTestId('command-menu')
-    await expect(menu).toHaveCount(0)
+    await expect(menu).not.toBeVisible()
 
     await page.keyboard.press('/')
     await expect(menu).toBeVisible()
@@ -26,7 +26,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(rows.nth(2)).toContainText('Jira')
 
     await page.keyboard.press('Escape')
-    await expect(menu).toHaveCount(0)
+    await expect(menu).not.toBeVisible()
   })
 
   test('GitHub opens a submenu (open / comment); Jira opens its three items', async ({ page }) => {
@@ -69,7 +69,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     const rows = page.getByTestId('command-row')
     await rows.nth(1).click() // "Comment plaatsen"
 
-    await expect(page.getByTestId('command-menu')).toHaveCount(0)
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await expect(page.getByTestId('comment-compose')).toBeVisible()
   })
 

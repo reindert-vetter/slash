@@ -47,6 +47,30 @@
   waarom de diff-binding zélf de update kan missen — vandaar de herbouw-via-key
   i.p.v. wéér een `b.code`-lezer toe te voegen. Zie
   `.claude/rules/detail-layout.md`.
+- **arrow.js ruimt een weggevallen (conditioneel gerenderde) subtree niet volledig
+  op — z'n reactieve expressions blijven geabonneerd (use-after-free).** Gezien bij
+  het **command-menu** (`home.mjs` + `CommandMenu.mjs`): het overlay hangt aan een
+  `${() => menu.open ? menuOverlay() : ''}`-binding. Bij sluiten geeft die `''`
+  terug en verdwijnt de overlay uit de DOM, **maar** de list/row-bindings van die
+  `CommandMenu`-instantie blijven geabonneerd op het state-object waartegen ze
+  gebouwd zijn. Muteert een **latere** open dat object (een andere `mode`, of het
+  betreden van een submenu dat `sub` zet), dan vuren die **wees-bindings** tegen
+  inmiddels vrijgegeven expression-slots → arrow gooit `W[t] is not a function`
+  (een teller-index in arrow's slot-pool wijst naar een gerecyclede slot). Same-mode
+  heropenen crasht niet (geen dep verandert), cross-mode of submenu wél. Het is een
+  **latente** bug: de oude flow opende nooit een tweede menu (Enter/`/` werden
+  opgeslokt zolang de composer open was), dus hij werd pas zichtbaar toen de
+  comment-soort-`compose`-mode een menu **over** de composer opende.
+  **Oplossing:** splits de menu-state in een **stabiele** `menu` (alleen `open`,
+  waar de top-level binding aan hangt) en een **wegwerp** `let ms = reactive({query,
+  sel, sub, mode})` die `openMenu` bij **elke** open **vervangt** door een vers
+  object. Wees-bindings van een vorige open wijzen dan naar het **oude** `ms` dat we
+  nooit meer aanraken, dus ze vuren nooit; alleen de live-bindings (tegen de huidige
+  `ms`) draaien. `closeMenu` zet enkel `menu.open=false` — het laat `ms` bewust met
+  rust. (Altijd-gemount-met-CSS-verbergen werkt níét: dan rendert `CommandMenu` al
+  bij page-load — vóór er een block geselecteerd is — en gooien de label-functies
+  die `curBlock()` lezen alsnog, wat de slot-pool corrumpeert.) Zie
+  `.claude/rules/keyboard-navigation.md`.
 - **Syntax-highlighting:** Prism 1.29.0 staat gevendord als één ES-module in
   `src/vendor/prism.js` (core + markup + clike + markup-templating + php, met
   `window.Prism={manual:true}` zodat het niet de hele pagina auto-highlightt). De
@@ -62,3 +86,9 @@
   subproces geeft.
 - **Code (Go + JS) is Engels** — comments, log-berichten en identifiers. De docs in
   `.claude/` en `CLAUDE.md` blijven Nederlands.
+- **Git worktrees mogen** — Claude/agents mogen gerust een git-worktree opzetten om
+  geïsoleerd of parallel aan een taak te werken (b.v. de Agent-tool met
+  `isolation: worktree`). Een eerdere afspraak verbood dit; die is hierbij
+  ingetrokken. (Niet te verwarren met de **app-eigen** base/head-worktrees onder
+  `data/worktrees/` uit de ingest-pipeline — die blijven zoals beschreven in
+  `.claude/rules/blocks-and-ingest.md`.)

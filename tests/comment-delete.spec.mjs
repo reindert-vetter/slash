@@ -42,7 +42,7 @@ test.describe('PR Review Tree — delete a comment', () => {
     await expect(page.getByTestId('reaction-compose')).toBeFocused()
     await expect(page.getByTestId('reaction-compose')).toHaveValue('')
 
-    await expect(page.getByTestId('command-menu')).toHaveCount(0)
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await page.keyboard.press('Enter')
 
     const menu = page.getByTestId('command-menu')
@@ -52,7 +52,7 @@ test.describe('PR Review Tree — delete a comment', () => {
     await expect(rows.first()).toContainText('Verwijder comment')
 
     await page.keyboard.press('Enter')
-    await expect(menu).toHaveCount(0)
+    await expect(menu).not.toBeVisible()
 
     // The comment disappears from the list once the delete flow completes.
     await expect(page.getByTestId('comment-item').filter({ hasText: body })).toHaveCount(0)
@@ -82,7 +82,7 @@ test.describe('PR Review Tree — delete a comment', () => {
     await page.keyboard.press('Enter')
 
     // No delete menu — the reply field's own Enter handler (sendReaction) ran.
-    await expect(page.getByTestId('command-menu')).toHaveCount(0)
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await expect
       .poll(async () => {
         const list = await (await page.request.get('/api/comments?pr=' + PR)).json()

@@ -134,6 +134,47 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 	}
 }
 
+// A local ("alleen voor mijzelf") note is stored as a comment but never posted
+// to GitHub: the workflow skips postGithubComment, so posted.RootID stays 0 and
+// deleting it also makes no GitHub call.
+func TestTaskCodeCommentLocalSkipsGitHub(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reindert",
+		Body: "note to self", Local: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Stored in the read-model, but nothing posted to GitHub.
+	if gh.PostedCount() != 0 {
+		t.Fatalf("github posted %d, want 0 for a local note", gh.PostedCount())
+	}
+	list, _ := cs.List(ctx, 42)
+	if len(list) != 1 || list[0].ID != runID || list[0].Status != "open" {
+		t.Fatalf("comments = %+v", list)
+	}
+
+	// Deleting a local note removes it from the store without a GitHub delete
+	// (RootID 0 → deleteGithubComment no-ops).
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-1", Source: "ui", Author: "reindert", Action: "delete"}); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := m.engine.Status(runID); s != tembed.StatusCompleted {
+		t.Fatalf("status = %q, want completed", s)
+	}
+	if l, _ := cs.List(ctx, 42); len(l) != 0 {
+		t.Fatalf("comments = %+v, want none after delete", l)
+	}
+	if gh.DeletedCount() != 0 {
+		t.Fatalf("github deleted %d, want 0 for a local note", gh.DeletedCount())
+	}
+}
+
 // Deleting a comment flips its status to "deleting" first (markCommentDeleting),
 // then removes it from GitHub (best-effort) and from our own store, and
 // completes the execution.
