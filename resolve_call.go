@@ -138,9 +138,8 @@ func parseLLMAnswer(raw string) (llmAnswer, bool) {
 // (class,method) block must actually exist there. Returns the real source, the
 // resolved class/method, and the declaration line.
 func verifyDefinition(headDir string, ans llmAnswer) (code, class, method string, line int, ok bool) {
-	rel := filepath.Clean("/" + ans.File)[1:] // strip any leading .. / absolute
-	full := filepath.Join(headDir, rel)
-	if !within(headDir, full) {
+	full, rel, ok := resolveWithinWorktree(headDir, ans.File)
+	if !ok {
 		return "", "", "", 0, false
 	}
 	src := extractBlockSource(full, rel, ans.Class, ans.Method)
@@ -148,15 +147,6 @@ func verifyDefinition(headDir string, ans llmAnswer) (code, class, method string
 		return "", "", "", 0, false
 	}
 	return src.Text, ans.Class, ans.Method, src.Start, true
-}
-
-// within reports whether path is inside dir.
-func within(dir, path string) bool {
-	rel, err := filepath.Rel(dir, path)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func ucfirst(s string) string {

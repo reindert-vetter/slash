@@ -218,15 +218,16 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(thread.getByTestId('comment-target')).toHaveCount(0)
   })
 
-  // The Onderliggende-code card is a walkable vertical stack: → (from the diff)
-  // lands on the first child, ↓ steps to the next child (leaving for the comments
-  // column once past the last), ↑ steps back (popping out to the diff from the
-  // first), and ← returns to the code being reviewed. The first child sits flush;
-  // the 2nd+ are indented under a →/↓ hint. Mount RelatedPanel directly with mock
-  // children + drive the exported nav functions so the test is independent of the
-  // fixture's child count.
+  // The Onderliggende-code card is a first (flush) child plus a right-hand stack
+  // of the rest. From the first child: → steps into that stack (the 2nd child), ↓
+  // leaves for the comments column, ↑/← return to the diff. In the stack (2nd+
+  // child): ↓ walks to the next child (past the last it leaves for comments), ↑
+  // steps back (from the 2nd it returns to the first), ← returns to the diff. The
+  // first child sits flush; the 2nd+ are indented under a →/↓ hint. Mount
+  // RelatedPanel directly with mock children + drive the exported nav functions so
+  // the test is independent of the fixture's child count.
   // See RelatedPanel (enterRelated / handleRelatedKey / relatedCard / stepHint).
-  test('↑/↓ walk the underlying-code children, ↓ leaves for comments', async ({
+  test('→ walks the underlying-code stack, ↑ steps back, ↓ leaves for comments', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -267,21 +268,30 @@ test.describe('PR Review Tree — change navigation', () => {
     await activeAt(0)
     await inactiveAt(1)
 
-    // ↓ advances one child at a time…
-    await key('ArrowDown')
+    // → steps into the right-hand stack (the 2nd child); ↓ then walks it downward.
+    await key('ArrowRight')
     await activeAt(1)
     await key('ArrowDown')
     await activeAt(2)
 
-    // ↑ steps back up the stack.
+    // ↑ steps back up the stack, and from the 2nd child returns to the first.
     await key('ArrowUp')
     await activeAt(1)
-    await key('ArrowDown')
-    await activeAt(2)
+    await key('ArrowUp')
+    await activeAt(0)
 
-    // ↓ past the last child leaves for the comments column: no child stays selected.
+    // From the first child, ↓ leaves the card for the comments column (the
+    // new-comment button gets focus): no child stays selected.
     await key('ArrowDown')
     await inactiveAt(0)
+    await expect(host.getByTestId('new-comment')).toHaveClass(/border-indigo-400/)
+
+    // And ↓ past the *last* stack child also leaves for comments.
+    await page.evaluate(() => window.__rp.enterRelated())
+    await key('ArrowRight') // → into the stack (2nd child)
+    await key('ArrowDown') // → the 3rd (last) child
+    await activeAt(2)
+    await key('ArrowDown') // past the last → comments column
     await inactiveAt(2)
     await expect(host.getByTestId('new-comment')).toHaveClass(/border-indigo-400/)
   })

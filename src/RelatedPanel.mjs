@@ -159,6 +159,13 @@ export function isCodeFocused() {
   return cs.focus === 'code'
 }
 
+// focusedRelatedChild returns the underlying-code child the keyboard is
+// currently on (cs.focus === 'code', indexed by cs.codeSel), or null. home.mjs
+// reads this on Enter to know which child to drill into (see drillIntoChild).
+export function focusedRelatedChild() {
+  return cs.focus === 'code' ? rc.children[cs.codeSel] || null : null
+}
+
 // enterRelated hands the keyboard to the panel, starting on the first
 // underlying-code child. Called by home.mjs on → from the diff.
 export function enterRelated() {

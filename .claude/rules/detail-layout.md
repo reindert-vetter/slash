@@ -11,8 +11,54 @@ look-ahead-preview van het volgende block (dashed connector als ze uit hetzelfde
 bestand komen). **Direct náást** die kolom (niet aan de rechterrand van het
 scherm) `RelatedPanel` (`src/RelatedPanel.mjs`, `data-testid=related-panel`,
 `w-[38rem] shrink-0`). Zo lijnt het comment/gerelateerd-paneel altijd tegen de
-diff aan; er is bewust ruimte rechts voor **latere extra blokken** (elk een eigen
-`shrink-0`-kolom die van links verder inpakt).
+diff aan.
+
+## Drillen: Onderliggende code als eigen kolom (`state.drill`)
+
+`Enter` op een **resolved** kind in de Onderliggende-code-kaart (een relatie-child
+of een opgeloste method-call — zie `isCodeFocused`/`focusedRelatedChild` in
+`RelatedPanel.mjs`) opent dat kind als een volwaardige diff-kolom rechts naast de
+bestaande kolommen, i.p.v. alleen de platte code-excerpt te tonen. `home.mjs` houdt
+daarvoor een **stack** bij, `state.drill`: elke `drillIntoChild(child)` (aangeroepen
+vanuit de `Enter`-tak in `onKeydown`, ná de bestaande "Zoek"-precedentie voor
+onopgeloste calls) pusht er één entry op, en `popDrill()` (aangeroepen zodra
+`←`/`Escape` het paneel op het diepste niveau zou **verlaten** — `handleRelatedKey`
+geeft dan `'exit'` terug — en de stack niet leeg is) haalt er één af, zodat
+terugstappen de kolommen één-voor-één sluit i.p.v. in één klap helemaal terug naar
+de top-level diff te springen.
+
+Een drill-entry is **één van twee vormen**:
+- **Een echt PR-block** — zit het kind al in `state.allBlocks` (een relatie-child,
+  of de definitie van een resolved method-call die zelf in deze PR wijzigt), dan
+  wordt dát bestaande block-object hergebruikt (geen kopie): het draagt al
+  `code`/`approvedRows`/etc., en `relatedChildren`/`resolvedCallChildren`/`callRows`
+  werken generiek op elk block-id — dus dit kind krijgt **out-of-the-box** zijn
+  eigen volledige, navigeerbare Onderliggende-code-paneel (recursie werkt gratis).
+- **Een synthetisch frame** — een resolved method-call naar een bestand dat de PR
+  niet wijzigt (geen PR-block, dus niets om te hergebruiken): een minimaal object
+  (`{ id, label, file, class, name, status:'modified', code:null, synthetic:true }`,
+  class/name gesplitst uit `child.label` op `::`), waarvan `ensureCode` de oud/nieuw-
+  broncode ophaalt zoals voor elk ander block. Dit niveau toont **alleen** zijn diff
+  — geen eigen Onderliggende-code-kaart (geen caller-scan ooit gedraaid voor een
+  synthetisch frame).
+
+**Interactie-scope:** alleen het **diepste** (meest recent gedrilde) niveau —
+`focusedBlock()`, `state.drill.length ? state.drill[state.drill.length-1] :
+curBlock()` — drijft het actieve Onderliggende-code-paneel + taken/chat eronder:
+`relatedChildren`/`unresolvedCalls`/`startCallSearch` nemen nu een block-argument
+i.p.v. impliciet `state.blocks[state.selected]` te lezen, en elke aanroepplek geeft
+`focusedBlock()` door. Eerdere niveaus (de oorspronkelijke selectie + eerder
+gedrilde kinderen) renderen **alleen** hun `Block`-kaart (`data-testid=drill-column`,
+`shrink-0`, gedimd via `preview:true` — hetzelfde `preview`-effect als de
+look-ahead-kaart) — géén eigen `activeGroup`/hints/RelatedPanel: die kolommen
+hebben geen eigen navigeerbare cursor (`state.change`/`gran` blijven van de
+top-level geselecteerde block). Er is dus altijd precies één `RelatedPanel`-
+instantie (`cs`/`rc` blijven singletons); `drillIntoChild` reset 'm met
+`enterRelated()` zodat het verse niveau op zijn eerste kind start. De kolom-`.key`
+codeert positie in de stack + code-status (`load`/`code`/`err`, hetzelfde patroon
+als de bestaande `sel`/`prev`-key) zodat een nieuwe drill altijd een verse kaart
+forceert; een nieuwe kolom scrollt zichzelf in beeld
+(`scrollIntoView({inline:'end',block:'nearest'})`, `<main>` scrolt horizontaal).
 
 De block-kaart-`.key(...)` codeert **rol** (`sel`/`prev`) **én code-status**
 (`load`/`code`/`err`), zodat arrow.js een **verse** kaart bouwt zodra een block
@@ -96,8 +142,16 @@ Twee gestapelde kaarten:
   toont hij **alle** resolved calls van het block. De getoonde calls zijn
   **geordend**: eerst een call waarvan de definitie zélf in deze PR wijzigt (een
   echt child-blok, `prio 0`), dan calls op een recent gewijzigde regel (`prio 1`),
-  dan de rest (`prio 2`). De listener-children (block-niveau) vallen op
-  call-niveau weg. In de kaart-header is de **titel (`class::method`) altijd
+  dan de rest (`prio 2`). **Binnen dezelfde prio** wint de **grootste** child
+  (meeste niet-lege regels, `codeSize` op de child-broncode — `childCode` voor
+  een call, geladen `code` voor een listener): zo staat de substantiële
+  aangepaste code bovenaan en zakken triviale one-liners eronder. Dat is
+  load-bearing want relatie-accessors (b.v. Eloquent `Order::billingAddress`,
+  een 3-regelige `MorphOne`) zijn óók `added` PR-blokken en dus óók `prio 0` — ze
+  zouden anders op bron-volgorde vóór een echt gewijzigde method kunnen landen. Een
+  child wiens code nog niet binnen is telt als `size 0` en zakt tot hij laadt;
+  gelijke prio+size houdt de bron-volgorde (stabiele sort). De listener-children
+  (block-niveau) vallen op call-niveau weg. In de kaart-header is de **titel (`class::method`) altijd
   zichtbaar** (krijgt de eerste regel, truncat pas bij extreme lengte); het
   **bestandspad** staat eronder op een eigen regel en truncat als het niet past.
   **Reactiviteit:** de lijst wordt **niet** in de render-binding van `RelatedPanel`

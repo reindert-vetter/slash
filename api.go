@@ -96,7 +96,9 @@ func (s *server) handleBlocks(w http.ResponseWriter, r *http.Request) {
 
 // handleCode serves GET /api/code?pr=N&file=...&class=...&name=... — the old
 // and new source of one block, read from the base/head worktrees of that PR.
-// The block must belong to a stored block of the PR (guards arbitrary reads).
+// The file must either belong to a stored block of the PR, or — as a fallback
+// for e.g. a resolved method-call target in a file the PR didn't touch —
+// resolve to a real file inside the head worktree (guards arbitrary reads).
 func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -121,12 +123,14 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
+	baseDir, headDir := worktreeDirs(s.dataDir, pr)
 	if !ok {
-		http.Error(w, "unknown block", http.StatusNotFound)
-		return
+		if _, _, inWorktree := resolveWithinWorktree(headDir, file); !inWorktree {
+			http.Error(w, "unknown block", http.StatusNotFound)
+			return
+		}
 	}
 
-	baseDir, headDir := worktreeDirs(s.dataDir, pr)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"file": file,
 		"old":  extractBlockSource(filepath.Join(baseDir, file), file, class, name),

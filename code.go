@@ -35,6 +35,32 @@ func extractBlockSource(path, relFile, class, name string) codeSide {
 	return codeSide{}
 }
 
+// resolveWithinWorktree cleans file (stripping any leading ../ or absolute
+// prefix) and joins it onto dir, then checks that the result both stays inside
+// dir and actually exists. Used to allow reads of files a PR didn't touch
+// (e.g. an unrelated method-call target) without letting untrusted input
+// escape the worktree. Returns the joined path and the cleaned relative file.
+func resolveWithinWorktree(dir, file string) (full, rel string, ok bool) {
+	rel = filepath.Clean("/" + file)[1:] // strip any leading .. / absolute
+	full = filepath.Join(dir, rel)
+	if !within(dir, full) {
+		return "", "", false
+	}
+	if _, err := os.Stat(full); err != nil {
+		return "", "", false
+	}
+	return full, rel, true
+}
+
+// within reports whether path is inside dir.
+func within(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // blockSource returns a block's source from the given worktree root. It first
 // tries a symbol lookup (works for top-level functions/methods); if that misses —
 // e.g. a macro closure nested inside a boot method's body, which ScanBlocks does

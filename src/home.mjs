@@ -31,6 +31,7 @@ import RelatedPanel, {
   commentRowSet,
   setCommentScope,
   setRelated,
+  focusedRelatedChild,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { bindUrlState, num } from './urlState.mjs'
@@ -79,6 +80,15 @@ const state = reactive({
   // children in the Onderliggende-code panel; unresolved/searching drive the
   // "Zoek" button + spinner.
   callResolve: [],
+  // drill — the stack of "drilled-into" children the reviewer has stepped into
+  // from the Onderliggende-code panel (Enter on a resolved child). Each entry is
+  // either a real block object reused straight from allBlocks (its own relations/
+  // callResolve/approvedRows already work, so its own Onderliggende-code panel
+  // falls out for free) or a minimal synthetic frame for a call target with no PR
+  // block of its own (an unchanged file — see drillIntoChild). Each entry renders
+  // as its own shrink-0 column to the right of the block column; only the deepest
+  // (last) one drives the active Onderliggende-code + tasks panel (focusedBlock).
+  drill: [],
   selected: 0,
   // mode: 'list' — up/down move between blocks in the sidebar; → steps into the
   // selected block's diff. 'diff' — up/down move between change groups inside the
@@ -443,6 +453,12 @@ function findCallSites(rows, name) {
 // list of calls.
 function callScopeMethods(b, rows) {
   if (state.mode !== 'diff') return null
+  // Cursor-based scoping (state.change/gran) only makes sense for the block the
+  // reviewer is actually stepping through with the keyboard — the top-level
+  // selected block. A drilled-into child has no navigable cursor of its own (only
+  // its Onderliggende-code panel is interactive), so it always shows its full call
+  // list, like list mode.
+  if (state.drill.length && b !== curBlock()) return null
   const unit = unitsFor(rows, state.gran)[state.change]
   if (!unit) return null
   const methods = new Set()
@@ -469,9 +485,20 @@ function callScopeMethods(b, rows) {
 // calls sitting on a recently-changed diff line, then the rest. At 'call'
 // granularity the list is narrowed to just the active call's method, so the event
 // listeners (a block-level relation, not this call) are dropped there.
-function relatedChildren() {
-  const b = state.blocks[state.selected]
-  const scoped = state.mode === 'diff' && state.gran === 'call'
+// codeSize counts the non-blank lines of a child's source — a rough "how much
+// code changed here" measure used to order same-priority children in the
+// Onderliggende-code panel (substantial methods above one-line accessors).
+function codeSize(code) {
+  if (!code) return 0
+  return code.split('\n').filter((l) => l.trim()).length
+}
+
+function relatedChildren(b) {
+  // Call-level scoping (dropping the block-level event listeners) only applies
+  // to the top-level selected block's own cursor — a drilled-into child has no
+  // independent gran/change cursor (see callScopeMethods).
+  const isTopCursor = b === curBlock() && !state.drill.length
+  const scoped = isTopCursor && state.mode === 'diff' && state.gran === 'call'
   const evt = scoped
     ? []
     : childrenOf(b).map((kid) => {
@@ -479,15 +506,20 @@ function relatedChildren() {
         const c = kid.code && !kid.code.error ? kid.code : null
         const code = (c && ((c.new && c.new.text) || (c.old && c.old.text))) || ''
         // A listener is by definition a changed child block, so it sorts to the top.
-        return { id: kid.id, label: kid.label, file: kid.file, line: kid.line, kind: 'event_listener', code, prio: 0, approve: blockApproveCount(kid) }
+        return { id: kid.id, label: kid.label, file: kid.file, line: kid.line, kind: 'event_listener', code, size: codeSize(code), prio: 0, approve: blockApproveCount(kid) }
       })
   // Resolved/found method calls (Go statically or LLM). Their code + descriptor
   // ride along in the callresolve row (unchanged file → no /api/code fetch).
   const calls = resolvedCallChildren(b)
-  // Stable sort by priority (0 = also-changed child block, 1 = call on a changed
-  // line, 2 = unchanged call); Array.prototype.sort is stable, so items of equal
-  // priority keep the order the resolver emitted them in.
-  return evt.concat(calls).sort((x, y) => x.prio - y.prio)
+  // Sort by priority (0 = also-changed child block, 1 = call on a changed line,
+  // 2 = unchanged call), then — within a priority — biggest child first, so the
+  // substantial modified code the reviewer cares about leads while trivial
+  // one-liners (e.g. Eloquent relation accessors, which are also `added` PR
+  // blocks and thus tie at prio 0) drop below it. `size` is the child's line
+  // count (embedded childCode for calls, loaded code for listeners); a child
+  // whose code hasn't arrived yet is size 0 and sinks until it loads. Ties keep
+  // the resolver-emit (source) order (Array.prototype.sort is stable).
+  return evt.concat(calls).sort((x, y) => x.prio - y.prio || y.size - x.size)
 }
 
 // resolvedCallChildren maps the caller block's resolved/found call rows to child
@@ -515,6 +547,9 @@ function resolvedCallChildren(b) {
         line: r.childLine,
         kind: 'method_call',
         code: r.childCode || '',
+        // Line count of the child definition — the secondary sort key in
+        // relatedChildren (bigger modified methods lead their prio group).
+        size: codeSize(r.childCode || ''),
         source: r.status === 'found' ? r.model : '',
         // Approval count only for a call whose definition is itself a PR block
         // (it has changed rows to approve); a call into an unchanged file has none.
@@ -600,8 +635,7 @@ function subtreeApproveCount(b) {
 // callScopeMethods): in diff mode only the calls under the selected unit
 // (group/line/call), so "Zoek" is coupled to what you selected; in list mode the
 // block's whole set.
-function unresolvedCalls() {
-  const b = state.blocks[state.selected]
+function unresolvedCalls(b) {
   const all = callRows(b).filter((r) => r.status === 'unresolved' || r.status === 'searching')
   if (all.length === 0) return all
   const rows = blockRows(b)
@@ -612,10 +646,9 @@ function unresolvedCalls() {
 // startCallSearch launches the LLM resolve_call workflow for the selected
 // block's still-unresolved calls, then polls the read-model until the search
 // settles. Starting an Execution is the sanctioned UI write path.
-async function startCallSearch() {
-  const b = state.blocks[state.selected]
+async function startCallSearch(b) {
   if (!b) return
-  const calls = unresolvedCalls()
+  const calls = unresolvedCalls(b)
     .filter((r) => r.status === 'unresolved')
     .map((r) => r.callKey)
   if (calls.length === 0) return
@@ -856,6 +889,77 @@ function curBlock() {
   return state.blocks[state.selected]
 }
 
+// focusedBlock is whichever block the active Onderliggende-code panel (and its
+// keyboard focus) currently belongs to: the deepest drilled-into child if the
+// reviewer has stepped into one (state.drill), otherwise the top-level selected
+// block. relatedChildren/unresolvedCalls/startCallSearch all take this so the
+// panel and its actions follow wherever the reviewer has drilled.
+function focusedBlock() {
+  return state.drill.length ? state.drill[state.drill.length - 1] : curBlock()
+}
+
+// scrollDrillIntoView keeps a freshly-pushed drill column in view — <main>
+// scrolls horizontally, so stepping into a child could otherwise land off-screen
+// to the right. Deferred a frame so the new column exists in the DOM first.
+function scrollDrillIntoView() {
+  requestAnimationFrame(() => {
+    const cols = document.querySelectorAll('[data-testid="drill-column"]')
+    const el = cols[cols.length - 1]
+    if (el) el.scrollIntoView({ inline: 'end', block: 'nearest' })
+  })
+}
+
+// drillIntoChild opens a child from the Onderliggende-code panel as its own diff
+// column, appended to the right of the current drill stack (Enter on a resolved
+// child in the panel — see the Enter handling in onKeydown). If the child is
+// itself a real PR block (already in state.allBlocks) we push that exact object:
+// its relations/callResolve/approvedRows already work, so its own
+// Onderliggende-code panel falls out for free (relatedChildren/resolvedCallChildren/
+// callRows are generic over any block id). Otherwise (a resolved call into an
+// unchanged file, with no PR block of its own) we build a minimal, non-interactive
+// synthetic frame and lazily fetch its code the same way a real block does.
+function drillIntoChild(child) {
+  if (!child) return
+  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const existing = byId.get(child.id)
+  if (existing) {
+    state.drill = [...state.drill, existing]
+    // A relation-child gets its code lazily loaded elsewhere (relatedChildren);
+    // a method-call child's PR-block definition might not have its own diff
+    // fetched yet (its row only carries the plain code text) — ensure it here.
+    ensureCode(existing)
+  } else {
+    const hasClass = !!(child.label && child.label.includes('::'))
+    const frame = {
+      id: child.id,
+      label: child.label,
+      file: child.file,
+      class: hasClass ? child.label.split('::')[0] : '',
+      name: hasClass ? child.label.split('::')[1] : child.label,
+      status: 'modified',
+      code: null,
+      synthetic: true,
+    }
+    state.drill = [...state.drill, frame]
+    ensureCode(frame)
+  }
+  // The freshly-pushed column's own Onderliggende-code panel starts fresh, on its
+  // first child (enterRelated also resets cs.composing and scrolls the code card).
+  enterRelated()
+  scrollDrillIntoView()
+}
+
+// popDrill closes the deepest drilled-in column, handing the Onderliggende-code
+// panel back to whichever level was open before it (or the top-level block once
+// the stack empties). Wired into ←/Escape from the panel's code card (see
+// onKeydown): the panel's own exitRelated would otherwise drop straight out of
+// the panel entirely instead of stepping back one drill level at a time.
+function popDrill() {
+  if (!state.drill.length) return
+  state.drill = state.drill.slice(0, -1)
+  enterRelated()
+}
+
 // commentTarget describes what a comment started *right now* would attach to —
 // the current navigation unit at the current granularity: a whole change 'group',
 // one 'line', or one 'call' segment (with the block's class::method and the unit's
@@ -954,7 +1058,10 @@ watch(
 // in the *callback* (untracked), which also keeps it off the panel's render binding
 // — computing them there would subscribe that binding to `b.code` and race with
 // home.mjs' own diff render over the same `b.code`, leaving the diff stuck on
-// "loading". setRelated pushes the fresh list into the panel.
+// "loading". setRelated pushes the fresh list into the panel. `state.drill` is
+// listed too so drilling into (or back out of) a child re-fires this: the panel
+// is always scoped to focusedBlock() — the deepest drilled child, or the
+// top-level selected block once the stack is empty — not always curBlock().
 watch(
   () => [
     state.selected,
@@ -970,9 +1077,10 @@ watch(
     // in approval re-renders the per-child badges.
     state.codeVersion,
     state.approvalSummaries,
-    curBlock() && curBlock().code,
+    state.drill,
+    focusedBlock() && focusedBlock().code,
   ],
-  () => setRelated(relatedChildren(), unresolvedCalls()),
+  () => setRelated(relatedChildren(focusedBlock()), unresolvedCalls(focusedBlock())),
 )
 
 // Bridge approval + code state → per-block combined-approval summaries the
@@ -1392,7 +1500,11 @@ function onKeydown(e) {
   if (relatedActive()) {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key)) {
       e.preventDefault()
-      handleRelatedKey(e.key)
+      const result = handleRelatedKey(e.key)
+      // Exiting the panel (← / Escape from the code card's first block) steps
+      // back out one drill level instead of dropping straight to the top-level
+      // diff, as long as there's a shallower level to return to (see popDrill).
+      if (result === 'exit' && state.drill.length > 0) popDrill()
       return
     }
     // Enter on a focused comment row (reply field empty — see commentReplyEmpty)
@@ -1403,12 +1515,21 @@ function onKeydown(e) {
       e.preventDefault()
       openMenu('comment')
     }
-    // Enter on the Onderliggende-code block, when there are calls the Go resolver
-    // could not pin, kicks off the LLM search (Haiku → Sonnet). Nothing to resolve
-    // → Enter does nothing here.
-    if (e.key === 'Enter' && isCodeFocused() && unresolvedCalls().some((r) => r.status === 'unresolved')) {
+    // Enter on the Onderliggende-code block: on the resolved child the cursor is
+    // actually sitting on, drills into it as its own diff column (see
+    // drillIntoChild) — recursing into its Onderliggende code — regardless of
+    // whether *other* calls elsewhere in the block are still unresolved. Only
+    // when nothing is focused (an empty list — every call still pending) does
+    // it fall back to the LLM search (Haiku → Sonnet) for the block's
+    // unresolved calls.
+    if (e.key === 'Enter' && isCodeFocused()) {
       e.preventDefault()
-      startCallSearch()
+      const child = focusedRelatedChild()
+      if (child) {
+        drillIntoChild(child)
+      } else if (unresolvedCalls(focusedBlock()).some((r) => r.status === 'unresolved')) {
+        startCallSearch(focusedBlock())
+      }
     }
     return
   }
@@ -1728,7 +1849,34 @@ function DetailPanel(state) {
         return out
       }}
       </div>
-      ${() => RelatedPanel(state, commentTarget, { startCallSearch }).key('related-panel')}
+      ${() => {
+        // One extra shrink-0 column per drilled-into child (Enter on a resolved
+        // Onderliggende-code child — see drillIntoChild), appended to the right of
+        // the block column: a real diff, no navigable cursor of its own. Only the
+        // deepest (last) one is where the Onderliggende-code panel + tasks render
+        // next to (see focusedBlock + the RelatedPanel call below); earlier levels
+        // just sit dimmed, like the existing look-ahead preview card.
+        void state.codeVersion
+        return state.drill.map((b, i) => {
+          ensureCode(b)
+          const isLast = i === state.drill.length - 1
+          const codeState = b.code && !b.code.error ? 'code' : b.code && b.code.error ? 'err' : 'load'
+          return html`
+            <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="drill-column" data-drill-idx="${i}">
+              ${Block(b, {
+                preview: !isLast,
+                approvedRows: () => approvedRowSet(b),
+                approvedCalls: () => approvedCallSet(b),
+                commentedRows: () => commentRowSet(b),
+              })}
+            </div>
+          `.key('drill:' + i + ':' + codeState + ':' + b.file + ':' + b.label + ':' + b.id)
+        })
+      }}
+      ${() =>
+        RelatedPanel(state, commentTarget, { startCallSearch: () => startCallSearch(focusedBlock()) }).key(
+          'related-panel',
+        )}
       ${() => (menu.open ? menuOverlay().key('command-overlay') : '')}
     </main>
   `
