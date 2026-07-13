@@ -392,6 +392,21 @@ export function startComment() {
   cs.composing = true
 }
 
+// isComposeOpen reports whether the new-comment composer is currently open, so
+// home.mjs's keydown handler can catch Enter on a filled composer and open the
+// comment-kind menu (Claude / Git / private / Jira) instead of placing directly.
+export function isComposeOpen() {
+  return cs.composing
+}
+
+// composeHasText reports whether the composer textarea holds non-whitespace text
+// — the gate for opening the comment-kind menu (an empty composer + Enter does
+// nothing). Reads the DOM (home.mjs has no access to the textarea otherwise).
+export function composeHasText() {
+  const el = document.querySelector('[data-testid=comment-compose]')
+  return !!el && el.value.trim() !== ''
+}
+
 // isCommentFocused reports whether a placed comment's row currently owns the
 // keyboard (landed on via ↑/↓ or a click, reply field focused but not yet
 // stepped into the thread). home.mjs uses this to decide whether Enter should
@@ -513,7 +528,7 @@ function syncComments(pr) {
 // ("Maak hiermee een comment", which uses the typed text as the comment). It writes
 // only by starting the workflow (POST), so the write-boundary holds. On success it
 // reloads the read-model and selects the fresh comment.
-export async function createComment({ pr, file, line, body, code, gran, label, rowStart, rowEnd, seg }) {
+export async function createComment({ pr, file, line, body, code, gran, label, rowStart, rowEnd, seg, local }) {
   if (pr == null || !file || !body) return
   cs.busy = true
   try {
@@ -532,6 +547,10 @@ export async function createComment({ pr, file, line, body, code, gran, label, r
         rowStart: rowStart == null ? -1 : rowStart,
         rowEnd: rowEnd == null ? -1 : rowEnd,
         seg: seg || '',
+        // A private note ("alleen voor mijzelf"): stored but never posted to
+        // GitHub (the workflow skips postGithubComment). Default false, so the
+        // existing composer/fallback paths are unchanged.
+        local: !!local,
       }),
     })
     await loadComments(pr)
@@ -543,7 +562,10 @@ export async function createComment({ pr, file, line, body, code, gran, label, r
   }
 }
 
-async function placeComment(state, commentTarget) {
+// placeComment submits the composer's text as a comment on the current unit.
+// Exported so the comment-kind menu (home.mjs COMPOSE_COMMANDS) can place a
+// private note via opts.local; the composer button routes through the menu too.
+export async function placeComment(state, commentTarget, opts = {}) {
   const b = state && state.blocks && state.blocks[state.selected]
   const el = document.querySelector('[data-testid=comment-compose]')
   const body = el && el.value.trim()
@@ -562,6 +584,7 @@ async function placeComment(state, commentTarget) {
     rowStart: t ? t.rowStart : -1,
     rowEnd: t ? t.rowEnd : -1,
     seg: t ? t.seg : '',
+    local: !!opts.local,
   })
   el.value = ''
   cs.composing = false
@@ -683,7 +706,7 @@ function reactionBubble(r, i, total) {
 // commentsSection — the wired panel: placed comments on the left, the selected
 // comment's reactions + a working composer on the right, and a "+ Comment op deze
 // regel" button that starts a new Execution on the current block.
-function commentsSection(state, commentTarget) {
+function commentsSection(state, commentTarget, openCompose) {
   syncComments(state ? state.pr : null)
   const target = () => {
     const b = state && state.blocks && state.blocks[state.selected]
@@ -755,9 +778,9 @@ function commentsSection(state, commentTarget) {
                         'rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
                         (cs.busy ? 'opacity-50' : 'hover:bg-indigo-600')}"
                       data-testid="comment-send"
-                      @click="${() => placeComment(state, commentTarget)}"
+                      @click="${() => (openCompose ? openCompose() : placeComment(state, commentTarget))}"
                     >
-                      Plaats comment
+                      Plaats…
                     </button>
                   </div>
                 </div>
@@ -809,8 +832,36 @@ function commentsSection(state, commentTarget) {
 // list and shown here, top-right of the block. Fed by home.mjs' relatedChildren
 // (GET /api/relations), which lazily loads each child's code.
 
-// KIND_LABEL names the relation on a child card.
-const KIND_LABEL = { event_listener: 'listener', method_call: 'aanroep' }
+// KIND_LABEL names the relation on a child card. A method_call carries no label:
+// it shows a +added/-removed diff-stat (diffStatBadge) instead.
+const KIND_LABEL = { event_listener: 'listener' }
+
+// diffStatBadge shows, for a called method, how many lines its definition adds /
+// removes ("+A −R", green/red) instead of the old "aanroep" label. A call into an
+// unchanged file has no diff (r.diff == null) → a grey "Ongewijzigd" badge.
+function diffStatBadge(r) {
+  if (r.kind !== 'method_call') return ''
+  if (!r.diff) {
+    return html`
+      <span
+        class="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-400"
+        data-testid="related-diffstat"
+        title="Aangeroepen definitie is niet gewijzigd in deze PR"
+        >Ongewijzigd</span
+      >
+    `
+  }
+  return html`
+    <span
+      class="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums"
+      data-testid="related-diffstat"
+      title="Toegevoegde / verwijderde regels in de aangeroepen definitie"
+    >
+      <span class="text-emerald-600">+${() => r.diff.add}</span>
+      <span class="text-rose-500">&#8722;${() => r.diff.del}</span>
+    </span>
+  `
+}
 
 // approvalBadge shows a child block's approval progress ("done/total", green +
 // ✓ once fully approved). `a` is { done, total } or null (a call into an
@@ -834,11 +885,18 @@ function approvalBadge(a) {
 // kind) and a short, non-interactive code excerpt highlighted like the panes.
 function relatedCard(r, i) {
   const selected = () => cs.focus === 'code' && i === cs.codeSel
+  // An unchanged call target (a method_call into a file this PR doesn't touch) has
+  // no diff to review, so its selection highlight is grey rather than indigo.
+  const unchanged = r.kind === 'method_call' && !r.diff
   return html`
     <div
       class="${() =>
         'rounded-lg border bg-slate-50/60 ' +
-        (selected() ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-200')}"
+        (selected()
+          ? unchanged
+            ? 'border-slate-300 ring-1 ring-slate-200'
+            : 'border-indigo-300 ring-1 ring-indigo-200'
+          : 'border-slate-200')}"
       data-testid="related-item"
       data-active="${() => (selected() ? 'true' : 'false')}"
     >
@@ -860,6 +918,7 @@ function relatedCard(r, i) {
                   >bron: ${r.source}</span
                 >`
               : ''}
+          ${() => diffStatBadge(r)}
           ${() => approvalBadge(r.approve)}
         </div>
         <span class="block truncate font-mono text-[10px] text-slate-400" title="${() => r.file + ':' + r.line}"
@@ -910,7 +969,7 @@ function stepHint() {
 // the unresolved-call list are read from `rc`, which home.mjs keeps up to date
 // via setRelated (see the note on rc above). `search.startCallSearch` launches
 // the LLM search for the currently-shown unresolved calls.
-export default function RelatedPanel(state, commentTarget, search) {
+export default function RelatedPanel(state, commentTarget, search, openCompose) {
   const kids = () => rc.children
   // Calls the Go resolver could not pin (status unresolved) + any in flight
   // (searching). Drives the "Zoek" button and the "zoeken…" spinner.
@@ -997,7 +1056,7 @@ export default function RelatedPanel(state, commentTarget, search) {
         </div>
       </section>
 
-      ${commentsSection(state, commentTarget)}
+      ${commentsSection(state, commentTarget, openCompose)}
     </aside>
   `
 }

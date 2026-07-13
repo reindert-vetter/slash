@@ -758,6 +758,20 @@ export function changedRows(rows) {
   return out
 }
 
+// diffStat tallies added vs removed lines over aligned rows, git-diff-stat style:
+// an inserted line counts +1, a removed line -1, and a paired modification counts
+// as both (+1/-1). Whitespace-only re-alignments are skipped (same as rowChanged).
+export function diffStat(rows) {
+  let add = 0
+  let del = 0
+  for (const r of rows) {
+    if (wsOnly(r)) continue
+    if (r.rightMark === 'ins') add++
+    if (r.leftMark === 'del') del++
+  }
+  return { add, del }
+}
+
 // approvedRowSet reads a block's approved-row indices as a Set (empty when none).
 export function approvedRowSet(b) {
   return new Set(Array.isArray(b && b.approvedRows) ? b.approvedRows : [])

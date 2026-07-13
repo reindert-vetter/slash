@@ -9,6 +9,7 @@ import Block, {
   blockRows,
   changeGroups,
   changedRows,
+  diffStat,
   approvedRowSet,
   approvedCallSet,
   callKey,
@@ -20,6 +21,9 @@ import Block, {
 import RelatedPanel, {
   startComment,
   createComment,
+  placeComment,
+  isComposeOpen,
+  composeHasText,
   relatedActive,
   enterRelated,
   handleRelatedKey,
@@ -539,6 +543,9 @@ function resolvedCallChildren(b) {
     .map((r) => {
       const childId = callChildId(r)
       const prBlock = byId.get(childId)
+      // Lazily load the called definition's code so its diff-stat can be counted
+      // (mirrors relatedChildren loading a listener's code).
+      if (prBlock) ensureCode(prBlock)
       const onChangedLine = findCallSites(rows, r.callKey).some((s) => changed.has(s.row))
       return {
         id: b.id + '::' + r.callKey,
@@ -554,6 +561,10 @@ function resolvedCallChildren(b) {
         // Approval count only for a call whose definition is itself a PR block
         // (it has changed rows to approve); a call into an unchanged file has none.
         approve: prBlock ? blockApproveCount(prBlock) : null,
+        // Added/removed line counts of the called definition, shown instead of an
+        // "aanroep" badge. null → the call targets an unchanged file (no diff) →
+        // renders a grey "Ongewijzigd" badge. Fills in as prBlock's code loads.
+        diff: prBlock ? diffStat(blockRows(prBlock)) : null,
         // 0 = the called method is itself changed in this PR (a real child block),
         // 1 = the call sits on a changed line, 2 = an unchanged call. Drives the
         // panel ordering (see relatedChildren).
@@ -884,6 +895,55 @@ const COMMENT_COMMANDS = [
     run: () => deleteFocusedComment(),
   },
 ]
+
+// COMPOSE_COMMANDS — shown when Enter (or the composer button) is pressed on a
+// filled new-comment composer (menu mode 'compose'): choose what to do with the
+// typed text. Only "Alleen voor mijzelf" acts today — it places a private note
+// (createComment with local:true → the workflow skips the GitHub post). The
+// Claude/Git/Jira items are placeholders (like the Jira items in PR_COMMANDS).
+// The Git label names the current selection unit (groep/regel/call) via granNoun.
+const COMPOSE_COMMANDS = [
+  {
+    id: 'compose-claude',
+    label: 'Claude commando',
+    hint: 'todo',
+    // Placeholder — no Claude command integration yet.
+    run: () => {},
+  },
+  {
+    id: 'compose-commit',
+    label: () => `Laat Claude dit implementeren (${granNoun()})`,
+    hint: 'commit',
+    // Placeholder — no git-commit/implement integration yet. The label refers to
+    // the unit (group/line/call) the comment is scoped to.
+    run: () => {},
+  },
+  {
+    id: 'compose-self',
+    label: 'Alleen voor mijzelf',
+    hint: 'privé',
+    run: () => placeComment(state, commentTarget, { local: true }),
+  },
+  {
+    id: 'compose-jira',
+    label: 'Jira',
+    hint: 'jira',
+    // A submenu (see runCommand). All three are placeholders — no Jira write yet.
+    children: [
+      { id: 'compose-jira-comment', label: 'Comment op ticket', hint: 'todo', run: () => {} },
+      { id: 'compose-jira-subtask', label: 'Subtaak aanmaken', hint: 'todo', run: () => {} },
+      { id: 'compose-jira-task', label: 'Nieuwe taak aanmaken', hint: 'todo', run: () => {} },
+    ],
+  },
+]
+
+// granNoun names the current comment target's granularity for the compose menu's
+// "implementeren" label — the group/line/call the comment attaches to.
+function granNoun() {
+  const t = commentTarget()
+  const g = t ? t.gran : 'group'
+  return g === 'line' ? 'regel' : g === 'call' ? 'call' : 'groep'
+}
 
 function curBlock() {
   return state.blocks[state.selected]
@@ -1365,6 +1425,10 @@ function resolveCommands(query) {
   // The PR-wide tree menu (opened with `/`) is a plain command list too — no
   // block actions, no comment fallback.
   if (menu.mode === 'pr') return filterCommands(PR_COMMANDS, query)
+  // The comment-kind menu (Enter/button on a filled composer): choose Claude /
+  // Git / private / Jira. The menu.sub check above already handles its Jira
+  // submenu, so we only reach here at the root list.
+  if (menu.mode === 'compose') return filterCommands(COMPOSE_COMMANDS, query)
   const list = filterCommands(COMMANDS, query)
   const q = (query || '').trim()
   if (list.length === 0 && q) {
@@ -1489,6 +1553,17 @@ function onKeydown(e) {
     // frame later (once re-rendered) so it stays snug under the selection, even
     // when flipped above it.
     if (menu.open) requestAnimationFrame(positionMenu)
+    return
+  }
+
+  // Enter on a filled new-comment composer opens the comment-kind menu (Claude /
+  // Git / private / Jira) instead of placing directly. Handled before the
+  // relatedActive() branch so it works whether the composer was opened via the
+  // keyboard (cs.focus==='new') or the button (focus null). Shift+Enter is left
+  // alone (newline for a multi-line comment); an empty composer does nothing.
+  if (e.key === 'Enter' && !e.shiftKey && isComposeOpen()) {
+    e.preventDefault()
+    if (composeHasText()) openMenu('compose')
     return
   }
 
@@ -1663,6 +1738,13 @@ function stepChevron(dir) {
 // one, else the selected block's card, else the sidebar row. Always something
 // on-screen so the menu opens under whatever is selected.
 function menuAnchor() {
+  // The comment-kind menu ('compose') anchors under the composer textarea.
+  if (menu.mode === 'compose') {
+    return (
+      document.querySelector('[data-testid="comment-compose"]') ||
+      document.querySelector('[data-testid="comments-panel"]')
+    )
+  }
   if (menu.mode === 'comment') {
     return (
       document.querySelectorAll('[data-testid="comment-item"]')[commentSelIndex()] ||
@@ -1683,7 +1765,8 @@ function menuAnchor() {
 // right-hand side — the new code you're reviewing. Falls back to the OLD pane
 // (a removed block has no new pane), then the whole block column.
 function menuRegion() {
-  if (menu.mode === 'comment') {
+  // Both comment-scoped menus sit over the comment thread pane.
+  if (menu.mode === 'comment' || menu.mode === 'compose') {
     return (
       document.querySelector('[data-testid="comment-thread"]') ||
       document.querySelector('[data-testid="comments-panel"]')
@@ -1874,9 +1957,9 @@ function DetailPanel(state) {
         })
       }}
       ${() =>
-        RelatedPanel(state, commentTarget, { startCallSearch: () => startCallSearch(focusedBlock()) }).key(
-          'related-panel',
-        )}
+        RelatedPanel(state, commentTarget, { startCallSearch: () => startCallSearch(focusedBlock()) }, () => {
+          if (composeHasText()) openMenu('compose')
+        }).key('related-panel')}
       ${() => (menu.open ? menuOverlay().key('command-overlay') : '')}
     </main>
   `

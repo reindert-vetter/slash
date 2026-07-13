@@ -81,7 +81,14 @@ Twee gestapelde kaarten:
 - **Onderliggende code** (boven, `data-testid=related-code`): de **child-blokken**
   van het geselecteerde block — de blokken waaraan het gekoppeld is (nu: de
   `Listener::handle` van een event dat het dispatcht). Elk als kleine
-  Prism-highlighted PHP-excerpt (`data-testid=related-item`) met een `kind`-badge.
+  Prism-highlighted PHP-excerpt (`data-testid=related-item`). Een listener-child
+  draagt een `listener`-`kind`-badge; een **methode-aanroep** heeft géén woord-badge
+  maar een **diff-stat** (`data-testid=related-diffstat`): `+A −R` (groen/rood, het
+  aantal toegevoegde/verwijderde regels van de aangeroepen definitie, geteld met
+  `diffStat` in `Block.mjs`, git-`--stat`-stijl), of een grijze **`Ongewijzigd`**-badge
+  als de aanroep naar een bestand wijst dat de PR niet wijzigt (geen diff → `r.diff`
+  is `null`). Zo'n ongewijzigd child krijgt bij selectie bovendien een **grijze**
+  ring i.p.v. de indigo ring — er valt niets te reviewen.
   Gevoed uit het relations-read-model via `GET /api/relations?pr=N`; `home.mjs`
   (`childrenOf`/`relatedChildren`) haalt de children uit `state.allBlocks` en laadt
   hun code lazy. Een child wordt **uit de linkerlijst gehaald** en hier getoond;
