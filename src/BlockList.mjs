@@ -109,11 +109,32 @@ function row(state, b, i) {
         title="${b.label}"
         >${b.label}</span
       >
+      ${() => approvalPill(state, b)}
       <span class="${() => 'shrink-0 text-xs font-medium ' + st.cls}"
         >${st.mark}</span
       >
     </div>
   `.key(b.file + ':' + b.label + ':' + b.side)
+}
+
+// approvalPill shows the combined approval progress of a block *and every block
+// nested under it* (the count home.mjs rolls up into state.approvalSummaries):
+// "done/total", green with a ✓ once everything is approved, neutral while
+// partial. Hidden only when there's nothing to approve yet (total 0 — e.g. code
+// still loading); the done state is always shown, never hidden.
+function approvalPill(state, b) {
+  const s = state.approvalSummaries && state.approvalSummaries[b.id]
+  if (!s || s.total === 0) return ''
+  const done = s.done === s.total
+  return html`
+    <span
+      class="${'shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold tabular-nums ' +
+      (done ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500')}"
+      data-testid="block-approval"
+      title="Goedgekeurde regels (dit block + onderliggende code)"
+      >${done ? '✓ ' : ''}${s.done}/${s.total}</span
+    >
+  `
 }
 
 function emptyState(state) {

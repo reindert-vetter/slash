@@ -106,6 +106,13 @@ const state = reactive({
   // DetailPanel re-runs and its key (which encodes the code-loaded state — see the
   // key comment) flips, yielding a fresh diff binding that reads the loaded code.
   codeVersion: 0,
+  // approvalSummaries — per top-level block id → { done, total } combined
+  // approval count of the block *and every PR block nested under it* (its
+  // relation children + resolved-call definitions). Computed off-render in a
+  // watch (see below) and read by the sidebar, so the sidebar never subscribes
+  // to each block's reactive b.code (which would re-trigger the diff
+  // "stuck on loading" race). Reassigned wholesale so arrow.js re-renders.
+  approvalSummaries: {},
   ingesting: false,
   error: '',
   onIngest: ingest,
@@ -472,7 +479,7 @@ function relatedChildren() {
         const c = kid.code && !kid.code.error ? kid.code : null
         const code = (c && ((c.new && c.new.text) || (c.old && c.old.text))) || ''
         // A listener is by definition a changed child block, so it sorts to the top.
-        return { id: kid.id, label: kid.label, file: kid.file, line: kid.line, kind: 'event_listener', code, prio: 0 }
+        return { id: kid.id, label: kid.label, file: kid.file, line: kid.line, kind: 'event_listener', code, prio: 0, approve: blockApproveCount(kid) }
       })
   // Resolved/found method calls (Go statically or LLM). Their code + descriptor
   // ride along in the callresolve row (unchanged file → no /api/code fetch).
@@ -493,13 +500,13 @@ function resolvedCallChildren(b) {
   if (resolved.length === 0) return []
   const rows = blockRows(b)
   const scope = callScopeMethods(b, rows)
-  const prBlockIds = new Set(state.allBlocks.map((x) => x.id))
+  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
   const changed = new Set(changedRows(rows))
   return resolved
     .filter((r) => scope == null || scope.has(r.callKey))
     .map((r) => {
-      const childId =
-        state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
+      const childId = callChildId(r)
+      const prBlock = byId.get(childId)
       const onChangedLine = findCallSites(rows, r.callKey).some((s) => changed.has(s.row))
       return {
         id: b.id + '::' + r.callKey,
@@ -509,10 +516,13 @@ function resolvedCallChildren(b) {
         kind: 'method_call',
         code: r.childCode || '',
         source: r.status === 'found' ? r.model : '',
+        // Approval count only for a call whose definition is itself a PR block
+        // (it has changed rows to approve); a call into an unchanged file has none.
+        approve: prBlock ? blockApproveCount(prBlock) : null,
         // 0 = the called method is itself changed in this PR (a real child block),
         // 1 = the call sits on a changed line, 2 = an unchanged call. Drives the
         // panel ordering (see relatedChildren).
-        prio: prBlockIds.has(childId) ? 0 : onChangedLine ? 1 : 2,
+        prio: prBlock ? 0 : onChangedLine ? 1 : 2,
       }
     })
 }
@@ -521,6 +531,67 @@ function resolvedCallChildren(b) {
 function callRows(b) {
   if (!b || !state.callResolve) return []
   return state.callResolve.filter((r) => r.callerId === b.id)
+}
+
+// callChildId builds the PR-block id a call-resolution row points at (empty
+// class → free function). Matches the id scheme in model.go (Block.ID).
+function callChildId(r) {
+  return (
+    state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
+  )
+}
+
+// directChildBlocks returns the immediate PR-block children of b — the blocks
+// pulled out of the left list and shown under it in the RelatedPanel: its
+// relation children plus the resolved/found method calls whose definition is
+// itself a PR block. Method calls into unchanged files aren't PR blocks (no
+// approval concept), so they're excluded.
+function directChildBlocks(b) {
+  if (!b) return []
+  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const ids = new Set()
+  for (const r of state.relations || []) if (r.parentId === b.id) ids.add(r.childId)
+  for (const r of callRows(b)) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    if (byId.has(callChildId(r))) ids.add(callChildId(r))
+  }
+  return [...ids].map((id) => byId.get(id)).filter(Boolean)
+}
+
+// nestedPrBlocks returns every PR block nested under b, transitively (children,
+// their children, …), cycle-guarded by id — the full set whose approval rolls
+// up into b's combined sidebar count.
+function nestedPrBlocks(b, seen = new Set()) {
+  const out = []
+  for (const kid of directChildBlocks(b)) {
+    if (seen.has(kid.id)) continue
+    seen.add(kid.id)
+    out.push(kid, ...nestedPrBlocks(kid, seen))
+  }
+  return out
+}
+
+// blockApproveCount returns { done, total } for a single block: how many of its
+// changed rows the reviewer has approved out of the total. total is 0 until the
+// block's code has loaded (blockRows needs it).
+function blockApproveCount(b) {
+  const all = changedRows(blockRows(b))
+  if (!all.length) return { done: 0, total: 0 }
+  const set = approvedRowSet(b)
+  return { done: all.filter((i) => set.has(i)).length, total: all.length }
+}
+
+// subtreeApproveCount aggregates blockApproveCount over b and every PR block
+// nested under it — the combined approval progress the sidebar shows.
+function subtreeApproveCount(b) {
+  let done = 0
+  let total = 0
+  for (const x of [b, ...nestedPrBlocks(b)]) {
+    const c = blockApproveCount(x)
+    done += c.done
+    total += c.total
+  }
+  return { done, total }
 }
 
 // unresolvedCalls returns the selected block's calls the Go resolver could not
@@ -894,9 +965,39 @@ watch(
     state.allBlocks,
     state.relations,
     state.callResolve,
+    // codeVersion so a child block's lazily-loaded code (and thus its approval
+    // count + code excerpt) refreshes the panel; approvalSummaries so a change
+    // in approval re-renders the per-child badges.
+    state.codeVersion,
+    state.approvalSummaries,
     curBlock() && curBlock().code,
   ],
   () => setRelated(relatedChildren(), unresolvedCalls()),
+)
+
+// Bridge approval + code state → per-block combined-approval summaries the
+// sidebar reads (state.approvalSummaries). Decoupled from the render for the
+// same reason as setCommentScope/setRelated: the sidebar reads a plain snapshot
+// instead of each block's reactive b.code, so it never becomes a co-subscriber
+// on the selected block's b.code and re-triggers the diff "stuck on loading"
+// race. The getter lists its deps INLINE (the arrow.js watch rule): the block
+// lists, the relation/call structure, the code-loaded counter (covers every
+// block's code arriving), and every block's approval arrays — so it re-fires on
+// any approve or code load. The count itself is computed in the callback.
+watch(
+  () => {
+    const deps = [state.blocks, state.allBlocks, state.relations, state.callResolve, state.codeVersion]
+    for (const b of state.allBlocks) {
+      deps.push(b.approvedRows)
+      deps.push(b.approvedCalls)
+    }
+    return deps
+  },
+  () => {
+    const map = {}
+    for (const b of state.blocks) map[b.id] = subtreeApproveCount(b)
+    state.approvalSummaries = map
+  },
 )
 
 // approveNoun names what an approve action *right now* covers, for the label: the

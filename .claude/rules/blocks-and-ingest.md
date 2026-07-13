@@ -39,6 +39,27 @@ navigeerbare lijst tonen.
   toe en blijven regel-voor-regel uitgelijnd. `b.approvedRows`/`b.approvedCalls`
   worden altijd **hertoegewezen** (nooit in-place gemuteerd) zodat arrow.js de
   checkbox en de indicators her-rendert. `edges` blijft voor de latere call-graph.
+- **Gecombineerde goedkeuring per boom (sidebar + Onderliggende code):** de
+  linker-sidebar toont per top-level block een pill (`data-testid=block-approval`)
+  met `done/total` van dat block **plus alle onderliggende blokken samen** — z'n
+  relatie-children én de PR-block-definities van z'n resolved/found method-calls,
+  transitief. `home.mjs` rolt dit op (`blockApproveCount` per block →
+  `subtreeApproveCount` over `[b, ...nestedPrBlocks(b)]`) en duwt het via een
+  `watch` in `state.approvalSummaries` (id→`{done,total}`) — **bewust ontkoppeld
+  van de render** (net als `setRelated`/`setCommentScope`): de sidebar leest een
+  platte snapshot i.p.v. elke block-`b.code`, want dat zou de sidebar een
+  co-subscriber op de `b.code` van het geselecteerde block maken en de diff
+  "stuck on loading"-race hertriggeren (zie `.claude/rules/conventions.md`). De
+  count telt goedgekeurde changed-rows uit `blockRows`, dus **`total` is 0 tot de
+  code van dat block geladen is** (lazy — de counts vullen zich terwijl je
+  navigeert; het geselecteerde block + z'n children laden altijd). De pill is
+  groen met een ✓ zodra `done === total`, anders neutraal; verborgen alleen bij
+  `total === 0`. Dezelfde `{done,total}` hangt per child in de **Onderliggende
+  code**-kaart (`data-testid=related-approval` + een header-rollup
+  `related-approval-total`) — zie `.claude/rules/detail-layout.md`. Kanttekening:
+  child-blokken zijn (nog) niet los goedkeurbaar (ze staan niet in de
+  navigeerbare `state.blocks`), dus hun `done` is voorlopig 0 tot dat er is; de
+  `total` maakt de review-omvang van de hele call-boom wél zichtbaar.
   Schema: `.claude/templates/schema.sql` (in sync met de `schemaDDL`-constante in
   `db.go`).
 - **Pipeline:** `gh pr view` → `git fetch` (pull-ref + develop, fallback by-sha) →

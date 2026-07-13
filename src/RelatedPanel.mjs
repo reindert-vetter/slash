@@ -805,6 +805,24 @@ function commentsSection(state, commentTarget) {
 // KIND_LABEL names the relation on a child card.
 const KIND_LABEL = { event_listener: 'listener', method_call: 'aanroep' }
 
+// approvalBadge shows a child block's approval progress ("done/total", green +
+// ✓ once fully approved). `a` is { done, total } or null (a call into an
+// unchanged file — nothing to approve). Hidden only when there's nothing to
+// approve yet (total 0); the done state is always shown.
+function approvalBadge(a) {
+  if (!a || !a.total) return ''
+  const done = a.done === a.total
+  return html`
+    <span
+      class="${'shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold tabular-nums ' +
+      (done ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500')}"
+      data-testid="related-approval"
+      title="Goedgekeurde regels"
+      >${done ? '✓ ' : ''}${a.done}/${a.total}</span
+    >
+  `
+}
+
 // relatedCard renders one child block: a header (label + file:line + relation
 // kind) and a short, non-interactive code excerpt highlighted like the panes.
 function relatedCard(r, i) {
@@ -835,6 +853,7 @@ function relatedCard(r, i) {
                   >bron: ${r.source}</span
                 >`
               : ''}
+          ${() => approvalBadge(r.approve)}
         </div>
         <span class="block truncate font-mono text-[10px] text-slate-400" title="${() => r.file + ':' + r.line}"
           >${r.file}:${r.line}</span
@@ -889,6 +908,19 @@ export default function RelatedPanel(state, commentTarget, search) {
   // Calls the Go resolver could not pin (status unresolved) + any in flight
   // (searching). Drives the "Zoek" button and the "zoeken…" spinner.
   const unresolved = () => rc.unresolved
+  // codeApproval rolls up the approval counts of the shown children (those that
+  // are PR blocks with changed rows) into one { done, total } for the header.
+  const codeApproval = () => {
+    let done = 0
+    let total = 0
+    for (const r of rc.children) {
+      if (r.approve) {
+        done += r.approve.done
+        total += r.approve.total
+      }
+    }
+    return { done, total }
+  }
   const pending = () => unresolved().filter((r) => r.status === 'unresolved').length
   const searching = () => unresolved().some((r) => r.status === 'searching')
   const runSearch = () => search && search.startCallSearch && search.startCallSearch()
@@ -905,7 +937,12 @@ export default function RelatedPanel(state, commentTarget, search) {
         <div class="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5">
           <div class="min-w-0">
             <h2 class="text-sm font-semibold text-slate-800">Onderliggende code</h2>
-            <p class="text-[11px] text-slate-400">Code die dit blok aanroept</p>
+            <p class="text-[11px] text-slate-400" data-testid="related-approval-total">
+              Code die dit blok aanroept${() => {
+                const a = codeApproval()
+                return a.total ? ` · ${a.done}/${a.total} goedgekeurd` : ''
+              }}
+            </p>
           </div>
           ${() =>
             searching()

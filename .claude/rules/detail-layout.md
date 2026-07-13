@@ -68,6 +68,16 @@ Twee gestapelde kaarten:
   diff) / `↓` (volgend blok). De hint kleurt feller (`text-indigo-400`) zolang de
   kaart de toetsen bezit. De code-excerpts **wrappen** (geen horizontale scroll:
   `whitespace-pre-wrap break-words`).
+  Elke child die zelf een PR-block is (relatie-child of een method-call wiens
+  definitie in de PR wijzigt) draagt een **goedkeurings-badge**
+  (`data-testid=related-approval`, `done/total`, groen + ✓ bij volledig
+  goedgekeurd), en de kaart-header toont een **rollup** over de getoonde children
+  (`data-testid=related-approval-total`, "… · X/Y goedgekeurd"). Een aanroep naar
+  een ongewijzigd bestand heeft geen goedkeurings-concept en dus geen badge. De
+  counts komen mee in de child-descriptor (`approve`, gevuld door
+  `relatedChildren`/`resolvedCallChildren` in `home.mjs` via `blockApproveCount`);
+  dezelfde rollup zit als combinatie-pill op de sidebar-rij — zie de
+  gecombineerde-goedkeuring-uitleg in `.claude/rules/blocks-and-ingest.md`.
   Náást de listener-children toont dezelfde kaart ook de **methode-aanroepen** die
   het block doet, gekoppeld aan hun **definitie** — ook uit ongewijzigde bestanden
   (`kind=method_call`, uit `GET /api/callresolve`, code + descriptor zitten in de
