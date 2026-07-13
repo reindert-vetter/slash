@@ -88,7 +88,7 @@ export default function Block(b, opts = {}) {
     <article
       class="${() =>
         'flex min-h-0 max-w-full flex-col overflow-hidden rounded-xl border bg-white transition ' +
-        (singleSide(b) ? 'w-[42rem] ' : 'w-[76rem] ') +
+        (singleSide(b) ? 'w-[38rem] 2xl:w-[46rem] ' : 'w-[70rem] 2xl:w-[82rem] ') +
         (preview
           ? 'max-h-72 border-slate-200 opacity-50'
           : diffActive()
@@ -872,8 +872,8 @@ export function changeLines(rows) {
 // segment of a changed row. Unlike the coarser levels this cuts a line by its
 // *structure* (the calls it makes), not by what the diff changed — so later each
 // segment can be tied to the function it calls (an edge in the call-graph). A
-// line is split on `->`, `.`, `;` and the binary separators `??`/`&&`/`||`/
-// comparisons (segmentCalls), and — unlike changeLines —
+// line is split on `->`, `;`, the binary separators `??`/`&&`/`||`/comparisons,
+// and a call's `(`/argument `,` boundaries (segmentCalls), and — unlike changeLines —
 // the WHOLE new line is walked: every non-empty segment is landable, changed or
 // not. Each unit is a single-row range { start: i, end: i } tagged `char: true`
 // with `left`/`right` Sets of the char indices to underline on each side.
@@ -935,27 +935,36 @@ export function rowCallSegments(rows, i) {
 
 // CALL_SEPARATORS are binary operators that join two *independent* operands —
 // each side is its own call chain — so they break a segment and lead the next one
-// (like `->`/`.`). `$a->x ?? $b->y` must split at `??` so `$a->x` and `$b->y` are
+// (like `->`). `$a->x ?? $b->y` must split at `??` so `$a->x` and `$b->y` are
 // separate segments (each later tied to its own call-graph edge), otherwise `??`
 // gets swallowed into one caller's segment. Besides `??` (null-coalesce) this
 // covers the logical `&&`/`||` and the comparisons — all glue two callers.
 // Matched longest-first so `===` beats `==` and `!==` beats `!=`.
 //
 // Deliberately NOT separators (would over-split real chains): `=>` (array
-// key=>value stays one segment — see the toArray test), `::` (static call, part
-// of a chain), the ternary `?`/`:` (collide with the `?->` nullsafe operator and
-// `::`), a bare `<`/`>` (collide with `->` and `=>`), and arithmetic (rarely a
-// caller boundary, and `-`/`/` collide with `->`/`//`).
+// key=>value stays one segment — see the toArray test), `.` (PHP string
+// concatenation, not a call boundary), `::` (static call, part of a chain), the
+// ternary `?`/`:` (collide with the `?->` nullsafe operator and `::`), a bare
+// `<`/`>` (collide with `->` and `=>`), and arithmetic (rarely a caller boundary,
+// and `-`/`/` collide with `->`/`//`).
 const CALL_SEPARATORS = ['===', '!==', '??', '&&', '||', '==', '!=', '<=', '>=']
 
-// segmentCalls splits a line into call-chain segments. A new segment begins at
-// each `->` or `.`, or a CALL_SEPARATORS operator (the operator starts the call it
-// introduces), and `;` closes the current one (a statement boundary, kept at the
-// end of its call). The segments tile the whole line with no gaps —
-// `$order->customer()->name();` becomes `$order`, `->customer()`, `->name();`, and
-// `$a->x ?? $b->y` becomes `$a`, `->x `, `?? $b`, `->y` — so every part of a line
-// is walkable. The `.` boundary is there for Vue/JS property access
-// (`order.customer.name`) as much as PHP concatenation. Returns [{ start, end }]
+// segmentCalls splits a line into call-chain segments so each caller — and each
+// of its arguments — is separately landable. A new segment begins at each `->`
+// or a CALL_SEPARATORS operator (the operator starts the call it introduces);
+// `;` closes the current one (a statement boundary, kept at the end of its call).
+// Two more boundaries separate a call from its arguments: at the *outermost*
+// call's opening `(` (when it has real arguments) the caller name ends and the
+// first argument starts fresh, and each top-level `,` inside that `(` ends one
+// argument. So `$order->customer()->name();` (empty `()`, no args) stays
+// `$order` / `->customer()` / `->name();`, while
+// `$couple->orWhere('contracts.type', $mapping[$type]);` becomes
+// `$couple` / `->orWhere(` / `'contracts.type',` / `$mapping[$type]);`.
+// Strings are opaque — no boundary (`->`/`,`/`??`, and PHP's `.` concatenation)
+// is ever detected inside a quoted literal, so `'contracts.type'` stays whole.
+// Argument splitting is *outermost only*: a nested call or array argument keeps
+// its own commas (`foo(bar($a, $b), $c)` → `foo(` / `bar($a, $b),` / `$c)`).
+// The segments tile the whole line with no gaps. Returns [{ start, end }]
 // half-open char ranges.
 function segmentCalls(text) {
   const segs = []
@@ -964,15 +973,47 @@ function segmentCalls(text) {
     if (end > start) segs.push({ start, end })
     start = end
   }
+  // skipString returns the index just past the closing quote of the string that
+  // starts at i (text[i] is `'` or `"`), honouring backslash escapes.
+  const skipString = (i) => {
+    const q = text[i]
+    i += 1
+    while (i < text.length) {
+      if (text[i] === '\\') {
+        i += 2
+        continue
+      }
+      if (text[i] === q) return i + 1
+      i += 1
+    }
+    return i
+  }
+  const stack = [] // open brackets we're inside: '(', '[' or '{'
   let i = 0
   while (i < text.length) {
-    if (text[i] === '-' && text[i + 1] === '>') {
+    const c = text[i]
+    if (c === '"' || c === "'") {
+      i = skipString(i) // strings are opaque — no boundary lives inside one
+    } else if (c === '-' && text[i + 1] === '>') {
       push(i) // end current here; `->` starts the next segment
       i += 2
-    } else if (text[i] === '.') {
-      push(i)
+    } else if (c === '(' || c === '[' || c === '{') {
+      // Separate the caller name from its arguments only at the outermost call
+      // (nothing open yet) that actually has arguments: peek past whitespace, an
+      // empty `()` stays with the caller so `->customer()` is one segment.
+      let j = i + 1
+      while (j < text.length && /\s/.test(text[j])) j++
+      const outermost = stack.length === 0
+      stack.push(c)
       i += 1
-    } else if (text[i] === ';') {
+      if (c === '(' && outermost && text[j] !== ')') push(i)
+    } else if (c === ')' || c === ']' || c === '}') {
+      if (stack.length) stack.pop()
+      i += 1 // a closer rides along with the segment it ends
+    } else if (c === ',' && stack.length === 1 && stack[0] === '(') {
+      i += 1
+      push(i) // an outermost-call argument boundary; the `,` trails its argument
+    } else if (c === ';') {
       i += 1
       push(i) // include `;` in the current segment, then start fresh after it
     } else {

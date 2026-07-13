@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"slash/modules/callresolve"
 	"slash/modules/relations"
 )
 
@@ -168,10 +169,11 @@ func runSeedCmd(args []string) {
 	dbFlag := fs.String("db", "", "path to the SQLite DB to seed")
 	from := fs.String("from", "", "path to a blocks JSON fixture")
 	relFrom := fs.String("relations", "", "optional path to a relations JSON fixture (seeded into relations.db)")
+	crFrom := fs.String("callresolve", "", "optional path to a call-resolutions JSON fixture (seeded into callresolve.db)")
 	_ = fs.Parse(args)
 
 	if *from == "" {
-		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>]")
+		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>] [-callresolve <callresolve.json>]")
 	}
 	raw, err := os.ReadFile(*from)
 	if err != nil {
@@ -203,6 +205,37 @@ func runSeedCmd(args []string) {
 	if *relFrom != "" {
 		seedRelations(dbPath(*dbFlag), *relFrom)
 	}
+	if *crFrom != "" {
+		seedCallResolve(dbPath(*dbFlag), *crFrom)
+	}
+}
+
+// seedCallResolve loads call resolutions from a JSON fixture into the
+// callresolve.db next to the blocks DB, so tests can render the underlying-code
+// panel's method-call children (and exercise its cursor-following) without an
+// LLM/Go resolver run.
+func seedCallResolve(dbPath, from string) {
+	raw, err := os.ReadFile(from)
+	if err != nil {
+		log.Fatalf("read callresolve fixture: %v", err)
+	}
+	var entries []callresolve.Entry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		log.Fatalf("parse callresolve fixture: %v", err)
+	}
+	cr, err := callresolve.Open(filepath.Join(filepath.Dir(dbPath), "callresolve.db"))
+	if err != nil {
+		log.Fatalf("open callresolve db: %v", err)
+	}
+	defer cr.Close()
+
+	ctx := context.Background()
+	for _, e := range entries {
+		if err := cr.Save(ctx, e); err != nil {
+			log.Fatalf("seed callresolve %s/%s: %v", e.CallerID, e.CallKey, err)
+		}
+	}
+	log.Printf("seeded %d call resolutions from %s", len(entries), from)
 }
 
 // seedRelations loads relations from a JSON fixture into the relations.db that

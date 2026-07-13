@@ -1,0 +1,223 @@
+// Package callresolve is the call-resolution module/service: a SQLite read-model
+// that couples a call site inside a changed block (its caller block ID + the
+// called symbol) to the definition of the called method — even when that method
+// lives in a file the PR did NOT change. It backs the "Onderliggende code" panel
+// alongside the relations module.
+//
+// It deliberately lives outside the relations table because its children point
+// at UNCHANGED files (so their block IDs are not PR blocks the frontend knows)
+// and because relations.Replace full-swaps per PR on every build — an expensive
+// LLM resolution would be wiped by a rebuild. Rows here carry the full child
+// descriptor plus the code text, and the LLM-owned states (searching/found) are
+// preserved across Go rebuilds (see UpsertGo).
+//
+// WRITE methods (UpsertGo/SaveSearching/SaveFound/SaveNotfound) are driven only
+// by workflow Activities (per .claude/rules/workflows-write-boundary.md); the
+// READ method (List) backs the read-only UI.
+package callresolve
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+const schema = `
+PRAGMA journal_mode = WAL;
+
+CREATE TABLE IF NOT EXISTS call_resolutions (
+  pr           INTEGER NOT NULL,
+  caller_id    TEXT    NOT NULL,
+  call_key     TEXT    NOT NULL,
+  status       TEXT    NOT NULL,
+  child_file   TEXT    NOT NULL DEFAULT '',
+  child_class  TEXT    NOT NULL DEFAULT '',
+  child_method TEXT    NOT NULL DEFAULT '',
+  child_line   INTEGER NOT NULL DEFAULT 0,
+  child_code   TEXT    NOT NULL DEFAULT '',
+  model        TEXT    NOT NULL DEFAULT '',
+  confidence   TEXT    NOT NULL DEFAULT '',
+  updated_at   TEXT    NOT NULL DEFAULT '',
+  PRIMARY KEY (pr, caller_id, call_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_call_resolutions_pr ON call_resolutions(pr);
+`
+
+// Status values.
+const (
+	StatusResolved   = "resolved"   // Go resolver found the definition
+	StatusUnresolved = "unresolved" // Go could not resolve — offer the "Zoek" button
+	StatusSearching  = "searching"  // an LLM resolve_call run is in progress
+	StatusFound      = "found"      // an LLM run found the definition
+	StatusNotfound   = "notfound"   // an LLM run could not find it either
+)
+
+// Model values recorded on LLM-produced rows.
+const (
+	ModelHaiku  = "haiku"
+	ModelSonnet = "sonnet"
+)
+
+// Entry is one call-site → definition resolution.
+type Entry struct {
+	PR          int    `json:"pr"`
+	CallerID    string `json:"callerId"`
+	CallKey     string `json:"callKey"`
+	Status      string `json:"status"`
+	ChildFile   string `json:"childFile"`
+	ChildClass  string `json:"childClass"`
+	ChildMethod string `json:"childMethod"`
+	ChildLine   int    `json:"childLine"`
+	ChildCode   string `json:"childCode"`
+	Model       string `json:"model"`
+	Confidence  string `json:"confidence"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+// Module owns the call-resolution store.
+type Module struct{ db *sql.DB }
+
+// Open opens (or creates) the callresolve DB at path and applies the schema.
+func Open(path string) (*Module, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("callresolve: open db: %w", err)
+	}
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("callresolve: apply schema: %w", err)
+	}
+	return &Module{db: db}, nil
+}
+
+// New wraps an existing DB and applies the schema.
+func New(db *sql.DB) (*Module, error) {
+	if _, err := db.Exec(schema); err != nil {
+		return nil, fmt.Errorf("callresolve: apply schema: %w", err)
+	}
+	return &Module{db: db}, nil
+}
+
+func (m *Module) Close() error { return m.db.Close() }
+
+func now() string { return time.Now().UTC().Format(time.RFC3339) }
+
+// UpsertGo writes the Go resolver's entries (status resolved/unresolved) for a
+// PR. It does NOT clobber a row already owned by the LLM (status searching or
+// found) — a Go rebuild must not wipe an expensive LLM resolution. WRITE —
+// workflow-Activity-only. Idempotent per (pr, caller_id, call_key).
+func (m *Module) UpsertGo(ctx context.Context, entries []Entry) error {
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO call_resolutions
+  (pr, caller_id, call_key, status, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(pr, caller_id, call_key) DO UPDATE SET
+  status       = excluded.status,
+  child_file   = excluded.child_file,
+  child_class  = excluded.child_class,
+  child_method = excluded.child_method,
+  child_line   = excluded.child_line,
+  child_code   = excluded.child_code,
+  model        = excluded.model,
+  confidence   = excluded.confidence,
+  updated_at   = excluded.updated_at
+WHERE call_resolutions.status NOT IN ('searching','found')`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, e := range entries {
+		if _, err := stmt.ExecContext(ctx,
+			e.PR, e.CallerID, e.CallKey, e.Status,
+			e.ChildFile, e.ChildClass, e.ChildMethod, e.ChildLine, e.ChildCode,
+			e.Model, e.Confidence, now()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SaveSearching marks the given calls of a caller as in-progress. WRITE —
+// workflow-Activity-only.
+func (m *Module) SaveSearching(ctx context.Context, pr int, callerID string, calls []string) error {
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO call_resolutions (pr, caller_id, call_key, status, updated_at)
+VALUES (?,?,?,?,?)
+ON CONFLICT(pr, caller_id, call_key) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, c := range calls {
+		if _, err := stmt.ExecContext(ctx, pr, callerID, c, StatusSearching, now()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// Save upserts one LLM-produced resolution (found or notfound). WRITE —
+// workflow-Activity-only.
+func (m *Module) Save(ctx context.Context, e Entry) error {
+	_, err := m.db.ExecContext(ctx, `
+INSERT OR REPLACE INTO call_resolutions
+  (pr, caller_id, call_key, status, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		e.PR, e.CallerID, e.CallKey, e.Status,
+		e.ChildFile, e.ChildClass, e.ChildMethod, e.ChildLine, e.ChildCode,
+		e.Model, e.Confidence, now())
+	return err
+}
+
+// List returns all resolutions for a PR, ordered deterministically. READ — safe
+// for the UI/API.
+func (m *Module) List(ctx context.Context, pr int) ([]Entry, error) {
+	rows, err := m.db.QueryContext(ctx, `
+SELECT pr, caller_id, call_key, status, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at
+FROM call_resolutions WHERE pr = ? ORDER BY caller_id, call_key`, pr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Entry
+	for rows.Next() {
+		var e Entry
+		if err := rows.Scan(&e.PR, &e.CallerID, &e.CallKey, &e.Status,
+			&e.ChildFile, &e.ChildClass, &e.ChildMethod, &e.ChildLine, &e.ChildCode,
+			&e.Model, &e.Confidence, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// NormalizeCallKey trims a captured call token to its bare method name (e.g.
+// "->joinAddress" or "joinAddress(" → "joinAddress"), so a call site keys
+// stably regardless of how it was captured.
+func NormalizeCallKey(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimPrefix(s, "->")
+	s = strings.TrimPrefix(s, "::")
+	if i := strings.IndexAny(s, "("); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
+}

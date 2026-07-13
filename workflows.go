@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/reindert-vetter/tembed"
+	"slash/modules/callresolve"
+	"slash/modules/claude"
 	"slash/modules/comments"
 	"slash/modules/github"
 	"slash/modules/inbox"
@@ -43,6 +46,11 @@ const (
 	// and again on each "rebuild" Signal (re-ingest). Designed to be extended with
 	// more relation detectors later.
 	WorkflowBuildRelations = "build_relations"
+	// WorkflowResolveCall is the Workflow Type that resolves a changed block's
+	// method calls to their definition with an LLM when the Go resolver could not:
+	// it runs Haiku first and, if that is not confident, escalates automatically to
+	// Sonnet (no signal). One Execution per resolve request; it completes when done.
+	WorkflowResolveCall = "resolve_call"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -133,6 +141,17 @@ type BuildRelationsInput struct {
 	PR int `json:"pr"`
 }
 
+// ResolveCallInput starts a resolve_call Execution: it asks the LLM to resolve
+// the given (Go-unresolved) call keys made by one caller block.
+type ResolveCallInput struct {
+	PR          int      `json:"pr"`
+	CallerID    string   `json:"callerId"`
+	CallerFile  string   `json:"callerFile"`
+	CallerClass string   `json:"callerClass"`
+	CallerName  string   `json:"callerName"`
+	Calls       []string `json:"calls"`
+}
+
 // inboxRefreshResult is the small summary the refreshInbox Activity returns — the
 // actual data lives in the inbox read-model, so the event history stays compact
 // even though this workflow refreshes indefinitely.
@@ -144,18 +163,20 @@ type inboxRefreshResult struct {
 // TaskManager registers the workflows + their activities on a tembed engine and
 // runs the per-execution GitHub poller.
 type TaskManager struct {
-	engine    *tembed.Engine
-	gh        github.Client
-	comments  *comments.Module
-	inbox     *inbox.Module
-	relations *relations.Module
-	prmeta    *prmeta.Module
-	db        *sql.DB
-	dataDir   string
-	repo      string
-	interval  time.Duration // fast cadence (reviewer active)
-	idle      time.Duration // slow cadence + PR-state check (reviewer idle)
-	logf      func(string, ...any)
+	engine      *tembed.Engine
+	gh          github.Client
+	comments    *comments.Module
+	inbox       *inbox.Module
+	relations   *relations.Module
+	prmeta      *prmeta.Module
+	callresolve *callresolve.Module
+	claude      claude.Client
+	db          *sql.DB
+	dataDir     string
+	repo        string
+	interval    time.Duration // fast cadence (reviewer active)
+	idle        time.Duration // slow cadence + PR-state check (reviewer idle)
+	logf        func(string, ...any)
 
 	mu       sync.Mutex           // guards lastBeat + prRuns + relRuns + inboxRun
 	lastBeat map[string]time.Time // code-comment/inbox Run ID → last heartbeat
@@ -165,9 +186,9 @@ type TaskManager struct {
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
-func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, db *sql.DB, dataDir, repo string) *TaskManager {
+func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, cl claude.Client, db *sql.DB, dataDir, repo string) *TaskManager {
 	m := &TaskManager{
-		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, db: db, dataDir: dataDir, repo: repo,
+		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, claude: cl, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
 		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{},
 		logf: log.Printf,
@@ -310,7 +331,57 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := m.relations.Replace(ctx, input.PR, rels); err != nil {
 			return nil, fmt.Errorf("build_relations: save: %w", err)
 		}
-		return json.Marshal(map[string]int{"relations": len(rels)})
+		// Also resolve method calls statically (resolved/unresolved) into the
+		// callresolve read-model. UpsertGo preserves LLM-owned rows.
+		calls := resolveCalls(m.dataDir, input.PR, blocks)
+		if m.callresolve != nil {
+			if err := m.callresolve.UpsertGo(ctx, calls); err != nil {
+				return nil, fmt.Errorf("build_relations: save calls: %w", err)
+			}
+		}
+		return json.Marshal(map[string]int{"relations": len(rels), "calls": len(calls)})
+	})
+
+	// Activity: mark a caller's calls as being searched (write, workflow-driven).
+	engine.RegisterActivity("markCallsSearching", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg ResolveCallInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.callresolve == nil {
+			return nil, nil
+		}
+		return nil, m.callresolve.SaveSearching(ctx, arg.PR, arg.CallerID, arg.Calls)
+	})
+
+	// Activity: resolve calls with one LLM model (Haiku = context-only shortlist,
+	// Sonnet = agentic worktree search). Reads the head worktree + shells out to
+	// the claude CLI — a side effect, hence an Activity. Returns one entry per call
+	// (found/notfound, verified against the worktree).
+	engine.RegisterActivity("resolveWithModel", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg resolveArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		entries := resolveCallsWithModel(ctx, m.claude, m.dataDir, arg)
+		return json.Marshal(entries)
+	})
+
+	// Activity: persist the final LLM resolutions (write, workflow-driven).
+	engine.RegisterActivity("saveResolutions", func(ctx context.Context, in []byte) ([]byte, error) {
+		var entries []callresolve.Entry
+		if err := json.Unmarshal(in, &entries); err != nil {
+			return nil, err
+		}
+		if m.callresolve == nil {
+			return nil, nil
+		}
+		for _, e := range entries {
+			if err := m.callresolve.Save(ctx, e); err != nil {
+				return nil, err
+			}
+		}
+		return json.Marshal(map[string]int{"saved": len(entries)})
 	})
 
 	// Activity: fetch the PR's metadata (title + URL) from GitHub and store it in
@@ -339,6 +410,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowBuildRelations, buildRelationsWorkflow)
+	engine.RegisterWorkflow(WorkflowResolveCall, resolveCallWorkflow)
 	return m
 }
 
@@ -378,6 +450,79 @@ func buildRelationsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 }
 
+// resolveCallWorkflow resolves a caller's Go-unresolved method calls with the
+// LLM. It is deterministic: the LLM/worktree work is in Activities, and the
+// escalation decision reads the recorded Haiku result (history), not live model
+// output. It runs Haiku first, escalates the still-unfound calls to Sonnet
+// automatically (no signal), then persists the merged result and completes.
+func resolveCallWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in ResolveCallInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	if len(in.Calls) == 0 {
+		return json.Marshal(map[string]int{"found": 0})
+	}
+	if err := w.ExecuteActivity("markCallsSearching", in, nil); err != nil {
+		return nil, fmt.Errorf("mark searching: %w", err)
+	}
+
+	// Haiku first (context-only shortlist).
+	var haiku []callresolve.Entry
+	if err := w.ExecuteActivity("resolveWithModel", resolveArg{
+		PR: in.PR, CallerID: in.CallerID, CallerFile: in.CallerFile,
+		CallerClass: in.CallerClass, CallerName: in.CallerName,
+		Calls: in.Calls, Model: claude.ModelHaiku,
+	}, &haiku); err != nil {
+		return nil, fmt.Errorf("resolve haiku: %w", err)
+	}
+
+	// Escalate the calls Haiku did not confidently find to Sonnet (agentic).
+	byKey := map[string]callresolve.Entry{}
+	var escalate []string
+	for _, e := range haiku {
+		byKey[e.CallKey] = e
+		if e.Status != callresolve.StatusFound {
+			escalate = append(escalate, e.CallKey)
+		}
+	}
+	if len(escalate) > 0 {
+		var sonnet []callresolve.Entry
+		if err := w.ExecuteActivity("resolveWithModel", resolveArg{
+			PR: in.PR, CallerID: in.CallerID, CallerFile: in.CallerFile,
+			CallerClass: in.CallerClass, CallerName: in.CallerName,
+			Calls: escalate, Model: claude.ModelSonnet,
+		}, &sonnet); err != nil {
+			return nil, fmt.Errorf("resolve sonnet: %w", err)
+		}
+		for _, e := range sonnet {
+			byKey[e.CallKey] = e // the Sonnet result wins over Haiku
+		}
+	}
+
+	// Persist the merged result in the deterministic order of in.Calls.
+	final := make([]callresolve.Entry, 0, len(in.Calls))
+	found := 0
+	for _, c := range in.Calls {
+		if e, ok := byKey[c]; ok {
+			final = append(final, e)
+			if e.Status == callresolve.StatusFound {
+				found++
+			}
+		}
+	}
+	if err := w.ExecuteActivity("saveResolutions", final, nil); err != nil {
+		return nil, fmt.Errorf("save resolutions: %w", err)
+	}
+	return json.Marshal(map[string]int{"found": found})
+}
+
+// StartResolveCall launches a resolve_call Execution and returns its Run ID.
+// Starting an Execution is the sanctioned UI write path.
+func (m *TaskManager) StartResolveCall(in ResolveCallInput) (string, error) {
+	return m.engine.StartWorkflow(WorkflowResolveCall, in)
+}
+
 // prStatusWorkflow is the per-PR lifecycle tracker. It is deterministic: it only
 // consumes "state" Signals (fed by the pollers) and records them in its history.
 // The Execution completes once the PR is no longer open (merged or closed) — that
@@ -404,6 +549,68 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 
 // taskCodeCommentWorkflow is the durable definition. It is deterministic: all
 // side effects go through Activities and Signals.
+// commentPath builds the hierarchical address a comment hangs on, from the PR
+// down to the exact code reference:
+//
+//	/pr-<pr>/<file>/<label>/<codeRef>/comment-<id>
+//
+// The file keeps its slashes, so it forms natural sub-segments (a directory
+// prefix matches too). A prefix search then narrows by scope: "/pr-123" is the
+// whole PR, "/pr-123/app/Foo.php" one file, ".../Foo::bar" one block, and
+// ".../group-5-9" one navigation unit. Pure function of the input + Run ID, so
+// it's deterministic under workflow replay.
+func commentPath(in CodeCommentInput, id string) string {
+	parts := []string{fmt.Sprintf("pr-%d", in.PR)}
+	if in.File != "" {
+		parts = append(parts, in.File) // already a validated repo-relative path
+	}
+	if in.Label != "" {
+		parts = append(parts, pathSeg(in.Label))
+	}
+	if ref := codeRef(in); ref != "" {
+		parts = append(parts, ref)
+	}
+	parts = append(parts, "comment-"+id)
+	return "/" + strings.Join(parts, "/")
+}
+
+// codeRef names the navigation unit segment of a comment path: the granularity
+// plus its row anchor (and, for a call, its segment key). Empty when the anchor
+// is unknown and there's no granularity to fall back on.
+func codeRef(in CodeCommentInput) string {
+	if in.RowStart < 0 {
+		return in.Gran // block-level / unknown rows: just the granularity (or "")
+	}
+	switch in.Gran {
+	case "line":
+		return fmt.Sprintf("line-%d", in.RowStart)
+	case "call":
+		if in.Seg != "" {
+			return fmt.Sprintf("call-%d-%s", in.RowStart, pathSeg(in.Seg))
+		}
+		return fmt.Sprintf("call-%d", in.RowStart)
+	default: // group (the default granularity)
+		return fmt.Sprintf("group-%d-%d", in.RowStart, in.RowEnd)
+	}
+}
+
+// pathSeg makes a single path segment safe: it keeps letters, digits and the
+// harmless punctuation a symbol/segment key uses (`. _ - :`) and turns anything
+// else (spaces, slashes, …) into `-`, so a segment can't inject an extra `/`.
+func pathSeg(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-', r == ':':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
 func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in CodeCommentInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -411,12 +618,15 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 	runID := w.RunID()
 
-	// Store the comment (comments module) and post it (github module).
+	// Store the comment (comments module) and post it (github module). The
+	// hierarchical Path is built here (deterministic from input + Run ID) so it
+	// lands in the read-model via the workflow, not from the UI.
 	comment := comments.Comment{
 		ID: runID, RunID: runID, PR: in.PR, File: in.File, Line: in.Line,
 		Author: in.Author, Body: in.Body,
 		Code: in.Code, Gran: in.Gran, Label: in.Label,
 		RowStart: in.RowStart, RowEnd: in.RowEnd, Seg: in.Seg,
+		Path: commentPath(in, runID),
 	}
 	if err := w.ExecuteActivity("saveComment", comment, nil); err != nil {
 		return nil, fmt.Errorf("save comment: %w", err)

@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 91,
+    "callerId": "91:app/Actions/AlphaAction.php:AlphaAction::run",
+    "callKey": "resolveAlpha",
+    "status": "resolved",
+    "childFile": "app/Services/AlphaService.php",
+    "childClass": "AlphaTarget",
+    "childMethod": "resolveAlpha",
+    "childLine": 42,
+    "childCode": "public function resolveAlpha(): int\n{\n    return 1;\n}"
+  },
+  {
+    "pr": 91,
+    "callerId": "91:app/Actions/BetaAction.php:BetaAction::run",
+    "callKey": "resolveBeta",
+    "status": "resolved",
+    "childFile": "app/Services/BetaService.php",
+    "childClass": "BetaTarget",
+    "childMethod": "resolveBeta",
+    "childLine": 77,
+    "childCode": "public function resolveBeta(): int\n{\n    return 2;\n}"
+  }
+]

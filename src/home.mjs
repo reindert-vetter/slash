@@ -23,12 +23,14 @@ import RelatedPanel, {
   relatedActive,
   enterRelated,
   handleRelatedKey,
+  isCodeFocused,
   isCommentFocused,
   commentReplyEmpty,
   commentSelIndex,
   deleteFocusedComment,
   commentRowSet,
   setCommentScope,
+  setRelated,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { bindUrlState, num } from './urlState.mjs'
@@ -42,6 +44,11 @@ function prFromPath() {
 const PR = prFromPath()
 if (PR == null) {
   location.replace('/pr-overview')
+}
+// Show the PR number in the tab immediately; loadPRMeta swaps this for the
+// real PR title once the prmeta read-model has it.
+if (PR != null) {
+  document.title = `PR #${PR} · PR Review Tree`
 }
 
 // JIRA_BASE mirrors the overview page — used to build the "Openen in nieuw tab"
@@ -67,6 +74,11 @@ const state = reactive({
   blocks: [],
   allBlocks: [],
   relations: [],
+  // callResolve — the call-resolution read-model (GET /api/callresolve): per
+  // (caller block, called method) rows. status resolved (Go) / found (LLM) become
+  // children in the Onderliggende-code panel; unresolved/searching drive the
+  // "Zoek" button + spinner.
+  callResolve: [],
   selected: 0,
   // mode: 'list' — up/down move between blocks in the sidebar; → steps into the
   // selected block's diff. 'diff' — up/down move between change groups inside the
@@ -271,6 +283,21 @@ async function loadBlocks() {
   if (state.selected >= state.blocks.length) {
     state.selected = Math.max(0, state.blocks.length - 1)
   }
+  loadCallResolve()
+}
+
+// loadCallResolve fetches the PR's call-resolution rows into state. Best-effort:
+// a transient failure just yields no rows. Reassigns the array so arrow.js
+// re-renders the Onderliggende-code panel when a search completes.
+async function loadCallResolve() {
+  try {
+    const res = await fetch(`/api/callresolve?pr=${state.pr}`)
+    if (!res.ok) return
+    const rows = await res.json()
+    state.callResolve = Array.isArray(rows) ? rows : []
+  } catch (_) {
+    /* offline — keep whatever we have */
+  }
 }
 
 // loadRelations fetches the PR's block relations (parent→child edges). A
@@ -308,6 +335,9 @@ async function loadPRMeta() {
     const meta = await res.json()
     if (!meta || !meta.ok) return
     state.title = meta.title || ''
+    if (state.title) {
+      document.title = `${state.title} · PR Review Tree`
+    }
     state.prUrl = meta.url || ''
     const m = state.title.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
     state.jiraKey = m ? m[1] : ''
@@ -326,18 +356,175 @@ function childrenOf(b) {
     .filter(Boolean)
 }
 
+// findCallSites locates, in a block's aligned diff rows, every place method
+// `name` is called on the *new* side — returning the row index and the call
+// *segment* (segStart, same key changeCalls/rowCallSegments use) that call sits
+// in. This is what couples a resolved-call child to the exact call in the diff:
+// at 'call' granularity we match the active segment, and for ordering we ask
+// whether any of a call's sites lands on a changed row. Method names are plain
+// `[A-Za-z_]\w*`, so no regex escaping is needed. We match both a call
+// (`name(`) and a bare `->name` property access — the latter is how an Eloquent
+// magic property ($order->billingAddress) reaches its relationship method.
+function findCallSites(rows, name) {
+  const sites = []
+  const re = new RegExp('->\\s*' + name + '\\b|\\b' + name + '\\s*\\(', 'g')
+  for (let i = 0; i < rows.length; i++) {
+    const text = rows[i].right
+    if (text == null) continue
+    re.lastIndex = 0
+    let segs = null
+    let m
+    while ((m = re.exec(text)) !== null) {
+      if (!segs) segs = rowCallSegments(rows, i)
+      const seg = segs.find((s) => m.index >= s.start && m.index < s.end)
+      sites.push({ row: i, segStart: seg ? seg.start : 0 })
+    }
+  }
+  return sites
+}
+
+// callScopeMethods returns the set of method names the underlying-code panel is
+// scoped to right now, or null for "no narrowing" (show them all). We only
+// narrow at the finest granularity (gran === 'call'): then the panel shows
+// exactly the method(s) of the one call segment under the cursor — land on
+// ->billingAddress and you see billingAddress(). At every coarser level (group/
+// line) and in list mode it returns null, so the panel shows the block's full
+// (ordered) list of calls.
+function callScopeMethods(b, rows) {
+  if (state.mode !== 'diff' || state.gran !== 'call') return null
+  const unit = unitsFor(rows, 'call')[state.change]
+  if (!unit) return null
+  const methods = new Set()
+  for (const r of callRows(b)) {
+    if (findCallSites(rows, r.callKey).some((s) => s.row === unit.start && s.segStart === unit.segStart)) {
+      methods.add(r.callKey)
+    }
+  }
+  return methods
+}
+
 // relatedChildren describes the selected block's children for the RelatedPanel:
-// it lazily loads each child's code and returns a small descriptor per child.
-// Reactive — reading state.selected/relations + each child's code, so the panel
-// re-renders as the selection changes and as child code arrives.
+// the resolved method calls it makes (coupled to the call in the diff) plus the
+// event listeners it is linked to. It lazily loads any child block's code and
+// returns a small descriptor per child. Reactive — reading state.selected/mode/
+// gran/change/relations/callResolve + each child's code — so the panel follows
+// the cursor and re-renders as child code arrives.
+//
+// Ordering (coarser than 'call'; see resolvedCallChildren for the per-item prio):
+// a called method whose definition is *also changed in this PR* comes first, then
+// calls sitting on a recently-changed diff line, then the rest. At 'call'
+// granularity the list is narrowed to just the active call's method, so the event
+// listeners (a block-level relation, not this call) are dropped there.
 function relatedChildren() {
   const b = state.blocks[state.selected]
-  return childrenOf(b).map((kid) => {
-    ensureCode(kid)
-    const c = kid.code && !kid.code.error ? kid.code : null
-    const code = (c && ((c.new && c.new.text) || (c.old && c.old.text))) || ''
-    return { id: kid.id, label: kid.label, file: kid.file, line: kid.line, kind: 'event_listener', code }
-  })
+  const scoped = state.mode === 'diff' && state.gran === 'call'
+  const evt = scoped
+    ? []
+    : childrenOf(b).map((kid) => {
+        ensureCode(kid)
+        const c = kid.code && !kid.code.error ? kid.code : null
+        const code = (c && ((c.new && c.new.text) || (c.old && c.old.text))) || ''
+        // A listener is by definition a changed child block, so it sorts to the top.
+        return { id: kid.id, label: kid.label, file: kid.file, line: kid.line, kind: 'event_listener', code, prio: 0 }
+      })
+  // Resolved/found method calls (Go statically or LLM). Their code + descriptor
+  // ride along in the callresolve row (unchanged file → no /api/code fetch).
+  const calls = resolvedCallChildren(b)
+  // Stable sort by priority (0 = also-changed child block, 1 = call on a changed
+  // line, 2 = unchanged call); Array.prototype.sort is stable, so items of equal
+  // priority keep the order the resolver emitted them in.
+  return evt.concat(calls).sort((x, y) => x.prio - y.prio)
+}
+
+// resolvedCallChildren maps the caller block's resolved/found call rows to child
+// descriptors for the Onderliggende-code panel — scoped to the current call (at
+// gran 'call') and tagged with an ordering priority. `source` names the LLM model
+// when it was resolved by one (status found); Go-resolved rows leave it empty.
+function resolvedCallChildren(b) {
+  if (!b) return []
+  const resolved = callRows(b).filter((r) => r.status === 'resolved' || r.status === 'found')
+  if (resolved.length === 0) return []
+  const rows = blockRows(b)
+  const scope = callScopeMethods(b, rows)
+  const prBlockIds = new Set(state.allBlocks.map((x) => x.id))
+  const changed = new Set(changedRows(rows))
+  return resolved
+    .filter((r) => scope == null || scope.has(r.callKey))
+    .map((r) => {
+      const childId =
+        state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
+      const onChangedLine = findCallSites(rows, r.callKey).some((s) => changed.has(s.row))
+      return {
+        id: b.id + '::' + r.callKey,
+        label: r.childClass ? `${r.childClass}::${r.childMethod}` : r.childMethod || r.callKey,
+        file: r.childFile,
+        line: r.childLine,
+        kind: 'method_call',
+        code: r.childCode || '',
+        source: r.status === 'found' ? r.model : '',
+        // 0 = the called method is itself changed in this PR (a real child block),
+        // 1 = the call sits on a changed line, 2 = an unchanged call. Drives the
+        // panel ordering (see relatedChildren).
+        prio: prBlockIds.has(childId) ? 0 : onChangedLine ? 1 : 2,
+      }
+    })
+}
+
+// callRows returns the call-resolution rows whose caller is block b.
+function callRows(b) {
+  if (!b || !state.callResolve) return []
+  return state.callResolve.filter((r) => r.callerId === b.id)
+}
+
+// unresolvedCalls returns the selected block's calls the Go resolver could not
+// pin (status unresolved) plus any currently searching — feeding the "Zoek"
+// button + spinner in the panel. Scoped like relatedChildren: at gran 'call' it
+// only reports the call under the cursor (so "Zoek" is coupled to that one call),
+// at every coarser level it reports the block's whole set.
+function unresolvedCalls() {
+  const b = state.blocks[state.selected]
+  const all = callRows(b).filter((r) => r.status === 'unresolved' || r.status === 'searching')
+  if (all.length === 0) return all
+  const rows = blockRows(b)
+  const scope = callScopeMethods(b, rows)
+  return scope == null ? all : all.filter((r) => scope.has(r.callKey))
+}
+
+// startCallSearch launches the LLM resolve_call workflow for the selected
+// block's still-unresolved calls, then polls the read-model until the search
+// settles. Starting an Execution is the sanctioned UI write path.
+async function startCallSearch() {
+  const b = state.blocks[state.selected]
+  if (!b) return
+  const calls = unresolvedCalls()
+    .filter((r) => r.status === 'unresolved')
+    .map((r) => r.callKey)
+  if (calls.length === 0) return
+  try {
+    await fetch('/api/workflows/resolve_call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pr: state.pr,
+        callerId: b.id,
+        callerFile: b.file,
+        callerClass: b.class || '',
+        callerName: b.name,
+        calls,
+      }),
+    })
+  } catch (_) {
+    return
+  }
+  // Poll the read-model until nothing is 'searching' for this caller (or we give
+  // up after a bounded number of reloads).
+  let tries = 0
+  const tick = async () => {
+    await loadCallResolve()
+    const stillSearching = callRows(b).some((r) => r.status === 'searching')
+    if (stillSearching && tries++ < 20) setTimeout(tick, 3000)
+  }
+  setTimeout(tick, 1500)
 }
 
 // codeRequested guards against re-fetching the source of a block we've already
@@ -626,6 +813,35 @@ function commentScope() {
 watch(
   () => [state.selected, state.mode, state.change, state.gran, state.blocks, curBlock() && curBlock().code],
   () => setCommentScope(commentScope()),
+)
+
+// Bridge state → RelatedPanel's underlying-code card. Same reasoning as the
+// comment-scope watch above, and the getter must follow the *same* rule: list the
+// navigation state INLINE. Burying every reactive read inside relatedChildren()/
+// unresolvedCalls() (as this watch used to) does NOT reliably re-subscribe the
+// watch — its early-returns (b undefined at first load, `resolved.length === 0`,
+// scope short-circuits) mean the settled run reads a different, smaller dep set,
+// and the panel then freezes on whatever block was selected at load: it never
+// re-fires as the cursor moves to another block. Listing state.selected/mode/
+// change/gran (+ the block lists, callResolve, relations, and the selected block's
+// lazily-loaded code) inline guarantees the re-fire; the children are then computed
+// in the *callback* (untracked), which also keeps it off the panel's render binding
+// — computing them there would subscribe that binding to `b.code` and race with
+// home.mjs' own diff render over the same `b.code`, leaving the diff stuck on
+// "loading". setRelated pushes the fresh list into the panel.
+watch(
+  () => [
+    state.selected,
+    state.mode,
+    state.change,
+    state.gran,
+    state.blocks,
+    state.allBlocks,
+    state.relations,
+    state.callResolve,
+    curBlock() && curBlock().code,
+  ],
+  () => setRelated(relatedChildren(), unresolvedCalls()),
 )
 
 // approveNoun names what an approve action *right now* covers, for the label: the
@@ -1031,6 +1247,13 @@ function onKeydown(e) {
       e.preventDefault()
       openMenu('comment')
     }
+    // Enter on the Onderliggende-code block, when there are calls the Go resolver
+    // could not pin, kicks off the LLM search (Haiku → Sonnet). Nothing to resolve
+    // → Enter does nothing here.
+    if (e.key === 'Enter' && isCodeFocused() && unresolvedCalls().some((r) => r.status === 'unresolved')) {
+      e.preventDefault()
+      startCallSearch()
+    }
     return
   }
 
@@ -1317,7 +1540,7 @@ function DetailPanel(state) {
         return out
       }}
       </div>
-      ${() => RelatedPanel(state, commentTarget, relatedChildren).key('related-panel')}
+      ${() => RelatedPanel(state, commentTarget, { startCallSearch }).key('related-panel')}
       ${() => (menu.open ? menuOverlay().key('command-overlay') : '')}
     </main>
   `

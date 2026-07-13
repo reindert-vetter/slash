@@ -29,7 +29,32 @@ import { highlight } from './Block.mjs'
 // reads cs and reliably re-renders on cs changes, whereas reading home.mjs'
 // `state` across the module boundary from inside this list binding did not
 // retrigger it. home.mjs bridges state→cs.scope with an arrow.js watch.
-const cs = reactive({ pr: null, list: [], view: [], sel: 0, composing: false, busy: false, focus: null, threadPos: 0, scope: null, scopeSig: '' })
+// codeSel indexes the selected underlying-code child while cs.focus === 'code':
+// → walks it forward through the child list, ↓ leaves it for the comments column.
+const cs = reactive({ pr: null, list: [], view: [], sel: 0, composing: false, busy: false, focus: null, threadPos: 0, scope: null, scopeSig: '', codeSel: 0 })
+
+// ── Underlying code, pushed from home.mjs ─────────────────────────────────────
+// The underlying-code card follows the cursor: which child blocks / resolved
+// calls to show depends on the current navigation unit, which lives in home.mjs'
+// `state`. Rather than read that reactive `state` (and the selected block's
+// lazily-loaded `b.code`) from inside this panel's render binding — which races
+// with home.mjs' own diff render over `b.code` and can leave the diff stuck on
+// "loading" — home.mjs computes the list in a `watch` and pushes it here via
+// setRelated (the same decoupling the comment index uses with setCommentScope).
+// `rc` is this module's own reactive so the render reliably re-runs on a push.
+const rc = reactive({ children: [], unresolved: [] })
+
+// setRelated receives the freshly-scoped underlying-code children + the
+// unresolved-call list from home.mjs (via a watch on the navigation state) and
+// stores them on rc. Always reassigns (never mutates in place) so arrow.js
+// re-renders the keyed card list.
+export function setRelated(children, unresolved) {
+  rc.children = Array.isArray(children) ? children : []
+  rc.unresolved = Array.isArray(unresolved) ? unresolved : []
+  // A block switch (or a shrinking list) must not leave the child cursor on a
+  // stale index; snap it back to the first block.
+  if (cs.codeSel >= rc.children.length) cs.codeSel = 0
+}
 
 // ── Index scoping (filter by the selected navigation unit) ────────────────────
 // The index shows only the comments *under* what's selected in the diff: a whole
@@ -128,11 +153,18 @@ export function relatedActive() {
   return cs.focus !== null
 }
 
-// enterRelated hands the keyboard to the panel, starting on the related-code
-// block (the light-blue-bordered card). Called by home.mjs on → from the diff.
+// isCodeFocused reports whether the keyboard is on the Onderliggende-code block
+// (so home.mjs can wire Enter there to the LLM call-search).
+export function isCodeFocused() {
+  return cs.focus === 'code'
+}
+
+// enterRelated hands the keyboard to the panel, starting on the first
+// underlying-code child. Called by home.mjs on → from the diff.
 export function enterRelated() {
   cs.composing = false
   cs.focus = 'code'
+  cs.codeSel = 0
 }
 
 // exitRelated releases the keyboard back to the diff and drops any input focus /
@@ -284,6 +316,27 @@ export function handleRelatedKey(key) {
       focusThread()
     } else if (key === 'ArrowLeft') {
       toComment()
+    }
+    return true
+  }
+  if (cs.focus === 'code') {
+    // The code card is a vertical stack the reviewer walks with ↑/↓: ↓ steps to
+    // the next child (leaving for the comments column once past the last), ↑ steps
+    // to the previous (popping out to the diff from the first). ← always returns
+    // to the code being reviewed (the diff on the left).
+    const n = rc.children.length
+    if (key === 'ArrowDown') {
+      if (cs.codeSel < n - 1) cs.codeSel += 1
+      else gotoRow(1)
+    } else if (key === 'ArrowUp') {
+      if (cs.codeSel > 0) cs.codeSel -= 1
+      else {
+        exitRelated()
+        return 'exit'
+      }
+    } else if (key === 'ArrowLeft') {
+      exitRelated()
+      return 'exit'
     }
     return true
   }
@@ -725,13 +778,20 @@ function commentsSection(state, commentTarget) {
 // (GET /api/relations), which lazily loads each child's code.
 
 // KIND_LABEL names the relation on a child card.
-const KIND_LABEL = { event_listener: 'listener' }
+const KIND_LABEL = { event_listener: 'listener', method_call: 'aanroep' }
 
 // relatedCard renders one child block: a header (label + file:line + relation
 // kind) and a short, non-interactive code excerpt highlighted like the panes.
-function relatedCard(r) {
+function relatedCard(r, i) {
+  const selected = () => cs.focus === 'code' && i === cs.codeSel
   return html`
-    <div class="rounded-lg border border-slate-200 bg-slate-50/60" data-testid="related-item">
+    <div
+      class="${() =>
+        'rounded-lg border bg-slate-50/60 ' +
+        (selected() ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-200')}"
+      data-testid="related-item"
+      data-active="${() => (selected() ? 'true' : 'false')}"
+    >
       <div class="flex items-baseline gap-2 border-b border-slate-100 px-3 py-1.5">
         <span class="truncate font-mono text-xs font-semibold text-slate-700">${r.label}</span>
         ${() =>
@@ -741,6 +801,14 @@ function relatedCard(r) {
                 >${KIND_LABEL[r.kind]}</span
               >`
             : ''}
+        ${() =>
+          r.source
+            ? html`<span
+                class="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-600"
+                title="Gevonden door een LLM"
+                >bron: ${r.source}</span
+              >`
+            : ''}
         <span class="ml-auto shrink-0 font-mono text-[10px] text-slate-400"
           >${r.file}:${r.line}</span
         >
@@ -748,7 +816,7 @@ function relatedCard(r) {
       ${() =>
         r.code
           ? html`<code
-              class="language-php m-0 block overflow-x-auto whitespace-pre px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700"
+              class="language-php m-0 block whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700"
               .innerHTML="${() => highlight(r.code)}"
             ></code>`
           : html`<p class="px-3 py-2 text-[11px] text-slate-400">code laden…</p>`}
@@ -756,13 +824,39 @@ function relatedCard(r) {
   `
 }
 
+// stepHint is the little → (next block) / ↓ (jump to comments) glyph pair shown
+// just below the first child block, hinting at the two moves available while the
+// code card owns the keyboard — brighter when focused.
+function stepHint() {
+  return html`
+    <div
+      class="${() =>
+        'flex items-center gap-2 pl-1 text-xs leading-none ' +
+        (cs.focus === 'code' ? 'text-indigo-400' : 'text-slate-300')}"
+      data-testid="related-hint"
+      title="→ volgend blok · ↓ naar comments"
+    >
+      <span>→</span>
+      <span>↓</span>
+    </div>
+  `
+}
+
 // RelatedPanel — the fixed-width right column: the selected block's underlying
 // (child) code on top, live comments below. `commentTarget` (from home.mjs)
 // reports what an in-progress comment would attach to at the current navigation
-// granularity; passed through to the composer. `children` (also from home.mjs)
-// returns the descriptors of the selected block's child blocks.
-export default function RelatedPanel(state, commentTarget, children) {
-  const kids = () => (children ? children() : [])
+// granularity; passed through to the composer. The underlying-code children +
+// the unresolved-call list are read from `rc`, which home.mjs keeps up to date
+// via setRelated (see the note on rc above). `search.startCallSearch` launches
+// the LLM search for the currently-shown unresolved calls.
+export default function RelatedPanel(state, commentTarget, search) {
+  const kids = () => rc.children
+  // Calls the Go resolver could not pin (status unresolved) + any in flight
+  // (searching). Drives the "Zoek" button and the "zoeken…" spinner.
+  const unresolved = () => rc.unresolved
+  const pending = () => unresolved().filter((r) => r.status === 'unresolved').length
+  const searching = () => unresolved().some((r) => r.status === 'searching')
+  const runSearch = () => search && search.startCallSearch && search.startCallSearch()
   return html`
     <aside class="flex w-[38rem] min-h-0 shrink-0 flex-col gap-3" data-testid="related-panel">
       <section
@@ -773,16 +867,54 @@ export default function RelatedPanel(state, commentTarget, children) {
             : 'border-slate-300 ring-black/5')}"
         data-testid="related-code"
       >
-        <div class="border-b border-slate-100 px-4 py-2.5">
-          <h2 class="text-sm font-semibold text-slate-800">Onderliggende code</h2>
-          <p class="text-[11px] text-slate-400">Code die dit blok aanroept</p>
+        <div class="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5">
+          <div class="min-w-0">
+            <h2 class="text-sm font-semibold text-slate-800">Onderliggende code</h2>
+            <p class="text-[11px] text-slate-400">Code die dit blok aanroept</p>
+          </div>
+          ${() =>
+            searching()
+              ? html`<span
+                  class="ml-auto shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-400"
+                  data-testid="related-searching"
+                  >zoeken…</span
+                >`
+              : pending() > 0
+                ? html`<button
+                    type="button"
+                    class="ml-auto shrink-0 rounded-md border border-dashed border-indigo-300 px-2 py-1 text-[11px] font-medium text-indigo-500 hover:bg-indigo-50"
+                    data-testid="related-search"
+                    @click="${runSearch}"
+                    title="Zoek de niet-gevonden aanroepen met AI (Haiku, dan Sonnet)"
+                  >
+                    Zoek (${pending()})
+                  </button>`
+                : ''}
         </div>
         <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
-          ${() => kids().map((r) => relatedCard(r).key('related:' + r.id))}
-          ${() =>
-            kids().length === 0
+          ${() => {
+            // The first child sits flush (no .key(): a lone keyed node outside an
+            // array makes arrow.js cache-persist it and the panel stops tracking
+            // the selected block — keys only reconcile inside a mapped array).
+            const ks = kids()
+            return ks.length === 0
               ? html`<p class="px-1 py-2 text-[11px] text-slate-400">Geen onderliggende code.</p>`
-              : null}
+              : relatedCard(ks[0], 0)
+          }}
+          ${() => {
+            // Just below the first block sits a → / ↓ arrow hint (→ = next block,
+            // ↓ = jump to comments); the rest are indented beneath it so the list
+            // reads as a walkable stack.
+            const rest = kids().slice(1)
+            return rest.length
+              ? html`<div class="flex flex-col gap-2">
+                  ${stepHint()}
+                  <div class="flex min-w-0 flex-col gap-2 pl-4">
+                    ${rest.map((r, k) => relatedCard(r, k + 1).key('related:' + r.id))}
+                  </div>
+                </div>`
+              : null
+          }}
         </div>
       </section>
 

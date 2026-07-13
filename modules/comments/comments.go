@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS comments (
   label          TEXT NOT NULL DEFAULT '',
   row_start      INTEGER NOT NULL DEFAULT -1,
   row_end        INTEGER NOT NULL DEFAULT -1,
-  seg            TEXT NOT NULL DEFAULT ''
+  seg            TEXT NOT NULL DEFAULT '',
+  path           TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS reactions (
@@ -75,9 +76,16 @@ type Comment struct {
 	// are inclusive row indices into blockRows; Seg identifies the one call
 	// segment for a 'call'-granularity comment (empty otherwise). RowStart < 0
 	// means "unknown" (legacy/seeded comment) — always shown within its block.
-	RowStart  int        `json:"rowStart"`
-	RowEnd    int        `json:"rowEnd"`
-	Seg       string     `json:"seg,omitempty"`
+	RowStart int    `json:"rowStart"`
+	RowEnd   int    `json:"rowEnd"`
+	Seg      string `json:"seg,omitempty"`
+	// Path is the hierarchical address the comment hangs on, from PR down to the
+	// exact code reference:  /pr-<pr>/<file>/<label>/<codeRef>/comment-<id>. It's
+	// built by the workflow (deterministic from the input + Run ID, see
+	// commentPath in workflows.go) and indexed, so a prefix match finds every
+	// comment under a scope: /pr-123 (whole PR), /pr-123/<file> (one file),
+	// …/<label> (one block), …/<codeRef> (one navigation unit).
+	Path      string     `json:"path,omitempty"`
 	Reactions []Reaction `json:"reactions,omitempty"`
 }
 
@@ -130,9 +138,14 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE comments ADD COLUMN row_start INTEGER NOT NULL DEFAULT -1`,
 		`ALTER TABLE comments ADD COLUMN row_end INTEGER NOT NULL DEFAULT -1`,
 		`ALTER TABLE comments ADD COLUMN seg TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE comments ADD COLUMN path TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
+	// Index the path only after the column is guaranteed to exist (the ADD COLUMN
+	// above runs first). Kept out of the main schema so applying it to an existing
+	// DB — where the column is added here, not by CREATE TABLE — can't error.
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_comments_path ON comments(path)`)
 }
 
 func (m *Module) Close() error { return m.db.Close() }
@@ -149,13 +162,13 @@ func (m *Module) Save(ctx context.Context, c Comment) error {
 	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO comments
-		   (id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg)
+		   (id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path)
 		 VALUES (?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT reaction_count FROM comments WHERE id = ?), 0),
 		   COALESCE((SELECT status FROM comments WHERE id = ?), ?),
-		   ?,?,?,?,?,?)`,
+		   ?,?,?,?,?,?,?)`,
 		c.ID, c.RunID, c.PR, c.File, c.Line, c.Author, c.Body, c.CreatedAt, c.ID, c.ID, c.Status,
-		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg)
+		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg, c.Path)
 	return err
 }
 
@@ -214,12 +227,32 @@ func (m *Module) Delete(ctx context.Context, id string) error {
 // List returns the comments of one PR (or all PRs if pr <= 0), each with its
 // reactions. READ — safe for the UI.
 func (m *Module) List(ctx context.Context, pr int) ([]Comment, error) {
-	q := `SELECT id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg
-	      FROM comments`
-	var args []any
 	if pr > 0 {
-		q += ` WHERE pr = ?`
-		args = append(args, pr)
+		return m.query(ctx, `WHERE pr = ?`, pr)
+	}
+	return m.query(ctx, ``)
+}
+
+// Search returns every comment whose Path starts with prefix, each with its
+// reactions — a prefix match over the hierarchical address, so "/pr-123" finds
+// the whole PR, "/pr-123/app/Foo.php" one file, and so on. An empty prefix
+// returns everything. READ — safe for the UI.
+func (m *Module) Search(ctx context.Context, prefix string) ([]Comment, error) {
+	if prefix == "" {
+		return m.query(ctx, ``)
+	}
+	// Escape LIKE wildcards in the prefix so it matches literally, then append %.
+	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(prefix)
+	return m.query(ctx, `WHERE path LIKE ? ESCAPE '\'`, esc+"%")
+}
+
+// query runs the comment select with an optional WHERE clause + args and
+// attaches each comment's reactions. Shared by List and Search.
+func (m *Module) query(ctx context.Context, where string, args ...any) ([]Comment, error) {
+	q := `SELECT id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path
+	      FROM comments`
+	if where != "" {
+		q += ` ` + where
 	}
 	q += ` ORDER BY created_at`
 	rows, err := m.db.QueryContext(ctx, q, args...)
@@ -234,7 +267,7 @@ func (m *Module) List(ctx context.Context, pr int) ([]Comment, error) {
 		var c Comment
 		if err := rows.Scan(&c.ID, &c.RunID, &c.PR, &c.File, &c.Line, &c.Author,
 			&c.Body, &c.CreatedAt, &c.ReactionCount, &c.Status, &c.Code, &c.Gran, &c.Label,
-			&c.RowStart, &c.RowEnd, &c.Seg); err != nil {
+			&c.RowStart, &c.RowEnd, &c.Seg, &c.Path); err != nil {
 			return nil, err
 		}
 		byID[c.ID] = len(out)

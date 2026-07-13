@@ -45,6 +45,42 @@ func TestSetStatus(t *testing.T) {
 	}
 }
 
+func TestSearchByPathPrefix(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	seed := []Comment{
+		{ID: "a", RunID: "a", PR: 123, File: "app/Foo.php", Body: "1", Path: "/pr-123/app/Foo.php/Foo::bar/group-5-9/comment-a"},
+		{ID: "b", RunID: "b", PR: 123, File: "app/Foo.php", Body: "2", Path: "/pr-123/app/Foo.php/Foo::bar/line-7/comment-b"},
+		{ID: "c", RunID: "c", PR: 123, File: "app/Other.php", Body: "3", Path: "/pr-123/app/Other.php/Other::baz/line-3/comment-c"},
+		{ID: "d", RunID: "d", PR: 456, File: "app/Foo.php", Body: "4", Path: "/pr-456/app/Foo.php/Foo::bar/line-1/comment-d"},
+	}
+	for _, c := range seed {
+		if err := m.Save(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cases := []struct {
+		prefix string
+		want   int
+	}{
+		{"/pr-123", 3},                             // whole PR
+		{"/pr-123/app/Foo.php", 2},                 // one file
+		{"/pr-123/app/Foo.php/Foo::bar/group-5-9", 1}, // one unit
+		{"/pr-456", 1},
+		{"/pr-999", 0},
+	}
+	for _, tc := range cases {
+		got, err := m.Search(ctx, tc.prefix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != tc.want {
+			t.Errorf("Search(%q) = %d comments, want %d", tc.prefix, len(got), tc.want)
+		}
+	}
+}
+
 func TestDeleteCascadesReactions(t *testing.T) {
 	m := openTest(t)
 	ctx := context.Background()

@@ -27,7 +27,7 @@ export default defineConfig({
       'rm -f tests/.tmp/*.db tests/.tmp/*.db-wal tests/.tmp/*.db-shm && ' +
       'rm -rf tests/.tmp/workflows && ' +
       'tests/.tmp/slash seed -db tests/.tmp/test.db -from tests/fixtures/blocks.json && ' +
-      'tests/.tmp/slash seed -db tests/.tmp/test.db -from tests/fixtures/relations-blocks.json -relations tests/fixtures/relations.json && ' +
+      'tests/.tmp/slash seed -db tests/.tmp/test.db -from tests/fixtures/relations-blocks.json -relations tests/fixtures/relations.json -callresolve tests/fixtures/callresolve.json && ' +
       `SLASH_GITHUB=off SLASH_INBOX=tests/fixtures/inbox.json tests/.tmp/slash -db tests/.tmp/test.db -addr 127.0.0.1:${PORT} -static .`,
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,

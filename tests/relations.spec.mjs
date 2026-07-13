@@ -24,4 +24,46 @@ test.describe('PR Review Tree — block relations', () => {
     await expect(child).toContainText('SendOrderMail::handle')
     await expect(child).toContainText('app/Listeners/SendOrderMail.php')
   })
+
+  // The "Onderliggende code" panel must FOLLOW the selected block. PR 91 has two
+  // independent caller blocks (AlphaAction::run, BetaAction::run), each with its own
+  // seeded resolved method-call child (tests/fixtures/callresolve.json); selecting a
+  // different block must swap the panel to that block's child.
+  //
+  // This guards the contract broken by a real bug: the panel used to freeze on
+  // whichever block was selected at page load and never follow the cursor. That was
+  // an arrow.js reactivity artifact — the watch feeding setRelated buried its reads
+  // inside relatedChildren()/unresolvedCalls() (which have early-returns), so its
+  // settled dependency set dropped state.selected and it stopped re-firing. The fix
+  // lists the navigation state inline in the watch getter (see home.mjs). NB: the
+  // freeze itself only manifests with real-data load timing (callResolve + code
+  // arriving in separate ticks), so this fixture test checks the behaviour, not that
+  // exact timing; the fix was verified end-to-end against a real PR.
+  test('the underlying-code panel follows the selected block (does not freeze)', async ({
+    page,
+  }) => {
+    await page.goto('/pr/91')
+
+    const rows = page.getByTestId('block-row')
+    await expect(rows).toHaveCount(2)
+    const alpha = rows.filter({ hasText: 'AlphaAction::run' })
+    const beta = rows.filter({ hasText: 'BetaAction::run' })
+
+    // Select Alpha → its resolved call (and only its call) shows in the panel.
+    await alpha.click()
+    const item = page.getByTestId('related-item')
+    await expect(item).toHaveCount(1)
+    await expect(item).toContainText('AlphaTarget::resolveAlpha')
+
+    // Selecting Beta must swap the panel to Beta's call — not stay on Alpha's.
+    await beta.click()
+    await expect(item).toHaveCount(1)
+    await expect(item).toContainText('BetaTarget::resolveBeta')
+    await expect(page.getByTestId('related-code')).not.toContainText('AlphaTarget')
+
+    // And back again, to prove it tracks in both directions.
+    await alpha.click()
+    await expect(item).toContainText('AlphaTarget::resolveAlpha')
+    await expect(page.getByTestId('related-code')).not.toContainText('BetaTarget')
+  })
 })

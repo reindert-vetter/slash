@@ -218,6 +218,74 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(thread.getByTestId('comment-target')).toHaveCount(0)
   })
 
+  // The Onderliggende-code card is a walkable vertical stack: → (from the diff)
+  // lands on the first child, ↓ steps to the next child (leaving for the comments
+  // column once past the last), ↑ steps back (popping out to the diff from the
+  // first), and ← returns to the code being reviewed. The first child sits flush;
+  // the 2nd+ are indented under a →/↓ hint. Mount RelatedPanel directly with mock
+  // children + drive the exported nav functions so the test is independent of the
+  // fixture's child count.
+  // See RelatedPanel (enterRelated / handleRelatedKey / relatedCard / stepHint).
+  test('↑/↓ walk the underlying-code children, ↓ leaves for comments', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+    await page.evaluate(async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const mod = await import('/src/RelatedPanel.mjs')
+      const state = reactive({ pr: 12903, blocks: [], allBlocks: [], selected: 0 })
+      const host = document.createElement('div')
+      host.id = 'related-host'
+      document.body.appendChild(host)
+      mod.default(state, () => null, { startCallSearch: () => {} })(host)
+      // Three children so we can prove → advances and then clamps on the last.
+      const kids = [0, 1, 2].map((i) => ({
+        id: 'c' + i,
+        label: 'Foo::m' + i,
+        file: 'app/Foo.php',
+        line: 10 + i,
+        kind: 'method_call',
+        code: 'public function m' + i + '() {}',
+      }))
+      mod.setRelated(kids, [])
+      window.__rp = mod
+    })
+
+    const host = page.locator('#related-host')
+    const items = host.getByTestId('related-item')
+    const activeAt = (i) => expect(items.nth(i)).toHaveAttribute('data-active', 'true')
+    const inactiveAt = (i) => expect(items.nth(i)).toHaveAttribute('data-active', 'false')
+    const key = (k) => page.evaluate((k) => window.__rp.handleRelatedKey(k), k)
+
+    await expect(items).toHaveCount(3)
+    // The →/↓ hint sits just below the first child; the 2nd+ are indented under it.
+    await expect(host.getByTestId('related-hint')).toBeVisible()
+
+    // Enter from the diff → first child selected.
+    await page.evaluate(() => window.__rp.enterRelated())
+    await activeAt(0)
+    await inactiveAt(1)
+
+    // ↓ advances one child at a time…
+    await key('ArrowDown')
+    await activeAt(1)
+    await key('ArrowDown')
+    await activeAt(2)
+
+    // ↑ steps back up the stack.
+    await key('ArrowUp')
+    await activeAt(1)
+    await key('ArrowDown')
+    await activeAt(2)
+
+    // ↓ past the last child leaves for the comments column: no child stays selected.
+    await key('ArrowDown')
+    await inactiveAt(0)
+    await inactiveAt(2)
+    await expect(host.getByTestId('new-comment')).toHaveClass(/border-indigo-400/)
+  })
+
   // Selection granularity: f refines group → line → call, d coarsens back. See
   // home.mjs (setGran/GRANS/unitsFor) + Block.mjs (changeLines/changeCalls).
   test('changeLines and changeCalls split a group into lines then call segments', async ({
@@ -300,6 +368,44 @@ test.describe('PR Review Tree — change navigation', () => {
     // The first caller's tail ends at `??`, never spanning across it.
     expect(segs.some((s) => s.includes('??') && s !== '?? $contract')).toBe(false)
     expect(segs).toContain('->company')
+  })
+
+  // A call is split into the caller name and each of its arguments, and a string
+  // argument (with a `.` inside, PHP concatenation) is never cut — segmentCalls
+  // treats strings as opaque and splits only at the outermost `(` / argument `,`.
+  test('changeCalls splits a call into caller name + each argument, keeping strings whole', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+    const segs = await page.evaluate(async () => {
+      const { changeCalls } = await import('/src/Block.mjs')
+      const rows = [
+        {
+          left: "$couple->where('type', $mapping[$type]);",
+          right: "$couple->orWhere('contracts.type', $mapping[$type]);",
+          leftMark: 'del',
+          rightMark: 'ins',
+        },
+      ]
+      // The trimmed text each unit underlines on the new (right) side.
+      return changeCalls(rows).map((u) =>
+        rows[0].right
+          .split('')
+          .filter((_, i) => u.right.has(i))
+          .join('')
+          .trim(),
+      )
+    })
+    // Caller name, then each parameter on its own — the `.` inside the string
+    // argument stays whole (regression guard).
+    expect(segs).toEqual([
+      '$couple',
+      '->orWhere(',
+      "'contracts.type',",
+      '$mapping[$type]);',
+    ])
+    expect(segs).toContain("'contracts.type',")
   })
 
   test('a call-granularity unit underlines only its segment (indigo), not the rest', async ({

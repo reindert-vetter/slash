@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/reindert-vetter/tembed"
+	"slash/modules/callresolve"
+	"slash/modules/claude"
 	"slash/modules/comments"
 	"slash/modules/github"
 	"slash/modules/inbox"
@@ -20,12 +22,13 @@ import (
 // tasks holds the workflow engine + the module read sides. It is built once at
 // server start.
 type tasks struct {
-	engine    *tembed.Engine
-	manager   *TaskManager
-	comments  *comments.Module
-	inbox     *inbox.Module
-	relations *relations.Module
-	prmeta    *prmeta.Module
+	engine      *tembed.Engine
+	manager     *TaskManager
+	comments    *comments.Module
+	inbox       *inbox.Module
+	relations   *relations.Module
+	prmeta      *prmeta.Module
+	callresolve *callresolve.Module
 }
 
 // newTasks builds the tembed engine (SQLite + JSONL, so comments live in the
@@ -69,6 +72,15 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, fu
 		rel.Close()
 		return nil, nil, err
 	}
+	cr, err := callresolve.Open(dataDir + "/callresolve.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -76,7 +88,13 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, fu
 	if os.Getenv("SLASH_GITHUB") == "off" {
 		gh = &github.Fake{}
 	}
-	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, db, dataDir, repo)
+	// Under SLASH_CLAUDE=off the LLM resolver never shells out — an empty Fake
+	// resolves nothing (offline/tests). Otherwise use the real claude CLI.
+	var cl claude.Client = claude.New()
+	if os.Getenv("SLASH_CLAUDE") == "off" {
+		cl = claude.NewFake()
+	}
+	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, cl, db, dataDir, repo)
 
 	if err := engine.Recover(); err != nil {
 		return nil, nil, err
@@ -91,9 +109,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, fu
 		_ = ib.Close()
 		_ = rel.Close()
 		_ = pm.Close()
+		_ = cr.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -137,6 +156,8 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET  /api/workflows/{runID}                       → execution status
 	mux.HandleFunc("/api/workflows/", s.handleWorkflows)
 	mux.HandleFunc("/api/workflows/task_code_comment", s.handleTaskCodeComment)
+	// POST /api/workflows/resolve_call → start an LLM call-resolution execution
+	mux.HandleFunc("/api/workflows/resolve_call", s.handleResolveCall)
 	// POST /api/workflows/pr_status {pr} → ensure the per-PR lifecycle tracker
 	// (its start fetches the PR's metadata into the prmeta read-model).
 	mux.HandleFunc("/api/workflows/pr_status", s.handlePRStatusStart)
@@ -147,6 +168,9 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	mux.HandleFunc("/api/comments", s.handleComments)
 	// GET /api/relations?pr=N → read-only block relations (edges) for the UI
 	mux.HandleFunc("/api/relations", s.handleRelations)
+	// GET /api/callresolve?pr=N → read-only call-resolution read-model (Go +
+	// LLM-resolved definitions, and the unresolved calls behind the "Zoek" button)
+	mux.HandleFunc("/api/callresolve", s.handleCallResolve)
 	// The inbox is owned by the pr_inbox workflow; these endpoints read its
 	// read-model (never GitHub directly).
 	mux.HandleFunc("/api/inbox", s.handleInbox)
@@ -195,7 +219,7 @@ func (s *server) handleTaskCodeComment(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" {
 		http.NotFound(w, r)
 		return
 	}
@@ -304,11 +328,22 @@ func (s *server) handleComments(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	pr := 0
-	if v := r.URL.Query().Get("pr"); v != "" {
-		pr, _ = strconv.Atoi(v)
+	// ?path=<prefix> does a hierarchical prefix search over the comment paths
+	// (e.g. /pr-123 for a whole PR, /pr-123/app/Foo.php for one file); ?pr=N is
+	// the plain per-PR list. Both are read-only.
+	var (
+		list []comments.Comment
+		err  error
+	)
+	if prefix := r.URL.Query().Get("path"); prefix != "" {
+		list, err = s.tasks.comments.Search(r.Context(), prefix)
+	} else {
+		pr := 0
+		if v := r.URL.Query().Get("pr"); v != "" {
+			pr, _ = strconv.Atoi(v)
+		}
+		list, err = s.tasks.comments.List(r.Context(), pr)
 	}
-	list, err := s.tasks.comments.List(r.Context(), pr)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -337,6 +372,53 @@ func (s *server) handleRelations(w http.ResponseWriter, r *http.Request) {
 	}
 	if list == nil {
 		list = []relations.Relation{}
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// handleResolveCall starts an LLM call-resolution Workflow Execution (POST). It
+// is the sanctioned UI write path for the "Zoek" action — the workflow runs
+// Haiku, escalates to Sonnet if needed, and writes the callresolve read-model.
+func (s *server) handleResolveCall(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in ResolveCallInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 || in.CallerID == "" || len(in.Calls) == 0 {
+		http.Error(w, "invalid resolve request", http.StatusBadRequest)
+		return
+	}
+	if strings.Contains(in.CallerFile, "..") {
+		http.Error(w, "invalid file", http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.StartResolveCall(in)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleCallResolve serves GET /api/callresolve?pr=N — the read-only
+// call-resolution read-model (resolved/found definitions + unresolved calls).
+func (s *server) handleCallResolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr := 0
+	if v := r.URL.Query().Get("pr"); v != "" {
+		pr, _ = strconv.Atoi(v)
+	}
+	list, err := s.tasks.callresolve.List(r.Context(), pr)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []callresolve.Entry{}
 	}
 	writeJSON(w, http.StatusOK, list)
 }

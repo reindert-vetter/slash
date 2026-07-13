@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PR Review Tree</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌳</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       /* Keep programmatic scrolling (scrollIntoView for keyboard nav) but hide
@@ -16,68 +17,71 @@
         display: none;
       }
 
-      /* Prism token colours only — scoped to the code panes. We deliberately drop
-         Prism's own container rules (padding/background/margins on
-         pre|code[class*=language-]) so they can't fight the Tailwind layout in
-         Block.mjs; only the syntax colours come from the vendored theme.
+      /* Prism token colours only — scoped to every Prism code excerpt via the
+         `.language-php` class it always carries (the diff panes in Block.mjs, the
+         Onderliggende-code cards + comment hint in RelatedPanel.mjs, the footer),
+         so all of them share one palette. We deliberately drop Prism's own
+         container rules (padding/background/margins on pre|code[class*=language-])
+         so they can't fight the Tailwind layout; only the syntax colours come from
+         the vendored theme.
 
          Higher-contrast light palette (GitHub-light inspired): each category gets
          a clearly distinct, saturated hue so variables, keywords, functions,
          strings and numbers pull apart at a glance instead of blending into the
          muted default (magenta props ~= numbers, olive strings, brown operators). */
-      [data-testid='code-diff'] .token.comment,
-      [data-testid='code-diff'] .token.prolog,
-      [data-testid='code-diff'] .token.doctype,
-      [data-testid='code-diff'] .token.cdata {
+      .language-php .token.comment,
+      .language-php .token.prolog,
+      .language-php .token.doctype,
+      .language-php .token.cdata {
         color: #6a737d; /* gray — recedes */
         font-style: italic;
       }
-      [data-testid='code-diff'] .token.punctuation {
+      .language-php .token.punctuation {
         color: #24292e; /* near-black, not washed-out gray */
       }
-      [data-testid='code-diff'] .token.namespace {
+      .language-php .token.namespace {
         opacity: 0.7;
       }
       /* object properties / accessors & variables — their own steady orange, no
          longer the same magenta as numbers, so `->id`/`$order` read as one kind */
-      [data-testid='code-diff'] .token.property,
-      [data-testid='code-diff'] .token.variable,
-      [data-testid='code-diff'] .token.regex,
-      [data-testid='code-diff'] .token.tag,
-      [data-testid='code-diff'] .token.symbol,
-      [data-testid='code-diff'] .token.deleted {
+      .language-php .token.property,
+      .language-php .token.variable,
+      .language-php .token.regex,
+      .language-php .token.tag,
+      .language-php .token.symbol,
+      .language-php .token.deleted {
         color: #e36209; /* orange */
       }
-      [data-testid='code-diff'] .token.boolean,
-      [data-testid='code-diff'] .token.number,
-      [data-testid='code-diff'] .token.constant {
+      .language-php .token.boolean,
+      .language-php .token.number,
+      .language-php .token.constant {
         color: #005cc5; /* blue */
       }
-      [data-testid='code-diff'] .token.selector,
-      [data-testid='code-diff'] .token.attr-name,
-      [data-testid='code-diff'] .token.string,
-      [data-testid='code-diff'] .token.char,
-      [data-testid='code-diff'] .token.builtin,
-      [data-testid='code-diff'] .token.inserted {
+      .language-php .token.selector,
+      .language-php .token.attr-name,
+      .language-php .token.string,
+      .language-php .token.char,
+      .language-php .token.builtin,
+      .language-php .token.inserted {
         color: #22863a; /* green */
       }
-      [data-testid='code-diff'] .token.operator,
-      [data-testid='code-diff'] .token.entity,
-      [data-testid='code-diff'] .token.url,
-      [data-testid='code-diff'] .token.atrule,
-      [data-testid='code-diff'] .token.attr-value,
-      [data-testid='code-diff'] .token.keyword {
+      .language-php .token.operator,
+      .language-php .token.entity,
+      .language-php .token.url,
+      .language-php .token.atrule,
+      .language-php .token.attr-value,
+      .language-php .token.keyword {
         color: #d73a49; /* red — keywords & operators */
       }
-      [data-testid='code-diff'] .token.function,
-      [data-testid='code-diff'] .token.class-name {
+      .language-php .token.function,
+      .language-php .token.class-name {
         color: #6f42c1; /* purple — calls & types */
       }
-      [data-testid='code-diff'] .token.important,
-      [data-testid='code-diff'] .token.bold {
+      .language-php .token.important,
+      .language-php .token.bold {
         font-weight: 700;
       }
-      [data-testid='code-diff'] .token.italic {
+      .language-php .token.italic {
         font-style: italic;
       }
     </style>

@@ -69,7 +69,7 @@ func newTestManager(t *testing.T) (*TaskManager, *github.Fake, *comments.Module)
 	t.Cleanup(func() { cs.Close() })
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, "", "test/repo")
 	m.interval = 3 * time.Millisecond // fast poll for the test
 	m.idle = 3 * time.Millisecond     // idle cadence too, so tests never wait 10m
 	return m, gh, cs
@@ -318,7 +318,7 @@ func TestPRInboxRefreshPopulatesReadModel(t *testing.T) {
 
 	ib := testInbox(t)
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, ib, testRelations(t), testPRMeta(t), db, "", repoSlug)
+	m := NewTaskManager(engine, &github.Fake{}, nil, ib, testRelations(t), testPRMeta(t), nil, nil, db, "", repoSlug)
 
 	runID, err := engine.StartWorkflow(WorkflowPRInbox, PRInboxInput{Repo: repoSlug})
 	if err != nil {
@@ -364,7 +364,7 @@ func TestTaskSurvivesRestart(t *testing.T) {
 
 	ib := testInbox(t)
 	e1 := tembed.New(store)
-	NewTaskManager(e1, gh, cs, ib, testRelations(t), testPRMeta(t), nil, "", "test/repo")
+	NewTaskManager(e1, gh, cs, ib, testRelations(t), testPRMeta(t), nil, nil, nil, "", "test/repo")
 	runID, err := e1.StartWorkflow(WorkflowTaskCodeComment, CodeCommentInput{PR: 1, File: "a.php", Line: 1, Body: "q"})
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +375,7 @@ func TestTaskSurvivesRestart(t *testing.T) {
 
 	// Restart: a new engine over the same store must not re-post the comment.
 	e2 := tembed.New(store)
-	NewTaskManager(e2, gh, cs, ib, testRelations(t), testPRMeta(t), nil, "", "test/repo")
+	NewTaskManager(e2, gh, cs, ib, testRelations(t), testPRMeta(t), nil, nil, nil, "", "test/repo")
 	if err := e2.Recover(); err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +404,7 @@ func TestPRStatusFetchesMeta(t *testing.T) {
 	gh := &github.Fake{}
 	gh.SetPRMeta(github.Meta{Title: "PS-123 fix the thing", URL: "https://github.com/x/y/pull/7"})
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, "", "test/repo")
 
 	if _, err := m.EnsurePRStatus(7); err != nil {
 		t.Fatal(err)
@@ -418,5 +418,52 @@ func TestPRStatusFetchesMeta(t *testing.T) {
 	}
 	if meta.URL == "" {
 		t.Fatalf("url empty, want stored")
+	}
+}
+
+func TestCommentPath(t *testing.T) {
+	cases := []struct {
+		name string
+		in   CodeCommentInput
+		id   string
+		want string
+	}{
+		{
+			name: "call unit with segment",
+			in:   CodeCommentInput{PR: 123, File: "app/Actions/Foo.php", Label: "Foo::bar", Gran: "call", RowStart: 7, RowEnd: 7, Seg: "r12-18"},
+			id:   "abc",
+			want: "/pr-123/app/Actions/Foo.php/Foo::bar/call-7-r12-18/comment-abc",
+		},
+		{
+			name: "group unit",
+			in:   CodeCommentInput{PR: 123, File: "app/Foo.php", Label: "Foo::bar", Gran: "group", RowStart: 5, RowEnd: 9},
+			id:   "x",
+			want: "/pr-123/app/Foo.php/Foo::bar/group-5-9/comment-x",
+		},
+		{
+			name: "line unit",
+			in:   CodeCommentInput{PR: 7, File: "a.php", Label: "A::b", Gran: "line", RowStart: 3, RowEnd: 3},
+			id:   "y",
+			want: "/pr-7/a.php/A::b/line-3/comment-y",
+		},
+		{
+			name: "unknown anchor falls back to gran",
+			in:   CodeCommentInput{PR: 9, File: "a.php", Label: "A::b", Gran: "group", RowStart: -1, RowEnd: -1},
+			id:   "z",
+			want: "/pr-9/a.php/A::b/group/comment-z",
+		},
+		{
+			name: "spaces in label are sanitised, slash cannot be injected",
+			in:   CodeCommentInput{PR: 1, File: "a.php", Label: "A::b c/d", Gran: "line", RowStart: 0, RowEnd: 0},
+			id:   "w",
+			want: "/pr-1/a.php/A::b-c-d/line-0/comment-w",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := commentPath(tc.in, tc.id); got != tc.want {
+				t.Errorf("commentPath = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
