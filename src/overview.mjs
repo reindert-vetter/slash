@@ -492,7 +492,7 @@ function stackGroup(chain, sectionOf) {
   const root = chain[0]
   return html`
     <div data-testid="stack">
-      <div class="mb-2 mt-6 flex items-center gap-2 first:mt-0">
+      <div class="mb-2 mt-10 flex items-center gap-2 first:mt-0">
         <span class="text-zinc-500">${icon('git-pull-request', 'h-3.5 w-3.5')}</span>
         <h2 class="text-[13px] font-semibold text-zinc-200">Gestapelde PR's</h2>
         <span class="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[11px] text-zinc-400">${chain.length}</span>
@@ -512,9 +512,8 @@ function sectionBlock(sec, filteredPrs) {
   if (!filteredPrs.length) return null
   return html`
     <section data-testid="section" data-title="${sec.title}">
-      <div class="mb-2 mt-6 flex items-center gap-2 first:mt-0">
-        <h2 class="text-[13px] font-semibold text-zinc-200">${sec.title}</h2>
-        <span class="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[11px] text-zinc-400">${filteredPrs.length}</span>
+      <div class="mb-3 mt-16 flex items-center gap-2 first:mt-6">
+        <h2 class="text-[15px] font-semibold text-zinc-100">${sec.title}</h2>
       </div>
       ${listBox(filteredPrs.map((pr) => ({ pr })))}
     </section>
@@ -712,7 +711,6 @@ function recentDrawer() {
     <div class="mt-8">
       <button
         data-testid="recent"
-        data-nav-row
         class="group flex w-full cursor-pointer items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-left transition-colors hover:bg-zinc-800/40"
         @click="${toggleRecent}"
       >

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"slash/modules/callresolve"
@@ -118,6 +119,240 @@ func TestResolveCallsStatic(t *testing.T) {
 	}
 }
 
+// TestResolveCallsChangedLinesOnly: when a base worktree exists, only calls on
+// lines the PR changed produce entries — a call on an untouched line must not
+// surface as underlying code (that was the unrelated-children bug).
+func TestResolveCallsChangedLinesOnly(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 13
+	baseDir, headDir := worktreeDirs(dataDir, pr)
+	callerBase := `<?php
+namespace App\Services;
+class OrderService {
+    public function build() {
+        $this->prepare();
+        $rows = $q->join('contracts');
+    }
+    public function prepare() {}
+    public function join($t) {}
+}
+`
+	// The head version only changes the ->where line; ->join stays untouched.
+	callerHead := `<?php
+namespace App\Services;
+class OrderService {
+    public function build() {
+        $this->prepare();
+        $rows = $q->join('contracts');
+        $rows->where('type', 'billing');
+    }
+    public function prepare() {}
+    public function join($t) {}
+}
+`
+	for dir, body := range map[string]string{baseDir: callerBase, headDir: callerHead} {
+		p := filepath.Join(dir, "app/Services/OrderService.php")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Services/OrderService.php", Class: "OrderService", Name: "build", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	// join and prepare sit on unchanged lines → no entries, even though both
+	// would statically resolve.
+	for _, key := range []string{"join", "prepare"} {
+		if _, ok := findEntry(entries, key); ok {
+			t.Errorf("call %q sits on an unchanged line but produced an entry", key)
+		}
+	}
+	// where sits on the changed line; nothing in the app defines it → unresolved
+	// (the panel offers the LLM search instead of showing nothing).
+	if e, ok := findEntry(entries, "where"); !ok {
+		t.Error("no entry for call 'where' on the changed line")
+	} else if e.Status != callresolve.StatusUnresolved {
+		t.Errorf("where: status=%q, want unresolved", e.Status)
+	}
+}
+
+// TestResolveCallsEnumCase covers an enum case reference on a changed line —
+// AddressType::BILLING — resolving to the enum declaration.
+func TestResolveCallsEnumCase(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 15
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Http/Controllers/UserV3Controller.php": `<?php
+namespace App\Http\Controllers;
+class UserV3Controller {
+    public function hydrate() {
+        $q->where('type', AddressType::BILLING);
+        $name = AddressType::class;
+    }
+}
+`,
+		"app/Enums/AddressType.php": `<?php
+namespace App\Enums;
+enum AddressType: string
+{
+    case BILLING = 'billing';
+    case SHIPPING = 'shipping';
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Http/Controllers/UserV3Controller.php", Class: "UserV3Controller", Name: "hydrate", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "BILLING")
+	if !ok {
+		t.Fatal("no entry for enum case 'BILLING'")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("BILLING: status=%q, want resolved", e.Status)
+	}
+	if got := e.ChildClass + "::" + e.ChildMethod; got != "AddressType::BILLING" {
+		t.Errorf("BILLING: child=%q, want AddressType::BILLING", got)
+	}
+	if !strings.Contains(e.ChildCode, "case BILLING") {
+		t.Errorf("BILLING: child code missing the enum body, got %q", e.ChildCode)
+	}
+	// Foo::class is not a case reference.
+	if _, ok := findEntry(entries, "class"); ok {
+		t.Error("AddressType::class should not produce an entry")
+	}
+}
+
+// TestResolveCallsReceiverVar covers a method call whose receiver variable
+// names its class — $order->billingAddress() resolves to Order::billingAddress
+// even though Invoice defines the same method (globally ambiguous).
+func TestResolveCallsReceiverVar(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 17
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Actions/FinalizeOrderInvoice.php": `<?php
+namespace App\Actions;
+class FinalizeOrderInvoice {
+    public static function execute(Order $order): void {
+        $order->billingAddress()->update(['signup_token' => $order->reference]);
+    }
+}
+`,
+		"app/Models/Order.php": `<?php
+namespace App\Models;
+class Order {
+    public function billingAddress(): MorphOne {
+        return $this->morphOne(Address::class, 'addressable');
+    }
+}
+`,
+		"app/Models/Invoice.php": `<?php
+namespace App\Models;
+class Invoice {
+    public function billingAddress(): MorphOne {
+        return $this->morphOne(Address::class, 'addressable');
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Actions/FinalizeOrderInvoice.php", Class: "FinalizeOrderInvoice", Name: "execute", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "billingAddress")
+	if !ok {
+		t.Fatal("no entry for call 'billingAddress'")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("billingAddress: status=%q, want resolved", e.Status)
+	}
+	if got := e.ChildClass + "::" + e.ChildMethod; got != "Order::billingAddress" {
+		t.Errorf("billingAddress: child=%q, want Order::billingAddress", got)
+	}
+}
+
+// TestResolveCallsMacro covers a ->name( call resolving to a Laravel macro
+// (Receiver::macro('name', function ...)), which lives inside a boot method's
+// body and is therefore invisible to ScanBlocks.
+func TestResolveCallsMacro(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 11
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Exports/ContractsExport.php": `<?php
+namespace App\Exports;
+class ContractsExport {
+    public function query() {
+        return Contract::query()->joinAddress('order');
+    }
+}
+`,
+		"app/Providers/MacroServiceProvider.php": `<?php
+namespace App\Providers;
+use Illuminate\Database\Query\Builder;
+class MacroServiceProvider {
+    private function bootBuilderMacros(): void {
+        Builder::macro('joinIfNeeded', function (...$params) {
+            return $this;
+        });
+        Builder::macro('joinAddress', function (string $morphAlias, ?AddressType $type = null): Builder {
+            return $this->joinPolymorphic('addresses', 'addressable', $morphAlias);
+        });
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Exports/ContractsExport.php", Class: "ContractsExport", Name: "query", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "joinAddress")
+	if !ok {
+		t.Fatal("no entry for macro call 'joinAddress'")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("joinAddress: status=%q, want resolved", e.Status)
+	}
+	if got := e.ChildClass + "::" + e.ChildMethod; got != "Builder::joinAddress" {
+		t.Errorf("joinAddress: child=%q, want Builder::joinAddress", got)
+	}
+	if e.ChildCode == "" || !strings.Contains(e.ChildCode, "joinPolymorphic") {
+		t.Errorf("joinAddress: child code missing the macro body, got %q", e.ChildCode)
+	}
+}
+
 // TestResolveCallsMagicProperty covers Eloquent magic-property access
 // ($order->billingAddress, no parentheses) resolving to the relationship method:
 // a unique relationship → resolved, one defined on two models → unresolved, and a
@@ -133,6 +368,7 @@ class Replicator {
     public function run() {
         $upsell->save($order->billingAddress->replicate());
         $upsell->save($order->contract);
+        $upsell->save($model->shippingAddress);
         $total = $order->total;
     }
 }
@@ -152,6 +388,17 @@ class Order {
 namespace App\Models;
 class Invoice {
     public function billingAddress(): MorphOne {
+        return $this->morphOne(Address::class, 'addressable');
+    }
+    public function shippingAddress(): MorphOne {
+        return $this->morphOne(Address::class, 'addressable');
+    }
+}
+`,
+		"app/Models/Order2.php": `<?php
+namespace App\Models;
+class Order2 {
+    public function shippingAddress(): MorphOne {
         return $this->morphOne(Address::class, 'addressable');
     }
 }
@@ -177,11 +424,20 @@ class Invoice {
 		t.Errorf("contract: status=%q child=%s::%s, want resolved Order::contract", e.Status, e.ChildClass, e.ChildMethod)
 	}
 
-	// billingAddress: relationship on both Order and Invoice → ambiguous → unresolved.
+	// billingAddress: relationship on both Order and Invoice, but the receiver
+	// variable names its model ($order) → resolved to Order::billingAddress.
 	if e, ok := findEntry(entries, "billingAddress"); !ok {
 		t.Error("no entry for magic property 'billingAddress'")
+	} else if e.Status != callresolve.StatusResolved || e.ChildClass+"::"+e.ChildMethod != "Order::billingAddress" {
+		t.Errorf("billingAddress: status=%q child=%s::%s, want resolved Order::billingAddress", e.Status, e.ChildClass, e.ChildMethod)
+	}
+
+	// shippingAddress: relationship on Invoice and Order2, receiver $model names
+	// no known class → still ambiguous → unresolved.
+	if e, ok := findEntry(entries, "shippingAddress"); !ok {
+		t.Error("no entry for magic property 'shippingAddress'")
 	} else if e.Status != callresolve.StatusUnresolved {
-		t.Errorf("billingAddress: status=%q, want unresolved", e.Status)
+		t.Errorf("shippingAddress: status=%q, want unresolved", e.Status)
 	}
 
 	// total: no method named total anywhere → plain attribute, ignored.

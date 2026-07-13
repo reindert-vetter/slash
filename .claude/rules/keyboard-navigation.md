@@ -129,12 +129,16 @@ dan vallen de links terug op de kale PR-URL resp. de Jira-base.
 
 In `'diff'`-mode stapt **`→`** de **Onderliggende-code-kaart** in
 (`enterRelated` in `RelatedPanel.mjs`, `cs.focus === 'code'`) en landt op het
-**eerste** child-blokje (`cs.codeSel = 0`). Vanaf daar is de kaart een verticale
-stapel die je met **`↑`**/**`↓`** doorloopt: **`↓`** selecteert het **volgende**
-blokje en verlaat — voorbij het laatste — de lijst naar de comments-kolom (de
-**"+ Comment op deze regel"**-knop, `gotoRow(1)`); **`↑`** het **vorige** blokje
-en verlaat — vanaf het **eerste** — de kaart terug naar de diff (`exitRelated`).
-**`←`** gaat altijd terug naar de code die je reviewt (de diff, `exitRelated`).
+**eerste** child-blokje (`cs.codeSel = 0`), dat op volle breedte bovenaan staat.
+De overige blokjes vormen een **rechter-stapel** náást de →/↓-hint. Op het
+**eerste** blokje: **`→`** stapt die rechter-stapel in (landt op het **2e**
+blokje, `cs.codeSel = 1`, mits er een is), **`↓`** verlaat de kaart naar de
+comments-kolom (de **"+ Comment op deze regel"**-knop, `gotoRow(1)`), en
+**`↑`**/**`←`** gaan terug naar de diff (`exitRelated`). In de rechter-stapel
+(2e+ blokje) doorloop je met **`↑`**/**`↓`**: **`↓`** selecteert het **volgende**
+blokje en verlaat — voorbij het laatste — de lijst naar de comments-kolom;
+**`↑`** het **vorige** blokje en keert — vanaf het 2e — terug op het **eerste**
+blokje; **`←`** gaat terug naar de diff; **`→`** doet niets meer.
 Vanuit de comments keert **`↑`** terug naar het laatst-gekozen blokje
 (`cs.codeSel` blijft behouden). **`Enter`** op de kaart start nog steeds de
 LLM-call-search als er onopgeloste calls zijn (`isCodeFocused()`). Deze code-tak

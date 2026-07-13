@@ -3,6 +3,7 @@ package main
 import (
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -25,6 +26,7 @@ type symbolIndex struct {
 	byClass    map[string][]Block // class short name → its methods
 	byMethod   map[string][]Block // method name → every block defining it
 	scopeAlias map[string][]Block // Eloquent scope alias (scopeX → x) → defining blocks
+	enums      map[string][]Block // enum short name → its declaration block(s)
 }
 
 var idxSkipDirs = map[string]bool{
@@ -38,6 +40,7 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		byClass:    map[string][]Block{},
 		byMethod:   map[string][]Block{},
 		scopeAlias: map[string][]Block{},
+		enums:      map[string][]Block{},
 	}
 	_ = filepath.WalkDir(headDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -71,9 +74,100 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 				idx.scopeAlias[alias] = append(idx.scopeAlias[alias], b)
 			}
 		}
+		// Laravel macros are anonymous closures nested inside a boot method, so
+		// ScanBlocks does not surface them; index them separately so a ->name(
+		// call resolves to the macro closure like any method.
+		for _, b := range scanMacros(src, rel) {
+			short := shortName(b.Class)
+			idx.byClass[short] = append(idx.byClass[short], b)
+			idx.byMethod[b.Name] = append(idx.byMethod[b.Name], b)
+		}
+		// Enums are declarations, not methods, so ScanBlocks does not surface
+		// them; index them separately so a case reference (AddressType::BILLING)
+		// resolves to the enum definition.
+		for _, b := range scanEnums(src, rel) {
+			idx.enums[b.Class] = append(idx.enums[b.Class], b)
+		}
 		return nil
 	})
 	return idx
+}
+
+// scanEnums finds PHP enum declarations and returns one synthetic block per
+// enum (Class = the enum name, Name empty), spanning the whole declaration.
+// blockSource falls back to line-slicing for it, like a macro closure.
+func scanEnums(src []byte, filename string) []Block {
+	s := string(src)
+	var out []Block
+	for _, loc := range reEnumDef.FindAllStringSubmatchIndex(s, -1) {
+		name := s[loc[2]:loc[3]]
+		// The header (`: string implements X`) never contains '{'; the first
+		// one opens the body.
+		i := loc[1]
+		for i < len(s) && s[i] != '{' {
+			i++
+		}
+		if i >= len(s) {
+			continue
+		}
+		startLine := 1 + strings.Count(s[:loc[0]], "\n")
+		bodyLine := 1 + strings.Count(s[:i], "\n")
+		endLine, _ := skipBody(s, i, &bodyLine)
+		out = append(out, Block{File: filename, Class: name, Line: startLine, EndLine: endLine})
+	}
+	return out
+}
+
+// scanMacros finds Laravel macro registrations —
+// Receiver::macro('name', function (...) {...}) — which ScanBlocks misses because
+// they live *inside* a boot method's body (skipBody swallows the whole method) as
+// anonymous closures. Each becomes a synthetic block named after the macro and
+// classed by the receiver, so a ->name( call resolves to its closure like any
+// method. Its source is read via blockSource, which line-slices when a symbol
+// lookup can't re-find it.
+func scanMacros(src []byte, filename string) []Block {
+	s := string(src)
+	var out []Block
+	for _, loc := range reMacroDef.FindAllStringSubmatchIndex(s, -1) {
+		receiver := s[loc[2]:loc[3]]
+		name := s[loc[4]:loc[5]]
+		// Walk from just past `function` (loc[1]) to the body '{', skipping the
+		// parameter list, an optional return type, strings and comments.
+		i := loc[1]
+		for i < len(s) {
+			switch s[i] {
+			case '\'':
+				if j, _, closed := skipSingleQuote(s, i); closed {
+					i = j
+					continue
+				}
+				i = len(s)
+			case '"':
+				if j, _, closed := skipDoubleQuote(s, i); closed {
+					i = j
+					continue
+				}
+				i = len(s)
+			case '{', ';':
+				// '{' = body opener; ';' = no body (e.g. an fn arrow closure) → bail.
+				goto found
+			default:
+				i++
+			}
+		}
+	found:
+		if i >= len(s) || s[i] != '{' {
+			continue
+		}
+		startLine := 1 + strings.Count(s[:loc[0]], "\n")
+		bodyLine := 1 + strings.Count(s[:i], "\n")
+		endLine, _ := skipBody(s, i, &bodyLine)
+		out = append(out, Block{
+			File: filename, Class: receiver, Name: name,
+			Line: startLine, EndLine: endLine,
+		})
+	}
+	return out
 }
 
 // scopeAliasOf maps an Eloquent scope method (scopeJoinAddress) to the name the
@@ -118,18 +212,38 @@ var (
 	// lookahead, so a trailing `(` (i.e. a method call) is filtered out by
 	// inspecting the char after the match (see resolveCalls rule 5).
 	reArrowProp = regexp.MustCompile(`->([A-Za-z_]\w*)`)
+	// reVarCall / reVarProp capture the receiver variable too ($order->m( /
+	// $order->m) — the variable name reveals the class ($order → Order), the
+	// same heuristic resolvePrompt teaches the LLM.
+	reVarCall = regexp.MustCompile(`\$([A-Za-z_]\w*)->([A-Za-z_]\w*)\s*\(`)
+	reVarProp = regexp.MustCompile(`\$([A-Za-z_]\w*)->([A-Za-z_]\w*)`)
 	// reRelationCall recognises an Eloquent relationship method body — a method
 	// returning $this->hasMany(...) / morphOne(...) / belongsTo(...) etc. is the
 	// definition a magic property like $order->billingAddress resolves to.
 	reRelationCall = regexp.MustCompile(`\b(?:hasOne|hasMany|belongsTo|belongsToMany|morphOne|morphMany|morphTo|morphToMany|hasOneThrough|hasManyThrough|morphedByMany)\s*\(`)
+	// reEnumDef matches a PHP enum declaration line.
+	reEnumDef = regexp.MustCompile(`(?m)^\s*enum\s+([A-Za-z_]\w*)`)
+	// reStaticRef matches Foo::name — with or without a call; a trailing `(`
+	// (a static call, rule 3's territory) is filtered by inspecting the char
+	// after the match, like reArrowProp.
+	reStaticRef = regexp.MustCompile(`([A-Za-z_]\w*)::([A-Za-z_]\w*)`)
+	// reMacroDef matches a Laravel macro registration —
+	// Receiver::macro('name', function ...) — up to the `function` keyword. RE2 has
+	// no backreferences, so the two quote chars are matched independently (a mixed
+	// pair like 'name" is not valid PHP and never occurs in practice).
+	reMacroDef = regexp.MustCompile(`([A-Za-z_]\w*)::macro\(\s*['"]([A-Za-z_]\w*)['"]\s*,\s*(?:static\s+)?function\b`)
 )
 
-// resolveCalls scans every changed new-side block's body for method calls and
-// resolves each against the worktree symbol index. Returns callresolve entries
-// (resolved with the child definition + its source, or unresolved).
+// resolveCalls scans every changed new-side block for method calls and resolves
+// each against the worktree symbol index. Returns callresolve entries (resolved
+// with the child definition + its source, or unresolved). Only the block's
+// *changed* lines are scanned (diffed base↔head per file), so a call sitting on
+// an untouched line never produces a child — the panel shows underlying code of
+// what the PR actually changed.
 func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
-	_, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, pr)
 	idx := buildSymbolIndex(headDir)
+	diffByFile := map[string]*fileChangeSet{}
 
 	var out []callresolve.Entry
 	for _, b := range blocks {
@@ -139,6 +253,15 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		src := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name)
 		if src.Text == "" {
 			continue
+		}
+		fc, ok := diffByFile[b.File]
+		if !ok {
+			fc = changedNewLines(baseDir, headDir, b.File)
+			diffByFile[b.File] = fc
+		}
+		scan := fc.keepChanged(src)
+		if scan == "" {
+			continue // the block's change is old-side only (pure deletions)
 		}
 		callerID := b.ID()
 		seen := map[string]bool{} // call keys already emitted for this caller
@@ -157,7 +280,7 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			if def.File == b.File && def.symbol() == b.symbol() {
 				return // no self-edge
 			}
-			code := extractBlockSource(filepath.Join(headDir, def.File), def.File, def.Class, def.Name)
+			code := blockSource(headDir, *def)
 			out = append(out, callresolve.Entry{
 				PR: pr, CallerID: callerID, CallKey: key, Status: callresolve.StatusResolved,
 				ChildFile: def.File, ChildClass: def.Class, ChildMethod: def.Name,
@@ -166,43 +289,73 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		}
 
 		// 1. $this->m( / self::m( / static::m( → a method on the caller's own class.
-		for _, m := range append(reThisCall.FindAllStringSubmatch(src.Text, -1),
-			reSelfCall.FindAllStringSubmatch(src.Text, -1)...) {
+		for _, m := range append(reThisCall.FindAllStringSubmatch(scan, -1),
+			reSelfCall.FindAllStringSubmatch(scan, -1)...) {
 			if def := methodOnClass(idx, b.Class, m[1]); def != nil {
 				emit(m[1], def)
 			}
 		}
 		// 2. (new Foo)->m( → method on Foo.
-		for _, m := range reNewCall.FindAllStringSubmatch(src.Text, -1) {
+		for _, m := range reNewCall.FindAllStringSubmatch(scan, -1) {
 			if def := methodOnClass(idx, shortName(m[1]), m[2]); def != nil {
 				emit(m[2], def)
 			}
 		}
-		// 3. Foo::m( → static method on Foo (skip self/static/parent handled above).
-		for _, m := range reStaticCall.FindAllStringSubmatch(src.Text, -1) {
+		// 3. Foo::m( → static method on Foo (skip self/static/parent handled
+		// above). An unknown class/method (typically a framework call — vendor is
+		// not indexed) becomes unresolved, so the panel still offers the LLM
+		// search instead of silently showing nothing.
+		for _, m := range reStaticCall.FindAllStringSubmatch(scan, -1) {
 			recv := m[1]
 			if recv == "self" || recv == "static" || recv == "parent" {
 				continue
 			}
-			if def := methodOnClass(idx, shortName(recv), m[2]); def != nil {
+			emit(m[2], methodOnClass(idx, shortName(recv), m[2]))
+		}
+		// 3b. $var->m( → infer the receiver class from the variable name
+		// ($order->billingAddress() → Order::billingAddress), the heuristic
+		// resolvePrompt teaches the LLM. Runs before the global unique-match
+		// rule, so an ambiguous method (billingAddress on several models)
+		// still resolves when the receiver names its model. Note: the call
+		// key is the bare method name, so two receivers calling the same
+		// method in one block collapse into the first match's definition.
+		for _, m := range reVarCall.FindAllStringSubmatch(scan, -1) {
+			if def := methodOrScopeOnClass(idx, ucfirst(m[1]), m[2]); def != nil {
 				emit(m[2], def)
 			}
 		}
 		// 4. ->m( with an unknown receiver: resolve only on a unique global /
 		// scope match; an ambiguous app method becomes unresolved (LLM territory).
-		// Method names not defined anywhere in the app worktree are ignored
-		// (framework/builtins live under skipped vendor/).
-		for _, m := range reArrowCall.FindAllStringSubmatch(src.Text, -1) {
+		// A method name not defined anywhere in the app worktree (framework/
+		// builtins live under skipped vendor/) is *also* unresolved: it sits on a
+		// changed line, so the reviewer gets the "Zoek" button instead of nothing.
+		for _, m := range reArrowCall.FindAllStringSubmatch(scan, -1) {
 			key := m[1]
 			if seen[key] {
 				continue
 			}
 			cands := idx.candidates(key)
-			switch {
-			case len(cands) == 1:
+			if len(cands) == 1 {
 				emit(key, &cands[0])
-			case len(cands) > 1:
-				emit(key, nil) // ambiguous → unresolved
+			} else {
+				emit(key, nil) // ambiguous or unknown → unresolved
+			}
+		}
+		// 5a. $var->name (no parens) → a magic property whose receiver names
+		// its model: $order->billingAddress resolves to Order::billingAddress
+		// when that method's body is a relationship, even if other models
+		// define the same relationship (rule 5 would call that ambiguous).
+		for _, loc := range reVarProp.FindAllStringSubmatchIndex(scan, -1) {
+			rest := scan[loc[1]:]
+			if strings.HasPrefix(strings.TrimLeft(rest, " \t"), "(") {
+				continue // a method call, handled by rules 1-4
+			}
+			recv, key := scan[loc[2]:loc[3]], scan[loc[4]:loc[5]]
+			if seen[key] {
+				continue
+			}
+			if def := methodOnClass(idx, ucfirst(recv), key); def != nil && isRelationship(headDir, *def) {
+				emit(key, def)
 			}
 		}
 		// 5. ->name (no parens) → an Eloquent magic property. Laravel resolves
@@ -211,12 +364,12 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		// body *is* a relationship (so plain attribute access like ->id, ->name is
 		// ignored): a unique relationship → resolved, several → unresolved (the LLM
 		// picks the right model). Runs after rule 4, so a parens call wins the key.
-		for _, loc := range reArrowProp.FindAllStringSubmatchIndex(src.Text, -1) {
-			rest := src.Text[loc[1]:]
+		for _, loc := range reArrowProp.FindAllStringSubmatchIndex(scan, -1) {
+			rest := scan[loc[1]:]
 			if strings.HasPrefix(strings.TrimLeft(rest, " \t"), "(") {
 				continue // it's a method call, handled by rules 1-4
 			}
-			key := src.Text[loc[2]:loc[3]]
+			key := scan[loc[2]:loc[3]]
 			if seen[key] {
 				continue
 			}
@@ -228,8 +381,98 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 				emit(key, nil) // ambiguous → unresolved (LLM territory)
 			}
 		}
+		// 6. Foo::NAME (no parens) → an enum case (or const) reference, e.g.
+		// AddressType::BILLING. Only receivers that are an indexed enum count
+		// (a constant on a plain class is ignored); the child is the whole enum
+		// declaration. Runs after rule 3, so a static call wins the key.
+		for _, loc := range reStaticRef.FindAllStringSubmatchIndex(scan, -1) {
+			rest := scan[loc[1]:]
+			if strings.HasPrefix(strings.TrimLeft(rest, " \t"), "(") {
+				continue // a static call, handled by rule 3
+			}
+			recv, key := scan[loc[2]:loc[3]], scan[loc[4]:loc[5]]
+			if key == "class" || seen[key] {
+				continue
+			}
+			enums := enumCaseCandidates(headDir, idx, recv, key)
+			switch {
+			case len(enums) == 1:
+				e := enums[0]
+				seen[key] = true
+				out = append(out, callresolve.Entry{
+					PR: pr, CallerID: callerID, CallKey: key, Status: callresolve.StatusResolved,
+					ChildFile: e.File, ChildClass: e.Class, ChildMethod: key,
+					ChildLine: e.Line, ChildCode: blockSource(headDir, e).Text,
+				})
+			case len(enums) > 1:
+				emit(key, nil) // same case on several enums → unresolved
+			}
+		}
 	}
 	return out
+}
+
+// enumCaseCandidates returns the enums named recv that actually define case (or
+// const) key — the definitions a reference like AddressType::BILLING points to.
+func enumCaseCandidates(headDir string, idx *symbolIndex, recv, key string) []Block {
+	var out []Block
+	re := regexp.MustCompile(`\b(?:case|const)\s+` + key + `\b`)
+	for _, e := range idx.enums[shortName(recv)] {
+		if re.MatchString(blockSource(headDir, e).Text) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// fileChangeSet is the head-side changed lines of one file; restrict=false means
+// "treat every line as changed" (added file, missing base worktree, git error).
+type fileChangeSet struct {
+	set      lineSet
+	restrict bool
+}
+
+// keepChanged filters a block's source down to its changed lines (joined by
+// newlines), so the call-scan regexes only ever see code the PR touched.
+func (fc *fileChangeSet) keepChanged(src codeSide) string {
+	if !fc.restrict {
+		return src.Text
+	}
+	var kept []string
+	for i, line := range strings.Split(src.Text, "\n") {
+		if fc.set[src.Start+i] {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// changedNewLines diffs the base and head worktree copies of file (git
+// --no-index, so no repo needed) and returns the head-side changed line
+// numbers. It reuses the ingest diff parser, so "changed" means exactly what
+// classified the block as modified.
+func changedNewLines(baseDir, headDir, file string) *fileChangeSet {
+	basePath := filepath.Join(baseDir, file)
+	if _, err := os.Stat(basePath); err != nil {
+		return &fileChangeSet{} // added file (or no base worktree) → all lines
+	}
+	raw, err := exec.Command("git", "diff", "--no-color", "--unified=0", "--no-index", "--",
+		basePath, filepath.Join(headDir, file)).Output()
+	if err != nil {
+		// git exits 1 when the files differ — the expected success case.
+		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 1 {
+			return &fileChangeSet{}
+		}
+	}
+	// parseUnifiedDiff keys by path; with --no-index the old and new path are
+	// both absolute (and different), so union every entry's new-side set.
+	set := lineSet{}
+	for _, fd := range parseUnifiedDiff(string(raw)) {
+		for ln := range fd.changedNew {
+			set[ln] = true
+		}
+	}
+	return &fileChangeSet{set: set, restrict: true}
 }
 
 // relationshipCandidates narrows idx.candidates(key) to the methods whose body
@@ -243,12 +486,27 @@ func relationshipCandidates(headDir string, idx *symbolIndex, key string) []Bloc
 		if c.Name != key { // scope aliases can't be a magic property
 			continue
 		}
-		src := extractBlockSource(filepath.Join(headDir, c.File), c.File, c.Class, c.Name)
-		if src.Text != "" && reRelationCall.MatchString(src.Text) {
+		if isRelationship(headDir, c) {
 			out = append(out, c)
 		}
 	}
 	return out
+}
+
+// isRelationship reports whether the block's body is an Eloquent relationship
+// (return $this->hasMany(...) / morphOne(...) / …).
+func isRelationship(headDir string, b Block) bool {
+	src := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name)
+	return src.Text != "" && reRelationCall.MatchString(src.Text)
+}
+
+// methodOrScopeOnClass resolves method on class directly or via its Eloquent
+// scope form (joinAddress → scopeJoinAddress).
+func methodOrScopeOnClass(idx *symbolIndex, class, method string) *Block {
+	if def := methodOnClass(idx, class, method); def != nil {
+		return def
+	}
+	return methodOnClass(idx, class, "scope"+ucfirst(method))
 }
 
 // methodOnClass returns the block defining method on the given class short name,

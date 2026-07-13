@@ -338,6 +338,12 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			if err := m.callresolve.UpsertGo(ctx, calls); err != nil {
 				return nil, fmt.Errorf("build_relations: save calls: %w", err)
 			}
+			// Drop stale rows: every (caller, call) pair the scan no longer emits —
+			// the caller block left the PR, or the call site is no longer on a
+			// changed line.
+			if err := m.callresolve.Prune(ctx, input.PR, calls); err != nil {
+				return nil, fmt.Errorf("build_relations: prune calls: %w", err)
+			}
 		}
 		return json.Marshal(map[string]int{"relations": len(rels), "calls": len(calls)})
 	})

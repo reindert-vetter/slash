@@ -165,6 +165,7 @@ export function enterRelated() {
   cs.composing = false
   cs.focus = 'code'
   cs.codeSel = 0
+  scrollCodeIntoView()
 }
 
 // exitRelated releases the keyboard back to the diff and drops any input focus /
@@ -232,6 +233,16 @@ function reactionCount() {
 function scrollCommentIntoView() {
   requestAnimationFrame(() => {
     const el = document.querySelectorAll('[data-testid=comment-item]')[selI()]
+    if (el) el.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+// scrollCodeIntoView keeps the selected underlying-code child in view while
+// walking the card with the arrows (deferred a frame so the DOM has the active
+// highlight first), mirroring scrollCommentIntoView.
+function scrollCodeIntoView() {
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid=related-item][data-active=true]')
     if (el) el.scrollIntoView({ block: 'nearest' })
   })
 }
@@ -320,20 +331,34 @@ export function handleRelatedKey(key) {
     return true
   }
   if (cs.focus === 'code') {
-    // The code card is a vertical stack the reviewer walks with ↑/↓: ↓ steps to
-    // the next child (leaving for the comments column once past the last), ↑ steps
-    // to the previous (popping out to the diff from the first). ← always returns
-    // to the code being reviewed (the diff on the left).
+    // The code card is a first (flush) block plus a right-hand stack of the
+    // remaining blocks. On the first block: → steps into that stack, ↓ leaves for
+    // the comments column, ↑/← return to the diff. In the stack (2nd+ block): ↑/↓
+    // walk it (↑ back onto the first block, ↓ past the last leaves for comments),
+    // ← returns to the diff; → does nothing.
     const n = rc.children.length
-    if (key === 'ArrowDown') {
-      if (cs.codeSel < n - 1) cs.codeSel += 1
-      else gotoRow(1)
-    } else if (key === 'ArrowUp') {
-      if (cs.codeSel > 0) cs.codeSel -= 1
-      else {
+    if (cs.codeSel === 0) {
+      if (key === 'ArrowRight') {
+        if (n > 1) {
+          cs.codeSel = 1
+          scrollCodeIntoView()
+        }
+      } else if (key === 'ArrowDown') {
+        gotoRow(1)
+      } else if (key === 'ArrowUp' || key === 'ArrowLeft') {
         exitRelated()
         return 'exit'
       }
+      return true
+    }
+    if (key === 'ArrowDown') {
+      if (cs.codeSel < n - 1) {
+        cs.codeSel += 1
+        scrollCodeIntoView()
+      } else gotoRow(1)
+    } else if (key === 'ArrowUp') {
+      cs.codeSel -= 1
+      scrollCodeIntoView()
     } else if (key === 'ArrowLeft') {
       exitRelated()
       return 'exit'
@@ -792,24 +817,26 @@ function relatedCard(r, i) {
       data-testid="related-item"
       data-active="${() => (selected() ? 'true' : 'false')}"
     >
-      <div class="flex items-baseline gap-2 border-b border-slate-100 px-3 py-1.5">
-        <span class="truncate font-mono text-xs font-semibold text-slate-700">${r.label}</span>
-        ${() =>
-          KIND_LABEL[r.kind]
-            ? html`<span
-                class="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-indigo-500"
-                >${KIND_LABEL[r.kind]}</span
-              >`
-            : ''}
-        ${() =>
-          r.source
-            ? html`<span
-                class="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-600"
-                title="Gevonden door een LLM"
-                >bron: ${r.source}</span
-              >`
-            : ''}
-        <span class="ml-auto shrink-0 font-mono text-[10px] text-slate-400"
+      <div class="border-b border-slate-100 px-3 py-1.5">
+        <div class="flex items-baseline gap-2">
+          <span class="min-w-0 flex-1 truncate font-mono text-xs font-semibold text-slate-700">${r.label}</span>
+          ${() =>
+            KIND_LABEL[r.kind]
+              ? html`<span
+                  class="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-indigo-500"
+                  >${KIND_LABEL[r.kind]}</span
+                >`
+              : ''}
+          ${() =>
+            r.source
+              ? html`<span
+                  class="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-600"
+                  title="Gevonden door een LLM"
+                  >bron: ${r.source}</span
+                >`
+              : ''}
+        </div>
+        <span class="block truncate font-mono text-[10px] text-slate-400" title="${() => r.file + ':' + r.line}"
           >${r.file}:${r.line}</span
         >
       </div>
@@ -824,20 +851,28 @@ function relatedCard(r, i) {
   `
 }
 
-// stepHint is the little → (next block) / ↓ (jump to comments) glyph pair shown
-// just below the first child block, hinting at the two moves available while the
-// code card owns the keyboard — brighter when focused.
+// stepHint is the little arrow-glyph cluster shown beside the child blocks,
+// hinting at the moves available while the code card owns the keyboard — brighter
+// when focused. On the first block it points at the two ways out: → (into the
+// right-hand stack) and ↓ (to the comments). Once in the stack (2nd+ block) it
+// switches to ↑ (previous block) / ← (back to the diff) / ↓ (next block).
 function stepHint() {
+  const inStack = () => cs.codeSel > 0
   return html`
     <div
       class="${() =>
-        'flex items-center gap-2 pl-1 text-xs leading-none ' +
+        'flex flex-col items-start gap-0.5 pl-1 text-xs leading-none ' +
         (cs.focus === 'code' ? 'text-indigo-400' : 'text-slate-300')}"
       data-testid="related-hint"
-      title="→ volgend blok · ↓ naar comments"
+      title="${() =>
+        inStack()
+          ? '↑ vorig blok · ← naar diff · ↓ volgend blok'
+          : '→ volgend blok · ↓ naar comments'}"
     >
-      <span>→</span>
-      <span>↓</span>
+      ${() =>
+        inStack()
+          ? html`<span>↑</span><span>←</span><span>↓</span>`
+          : html`<span>→</span><span>↓</span>`}
     </div>
   `
 }
@@ -861,7 +896,7 @@ export default function RelatedPanel(state, commentTarget, search) {
     <aside class="flex w-[38rem] min-h-0 shrink-0 flex-col gap-3" data-testid="related-panel">
       <section
         class="${() =>
-          'flex min-h-0 max-h-[40%] flex-col overflow-hidden rounded-xl border bg-white ring-1 ' +
+          'flex min-h-0 flex-col overflow-hidden rounded-xl border bg-white ring-1 ' +
           (cs.focus === 'code'
             ? 'border-indigo-300 ring-indigo-200'
             : 'border-slate-300 ring-black/5')}"
@@ -902,14 +937,14 @@ export default function RelatedPanel(state, commentTarget, search) {
               : relatedCard(ks[0], 0)
           }}
           ${() => {
-            // Just below the first block sits a → / ↓ arrow hint (→ = next block,
-            // ↓ = jump to comments); the rest are indented beneath it so the list
-            // reads as a walkable stack.
+            // Next to the first block, the → / ↓ arrow hint (→ = next block,
+            // ↓ = jump to comments) sits on the left with the rest of the blocks
+            // stacked to its right, so the list reads as a walkable stack.
             const rest = kids().slice(1)
             return rest.length
-              ? html`<div class="flex flex-col gap-2">
+              ? html`<div class="flex items-start gap-2">
                   ${stepHint()}
-                  <div class="flex min-w-0 flex-col gap-2 pl-4">
+                  <div class="flex min-w-0 flex-1 flex-col gap-2">
                     ${rest.map((r, k) => relatedCard(r, k + 1).key('related:' + r.id))}
                   </div>
                 </div>`

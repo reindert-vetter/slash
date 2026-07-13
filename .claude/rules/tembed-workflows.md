@@ -218,27 +218,69 @@ fallback.
   De rij draagt de **volledige child-descriptor + de codetekst** (`child_code`),
   dus de frontend rendert zonder losse code-fetch. Writes (workflow-only):
   `UpsertGo` (schrijft Go-rijen, maar **overschrijft geen** `searching`/`found`
-  rij → LLM wint van een rebuild), `SaveSearching`, `Save`. Read: `List(pr)`.
+  rij → LLM wint van een rebuild), `SaveSearching`, `Save`, en `Prune(pr, keep)`
+  (verwijdert elke rij waarvan het `(caller_id, call_key)`-pair niet in de
+  huidige Go-scan zit — de caller is uit de PR gevallen óf de call-site staat
+  niet meer op een gewijzigde regel; dit ruimt óók LLM-rijen op, want de
+  call-site is weg). Read: `List(pr)`. De `buildRelations`-Activity roept na
+  `UpsertGo` `Prune` aan met de zojuist gescande entries als keep-set.
 - **Analyse-service `callresolve_analysis.go`** (package main, géén module —
   leest de head-worktree): `resolveCalls(dataDir, pr, blocks)` bouwt via
   `buildSymbolIndex` één worktree-brede index (class→methods, method→blocks,
-  Eloquent scope-alias `scopeX→x`) en scant elk gewijzigd new-side blok met
-  regexes (patroon van `dispatchedEvents`). Resolvt `$this->`/`self::`/`static::`
-  (eigen class), `Foo::m(`/`(new Foo)->m(` (class in de call), en `->m(` op een
-  **unieke** globale- of scope-match. Ambigu (>1 kandidaat) → `unresolved`;
-  methodes die nergens in de app-worktree bestaan (vendor is geskipt) → genegeerd.
+  Eloquent scope-alias `scopeX→x`, enums) en scant elk gewijzigd new-side blok
+  met regexes (patroon van `dispatchedEvents`). **Alleen de gewijzigde regels**
+  van het blok worden gescand: `changedNewLines` dieft base↔head per bestand
+  (`git diff --no-index --unified=0`, geparsed met de ingest-`parseUnifiedDiff`,
+  new-side sets ge-union'd omdat `--no-index` twee absolute paden oplevert;
+  ontbrekende base-file → alles telt als gewijzigd). Een call op een ongewijzigde
+  regel levert dus nooit een child op — dat gaf ongerelateerde "Onderliggende
+  code", b.v. een builder-`->join(` op een oude regel die uniek naar een
+  toevallige app-method (`MerchantController::join`) matchte. Resolvt
+  `$this->`/`self::`/`static::` (eigen class), `Foo::m(`/`(new Foo)->m(` (class
+  in de call), **`$var->m(` via de receiver-variabelenaam** (regel 3b:
+  `$order->billingAddress()` → `Order::billingAddress`, ook als die method op
+  meerdere classes bestaat; incl. scope-vorm — dezelfde heuristiek die
+  `resolvePrompt` de LLM leert; kanttekening: de call-key is de kale
+  methodenaam, dus twee receivers die in één blok dezelfde method aanroepen
+  vallen samen op de eerste match), en `->m(` op een **unieke** globale- of
+  scope-match. Ambigu (>1 kandidaat) → `unresolved`; methodes die nergens in de app-worktree bestaan
+  (vendor is geskipt — framework-calls als `->where(`) worden **óók
+  `unresolved`**: ze staan per definitie op een gewijzigde regel, dus de reviewer
+  krijgt de "Zoek"-knop i.p.v. niks.
+  **Enum-cases** (regel 6, `reStaticRef`): een `Foo::NAAM` **zonder haakjes** —
+  `AddressType::BILLING` — resolvt naar de **enum-declaratie** als `Foo` een
+  geïndexeerde enum is die die case/const definieert (`scanEnums` maakt van elke
+  enum een synthetisch blok, à la macros; code via `blockSource`-line-slicing;
+  `child_method` = de case-naam, dus het label wordt `AddressType::BILLING`).
+  `Foo::class` en constanten op niet-enum-classes worden genegeerd; dezelfde
+  case op meerdere enums → `unresolved`. De frontend-`findCallSites` matcht
+  daarvoor naast `naam(` en `->naam` ook `::naam`.
   **Eloquent magic properties** (regel 5, `reArrowProp`): een `->naam` **zonder
   haakjes** — `$order->billingAddress` — is Laravel-syntax voor de
   relatie-**methode** `billingAddress()`. We behandelen 'm als call als `naam` een
   methode matcht wiens body een **relatie** is (`return $this->morphOne/hasMany/
   belongsTo(...)`, `reRelationCall` + `relationshipCandidates`) — zodat kale
-  attribuut-toegang (`->id`, `->total`) genegeerd blijft: uniek → `resolved`,
-  meerdere modellen → `unresolved` (LLM kiest het juiste model). Draait ná regel 4,
-  dus een echte `->naam()`-call wint de key. De frontend koppelt zo'n property-
+  attribuut-toegang (`->id`, `->total`) genegeerd blijft: eerst probeert regel
+  5a de **receiver-variabelenaam** (`$order->billingAddress` →
+  `Order::billingAddress`, ook bij meerdere modellen met die relatie), daarna
+  regel 5 generiek: uniek → `resolved`, meerdere modellen → `unresolved` (LLM
+  kiest het juiste model). Draait ná regel 4, dus een echte `->naam()`-call wint
+  de key. De frontend koppelt zo'n property-
   segment aan het child via `findCallSites`, dat naast `naam(` ook `->naam`
   (property) matcht. De LLM-prompt (`resolvePrompt`) legt Haiku/Sonnet uit dat
   `->naam` en `naam()` hetzelfde target zijn en dat de receiver-variabelenaam
   (`$order` → `Order`) het juiste model verraadt.
+  **Laravel-macros** worden óók geïndexeerd (`scanMacros`, aangeroepen in
+  `buildSymbolIndex`): een `Receiver::macro('naam', function (…) {…})` — b.v.
+  `Builder::macro('joinAddress', …)` in een `*ServiceProvider` — is een anonieme
+  closure **binnen** een boot-method en dus onzichtbaar voor `ScanBlocks`
+  (`skipBody` slokt de hele method-body op, inclusief de macro-registratie). We
+  detecteren de registratie met een regex (`reMacroDef`) en maken er een
+  synthetisch block van (`Class` = de receiver, `Name` = de macro-naam), zodat een
+  `->joinAddress(`-call via regel 4 als een gewone unieke method resolvt. De code
+  van zo'n macro komt via `blockSource` (code.go): de symbool-lookup faalt (het
+  block is genest, niet top-level), dus die valt terug op line-slicing op de
+  opgeslagen `Line`/`EndLine`.
 - **`modules/claude`** (`modules/claude/claude.go`): de CLI-bridge naar `claude`
   (`Client`-interface + `Fake`, patroon van `modules/github`). `Run` shelt uit
   naar `claude -p <prompt> --model <id>` met context-timeout; agentisch (Sonnet)
@@ -263,17 +305,21 @@ fallback.
   toont de **"Zoek (N)"**-knop + `startCallSearch` voor `unresolved` calls
   (`RelatedPanel`, ook via `Enter` op het code-blok — `isCodeFocused`). De kaart
   **volgt de cursor**: `findCallSites` mapt elke call-methode naar het diff-segment
-  waar hij staat, `callScopeMethods` scope't op `gran==='call'` tot de ene actieve
-  call, en op grovere niveaus toont hij alle calls geordend (gewijzigd child-blok →
-  call op gewijzigde regel → rest). De lijst wordt in een `watch` berekend en via
+  waar hij staat, `callScopeMethods` scope't in diff-mode op de geselecteerde unit
+  (op `gran==='call'` de ene actieve call; op line/group de calls op de regels
+  binnen `[unit.start, unit.end]`), en alleen in list-mode toont hij alle calls van
+  het block, geordend (gewijzigd child-blok → call op gewijzigde regel → rest). De lijst wordt in een `watch` berekend en via
   `setRelated` het paneel in geduwd (niet in de render-binding — dat racet met de
   diff over `b.code`). Een LLM-gevonden child toont een **`bron: haiku/sonnet`**-badge
   (de `source` uit de rij; Go-resolved toont geen bron). Zie
   `.claude/rules/detail-layout.md`.
-- Tests: `callresolve_analysis_test.go` (resolver op fixture-PHP),
+- Tests: `callresolve_analysis_test.go` (resolver op fixture-PHP, incl. een
+  macro-call → `Builder::joinAddress`, de gewijzigde-regels-restrictie met een
+  echte base+head-diff, en een enum-case → `AddressType::BILLING`),
   `resolve_call_test.go` (Haiku-confident → found; escalatie naar Sonnet;
   notfound; verificatie weigert een verzonnen definitie), en
-  `modules/callresolve/callresolve_test.go` (round-trip + UpsertGo bewaart LLM).
+  `modules/callresolve/callresolve_test.go` (round-trip + UpsertGo bewaart LLM +
+  `Prune` ruimt wees-callers én stale call-keys op).
   De frontend-kant heeft een **seed-pad**: `slash seed … -callresolve
   <callresolve.json>` (mirror van `-relations`) laadt resolved rijen in
   `callresolve.db` zodat Playwright de `method_call`-children rendert zonder

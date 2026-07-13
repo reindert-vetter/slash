@@ -14,6 +14,21 @@ scherm) `RelatedPanel` (`src/RelatedPanel.mjs`, `data-testid=related-panel`,
 diff aan; er is bewust ruimte rechts voor **latere extra blokken** (elk een eigen
 `shrink-0`-kolom die van links verder inpakt).
 
+De block-kaart-`.key(...)` codeert **rol** (`sel`/`prev`) **én code-status**
+(`load`/`code`/`err`), zodat arrow.js een **verse** kaart bouwt zodra een block
+van preview→geselecteerd gaat (↓/↑ op een al gepreviewd block) of z'n code
+arriveert. Zonder die twee sleutel-onderdelen hergebruikt arrow.js de keyed node
+(move+patch) zónder de `${…}`-bindings te herdraaien: de `activeGroup`-highlight
++ scroll bleven dan bevroren op de vorige selectie, en de `null→geladen`-diff-
+render viel intermitterend uit (kaart bleef op "loading" hangen). Het "code
+gearriveerd"-signaal loopt via `state.codeVersion` (gebumpt in `ensureCode`),
+waarop **de DetailPanel-binding** abonneert zodat hij herdraait en de key omklapt
+(verse diff-binding). De `setCommentScope`/`setRelated`-watches blijven
+`curBlock().code` lezen (nodig om de cursor te volgen) — juist hun co-subscriptie
+op `b.code` is waarom de diff-binding de update kan missen, dus herbouwen we via
+de key i.p.v. nóg een `b.code`-lezer toe te voegen. Zie de arrow.js-valkuilen in
+`.claude/rules/conventions.md`.
+
 `RelatedPanel` is **puur placeholder met dummy data** — nog geen `/api`-koppeling.
 Twee gestapelde kaarten:
 
@@ -23,33 +38,58 @@ Twee gestapelde kaarten:
   Prism-highlighted PHP-excerpt (`data-testid=related-item`) met een `kind`-badge.
   Gevoed uit het relations-read-model via `GET /api/relations?pr=N`; `home.mjs`
   (`childrenOf`/`relatedChildren`) haalt de children uit `state.allBlocks` en laadt
-  hun code lazy. Een child wordt **uit de linkerlijst gehaald** (`state.blocks` =
-  `allBlocks` minus alle `childId`s) en hier getoond; wat overblijft staat links.
+  hun code lazy. Een child wordt **uit de linkerlijst gehaald** en hier getoond;
+  wat overblijft staat links. `recomputeLeftList` in `home.mjs` bepaalt de
+  linkerlijst: `state.blocks` = `allBlocks` minus (a) alle relation-`childId`s én
+  (b) elk **PR-blok dat de definitie is van een resolved/found method-call**
+  (`resolvedCallTargetIds`) — dus een functie die als "Onderliggende code" onder
+  een parent verschijnt (b.v. `ProcessCartAction::buildShippingAddressAttributes`
+  aangeroepen op een gewijzigde regel) staat níét óók nog los in de linkerlijst.
+  Het draait bij `loadBlocks` én opnieuw na elke `loadCallResolve` (initieel +
+  de poll na een zoekactie), en bewaart de selectie op **block-id** zodat een
+  callResolve-reload de cursor niet verspringt.
   Zie `.claude/rules/tembed-workflows.md` (sectie "Relaties tussen blokken").
   De kaart is een **navigeerbare lijst**: `→` vanuit de diff selecteert het
-  **eerste** blokje (`cs.codeSel=0`), elke volgende `→` het volgende (geklemd op
-  het laatste), `↓` verlaat de lijst naar de comments (zie
+  **eerste** blokje (`cs.codeSel=0`). Vanaf het eerste blokje stapt `→` de
+  **rechter-stapel** in (het 2e blokje) en `↓` verlaat de lijst naar de comments;
+  in de rechter-stapel lopen `↑`/`↓` langs de blokjes (zie
   `.claude/rules/keyboard-navigation.md`). Het geselecteerde blokje krijgt een
   indigo ring (`data-active=true`). Het **eerste** blokje staat op volle breedte;
-  **net onder** dat eerste blokje staat een `→`/`↓`-hint (`data-testid=related-hint`,
-  twee kleine pijltjes: → = volgend blok, ↓ = naar comments) — de twee mogelijke
-  bewegingen — en het **2e en verdere** blokje staat als groep daaronder
-  **ingesprongen**. De hint kleurt feller (`text-indigo-400`) zolang de kaart de
-  toetsen bezit. De code-excerpts **wrappen** (geen horizontale scroll:
+  **daaronder** staat een pijltjes-hint (`data-testid=related-hint`, verticaal
+  gestapeld) met het **2e en verdere** blokje als groep **rechts náást** die
+  hint. De kaart heeft **geen vaste hoogte-cap** (eerder `max-h-[40%]`): hij
+  groeit met zijn inhoud mee en pakt alle verticale ruimte die de comments-kaart
+  eronder niet nodig heeft; pas als beide samen niet passen krimpt hij
+  (flex-shrink, `min-h-0`) en scrollt zijn lijst, waarbij de comments-kaart
+  altijd zijn `min-h-[16rem]` houdt. De hint toont **de bewegingen die vanaf de
+  huidige positie kunnen**: op
+  het eerste blokje `→` (volgend blok) / `↓` (naar comments); zit je in de
+  rechter-stapel (2e+ blokje) dan schakelt hij naar `↑` (vorig blok) / `←` (naar
+  diff) / `↓` (volgend blok). De hint kleurt feller (`text-indigo-400`) zolang de
+  kaart de toetsen bezit. De code-excerpts **wrappen** (geen horizontale scroll:
   `whitespace-pre-wrap break-words`).
   Náást de listener-children toont dezelfde kaart ook de **methode-aanroepen** die
   het block doet, gekoppeld aan hun **definitie** — ook uit ongewijzigde bestanden
   (`kind=method_call`, uit `GET /api/callresolve`, code + descriptor zitten in de
-  rij, dus geen extra code-fetch).
+  rij, dus geen extra code-fetch). Alleen aanroepen op **door de PR gewijzigde
+  regels** hebben zo'n rij (de resolver scant enkel de changed lines, zie
+  `.claude/rules/tembed-workflows.md`); ook **enum-cases**
+  (`AddressType::BILLING`) resolven — naar hun enum-declaratie.
   De kaart **volgt de cursor**: `home.mjs` (`callScopeMethods`/`findCallSites`)
   koppelt elke resolved call aan het diff-segment waar hij staat. Op het fijnste
   niveau (`gran==='call'`) toont de kaart **precies de method van die ene call** —
   land op `->billingAddress` en je ziet `Order::billingAddress`; een segment
-  zonder resolved call geeft een lege kaart. Op grovere niveaus (line/group) en in
-  list-mode toont hij **alle** resolved calls van het block, **geordend**: eerst
-  een call waarvan de definitie zélf in deze PR wijzigt (een echt child-blok,
-  `prio 0`), dan calls op een recent gewijzigde regel (`prio 1`), dan de rest
-  (`prio 2`). De listener-children (block-niveau) vallen op call-niveau weg.
+  zonder resolved call geeft een lege kaart. Op de grovere niveaus (line/group)
+  scope't hij op de **regels van de geselecteerde unit**: alleen de calls waarvan
+  de call-site binnen `[unit.start, unit.end]` valt — dus je ziet nooit een call
+  van een regel die je níét hebt geselecteerd. Alleen in **list-mode** (geen diff)
+  toont hij **alle** resolved calls van het block. De getoonde calls zijn
+  **geordend**: eerst een call waarvan de definitie zélf in deze PR wijzigt (een
+  echt child-blok, `prio 0`), dan calls op een recent gewijzigde regel (`prio 1`),
+  dan de rest (`prio 2`). De listener-children (block-niveau) vallen op
+  call-niveau weg. In de kaart-header is de **titel (`class::method`) altijd
+  zichtbaar** (krijgt de eerste regel, truncat pas bij extreme lengte); het
+  **bestandspad** staat eronder op een eigen regel en truncat als het niet past.
   **Reactiviteit:** de lijst wordt **niet** in de render-binding van `RelatedPanel`
   berekend maar in een `watch` in `home.mjs` en via `setRelated` het paneel in
   geduwd — dezelfde ontkoppeling als `setCommentScope`. Dat is **load-bearing**:

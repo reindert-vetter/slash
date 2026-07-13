@@ -95,6 +95,17 @@ const state = reactive({
   // next/previous call (flowing across same-file blocks like ↓/↑; see fKey/dKey).
   // `change` indexes into the unit list of the current granularity (unitsFor).
   gran: 'group',
+  // codeVersion bumps every time a block's lazily-loaded `b.code` is filled in
+  // (see ensureCode). It is the reliable "code arrived" signal the DetailPanel
+  // binding subscribes to so it re-runs and rebuilds the affected card. Why not
+  // rely on the diff card's own `b.code` binding: the setCommentScope/setRelated
+  // watches also read `b.code` (they must, to follow the cursor), and with more
+  // than one reactive consumer on the same `b.code` arrow.js intermittently drops
+  // the diff card's null→loaded re-render, leaving it stuck on "loading code…".
+  // So the card is rebuilt from the outside instead: on a codeVersion bump the
+  // DetailPanel re-runs and its key (which encodes the code-loaded state — see the
+  // key comment) flips, yielding a fresh diff binding that reads the loaded code.
+  codeVersion: 0,
   ingesting: false,
   error: '',
   onIngest: ingest,
@@ -273,17 +284,44 @@ async function loadBlocks() {
   }
   const blocks = await res.json()
   const all = Array.isArray(blocks) ? blocks : []
-  // Fetch the relations and pull any child block out of the left list — it is
-  // nested under its parent in the RelatedPanel. What's left stays on the left.
+  // Fetch the relations; recomputeLeftList pulls any nested child out of the
+  // left list — it is shown under its parent in the RelatedPanel instead.
   const rels = await loadRelations()
-  const childIds = new Set(rels.map((r) => r.childId))
   state.allBlocks = all
   state.relations = rels
-  state.blocks = all.filter((b) => !childIds.has(b.id))
-  if (state.selected >= state.blocks.length) {
-    state.selected = Math.max(0, state.blocks.length - 1)
-  }
+  recomputeLeftList()
   loadCallResolve()
+}
+
+// recomputeLeftList derives state.blocks from allBlocks: everything except the
+// blocks that are nested under a parent in the RelatedPanel — the relation
+// children AND PR blocks that are the definition of a resolved method call
+// (i.e. already shown in "Onderliggende code"). A called-and-shown function
+// shouldn't also sit in the left list. Selection is preserved by block id so a
+// callResolve reload (poll after a search) doesn't jump the cursor.
+function recomputeLeftList() {
+  const hidden = new Set(state.relations.map((r) => r.childId))
+  for (const id of resolvedCallTargetIds()) hidden.add(id)
+  const selId = state.blocks[state.selected] && state.blocks[state.selected].id
+  state.blocks = state.allBlocks.filter((b) => !hidden.has(b.id))
+  const at = state.blocks.findIndex((b) => b.id === selId)
+  state.selected = at >= 0 ? at : Math.min(state.selected, Math.max(0, state.blocks.length - 1))
+}
+
+// resolvedCallTargetIds returns the ids of PR blocks that are the definition of
+// some resolved/found method call — the blocks that surface in a RelatedPanel's
+// "Onderliggende code" (prio 0 in resolvedCallChildren). Those are pulled from
+// the left list, like relation children.
+function resolvedCallTargetIds() {
+  const prBlockIds = new Set(state.allBlocks.map((x) => x.id))
+  const ids = new Set()
+  for (const r of state.callResolve || []) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    const childId =
+      state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
+    if (prBlockIds.has(childId)) ids.add(childId)
+  }
+  return ids
 }
 
 // loadCallResolve fetches the PR's call-resolution rows into state. Best-effort:
@@ -295,6 +333,9 @@ async function loadCallResolve() {
     if (!res.ok) return
     const rows = await res.json()
     state.callResolve = Array.isArray(rows) ? rows : []
+    // A resolved call whose definition is a PR block now shows in "Onderliggende
+    // code", so drop it from the left list (recompute preserves the selection).
+    recomputeLeftList()
   } catch (_) {
     /* offline — keep whatever we have */
   }
@@ -362,12 +403,13 @@ function childrenOf(b) {
 // in. This is what couples a resolved-call child to the exact call in the diff:
 // at 'call' granularity we match the active segment, and for ordering we ask
 // whether any of a call's sites lands on a changed row. Method names are plain
-// `[A-Za-z_]\w*`, so no regex escaping is needed. We match both a call
-// (`name(`) and a bare `->name` property access — the latter is how an Eloquent
-// magic property ($order->billingAddress) reaches its relationship method.
+// `[A-Za-z_]\w*`, so no regex escaping is needed. We match a call (`name(`), a
+// bare `->name` property access — how an Eloquent magic property
+// ($order->billingAddress) reaches its relationship method — and a `::name`
+// static reference — how an enum case (AddressType::BILLING) reaches its enum.
 function findCallSites(rows, name) {
   const sites = []
-  const re = new RegExp('->\\s*' + name + '\\b|\\b' + name + '\\s*\\(', 'g')
+  const re = new RegExp('->\\s*' + name + '\\b|::\\s*' + name + '\\b|\\b' + name + '\\s*\\(', 'g')
   for (let i = 0; i < rows.length; i++) {
     const text = rows[i].right
     if (text == null) continue
@@ -384,21 +426,26 @@ function findCallSites(rows, name) {
 }
 
 // callScopeMethods returns the set of method names the underlying-code panel is
-// scoped to right now, or null for "no narrowing" (show them all). We only
-// narrow at the finest granularity (gran === 'call'): then the panel shows
-// exactly the method(s) of the one call segment under the cursor — land on
-// ->billingAddress and you see billingAddress(). At every coarser level (group/
-// line) and in list mode it returns null, so the panel shows the block's full
-// (ordered) list of calls.
+// scoped to right now, or null for "no narrowing" (show them all). It narrows to
+// whatever the cursor covers in *diff* mode: at the finest granularity
+// (gran === 'call') it matches exactly the one call segment under the cursor —
+// land on ->billingAddress and you see billingAddress(); at group/line it matches
+// every call whose site sits on a row *inside the selected unit's range*, so the
+// panel only shows the calls made by the lines you actually selected (not every
+// call in the block). In list mode it returns null → the block's full (ordered)
+// list of calls.
 function callScopeMethods(b, rows) {
-  if (state.mode !== 'diff' || state.gran !== 'call') return null
-  const unit = unitsFor(rows, 'call')[state.change]
+  if (state.mode !== 'diff') return null
+  const unit = unitsFor(rows, state.gran)[state.change]
   if (!unit) return null
   const methods = new Set()
   for (const r of callRows(b)) {
-    if (findCallSites(rows, r.callKey).some((s) => s.row === unit.start && s.segStart === unit.segStart)) {
-      methods.add(r.callKey)
-    }
+    const sites = findCallSites(rows, r.callKey)
+    const inScope =
+      state.gran === 'call'
+        ? sites.some((s) => s.row === unit.start && s.segStart === unit.segStart)
+        : sites.some((s) => s.row >= unit.start && s.row <= unit.end)
+    if (inScope) methods.add(r.callKey)
   }
   return methods
 }
@@ -478,9 +525,10 @@ function callRows(b) {
 
 // unresolvedCalls returns the selected block's calls the Go resolver could not
 // pin (status unresolved) plus any currently searching — feeding the "Zoek"
-// button + spinner in the panel. Scoped like relatedChildren: at gran 'call' it
-// only reports the call under the cursor (so "Zoek" is coupled to that one call),
-// at every coarser level it reports the block's whole set.
+// button + spinner in the panel. Scoped like relatedChildren (see
+// callScopeMethods): in diff mode only the calls under the selected unit
+// (group/line/call), so "Zoek" is coupled to what you selected; in list mode the
+// block's whole set.
 function unresolvedCalls() {
   const b = state.blocks[state.selected]
   const all = callRows(b).filter((r) => r.status === 'unresolved' || r.status === 'searching')
@@ -546,9 +594,15 @@ async function ensureCode(b) {
     const res = await fetch(`/api/code?${params}`)
     if (!res.ok) {
       b.code = { error: `code load failed: ${res.status}` }
+      state.codeVersion++
       return
     }
     b.code = await res.json()
+    // Signal that this block's code arrived so the DetailPanel rebuilds its card
+    // (keyed on the code-loaded state) — a reliable re-render path that doesn't
+    // depend on the diff's own `b.code` binding re-firing (see the codeVersion
+    // note on `state`).
+    state.codeVersion++
     // If this is the selected block, centre its active change now that the rows
     // (and their anchor) can be rendered — both when we've stepped into the diff
     // and when it's merely selected in the list (previewing the first change).
@@ -575,6 +629,7 @@ async function ensureCode(b) {
     refreshHints()
   } catch (e) {
     b.code = { error: String(e) }
+    state.codeVersion++
   }
 }
 
@@ -1485,6 +1540,12 @@ function DetailPanel(state) {
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="block-column">
       ${() => {
         const sel = state.selected
+        // Subscribe this binding to codeVersion so it re-runs when a block's code
+        // loads (ensureCode bumps it). That re-run re-reads b.code for each card's
+        // key below — a reliable trigger, since a per-card b.code subscription is
+        // dropped when it co-subscribes with the setRelated/setCommentScope watches
+        // (see the key comment + the codeVersion note on `state`).
+        void state.codeVersion
         const pair = state.blocks
           .map((b, i) => ({ b, i }))
           .filter(({ i }) => i === sel || i === sel + 1)
@@ -1534,7 +1595,33 @@ function DetailPanel(state) {
             // rows, so it's visible which units already hold a comment (however
             // many). Reads the comments read-model via RelatedPanel.
             commentedRows: () => commentRowSet(b),
-          }).key('detail:' + b.file + ':' + b.label + ':' + b.side)
+            // The key encodes (a) whether this card is the *selected* one or the
+            // look-ahead *preview*, and (b) whether its code has loaded yet. Both
+            // are load-bearing because arrow.js otherwise *reuses* the keyed node
+            // across those transitions — it moves + patches the node but does NOT
+            // re-run the persisted pane bindings, so a frozen binding never re-fires:
+            //  • preview→selected (↓/↑ onto an already-previewed block): the
+            //    activeGroup binding stays frozen and the active-change highlight +
+            //    its scroll-into-view silently fail to appear.
+            //  • loading→loaded: the codeDiff binding's b.code subscription is
+            //    dropped (it co-subscribes with the setRelated/setCommentScope
+            //    watches, and arrow.js loses one of the updates), leaving the diff
+            //    stuck on "loading code…" even though b.code has arrived.
+            // Rekeying on both forces a fresh card (fresh bindings) the moment
+            // either changes. b.code persists on the block, so the rebuild shows
+            // the code immediately — no reload flash.
+          }).key(
+            'detail:' +
+              (i === sel ? 'sel' : 'prev') +
+              ':' +
+              (b.code && !b.code.error ? 'code' : b.code && b.code.error ? 'err' : 'load') +
+              ':' +
+              b.file +
+              ':' +
+              b.label +
+              ':' +
+              b.side,
+          )
           out.push(card)
         })
         return out

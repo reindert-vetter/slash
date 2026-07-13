@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -32,6 +33,22 @@ func extractBlockSource(path, relFile, class, name string) codeSide {
 		}
 	}
 	return codeSide{}
+}
+
+// blockSource returns a block's source from the given worktree root. It first
+// tries a symbol lookup (works for top-level functions/methods); if that misses —
+// e.g. a macro closure nested inside a boot method's body, which ScanBlocks does
+// not surface as its own block — it falls back to the block's recorded line range.
+func blockSource(root string, def Block) codeSide {
+	path := filepath.Join(root, def.File)
+	if cs := extractBlockSource(path, def.File, def.Class, def.Name); cs.Text != "" {
+		return cs
+	}
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return codeSide{}
+	}
+	return sliceLines(src, def.Line, def.EndLine)
 }
 
 // sliceLines returns lines [start,end] (1-based, inclusive) of src, clamped to

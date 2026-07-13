@@ -149,6 +149,31 @@ WHERE call_resolutions.status NOT IN ('searching','found')`)
 	return tx.Commit()
 }
 
+// Prune deletes every resolution for pr whose (caller_id, call_key) pair is not
+// among keep — the pairs the Go scan just emitted. A pair goes stale when its
+// caller block left the PR (re-ingest dropped the file) or when its call site is
+// no longer on a changed line; either way the row — LLM-owned included, its call
+// site is gone — is meaningless. WRITE — workflow-Activity-only.
+func (m *Module) Prune(ctx context.Context, pr int, keep []Entry) error {
+	if len(keep) == 0 {
+		_, err := m.db.ExecContext(ctx, `DELETE FROM call_resolutions WHERE pr = ?`, pr)
+		return err
+	}
+	// Pair the PK columns with a separator that appears in neither.
+	const sep = "\x1f"
+	args := make([]any, 0, len(keep)+1)
+	args = append(args, pr)
+	ph := make([]string, len(keep))
+	for i, e := range keep {
+		ph[i] = "?"
+		args = append(args, e.CallerID+sep+e.CallKey)
+	}
+	q := `DELETE FROM call_resolutions WHERE pr = ? AND caller_id || char(31) || call_key NOT IN (` +
+		strings.Join(ph, ",") + `)`
+	_, err := m.db.ExecContext(ctx, q, args...)
+	return err
+}
+
 // SaveSearching marks the given calls of a caller as in-progress. WRITE —
 // workflow-Activity-only.
 func (m *Module) SaveSearching(ctx context.Context, pr int, callerID string, calls []string) error {
