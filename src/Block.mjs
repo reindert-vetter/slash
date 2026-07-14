@@ -538,27 +538,21 @@ function rowChanged(r) {
 export const UNDERLINE_CLS = 'underline decoration-2 decoration-[#6366f1] underline-offset-2'
 
 // highlightChanges renders one side of a modified row: Prism-highlighted like any
-// line, but with the characters that differ from the other side wrapped in a
-// coloured marker (rose on old, emerald on new) so the exact edit stands out —
-// e.g. the inserted `_` in `firstname` → `first_name`. `ws` picks the marker
-// weight: a whitespace-only re-alignment sits on an untinted row and gets the
-// softer 200 shade; a real content change sits on a tinted row and needs the
-// stronger 300 shade to read against it. `underline` is an optional Set of char
-// indices (the active char-edit) that additionally get the indigo underline.
+// line. A real content change no longer gets its own char-level background here
+// — the line-level row background (rose/emerald pane tint) already shows what
+// changed. The one exception is a whitespace-only re-alignment (`ws`): the row
+// itself stays untinted (see paneHTML), so the shifted whitespace still needs
+// its own soft marker to be visible at all — see `wsOnly` in blocks-and-ingest.md.
+// `underline` is an optional Set of char indices (the active call-segment) that
+// gets the indigo underline regardless of `ws`.
 function highlightChanges(r, sideKey, ws, underline) {
   const text = sideKey === 'left' ? r.left : r.right
-  const { leftMarked, rightMarked } = charDiffSides(r.left, r.right)
-  const marked = sideKey === 'left' ? leftMarked : rightMarked
-  const markCls = ws
-    ? sideKey === 'left'
-      ? 'bg-rose-200'
-      : 'bg-emerald-200'
-    : sideKey === 'left'
-      ? 'bg-rose-300'
-      : 'bg-emerald-300'
+  const markCls = ws ? (sideKey === 'left' ? 'bg-rose-200' : 'bg-emerald-200') : ''
+  const { leftMarked, rightMarked } = ws ? charDiffSides(r.left, r.right) : {}
+  const marked = ws ? (sideKey === 'left' ? leftMarked : rightMarked) : null
   return markChars(highlight(text), (pi) => {
     const parts = []
-    if (marked.has(pi)) parts.push(markCls)
+    if (marked && marked.has(pi)) parts.push(markCls)
     if (underline && underline.has(pi)) parts.push(UNDERLINE_CLS)
     return parts.join(' ')
   })
@@ -567,10 +561,9 @@ function highlightChanges(r, sideKey, ws, underline) {
 // charDiffSides diffs the two sides at *token* granularity and returns, per side,
 // the set of character indices belonging to a token present on only that side.
 // A token is a whole `[A-Za-z0-9]` run (an identifier / number) or a single other
-// character, so a word is matched as a unit — `address` → `billingAddress` marks
-// the whole `address` / `billingAddress`, not just the differing letters. The
-// per-token char ranges are unioned back so wrapChangedChars can still wrap by
-// character offset.
+// character, so a word is matched as a unit. Only used for whitespace-only rows
+// (see `highlightChanges`) — there, every token matches except the whitespace
+// tokens, so this ends up marking exactly the re-spaced whitespace.
 function charDiffSides(left, right) {
   const a = tokenize(left || '')
   const b = tokenize(right || '')
@@ -655,13 +648,12 @@ function diffChars(a, b) {
 // spans, where `classOf(plaintextIndex)` returns the class string for that source
 // char (`''` for none). It walks the HTML tracking the plaintext offset — copying
 // tags verbatim (they don't advance the offset) and counting each entity
-// (`&amp;` etc.) as one source char — so the indices from charDiffSides (offsets
-// into the raw line) line up with the escaped output. Consecutive chars that map
-// to the *same* class string share one span, and a span is always closed before a
-// tag, so a marker never straddles a Prism token boundary (it nests inside or sits
-// between tokens) and the markup stays well-formed. Because a whole class string
-// (e.g. background + underline) is compared as one unit, overlapping markers just
-// produce a span carrying both classes.
+// (`&amp;` etc.) as one source char — so char-offset-based classifiers (e.g. the
+// active call-segment underline, or the whitespace-only tint) line up with the
+// escaped output. Consecutive chars that map to the *same* class string share
+// one span, and a span is always closed before a tag, so a marker never
+// straddles a Prism token boundary (it nests inside or sits between tokens) and
+// the markup stays well-formed.
 export function markChars(html, classOf) {
   let out = ''
   let pi = 0 // plaintext index into the original line

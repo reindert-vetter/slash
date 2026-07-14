@@ -277,11 +277,14 @@ pijlen en `f`/`d` de diff identiek doorlopen. Verfijn je een groep die precies
 over en springt direct naar `'call'` (er is dan geen zinvolle line-stap: de regel
 ís de groep); `s`/`d` lopen wél stap-voor-stap terug (`call → line → group`). De
 call-underline
-rijdt mee op de bestaande char-diff: `paneHTML` geeft de underline-set van het
-actieve segment door aan `highlightChanges`, dat samen met de bestaande
-achtergrond-markering via `markChars` (per-teken class-functie, opvolger van
-`wrapChangedChars`) in één pass gerenderd wordt. Een lege toegevoegde regel heeft
-geen tekens en dus geen underline (correct: niets te markeren).
+rijdt mee op `markChars` (per-teken class-functie): `paneHTML` geeft de
+underline-set van het actieve segment door aan `highlightChanges`, dat 'm via
+`markChars` in de Prism-highlighted HTML rendert. Gewijzigde tekens krijgen
+sinds kort **geen** eigen achtergrond meer (die achtergrond-markering is
+verwijderd — zie de sectie "Char-diff" in `.claude/rules/blocks-and-ingest.md`);
+de regel-achtergrond (rood/groen) markeert een echte wijziging nu alleen nog op
+regelniveau. Een lege toegevoegde regel heeft geen tekens en dus geen underline
+(correct: niets te markeren).
 
 ## Footer: inline preview van de geselecteerde regel
 

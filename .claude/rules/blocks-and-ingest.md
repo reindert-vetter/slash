@@ -99,3 +99,17 @@ navigeerbare lijst tonen.
   whitespace krijgt een zachte tint, het woord zelf wordt nooit char-gemarkeerd —
   i.p.v. door de positionele del/ins-pairing te schuiven en ongewijzigde woorden
   als "gewijzigd" te markeren.
+- **Char-diff: alleen regel-achtergrond, geen woord-achtergrond.** Een echt
+  gewijzigde regel (paired del/ins, geen `wsOnly`) krijgt zijn rood/groene
+  regel-achtergrond (pane-tint), maar de **individuele gewijzigde tekens/woorden
+  binnen die regel krijgen geen eigen achtergrond meer** — dat zou een dubbele,
+  donkerdere "pill" bovenop de regel-tint geven. `highlightChanges` in
+  `Block.mjs` rendert zo'n regel dus zonder woord-achtergrond; de
+  token-granulaire `charDiffSides`/`tokenize`/`diffChars`-pas (LCS op
+  `[A-Za-z0-9]`-runs, à la git-woorddiff) draait nu **alleen nog** voor een
+  `wsOnly`-rij, om de verschoven whitespace zelf te markeren (de zachte
+  `bg-rose-200`/`bg-emerald-200`-tint hierboven) — niet voor een echte
+  content-wijziging. De **call-underline** (`UNDERLINE_CLS`, indigo, het actieve
+  segment op `gran==='call'`) is een aparte laag boven op dezelfde
+  `markChars`-pass en blijft ongewijzigd werken, ook op een regel zonder
+  woord-achtergrond.

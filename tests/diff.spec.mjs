@@ -191,16 +191,21 @@ test.describe('PR Review Tree — code diff alignment', () => {
       await expect(panes.locator(`span${markers}`, { hasText: word })).toHaveCount(0)
     }
 
-    // The genuinely new structure is still marked as a real change.
+    // Content changes (e.g. the genuinely new `array_merge(...)` structure) get
+    // no char-level background either — only the line-level red/green pane tint
+    // marks a real change now (see highlightChanges in Block.mjs).
     await expect(
       panes.nth(1).locator('span[class*="bg-emerald-"]', { hasText: 'array_merge' }),
-    ).not.toHaveCount(0)
+    ).toHaveCount(0)
 
     // The re-indented 'taxes' row is a whitespace-only re-alignment: no full-line
-    // tint (#… hex classes) and not counted as a change for navigation.
+    // tint (#… hex classes) and not counted as a change for navigation. It still
+    // gets its own soft whitespace marker (bg-emerald-200) so the shifted
+    // indentation is visible even though the row itself is untinted.
     const taxesRow = panes.nth(1).locator(':scope > div', { hasText: 'taxes' })
     await expect(taxesRow).toHaveCount(1)
     await expect(taxesRow).not.toHaveClass(/bg-\[#/)
     await expect(taxesRow).not.toHaveAttribute('data-changed', '1')
+    await expect(taxesRow.locator('span[class*="bg-emerald-200"]')).not.toHaveCount(0)
   })
 })
