@@ -109,6 +109,19 @@ type CodeCommentInput struct {
 	RowStart int    `json:"rowStart"`
 	RowEnd   int    `json:"rowEnd"`
 	Seg      string `json:"seg"`
+	// StartLine/EndLine are the source line numbers (on Side) the GitHub review
+	// comment anchors to: a single line when equal (or when StartLine is 0), a
+	// multi-line range otherwise (GitHub requires StartLine < EndLine). Falls
+	// back to Line when both are 0, for backward compatibility with callers that
+	// only set Line. Side is "RIGHT" (new/context line) or "LEFT" (a removed
+	// line); empty defaults to "RIGHT".
+	StartLine int    `json:"startLine"`
+	EndLine   int    `json:"endLine"`
+	Side      string `json:"side"`
+	// Segment is the call-segment text (gran "call") shown as a code-span at the
+	// top of the GitHub-posted body, for context on which part of the line the
+	// comment targets. It never touches the stored comment's Body.
+	Segment string `json:"segment"`
 	// Local marks a private note: it is stored as a comment but never posted to
 	// GitHub. The workflow then skips postGithubComment, so posted.RootID stays 0
 	// and every downstream github call (poller, reply mirror, delete) no-ops via
@@ -278,7 +291,21 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &c); err != nil {
 			return nil, err
 		}
-		id, err := gh.PostLineComment(ctx, c.PR, c.File, c.Line, c.Body)
+		start, end := c.StartLine, c.EndLine
+		if start == 0 && end == 0 {
+			start, end = c.Line, c.Line
+		} else if end == 0 {
+			end = c.Line
+		}
+		side := c.Side
+		if side == "" {
+			side = "RIGHT"
+		}
+		body := c.Body
+		if c.Gran == "call" && c.Segment != "" {
+			body = fmt.Sprintf("`%s`\n\n%s", c.Segment, body)
+		}
+		id, err := gh.PostReviewComment(ctx, c.PR, c.File, start, end, side, body)
 		if err != nil {
 			m.logf("task_code_comment: github post skipped: %v", err)
 			return json.Marshal(postResult{RootID: 0})

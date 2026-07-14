@@ -40,7 +40,7 @@ Workflow Execution; al het andere is **read-only van buitenaf**:
 
 - **Modules** (`modules/*`, b.v. `comments`, `github`, `inbox`) zijn de dingen die "kunnen
   gebeuren in een workflow" — ze worden **alleen** door workflow-Activities
-  aangeroepen. Hun schrijf-methodes (`Save`, `AddReaction`, `PostLineComment`, …)
+  aangeroepen. Hun schrijf-methodes (`Save`, `AddReaction`, `PostReviewComment`, …)
   hoor je nergens anders aan te roepen; hun **read**-methodes (`List`, …) voeden
   de UI.
 - De **HTTP-API** schrijft alleen via workflow-endpoints (een Execution starten
@@ -95,12 +95,13 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
     telt die opening mee, dus `↑` loopt door tot de opening bovenaan. Een **klik**
     op een comment-rij landt er ook echt op (`toComment()` → highlight + thread
     open + reply-veld gefocust), net als de toetsenbord-landing.
-  - `modules/github` — de GitHub-communicatie (`gh api`): `PostLineComment`,
-    `Reply`, `FetchReplies`, `PRState` (`open`/`merged`/`closed`), `PRMeta`
-    (titel/URL/body/author/diff-stats/head-ref), `DeleteComment`,
-    `MarkFileViewed` (het Files-changed-"Viewed"-vinkje, via `gh api graphql`).
-    Interface `github.Client` + `github.Fake` (met `SetPRState`,
-    `IsViewed`/`ViewedFiles`) voor tests.
+  - `modules/github` — de GitHub-communicatie (`gh api`): `PostReviewComment`
+    (regel-range + side, zie hieronder), `Reply`, `FetchReplies`, `PRState`
+    (`open`/`merged`/`closed`), `PRMeta` (titel/URL/body/author/diff-stats/head-ref),
+    `DeleteComment`, `MarkFileViewed` (het Files-changed-"Viewed"-vinkje, via
+    `gh api graphql`). Interface `github.Client` + `github.Fake` (met `SetPRState`,
+    `IsViewed`/`ViewedFiles`, `LastStartLine`/`LastEndLine`/`LastSide`/
+    `LastPostedBody`) voor tests.
   - `modules/jira` — de Jira-communicatie via de lokale `acli`-CLI (zelfde
     bridge-patroon als `modules/github`/`modules/claude`, geen nieuwe
     dependency): `Issue(key)` draait `acli jira workitem view <key> --fields
@@ -119,6 +120,18 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   beide worden als hetzelfde Signal geleverd. Elke reactie wordt opgeslagen
   (comments) en een UI-reactie wordt gespiegeld naar GitHub; `Done`/`/resolve`
   sluit de thread.
+- **Regel-range, side en call-context naar GitHub:** `CodeCommentInput` draagt
+  naast `Line` ook `StartLine`/`EndLine`/`Side`/`Segment`. `postGithubComment`
+  bouwt daaruit de `github.PostReviewComment(ctx, pr, file, start, end, side,
+  body)`-call: `Side` is `"RIGHT"` (nieuw/context, default bij leeg) of
+  `"LEFT"` (een verwijderde regel); is `StartLine < EndLine` dan post het een
+  **multi-line range** (`start_line`..`line`, GitHub-eis), anders single-line op
+  `EndLine` (valt terug op `Line` als beide 0 zijn — backward-compat met oudere
+  callers die alleen `Line` zetten). Voor `Gran == "call"` met een niet-lege
+  `Segment` prefixt de **naar-GitHub-geposte** body met het segment als
+  code-span (`` `segment`\n\n`` + body) — de **opgeslagen** comment (`saveComment`,
+  het read-model achter de thread) blijft de rauwe `Body`, ongewijzigd door
+  `Segment`. Puur input-gedreven, dus deterministisch onder replay.
 - **Privé-notitie (`local`-vlag):** `CodeCommentInput` draagt een
   `Local bool`-vlag. Is die gezet — de UI stuurt 'm bij de keuze **"Alleen voor
   mijzelf"** in het comment-soort-menu (zie `.claude/rules/keyboard-navigation.md`)

@@ -38,7 +38,12 @@ type Reply struct {
 // Client is the module's behaviour, so callers (workflows, tests) can depend on
 // an interface and swap in Fake.
 type Client interface {
-	PostLineComment(ctx context.Context, pr int, file string, line int, body string) (int64, error)
+	// PostReviewComment posts a review comment on file, anchored to the PR head
+	// SHA, and returns the new comment ID. side is "RIGHT" or "LEFT" (empty
+	// defaults to "RIGHT"). When startLine is > 0 and < endLine, it posts a
+	// multi-line range (start_line..line); otherwise it posts a single line at
+	// endLine (falling back to startLine if endLine is <= 0).
+	PostReviewComment(ctx context.Context, pr int, file string, startLine, endLine int, side, body string) (int64, error)
 	Reply(ctx context.Context, pr int, inReplyTo int64, body string) (int64, error)
 	FetchReplies(ctx context.Context, pr int, rootID int64) ([]Reply, error)
 	// PRState reports the lifecycle state of a PR: "open", "merged", or "closed".
@@ -67,20 +72,36 @@ type ghComment struct {
 	InReplyTo int64                  `json:"in_reply_to_id"`
 }
 
-// PostLineComment posts a review comment on file:line of a PR (anchored to the
-// PR head SHA) and returns the new comment ID.
-func (m *Module) PostLineComment(ctx context.Context, pr int, file string, line int, body string) (int64, error) {
+// PostReviewComment posts a review comment on file (anchored to the PR head
+// SHA) and returns the new comment ID. See the Client interface doc for the
+// single-line vs multi-line-range rules.
+func (m *Module) PostReviewComment(ctx context.Context, pr int, file string, startLine, endLine int, side, body string) (int64, error) {
 	sha, err := m.headSHA(ctx, pr)
 	if err != nil {
 		return 0, err
 	}
+	if side == "" {
+		side = "RIGHT"
+	}
+	if endLine <= 0 {
+		endLine = startLine
+	}
+	args := []string{
+		"-f", "body=" + body,
+		"-f", "commit_id=" + sha,
+		"-f", "path=" + file,
+		"-F", "line=" + strconv.Itoa(endLine),
+		"-f", "side=" + side,
+	}
+	if startLine > 0 && startLine < endLine {
+		args = append(args,
+			"-F", "start_line="+strconv.Itoa(startLine),
+			"-f", "start_side="+side,
+		)
+	}
 	out, err := m.api(ctx, "POST",
 		fmt.Sprintf("repos/%s/pulls/%d/comments", m.repo, pr),
-		"-f", "body="+body,
-		"-f", "commit_id="+sha,
-		"-f", "path="+file,
-		"-F", "line="+strconv.Itoa(line),
-		"-f", "side=RIGHT",
+		args...,
 	)
 	if err != nil {
 		return 0, err

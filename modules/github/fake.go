@@ -17,14 +17,57 @@ type Fake struct {
 	prState string          // "" reads as "open"
 	prMeta  Meta            // returned by PRMeta (SetPRMeta overrides)
 	viewed  map[string]bool // "pr|path" -> viewed
+
+	lastStartLine int
+	lastEndLine   int
+	lastSide      string
 }
 
-func (f *Fake) PostLineComment(_ context.Context, pr int, file string, line int, body string) (int64, error) {
+func (f *Fake) PostReviewComment(_ context.Context, pr int, file string, startLine, endLine int, side, body string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nextID++
 	f.Posted = append(f.Posted, body)
+	if side == "" {
+		side = "RIGHT"
+	}
+	if endLine <= 0 {
+		endLine = startLine
+	}
+	f.lastStartLine = startLine
+	f.lastEndLine = endLine
+	f.lastSide = side
 	return f.nextID, nil
+}
+
+// LastStartLine, LastEndLine and LastSide report the range/side of the most
+// recent PostReviewComment call (tests only).
+func (f *Fake) LastStartLine() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastStartLine
+}
+
+func (f *Fake) LastEndLine() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastEndLine
+}
+
+func (f *Fake) LastSide() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastSide
+}
+
+// LastPostedBody returns the body of the most recently posted comment/reply.
+func (f *Fake) LastPostedBody() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.Posted) == 0 {
+		return ""
+	}
+	return f.Posted[len(f.Posted)-1]
 }
 
 func (f *Fake) Reply(_ context.Context, pr int, inReplyTo int64, body string) (int64, error) {

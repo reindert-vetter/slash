@@ -140,6 +140,93 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 	}
 }
 
+// A group comment posts as a multi-line range on the RIGHT side.
+func TestTaskCodeCommentGroupRange(t *testing.T) {
+	m, gh, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if _, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 14, Author: "reindert",
+		Body: "Looks off.", Gran: "group", StartLine: 10, EndLine: 14, Side: "RIGHT",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gh.PostedCount() != 1 {
+		t.Fatalf("github posted %d, want 1", gh.PostedCount())
+	}
+	if gh.LastStartLine() != 10 || gh.LastEndLine() != 14 || gh.LastSide() != "RIGHT" {
+		t.Fatalf("range = %d..%d side=%s, want 10..14 RIGHT", gh.LastStartLine(), gh.LastEndLine(), gh.LastSide())
+	}
+}
+
+// A call comment's GitHub-posted body is prefixed with the segment as a code
+// span, but the stored (thread) body stays raw.
+func TestTaskCodeCommentCallSegmentPrefix(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 7, Author: "reindert",
+		Body: "Check the null case.", Gran: "call", StartLine: 7, EndLine: 7, Side: "RIGHT",
+		Segment: "->billingAddress()",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gh.PostedCount() != 1 {
+		t.Fatalf("github posted %d, want 1", gh.PostedCount())
+	}
+	body := gh.LastPostedBody()
+	want := "`->billingAddress()`\n\nCheck the null case."
+	if body != want {
+		t.Fatalf("posted body = %q, want %q", body, want)
+	}
+	list, _ := cs.List(ctx, 42)
+	if len(list) != 1 || list[0].ID != runID || list[0].Body != "Check the null case." {
+		t.Fatalf("stored comment body = %+v, want raw body untouched", list)
+	}
+}
+
+// A removed line posts with side LEFT.
+func TestTaskCodeCommentRemovedLineSide(t *testing.T) {
+	m, gh, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if _, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 5, Author: "reindert",
+		Body: "This was removed.", Gran: "line", StartLine: 5, EndLine: 5, Side: "LEFT",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gh.LastSide() != "LEFT" {
+		t.Fatalf("side = %q, want LEFT", gh.LastSide())
+	}
+	if gh.LastStartLine() != 5 || gh.LastEndLine() != 5 {
+		t.Fatalf("range = %d..%d, want 5..5", gh.LastStartLine(), gh.LastEndLine())
+	}
+}
+
+// Backward compat: an input with only Line set (no StartLine/EndLine/Side)
+// still posts single-line RIGHT on that line.
+func TestTaskCodeCommentLineOnlyBackwardCompat(t *testing.T) {
+	m, gh, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if _, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reindert",
+		Body: "Old-style input.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gh.LastStartLine() != 10 || gh.LastEndLine() != 10 || gh.LastSide() != "RIGHT" {
+		t.Fatalf("range = %d..%d side=%s, want 10..10 RIGHT", gh.LastStartLine(), gh.LastEndLine(), gh.LastSide())
+	}
+}
+
 // A local ("alleen voor mijzelf") note is stored as a comment but never posted
 // to GitHub: the workflow skips postGithubComment, so posted.RootID stays 0 and
 // deleting it also makes no GitHub call.
