@@ -1987,9 +1987,13 @@ function onKeydown(e) {
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault()
       if (state.focusLevel > 0) {
-        // Step focus one column to the left — the previous drilled column, or
-        // (from level 1) back onto the original top-level block's own diff —
-        // WITHOUT closing the column we're leaving; it stays open, just dimmed.
+        // Close the focused drilled column and step focus back onto the diff
+        // of its parent column — the closed child reappears in the parent's
+        // Related-code list (that list is driven by focusedBlock() via the
+        // setRelated watch, so it updates on its own once focusLevel drops).
+        // Repeated ArrowLeft peels back one drilled level at a time.
+        state.drill = state.drill.slice(0, state.focusLevel - 1)
+        state.drillCursor = state.drillCursor.slice(0, state.focusLevel - 1)
         state.focusLevel -= 1
         scrollFocusIntoView()
       } else {

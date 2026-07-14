@@ -178,10 +178,12 @@ worden **automatisch** door de LLM-search opgepakt zonder toets of knop (zie
 drillen staat de keyboard-focus op de **diff** van de nieuwe kolom, niet op zijn
 Onderliggende-code-paneel (`drillIntoChild` roept `leaveRelated()` — de
 geëxporteerde `exitRelated` — i.p.v. `enterRelated()`); vandaar loop je met
-`↑`/`↓` door de wijzigingsgroepen van díe kolom, en stapt `←` de focus terug naar
-de vorige kolom **zonder 'm te sluiten** — herhaald `←` loopt zo alle gedrilde
-kolommen af tot het oorspronkelijke top-level block, waar nóg een `←` pas de hele
-diff-sessie verlaat (en dan ook de gedrilde kolommen opruimt). Zie de sectie
+`↑`/`↓` door de wijzigingsgroepen van díe kolom, en **sluit** `←` de gefocuste
+gedrilde kolom, waarna de focus terugvalt op de diff van de parent-kolom (het
+gesloten kind verschijnt weer in diens Onderliggende-code-lijst) — herhaald `←`
+pelt zo niveau voor niveau terug tot het oorspronkelijke top-level block, waar
+nóg een `←` pas de hele diff-sessie verlaat (en dan ook de resterende
+gedrilde-kolom-state opruimt). Zie de sectie
 "Kolom-navigatie" in `.claude/rules/detail-layout.md` voor het volledige
 `state.focusLevel`-mechanisme. `←`/`Escape` vanaf de eerste positie van het
 Onderliggende-code-paneel (`cs.codeSel === 0`) geeft de keyboard-focus terug aan

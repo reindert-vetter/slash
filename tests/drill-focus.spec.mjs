@@ -2,9 +2,9 @@ import { test, expect } from './_fixtures.mjs'
 
 // Verifies the new right-to-left drill-column keyboard navigation: after
 // drilling, the keyboard focus lands on the new column's own diff (not its
-// Onderliggende-code panel); ← steps focus back one column at a time WITHOUT
-// closing the column; eventually ← returns to the original block's own diff,
-// and one more ← exits to the list.
+// Onderliggende-code panel); ← closes the focused drilled column and steps
+// focus back onto the parent column's own diff; eventually ← returns to the
+// original block's own diff, and one more ← exits to the list.
 //
 // Uses PR 12903 (the only fixture PR backed by a real worktree, so its blocks
 // have real diffs) with a synthetic relation — injected by mocking
@@ -67,17 +67,15 @@ test('drilled columns are navigable left/right with the keyboard', async ({ page
   await expect(drillColumn).toHaveCount(1)
   await expect(drillArticle).toHaveClass(/border-indigo-300/)
 
-  // 2. ← steps focus back onto the original block's diff — WITHOUT closing
-  // the drilled column (it stays open, just dimmed).
+  // 2. ← closes the drilled column and steps focus back onto the original
+  // block's own diff.
   await page.keyboard.press('ArrowLeft')
   await page.waitForTimeout(200)
-  await expect(drillColumn).toHaveCount(1)
+  await expect(drillColumn).toHaveCount(0)
   await expect(blockArticle).toHaveClass(/border-indigo-300/)
-  await expect(drillArticle).not.toHaveClass(/border-indigo-300/)
 
-  // 3. One more ← drops back to the list (mode change) and clears the drill
-  // stack — the existing diff→list behaviour, now also tearing down the
-  // drilled columns that only make sense inside this diff session.
+  // 3. One more ← drops back to the list (mode change) — the existing
+  // diff→list behaviour.
   await page.keyboard.press('ArrowLeft')
   await page.waitForTimeout(200)
   await expect(drillColumn).toHaveCount(0)

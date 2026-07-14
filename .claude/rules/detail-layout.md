@@ -117,11 +117,13 @@ van dat niveau, `0` bewerkt zoals altijd `state.gran`/`state.change`.
   van een **nog niet eerder geladen** gedrilde/gefocuste child alsnog arriveert
   (mirror van de bestaande top-level-branch: `state.drill[state.focusLevel - 1]
   === b`). Zie `.claude/rules/keyboard-navigation.md` voor `scrollChangeIntoView`.
-- **`←` stapt de focus één kolom naar links** — naar de vorige gedrilde kolom, of
-  (vanaf niveau 1) terug naar de diff van het oorspronkelijke top-level block —
-  **zonder die kolom te sluiten**: hij blijft staan, alleen gedimd (`preview`).
-  Herhaald `←` loopt zo alle gedrilde kolommen af tot je weer op het eerste block
-  staat.
+- **`←` sluit de gefocuste gedrilde kolom** en zet de focus terug op de diff van
+  de **parent-kolom** — de vorige gedrilde kolom, of (vanaf niveau 1) het
+  oorspronkelijke top-level block. Het gesloten kind verschijnt daarmee vanzelf
+  weer in de Onderliggende-code-lijst van die parent-kolom (die lijst wordt
+  gedreven door `focusedBlock()` via de `setRelated`-watch, dus dat herstelt
+  zonder extra code zodra `focusLevel` daalt). Herhaald `←` pelt zo niveau voor
+  niveau terug tot je weer op het top-level block staat.
 - **Pas als je al op niveau `0` staat (het top-level block), sluit `←` de héle
   diff-sessie** — de bestaande diff→list-overgang (`state.mode='list'`) — en dán
   worden `state.drill`/`state.drillCursor` ook leeggemaakt: gedrilde kolommen
