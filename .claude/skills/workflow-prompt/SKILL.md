@@ -1,5 +1,5 @@
 ---
-name: prompt-workflow
+name: workflow-prompt
 description: Draai een reeks losse, onderling ongerelateerde prompts als één sequentiële workflow — elke prompt in een eigen geïsoleerde subagent-context, met een [x]/[*]/[ ]-overzicht, planvragen vooraf, en een commit per afgeronde taak. Gebruik wanneer de gebruiker "run dit als workflow", "ik geef je prompts één voor één", of iets vergelijkbaars vraagt.
 ---
 
