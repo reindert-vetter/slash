@@ -66,8 +66,24 @@ export default function BlockList(state) {
             >${() => state.blocks.length}</span
           >
           starting points &nbsp;·&nbsp; ↑ ↓ to choose · → to step into the diff ·
-          ← to step back
+          ← to search
         </p>
+        <input
+          id="block-search"
+          data-testid="block-search"
+          type="text"
+          placeholder="Search starting points…"
+          autocomplete="off"
+          spellcheck="false"
+          class="${() =>
+            'mt-2 w-full rounded-lg border bg-slate-50 px-3 py-1.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none ' +
+            (state.searchActive
+              ? 'border-indigo-300 bg-white ring-2 ring-indigo-200'
+              : 'border-slate-200 hover:border-slate-300')}"
+          @input="${(e) => state.onSearch && state.onSearch(e.target.value)}"
+          @focus="${() => (state.searchActive = true)}"
+          @blur="${() => (state.searchActive = false)}"
+        />
       </header>
 
       <div class="no-scrollbar min-h-0 flex-1 overflow-y-auto" id="block-scroll">

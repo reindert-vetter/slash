@@ -100,6 +100,18 @@ terug naar `mode:'list'` bij een block zonder wijzigingen; de paneel-cursor word
 ná de data-push één keer opnieuw toegepast, zie `RelatedPanel.applyRelRestore`).
 Zie skill `url-state`.
 
+## Klaar met een taak
+
+Ben je klaar met een taak, **vraag dan of je**:
+
+1. de wijzigingen moet **committen**,
+2. de branch moet **mergen in `main`**, en
+3. de **worktree moet opruimen**.
+
+Voer deze stappen niet ongevraagd uit — vraag het eerst, en pas als hij ja zegt
+commit → merge → ruim de worktree op. We werken in een git-worktree (een geïsoleerde
+kopie), dus opruimen hoort bij het afronden.
+
 ## `.claude/` bijhouden
 
 Deze `.claude/`-map (rules, templates, skills, agents) is onderdeel van het project

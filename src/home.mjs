@@ -130,6 +130,14 @@ const state = reactive({
   ingesting: false,
   error: '',
   onIngest: ingest,
+  // search — the free-text filter over the starting-points list. `search` is the
+  // query (matched against each block's label + category in recomputeLeftList);
+  // `searchActive` is true while the search box holds the keyboard, so onKeydown
+  // routes typing into it and keeps ↑/↓ moving the (filtered) selection without
+  // stealing focus. Reached by ← from the list, left by → / Enter / Escape.
+  search: '',
+  searchActive: false,
+  onSearch: setSearch,
 })
 
 // Persist the navigation position in the URL so a refresh (or a shared link)
@@ -324,9 +332,37 @@ function recomputeLeftList() {
   const hidden = new Set(state.relations.map((r) => r.childId))
   for (const id of resolvedCallTargetIds()) hidden.add(id)
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
-  state.blocks = state.allBlocks.filter((b) => !hidden.has(b.id))
+  const q = (state.search || '').trim().toLowerCase()
+  state.blocks = state.allBlocks
+    .filter((b) => !hidden.has(b.id))
+    .filter((b) => !q || (b.label + ' ' + b.category).toLowerCase().includes(q))
   const at = state.blocks.findIndex((b) => b.id === selId)
   state.selected = at >= 0 ? at : Math.min(state.selected, Math.max(0, state.blocks.length - 1))
+}
+
+// setSearch is the search box's input handler: refilter the left list and jump
+// the selection to the top match so ↑/↓ walk the results from the first hit.
+function setSearch(q) {
+  state.search = q
+  recomputeLeftList()
+  state.selected = 0
+  scrollSelectedIntoView()
+}
+
+// activateSearch / exitSearch move the keyboard in and out of the search box.
+// They flip state.searchActive AND drive real DOM focus (the box's @focus/@blur
+// mirror the flag back, so a mouse click stays in sync). Reached by ← from the
+// list; left by → / Enter (step into the diff) or Escape (back to the list).
+function activateSearch() {
+  state.searchActive = true
+  const el = document.getElementById('block-search')
+  if (el) el.focus()
+}
+
+function exitSearch() {
+  state.searchActive = false
+  const el = document.getElementById('block-search')
+  if (el) el.blur()
 }
 
 // resolvedCallTargetIds returns the ids of PR blocks that are the definition of
@@ -1569,6 +1605,33 @@ function onKeydown(e) {
     return
   }
 
+  // While the search box holds the keyboard it owns typing: letters flow into it
+  // (we don't preventDefault them), ↑/↓ still walk the filtered selection but
+  // leave focus in the box so the reviewer can keep typing, and → / Enter step
+  // into the selected block's diff while Escape drops back to the list. ← is
+  // swallowed — the box is already the leftmost stop.
+  if (state.searchActive) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      state.selected = Math.min(state.selected + 1, state.blocks.length - 1)
+      scrollSelectedIntoView()
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      state.selected = Math.max(state.selected - 1, 0)
+      scrollSelectedIntoView()
+    } else if (e.key === 'ArrowRight' || e.key === 'Enter') {
+      e.preventDefault()
+      exitSearch()
+      enterDiff()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      exitSearch()
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+    }
+    return
+  }
+
   // Enter on a filled new-comment composer opens the comment-kind menu (Claude /
   // Git / private / Jira) instead of placing directly. Handled before the
   // relatedActive() branch so it works whether the composer was opened via the
@@ -1693,6 +1756,9 @@ function onKeydown(e) {
   } else if (e.key === 'ArrowRight') {
     e.preventDefault()
     enterDiff()
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault()
+    activateSearch() // step left out of the list into the search box
   }
 }
 
@@ -1983,6 +2049,10 @@ const app = document.getElementById('app')
 BlockList(state)(app)
 DetailPanel(state)(app)
 Footer(state)(app)
+
+// Start with the search box already focused so the reviewer can type straight
+// away — a frame later, once BlockList has rendered the input into the DOM.
+requestAnimationFrame(activateSearch)
 
 // Kick off the initial load.
 loadBlocks()
