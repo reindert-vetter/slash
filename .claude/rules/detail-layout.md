@@ -177,6 +177,16 @@ Twee gestapelde kaarten:
   uitgekristalliseerde run `state.selected` uit zijn dependency-set vallen: de
   `watch` her-abonneert niet meer en het paneel **bevriest** op het block dat bij
   het laden geselecteerd was — het volgt de cursor niet meer naar een ander block.
+  **Refresh-restore van de paneel-cursor:** `cs.focus`/`codeSel`/`sel`/`threadPos`
+  leven in de URL onder de eigen `rel`-namespace (`bindUrlState(cs, …, { ns:'rel' })`
+  in `RelatedPanel.mjs`), zodat een refresh je terugzet op hetzelfde
+  Onderliggende-code-kind resp. dezelfde comment-thread. Omdat de data-pushes
+  (`setRelated`/`loadComments`) `cs` tijdens het laden clampen — en de mirror-`watch`
+  dat meteen naar de URL zou spiegelen — snapshot `RelatedPanel` de herstelde waarden
+  in `restorePending` en past ze via **`applyRelRestore`** één keer geclampt opnieuw
+  toe zodra de kinderen/comments binnen zijn (een focus alleen als z'n doel bestaat,
+  daarna clear zodat latere navigatie vrij blijft). Zie skill `url-state` en de
+  URL-state-sectie in `CLAUDE.md`.
   Aanroepen die de Go-resolver niet kon pinnen
   geven een **"Zoek (N)"**-knop (`data-testid=related-search`) die de LLM-zoektocht
   start (`startCallSearch` → `POST /api/workflows/resolve_call`; ook via `Enter` op

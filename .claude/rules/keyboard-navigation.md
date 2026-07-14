@@ -160,7 +160,14 @@ blokje en verlaat — voorbij het laatste — de lijst naar de comments-kolom;
 **`↑`** het **vorige** blokje en keert — vanaf het 2e — terug op het **eerste**
 blokje; **`←`** gaat terug naar de diff; **`→`** doet niets meer.
 Vanuit de comments keert **`↑`** terug naar het laatst-gekozen blokje
-(`cs.codeSel` blijft behouden). **`Enter`** op de kaart **drilt** in het kind
+(`cs.codeSel` blijft behouden). Deze paneel-cursor
+(`cs.focus`/`codeSel`/`sel`/`threadPos`) leeft in de **URL** onder de eigen
+`rel`-namespace (`rel.foc`/`rel.code`/`rel.csel`/`rel.thr`, via
+`bindUrlState(cs, …, { ns:'rel' })` in `RelatedPanel.mjs`), zodat een refresh je
+terugzet op precies dit blokje / deze comment-thread; `applyRelRestore` past de
+herstelde cursor één keer geclampt opnieuw toe zodra de kinderen/comments geladen
+zijn (zie `.claude/rules/detail-layout.md` en skill `url-state`). **`Enter`** op de
+kaart **drilt** in het kind
 waar de cursor op staat (`focusedRelatedChild()`): het kind opent als een eigen
 diff-kolom rechts naast de bestaande, tussen die kolommen en `RelatedPanel` in
 (`drillIntoChild`, zie de sectie "Drillen" in `.claude/rules/detail-layout.md`),

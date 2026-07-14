@@ -7,6 +7,7 @@
 import { html } from './vendor/arrow.js'
 import { reactive } from './vendor/arrow.js'
 import { highlight } from './Block.mjs'
+import { bindUrlState, num } from './urlState.mjs'
 
 // ── Real comments (task_code_comment workflow) ────────────────────────────────
 // This section IS wired to the API. Placing a comment starts a Workflow
@@ -33,6 +34,34 @@ import { highlight } from './Block.mjs'
 // → walks it forward through the child list, ↓ leaves it for the comments column.
 const cs = reactive({ pr: null, list: [], view: [], sel: 0, composing: false, busy: false, focus: null, threadPos: 0, scope: null, scopeSig: '', codeSel: 0 })
 
+// The panel cursor survives a browser refresh: focus/codeSel/sel/threadPos live in
+// the URL under their own `rel` namespace, alongside the main navigation (sel/mode/
+// chg/gran) that home.mjs binds. The composer/busy/list/view/scope are transient or
+// loaded data and stay out. focus === null (diff owns the keyboard) is the default,
+// so the params only appear once you actually step into the panel.
+bindUrlState(
+  cs,
+  [
+    { key: 'focus', param: 'foc', default: null },
+    { key: 'codeSel', param: 'code', parse: num(0), default: 0 },
+    { key: 'sel', param: 'csel', parse: num(0), default: 0 },
+    { key: 'threadPos', param: 'thr', parse: num(0), default: 0 },
+  ],
+  { ns: 'rel' },
+)
+
+// restorePending captures what the URL restored into cs *before* the async data
+// pushes (setRelated / loadComments) can clobber it — those clamp codeSel/sel back
+// to 0 and drop a dangling focus while the children/comments are still loading,
+// which would immediately mirror the params out of the URL again. We re-apply this
+// snapshot once the data settles (applyRelRestore), then clear it so it never
+// hijacks later navigation. Null when the URL carried no rel.* param — nothing to
+// restore, and the mirror-watch is then free to keep the URL canonical.
+let restorePending =
+  cs.focus !== null || cs.codeSel !== 0 || cs.sel !== 0 || cs.threadPos !== 0
+    ? { focus: cs.focus, codeSel: cs.codeSel, sel: cs.sel, threadPos: cs.threadPos }
+    : null
+
 // ── Underlying code, pushed from home.mjs ─────────────────────────────────────
 // The underlying-code card follows the cursor: which child blocks / resolved
 // calls to show depends on the current navigation unit, which lives in home.mjs'
@@ -54,6 +83,9 @@ export function setRelated(children, unresolved) {
   // A block switch (or a shrinking list) must not leave the child cursor on a
   // stale index; snap it back to the first block.
   if (cs.codeSel >= rc.children.length) cs.codeSel = 0
+  // Children just arrived — a pending refresh-restore that wanted the code card
+  // (or a codeSel) can now land. One-shot; see applyRelRestore.
+  applyRelRestore()
 }
 
 // ── Index scoping (filter by the selected navigation unit) ────────────────────
@@ -145,8 +177,9 @@ export function commentRowSet(b) {
 // ── Keyboard focus in the right-hand panel ────────────────────────────────────
 // home.mjs owns the single keydown listener and, once the reviewer steps into
 // this panel (→ from the diff), routes the arrows here via handleRelatedKey. The
-// focus state is ephemeral (like the command palette) — it never touches the URL
-// or any durable store, so the write-boundary rule is unaffected.
+// focus state is navigation position, not durable state: it is mirrored to the URL
+// (rel.foc, so a refresh restores where the cursor sat — see bindUrlState above),
+// but never written to a store, so the write-boundary rule is unaffected.
 
 // relatedActive reports whether this panel currently owns the keyboard.
 export function relatedActive() {
@@ -286,6 +319,42 @@ function enterThread() {
   cs.focus = 'thread'
   cs.threadPos = 0
   focusThread()
+}
+
+// applyRelRestore re-applies the URL-restored panel cursor (restorePending, set at
+// module load) once the data it points at has actually loaded — children arrive via
+// setRelated, comments via loadComments, and either can win the race. It gates on
+// the data the *wanted* focus needs and only clears restorePending once it applies,
+// so a comment focus isn't dropped because setRelated happened to fire first with
+// children but no comments yet (and vice-versa). It runs at most once, so it never
+// hijacks navigation the reviewer does afterwards. Indices are clamped to what
+// loaded and a focus is restored via the same land helpers the arrows use — so the
+// caret/scroll land exactly where a manual step would — but only when the target
+// exists; otherwise the diff keeps the keyboard.
+function applyRelRestore() {
+  const want = restorePending
+  if (!want) return
+  const children = rc.children.length
+  const comments = visibleComments().length
+  // Wait for the data the wanted focus points at; 'new'/null need none.
+  if (want.focus === 'code' && children === 0) return
+  if ((want.focus === 'comment' || want.focus === 'thread') && comments === 0) return
+  restorePending = null
+  cs.codeSel = children ? Math.min(want.codeSel, children - 1) : 0
+  cs.sel = comments ? Math.min(want.sel, comments - 1) : 0
+  if (want.focus === 'code') {
+    cs.focus = 'code'
+    scrollCodeIntoView()
+  } else if (want.focus === 'new') {
+    toNew()
+  } else if (want.focus === 'thread') {
+    cs.focus = 'thread'
+    cs.threadPos = Math.min(want.threadPos, reactionCount())
+    focusThread()
+  } else if (want.focus === 'comment') {
+    toComment()
+  }
+  // else (focus null): leave the diff with the keyboard, indices restored silently.
 }
 
 // The left column is one flat vertical list the arrows walk: the related-code
@@ -465,6 +534,9 @@ async function loadComments(pr) {
         cs.focus = 'new'
         cs.threadPos = 0
       }
+      // Comments just arrived — a pending refresh-restore that wanted a comment/
+      // thread (or a sel) can now land. One-shot; see applyRelRestore.
+      applyRelRestore()
     }
   } catch (_) {
     // keep the last good list on a transient error

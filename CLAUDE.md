@@ -89,12 +89,16 @@ bindt de hoofd-navigatie (`selected`→`sel`, `mode`, `change`→`chg`,
 `.claude/rules/pages-and-routing.md`), niet in de query. Een `default`-waarde
 wordt uit de URL weggelaten zodat die kort/canoniek blijft (dus `gran` verschijnt
 alleen bij `line`/`call`, niet bij de default `group`).
-Elk **extra venster/paneel** krijgt een eigen `ns` (b.v. `{ ns: 'diff' }` →
-`?..&diff.file=..`) zodat zijn params náást de hoofd-navigatie in dezelfde URL
-staan zonder te botsen. Herstelde waarden die door async-load buiten bereik
-vallen worden geclamped (`loadBlocks` clamp't `selected`, `ensureCode` clamp't
-`change` en valt terug naar `mode:'list'` bij een block zonder wijzigingen). Zie
-skill `url-state`.
+Elk **extra venster/paneel** krijgt een eigen `ns` zodat zijn params náást de
+hoofd-navigatie in dezelfde URL staan zonder te botsen. Het `RelatedPanel` gebruikt
+dit echt: `bindUrlState(cs, …, { ns: 'rel' })` bindt de **paneel-cursor**
+(`focus`→`rel.foc`, `codeSel`→`rel.code`, `sel`→`rel.csel`, `threadPos`→`rel.thr`)
+zodat een refresh je terugzet op hetzelfde Onderliggende-code-kind / dezelfde
+comment-thread. Herstelde waarden die door async-load buiten bereik vallen worden
+geclamped (`loadBlocks` clamp't `selected`, `ensureCode` clamp't `change` en valt
+terug naar `mode:'list'` bij een block zonder wijzigingen; de paneel-cursor wordt
+ná de data-push één keer opnieuw toegepast, zie `RelatedPanel.applyRelRestore`).
+Zie skill `url-state`.
 
 ## `.claude/` bijhouden
 

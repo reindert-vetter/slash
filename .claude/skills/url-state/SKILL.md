@@ -53,9 +53,15 @@ bindUrlState(state, [
 ## Een extra venster/paneel toevoegen
 
 1. Maak zijn eigen `reactive(...)`-state.
-2. `bindUrlState(panelState, [...], { ns: 'diff' })` — kies een korte, unieke `ns`.
-3. Klaar: zijn params (`diff.<param>`) staan naast de hoofd-navigatie en overleven
+2. `bindUrlState(panelState, [...], { ns: 'rel' })` — kies een korte, unieke `ns`.
+3. Klaar: zijn params (`rel.<param>`) staan naast de hoofd-navigatie en overleven
    een refresh onafhankelijk.
+
+Het `RelatedPanel` doet dit echt (`src/RelatedPanel.mjs`): het bindt zijn eigen
+`cs`-cursor onder `ns:'rel'` (`focus`→`rel.foc`, `codeSel`→`rel.code`,
+`sel`→`rel.csel`, `threadPos`→`rel.thr`) zodat een refresh je terugzet op hetzelfde
+Onderliggende-code-kind / dezelfde comment-thread. Kijk daar voor een compleet
+voorbeeld inclusief de async-clobber-oplossing hieronder.
 
 ## Valkuilen (uit de praktijk)
 
@@ -65,6 +71,15 @@ bindUrlState(state, [
   vallen tot de blocks/code geladen zijn. Clamp na het laden — zie `loadBlocks`
   (clamp `selected`) en `ensureCode` in `home.mjs` (clamp `change`, en val terug
   naar `mode:'list'` als het herstelde block geen navigeerbare wijzigingen heeft).
+- **De mirror-`watch` wist herstelde params tijdens het laden.** Wordt je state ná
+  de restore nog door een async data-push overschreven (b.v. een clamp-naar-0 zolang
+  de data leeg is), dan spiegelt de `watch` die reset meteen naar de URL en ben je de
+  herstelde waarde kwijt vóór je 'm kon gebruiken. Oplossing (zie
+  `RelatedPanel.applyRelRestore`): **snapshot** de herstelde waarden ná `bindUrlState`
+  in een losse `restorePending`, en pas ze **één keer, geclampt** opnieuw toe zodra de
+  data binnen is (aan het eind van de load-functies). Herstel een positie alleen als
+  z'n doel echt bestaat, en clear de snapshot daarna zodat latere navigatie niet
+  gekaapt wordt.
 - **Kale keys reageren niet als attribuut-waarde** — dit is state-sync, niet arrow's
   attribuut-binding; de gewone arrow.js-regels gelden verder in de templates.
 - **`watch` trackt alleen wat je leest.** De `fields.map(f => state[f.key])` in de
