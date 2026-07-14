@@ -570,3 +570,47 @@ func TestCommentPath(t *testing.T) {
 		})
 	}
 }
+
+// TestRunsForPR asserts RunsForPR filters workflow runs by their input's PR
+// number and excludes runs without one (pr_inbox), so the read-only "Taken"
+// endpoint only ever shows runs that belong to the requested PR.
+func TestRunsForPR(t *testing.T) {
+	t.Setenv("SLASH_GITHUB", "off")
+	pm := testPRMeta(t)
+	cs, err := comments.Open(filepath.Join(t.TempDir(), "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+	gh := &github.Fake{}
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, nil, "", "test/repo")
+
+	if _, err := m.EnsurePRStatus(101); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.EnsurePRStatus(202); err != nil {
+		t.Fatal(err)
+	}
+	m.EnsureInbox(context.Background()) // per-repo, no "pr" field — must not leak into either PR's list
+
+	runs := m.RunsForPR(101)
+	if len(runs) != 1 {
+		t.Fatalf("RunsForPR(101) = %d runs, want 1 (%+v)", len(runs), runs)
+	}
+	if runs[0].Workflow != WorkflowPRStatus {
+		t.Fatalf("workflow = %q, want %q", runs[0].Workflow, WorkflowPRStatus)
+	}
+	if runs[0].Status != tembed.StatusWaiting && runs[0].Status != tembed.StatusRunning {
+		t.Fatalf("status = %q, want waiting/running", runs[0].Status)
+	}
+
+	runs202 := m.RunsForPR(202)
+	if len(runs202) != 1 {
+		t.Fatalf("RunsForPR(202) = %d runs, want 1", len(runs202))
+	}
+
+	if runs := m.RunsForPR(999); len(runs) != 0 {
+		t.Fatalf("RunsForPR(999) = %d runs, want 0", len(runs))
+	}
+}

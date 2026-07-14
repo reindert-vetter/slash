@@ -47,7 +47,24 @@ naar de hoogte van het comment-blok. In combinatie met `max-h-full` op de
 code-section blijft die zo hoog als zijn inhoud (korte lijst → korte kaart) maar
 groeit hij bij veel onderliggende code tot de **volle beschikbare hoogte** en
 scrollt dan intern (de body is `flex-1 min-h-0 overflow-auto`). Het comment-blok
-houdt zijn eigen `max-h-[28rem] min-h-[16rem]` naast de code-kaart. `<main>`
+houdt zijn eigen `max-h-[28rem] min-h-[16rem]` naast de code-kaart. Een **derde**
+kolom, rechts van het comment-blok — `<section data-testid=workflows-panel>`,
+titel **"Taken"** — toont de **workflow-runs van de huidige PR** (`state.workflows`,
+gevuld door `pollWorkflows` in `home.mjs` via `GET /api/workflows?pr=N`, elke
+2.5s). Dat endpoint is **read-only** (`RunsForPR` in `tasks_api.go` filtert
+`engine.Runs()` op het `pr`-veld in elke run's opgeslagen input — geen mutatie,
+dus binnen de write-boundary), niet te verwarren met het bestaande, ongerelateerde
+placeholder-blok `data-testid=tasks` (Taken + chat) *binnen* het comment-blok. De
+kaart splitst **actief** (`running`/`waiting`, bovenaan, vol) van **recent klaar**
+(`completed`/`failed`, eronder, gedimd) onder de kopjes "Actief"/"Recent"; elke rij
+toont een leesbaar workflow-label (`WORKFLOW_LABELS` in `RelatedPanel.mjs`, b.v.
+`build_relations`→"Relaties") plus een kleur-gecodeerde status-badge (amber/
+blauw/groen/rood). De rij-key codeert **runId + status** (niet alleen runId) zodat
+een statuswissel (b.v. `running`→`completed`) een **verse** node forceert i.p.v.
+een keyed node te hergebruiken zonder zijn statische classes te herevalueren —
+dezelfde valkuil als de block-kaart-key, zie `.claude/rules/conventions.md`. De
+lege staat wikkelt in een array-van-één (`.key('no-workflows')`), conform de
+"no comments"-valkuil in diezelfde conventions-regel. `<main>`
 scrollt horizontaal mee als de kolommen samen te breed worden.
 
 **Inklappen bij comment-focus:** samen met de diff-kolom is de volle-breedte

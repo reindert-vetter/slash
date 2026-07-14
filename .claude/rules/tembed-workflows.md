@@ -194,6 +194,13 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   `POST /api/workflows/{runID}/heartbeat` (UI-heartbeat, geen state-write),
   `GET /api/workflows/{runID}` (status), en read-only `GET /api/comments?pr=N`
   (of `?path=<prefix>` voor de hiërarchische prefix-zoek over de comment-paden).
+  Read-only `GET /api/workflows?pr=N` (let op: **zonder** trailing slash, dus een
+  ander pattern dan `/api/workflows/`) geeft `{ok,runs:[...]}` — élke workflow-run
+  van die PR (`RunsForPR` in `tasks_api.go` filtert `engine.Runs()` op het
+  `pr`-veld in elke run's opgeslagen input, dus `pr_inbox` — per-repo, geen
+  `pr`-veld — valt er vanzelf uit), nieuwste `updatedAt` eerst. Voedt de
+  "Taken"-kolom (`workflows-panel`) in `RelatedPanel`, zie
+  `.claude/rules/detail-layout.md`.
   Voor de PR-metadata: `POST /api/workflows/pr_status {pr}` (ensure de tracker,
   die synchroon de drie stages draait) + read-only `GET /api/pr?pr=N` (leest
   het `prmeta`-read-model: `{ok,pr,title,url,updatedAt,body,author,additions,

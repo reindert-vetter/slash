@@ -76,6 +76,10 @@ const state = reactive({
   // as the pr_status workflow completes its 3 stages (basics, summary, statuses) —
   // see loadPRMeta/pollPRMeta and prInfoCard below.
   prMeta: {},
+  // workflows — the read-only list of workflow runs for this PR (GET
+  // /api/workflows?pr=N), reassigned wholesale on every poll so arrow.js
+  // re-renders the "Taken" column in RelatedPanel. See pollWorkflows below.
+  workflows: [],
   // blocks — the top-level blocks shown in the sidebar and walked by the
   // navigation: the full set minus any block that is a child in a relation
   // (those are nested under their parent in the RelatedPanel instead). allBlocks
@@ -628,6 +632,27 @@ async function pollPRMeta(count) {
   }
   if (count + 1 < PR_META_MAX_POLLS) {
     setTimeout(() => pollPRMeta(count + 1), PR_META_POLL_MS)
+  }
+}
+
+const WORKFLOWS_POLL_MS = 2500
+
+// pollWorkflows refreshes state.workflows from the read-only GET
+// /api/workflows?pr=N endpoint (the "Taken" column in RelatedPanel). Runs keep
+// changing status over time (running → waiting → completed), so — unlike
+// pollPRMeta — this just keeps polling on a plain interval for the life of the
+// page. Read-only; best-effort (offline just leaves the last-known list).
+async function pollWorkflows() {
+  try {
+    const res = await fetch(`/api/workflows?pr=${state.pr}`)
+    if (res.ok) {
+      const data = await res.json()
+      if (data && data.ok) {
+        state.workflows = data.runs || []
+      }
+    }
+  } catch (_) {
+    /* offline/transient — keep the last-known list, try again next tick */
   }
 }
 
@@ -2659,3 +2684,5 @@ requestAnimationFrame(activateSearch)
 // Kick off the initial load.
 loadBlocks()
 loadPRMeta()
+pollWorkflows()
+setInterval(pollWorkflows, WORKFLOWS_POLL_MS)

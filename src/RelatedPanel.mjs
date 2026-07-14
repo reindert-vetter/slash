@@ -1026,6 +1026,103 @@ function codeCardCollapsed() {
 // the unresolved-call list are read from `rc`, which home.mjs keeps up to date
 // via setRelated (see the note on rc above). The LLM search for unresolved calls
 // runs automatically (home.mjs' startCallSearch); `search.drill` opens a child.
+// ── "Taken" (workflow runs) ────────────────────────────────────────────────
+// Read-only column: home.mjs polls GET /api/workflows?pr=N into state.workflows
+// (see pollWorkflows); this section just renders that snapshot. It never writes
+// anything itself.
+
+// WORKFLOW_LABELS maps a Workflow Type to the Dutch label shown in the list;
+// an unknown type falls back to its raw name.
+const WORKFLOW_LABELS = {
+  task_code_comment: 'Comment',
+  pr_status: 'PR-status',
+  build_relations: 'Relaties',
+  resolve_call: 'Call zoeken',
+  approve: 'Goedkeuring',
+  pr_inbox: 'Inbox',
+}
+
+// STATUS_BADGES maps a run status to its Dutch label + badge colour classes.
+const STATUS_BADGES = {
+  running: { label: 'draait', cls: 'bg-amber-50 text-amber-700 ring-amber-200' },
+  waiting: { label: 'wacht', cls: 'bg-sky-50 text-sky-700 ring-sky-200' },
+  completed: { label: 'klaar', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
+  failed: { label: 'mislukt', cls: 'bg-rose-50 text-rose-700 ring-rose-200' },
+}
+
+function workflowRow(run) {
+  const badge = STATUS_BADGES[run.status] || { label: run.status, cls: 'bg-slate-50 text-slate-500 ring-slate-200' }
+  const active = run.status === 'running' || run.status === 'waiting'
+  return html`
+    <div
+      class="${'flex items-center gap-2 rounded-md px-2 py-1.5 ' + (active ? '' : 'opacity-60')}"
+      data-testid="workflow-row"
+      data-status="${run.status}"
+    >
+      <span class="min-w-0 flex-1 truncate text-[12px] text-slate-700" data-testid="workflow-label"
+        >${WORKFLOW_LABELS[run.workflow] || run.workflow}</span
+      >
+      <span
+        class="${'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ' + badge.cls}"
+        data-testid="workflow-status"
+        >${badge.label}</span
+      >
+    </div>
+  `
+}
+
+function workflowsSection(state) {
+  const runs = () => (state && Array.isArray(state.workflows) ? state.workflows : [])
+  const activeRuns = () => runs().filter((r) => r.status === 'running' || r.status === 'waiting')
+  const doneRuns = () => runs().filter((r) => r.status === 'completed' || r.status === 'failed')
+  return html`
+    <section
+      class="flex w-[24rem] shrink-0 max-h-[28rem] min-h-[16rem] flex-col overflow-hidden rounded-xl border border-slate-300 bg-white ring-1 ring-black/5"
+      data-testid="workflows-panel"
+    >
+      <div class="border-b border-slate-100 px-3 py-2.5">
+        <h2 class="text-sm font-semibold text-slate-800">Taken</h2>
+        <p class="text-[11px] text-slate-400">workflow-runs · deze PR</p>
+      </div>
+      <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-1 overflow-auto p-2">
+        ${() => {
+          // Always return an ARRAY from this slot (see the "no comments" note
+          // above): a slot that alternates between a single element and an
+          // array can freeze empty after the first empty render.
+          const all = runs()
+          if (all.length === 0) {
+            return [html`<p class="px-1 py-2 text-[11px] text-slate-400">Geen taken.</p>`.key('no-workflows')]
+          }
+          const rows = []
+          const act = activeRuns()
+          const done = doneRuns()
+          if (act.length > 0) {
+            rows.push(
+              html`<p class="px-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">Actief</p>`.key(
+                'hdr-active'
+              )
+            )
+            // Key includes status: a run whose status just changed (e.g.
+            // running → completed) needs a fresh node, not a patched one —
+            // arrow.js only re-runs a keyed node's own bindings on a key
+            // change (see the block-card-key convention in conventions.md).
+            for (const r of act) rows.push(workflowRow(r).key('run:' + r.runId + ':' + r.status))
+          }
+          if (done.length > 0) {
+            rows.push(
+              html`<p class="px-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">Recent</p>`.key(
+                'hdr-done'
+              )
+            )
+            for (const r of done) rows.push(workflowRow(r).key('run:' + r.runId + ':' + r.status))
+          }
+          return rows
+        }}
+      </div>
+    </section>
+  `
+}
+
 export default function RelatedPanel(state, commentTarget, search, openCompose) {
   const kids = () => rc.children
   // Calls the Go resolver could not pin (status unresolved) + any in flight
@@ -1120,6 +1217,7 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
       </section>
 
       ${commentsSection(state, commentTarget, openCompose)}
+      ${workflowsSection(state)}
     </aside>
   `
 }

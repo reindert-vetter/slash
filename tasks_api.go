@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/approvals"
@@ -167,6 +169,47 @@ func (m *TaskManager) ResumePolling(ctx context.Context) {
 	}
 }
 
+// WorkflowRunView is one row of the read-only "Taken" (tasks) list: a workflow
+// run scoped to a single PR, with a JSON-friendly shape (camelCase, string
+// status/time).
+type WorkflowRunView struct {
+	RunID     string    `json:"runId"`
+	Workflow  string    `json:"workflow"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// RunsForPR lists every workflow run whose input carries the given PR number,
+// newest-updated first. Read-only: it only inspects engine.Runs()/Input(), it
+// never signals or starts anything. pr_inbox runs are per-repo (no "pr" field
+// in their input) so they never match and are correctly excluded.
+func (m *TaskManager) RunsForPR(pr int) []WorkflowRunView {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return nil
+	}
+	out := make([]WorkflowRunView, 0, len(runs))
+	for _, r := range runs {
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var input struct {
+			PR int `json:"pr"`
+		}
+		if json.Unmarshal(in, &input) != nil || input.PR != pr {
+			continue
+		}
+		out = append(out, WorkflowRunView{
+			RunID: r.ID, Workflow: r.Workflow, Status: r.Status,
+			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	return out
+}
+
 // routesTasks registers the workflow + comments routes on mux. Writes go only
 // through workflow endpoints (start / signal); everything else is read-only.
 func (s *server) routesTasks(mux *http.ServeMux) {
@@ -176,6 +219,9 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET  /api/workflows/{runID}                       → execution status
 	mux.HandleFunc("/api/workflows/", s.handleWorkflows)
 	mux.HandleFunc("/api/workflows/task_code_comment", s.handleTaskCodeComment)
+	// GET /api/workflows?pr=N → read-only list of workflow runs for one PR (the
+	// "Taken" column in RelatedPanel): status per run, newest first.
+	mux.HandleFunc("/api/workflows", s.handleWorkflowsList)
 	// POST /api/workflows/resolve_call → start an LLM call-resolution execution
 	mux.HandleFunc("/api/workflows/resolve_call", s.handleResolveCall)
 	// POST /api/workflows/pr_status {pr} → ensure the per-PR lifecycle tracker
@@ -239,6 +285,24 @@ func (s *server) handleTaskCodeComment(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleWorkflowsList serves GET /api/workflows?pr=N — the read-only list of
+// workflow runs scoped to that PR (the "Taken" column in RelatedPanel).
+func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr := 0
+	if v := r.URL.Query().Get("pr"); v != "" {
+		pr, _ = strconv.Atoi(v)
+	}
+	runs := s.tasks.manager.RunsForPR(pr)
+	if runs == nil {
+		runs = []WorkflowRunView{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": runs})
 }
 
 // handleWorkflows routes /api/workflows/{runID} (GET status) and
