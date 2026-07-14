@@ -509,6 +509,57 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(activeRows).toHaveCount(groupCount)
   })
 
+  // Regression guard: a plain change-step within the same block must only move
+  // the active-group highlight, not rebuild the card. canStep() (which drives the
+  // grey step-chevron) reads state.change/mode/focusLevel; calling it directly
+  // inside the DetailPanel block-column's outer array-building closure (rather
+  // than in its own nested reactive slot) used to make THAT closure depend on
+  // state.change, forcing a fresh Block() call (fresh activeGroup/hintsEnabled/
+  // etc. closures) — and therefore a fresh attribute patch across the WHOLE card
+  // (article class, category/status badges, description, approve checkbox) — on
+  // every single step, a visible flicker for what should be just the highlight
+  // moving. See stepChevronSlot in home.mjs / the flicker note in
+  // detail-layout.md. Block 0's first change group is a single row with several
+  // call segments (see the previous test), so refining to 'call' and stepping to
+  // the next segment stays within the same block while state.change advances —
+  // exactly the scenario that used to flicker.
+  test('a change-step within the same block only patches the highlight, not the whole card', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    const panel = page.getByTestId('detail-panel')
+    await expect(panel.locator('code.language-php').first()).toBeVisible()
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('f') // single-row group → jumps straight to 'call'
+    await expect(page).toHaveURL(/gran=call/)
+    await expect(page).not.toHaveURL(/chg=/) // first call segment → index 0, omitted
+
+    // Watch every attribute mutation on the block column for the next step. The
+    // active-row highlight itself is a .innerHTML replace inside <code> (not an
+    // attribute), so a clean highlight-only update records zero attribute
+    // mutations here.
+    await page.evaluate(() => {
+      window.__mutations = 0
+      const target = document.querySelector('[data-testid="block-column"]')
+      window.__obs = new MutationObserver((records) => {
+        window.__mutations += records.length
+      })
+      window.__obs.observe(target, { attributes: true, subtree: true })
+    })
+
+    await page.keyboard.press('f') // next call segment, same block
+    await expect(page).toHaveURL(/chg=1/)
+    await page.waitForTimeout(200)
+
+    const mutations = await page.evaluate(() => window.__mutations)
+    expect(mutations).toBe(0)
+
+    // The highlight itself DID move.
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await expect(panel.locator('span[class*="decoration-[#6366f1]"]').first()).toBeVisible()
+  })
+
   // On the finest 'call' level f no longer zooms in — it steps to the *next* call
   // (fKey → nextChange, the same flow as ↓). s always zooms straight back out
   // (sKey → setGran(-1)), never walking the calls. See home.mjs.

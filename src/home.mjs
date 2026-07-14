@@ -2029,6 +2029,22 @@ function stepChevron(dir) {
   `
 }
 
+// stepChevronSlot wraps a step-chevron in its own nested reactive `${() => ...}`
+// binding, so the state.change/mode/focusLevel reads inside canStep() are tracked
+// by THIS small binding alone rather than by whatever outer closure calls
+// stepChevronSlot. Calling canStep() directly inside the DetailPanel block-column
+// closure (as this used to) makes that whole closure re-run on every change-step —
+// rebuilding every Block() card with fresh activeGroup/hintsEnabled/etc. closures,
+// which (see the .key() comment above) forces the diff panes to fully re-render on
+// every ↑/↓ press, a visible flicker for what should be just the highlight moving.
+// Deferring the read into a nested slot (same pattern as the existing
+// `${() => menu.open ? menuOverlay() : ''}` toggle) keeps the outer closure's
+// dependency set limited to what it explicitly reads (selected/codeVersion/
+// focusLevel), so a plain navigation step only re-runs this one small binding.
+function stepChevronSlot(delta, dir) {
+  return html`${() => (canStep(delta) ? stepChevron(dir) : '')}`
+}
+
 // menuAnchor returns the element the command palette floats *beneath* (its
 // vertical anchor): in 'comment' mode, the focused comment row; otherwise the
 // active change row (present in both list-preview and diff mode) if there is
@@ -2159,13 +2175,22 @@ function DetailPanel(state) {
         const out = []
         // A step-up cue sits *above* the selected card when ↑ would flow into the
         // previous same-file block (which isn't rendered here — it's up the list).
-        if (canStep(-1)) out.push(stepChevron('up').key('step-up'))
+        // canStep reads state.change/mode/focusLevel — calling it directly here
+        // (synchronously, inside this outer array-building closure) would make
+        // THIS closure depend on state.change, forcing it to rebuild the whole
+        // out array — including every Block() card's activeGroup/hintsEnabled/etc.
+        // closures — on every single ↑/↓ step, which visibly re-renders (flickers)
+        // both diff panes even though only the highlight moved. stepChevronSlot
+        // defers the canStep() read into its own nested reactive binding (only
+        // mounted once, toggling internally), so a plain change-step never
+        // re-triggers this outer closure. See conventions.md / detail-layout.md.
+        out.push(stepChevronSlot(-1, 'up').key('step-up'))
         pair.forEach(({ b, i }, idx) => {
           ensureCode(b)
           if (idx > 0 && pair[idx - 1].b.file === b.file) {
             // The step-down cue sits *below* the selected card, just above the
             // dashed connector to the next same-file block ↓ would flow into.
-            if (canStep(1)) out.push(stepChevron('down').key('step-down'))
+            out.push(stepChevronSlot(1, 'down').key('step-down'))
             out.push(connector().key('conn:' + b.file + ':' + i))
           }
           const card = Block(b, {

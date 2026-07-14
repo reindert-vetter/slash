@@ -69,6 +69,27 @@
   waarom de diff-binding zélf de update kan missen — vandaar de herbouw-via-key
   i.p.v. wéér een `b.code`-lezer toe te voegen. Zie
   `.claude/rules/detail-layout.md`.
+- **Een `state.x`-lezing die je synchroon binnen een outer array-bouwende
+  `${() => {...}}`-closure aanroept (i.p.v. in een eigen geneste reactieve slot),
+  maakt de HELE closure afhankelijk van `state.x`** — ook als de uitkomst zelf
+  slechts één klein element betreft. Gezien in `home.mjs`'s `DetailPanel`: de
+  block-kolom-closure die alle `Block(...)`-kaarten bouwt riep `canStep(-1)`/
+  `canStep(1)` (voor het grijze step-chevron) **direct** aan; `canStep` leest
+  `state.change`/`mode`/`focusLevel`. Daardoor draaide de hele closure — en dus
+  elke `Block()`-aanroep met **verse** `activeGroup`/`hintsEnabled`/`diffActive`/
+  etc.-closures — opnieuw bij **elke** ↑/↓-stap. De `.key(...)` voorkwam een
+  volledige DOM-node-vervanging (arrow matcht 'm en hergebruikt de node via
+  `move+patch`), maar elke functie-gebonden attribute-slot (`class`, checkbox
+  `.indeterminate`, category-badge, enz.) werd daarbij toch **opnieuw gezet**
+  (`setAttribute` vergelijkt niet met de oude waarde) — een meetbare
+  `MutationObserver`-cascade over de HELE kaart bij iedere stap, wat als
+  zichtbare flikkering oogde (niet alleen de highlight verschoof, de hele kaart
+  "ademde" mee). **Oplossing:** verplaats de `state.change`-lezing naar een eigen
+  geneste `${() => canStep(...) ? … : ''}`-binding (dezelfde vorm als de bestaande
+  `${() => menu.open ? menuOverlay() : ''}`-toggle) zodat alléén dat kleine slot
+  op de navigatie-state reageert; de outer closure blijft beperkt tot de deps die
+  hij expliciet noemt (`selected`/`codeVersion`/`focusLevel`). Zie
+  `stepChevronSlot` in `home.mjs` en `.claude/rules/detail-layout.md`.
 - **arrow.js ruimt een weggevallen (conditioneel gerenderde) subtree niet volledig
   op — z'n reactieve expressions blijven geabonneerd (use-after-free).** Gezien bij
   het **command-menu** (`home.mjs` + `CommandMenu.mjs`): het overlay hangt aan een

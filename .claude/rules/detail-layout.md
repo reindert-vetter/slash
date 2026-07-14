@@ -164,6 +164,16 @@ op `b.code` is waarom de diff-binding de update kan missen, dus herbouwen we via
 de key i.p.v. nóg een `b.code`-lezer toe te voegen. Zie de arrow.js-valkuilen in
 `.claude/rules/conventions.md`.
 
+**Een gewone `state.change`-stap binnen hetzelfde block mag deze kaart-key niet
+laten omklappen** (die zou anders een verse `Block()`-aanroep — en dus een
+zichtbare flikkering over de hele kaart — forceren bij élke ↑/↓). Het
+grijze step-chevron (`stepChevronSlot`/`canStep` verderop) leest zelf
+`state.change`, maar zit daarom in zijn **eigen** geneste `${() => …}`-slot i.p.v.
+rechtstreeks in de outer array-bouwende closure van `DetailPanel` — anders lekt
+die lezing naar de hele closure en herbouwt elke stap alle `Block()`-kaarten met
+verse `activeGroup`/`hintsEnabled`/etc.-closures. Zie de bijbehorende
+arrow.js-valkuil in `.claude/rules/conventions.md`.
+
 `RelatedPanel` is **puur placeholder met dummy data** — nog geen `/api`-koppeling.
 Twee naast elkaar liggende kaarten (Onderliggende code links, comment-blok
 rechts — zie de layout-alinea hierboven):
