@@ -466,7 +466,15 @@ function childrenOf(b) {
 // static reference — how an enum case (AddressType::BILLING) reaches its enum.
 function findCallSites(rows, name) {
   const sites = []
-  const re = new RegExp('->\\s*' + name + '\\b|::\\s*' + name + '\\b|\\b' + name + '\\s*\\(', 'g')
+  // An artisan command key (accounting:import, foo-bar) carries characters no PHP
+  // identifier has (':', '-'), so it can never be a method/property/enum name — it
+  // appears only as the string literal of a ->command('name …') scheduler call.
+  // Match that literal instead of the identifier forms.
+  const isCommand = /[^\w]/.test(name)
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = isCommand
+    ? new RegExp("command\\s*\\(\\s*['\"]" + esc + "(?=[\\s'\"])", 'g')
+    : new RegExp('->\\s*' + name + '\\b|::\\s*' + name + '\\b|\\b' + name + '\\s*\\(', 'g')
   for (let i = 0; i < rows.length; i++) {
     const text = rows[i].right
     if (text == null) continue
@@ -585,6 +593,12 @@ function resolvedCallChildren(b) {
       const onChangedLine = findCallSites(rows, r.callKey).some((s) => changed.has(s.row))
       return {
         id: b.id + '::' + r.callKey,
+        // The PR-block id this call resolves to, when its definition is itself
+        // changed in this PR (prBlock). Distinct from `id` (which is caller-scoped
+        // so each call-site stays its own panel row); drillIntoChild uses this to
+        // reuse the real block object — with its own diff, approval and recursive
+        // Onderliggende-code panel — instead of a code-only synthetic frame.
+        blockId: prBlock ? prBlock.id : '',
         label: r.childClass ? `${r.childClass}::${r.childMethod}` : r.childMethod || r.callKey,
         file: r.childFile,
         line: r.childLine,
@@ -735,6 +749,11 @@ const codeRequested = new Set()
 // block as `b.code` (reactive → the Block card re-renders). `b.code` is null
 // while loading, then { file, old, new } or { error }.
 async function ensureCode(b) {
+  // A synthetic drill frame (a call into a file this PR doesn't change) already
+  // carries its source inline (built in drillIntoChild from the call-row's
+  // childCode); there's no stored PR block to fetch, so never hit /api/code for it
+  // — that would clobber the inline code with null and hang on "loading".
+  if (b.synthetic) return
   const key = b.file + '|' + b.label + '|' + b.side
   if (codeRequested.has(key)) return
   codeRequested.add(key)
@@ -1032,7 +1051,11 @@ function scrollDrillIntoView() {
 function drillIntoChild(child) {
   if (!child) return
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
-  const existing = byId.get(child.id)
+  // A method-call child's own `id` is caller-scoped (b.id + '::' + callKey), so it
+  // never matches a real block; its `blockId` points at the definition's PR block
+  // when that definition is itself changed here. Relation children carry their real
+  // block id directly in `id`. Try both, preferring the explicit target block id.
+  const existing = byId.get(child.blockId) || byId.get(child.id)
   if (existing) {
     state.drill = [...state.drill, existing]
     // A relation-child gets its code lazily loaded elsewhere (relatedChildren);
@@ -1041,18 +1064,34 @@ function drillIntoChild(child) {
     ensureCode(existing)
   } else {
     const hasClass = !!(child.label && child.label.includes('::'))
+    // The call-row already carries the called definition's source text
+    // (r.childCode → child.code). The file is unchanged by this PR, so /api/code
+    // has no stored block for it (the fetch would never yield a diff and the card
+    // would hang on "loading"). Build the code inline instead: old === new (nothing
+    // changed here), so alignRows renders all-equal rows — the plain source, no
+    // diff highlight. Only fall back to a fetch if we somehow have no text.
+    const src = child.code || ''
+    const start = child.line || 1
     const frame = {
       id: child.id,
       label: child.label,
       file: child.file,
       class: hasClass ? child.label.split('::')[0] : '',
       name: hasClass ? child.label.split('::')[1] : child.label,
+      line: child.line,
       status: 'modified',
-      code: null,
+      // Ready synchronously; if the row somehow carried no code, mark it as such
+      // rather than hang on "loading" (there's no stored block to fetch).
+      code: src
+        ? { file: child.file, old: { start, text: src }, new: { start, text: src } }
+        : { error: 'geen broncode beschikbaar' },
       synthetic: true,
     }
     state.drill = [...state.drill, frame]
-    ensureCode(frame)
+    // Bump codeVersion so the DetailPanel rebuilds its keyed card on the loaded
+    // state (see ensureCode's own bump); ensureCode itself no-ops for synthetic
+    // frames, so this is the only "code arrived" signal it gets.
+    state.codeVersion++
   }
   // The freshly-pushed column's own Onderliggende-code panel starts fresh, on its
   // first child (enterRelated also resets cs.composing and scrolls the code card).

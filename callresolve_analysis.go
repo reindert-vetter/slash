@@ -27,6 +27,7 @@ type symbolIndex struct {
 	byMethod   map[string][]Block // method name → every block defining it
 	scopeAlias map[string][]Block // Eloquent scope alias (scopeX → x) → defining blocks
 	enums      map[string][]Block // enum short name → its declaration block(s)
+	commands   map[string]Block   // artisan command name (accounting:import) → its handle method
 }
 
 var idxSkipDirs = map[string]bool{
@@ -41,6 +42,7 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		byMethod:   map[string][]Block{},
 		scopeAlias: map[string][]Block{},
 		enums:      map[string][]Block{},
+		commands:   map[string]Block{},
 	}
 	_ = filepath.WalkDir(headDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -63,7 +65,8 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		if err != nil {
 			rel = path
 		}
-		for _, b := range ScanBlocks(src, rel) {
+		fileBlocks := ScanBlocks(src, rel)
+		for _, b := range fileBlocks {
 			if b.Class == "" || b.Name == "" {
 				continue
 			}
@@ -72,6 +75,18 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 			idx.byMethod[b.Name] = append(idx.byMethod[b.Name], b)
 			if alias := scopeAliasOf(b.Name); alias != "" {
 				idx.scopeAlias[alias] = append(idx.scopeAlias[alias], b)
+			}
+		}
+		// A Laravel artisan command declares its name in `protected $signature =
+		// 'name ...'`; the handle() method of that class is what runs. Index the
+		// command name → its handle block so a scheduled `->command('name ...')`
+		// call resolves to the command's code.
+		for _, name := range scanCommands(src) {
+			for _, b := range fileBlocks {
+				if b.Name == "handle" {
+					idx.commands[name] = b
+					break
+				}
 			}
 		}
 		// Laravel macros are anonymous closures nested inside a boot method, so
@@ -170,6 +185,21 @@ func scanMacros(src []byte, filename string) []Block {
 	return out
 }
 
+// scanCommands finds Laravel artisan command names declared in a file via
+// `protected $signature = 'name arg ...'`. The command name is the first
+// whitespace-delimited token of the signature (the rest are arguments/options).
+// Only $signature is matched (not $name) — it is command-specific, so it never
+// mistakes an unrelated class property for a command.
+func scanCommands(src []byte) []string {
+	var out []string
+	for _, m := range reCommandSignature.FindAllStringSubmatch(string(src), -1) {
+		if fields := strings.Fields(m[1]); len(fields) > 0 {
+			out = append(out, fields[0])
+		}
+	}
+	return out
+}
+
 // scopeAliasOf maps an Eloquent scope method (scopeJoinAddress) to the name the
 // caller uses (joinAddress); "" if b is not a scope method.
 func scopeAliasOf(method string) string {
@@ -207,7 +237,20 @@ var (
 	reSelfCall   = regexp.MustCompile(`(?:self|static)::([A-Za-z_]\w*)\s*\(`)
 	reStaticCall = regexp.MustCompile(`([A-Za-z_]\w*)::([A-Za-z_]\w*)\s*\(`)
 	reNewCall    = regexp.MustCompile(`\(new\s+([\\A-Za-z_][\\\w]*)\s*(?:\([^)]*\))?\)->([A-Za-z_]\w*)\s*\(`)
-	reArrowCall  = regexp.MustCompile(`->([A-Za-z_]\w*)\s*\(`)
+	// reNewObj matches a bare object construction `new Foo(` — it couples to the
+	// class's constructor (__construct), so e.g. new PluginDisabledNotification(...)
+	// shows that notification's definition as underlying code. It also matches the
+	// `new Foo(` inside the chained `(new Foo)->m(` form (rule 2); that is fine, the
+	// constructor is a distinct child keyed by the class name.
+	reNewObj    = regexp.MustCompile(`\bnew\s+([\\A-Za-z_][\\\w]*)\s*\(`)
+	reArrowCall = regexp.MustCompile(`->([A-Za-z_]\w*)\s*\(`)
+	// reCommandCall matches a scheduled artisan call `->command('name ...')` and
+	// captures the whole command string (the name is its first token). Used to
+	// resolve $schedule->command('accounting:import ...') to the command's handle.
+	reCommandCall = regexp.MustCompile(`->command\(\s*['"]([^'"]+)['"]`)
+	// reCommandSignature matches a Laravel command's `protected $signature =
+	// 'name ...'` declaration; group 1 is the whole signature string.
+	reCommandSignature = regexp.MustCompile(`\$signature\s*=\s*['"]([^'"]+)['"]`)
 	// reArrowProp matches a bare `->name` property access. Go regexp has no
 	// lookahead, so a trailing `(` (i.e. a method call) is filtered out by
 	// inspecting the char after the match (see resolveCalls rule 5).
@@ -301,6 +344,17 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 				emit(m[2], def)
 			}
 		}
+		// 2b. new Foo(...) → the constructor of Foo (its __construct method). The
+		// call key is the class short name (not "__construct") so distinct
+		// constructions never collapse and the frontend's findCallSites matches
+		// `Foo(`. A class with no explicit constructor (no __construct block) is
+		// skipped — there is no definition to point at.
+		for _, m := range reNewObj.FindAllStringSubmatch(scan, -1) {
+			class := shortName(m[1])
+			if def := methodOnClass(idx, class, "__construct"); def != nil {
+				emit(class, def)
+			}
+		}
 		// 3. Foo::m( → static method on Foo (skip self/static/parent handled
 		// above). An unknown class/method (typically a framework call — vendor is
 		// not indexed) becomes unresolved, so the panel still offers the LLM
@@ -322,6 +376,25 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		for _, m := range reVarCall.FindAllStringSubmatch(scan, -1) {
 			if def := methodOrScopeOnClass(idx, ucfirst(m[1]), m[2]); def != nil {
 				emit(m[2], def)
+			}
+		}
+		// 3c. $schedule->command('name ...') → the artisan command's handle method.
+		// The call key is the command NAME (accounting:import), not "command", so
+		// distinct scheduled commands stay separate children (the frontend matches
+		// the string literal in the diff, since a name like accounting:import can
+		// never be a method identifier). Mark "command" as seen so the generic
+		// arrow-call rule below doesn't also emit a redundant unresolved "command".
+		for _, m := range reCommandCall.FindAllStringSubmatch(scan, -1) {
+			seen["command"] = true
+			fields := strings.Fields(m[1])
+			if len(fields) == 0 {
+				continue
+			}
+			name := fields[0]
+			if def, ok := idx.commands[name]; ok {
+				emit(name, &def)
+			} else {
+				emit(name, nil) // an unknown (e.g. framework) command → LLM territory
 			}
 		}
 		// 4. ->m( with an unknown receiver: resolve only on a unique global /

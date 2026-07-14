@@ -445,3 +445,139 @@ class Order2 {
 		t.Error("plain attribute 'total' should not produce a call entry")
 	}
 }
+
+// TestResolveCallsScheduledCommand: a scheduled `->command('accounting:import …')`
+// call resolves to the artisan command class's handle method, keyed by the
+// command name so distinct scheduled commands stay separate. A framework command
+// (no class in the app) becomes unresolved, and the generic "command" method key
+// is suppressed.
+func TestResolveCallsScheduledCommand(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 44
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"modules/Accounting/Internal/Providers/AccountingServiceProvider.php": `<?php
+namespace Modules\Accounting\Internal\Providers;
+class AccountingServiceProvider {
+    private function scheduleCommands(): void {
+        $schedule = app(Schedule::class);
+        $schedule->command('accounting:import --provider=moneybird --limit=100')->everyTenMinutes();
+        $schedule->command('accounting:import 3 --provider=reeleezee --limit=30 --force')->everyFiveMinutes();
+        $schedule->command('queue:work')->everyMinute();
+    }
+}
+`,
+		"modules/Accounting/Internal/Commands/AccountingImport.php": `<?php
+namespace Modules\Accounting\Internal\Commands;
+class AccountingImport {
+    protected $signature = 'accounting:import {tenantId?} {--provider=} {--limit=} {--force}';
+    public function handle(): int {
+        return 0;
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "modules/Accounting/Internal/Providers/AccountingServiceProvider.php", Class: "AccountingServiceProvider", Name: "scheduleCommands", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	// accounting:import (scheduled twice) resolves to the command's handle, once.
+	e, ok := findEntry(entries, "accounting:import")
+	if !ok {
+		t.Fatal("no entry for scheduled command accounting:import")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("accounting:import: status=%q, want resolved", e.Status)
+	}
+	if got := e.ChildClass + "::" + e.ChildMethod; got != "AccountingImport::handle" {
+		t.Errorf("accounting:import: child=%q, want AccountingImport::handle", got)
+	}
+	if e.ChildCode == "" {
+		t.Error("accounting:import: resolved entry has empty child code")
+	}
+
+	// queue:work has no command class in the app → unresolved (LLM territory).
+	if e, ok := findEntry(entries, "queue:work"); !ok {
+		t.Error("no entry for scheduled command queue:work")
+	} else if e.Status != callresolve.StatusUnresolved {
+		t.Errorf("queue:work: status=%q, want unresolved", e.Status)
+	}
+
+	// The generic ->command( arrow call must not surface as its own child.
+	if _, ok := findEntry(entries, "command"); ok {
+		t.Error("generic 'command' method key should be suppressed")
+	}
+}
+
+// TestResolveCallsConstructor: a bare `new Foo(...)` construction couples to the
+// class's constructor (__construct) — e.g. new PluginDisabledNotification(...)
+// shows that notification's definition as underlying code. A class without an
+// explicit constructor produces no entry.
+func TestResolveCallsConstructor(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 42
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Actions/DisablePlugin.php": `<?php
+namespace App\Actions;
+use App\Notifications\PluginDisabledNotification;
+class DisablePlugin {
+    public function execute($plugin, $error) {
+        $plugin->tenant->notifyOwner(new PluginDisabledNotification($plugin, $error));
+        $bare = new PlainThing();
+    }
+}
+`,
+		"app/Notifications/PluginDisabledNotification.php": `<?php
+namespace App\Notifications;
+class PluginDisabledNotification {
+    public function __construct($plugin, $error) {}
+}
+`,
+		"app/Support/PlainThing.php": `<?php
+namespace App\Support;
+class PlainThing {
+    public function run() {}
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Actions/DisablePlugin.php", Class: "DisablePlugin", Name: "execute", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "PluginDisabledNotification")
+	if !ok {
+		t.Fatal("no entry for constructor call PluginDisabledNotification")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("status = %q, want resolved", e.Status)
+	}
+	if got := e.ChildClass + "::" + e.ChildMethod; got != "PluginDisabledNotification::__construct" {
+		t.Errorf("child = %q, want PluginDisabledNotification::__construct", got)
+	}
+	if e.ChildCode == "" {
+		t.Error("resolved constructor entry has empty child code")
+	}
+	// A class without an explicit constructor has no definition to point at.
+	if _, ok := findEntry(entries, "PlainThing"); ok {
+		t.Error("new PlainThing() (no __construct) should not produce a call entry")
+	}
+}

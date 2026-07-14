@@ -291,6 +291,19 @@ fallback.
   van zo'n macro komt via `blockSource` (code.go): de symbool-lookup faalt (het
   block is genest, niet top-level), dus die valt terug op line-slicing op de
   opgeslagen `Line`/`EndLine`.
+  **Artisan-commando's** (regel 3c, `reCommandCall`): een geschedulede
+  `$schedule->command('accounting:import --provider=…')`-call resolvt naar de
+  **`handle`-method van de commando-class**. `buildSymbolIndex` bouwt daarvoor
+  een `commands`-map: `scanCommands` leest elke `protected $signature = 'naam …'`
+  (alleen `$signature`, commando-specifiek), neemt het **eerste token** als
+  commando-naam en koppelt die aan de `handle`-block van dezelfde file. De
+  **call-key is de commando-naam** (`accounting:import`), niet `command`, zodat
+  verschillende geschedulede commando's aparte children blijven; de generieke
+  `->command(`-arrow-call wordt onderdrukt (`seen["command"]`). Een commando
+  zonder app-class (framework, b.v. `queue:work`) wordt `unresolved`. De
+  frontend-`findCallSites` matcht een commando-key (bevat `:`/`-`, dus nooit een
+  method-identifier) via de **string-literal** `command('naam…')` i.p.v. de
+  identifier-vormen.
 - **`modules/claude`** (`modules/claude/claude.go`): de CLI-bridge naar `claude`
   (`Client`-interface + `Fake`, patroon van `modules/github`). `Run` shelt uit
   naar `claude -p <prompt> --model <id>` met context-timeout; agentisch (Sonnet)
@@ -309,7 +322,11 @@ fallback.
   callerFile, callerClass, callerName, calls}`) en read-only
   `GET /api/callresolve?pr=N`. De `buildRelations`-Activity schrijft de Go-rijen
   mee (naast de relaties). Voortgang: de UI herlaadt het read-model op een
-  interval (zoals `syncComments`), geen run-poll.
+  interval (zoals `syncComments`), geen run-poll. De headless twin
+  **`slash relations <pr>`** (`main.go`) draait naast `buildRelations` óók
+  `resolveCalls` + `UpsertGo`/`Prune`, zodat een re-run zónder volledige
+  re-ingest het Onderliggende-code-read-model ververst (handig na een
+  resolver-wijziging).
 - **Frontend:** `home.mjs` laadt `state.callResolve` (`loadCallResolve`), voegt
   `resolved`/`found`-rijen als `method_call`-children toe (`relatedChildren`), en
   toont de **"Zoek (N)"**-knop + `startCallSearch` voor `unresolved` calls
@@ -325,7 +342,8 @@ fallback.
   `.claude/rules/detail-layout.md`.
 - Tests: `callresolve_analysis_test.go` (resolver op fixture-PHP, incl. een
   macro-call → `Builder::joinAddress`, de gewijzigde-regels-restrictie met een
-  echte base+head-diff, en een enum-case → `AddressType::BILLING`),
+  echte base+head-diff, een enum-case → `AddressType::BILLING`, en een
+  geschedulede `->command('accounting:import …')` → `AccountingImport::handle`),
   `resolve_call_test.go` (Haiku-confident → found; escalatie naar Sonnet;
   notfound; verificatie weigert een verzonnen definitie), en
   `modules/callresolve/callresolve_test.go` (round-trip + UpsertGo bewaart LLM +
