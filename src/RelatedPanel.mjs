@@ -1002,6 +1002,16 @@ function relatedCard(r, i, drill) {
   `
 }
 
+// codeCardCollapsed reports whether the keyboard focus currently sits in the
+// comment/task block ('new' composer, a comment row, or inside its thread) —
+// the panel-cursor states that mean "the reviewer is at the comments". While
+// true, the Onderliggende-code card collapses to a narrow icon rail so the
+// diff column and the comments stay visible together. 'code' (or no focus at
+// all — the diff owns the keyboard) keeps the card at full width.
+function codeCardCollapsed() {
+  return cs.focus === 'new' || cs.focus === 'comment' || cs.focus === 'thread'
+}
+
 // RelatedPanel — the fixed-width right column: the selected block's underlying
 // (child) code on top, live comments below. `commentTarget` (from home.mjs)
 // reports what an in-progress comment would attach to at the current navigation
@@ -1037,50 +1047,80 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
     <aside class="flex min-h-0 shrink-0 flex-row items-start gap-3" data-testid="related-panel">
       <section
         class="${() =>
-          'flex w-[30rem] shrink-0 max-h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-white ring-1 ' +
+          'flex shrink-0 max-h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-white ring-1 transition-[width] ' +
+          (codeCardCollapsed() ? 'w-12 items-center' : 'w-[30rem]') +
+          ' ' +
           (cs.focus === 'code'
             ? 'border-indigo-300 ring-indigo-200'
             : 'border-slate-300 ring-black/5')}"
         data-testid="related-code"
       >
-        <div class="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5">
-          <div class="min-w-0">
-            <h2 class="text-sm font-semibold text-slate-800">Onderliggende code</h2>
-            <p class="text-[11px] text-slate-400" data-testid="related-approval-total">
-              Code die dit blok aanroept${() => {
-                const a = codeApproval()
-                return a.total ? ` · ${a.done}/${a.total} goedgekeurd` : ''
-              }}
-            </p>
-          </div>
-          ${() =>
-            searching()
-              ? html`<span
-                  class="ml-auto shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-400"
-                  data-testid="related-searching"
-                  >zoeken…</span
-                >`
-              : pending() > 0
-                ? html`<button
-                    type="button"
-                    class="ml-auto shrink-0 rounded-md border border-dashed border-indigo-300 px-2 py-1 text-[11px] font-medium text-indigo-500 hover:bg-indigo-50"
-                    data-testid="related-search"
-                    @click="${runSearch}"
-                    title="Zoek de niet-gevonden aanroepen met AI (Haiku, dan Sonnet)"
+        ${() =>
+          codeCardCollapsed()
+            ? html`
+                <button
+                  type="button"
+                  class="flex h-full w-full flex-col items-center justify-center gap-1 text-slate-400 hover:bg-slate-50 hover:text-indigo-500"
+                  data-testid="related-code-collapsed"
+                  title="Onderliggende code"
+                  aria-label="Onderliggende code tonen"
+                  @click="${() => toCode()}"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    class="h-5 w-5"
                   >
-                    Zoek (${pending()})
-                  </button>`
-                : ''}
-        </div>
-        <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
-          ${() => {
-            // All children render as one flat vertical list, full width, in order.
-            const ks = kids()
-            return ks.length === 0
-              ? html`<p class="px-1 py-2 text-[11px] text-slate-400">Geen onderliggende code.</p>`
-              : ks.map((r, i) => relatedCard(r, i, drill).key('related:' + r.id))
-          }}
-        </div>
+                    <polyline points="9 8 5 12 9 16"></polyline>
+                    <polyline points="15 8 19 12 15 16"></polyline>
+                  </svg>
+                </button>
+              `
+            : html`
+                <div class="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5">
+                  <div class="min-w-0">
+                    <h2 class="text-sm font-semibold text-slate-800">Onderliggende code</h2>
+                    <p class="text-[11px] text-slate-400" data-testid="related-approval-total">
+                      Code die dit blok aanroept${() => {
+                        const a = codeApproval()
+                        return a.total ? ` · ${a.done}/${a.total} goedgekeurd` : ''
+                      }}
+                    </p>
+                  </div>
+                  ${() =>
+                    searching()
+                      ? html`<span
+                          class="ml-auto shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-400"
+                          data-testid="related-searching"
+                          >zoeken…</span
+                        >`
+                      : pending() > 0
+                        ? html`<button
+                            type="button"
+                            class="ml-auto shrink-0 rounded-md border border-dashed border-indigo-300 px-2 py-1 text-[11px] font-medium text-indigo-500 hover:bg-indigo-50"
+                            data-testid="related-search"
+                            @click="${runSearch}"
+                            title="Zoek de niet-gevonden aanroepen met AI (Haiku, dan Sonnet)"
+                          >
+                            Zoek (${pending()})
+                          </button>`
+                        : ''}
+                </div>
+                <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
+                  ${() => {
+                    // All children render as one flat vertical list, full width, in order.
+                    const ks = kids()
+                    return ks.length === 0
+                      ? html`<p class="px-1 py-2 text-[11px] text-slate-400">Geen onderliggende code.</p>`
+                      : ks.map((r, i) => relatedCard(r, i, drill).key('related:' + r.id))
+                  }}
+                </div>
+              `}
       </section>
 
       ${commentsSection(state, commentTarget, openCompose)}

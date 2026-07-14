@@ -284,13 +284,23 @@ test.describe('PR Review Tree — change navigation', () => {
     await inactiveAt(0)
 
     // → from any child leaves the card for the comments column (the new-comment
-    // button gets focus): no child stays selected.
+    // button gets focus): the underlying-code card collapses to its icon rail
+    // (so the diff and the comments stay visible together) and its children are
+    // no longer rendered.
     await page.evaluate(() => window.__rp.enterRelated())
     await key('ArrowDown') // 2nd child
     await activeAt(1)
     await key('ArrowRight') // → comments column
-    await inactiveAt(1)
+    await expect(items).toHaveCount(0)
+    await expect(host.getByTestId('related-code-collapsed')).toBeVisible()
     await expect(host.getByTestId('new-comment')).toHaveClass(/border-indigo-400/)
+
+    // Clicking the collapsed rail re-expands the card and hands the keyboard
+    // back to the same child that was selected before collapsing.
+    await host.getByTestId('related-code-collapsed').click()
+    await expect(host.getByTestId('related-code-collapsed')).toHaveCount(0)
+    await expect(items).toHaveCount(3)
+    await activeAt(1)
   })
 
   // Selection granularity: f refines group → line → call, d coarsens back. See

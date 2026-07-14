@@ -25,6 +25,20 @@ scrollt dan intern (de body is `flex-1 min-h-0 overflow-auto`). Het comment-blok
 houdt zijn eigen `max-h-[28rem] min-h-[16rem]` naast de code-kaart. `<main>`
 scrollt horizontaal mee als de kolommen samen te breed worden.
 
+**Inklappen bij comment-focus:** samen met de diff-kolom is de volle-breedte
+combinatie van beide kaarten soms te breed om alles tegelijk te zien. Zodra de
+paneel-cursor (`cs.focus`) in het comment/taken-blok zit (`'new'`, `'comment'`
+of `'thread'` — `codeCardCollapsed()` in `RelatedPanel.mjs`), klapt de
+Onderliggende-code-kaart in tot een smalle verticale rail (`w-12`, geen titel/
+inhoud) met alleen een `</>`-code-icoon (inline SVG, `data-testid=
+related-code-collapsed`). Staat de focus op `'code'` of is er geen paneel-focus
+(diff/list heeft het toetsenbord) dan blijft de kaart op volle breedte
+(`w-[30rem]`). Een klik op de rail roept `toCode()` aan — dezelfde functie als
+een klik op een Onderliggende-code-item elders — en klapt de kaart weer uit met
+de laatst-gekozen `cs.codeSel` nog intact. Verlaat de focus de comments (`←`
+terug naar de code-kaart, of terug naar de diff), dan klapt hij vanzelf weer
+uit omdat de conditie herevalueert.
+
 ## Drillen: Onderliggende code als eigen kolom (`state.drill`)
 
 `Enter` op een **resolved** kind in de Onderliggende-code-kaart (een relatie-child
