@@ -92,7 +92,10 @@ export default function Block(b, opts = {}) {
     <article
       class="${() =>
         'flex min-h-0 max-w-full flex-col overflow-hidden rounded-xl border bg-white transition ' +
-        (singleSide(b) ? 'w-[38rem] 2xl:w-[46rem] ' : 'w-[70rem] 2xl:w-[82rem] ') +
+        // Every card uses the full two-pane width, even a one-sided (added/removed)
+        // block: it keeps the empty pane dropped (see singleSide below) but stays as
+        // wide as a modified block so the layout doesn't jump between block types.
+        'w-[70rem] 2xl:w-[82rem] ' +
         (preview
           ? 'max-h-72 border-slate-200 opacity-50'
           : diffActive()

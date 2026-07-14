@@ -5,8 +5,10 @@ Rechts van de sidebar staat de `DetailPanel` (`home.mjs`): een `<main>` als
 uitrekken) en horizontaal scrolt (`overflow-x-auto`) zodra ze samen breder zijn
 dan het scherm. Links de **block-kolom** (`data-testid=block-column`,
 **`shrink-0`** — niet `flex-1`, dus op zijn **natuurlijke diff-breedte**
-(`w-[70rem] 2xl:w-[82rem]`, of `w-[38rem] 2xl:w-[46rem]` voor een één-zijdig
-block) i.p.v. de resterende
+(altijd `w-[70rem] 2xl:w-[82rem]`, óók voor een één-zijdig added/removed block —
+dat laat weliswaar de lege pane weg (`singleSide` in `Block.mjs`) maar houdt
+dezelfde breedte als een modified block, zodat de layout niet springt tussen
+block-types) i.p.v. de resterende
 ruimte op te vullen) met de kaart van het geselecteerde block plus de
 look-ahead-preview van het volgende block (dashed connector als ze uit hetzelfde
 bestand komen). **Direct náást** die kolom (niet aan de rechterrand van het
@@ -334,9 +336,9 @@ rechts — zie de layout-alinea hierboven):
   (`ui.task`), niet in de URL. Koppelt later aan echte work-items + de
   `/api/claude`-bridge (één thread per taak).
 
-De block-kaart houdt zijn vaste `w-[70rem] 2xl:w-[82rem]` / `w-[38rem]
-2xl:w-[46rem]`-breedte (geen `flex-1`
-meer), zodat de diff niet uitrekt en het paneel er strak naast blijft liggen. In
+De block-kaart houdt zijn vaste `w-[70rem] 2xl:w-[82rem]`-breedte (geen `flex-1`
+meer, en ongeacht of het block één- of tweezijdig is), zodat de diff niet uitrekt
+en het paneel er strak naast blijft liggen. In
 `'list'`-mode start `<main>` op `left-[29rem]` (naast de sidebar), in `'diff'`-mode
 op `left-6` (meer ruimte); de kolommen blijven in beide gevallen vanaf links
 inpakken.

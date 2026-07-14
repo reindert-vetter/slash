@@ -112,10 +112,11 @@ test.describe('PR Review Tree — code diff alignment', () => {
     await expect(panes.first().locator('div[class*="#dafbea"]')).toHaveCount(3)
     await expect(panes.first().locator('.bg-slate-50')).toHaveCount(0)
 
-    // The card is the narrow single-pane width, not the wide two-pane width.
+    // The card keeps the full two-pane width even though it is one-sided (the
+    // empty old pane is dropped), so the layout doesn't jump between block types.
     const card = page.locator('#added-host article')
-    await expect(card).toHaveClass(/w-\[38rem\]/)
-    await expect(card).not.toHaveClass(/w-\[70rem\]/)
+    await expect(card).toHaveClass(/w-\[70rem\]/)
+    await expect(card).not.toHaveClass(/w-\[38rem\]/)
   })
 
   // Re-indent regression: wrapping an array in array_merge([...]) pushes the
