@@ -100,10 +100,12 @@ const state = reactive({
   // as its own shrink-0 column to the right of the block column, a full diff of
   // its own — see focusLevel below for which one currently owns the keyboard.
   drill: [],
-  // drillCursor — parallel to `drill`: each drilled column's own change-group
-  // cursor ({change}, group-granularity only — a drilled column doesn't zoom
-  // with f/d/s or flow into same-file neighbours, it's a single self-contained
-  // diff). Populated in drillIntoChild, walked by drillNextChange/drillPrevChange.
+  // drillCursor — parallel to `drill`: each drilled column's own navigation
+  // cursor ({change, gran}, mirroring state.change/state.gran) — a drilled
+  // column zooms with f/d/s (group → line → call) exactly like the top-level
+  // block, it just never flows into a same-file neighbour at the ends (it's a
+  // single self-contained diff). Populated in drillIntoChild (gran defaults to
+  // 'group'), walked by drillNextChange/drillPrevChange/setDrillGran.
   drillCursor: [],
   // focusLevel — which column currently owns the diff keyboard (↑/↓ walk its
   // changes, → opens its Onderliggende-code panel): 0 is the top-level selected
@@ -302,15 +304,22 @@ function prevChange() {
 // fKey — zoom in. From the list it steps into the diff first. Inside the diff it
 // refines the granularity one level (group → line → call); once on the finest
 // 'call' level it steps to the next call instead (flowing into the next same-file
-// block, like ↓). No-ops while a drilled column owns the keyboard (focusLevel >
-// 0) — a drilled column is a single self-contained diff at group granularity,
-// it doesn't zoom.
+// block, like ↓). While a drilled column owns the keyboard (focusLevel > 0) this
+// mirrors the exact same group→line→call zoom, but scoped to that column's own
+// drillCursor (setDrillGran/drillNextChange) — it never flows into a same-file
+// neighbour, since a drilled column is self-contained.
 function fKey() {
   if (state.mode !== 'diff') {
     enterDiff()
     return
   }
-  if (state.focusLevel > 0) return
+  const level = state.focusLevel
+  if (level > 0) {
+    const cur = state.drillCursor[level - 1] || { change: 0, gran: 'group' }
+    if (cur.gran === 'call') drillNextChange()
+    else setDrillGran(level, 1)
+    return
+  }
   if (state.gran === 'call') nextChange()
   else setGran(1)
 }
@@ -318,17 +327,28 @@ function fKey() {
 // dKey — go back. On 'call' it steps to the previous call (flowing back into the
 // previous same-file block like ↑); at the very first call, with nowhere to flow,
 // it zooms back out to 'line'. On the coarser levels it just zooms out one step.
-// No-ops for a focused drilled column, like fKey.
+// For a focused drilled column it does the same, scoped to its own drillCursor,
+// except at the first call it always zooms out (no same-file column to flow into).
 function dKey() {
-  if (state.mode !== 'diff' || state.focusLevel > 0) return
+  if (state.mode !== 'diff') return
+  const level = state.focusLevel
+  if (level > 0) {
+    const cur = state.drillCursor[level - 1] || { change: 0, gran: 'group' }
+    if (cur.gran === 'call' && cur.change > 0) drillPrevChange()
+    else setDrillGran(level, -1)
+    return
+  }
   if (state.gran === 'call' && (state.change > 0 || sameFileNeighbour(-1))) prevChange()
   else setGran(-1)
 }
 
 // sKey — always zoom out one level (call → line → group), clamped at 'group'.
-// No-ops for a focused drilled column, like fKey.
+// For a focused drilled column this zooms out its own drillCursor instead.
 function sKey() {
-  if (state.mode === 'diff' && state.focusLevel === 0) setGran(-1)
+  if (state.mode !== 'diff') return
+  const level = state.focusLevel
+  if (level > 0) setDrillGran(level, -1)
+  else setGran(-1)
 }
 
 async function loadBlocks() {
@@ -1144,16 +1164,17 @@ function focusedBlock() {
 }
 
 // drillNextChange / drillPrevChange walk the *drilled* column that currently
-// owns the diff keyboard (state.focusLevel > 0) through its change groups.
-// Unlike the top-level nextChange/prevChange, a drilled column never zooms
-// (no f/d/s) and never flows into a same-file neighbour — it's a single,
-// self-contained diff — so this just clamps at both ends.
+// owns the diff keyboard (state.focusLevel > 0) through the units of its own
+// current granularity (drillCursor.gran) — the same unitsFor walk as the
+// top-level nextChange/prevChange, just scoped to that column's rows. Unlike
+// the top level, a drilled column never flows into a same-file neighbour — it's
+// a single, self-contained diff — so this just clamps at both ends.
 function drillNextChange() {
   const level = state.focusLevel
   const b = state.drill[level - 1]
-  const groups = changeGroups(blockRows(b))
-  const cur = state.drillCursor[level - 1] || { change: 0 }
-  if (cur.change < groups.length - 1) {
+  const cur = state.drillCursor[level - 1] || { change: 0, gran: 'group' }
+  const units = unitsFor(blockRows(b), cur.gran)
+  if (cur.change < units.length - 1) {
     setDrillChange(level, cur.change + 1)
     scrollChangeIntoView()
   }
@@ -1161,7 +1182,7 @@ function drillNextChange() {
 
 function drillPrevChange() {
   const level = state.focusLevel
-  const cur = state.drillCursor[level - 1] || { change: 0 }
+  const cur = state.drillCursor[level - 1] || { change: 0, gran: 'group' }
   if (cur.change > 0) {
     setDrillChange(level, cur.change - 1)
     scrollChangeIntoView()
@@ -1171,9 +1192,36 @@ function drillPrevChange() {
 // setDrillChange reassigns state.drillCursor wholesale (never mutates an entry
 // in place) so arrow.js's reactive activeGroup binding on that drilled column's
 // card re-fires — the same "always reassign, never mutate" rule as
-// b.approvedRows elsewhere in this file.
+// b.approvedRows elsewhere in this file. Keeps the entry's current `gran`.
 function setDrillChange(level, change) {
-  state.drillCursor = state.drillCursor.map((c, i) => (i === level - 1 ? { change } : c))
+  state.drillCursor = state.drillCursor.map((c, i) =>
+    i === level - 1 ? { ...(c || { gran: 'group' }), change } : c,
+  )
+}
+
+// setDrillGran mirrors setGran, but for the drilled column at `level` (its own
+// drillCursor entry instead of state.gran/state.change): +1 refines
+// (group → line → call) via f, -1 coarsens via d/s. Re-anchors `change` onto
+// the unit covering the row we were on, exactly like the top-level version.
+function setDrillGran(level, delta) {
+  const b = state.drill[level - 1]
+  if (!b) return
+  const rows = blockRows(b)
+  const cur = state.drillCursor[level - 1] || { change: 0, gran: 'group' }
+  const from = GRANS.indexOf(cur.gran)
+  const curUnit = unitsFor(rows, cur.gran)[cur.change]
+  const anchorRow = curUnit ? curUnit.start : 0
+  let to = Math.min(GRANS.length - 1, Math.max(0, from + delta))
+  // Same single-row-group shortcut as setGran: skip 'line' straight to 'call'.
+  if (delta > 0 && cur.gran === 'group' && curUnit && curUnit.end === curUnit.start) {
+    to = GRANS.indexOf('call')
+  }
+  if (to === from) return
+  const gran = GRANS[to]
+  const units = unitsFor(rows, gran)
+  const change = units.length ? unitAtRow(units, anchorRow) : 0
+  state.drillCursor = state.drillCursor.map((c, i) => (i === level - 1 ? { gran, change } : c))
+  scrollChangeIntoView()
 }
 
 // scrollFocusIntoView scrolls whichever column now owns the diff keyboard into
@@ -1252,7 +1300,7 @@ function drillIntoChild(child) {
     // frames, so this is the only "code arrived" signal it gets.
     state.codeVersion++
   }
-  state.drillCursor = [...state.drillCursor, { change: 0 }]
+  state.drillCursor = [...state.drillCursor, { change: 0, gran: 'group' }]
   // Hand the keyboard to the fresh column's own diff (not its Onderliggende-code
   // panel — the reviewer lands on its first change group and steps ↑/↓ through
   // it directly; → still opens its panel same as any other diff, see onKeydown).
@@ -2275,15 +2323,24 @@ function DetailPanel(state) {
         // One extra shrink-0 column per drilled-into child (Enter/click on a
         // resolved Onderliggende-code child — see drillIntoChild), appended to
         // the right of the block column: a full, navigable diff of its own
-        // (own change-group cursor in state.drillCursor). Exactly one column —
+        // (own change/gran cursor in state.drillCursor). Exactly one column —
         // the one at state.focusLevel — owns the keyboard at a time: ↑/↓ walk
-        // its changes, → opens its Onderliggende-code panel, ← steps focus back
-        // to the previous column (see onKeydown). The others sit dimmed, like
-        // the existing look-ahead preview card, but stay open (← never closes a
-        // column, it only moves the focus).
+        // its changes, f/d/s zoom its own granularity, → opens its
+        // Onderliggende-code panel, ← steps focus back to the previous column
+        // (see onKeydown). The others sit dimmed, like the existing look-ahead
+        // preview card, but stay open (← never closes a column, it only moves
+        // the focus).
+        //
+        // Deliberately NOT subscribed to state.drillCursor here (mirrors the
+        // top-level block-column closure's stepChevronSlot rationale above): a
+        // plain change/gran step within the focused column must not rebuild
+        // every open drill card (which would re-run Prism highlighting on all
+        // of them and flicker). The drillCursor read that matters
+        // (activeGroup below) is deferred into Block's own per-card reactive
+        // binding, which arrow.js re-invokes on its own without rebuilding the
+        // card, exactly like state.change/state.gran for the top-level card.
         void state.codeVersion
         void state.focusLevel
-        void state.drillCursor
         return state.drill.map((b, i) => {
           ensureCode(b)
           const level = i + 1
@@ -2317,9 +2374,8 @@ function DetailPanel(state) {
                 preview: !focusedHere,
                 activeGroup: () => {
                   if (state.focusLevel !== level) return null
-                  const groups = changeGroups(blockRows(b))
-                  const cur = state.drillCursor[i] || { change: 0 }
-                  return groups[cur.change] || null
+                  const cur = state.drillCursor[i] || { change: 0, gran: 'group' }
+                  return unitsFor(blockRows(b), cur.gran)[cur.change] || null
                 },
                 hintsEnabled: () => state.focusLevel === level,
                 diffActive: () => state.focusLevel === level && !relatedActive(),

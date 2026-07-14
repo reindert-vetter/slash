@@ -83,9 +83,18 @@ navigeerbare diff met zijn **eigen** change-group-cursor. `state.focusLevel` wij
 aan welke kolom de pijltjestoetsen op dit moment bezit: `0` is de top-level
 geselecteerde block (die blijft `state.change`/`state.gran` gebruiken, zoals
 altijd), `1..state.drill.length` indexeert `state.drill[level-1]` met zijn eigen
-cursor in `state.drillCursor[level-1]` (`{change}`, **alleen** group-granulariteit
-— een gedrilde kolom zoomt niet met `f`/`d`/`s` en stroomt niet door naar een
-same-file buurblock; het is een op zichzelf staande diff).
+cursor in `state.drillCursor[level-1]` (`{change, gran}`, een spiegeling van
+`state.change`/`state.gran`). Een gedrilde kolom zoomt dus **wél** met `f`/`d`/`s`
+(group → line → call, exact dezelfde `setGran`-logica als het top-level block,
+maar dan als `setDrillGran(level, delta)` op zijn eigen `drillCursor`-entry) —
+alleen stroomt hij niet door naar een same-file buurblock aan de randen van zijn
+change-lijst: het blijft een op zichzelf staande diff, dus op de eerste/laatste
+unit (ook op `call`-niveau) stopt de navigatie binnen de kolom in plaats van
+naar een ander block te springen (`drillNextChange`/`drillPrevChange` klemmen op
+de units van `cursor.gran`, i.p.v. `sameFileNeighbour`/`stepBlock` zoals
+`nextChange`/`prevChange` dat voor niveau 0 doen). `fKey`/`dKey`/`sKey` in
+`home.mjs` vertakken op `state.focusLevel`: `> 0` bewerkt de drillCursor-entry
+van dat niveau, `0` bewerkt zoals altijd `state.gran`/`state.change`.
 
 - **Direct na het drillen staat de focus op de diff van de nieuwe kolom** —
   niet op zijn Onderliggende-code-paneel. `drillIntoChild` roept daarvoor
@@ -123,6 +132,22 @@ same-file buurblock; het is een op zichzelf staande diff).
   `exitRelated`) — dat sluit geen kolom meer; de kolom-voor-kolom-navigatie
   hierboven is een aparte stap die pas volgt zodra `relatedActive()` weer `false`
   is.
+
+**Geen flicker bij een gran/change-stap binnen een gefocuste gedrilde kolom:**
+de buitenste `${() => state.drill.map(...)}`-binding die de kolommen bouwt
+abonneert bewust **niet** op `state.drillCursor` (alleen op `state.codeVersion`
+en `state.focusLevel`, die de `.key(...)` van een kolom laten omklappen — zie
+hieronder). Zou die buitenste closure ook op `drillCursor` lezen, dan herbouwt
+elke `f`/`d`/`s`/`↑`/`↓`-stap **alle** open gedrilde kolommen (elke `Block()`-call
+opnieuw, dus Prism-highlighting opnieuw over elke kolom heen) — exact dezelfde
+valkuil als `canStep()` voor de top-level kaart (zie `stepChevronSlot` in
+`home.mjs` en de conventions.md-notitie erover). De `state.drillCursor[i]`-lezing
+die er wél toe doet zit in de `activeGroup`/`hintsEnabled`/`diffActive`-functies
+die aan `Block(b, {...})` worden meegegeven: dat zijn zelf al reactieve
+arrow.js-bindings (ze worden pas aangeroepen ván binnen `Block`'s eigen
+`${…}`-slots), dus die herevalueren op hun eigen dependency zonder de kolom te
+herbouwen — precies zoals `state.change`/`state.gran` dat al deden voor de
+top-level kaart.
 
 `focusedBlock()` (het Onderliggende-code-paneel + taken/chat) volgt nu
 `state.focusLevel` in plaats van altijd het diepste niveau: `state.focusLevel ===

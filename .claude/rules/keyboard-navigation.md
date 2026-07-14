@@ -272,7 +272,17 @@ De drie navigatietoetsen (`fKey`/`dKey`/`sKey` in `home.mjs`):
 
 `d`/`s` doen niets in `'list'`-mode (er is dan niets om uit te zoomen); alleen `f`
 stapt van daaruit in. `nextChange`/`prevChange` worden gedeeld met `↑`/`↓`, zodat
-pijlen en `f`/`d` de diff identiek doorlopen. Verfijn je een groep die precies
+pijlen en `f`/`d` de diff identiek doorlopen.
+
+**`f`/`d`/`s` werken ook binnen een gedrilde kolom** (`state.focusLevel > 0`,
+zie "Drillen"/"Kolom-navigatie" in `.claude/rules/detail-layout.md`) — exact
+dezelfde group→line→call-zoom, maar op de eigen `{change, gran}`-cursor van die
+kolom in `state.drillCursor[focusLevel-1]` (`setDrillGran`/`drillNextChange`/
+`drillPrevChange` in `home.mjs`, spiegelbeeld van `setGran`/`nextChange`/
+`prevChange`). Het enige verschil: een gedrilde kolom is een op zichzelf staande
+diff, dus op `'call'` stroomt hij aan de eerste/laatste call **niet** door naar
+een same-file buurblock (dat bestaat niet voor een gedrilde kolom) — daar zoomt
+`f`/`d` gewoon terug naar `'line'` i.p.v. verder te lopen. Verfijn je een groep die precies
 **één regel** beslaat (`cur.end === cur.start`), dan slaat `f` het `'line'`-niveau
 over en springt direct naar `'call'` (er is dan geen zinvolle line-stap: de regel
 ís de groep); `s`/`d` lopen wél stap-voor-stap terug (`call → line → group`). De
