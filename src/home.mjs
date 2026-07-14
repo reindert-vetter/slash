@@ -1100,7 +1100,12 @@ function scrollFocusIntoView(level = state.focusLevel) {
       level === 0
         ? document.querySelector('[data-testid="block-column"]')
         : document.querySelectorAll('[data-testid="drill-column"]')[level - 1]
-    if (el) el.scrollIntoView({ inline: level === 0 ? 'start' : 'end', block: 'nearest' })
+    // Always align to the *left* edge of the viewport: the top-level block
+    // column is the leftmost column, and a freshly-focused drilled column
+    // should land flush against <main>'s left edge too (rather than its right
+    // edge) so the columns it was drilled from stay hinted-at via the
+    // left-edge chevron below instead of scrolling fully out of reach.
+    if (el) el.scrollIntoView({ inline: 'start', block: 'nearest' })
   })
 }
 
@@ -2160,7 +2165,29 @@ function DetailPanel(state) {
           const focusedHere = state.focusLevel === level
           const codeState = b.code && !b.code.error ? 'code' : b.code && b.code.error ? 'err' : 'load'
           return html`
-            <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="drill-column" data-drill-idx="${i}">
+            <div class="relative flex min-h-0 shrink-0 flex-col gap-3" data-testid="drill-column" data-drill-idx="${i}">
+              ${focusedHere
+                ? html`
+                    <div
+                      class="pointer-events-none absolute -left-3 top-1/2 z-10 -translate-y-1/2"
+                      data-testid="drill-left-hint"
+                    >
+                      <span
+                        class="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-slate-500 shadow-sm ring-1 ring-black/5"
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="3"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          class="h-3 w-3"
+                        ><path d="M15 18l-6-6 6-6"/></svg>
+                      </span>
+                    </div>
+                  `
+                : ''}
               ${Block(b, {
                 preview: !focusedHere,
                 activeGroup: () => {

@@ -106,8 +106,18 @@ De kolom-`.key` codeert (naast positie in de stack + code-status
 zodat een focus-wissel altijd een verse kaart (verse `${…}`-bindings) forceert in
 plaats van dat arrow.js de bestaande node hergebruikt (zie de valkuil in
 `.claude/rules/conventions.md`). Een nieuwe kolom scrollt zichzelf in beeld
-(`scrollFocusIntoView`, `<main>` scrolt horizontaal); dezelfde functie scrollt ook
-bij het terugstappen de nu-gefocuste kolom in beeld.
+(`scrollFocusIntoView`, `<main>` scrolt horizontaal) — altijd **links**
+uitgelijnd (`inline:'start'`, ook voor een gedrilde kolom, niet alleen de
+top-level kaart), zodat de kolommen waar je vandaan komt links buiten beeld
+verdwijnen i.p.v. de nieuwe kolom aan de rechterkant te proppen; dezelfde
+functie scrollt ook bij het terugstappen de nu-gefocuste kolom links uit. Elke
+**gefocuste** gedrilde kolom (`state.focusLevel > 0`) toont daarbij een kleine
+grijze **‹-chevron aan zijn linkerrand** (`data-testid=drill-left-hint`, buiten
+de kaart, verticaal gecentreerd) als visuele hint dat er kolommen links buiten
+beeld zitten — puur een cue, geen eigen klik-actie (`←` doet het echte
+terugstappen). De chevron zit in de kolom-`.key` verdisconteerd via de
+bestaande `foc`/`unfoc`-component, dus hij verschijnt/verdwijnt met een verse
+kaart i.p.v. een hergebruikte node.
 
 De block-kaart-`.key(...)` codeert **rol** (`sel`/`prev`) **én code-status**
 (`load`/`code`/`err`), zodat arrow.js een **verse** kaart bouwt zodra een block
