@@ -168,7 +168,9 @@ terugzet op precies dit blokje / deze comment-thread; `applyRelRestore` past de
 herstelde cursor één keer geclampt opnieuw toe zodra de kinderen/comments geladen
 zijn (zie `.claude/rules/detail-layout.md` en skill `url-state`). **`Enter`** op de
 kaart **drilt** in het kind
-waar de cursor op staat (`focusedRelatedChild()`): het kind opent als een eigen
+waar de cursor op staat (`focusedRelatedChild()`) — en een **muisklik** op een
+Onderliggende-code-item (`data-testid=related-item`) drilt in dát kind, langs
+dezelfde weg: het kind opent als een eigen
 diff-kolom rechts naast de bestaande, tussen die kolommen en `RelatedPanel` in
 (`drillIntoChild`, zie de sectie "Drillen" in `.claude/rules/detail-layout.md`),
 en het Onderliggende-code-paneel + de taken/chat eronder springen mee naar dát

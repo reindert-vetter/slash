@@ -1970,7 +1970,7 @@ function DetailPanel(state) {
         })
       }}
       ${() =>
-        RelatedPanel(state, commentTarget, { startCallSearch: () => startCallSearch(focusedBlock()) }, () => {
+        RelatedPanel(state, commentTarget, { startCallSearch: () => startCallSearch(focusedBlock()), drill: (child) => drillIntoChild(child) }, () => {
           if (composeHasText()) openMenu('compose')
         }).key('related-panel')}
       ${() => (menu.open ? menuOverlay().key('command-overlay') : '')}
