@@ -1443,14 +1443,29 @@ function commentTarget() {
   const unit = unitsFor(rows, gran)[idx]
   // No unit (block with no navigable changes): a block-level target with an
   // unknown row range (rowStart -1) — the index then shows all block comments.
+  // startLine/endLine stay 0 so the backend falls back to the block's own line.
   if (!unit)
-    return { gran, label: b.label, file: b.file, line: b.line, code: '', rowStart: -1, rowEnd: -1, seg: '' }
+    return {
+      gran,
+      label: b.label,
+      file: b.file,
+      line: b.line,
+      code: '',
+      rowStart: -1,
+      rowEnd: -1,
+      seg: '',
+      startLine: 0,
+      endLine: 0,
+      side: 'RIGHT',
+      segment: '',
+    }
   let code = ''
   for (let i = unit.start; i <= unit.end; i++) {
     const r = rows[i]
     const text = r && (r.right != null ? r.right : r.left)
     if (text != null) code += (code ? '\n' : '') + text
   }
+  const { startLine, endLine, side } = unitLineRange(b, rows, unit)
   return {
     gran,
     label: b.label,
@@ -1463,7 +1478,71 @@ function commentTarget() {
     rowStart: unit.start,
     rowEnd: unit.end,
     seg: segKey(unit),
+    // The real source line range/side this unit maps to (for GitHub anchoring —
+    // see createComment/placeComment) plus, for a 'call' unit, its segment text.
+    startLine,
+    endLine,
+    side,
+    segment: unitSegment(rows, unit),
   }
+}
+
+// unitLineRange maps a navigation unit (an aligned-row range, see unitsFor) to
+// the real source line range GitHub needs: which side ('RIGHT' new / 'LEFT'
+// old) the comment should anchor on, and the first/last source line number of
+// that side within the unit. Aligned rows carry no line numbers themselves, so
+// this counts them off from the block's known source start
+// (b.code.new.start/b.code.old.start — see ensureCode/GET /api/code), advancing
+// a running line counter per row that carries content on that side (a filler
+// row for the other side doesn't advance it). side is RIGHT unless every row in
+// the unit is a pure deletion (no `right` anywhere), matching what a reviewer
+// would actually see change. Returns a RIGHT/line-0 fallback when the code
+// isn't loaded yet — the backend then falls back to the block's own line.
+function unitLineRange(b, rows, unit) {
+  const c = b && b.code
+  if (!c || !c.new || !c.old || !unit) return { startLine: 0, endLine: 0, side: 'RIGHT' }
+  let hasRight = false
+  for (let i = unit.start; i <= unit.end; i++) {
+    if (rows[i] && rows[i].right != null) {
+      hasRight = true
+      break
+    }
+  }
+  const side = hasRight ? 'RIGHT' : 'LEFT'
+  let newNo = c.new.start
+  let oldNo = c.old.start
+  let startLine = 0
+  let endLine = 0
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
+    if (!r) continue
+    const hasContent = side === 'RIGHT' ? r.right != null : r.left != null
+    if (i >= unit.start && i <= unit.end && hasContent) {
+      const no = side === 'RIGHT' ? newNo : oldNo
+      if (!startLine) startLine = no
+      endLine = no
+    }
+    if (r.right != null) newNo++
+    if (r.left != null) oldNo++
+  }
+  return { startLine, endLine, side }
+}
+
+// unitSegment returns the source text of a 'call' unit's underlined segment —
+// the substring of the row's active-side text between the segment's char
+// bounds (see changeCalls/segKey, the same underline Sets Block.mjs renders).
+// Coarser units (group/line, no `char`) or an empty segment (a blank added
+// line) yield ''.
+function unitSegment(rows, unit) {
+  if (!unit || !unit.char) return ''
+  const r = rows[unit.start]
+  if (!r) return ''
+  const hasRight = unit.right && unit.right.size
+  const text = hasRight ? r.right : r.left
+  const set = hasRight ? unit.right : unit.left
+  if (!set || !set.size || text == null) return ''
+  const arr = [...set]
+  return text.slice(Math.min(...arr), Math.max(...arr) + 1)
 }
 
 // segKey canonicalises a 'call'-unit's segment into a stable string identity so

@@ -132,6 +132,23 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   code-span (`` `segment`\n\n`` + body) — de **opgeslagen** comment (`saveComment`,
   het read-model achter de thread) blijft de rauwe `Body`, ongewijzigd door
   `Segment`. Puur input-gedreven, dus deterministisch onder replay.
+  **Frontend-kant:** `commentTarget()` (`home.mjs`) berekent deze vier velden uit
+  de huidige navigatie-unit i.p.v. altijd `b.line` (de blok-startregel) te sturen.
+  `unitLineRange(b, rows, unit)` telt de aligned rows van `blockRows(b)` af vanaf
+  `b.code.new.start`/`b.code.old.start` (de bron-startregel uit `GET /api/code`;
+  aligned rows dragen zelf geen regelnummers, een filler-rij op de andere kant telt
+  niet mee) om `startLine`/`endLine` + `side` te bepalen: `side` is `'RIGHT'` zodra
+  één rij in de unit een `right` heeft, anders (een pure verwijdering) `'LEFT'`; is
+  de code nog niet geladen dan valt het terug op `{startLine:0, endLine:0,
+  side:'RIGHT'}` (de backend valt op zijn beurt terug op `Line`). `unitSegment(rows,
+  unit)` levert voor een `'call'`-unit de onderstreepte segmenttekst (dezelfde
+  `unit.right`/`unit.left`-Sets als `segKey`/de indigo-underline in `Block.mjs`,
+  substring `min..max` inclusief); een group/line-unit heeft geen `char`-vlag en
+  geeft `''`. `placeComment` (`RelatedPanel.mjs`) geeft alle vier door aan
+  `createComment`, plus `line: t.startLine || b.line` (dezelfde backward-compat-
+  fallback als de Go-kant). Er is precies één plek die naar de workflow post
+  (`createComment`); elke composer-flow (toetsenbord, klik, de comment-soort-menu's
+  "Alleen voor mijzelf") loopt via `placeComment` en krijgt dus dezelfde anchoring.
 - **Privé-notitie (`local`-vlag):** `CodeCommentInput` draagt een
   `Local bool`-vlag. Is die gezet — de UI stuurt 'm bij de keuze **"Alleen voor
   mijzelf"** in het comment-soort-menu (zie `.claude/rules/keyboard-navigation.md`)

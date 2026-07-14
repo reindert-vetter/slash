@@ -593,7 +593,23 @@ function syncComments(pr) {
 // ("Maak hiermee een comment", which uses the typed text as the comment). It writes
 // only by starting the workflow (POST), so the write-boundary holds. On success it
 // reloads the read-model and selects the fresh comment.
-export async function createComment({ pr, file, line, body, code, gran, label, rowStart, rowEnd, seg, local }) {
+export async function createComment({
+  pr,
+  file,
+  line,
+  body,
+  code,
+  gran,
+  label,
+  rowStart,
+  rowEnd,
+  seg,
+  local,
+  startLine,
+  endLine,
+  side,
+  segment,
+}) {
   if (pr == null || !file || !body) return
   cs.busy = true
   try {
@@ -616,6 +632,14 @@ export async function createComment({ pr, file, line, body, code, gran, label, r
         // GitHub (the workflow skips postGithubComment). Default false, so the
         // existing composer/fallback paths are unchanged.
         local: !!local,
+        // The unit's real source line range/side (see home.mjs' commentTarget/
+        // unitLineRange) +, for a 'call' unit, its segment text — lets the
+        // workflow post a correctly-anchored (multi-line, right side) GitHub
+        // comment instead of always the block's first line.
+        startLine: startLine || 0,
+        endLine: endLine || 0,
+        side: side || 'RIGHT',
+        segment: segment || '',
       }),
     })
     await loadComments(pr)
@@ -641,7 +665,10 @@ export async function placeComment(state, commentTarget, opts = {}) {
   await createComment({
     pr: state.pr,
     file: b.file,
-    line: b.line,
+    // Prefer the unit's real source line (see home.mjs' commentTarget/
+    // unitLineRange) over the block's own start line; falls back to it when
+    // there's no navigable unit (t.startLine is 0).
+    line: (t && t.startLine) || b.line,
     body,
     code: t ? t.code : '',
     gran: t ? t.gran : '',
@@ -650,6 +677,10 @@ export async function placeComment(state, commentTarget, opts = {}) {
     rowEnd: t ? t.rowEnd : -1,
     seg: t ? t.seg : '',
     local: !!opts.local,
+    startLine: t ? t.startLine : 0,
+    endLine: t ? t.endLine : 0,
+    side: t ? t.side : 'RIGHT',
+    segment: t ? t.segment : '',
   })
   el.value = ''
   cs.composing = false
