@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // Line-aligned diff in the code panes. Block.mjs runs a pure LCS line diff
 // (alignRows/diffLines — no AI) so the two sides line up row-for-row: unchanged
@@ -10,6 +10,10 @@ test.describe('PR Review Tree — code diff alignment', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
+    // Let the app's initial module load + lazy fetches settle before the in-page
+    // evaluate() runs — otherwise its dynamic import races the load and the
+    // execution context can be destroyed mid-import ("context destroyed").
+    await page.waitForLoadState('networkidle')
 
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -71,6 +75,9 @@ test.describe('PR Review Tree — code diff alignment', () => {
     // Let the app's own load settle before injecting, so our evaluate's dynamic
     // import doesn't race a client re-render.
     await expect(page.getByTestId('block-row').first()).toBeVisible()
+    // Settle the app's own load before the in-page evaluate() so its dynamic
+    // import doesn't race a client re-render / navigation ("context destroyed").
+    await page.waitForLoadState('networkidle')
 
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -105,10 +112,10 @@ test.describe('PR Review Tree — code diff alignment', () => {
     await expect(panes.first().locator('div[class*="#dafbea"]')).toHaveCount(3)
     await expect(panes.first().locator('.bg-slate-50')).toHaveCount(0)
 
-    // The card is the narrow width, not the wide two-pane width.
+    // The card is the narrow single-pane width, not the wide two-pane width.
     const card = page.locator('#added-host article')
-    await expect(card).toHaveClass(/w-\[42rem\]/)
-    await expect(card).not.toHaveClass(/w-\[76rem\]/)
+    await expect(card).toHaveClass(/w-\[38rem\]/)
+    await expect(card).not.toHaveClass(/w-\[70rem\]/)
   })
 
   // Re-indent regression: wrapping an array in array_merge([...]) pushes the
@@ -121,6 +128,9 @@ test.describe('PR Review Tree — code diff alignment', () => {
   }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toBeVisible()
+    // Settle the app's own load before the in-page evaluate() so its dynamic
+    // import doesn't race a client re-render / navigation ("context destroyed").
+    await page.waitForLoadState('networkidle')
 
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

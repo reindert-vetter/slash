@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // Verifies: a placed comment shows its code snippet in the thread (feature 1)
 // and its original body as the first chat bubble (feature 2).

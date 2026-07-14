@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // Change navigation: from the sidebar (list mode) → steps into the selected
 // block's diff and selects the first changed line; ↑/↓ then walk the change

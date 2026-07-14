@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // Verifies the new right-to-left drill-column keyboard navigation: after
 // drilling, the keyboard focus lands on the new column's own diff (not its

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // Command palette: pressing Enter opens a searchable menu overlaid on the
 // next-block preview slot. Typing fuzzy-filters, ↑/↓ move the selection, Enter
@@ -10,6 +10,7 @@ test.describe('PR Review Tree — command palette', () => {
   }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     // Wait for the selected block's diff (the active-change anchor) to render.
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -42,6 +43,7 @@ test.describe('PR Review Tree — command palette', () => {
   test('typing fuzzy-filters and Enter runs the selected command', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await expect(approve).not.toBeChecked()
 
@@ -66,6 +68,7 @@ test.describe('PR Review Tree — command palette', () => {
   }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
 
     // Nothing should be posted yet — the fallback only opens the composer, it
     // does not place the comment on its own.
@@ -121,6 +124,7 @@ test.describe('PR Review Tree — command palette', () => {
   }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
 
     let posted = null
     await page.route('**/api/workflows/task_code_comment', async (route) => {
@@ -167,6 +171,7 @@ test.describe('PR Review Tree — command palette', () => {
   test('the approve command toggles the selected block', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await expect(approve).not.toBeChecked()
 
@@ -184,6 +189,7 @@ test.describe('PR Review Tree — command palette', () => {
   test('the approve label follows the selection granularity', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     const rows = page.getByTestId('command-row')
@@ -252,6 +258,7 @@ test.describe('PR Review Tree — command palette', () => {
   }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
 
     await page.keyboard.press('Enter')
     const rows = page.getByTestId('command-row')
@@ -284,6 +291,7 @@ test.describe('PR Review Tree — command palette', () => {
   test('the menu covers the right (new) pane — half width, right side', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     // Step into the diff so both panes are shown, then open the palette.
@@ -323,6 +331,7 @@ test.describe('PR Review Tree — command palette', () => {
     await page.setViewportSize({ width: 1400, height: 520 })
     await page.goto('/pr/12903')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
 
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).toBeVisible()
@@ -338,6 +347,7 @@ test.describe('PR Review Tree — command palette', () => {
   test('block navigation is suspended while the menu is open', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
 

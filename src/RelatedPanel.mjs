@@ -803,11 +803,18 @@ function commentsSection(state, commentTarget, openCompose) {
             >
             <span class="text-xs font-medium">Comment op deze regel</span>
           </button>
-          ${() => visibleComments().map((c, i) => commentRow(c, i).key('comment:' + c.id))}
-          ${() =>
-            visibleComments().length === 0
-              ? html`<p class="px-2.5 py-3 text-[11px] text-slate-400">Nog geen comments.</p>`
-              : null}
+          ${() => {
+            // Always return an ARRAY from this slot. Arrow.js mishandles a slot
+            // that alternates between a single element (the "no comments" note) and
+            // an array (the comment rows): after the empty render it would not
+            // re-render the rows when navigating back to a block whose comments had
+            // repopulated, leaving the list frozen empty. Wrapping the empty note in
+            // a one-element array keeps the slot's shape stable so it re-renders.
+            const cts = visibleComments()
+            return cts.length === 0
+              ? [html`<p class="px-2.5 py-3 text-[11px] text-slate-400">Nog geen comments.</p>`.key('no-comments')]
+              : cts.map((c, i) => commentRow(c, i).key('comment:' + c.id))
+          }}
         </div>
       </div>
 

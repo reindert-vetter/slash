@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // Keyboard navigation into the right-hand Related panel. From the diff, → selects
 // the related-code block; → again jumps to the "+ Comment op deze regel" button,

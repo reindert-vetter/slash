@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // Out-of-view change hints. When a diff is taller than its viewport, Block.mjs
 // floats a small bar with a chevron at the top/bottom edge of the code body to

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // Syntax highlighting of the code panes. The real /api/code path needs the
 // base/head worktrees (absent for the seeded fixture DB), so we mount a Block

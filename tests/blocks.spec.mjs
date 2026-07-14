@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // The fixture (tests/fixtures/blocks.json) has 9 blocks. They render sorted by
 // (file, line); this is the expected label order. The first two share a file

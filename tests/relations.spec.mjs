@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // PR 90 (tests/fixtures/relations-blocks.json + relations.json) has two blocks:
 // a dispatcher (PlaceOrderAction::execute) and a listener (SendOrderMail::handle).

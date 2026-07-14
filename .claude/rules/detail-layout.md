@@ -5,7 +5,8 @@ Rechts van de sidebar staat de `DetailPanel` (`home.mjs`): een `<main>` als
 uitrekken) en horizontaal scrolt (`overflow-x-auto`) zodra ze samen breder zijn
 dan het scherm. Links de **block-kolom** (`data-testid=block-column`,
 **`shrink-0`** — niet `flex-1`, dus op zijn **natuurlijke diff-breedte**
-(`w-[76rem]`, of `w-[42rem]` voor een één-zijdig block) i.p.v. de resterende
+(`w-[70rem] 2xl:w-[82rem]`, of `w-[38rem] 2xl:w-[46rem]` voor een één-zijdig
+block) i.p.v. de resterende
 ruimte op te vullen) met de kaart van het geselecteerde block plus de
 look-ahead-preview van het volgende block (dashed connector als ze uit hetzelfde
 bestand komen). **Direct náást** die kolom (niet aan de rechterrand van het
@@ -279,7 +280,8 @@ rechts — zie de layout-alinea hierboven):
   (`ui.task`), niet in de URL. Koppelt later aan echte work-items + de
   `/api/claude`-bridge (één thread per taak).
 
-De block-kaart houdt zijn vaste `w-[76rem]`/`w-[42rem]`-breedte (geen `flex-1`
+De block-kaart houdt zijn vaste `w-[70rem] 2xl:w-[82rem]` / `w-[38rem]
+2xl:w-[46rem]`-breedte (geen `flex-1`
 meer), zodat de diff niet uitrekt en het paneel er strak naast blijft liggen. In
 `'list'`-mode start `<main>` op `left-[29rem]` (naast de sidebar), in `'diff'`-mode
 op `left-6` (meer ruimte); de kolommen blijven in beide gevallen vanaf links

@@ -31,6 +31,18 @@
   `setRelated`-watches in `home.mjs` het; een eerdere `setRelated`-watch die dat
   níét deed liet het gerelateerd-paneel op het bij load geselecteerde block
   bevriezen (zie `.claude/rules/detail-layout.md`).
+- **arrow.js — een `${() => …}`-slot dat wisselt tussen een enkel element en een
+  keyed array (`.map()`) bevriest na een lege render.** Waargenomen in de
+  comment-lijst van `RelatedPanel.mjs`: de slot gaf óf `visibleComments().map(...)`
+  (keyed rijen) óf een enkel `<p>Nog geen comments</p>`. Navigeer je naar een block
+  zónder comments (de slot rendert het enkele `<p>`) en dan terug naar een block
+  mét een comment, dan draaide de slot-binding wel opnieuw en gaf een niet-lege
+  array terug, maar arrow.js rende de rijen niet meer — de lijst bleef leeg terwijl
+  `cs.view` wél gevuld was (de comment stond nog wel in de thread-header, die een
+  string teruggeeft). **Oplossing:** geef **altijd hetzelfde soort** uit die slot —
+  wikkel de lege-staat in een **array van één** (`[html\`<p …>…</p>\`.key('no-comments')]`)
+  zodat de slot-vorm stabiel een keyed array blijft. Re-keyen van het paneel of een
+  scalar-versieteller hielpen niet; alleen de stabiele array-vorm.
 - **arrow.js hergebruikt een keyed node zonder z'n function-bindings te
   herdraaien — en verliest soms een `.innerHTML`/attribuut-update bij
   co-subscribers.** Twee samenhangende valkuilen, beide waargenomen in de
@@ -102,3 +114,34 @@
   ingetrokken. (Niet te verwarren met de **app-eigen** base/head-worktrees onder
   `data/worktrees/` uit de ingest-pipeline — die blijven zoals beschreven in
   `.claude/rules/blocks-and-ingest.md`.)
+
+## Playwright-test-infra (per-worker geïsoleerde server)
+
+- De Go-binary wordt **één keer** gebouwd in `globalSetup` (`tests/_setup.mjs` →
+  `go build -o tests/.tmp/slash .`), nooit per test.
+- Er is **geen gedeelde `webServer`** meer. Elke Playwright-worker krijgt via de
+  worker-scoped fixture in **`tests/_fixtures.mjs`** zijn **eigen** geseede
+  SQLite-DB én **eigen** server op **poort `4200 + workerIndex`**. Omdat `newTasks`
+  álle module-DB's (comments/workflows/relations/callresolve/inbox/prmeta) **naast**
+  het `-db`-pad zet (`filepath.Dir`), isoleert één `-db tests/.tmp/w<n>/test.db`
+  meteen **alle write-state** per worker. De read-only base/head-worktrees onder
+  `data/` blijven gedeeld (server-`dataDir` is hardcoded `"data"`). Dit haalt de
+  cross-worker **write-races** weg (comment/workflow-SQLite-contention gaf eerder
+  een lege `runId`) én de page-load-contentie die de suite flaky maakte.
+- **Spec-imports:** elke spec importeert `{ test, expect }` uit **`./_fixtures.mjs`**
+  (niet `@playwright/test`), zodat `page.goto('/pr/…')` de eigen worker-server raakt
+  (de fixture overschrijft `baseURL`).
+- **Workers = 4** op deze 8-core-box: elke worker draait een Go-server **plus** een
+  Chromium, dus hoger (6+) verzadigt de machine en gaf flaky assertion-timeouts.
+  `expect`-timeout staat op **15s** (ruimte voor een trage render tijdens een
+  startup-piek; geslaagde tests blijven <1s) en `retries: 1` vangt de resterende
+  cold-start **mount-race** op (een paar specs mounten een component via een
+  dynamische `import()` in `page.evaluate()` tegen de live app-pagina — nodig voor
+  de Tailwind/Prism-CSS van `index.html` — en de `history.replaceState`-burst van de
+  app tijdens load kan die mount kort verstoren). Een echte fout faalt beide pogingen.
+- **Data-kanttekening:** de diff-inhoud (`/api/code`) komt uit de **gitignored**
+  `data/worktrees/pr-<n>-{base,head}` — géén gecommitte fixture. Zijn die lokaal naar
+  een andere commit gedreven (b.v. base+head op twee náást elkaar liggende commits
+  i.p.v. base=merge-base), dan tonen de meeste blokken **geen** wijzigingen en falen
+  diff-inhoud-afhankelijke tests. Anker diff-navigatie-tests daarom op een blok dat
+  betrouwbaar een wijziging draagt (blok 0 van PR 12903).

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 async function place(page, body) {
   await page.getByTestId('new-comment').click()

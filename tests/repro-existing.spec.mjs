@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // Force the load-order race: comments arrive & render BEFORE the block code, so the
 // later code-load re-render tears down the comment subtrees (arrow.js orphan).

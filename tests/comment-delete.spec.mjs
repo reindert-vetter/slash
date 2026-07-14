@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // Enter on a focused comment row (reply field empty) opens a small menu with a
 // "Verwijder comment" option. Choosing it signals the task_code_comment

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // Combined approval indicators. The seeded fixture DB has no worktrees, so
 // /api/code (and thus a real diff with changed rows) is unavailable — like the

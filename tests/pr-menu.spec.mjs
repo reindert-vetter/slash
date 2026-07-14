@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // The `/` key opens a general, PR-wide tree menu (distinct from Enter's
 // block palette): "Naar PR-overzicht", "GitHub" and "Jira", the latter two
@@ -8,6 +8,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
   test('`/` opens the PR-wide tree with overview / GitHub / Jira', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     const menu = page.getByTestId('command-menu')
@@ -32,6 +33,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
   test('GitHub opens a submenu (open / comment); Jira opens its three items', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     await page.keyboard.press('/')
@@ -61,6 +63,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
   test('GitHub → Comment plaatsen opens the line-comment composer', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     await page.keyboard.press('/')
@@ -76,6 +79,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
   test('Naar PR-overzicht navigates to the overview', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     await page.keyboard.press('/')

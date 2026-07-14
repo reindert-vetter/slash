@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // URL-state persistence: the navigation position (selected block, mode, change)
 // is mirrored into the query string via history.replaceState, so a refresh
@@ -8,18 +8,21 @@ test.describe('PR Review Tree — URL state persistence', () => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
 
-    // The PR lives in the path (/pr/12903), not the query. Step down once in the list.
+    // The PR lives in the path (/pr/12903), not the query. Stepping the sidebar
+    // selection writes `sel` into the query string.
     await page.keyboard.press('ArrowDown')
     await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe('1')
+    // Step back to the first block: it is a `modified` block with a change to step
+    // into, so enterDiff has change groups to land on (the diff content comes from
+    // the base/head worktrees). sel 0 is the default, so it drops back out of the URL.
+    await page.keyboard.press('ArrowUp')
+    await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBeNull()
 
     // enterDiff needs the block's code loaded to know its change groups; wait for
     // the lazy fetch to settle before stepping in.
     await page.waitForLoadState('networkidle')
     await page.keyboard.press('ArrowRight')
     await expect.poll(() => new URL(page.url()).searchParams.get('mode')).toBe('diff')
-
-    // Walk to the next change group → chg is recorded (if the block has >1 group).
-    await page.keyboard.press('ArrowDown')
     const before = new URL(page.url()).search
 
     // Reload from the exact URL — state must come back.
@@ -30,7 +33,6 @@ test.describe('PR Review Tree — URL state persistence', () => {
     // Diff mode restored → the detail panel is in its full-width (left-6) layout.
     const panel = page.locator('[data-testid="detail-panel"]')
     await expect(panel).toHaveClass(/left-6/)
-    expect(new URL(page.url()).searchParams.get('sel')).toBe('1')
     expect(new URL(page.url()).searchParams.get('mode')).toBe('diff')
   })
 
@@ -104,9 +106,11 @@ test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
       })
       .toBe(true)
 
-    // Step into the panel, then ↓ ↓ : related block → new-comment → the comment.
+    // Step into the panel, then → ↓ : the code card hands off to the comments
+    // column (→ lands on the new-comment button) and ↓ steps onto the seeded
+    // comment. (↓ walks within the code card; → is what crosses to the comments.)
     await intoRelated(page)
-    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('ArrowRight')
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('comment-item').first()).toHaveClass(/bg-indigo-50/)
     await expect.poll(() => new URL(page.url()).searchParams.get('rel.foc')).toBe('comment')

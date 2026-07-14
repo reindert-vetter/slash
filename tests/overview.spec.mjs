@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // The PR overview (/pr-overview) is a live GitHub-style inbox. Under test the Go
 // bridge serves tests/fixtures/inbox.json (SLASH_GITHUB=off + SLASH_INBOX), so

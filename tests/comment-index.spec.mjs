@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './_fixtures.mjs'
 
 // The comment index is scoped to the selected block (and, drilling into the diff,
 // to the unit under the selection: call ⊂ line ⊂ group ⊂ block). A diff row that
