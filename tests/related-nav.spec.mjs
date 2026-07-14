@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test'
 
 // Keyboard navigation into the right-hand Related panel. From the diff, → selects
-// the related-code block (green border); ↓ walks to the "+ Comment op deze regel"
-// button, then into the comment index; → on a comment opens its thread with the
+// the related-code block; → again jumps to the "+ Comment op deze regel" button,
+// then ↓ walks into the comment index; → on a comment opens its thread with the
 // reply field focused; ↑ walks up through the old messages. ← / Esc step back out.
 // See home.mjs (onKeydown → relatedActive/enterRelated/handleRelatedKey) and
 // RelatedPanel.mjs (the cs.focus/threadPos state machine).
@@ -17,7 +17,7 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     await page.keyboard.press('ArrowRight') // diff → related panel
   }
 
-  test('→ selects the related block (light blue), ↓ steps to the new-comment button, ← exits', async ({
+  test('→ selects the related block (light blue), → opens the new-comment composer, ← exits', async ({
     page,
   }) => {
     await stepIntoRelated(page)
@@ -26,10 +26,10 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     const related = page.getByTestId('related-code')
     await expect(related).toHaveClass(/border-indigo-300/)
 
-    // ↓ moves focus to the "+ Comment op deze regel" button (indigo focus ring).
+    // → moves focus to the "+ Comment op deze regel" button (indigo focus ring).
     // Landing there opens an empty new-comment composer and focuses it, so the
-    // reviewer can type straight away — no → needed.
-    await page.keyboard.press('ArrowDown')
+    // reviewer can type straight away. (↓/↑ now walk the code list instead.)
+    await page.keyboard.press('ArrowRight')
     await expect(related).not.toHaveClass(/border-indigo-300/)
     await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
     await expect(page.getByTestId('comment-compose')).toBeFocused()
@@ -77,10 +77,10 @@ test.describe('PR Review Tree — related-panel navigation', () => {
 
     await stepIntoRelated(page)
 
-    // ↓ ↓ : related block → new-comment button → the first comment in the index.
-    // Landing on the comment shows its history and focuses the reply field, so
-    // the reviewer can type a reply straight away.
-    await page.keyboard.press('ArrowDown')
+    // → then ↓ : related block → new-comment button → the first comment in the
+    // index. Landing on the comment shows its history and focuses the reply field,
+    // so the reviewer can type a reply straight away.
+    await page.keyboard.press('ArrowRight')
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('comment-item').first()).toHaveClass(/bg-indigo-50/)
     await expect(page.getByTestId('reaction-compose')).toBeFocused()

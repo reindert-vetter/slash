@@ -410,34 +410,24 @@ export function handleRelatedKey(key) {
     return true
   }
   if (cs.focus === 'code') {
-    // The code card is a first (flush) block plus a right-hand stack of the
-    // remaining blocks. On the first block: → steps into that stack, ↓ leaves for
-    // the comments column, ↑/← return to the diff. In the stack (2nd+ block): ↑/↓
-    // walk it (↑ back onto the first block, ↓ past the last leaves for comments),
-    // ← returns to the diff; → does nothing.
+    // The code card is a flat vertical list of underlying-code children. ↓/↑ walk
+    // it (↑ from the first child exits to the diff); → jumps to the comments
+    // column; ← always returns to the diff.
     const n = rc.children.length
-    if (cs.codeSel === 0) {
-      if (key === 'ArrowRight') {
-        if (n > 1) {
-          cs.codeSel = 1
-          scrollCodeIntoView()
-        }
-      } else if (key === 'ArrowDown') {
-        gotoRow(1)
-      } else if (key === 'ArrowUp' || key === 'ArrowLeft') {
-        exitRelated()
-        return 'exit'
-      }
-      return true
-    }
     if (key === 'ArrowDown') {
       if (cs.codeSel < n - 1) {
         cs.codeSel += 1
         scrollCodeIntoView()
-      } else gotoRow(1)
+      }
     } else if (key === 'ArrowUp') {
+      if (cs.codeSel === 0) {
+        exitRelated()
+        return 'exit'
+      }
       cs.codeSel -= 1
       scrollCodeIntoView()
+    } else if (key === 'ArrowRight') {
+      gotoRow(1)
     } else if (key === 'ArrowLeft') {
       exitRelated()
       return 'exit'

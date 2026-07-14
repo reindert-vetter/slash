@@ -150,15 +150,12 @@ dan vallen de links terug op de kale PR-URL resp. de Jira-base.
 In `'diff'`-mode stapt **`→`** de **Onderliggende-code-kaart** in
 (`enterRelated` in `RelatedPanel.mjs`, `cs.focus === 'code'`) en landt op het
 **eerste** child-blokje (`cs.codeSel = 0`). Alle blokjes staan verticaal onder
-elkaar op volle breedte (geen zij-aan-zij-hint meer). Op het
-**eerste** blokje: **`→`** stapt naar het **2e**
-blokje (`cs.codeSel = 1`, mits er een is), **`↓`** verlaat de kaart naar de
-comments-kolom (de **"+ Comment op deze regel"**-knop, `gotoRow(1)`), en
-**`↑`**/**`←`** gaan terug naar de diff (`exitRelated`). Vanaf het
-2e+ blokje doorloop je met **`↑`**/**`↓`**: **`↓`** selecteert het **volgende**
-blokje en verlaat — voorbij het laatste — de lijst naar de comments-kolom;
-**`↑`** het **vorige** blokje en keert — vanaf het 2e — terug op het **eerste**
-blokje; **`←`** gaat terug naar de diff; **`→`** doet niets meer.
+elkaar op volle breedte (geen zij-aan-zij-hint meer) en de kaart is een **pure
+lijst-navigatie**: **`↓`** selecteert het **volgende** blokje (blijft op het
+laatste), **`↑`** het **vorige** blokje — vanaf het **eerste** blokje gaat
+**`↑`** i.p.v. verder terug naar de diff (`exitRelated`). **`→`** springt vanaf
+elk blokje naar de comments-kolom (de **"+ Comment op deze regel"**-knop,
+`gotoRow(1)`); **`←`** gaat vanaf elk blokje terug naar de diff (`exitRelated`).
 Vanuit de comments keert **`↑`** terug naar het laatst-gekozen blokje
 (`cs.codeSel` blijft behouden). Deze paneel-cursor
 (`cs.focus`/`codeSel`/`sel`/`threadPos`) leeft in de **URL** onder de eigen
