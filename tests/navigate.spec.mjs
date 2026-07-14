@@ -218,15 +218,14 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(thread.getByTestId('comment-target')).toHaveCount(0)
   })
 
-  // The Onderliggende-code card is a first (flush) child plus a right-hand stack
-  // of the rest. From the first child: → steps into that stack (the 2nd child), ↓
-  // leaves for the comments column, ↑/← return to the diff. In the stack (2nd+
-  // child): ↓ walks to the next child (past the last it leaves for comments), ↑
-  // steps back (from the 2nd it returns to the first), ← returns to the diff. The
-  // first child sits flush; the 2nd+ are indented under a →/↓ hint. Mount
-  // RelatedPanel directly with mock children + drive the exported nav functions so
-  // the test is independent of the fixture's child count.
-  // See RelatedPanel (enterRelated / handleRelatedKey / relatedCard / stepHint).
+  // The Onderliggende-code card renders all children as one flat vertical list.
+  // From the first child: → steps to the 2nd child, ↓ leaves for the comments
+  // column, ↑/← return to the diff. From the 2nd+: ↓ walks to the next child
+  // (past the last it leaves for comments), ↑ steps back (from the 2nd it
+  // returns to the first), ← returns to the diff. Mount RelatedPanel directly
+  // with mock children + drive the exported nav functions so the test is
+  // independent of the fixture's child count.
+  // See RelatedPanel (enterRelated / handleRelatedKey / relatedCard).
   test('→ walks the underlying-code stack, ↑ steps back, ↓ leaves for comments', async ({
     page,
   }) => {
@@ -260,8 +259,8 @@ test.describe('PR Review Tree — change navigation', () => {
     const key = (k) => page.evaluate((k) => window.__rp.handleRelatedKey(k), k)
 
     await expect(items).toHaveCount(3)
-    // The →/↓ hint sits just below the first child; the 2nd+ are indented under it.
-    await expect(host.getByTestId('related-hint')).toBeVisible()
+    // No more →/↓ hint element — children render as a flat vertical list.
+    await expect(host.getByTestId('related-hint')).toHaveCount(0)
 
     // Enter from the diff → first child selected.
     await page.evaluate(() => window.__rp.enterRelated())

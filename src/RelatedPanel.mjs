@@ -1012,32 +1012,6 @@ function relatedCard(r, i, drill) {
   `
 }
 
-// stepHint is the little arrow-glyph cluster shown beside the child blocks,
-// hinting at the moves available while the code card owns the keyboard — brighter
-// when focused. On the first block it points at the two ways out: → (into the
-// right-hand stack) and ↓ (to the comments). Once in the stack (2nd+ block) it
-// switches to ↑ (previous block) / ← (back to the diff) / ↓ (next block).
-function stepHint() {
-  const inStack = () => cs.codeSel > 0
-  return html`
-    <div
-      class="${() =>
-        'flex flex-col items-start gap-0.5 pl-1 text-xs leading-none ' +
-        (cs.focus === 'code' ? 'text-indigo-400' : 'text-slate-300')}"
-      data-testid="related-hint"
-      title="${() =>
-        inStack()
-          ? '↑ vorig blok · ← naar diff · ↓ volgend blok'
-          : '→ volgend blok · ↓ naar comments'}"
-    >
-      ${() =>
-        inStack()
-          ? html`<span>↑</span><span>←</span><span>↓</span>`
-          : html`<span>→</span><span>↓</span>`}
-    </div>
-  `
-}
-
 // RelatedPanel — the fixed-width right column: the selected block's underlying
 // (child) code on top, live comments below. `commentTarget` (from home.mjs)
 // reports what an in-progress comment would attach to at the current navigation
@@ -1110,27 +1084,11 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
         </div>
         <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
           ${() => {
-            // The first child sits flush (no .key(): a lone keyed node outside an
-            // array makes arrow.js cache-persist it and the panel stops tracking
-            // the selected block — keys only reconcile inside a mapped array).
+            // All children render as one flat vertical list, full width, in order.
             const ks = kids()
             return ks.length === 0
               ? html`<p class="px-1 py-2 text-[11px] text-slate-400">Geen onderliggende code.</p>`
-              : relatedCard(ks[0], 0, drill)
-          }}
-          ${() => {
-            // Next to the first block, the → / ↓ arrow hint (→ = next block,
-            // ↓ = jump to comments) sits on the left with the rest of the blocks
-            // stacked to its right, so the list reads as a walkable stack.
-            const rest = kids().slice(1)
-            return rest.length
-              ? html`<div class="flex items-start gap-2">
-                  ${stepHint()}
-                  <div class="flex min-w-0 flex-1 flex-col gap-2">
-                    ${rest.map((r, k) => relatedCard(r, k + 1, drill).key('related:' + r.id))}
-                  </div>
-                </div>`
-              : null
+              : ks.map((r, i) => relatedCard(r, i, drill).key('related:' + r.id))
           }}
         </div>
       </section>

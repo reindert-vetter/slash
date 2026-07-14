@@ -149,13 +149,13 @@ dan vallen de links terug op de kale PR-URL resp. de Jira-base.
 
 In `'diff'`-mode stapt **`→`** de **Onderliggende-code-kaart** in
 (`enterRelated` in `RelatedPanel.mjs`, `cs.focus === 'code'`) en landt op het
-**eerste** child-blokje (`cs.codeSel = 0`), dat op volle breedte bovenaan staat.
-De overige blokjes vormen een **rechter-stapel** náást de →/↓-hint. Op het
-**eerste** blokje: **`→`** stapt die rechter-stapel in (landt op het **2e**
-blokje, `cs.codeSel = 1`, mits er een is), **`↓`** verlaat de kaart naar de
+**eerste** child-blokje (`cs.codeSel = 0`). Alle blokjes staan verticaal onder
+elkaar op volle breedte (geen zij-aan-zij-hint meer). Op het
+**eerste** blokje: **`→`** stapt naar het **2e**
+blokje (`cs.codeSel = 1`, mits er een is), **`↓`** verlaat de kaart naar de
 comments-kolom (de **"+ Comment op deze regel"**-knop, `gotoRow(1)`), en
-**`↑`**/**`←`** gaan terug naar de diff (`exitRelated`). In de rechter-stapel
-(2e+ blokje) doorloop je met **`↑`**/**`↓`**: **`↓`** selecteert het **volgende**
+**`↑`**/**`←`** gaan terug naar de diff (`exitRelated`). Vanaf het
+2e+ blokje doorloop je met **`↑`**/**`↓`**: **`↓`** selecteert het **volgende**
 blokje en verlaat — voorbij het laatste — de lijst naar de comments-kolom;
 **`↑`** het **vorige** blokje en keert — vanaf het 2e — terug op het **eerste**
 blokje; **`←`** gaat terug naar de diff; **`→`** doet niets meer.
@@ -192,9 +192,8 @@ de diff van **diezelfde** kolom (`handleRelatedKey`'s `exitRelated()`) — dat i
 geen aparte "pop"-stap meer, de kolom-voor-kolom-navigatie hierboven volgt pas
 zodra `relatedActive()` weer `false` is. Deze code-tak zit vóór de generieke
 `gotoRow`-walk in `handleRelatedKey`; de comment-/thread-takken blijven
-ongewijzigd. Visueel: het eerste blokje staat op volle breedte, en **net eronder**
-een `→`/`↓`-hint (`data-testid=related-hint`) met het 2e+ blokje als groep
-daaronder ingesprongen; het geselecteerde blokje krijgt een indigo ring
+ongewijzigd. Visueel: alle blokjes staan verticaal onder elkaar op volle
+breedte (geen pijltjes-hint meer); het geselecteerde blokje krijgt een indigo ring
 (`data-active=true`). Zie `.claude/rules/detail-layout.md`.
 
 Bij het instappen (`→`) springt de selectie naar de **eerste gewijzigde regel**

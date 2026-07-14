@@ -153,24 +153,18 @@ rechts — zie de layout-alinea hierboven):
   callResolve-reload de cursor niet verspringt.
   Zie `.claude/rules/tembed-workflows.md` (sectie "Relaties tussen blokken").
   De kaart is een **navigeerbare lijst**: `→` vanuit de diff selecteert het
-  **eerste** blokje (`cs.codeSel=0`). Vanaf het eerste blokje stapt `→` de
-  **rechter-stapel** in (het 2e blokje) en `↓` verlaat de lijst naar de comments;
-  in de rechter-stapel lopen `↑`/`↓` langs de blokjes (zie
-  `.claude/rules/keyboard-navigation.md`). Het geselecteerde blokje krijgt een
-  indigo ring (`data-active=true`). Het **eerste** blokje staat op volle breedte;
-  **daaronder** staat een pijltjes-hint (`data-testid=related-hint`, verticaal
-  gestapeld) met het **2e en verdere** blokje als groep **rechts náást** die
-  hint. De kaart heeft **geen vaste hoogte-cap** (eerder `max-h-[40%]`): hij
-  groeit met zijn inhoud mee en pakt alle verticale ruimte die de comments-kaart
-  eronder niet nodig heeft; pas als beide samen niet passen krimpt hij
-  (flex-shrink, `min-h-0`) en scrollt zijn lijst, waarbij de comments-kaart
-  altijd zijn `min-h-[16rem]` houdt. De hint toont **de bewegingen die vanaf de
-  huidige positie kunnen**: op
-  het eerste blokje `→` (volgend blok) / `↓` (naar comments); zit je in de
-  rechter-stapel (2e+ blokje) dan schakelt hij naar `↑` (vorig blok) / `←` (naar
-  diff) / `↓` (volgend blok). De hint kleurt feller (`text-indigo-400`) zolang de
-  kaart de toetsen bezit. De code-excerpts **wrappen** (geen horizontale scroll:
-  `whitespace-pre-wrap break-words`).
+  **eerste** blokje (`cs.codeSel=0`). Vanaf het eerste blokje stapt `→` naar het
+  2e blokje en `↓` verlaat de lijst naar de comments; vanaf het 2e+ blokje lopen
+  `↑`/`↓` langs de blokjes (zie `.claude/rules/keyboard-navigation.md`). Het
+  geselecteerde blokje krijgt een indigo ring (`data-active=true`). Alle
+  blokjes staan **verticaal onder elkaar** op volle breedte (geen
+  pijltjes-hint meer — die is verwijderd). De kaart heeft **geen vaste
+  hoogte-cap** (eerder `max-h-[40%]`): hij groeit met zijn inhoud mee en pakt
+  alle verticale ruimte die de comments-kaart eronder niet nodig heeft; pas als
+  beide samen niet passen krimpt hij (flex-shrink, `min-h-0`) en scrollt zijn
+  lijst, waarbij de comments-kaart altijd zijn `min-h-[16rem]` houdt. De
+  code-excerpts **wrappen** (geen horizontale scroll: `whitespace-pre-wrap
+  break-words`).
   Elke child die zelf een PR-block is (relatie-child of een method-call wiens
   definitie in de PR wijzigt) draagt een **goedkeurings-badge**
   (`data-testid=related-approval`, `done/total`, groen + ✓ bij volledig
