@@ -96,8 +96,10 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
     op een comment-rij landt er ook echt op (`toComment()` → highlight + thread
     open + reply-veld gefocust), net als de toetsenbord-landing.
   - `modules/github` — de GitHub-communicatie (`gh api`): `PostLineComment`,
-    `Reply`, `FetchReplies`, `PRState` (`open`/`merged`/`closed`). Interface
-    `github.Client` + `github.Fake` (met `SetPRState`) voor tests.
+    `Reply`, `FetchReplies`, `PRState` (`open`/`merged`/`closed`), `PRMeta`,
+    `DeleteComment`, `MarkFileViewed` (het Files-changed-"Viewed"-vinkje, via
+    `gh api graphql`). Interface `github.Client` + `github.Fake` (met
+    `SetPRState`, `IsViewed`/`ViewedFiles`) voor tests.
 - **Flow:** `saveComment` (comments) + `postGithubComment` (github, best-effort),
   dan een lus op `reply`-**Signals**. Een reactie komt binnen via de **UI**
   (`POST /api/workflows/{runID}/signals/reply`) én via een **per-thread poller**;
@@ -401,5 +403,24 @@ Patroon van `build_relations`/`pr_status`.
   `onApprove`-callback die `Block.mjs` uitvoert) stuurt ná de lokale hertoewijzing
   `persistApproval(b)` → het `set`-Signal met het volledige stel voor dat block. De
   UI schrijft nooit direct — alleen dit Signal (write-boundary).
-- Tests: `approvals_test.go` (module round-trip incl. full-swap/clear + de workflow
-  end-to-end: `set`-Signal → read-model, en `EnsureApprovals`-idempotentie).
+- **GitHub "Viewed"-vinkje in sync houden:** een viewed-verzoek lift mee op
+  hetzelfde `set`-Signal — mirror van `ReactionSignal.Action`. `ApprovalSignal`
+  draagt daarvoor `File string` + `Viewed *bool`: `nil` = gewone block-approval-
+  set (bestaand gedrag), niet-`nil` = "markeer/ontmarkeer dit bestand" en
+  `BlockID`/`Rows`/`Calls` worden genegeerd. `approveWorkflow` vertakt op
+  `sig.Viewed != nil` naar de Activity **`setFileViewed`** (i.p.v.
+  `saveApproval`), die `github.Client.MarkFileViewed(ctx, pr, file, viewed)`
+  aanroept — de enige plek die GitHub's Files-changed-"Viewed"-checkbox zet
+  (`gh api graphql`: eerst het PR-node-ID ophalen, dan `markFileAsViewed`/
+  `unmarkFileAsViewed` als mutatie). De UI detecteert de transitie zelf:
+  `syncViewedFiles` in `home.mjs` groepeert `state.blocks` per bestand en
+  vergelijkt "alle blokken van dit bestand volledig approved + code geladen"
+  tegen `state.viewedFiles`; alleen bij een overgang (net compleet / niet meer
+  compleet) stuurt het het signal. Het draait aan het eind van
+  `persistApproval` (elke approve-toggle) én in `ensureCode` zodra een block se
+  code alsnog arriveert (voor het geval een bestand pas ná een refresh z'n
+  laatste code-fetch binnenkrijgt).
+- Tests: `approvals_test.go` (module round-trip incl. full-swap/clear, de workflow
+  end-to-end: `set`-Signal → read-model, `EnsureApprovals`-idempotentie, en een
+  viewed-request die `setFileViewed`/`github.Client.MarkFileViewed` drijft i.p.v.
+  het approvals-read-model aan te raken).

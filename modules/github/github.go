@@ -41,6 +41,9 @@ type Client interface {
 	PRMeta(ctx context.Context, pr int) (Meta, error)
 	// DeleteComment removes a review comment (the root of a thread) from the PR.
 	DeleteComment(ctx context.Context, pr int, commentID int64) error
+	// MarkFileViewed sets (viewed=true) or clears (viewed=false) the "Viewed"
+	// checkbox for path in the Files-changed tab of pr.
+	MarkFileViewed(ctx context.Context, pr int, path string, viewed bool) error
 }
 
 // Module is the production Client: it shells out to `gh api` against repo.
@@ -183,6 +186,68 @@ func (m *Module) DeleteComment(ctx context.Context, pr int, commentID int64) err
 	_, err := m.api(ctx, "DELETE",
 		fmt.Sprintf("repos/%s/pulls/comments/%d", m.repo, commentID))
 	return err
+}
+
+// MarkFileViewed sets or clears the "Viewed" checkbox for path in the PR's
+// Files-changed tab. GitHub's REST API has no such endpoint, so this goes
+// through the GraphQL API: first resolve the PR's node ID, then run the
+// markFileAsViewed/unmarkFileAsViewed mutation against it.
+func (m *Module) MarkFileViewed(ctx context.Context, pr int, path string, viewed bool) error {
+	owner, name, ok := strings.Cut(m.repo, "/")
+	if !ok {
+		return fmt.Errorf("invalid repo slug %q", m.repo)
+	}
+	nodeID, err := m.prNodeID(ctx, owner, name, pr)
+	if err != nil {
+		return err
+	}
+	mutation := "unmarkFileAsViewed"
+	if viewed {
+		mutation = "markFileAsViewed"
+	}
+	query := fmt.Sprintf(
+		"mutation($p:String!,$id:ID!){%s(input:{path:$p, pullRequestId:$id}){clientMutationId}}",
+		mutation)
+	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
+		"-f", "query="+query,
+		"-F", "p="+path,
+		"-F", "id="+nodeID,
+	)
+	if out, err := cmd.Output(); err != nil {
+		return fmt.Errorf("gh api graphql %s: %w (%s)", mutation, err, out)
+	}
+	return nil
+}
+
+// prNodeID fetches the GraphQL global node ID of a pull request.
+func (m *Module) prNodeID(ctx context.Context, owner, name string, pr int) (string, error) {
+	const query = `query($o:String!,$n:String!,$pr:Int!){repository(owner:$o,name:$n){pullRequest(number:$pr){id}}}`
+	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
+		"-f", "query="+query,
+		"-F", "o="+owner,
+		"-F", "n="+name,
+		"-F", "pr="+strconv.Itoa(pr),
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("gh api graphql pr node id: %w", err)
+	}
+	var res struct {
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					ID string `json:"id"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		return "", err
+	}
+	if res.Data.Repository.PullRequest.ID == "" {
+		return "", fmt.Errorf("pr node id not found for %s/%s#%d", owner, name, pr)
+	}
+	return res.Data.Repository.PullRequest.ID, nil
 }
 
 func (m *Module) api(ctx context.Context, method, endpoint string, args ...string) ([]byte, error) {

@@ -91,6 +91,10 @@ const state = reactive({
   // Run ID (.../signals/set). Empty until the ensure-call returns (offline: stays
   // empty and approval is then session-only).
   approveRunId: '',
+  // viewedFiles — files we've told GitHub are fully approved (marked "Viewed" in
+  // Files changed). Kept in sync by syncViewedFiles; not rendered, so it's a
+  // plain Set rather than something arrow.js needs to react to.
+  viewedFiles: new Set(),
   // drill — the stack of "drilled-into" children the reviewer has stepped into
   // from the Onderliggende-code panel (Enter on a resolved child). Each entry is
   // either a real block object reused straight from allBlocks (its own relations/
@@ -424,6 +428,57 @@ function persistApproval(b) {
     }),
   }).catch(() => {
     /* best-effort — the local state is already updated */
+  })
+  syncViewedFiles()
+}
+
+// syncViewedFiles keeps GitHub's per-file "Viewed" checkbox in sync with
+// per-file approval: a file is "done" once every one of its top-level blocks
+// has fully loaded code and is fully approved. Only fires on transitions (a
+// file becoming newly-complete, or falling out of complete) so repeated calls
+// are cheap no-ops. Fire-and-forget, same write path as persistApproval — the
+// UI never writes a read-model directly, only signals the approve tracker.
+function syncViewedFiles() {
+  if (!state.approveRunId) return
+  const byFile = new Map()
+  for (const b of state.blocks) {
+    if (!byFile.has(b.file)) byFile.set(b.file, [])
+    byFile.get(b.file).push(b)
+  }
+  for (const [file, blocks] of byFile) {
+    let total = 0
+    let complete = true
+    for (const b of blocks) {
+      if (!b.code) {
+        complete = false
+        break
+      }
+      const c = blockApproveCount(b)
+      total += c.total
+      if (c.done !== c.total) {
+        complete = false
+        break
+      }
+    }
+    const isComplete = complete && total > 0
+    const wasViewed = state.viewedFiles.has(file)
+    if (isComplete && !wasViewed) {
+      state.viewedFiles.add(file)
+      signalFileViewed(file, true)
+    } else if (!isComplete && wasViewed) {
+      state.viewedFiles.delete(file)
+      signalFileViewed(file, false)
+    }
+  }
+}
+
+function signalFileViewed(file, viewed) {
+  fetch(`/api/workflows/${state.approveRunId}/signals/set`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file, viewed }),
+  }).catch(() => {
+    /* best-effort */
   })
 }
 
@@ -890,6 +945,10 @@ async function ensureCode(b) {
     // depend on the diff's own `b.code` binding re-firing (see the codeVersion
     // note on `state`).
     state.codeVersion++
+    // A file whose blocks were already fully approved may only just now have
+    // this block's code (and thus its real done/total) available — recheck so
+    // it doesn't stay un-marked as Viewed after a refresh.
+    syncViewedFiles()
     // If this is the selected block, centre its active change now that the rows
     // (and their anchor) can be rendered — both when we've stepped into the diff
     // and when it's merely selected in the list (previewing the first change).

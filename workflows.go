@@ -163,10 +163,19 @@ type ApproveInput struct {
 // ApprovalSignal carries one block's full approved state into the approve
 // tracker (delivered under SignalSet). Rows/Calls are the complete set for that
 // block; an empty set clears the block's row from the read-model.
+//
+// It also doubles as a file-viewed request (File set, Viewed non-nil): the UI
+// marks/unmarks a file's GitHub "Viewed" checkbox once all its top-level
+// blocks are fully approved. Both ride the same "set" Signal because a
+// workflow can only WaitSignal on one name at a time (mirrors ReactionSignal's
+// Action-based multiplexing) — Viewed == nil means "ordinary block approval",
+// non-nil means "file-viewed request" and BlockID/Rows/Calls are ignored.
 type ApprovalSignal struct {
 	BlockID string   `json:"blockId"`
 	Rows    []int    `json:"rows"`
 	Calls   []string `json:"calls"`
+	File    string   `json:"file"`
+	Viewed  *bool    `json:"viewed"`
 }
 
 // ResolveCallInput starts a resolve_call Execution: it asks the LLM to resolve
@@ -460,6 +469,23 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.approvals.Replace(ctx, arg.PR, arg.BlockID, arg.Rows, arg.Calls)
 	})
 
+	// Activity: mark/unmark a file's GitHub "Viewed" checkbox (write,
+	// workflow-driven — the only place that talks to GitHub for this).
+	engine.RegisterActivity("setFileViewed", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR     int    `json:"pr"`
+			File   string `json:"file"`
+			Viewed bool   `json:"viewed"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.gh == nil || arg.File == "" {
+			return nil, nil
+		}
+		return nil, m.gh.MarkFileViewed(ctx, arg.PR, arg.File, arg.Viewed)
+	})
+
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
@@ -518,6 +544,17 @@ func approveWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	for {
 		var sig ApprovalSignal
 		w.WaitSignal(SignalSet, &sig)
+		if sig.Viewed != nil {
+			arg := struct {
+				PR     int    `json:"pr"`
+				File   string `json:"file"`
+				Viewed bool   `json:"viewed"`
+			}{PR: in.PR, File: sig.File, Viewed: *sig.Viewed}
+			if err := w.ExecuteActivity("setFileViewed", arg, nil); err != nil {
+				return nil, fmt.Errorf("set file viewed: %w", err)
+			}
+			continue
+		}
 		arg := struct {
 			PR      int      `json:"pr"`
 			BlockID string   `json:"blockId"`

@@ -288,7 +288,16 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		// segments) to the per-PR approve tracker — the UI write path for approval.
 		if parts[2] == SignalSet {
 			var body ApprovalSignal
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.BlockID == "" {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid approval", http.StatusBadRequest)
+				return
+			}
+			if body.Viewed != nil {
+				if body.File == "" {
+					http.Error(w, "invalid viewed request", http.StatusBadRequest)
+					return
+				}
+			} else if body.BlockID == "" {
 				http.Error(w, "invalid approval", http.StatusBadRequest)
 				return
 			}

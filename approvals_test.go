@@ -124,3 +124,46 @@ func TestApproveWorkflow(t *testing.T) {
 		t.Fatalf("EnsureApprovals returned a new run ID %q, want reuse of %q", again, runID)
 	}
 }
+
+// A "set" Signal carrying a Viewed request (rather than a BlockID) drives the
+// setFileViewed Activity instead of saveApproval — it marks/unmarks the file's
+// GitHub "Viewed" checkbox via github.Client, and never touches the approvals
+// read-model.
+func TestApproveWorkflowFileViewed(t *testing.T) {
+	ap, err := approvals.Open(filepath.Join(t.TempDir(), "approvals.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.Close()
+
+	gh := &github.Fake{}
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, ap, nil, nil, "", "test/repo")
+
+	pr := 43
+	runID, err := m.EnsureApprovals(pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	viewedTrue := true
+	if err := engine.SignalWorkflow(runID, SignalSet, ApprovalSignal{
+		File: "app/Foo.php", Viewed: &viewedTrue,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return gh.IsViewed(pr, "app/Foo.php") })
+
+	viewedFalse := false
+	if err := engine.SignalWorkflow(runID, SignalSet, ApprovalSignal{
+		File: "app/Foo.php", Viewed: &viewedFalse,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return !gh.IsViewed(pr, "app/Foo.php") })
+
+	// The approvals read-model was never touched by the viewed requests.
+	if got, _ := ap.List(context.Background(), pr); len(got) != 0 {
+		t.Fatalf("approvals List = %+v, want none (viewed-only signals)", got)
+	}
+}

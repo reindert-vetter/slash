@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"strconv"
 	"sync"
 )
 
@@ -13,8 +14,9 @@ type Fake struct {
 	Posted  []string // bodies posted (root + replies), in order
 	Deleted []int64  // comment IDs deleted, in order
 	replies []Reply
-	prState string // "" reads as "open"
-	prMeta  Meta   // returned by PRMeta (SetPRMeta overrides)
+	prState string          // "" reads as "open"
+	prMeta  Meta            // returned by PRMeta (SetPRMeta overrides)
+	viewed  map[string]bool // "pr|path" -> viewed
 }
 
 func (f *Fake) PostLineComment(_ context.Context, pr int, file string, line int, body string) (int64, error) {
@@ -97,4 +99,41 @@ func (f *Fake) DeletedCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.Deleted)
+}
+
+func viewedKey(pr int, path string) string {
+	return strconv.Itoa(pr) + "|" + path
+}
+
+func (f *Fake) MarkFileViewed(_ context.Context, pr int, path string, viewed bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.viewed == nil {
+		f.viewed = map[string]bool{}
+	}
+	if viewed {
+		f.viewed[viewedKey(pr, path)] = true
+	} else {
+		delete(f.viewed, viewedKey(pr, path))
+	}
+	return nil
+}
+
+// IsViewed reports whether MarkFileViewed(pr, path, true) is the last call
+// recorded for that pr/path (and no later unmark happened).
+func (f *Fake) IsViewed(pr int, path string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.viewed[viewedKey(pr, path)]
+}
+
+// ViewedFiles returns a copy of the current viewed-set (pr|path -> true).
+func (f *Fake) ViewedFiles() map[string]bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]bool, len(f.viewed))
+	for k, v := range f.viewed {
+		out[k] = v
+	}
+	return out
 }
