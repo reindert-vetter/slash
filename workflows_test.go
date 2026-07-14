@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/reindert-vetter/tembed"
+	"slash/modules/claude"
 	"slash/modules/comments"
 	"slash/modules/github"
 	"slash/modules/inbox"
+	"slash/modules/jira"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 )
@@ -62,6 +64,10 @@ func waitFor(t *testing.T, cond func() bool) {
 
 func newTestManager(t *testing.T) (*TaskManager, *github.Fake, *comments.Module) {
 	t.Helper()
+	// fetchPRStatuses (pr_status stage 3) shells to gh directly (statusesFor,
+	// not the injected github.Client fake) — keep every test built on this
+	// helper offline.
+	t.Setenv("SLASH_GITHUB", "off")
 	cs, err := comments.Open(filepath.Join(t.TempDir(), "comments.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +75,7 @@ func newTestManager(t *testing.T) (*TaskManager, *github.Fake, *comments.Module)
 	t.Cleanup(func() { cs.Close() })
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, "", "test/repo")
 	m.interval = 3 * time.Millisecond // fast poll for the test
 	m.idle = 3 * time.Millisecond     // idle cadence too, so tests never wait 10m
 	return m, gh, cs
@@ -359,7 +365,7 @@ func TestPRInboxRefreshPopulatesReadModel(t *testing.T) {
 
 	ib := testInbox(t)
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, ib, testRelations(t), testPRMeta(t), nil, nil, nil, db, "", repoSlug)
+	m := NewTaskManager(engine, &github.Fake{}, nil, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, db, "", repoSlug)
 
 	runID, err := engine.StartWorkflow(WorkflowPRInbox, PRInboxInput{Repo: repoSlug})
 	if err != nil {
@@ -405,7 +411,7 @@ func TestTaskSurvivesRestart(t *testing.T) {
 
 	ib := testInbox(t)
 	e1 := tembed.New(store)
-	NewTaskManager(e1, gh, cs, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, "", "test/repo")
+	NewTaskManager(e1, gh, cs, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, "", "test/repo")
 	runID, err := e1.StartWorkflow(WorkflowTaskCodeComment, CodeCommentInput{PR: 1, File: "a.php", Line: 1, Body: "q"})
 	if err != nil {
 		t.Fatal(err)
@@ -416,7 +422,7 @@ func TestTaskSurvivesRestart(t *testing.T) {
 
 	// Restart: a new engine over the same store must not re-post the comment.
 	e2 := tembed.New(store)
-	NewTaskManager(e2, gh, cs, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, "", "test/repo")
+	NewTaskManager(e2, gh, cs, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, "", "test/repo")
 	if err := e2.Recover(); err != nil {
 		t.Fatal(err)
 	}
@@ -436,6 +442,7 @@ func TestTaskSurvivesRestart(t *testing.T) {
 // metadata (title + URL) into the prmeta read-model at start (synchronously,
 // inside EnsurePRStatus → StartWorkflow), which is what feeds the `/` menu.
 func TestPRStatusFetchesMeta(t *testing.T) {
+	t.Setenv("SLASH_GITHUB", "off") // fetchPRStatuses shells to gh directly (statusesFor); keep this test offline
 	pm := testPRMeta(t)
 	cs, err := comments.Open(filepath.Join(t.TempDir(), "comments.db"))
 	if err != nil {
@@ -445,7 +452,7 @@ func TestPRStatusFetchesMeta(t *testing.T) {
 	gh := &github.Fake{}
 	gh.SetPRMeta(github.Meta{Title: "PS-123 fix the thing", URL: "https://github.com/x/y/pull/7"})
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, nil, "", "test/repo")
 
 	if _, err := m.EnsurePRStatus(7); err != nil {
 		t.Fatal(err)
@@ -459,6 +466,61 @@ func TestPRStatusFetchesMeta(t *testing.T) {
 	}
 	if meta.URL == "" {
 		t.Fatalf("url empty, want stored")
+	}
+}
+
+// TestPRStatusThreeStages asserts the pr_status tracker fills the prmeta
+// read-model in its three stages — basics (incl. the linked Jira issue),
+// Claude summary, review/CI statuses — all at start, before the tracker parks
+// on its first state Signal.
+func TestPRStatusThreeStages(t *testing.T) {
+	t.Setenv("SLASH_GITHUB", "off") // fetchPRStatuses shells to gh directly (statusesFor); keep this test offline
+	pm := testPRMeta(t)
+	cs, err := comments.Open(filepath.Join(t.TempDir(), "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+
+	gh := &github.Fake{}
+	gh.SetPRMeta(github.Meta{
+		Title: "INTEG-562 fix the thing", URL: "https://github.com/x/y/pull/7",
+		Body: "does a thing", Author: "alice", Additions: 10, Deletions: 2, ChangedFiles: 1, HeadRef: "feature/x",
+	})
+	jr := &jira.Fake{}
+	jr.SetIssue("INTEG-562", jira.Issue{
+		Key: "INTEG-562", Title: "Jira title", Description: "Jira description",
+		URL: "https://plugandpaybv.atlassian.net/browse/INTEG-562",
+	})
+	cl := claude.NewFake()
+	cl.SetOutput(claude.ModelHaiku, "This PR fixes the thing.")
+
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, cl, jr, nil, "", "test/repo")
+
+	if _, err := m.EnsurePRStatus(7); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, ok, err := pm.Get(context.Background(), 7)
+	if err != nil || !ok {
+		t.Fatalf("meta not stored (ok=%v err=%v)", ok, err)
+	}
+	// Stage 1: basics + Jira.
+	if meta.Title != "INTEG-562 fix the thing" || meta.Body != "does a thing" || meta.Author != "alice" {
+		t.Fatalf("basics = %+v", meta)
+	}
+	if meta.JiraKey != "INTEG-562" || meta.JiraTitle != "Jira title" || meta.JiraDesc != "Jira description" {
+		t.Fatalf("jira fields = %+v", meta)
+	}
+	// Stage 2: Claude summary.
+	if meta.Summary != "This PR fixes the thing." {
+		t.Fatalf("summary = %q", meta.Summary)
+	}
+	// Stage 3: statuses. The Fake github/statusesFor path (no real gh) yields no
+	// heavy status — assert it didn't error the tracker and stays zero.
+	if meta.ChecksTotal != 0 || meta.ReviewDecision != "" {
+		t.Fatalf("statuses = %+v, want zero (no gh in test)", meta)
 	}
 }
 

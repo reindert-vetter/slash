@@ -96,10 +96,23 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
     op een comment-rij landt er ook echt op (`toComment()` → highlight + thread
     open + reply-veld gefocust), net als de toetsenbord-landing.
   - `modules/github` — de GitHub-communicatie (`gh api`): `PostLineComment`,
-    `Reply`, `FetchReplies`, `PRState` (`open`/`merged`/`closed`), `PRMeta`,
-    `DeleteComment`, `MarkFileViewed` (het Files-changed-"Viewed"-vinkje, via
-    `gh api graphql`). Interface `github.Client` + `github.Fake` (met
-    `SetPRState`, `IsViewed`/`ViewedFiles`) voor tests.
+    `Reply`, `FetchReplies`, `PRState` (`open`/`merged`/`closed`), `PRMeta`
+    (titel/URL/body/author/diff-stats/head-ref), `DeleteComment`,
+    `MarkFileViewed` (het Files-changed-"Viewed"-vinkje, via `gh api graphql`).
+    Interface `github.Client` + `github.Fake` (met `SetPRState`,
+    `IsViewed`/`ViewedFiles`) voor tests.
+  - `modules/jira` — de Jira-communicatie via de lokale `acli`-CLI (zelfde
+    bridge-patroon als `modules/github`/`modules/claude`, geen nieuwe
+    dependency): `Issue(key)` draait `acli jira workitem view <key> --fields
+    summary,description --json` (de `key` wordt eerst tegen
+    `^[A-Z][A-Z0-9]+-\d+$` gevalideerd — nooit ongevalideerde input naar
+    `exec.CommandContext`) en flatten't de ADF-`description` (Atlassian
+    Document Format, een `{type:"doc", content:[...]}`-boom) naar platte tekst
+    door de content-boom recursief te doorlopen en alle `text`-leaves te
+    concateneren (paragrafen gescheiden door `\n`). Interface `jira.Client` +
+    `jira.Fake` (`SetIssue`) voor tests; **`SLASH_JIRA=off`** → `jira.Fake{}`
+    (geen netwerk, mirrort `SLASH_GITHUB=off`/`SLASH_CLAUDE=off`), bedraad in
+    `newTasks` (`tasks_api.go`).
 - **Flow:** `saveComment` (comments) + `postGithubComment` (github, best-effort),
   dan een lus op `reply`-**Signals**. Een reactie komt binnen via de **UI**
   (`POST /api/workflows/{runID}/signals/reply`) én via een **per-thread poller**;
@@ -134,15 +147,38 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   merged/closed is. Dat is de durabele bron-van-waarheid die pollers lezen om te
   stoppen (schrijven blijft dus binnen een workflow). `ensurePRStatus(pr)` start/
   hergebruikt één tracker per PR (ook na herstart, via `Runs()`+`Input()`).
-  **Bij start** (synchroon in `StartWorkflow`, vóór de signal-lus) draait hij één
-  keer de **`fetchPRMeta`-Activity**: die haalt de **PR-titel + URL** op via de
-  github-module (`PRMeta`, best-effort — geen gh = leeg) en schrijft ze in de
-  **`prmeta`-module** (`modules/prmeta`, `data/prmeta.db`, read-model met
-  `Save`/`Get`). De UI (`/`-menu, zie `.claude/rules/keyboard-navigation.md`) leest dat via
+  **Bij start** (synchroon in `StartWorkflow`, vóór de signal-lus) draait hij
+  drie Activities **na elkaar**, elk gevolgd door zijn eigen read-model-write —
+  zodat de UI **progressief** kan tonen (eerst titel+omschrijving, dan de
+  samenvatting, dan de review/CI-status) i.p.v. te wachten tot alles binnen is:
+  1. **`fetchPRBasics`** — haalt titel/URL/body/author/diff-stats/head-ref op
+     via de github-module (`PRMeta`, best-effort — een gh-hiccup laat de rest
+     leeg), leidt een Jira-key af uit de titel (`\b([A-Z][A-Z0-9]+-\d+)\b`,
+     dezelfde regex als de frontend) en haalt bij een gevonden key het
+     Jira-ticket op (`jira.Issue`, best-effort — geen key of een Jira-hiccup
+     laat de jira-velden leeg), dan `prmeta.SaveBasics(...)`.
+  2. **`generatePRSummary`** — bouwt uit de zojuist opgeslagen basics (titel,
+     body, de distinct gewijzigde bestanden uit de `blocks`-tabel, en het
+     Jira-ticket) een prompt en vraagt Haiku (`claude.Client.Run`, context-only)
+     om in 2-4 zinnen samen te vatten wat de PR doet, dan
+     `prmeta.SaveSummary(pr, summary)`.
+  3. **`fetchPRStatuses`** — hergebruikt de bestaande heavy inbox-status-query
+     (`statusesFor` uit `inbox.go`: reviewDecision, checks, reviewers) voor
+     precies deze ene PR (respecteert `SLASH_GITHUB=off`), dan
+     `prmeta.SaveStatuses(...)`. Kanttekening: GitHub's rollup levert alleen een
+     **totaal** + een overall state, geen per-check pass-count; `checksPassed`
+     is dus `checksTotal` bij een `SUCCESS`-rollup, anders `0` — genoeg voor een
+     status-pill, geen exacte teller.
+
+  Elke stage schrijft via zijn **eigen, gerichte** `prmeta`-methode (zie
+  hieronder) zodat een latere stage nooit een eerdere overschrijft. De UI
+  (`/`-menu, zie `.claude/rules/keyboard-navigation.md`) leest dat via
   `GET /api/pr?pr=N` voor de Jira/GitHub-deep-links; de titel levert de
   `KEY-123`-ticket-key. `EnsurePRStatus` is de geëxporteerde ensure-wrapper die de
   UI via `POST /api/workflows/pr_status {pr}` bij het laden aanroept (een Execution
-  starten = sanctioned write-weg).
+  starten = sanctioned write-weg) — de UI wacht **niet** op deze POST, maar
+  pollt `GET /api/pr` en rendert wat er al is (velden van een nog niet-gedraaide
+  stage zijn simpelweg leeg/0).
 - **`pr_inbox`-workflow (per repo):** een derde Workflow Type dat de PR-inbox
   bezit — het is de **enige** die GitHub voor het overzicht leest. Een
   `refresh`-Signal (van de UI bij laden én van `pollInbox` op de
@@ -159,9 +195,12 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   `GET /api/workflows/{runID}` (status), en read-only `GET /api/comments?pr=N`
   (of `?path=<prefix>` voor de hiërarchische prefix-zoek over de comment-paden).
   Voor de PR-metadata: `POST /api/workflows/pr_status {pr}` (ensure de tracker,
-  die synchroon de titel fetcht) + read-only `GET /api/pr?pr=N` (leest het
-  `prmeta`-read-model: `{ok,pr,title,url,updatedAt}`; `{ok:false}` zolang nog niet
-  gefetcht). Voor de inbox: `POST /api/workflows/{runID}/signals/refresh` +
+  die synchroon de drie stages draait) + read-only `GET /api/pr?pr=N` (leest
+  het `prmeta`-read-model: `{ok,pr,title,url,updatedAt,body,author,additions,
+  deletions,changedFiles,headRef,summary,jiraKey,jiraTitle,jiraDesc,jiraUrl,
+  reviewDecision,checksTotal,checksPassed,reviewers}`; `{ok:false}` zolang nog
+  niets gefetcht is, en een veld van een nog niet-gedraaide stage staat gewoon
+  op zijn zero-value). Voor de inbox: `POST /api/workflows/{runID}/signals/refresh` +
   read-only `GET /api/inbox` (leest het `inbox`-read-model).
   Bootstrap + recovery + hervatten van pollers + `EnsureInbox`:
   `newTasks(ctx, db, dataDir, repo)` in `tasks_api.go`, aangeroepen in `runServe`.

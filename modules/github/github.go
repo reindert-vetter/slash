@@ -14,11 +14,17 @@ import (
 	"strings"
 )
 
-// Meta is lightweight PR metadata (its title and web URL), fetched by the
-// pr_status tracker at start and stored in the prmeta read-model.
+// Meta is PR metadata fetched by the pr_status tracker's basics stage and
+// stored in the prmeta read-model.
 type Meta struct {
-	Title string `json:"title"`
-	URL   string `json:"url"`
+	Title        string `json:"title"`
+	URL          string `json:"url"`
+	Body         string `json:"body"`
+	Author       string `json:"author"`
+	Additions    int    `json:"additions"`
+	Deletions    int    `json:"deletions"`
+	ChangedFiles int    `json:"changedFiles"`
+	HeadRef      string `json:"headRef"`
 }
 
 // Reply is one reply/reaction on a review-comment thread.
@@ -164,7 +170,8 @@ func (m *Module) PRState(ctx context.Context, pr int) (string, error) {
 	return meta.State, nil
 }
 
-// PRMeta fetches the PR's title and web URL (one `gh api` call).
+// PRMeta fetches the PR's title, web URL, body, author, diff-stats and head
+// branch (one `gh api` call).
 func (m *Module) PRMeta(ctx context.Context, pr int) (Meta, error) {
 	out, err := m.api(ctx, "GET",
 		fmt.Sprintf("repos/%s/pulls/%d", m.repo, pr))
@@ -172,13 +179,23 @@ func (m *Module) PRMeta(ctx context.Context, pr int) (Meta, error) {
 		return Meta{}, err
 	}
 	var meta struct {
-		Title   string `json:"title"`
-		HTMLURL string `json:"html_url"`
+		Title        string                 `json:"title"`
+		HTMLURL      string                 `json:"html_url"`
+		Body         string                 `json:"body"`
+		User         struct{ Login string } `json:"user"`
+		Additions    int                    `json:"additions"`
+		Deletions    int                    `json:"deletions"`
+		ChangedFiles int                    `json:"changed_files"`
+		Head         struct{ Ref string }   `json:"head"`
 	}
 	if err := json.Unmarshal(out, &meta); err != nil {
 		return Meta{}, err
 	}
-	return Meta{Title: meta.Title, URL: meta.HTMLURL}, nil
+	return Meta{
+		Title: meta.Title, URL: meta.HTMLURL, Body: meta.Body, Author: meta.User.Login,
+		Additions: meta.Additions, Deletions: meta.Deletions, ChangedFiles: meta.ChangedFiles,
+		HeadRef: meta.Head.Ref,
+	}, nil
 }
 
 // DeleteComment removes the review comment commentID from pr.

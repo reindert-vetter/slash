@@ -16,6 +16,7 @@ import (
 	"slash/modules/comments"
 	"slash/modules/github"
 	"slash/modules/inbox"
+	"slash/modules/jira"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 )
@@ -106,7 +107,13 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, fu
 	if os.Getenv("SLASH_CLAUDE") == "off" {
 		cl = claude.NewFake()
 	}
-	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, ap, cl, db, dataDir, repo)
+	// Under SLASH_JIRA=off the Jira bridge never shells out (offline/tests): an
+	// empty Fake reports no linked issue for every key.
+	var jr jira.Client = jira.New()
+	if os.Getenv("SLASH_JIRA") == "off" {
+		jr = &jira.Fake{}
+	}
+	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, ap, cl, jr, db, dataDir, repo)
 
 	if err := engine.Recover(); err != nil {
 		return nil, nil, err
@@ -541,9 +548,12 @@ func (s *server) handleApprovals(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
-// handlePR serves GET /api/pr?pr=N — the read-only PR metadata (title + URL)
-// from the prmeta read-model. {ok:false} while the pr_status tracker hasn't
-// fetched it yet.
+// handlePR serves GET /api/pr?pr=N — the read-only PR metadata from the prmeta
+// read-model, filled in three progressive stages by the pr_status tracker
+// (basics → Claude summary → review/CI statuses). {ok:false} while the tracker
+// hasn't fetched anything yet; once ok, fields whose stage hasn't landed yet are
+// simply zero values (empty summary/reviewDecision, checksTotal 0, …) so the UI
+// can render progressively instead of waiting for every stage.
 func (s *server) handlePR(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -564,5 +574,11 @@ func (s *server) handlePR(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "pr": meta.PR, "title": meta.Title, "url": meta.URL, "updatedAt": meta.UpdatedAt,
+		"body": meta.Body, "author": meta.Author, "additions": meta.Additions, "deletions": meta.Deletions,
+		"changedFiles": meta.ChangedFiles, "headRef": meta.HeadRef,
+		"summary": meta.Summary,
+		"jiraKey": meta.JiraKey, "jiraTitle": meta.JiraTitle, "jiraDesc": meta.JiraDesc, "jiraUrl": meta.JiraURL,
+		"reviewDecision": meta.ReviewDecision, "checksTotal": meta.ChecksTotal, "checksPassed": meta.ChecksPassed,
+		"reviewers": meta.Reviewers,
 	})
 }

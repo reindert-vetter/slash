@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"slash/modules/comments"
 	"slash/modules/github"
 	"slash/modules/inbox"
+	"slash/modules/jira"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 )
@@ -209,6 +212,7 @@ type TaskManager struct {
 	callresolve *callresolve.Module
 	approvals   *approvals.Module
 	claude      claude.Client
+	jira        jira.Client
 	db          *sql.DB
 	dataDir     string
 	repo        string
@@ -225,9 +229,9 @@ type TaskManager struct {
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
-func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, ap *approvals.Module, cl claude.Client, db *sql.DB, dataDir, repo string) *TaskManager {
+func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, ap *approvals.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
 	m := &TaskManager{
-		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, approvals: ap, claude: cl, db: db, dataDir: dataDir, repo: repo,
+		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, approvals: ap, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
 		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{},
 		logf: log.Printf,
@@ -429,10 +433,12 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(map[string]int{"saved": len(entries)})
 	})
 
-	// Activity: fetch the PR's metadata (title + URL) from GitHub and store it in
-	// the prmeta read-model (write, workflow-driven). Best-effort: a GitHub hiccup
-	// or a nil store (tests) must not sink the pr_status tracker.
-	engine.RegisterActivity("fetchPRMeta", func(ctx context.Context, in []byte) ([]byte, error) {
+	// Activity: stage 1 of the pr_status tracker — fetch the PR's basics (title,
+	// URL, body, author, diff-stats, head ref) from GitHub, derive a Jira key from
+	// the title and fetch that issue (best-effort), then store all of it in the
+	// prmeta read-model (write, workflow-driven). A GitHub/Jira hiccup or a nil
+	// store (tests) must not sink the pr_status tracker.
+	engine.RegisterActivity("fetchPRBasics", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg PRStatusInput
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
@@ -442,11 +448,92 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		meta, err := gh.PRMeta(ctx, arg.PR)
 		if err != nil {
-			m.logf("pr_status: fetch meta pr=%d skipped: %v", arg.PR, err)
+			m.logf("pr_status: fetch basics pr=%d skipped: %v", arg.PR, err)
 			return nil, nil
 		}
-		if err := m.prmeta.Save(ctx, prmeta.Meta{PR: arg.PR, Title: meta.Title, URL: meta.URL}); err != nil {
-			return nil, fmt.Errorf("save pr meta: %w", err)
+		out := prmeta.Meta{
+			PR: arg.PR, Title: meta.Title, URL: meta.URL, Body: meta.Body, Author: meta.Author,
+			Additions: meta.Additions, Deletions: meta.Deletions, ChangedFiles: meta.ChangedFiles,
+			HeadRef: meta.HeadRef,
+		}
+		if key := jiraKeyFromTitle(meta.Title); key != "" && m.jira != nil {
+			issue, err := m.jira.Issue(ctx, key)
+			if err != nil {
+				m.logf("pr_status: fetch jira %s skipped: %v", key, err)
+			} else {
+				out.JiraKey = key
+				out.JiraTitle = issue.Title
+				out.JiraDesc = issue.Description
+				out.JiraURL = issue.URL
+			}
+		}
+		if err := m.prmeta.SaveBasics(ctx, out); err != nil {
+			return nil, fmt.Errorf("save pr basics: %w", err)
+		}
+		return nil, nil
+	})
+
+	// Activity: stage 2 of the pr_status tracker — ask Haiku for a short summary
+	// of the PR (title + body + changed files + linked Jira issue) and store it.
+	// Best-effort: a Claude hiccup or missing stores must not sink the tracker.
+	engine.RegisterActivity("generatePRSummary", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg PRStatusInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.prmeta == nil || m.claude == nil {
+			return nil, nil
+		}
+		meta, ok, err := m.prmeta.Get(ctx, arg.PR)
+		if err != nil || !ok {
+			return nil, nil
+		}
+		files, _ := changedFilesFor(m.db, arg.PR)
+		prompt := prSummaryPrompt(meta, files)
+		summary, err := m.claude.Run(ctx, claude.RunRequest{Prompt: prompt, Model: claude.ModelHaiku})
+		if err != nil {
+			m.logf("pr_status: summary pr=%d skipped: %v", arg.PR, err)
+			return nil, nil
+		}
+		if err := m.prmeta.SaveSummary(ctx, arg.PR, strings.TrimSpace(summary)); err != nil {
+			return nil, fmt.Errorf("save pr summary: %w", err)
+		}
+		return nil, nil
+	})
+
+	// Activity: stage 3 of the pr_status tracker — fetch the review decision + CI
+	// checks + reviewers via the same heavy inbox query the overview uses, and
+	// store them. Best-effort: a GitHub hiccup must not sink the tracker.
+	engine.RegisterActivity("fetchPRStatuses", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg PRStatusInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.prmeta == nil || ghDisabled() {
+			return nil, nil
+		}
+		statuses, err := statusesFor(ctx, []int{arg.PR})
+		if err != nil {
+			m.logf("pr_status: fetch statuses pr=%d skipped: %v", arg.PR, err)
+			return nil, nil
+		}
+		st, ok := statuses[strconv.Itoa(arg.PR)]
+		if !ok {
+			return nil, nil
+		}
+		reviewers := make([]string, 0, len(st.Reviewers))
+		for _, r := range st.Reviewers {
+			reviewers = append(reviewers, r.Login)
+		}
+		// The heavy query only reports an overall rollup state, not a per-check
+		// pass count; treat a SUCCESS rollup as "all passed", anything else as
+		// "none confirmed passed yet" — good enough for a status pill.
+		checksPassed := 0
+		if st.ChecksState == "SUCCESS" {
+			checksPassed = st.ChecksTotal
+		}
+		if err := m.prmeta.SaveStatuses(ctx, arg.PR, st.ReviewDecision, st.ChecksTotal, checksPassed, reviewers); err != nil {
+			return nil, fmt.Errorf("save pr statuses: %w", err)
 		}
 		return nil, nil
 	})
@@ -649,11 +736,19 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, err
 	}
-	// Fetch the PR's metadata (title + URL) once at start (synchronously, inside
-	// StartWorkflow), so the read-model is filled before the tracker parks on the
-	// first state Signal. The UI reads it via GET /api/pr for the `/` menu.
-	if err := w.ExecuteActivity("fetchPRMeta", in, nil); err != nil {
-		return nil, fmt.Errorf("fetch pr meta: %w", err)
+	// Fetch the PR's metadata in three stages, once at start (synchronously,
+	// inside StartWorkflow), so the read-model fills in progressively before the
+	// tracker parks on the first state Signal: basics (title/body/Jira) first,
+	// then the Claude summary, then review/CI statuses. The UI polls GET /api/pr
+	// and renders whatever stage has landed so far.
+	if err := w.ExecuteActivity("fetchPRBasics", in, nil); err != nil {
+		return nil, fmt.Errorf("fetch pr basics: %w", err)
+	}
+	if err := w.ExecuteActivity("generatePRSummary", in, nil); err != nil {
+		return nil, fmt.Errorf("generate pr summary: %w", err)
+	}
+	if err := w.ExecuteActivity("fetchPRStatuses", in, nil); err != nil {
+		return nil, fmt.Errorf("fetch pr statuses: %w", err)
 	}
 	for {
 		var s PRStateSignal
@@ -662,6 +757,62 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			return json.Marshal(map[string]any{"pr": in.PR, "state": s.State})
 		}
 	}
+}
+
+// jiraKeyRe matches a KEY-123-style Jira ticket key inside a PR title. Mirrors
+// the frontend's own extraction (src/home.mjs, src/overview.mjs) so the `/`
+// menu's deep-link and this backend-derived key always agree.
+var jiraKeyRe = regexp.MustCompile(`\b([A-Z][A-Z0-9]+-\d+)\b`)
+
+// jiraKeyFromTitle extracts the first KEY-123-style ticket key from a PR title,
+// or "" when there isn't one.
+func jiraKeyFromTitle(title string) string {
+	m := jiraKeyRe.FindStringSubmatch(title)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// changedFilesFor returns the distinct changed files of pr (from the blocks
+// table), for the PR-summary prompt. Best-effort: a nil db or query error just
+// yields no files.
+func changedFilesFor(db *sql.DB, pr int) ([]string, error) {
+	if db == nil {
+		return nil, nil
+	}
+	rows, err := db.Query(`SELECT DISTINCT file FROM blocks WHERE pr = ? ORDER BY file`, pr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var files []string
+	for rows.Next() {
+		var f string
+		if err := rows.Scan(&f); err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
+	return files, rows.Err()
+}
+
+// prSummaryPrompt builds the Haiku prompt for the PR-summary stage: title, body,
+// changed files, and (when linked) the Jira issue's title + description.
+func prSummaryPrompt(meta prmeta.Meta, files []string) string {
+	var b strings.Builder
+	b.WriteString("Vat in 2-4 zinnen samen wat deze PR doet, voor een reviewer.\n\n")
+	fmt.Fprintf(&b, "Titel: %s\n", meta.Title)
+	if meta.Body != "" {
+		fmt.Fprintf(&b, "Omschrijving:\n%s\n", meta.Body)
+	}
+	if len(files) > 0 {
+		fmt.Fprintf(&b, "Gewijzigde bestanden:\n%s\n", strings.Join(files, "\n"))
+	}
+	if meta.JiraKey != "" {
+		fmt.Fprintf(&b, "Jira-ticket %s: %s\n%s\n", meta.JiraKey, meta.JiraTitle, meta.JiraDesc)
+	}
+	return b.String()
 }
 
 // taskCodeCommentWorkflow is the durable definition. It is deterministic: all
