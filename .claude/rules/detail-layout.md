@@ -34,14 +34,14 @@ of een opgeloste method-call — zie `isCodeFocused`/`focusedRelatedChild` in
 `RelatedPanel` meegeeft) opent dat kind als een volwaardige diff-kolom rechts naast
 de bestaande kolommen (tussen de diff en `RelatedPanel`), i.p.v. alleen de platte
 code-excerpt te tonen. Klik en Enter lopen allebei via dezelfde
-`drillIntoChild(child)`. `home.mjs` houdt
-daarvoor een **stack** bij, `state.drill`: elke `drillIntoChild(child)` (aangeroepen
-vanuit de `Enter`-tak in `onKeydown` — ná de bestaande "Zoek"-precedentie voor
-onopgeloste calls — of vanuit de klik-callback) pusht er één entry op, en `popDrill()` (aangeroepen zodra
-`←`/`Escape` het paneel op het diepste niveau zou **verlaten** — `handleRelatedKey`
-geeft dan `'exit'` terug — en de stack niet leeg is) haalt er één af, zodat
-terugstappen de kolommen één-voor-één sluit i.p.v. in één klap helemaal terug naar
-de top-level diff te springen.
+`drillIntoChild(child)`. `home.mjs` houdt daarvoor een **stack** bij, `state.drill`:
+elke `drillIntoChild(child)` (aangeroepen vanuit de `Enter`-tak in `onKeydown` — ná
+de bestaande "Zoek"-precedentie voor onopgeloste calls — of vanuit de
+klik-callback) pusht er één entry op **plus** een bijbehorende cursor-entry op
+`state.drillCursor` (`{change:0}`), en zet `state.focusLevel` op dat verse
+(diepste) niveau. Anders dan eerder **sluit** niets van dit meer automatisch: elke
+gedrilde kolom blijft open zolang de diff-sessie duurt (zie "Kolom-navigatie"
+hieronder voor hoe je 'm weer verlaat).
 
 Een drill-entry is **één van twee vormen**:
 - **Een echt PR-block** — zit het kind al in `state.allBlocks` (een relatie-child,
@@ -58,23 +58,56 @@ Een drill-entry is **één van twee vormen**:
   — geen eigen Onderliggende-code-kaart (geen caller-scan ooit gedraaid voor een
   synthetisch frame).
 
-**Interactie-scope:** alleen het **diepste** (meest recent gedrilde) niveau —
-`focusedBlock()`, `state.drill.length ? state.drill[state.drill.length-1] :
-curBlock()` — drijft het actieve Onderliggende-code-paneel + taken/chat eronder:
-`relatedChildren`/`unresolvedCalls`/`startCallSearch` nemen nu een block-argument
-i.p.v. impliciet `state.blocks[state.selected]` te lezen, en elke aanroepplek geeft
-`focusedBlock()` door. Eerdere niveaus (de oorspronkelijke selectie + eerder
-gedrilde kinderen) renderen **alleen** hun `Block`-kaart (`data-testid=drill-column`,
-`shrink-0`, gedimd via `preview:true` — hetzelfde `preview`-effect als de
-look-ahead-kaart) — géén eigen `activeGroup`/hints/RelatedPanel: die kolommen
-hebben geen eigen navigeerbare cursor (`state.change`/`gran` blijven van de
-top-level geselecteerde block). Er is dus altijd precies één `RelatedPanel`-
-instantie (`cs`/`rc` blijven singletons); `drillIntoChild` reset 'm met
-`enterRelated()` zodat het verse niveau op zijn eerste kind start. De kolom-`.key`
-codeert positie in de stack + code-status (`load`/`code`/`err`, hetzelfde patroon
-als de bestaande `sel`/`prev`-key) zodat een nieuwe drill altijd een verse kaart
-forceert; een nieuwe kolom scrollt zichzelf in beeld
-(`scrollIntoView({inline:'end',block:'nearest'})`, `<main>` scrolt horizontaal).
+## Kolom-navigatie: `state.focusLevel` (elke gedrilde kolom is een volwaardige diff)
+
+Anders dan het "altijd het diepste niveau"-model van eerder is **elke** kolom —
+de oorspronkelijke top-level block-kaart én elke gedrilde kolom — een volwaardige,
+navigeerbare diff met zijn **eigen** change-group-cursor. `state.focusLevel` wijst
+aan welke kolom de pijltjestoetsen op dit moment bezit: `0` is de top-level
+geselecteerde block (die blijft `state.change`/`state.gran` gebruiken, zoals
+altijd), `1..state.drill.length` indexeert `state.drill[level-1]` met zijn eigen
+cursor in `state.drillCursor[level-1]` (`{change}`, **alleen** group-granulariteit
+— een gedrilde kolom zoomt niet met `f`/`d`/`s` en stroomt niet door naar een
+same-file buurblock; het is een op zichzelf staande diff).
+
+- **Direct na het drillen staat de focus op de diff van de nieuwe kolom** —
+  niet op zijn Onderliggende-code-paneel. `drillIntoChild` roept daarvoor
+  `leaveRelated()` (de geëxporteerde `exitRelated` uit `RelatedPanel.mjs`) aan
+  i.p.v. het vroegere `enterRelated()`: de reviewer landt op de eerste
+  wijzigingsgroep van de nieuwe kolom en loopt daar met `↑`/`↓` doorheen
+  (`drillNextChange`/`drillPrevChange` in `home.mjs`).
+- **`←` stapt de focus één kolom naar links** — naar de vorige gedrilde kolom, of
+  (vanaf niveau 1) terug naar de diff van het oorspronkelijke top-level block —
+  **zonder die kolom te sluiten**: hij blijft staan, alleen gedimd (`preview`).
+  Herhaald `←` loopt zo alle gedrilde kolommen af tot je weer op het eerste block
+  staat.
+- **Pas als je al op niveau `0` staat (het top-level block), sluit `←` de héle
+  diff-sessie** — de bestaande diff→list-overgang (`state.mode='list'`) — en dán
+  worden `state.drill`/`state.drillCursor` ook leeggemaakt: gedrilde kolommen
+  hebben alleen betekenis binnen déze diff-sessie.
+- **`→` opent nog steeds het Onderliggende-code-paneel** van de kolom die op dat
+  moment de focus heeft (`enterRelated()`, ongewijzigd) — dat is nog altijd de
+  enige weg om **dieper** te drillen (Enter/klik op een kind daarin).
+- Vanuit het paneel (`relatedActive()`) geeft `←`/`Escape` op de eerste positie
+  de focus terug aan de diff van **diezelfde** kolom (`handleRelatedKey`'s
+  `exitRelated`) — dat sluit geen kolom meer; de kolom-voor-kolom-navigatie
+  hierboven is een aparte stap die pas volgt zodra `relatedActive()` weer `false`
+  is.
+
+`focusedBlock()` (het Onderliggende-code-paneel + taken/chat) volgt nu
+`state.focusLevel` in plaats van altijd het diepste niveau: `state.focusLevel ===
+0 ? curBlock() : state.drill[state.focusLevel - 1]`. Stap je met `←` een kolom
+terug, dan schuift het paneel dus mee naar díe kolom. Er is nog altijd precies één
+`RelatedPanel`-instantie (`cs`/`rc` blijven singletons).
+
+De kolom-`.key` codeert (naast positie in de stack + code-status
+`load`/`code`/`err`) ook of de kolom **op dit moment de focus heeft**
+(`foc`/`unfoc`) — net als de bestaande `sel`/`prev`-key op de top-level kaart —
+zodat een focus-wissel altijd een verse kaart (verse `${…}`-bindings) forceert in
+plaats van dat arrow.js de bestaande node hergebruikt (zie de valkuil in
+`.claude/rules/conventions.md`). Een nieuwe kolom scrollt zichzelf in beeld
+(`scrollFocusIntoView`, `<main>` scrolt horizontaal); dezelfde functie scrollt ook
+bij het terugstappen de nu-gefocuste kolom in beeld.
 
 De block-kaart-`.key(...)` codeert **rol** (`sel`/`prev`) **én code-status**
 (`load`/`code`/`err`), zodat arrow.js een **verse** kaart bouwt zodra een block

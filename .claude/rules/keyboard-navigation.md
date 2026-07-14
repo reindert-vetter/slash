@@ -177,19 +177,25 @@ en het Onderliggende-code-paneel + de taken/chat eronder springen mee naar dát
 niveau (`focusedBlock()`). Dit geldt **altijd voor het gefocuste kind**, ook als
 er *elders* in het block nog onopgeloste calls staan — die tellen alleen mee als
 er **niets** gefocust is (de lijst leeg, alles nog pending): dan valt `Enter`
-terug op de LLM-call-search (`unresolvedCalls(focusedBlock())`). `←`/`Escape`
-vanaf de eerste positie van de kaart
-(`cs.codeSel === 0`) — waar `handleRelatedKey` normaal `exitRelated()` aanroept en
-`'exit'` teruggeeft — **popt** in plaats daarvan één drill-niveau (`popDrill`,
-zolang `state.drill` niet leeg is) en heropent het paneel op het niveau
-eronder; pas een `←`/`Escape` zonder resterende drill-niveaus verlaat het paneel
-echt naar de top-level diff. Zo sluit je de gedrilde kolommen één-voor-één,
-net zoals je erin stapte. Deze code-tak zit vóór de generieke `gotoRow`-walk in
-`handleRelatedKey`; de comment-/thread-takken blijven ongewijzigd. Visueel: het
-eerste blokje staat op volle breedte, en **net eronder** een `→`/`↓`-hint
-(`data-testid=related-hint`) met het 2e+ blokje als groep daaronder ingesprongen;
-het geselecteerde blokje krijgt een indigo ring (`data-active=true`). Zie
-`.claude/rules/detail-layout.md`.
+terug op de LLM-call-search (`unresolvedCalls(focusedBlock())`). Meteen na het
+drillen staat de keyboard-focus op de **diff** van de nieuwe kolom, niet op zijn
+Onderliggende-code-paneel (`drillIntoChild` roept `leaveRelated()` — de
+geëxporteerde `exitRelated` — i.p.v. `enterRelated()`); vandaar loop je met
+`↑`/`↓` door de wijzigingsgroepen van díe kolom, en stapt `←` de focus terug naar
+de vorige kolom **zonder 'm te sluiten** — herhaald `←` loopt zo alle gedrilde
+kolommen af tot het oorspronkelijke top-level block, waar nóg een `←` pas de hele
+diff-sessie verlaat (en dan ook de gedrilde kolommen opruimt). Zie de sectie
+"Kolom-navigatie" in `.claude/rules/detail-layout.md` voor het volledige
+`state.focusLevel`-mechanisme. `←`/`Escape` vanaf de eerste positie van het
+Onderliggende-code-paneel (`cs.codeSel === 0`) geeft de keyboard-focus terug aan
+de diff van **diezelfde** kolom (`handleRelatedKey`'s `exitRelated()`) — dat is
+geen aparte "pop"-stap meer, de kolom-voor-kolom-navigatie hierboven volgt pas
+zodra `relatedActive()` weer `false` is. Deze code-tak zit vóór de generieke
+`gotoRow`-walk in `handleRelatedKey`; de comment-/thread-takken blijven
+ongewijzigd. Visueel: het eerste blokje staat op volle breedte, en **net eronder**
+een `→`/`↓`-hint (`data-testid=related-hint`) met het 2e+ blokje als groep
+daaronder ingesprongen; het geselecteerde blokje krijgt een indigo ring
+(`data-active=true`). Zie `.claude/rules/detail-layout.md`.
 
 Bij het instappen (`→`) springt de selectie naar de **eerste gewijzigde regel**
 (toegevoegd, verwijderd of gewijzigd) — `state.change` is de index. De

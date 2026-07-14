@@ -26,6 +26,7 @@ import RelatedPanel, {
   composeHasText,
   relatedActive,
   enterRelated,
+  leaveRelated,
   handleRelatedKey,
   isCodeFocused,
   isCommentFocused,
@@ -90,9 +91,23 @@ const state = reactive({
   // callResolve/approvedRows already work, so its own Onderliggende-code panel
   // falls out for free) or a minimal synthetic frame for a call target with no PR
   // block of its own (an unchanged file — see drillIntoChild). Each entry renders
-  // as its own shrink-0 column to the right of the block column; only the deepest
-  // (last) one drives the active Onderliggende-code + tasks panel (focusedBlock).
+  // as its own shrink-0 column to the right of the block column, a full diff of
+  // its own — see focusLevel below for which one currently owns the keyboard.
   drill: [],
+  // drillCursor — parallel to `drill`: each drilled column's own change-group
+  // cursor ({change}, group-granularity only — a drilled column doesn't zoom
+  // with f/d/s or flow into same-file neighbours, it's a single self-contained
+  // diff). Populated in drillIntoChild, walked by drillNextChange/drillPrevChange.
+  drillCursor: [],
+  // focusLevel — which column currently owns the diff keyboard (↑/↓ walk its
+  // changes, → opens its Onderliggende-code panel): 0 is the top-level selected
+  // block (state.change/state.gran), 1..drill.length indexes drill[level-1] /
+  // drillCursor[level-1]. Drilling in (drillIntoChild) jumps focus to the fresh
+  // (deepest) column; ← steps focus back one column at a time without closing
+  // any of them, until level 0, where ← falls through to the existing
+  // diff→list transition. focusedBlock() follows this, not always the deepest
+  // entry, so the Onderliggende-code panel + tasks slide along with the focus.
+  focusLevel: 0,
   selected: 0,
   // mode: 'list' — up/down move between blocks in the sidebar; → steps into the
   // selected block's diff. 'diff' — up/down move between change groups inside the
@@ -281,12 +296,15 @@ function prevChange() {
 // fKey — zoom in. From the list it steps into the diff first. Inside the diff it
 // refines the granularity one level (group → line → call); once on the finest
 // 'call' level it steps to the next call instead (flowing into the next same-file
-// block, like ↓).
+// block, like ↓). No-ops while a drilled column owns the keyboard (focusLevel >
+// 0) — a drilled column is a single self-contained diff at group granularity,
+// it doesn't zoom.
 function fKey() {
   if (state.mode !== 'diff') {
     enterDiff()
     return
   }
+  if (state.focusLevel > 0) return
   if (state.gran === 'call') nextChange()
   else setGran(1)
 }
@@ -294,15 +312,17 @@ function fKey() {
 // dKey — go back. On 'call' it steps to the previous call (flowing back into the
 // previous same-file block like ↑); at the very first call, with nowhere to flow,
 // it zooms back out to 'line'. On the coarser levels it just zooms out one step.
+// No-ops for a focused drilled column, like fKey.
 function dKey() {
-  if (state.mode !== 'diff') return
+  if (state.mode !== 'diff' || state.focusLevel > 0) return
   if (state.gran === 'call' && (state.change > 0 || sameFileNeighbour(-1))) prevChange()
   else setGran(-1)
 }
 
 // sKey — always zoom out one level (call → line → group), clamped at 'group'.
+// No-ops for a focused drilled column, like fKey.
 function sKey() {
-  if (state.mode === 'diff') setGran(-1)
+  if (state.mode === 'diff' && state.focusLevel === 0) setGran(-1)
 }
 
 async function loadBlocks() {
@@ -921,6 +941,13 @@ function enterDiff() {
   // change run); the reviewer refines from there with f.
   state.gran = 'group'
   state.change = 0
+  // Defensive: a fresh diff session starts with no drilled columns and the
+  // keyboard on the top-level block itself (drill/focusLevel should already be
+  // empty/0 here — the diff→list transition clears them — but reset in case
+  // this is ever reached some other way, e.g. a future URL restore).
+  state.drill = []
+  state.drillCursor = []
+  state.focusLevel = 0
   scrollChangeIntoView()
 }
 
@@ -1020,22 +1047,60 @@ function curBlock() {
 }
 
 // focusedBlock is whichever block the active Onderliggende-code panel (and its
-// keyboard focus) currently belongs to: the deepest drilled-into child if the
-// reviewer has stepped into one (state.drill), otherwise the top-level selected
-// block. relatedChildren/unresolvedCalls/startCallSearch all take this so the
-// panel and its actions follow wherever the reviewer has drilled.
+// keyboard focus) currently belongs to: state.focusLevel indexes the virtual
+// column list [top-level selected block, ...state.drill] — not always the
+// deepest drilled child. Stepping ← back through the drilled columns slides
+// this (and the panel + tasks it drives) along with the focus.
+// relatedChildren/unresolvedCalls/startCallSearch all take this so the panel
+// and its actions follow wherever the keyboard currently is.
 function focusedBlock() {
-  return state.drill.length ? state.drill[state.drill.length - 1] : curBlock()
+  return state.focusLevel === 0 ? curBlock() : state.drill[state.focusLevel - 1]
 }
 
-// scrollDrillIntoView keeps a freshly-pushed drill column in view — <main>
-// scrolls horizontally, so stepping into a child could otherwise land off-screen
-// to the right. Deferred a frame so the new column exists in the DOM first.
-function scrollDrillIntoView() {
+// drillNextChange / drillPrevChange walk the *drilled* column that currently
+// owns the diff keyboard (state.focusLevel > 0) through its change groups.
+// Unlike the top-level nextChange/prevChange, a drilled column never zooms
+// (no f/d/s) and never flows into a same-file neighbour — it's a single,
+// self-contained diff — so this just clamps at both ends.
+function drillNextChange() {
+  const level = state.focusLevel
+  const b = state.drill[level - 1]
+  const groups = changeGroups(blockRows(b))
+  const cur = state.drillCursor[level - 1] || { change: 0 }
+  if (cur.change < groups.length - 1) {
+    setDrillChange(level, cur.change + 1)
+    scrollChangeIntoView()
+  }
+}
+
+function drillPrevChange() {
+  const level = state.focusLevel
+  const cur = state.drillCursor[level - 1] || { change: 0 }
+  if (cur.change > 0) {
+    setDrillChange(level, cur.change - 1)
+    scrollChangeIntoView()
+  }
+}
+
+// setDrillChange reassigns state.drillCursor wholesale (never mutates an entry
+// in place) so arrow.js's reactive activeGroup binding on that drilled column's
+// card re-fires — the same "always reassign, never mutate" rule as
+// b.approvedRows elsewhere in this file.
+function setDrillChange(level, change) {
+  state.drillCursor = state.drillCursor.map((c, i) => (i === level - 1 ? { change } : c))
+}
+
+// scrollFocusIntoView scrolls whichever column now owns the diff keyboard into
+// view — <main> scrolls horizontally, so stepping across drilled columns (or
+// back to the original block) could otherwise land off-screen. Deferred a
+// frame so a freshly-pushed drill column exists in the DOM first.
+function scrollFocusIntoView(level = state.focusLevel) {
   requestAnimationFrame(() => {
-    const cols = document.querySelectorAll('[data-testid="drill-column"]')
-    const el = cols[cols.length - 1]
-    if (el) el.scrollIntoView({ inline: 'end', block: 'nearest' })
+    const el =
+      level === 0
+        ? document.querySelector('[data-testid="block-column"]')
+        : document.querySelectorAll('[data-testid="drill-column"]')[level - 1]
+    if (el) el.scrollIntoView({ inline: level === 0 ? 'start' : 'end', block: 'nearest' })
   })
 }
 
@@ -1093,21 +1158,14 @@ function drillIntoChild(child) {
     // frames, so this is the only "code arrived" signal it gets.
     state.codeVersion++
   }
-  // The freshly-pushed column's own Onderliggende-code panel starts fresh, on its
-  // first child (enterRelated also resets cs.composing and scrolls the code card).
-  enterRelated()
-  scrollDrillIntoView()
-}
-
-// popDrill closes the deepest drilled-in column, handing the Onderliggende-code
-// panel back to whichever level was open before it (or the top-level block once
-// the stack empties). Wired into ←/Escape from the panel's code card (see
-// onKeydown): the panel's own exitRelated would otherwise drop straight out of
-// the panel entirely instead of stepping back one drill level at a time.
-function popDrill() {
-  if (!state.drill.length) return
-  state.drill = state.drill.slice(0, -1)
-  enterRelated()
+  state.drillCursor = [...state.drillCursor, { change: 0 }]
+  // Hand the keyboard to the fresh column's own diff (not its Onderliggende-code
+  // panel — the reviewer lands on its first change group and steps ↑/↓ through
+  // it directly; → still opens its panel same as any other diff, see onKeydown).
+  // Drop any related-panel focus the previous column left behind first.
+  state.focusLevel = state.drill.length
+  leaveRelated()
+  scrollFocusIntoView()
 }
 
 // commentTarget describes what a comment started *right now* would attach to —
@@ -1690,11 +1748,14 @@ function onKeydown(e) {
   if (relatedActive()) {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key)) {
       e.preventDefault()
-      const result = handleRelatedKey(e.key)
-      // Exiting the panel (← / Escape from the code card's first block) steps
-      // back out one drill level instead of dropping straight to the top-level
-      // diff, as long as there's a shallower level to return to (see popDrill).
-      if (result === 'exit' && state.drill.length > 0) popDrill()
+      handleRelatedKey(e.key)
+      // Exiting the panel (← / Escape from the code card's first block) just
+      // hands the keyboard back to the diff of whichever column is currently
+      // focused (handleRelatedKey's exitRelated already did that) — it does
+      // NOT close the drilled column. Stepping further left through the
+      // drilled columns (or back to the list) is the diff-mode ArrowLeft
+      // handling below (state.focusLevel), reached once relatedActive() is
+      // false again.
       return
     }
     // Enter on a focused comment row (reply field empty — see commentReplyEmpty)
@@ -1766,18 +1827,33 @@ function onKeydown(e) {
   if (state.mode === 'diff') {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      nextChange()
+      if (state.focusLevel > 0) drillNextChange()
+      else nextChange()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      prevChange()
+      if (state.focusLevel > 0) drillPrevChange()
+      else prevChange()
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault()
-      state.mode = 'list'
-      scrollSelectedIntoView()
-      refreshHints() // stepping back to the list hides the hints
+      if (state.focusLevel > 0) {
+        // Step focus one column to the left — the previous drilled column, or
+        // (from level 1) back onto the original top-level block's own diff —
+        // WITHOUT closing the column we're leaving; it stays open, just dimmed.
+        state.focusLevel -= 1
+        scrollFocusIntoView()
+      } else {
+        // Already on the top-level block's own diff (no drilled column focused):
+        // the existing diff→list transition. Also drop any drilled columns —
+        // they only make sense in the context of this diff session.
+        state.mode = 'list'
+        state.drill = []
+        state.drillCursor = []
+        scrollSelectedIntoView()
+        refreshHints() // stepping back to the list hides the hints
+      }
     } else if (e.key === 'ArrowRight') {
       e.preventDefault()
-      enterRelated() // step into the right-hand Related panel (green related block)
+      enterRelated() // step into the right-hand Related panel of the focused column
     }
     return
   }
@@ -1818,7 +1894,7 @@ function connector() {
 // (resp. first) change of the block, and that neighbour exists. This is the cue
 // for the grey step-chevron below/above the card (see stepChevron).
 function canStep(delta) {
-  if (state.mode !== 'diff') return false
+  if (state.mode !== 'diff' || state.focusLevel > 0) return false
   const groups = unitsOf(state.blocks[state.selected])
   if (!groups.length) return false
   const atEdge = delta > 0 ? state.change >= groups.length - 1 : state.change <= 0
@@ -1967,8 +2043,13 @@ function DetailPanel(state) {
         // loads (ensureCode bumps it). That re-run re-reads b.code for each card's
         // key below — a reliable trigger, since a per-card b.code subscription is
         // dropped when it co-subscribes with the setRelated/setCommentScope watches
-        // (see the key comment + the codeVersion note on `state`).
+        // (see the key comment + the codeVersion note on `state`). Also subscribe
+        // to focusLevel: stepping ← out of a drilled column back onto this card
+        // (or → into one) toggles whether it's dimmed/owns the keyboard, which
+        // the key below must reflect to force a fresh card (see its comment).
         void state.codeVersion
+        void state.focusLevel
+        const focusedHere = state.focusLevel === 0
         const pair = state.blocks
           .map((b, i) => ({ b, i }))
           .filter(({ i }) => i === sel || i === sel + 1)
@@ -1985,12 +2066,16 @@ function DetailPanel(state) {
             out.push(connector().key('conn:' + b.file + ':' + i))
           }
           const card = Block(b, {
-            preview: i !== sel,
+            // Dimmed like the look-ahead preview whenever it isn't the selected
+            // card, OR the keyboard focus has stepped off it onto a drilled
+            // column (state.focusLevel > 0).
+            preview: i !== sel || !focusedHere,
             // Reactive: reads mode/selected/change so the pane re-highlights as
             // the reviewer navigates. Only the selected block, in diff mode,
-            // gets a highlighted group.
+            // with the keyboard actually on it (not a drilled column), gets a
+            // highlighted group.
             activeGroup: () => {
-              if (i !== state.selected) return null
+              if (i !== state.selected || state.focusLevel > 0) return null
               // In list mode we preview the first change group (the very run →
               // would step onto). In diff mode we follow state.change into the
               // current granularity's units (a run, a line, or a call segment).
@@ -1998,14 +2083,14 @@ function DetailPanel(state) {
               return unitsOf(b)[state.change] || null
             },
             // Out-of-view change hints belong only to the block being stepped
-            // through: the selected card, in diff mode. Preview cards and list
-            // mode never show them.
-            hintsEnabled: () => i === state.selected && state.mode === 'diff',
+            // through: the selected card, in diff mode, with the keyboard on it.
+            hintsEnabled: () => i === state.selected && state.mode === 'diff' && state.focusLevel === 0,
             // Light-blue border while the keyboard drives this block's diff
             // (selected card, diff mode) — mirrors the selected comment-index row.
-            // Once the reviewer steps → into the related panel the diff no longer
-            // owns the keyboard, so the border drops (relatedActive()).
-            diffActive: () => i === state.selected && state.mode === 'diff' && !relatedActive(),
+            // Drops once the reviewer steps → into the related panel
+            // (relatedActive()) or ← into a drilled column (focusLevel > 0).
+            diffActive: () =>
+              i === state.selected && state.mode === 'diff' && state.focusLevel === 0 && !relatedActive(),
             // Reactive Set of approved row indices → an emerald bar on approved
             // rows. Reads b.approvedRows so the pane re-tints on every approve.
             approvedRows: () => approvedRowSet(b),
@@ -2019,10 +2104,12 @@ function DetailPanel(state) {
             // many). Reads the comments read-model via RelatedPanel.
             commentedRows: () => commentRowSet(b),
             // The key encodes (a) whether this card is the *selected* one or the
-            // look-ahead *preview*, and (b) whether its code has loaded yet. Both
-            // are load-bearing because arrow.js otherwise *reuses* the keyed node
-            // across those transitions — it moves + patches the node but does NOT
-            // re-run the persisted pane bindings, so a frozen binding never re-fires:
+            // look-ahead *preview*, (b) whether its code has loaded yet, and (c)
+            // whether the keyboard is actually focused on it (vs. a drilled
+            // column). All three are load-bearing because arrow.js otherwise
+            // *reuses* the keyed node across those transitions — it moves +
+            // patches the node but does NOT re-run the persisted pane bindings,
+            // so a frozen binding never re-fires:
             //  • preview→selected (↓/↑ onto an already-previewed block): the
             //    activeGroup binding stays frozen and the active-change highlight +
             //    its scroll-into-view silently fail to appear.
@@ -2030,14 +2117,18 @@ function DetailPanel(state) {
             //    dropped (it co-subscribes with the setRelated/setCommentScope
             //    watches, and arrow.js loses one of the updates), leaving the diff
             //    stuck on "loading code…" even though b.code has arrived.
-            // Rekeying on both forces a fresh card (fresh bindings) the moment
-            // either changes. b.code persists on the block, so the rebuild shows
-            // the code immediately — no reload flash.
+            //  • focused→unfocused (← into a drilled column) and back: the same
+            //    frozen-binding issue would leave the dimming/highlight stale.
+            // Rekeying on all three forces a fresh card (fresh bindings) the
+            // moment any changes. b.code persists on the block, so the rebuild
+            // shows the code immediately — no reload flash.
           }).key(
             'detail:' +
               (i === sel ? 'sel' : 'prev') +
               ':' +
               (b.code && !b.code.error ? 'code' : b.code && b.code.error ? 'err' : 'load') +
+              ':' +
+              (i === sel && focusedHere ? 'foc' : 'unfoc') +
               ':' +
               b.file +
               ':' +
@@ -2051,27 +2142,54 @@ function DetailPanel(state) {
       }}
       </div>
       ${() => {
-        // One extra shrink-0 column per drilled-into child (Enter on a resolved
-        // Onderliggende-code child — see drillIntoChild), appended to the right of
-        // the block column: a real diff, no navigable cursor of its own. Only the
-        // deepest (last) one is where the Onderliggende-code panel + tasks render
-        // next to (see focusedBlock + the RelatedPanel call below); earlier levels
-        // just sit dimmed, like the existing look-ahead preview card.
+        // One extra shrink-0 column per drilled-into child (Enter/click on a
+        // resolved Onderliggende-code child — see drillIntoChild), appended to
+        // the right of the block column: a full, navigable diff of its own
+        // (own change-group cursor in state.drillCursor). Exactly one column —
+        // the one at state.focusLevel — owns the keyboard at a time: ↑/↓ walk
+        // its changes, → opens its Onderliggende-code panel, ← steps focus back
+        // to the previous column (see onKeydown). The others sit dimmed, like
+        // the existing look-ahead preview card, but stay open (← never closes a
+        // column, it only moves the focus).
         void state.codeVersion
+        void state.focusLevel
+        void state.drillCursor
         return state.drill.map((b, i) => {
           ensureCode(b)
-          const isLast = i === state.drill.length - 1
+          const level = i + 1
+          const focusedHere = state.focusLevel === level
           const codeState = b.code && !b.code.error ? 'code' : b.code && b.code.error ? 'err' : 'load'
           return html`
             <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="drill-column" data-drill-idx="${i}">
               ${Block(b, {
-                preview: !isLast,
+                preview: !focusedHere,
+                activeGroup: () => {
+                  if (state.focusLevel !== level) return null
+                  const groups = changeGroups(blockRows(b))
+                  const cur = state.drillCursor[i] || { change: 0 }
+                  return groups[cur.change] || null
+                },
+                hintsEnabled: () => state.focusLevel === level,
+                diffActive: () => state.focusLevel === level && !relatedActive(),
                 approvedRows: () => approvedRowSet(b),
                 approvedCalls: () => approvedCallSet(b),
                 commentedRows: () => commentRowSet(b),
               })}
             </div>
-          `.key('drill:' + i + ':' + codeState + ':' + b.file + ':' + b.label + ':' + b.id)
+          `.key(
+            'drill:' +
+              i +
+              ':' +
+              codeState +
+              ':' +
+              (focusedHere ? 'foc' : 'unfoc') +
+              ':' +
+              b.file +
+              ':' +
+              b.label +
+              ':' +
+              b.id,
+          )
         })
       }}
       ${() =>

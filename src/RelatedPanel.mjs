@@ -209,13 +209,16 @@ export function enterRelated() {
 }
 
 // exitRelated releases the keyboard back to the diff and drops any input focus /
-// half-typed new comment.
+// half-typed new comment. Exported as leaveRelated for home.mjs: drillIntoChild
+// calls it to hand a freshly-drilled column's keyboard to its own diff instead
+// of landing on its Onderliggende-code panel (see the "Drillen" flow).
 function exitRelated() {
   cs.focus = null
   cs.composing = false
   const el = document.activeElement
   if (el && el.blur) el.blur()
 }
+export { exitRelated as leaveRelated }
 
 // focusEl focuses a right-pane input a frame later (once the reactive re-render
 // has swapped in the matching view: the new-comment composer or the reply field).
