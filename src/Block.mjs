@@ -75,6 +75,10 @@ export default function Block(b, opts = {}) {
   // units. A function (not a value) so the .innerHTML binding re-runs when
   // b.approvedRows changes. Defaults to nothing approved.
   const approvedFn = opts.approvedRows || (() => new Set())
+  // onApprove is called with the block after the top checkbox toggles its
+  // approved rows, so the caller (home.mjs) can persist the new state durably.
+  // Defaults to a no-op; Block itself stays decoupled from the write path.
+  const onApprove = opts.onApprove || (() => {})
   // commentedRows is a function returning the Set of rows that carry a comment,
   // so the panes mark them with a 💬 (presence only). A function so the binding
   // re-runs as comments load/change. Defaults to no comments.
@@ -135,7 +139,10 @@ export default function Block(b, opts = {}) {
             class="h-3.5 w-3.5 rounded border-slate-300"
             checked="${() => blockApproved(b)}"
             .indeterminate="${() => blockPartlyApproved(b)}"
-            @change="${() => toggleBlockApproval(b)}"
+            @change="${() => {
+              toggleBlockApproval(b)
+              onApprove(b)
+            }}"
           />
           ${() => approveSummary(b)}
         </label>

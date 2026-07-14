@@ -7,7 +7,7 @@ navigeerbare lijst tonen.
 - **Opslag:** de `blocks`-tabel (dit ís de `nodes`/functie-tabel uit de graph,
   hernoemd + uitgebreid met `class/category/end_line/status/side/pr`). De kolom
   `approved` (0/1) markeert of de reviewer een block heeft goedgekeurd. Goedkeuring
-  is echter **granulair** (voorlopig client-side): niet één blok-vlag maar een set
+  is echter **granulair**: niet één blok-vlag maar een set
   goedgekeurde **gewijzigde regels** — `b.approvedRows`, een array van rij-indices
   in `blockRows(b)`. Elke granulariteit reduceert daartoe (een groep keurt al zijn
   regels goed, een `line`/`call` de ene rij waarop hij staat), zodat "is het hele
@@ -39,6 +39,20 @@ navigeerbare lijst tonen.
   toe en blijven regel-voor-regel uitgelijnd. `b.approvedRows`/`b.approvedCalls`
   worden altijd **hertoegewezen** (nooit in-place gemuteerd) zodat arrow.js de
   checkbox en de indicators her-rendert. `edges` blijft voor de latere call-graph.
+- **Durable persistentie (`approve`-workflow + `modules/approvals`):** goedkeuring
+  overleeft een refresh. `b.approvedRows`/`b.approvedCalls` leven per block durabel
+  in het `approvals`-read-model (`data/approvals.db`), gevoed door de `approve`-
+  workflow — **niet** in de URL (te groot/veranderlijk). `home.mjs` (`loadApprovals`)
+  ensuret bij het laden de tracker (`POST /api/workflows/approve {pr}` → runId
+  onthouden in `state.approveRunId`) en herstelt daarna elke block-goedkeuring uit
+  `GET /api/approvals?pr=N` (per block-id → `b.approvedRows`/`b.approvedCalls`
+  hertoegewezen). Élke goedkeurings-mutatie (`toggleApprove`/`toggleCallApprove` in
+  `home.mjs`, plus de top-checkbox via de `onApprove`-callback van `Block.mjs`) stuurt
+  ná de lokale hertoewijzing het **volledige** stel voor dát block als Signal
+  (`POST /api/workflows/{runId}/signals/set {blockId, rows, calls}`,
+  `persistApproval`). De UI schrijft dus **nooit** direct — alleen dit signal, binnen
+  de write-boundary. Zie `.claude/rules/tembed-workflows.md` (sectie "Reviewer-
+  goedkeuring persisteren").
 - **Gecombineerde goedkeuring per boom (sidebar + Onderliggende code):** de
   linker-sidebar toont per top-level block een pill (`data-testid=block-approval`)
   met `done/total` van dat block **plus alle onderliggende blokken samen** — z'n

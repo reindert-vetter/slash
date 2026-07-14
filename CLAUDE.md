@@ -69,8 +69,9 @@ geladen worden als het onderwerp relevant is. Werk dáár de details bij, niet h
   loopt. Zie `.claude/rules/pages-and-routing.md`.
 - **Tembed: durable workflows** — de embeddable workflow-engine (`tembed/`), de
   write-boundary-regel, en de concrete workflows (`task_code_comment`,
-  `pr_status`, `pr_inbox`, `build_relations`, `resolve_call` — de laatste resolvt
-  methode-aanroepen naar hun definitie, Go-statisch met LLM-fallback). Zie
+  `pr_status`, `pr_inbox`, `build_relations`, `resolve_call` — die resolvt
+  methode-aanroepen naar hun definitie, Go-statisch met LLM-fallback —, en
+  `approve` die reviewer-goedkeuring durable persisteert). Zie
   `.claude/rules/tembed-workflows.md` en de harde regels
   `.claude/rules/workflow-determinism.md` /
   `.claude/rules/workflows-write-boundary.md`.

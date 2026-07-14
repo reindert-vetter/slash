@@ -369,3 +369,37 @@ fallback.
   `callresolve.db` zodat Playwright de `method_call`-children rendert zonder
   resolver-run (`tests/fixtures/callresolve.json`, PR 91 in `relations.spec.mjs` —
   bewijst o.a. dat het Onderliggende-code-paneel de blok-selectie volgt).
+
+## Reviewer-goedkeuring persisteren (`approve` + `modules/approvals`)
+
+Een vijfde Workflow Type, **`approve`** (één Execution per PR), maakt reviewer-
+goedkeuring **durable** zodat een browser-refresh onthoudt wat is afgevinkt.
+Patroon van `build_relations`/`pr_status`.
+
+- **`modules/approvals`** (`data/approvals.db`): het read-model
+  `approvals(pr, block_id, rows, calls, PRIMARY KEY(pr, block_id))`, met `rows`/
+  `calls` als JSON-arrays (de goedgekeurde rij-indices resp. de
+  `${row}:${segStart}`-call-segment-keys — de client-side `b.approvedRows`/
+  `b.approvedCalls`). Write `Replace(pr, blockID, rows, calls)` (workflow-only):
+  full-swap per block, een **leeg** stel verwijdert de rij → replay-safe. Read
+  `List(pr)`.
+- **Workflow** (`workflows.go`): `approveWorkflow` is een lus op een **`set`**-
+  Signal (`ApprovalSignal{blockId, rows, calls}`); elke `set` draait één
+  `saveApproval`-Activity die `approvals.Replace` aanroept. Deterministisch: het
+  aantal Activities is exact het aantal `set`-Signals in de history (geen live
+  state, geen klok/random). Nooit-completend — een lange-levende per-PR tracker.
+  `EnsureApprovals(pr)` (spiegelt `EnsurePRStatus`) start/hergebruikt één Execution
+  per PR, ook na herstart (`engine.Recover()` her-blokkeert de waiting Execution op
+  `set`; `findApproveLocked` vindt 'm terug).
+- **Endpoints** (`tasks_api.go`): `POST /api/workflows/approve {pr}` →
+  `EnsureApprovals`, geeft `runId`; de generieke `POST
+  /api/workflows/{runID}/signals/set {blockId, rows, calls}` levert het Signal;
+  read-only `GET /api/approvals?pr=N` → `approvals.List(pr)`.
+- **Frontend** (`home.mjs`): `loadApprovals` ensuret de tracker (runId in
+  `state.approveRunId`) en herstelt per block-id `b.approvedRows`/`b.approvedCalls`.
+  Elke mutatie (`toggleApprove`/`toggleCallApprove`, plus de top-checkbox via de
+  `onApprove`-callback die `Block.mjs` uitvoert) stuurt ná de lokale hertoewijzing
+  `persistApproval(b)` → het `set`-Signal met het volledige stel voor dat block. De
+  UI schrijft nooit direct — alleen dit Signal (write-boundary).
+- Tests: `approvals_test.go` (module round-trip incl. full-swap/clear + de workflow
+  end-to-end: `set`-Signal → read-model, en `EnsureApprovals`-idempotentie).

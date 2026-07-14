@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/reindert-vetter/tembed"
+	"slash/modules/approvals"
 	"slash/modules/callresolve"
 	"slash/modules/claude"
 	"slash/modules/comments"
@@ -46,6 +47,11 @@ const (
 	// and again on each "rebuild" Signal (re-ingest). Designed to be extended with
 	// more relation detectors later.
 	WorkflowBuildRelations = "build_relations"
+	// WorkflowApprove is the Workflow Type that persists reviewer approval: one
+	// Execution per PR. Each "set" Signal carries a block's full approved state
+	// (rows + call segments), which one Activity full-swaps into the approvals
+	// read-model — so a browser refresh restores exactly what was ticked off.
+	WorkflowApprove = "approve"
 	// WorkflowResolveCall is the Workflow Type that resolves a changed block's
 	// method calls to their definition with an LLM when the Go resolver could not:
 	// it runs Haiku first and, if that is not confident, escalates automatically to
@@ -62,6 +68,9 @@ const (
 	// SignalRebuild asks the build_relations workflow to recompute a PR's
 	// relations now (sent after a re-ingest).
 	SignalRebuild = "rebuild"
+	// SignalSet delivers a block's full approved state to the approve workflow
+	// (from the UI, on every approve/un-approve toggle).
+	SignalSet = "set"
 	// SignalDelete is the URL-level signal name the UI posts to delete a
 	// comment. It is delivered to the workflow as a ReactionSignal (Action:
 	// "delete") under SignalReply — see ReactionSignal's doc comment.
@@ -146,6 +155,20 @@ type BuildRelationsInput struct {
 	PR int `json:"pr"`
 }
 
+// ApproveInput starts an approve Execution — one tracker per PR.
+type ApproveInput struct {
+	PR int `json:"pr"`
+}
+
+// ApprovalSignal carries one block's full approved state into the approve
+// tracker (delivered under SignalSet). Rows/Calls are the complete set for that
+// block; an empty set clears the block's row from the read-model.
+type ApprovalSignal struct {
+	BlockID string   `json:"blockId"`
+	Rows    []int    `json:"rows"`
+	Calls   []string `json:"calls"`
+}
+
 // ResolveCallInput starts a resolve_call Execution: it asks the LLM to resolve
 // the given (Go-unresolved) call keys made by one caller block.
 type ResolveCallInput struct {
@@ -175,6 +198,7 @@ type TaskManager struct {
 	relations   *relations.Module
 	prmeta      *prmeta.Module
 	callresolve *callresolve.Module
+	approvals   *approvals.Module
 	claude      claude.Client
 	db          *sql.DB
 	dataDir     string
@@ -183,19 +207,20 @@ type TaskManager struct {
 	idle        time.Duration // slow cadence + PR-state check (reviewer idle)
 	logf        func(string, ...any)
 
-	mu       sync.Mutex           // guards lastBeat + prRuns + relRuns + inboxRun
+	mu       sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + inboxRun
 	lastBeat map[string]time.Time // code-comment/inbox Run ID → last heartbeat
 	prRuns   map[int]string       // PR → pr_status Run ID
 	relRuns  map[int]string       // PR → build_relations Run ID
+	apprRuns map[int]string       // PR → approve Run ID
 	inboxRun string               // pr_inbox Run ID (one per repo/process)
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
-func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, cl claude.Client, db *sql.DB, dataDir, repo string) *TaskManager {
+func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, ap *approvals.Module, cl claude.Client, db *sql.DB, dataDir, repo string) *TaskManager {
 	m := &TaskManager{
-		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, claude: cl, db: db, dataDir: dataDir, repo: repo,
+		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, approvals: ap, claude: cl, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
-		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{},
+		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{},
 		logf: log.Printf,
 	}
 
@@ -417,11 +442,30 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, nil
 	})
 
+	// Activity: persist one block's full approved state (write, workflow-driven).
+	// The approvals module is the only writer of the approvals read-model.
+	engine.RegisterActivity("saveApproval", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR      int      `json:"pr"`
+			BlockID string   `json:"blockId"`
+			Rows    []int    `json:"rows"`
+			Calls   []string `json:"calls"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.approvals == nil {
+			return nil, nil
+		}
+		return nil, m.approvals.Replace(ctx, arg.PR, arg.BlockID, arg.Rows, arg.Calls)
+	})
+
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowBuildRelations, buildRelationsWorkflow)
 	engine.RegisterWorkflow(WorkflowResolveCall, resolveCallWorkflow)
+	engine.RegisterWorkflow(WorkflowApprove, approveWorkflow)
 	return m
 }
 
@@ -457,6 +501,31 @@ func buildRelationsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		w.WaitSignal(SignalRebuild, &s)
 		if err := w.ExecuteActivity("buildRelations", in, nil); err != nil {
 			return nil, fmt.Errorf("rebuild relations: %w", err)
+		}
+	}
+}
+
+// approveWorkflow persists reviewer approval for a PR. It is deterministic: the
+// only side effect (the read-model write) is an Activity, and the number of
+// Activities is exactly the number of "set" Signals in the history. It never
+// completes — a long-lived per-PR tracker that records each block's approved
+// state as it is toggled.
+func approveWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in ApproveInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	for {
+		var sig ApprovalSignal
+		w.WaitSignal(SignalSet, &sig)
+		arg := struct {
+			PR      int      `json:"pr"`
+			BlockID string   `json:"blockId"`
+			Rows    []int    `json:"rows"`
+			Calls   []string `json:"calls"`
+		}{PR: in.PR, BlockID: sig.BlockID, Rows: sig.Rows, Calls: sig.Calls}
+		if err := w.ExecuteActivity("saveApproval", arg, nil); err != nil {
+			return nil, fmt.Errorf("save approval: %w", err)
 		}
 	}
 }
@@ -840,6 +909,55 @@ func (m *TaskManager) findBuildRelationsLocked(pr int) string {
 			continue
 		}
 		var pin BuildRelationsInput
+		if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
+			return r.ID
+		}
+	}
+	return ""
+}
+
+// EnsureApprovals ensures an approve tracker exists for pr (starting one if none
+// is live) and returns its Run ID. The UI calls this on page load so it has a
+// Run ID to signal approvals to; the tracker is reused across restarts (its
+// waiting Execution is re-driven by engine.Recover). Starting/reusing an
+// Execution is the sanctioned UI write path.
+func (m *TaskManager) EnsureApprovals(pr int) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if id, ok := m.apprRuns[pr]; ok {
+		return id, nil
+	}
+	if id := m.findApproveLocked(pr); id != "" {
+		m.apprRuns[pr] = id
+		return id, nil
+	}
+	id, err := m.engine.StartWorkflow(WorkflowApprove, ApproveInput{PR: pr})
+	if err != nil {
+		return "", err
+	}
+	m.apprRuns[pr] = id
+	return id, nil
+}
+
+// findApproveLocked scans for a running/waiting approve tracker for pr. It reads
+// only the engine, so it is safe to call while holding m.mu.
+func (m *TaskManager) findApproveLocked(pr int) string {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowApprove {
+			continue
+		}
+		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var pin ApproveInput
 		if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
 			return r.ID
 		}

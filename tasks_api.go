@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/reindert-vetter/tembed"
+	"slash/modules/approvals"
 	"slash/modules/callresolve"
 	"slash/modules/claude"
 	"slash/modules/comments"
@@ -29,6 +30,7 @@ type tasks struct {
 	relations   *relations.Module
 	prmeta      *prmeta.Module
 	callresolve *callresolve.Module
+	approvals   *approvals.Module
 }
 
 // newTasks builds the tembed engine (SQLite + JSONL, so comments live in the
@@ -81,6 +83,16 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, fu
 		pm.Close()
 		return nil, nil, err
 	}
+	ap, err := approvals.Open(dataDir + "/approvals.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -94,7 +106,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, fu
 	if os.Getenv("SLASH_CLAUDE") == "off" {
 		cl = claude.NewFake()
 	}
-	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, cl, db, dataDir, repo)
+	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, ap, cl, db, dataDir, repo)
 
 	if err := engine.Recover(); err != nil {
 		return nil, nil, err
@@ -110,9 +122,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, fu
 		_ = rel.Close()
 		_ = pm.Close()
 		_ = cr.Close()
+		_ = ap.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, approvals: ap}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -161,6 +174,12 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// POST /api/workflows/pr_status {pr} → ensure the per-PR lifecycle tracker
 	// (its start fetches the PR's metadata into the prmeta read-model).
 	mux.HandleFunc("/api/workflows/pr_status", s.handlePRStatusStart)
+	// POST /api/workflows/approve {pr} → ensure the per-PR approval tracker; the
+	// UI then signals approvals to its Run ID via .../signals/set.
+	mux.HandleFunc("/api/workflows/approve", s.handleApproveStart)
+	// GET /api/approvals?pr=N → read-only approval read-model (per block: the
+	// approved changed rows + call segments) for refresh-restore.
+	mux.HandleFunc("/api/approvals", s.handleApprovals)
 	// GET /api/pr?pr=N → read-only PR metadata (title + URL) from the prmeta
 	// read-model — for the `/` command menu's Jira/GitHub deep-links.
 	mux.HandleFunc("/api/pr", s.handlePR)
@@ -219,7 +238,7 @@ func (s *server) handleTaskCodeComment(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "approve" {
 		http.NotFound(w, r)
 		return
 	}
@@ -263,6 +282,27 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "rebuilding"})
+			return
+		}
+		// The "set" signal carries a block's full approved state (rows + call
+		// segments) to the per-PR approve tracker — the UI write path for approval.
+		if parts[2] == SignalSet {
+			var body ApprovalSignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.BlockID == "" {
+				http.Error(w, "invalid approval", http.StatusBadRequest)
+				return
+			}
+			if body.Rows == nil {
+				body.Rows = []int{}
+			}
+			if body.Calls == nil {
+				body.Calls = []string{}
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalSet, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
 			return
 		}
 		// The delete signal carries no comment body — it just asks the workflow
@@ -444,6 +484,52 @@ func (s *server) handlePRStatusStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleApproveStart starts (or reuses) the per-PR approve tracker and returns
+// its Run ID. Starting an Execution is the sanctioned UI write path; the UI then
+// signals approvals to this Run ID via .../signals/set.
+func (s *server) handleApproveStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		PR int `json:"pr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 {
+		http.Error(w, "invalid pr", http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.EnsureApprovals(in.PR)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleApprovals serves GET /api/approvals?pr=N — the read-only approval
+// read-model (per block: approved changed rows + call segments) the UI restores
+// on load.
+func (s *server) handleApprovals(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr := 0
+	if v := r.URL.Query().Get("pr"); v != "" {
+		pr, _ = strconv.Atoi(v)
+	}
+	list, err := s.tasks.approvals.List(r.Context(), pr)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []approvals.Approval{}
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 // handlePR serves GET /api/pr?pr=N — the read-only PR metadata (title + URL)

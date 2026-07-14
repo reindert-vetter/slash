@@ -85,6 +85,12 @@ const state = reactive({
   // children in the Onderliggende-code panel; unresolved/searching drive the
   // "Zoek" button + spinner.
   callResolve: [],
+  // approveRunId — the Run ID of this PR's `approve` workflow (durable approval
+  // tracker), filled by loadApprovals via POST /api/workflows/approve. Every
+  // approve/un-approve toggle signals the new full state for that block to this
+  // Run ID (.../signals/set). Empty until the ensure-call returns (offline: stays
+  // empty and approval is then session-only).
+  approveRunId: '',
   // drill — the stack of "drilled-into" children the reviewer has stepped into
   // from the Onderliggende-code panel (Enter on a resolved child). Each entry is
   // either a real block object reused straight from allBlocks (its own relations/
@@ -340,6 +346,65 @@ async function loadBlocks() {
   state.relations = rels
   recomputeLeftList()
   loadCallResolve()
+  loadApprovals()
+}
+
+// loadApprovals ensures the per-PR `approve` tracker is running (its Run ID is
+// what every approve toggle signals to) and restores each block's approved state
+// from the read-model into b.approvedRows/b.approvedCalls. Both steps are
+// best-effort — offline, approveRunId stays empty and approval is session-only.
+// Reassigns the arrays (never mutates in place) so arrow.js re-renders the
+// checkbox + pane indicators. Applied against allBlocks (state.blocks shares the
+// same objects), keyed by block id.
+async function loadApprovals() {
+  try {
+    const res = await fetch('/api/workflows/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr: state.pr }),
+    })
+    if (res.ok) {
+      const { runId } = await res.json()
+      if (runId) state.approveRunId = runId
+    }
+  } catch (_) {
+    /* offline — approval stays session-only */
+  }
+  try {
+    const res = await fetch(`/api/approvals?pr=${state.pr}`)
+    if (!res.ok) return
+    const rows = await res.json()
+    if (!Array.isArray(rows)) return
+    const byId = new Map(state.allBlocks.map((b) => [b.id, b]))
+    for (const a of rows) {
+      const b = byId.get(a.blockId)
+      if (!b) continue
+      b.approvedRows = Array.isArray(a.rows) ? [...a.rows] : []
+      b.approvedCalls = Array.isArray(a.calls) ? [...a.calls] : []
+    }
+    // Nudge the reactive summaries/panes to recompute now that approvals landed.
+    state.allBlocks = [...state.allBlocks]
+  } catch (_) {
+    /* offline — keep whatever we have */
+  }
+}
+
+// persistApproval signals a block's full approved state to the durable approve
+// tracker — the ONLY write path (the UI never writes a read-model directly). A
+// no-op until approveRunId is known (offline); fire-and-forget, best-effort.
+function persistApproval(b) {
+  if (!b || !state.approveRunId) return
+  fetch(`/api/workflows/${state.approveRunId}/signals/set`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      blockId: b.id,
+      rows: b.approvedRows || [],
+      calls: b.approvedCalls || [],
+    }),
+  }).catch(() => {
+    /* best-effort — the local state is already updated */
+  })
 }
 
 // recomputeLeftList derives state.blocks from allBlocks: everything except the
@@ -1403,6 +1468,7 @@ function toggleApprove() {
   const allIn = target.every((i) => set.has(i))
   target.forEach((i) => (allIn ? set.delete(i) : set.add(i)))
   b.approvedRows = [...set].sort((x, y) => x - y)
+  persistApproval(b)
 }
 
 // toggleCallApprove flips approval of exactly the one call segment the
@@ -1441,6 +1507,7 @@ function toggleCallApprove(b) {
     b.approvedCalls = [...others, ...keys]
   }
   b.approvedRows = [...rowSet].sort((x, y) => x - y)
+  persistApproval(b)
 }
 
 const COMMANDS = [
@@ -2135,6 +2202,8 @@ function DetailPanel(state) {
             // multiple call segments that aren't fully approved yet. Reads
             // b.approvedCalls so the pane re-renders on every call-toggle.
             approvedCalls: () => approvedCallSet(b),
+            // Persist a top-checkbox toggle to the durable approve tracker.
+            onApprove: (blk) => persistApproval(blk),
             // Reactive Set of rows that carry a comment → a 💬 marker on those
             // rows, so it's visible which units already hold a comment (however
             // many). Reads the comments read-model via RelatedPanel.
@@ -2231,6 +2300,7 @@ function DetailPanel(state) {
                 diffActive: () => state.focusLevel === level && !relatedActive(),
                 approvedRows: () => approvedRowSet(b),
                 approvedCalls: () => approvedCallSet(b),
+                onApprove: (blk) => persistApproval(blk),
                 commentedRows: () => commentRowSet(b),
               })}
             </div>
