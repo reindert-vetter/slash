@@ -91,6 +91,19 @@ same-file buurblock; het is een op zichzelf staande diff).
   i.p.v. het vroegere `enterRelated()`: de reviewer landt op de eerste
   wijzigingsgroep van de nieuwe kolom en loopt daar met `↑`/`↓` doorheen
   (`drillNextChange`/`drillPrevChange` in `home.mjs`).
+- **De gedrilde kolom hergebruikt exact dezelfde diff-render als de top-level
+  block-kaart** — beide roepen dezelfde `Block(b, {...})` uit `Block.mjs` aan
+  (rood/groen, char-diff, filler-uitlijning zijn dus identiek). Wat ontbrak was
+  de **scroll-naar-de-actieve-wijziging**: bij een grote functie landde de
+  reviewer boven aan de functie-body, met de daadwerkelijke (correct gekleurde)
+  diff-hunk buiten beeld gescrold — wat oogt als "geen diff-opmaak" terwijl de
+  opmaak er wél is, alleen niet zichtbaar. `drillIntoChild` roept daarom na het
+  pushen van de kolom ook `scrollChangeIntoView(false)` aan (voor het cached
+  geval — een synthetisch frame of een child wiens code al eerder geladen werd
+  voor het Onderliggende-code-paneel); `ensureCode` doet hetzelfde zodra de code
+  van een **nog niet eerder geladen** gedrilde/gefocuste child alsnog arriveert
+  (mirror van de bestaande top-level-branch: `state.drill[state.focusLevel - 1]
+  === b`). Zie `.claude/rules/keyboard-navigation.md` voor `scrollChangeIntoView`.
 - **`←` stapt de focus één kolom naar links** — naar de vorige gedrilde kolom, of
   (vanaf niveau 1) terug naar de diff van het oorspronkelijke top-level block —
   **zonder die kolom te sluiten**: hij blijft staan, alleen gedimd (`preview`).

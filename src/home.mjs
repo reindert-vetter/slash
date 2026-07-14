@@ -812,6 +812,15 @@ async function ensureCode(b) {
       // navigable changes; fall back to the list instead of a dead diff view.
       if (state.mode === 'diff' && groups.length === 0) state.mode = 'list'
       scrollChangeIntoView(state.mode === 'diff')
+    } else if (state.drill[state.focusLevel - 1] === b) {
+      // A focused drilled column's code just arrived (a real PR block whose
+      // source wasn't fetched yet — see drillIntoChild) — jump straight to its
+      // first change group now that the rows/anchor can be rendered, mirroring
+      // the top-level scroll-on-load above. Without this the reviewer lands on
+      // the top of the (often large) function body with the actual diff hunk
+      // scrolled out of view, looking as if the red/green formatting is simply
+      // missing.
+      scrollChangeIntoView(false)
     }
     // Show the out-of-view hints for this freshly-rendered diff (its own card and
     // the look-ahead preview both land here). scrollChangeIntoView only fires for
@@ -1171,6 +1180,13 @@ function drillIntoChild(child) {
   state.focusLevel = state.drill.length
   leaveRelated()
   scrollFocusIntoView()
+  // Jump straight to the new column's first change group (same red/green diff
+  // as the top-level block card — see Block.mjs codeDiff, reused as-is here).
+  // Its code is often already cached (a synthetic frame builds it inline; a
+  // real PR block's code has usually already been fetched for the
+  // Onderliggende-code panel), in which case this fires immediately; otherwise
+  // the ensureCode "code arrived" branch above does the same once it loads.
+  scrollChangeIntoView(false)
 }
 
 // commentTarget describes what a comment started *right now* would attach to —
