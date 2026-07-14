@@ -25,6 +25,23 @@ test.describe('PR Review Tree — block relations', () => {
     await expect(child).toContainText('app/Listeners/SendOrderMail.php')
   })
 
+  // Clicking an "Onderliggende code" item drills into it — the same drillIntoChild
+  // path Enter takes on a focused child — opening it as its own diff column
+  // (data-testid=drill-column) between the diff and the RelatedPanel.
+  test('clicking an underlying-code item opens it as a drill column', async ({ page }) => {
+    await page.goto('/pr/90')
+
+    const child = page.getByTestId('related-item')
+    await expect(child).toContainText('SendOrderMail::handle')
+    const drill = page.getByTestId('drill-column')
+    await expect(drill).toHaveCount(0)
+
+    await child.click()
+
+    await expect(drill).toHaveCount(1)
+    await expect(drill).toContainText('SendOrderMail::handle')
+  })
+
   // The "Onderliggende code" panel must FOLLOW the selected block. PR 91 has two
   // independent caller blocks (AlphaAction::run, BetaAction::run), each with its own
   // seeded resolved method-call child (tests/fixtures/callresolve.json); selecting a

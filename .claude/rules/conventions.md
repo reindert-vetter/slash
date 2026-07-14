@@ -5,6 +5,16 @@
 - Vendored libs (arrow.js, Prism) leven in `src/vendor/` en worden met een relatief
   pad geïmporteerd, niet via een CDN-module. Tailwind is de uitzondering (Play CDN).
   arrow.js staat gevendord in `src/vendor/arrow.js`.
+- **Lokale patch op arrow.js (`src/vendor/arrow.js`)** — er staat één bewuste
+  wijziging in de gevendorde arrow.js, gemarkeerd met een `LOCAL PATCH`-comment in
+  de header: de template-expressie-evaluator `rt` skipt een **vrijgegeven slot**
+  (`typeof W[t]=="function"`-guard) i.p.v. 'm aan te roepen. Zonder die guard crasht
+  een reactief effect dat ná het opruimen van zijn keyed-node nog in de
+  microtask-flush vuurt met `W[t] is not a function` (use-after-free) — o.a. bij het
+  **drillen** (een Onderliggende-code-kind als eigen kolom openen re-scope't het
+  paneel en breekt kaarten af midden in de flush). Bij een arrow.js-upgrade moet
+  deze patch **opnieuw** worden aangebracht (zie het comment voor de originele
+  regel).
 - **arrow.js-valkuilen** (uit de praktijk): géén HTML-comments (`<!-- -->`) in een
   `html`` `` template (gooit "Invalid HTML position"); een reactieve attribuut-waarde
   moet de **hele** waarde zijn (`class="${() => ...}"`, niet `class="x ${...}"`).

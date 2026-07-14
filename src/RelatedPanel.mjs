@@ -883,7 +883,7 @@ function approvalBadge(a) {
 
 // relatedCard renders one child block: a header (label + file:line + relation
 // kind) and a short, non-interactive code excerpt highlighted like the panes.
-function relatedCard(r, i) {
+function relatedCard(r, i, drill) {
   const selected = () => cs.focus === 'code' && i === cs.codeSel
   // An unchanged call target (a method_call into a file this PR doesn't touch) has
   // no diff to review, so its selection highlight is grey rather than indigo.
@@ -891,7 +891,7 @@ function relatedCard(r, i) {
   return html`
     <div
       class="${() =>
-        'rounded-lg border bg-slate-50/60 ' +
+        'cursor-pointer rounded-lg border bg-slate-50/60 hover:border-indigo-200 ' +
         (selected()
           ? unchanged
             ? 'border-slate-300 ring-1 ring-slate-200'
@@ -899,6 +899,7 @@ function relatedCard(r, i) {
           : 'border-slate-200')}"
       data-testid="related-item"
       data-active="${() => (selected() ? 'true' : 'false')}"
+      @click="${() => drill && drill(r)}"
     >
       <div class="border-b border-slate-100 px-3 py-1.5">
         <div class="flex items-baseline gap-2">
@@ -990,6 +991,9 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
   const pending = () => unresolved().filter((r) => r.status === 'unresolved').length
   const searching = () => unresolved().some((r) => r.status === 'searching')
   const runSearch = () => search && search.startCallSearch && search.startCallSearch()
+  // Clicking a child drills into it as its own diff column — the same path Enter
+  // takes on a focused child (drillIntoChild in home.mjs), just mouse-driven.
+  const drill = (r) => search && search.drill && search.drill(r)
   return html`
     <aside class="flex w-[38rem] min-h-0 shrink-0 flex-col gap-3" data-testid="related-panel">
       <section
@@ -1037,7 +1041,7 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
             const ks = kids()
             return ks.length === 0
               ? html`<p class="px-1 py-2 text-[11px] text-slate-400">Geen onderliggende code.</p>`
-              : relatedCard(ks[0], 0)
+              : relatedCard(ks[0], 0, drill)
           }}
           ${() => {
             // Next to the first block, the → / ↓ arrow hint (→ = next block,
@@ -1048,7 +1052,7 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
               ? html`<div class="flex items-start gap-2">
                   ${stepHint()}
                   <div class="flex min-w-0 flex-1 flex-col gap-2">
-                    ${rest.map((r, k) => relatedCard(r, k + 1).key('related:' + r.id))}
+                    ${rest.map((r, k) => relatedCard(r, k + 1, drill).key('related:' + r.id))}
                   </div>
                 </div>`
               : null

@@ -17,11 +17,15 @@ diff aan.
 
 `Enter` op een **resolved** kind in de Onderliggende-code-kaart (een relatie-child
 of een opgeloste method-call — zie `isCodeFocused`/`focusedRelatedChild` in
-`RelatedPanel.mjs`) opent dat kind als een volwaardige diff-kolom rechts naast de
-bestaande kolommen, i.p.v. alleen de platte code-excerpt te tonen. `home.mjs` houdt
+`RelatedPanel.mjs`) **of een muisklik op dat kind** (`@click` op
+`data-testid=related-item`, via de `drill`-callback die `home.mjs` als optie aan
+`RelatedPanel` meegeeft) opent dat kind als een volwaardige diff-kolom rechts naast
+de bestaande kolommen (tussen de diff en `RelatedPanel`), i.p.v. alleen de platte
+code-excerpt te tonen. Klik en Enter lopen allebei via dezelfde
+`drillIntoChild(child)`. `home.mjs` houdt
 daarvoor een **stack** bij, `state.drill`: elke `drillIntoChild(child)` (aangeroepen
-vanuit de `Enter`-tak in `onKeydown`, ná de bestaande "Zoek"-precedentie voor
-onopgeloste calls) pusht er één entry op, en `popDrill()` (aangeroepen zodra
+vanuit de `Enter`-tak in `onKeydown` — ná de bestaande "Zoek"-precedentie voor
+onopgeloste calls — of vanuit de klik-callback) pusht er één entry op, en `popDrill()` (aangeroepen zodra
 `←`/`Escape` het paneel op het diepste niveau zou **verlaten** — `handleRelatedKey`
 geeft dan `'exit'` terug — en de stack niet leeg is) haalt er één af, zodat
 terugstappen de kolommen één-voor-één sluit i.p.v. in één klap helemaal terug naar

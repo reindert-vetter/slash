@@ -141,7 +141,9 @@ blokje en verlaat — voorbij het laatste — de lijst naar de comments-kolom;
 blokje; **`←`** gaat terug naar de diff; **`→`** doet niets meer.
 Vanuit de comments keert **`↑`** terug naar het laatst-gekozen blokje
 (`cs.codeSel` blijft behouden). **`Enter`** op de kaart **drilt** in het kind
-waar de cursor op staat (`focusedRelatedChild()`): het kind opent als een eigen
+waar de cursor op staat (`focusedRelatedChild()`) — en een **muisklik** op een
+Onderliggende-code-item (`data-testid=related-item`) drilt in dát kind, langs
+dezelfde weg: het kind opent als een eigen
 diff-kolom rechts naast de bestaande, tussen die kolommen en `RelatedPanel` in
 (`drillIntoChild`, zie de sectie "Drillen" in `.claude/rules/detail-layout.md`),
 en het Onderliggende-code-paneel + de taken/chat eronder springen mee naar dát
