@@ -714,7 +714,7 @@ function commentsSection(state, commentTarget, openCompose) {
   }
   return html`
     <section
-      class="flex max-h-[28rem] min-h-[16rem] flex-row overflow-hidden rounded-xl border border-slate-300 bg-white ring-1 ring-black/5"
+      class="flex w-[36rem] shrink-0 max-h-[28rem] min-h-[16rem] flex-row overflow-hidden rounded-xl border border-slate-300 bg-white ring-1 ring-black/5"
       data-testid="comments-panel"
     >
       <div class="flex w-56 shrink-0 flex-col overflow-hidden border-r border-slate-100">
@@ -991,10 +991,10 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
   const searching = () => unresolved().some((r) => r.status === 'searching')
   const runSearch = () => search && search.startCallSearch && search.startCallSearch()
   return html`
-    <aside class="flex w-[38rem] min-h-0 shrink-0 flex-col gap-3" data-testid="related-panel">
+    <aside class="flex min-h-0 shrink-0 flex-row items-start gap-3" data-testid="related-panel">
       <section
         class="${() =>
-          'flex min-h-0 flex-col overflow-hidden rounded-xl border bg-white ring-1 ' +
+          'flex w-[30rem] shrink-0 max-h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-white ring-1 ' +
           (cs.focus === 'code'
             ? 'border-indigo-300 ring-indigo-200'
             : 'border-slate-300 ring-black/5')}"

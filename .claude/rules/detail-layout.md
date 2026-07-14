@@ -9,9 +9,21 @@ dan het scherm. Links de **block-kolom** (`data-testid=block-column`,
 ruimte op te vullen) met de kaart van het geselecteerde block plus de
 look-ahead-preview van het volgende block (dashed connector als ze uit hetzelfde
 bestand komen). **Direct náást** die kolom (niet aan de rechterrand van het
-scherm) `RelatedPanel` (`src/RelatedPanel.mjs`, `data-testid=related-panel`,
-`w-[38rem] shrink-0`). Zo lijnt het comment/gerelateerd-paneel altijd tegen de
-diff aan.
+scherm) `RelatedPanel` (`src/RelatedPanel.mjs`, `data-testid=related-panel`).
+Zo lijnt het comment/gerelateerd-paneel altijd tegen de diff aan.
+
+De `RelatedPanel`-`<aside>` is zelf een **flex-row** (`flex-row items-start
+gap-3`, geen vaste breedte meer): de kaart **Onderliggende code**
+(`data-testid=related-code`, `w-[30rem] shrink-0`) staat **links** en het
+**comment/taken-blok** (`data-testid=comments-panel`, `w-[36rem] shrink-0`)
+**rechts ernaast** — niet meer eronder gestapeld. De `items-start` is
+load-bearing: die voorkomt dat "Onderliggende code" verticaal wordt uitgerekt
+naar de hoogte van het comment-blok. In combinatie met `max-h-full` op de
+code-section blijft die zo hoog als zijn inhoud (korte lijst → korte kaart) maar
+groeit hij bij veel onderliggende code tot de **volle beschikbare hoogte** en
+scrollt dan intern (de body is `flex-1 min-h-0 overflow-auto`). Het comment-blok
+houdt zijn eigen `max-h-[28rem] min-h-[16rem]` naast de code-kaart. `<main>`
+scrollt horizontaal mee als de kolommen samen te breed worden.
 
 ## Drillen: Onderliggende code als eigen kolom (`state.drill`)
 
@@ -76,7 +88,8 @@ de key i.p.v. nóg een `b.code`-lezer toe te voegen. Zie de arrow.js-valkuilen i
 `.claude/rules/conventions.md`.
 
 `RelatedPanel` is **puur placeholder met dummy data** — nog geen `/api`-koppeling.
-Twee gestapelde kaarten:
+Twee naast elkaar liggende kaarten (Onderliggende code links, comment-blok
+rechts — zie de layout-alinea hierboven):
 
 - **Onderliggende code** (boven, `data-testid=related-code`): de **child-blokken**
   van het geselecteerde block — de blokken waaraan het gekoppeld is (nu: de
