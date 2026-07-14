@@ -3,7 +3,29 @@
 Rechts van de sidebar staat de `DetailPanel` (`home.mjs`): een `<main>` als
 **flex-row** die zijn kolommen **vanaf links inpakt** (`justify-start`, geen
 uitrekken) en horizontaal scrolt (`overflow-x-auto`) zodra ze samen breder zijn
-dan het scherm. Links de **block-kolom** (`data-testid=block-column`,
+dan het scherm.
+
+**Eerste kolom: PR-info** (`data-testid=pr-info-column`, `w-[26rem] shrink-0`,
+gerenderd door `prInfoCard(state)` in `home.mjs`, vlak vóór `DetailPanel`). Een
+witte kaart met titel + Jira-badge, meta-regel (auteur, `+add −del`,
+bestandenaantal, branch, "op GitHub ›"), een **Samenvatting**-sectie (Claude-tekst),
+een **Omschrijving**-sectie (PR-body + eventueel een Jira-kadertje), en onderaan
+review/CI-pills — gestyled als de dark-zinc pills in `overview.mjs` maar dan in
+het lichte kaart-thema (`bg-emerald-50`/`bg-rose-50`/`bg-amber-50` i.p.v.
+`bg-emerald-500/15` etc.). De kaart leest **uitsluitend** `state.prMeta`/
+`state.pr`/`state.prUrl`/`state.jiraKey` — nooit `b.code` — zodat hij niet
+co-subscribed raakt met de diff-render (zie de "stuck on loading"-valkuil in
+`conventions.md`). **Progressief laden:** `state.prMeta` (leeg object bij start)
+wordt door `pollPRMeta` in `home.mjs` **wholesale hertoegewezen** op elke poll
+van `GET /api/pr?pr=N` (elke 1.5s, tot de statussen er zijn of na een max van 20
+pollingen) — het `pr_status`-workflow vult het `prmeta`-read-model in **3 stages**
+(basics → Claude-`summary` → review/checks-statussen), dus elke sectie verschijnt
+zodra zijn stage klaar is (placeholder ("samenvatting genereren…", een pulserende
+skeleton-pill) tot dan). `loadPRMeta` vuurt de `POST /api/workflows/pr_status`
+**fire-and-forget** (niet awaited — die POST blokkeert tot alle 3 stages klaar
+zijn) en start daarna meteen de poll-lus.
+
+Daarna de **block-kolom** (`data-testid=block-column`,
 **`shrink-0`** — niet `flex-1`, dus op zijn **natuurlijke diff-breedte**
 (altijd `w-[70rem] 2xl:w-[82rem]`, óók voor een één-zijdig added/removed block —
 dat laat weliswaar de lege pane weg (`singleSide` in `Block.mjs`) maar houdt

@@ -71,6 +71,11 @@ const state = reactive({
   title: '',
   prUrl: '',
   jiraKey: '',
+  // prMeta — the full prmeta read-model payload (GET /api/pr), reassigned wholesale
+  // on every poll so arrow.js re-renders the PR-info column. Fills progressively
+  // as the pr_status workflow completes its 3 stages (basics, summary, statuses) —
+  // see loadPRMeta/pollPRMeta and prInfoCard below.
+  prMeta: {},
   // blocks — the top-level blocks shown in the sidebar and walked by the
   // navigation: the full set minus any block that is a child in a relation
   // (those are nested under their parent in the RelatedPanel instead). allBlocks
@@ -571,36 +576,58 @@ async function loadRelations() {
   }
 }
 
+// PR_META_POLL_MS / PR_META_MAX_POLLS — the pr_status workflow fills the
+// prmeta read-model in 3 stages (basics, then the Claude summary, then review/
+// checks statuses); a single fetch after starting it would show nothing for the
+// ~10s it takes to run all 3 stages. Instead we poll every 1.5s and stop once
+// the statuses stage has landed (or after this many polls, so an offline/never-
+// finishing tracker doesn't poll forever).
+const PR_META_POLL_MS = 1500
+const PR_META_MAX_POLLS = 20
+
 // loadPRMeta ensures the per-PR pr_status tracker is running (its start fetches
-// the PR's title + URL into the prmeta read-model) and then reads that read-model
-// into state, deriving the Jira ticket key from the title. Both steps are
-// best-effort — offline/no-gh runs simply leave the menu's links on their
-// fallbacks (plain GitHub PR URL, Jira base). Starting the tracker is a
-// sanctioned UI write path (an Execution start); everything else is a read.
-async function loadPRMeta() {
-  try {
-    await fetch('/api/workflows/pr_status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: state.pr }),
-    })
-  } catch (_) {
-    /* offline — fall through to read whatever the read-model already has */
-  }
+// the PR's title/summary/statuses into the prmeta read-model, in 3 stages) and
+// starts polling that read-model into state.prMeta so the PR-info column reveals
+// progressively. Both steps are best-effort — offline/no-gh runs simply leave the
+// column on whatever partial data it got (and the menu's links on their
+// fallbacks). Starting the tracker is a sanctioned UI write path (an Execution
+// start, fire-and-forget — awaiting it would block on all 3 stages); everything
+// else here is a read.
+function loadPRMeta() {
+  fetch('/api/workflows/pr_status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pr: state.pr }),
+  }).catch(() => {
+    /* offline — the poll below still reads whatever the read-model already has */
+  })
+  pollPRMeta(0)
+}
+
+async function pollPRMeta(count) {
   try {
     const res = await fetch(`/api/pr?pr=${state.pr}`)
-    if (!res.ok) return
-    const meta = await res.json()
-    if (!meta || !meta.ok) return
-    state.title = meta.title || ''
-    if (state.title) {
-      document.title = `${state.title} · PR Review Tree`
+    if (res.ok) {
+      const meta = await res.json()
+      if (meta && meta.ok) {
+        state.prMeta = meta
+        state.title = meta.title || ''
+        if (state.title) {
+          document.title = `${state.title} · PR Review Tree`
+        }
+        state.prUrl = meta.url || ''
+        const m = state.title.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
+        state.jiraKey = m ? m[1] : ''
+        const statusesIn =
+          meta.reviewDecision !== '' || (Array.isArray(meta.reviewers) && meta.reviewers.length > 0) || meta.checksTotal > 0
+        if (statusesIn) return
+      }
     }
-    state.prUrl = meta.url || ''
-    const m = state.title.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
-    state.jiraKey = m ? m[1] : ''
   } catch (_) {
-    /* transient — the menu keeps its fallback links */
+    /* transient — keep polling until PR_META_MAX_POLLS */
+  }
+  if (count + 1 < PR_META_MAX_POLLS) {
+    setTimeout(() => pollPRMeta(count + 1), PR_META_POLL_MS)
   }
 }
 
@@ -2255,6 +2282,149 @@ function menuOverlay() {
   `
 }
 
+// ── PR-info column ──────────────────────────────────────────────────────────
+// prInfoCard renders the first column of <main>: PR title/Jira badge, meta
+// (author/diffstat/branch/GitHub link), the Claude summary, the PR description
+// (+ Jira description if any), and review/CI pills — each section appearing as
+// soon as its stage of the pr_status workflow has landed in state.prMeta. Reads
+// only state.prMeta/state.pr — never b.code, so it can't race the diff render
+// (see conventions.md).
+
+const REPO_SLUG = 'plug-and-pay/plug-and-pay'
+
+function prPill(text, cls) {
+  return html`<span
+    class="${'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ' + cls}"
+    >${text}</span
+  >`
+}
+
+function prReviewPill(meta) {
+  const d = meta.reviewDecision
+  if (d === 'APPROVED') return prPill('Goedgekeurd', 'bg-emerald-50 text-emerald-700 ring-emerald-200')
+  if (d === 'CHANGES_REQUESTED') return prPill('Wijzigingen gevraagd', 'bg-rose-50 text-rose-700 ring-rose-200')
+  return prPill('Wacht op review', 'bg-amber-50 text-amber-700 ring-amber-200')
+}
+
+function prChecksPill(meta) {
+  const total = Number(meta.checksTotal) || 0
+  if (!total) return null
+  const passed = Number(meta.checksPassed) || 0
+  if (passed >= total) return prPill('✓ ' + total + ' checks', 'bg-emerald-50 text-emerald-700 ring-emerald-200')
+  return prPill(passed + '/' + total + ' checks', 'bg-slate-100 text-slate-600 ring-slate-200')
+}
+
+function prStatusSlot(meta) {
+  const statusesIn = meta.reviewDecision !== '' || (Array.isArray(meta.reviewers) && meta.reviewers.length > 0) || meta.checksTotal > 0
+  if (!statusesIn) {
+    return [
+      html`<span
+        class="inline-flex w-24 animate-pulse items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] ring-1 ring-inset ring-slate-200"
+        aria-hidden="true"
+        >${' '}</span
+      >`.key('status-skeleton'),
+    ]
+  }
+  const pills = [prReviewPill(meta).key('review'), prChecksPill(meta)]
+  const reviewers = Array.isArray(meta.reviewers) ? meta.reviewers : []
+  if (reviewers.length) {
+    pills.push(
+      html`<span class="flex flex-wrap items-center gap-1" data-testid="pr-info-reviewers">
+        ${reviewers.map((login, i) =>
+          html`<span
+            class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-inset ring-slate-200"
+            >${login}</span
+          >`.key('rev:' + i + ':' + login),
+        )}
+      </span>`.key('reviewers'),
+    )
+  }
+  return pills.filter(Boolean)
+}
+
+function prInfoCard(state) {
+  return html`
+    <div
+      class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+      data-testid="pr-info-card"
+    >
+      <div>
+        <div class="flex items-start gap-2">
+          <h1 class="min-w-0 flex-1 text-lg font-semibold leading-snug text-slate-900" data-testid="pr-info-title">
+            ${() => state.prMeta.title || `PR #${state.pr}`}
+          </h1>
+          ${() =>
+            state.jiraKey
+              ? html`<a
+                  href="${() => state.prMeta.jiraUrl || JIRA_BASE + state.jiraKey}"
+                  target="_blank"
+                  rel="noreferrer"
+                  class="shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600 ring-1 ring-inset ring-indigo-200 hover:bg-indigo-100"
+                  data-testid="pr-info-jira-key"
+                  >${state.jiraKey}</a
+                >`
+              : ''}
+        </div>
+        <div class="mt-0.5 font-mono text-[11px] text-slate-400">${REPO_SLUG}#${state.pr}</div>
+      </div>
+      <div class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px] text-slate-500" data-testid="pr-info-meta">
+        ${() => (state.prMeta.author ? html`<span>${state.prMeta.author}</span>` : '')}
+        ${() =>
+          state.prMeta.author && (state.prMeta.additions || state.prMeta.deletions)
+            ? html`<span class="text-slate-300">·</span>`
+            : ''}
+        ${() =>
+          state.prMeta.additions || state.prMeta.deletions
+            ? html`<span
+                ><span class="font-medium text-emerald-600">+${state.prMeta.additions || 0}</span>
+                <span class="font-medium text-rose-600">−${state.prMeta.deletions || 0}</span></span
+              >`
+            : ''}
+        ${() => (state.prMeta.changedFiles ? html`<span class="text-slate-300">·</span>` : '')}
+        ${() => (state.prMeta.changedFiles ? html`<span>${state.prMeta.changedFiles} bestanden</span>` : '')}
+        ${() => (state.prMeta.headRef ? html`<span class="text-slate-300">·</span>` : '')}
+        ${() =>
+          state.prMeta.headRef
+            ? html`<span class="truncate font-mono text-sky-600" title="Huidige branch">${state.prMeta.headRef}</span>`
+            : ''}
+        ${() => (state.prUrl ? html`<span class="text-slate-300">·</span>` : '')}
+        ${() =>
+          state.prUrl
+            ? html`<a href="${state.prUrl}" target="_blank" rel="noreferrer" class="text-indigo-600 hover:underline"
+                >op GitHub ›</a
+              >`
+            : ''}
+      </div>
+      <div data-testid="pr-info-summary">
+        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Samenvatting</div>
+        ${() =>
+          state.prMeta.summary
+            ? html`<p class="whitespace-pre-wrap text-[13px] leading-relaxed text-slate-700">${state.prMeta.summary}</p>`
+            : html`<p class="text-[13px] italic text-slate-400">samenvatting genereren…</p>`}
+      </div>
+      <div data-testid="pr-info-body">
+        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Omschrijving</div>
+        ${() =>
+          state.prMeta.body
+            ? html`<p class="whitespace-pre-wrap text-[13px] leading-relaxed text-slate-700">${state.prMeta.body}</p>`
+            : html`<p class="text-[13px] text-slate-400">geen omschrijving</p>`}
+        ${() =>
+          state.prMeta.jiraTitle
+            ? html`<div class="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5" data-testid="pr-info-jira">
+                <div class="text-[12px] font-medium text-slate-700">Jira: ${state.prMeta.jiraTitle}</div>
+                ${state.prMeta.jiraDesc
+                  ? html`<p class="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-slate-600">${state.prMeta.jiraDesc}</p>`
+                  : ''}
+              </div>`
+            : ''}
+      </div>
+      <div class="mt-auto flex flex-wrap items-center gap-1.5 pt-1" data-testid="pr-info-statuses">
+        ${() => prStatusSlot(state.prMeta)}
+      </div>
+    </div>
+  `
+}
+
 // DetailPanel — the area right of the fixed sidebar. It shows the block card for
 // the selected row, and the next row's card already (a look-ahead preview). When
 // both cards are from the same file, a dashed connector links them.
@@ -2266,6 +2436,9 @@ function DetailPanel(state) {
         (state.mode === 'diff' ? 'left-6' : 'left-[29rem]')}"
       data-testid="detail-panel"
     >
+      <div class="flex min-h-0 w-[26rem] shrink-0 flex-col" data-testid="pr-info-column">
+        ${() => prInfoCard(state)}
+      </div>
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="block-column">
       ${() => {
         const sel = state.selected
