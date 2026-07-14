@@ -34,42 +34,68 @@ func worktreeDirs(dataDir string, pr int) (base, head string) {
 	return base, head
 }
 
-// ingestPR runs the full pipeline: fetch meta → ensure commits → worktrees →
-// diff → parse concurrently → classify → store.
-func ingestPR(ctx context.Context, db *sql.DB, dataDir string, pr int) (*ingestResult, error) {
+// worktreeSHAs is the small summary prepareWorktrees returns — the two SHAs
+// plus the PR's changed file paths, so this step's Activity result stays
+// compact in the workflow history (the worktrees themselves live on disk at
+// their deterministic paths, see worktreeDirs) while sparing the second step a
+// redundant gh fetch.
+type worktreeSHAs struct {
+	BaseSHA string   `json:"baseSHA"`
+	HeadSHA string   `json:"headSHA"`
+	Paths   []string `json:"paths"`
+}
+
+// prepareIngestWorktrees fetches the PR's metadata, ensures both commits are
+// locally reachable, and materializes the base/head worktrees. This is the
+// side-effecting first step of the ingest pipeline (network + git), run as the
+// ingest workflow's "prepareWorktrees" Activity.
+func prepareIngestWorktrees(ctx context.Context, dataDir string, pr int) (worktreeSHAs, error) {
 	ingestMu.Lock()
 	defer ingestMu.Unlock()
 
-	res := &ingestResult{PR: pr, ByStatus: map[string]int{}}
-
 	meta, err := fetchPRMeta(ctx, pr)
 	if err != nil {
-		return nil, err
+		return worktreeSHAs{}, err
 	}
 	baseSHA, headSHA := meta.BaseRefOid, meta.HeadRefOid
 	if baseSHA == "" || headSHA == "" {
-		return nil, fmt.Errorf("pr %d: missing base/head SHA in metadata", pr)
+		return worktreeSHAs{}, fmt.Errorf("pr %d: missing base/head SHA in metadata", pr)
 	}
 	log.Printf("ingest pr %d: base=%s head=%s files=%d", pr, short(baseSHA), short(headSHA), len(meta.Files))
 
 	if err := ensureCommits(ctx, pr, baseSHA, headSHA); err != nil {
-		return nil, err
+		return worktreeSHAs{}, err
 	}
 
 	baseDir, headDir := worktreeDirs(dataDir, pr)
 	if err := ensureWorktree(ctx, baseDir, baseSHA); err != nil {
-		return nil, fmt.Errorf("base worktree: %w", err)
+		return worktreeSHAs{}, fmt.Errorf("base worktree: %w", err)
 	}
 	if err := ensureWorktree(ctx, headDir, headSHA); err != nil {
-		return nil, fmt.Errorf("head worktree: %w", err)
+		return worktreeSHAs{}, fmt.Errorf("head worktree: %w", err)
 	}
 
 	paths := make([]string, 0, len(meta.Files))
 	for _, f := range meta.Files {
 		paths = append(paths, f.Path)
 	}
+	return worktreeSHAs{BaseSHA: baseSHA, HeadSHA: headSHA, Paths: paths}, nil
+}
 
-	rawDiff, err := diffBetweenSHAs(ctx, baseSHA, headSHA, paths)
+// scanAndStoreIngestBlocks diffs the two worktrees, parses+classifies the
+// touched PHP files, and full-swaps the resulting blocks into the DB. This is
+// the side-effecting second step of the ingest pipeline (git diff + file reads
+// + DB write), run as the ingest workflow's "scanAndStoreBlocks" Activity.
+func scanAndStoreIngestBlocks(ctx context.Context, db *sql.DB, dataDir string, pr int, shas worktreeSHAs) (*ingestResult, error) {
+	ingestMu.Lock()
+	defer ingestMu.Unlock()
+
+	res := &ingestResult{PR: pr, ByStatus: map[string]int{}}
+
+	baseDir, headDir := worktreeDirs(dataDir, pr)
+	paths := shas.Paths
+
+	rawDiff, err := diffBetweenSHAs(ctx, shas.BaseSHA, shas.HeadSHA, paths)
 	if err != nil {
 		return nil, fmt.Errorf("diff: %w", err)
 	}

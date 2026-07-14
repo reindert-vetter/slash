@@ -39,7 +39,11 @@ type tasks struct {
 // newTasks builds the tembed engine (SQLite + JSONL, so comments live in the
 // workflow event history AND in jsonl files), the comments module, and the
 // github module, then recovers in-flight executions and resumes their pollers.
-func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, func() error, error) {
+// resumeRuntime gates the server-only runtime bits (resuming comment pollers,
+// ensuring the inbox tracker + its poller) — a one-shot CLI caller (e.g. `slash
+// ingest`) passes false so it doesn't start background pollers or fetch the
+// inbox just to run a single workflow.
+func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRuntime bool) (*tasks, func() error, error) {
 	sq, err := tembed.NewSQLiteStore(dataDir + "/workflows.db")
 	if err != nil {
 		return nil, nil, err
@@ -120,10 +124,12 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string) (*tasks, fu
 	if err := engine.Recover(); err != nil {
 		return nil, nil, err
 	}
-	mgr.ResumePolling(ctx)
-	// Own the PR inbox via the workflow: fetch an initial snapshot into the
-	// read-model and start the refresh poller (the UI reads only the read-model).
-	mgr.EnsureInbox(ctx)
+	if resumeRuntime {
+		mgr.ResumePolling(ctx)
+		// Own the PR inbox via the workflow: fetch an initial snapshot into the
+		// read-model and start the refresh poller (the UI reads only the read-model).
+		mgr.EnsureInbox(ctx)
+	}
 
 	closeFn := func() error {
 		_ = sq.Close()

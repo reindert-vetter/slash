@@ -55,6 +55,12 @@ const (
 	// (rows + call segments), which one Activity full-swaps into the approvals
 	// read-model — so a browser refresh restores exactly what was ticked off.
 	WorkflowApprove = "approve"
+	// WorkflowIngest is the Workflow Type that runs the ingest pipeline for a PR:
+	// fetch meta/worktrees, diff+parse+classify, and full-swap the resulting
+	// blocks into the DB. One Execution per ingest request; it completes once
+	// done (no signals). This is the only path that writes the blocks table /
+	// touches the git worktrees — the sole write boundary for ingest.
+	WorkflowIngest = "ingest"
 	// WorkflowResolveCall is the Workflow Type that resolves a changed block's
 	// method calls to their definition with an LLM when the Go resolver could not:
 	// it runs Haiku first and, if that is not confident, escalates automatically to
@@ -203,6 +209,11 @@ type ResolveCallInput struct {
 	CallerClass string   `json:"callerClass"`
 	CallerName  string   `json:"callerName"`
 	Calls       []string `json:"calls"`
+}
+
+// IngestInput starts an ingest Workflow Execution for one PR.
+type IngestInput struct {
+	PR int `json:"pr"`
 }
 
 // inboxRefreshResult is the small summary the refreshInbox Activity returns — the
@@ -383,6 +394,40 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			m.logf("task_code_comment: github reply skipped: %v", err)
 		}
 		return nil, nil
+	})
+
+	// Activity: fetch the PR's meta, ensure its commits are locally reachable, and
+	// materialize the base/head git worktrees (write — creates worktrees on disk).
+	// Returns only the two SHAs + changed file paths, not the worktree contents.
+	engine.RegisterActivity("prepareWorktrees", func(ctx context.Context, in []byte) ([]byte, error) {
+		var input IngestInput
+		if err := json.Unmarshal(in, &input); err != nil {
+			return nil, err
+		}
+		shas, err := prepareIngestWorktrees(ctx, m.dataDir, input.PR)
+		if err != nil {
+			return nil, fmt.Errorf("ingest: prepare worktrees: %w", err)
+		}
+		return json.Marshal(shas)
+	})
+
+	// Activity: diff the two worktrees, parse+classify the touched PHP files, and
+	// full-swap the resulting blocks into the DB (write — the only writer of the
+	// blocks table). Returns only the small ingestResult summary, not the blocks
+	// themselves, so the workflow history stays compact.
+	engine.RegisterActivity("scanAndStoreBlocks", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR   int          `json:"pr"`
+			Shas worktreeSHAs `json:"shas"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		res, err := scanAndStoreIngestBlocks(ctx, m.db, m.dataDir, arg.PR, arg.Shas)
+		if err != nil {
+			return nil, fmt.Errorf("ingest: scan and store blocks: %w", err)
+		}
+		return json.Marshal(res)
 	})
 
 	// Activity: analyse the PR's blocks into relations and store them (write,
@@ -604,6 +649,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowBuildRelations, buildRelationsWorkflow)
+	engine.RegisterWorkflow(WorkflowIngest, ingestWorkflow)
 	engine.RegisterWorkflow(WorkflowResolveCall, resolveCallWorkflow)
 	engine.RegisterWorkflow(WorkflowApprove, approveWorkflow)
 	return m
@@ -643,6 +689,55 @@ func buildRelationsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			return nil, fmt.Errorf("rebuild relations: %w", err)
 		}
 	}
+}
+
+// ingestWorkflow runs the ingest pipeline for a PR. It is deterministic: all
+// side effects (gh fetch, git worktrees, diff/parse, the blocks-table write)
+// live in its two Activities, run in a fixed order. It completes once done —
+// no signals, one Execution per ingest request.
+func ingestWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in IngestInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+
+	var shas worktreeSHAs
+	if err := w.ExecuteActivity("prepareWorktrees", in, &shas); err != nil {
+		return nil, fmt.Errorf("prepare worktrees: %w", err)
+	}
+
+	var res ingestResult
+	arg := struct {
+		PR   int          `json:"pr"`
+		Shas worktreeSHAs `json:"shas"`
+	}{PR: in.PR, Shas: shas}
+	if err := w.ExecuteActivity("scanAndStoreBlocks", arg, &res); err != nil {
+		return nil, fmt.Errorf("scan and store blocks: %w", err)
+	}
+	return json.Marshal(res)
+}
+
+// StartIngest runs the ingest Workflow Execution for pr to completion
+// (StartWorkflow drives a signal-less workflow synchronously) and returns its
+// result summary. Starting an Execution is the sanctioned write path — this is
+// the only way blocks/worktrees are written.
+func (m *TaskManager) StartIngest(ctx context.Context, pr int) (*ingestResult, error) {
+	runID, err := m.engine.StartWorkflow(WorkflowIngest, IngestInput{PR: pr})
+	if err != nil {
+		return nil, err
+	}
+	status, err := m.engine.Status(runID)
+	if err != nil {
+		return nil, err
+	}
+	if status == tembed.StatusFailed {
+		return nil, fmt.Errorf("ingest failed (run %s)", runID)
+	}
+	var res ingestResult
+	if err := m.engine.Result(runID, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
 }
 
 // approveWorkflow persists reviewer approval for a PR. It is deterministic: the

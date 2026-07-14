@@ -63,7 +63,7 @@ func runServe(args []string) {
 
 	// Workflow/comments stores live next to the DB, so a test DB isolates its
 	// workflow state too. (The worktree data dir stays "data" — see server.)
-	tk, closeTasks, err := newTasks(context.Background(), db, filepath.Dir(resolvedDB), repoSlug)
+	tk, closeTasks, err := newTasks(context.Background(), db, filepath.Dir(resolvedDB), repoSlug, true)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)
 	}
@@ -94,18 +94,29 @@ func runIngestCmd(args []string) {
 	if err := os.MkdirAll("data", 0o755); err != nil {
 		log.Fatalf("mkdir data: %v", err)
 	}
-	db, err := openDB(dbPath(*dbFlag))
+	resolvedDB := dbPath(*dbFlag)
+	db, err := openDB(resolvedDB)
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
 
+	// Build the workflow engine (no server runtime — no poller resume, no inbox
+	// fetch) just to run the ingest workflow, the sole writer of blocks/worktrees.
+	dataDir := filepath.Dir(resolvedDB)
+	tk, closeTasks, err := newTasks(context.Background(), db, dataDir, repoSlug, false)
+	if err != nil {
+		log.Fatalf("init workflows: %v", err)
+	}
+	defer closeTasks()
+
 	ctx, cancel := context.WithTimeout(context.Background(), ingestTimeout)
 	defer cancel()
-	res, err := ingestPR(ctx, db, "data", pr)
+	res, err := tk.manager.StartIngest(ctx, pr)
 	if err != nil {
 		log.Fatalf("ingest: %v", err)
 	}
+	tk.manager.EnsureRelations(ctx, pr)
 	out, _ := json.MarshalIndent(res, "", "  ")
 	fmt.Println(string(out))
 }

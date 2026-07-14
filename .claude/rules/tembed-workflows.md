@@ -496,6 +496,47 @@ Patroon van `build_relations`/`pr_status`.
   `persistApproval` (elke approve-toggle) én in `ensureCode` zodra een block se
   code alsnog arriveert (voor het geval een bestand pas ná een refresh z'n
   laatste code-fetch binnenkrijgt).
+
+## Ingest-pipeline als workflow (`ingest` + `.claude/rules/blocks-and-ingest.md`)
+
+Een zesde Workflow Type, **`ingest`**, tilt de PR→blocks-pipeline binnen de
+write-boundary: vóór deze workflow schreef `ingestPR` de `blocks`-tabel en de
+git-worktrees rechtstreeks vanuit `handleIngest` (HTTP) en de CLI — de enige
+echte doorbraak van de "alleen workflows muteren state"-regel. Eén Execution
+per ingest-verzoek, **geen Signal** — de workflow-body draait zijn twee
+Activities sequentieel en completet meteen (`StartWorkflow` drijft 'm
+synchroon tot completion omdat er geen `WaitSignal` in zit).
+
+- **`prepareWorktrees`-Activity:** `gh pr view` (via `fetchPRMeta`) +
+  `ensureCommits` + de twee `ensureWorktree`-calls (`ingest.go`,
+  `prepareIngestWorktrees`). Retourneert alleen de kleine `worktreeSHAs`-summary
+  (base-SHA, head-SHA, gewijzigde bestandspaden) — niet de worktree-inhoud, die
+  op schijf blijft op zijn deterministische pad (`worktreeDirs`).
+- **`scanAndStoreBlocks`-Activity:** `git diff` + de PHP-scanner/classificatie +
+  `replacePRBlocks` (`ingest.go`, `scanAndStoreIngestBlocks`) — de enige plek die
+  de `blocks`-tabel nog schrijft. Retourneert alleen de kleine
+  `ingestResult`-summary (`{pr, stored, byStatus, warnings}`), niet de blocks
+  zelf, zodat de event-history compact blijft (zelfde patroon als
+  `build_relations`/`pr_inbox`).
+- **`TaskManager.StartIngest(ctx, pr) (*ingestResult, error)`** start de
+  Execution en leest het resultaat terug (`engine.Result`) — de sanctioned
+  write-weg. `handleIngest` (`api.go`) roept 'm aan i.p.v. rechtstreeks
+  `ingestPR`, en roept daarna zoals voorheen `EnsureRelations` aan.
+- **CLI (`slash ingest <pr>`, `main.go`):** bouwt zelf een losse engine +
+  modules via `newTasks(ctx, db, dataDir, repo, resumeRuntime=false)` — de
+  `resumeRuntime`-vlag slaat `ResumePolling`/`EnsureInbox` over (server-only
+  runtime: geen poller-hervatting, geen inbox-fetch voor een one-shot
+  headless-ingest) — en roept dan `StartIngest` + `EnsureRelations` aan, zoals
+  de HTTP-flow.
+- **Determinisme:** beide Activities zijn de enige non-determinisme/IO
+  (netwerk, git, DB); de workflow-body zelf voegt niets non-deterministisch toe
+  en draait de twee stappen altijd in dezelfde volgorde. `ingestMu` (een
+  package-level mutex, ongewijzigd) serialiseert gelijktijdige ingests van
+  dezelfde PR op worktree-niveau — nu binnen elke Activity apart in plaats van
+  rond de oude, ongesplitste `ingestPR`.
+- Zie `.claude/rules/blocks-and-ingest.md` voor de volledige pipeline-uitleg en
+  `ingest_test.go` (`TestIngestWorkflowEndToEnd`, een echte gh/git-afhankelijke
+  end-to-end-test die zichzelf skipt als gh onbereikbaar is).
 - Tests: `approvals_test.go` (module round-trip incl. full-swap/clear, de workflow
   end-to-end: `set`-Signal → read-model, `EnsureApprovals`-idempotentie, en een
   viewed-request die `setFileViewed`/`github.Client.MarkFileViewed` drijft i.p.v.

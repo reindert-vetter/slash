@@ -152,19 +152,22 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.tasks == nil {
+		http.Error(w, "workflow engine unavailable", http.StatusInternalServerError)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), ingestTimeout)
 	defer cancel()
 
-	res, err := ingestPR(ctx, s.db, s.dataDir, req.PR)
+	res, err := s.tasks.manager.StartIngest(ctx, req.PR)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 	// Build the block relations (event→listener, …) now that blocks are stored.
 	// The workflow is the only writer; the initial build runs synchronously.
-	if s.tasks != nil {
-		s.tasks.manager.EnsureRelations(ctx, req.PR)
-	}
+	s.tasks.manager.EnsureRelations(ctx, req.PR)
 	writeJSON(w, http.StatusOK, res)
 }
 

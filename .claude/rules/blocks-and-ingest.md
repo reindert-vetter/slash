@@ -80,8 +80,27 @@ navigeerbare lijst tonen.
   twee detached worktrees onder `data/worktrees/pr-<pr>-{base,head}` (**absolute
   paden**!) → `git diff --unified=0` → PHP-scanner (`phpscan.go`, brace-lexer, geen
   externe parser) → classificeren (`classify.go`) → opslaan. Zie skill `ingest-pr`.
-- **Draaien:** `go run . ingest <pr> [-db data/graph.db]` (headless) of
-  `POST /api/ingest {"pr":N}`. Server: `go run . [-db path] [-addr host:port]
+- **Draait als de `ingest`-workflow (write-boundary):** de blocks-tabel-write +
+  de git-worktree-mutaties gebeuren niet meer rechtstreeks vanuit een
+  HTTP-handler of de CLI, maar binnen een tembed **Workflow Execution** (Workflow
+  Type `ingest`, `workflows.go`), gesplitst in twee Activities:
+  `prepareWorktrees` (gh-fetch + `ensureCommits` + de twee `ensureWorktree`-calls,
+  retourneert alleen de kleine `worktreeSHAs`-summary — base/head-SHA + de
+  gewijzigde bestandspaden, niet de worktree-inhoud) en `scanAndStoreBlocks`
+  (`git diff` + PHP-scan/classificatie + `replacePRBlocks`, retourneert alleen de
+  kleine `ingestResult`-summary, niet de blocks zelf — zo blijft de event-history
+  compact, net als bij `build_relations`/`pr_inbox`). Beide Activity-bodies
+  (`prepareIngestWorktrees`/`scanAndStoreIngestBlocks` in `ingest.go`) blijven
+  wél gewone, direct-testbare functies; alleen worden ze nu **uitsluitend** vanuit
+  deze Activities aangeroepen. `TaskManager.StartIngest(ctx, pr)` start de
+  Execution (die zonder Signal synchroon doorloopt tot completion) en geeft de
+  `ingestResult`-summary terug.
+- **Draaien:** `go run . ingest <pr> [-db data/graph.db]` start de
+  `ingest`-workflow headless (bouwt een losse engine zonder server-runtime — geen
+  poller-resume, geen inbox-fetch, zie `newTasks(..., resumeRuntime)` in
+  `tasks_api.go`) en meteen daarna `EnsureRelations`, net als de HTTP-flow. De
+  server-kant is `POST /api/ingest {"pr":N}` (`handleIngest` → `StartIngest` →
+  `EnsureRelations`). Server: `go run . [-db path] [-addr host:port]
   [-static dir]`. DB-pad ook via `SLASH_DB`. Serve: `GET /api/blocks?pr=N`
   (delta) en `GET /api/code?pr=N&file=..&class=..&name=..` (de oude + nieuwe
   source van één block, uit de base/head worktrees — voor de side-by-side diff
