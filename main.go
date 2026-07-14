@@ -152,11 +152,28 @@ func runRelationsCmd(args []string) {
 		log.Fatalf("save relations: %v", err)
 	}
 
+	// Mirror the build_relations Activity: also resolve the blocks' method calls
+	// into the callresolve read-model, so a headless re-run refreshes the
+	// Onderliggende-code panel too (UpsertGo preserves LLM-owned rows, Prune drops
+	// call-sites that fell out of the PR).
+	calls := resolveCalls(dataDir, pr, blocks)
+	cr, err := callresolve.Open(filepath.Join(dataDir, "callresolve.db"))
+	if err != nil {
+		log.Fatalf("open callresolve db: %v", err)
+	}
+	defer cr.Close()
+	if err := cr.UpsertGo(context.Background(), calls); err != nil {
+		log.Fatalf("save call resolutions: %v", err)
+	}
+	if err := cr.Prune(context.Background(), pr, calls); err != nil {
+		log.Fatalf("prune call resolutions: %v", err)
+	}
+
 	label := map[string]string{}
 	for _, b := range blocks {
 		label[b.ID()] = b.Label
 	}
-	fmt.Printf("PR %d: %d block(s), %d relation(s)\n", pr, len(blocks), len(rels))
+	fmt.Printf("PR %d: %d block(s), %d relation(s), %d call(s) resolved\n", pr, len(blocks), len(rels), len(calls))
 	for _, r := range rels {
 		fmt.Printf("  [%s] %s  →  %s\n", r.Kind, label[r.ParentID], label[r.ChildID])
 	}
