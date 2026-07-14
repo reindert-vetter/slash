@@ -50,9 +50,9 @@ of een opgeloste method-call — zie `isCodeFocused`/`focusedRelatedChild` in
 de bestaande kolommen (tussen de diff en `RelatedPanel`), i.p.v. alleen de platte
 code-excerpt te tonen. Klik en Enter lopen allebei via dezelfde
 `drillIntoChild(child)`. `home.mjs` houdt daarvoor een **stack** bij, `state.drill`:
-elke `drillIntoChild(child)` (aangeroepen vanuit de `Enter`-tak in `onKeydown` — ná
-de bestaande "Zoek"-precedentie voor onopgeloste calls — of vanuit de
-klik-callback) pusht er één entry op **plus** een bijbehorende cursor-entry op
+elke `drillIntoChild(child)` (aangeroepen vanuit de `Enter`-tak in `onKeydown` —
+Enter op een gefocust kind drilt, onopgeloste calls zoeken vanzelf zonder Enter —
+of vanuit de klik-callback) pusht er één entry op **plus** een bijbehorende cursor-entry op
 `state.drillCursor` (`{change:0}`), en zet `state.focusLevel` op dat verse
 (diepste) niveau. Anders dan eerder **sluit** niets van dit meer automatisch: elke
 gedrilde kolom blijft open zolang de diff-sessie duurt (zie "Kolom-navigatie"
@@ -67,7 +67,9 @@ Een drill-entry is **één van twee vormen**:
   eigen volledige, navigeerbare Onderliggende-code-paneel (recursie werkt gratis).
 - **Een synthetisch frame** — een resolved method-call naar een bestand dat de PR
   niet wijzigt (geen PR-block, dus niets om te hergebruiken): een minimaal object
-  (`{ id, label, file, class, name, status:'modified', code:null, synthetic:true }`,
+  (`{ id, label, file, class, name, status:'unchanged', code:null, synthetic:true }`
+  — `unchanged`, want de PR raakt dit bestand niet, dus old === new en de diff is
+  volledig gelijk; een `modified`-badge zou hier misleidend zijn,
   class/name gesplitst uit `child.label` op `::`), waarvan `ensureCode` de oud/nieuw-
   broncode ophaalt zoals voor elk ander block. Dit niveau toont **alleen** zijn diff
   — geen eigen Onderliggende-code-kaart (geen caller-scan ooit gedraaid voor een
@@ -269,11 +271,15 @@ rechts — zie de layout-alinea hierboven):
   toe zodra de kinderen/comments binnen zijn (een focus alleen als z'n doel bestaat,
   daarna clear zodat latere navigatie vrij blijft). Zie skill `url-state` en de
   URL-state-sectie in `CLAUDE.md`.
-  Aanroepen die de Go-resolver niet kon pinnen
-  geven een **"Zoek (N)"**-knop (`data-testid=related-search`) die de LLM-zoektocht
-  start (`startCallSearch` → `POST /api/workflows/resolve_call`; ook via `Enter` op
-  het code-blok, `isCodeFocused`); tijdens het zoeken toont de kaart "zoeken…"
-  (`data-testid=related-searching`). Een door een LLM gevonden child draagt een
+  Aanroepen die de Go-resolver niet kon pinnen starten **automatisch** de
+  LLM-zoektocht — **geen knop meer**: `home.mjs` roept in de `setRelated`-watch
+  `startCallSearch(focusedBlock())` aan zodra het paneel een blok met `unresolved`
+  calls toont (`POST /api/workflows/resolve_call`, gededupt per caller+callKey in
+  `searchRequested` zodat het één keer vuurt). Het lost de **hele** unresolved-set
+  van het blok op (niet gescoped op de geselecteerde unit), dus je hoeft nergens
+  heen te navigeren. Tijdens het zoeken toont de kaart "zoeken…"
+  (`data-testid=related-searching`, ook zolang er nog `unresolved` in de wachtrij
+  staat). Een door een LLM gevonden child draagt een
   **`bron: haiku/sonnet`**-badge (`source`); Go-resolved children tonen geen bron.
   Zie `.claude/rules/tembed-workflows.md` (sectie "Aangeroepen … methodes resolven").
 - **Taken + chat** (onder, `data-testid=tasks`): een **flex-row**. Links een

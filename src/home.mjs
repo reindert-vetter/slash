@@ -724,15 +724,27 @@ function unresolvedCalls(b) {
   return scope == null ? all : all.filter((r) => scope.has(r.callKey))
 }
 
-// startCallSearch launches the LLM resolve_call workflow for the selected
-// block's still-unresolved calls, then polls the read-model until the search
-// settles. Starting an Execution is the sanctioned UI write path.
+// searchRequested dedups auto-launched searches per caller+callKey, so the
+// resolve_call workflow fires once for a given unresolved call and doesn't
+// re-POST as the cursor moves or the poll re-runs the panel watch. Kept outside
+// reactive state so reading it never creates a dependency.
+const searchRequested = new Set()
+
+// startCallSearch auto-launches the LLM resolve_call workflow for every call in
+// the block the Go resolver could not pin (status unresolved) — no button, it
+// runs whenever the panel shows a block with unresolved calls (see the setRelated
+// watch). It resolves the block's *whole* unresolved set (not scoped to the
+// selected unit) so navigating isn't required to trigger it, then polls the
+// read-model until the search settles. Starting an Execution is the sanctioned
+// UI write path; searchRequested guards against re-firing.
 async function startCallSearch(b) {
   if (!b) return
-  const calls = unresolvedCalls(b)
+  const calls = callRows(b)
     .filter((r) => r.status === 'unresolved')
     .map((r) => r.callKey)
+    .filter((k) => !searchRequested.has(b.id + '|' + k))
   if (calls.length === 0) return
+  calls.forEach((k) => searchRequested.add(b.id + '|' + k))
   try {
     await fetch('/api/workflows/resolve_call', {
       method: 'POST',
@@ -1158,7 +1170,10 @@ function drillIntoChild(child) {
       class: hasClass ? child.label.split('::')[0] : '',
       name: hasClass ? child.label.split('::')[1] : child.label,
       line: child.line,
-      status: 'modified',
+      // The PR doesn't touch this file (that's why there's no stored block), so
+      // old === new below and the diff is all-equal — the frame is 'unchanged',
+      // not 'modified' (which would show a misleading amber badge, see Block.mjs).
+      status: 'unchanged',
       // Ready synchronously; if the row somehow carried no code, mark it as such
       // rather than hang on "loading" (there's no stored block to fetch).
       code: src
@@ -1309,7 +1324,14 @@ watch(
     state.drill,
     focusedBlock() && focusedBlock().code,
   ],
-  () => setRelated(relatedChildren(focusedBlock()), unresolvedCalls(focusedBlock())),
+  () => {
+    const b = focusedBlock()
+    setRelated(relatedChildren(b), unresolvedCalls(b))
+    // Auto-run the LLM fallback for any calls the Go resolver couldn't pin — no
+    // button (deduped per caller+callKey in searchRequested, so this cheap on
+    // every panel re-fire).
+    startCallSearch(b)
+  },
 )
 
 // Bridge approval + code state → per-block combined-approval summaries the
@@ -1787,21 +1809,14 @@ function onKeydown(e) {
       e.preventDefault()
       openMenu('comment')
     }
-    // Enter on the Onderliggende-code block: on the resolved child the cursor is
-    // actually sitting on, drills into it as its own diff column (see
-    // drillIntoChild) — recursing into its Onderliggende code — regardless of
-    // whether *other* calls elsewhere in the block are still unresolved. Only
-    // when nothing is focused (an empty list — every call still pending) does
-    // it fall back to the LLM search (Haiku → Sonnet) for the block's
-    // unresolved calls.
+    // Enter on the Onderliggende-code block drills into the resolved child the
+    // cursor is sitting on as its own diff column (see drillIntoChild) — recursing
+    // into its Onderliggende code. Unresolved calls no longer need a manual Enter:
+    // the LLM search runs automatically (see the setRelated watch / startCallSearch).
     if (e.key === 'Enter' && isCodeFocused()) {
       e.preventDefault()
       const child = focusedRelatedChild()
-      if (child) {
-        drillIntoChild(child)
-      } else if (unresolvedCalls(focusedBlock()).some((r) => r.status === 'unresolved')) {
-        startCallSearch(focusedBlock())
-      }
+      if (child) drillIntoChild(child)
     }
     return
   }
@@ -2236,7 +2251,7 @@ function DetailPanel(state) {
         })
       }}
       ${() =>
-        RelatedPanel(state, commentTarget, { startCallSearch: () => startCallSearch(focusedBlock()), drill: (child) => drillIntoChild(child) }, () => {
+        RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }, () => {
           if (composeHasText()) openMenu('compose')
         }).key('related-panel')}
       ${() => (menu.open ? menuOverlay().key('command-overlay') : '')}

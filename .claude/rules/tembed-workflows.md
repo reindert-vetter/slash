@@ -224,7 +224,7 @@ fallback.
 - **`modules/callresolve`** (`data/callresolve.db`): het read-model
   `call_resolutions(pr, caller_id, call_key, status, child_*, model, confidence,
   updated_at)`, PK `(pr, caller_id, call_key)`. `status`: `resolved` (Go),
-  `unresolved` (Go faalde → "Zoek"-knop), `searching`/`found`/`notfound` (LLM).
+  `unresolved` (Go faalde → automatische LLM-search), `searching`/`found`/`notfound` (LLM).
   De rij draagt de **volledige child-descriptor + de codetekst** (`child_code`),
   dus de frontend rendert zonder losse code-fetch. Writes (workflow-only):
   `UpsertGo` (schrijft Go-rijen, maar **overschrijft geen** `searching`/`found`
@@ -255,8 +255,8 @@ fallback.
   vallen samen op de eerste match), en `->m(` op een **unieke** globale- of
   scope-match. Ambigu (>1 kandidaat) → `unresolved`; methodes die nergens in de app-worktree bestaan
   (vendor is geskipt — framework-calls als `->where(`) worden **óók
-  `unresolved`**: ze staan per definitie op een gewijzigde regel, dus de reviewer
-  krijgt de "Zoek"-knop i.p.v. niks.
+  `unresolved`**: ze staan per definitie op een gewijzigde regel, dus de
+  automatische LLM-search pikt ze op i.p.v. niks te tonen.
   **Enum-cases** (regel 6, `reStaticRef`): een `Foo::NAAM` **zonder haakjes** —
   `AddressType::BILLING` — resolvt naar de **enum-declaratie** als `Foo` een
   geïndexeerde enum is die die case/const definieert (`scanEnums` maakt van elke
@@ -304,6 +304,17 @@ fallback.
   frontend-`findCallSites` matcht een commando-key (bevat `:`/`-`, dus nooit een
   method-identifier) via de **string-literal** `command('naam…')` i.p.v. de
   identifier-vormen.
+  **Laravel-facades** (regel 3, fallback op `reStaticCall`): een facade forwardt
+  z'n static calls naar zijn accessor-class, dus `AccountingClient::providers()`
+  draait feitelijk op `AccountingDriver::providers()`. `buildSymbolIndex` bouwt
+  een `facades`-map (facade-shortname → accessor-shortname) met `scanFacades`: die
+  detecteert `class X extends …Facade` (`reFacadeClass`) plus de
+  `getFacadeAccessor() { return Y::class; }` (`reFacadeAccessor`) en koppelt X→Y
+  (positioneel gepaird — een facade-file bevat één facade + één accessor). In
+  regel 3 valt een `Foo::m(` die niet op `Foo` zélf resolvt terug op
+  `methodOnClass(accessor, m)` als `Foo` een geïndexeerde facade is. Een method
+  die óók op de accessor niet bestaat (b.v. de framework-`Manager::forgetDrivers()`
+  ná `providers()`, vendor is niet geïndexeerd) blijft `unresolved` → automatische LLM-search.
 - **`modules/claude`** (`modules/claude/claude.go`): de CLI-bridge naar `claude`
   (`Client`-interface + `Fake`, patroon van `modules/github`). `Run` shelt uit
   naar `claude -p <prompt> --model <id>` met context-timeout; agentisch (Sonnet)
@@ -329,8 +340,12 @@ fallback.
   resolver-wijziging).
 - **Frontend:** `home.mjs` laadt `state.callResolve` (`loadCallResolve`), voegt
   `resolved`/`found`-rijen als `method_call`-children toe (`relatedChildren`), en
-  toont de **"Zoek (N)"**-knop + `startCallSearch` voor `unresolved` calls
-  (`RelatedPanel`, ook via `Enter` op het code-blok — `isCodeFocused`). De kaart
+  start de LLM-search voor `unresolved` calls **automatisch** — geen knop:
+  `startCallSearch(focusedBlock())` draait in de `setRelated`-watch zodra het
+  paneel een blok met onopgeloste calls toont (gededupt per caller+callKey in
+  `searchRequested`, lost de héle unresolved-set van het blok op i.p.v. gescoped
+  op de selectie). Het paneel toont alleen nog de "zoeken…"-indicator
+  (`related-searching`). De kaart
   **volgt de cursor**: `findCallSites` mapt elke call-methode naar het diff-segment
   waar hij staat, `callScopeMethods` scope't in diff-mode op de geselecteerde unit
   (op `gran==='call'` de ene actieve call; op line/group de calls op de regels
@@ -342,8 +357,9 @@ fallback.
   `.claude/rules/detail-layout.md`.
 - Tests: `callresolve_analysis_test.go` (resolver op fixture-PHP, incl. een
   macro-call → `Builder::joinAddress`, de gewijzigde-regels-restrictie met een
-  echte base+head-diff, een enum-case → `AddressType::BILLING`, en een
-  geschedulede `->command('accounting:import …')` → `AccountingImport::handle`),
+  echte base+head-diff, een enum-case → `AddressType::BILLING`, een
+  geschedulede `->command('accounting:import …')` → `AccountingImport::handle`,
+  en een facade-call `AccountingClient::providers()` → `AccountingDriver::providers`),
   `resolve_call_test.go` (Haiku-confident → found; escalatie naar Sonnet;
   notfound; verificatie weigert een verzonnen definitie), en
   `modules/callresolve/callresolve_test.go` (round-trip + UpsertGo bewaart LLM +

@@ -1024,12 +1024,12 @@ function codeCardCollapsed() {
 // reports what an in-progress comment would attach to at the current navigation
 // granularity; passed through to the composer. The underlying-code children +
 // the unresolved-call list are read from `rc`, which home.mjs keeps up to date
-// via setRelated (see the note on rc above). `search.startCallSearch` launches
-// the LLM search for the currently-shown unresolved calls.
+// via setRelated (see the note on rc above). The LLM search for unresolved calls
+// runs automatically (home.mjs' startCallSearch); `search.drill` opens a child.
 export default function RelatedPanel(state, commentTarget, search, openCompose) {
   const kids = () => rc.children
   // Calls the Go resolver could not pin (status unresolved) + any in flight
-  // (searching). Drives the "Zoek" button and the "zoeken…" spinner.
+  // (searching). Both show the "zoeken…" spinner — the LLM search auto-runs.
   const unresolved = () => rc.unresolved
   // codeApproval rolls up the approval counts of the shown children (those that
   // are PR blocks with changed rows) into one { done, total } for the header.
@@ -1046,7 +1046,6 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
   }
   const pending = () => unresolved().filter((r) => r.status === 'unresolved').length
   const searching = () => unresolved().some((r) => r.status === 'searching')
-  const runSearch = () => search && search.startCallSearch && search.startCallSearch()
   // Clicking a child drills into it as its own diff column — the same path Enter
   // takes on a focused child (drillIntoChild in home.mjs), just mouse-driven.
   const drill = (r) => search && search.drill && search.drill(r)
@@ -1100,23 +1099,13 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
                     </p>
                   </div>
                   ${() =>
-                    searching()
+                    searching() || pending() > 0
                       ? html`<span
                           class="ml-auto shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-400"
                           data-testid="related-searching"
                           >zoeken…</span
                         >`
-                      : pending() > 0
-                        ? html`<button
-                            type="button"
-                            class="ml-auto shrink-0 rounded-md border border-dashed border-indigo-300 px-2 py-1 text-[11px] font-medium text-indigo-500 hover:bg-indigo-50"
-                            data-testid="related-search"
-                            @click="${runSearch}"
-                            title="Zoek de niet-gevonden aanroepen met AI (Haiku, dan Sonnet)"
-                          >
-                            Zoek (${pending()})
-                          </button>`
-                        : ''}
+                      : ''}
                 </div>
                 <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
                   ${() => {

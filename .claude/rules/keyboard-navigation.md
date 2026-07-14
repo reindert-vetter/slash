@@ -171,10 +171,10 @@ dezelfde weg: het kind opent als een eigen
 diff-kolom rechts naast de bestaande, tussen die kolommen en `RelatedPanel` in
 (`drillIntoChild`, zie de sectie "Drillen" in `.claude/rules/detail-layout.md`),
 en het Onderliggende-code-paneel + de taken/chat eronder springen mee naar dát
-niveau (`focusedBlock()`). Dit geldt **altijd voor het gefocuste kind**, ook als
-er *elders* in het block nog onopgeloste calls staan — die tellen alleen mee als
-er **niets** gefocust is (de lijst leeg, alles nog pending): dan valt `Enter`
-terug op de LLM-call-search (`unresolvedCalls(focusedBlock())`). Meteen na het
+niveau (`focusedBlock()`). Dit geldt **altijd voor het gefocuste kind**; is er
+geen kind gefocust (lege lijst) dan doet `Enter` niets — onopgeloste calls
+worden **automatisch** door de LLM-search opgepakt zonder toets of knop (zie
+`startCallSearch` + de `setRelated`-watch in `home.mjs`). Meteen na het
 drillen staat de keyboard-focus op de **diff** van de nieuwe kolom, niet op zijn
 Onderliggende-code-paneel (`drillIntoChild` roept `leaveRelated()` — de
 geëxporteerde `exitRelated` — i.p.v. `enterRelated()`); vandaar loop je met

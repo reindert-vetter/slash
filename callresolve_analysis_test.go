@@ -353,6 +353,74 @@ class MacroServiceProvider {
 	}
 }
 
+// TestResolveCallsFacade covers a Laravel facade static call
+// (AccountingClient::providers()) resolving to the accessor class's method
+// (AccountingDriver::providers) — the facade forwards its static calls to the
+// class getFacadeAccessor() returns.
+func TestResolveCallsFacade(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 21
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Actions/ResetTenancyAction.php": `<?php
+namespace App\Actions;
+use Modules\Accounting\Client\AccountingClient;
+class ResetTenancyAction {
+    public function execute() {
+        AccountingClient::providers()->forgetDrivers();
+    }
+}
+`,
+		"modules/Accounting/Client/AccountingClient.php": `<?php
+namespace Modules\Accounting\Client;
+use Illuminate\Support\Facades\Facade;
+final class AccountingClient extends Facade {
+    protected static function getFacadeAccessor(): string {
+        return AccountingDriver::class;
+    }
+}
+`,
+		"modules/Accounting/Client/AccountingDriver.php": `<?php
+namespace Modules\Accounting\Client;
+final class AccountingDriver {
+    public static function providers(): AccountingProviderService {
+        return app(AccountingProviderService::class);
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Actions/ResetTenancyAction.php", Class: "ResetTenancyAction", Name: "execute", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "providers")
+	if !ok {
+		t.Fatal("no entry for facade call 'providers'")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("providers: status=%q, want resolved", e.Status)
+	}
+	if got := e.ChildClass + "::" + e.ChildMethod; got != "AccountingDriver::providers" {
+		t.Errorf("providers: child=%q, want AccountingDriver::providers", got)
+	}
+	if e.ChildCode == "" {
+		t.Error("providers: resolved entry has empty child code")
+	}
+	// forgetDrivers is a framework Manager method (vendor not indexed) → unresolved.
+	if f, ok := findEntry(entries, "forgetDrivers"); ok && f.Status != callresolve.StatusUnresolved {
+		t.Errorf("forgetDrivers: status=%q, want unresolved", f.Status)
+	}
+}
+
 // TestResolveCallsMagicProperty covers Eloquent magic-property access
 // ($order->billingAddress, no parentheses) resolving to the relationship method:
 // a unique relationship → resolved, one defined on two models → unresolved, and a

@@ -28,6 +28,7 @@ type symbolIndex struct {
 	scopeAlias map[string][]Block // Eloquent scope alias (scopeX → x) → defining blocks
 	enums      map[string][]Block // enum short name → its declaration block(s)
 	commands   map[string]Block   // artisan command name (accounting:import) → its handle method
+	facades    map[string]string  // Laravel facade short name → accessor class short name
 }
 
 var idxSkipDirs = map[string]bool{
@@ -43,6 +44,7 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		scopeAlias: map[string][]Block{},
 		enums:      map[string][]Block{},
 		commands:   map[string]Block{},
+		facades:    map[string]string{},
 	}
 	_ = filepath.WalkDir(headDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -102,6 +104,12 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		// resolves to the enum definition.
 		for _, b := range scanEnums(src, rel) {
 			idx.enums[b.Class] = append(idx.enums[b.Class], b)
+		}
+		// A Laravel facade (`class X extends Facade` with a getFacadeAccessor
+		// returning Y::class) forwards its static calls to Y; index facade →
+		// accessor so AccountingClient::providers() resolves to AccountingDriver.
+		for f, acc := range scanFacades(src) {
+			idx.facades[f] = acc
 		}
 		return nil
 	})
@@ -200,6 +208,31 @@ func scanCommands(src []byte) []string {
 	return out
 }
 
+// scanFacades finds Laravel facade classes in a file. A facade is a
+// `class X extends Facade` whose getFacadeAccessor() returns Y::class; every
+// static call on X (AccountingClient::providers()) actually runs on Y
+// (AccountingDriver::providers()), so we map the facade short name → accessor
+// short name. Facade files hold one facade + one accessor, so the class and
+// accessor matches are paired positionally (falling back to the single accessor
+// when counts differ).
+func scanFacades(src []byte) map[string]string {
+	s := string(src)
+	classes := reFacadeClass.FindAllStringSubmatch(s, -1)
+	accessors := reFacadeAccessor.FindAllStringSubmatch(s, -1)
+	if len(classes) == 0 || len(accessors) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for i, c := range classes {
+		acc := accessors[0]
+		if i < len(accessors) {
+			acc = accessors[i]
+		}
+		out[shortName(c[1])] = shortName(acc[1])
+	}
+	return out
+}
+
 // scopeAliasOf maps an Eloquent scope method (scopeJoinAddress) to the name the
 // caller uses (joinAddress); "" if b is not a scope method.
 func scopeAliasOf(method string) string {
@@ -275,6 +308,12 @@ var (
 	// no backreferences, so the two quote chars are matched independently (a mixed
 	// pair like 'name" is not valid PHP and never occurs in practice).
 	reMacroDef = regexp.MustCompile(`([A-Za-z_]\w*)::macro\(\s*['"]([A-Za-z_]\w*)['"]\s*,\s*(?:static\s+)?function\b`)
+	// reFacadeClass matches a Laravel facade declaration `class X extends Facade`
+	// (also a namespaced/aliased ...Facade base). reFacadeAccessor captures the
+	// accessor class from `getFacadeAccessor() { return Y::class; }` (lazy match
+	// bridges the method signature and its return; RE2 supports [\s\S]*?).
+	reFacadeClass    = regexp.MustCompile(`class\s+([A-Za-z_]\w*)\s+extends\s+[\\\w]*Facade\b`)
+	reFacadeAccessor = regexp.MustCompile(`getFacadeAccessor\b[\s\S]*?return\s+([\\A-Za-z_][\\\w]*)::class`)
 )
 
 // resolveCalls scans every changed new-side block for method calls and resolves
@@ -364,7 +403,15 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			if recv == "self" || recv == "static" || recv == "parent" {
 				continue
 			}
-			emit(m[2], methodOnClass(idx, shortName(recv), m[2]))
+			def := methodOnClass(idx, shortName(recv), m[2])
+			if def == nil {
+				// A Laravel facade forwards static calls to its accessor class:
+				// AccountingClient::providers() → AccountingDriver::providers().
+				if acc, ok := idx.facades[shortName(recv)]; ok {
+					def = methodOnClass(idx, acc, m[2])
+				}
+			}
+			emit(m[2], def)
 		}
 		// 3b. $var->m( → infer the receiver class from the variable name
 		// ($order->billingAddress() → Order::billingAddress), the heuristic
