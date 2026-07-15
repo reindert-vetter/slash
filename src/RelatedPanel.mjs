@@ -90,15 +90,17 @@ let restorePending =
 // "loading" — home.mjs computes the list in a `watch` and pushes it here via
 // setRelated (the same decoupling the comment index uses with setCommentScope).
 // `rc` is this module's own reactive so the render reliably re-runs on a push.
-const rc = reactive({ children: [], unresolved: [] })
+const rc = reactive({ children: [], unresolved: [], warning: null })
 
-// setRelated receives the freshly-scoped underlying-code children + the
-// unresolved-call list from home.mjs (via a watch on the navigation state) and
-// stores them on rc. Always reassigns (never mutates in place) so arrow.js
-// re-renders the keyed card list.
-export function setRelated(children, unresolved) {
+// setRelated receives the freshly-scoped underlying-code children, the
+// unresolved-call/test-coverage list, and the test-coverage warning (or null)
+// from home.mjs (via a watch on the navigation state) and stores them on rc.
+// Always reassigns (never mutates in place) so arrow.js re-renders the keyed
+// card list.
+export function setRelated(children, unresolved, warning) {
   rc.children = Array.isArray(children) ? children : []
   rc.unresolved = Array.isArray(unresolved) ? unresolved : []
+  rc.warning = warning || null
   // A block switch (or a shrinking list) must not leave the child cursor on a
   // stale index; snap it back to the first block.
   if (cs.codeSel >= rc.children.length) cs.codeSel = 0
@@ -1062,15 +1064,16 @@ function commentsSection(state, commentTarget, openCompose) {
 // list and shown here, top-right of the block. Fed by home.mjs' relatedChildren
 // (GET /api/relations), which lazily loads each child's code.
 
-// KIND_LABEL names the relation on a child card. A method_call carries no label:
-// it shows a +added/-removed diff-stat (diffStatBadge) instead.
-const KIND_LABEL = { event_listener: 'listener' }
+// KIND_LABEL names the relation on a child card. method_call/covers carry no
+// label: they show a +added/-removed diff-stat (diffStatBadge) instead.
+const KIND_LABEL = { event_listener: 'listener', covered_by: 'test' }
 
-// diffStatBadge shows, for a called method, how many lines its definition adds /
-// removes ("+A −R", green/red) instead of the old "aanroep" label. A call into an
-// unchanged file has no diff (r.diff == null) → a grey "Ongewijzigd" badge.
+// diffStatBadge shows, for a called method (or a test's covered method), how
+// many lines its definition adds/removes ("+A −R", green/red) instead of a
+// word label. A call/covered method into an unchanged file has no diff
+// (r.diff == null) → a grey "Ongewijzigd" badge.
 function diffStatBadge(r) {
-  if (r.kind !== 'method_call') return ''
+  if (r.kind !== 'method_call' && r.kind !== 'covers') return ''
   if (!r.diff) {
     return html`
       <span
@@ -1115,9 +1118,9 @@ function approvalBadge(a) {
 // kind) and a short, non-interactive code excerpt highlighted like the panes.
 function relatedCard(r, i, drill) {
   const selected = () => cs.focus === 'code' && i === cs.codeSel
-  // An unchanged call target (a method_call into a file this PR doesn't touch) has
-  // no diff to review, so its selection highlight is grey rather than indigo.
-  const unchanged = r.kind === 'method_call' && !r.diff
+  // An unchanged call/covered-method target (into a file this PR doesn't touch)
+  // has no diff to review, so its selection highlight is grey rather than indigo.
+  const unchanged = (r.kind === 'method_call' || r.kind === 'covers') && !r.diff
   return html`
     <div
       class="${() =>
@@ -1362,6 +1365,46 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
   }
   const pending = () => unresolved().filter((r) => r.status === 'unresolved').length
   const searching = () => unresolved().some((r) => r.status === 'searching')
+  // coversWarning renders the "dekking niet te bepalen" line under the card
+  // header's description when the focused block is a test with no usable
+  // coverage annotation (rc.warning, pushed by home.mjs' testCoverWarning): a
+  // custom inline warning-triangle SVG (deliberately not one more Prism/vendor
+  // dependency) + a short explanation. `unannotated` = no #[CoversMethod]/
+  // @covers found at all (never sent to an LLM); `notfound` = a class-level-
+  // only annotation (#[CoversClass]/bare "@covers Class") whose LLM search
+  // could not pin a specific method. Both share the same icon/testid, only
+  // the wording differs.
+  const COVERS_WARNING_TEXT = {
+    unannotated: 'Dekking niet te bepalen — geen #[CoversMethod]/@covers gevonden op deze test.',
+    notfound:
+      'Dekking niet te bepalen — #[CoversClass] gevonden, maar geen specifieke methode kunnen vaststellen.',
+  }
+  const coversWarning = () => {
+    const kind = rc.warning
+    if (!kind) return ''
+    return html`
+      <p
+        class="mt-1 flex items-start gap-1 text-[11px] text-amber-700"
+        data-testid="related-covers-warning"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          class="mt-0.5 h-3 w-3 shrink-0"
+        >
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+        <span>${COVERS_WARNING_TEXT[kind] || 'Dekking niet te bepalen.'}</span>
+      </p>
+    `
+  }
   // Clicking a child drills into it as its own diff column — the same path Enter
   // takes on a focused child (drillIntoChild in home.mjs), just mouse-driven.
   const drill = (r) => search && search.drill && search.drill(r)
@@ -1409,6 +1452,7 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
                         return a.total ? ` · ${a.done}/${a.total} goedgekeurd` : ''
                       }}
                     </p>
+                    ${() => coversWarning()}
                   </div>
                   ${() =>
                     searching() || pending() > 0

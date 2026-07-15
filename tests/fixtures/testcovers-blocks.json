@@ -1,0 +1,68 @@
+[
+  {
+    "pr": 92,
+    "file": "tests/Feature/OrderCoverageTest.php",
+    "class": "OrderCoverageTest",
+    "name": "testBillingAddress",
+    "category": "TEST",
+    "line": 10,
+    "endLine": 14,
+    "status": "added",
+    "side": "new"
+  },
+  {
+    "pr": 92,
+    "file": "app/Models/Order.php",
+    "class": "Order",
+    "name": "billingAddress",
+    "category": "MODEL",
+    "line": 8,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 93,
+    "file": "tests/Feature/UnannotatedTest.php",
+    "class": "UnannotatedTest",
+    "name": "testSomethingWithoutCoverage",
+    "category": "TEST",
+    "line": 5,
+    "endLine": 9,
+    "status": "added",
+    "side": "new"
+  },
+  {
+    "pr": 93,
+    "file": "tests/Feature/NotfoundTest.php",
+    "class": "NotfoundTest",
+    "name": "testClassLevelOnly",
+    "category": "TEST",
+    "line": 5,
+    "endLine": 9,
+    "status": "added",
+    "side": "new"
+  },
+  {
+    "pr": 94,
+    "file": "tests/Feature/FoundTest.php",
+    "class": "FoundTest",
+    "name": "testFound",
+    "category": "TEST",
+    "line": 5,
+    "endLine": 9,
+    "status": "added",
+    "side": "new"
+  },
+  {
+    "pr": 94,
+    "file": "app/Models/Invoice.php",
+    "class": "Invoice",
+    "name": "total",
+    "category": "MODEL",
+    "line": 5,
+    "endLine": 8,
+    "status": "modified",
+    "side": "new"
+  }
+]

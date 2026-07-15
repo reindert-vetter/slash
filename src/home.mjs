@@ -100,6 +100,13 @@ const state = reactive({
   // children in the Onderliggende-code panel; unresolved/searching drive the
   // "Zoek" button + spinner.
   callResolve: [],
+  // testCovers — the test-coverage read-model (GET /api/testcovers): per test
+  // block, which method(s) it covers. status resolved (method-level annotation)
+  // / found (LLM, class-level-only annotation) become children in the
+  // Onderliggende-code panel (both directions — test→covered method and
+  // covered method→test); unannotated/notfound drive the warning icon;
+  // unresolved/searching drive the automatic LLM search.
+  testCovers: [],
   // approveRunId — the Run ID of this PR's `approve` workflow (durable approval
   // tracker), filled by loadApprovals via POST /api/workflows/approve. Every
   // approve/un-approve toggle signals the new full state for that block to this
@@ -458,6 +465,7 @@ async function loadBlocks() {
   recomputeLeftList()
   applyBlockRefRestore()
   loadCallResolve()
+  loadTestCovers()
   loadApprovals()
   loadBlockStats()
 }
@@ -598,13 +606,19 @@ function signalFileViewed(file, viewed) {
 
 // recomputeLeftList derives state.blocks from allBlocks: everything except the
 // blocks that are nested under a parent in the RelatedPanel — the relation
-// children AND PR blocks that are the definition of a resolved method call
-// (i.e. already shown in "Onderliggende code"). A called-and-shown function
-// shouldn't also sit in the left list. Selection is preserved by block id so a
-// callResolve reload (poll after a search) doesn't jump the cursor.
+// children, PR blocks that are the definition of a resolved method call, and
+// PR blocks that a test's coverage annotation resolves to (all already shown
+// in "Onderliggende code"). A called-and-shown function shouldn't also sit in
+// the left list. Note this is NOT symmetric: a test that COVERS a method
+// stays in the left list even though it also appears as a "covered_by" child
+// under that method — unlike a called definition or a listener, a test is
+// itself a primary reviewable unit (its own diff), not just reference code
+// shown for context. Selection is preserved by block id so a callResolve/
+// testCovers reload (poll after a search) doesn't jump the cursor.
 function recomputeLeftList() {
   const hidden = new Set(state.relations.map((r) => r.childId))
   for (const id of resolvedCallTargetIds()) hidden.add(id)
+  for (const id of testCoverTargetIds()) hidden.add(id)
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
   const q = (state.search || '').trim().toLowerCase()
   state.blocks = state.allBlocks
@@ -666,6 +680,36 @@ async function loadCallResolve() {
     state.callResolve = Array.isArray(rows) ? rows : []
     // A resolved call whose definition is a PR block now shows in "Onderliggende
     // code", so drop it from the left list (recompute preserves the selection).
+    recomputeLeftList()
+  } catch (_) {
+    /* offline — keep whatever we have */
+  }
+}
+
+// testCoverTargetIds returns the ids of PR blocks that are the covered-method
+// target of some resolved/found test-coverage row — mirrors
+// resolvedCallTargetIds (pulled from the left list, shown instead under the
+// covering test in "Onderliggende code").
+function testCoverTargetIds() {
+  const prBlockIds = new Set(state.allBlocks.map((x) => x.id))
+  const ids = new Set()
+  for (const r of state.testCovers || []) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    const id = coveredChildId(r)
+    if (prBlockIds.has(id)) ids.add(id)
+  }
+  return ids
+}
+
+// loadTestCovers fetches the PR's test-coverage rows into state. Best-effort:
+// a transient failure just yields no rows. Reassigns the array so arrow.js
+// re-renders the Onderliggende-code panel when a search completes.
+async function loadTestCovers() {
+  try {
+    const res = await fetch(`/api/testcovers?pr=${state.pr}`)
+    if (!res.ok) return
+    const rows = await res.json()
+    state.testCovers = Array.isArray(rows) ? rows : []
     recomputeLeftList()
   } catch (_) {
     /* offline — keep whatever we have */
@@ -915,6 +959,12 @@ function relatedChildren(b) {
   // Resolved/found method calls (Go statically or LLM). Their code + descriptor
   // ride along in the callresolve row (unchanged file → no /api/code fetch).
   const calls = resolvedCallChildren(b)
+  // Test-coverage children — block-level like event listeners, not tied to a
+  // diff line/call, so they're dropped at the same 'call' scoping as the
+  // listeners: b → the method(s) it covers (if b is a test), and the test(s)
+  // that cover b (if b is a production method).
+  const covers = scoped ? [] : resolvedTestCoverChildren(b)
+  const coveredBy = scoped ? [] : coveredByChildren(b)
   // Sort by priority (0 = also-changed child block, 1 = call on a changed line,
   // 2 = unchanged call), then — within a priority — biggest child first, so the
   // substantial modified code the reviewer cares about leads while trivial
@@ -923,7 +973,11 @@ function relatedChildren(b) {
   // count (embedded childCode for calls, loaded code for listeners); a child
   // whose code hasn't arrived yet is size 0 and sinks until it loads. Ties keep
   // the resolver-emit (source) order (Array.prototype.sort is stable).
-  return evt.concat(calls).sort((x, y) => x.prio - y.prio || y.size - x.size)
+  return evt
+    .concat(covers)
+    .concat(coveredBy)
+    .concat(calls)
+    .sort((x, y) => x.prio - y.prio || y.size - x.size)
 }
 
 // resolvedCallChildren maps the caller block's resolved/found call rows to child
@@ -993,11 +1047,163 @@ function callChildId(r) {
   )
 }
 
+// testCoverRows returns the test-coverage rows whose test is block b.
+function testCoverRows(b) {
+  if (!b || !state.testCovers) return []
+  return state.testCovers.filter((r) => r.testId === b.id)
+}
+
+// coveredChildId builds the PR-block id a test-coverage row's covered method
+// points at (empty class → free function) — mirrors callChildId.
+function coveredChildId(r) {
+  return (
+    state.pr +
+    ':' +
+    r.coveredFile +
+    ':' +
+    (r.coveredClass ? r.coveredClass + '::' + r.coveredMethod : r.coveredMethod)
+  )
+}
+
+// resolvedTestCoverChildren maps block b's own resolved/found test-coverage
+// rows to child descriptors — direction 1 (test → geteste methode): b must be
+// the covering test. Its code + descriptor ride along in the testcovers row
+// (unchanged file → no /api/code fetch), mirroring resolvedCallChildren.
+function resolvedTestCoverChildren(b) {
+  if (!b) return []
+  const resolved = testCoverRows(b).filter((r) => r.status === 'resolved' || r.status === 'found')
+  if (resolved.length === 0) return []
+  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  return resolved.map((r) => {
+    const prBlock = byId.get(coveredChildId(r))
+    if (prBlock) ensureCode(prBlock)
+    return {
+      id: b.id + '::' + r.targetKey,
+      blockId: prBlock ? prBlock.id : '',
+      label: r.coveredClass ? `${r.coveredClass}::${r.coveredMethod}` : r.coveredMethod,
+      file: r.coveredFile,
+      line: r.coveredLine,
+      kind: 'covers',
+      code: r.coveredCode || '',
+      size: codeSize(r.coveredCode || ''),
+      source: r.status === 'found' ? r.model : '',
+      approve: prBlock ? blockApproveCount(prBlock) : null,
+      diff: prBlock ? diffStat(blockRows(prBlock)) : null,
+      // A covered method isn't tied to a specific diff line the way a method
+      // call is (the annotation covers the whole test), so there's no
+      // "on a changed line" middle tier — just changed-in-this-PR (0) or not (2).
+      prio: prBlock ? 0 : 2,
+    }
+  })
+}
+
+// coveredByChildren maps every test that covers block b to a child descriptor —
+// direction 2 (geteste productiemethode → dekkende test): b must itself be a
+// changed PR block (the covered method), and the covering test must also be a
+// PR block (guaranteed: a test_covers row only exists for a test the PR
+// changed). Always prio 0 — the test is by definition a changed block.
+function coveredByChildren(b) {
+  if (!b || !state.testCovers) return []
+  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const seen = new Set()
+  const out = []
+  for (const r of state.testCovers) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    if (r.coveredClass !== (b.class || '') || r.coveredMethod !== b.name) continue
+    const test = byId.get(r.testId)
+    if (!test || seen.has(test.id)) continue
+    seen.add(test.id)
+    ensureCode(test)
+    const c = test.code && !test.code.error ? test.code : null
+    const code = (c && ((c.new && c.new.text) || (c.old && c.old.text))) || ''
+    out.push({
+      id: test.id,
+      blockId: test.id,
+      label: test.label,
+      file: test.file,
+      line: test.line,
+      kind: 'covered_by',
+      code,
+      size: codeSize(code),
+      source: r.status === 'found' ? r.model : '',
+      approve: blockApproveCount(test),
+      diff: diffStat(blockRows(test)),
+      prio: 0,
+    })
+  }
+  return out
+}
+
+// unresolvedTestCovers returns block b's test-coverage targets the Go analyzer
+// could not resolve statically (status unresolved) plus any currently
+// searching — feeding the "zoeken…" indicator, mirroring unresolvedCalls.
+// Unlike calls, coverage is a whole-test concept (not tied to a diff line/
+// call), so this is never scoped to the selected navigation unit.
+function unresolvedTestCovers(b) {
+  return testCoverRows(b).filter((r) => r.status === 'unresolved' || r.status === 'searching')
+}
+
+// testCoverWarning reports the "dekking niet te bepalen" warning for block b,
+// or null when there's nothing to warn about. `unannotated` (no coverage
+// annotation at all) NEVER triggers the LLM — it is a permanent warning.
+// `notfound` means a class-level-only annotation's LLM search gave up.
+function testCoverWarning(b) {
+  const rows = testCoverRows(b)
+  if (rows.some((r) => r.targetKey === 'none' && r.status === 'unannotated')) return 'unannotated'
+  if (rows.length > 0 && rows.every((r) => r.status === 'notfound')) return 'notfound'
+  return null
+}
+
+// testCoverSearchRequested dedups auto-launched test-coverage searches per
+// test+targetKey, mirroring searchRequested for resolve_call.
+const testCoverSearchRequested = new Set()
+
+// startTestCoverSearch auto-launches the LLM resolve_test_covers workflow for
+// every class-level-only coverage target the Go analyzer could not turn into
+// a method (status unresolved) — no button, mirrors startCallSearch. Never
+// runs for an `unannotated` test (no annotation at all never reaches the LLM).
+async function startTestCoverSearch(b) {
+  if (!b) return
+  const classes = testCoverRows(b)
+    .filter((r) => r.status === 'unresolved')
+    .map((r) => r.coveredClass)
+    .filter((c) => c && !testCoverSearchRequested.has(b.id + '|' + c))
+  if (classes.length === 0) return
+  classes.forEach((c) => testCoverSearchRequested.add(b.id + '|' + c))
+  try {
+    await fetch('/api/workflows/resolve_test_covers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pr: state.pr,
+        testId: b.id,
+        testFile: b.file,
+        testClass: b.class || '',
+        testName: b.name,
+        classes,
+      }),
+    })
+  } catch (_) {
+    return
+  }
+  let tries = 0
+  const tick = async () => {
+    await loadTestCovers()
+    const stillSearching = testCoverRows(b).some((r) => r.status === 'searching')
+    if (stillSearching && tries++ < 20) setTimeout(tick, 3000)
+  }
+  setTimeout(tick, 1500)
+}
+
 // directChildBlocks returns the immediate PR-block children of b — the blocks
 // pulled out of the left list and shown under it in the RelatedPanel: its
-// relation children plus the resolved/found method calls whose definition is
-// itself a PR block. Method calls into unchanged files aren't PR blocks (no
-// approval concept), so they're excluded.
+// relation children plus the resolved/found method calls AND resolved/found
+// test-coverage targets whose definition is itself a PR block. Method calls
+// (or covered methods) into unchanged files aren't PR blocks (no approval
+// concept), so they're excluded. Deliberately one-directional: the covering
+// test of a production method is NOT folded in here (only used for the
+// sidebar's combined-approval rollup, via nestedPrBlocks) — doing so would
+// create a method↔test cycle in that recursive rollup.
 function directChildBlocks(b) {
   if (!b) return []
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
@@ -1006,6 +1212,10 @@ function directChildBlocks(b) {
   for (const r of callRows(b)) {
     if (r.status !== 'resolved' && r.status !== 'found') continue
     if (byId.has(callChildId(r))) ids.add(callChildId(r))
+  }
+  for (const r of testCoverRows(b)) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    if (byId.has(coveredChildId(r))) ids.add(coveredChildId(r))
   }
   return [...ids].map((id) => byId.get(id)).filter(Boolean)
 }
@@ -1842,6 +2052,7 @@ watch(
     state.allBlocks,
     state.relations,
     state.callResolve,
+    state.testCovers,
     // codeVersion so a child block's lazily-loaded code (and thus its approval
     // count + code excerpt) refreshes the panel; approvalSummaries so a change
     // in approval re-renders the per-child badges.
@@ -1853,11 +2064,12 @@ watch(
   ],
   () => {
     const b = focusedBlock()
-    setRelated(relatedChildren(b), unresolvedCalls(b))
-    // Auto-run the LLM fallback for any calls the Go resolver couldn't pin — no
-    // button (deduped per caller+callKey in searchRequested, so this cheap on
-    // every panel re-fire).
+    setRelated(relatedChildren(b), unresolvedCalls(b).concat(unresolvedTestCovers(b)), testCoverWarning(b))
+    // Auto-run the LLM fallback for any calls/test-coverage targets the Go
+    // resolver couldn't pin — no button (deduped per caller+callKey resp.
+    // test+class, so this is cheap on every panel re-fire).
     startCallSearch(b)
+    startTestCoverSearch(b)
   },
 )
 
@@ -1877,6 +2089,7 @@ watch(
       state.allBlocks,
       state.relations,
       state.callResolve,
+      state.testCovers,
       state.codeVersion,
       state.blockTotals,
     ]

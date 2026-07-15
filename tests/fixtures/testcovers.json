@@ -1,0 +1,43 @@
+[
+  {
+    "pr": 92,
+    "testId": "92:tests/Feature/OrderCoverageTest.php:OrderCoverageTest::testBillingAddress",
+    "targetKey": "method:Order::billingAddress",
+    "status": "resolved",
+    "coveredFile": "app/Models/Order.php",
+    "coveredClass": "Order",
+    "coveredMethod": "billingAddress",
+    "coveredLine": 8,
+    "coveredCode": "public function billingAddress()\n{\n    return $this->morphOne(Address::class, 'addressable');\n}",
+    "annotation": "CoversMethod"
+  },
+  {
+    "pr": 93,
+    "testId": "93:tests/Feature/UnannotatedTest.php:UnannotatedTest::testSomethingWithoutCoverage",
+    "targetKey": "none",
+    "status": "unannotated"
+  },
+  {
+    "pr": 93,
+    "testId": "93:tests/Feature/NotfoundTest.php:NotfoundTest::testClassLevelOnly",
+    "targetKey": "class:Invoice",
+    "status": "notfound",
+    "annotation": "CoversClass",
+    "coveredClass": "Invoice",
+    "model": "sonnet"
+  },
+  {
+    "pr": 94,
+    "testId": "94:tests/Feature/FoundTest.php:FoundTest::testFound",
+    "targetKey": "class:Invoice",
+    "status": "found",
+    "coveredFile": "app/Models/Invoice.php",
+    "coveredClass": "Invoice",
+    "coveredMethod": "total",
+    "coveredLine": 5,
+    "coveredCode": "public function total()\n{\n    return $this->amount + $this->tax;\n}",
+    "annotation": "CoversClass",
+    "model": "sonnet",
+    "confidence": "high"
+  }
+]

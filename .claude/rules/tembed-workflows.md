@@ -523,6 +523,113 @@ fallback.
   resolver-run (`tests/fixtures/callresolve.json`, PR 91 in `relations.spec.mjs` —
   bewijst o.a. dat het Onderliggende-code-paneel de blok-selectie volgt).
 
+## Testdekking koppelen (`resolve_test_covers` + `modules/testcovers`)
+
+Een PHPUnit-testmethode koppelt aan de methode die hij test — in **beide
+richtingen** van de "Onderliggende code"-kaart: een test toont de geteste
+methode als kind, én een geteste productiemethode toont "gedekt door
+TestX::testY" als kind (mits de test zelf ook door de PR wijzigt, want alleen
+dán bestaat er een test-PR-blok om aan te hangen). Twee lagen, net als bij
+call-resolve: een Go-detector eerst, een **beperkte** AI-fallback alleen voor
+één specifiek geval.
+
+- **Waarom een eigen module, geen `relations`-rij:** de geteste methode kan in
+  een bestand staan dat de PR **niet** wijzigt (het normale geval — een
+  bestaande test op bestaande productiecode), dus is zijn block-id vaak geen
+  PR-blok dat de frontend kent. Net als `callresolve` draagt een rij daarom de
+  **volledige child-descriptor + codetekst**, niet alleen een block-id-paar.
+- **`modules/testcovers`** (`data/testcovers.db`): het read-model
+  `test_covers(pr, test_id, target_key, status, covered_*, annotation, model,
+  confidence, updated_at)`, PK `(pr, test_id, target_key)`. `target_key` mirrort
+  callresolve's `call_key`: `"method:Class::method"` voor een statisch
+  opgeloste annotatie, `"class:Class"` voor een class-niveau-annotatie
+  (AI-territorium), `"none"` voor "geen annotatie". Zes statussen — de vijf van
+  `callresolve` plus één nieuwe terminale:
+  - **`resolved`** — een **method-niveau** annotatie (`#[CoversMethod(Class::class,
+    'method')]`, `@covers Class::method`, of `@coversDefaultClass` +
+    `@covers ::method`) noemt **altijd** zowel class als methode, dus dit
+    resolvt **statisch, zonder AI**, geverifieerd tegen de worktree.
+  - **`unannotated`** — geen enkele annotatie gevonden → **permanente warning,
+    nooit AI**.
+  - **`unresolved`** — een **class-niveau-only** annotatie (`#[CoversClass(Class::class)]`,
+    kale `@covers Class`) noemt alleen een class, geen methode → precies de
+    betekenis van callresolve's `unresolved`: "Go kon 'm niet pinnen, bied de
+    AI-zoektocht aan" — triggert automatisch `resolve_test_covers`.
+  - **`searching`/`found`/`notfound`** — LLM-owned, identiek aan callresolve.
+  - Write `UpsertGo` (schrijft `resolved`/`unannotated`/`unresolved`-rijen,
+    overschrijft nooit een `searching`/`found`/`notfound`-rij — een Go-rebuild
+    mag een dure AI-resolutie niet wegvegen) en `Prune` (ruimt weesrijen op wier
+    `(test_id, target_key)` niet meer in de huidige scan zit), `SaveSearching`/
+    `Save` voor de AI-tak, `List` read-only.
+- **Statische detector `testcovers_analysis.go`** (package main, leest de
+  head-worktree): `scanTestCovers(dataDir, pr, blocks)` scant, per **gewijzigd
+  testbestand** (TEST-categorie PR-blokken — geen whole-worktree-scan van
+  tests), de ruwe tekst rond elke testmethode (`methodZone`, begrensd door het
+  vorige blok in hetzelfde bestand) én rond de class-declaratie (`classZone`,
+  alles vóór het eerste `class`-keyword — voor een class-brede
+  `@coversDefaultClass`/`#[CoversClass]`/kale `@covers Class`) op de vier
+  annotatievormen, puur regex, geen parser. Een method-niveau-annotatie wint
+  altijd van een class-niveau-annotatie voor dezelfde class (geen dubbele
+  AI-zoektocht als de methode al precies bekend is). Een testmethode wordt
+  herkend via de `test`-naamprefix of een `#[Test]`/`@test`-marker
+  (`isTestMethod`) — zo blijven `setUp`/helper-methodes buiten beschouwing.
+  `buildTestCovers` wordt aangeroepen **in de bestaande `buildRelations`-Activity**
+  (naast de bestaande `resolveCalls`/`UpsertGo`/`Prune`-aanroep voor
+  callresolve) — geen apart Workflow Type voor dit statische deel, exact
+  hetzelfde precedent als callresolve's Go-rijen.
+- **AI-tak `resolve_test_covers.go` + workflow `resolveTestCoversWorkflow`**
+  (mirror van `resolve_call.go`/`resolveCallWorkflow`): draait **uitsluitend**
+  voor `unresolved`-targets (een class-niveau-only annotatie) — **nooit** voor
+  `unannotated`. Haiku krijgt als context de **kandidaat-methoden van de
+  genoemde class** (`idx.byClass[class]`, dezelfde beperkte, goed te verifiëren
+  scope als de coordinator vroeg) + de testmethode-body, en kiest **welke
+  methode** de test uitoefent; bij lage confidence escaleert automatisch naar
+  Sonnet (agentisch, `Read/Grep/Glob` in de worktree). Elke claim wordt
+  geverifieerd: de methode moet **echt bestaan op de genoemde class**
+  (`methodOnClass`) — strenger dan `verifyDefinition` omdat de class al vastligt
+  door de annotatie, alleen de methode is onzeker. Resultaat `found`
+  (met `model`/`confidence`) of `notfound`.
+- **Endpoints:** `POST /api/workflows/resolve_test_covers` (start; body `{pr,
+  testId, testFile, testClass, testName, classes}`) en read-only
+  `GET /api/testcovers?pr=N`.
+- **Frontend** (`home.mjs`): `state.testCovers` (`loadTestCovers`).
+  **Richting 1** (test → geteste methode): `resolvedTestCoverChildren(b)` voor
+  een TEST-blok `b` — kind `covers`, dezelfde diffstat/`Ongewijzigd`-badge en
+  `bron: haiku/sonnet`-badge als een `method_call`-child. **Richting 2**
+  (geteste productiemethode → dekkende test): `coveredByChildren(b)` — kind
+  `covered_by`, hergebruikt het bestaande test-PR-blok (geen los codesnapshot
+  nodig). Beide zijn **block-level** (zoals `event_listener`): ze vallen weg op
+  `gran==='call'`, net als de listener-children — dekking is geen
+  regel/call-gebonden begrip. `directChildBlocks`/`nestedPrBlocks` (de
+  combinatie-goedkeuringspil) nemen **alleen richting 1** mee (test → geteste
+  methode); richting 2 bewust **niet**, om een method↔test-cyclus in die
+  recursieve rollup te vermijden. Een test die zelf **ook** als "gedekt door"
+  onder zijn geteste methode verschijnt blijft desondanks **gewoon in de
+  linkerlijst staan** (`recomputeLeftList`/`testCoverTargetIds` verbergt alleen
+  de **geteste methode** als die zelf een PR-blok is — niet de test): een test
+  is een primair te review-en eenheid, geen pure referentiecode.
+  **Warning** (`data-testid=related-covers-warning`, custom inline SVG,
+  in de kaart-header naast `related-approval-total`): getoond zodra het
+  gefocuste TEST-blok een `unannotated`- of (na een mislukte AI-zoektocht)
+  `notfound`-rij heeft, met per geval andere tekst. **"zoeken…"**-indicator
+  (`related-searching`) hergebruikt dezelfde `searching()`/`pending()`-helpers
+  als callresolve — `unresolvedTestCovers(b)` wordt gewoon meegeconcateneerd in
+  hetzelfde `unresolved`-argument van `setRelated`. De AI-search start
+  **automatisch** (`startTestCoverSearch`, dezelfde `setRelated`-watch als
+  `startCallSearch`), gededupt per test+class in `testCoverSearchRequested`.
+- Tests: `testcovers_analysis_test.go` (alle annotatievormen, class-niveau →
+  `unresolved`, een onverifieerbare claim → effectief `unannotated`, een
+  niet-TEST-blok wordt geskipt, en een `build_relations`-end-to-end-test die
+  bevestigt dat de Activity ook `testcovers.db` vult), `resolve_test_covers_test.go`
+  (mirror van `resolve_call_test.go`: Haiku-confident → found, escalatie naar
+  Sonnet, notfound, verificatie weigert een methode die niet op de genoemde
+  class bestaat), `modules/testcovers/testcovers_test.go` (round-trip,
+  `UpsertGo` beschermt een `found`-rij, `Prune` ruimt weesrijen op).
+  Playwright: `tests/testcovers.spec.mjs` (beide richtingen + drill-recursie,
+  beide warning-varianten, het `bron: sonnet`-badge), geseed via
+  `slash seed … -testcovers <testcovers.json>` (mirror van `-callresolve`,
+  `tests/fixtures/testcovers.json` + `testcovers-blocks.json`, PR 92/93/94).
+
 ## Reviewer-goedkeuring persisteren (`approve` + `modules/approvals`)
 
 Een vijfde Workflow Type, **`approve`** (één Execution per PR), maakt reviewer-

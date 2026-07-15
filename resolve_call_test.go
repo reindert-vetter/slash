@@ -21,7 +21,7 @@ func resolveCallManager(t *testing.T, dataDir string, fake *claude.Fake) (*TaskM
 	}
 	t.Cleanup(func() { cr.Close() })
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), cr, nil, fake, nil, nil, dataDir, "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), cr, nil, nil, fake, nil, nil, dataDir, "test/repo")
 	return m, cr
 }
 

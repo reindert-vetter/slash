@@ -384,6 +384,17 @@ rechts — zie de layout-alinea hierboven):
   regels** hebben zo'n rij (de resolver scant enkel de changed lines, zie
   `.claude/rules/tembed-workflows.md`); ook **enum-cases**
   (`AddressType::BILLING`) resolven — naar hun enum-declaratie.
+  Een **derde** kind-bron koppelt een PHPUnit-test aan de methode die hij test,
+  in **beide richtingen**: `kind=covers` (een test-blok toont de geteste
+  methode — diffstat/`Ongewijzigd`-badge net als `method_call`) en
+  `kind=covered_by` (een geteste productiemethode toont "gedekt door
+  TestX::testY" — de test zelf, hergebruikt als bestaand PR-blok). Uit
+  `GET /api/testcovers`; beide zijn **block-level** (zoals de listener-
+  children) en vallen dus ook weg op `gran==='call'`. Ontbreekt een bruikbare
+  coverage-annotatie op een test, dan toont de kaart-header i.p.v. een child
+  een **warning** (`data-testid=related-covers-warning`, custom inline SVG +
+  uitleg — nooit een AI-gok). Zie `.claude/rules/tembed-workflows.md` (sectie
+  "Testdekking koppelen").
   De kaart **volgt de cursor**: `home.mjs` (`callScopeMethods`/`findCallSites`)
   koppelt elke resolved call aan het diff-segment waar hij staat. Op het fijnste
   niveau (`gran==='call'`) toont de kaart **precies de method van die ene call** —

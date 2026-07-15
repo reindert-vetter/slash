@@ -21,6 +21,7 @@ import (
 	"slash/modules/jira"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
+	"slash/modules/testcovers"
 )
 
 // tasks holds the workflow engine + the module read sides. It is built once at
@@ -33,6 +34,7 @@ type tasks struct {
 	relations   *relations.Module
 	prmeta      *prmeta.Module
 	callresolve *callresolve.Module
+	testcovers  *testcovers.Module
 	approvals   *approvals.Module
 }
 
@@ -90,6 +92,16 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		pm.Close()
 		return nil, nil, err
 	}
+	tc, err := testcovers.Open(dataDir + "/testcovers.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		return nil, nil, err
+	}
 	ap, err := approvals.Open(dataDir + "/approvals.db")
 	if err != nil {
 		sq.Close()
@@ -98,6 +110,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		rel.Close()
 		pm.Close()
 		cr.Close()
+		tc.Close()
 		return nil, nil, err
 	}
 
@@ -119,7 +132,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	if os.Getenv("SLASH_JIRA") == "off" {
 		jr = &jira.Fake{}
 	}
-	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, ap, cl, jr, db, dataDir, repo)
+	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, tc, ap, cl, jr, db, dataDir, repo)
 	// Record the server-lifetime context + whether background pollers may run,
 	// so ensurePRStatus's fresh-poller spawn uses a context that outlives the
 	// HTTP request that triggered it (see TaskManager.baseCtx).
@@ -144,10 +157,11 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = rel.Close()
 		_ = pm.Close()
 		_ = cr.Close()
+		_ = tc.Close()
 		_ = ap.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, approvals: ap}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -306,6 +320,9 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	mux.HandleFunc("/api/workflows", s.handleWorkflowsList)
 	// POST /api/workflows/resolve_call → start an LLM call-resolution execution
 	mux.HandleFunc("/api/workflows/resolve_call", s.handleResolveCall)
+	// POST /api/workflows/resolve_test_covers → start an LLM test-coverage
+	// resolution execution (class-level-only annotations only).
+	mux.HandleFunc("/api/workflows/resolve_test_covers", s.handleResolveTestCovers)
 	// POST /api/workflows/pr_status {pr} → ensure the per-PR lifecycle tracker
 	// (its start fetches the PR's metadata into the prmeta read-model).
 	mux.HandleFunc("/api/workflows/pr_status", s.handlePRStatusStart)
@@ -325,6 +342,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/callresolve?pr=N → read-only call-resolution read-model (Go +
 	// LLM-resolved definitions, and the unresolved calls behind the "Zoek" button)
 	mux.HandleFunc("/api/callresolve", s.handleCallResolve)
+	// GET /api/testcovers?pr=N → read-only test-coverage read-model (test →
+	// covered method, both statically resolved and LLM-resolved, plus the
+	// unannotated/unresolved rows behind the warning icon / "Zoek" action)
+	mux.HandleFunc("/api/testcovers", s.handleTestCovers)
 	// The inbox is owned by the pr_inbox workflow; these endpoints read its
 	// read-model (never GitHub directly).
 	mux.HandleFunc("/api/inbox", s.handleInbox)
@@ -391,7 +412,7 @@ func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "approve" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "approve" {
 		http.NotFound(w, r)
 		return
 	}
@@ -621,6 +642,56 @@ func (s *server) handleCallResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	if list == nil {
 		list = []callresolve.Entry{}
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// handleResolveTestCovers starts an LLM test-coverage resolution Workflow
+// Execution (POST). It is the sanctioned UI write path for a class-level-only
+// coverage annotation (#[CoversClass]/bare "@covers Class") the Go analyzer
+// left "unresolved" — the workflow runs Haiku, escalates to Sonnet if needed,
+// and writes the testcovers read-model. Never used for an "unannotated" test.
+func (s *server) handleResolveTestCovers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in ResolveTestCoversInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 || in.TestID == "" || len(in.Classes) == 0 {
+		http.Error(w, "invalid resolve request", http.StatusBadRequest)
+		return
+	}
+	if strings.Contains(in.TestFile, "..") {
+		http.Error(w, "invalid file", http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.StartResolveTestCovers(in)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleTestCovers serves GET /api/testcovers?pr=N — the read-only
+// test-coverage read-model (resolved/found covered methods, plus the
+// unannotated/unresolved rows).
+func (s *server) handleTestCovers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr := 0
+	if v := r.URL.Query().Get("pr"); v != "" {
+		pr, _ = strconv.Atoi(v)
+	}
+	list, err := s.tasks.testcovers.List(r.Context(), pr)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []testcovers.Entry{}
 	}
 	writeJSON(w, http.StatusOK, list)
 }

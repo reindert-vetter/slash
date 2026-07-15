@@ -22,6 +22,7 @@ import (
 	"slash/modules/jira"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
+	"slash/modules/testcovers"
 )
 
 // This file wires the first task as a durable tembed Workflow. Terminology
@@ -66,6 +67,15 @@ const (
 	// it runs Haiku first and, if that is not confident, escalates automatically to
 	// Sonnet (no signal). One Execution per resolve request; it completes when done.
 	WorkflowResolveCall = "resolve_call"
+	// WorkflowResolveTestCovers is the Workflow Type that resolves which method
+	// a test covers with an LLM, for the class-level-only coverage annotations
+	// the Go analyzer could not turn into a specific method
+	// (#[CoversClass]/bare "@covers Class"): it runs Haiku first and, if that is
+	// not confident, escalates automatically to Sonnet (no signal). A test with
+	// no coverage annotation at all never reaches this workflow — that case is
+	// "unannotated" and only ever shown as a warning. One Execution per resolve
+	// request; it completes when done.
+	WorkflowResolveTestCovers = "resolve_test_covers"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -218,6 +228,19 @@ type ResolveCallInput struct {
 	Calls       []string `json:"calls"`
 }
 
+// ResolveTestCoversInput starts a resolve_test_covers Execution: it asks the
+// LLM which method of each named class the given test covers — only for
+// classes a class-level-only annotation named (the Go analyzer's "unresolved"
+// status).
+type ResolveTestCoversInput struct {
+	PR        int      `json:"pr"`
+	TestID    string   `json:"testId"`
+	TestFile  string   `json:"testFile"`
+	TestClass string   `json:"testClass"`
+	TestName  string   `json:"testName"`
+	Classes   []string `json:"classes"`
+}
+
 // IngestInput starts an ingest Workflow Execution for one PR.
 type IngestInput struct {
 	PR int `json:"pr"`
@@ -241,6 +264,7 @@ type TaskManager struct {
 	relations   *relations.Module
 	prmeta      *prmeta.Module
 	callresolve *callresolve.Module
+	testcovers  *testcovers.Module
 	approvals   *approvals.Module
 	claude      claude.Client
 	jira        jira.Client
@@ -268,9 +292,9 @@ type TaskManager struct {
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
-func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, ap *approvals.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
+func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, tc *testcovers.Module, ap *approvals.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
 	m := &TaskManager{
-		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, approvals: ap, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
+		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
 		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{},
 		logf: log.Printf,
@@ -496,7 +520,19 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				return nil, fmt.Errorf("build_relations: prune calls: %w", err)
 			}
 		}
-		return json.Marshal(map[string]int{"relations": len(rels), "calls": len(calls)})
+		// Also detect test-coverage annotations statically (resolved/unannotated/
+		// unresolved) into the testcovers read-model. UpsertGo preserves LLM-owned
+		// rows (searching/found/notfound).
+		covers := scanTestCovers(m.dataDir, input.PR, blocks)
+		if m.testcovers != nil {
+			if err := m.testcovers.UpsertGo(ctx, covers); err != nil {
+				return nil, fmt.Errorf("build_relations: save test covers: %w", err)
+			}
+			if err := m.testcovers.Prune(ctx, input.PR, covers); err != nil {
+				return nil, fmt.Errorf("build_relations: prune test covers: %w", err)
+			}
+		}
+		return json.Marshal(map[string]int{"relations": len(rels), "calls": len(calls), "covers": len(covers)})
 	})
 
 	// Activity: mark a caller's calls as being searched (write, workflow-driven).
@@ -535,6 +571,55 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		for _, e := range entries {
 			if err := m.callresolve.Save(ctx, e); err != nil {
+				return nil, err
+			}
+		}
+		return json.Marshal(map[string]int{"saved": len(entries)})
+	})
+
+	// Activity: mark a test's class-level-only targets as being searched
+	// (write, workflow-driven).
+	engine.RegisterActivity("markTestCoversSearching", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg ResolveTestCoversInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.testcovers == nil {
+			return nil, nil
+		}
+		keys := make([]string, len(arg.Classes))
+		for i, c := range arg.Classes {
+			keys[i] = "class:" + shortName(c)
+		}
+		return nil, m.testcovers.SaveSearching(ctx, arg.PR, arg.TestID, keys)
+	})
+
+	// Activity: resolve which method of each named class a test covers, with
+	// one LLM model (Haiku = context-only shortlist, Sonnet = agentic worktree
+	// search). Reads the head worktree + shells out to the claude CLI — a side
+	// effect, hence an Activity. Returns one entry per class (found/notfound,
+	// verified against the worktree).
+	engine.RegisterActivity("resolveTestCoversWithModel", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg testCoverArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		entries := resolveTestCoversWithModel(ctx, m.claude, m.dataDir, arg)
+		return json.Marshal(entries)
+	})
+
+	// Activity: persist the final LLM test-coverage resolutions (write,
+	// workflow-driven).
+	engine.RegisterActivity("saveTestCoverResolutions", func(ctx context.Context, in []byte) ([]byte, error) {
+		var entries []testcovers.Entry
+		if err := json.Unmarshal(in, &entries); err != nil {
+			return nil, err
+		}
+		if m.testcovers == nil {
+			return nil, nil
+		}
+		for _, e := range entries {
+			if err := m.testcovers.Save(ctx, e); err != nil {
 				return nil, err
 			}
 		}
@@ -687,6 +772,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowBuildRelations, buildRelationsWorkflow)
 	engine.RegisterWorkflow(WorkflowIngest, ingestWorkflow)
 	engine.RegisterWorkflow(WorkflowResolveCall, resolveCallWorkflow)
+	engine.RegisterWorkflow(WorkflowResolveTestCovers, resolveTestCoversWorkflow)
 	engine.RegisterWorkflow(WorkflowApprove, approveWorkflow)
 	return m
 }
@@ -895,6 +981,81 @@ func resolveCallWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 // Starting an Execution is the sanctioned UI write path.
 func (m *TaskManager) StartResolveCall(in ResolveCallInput) (string, error) {
 	return m.engine.StartWorkflow(WorkflowResolveCall, in)
+}
+
+// resolveTestCoversWorkflow resolves a test's class-level-only coverage
+// annotations (#[CoversClass]/bare "@covers Class") with the LLM — never for a
+// test with no annotation at all (that never reaches this workflow). It is
+// deterministic: the LLM/worktree work is in Activities, and the escalation
+// decision reads the recorded Haiku result (history), not live model output.
+// It runs Haiku first, escalates the still-unfound classes to Sonnet
+// automatically (no signal), then persists the merged result and completes.
+func resolveTestCoversWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in ResolveTestCoversInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	if len(in.Classes) == 0 {
+		return json.Marshal(map[string]int{"found": 0})
+	}
+	if err := w.ExecuteActivity("markTestCoversSearching", in, nil); err != nil {
+		return nil, fmt.Errorf("mark searching: %w", err)
+	}
+
+	// Haiku first (context-only shortlist).
+	var haiku []testcovers.Entry
+	if err := w.ExecuteActivity("resolveTestCoversWithModel", testCoverArg{
+		PR: in.PR, TestID: in.TestID, TestFile: in.TestFile,
+		TestClass: in.TestClass, TestName: in.TestName,
+		Classes: in.Classes, Model: claude.ModelHaiku,
+	}, &haiku); err != nil {
+		return nil, fmt.Errorf("resolve haiku: %w", err)
+	}
+
+	// Escalate the classes Haiku did not confidently resolve to Sonnet (agentic).
+	byClass := map[string]testcovers.Entry{}
+	var escalate []string
+	for _, e := range haiku {
+		byClass[e.CoveredClass] = e
+		if e.Status != testcovers.StatusFound {
+			escalate = append(escalate, e.CoveredClass)
+		}
+	}
+	if len(escalate) > 0 {
+		var sonnet []testcovers.Entry
+		if err := w.ExecuteActivity("resolveTestCoversWithModel", testCoverArg{
+			PR: in.PR, TestID: in.TestID, TestFile: in.TestFile,
+			TestClass: in.TestClass, TestName: in.TestName,
+			Classes: escalate, Model: claude.ModelSonnet,
+		}, &sonnet); err != nil {
+			return nil, fmt.Errorf("resolve sonnet: %w", err)
+		}
+		for _, e := range sonnet {
+			byClass[e.CoveredClass] = e // the Sonnet result wins over Haiku
+		}
+	}
+
+	// Persist the merged result in the deterministic order of in.Classes.
+	final := make([]testcovers.Entry, 0, len(in.Classes))
+	found := 0
+	for _, c := range in.Classes {
+		if e, ok := byClass[shortName(c)]; ok {
+			final = append(final, e)
+			if e.Status == testcovers.StatusFound {
+				found++
+			}
+		}
+	}
+	if err := w.ExecuteActivity("saveTestCoverResolutions", final, nil); err != nil {
+		return nil, fmt.Errorf("save resolutions: %w", err)
+	}
+	return json.Marshal(map[string]int{"found": found})
+}
+
+// StartResolveTestCovers launches a resolve_test_covers Execution and returns
+// its Run ID. Starting an Execution is the sanctioned UI write path.
+func (m *TaskManager) StartResolveTestCovers(in ResolveTestCoversInput) (string, error) {
+	return m.engine.StartWorkflow(WorkflowResolveTestCovers, in)
 }
 
 // prStatusWorkflow is the per-PR lifecycle tracker. It is deterministic: it only

@@ -12,6 +12,7 @@ import (
 
 	"slash/modules/callresolve"
 	"slash/modules/relations"
+	"slash/modules/testcovers"
 )
 
 func main() {
@@ -180,11 +181,27 @@ func runRelationsCmd(args []string) {
 		log.Fatalf("prune call resolutions: %v", err)
 	}
 
+	// Also detect test-coverage annotations, mirroring the buildRelations
+	// Activity's third step (Go rows only — UpsertGo preserves any LLM-owned
+	// searching/found/notfound row from a prior resolve_test_covers run).
+	covers := scanTestCovers(dataDir, pr, blocks)
+	tc, err := testcovers.Open(filepath.Join(dataDir, "testcovers.db"))
+	if err != nil {
+		log.Fatalf("open testcovers db: %v", err)
+	}
+	defer tc.Close()
+	if err := tc.UpsertGo(context.Background(), covers); err != nil {
+		log.Fatalf("save test covers: %v", err)
+	}
+	if err := tc.Prune(context.Background(), pr, covers); err != nil {
+		log.Fatalf("prune test covers: %v", err)
+	}
+
 	label := map[string]string{}
 	for _, b := range blocks {
 		label[b.ID()] = b.Label
 	}
-	fmt.Printf("PR %d: %d block(s), %d relation(s), %d call(s) resolved\n", pr, len(blocks), len(rels), len(calls))
+	fmt.Printf("PR %d: %d block(s), %d relation(s), %d call(s) resolved, %d test-cover(s)\n", pr, len(blocks), len(rels), len(calls), len(covers))
 	for _, r := range rels {
 		fmt.Printf("  [%s] %s  →  %s\n", r.Kind, label[r.ParentID], label[r.ChildID])
 	}
@@ -198,10 +215,11 @@ func runSeedCmd(args []string) {
 	from := fs.String("from", "", "path to a blocks JSON fixture")
 	relFrom := fs.String("relations", "", "optional path to a relations JSON fixture (seeded into relations.db)")
 	crFrom := fs.String("callresolve", "", "optional path to a call-resolutions JSON fixture (seeded into callresolve.db)")
+	tcFrom := fs.String("testcovers", "", "optional path to a test-coverage JSON fixture (seeded into testcovers.db)")
 	_ = fs.Parse(args)
 
 	if *from == "" {
-		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>] [-callresolve <callresolve.json>]")
+		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>] [-callresolve <callresolve.json>] [-testcovers <testcovers.json>]")
 	}
 	raw, err := os.ReadFile(*from)
 	if err != nil {
@@ -236,6 +254,37 @@ func runSeedCmd(args []string) {
 	if *crFrom != "" {
 		seedCallResolve(dbPath(*dbFlag), *crFrom)
 	}
+	if *tcFrom != "" {
+		seedTestCovers(dbPath(*dbFlag), *tcFrom)
+	}
+}
+
+// seedTestCovers loads test-coverage entries from a JSON fixture into the
+// testcovers.db next to the blocks DB, so tests can render both directions of
+// the "Onderliggende code" panel's test-coverage children (and the warning
+// variants) without a real annotation scan/LLM run.
+func seedTestCovers(dbPath, from string) {
+	raw, err := os.ReadFile(from)
+	if err != nil {
+		log.Fatalf("read testcovers fixture: %v", err)
+	}
+	var entries []testcovers.Entry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		log.Fatalf("parse testcovers fixture: %v", err)
+	}
+	tc, err := testcovers.Open(filepath.Join(filepath.Dir(dbPath), "testcovers.db"))
+	if err != nil {
+		log.Fatalf("open testcovers db: %v", err)
+	}
+	defer tc.Close()
+
+	ctx := context.Background()
+	for _, e := range entries {
+		if err := tc.Save(ctx, e); err != nil {
+			log.Fatalf("seed testcovers %s/%s: %v", e.TestID, e.TargetKey, err)
+		}
+	}
+	log.Printf("seeded %d test-coverage entries from %s", len(entries), from)
 }
 
 // seedCallResolve loads call resolutions from a JSON fixture into the
