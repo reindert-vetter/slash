@@ -6,6 +6,17 @@
 // contention that made the suite flaky under a single shared server, and lets us
 // scale workers freely.
 //
+// The harness forces both SLASH_GITHUB=off and SLASH_CLAUDE=off on every
+// worker server, regardless of the invoking shell's environment — the suite
+// must never touch the real network. Without a forced SLASH_CLAUDE=off, a
+// worker started from a shell that hadn't exported it would shell out to the
+// real `claude` CLI for the automatic call-resolution search (resolve_call),
+// which stalls/times out and made comment-flow specs (e.g.
+// repro-live-comment.spec.mjs) fail non-deterministically depending on how the
+// suite happened to be invoked. No spec exercises a non-Fake claude client —
+// the LLM-resolved paths are covered via seed fixtures (see
+// tests/fixtures/callresolve.json) — so forcing the Fake everywhere is safe.
+//
 // The binary is built once by globalSetup (_setup.mjs); here we only seed + spawn.
 // Spec files import { test, expect } from './_fixtures.mjs' instead of
 // '@playwright/test' so every page.goto() targets this worker's own server via the
@@ -87,7 +98,7 @@ export const test = base.extend({
 
       const port = 4200 + i
       const proc = spawn(BIN, ['-db', db, '-addr', `127.0.0.1:${port}`, '-static', '.'], {
-        env: { ...process.env, SLASH_GITHUB: 'off', SLASH_INBOX: 'tests/fixtures/inbox.json' },
+        env: { ...process.env, SLASH_GITHUB: 'off', SLASH_CLAUDE: 'off', SLASH_INBOX: 'tests/fixtures/inbox.json' },
         stdio: 'ignore',
       })
       try {

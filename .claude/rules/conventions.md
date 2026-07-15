@@ -190,3 +190,19 @@
   i.p.v. base=merge-base), dan tonen de meeste blokken **geen** wijzigingen en falen
   diff-inhoud-afhankelijke tests. Anker diff-navigatie-tests daarom op een blok dat
   betrouwbaar een wijziging draagt (blok 0 van PR 12903).
+- **De harness forceert offline altijd, ongeacht de shell-omgeving:** de
+  worker-fixture (`tests/_fixtures.mjs`) start elke server met **zowel
+  `SLASH_GITHUB=off` als `SLASH_CLAUDE=off`** hardcoded in de `spawn`-`env`
+  (`{ ...process.env, SLASH_GITHUB:'off', SLASH_CLAUDE:'off', … }`) — het spreidt
+  wel de rest van `process.env`, maar deze twee liggen vast. Zonder de
+  hardcoded `SLASH_CLAUDE=off` shelde een worker die vanuit een shell zónder die
+  var werd gestart, echt uit naar de `claude`-CLI voor de automatische
+  call-resolution-search (`resolve_call`); dat stalt/timeout't en liet
+  comment-flow-specs (b.v. `repro-live-comment.spec.mjs`) niet-deterministisch
+  falen, afhankelijk van hoe de suite toevallig werd aangeroepen. Geen enkele
+  spec verwacht een echte (niet-Fake) `claude`-client — de LLM-resolved paden
+  worden via seed-fixtures getest (`tests/fixtures/callresolve.json`) — dus de
+  Fake overal forceren is veilig. **Draai de suite dus nooit met losse
+  `SLASH_GITHUB`/`SLASH_CLAUDE`-env-vars om 'm offline te krijgen** — dat doet de
+  harness al; die vars zijn alleen nog relevant voor `go run .`/`slash`
+  buiten Playwright om.
