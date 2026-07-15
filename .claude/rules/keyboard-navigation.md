@@ -3,6 +3,75 @@
 De keyboard-flow zit in `home.mjs` (`onKeydown`) en heeft twee modes via
 `state.mode`.
 
+## De links→rechts navigatieketen (`←`/`→` door de hele layout)
+
+Los van de losse mechanismen hieronder vormen `←`/`→` samen één doorlopende
+keten van **stops**, van links naar rechts over de hele layout:
+
+1. **Omschrijving** (`prInfoCard`/`state.showDescription`) — de PR-titel/
+   samenvatting/beschrijving. **Standaard verborgen** (neemt dan geen breedte
+   in — geen rail zoals stop 5's inklap, de kolom valt volledig weg) en de
+   meest-linkse stop.
+2. **PR-blok-index** (de sidebar, `state.mode==='list'`).
+3. **Blok met diff** (`state.mode==='diff'`, `state.focusLevel===0`).
+4. **Gedrilde kolommen** (`state.drill`/`focusLevel>0`) — een **zijtak**, geen
+   strikte stop: alleen bereikbaar via Enter/klik op een Onderliggende-code-kind
+   (zie "Drillen" in `.claude/rules/detail-layout.md`), niet via `→`. `←` pelt
+   ze wel één voor één terug af, net als de andere stops.
+5. **Onderliggende code** (`RelatedPanel`, `cs.focus==='code'`).
+6. **Comments** (`cs.focus` ∈ `{'new','comment','thread'}`).
+7. **Taken** (`cs.focus==='task'`, de workflow-runs-kolom).
+
+`→` schuift één stop naar rechts, `←` één stop naar links — dit is
+**bovenop**, niet in plaats van, de bestaande per-stop `↑`/`↓`-navigatie
+(die blijft binnen een stop lopen: block-selectie in de index, wijzigingsgroep
+in de diff, kind in Onderliggende code, rij in comments, rij in Taken).
+Concreet, met de aanpassingen die dit vereiste t.o.v. het oudere per-mechanisme
+gedrag:
+
+- **Stop 1 ↔ 2:** `←` in `'list'`-mode (buiten de zoekbox) opende vroeger de
+  zoekbox (`activateSearch()`); dat is nu **de omschrijving openen**
+  (`state.showDescription = true`). `→` vanuit de omschrijving sluit 'm weer
+  (`state.showDescription = false`) en geeft de blok-index de keyboard terug.
+  Terwijl de omschrijving open is doen `↑`/`↓` niets (geen interne cursor om te
+  lopen) — dat voorkomt dat ze de block-selectie eronder verschuiven.
+  **De zoekbox is geen eigen stop** — hij hoort bij stop 2 en is niet meer via
+  `←` bereikbaar (dat was zijn enige toetsenbord-ingang); hij blijft gewoon
+  bereikbaar via een muisklik (en native Tab), en typen filtert zoals altijd
+  zodra hij focus heeft. Was de zoekbox al met een klik gefocust
+  (`state.searchActive`), dan doet `←` daar nu hetzelfde (naar stop 1, met
+  `exitSearch()` om de DOM-focus netjes los te laten) i.p.v. de oude no-op
+  ("already the leftmost stop").
+- **Stop 2 ↔ 3 / stop 3 ↔ 4:** ongewijzigd — zie de `'list'`/`'diff'`-secties
+  hieronder resp. "Kolom-navigatie" in `.claude/rules/detail-layout.md`.
+- **Stop 3/4 ↔ 5:** ongewijzigd — `→` vanuit de diff is `enterRelated()`, `←`
+  vanuit `cs.focus==='code'` (op het eerste kind, of via `↑` daar) is
+  `exitRelated()`.
+- **Stop 5 ↔ 6:** ongewijzigd — `→` vanuit `'code'` is `gotoRow(1)` (naar de
+  composer).
+- **Binnen/uit stop 6:** **bugfix** — `←` vanuit een comment-rij (`'new'`/
+  `'comment'`, niet `'thread'`) riep voorheen onvoorwaardelijk `exitRelated()`
+  aan en sprong dus in één klap helemaal terug naar de diff, stop 5 overslaand.
+  Dat is nu `toCode()` (terug naar stop 5) — alleen `←` vanuit `cs.focus===
+  'code'` zelf gaat nog zo ver terug als de diff. `←` vanuit `'thread'` blijft
+  ongewijzigd (`toComment()`, één niveau terug naar de comment-rij, geen
+  stop-stap).
+- **Stop 6 ↔ 7:** nieuw. `→` gaat binnen comments eerst zo diep mogelijk
+  (`'comment'` → `'thread'`, ongewijzigd — `enterThread()`); pas als er niks
+  dieper is (`'new'`, de lege composer, of al in `'thread'`) stapt `→` door
+  naar Taken (`toTask(0)`, in `RelatedPanel.mjs`). In Taken lopen `↑`/`↓`
+  door de rijen (`cs.taskSel`, geklemd op `taskRuns(state).length` — de
+  actief-dan-klaar-volgorde die `workflowsSection` ook rendert, zodat rij-index
+  en render altijd overeenkomen); `←` gaat terug naar waar `→` vandaan kwam
+  (`preTaskFocus`: de composer, of dezelfde thread); `→` doet niets (laatste
+  stop). `Enter` (in `home.mjs`, via `isTaskFocused()`/`focusedTaskRun()`) opent
+  de gefocuste run net als een klik (`openTask`) — alleen zinvol voor een
+  `task_code_comment`-run met een gekoppelde comment, stil genegeerd voor de
+  rest. Zie de sectie "Taken" in `.claude/rules/detail-layout.md`.
+- `state.showDescription`/`cs.taskSel` leven bewust **buiten** de URL (net als
+  `menu`/`ui.task` elders) — efemere cursor-state, geen navigatiepositie die een
+  refresh moet terugzetten.
+
 **`Enter`** opent een **command-palette** (`src/CommandMenu.mjs`,
 `data-testid=command-menu`): een doorzoekbaar commando-menu dat als **drijvende
 popover net onder de huidige selectie** verschijnt, over de rest van de pagina heen

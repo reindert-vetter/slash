@@ -32,7 +32,26 @@ import { bindUrlState, num } from './urlState.mjs'
 // retrigger it. home.mjs bridges state→cs.scope with an arrow.js watch.
 // codeSel indexes the selected underlying-code child while cs.focus === 'code':
 // → walks it forward through the child list, ↓ leaves it for the comments column.
-const cs = reactive({ pr: null, list: [], view: [], sel: 0, composing: false, busy: false, focus: null, threadPos: 0, scope: null, scopeSig: '', codeSel: 0 })
+const cs = reactive({
+  pr: null,
+  list: [],
+  view: [],
+  sel: 0,
+  composing: false,
+  busy: false,
+  focus: null,
+  threadPos: 0,
+  scope: null,
+  scopeSig: '',
+  codeSel: 0,
+  // taskSel indexes the flat active+done workflow-run list while
+  // cs.focus === 'task' (stop 7 of the nav chain, see keyboard-navigation.md).
+  // Deliberately NOT bound to the URL (unlike codeSel/sel/threadPos below) —
+  // it's a step further than any of those flows have gone before and, like
+  // `menu`/`ui.task` elsewhere, an ephemeral cursor rather than a navigation
+  // position worth restoring on refresh.
+  taskSel: 0,
+})
 
 // The panel cursor survives a browser refresh: focus/codeSel/sel/threadPos live in
 // the URL under their own `rel` namespace, alongside the main navigation (sel/mode/
@@ -246,6 +265,62 @@ function toNew() {
   focusEl('[data-testid=comment-compose]')
 }
 
+// preTaskFocus remembers which comments-substop (the 'new' composer or a
+// comment's 'thread') → advanced from into the Taken stop (stop 7 of the nav
+// chain), so ← out of Taken lands back where it left off instead of always
+// resetting to the composer. A plain module `let`, not on `cs` — it's a
+// one-shot breadcrumb for a single step back, not navigation state worth
+// exposing/restoring.
+let preTaskFocus = 'new'
+
+// toTask hands the keyboard to the Taken/workflows panel (stop 7), landing on
+// row `i` (default the first row). Reached by → once comments has nowhere
+// deeper left to go (from the composer, or from inside a thread) — see
+// handleRelatedKey.
+function toTask(i = 0) {
+  preTaskFocus = cs.focus
+  cs.composing = false
+  cs.focus = 'task'
+  cs.taskSel = i
+  scrollTaskIntoView()
+}
+
+// scrollTaskIntoView keeps the selected Taken row in view while walking it
+// with the arrows, mirroring scrollCodeIntoView/scrollCommentIntoView.
+function scrollTaskIntoView() {
+  requestAnimationFrame(() => {
+    const el = document.querySelectorAll('[data-testid=workflow-row]')[cs.taskSel]
+    if (el) el.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+// isTaskFocused / focusedTaskRun mirror isCodeFocused/focusedRelatedChild for
+// the Taken panel: home.mjs reads these on Enter to know whether — and which
+// run — to hand to its own openTask (which lives in home.mjs, since it drives
+// the shared navigation state, not this panel). `runs` is the same ordered
+// list `workflowsSection` renders (active runs, then done — see `taskRuns`),
+// passed in by the caller rather than read from home.mjs' `state` directly
+// (this module stays decoupled from that reactive's shape, like `rc`/`cs`
+// elsewhere).
+export function isTaskFocused() {
+  return cs.focus === 'task'
+}
+
+export function focusedTaskRun(runs) {
+  return cs.focus === 'task' && Array.isArray(runs) ? runs[cs.taskSel] || null : null
+}
+
+// taskRuns is the single ordering both workflowsSection (row indices) and
+// home.mjs (handleRelatedKey's taskCount + focusedTaskRun's `runs`) rely on —
+// active runs first, then done — so cs.taskSel always points at the same run
+// in both the render and the keyboard nav.
+export function taskRuns(state) {
+  const all = state && Array.isArray(state.workflows) ? state.workflows : []
+  const active = all.filter((r) => r.status === 'running' || r.status === 'waiting')
+  const done = all.filter((r) => r.status === 'completed' || r.status === 'failed')
+  return active.concat(done)
+}
+
 function toComment() {
   cs.composing = false
   cs.focus = 'comment'
@@ -408,10 +483,34 @@ function gotoRow(n) {
 // when focus leaves the panel back to the diff (else true). The left column is a
 // flat row walk (gotoRow); the thread is the one region where ↑/↓ mean something
 // else — they walk the message history — and ← steps back out to the comment row.
-export function handleRelatedKey(key) {
+// `taskCount` is the current length of the Taken/workflows list (see `taskRuns`,
+// exported for the caller to compute from its own state) — needed here only to
+// clamp cs.taskSel while cs.focus === 'task'.
+export function handleRelatedKey(key, taskCount = 0) {
   if (key === 'Escape') {
     exitRelated()
     return 'exit'
+  }
+  if (cs.focus === 'task') {
+    // Stop 7 (Taken) — the end of the left→right nav chain (see
+    // keyboard-navigation.md). ↑/↓ walk its rows; ← steps back to whichever
+    // comments-substop advanced into it (the composer, or a thread — see
+    // preTaskFocus/toTask); → is a no-op, there is nothing further right.
+    if (key === 'ArrowDown') {
+      cs.taskSel = Math.min(cs.taskSel + 1, Math.max(0, taskCount - 1))
+      scrollTaskIntoView()
+    } else if (key === 'ArrowUp') {
+      cs.taskSel = Math.max(cs.taskSel - 1, 0)
+      scrollTaskIntoView()
+    } else if (key === 'ArrowLeft') {
+      if (preTaskFocus === 'thread') {
+        cs.focus = 'thread'
+        focusThread()
+      } else {
+        toNew()
+      }
+    }
+    return true
   }
   if (cs.focus === 'thread') {
     if (key === 'ArrowUp') {
@@ -422,6 +521,10 @@ export function handleRelatedKey(key) {
       focusThread()
     } else if (key === 'ArrowLeft') {
       toComment()
+    } else if (key === 'ArrowRight') {
+      // Comments has nowhere deeper to go from inside a thread — advance to
+      // the next stop (Taken, stop 7).
+      toTask(0)
     }
     return true
   }
@@ -450,14 +553,22 @@ export function handleRelatedKey(key) {
     }
     return true
   }
+  // cs.focus is 'new' or 'comment' here (the flat comments row-walk).
   if (key === 'ArrowDown') gotoRow(currentRow() + 1)
   else if (key === 'ArrowUp') gotoRow(currentRow() - 1)
   else if (key === 'ArrowLeft') {
-    exitRelated()
-    return 'exit'
-  } else if (key === 'ArrowRight' && cs.focus === 'comment' && selComment()) {
-    // → steps into the thread so ↑ walks the old messages instead of the index.
-    enterThread()
+    // Step back to the Onderliggende-code stop (5), not all the way out to the
+    // diff — only cs.focus === 'code' (handled above) steps out that far. This
+    // used to call exitRelated() unconditionally, skipping stop 5 entirely.
+    toCode()
+  } else if (key === 'ArrowRight') {
+    if (cs.focus === 'comment' && selComment()) {
+      // → steps into the thread so ↑ walks the old messages instead of the index.
+      enterThread()
+    } else if (cs.focus === 'new') {
+      // The composer has nowhere deeper to go — advance to Taken (stop 7).
+      toTask(0)
+    }
   }
   return true
 }
@@ -1057,13 +1168,14 @@ function relatedCard(r, i, drill) {
 }
 
 // codeCardCollapsed reports whether the keyboard focus currently sits in the
-// comment/task block ('new' composer, a comment row, or inside its thread) —
-// the panel-cursor states that mean "the reviewer is at the comments". While
-// true, the Onderliggende-code card collapses to a narrow icon rail so the
-// diff column and the comments stay visible together. 'code' (or no focus at
-// all — the diff owns the keyboard) keeps the card at full width.
+// comment/task block ('new' composer, a comment row, inside its thread, or the
+// Taken/workflows panel) — the panel-cursor states that mean "the reviewer is
+// past the underlying-code stop". While true, the Onderliggende-code card
+// collapses to a narrow icon rail so the diff column and the comments/taken
+// stay visible together. 'code' (or no focus at all — the diff owns the
+// keyboard) keeps the card at full width.
 function codeCardCollapsed() {
-  return cs.focus === 'new' || cs.focus === 'comment' || cs.focus === 'thread'
+  return cs.focus === 'new' || cs.focus === 'comment' || cs.focus === 'thread' || cs.focus === 'task'
 }
 
 // RelatedPanel — the fixed-width right column: the selected block's underlying
@@ -1131,22 +1243,30 @@ function workflowNote(run) {
   return WORKFLOW_STATUS_NOTE[run.workflow + ':' + run.status] || run.status
 }
 
-// workflowRow renders one run. A task_code_comment run with a resolved
-// `comment` reference is clickable: it opens that comment's block/diff-unit
-// and selects its thread (openTask, from home.mjs via the `search` options
-// object). Other run types are purely informational — clicking does nothing.
-function workflowRow(run, openTask) {
+// workflowRow renders one run at flat index `i` (its position in `taskRuns`'
+// active-then-done order — see workflowsSection). A task_code_comment run with
+// a resolved `comment` reference is clickable: it opens that comment's
+// block/diff-unit and selects its thread (openTask, from home.mjs via the
+// `search` options object). Other run types are purely informational — a click
+// still lands the keyboard cursor on the row (mouse equivalent of → walking
+// here, see toTask) but doesn't navigate anywhere.
+function workflowRow(run, openTask, i) {
   const badge = STATUS_BADGES[run.status] || { label: run.status, cls: 'bg-slate-50 text-slate-500 ring-slate-200' }
   const active = run.status === 'running' || run.status === 'waiting'
   const clickable = !!(run.comment && openTask)
+  const focused = () => cs.focus === 'task' && cs.taskSel === i
   return html`
     <div
-      class="${'flex flex-col gap-0.5 rounded-md px-2 py-1.5 ' +
-      (active ? '' : 'opacity-60') +
-      (clickable ? ' cursor-pointer hover:bg-slate-50' : '')}"
+      class="${() =>
+        'flex flex-col gap-0.5 rounded-md px-2 py-1.5 ring-1 ring-inset ' +
+        (active ? '' : 'opacity-60') +
+        (clickable ? ' cursor-pointer hover:bg-slate-50' : '') +
+        (focused() ? ' ring-indigo-300 bg-indigo-50/60' : ' ring-transparent')}"
       data-testid="workflow-row"
       data-status="${run.status}"
-      @click="${() => clickable && openTask(run)}"
+      data-run-id="${run.runId}"
+      data-active="${() => focused()}"
+      @click="${() => (clickable ? openTask(run) : toTask(i))}"
     >
       <div class="flex items-center gap-2">
         <span class="min-w-0 flex-1 truncate text-[12px] text-slate-700" data-testid="workflow-label"
@@ -1190,6 +1310,10 @@ function workflowsSection(state, openTask) {
           const rows = []
           const act = activeRuns()
           const done = doneRuns()
+          // idx tracks each run's position in the flat active-then-done order —
+          // the same order `taskRuns` (exported) returns — so cs.taskSel always
+          // points at the same run the keyboard nav (home.mjs) sees.
+          let idx = 0
           if (act.length > 0) {
             rows.push(
               html`<p class="px-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">Actief</p>`.key(
@@ -1200,7 +1324,7 @@ function workflowsSection(state, openTask) {
             // running → completed) needs a fresh node, not a patched one —
             // arrow.js only re-runs a keyed node's own bindings on a key
             // change (see the block-card-key convention in conventions.md).
-            for (const r of act) rows.push(workflowRow(r, openTask).key('run:' + r.runId + ':' + r.status))
+            for (const r of act) rows.push(workflowRow(r, openTask, idx++).key('run:' + r.runId + ':' + r.status))
           }
           if (done.length > 0) {
             rows.push(
@@ -1208,7 +1332,7 @@ function workflowsSection(state, openTask) {
                 'hdr-done'
               )
             )
-            for (const r of done) rows.push(workflowRow(r, openTask).key('run:' + r.runId + ':' + r.status))
+            for (const r of done) rows.push(workflowRow(r, openTask, idx++).key('run:' + r.runId + ':' + r.status))
           }
           return rows
         }}

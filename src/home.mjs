@@ -38,6 +38,9 @@ import RelatedPanel, {
   setRelated,
   focusedRelatedChild,
   selectComment,
+  isTaskFocused,
+  focusedTaskRun,
+  taskRuns,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { bindUrlState, num } from './urlState.mjs'
@@ -181,6 +184,14 @@ const state = reactive({
   search: '',
   searchActive: false,
   onSearch: setSearch,
+  // showDescription — stop 1 of the left→right nav chain (see
+  // keyboard-navigation.md): the PR-info/description column, hidden by default so
+  // it doesn't eat width. Only reachable from stop 2 (the block-index, ← ) and
+  // only ever toggled while state.mode === 'list' (it sits to the left of the
+  // sidebar, which itself only shows in list mode). Deliberately NOT bound to the
+  // URL — ephemeral UI state, like `menu`/`ui.task`, not a navigation position a
+  // refresh needs to restore.
+  showDescription: false,
 })
 
 // Persist the navigation position in the URL so a refresh (or a shared link)
@@ -2143,9 +2154,17 @@ function onKeydown(e) {
   // While the search box holds the keyboard it owns typing: letters flow into it
   // (we don't preventDefault them), ↑/↓ still walk the filtered selection but
   // leave focus in the box so the reviewer can keep typing, and → / Enter step
-  // into the selected block's diff while Escape drops back to the list. ← is
-  // swallowed — the box is already the leftmost stop.
+  // into the selected block's diff while Escape drops back to the list. ← used
+  // to be swallowed here ("already the leftmost stop") — now it steps one stop
+  // further left, into the PR-description column (stop 1 of the nav chain, see
+  // keyboard-navigation.md), dropping DOM focus from the box on the way out.
   if (state.searchActive) {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      exitSearch()
+      state.showDescription = true
+      return
+    }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       state.selected = Math.min(state.selected + 1, state.blocks.length - 1)
@@ -2161,8 +2180,6 @@ function onKeydown(e) {
     } else if (e.key === 'Escape') {
       e.preventDefault()
       exitSearch()
-    } else if (e.key === 'ArrowLeft') {
-      e.preventDefault()
     }
     return
   }
@@ -2186,7 +2203,9 @@ function onKeydown(e) {
   if (relatedActive()) {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key)) {
       e.preventDefault()
-      handleRelatedKey(e.key)
+      // taskRuns(state).length clamps cs.taskSel while the Taken stop (7) owns
+      // the keyboard — see handleRelatedKey/taskRuns in RelatedPanel.mjs.
+      handleRelatedKey(e.key, taskRuns(state).length)
       // Exiting the panel (← / Escape from the code card's first block) just
       // hands the keyboard back to the diff of whichever column is currently
       // focused (handleRelatedKey's exitRelated already did that) — it does
@@ -2212,6 +2231,14 @@ function onKeydown(e) {
       e.preventDefault()
       const child = focusedRelatedChild()
       if (child) drillIntoChild(child)
+    }
+    // Enter on the Taken stop (7) opens the focused run the same way clicking it
+    // does (openTask) — only meaningful for a task_code_comment run with a
+    // resolved comment; a purely informational run is a silent no-op there too.
+    if (e.key === 'Enter' && isTaskFocused()) {
+      e.preventDefault()
+      const run = focusedTaskRun(taskRuns(state))
+      if (run) openTask(run)
     }
     return
   }
@@ -2293,6 +2320,16 @@ function onKeydown(e) {
     return
   }
 
+  // Stop 1 of the nav chain (the PR-description column) sits to the left of the
+  // block-index and owns the keyboard while open: → closes it back to stop 2,
+  // any other arrow is a no-op (it has no internal cursor to walk) so it doesn't
+  // move the block selection underneath it.
+  if (state.showDescription) {
+    e.preventDefault()
+    if (e.key === 'ArrowRight') state.showDescription = false
+    return
+  }
+
   if (e.key === 'ArrowDown') {
     e.preventDefault()
     state.selected = Math.min(state.selected + 1, state.blocks.length - 1)
@@ -2308,7 +2345,7 @@ function onKeydown(e) {
     enterDiff()
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault()
-    activateSearch() // step left out of the list into the search box
+    state.showDescription = true // step left out of the list into stop 1 (the description)
   }
 }
 
@@ -2630,9 +2667,12 @@ function DetailPanel(state) {
         (state.mode === 'diff' ? 'left-6' : 'left-[29rem]')}"
       data-testid="detail-panel"
     >
-      <div class="flex min-h-0 w-[26rem] shrink-0 flex-col" data-testid="pr-info-column">
-        ${() => prInfoCard(state)}
-      </div>
+      ${() =>
+        state.showDescription
+          ? html`<div class="flex min-h-0 w-[26rem] shrink-0 flex-col" data-testid="pr-info-column">
+              ${prInfoCard(state)}
+            </div>`.key('pr-info-column')
+          : ''}
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="block-column">
       ${() => {
         const sel = state.selected
