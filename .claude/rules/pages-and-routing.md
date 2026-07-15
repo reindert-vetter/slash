@@ -39,6 +39,38 @@ nodig. Mislukt het genereren, dan blijft de popover open met de foutmelding
 (nog steeds `hasGraph:false`); daaronder staan nog steeds *Open op GitHub* /
 *Open Jira-ticket*.
 
+Een **al geïngeste** rij blijft één-klik-direct: de hele rij is nog steeds de
+kale `<a href="/pr/<id>">` (`prRowLink`), zodat een klik overal op de rij meteen
+naar de tree navigeert (ongewijzigd t.o.v. hierboven). Daarnaast draagt zo'n
+rij een klein, pas-bij-hover zichtbaar knopje **"Opnieuw genereren"**
+(`data-testid=regenerate-page`, `regenerateButton` in `src/overview.mjs`) dat
+dezelfde `generatePage`/`ui.ingesting`-flow hergebruikt als de popover-knop
+hierboven. Omdat je geen interactief element in een `<a>` mag nesten (invalide
+HTML, en een klik zou anders de navigatie meenemen), staat de knop als
+**sibling** van de `<a>` in een omhullende `<div class="group relative">`
+(`data-row=<id>` op die wrapper — bewust niet `data-pr`, want dat attribuut
+staat al op de `<a>` zelf en andere tests/selectors verwachten daar een
+uniek-matchende `pr-row`; `data-row` laat een test scopen op de rij zonder een
+ambigue dubbele match). De knop is `position:absolute` en toont/verbergt
+zichzelf via Tailwinds `group-hover`, en zijn `@click` doet
+`preventDefault`/`stopPropagation` als extra zekerheid tegen de rij-link (de
+knop overlapt de `<a>`'s hit-box sowieso al nooit, want hij is er geen
+descendant van). **De eigenlijke reden dat een geslaagde regeneratie eerder
+tóch naar `/pr/<id>` navigeerde zat niet in click-bubbling, maar in
+`generatePage` zelf:** die deed altijd `location.href = '/pr/<id>'` op
+succes — correct voor de popover van een niet-geïngeste rij (je wil na de
+allereerste keer genereren meteen de boom in), maar fout voor "Opnieuw
+genereren" op een rij die al een boom heeft, waar de reviewer op de overview
+blijft en alleen de achterliggende data wil verversen. `generatePage(pr, {
+redirect })` heeft daarom een `redirect`-optie (default `true`, ongewijzigd
+voor de popover); `regenerateButton` roept 'm aan met `{ redirect: false }` en
+zet `ui.ingesting` zelf terug op `null` op succes in plaats van te navigeren.
+Een mislukte regeneratie toont de foutmelding onder de knop
+(`data-testid=regenerate-error`); omdat `ui.ingesting` op dat moment al weer
+`null` is, bewaart `ui.ingestErrorFor` (naast `ui.ingestError`) welke PR de
+fout hoort — anders zou de foutmelding niet weten onder welke rij hij moet
+verschijnen.
+
 ### GitHub-toegang loopt via een workflow (niet rechtstreeks)
 
 **De pagina roept GitHub nooit zelf aan.** De PR-lijst wordt gefetcht en beheerd

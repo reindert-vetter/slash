@@ -113,4 +113,44 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(page).toHaveURL(/\/pr-overview$/)
     await expect(generate).toBeEnabled()
   })
+
+  // An already-ingested row (12903) still links straight into /pr/<id> on a
+  // click — see the test above — but also carries a standalone "opnieuw
+  // genereren" button (revealed on hover, not inside the <a>) that re-runs
+  // the same ingest workflow without navigating away.
+  test('regenerating an already-ingested PR reruns ingest without navigating', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    let ingestCalls = 0
+    await page.route('**/api/ingest', async (route) => {
+      ingestCalls++
+      const body = JSON.parse(route.request().postData() || '{}')
+      expect(body.pr).toBe(12903)
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    })
+
+    const regenerate = page.locator('[data-row="12903"] [data-testid="regenerate-page"]')
+    await regenerate.click()
+
+    await expect.poll(() => ingestCalls).toBe(1)
+    // No navigation — the row's own <a href> click must not have fired.
+    await expect(page).toHaveURL(/\/pr-overview$/)
+  })
+
+  test('a failed regenerate shows an inline error under the button, row stays put', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    await page.route('**/api/ingest', async (route) => {
+      await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"gh unreachable"}' })
+    })
+
+    const regenerate = page.locator('[data-row="12903"] [data-testid="regenerate-page"]')
+    await regenerate.click()
+
+    await expect(page.locator('[data-row="12903"] [data-testid="regenerate-error"]')).toHaveText(/gh unreachable/)
+    await expect(page).toHaveURL(/\/pr-overview$/)
+    await expect(regenerate).toBeEnabled()
+  })
 })
