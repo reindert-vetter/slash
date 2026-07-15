@@ -1,5 +1,5 @@
 {
-  "repo": "plug-and-pay/plug-and-pay",
+  "repo": "blog-org/blog-platform",
   "generatedFor": "reindert-vetter",
   "sections": [
     {
@@ -7,13 +7,13 @@
       "prs": [
         {
           "number": 12888,
-          "title": "Fix webhook retry backoff (PP-1421)",
+          "title": "Fix comment notification retry backoff (BLOG-1421)",
           "author": "dave",
           "updatedAt": "2026-07-11T08:00:00Z",
-          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/12888",
+          "url": "https://github.com/blog-org/blog-platform/pull/12888",
           "isDraft": false,
           "baseRefName": "develop",
-          "headRefName": "fix/webhook-backoff",
+          "headRefName": "fix/comment-retry",
           "additions": 18,
           "deletions": 4,
           "changedFiles": 2,
@@ -22,13 +22,13 @@
         },
         {
           "number": 12903,
-          "title": "Refactor checkout address handling",
+          "title": "Refactor post scheduling",
           "author": "alice",
           "updatedAt": "2026-07-10T09:00:00Z",
-          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/12903",
+          "url": "https://github.com/blog-org/blog-platform/pull/12903",
           "isDraft": false,
           "baseRefName": "develop",
-          "headRefName": "feature/address-base",
+          "headRefName": "feature/scheduling-base",
           "additions": 42,
           "deletions": 12,
           "changedFiles": 3,
@@ -37,13 +37,13 @@
         },
         {
           "number": 12904,
-          "title": "Address handling follow-up",
+          "title": "Post scheduling follow-up",
           "author": "alice",
           "updatedAt": "2026-07-10T10:00:00Z",
-          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/12904",
+          "url": "https://github.com/blog-org/blog-platform/pull/12904",
           "isDraft": false,
-          "baseRefName": "feature/address-base",
-          "headRefName": "feature/address-followup",
+          "baseRefName": "feature/scheduling-base",
+          "headRefName": "feature/scheduling-followup",
           "additions": 10,
           "deletions": 1,
           "changedFiles": 1,
@@ -57,13 +57,13 @@
       "prs": [
         {
           "number": 12801,
-          "title": "Bump invoice PDF renderer",
+          "title": "Bump markdown renderer",
           "author": "reindert-vetter",
           "updatedAt": "2026-07-09T14:00:00Z",
-          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/12801",
+          "url": "https://github.com/blog-org/blog-platform/pull/12801",
           "isDraft": false,
           "baseRefName": "develop",
-          "headRefName": "chore/pdf-bump",
+          "headRefName": "chore/markdown-bump",
           "additions": 5,
           "deletions": 5,
           "changedFiles": 2,
@@ -79,7 +79,12 @@
       "reviewDecision": "CHANGES_REQUESTED",
       "state": "OPEN",
       "reviewers": [
-        { "login": "reindert-vetter", "avatarUrl": "", "state": "CHANGES_REQUESTED", "team": false }
+        {
+          "login": "reindert-vetter",
+          "avatarUrl": "",
+          "state": "CHANGES_REQUESTED",
+          "team": false
+        }
       ],
       "checksState": "FAILURE",
       "checksTotal": 9
@@ -89,8 +94,18 @@
       "reviewDecision": "REVIEW_REQUIRED",
       "state": "OPEN",
       "reviewers": [
-        { "login": "bob", "avatarUrl": "", "state": "APPROVED", "team": false },
-        { "login": "reindert-vetter", "avatarUrl": "", "state": "PENDING", "team": false }
+        {
+          "login": "bob",
+          "avatarUrl": "",
+          "state": "APPROVED",
+          "team": false
+        },
+        {
+          "login": "reindert-vetter",
+          "avatarUrl": "",
+          "state": "PENDING",
+          "team": false
+        }
       ],
       "checksState": "SUCCESS",
       "checksTotal": 12
@@ -100,7 +115,12 @@
       "reviewDecision": "REVIEW_REQUIRED",
       "state": "OPEN",
       "reviewers": [
-        { "login": "reindert-vetter", "avatarUrl": "", "state": "PENDING", "team": false }
+        {
+          "login": "reindert-vetter",
+          "avatarUrl": "",
+          "state": "PENDING",
+          "team": false
+        }
       ],
       "checksState": "PENDING",
       "checksTotal": 8
@@ -110,7 +130,12 @@
       "reviewDecision": "APPROVED",
       "state": "OPEN",
       "reviewers": [
-        { "login": "carol", "avatarUrl": "", "state": "APPROVED", "team": false }
+        {
+          "login": "carol",
+          "avatarUrl": "",
+          "state": "APPROVED",
+          "team": false
+        }
       ],
       "checksState": "SUCCESS",
       "checksTotal": 10

@@ -24,7 +24,7 @@ side-by-side diff on the right.
 ![Review page](docs/screenshots/review.png)
 
 **Block diff** — stepping through a single block. The active change group is
-highlighted, changed lines are red/green, and granular approval (`approve 8/8`)
+highlighted, changed lines are red/green, and granular approval (`approve 0/3`)
 lives right on the card.
 
 ![Block diff](docs/screenshots/diff.png)

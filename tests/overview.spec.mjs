@@ -2,9 +2,10 @@ import { test, expect } from './_fixtures.mjs'
 
 // The PR overview (/pr-overview) is a live GitHub-style inbox. Under test the Go
 // bridge serves tests/fixtures/inbox.json (SLASH_GITHUB=off + SLASH_INBOX), so
-// the sections/rows/pills are deterministic and never touch the network. An
-// ingested PR (hasGraph, from the seeded blocks DB) links into /pr/<id>.
-// See src/overview.mjs + inbox.go/inbox_api.go.
+// the sections/rows/pills are deterministic and never touch the network. Every
+// row (ingested or not) opens the same click-to-popover menu; an ingested PR
+// (hasGraph, from the seeded blocks DB) shows "Open review-boom" to reach
+// /pr/<id>. See src/overview.mjs + inbox.go/inbox_api.go.
 test.describe('PR Review Tree — PR inbox', () => {
   test('renders sections and rows from the live inbox', async ({ page }) => {
     await page.goto('/pr-overview')
@@ -36,14 +37,17 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(stack.locator('[data-pr="12904"]')).toBeVisible()
   })
 
-  test('an ingested PR links into its review page', async ({ page }) => {
+  test('an ingested PR opens a popover with "Open review-boom"', async ({ page }) => {
     await page.goto('/pr-overview')
     await page.waitForLoadState('networkidle')
 
     const ingested = page.locator('[data-testid="pr-row"][data-pr="12903"]')
-    await expect(ingested).toHaveAttribute('href', '/pr/12903')
-
     await ingested.click()
+    const openTree = page.locator('[data-testid="pr-popover"] [data-testid="open-tree"]')
+    await expect(openTree).toBeVisible()
+    await expect(openTree).toHaveText(/Open review-boom/)
+
+    await openTree.click()
     await expect(page).toHaveURL(/\/pr\/12903/)
     const firstRow = page.locator('[data-testid="block-row"]').first()
     await expect(firstRow).toBeVisible()
@@ -68,7 +72,7 @@ test.describe('PR Review Tree — PR inbox', () => {
     await page.goto('/pr-overview')
     await page.waitForLoadState('networkidle')
 
-    await page.locator('[data-testid="search"]').fill('address')
+    await page.locator('[data-testid="search"]').fill('scheduling')
     const results = page.locator('[data-testid="search-results"]')
     await expect(results).toBeVisible()
     await expect(results.locator('[data-testid="pr-row"]')).toHaveCount(2)
@@ -120,10 +124,10 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(generate).toBeEnabled()
   })
 
-  // An already-ingested row (12903) still links straight into /pr/<id> on a
-  // click — see the test above — but also carries a standalone "opnieuw
-  // genereren" button (revealed on hover, not inside the <a>) that re-runs
-  // the same ingest workflow without navigating away.
+  // An already-ingested row (12903) opens the same click-to-popover menu as
+  // every other row; its menu carries "Open review-boom" (see the test above)
+  // plus "Opnieuw genereren", which re-runs the same ingest workflow without
+  // navigating away.
   test('regenerating an already-ingested PR reruns ingest without navigating', async ({ page }) => {
     await page.goto('/pr-overview')
     await page.waitForLoadState('networkidle')
@@ -136,11 +140,13 @@ test.describe('PR Review Tree — PR inbox', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
     })
 
-    const regenerate = page.locator('[data-row="12903"] [data-testid="regenerate-page"]')
+    const row = page.locator('[data-testid="pr-row"][data-pr="12903"]')
+    await row.click()
+    const regenerate = page.locator('[data-testid="pr-popover"] [data-testid="regenerate-page"]')
     await regenerate.click()
 
     await expect.poll(() => ingestCalls).toBe(1)
-    // No navigation — the row's own <a href> click must not have fired.
+    // No navigation — the "Opnieuw genereren" action stays on the overview.
     await expect(page).toHaveURL(/\/pr-overview$/)
   })
 
@@ -152,10 +158,14 @@ test.describe('PR Review Tree — PR inbox', () => {
       await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"gh unreachable"}' })
     })
 
-    const regenerate = page.locator('[data-row="12903"] [data-testid="regenerate-page"]')
+    const row = page.locator('[data-testid="pr-row"][data-pr="12903"]')
+    await row.click()
+    const regenerate = page.locator('[data-testid="pr-popover"] [data-testid="regenerate-page"]')
     await regenerate.click()
 
-    await expect(page.locator('[data-row="12903"] [data-testid="regenerate-error"]')).toHaveText(/gh unreachable/)
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="regenerate-error"]')).toHaveText(
+      /gh unreachable/,
+    )
     await expect(page).toHaveURL(/\/pr-overview$/)
     await expect(regenerate).toBeEnabled()
   })
@@ -191,18 +201,22 @@ test.describe('PR Review Tree — PR inbox', () => {
     })
   }
 
-  // On an already-generated row (12903 has a graph), both keys must instead
-  // navigate straight into the review tree — identical to clicking the row's
-  // own <a href>.
+  // On an already-generated row (12903 has a graph), both keys must open the
+  // same popover as a click would — but with the ingested action set
+  // ("Open review-boom" / "Opnieuw genereren") instead of "Genereer".
   for (const key of ['Enter', 'ArrowRight']) {
-    test(`${key} navigates into /pr/<id> on a generated row, same as a click`, async ({ page }) => {
+    test(`${key} opens the popover on a generated row, same as a click`, async ({ page }) => {
       await page.goto('/pr-overview')
       await page.waitForLoadState('networkidle')
 
       await selectRowByKeyboard(page, 12903)
       await page.keyboard.press(key)
 
-      await expect(page).toHaveURL(/\/pr\/12903/)
+      const openTree = page.locator('[data-testid="pr-popover"] [data-testid="open-tree"]')
+      await expect(openTree).toBeVisible()
+      await expect(openTree).toHaveText(/Open review-boom/)
+      // No navigation happened yet — only the popover opened.
+      await expect(page).toHaveURL(/\/pr-overview$/)
     })
   }
 })
