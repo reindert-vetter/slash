@@ -22,25 +22,24 @@ test.describe('PR Review Tree — related-panel navigation', () => {
   }) => {
     await stepIntoRelated(page)
 
-    // The related-code block gets the light-blue (indigo) border while focused.
-    const related = page.getByTestId('related-code')
-    await expect(related).toHaveClass(/border-indigo-300/)
+    // The related-code card itself has no outer focus border (that container
+    // border was removed so children read as loose blocks, see RelatedPanel.mjs);
+    // focus moving through it is instead observed via the new-comment composer
+    // it hands off to below.
 
     // → moves focus to the "+ Comment op deze regel" button (indigo focus ring).
     // Landing there opens an empty new-comment composer and focuses it, so the
     // reviewer can type straight away. (↓/↑ now walk the code list instead.)
     await page.keyboard.press('ArrowRight')
-    await expect(related).not.toHaveClass(/border-indigo-300/)
     await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
     await expect(page.getByTestId('comment-compose')).toBeFocused()
 
-    // ↑ walks back up to the related block.
+    // ↑ walks back up to the related block, closing the composer again.
     await page.keyboard.press('ArrowUp')
-    await expect(related).toHaveClass(/border-indigo-300/)
+    await expect(page.getByTestId('new-comment')).not.toHaveClass(/ring-indigo-300/)
 
     // ← releases the keyboard back to the diff.
     await page.keyboard.press('ArrowLeft')
-    await expect(related).not.toHaveClass(/border-indigo-300/)
   })
 
   test('↓ into the comment index, → opens the thread (reply focused), ↑ selects an old message', async ({

@@ -1369,12 +1369,8 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
     <aside class="flex min-h-0 shrink-0 flex-row items-start gap-3" data-testid="related-panel">
       <section
         class="${() =>
-          'flex shrink-0 max-h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-white ring-1 transition-[width] ' +
-          (codeCardCollapsed() ? 'w-12 items-center' : 'w-[30rem]') +
-          ' ' +
-          (cs.focus === 'code'
-            ? 'border-indigo-300 ring-indigo-200'
-            : 'border-slate-300 ring-black/5')}"
+          'flex shrink-0 max-h-full min-h-0 flex-col overflow-hidden rounded-xl bg-white transition-[width] ' +
+          (codeCardCollapsed() ? 'w-12 items-center' : 'w-[30rem]')}"
         data-testid="related-code"
       >
         ${() =>
