@@ -101,10 +101,6 @@ const state = reactive({
   // Run ID (.../signals/set). Empty until the ensure-call returns (offline: stays
   // empty and approval is then session-only).
   approveRunId: '',
-  // viewedFiles — files we've told GitHub are fully approved (marked "Viewed" in
-  // Files changed). Kept in sync by syncViewedFiles; not rendered, so it's a
-  // plain Set rather than something arrow.js needs to react to.
-  viewedFiles: new Set(),
   // drill — the stack of "drilled-into" children the reviewer has stepped into
   // from the Onderliggende-code panel (Enter on a resolved child). Each entry is
   // either a real block object reused straight from allBlocks (its own relations/
@@ -520,16 +516,23 @@ function syncViewedFiles() {
       }
     }
     const isComplete = complete && total > 0
-    const wasViewed = state.viewedFiles.has(file)
+    const wasViewed = viewedFiles.has(file)
     if (isComplete && !wasViewed) {
-      state.viewedFiles.add(file)
+      viewedFiles.add(file)
       signalFileViewed(file, true)
     } else if (!isComplete && wasViewed) {
-      state.viewedFiles.delete(file)
+      viewedFiles.delete(file)
       signalFileViewed(file, false)
     }
   }
 }
+
+// viewedFiles — files we've told GitHub are fully approved (marked "Viewed" in
+// Files changed). Kept in sync by syncViewedFiles. It lives at module scope, not
+// on the reactive `state`: arrow.js wraps reactive values in a Proxy, and a
+// proxied Set throws "Method Set.prototype.has called on incompatible receiver".
+// It's never rendered, so it needs no reactivity anyway.
+const viewedFiles = new Set()
 
 function signalFileViewed(file, viewed) {
   fetch(`/api/workflows/${state.approveRunId}/signals/set`, {
