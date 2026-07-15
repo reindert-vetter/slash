@@ -2361,10 +2361,14 @@ function onKeydown(e) {
   }
 
   // Enter opens the palette at the next-block slot. Handled before the empty-blocks
-  // guard so it works even while a PR is still loading.
+  // guard so it works even while a PR is still loading. On stop 1 (the
+  // PR-description column, state.showDescription) there's no block context, so
+  // it opens the same PR-wide menu as `/` instead of the block-scoped palette —
+  // block 0 in the list is a different stop (showDescription is false there)
+  // and keeps the normal block palette.
   if (e.key === 'Enter') {
     e.preventDefault()
-    openMenu()
+    openMenu(state.showDescription ? 'pr' : 'block')
     return
   }
 

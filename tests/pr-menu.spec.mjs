@@ -86,4 +86,40 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await page.getByTestId('command-row').first().click() // "Naar PR-overzicht"
     await page.waitForURL('**/pr-overview')
   })
+
+  // Enter on stop 1 (the PR-description column, state.showDescription) has no
+  // block context to act on, so it opens the same PR-wide menu as `/` instead
+  // of the block-scoped palette (see onKeydown's `openMenu(state.showDescription
+  // ? 'pr' : 'block')`). Block 0 in the list is a different stop and keeps the
+  // regular block palette (COMMANDS), asserted here for contrast.
+  test('Enter on stop 1 (PR description) opens the PR-wide menu; block 0 keeps the block palette', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+
+    const menu = page.getByTestId('command-menu')
+    const rows = page.getByTestId('command-row')
+
+    // Block 0 in the list: Enter opens the block-scoped palette.
+    await expect(menu).not.toBeVisible()
+    await page.keyboard.press('Enter')
+    await expect(menu).toBeVisible()
+    await expect(rows.first()).not.toContainText('Naar PR-overzicht')
+    await page.keyboard.press('Escape')
+    await expect(menu).not.toBeVisible()
+
+    // Step left out of the list into stop 1 (the PR-description column).
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('pr-info-column')).toBeVisible()
+
+    await page.keyboard.press('Enter')
+    await expect(menu).toBeVisible()
+    await expect(rows).toHaveCount(3)
+    await expect(rows.nth(0)).toContainText('Naar PR-overzicht')
+    await expect(rows.nth(1)).toContainText('GitHub')
+    await expect(rows.nth(2)).toContainText('Jira')
+  })
 })

@@ -84,7 +84,13 @@ gedrag:
 **`Enter`** opent een **command-palette** (`src/CommandMenu.mjs`,
 `data-testid=command-menu`): een doorzoekbaar commando-menu dat als **drijvende
 popover net onder de huidige selectie** verschijnt, over de rest van de pagina heen
-— overal in de tree, in welk block dan ook. `home.mjs` (`menuOverlay`) rendert het
+— overal in de tree, in welk block dan ook. Op **stop 1** (de PR-omschrijving-
+kolom, `state.showDescription`, zie "De links→rechts navigatieketen" hierboven) is er geen
+block-context om op te acteren, dus opent `Enter` daar hetzelfde **PR-brede**
+menu als `/` (`openMenu(state.showDescription ? 'pr' : 'block')` in `onKeydown`)
+i.p.v. de block-scoped palette — blok 0 in de lijst is een andere stop
+(`showDescription` is daar `false`) en houdt gewoon de block-palette. `home.mjs`
+(`menuOverlay`) rendert het
 één keer op `<main>`-niveau als `position:fixed` element (`data-testid=
 command-anchor`) met een full-screen catch-laag (`data-testid=command-overlay`) die
 bij een klik buiten het menu sluit. `positionMenu` ankert het net **onder** de
