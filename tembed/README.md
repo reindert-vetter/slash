@@ -10,6 +10,12 @@ This package is abstract and reusable — it knows nothing about any particular
 application. (It is developed inside the `slash` repo as a git subtree and can be
 pulled into any Go project as its own module: `github.com/reindert-vetter/tembed`.)
 
+## Install
+
+```sh
+go get github.com/reindert-vetter/tembed
+```
+
 ## Features
 
 - **Workflows & activities** as Go functions. Activities run once; their result
@@ -79,6 +85,50 @@ _ = engine.Result(id, &out)
 
 On startup, call `engine.Recover()` to resume any runs that were `running` or
 `waiting` when the process stopped.
+
+## Durable timers
+
+`w.Sleep(d)` durably pauses a workflow: the fire time is recorded in history, so
+the timer survives a restart and fires exactly once (`engine.Wait()` blocks
+until any in-flight timer callbacks — e.g. before a test asserts the result —
+have completed):
+
+```go
+engine.RegisterWorkflow("nap", func(w *tembed.Workflow, _ []byte) ([]byte, error) {
+    w.Sleep(20 * time.Millisecond)
+    return json.Marshal("awake")
+})
+
+id, _ := engine.StartWorkflow("nap", nil) // returns immediately, status "waiting"
+engine.Wait()                             // let the timer fire
+
+var got string
+_ = engine.Result(id, &got) // "awake"
+```
+
+## Choosing a store
+
+```go
+// In-memory — tests and ephemeral runs, nothing survives a restart.
+store := tembed.NewMemoryStore()
+
+// JSONL — one human-readable file per run under dir.
+store, err := tembed.NewJSONLStore("data/workflows")
+
+// SQLite — pure-Go (modernc.org/sqlite), no cgo, one DB file.
+store, err := tembed.NewSQLiteStore("data/workflows.db")
+// or reuse an existing *sql.DB:
+store, err := tembed.NewSQLiteStoreDB(db)
+
+// Combine them: SQLite for querying + JSONL as a plain-text audit trail.
+// This is exactly how slash wires its engine (tasks_api.go):
+sq, _ := tembed.NewSQLiteStore(dataDir + "/workflows.db")
+jl, _ := tembed.NewJSONLStore(dataDir + "/workflows")
+engine := tembed.New(tembed.NewMultiStore(sq, jl))
+```
+
+`MultiStore` writes every event to all wrapped stores and reads from the first
+(the primary).
 
 ## Status & limitations
 
