@@ -193,7 +193,10 @@ model** via `GET /api/pr?pr=N`, gevuld door het `pr_status`-workflow (zie
 dan vallen de links terug op de kale PR-URL resp. de Jira-base.
 
 - **`'list'`** (start): `↑`/`↓` kiezen een block in de sidebar, `→` stapt de diff
-  van het geselecteerde block in.
+  van het geselecteerde block in. Volledig goedgekeurde top-level blokken zijn
+  standaard **verborgen** uit deze lijst (knop onderin klapt ze uit); de "Start"-kop
+  toont een PR-brede goedkeurings-teller. Zie de sectie "Verbergen van goedgekeurde
+  blokken" + "Server-side `total`" in `.claude/rules/blocks-and-ingest.md`.
 - **`'diff'`**: `↑`/`↓` lopen door de **wijzigingen** van dat block, `←` stapt
   terug naar de lijst. Loop je voorbij de **laatste** wijziging (`↓`) of de
   **eerste** (`↑`) — je kunt niet verder binnen dit block — dan stap je door

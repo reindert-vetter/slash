@@ -68,6 +68,7 @@ export default function BlockList(state) {
           starting points &nbsp;·&nbsp; ↑ ↓ to choose · → to step into the diff ·
           ← to search
         </p>
+        ${() => approvalSummaryLine(state)}
         <input
           id="block-search"
           data-testid="block-search"
@@ -87,12 +88,76 @@ export default function BlockList(state) {
       </header>
 
       <div class="no-scrollbar min-h-0 flex-1 overflow-y-auto" id="block-scroll">
-        ${() =>
-          state.blocks.length === 0
-            ? emptyState(state)
-            : state.blocks.map((b, i) => row(state, b, i))}
+        ${() => renderList(state)}
       </div>
     </aside>
+  `
+}
+
+// isFullyApproved reports whether a top-level block (and its whole subtree) is
+// completely approved — the same green ✓ state the row pill shows. Driven by the
+// server-backed combined-approval summary (state.approvalSummaries), so it's right
+// even before a block's code has lazily loaded.
+function isFullyApproved(state, b) {
+  const s = state.approvalSummaries && state.approvalSummaries[b.id]
+  return !!s && s.total > 0 && s.done === s.total
+}
+
+// renderList builds the starting-points list. Fully-approved blocks are hidden by
+// default (state.showApproved === false) and revealed by a toggle row at the
+// bottom. It ALWAYS returns a keyed array (never a bare element), so arrow.js
+// never freezes on a single↔array slot-shape switch (see conventions.md): the
+// empty state is wrapped as an array of one keyed element.
+function renderList(state) {
+  if (state.blocks.length === 0) return [emptyState(state).key('empty')]
+  const approvedCount = state.blocks.filter((b) => isFullyApproved(state, b)).length
+  const items = []
+  state.blocks.forEach((b, i) => {
+    if (!state.showApproved && isFullyApproved(state, b)) return
+    items.push(row(state, b, i))
+  })
+  if (approvedCount > 0) items.push(toggleRow(state, approvedCount))
+  return items
+}
+
+// toggleRow is the bottom button that hides/shows the fully-approved blocks.
+function toggleRow(state, count) {
+  return html`
+    <button
+      data-testid="toggle-approved"
+      class="w-full border-t border-slate-100 px-3 py-2 text-left text-xs font-medium text-slate-500 hover:bg-slate-50"
+      @click="${() => (state.showApproved = !state.showApproved)}"
+    >
+      ${() =>
+        state.showApproved
+          ? `Verberg ${count} goedgekeurde ${count === 1 ? 'block' : 'blocks'}`
+          : `Toon ${count} goedgekeurde ${count === 1 ? 'block' : 'blocks'}`}
+    </button>
+  `.key('toggle-approved')
+}
+
+// approvalSummaryLine is the PR-wide combined-approval counter in the header,
+// fed by the server-backed total (state.approvalTotal). Hidden until there's
+// anything to approve.
+function approvalSummaryLine(state) {
+  const t = state.approvalTotal
+  if (!t || t.total === 0) return ''
+  const done = t.done === t.total
+  const remaining = t.total - t.done
+  return html`
+    <p class="mt-1 text-xs" data-testid="approval-summary">
+      <span
+        class="${'rounded px-1.5 py-0.5 font-semibold tabular-nums ' +
+        (done ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600')}"
+        >${done ? '✓ ' : ''}${t.done}/${t.total} goedgekeurd</span
+      >
+      ${() =>
+        done
+          ? ''
+          : html`<span class="ml-1 text-slate-500"
+              >· ${remaining} nog te reviewen</span
+            >`}
+    </p>
   `
 }
 

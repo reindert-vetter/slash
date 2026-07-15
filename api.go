@@ -21,6 +21,7 @@ type server struct {
 func (s *server) routes(staticDir string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/blocks", s.handleBlocks)
+	mux.HandleFunc("/api/blockstats", s.handleBlockStats)
 	mux.HandleFunc("/api/code", s.handleCode)
 	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.HandleFunc("/api/prs", s.handlePRs)
@@ -92,6 +93,33 @@ func (s *server) handleBlocks(w http.ResponseWriter, r *http.Request) {
 		blocks = []Block{}
 	}
 	writeJSON(w, http.StatusOK, blocks)
+}
+
+// handleBlockStats serves GET /api/blockstats?pr=N — per block the number of
+// changed aligned rows a reviewer must approve (the "total"), computed server-side
+// from the base/head worktrees so it is known before a block's code is fetched and
+// lives in the same row-index space as the approved rows. Read-only.
+func (s *server) handleBlockStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr, err := strconv.Atoi(r.URL.Query().Get("pr"))
+	if err != nil || pr <= 0 {
+		http.Error(w, "invalid pr", http.StatusBadRequest)
+		return
+	}
+	blocks, err := blocksByPR(s.db, pr)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	baseDir, headDir := worktreeDirs(s.dataDir, pr)
+	stats := make(map[string]int, len(blocks))
+	for _, b := range blocks {
+		stats[b.ID()] = blockChangedRowCount(baseDir, headDir, b)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pr": pr, "totals": stats})
 }
 
 // handleCode serves GET /api/code?pr=N&file=...&class=...&name=... — the old

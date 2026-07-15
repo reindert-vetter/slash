@@ -64,18 +64,48 @@ navigeerbare lijst tonen.
   platte snapshot i.p.v. elke block-`b.code`, want dat zou de sidebar een
   co-subscriber op de `b.code` van het geselecteerde block maken en de diff
   "stuck on loading"-race hertriggeren (zie `.claude/rules/conventions.md`). De
-  count telt goedgekeurde changed-rows uit `blockRows`, dus **`total` is 0 tot de
-  code van dat block geladen is** (lazy — de counts vullen zich terwijl je
-  navigeert; het geselecteerde block + z'n children laden altijd). De pill is
-  groen met een ✓ zodra `done === total`, anders neutraal; verborgen alleen bij
-  `total === 0`. Dezelfde `{done,total}` hangt per child in de **Onderliggende
-  code**-kaart (`data-testid=related-approval` + een header-rollup
+  count telt goedgekeurde changed-rows. De `done`-kant komt uit de
+  goedgekeurde rij-indices; de **`total`** (aantal goed te keuren changed-rows per
+  block) komt **server-side** uit `GET /api/blockstats?pr=N` — zie hieronder — met
+  een client-side fallback op `changedRows(blockRows(b))` zolang de stats nog niet
+  binnen zijn. De pill is groen met een ✓ zodra `done === total`, anders neutraal;
+  verborgen alleen bij `total === 0`. Dezelfde `{done,total}` hangt per child in de
+  **Onderliggende code**-kaart (`data-testid=related-approval` + een header-rollup
   `related-approval-total`) — zie `.claude/rules/detail-layout.md`. Kanttekening:
   child-blokken zijn (nog) niet los goedkeurbaar (ze staan niet in de
   navigeerbare `state.blocks`), dus hun `done` is voorlopig 0 tot dat er is; de
   `total` maakt de review-omvang van de hele call-boom wél zichtbaar.
   Schema: `.claude/templates/schema.sql` (in sync met de `schemaDDL`-constante in
   `db.go`).
+- **Server-side `total` (`blockstats.go` + `GET /api/blockstats`):** het aantal
+  goed te keuren changed-rows per block wordt **in de backend** berekend zodat het
+  meteen bekend is — óók vóór een block z'n code lazy geladen heeft — en in exact
+  dezelfde aligned-row-indexruimte leeft als de goedgekeurde rijen in
+  `approvals.db`, zodat `done/total` altijd klopt. `blockstats.go` is een **exacte
+  Go-port** van de frontend-`changedRows(blockRows(b))` (`Block.mjs`): het leest de
+  oud/nieuw-broncode uit de base/head-worktrees (zoals `/api/code`), past dezelfde
+  `dedent4` + LCS-line-alignment (`alignRows`/`diffLines`, whitespace-ongevoelig)
+  toe en telt de gewijzigde, niet-ws-only rijen (een pure verwijdering telt als 1
+  filler-rij; een ws-only re-indent telt niet). `GET /api/blockstats?pr=N` geeft
+  `{pr, totals}` (block-id → count) en is **read-only** — het leest alleen
+  worktree-bestanden, dus vrij vanuit een read-handler (write-boundary). De
+  parity met de JS wordt door `TestChangedRowCount` (`blockstats_test.go`) op
+  gedeelde fixtures bewezen (incl. pure deletion + ws-only). Frontend:
+  `home.mjs` (`loadBlockStats` → `state.blockTotals`); `blockApproveCount` prefereert
+  dit backend-`total`.
+- **Verbergen van goedgekeurde blokken (`BlockList.mjs`):** volledig goedgekeurde
+  **top-level** blokken (de pill `done === total`, subtree) worden standaard
+  **verborgen** uit de "Start"-lijst; een knop onderin (`data-testid=toggle-approved`,
+  "Toon N goedgekeurde blocks" / "Verberg …") klapt ze uit
+  (`state.showApproved`, efemeer — niet in de URL). Partial + ongoedgekeurd blijven
+  altijd zichtbaar. Omdat `total` server-side bekend is, werkt dit betrouwbaar vóór
+  de code geladen is. De "Start"-kop toont daarnaast een **PR-brede** teller
+  (`data-testid=approval-summary`, "X/Y goedgekeurd · N nog te reviewen") uit
+  `state.approvalTotal` — gesommeerd over de subtree-counts in dezelfde ontkoppelde
+  `watch` die `approvalSummaries` vult (een platte snapshot, dus de kop wordt nooit
+  co-subscriber op een block-`b.code`). `renderList` geeft **altijd** een keyed
+  array terug (lege staat als array-van-één) om de arrow.js single↔array
+  slot-valkuil te vermijden (zie `.claude/rules/conventions.md`).
 - **Pipeline:** `gh pr view` → `git fetch` (pull-ref + develop, fallback by-sha) →
   twee detached worktrees onder `data/worktrees/pr-<pr>-{base,head}` (**absolute
   paden**!) → `git diff --unified=0` → PHP-scanner (`phpscan.go`, brace-lexer, geen

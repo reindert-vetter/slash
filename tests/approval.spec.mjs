@@ -42,6 +42,10 @@ test.describe('PR Review Tree — combined approval', () => {
       const state = reactive({
         mode: 'list',
         selected: 0,
+        // Show approved blocks too — this test asserts the pill rendering of a
+        // fully-approved row, which is otherwise hidden by default (see
+        // blockstats.spec.mjs for the hide/toggle behaviour itself).
+        showApproved: true,
         blocks: [
           { id: 'b1', category: 'ACTION', label: 'Foo::a', status: 'modified', file: 'app/Foo.php', side: 'new' },
           { id: 'b2', category: 'ACTION', label: 'Foo::b', status: 'modified', file: 'app/Foo.php', side: 'new' },

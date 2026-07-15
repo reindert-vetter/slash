@@ -173,6 +173,20 @@ const state = reactive({
   // to each block's reactive b.code (which would re-trigger the diff
   // "stuck on loading" race). Reassigned wholesale so arrow.js re-renders.
   approvalSummaries: {},
+  // approvalTotal — the PR-wide { done, total } combined-approval count shown in
+  // the "Start" header. Summed over every top-level block's subtree count in the
+  // same off-render watch that fills approvalSummaries (a plain snapshot, so the
+  // header never co-subscribes to any block's b.code).
+  approvalTotal: { done: 0, total: 0 },
+  // blockTotals — per block id → the number of changed rows a reviewer must
+  // approve (the "total"), computed server-side (GET /api/blockstats). Authoritative
+  // and known immediately, so done/total is right before a block's code lazily
+  // loads; blockApproveCount prefers it and falls back to the client-side count.
+  blockTotals: {},
+  // showApproved — when false (default) fully-approved top-level blocks are hidden
+  // from the starting-points list, revealed by the "Toon N goedgekeurde blokken"
+  // button at the bottom. Ephemeral UI state, not bound to the URL.
+  showApproved: false,
   ingesting: false,
   error: '',
   onIngest: ingest,
@@ -437,6 +451,25 @@ async function loadBlocks() {
   applyBlockRefRestore()
   loadCallResolve()
   loadApprovals()
+  loadBlockStats()
+}
+
+// loadBlockStats fetches the server-computed per-block approval totals (the number
+// of changed rows to approve, GET /api/blockstats) into state.blockTotals. This is
+// the authoritative "total" — known immediately, before a block's code lazily
+// loads, and in the same row-index space as the approved rows. Best-effort:
+// offline, blockApproveCount just falls back to the client-side row count.
+async function loadBlockStats() {
+  try {
+    const res = await fetch(`/api/blockstats?pr=${state.pr}`)
+    if (!res.ok) return
+    const data = await res.json()
+    if (data && data.totals && typeof data.totals === 'object') {
+      state.blockTotals = data.totals
+    }
+  } catch (_) {
+    /* offline — fall back to client-side counts */
+  }
 }
 
 // loadApprovals ensures the per-PR `approve` tracker is running (its Run ID is
@@ -944,13 +977,26 @@ function nestedPrBlocks(b, seen = new Set()) {
 }
 
 // blockApproveCount returns { done, total } for a single block: how many of its
-// changed rows the reviewer has approved out of the total. total is 0 until the
-// block's code has loaded (blockRows needs it).
+// changed rows the reviewer has approved out of the total. The total prefers the
+// server-computed count (state.blockTotals, GET /api/blockstats) so it is right
+// immediately — even before the block's code has lazily loaded; it falls back to
+// the client-side row count when stats aren't in yet. `done` counts approved
+// changed rows: exact once code is loaded (intersect with the changed rows),
+// otherwise the size of approvedRows (which only ever holds changed-row indices).
 function blockApproveCount(b) {
+  const backendTotal =
+    state.blockTotals && typeof state.blockTotals[b.id] === 'number'
+      ? state.blockTotals[b.id]
+      : null
   const all = changedRows(blockRows(b))
-  if (!all.length) return { done: 0, total: 0 }
   const set = approvedRowSet(b)
-  return { done: all.filter((i) => set.has(i)).length, total: all.length }
+  if (all.length) {
+    const done = all.filter((i) => set.has(i)).length
+    return { done, total: backendTotal !== null ? backendTotal : all.length }
+  }
+  // Code not loaded yet — lean on the backend total, count approved rows directly.
+  if (backendTotal === null) return { done: 0, total: 0 }
+  return { done: Math.min(set.size, backendTotal), total: backendTotal }
 }
 
 // subtreeApproveCount aggregates blockApproveCount over b and every PR block
@@ -1725,6 +1771,7 @@ watch(
     // in approval re-renders the per-child badges.
     state.codeVersion,
     state.approvalSummaries,
+    state.blockTotals,
     state.drill,
     focusedBlock() && focusedBlock().code,
   ],
@@ -1749,7 +1796,14 @@ watch(
 // any approve or code load. The count itself is computed in the callback.
 watch(
   () => {
-    const deps = [state.blocks, state.allBlocks, state.relations, state.callResolve, state.codeVersion]
+    const deps = [
+      state.blocks,
+      state.allBlocks,
+      state.relations,
+      state.callResolve,
+      state.codeVersion,
+      state.blockTotals,
+    ]
     for (const b of state.allBlocks) {
       deps.push(b.approvedRows)
       deps.push(b.approvedCalls)
@@ -1758,8 +1812,16 @@ watch(
   },
   () => {
     const map = {}
-    for (const b of state.blocks) map[b.id] = subtreeApproveCount(b)
+    let done = 0
+    let total = 0
+    for (const b of state.blocks) {
+      const c = subtreeApproveCount(b)
+      map[b.id] = c
+      done += c.done
+      total += c.total
+    }
     state.approvalSummaries = map
+    state.approvalTotal = { done, total }
   },
 )
 
