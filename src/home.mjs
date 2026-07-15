@@ -45,6 +45,7 @@ import RelatedPanel, {
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { bindUrlState, num } from './urlState.mjs'
+import { renderMarkdown } from './markdown.mjs'
 
 // The PR under review comes from the path: /pr/<id>. Without one there's nothing
 // to show, so bounce to the overview page that lists the ingested PRs.
@@ -2880,21 +2881,30 @@ function prInfoCard(state) {
         <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Samenvatting</div>
         ${() =>
           state.prMeta.summary
-            ? html`<p class="whitespace-pre-wrap text-[13px] leading-relaxed text-slate-700">${state.prMeta.summary}</p>`
+            ? html`<div
+                class="markdown-body text-[13px] leading-relaxed text-slate-700"
+                .innerHTML="${() => renderMarkdown(state.prMeta.summary)}"
+              ></div>`
             : html`<p class="text-[13px] italic text-slate-400">samenvatting genereren…</p>`}
       </div>
       <div data-testid="pr-info-body">
         <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Omschrijving</div>
         ${() =>
           state.prMeta.body
-            ? html`<p class="whitespace-pre-wrap text-[13px] leading-relaxed text-slate-700">${state.prMeta.body}</p>`
+            ? html`<div
+                class="markdown-body text-[13px] leading-relaxed text-slate-700"
+                .innerHTML="${() => renderMarkdown(state.prMeta.body)}"
+              ></div>`
             : html`<p class="text-[13px] text-slate-400">geen omschrijving</p>`}
         ${() =>
           state.prMeta.jiraTitle
             ? html`<div class="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5" data-testid="pr-info-jira">
                 <div class="text-[12px] font-medium text-slate-700">Jira: ${state.prMeta.jiraTitle}</div>
                 ${state.prMeta.jiraDesc
-                  ? html`<p class="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-slate-600">${state.prMeta.jiraDesc}</p>`
+                  ? html`<div
+                      class="markdown-body mt-1 text-[12px] leading-relaxed text-slate-600"
+                      .innerHTML="${() => renderMarkdown(state.prMeta.jiraDesc)}"
+                    ></div>`
                   : ''}
               </div>`
             : ''}

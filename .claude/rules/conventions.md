@@ -124,6 +124,30 @@
   alleen de diff-panes maar ook de Onderliggende-code-kaarten + de comment-hint
   (`RelatedPanel.mjs`) en de footer krijgen dezelfde kleuren. (Was eerder gescoped
   op `[data-testid=code-diff]`, waardoor alles buiten de diff-panes kleurloos bleef.)
+- **Markdown-rendering:** `snarkdown` (v2.0.0, MIT, ~1kb) staat gevendord als
+  ES-module in `src/vendor/snarkdown.js` (verbatim upstream-algoritme, alleen een
+  vendoring-headercomment toegevoegd) — gebruikt precies zoals het uit de doos
+  komt: koppen, lijsten, bold/italic/strike, blockquotes, inline code, links,
+  afbeeldingen, `---`. `src/markdown.mjs` is een dunne wrapper
+  (`renderMarkdown(text) -> safeHtmlString`) die er twee dingen omheen legt: (1)
+  fenced code blocks worden er **vóór** alles uitgehaald en met dezelfde Prism
+  `highlight()` als de diff-panes (`Block.mjs`) gerenderd i.p.v. snarkdown's eigen
+  kale `<pre><code>` — vandaar ook de `.language-php`-class op elk code-fragment
+  (dezelfde CSS-scope hierboven); (2) een XSS-veiligheidslaag: de **hele** ruwe
+  Markdown-tekst wordt eerst volledig HTML-ge-escaped (`escapeHtml`, `&<>"`) vóórdat
+  hij naar snarkdown gaat — snarkdown zelf escapet **geen** losse HTML in de
+  brontekst, alleen de attribuut-waarden die het zelf opbouwt (link/image-URL's) —
+  en link/image-URL's gaan daarna nog door `sanitizeUrls`, dat een
+  `javascript:`/`vbscript:`/`data:text/html`-schema neutraliseert als extra laag
+  (snarkdown's eigen `encodeAttr` escapet al de quote in een URL, dus een
+  `<img src>` kan sowieso geen los `onerror=`-attribuut injecteren). Gebruikt in
+  `prInfoCard` (`home.mjs`) voor de PR-samenvatting/-omschrijving/Jira-omschrijving
+  via de `.innerHTML`-binding; een klein `.markdown-body`-stijlblok in
+  `index.html` (koppen/lijsten/links/blockquote/code/afbeeldingen) is de
+  hand-geschreven typography-laag — Tailwind Play CDN heeft geen
+  typography-plugin zonder build-stap. **Geen** GFM-tabellen of
+  taak-checklists (`- [ ]`) — bewust buiten scope gehouden, snarkdown ondersteunt
+  ze niet en er is geen extensie voor gebouwd.
 - Go: `net/http` `ServeMux`, handlers per feature. De `/api/`-bridge shelt uit naar
   `gh`/`claude` via `os/exec` — valideer altijd input voordat je het aan een
   subproces geeft.
