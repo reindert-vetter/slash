@@ -7,6 +7,7 @@ import BlockList from './BlockList.mjs'
 import Footer from './Footer.mjs'
 import Block, {
   blockRows,
+  blockApproved,
   changeGroups,
   changedRows,
   diffStat,
@@ -1385,8 +1386,10 @@ async function openTask(run) {
 // `mode` selects which command list resolveCommands shows: 'block' (the
 // default, the block palette opened by Enter), 'comment' (opened by Enter on a
 // focused, not-yet-replied-to comment row — see COMMENT_COMMANDS), 'pr' (the
-// general PR-wide tree menu opened by `/` — see PR_COMMANDS), or 'compose' (the
-// comment-kind menu opened on a filled composer — see COMPOSE_COMMANDS).
+// general PR-wide tree menu opened by `/` — see PR_COMMANDS), 'compose' (the
+// comment-kind menu opened on a filled composer — see COMPOSE_COMMANDS), or
+// 'postApprove' (opened right after a palette approve action that still leaves
+// a not-yet-approved unit ahead — see afterApproveAction/POSTAPPROVE_COMMANDS).
 const menu = reactive({ open: false })
 let ms = reactive({ query: '', sel: 0, sub: null, mode: 'block' })
 
@@ -1440,6 +1443,33 @@ const COMPOSE_COMMANDS = [
       { id: 'compose-jira-subtask', label: 'Subtaak aanmaken', hint: 'todo', run: () => {} },
       { id: 'compose-jira-task', label: 'Nieuwe taak aanmaken', hint: 'todo', run: () => {} },
     ],
+  },
+]
+
+// POSTAPPROVE_COMMANDS — shown right after a palette approve action (menu mode
+// 'postApprove', see afterApproveAction) when there's a next not-yet-approved
+// unit still ahead: continue straight to it, or just close. Only reached from
+// the command-palette approve action — the top checkbox in Block.mjs stays a
+// direct toggle and never opens this menu.
+const POSTAPPROVE_COMMANDS = [
+  {
+    id: 'postapprove-next',
+    label: 'Ga door naar de volgende niet-goedgekeurde code',
+    hint: 'volgende',
+    run: () => {
+      if (postApproveTarget) applyNextUnapproved(postApproveTarget)
+      postApproveTarget = null
+    },
+  },
+  {
+    id: 'postapprove-close',
+    label: 'Sluit menu',
+    hint: 'sluit',
+    // Nothing to do — runCommand already closed the palette. Just drop the
+    // stashed target so a later unrelated navigation can't reuse it.
+    run: () => {
+      postApproveTarget = null
+    },
   },
 ]
 
@@ -1900,7 +1930,9 @@ function approveTargetRows() {
 // reassigns b.approvedRows so arrow.js re-renders the checkbox and the pane bars.
 // At call granularity a row can hold several call segments, so that case defers
 // to toggleCallApprove, which approves just the one segment instead of the whole
-// row.
+// row. Only called from the command palette (COMMANDS' 'approve' item) — the top
+// checkbox in Block.mjs calls toggleBlockApproval directly and doesn't run
+// afterApproveAction, per the postApprove-menu scope decision below.
 function toggleApprove() {
   const b = curBlock()
   if (!b) return
@@ -1915,6 +1947,8 @@ function toggleApprove() {
   target.forEach((i) => (allIn ? set.delete(i) : set.add(i)))
   b.approvedRows = [...set].sort((x, y) => x - y)
   persistApproval(b)
+  // allIn was false → this action just ADDED approval (not revoked it).
+  afterApproveAction(!allIn)
 }
 
 // toggleCallApprove flips approval of exactly the one call segment the
@@ -1941,6 +1975,9 @@ function toggleCallApprove(b) {
       : [...callSet].filter((k) => k.startsWith(row + ':')),
   )
   const key = callKey(row, unit.segStart)
+  // Not yet in `keys` → this action is ADDING the segment (approving), not
+  // removing it.
+  const approving = !keys.has(key)
   if (keys.has(key)) keys.delete(key)
   else keys.add(key)
 
@@ -1954,6 +1991,95 @@ function toggleCallApprove(b) {
   }
   b.approvedRows = [...rowSet].sort((x, y) => x - y)
   persistApproval(b)
+  afterApproveAction(approving)
+}
+
+// unitFullyApproved reports whether every changed row (or, at gran==='call', the
+// one call segment) a navigation unit covers is approved — the same scoping
+// approveTargetRows uses, so "next not-approved" agrees with what an approve
+// action would actually cover. `all` is the block's changedRows, passed in so
+// callers that already have it don't recompute it per unit.
+function unitFullyApproved(b, unit, gran, all) {
+  if (gran === 'call') return callUnitApproved(b, unit)
+  const rowsInUnit = all.filter((i) => i >= unit.start && i <= unit.end)
+  if (!rowsInUnit.length) return true
+  const set = approvedRowSet(b)
+  return rowsInUnit.every((i) => set.has(i))
+}
+
+// findNextUnapproved locates the next navigation unit that isn't (fully)
+// approved yet, searching forward only: first past the current position within
+// the current block at its current granularity, then — once that block is
+// exhausted or we're not even in diff mode — through state.blocks in sidebar
+// order at 'group' granularity, lazily loading each candidate's code the same
+// way the look-ahead preview does. Returns a landing plan {selected, gran,
+// change}, or null once nothing not-yet-approved remains ahead. Async because a
+// not-yet-visited block's code may still need fetching.
+async function findNextUnapproved() {
+  if (state.mode === 'diff') {
+    const b = state.blocks[state.selected]
+    if (b) {
+      const rows = blockRows(b)
+      const all = changedRows(rows)
+      const units = unitsFor(rows, state.gran)
+      for (let i = state.change + 1; i < units.length; i++) {
+        if (!unitFullyApproved(b, units[i], state.gran, all)) {
+          return { selected: state.selected, gran: state.gran, change: i }
+        }
+      }
+    }
+  }
+  for (let idx = state.selected + 1; idx < state.blocks.length; idx++) {
+    const b = state.blocks[idx]
+    await ensureCode(b)
+    const rows = blockRows(b)
+    const all = changedRows(rows)
+    // No navigable changes here (nothing to approve), or already fully approved
+    // — keep looking at the next block.
+    if (!all.length || blockApproved(b)) continue
+    const units = unitsFor(rows, 'group')
+    const change = units.findIndex((u) => !unitFullyApproved(b, u, 'group', all))
+    if (change < 0) continue
+    return { selected: idx, gran: 'group', change }
+  }
+  return null
+}
+
+// applyNextUnapproved jumps the keyboard cursor to a plan findNextUnapproved
+// found — driven by the postApprove menu's "Ga door" command. Mirrors
+// openTask/enterDiff's reset of the drilled-column state when landing on a
+// different block.
+function applyNextUnapproved(target) {
+  if (target.selected !== state.selected) {
+    state.selected = target.selected
+    state.drill = []
+    state.drillCursor = []
+    state.focusLevel = 0
+  }
+  state.mode = 'diff'
+  state.gran = target.gran
+  state.change = target.change
+  scrollChangeIntoView()
+}
+
+// postApproveTarget stashes the landing plan findNextUnapproved found right
+// after an approving action, for the postApprove menu's "Ga door" command to
+// jump to without recomputing — safe because the palette owns the keyboard
+// while it's open, so the navigation state can't have moved in the meantime.
+let postApproveTarget = null
+
+// afterApproveAction runs once a palette approve command has just ADDED
+// approval (`approving`, see toggleApprove/toggleCallApprove — un-approving
+// never reaches here). If there's a next not-yet-approved unit ahead, stash it
+// and open the postApprove follow-up menu (continue / close); if nothing's
+// left ahead, leave the menu closed as usual (see runCommand).
+function afterApproveAction(approving) {
+  if (!approving) return
+  findNextUnapproved().then((target) => {
+    if (!target) return
+    postApproveTarget = target
+    openMenu('postApprove')
+  })
 }
 
 const COMMANDS = [
@@ -2123,6 +2249,10 @@ function resolveCommands(query) {
   // The comment-scoped menu (Enter on a focused comment row) is just its own
   // small list — no submenu, no make-a-comment fallback.
   if (ms.mode === 'comment') return filterCommands(COMMENT_COMMANDS, query)
+  // The postApprove follow-up (opened right after an approve action finds a
+  // next not-yet-approved unit ahead): just its two choices, no submenu, no
+  // make-a-comment fallback.
+  if (ms.mode === 'postApprove') return filterCommands(POSTAPPROVE_COMMANDS, query)
   // In a submenu we only show (and filter) that parent's children — no
   // make-a-comment fallback, since the submenu is a plain choice list.
   if (ms.sub) return filterCommands(ms.sub, query)
@@ -2168,7 +2298,7 @@ window.addEventListener('scroll', repositionMenu, true) // capture: catch inner 
 // openMenu opens the palette, then a frame later (once it's rendered and its size
 // is known) focuses the input and positions it just beneath the current selection.
 // `mode` picks the command list (see resolveCommands): 'block' (default),
-// 'comment', 'pr' or 'compose'. It installs a FRESH `ms` reactive so the previous
+// 'comment', 'pr', 'compose' or 'postApprove'. It installs a FRESH `ms` reactive so the previous
 // open's (undisposed) CommandMenu bindings can't fire when this menu mutates its
 // state — see the note on the menu/ms split.
 function openMenu(mode = 'block') {

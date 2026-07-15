@@ -145,6 +145,30 @@ menu-render én de keyboard-handler zodat beide dezelfde lijst zien. `CommandMen
 zelf is puur presentatie: het krijgt `menu`, een `resolve(query)`-functie en `onRun`,
 en bevat geen filter- of navigatielogica.
 
+**Na het goedkeuren via de palette** (niet via de top-checkbox op de block-kaart —
+die blijft een direct togglende klik zonder vervolg) opent, als er nog een
+volgende niet-goedgekeurde unit bestaat, meteen een **vervolgmenu**
+(`menu.mode = 'postApprove'`, `POSTAPPROVE_COMMANDS` in `home.mjs`): **"Ga door
+naar de volgende niet-goedgekeurde code"** (default, eerste item — navigeert
+alleen, keurt niets automatisch goed) of **"Sluit menu"**. Dit triggert alleen
+als de actie goedkeuring **toevoegde** (`toggleApprove`/`toggleCallApprove`
+detecteren dat via `allIn`/`keys.has(key)` **vóór** de mutatie — intrekken van een
+goedkeuring opent dit menu nooit) én er daadwerkelijk nog iets openstaat
+(`afterApproveAction` → `findNextUnapproved()`; niets meer open → het menu blijft
+gewoon dicht, zoals altijd). "Volgende" is **blok-overstijgend**: eerst verder
+binnen het huidige blok op de huidige granulariteit (voorbij `state.change`),
+en als dat blok klaar is, verder door `state.blocks` in sidebar-volgorde
+(altijd op `'group'`-niveau) — met lazy `ensureCode`-fetches voor blokken die
+nog niet bezocht zijn, net als de look-ahead-preview. Alleen **voorwaarts**, geen
+wrap en geen terugzoeken naar eerder overgeslagen units. `findNextUnapproved`
+stasht de gevonden bestemming in `postApproveTarget`; "Ga door" past 'm toe via
+`applyNextUnapproved` (mirror van `openTask`'s block-wissel-reset: een andere
+`state.selected` maakt `state.drill`/`drillCursor`/`focusLevel` leeg) zonder te
+herberekenen — de palette bezit de keyboard zolang hij open is, dus de
+navigatie-state kan intussen niet verschoven zijn. Dit is een eenmalige stap: na
+het navigeren opent er **geen** nieuw vervolgmenu vanzelf — de reviewer keurt de
+nieuwe unit zelf weer goed met `Enter`.
+
 Hetzelfde menu-mechanisme bedient ook een **comment-scoped** variant: staat de
 keyboard op een geplaatste comment-rij in `RelatedPanel` (`cs.focus === 'comment'`,
 vóór het instappen in de thread) én is het reply-veld nog **leeg**, dan opent
