@@ -85,11 +85,24 @@ link precies terugkomt waar je was. `src/urlState.mjs` biedt `bindUrlState(state
 fields, { ns })`: het herstelt bij load de opgegeven keys uit de URL naar de
 reactive `state` en schrijft daarna elke wijziging terug via
 `history.replaceState` (een arrow.js `watch`, dus geen history-spam). `home.mjs`
-bindt de hoofd-navigatie (`selected`→`sel`, `mode`, `change`→`chg`,
+bindt de hoofd-navigatie (`blockRef`→`sel`, `mode`, `change`→`chg`,
 `gran`→`gran`); de **PR zit in het pad** (`/pr/<id>`, zie
 `.claude/rules/pages-and-routing.md`), niet in de query. Een `default`-waarde
 wordt uit de URL weggelaten zodat die kort/canoniek blijft (dus `gran` verschijnt
 alleen bij `line`/`call`, niet bij de default `group`).
+`sel` codeert de **block-referentie** `${file}:${line}` — niet de rauwe index in
+`state.blocks` — omdat die index verschuift zodra de linkerlijst herschikt
+(zoeken, of een block dat via een relatie/call-resolve-reload naar "Onderliggende
+code" verhuist); `file:line` overleeft dat. Een `watch` op `state.selected`/
+`state.blocks` herleidt `state.blockRef` bij elke selectiewijziging (`home.mjs`);
+bij load snapshot't `blockRefPending` de uit de URL herstelde referentie vóórdat
+diezelfde watch 'm (met nog lege `state.blocks`) zou overschrijven, en
+`applyBlockRefRestore` lost 'm — analoog aan `RelatedPanel.applyRelRestore` — één
+keer op naar een index zodra `loadBlocks` de blocks heeft gevuld; niet gevonden
+(verlopen/gedeelde link) → de bestaande index-clamp (naar 0) blijft staan. Anders
+dan `gran`/`mode`/`chg` heeft `sel` geen "default" die uit de URL verdwijnt zodra
+er een block geladen is: elk block (ook het eerste) heeft een echte `file:line`,
+dus `sel` staat structureel in de URL zodra de PR geladen is.
 Elk **extra venster/paneel** krijgt een eigen `ns` zodat zijn params náást de
 hoofd-navigatie in dezelfde URL staan zonder te botsen. Het `RelatedPanel` gebruikt
 dit echt: `bindUrlState(cs, …, { ns: 'rel' })` bindt de **paneel-cursor**

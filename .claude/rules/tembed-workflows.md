@@ -228,9 +228,16 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   ander pattern dan `/api/workflows/`) geeft `{ok,runs:[...]}` — élke workflow-run
   van die PR (`RunsForPR` in `tasks_api.go` filtert `engine.Runs()` op het
   `pr`-veld in elke run's opgeslagen input, dus `pr_inbox` — per-repo, geen
-  `pr`-veld — valt er vanzelf uit), nieuwste `updatedAt` eerst. Voedt de
+  `pr`-veld — valt er vanzelf uit), nieuwste `updatedAt` eerst. Elke
+  `task_code_comment`-run draagt daarnaast een genest, optioneel `comment`-veld
+  (`WorkflowRunView.Comment`, een `*CommentRef`): `RunsForPR` parseert de run's
+  eigen (immutable) `Input` nogmaals als `CodeCommentInput` en vult
+  `{file,label,gran,line,rowStart,rowEnd,snippet}` — `snippet` is `Body`
+  afgekapt op een woordgrens (`commentSnippet`, ~60 tekens + `…`). `RunID` (==
+  de comment's id, zie boven) staat al op de buitenste view. Voedt de
   "Taken"-kolom (`workflows-panel`) in `RelatedPanel`, zie
-  `.claude/rules/detail-layout.md`.
+  `.claude/rules/detail-layout.md`: de omschrijving per rij en de klik-door-naar-
+  de-comment (`openTask` in `home.mjs`) leunen op dit veld.
   Voor de PR-metadata: `POST /api/workflows/pr_status {pr}` (ensure de tracker,
   die synchroon de drie stages draait) + read-only `GET /api/pr?pr=N` (leest
   het `prmeta`-read-model: `{ok,pr,title,url,updatedAt,body,author,additions,

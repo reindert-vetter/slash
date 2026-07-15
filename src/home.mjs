@@ -37,6 +37,7 @@ import RelatedPanel, {
   setCommentScope,
   setRelated,
   focusedRelatedChild,
+  selectComment,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { bindUrlState, num } from './urlState.mjs'
@@ -130,6 +131,16 @@ const state = reactive({
   // entry, so the Onderliggende-code panel + tasks slide along with the focus.
   focusLevel: 0,
   selected: 0,
+  // blockRef — the URL-facing identity of the selected block: `${file}:${line}`
+  // instead of its raw index into state.blocks. An index shifts whenever the
+  // left list is filtered/reordered (search, a relation/call-resolve reload
+  // pulling a block out into "Onderliggende code"), so it made a poor, unstable
+  // URL anchor; file+line survives all of that. Mirrored to `?sel=` (see
+  // bindUrlState below) by a watch that re-derives it from state.selected, and
+  // resolved back to an index once after loadBlocks (see the blockRef-restore
+  // note further down) — never read directly by the navigation, which still
+  // works purely in terms of `selected`.
+  blockRef: '',
   // mode: 'list' — up/down move between blocks in the sidebar; → steps into the
   // selected block's diff. 'diff' — up/down move between change groups inside the
   // block, and once past the last/first change they flow straight into the
@@ -183,11 +194,49 @@ const state = reactive({
 // sit alongside these in the same query string. Do this before the first render
 // so restored values are already in `state`.
 bindUrlState(state, [
-  { key: 'selected', param: 'sel', parse: num(0), default: 0 },
+  { key: 'blockRef', param: 'sel', default: '' },
   { key: 'mode', param: 'mode', default: 'list' },
   { key: 'change', param: 'chg', parse: num(0), default: 0 },
   { key: 'gran', param: 'gran', default: 'group' },
 ])
+
+// restoredBlockRef snapshots whatever bindUrlState just restored into
+// state.blockRef from `?sel=` *before* the write-back watch below (which runs
+// once immediately, per arrow.js' watch semantics) can clobber it: at this
+// point state.blocks is still empty, so that first run recomputes blockRef as
+// '' — see the async-clobber pitfall in CLAUDE.md/the url-state skill.
+// blockRefPending carries the still-unresolved reference through to
+// applyBlockRefRestore, called once after the first loadBlocks() (see below);
+// null once applied (or if there was nothing to restore) so it never hijacks
+// later navigation.
+let blockRefPending = state.blockRef || null
+
+// Keep blockRef mirroring the selected block (by file:line, not index) so a
+// refresh/shared link restores the same block regardless of how the left
+// list has since been filtered/reordered. Reads state.blocks/selected inline
+// (the watch-getter convention — see conventions.md) so it reliably re-runs
+// on every selection change.
+watch(
+  () => [state.selected, state.blocks],
+  () => {
+    const b = state.blocks[state.selected]
+    state.blockRef = b ? `${b.file}:${b.line}` : ''
+  },
+)
+
+// applyBlockRefRestore resolves the `?sel=file:line` restored at load time
+// into a real state.selected index, once state.blocks is populated (called at
+// the end of loadBlocks — the same "resolve after the data push" pattern as
+// RelatedPanel's applyRelRestore). Not found (stale/shared link, or the block
+// got filtered out) → leave whatever recomputeLeftList already clamped
+// state.selected to.
+function applyBlockRefRestore() {
+  if (blockRefPending == null) return
+  const ref = blockRefPending
+  blockRefPending = null
+  const idx = state.blocks.findIndex((b) => `${b.file}:${b.line}` === ref)
+  if (idx >= 0) state.selected = idx
+}
 
 // groupsFor returns the group-granularity change runs of a block (empty until its
 // code has loaded). Used for the list-mode preview, which always previews the
@@ -378,6 +427,7 @@ async function loadBlocks() {
   state.allBlocks = all
   state.relations = rels
   recomputeLeftList()
+  applyBlockRefRestore()
   loadCallResolve()
   loadApprovals()
 }
@@ -1166,6 +1216,43 @@ function enterDiff() {
   state.drillCursor = []
   state.focusLevel = 0
   scrollChangeIntoView()
+}
+
+// openTask jumps to what a "Taken" row (RelatedPanel's workflows section)
+// points at — currently only meaningful for a task_code_comment run that
+// carries a resolved `comment` reference (see WorkflowRunView.comment in
+// tasks_api.go): it selects the comment's block, steps into its diff on the
+// comment's exact unit (gran + row range), and finally selects the comment's
+// own thread in the panel. Every other run type is purely informational, so
+// this is a no-op for them. Fails silently at every step (block not found,
+// comment not yet loaded) rather than throwing — a stale/racy click should
+// just do nothing.
+async function openTask(run) {
+  const c = run && run.comment
+  if (!c) return
+  const idx = state.blocks.findIndex((b) => b.file === c.file && b.label === c.label)
+  if (idx < 0) return
+  state.selected = idx
+  state.mode = 'diff'
+  state.drill = []
+  state.drillCursor = []
+  state.focusLevel = 0
+  const b = state.blocks[idx]
+  await ensureCode(b)
+  const rows = blockRows(b)
+  const gran = c.gran || 'group'
+  state.gran = gran
+  const units = unitsFor(rows, gran)
+  state.change = units.length ? unitAtRow(units, c.rowStart >= 0 ? c.rowStart : 0) : 0
+  scrollChangeIntoView()
+  // Give arrow.js a couple of microtask turns to flush the setCommentScope
+  // watch that the navigation change above just queued, so RelatedPanel's
+  // comment index (cs.view) is scoped to this unit before we select the
+  // comment within it — selectComment looks the id up in cs.view, not the
+  // full unfiltered list.
+  await Promise.resolve()
+  await Promise.resolve()
+  selectComment(run.runId)
 }
 
 // ── Command palette (`/`) ─────────────────────────────────────────────────────
@@ -2742,7 +2829,7 @@ function DetailPanel(state) {
         })
       }}
       ${() =>
-        RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }, () => {
+        RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child), openTask }, () => {
           if (composeHasText()) openMenu('compose')
         }).key('related-panel')}
       ${() => (menu.open ? menuOverlay().key('command-overlay') : '')}

@@ -4,19 +4,44 @@ import { test, expect } from './_fixtures.mjs'
 // is mirrored into the query string via history.replaceState, so a refresh
 // reopens the exact same spot. See src/urlState.mjs + home.mjs (bindUrlState).
 test.describe('PR Review Tree — URL state persistence', () => {
+  // fileLineOf reads the `file:line` reference off the currently-selected
+  // card's meta line — exactly the format `sel` now carries (see
+  // CLAUDE.md/blockRef: the block reference, not its index into state.blocks).
+  async function fileLineOf(page) {
+    const card = page.getByTestId('block-column').locator('article').first()
+    return (await card.locator('.font-mono.text-slate-500').first().innerText()).trim()
+  }
+
+  // normalizeQuery sorts a query string's params so two URLs that carry the
+  // same state compare equal regardless of param insertion order. blockRef's
+  // write-back watch (a plain arrow.js `watch`, distinct from bindUrlState's
+  // own mirror-watch) can flush in a different relative order than the other
+  // fields' — e.g. `sel` landing before or after `mode` — depending on timing,
+  // without the restored state itself differing.
+  function normalizeQuery(search) {
+    return [...new URLSearchParams(search)].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join('&')
+  }
+
   test('navigation writes the query string and survives a reload', async ({ page }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
+    // `sel` mirrors the selected block's `file:line` from the very first render
+    // (blockRef is only '' — the bindUrlState default that gets dropped — before
+    // any block is loaded), unlike the old index-based `sel` whose default 0
+    // matched the first block and so stayed out of the URL.
+    const first = await fileLineOf(page)
+    await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe(first)
 
     // The PR lives in the path (/pr/12903), not the query. Stepping the sidebar
-    // selection writes `sel` into the query string.
+    // selection writes `sel` into the query string as the block's `file:line`.
     await page.keyboard.press('ArrowDown')
-    await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe('1')
+    const second = await fileLineOf(page)
+    await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe(second)
     // Step back to the first block: it is a `modified` block with a change to step
     // into, so enterDiff has change groups to land on (the diff content comes from
-    // the base/head worktrees). sel 0 is the default, so it drops back out of the URL.
+    // the base/head worktrees).
     await page.keyboard.press('ArrowUp')
-    await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBeNull()
+    await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe(first)
 
     // enterDiff needs the block's code loaded to know its change groups; wait for
     // the lazy fetch to settle before stepping in.
@@ -28,7 +53,7 @@ test.describe('PR Review Tree — URL state persistence', () => {
     // Reload from the exact URL — state must come back.
     await page.reload()
     await page.waitForLoadState('networkidle')
-    expect(new URL(page.url()).search).toBe(before)
+    expect(normalizeQuery(new URL(page.url()).search)).toBe(normalizeQuery(before))
 
     // Diff mode restored → the detail panel is in its full-width (left-6) layout.
     const panel = page.locator('[data-testid="detail-panel"]')
@@ -36,16 +61,20 @@ test.describe('PR Review Tree — URL state persistence', () => {
     expect(new URL(page.url()).searchParams.get('mode')).toBe('diff')
   })
 
-  test('stepping back to defaults clears the params again', async ({ page }) => {
+  test('stepping back to the first block restores its sel again', async ({ page }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
+    const first = await fileLineOf(page)
 
     await page.keyboard.press('ArrowDown')
-    await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe('1')
-    await page.keyboard.press('ArrowUp') // back to sel=0, the default
+    const second = await fileLineOf(page)
+    await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe(second)
+    await page.keyboard.press('ArrowUp') // back to the first block
 
-    // Default values are dropped, keeping the URL canonical/short.
-    await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBeNull()
+    // sel mirrors whichever block is selected — unlike other fields (mode/chg/
+    // gran) it has no "default" that drops out of the URL once any block has
+    // loaded, since every block (including the first) has a real file:line.
+    await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe(first)
   })
 })
 

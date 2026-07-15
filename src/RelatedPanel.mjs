@@ -253,6 +253,22 @@ function toComment() {
   focusEl('[data-testid=reaction-compose]')
 }
 
+// selectComment focuses the panel on the comment whose id matches `id` (a
+// task_code_comment run's Run ID == its comment's id) — home.mjs' openTask
+// calls this once it has landed on the comment's block/diff-unit, so clicking
+// a "Taken" row opens that comment's thread. It looks the comment up in the
+// currently-scoped view (cs.view, kept in sync with the navigation by
+// setCommentScope), so it only succeeds once the scope actually covers the
+// comment's unit. Fails silently (returns false) if the comment isn't visible
+// yet — the caller doesn't retry.
+export function selectComment(id) {
+  const vi = cs.view.findIndex((c) => c.id === id)
+  if (vi < 0) return false
+  cs.sel = vi
+  toComment()
+  return true
+}
+
 // threadMessages builds the rendered thread of a comment: its own body as the
 // first message (the reviewer's opening, shown as their own bubble) followed by
 // every reaction. So the comment that titles the thread also reads back as its
@@ -1081,28 +1097,75 @@ const STATUS_BADGES = {
   failed: { label: 'mislukt', cls: 'bg-rose-50 text-rose-700 ring-rose-200' },
 }
 
-function workflowRow(run) {
+// WORKFLOW_STATUS_NOTE maps `${workflow}:${status}` to a short Dutch sentence
+// explaining *why* a non-comment run sits in that status — the description
+// line for every run type except task_code_comment (which instead shows its
+// linked comment's label/line/snippet, see workflowNote).
+const WORKFLOW_STATUS_NOTE = {
+  'pr_status:waiting': 'volgt of de PR gemerged/gesloten wordt',
+  'build_relations:completed': 'relaties opgebouwd',
+  'build_relations:running': 'relaties opbouwen…',
+  'build_relations:waiting': 'relaties opbouwen…',
+  'resolve_call:running': 'zoekt call-definities',
+  'resolve_call:waiting': 'zoekt call-definities',
+  'resolve_call:completed': 'call-definities opgelost',
+  'approve:waiting': 'wacht op goedkeuringen',
+  'pr_inbox:running': 'houdt de PR-inbox bij',
+  'pr_inbox:waiting': 'houdt de PR-inbox bij',
+  'pr_inbox:completed': 'houdt de PR-inbox bij',
+}
+
+// workflowNote builds the small description line under a run's label + status
+// badge: a rich "label · regel N · snippet" for a code-comment run, else a
+// short explanatory sentence keyed on workflow+status (falling back to the
+// kale status when no combination matches).
+function workflowNote(run) {
+  const c = run.comment
+  if (c) {
+    const parts = [c.label]
+    if (c.line) parts.push('regel ' + c.line)
+    if (c.snippet) parts.push('"' + c.snippet + '"')
+    return parts.filter(Boolean).join(' · ')
+  }
+  if (run.status === 'failed') return 'mislukt'
+  return WORKFLOW_STATUS_NOTE[run.workflow + ':' + run.status] || run.status
+}
+
+// workflowRow renders one run. A task_code_comment run with a resolved
+// `comment` reference is clickable: it opens that comment's block/diff-unit
+// and selects its thread (openTask, from home.mjs via the `search` options
+// object). Other run types are purely informational — clicking does nothing.
+function workflowRow(run, openTask) {
   const badge = STATUS_BADGES[run.status] || { label: run.status, cls: 'bg-slate-50 text-slate-500 ring-slate-200' }
   const active = run.status === 'running' || run.status === 'waiting'
+  const clickable = !!(run.comment && openTask)
   return html`
     <div
-      class="${'flex items-center gap-2 rounded-md px-2 py-1.5 ' + (active ? '' : 'opacity-60')}"
+      class="${'flex flex-col gap-0.5 rounded-md px-2 py-1.5 ' +
+      (active ? '' : 'opacity-60') +
+      (clickable ? ' cursor-pointer hover:bg-slate-50' : '')}"
       data-testid="workflow-row"
       data-status="${run.status}"
+      @click="${() => clickable && openTask(run)}"
     >
-      <span class="min-w-0 flex-1 truncate text-[12px] text-slate-700" data-testid="workflow-label"
-        >${WORKFLOW_LABELS[run.workflow] || run.workflow}</span
-      >
-      <span
-        class="${'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ' + badge.cls}"
-        data-testid="workflow-status"
-        >${badge.label}</span
-      >
+      <div class="flex items-center gap-2">
+        <span class="min-w-0 flex-1 truncate text-[12px] text-slate-700" data-testid="workflow-label"
+          >${WORKFLOW_LABELS[run.workflow] || run.workflow}</span
+        >
+        <span
+          class="${'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ' + badge.cls}"
+          data-testid="workflow-status"
+          >${badge.label}</span
+        >
+      </div>
+      <p class="line-clamp-2 text-[11px] leading-snug text-slate-400" data-testid="workflow-note">
+        ${workflowNote(run)}
+      </p>
     </div>
   `
 }
 
-function workflowsSection(state) {
+function workflowsSection(state, openTask) {
   const runs = () => (state && Array.isArray(state.workflows) ? state.workflows : [])
   const activeRuns = () => runs().filter((r) => r.status === 'running' || r.status === 'waiting')
   const doneRuns = () => runs().filter((r) => r.status === 'completed' || r.status === 'failed')
@@ -1137,7 +1200,7 @@ function workflowsSection(state) {
             // running → completed) needs a fresh node, not a patched one —
             // arrow.js only re-runs a keyed node's own bindings on a key
             // change (see the block-card-key convention in conventions.md).
-            for (const r of act) rows.push(workflowRow(r).key('run:' + r.runId + ':' + r.status))
+            for (const r of act) rows.push(workflowRow(r, openTask).key('run:' + r.runId + ':' + r.status))
           }
           if (done.length > 0) {
             rows.push(
@@ -1145,7 +1208,7 @@ function workflowsSection(state) {
                 'hdr-done'
               )
             )
-            for (const r of done) rows.push(workflowRow(r).key('run:' + r.runId + ':' + r.status))
+            for (const r of done) rows.push(workflowRow(r, openTask).key('run:' + r.runId + ':' + r.status))
           }
           return rows
         }}
@@ -1155,6 +1218,7 @@ function workflowsSection(state) {
 }
 
 export default function RelatedPanel(state, commentTarget, search, openCompose) {
+  const openTask = (run) => search && search.openTask && search.openTask(run)
   const kids = () => rc.children
   // Calls the Go resolver could not pin (status unresolved) + any in flight
   // (searching). Both show the "zoeken…" spinner — the LLM search auto-runs.
@@ -1248,7 +1312,7 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
       </section>
 
       ${commentsSection(state, commentTarget, openCompose)}
-      ${workflowsSection(state)}
+      ${workflowsSection(state, openTask)}
     </aside>
   `
 }

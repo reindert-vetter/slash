@@ -179,11 +179,40 @@ func (m *TaskManager) ResumePolling(ctx context.Context) {
 // run scoped to a single PR, with a JSON-friendly shape (camelCase, string
 // status/time).
 type WorkflowRunView struct {
-	RunID     string    `json:"runId"`
-	Workflow  string    `json:"workflow"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	RunID     string      `json:"runId"`
+	Workflow  string      `json:"workflow"`
+	Status    string      `json:"status"`
+	CreatedAt time.Time   `json:"createdAt"`
+	UpdatedAt time.Time   `json:"updatedAt"`
+	Comment   *CommentRef `json:"comment,omitempty"`
+}
+
+// CommentRef is the nested code-comment reference on a task_code_comment run's
+// WorkflowRunView row — parsed from the run's own (immutable) input — so the
+// "Taken" column can describe what the comment is about and the UI can select
+// + scroll to it. RunID (== the comment's id) already sits on the outer view.
+type CommentRef struct {
+	File     string `json:"file"`
+	Label    string `json:"label"`
+	Gran     string `json:"gran"`
+	Line     int    `json:"line"`
+	RowStart int    `json:"rowStart"`
+	RowEnd   int    `json:"rowEnd"`
+	Snippet  string `json:"snippet"`
+}
+
+// commentSnippet trims body to roughly n characters on a word boundary, adding
+// an ellipsis when it truncated — a short preview for the "Taken" row.
+func commentSnippet(body string, n int) string {
+	body = strings.TrimSpace(body)
+	if len(body) <= n {
+		return body
+	}
+	cut := body[:n]
+	if i := strings.LastIndexAny(cut, " \t\n"); i > 0 {
+		cut = cut[:i]
+	}
+	return strings.TrimSpace(cut) + "…"
 }
 
 // RunsForPR lists every workflow run whose input carries the given PR number,
@@ -207,10 +236,21 @@ func (m *TaskManager) RunsForPR(pr int) []WorkflowRunView {
 		if json.Unmarshal(in, &input) != nil || input.PR != pr {
 			continue
 		}
-		out = append(out, WorkflowRunView{
+		view := WorkflowRunView{
 			RunID: r.ID, Workflow: r.Workflow, Status: r.Status,
 			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
-		})
+		}
+		if r.Workflow == WorkflowTaskCodeComment {
+			var cc CodeCommentInput
+			if json.Unmarshal(in, &cc) == nil && cc.File != "" {
+				view.Comment = &CommentRef{
+					File: cc.File, Label: cc.Label, Gran: cc.Gran, Line: cc.Line,
+					RowStart: cc.RowStart, RowEnd: cc.RowEnd,
+					Snippet: commentSnippet(cc.Body, 60),
+				}
+			}
+		}
+		out = append(out, view)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out

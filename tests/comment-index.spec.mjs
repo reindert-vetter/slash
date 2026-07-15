@@ -19,7 +19,7 @@ test.describe('PR Review Tree — comment index scoping', () => {
     await expect(card).toBeVisible()
     const label = (await card.locator('h2').first().innerText()).trim()
     const fileLine = (await card.locator('.font-mono.text-slate-500').first().innerText()).trim()
-    return { label, file: fileLine.split(':')[0] }
+    return { label, file: fileLine.split(':')[0], fileLine }
   }
   // waitBlock waits until the selected card is the block `label` (used after a
   // deep link restores ?sel=, which may select a non-first row).
@@ -29,16 +29,15 @@ test.describe('PR Review Tree — comment index scoping', () => {
 
   test('a comment shows only on its own block, with a 💬 on its row', async ({ page }) => {
     // Discover a block other than the first (so this spec never pollutes the first
-    // block other 12903 specs select by default) and remember its index.
+    // block other 12903 specs select by default) and remember its file:line ref
+    // (?sel= carries the block's `file:line`, not its index — see CLAUDE.md).
     await page.goto('/pr/12903')
     await ready(page)
     const first = await ident(page)
-    let idx = 0
     for (let i = 0; i < 12; i++) {
       if ((await ident(page)).label !== first.label) break
       await page.keyboard.press('ArrowDown')
       await page.waitForTimeout(120)
-      idx++
     }
     const mine = await ident(page)
     expect(mine.label).not.toBe(first.label)
@@ -68,7 +67,7 @@ test.describe('PR Review Tree — comment index scoping', () => {
 
     // Deep-link with its block selected — the comment shows, and its diff row
     // carries a 💬 marker.
-    await page.goto('/pr/12903?sel=' + idx)
+    await page.goto('/pr/12903?sel=' + encodeURIComponent(mine.fileLine))
     await waitBlock(page, mine.label)
     await expect(item).toHaveCount(1)
     await expect(page.getByTestId('block-column').locator('[data-comment]').first()).toBeVisible()

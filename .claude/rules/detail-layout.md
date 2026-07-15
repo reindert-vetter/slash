@@ -67,6 +67,29 @@ lege staat wikkelt in een array-van-één (`.key('no-workflows')`), conform de
 "no comments"-valkuil in diezelfde conventions-regel. `<main>`
 scrollt horizontaal mee als de kolommen samen te breed worden.
 
+Elke rij toont onder het label + de status-badge ook een korte **omschrijving**
+(`data-testid=workflow-note`, grijs, `line-clamp-2`, `workflowNote` in
+`RelatedPanel.mjs`): voor een `task_code_comment`-run de rijke
+`class::method · regel N · "snippet"` uit de run's meegestuurde `comment`-ref
+(`WorkflowRunView.comment`, zie `.claude/rules/tembed-workflows.md`); voor elk
+ander type een korte Nederlandse zin die uitlegt *waarom* de run in die status
+zit (`WORKFLOW_STATUS_NOTE`, een `${workflow}:${status}`-map, b.v.
+`resolve_call:running` → "zoekt call-definities"), met de kale status als
+fallback wanneer geen combinatie matcht.
+
+Een run met een `comment`-ref is **klikbaar** (`cursor-pointer`, de rest is
+puur informatief): de klik roept `openTask(run)` aan, een callback die
+`home.mjs` net als `drill` meegeeft in het `search`-options-object van
+`RelatedPanel(state, commentTarget, { drill, openTask }, …)`. `openTask` (in
+`home.mjs`) zoekt het block in `state.blocks` op `comment.file`+`comment.label`,
+selecteert het, stapt de diff in op de opgeslagen granulariteit/rij-range
+(`unitsFor`+`unitAtRow`, dezelfde walk als `setGran`), en selecteert tot slot de
+comment zelf via `selectComment(runId)` (geëxporteerd uit `RelatedPanel.mjs` —
+`runId` == de comment's id) zodra de comment-scope-watch heeft kunnen bijtrekken
+(een paar `await Promise.resolve()`-ticks, nodig omdat arrow.js' `watch`
+microtask-gedeferred draait — zie de watch-timing in `conventions.md`). Faalt
+een stap (block/comment nog niet gevonden) dan doet `openTask` stil niets.
+
 **Inklappen bij comment-focus:** samen met de diff-kolom is de volle-breedte
 combinatie van beide kaarten soms te breed om alles tegelijk te zien. Zodra de
 paneel-cursor (`cs.focus`) in het comment/taken-blok zit (`'new'`, `'comment'`
