@@ -80,10 +80,14 @@ test.describe('PR Review Tree — left-right nav chain', () => {
 
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
-    const related = page.getByTestId('related-code')
+    // The related-code card has no outer focus border anymore (removed so its
+    // children read as loose blocks); the code stop owning the keyboard shows as
+    // cs.focus === 'code', mirrored to the URL as rel.foc (block 0 has no
+    // underlying-code children here, so there's no selected item to assert on).
+    const relFoc = () => new URL(page.url()).searchParams.get('rel.foc')
     await page.keyboard.press('ArrowRight') // list → diff (block 0's one change)
     await page.keyboard.press('ArrowRight') // diff → related panel (code)
-    await expect(related).toHaveClass(/border-indigo-300/)
+    await expect.poll(relFoc).toBe('code')
     await page.keyboard.press('ArrowRight') // code → new-comment composer (empty)
     await expect(page.getByTestId('comment-compose')).toBeFocused()
 
@@ -91,7 +95,7 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     // Onderliggende-code stop, not skip past it straight to the diff (it used
     // to call exitRelated() unconditionally here).
     await page.keyboard.press('ArrowLeft')
-    await expect(related).toHaveClass(/border-indigo-300/)
+    await expect.poll(relFoc).toBe('code')
 
     // → again into the (still empty) composer. Nothing deeper to go from there
     // — → advances straight to Taken (stop 7). Exactly one row should carry the

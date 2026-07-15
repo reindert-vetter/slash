@@ -94,16 +94,19 @@ test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
 
   test('stepping into the related-code card writes rel.foc and survives a reload', async ({ page }) => {
     await intoRelated(page)
-    const related = page.getByTestId('related-code')
-    await expect(related).toHaveClass(/border-indigo-300/)
+    // The related-code card has no outer focus border anymore (removed so its
+    // children read as loose blocks); the code stop owning the keyboard shows as
+    // cs.focus === 'code', mirrored to the URL as rel.foc.
     await expect.poll(() => new URL(page.url()).searchParams.get('rel.foc')).toBe('code')
 
-    // Reload from the exact URL — the panel must own the keyboard again (blue
-    // border), and rel.foc must still be there (the async data-push must not clobber
-    // it — applyRelRestore re-applies it once the children load).
+    // Reload from the exact URL — rel.foc must still be there and the panel must
+    // re-own the keyboard (the async data-push must not clobber it —
+    // applyRelRestore re-applies it once the children load).
     await page.reload()
     await page.waitForLoadState('networkidle')
-    await expect(page.getByTestId('related-code')).toHaveClass(/border-indigo-300/)
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('rel.foc'))
+      .toBe('code')
     expect(new URL(page.url()).searchParams.get('rel.foc')).toBe('code')
     expect(new URL(page.url()).searchParams.get('mode')).toBe('diff')
   })
