@@ -380,15 +380,14 @@ function togglePopover(number) {
 // (api.go) only answers 200 once the ingest pipeline AND the build_relations
 // workflow have run synchronously, so a plain full-page redirect on success
 // is safe for a *non-ingested* row: the fresh /pr/<id> load has everything it
-// needs. On failure we stay on the overview and surface the error inline
-// (the popover for a non-ingested row, or the regenerateButton for an
-// already-ingested one); the row itself is untouched, so a retry or a page
-// refresh reflects the real state.
+// needs. On failure the popover stays open and surfaces the error inline
+// (generateAction/ingestedActions below); the row itself is untouched, so a
+// retry or a page refresh reflects the real state.
 //
-// `redirect` defaults to true (the popover's "Genereer review-boom" for a
+// `redirect` defaults to true (generateAction's "Genereer review-boom" for a
 // not-yet-ingested row: after generating for the first time you want to land
-// straight in the fresh tree). regenerateButton below passes `redirect:
-// false` — an already-ingested row's "Opnieuw genereren" only refreshes the
+// straight in the fresh tree). ingestedActions' "Opnieuw genereren" passes
+// `redirect: false` — an already-ingested row's regenerate only refreshes the
 // existing tree's data in the background; the reviewer is still on the
 // overview and didn't ask to be navigated away.
 async function generatePage(pr, { redirect = true } = {}) {
@@ -418,9 +417,61 @@ async function generatePage(pr, { redirect = true } = {}) {
   }
 }
 
-// popover — non-ingested rows have no review tree to open yet, so a click
-// opens this little menu: first "Genereer review-boom" (runs the ingest
-// workflow, see generatePage above), then a plain link to GitHub, plus a
+// generateAction — the not-yet-ingested case: "Genereer review-boom" runs the
+// ingest workflow (generatePage above) and redirects into /pr/<id> on success.
+function generateAction(pr, busy) {
+  return html`
+    <button
+      type="button"
+      data-testid="generate-page"
+      ?disabled="${() => ui.ingesting === pr.number}"
+      class="${'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-700 ' +
+      (busy ? 'cursor-not-allowed opacity-60' : '')}"
+      @click="${() => generatePage(pr)}"
+    >
+      ${icon('sparkles', 'h-3.5 w-3.5')} ${busy ? 'Bezig met genereren…' : 'Genereer review-boom'}
+    </button>
+    ${() =>
+      ui.ingestError
+        ? html`<p class="px-2.5 py-1 text-[11px] text-rose-400" data-testid="generate-error">${ui.ingestError}</p>`
+        : ''}
+  `
+}
+
+// ingestedActions — the already-ingested case: "Open review-boom" navigates
+// straight into the existing tree; "Opnieuw genereren" reruns the ingest
+// workflow in the background (redirect: false — the reviewer stays on the
+// overview, mirrors the old standalone regenerateButton behaviour).
+function ingestedActions(pr, busy) {
+  return html`
+    <button
+      type="button"
+      data-testid="open-tree"
+      class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-700"
+      @click="${() => (location.href = '/pr/' + pr.number)}"
+    >
+      ${icon('sparkles', 'h-3.5 w-3.5')} Open review-boom
+    </button>
+    <button
+      type="button"
+      data-testid="regenerate-page"
+      ?disabled="${() => ui.ingesting === pr.number}"
+      class="${'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-700 ' +
+      (busy ? 'cursor-not-allowed opacity-60' : '')}"
+      @click="${() => generatePage(pr, { redirect: false })}"
+    >
+      ${icon('sparkles', 'h-3.5 w-3.5')} ${busy ? 'Bezig met genereren…' : 'Opnieuw genereren'}
+    </button>
+    ${() =>
+      ui.ingestError
+        ? html`<p class="px-2.5 py-1 text-[11px] text-rose-400" data-testid="regenerate-error">${ui.ingestError}</p>`
+        : ''}
+  `
+}
+
+// popover — every row (ingested or not) opens this same menu on a click: the
+// ingest-related action(s) first (which action depends on pr.hasGraph, see
+// generateAction/ingestedActions above), then a plain link to GitHub, plus a
 // Jira link when the title carries a KEY-123-style ticket key.
 function popover(pr) {
   const m = (pr.title || '').match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
@@ -431,20 +482,7 @@ function popover(pr) {
       data-testid="pr-popover"
       @click="${(e) => e.stopPropagation()}"
     >
-      <button
-        type="button"
-        data-testid="generate-page"
-        ?disabled="${() => ui.ingesting === pr.number}"
-        class="${'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-700 ' +
-        (busy ? 'cursor-not-allowed opacity-60' : '')}"
-        @click="${() => generatePage(pr)}"
-      >
-        ${icon('sparkles', 'h-3.5 w-3.5')} ${busy ? 'Bezig met genereren…' : 'Genereer review-boom'}
-      </button>
-      ${() =>
-        ui.ingestError
-          ? html`<p class="px-2.5 py-1 text-[11px] text-rose-400" data-testid="generate-error">${ui.ingestError}</p>`
-          : ''}
+      ${pr.hasGraph ? ingestedActions(pr, busy) : generateAction(pr, busy)}
       <a
         href="${pr.url}"
         target="_blank"
@@ -468,51 +506,6 @@ function popover(pr) {
   `
 }
 
-// regenerateButton — an already-ingested row still links straight into
-// /pr/<id> on a click (see prRowLink below), so this can't live inside that
-// <a> (nesting an interactive control in a link is invalid HTML and would let
-// its click bubble into the navigation). It renders instead as an absolutely
-// positioned sibling in prRowLink's wrapping <div>, revealed on row hover, and
-// calls preventDefault/stopPropagation as defense-in-depth against ever
-// triggering the row's own navigation (the button never overlaps the anchor's
-// hit box by design, but this keeps it true even if the layout changes).
-// Reuses generatePage/ui.ingesting exactly like the non-ingested popover's
-// "Genereer review-boom" button, but with `{ redirect: false }`: on this
-// already-ingested row a successful re-ingest must NOT navigate away — the
-// reviewer stayed on the overview and only asked to refresh the tree's data
-// in the background. (An earlier version called generatePage(pr) with its
-// default `redirect: true`, which — unrelated to any click-bubbling — always
-// did `location.href = '/pr/<id>'` on success and silently carried the
-// reviewer into the tree; that surfaced as a failing "does not navigate"
-// Playwright assertion.)
-function regenerateButton(pr) {
-  const busy = ui.ingesting === pr.number
-  return html`
-    <div class="absolute bottom-1.5 right-3 flex flex-col items-end gap-0.5">
-      <button
-        type="button"
-        data-testid="regenerate-page"
-        ?disabled="${() => ui.ingesting === pr.number}"
-        class="${'flex items-center gap-1 rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10.5px] font-medium text-zinc-400 opacity-0 ring-1 ring-inset ring-zinc-700 transition-opacity hover:bg-zinc-700 hover:text-zinc-200 group-hover:opacity-100 ' +
-        (busy ? 'cursor-not-allowed opacity-100' : '')}"
-        @click="${(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          generatePage(pr, { redirect: false })
-        }}"
-      >
-        ${icon('sparkles', 'h-3 w-3')} ${busy ? 'Bezig met genereren…' : 'Opnieuw genereren'}
-      </button>
-      ${() =>
-        ui.ingestErrorFor === pr.number && ui.ingestError
-          ? html`<p class="rounded bg-zinc-900/90 px-1.5 py-0.5 text-[10px] text-rose-400" data-testid="regenerate-error">
-              ${ui.ingestError}
-            </p>`
-          : ''}
-    </div>
-  `
-}
-
 const ROW_CLASS =
   'group flex items-center gap-3 border-b border-zinc-800/70 px-4 py-3 transition-colors first:rounded-t-xl last:rounded-b-xl last:border-b-0 hover:bg-zinc-800/40'
 
@@ -520,31 +513,13 @@ function indentStyle(opts) {
   return opts.depth ? 'padding-left:' + (16 + opts.depth * 22) + 'px' : ''
 }
 
-// prRowLink — an ingested row is still a single, direct link into /pr/<id>
-// (one click, no intermediate menu), wrapped in a plain positioning <div> so
-// regenerateButton can sit as a sibling instead of nesting inside the <a>.
-// The wrapper's own `data-row` (not `data-pr` — that's already the <a>'s
-// unique-match attribute other tests/selectors rely on) lets a test scope
-// down to this row's regenerate button/error without an ambiguous match.
-function prRowLink(pr, opts) {
-  return html`
-    <div class="group relative" data-row="${pr.number}">
-      <a
-        href="${'/pr/' + pr.number}"
-        data-testid="pr-row"
-        data-pr="${pr.number}"
-        data-nav-row
-        class="${ROW_CLASS}"
-        style="${indentStyle(opts)}"
-      >
-        ${rowInner(pr, opts)}
-      </a>
-      ${regenerateButton(pr)}
-    </div>
-  `.key('row:' + pr.number)
-}
-
-function prRowButton(pr, opts) {
+// prRow — every row (ingested or not) is a click-opens-popover button, so the
+// menu's action set (see popover/ingestedActions/generateAction above) is the
+// only thing that varies with pr.hasGraph. This is the single row renderer;
+// there used to be a separate direct-linking prRowLink + hover-only
+// regenerateButton for already-ingested rows, but "Open review-boom"/"Opnieuw
+// genereren" now live inside the same popover as every other row's actions.
+function prRow(pr, opts = {}) {
   return html`
     <div
       role="button"
@@ -559,10 +534,6 @@ function prRowButton(pr, opts) {
       ${rowInner(pr, opts)} ${() => (ui.openPopover === pr.number ? popover(pr) : null)}
     </div>
   `.key('row:' + pr.number)
-}
-
-function prRow(pr, opts = {}) {
-  return pr.hasGraph ? prRowLink(pr, opts) : prRowButton(pr, opts)
 }
 
 // listBox — the framed rounded-xl box every group of rows sits in, with thin

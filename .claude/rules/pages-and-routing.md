@@ -9,9 +9,11 @@ Go-server (`api.go`, `routes`) bepaalt welke shell een route krijgt:
   id in het pad doet `home.mjs` een `location.replace('/pr-overview')`.
 - **`/pr-overview`** — de **PR-inbox**: een live GitHub-dashboard van PR's die je
   aandacht nodig hebben (`overview.html` → `src/overview.mjs`). Zie de sectie
-  **PR-inbox** hieronder. Een geïngeste PR (`hasGraph`) linkt naar `/pr/<id>`; de
-  read-only "recent gegenereerd"-lade voedt nog steeds uit **`GET /api/prs`**
-  (`handlePRs` → `listPRs`, block/file-counts per PR uit `PRSummary`).
+  **PR-inbox** hieronder. Elke rij opent bij een klik hetzelfde popover-menu; een
+  geïngeste PR (`hasGraph`) bereikt `/pr/<id>` via de menu-keuze "Open
+  review-boom". De read-only "recent gegenereerd"-lade voedt nog steeds uit
+  **`GET /api/prs`** (`handlePRs` → `listPRs`, block/file-counts per PR uit
+  `PRSummary`).
 - **`/`** redirect (302) naar `/pr-overview`; alle overige paden
   (`/src/*`, `/overview.html`, …) worden statisch geserveerd door de
   `http.FileServer`. De `/pr/`- en `/pr-overview`-routes serveren hun shell via
@@ -23,53 +25,43 @@ De startpagina is een **GitHub-inbox**, nagebouwd op GitHub's eigen
 `github.com/pulls`-dashboard: dezelfde secties en taal ("Ready to merge", "Needs
 your review", …), met per rij review-status, CI-checks, reviewers en diff-stats.
 Hij is **volledig read-only** in de zin dat hij nooit direct een module/tabel
-schrijft (conform `workflows-write-boundary.md`). Een geïngeste PR opent de tree
-op `/pr/<n>`; een niet-geïngeste rij opent een popover-menu (`popover(pr)` in
-`src/overview.mjs`) met als **eerste** keuze **"Genereer review-boom"**
-(`data-testid=generate-page`) — die start het bestaande **`POST /api/ingest
-{"pr":N}`**-endpoint (zie `.claude/rules/blocks-and-ingest.md`), de sanctioned
-write-weg (een Workflow Execution starten), niet een directe module-write. De
-knop toont tijdens het genereren "Bezig met genereren…" en is dan `disabled`
-(`ui.ingesting`, tegen een dubbele ingest); `handleIngest` (`api.go`) antwoordt
-pas 200 zodra de ingest-pipeline **en** `EnsureRelations` synchroon zijn
-afgerond, dus `generatePage` doet op succes een simpele volle
-`location.href = '/pr/<n>'`-redirect — de verse paginalaad heeft dan alles al
-nodig. Mislukt het genereren, dan blijft de popover open met de foutmelding
-(`ui.ingestError`, `data-testid=generate-error`) en verandert de rij zelf niet
-(nog steeds `hasGraph:false`); daaronder staan nog steeds *Open op GitHub* /
-*Open Jira-ticket*.
+schrijft (conform `workflows-write-boundary.md`). **Elke rij** — geïngest of
+niet — opent bij een klik hetzelfde popover-menu (`prRow`/`popover(pr)` in
+`src/overview.mjs`, `@click="${() => togglePopover(pr.number)}"` op de hele
+rij, een `role="button"`-`<div>`, geen `<a>`); alleen de **inhoud** van dat menu
+verschilt op `pr.hasGraph`:
 
-Een **al geïngeste** rij blijft één-klik-direct: de hele rij is nog steeds de
-kale `<a href="/pr/<id>">` (`prRowLink`), zodat een klik overal op de rij meteen
-naar de tree navigeert (ongewijzigd t.o.v. hierboven). Daarnaast draagt zo'n
-rij een klein, pas-bij-hover zichtbaar knopje **"Opnieuw genereren"**
-(`data-testid=regenerate-page`, `regenerateButton` in `src/overview.mjs`) dat
-dezelfde `generatePage`/`ui.ingesting`-flow hergebruikt als de popover-knop
-hierboven. Omdat je geen interactief element in een `<a>` mag nesten (invalide
-HTML, en een klik zou anders de navigatie meenemen), staat de knop als
-**sibling** van de `<a>` in een omhullende `<div class="group relative">`
-(`data-row=<id>` op die wrapper — bewust niet `data-pr`, want dat attribuut
-staat al op de `<a>` zelf en andere tests/selectors verwachten daar een
-uniek-matchende `pr-row`; `data-row` laat een test scopen op de rij zonder een
-ambigue dubbele match). De knop is `position:absolute` en toont/verbergt
-zichzelf via Tailwinds `group-hover`, en zijn `@click` doet
-`preventDefault`/`stopPropagation` als extra zekerheid tegen de rij-link (de
-knop overlapt de `<a>`'s hit-box sowieso al nooit, want hij is er geen
-descendant van). **De eigenlijke reden dat een geslaagde regeneratie eerder
-tóch naar `/pr/<id>` navigeerde zat niet in click-bubbling, maar in
-`generatePage` zelf:** die deed altijd `location.href = '/pr/<id>'` op
-succes — correct voor de popover van een niet-geïngeste rij (je wil na de
-allereerste keer genereren meteen de boom in), maar fout voor "Opnieuw
-genereren" op een rij die al een boom heeft, waar de reviewer op de overview
-blijft en alleen de achterliggende data wil verversen. `generatePage(pr, {
-redirect })` heeft daarom een `redirect`-optie (default `true`, ongewijzigd
-voor de popover); `regenerateButton` roept 'm aan met `{ redirect: false }` en
-zet `ui.ingesting` zelf terug op `null` op succes in plaats van te navigeren.
-Een mislukte regeneratie toont de foutmelding onder de knop
-(`data-testid=regenerate-error`); omdat `ui.ingesting` op dat moment al weer
-`null` is, bewaart `ui.ingestErrorFor` (naast `ui.ingestError`) welke PR de
-fout hoort — anders zou de foutmelding niet weten onder welke rij hij moet
-verschijnen.
+- **`pr.hasGraph === false`** (nog niet geïngest, `generateAction(pr, busy)`):
+  als **eerste** keuze **"Genereer review-boom"** (`data-testid=generate-page`)
+  — die start het bestaande **`POST /api/ingest {"pr":N}`**-endpoint (zie
+  `.claude/rules/blocks-and-ingest.md`), de sanctioned write-weg (een Workflow
+  Execution starten), niet een directe module-write. De knop toont tijdens het
+  genereren "Bezig met genereren…" en is dan `disabled` (`ui.ingesting`, tegen
+  een dubbele ingest); `handleIngest` (`api.go`) antwoordt pas 200 zodra de
+  ingest-pipeline **en** `EnsureRelations` synchroon zijn afgerond, dus
+  `generatePage` doet op succes een simpele volle `location.href = '/pr/<n>'`-
+  redirect — de verse paginalaad heeft dan alles al nodig. Mislukt het
+  genereren, dan blijft de popover open met de foutmelding (`ui.ingestError`,
+  `data-testid=generate-error`) en verandert de rij zelf niet (nog steeds
+  `hasGraph:false`).
+- **`pr.hasGraph === true`** (al geïngest, `ingestedActions(pr, busy)`): twee
+  keuzes — **"Open review-boom"** (`data-testid=open-tree`, navigeert direct
+  naar `location.href = '/pr/' + pr.number`) en **"Opnieuw genereren"**
+  (`data-testid=regenerate-page`) die dezelfde `generatePage`/`ui.ingesting`-
+  flow hergebruikt als de niet-geïngeste tak, maar met `{ redirect: false }`
+  (`generatePage(pr, { redirect })` — default `true` voor de "Genereer"-tak;
+  "Opnieuw genereren" moet **niet** navigeren, de reviewer blijft op de
+  overview en wil alleen de achterliggende data verversen; `ui.ingesting` gaat
+  zelf terug op `null` op succes). Een mislukte regeneratie toont de
+  foutmelding onder de knop, binnen dezelfde popover
+  (`data-testid=regenerate-error`).
+
+Onder beide takken staan ongewijzigd *Open op GitHub* / *Open Jira-ticket*.
+Omdat er nu nooit meer een `<a href="/pr/<id>">` in de rij zit — de navigatie
+naar de tree loopt altijd via de menu-keuze "Open review-boom" — is er ook geen
+losse hover-only regenerate-knop (`regenerateButton`) of aparte `data-row`-
+wrapper meer nodig; die zijn vervallen (was eerder nodig om een interactief
+element niet in een `<a>` te nesten, wat nu niet meer speelt).
 
 ### GitHub-toegang loopt via een workflow (niet rechtstreeks)
 
@@ -126,9 +118,10 @@ Onder **`SLASH_GITHUB=off`** raakt niets het netwerk: `buildInboxSnapshot` (de
 Activity) serveert de **fixture** uit `SLASH_INBOX` (`tests/fixtures/inbox.json`,
 shape `{repo,generatedFor,sections,statuses}`). Bij startup vult de synchrone
 refresh het read-model, dus `GET /api/inbox` heeft meteen data (geen race in
-tests). `hasGraph` komt uit de DB, dus de geseedde PR (12903) linkt naar
-`/pr/12903`. Faalt de eerste fetch (geen fixture, geen snapshot) → `/api/inbox`
-`{ok:false}` → client valt terug op `GET /data/inbox.json` (label "cached").
+tests). `hasGraph` komt uit de DB, dus de geseedde PR (12903) toont in zijn
+popover "Open review-boom" naar `/pr/12903`. Faalt de eerste fetch (geen
+fixture, geen snapshot) → `/api/inbox` `{ok:false}` → client valt terug op
+`GET /data/inbox.json` (label "cached").
 
 ### Client (`src/overview.mjs`, arrow.js, dark-zinc, Nederlands)
 
