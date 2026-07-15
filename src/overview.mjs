@@ -1049,14 +1049,6 @@ function activateSelected() {
   el.click()
 }
 
-function openSelectedDirect() {
-  const rows = currentRows()
-  const el = rows[selIndex]
-  if (el && el.dataset.testid === 'pr-row' && el.matches('a[href]')) {
-    location.href = el.getAttribute('href')
-  }
-}
-
 let kbHandler = null
 function setupKeyboard() {
   if (kbHandler) window.removeEventListener('keydown', kbHandler, true)
@@ -1092,7 +1084,8 @@ function setupKeyboard() {
         activateSelected()
         break
       case 'ArrowRight':
-        openSelectedDirect()
+        e.preventDefault()
+        activateSelected()
         break
     }
   }

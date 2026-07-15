@@ -159,4 +159,50 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(page).toHaveURL(/\/pr-overview$/)
     await expect(regenerate).toBeEnabled()
   })
+
+  // selectRowByKeyboard drives the page's own keyboard-nav (Home + ArrowDown,
+  // see setupKeyboard/move in src/overview.mjs) to land selIndex on a given
+  // PR's row, purely via the keyboard — no synthetic hover/mouseenter, which
+  // proved unreliable to trigger deterministically under Playwright.
+  async function selectRowByKeyboard(page, pr) {
+    const row = page.locator(`[data-testid="pr-row"][data-pr="${pr}"]`)
+    const idx = Number(await row.getAttribute('data-nav-index'))
+    await page.keyboard.press('Home')
+    for (let i = 0; i < idx; i++) await page.keyboard.press('ArrowDown')
+  }
+
+  // Enter and ArrowRight must be interchangeable on the keyboard-selected row
+  // (src/overview.mjs's setupKeyboard: both call activateSelected()). On a
+  // non-generated row (12801, no graph yet) that means both keys open the
+  // popover with "Genereer review-boom" first, same as a mouse click would.
+  for (const key of ['Enter', 'ArrowRight']) {
+    test(`${key} opens the popover on a non-generated row, same as a click`, async ({ page }) => {
+      await page.goto('/pr-overview')
+      await page.waitForLoadState('networkidle')
+
+      await selectRowByKeyboard(page, 12801)
+      await page.keyboard.press(key)
+
+      const generate = page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')
+      await expect(generate).toBeVisible()
+      await expect(generate).toHaveText(/Genereer review-boom/)
+      // No navigation happened — a non-generated row never links anywhere.
+      await expect(page).toHaveURL(/\/pr-overview$/)
+    })
+  }
+
+  // On an already-generated row (12903 has a graph), both keys must instead
+  // navigate straight into the review tree — identical to clicking the row's
+  // own <a href>.
+  for (const key of ['Enter', 'ArrowRight']) {
+    test(`${key} navigates into /pr/<id> on a generated row, same as a click`, async ({ page }) => {
+      await page.goto('/pr-overview')
+      await page.waitForLoadState('networkidle')
+
+      await selectRowByKeyboard(page, 12903)
+      await page.keyboard.press(key)
+
+      await expect(page).toHaveURL(/\/pr\/12903/)
+    })
+  }
 })
