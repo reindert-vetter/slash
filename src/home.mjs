@@ -1613,9 +1613,29 @@ async function openTask(run) {
 // fire; only the live menu's bindings (built against the current `ms`) run.
 // Both stay out of the URL (not in bindUrlState) since they're ephemeral.
 //
-// `sub` holds a parent command's children while a submenu is open (null at the
-// root). Choosing a command with `children` (e.g. "Open GitHub") swaps the list to
-// those children instead of running; Esc backs out to the root.
+// That `ms`-swap avoids the *crash*, but on its own it does NOT stop a much
+// quieter problem: arrow.js never disposes CommandMenu's nested row/list
+// bindings at all (there's no cascading teardown for a component embedded via
+// `${CommandMenu(...)}` — see the "disposal gap" note in conventions.md). An
+// orphaned binding that reads only `ms` is harmless (nothing ever mutates a
+// discarded `ms` again, so it never re-fires). But a command whose `label` is a
+// *function* reading GLOBAL state (`state.mode`, `b.approvedRows`,
+// `state.jiraKey`, …) registers that binding's dependency against those global
+// properties, not against `ms` — and those keep changing for the rest of the
+// session. Every past palette-open's orphaned label binding then re-evaluates
+// on every future, unrelated navigation/approve step: a permanently growing
+// amount of dead work per keystroke, which is what made the tab "loopt vast"
+// after enough approve+navigate cycles (the automatic postApprove follow-up
+// menu, see afterApproveAction, opens one of these on every group approval).
+// `commands`/`sub` below hold a *snapshot* (see snapshotCommands) with every
+// function label already resolved to a plain string, precisely so nothing
+// left over in the (never-disposed) CommandMenu tree ever reads live global
+// state again — see resolveLabel/snapshotCommands/rootCommandsFor.
+//
+// `sub` holds a parent command's (already-snapshotted) children while a
+// submenu is open (null at the root). Choosing a command with `children` (e.g.
+// "Open GitHub") swaps the list to those children instead of running; Esc
+// backs out to the root.
 // `mode` selects which command list resolveCommands shows: 'block' (the
 // default, the block palette opened by Enter), 'comment' (opened by Enter on a
 // focused, not-yet-replied-to comment row — see COMMENT_COMMANDS), 'pr' (the
@@ -1624,7 +1644,7 @@ async function openTask(run) {
 // 'postApprove' (opened right after a palette approve action that still leaves
 // a not-yet-approved unit ahead — see afterApproveAction/POSTAPPROVE_COMMANDS).
 const menu = reactive({ open: false })
-let ms = reactive({ query: '', sel: 0, sub: null, mode: 'block' })
+let ms = reactive({ query: '', sel: 0, sub: null, mode: 'block', commands: [] })
 
 // COMMENT_COMMANDS — shown when Enter is pressed on a focused comment row
 // (not mid-reply): currently just deleting it. Kept separate from COMMANDS
@@ -1705,6 +1725,30 @@ const POSTAPPROVE_COMMANDS = [
     },
   },
 ]
+
+// resolveLabel/snapshotCommands materialize a command list's labels into plain
+// strings, calling any function label RIGHT NOW instead of leaving it as a live
+// `${() => labelOf(c)}` binding inside CommandMenu's tree. This must run from
+// plain, non-reactive code (openMenu/enterSubmenu/the Escape-to-root branch in
+// onKeydown — never from inside an arrow.js reactive callback) so the read of
+// whatever global state the label function touches (state.mode, b.approvedRows,
+// state.jiraKey, …) never registers as a tracked dependency in the first place.
+// See the menu/ms comment above and the "disposal gap" note in conventions.md
+// for why that matters: CommandMenu's nested bindings are never disposed when
+// the palette closes, so a *live* dependency there would silently keep
+// re-evaluating forever, on every future unrelated state change. A plain string
+// has nothing to depend on, so an orphaned binding built from one simply never
+// fires again — harmless, exactly like the existing ms-only bindings.
+function resolveLabel(c) {
+  return typeof c.label === 'function' ? c.label() : c.label
+}
+function snapshotCommands(list) {
+  return list.map((c) => ({
+    ...c,
+    label: resolveLabel(c),
+    children: c.children ? snapshotCommands(c.children) : undefined,
+  }))
+}
 
 // granNoun names the current comment target's granularity for the compose menu's
 // "implementeren" label — the group/line/call the comment attaches to.
@@ -2476,30 +2520,47 @@ async function openGithubLine() {
   else window.open(url, '_blank')
 }
 
+// rootCommandsFor returns the *raw* (function-labelled) command list for a
+// palette mode — the input to snapshotCommands. Only ever called from openMenu
+// (plain, non-reactive code), never from resolveCommands itself: resolveCommands
+// filters the already-snapshotted `ms.commands`/`ms.sub`, never these raw lists,
+// so a live label function never reaches CommandMenu's reactive tree — see the
+// menu/ms comment above.
+function rootCommandsFor(mode) {
+  if (mode === 'comment') return COMMENT_COMMANDS
+  if (mode === 'postApprove') return POSTAPPROVE_COMMANDS
+  if (mode === 'pr') return PR_COMMANDS
+  if (mode === 'compose') return COMPOSE_COMMANDS
+  return COMMANDS
+}
+
 // resolveCommands returns the commands to show for `query`: the fuzzy-matched
-// COMMANDS, or — when nothing matches a non-empty query — a single fallback that
-// opens the composer with the typed text pre-filled, so the reviewer can continue
-// typing ("Maak hiermee een comment"). Shared by the menu render and the keyboard
-// handler so both walk the same list.
+// `ms.commands` (a plain-string-label snapshot of the current mode's root list,
+// built by openMenu/rootCommandsFor+snapshotCommands), or — when nothing
+// matches a non-empty query in the default 'block' mode — a single fallback
+// that opens the composer with the typed text pre-filled, so the reviewer can
+// continue typing ("Maak hiermee een comment"). Shared by the menu render and
+// the keyboard handler so both walk the same list.
 function resolveCommands(query) {
   // The comment-scoped menu (Enter on a focused comment row) is just its own
   // small list — no submenu, no make-a-comment fallback.
-  if (ms.mode === 'comment') return filterCommands(COMMENT_COMMANDS, query)
+  if (ms.mode === 'comment') return filterCommands(ms.commands, query)
   // The postApprove follow-up (opened right after an approve action finds a
   // next not-yet-approved unit ahead): just its two choices, no submenu, no
   // make-a-comment fallback.
-  if (ms.mode === 'postApprove') return filterCommands(POSTAPPROVE_COMMANDS, query)
-  // In a submenu we only show (and filter) that parent's children — no
-  // make-a-comment fallback, since the submenu is a plain choice list.
+  if (ms.mode === 'postApprove') return filterCommands(ms.commands, query)
+  // In a submenu we only show (and filter) that parent's already-snapshotted
+  // children — no make-a-comment fallback, since the submenu is a plain
+  // choice list.
   if (ms.sub) return filterCommands(ms.sub, query)
   // The PR-wide tree menu (opened with `/`) is a plain command list too — no
   // block actions, no comment fallback.
-  if (ms.mode === 'pr') return filterCommands(PR_COMMANDS, query)
+  if (ms.mode === 'pr') return filterCommands(ms.commands, query)
   // The comment-kind menu (Enter/button on a filled composer): choose Claude /
   // Git / private / Jira. The ms.sub check above already handles its Jira
   // submenu, so we only reach here at the root list.
-  if (ms.mode === 'compose') return filterCommands(COMPOSE_COMMANDS, query)
-  const list = filterCommands(COMMANDS, query)
+  if (ms.mode === 'compose') return filterCommands(ms.commands, query)
+  const list = filterCommands(ms.commands, query)
   const q = (query || '').trim()
   if (list.length === 0 && q) {
     return [
@@ -2536,9 +2597,12 @@ window.addEventListener('scroll', repositionMenu, true) // capture: catch inner 
 // `mode` picks the command list (see resolveCommands): 'block' (default),
 // 'comment', 'pr', 'compose' or 'postApprove'. It installs a FRESH `ms` reactive so the previous
 // open's (undisposed) CommandMenu bindings can't fire when this menu mutates its
-// state — see the note on the menu/ms split.
+// state — see the note on the menu/ms split. `commands` is filled here, in this
+// plain (non-reactive) function, by resolving rootCommandsFor(mode) through
+// snapshotCommands — see those for why that must happen from ordinary code and
+// never from inside CommandMenu's own render/filter path.
 function openMenu(mode = 'block') {
-  ms = reactive({ query: '', sel: 0, sub: null, mode })
+  ms = reactive({ query: '', sel: 0, sub: null, mode, commands: snapshotCommands(rootCommandsFor(mode)) })
   menu.open = true
   requestAnimationFrame(() => {
     // Position first — the palette starts visibility:hidden, and a hidden element

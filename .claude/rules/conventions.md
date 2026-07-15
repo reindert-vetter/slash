@@ -114,6 +114,55 @@
   bij page-load — vóór er een block geselecteerd is — en gooien de label-functies
   die `curBlock()` lezen alsnog, wat de slot-pool corrumpeert.) Zie
   `.claude/rules/keyboard-navigation.md`.
+- **Dezelfde disposal-gap is ook een geheugenlek, niet alleen een crash-risico —
+  en de `ms`-swap hierboven verhelpt alleen de crash.** De `ms`-swap voorkomt dat
+  een wees-binding **crasht** (hij hangt aan een object dat nooit meer verandert,
+  dus vuurt nooit meer), maar arrow.js's `Ft`-teardown (het opruimen van een
+  weggevallen keyed node) ruimt **alleen** de expression-slots op die de node
+  **zelf direct** bezit — hij cascadeert nooit naar een genest stuk template dat
+  via `${() => componentAanroep(...)}` is ingebed (zoals `${CommandMenu(ms, ...)}`
+  in `menuOverlay()`, of `${() => codeDiff(...)}` in `Block.mjs`). Zo'n geneste
+  reconciler-boom (elke rij, elke `.innerHTML`-binding erin) blijft dus **voor
+  altijd** een levend, DOM-loos (detached) stuk template — precies "Detached
+  `<span>`/`<div>`/Text"-groei in een heap-snapshot. Dat is op zich al een
+  (langzaam groeiend, per-open) lek, maar wordt een **actief, steeds sneller
+  groeiend** probleem zodra een wees-binding **niet** alleen van de weggeworpen
+  `ms` afhangt maar ook van **globale, blijvend veranderende** state: zo'n
+  binding blijft na sluiten geregistreerd tegen die globale property en
+  her-evalueert dus bij **elke** latere, ongerelateerde wijziging — voor élke
+  ooit-geopende menu-instantie. Concreet gevonden: `COMMANDS[0]`'s "Keur … goed"-
+  label (leest `curBlock()`/`state.mode`/`state.gran`/`state.change`/
+  `b.approvedRows`/`b.approvedCalls`), plus vergelijkbare labels in
+  `COMPOSE_COMMANDS`/`PR_COMMANDS` — precies de **standaard, meest-gebruikte**
+  Enter-palette, en de automatische postApprove-vervolgmenu na élke
+  groeps-goedkeuring (`afterApproveAction`). Elke open+close-cyclus liet zo een
+  steeds duurdere geest achter die bij iedere navigatie-/approve-stap opnieuw
+  meerekende — een met Playwright gemeten, reproduceerbare ~3.6× vertraging van
+  60 `f`/`s`-toetsaanslagen na 200 open/close-cycli op de ongepatchte code
+  (0.9–1.0× — vlak, geen groei — na de fix), wat zich in de praktijk uitte als
+  "de tab loopt op een gegeven moment vast" na genoeg goedkeur+navigeer-cycli.
+  **Fix (toegepast, laag risico):** laat nooit een `label`-**functie** de
+  geneste, nooit-opgeruimde `CommandMenu`-boom bereiken. `resolveLabel`/
+  `snapshotCommands` (`home.mjs`) roepen zo'n functie **eenmalig** aan vanuit
+  gewone, niet-reactieve code (`openMenu`, dus buiten elke arrow.js-`Te()/Ae()`-
+  tracking-bracket) en zetten het resultaat vast als platte string op
+  `ms.commands`/`ms.sub` — CommandMenu's eigen `${() => labelOf(c)}`-binding ziet
+  dan nooit meer iets dan een string, registreert dus geen dependency op iets
+  buiten `ms`, en een wees-binding die daaruit voortkomt vuurt (net als de
+  bestaande `ms`-only bindings) nooit meer. **Nog niet opgelost (bewuste
+  scope-keuze, hogere impact maar groter risico):** hetzelfde disposal-gap-
+  patroon zit ook onder de kaart-hertekening in `DetailPanel`/`Block.mjs` (elke
+  keer dat een block-kaart een **nieuwe key** krijgt — preview→selected, code
+  net geladen, focus-niveau-wissel, zie `.claude/rules/detail-layout.md` — wordt
+  de oude `<article>` afgebroken, maar zijn geneste `${() => codeDiff(...)}`-
+  subtree, met zijn `b.approvedRows`/`state.diffViewMode`-lezende
+  `.innerHTML`-bindings, blijft op dezelfde manier hangen). Dat gebeurt al bij
+  **gewoon navigeren** (niet alleen bij goedkeuren) en is vermoedelijk de
+  grootste losse bijdrage aan de "Detached `<div>`/Text"-tellen in een
+  heap-snapshot. Een echte fix vereist dat `Ft` genest-gemonteerde
+  reconciler-subtrees cascadeert — een tweede `LOCAL PATCH` op `vendor/arrow.js`
+  die het hele reconciliatiepad raakt (dus met bredere impact/risico dan deze
+  gerichte `CommandMenu`-fix) — nog niet uitgevoerd.
 - **Syntax-highlighting:** Prism 1.29.0 staat gevendord als één ES-module in
   `src/vendor/prism.js` (core + markup + clike + markup-templating + php, met
   `window.Prism={manual:true}` zodat het niet de hele pagina auto-highlightt). De
