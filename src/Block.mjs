@@ -53,6 +53,12 @@ function singleSide(b) {
  * @returns arrow.js template — call with a mount target to render.
  */
 export default function Block(b, opts = {}) {
+  // viewMode — a function returning the global diff-view preference: 'split'
+  // (default, both panes side by side) or 'new' (only the new/right pane, full
+  // width — hides the old side). Toggled everywhere with `a` (home.mjs). A
+  // function so codeDiff's own reactive slot picks up the change, mirroring
+  // activeGroup/hintsEnabled above.
+  const viewModeFn = opts.viewMode || (() => 'split')
   const preview = !!opts.preview
   // activeGroup is a function returning the currently-navigated change group
   // ({ start, end } row indices) for this block, or null. It's a function (not a
@@ -158,7 +164,7 @@ export default function Block(b, opts = {}) {
         >
       </p>
 
-      ${() => codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn)}
+      ${() => codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn)}
     </article>
   `
 }
@@ -170,6 +176,12 @@ export default function Block(b, opts = {}) {
 // the left. Changed lines are tinted red (old) / green (new). This is a pure
 // text diff — no AI. `b.code` is filled lazily by home.mjs: undefined (not
 // requested), null (loading), { old, new } or { error }.
+//
+// viewMode() is read directly here (not in a nested slot) so this call's own
+// enclosing `${() => codeDiff(...)}` slot in Block() picks up state.diffViewMode
+// as a dependency, same as its existing b.code dependency — flipping `a`
+// re-renders just this per-card slot (split ↔ single new-only pane), not the
+// outer per-column closures in home.mjs. See keyboard-navigation.md.
 function codeDiff(
   b,
   activeGroup,
@@ -177,6 +189,7 @@ function codeDiff(
   approvedFn = () => new Set(),
   commentedFn = () => new Set(),
   approvedCallsFn = () => new Set(),
+  viewMode = () => 'split',
 ) {
   const c = b.code
   if (c === undefined) return ''
@@ -198,9 +211,15 @@ function codeDiff(
   }
   const rows = blockRows(b)
   const only = singleSide(b)
-  // One-sided blocks (added / removed) show just their non-empty pane at full
-  // width — no divider, no empty counterpart.
-  if (only === 'right') {
+  // Toggle `a` (home.mjs) forces a two-sided (modified) block down to just its
+  // new pane, full width — same rendering as an already one-sided added block.
+  // A block that's already one-sided (added/removed) has nothing to hide/show
+  // on the other side, so the toggle has no effect there — `only` wins.
+  const effectiveOnly = only || (viewMode() === 'new' ? 'right' : null)
+  // One-sided blocks (added / removed, or a modified block in new-only view)
+  // show just their non-empty pane at full width — no divider, no empty
+  // counterpart.
+  if (effectiveOnly === 'right') {
     return html`
       <div
         class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100"
@@ -213,7 +232,7 @@ function codeDiff(
       </div>
     `
   }
-  if (only === 'left') {
+  if (effectiveOnly === 'left') {
     return html`
       <div
         class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100"

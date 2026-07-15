@@ -426,6 +426,25 @@ de regel-achtergrond (rood/groen) markeert een echte wijziging nu alleen nog op
 regelniveau. Een lege toegevoegde regel heeft geen tekens en dus geen underline
 (correct: niets te markeren).
 
+## `a` — diff-weergave toggelen (side-by-side ↔ alleen nieuw)
+
+**`a`** toggelt globaal, voor **elke zichtbare diff-kaart tegelijk** — de
+geselecteerde/preview-kaart én elke open gedrilde kolom (`state.drill`) — tussen
+de bestaande side-by-side weergave (oud+nieuw, default) en een **alleen-nieuw**-
+weergave (enkel de rechter/nieuwe pane, volle breedte, dezelfde rendering als een
+al one-sided `added`-block). Staat naast `f`/`d`/`s` in `onKeydown` (`home.mjs`),
+dus met dezelfde eerdere guards (command-palette/zoekbox/related-panel actief)
+ervoor — werkt zowel in `'list'`- als `'diff'`-mode, botst niet met typen in een
+invoerveld. De state (`state.diffViewMode`, `'split'`/`'new'`) is efemeer, geen
+URL-binding (net als `showDescription`/`showApproved`). Een al one-sided block
+(`added`/`removed`) heeft geen andere kant om te verbergen/tonen — de toggle
+heeft daar geen effect, `singleSide(b)` blijft leidend (`effectiveOnly` in
+`Block.mjs`'s `codeDiff`). Gelezen als `viewMode()` binnen `Block()`'s eigen
+per-kaart `${() => codeDiff(...)}`-slot (niet in de outer per-kolom closure van
+`home.mjs`) — mirrort hoe die slot al op `b.code` leest, dus een toggle
+her-rendert alleen de diff-structuur van elke zichtbare kaart, niet de
+kaart-bouwende closures zelf.
+
 ## Footer: inline preview van de geselecteerde regel
 
 Onder de panels zit een vaste footer (`src/Footer.mjs`, `data-testid=footer`, de

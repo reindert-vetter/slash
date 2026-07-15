@@ -221,7 +221,29 @@ const state = reactive({
   // URL — ephemeral UI state, like `menu`/`ui.task`, not a navigation position a
   // refresh needs to restore.
   showDescription: false,
+  // diffViewMode — the global diff-pane preference, toggled everywhere with `a`
+  // (onKeydown): 'split' (default, old+new side by side) or 'new' (only the
+  // new/right pane, full width). Read by every visible Block() card (the
+  // selected/preview cards and every open drilled column) via its viewMode opt
+  // — see Block.mjs's codeDiff. Ephemeral UI state, not bound to the URL, like
+  // showDescription/showApproved above.
+  diffViewMode: 'split',
 })
+
+// toggleDiffView flips the global diff-pane preference between full side-by-side
+// and new-only (see state.diffViewMode above).
+function toggleDiffView() {
+  state.diffViewMode = state.diffViewMode === 'new' ? 'split' : 'new'
+}
+
+// isEditableFocused reports whether DOM focus currently sits on a text input —
+// used to keep the `a` shortcut (a real letter a reviewer might type) from
+// firing while typing into a field that isn't otherwise guarded by cs.focus
+// (see the `a` handler in onKeydown for why that guard alone isn't enough).
+function isEditableFocused() {
+  const el = document.activeElement
+  return !!el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')
+}
 
 // Persist the navigation position in the URL so a refresh (or a shared link)
 // reopens the same selected block, mode and change. The PR itself lives in the
@@ -2737,6 +2759,23 @@ function onKeydown(e) {
     return
   }
 
+  // `a` toggles the diff-pane view everywhere (every visible Block card: the
+  // selected/preview cards and every open drilled column) between full
+  // side-by-side (default) and new-only, full width. Placed alongside f/d/s so
+  // it's guarded by the same earlier menu/search/related checks above — except
+  // those key on cs.focus (relatedActive()), which stays null when the composer
+  // is opened via a path that only flips cs.composing (e.g. the command
+  // palette's "Maak hiermee een comment" fallback, see startComment in
+  // RelatedPanel.mjs) without ever routing through the panel's own keyboard
+  // navigation. A literal "a" typed there would otherwise be eaten by this
+  // shortcut instead of reaching the textarea, so guard directly on whether an
+  // editable field currently holds DOM focus.
+  if (e.key === 'a' && !isEditableFocused()) {
+    e.preventDefault()
+    toggleDiffView()
+    return
+  }
+
   if (state.mode === 'diff') {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
@@ -3250,6 +3289,10 @@ function DetailPanel(state) {
             // rows, so it's visible which units already hold a comment (however
             // many). Reads the comments read-model via RelatedPanel.
             commentedRows: () => commentRowSet(b),
+            // Global diff-pane preference (see state.diffViewMode / the `a` key) —
+            // read inside Block's own per-card slot, so toggling re-renders this
+            // card's diff structure without touching this outer closure.
+            viewMode: () => state.diffViewMode,
             // The key encodes (a) whether this card is the *selected* one or the
             // look-ahead *preview*, (b) whether its code has loaded yet, and (c)
             // whether the keyboard is actually focused on it (vs. a drilled
@@ -3352,6 +3395,7 @@ function DetailPanel(state) {
                 approvedCalls: () => approvedCallSet(b),
                 onApprove: (blk) => persistApproval(blk),
                 commentedRows: () => commentRowSet(b),
+                viewMode: () => state.diffViewMode,
               })}
             </div>
           `.key(
