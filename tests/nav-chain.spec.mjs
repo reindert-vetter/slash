@@ -166,4 +166,15 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await expect(page.getByTestId('comment-thread')).toContainText('nav-chain comment')
     await expect(page.getByTestId('reaction-compose')).toBeFocused()
   })
+
+  test('stop 1 summary section is labelled "Doel" with a light-green background', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await page.keyboard.press('ArrowLeft') // block-index → stop 1 (description)
+
+    const summary = page.getByTestId('pr-info-summary')
+    await expect(summary).toBeVisible()
+    await expect(summary).toContainText('Doel')
+    await expect(summary).not.toContainText('Samenvatting')
+    await expect(summary).toHaveClass(/bg-emerald-50/)
+  })
 })

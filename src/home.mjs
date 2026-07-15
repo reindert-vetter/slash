@@ -2877,8 +2877,8 @@ function prInfoCard(state) {
               >`
             : ''}
       </div>
-      <div data-testid="pr-info-summary">
-        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Samenvatting</div>
+      <div class="rounded-lg bg-emerald-50 p-2.5" data-testid="pr-info-summary">
+        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Doel</div>
         ${() =>
           state.prMeta.summary
             ? html`<div
