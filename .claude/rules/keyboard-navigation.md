@@ -12,7 +12,9 @@ keten van **stops**, van links naar rechts over de hele layout:
    samenvatting/beschrijving. **Standaard verborgen** (neemt dan geen breedte
    in — geen rail zoals stop 5's inklap, de kolom valt volledig weg) en de
    meest-linkse stop.
-2. **PR-blok-index** (de sidebar, `state.mode==='list'`).
+2. **PR-blok-index** (`data-testid=pr-index`, de sidebar, `state.mode==='list'`)
+   — schuift fysiek naar rechts zodra stop 1 open is, zodat de omschrijving er
+   echt links van staat i.p.v. erna (zie `.claude/rules/detail-layout.md`).
 3. **Blok met diff** (`state.mode==='diff'`, `state.focusLevel===0`).
 4. **Gedrilde kolommen** (`state.drill`/`focusLevel>0`) — een **zijtak**, geen
    strikte stop: alleen bereikbaar via Enter/klik op een Onderliggende-code-kind

@@ -17,6 +17,20 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await expect(info).toHaveCount(1)
     await expect(info).toBeVisible()
 
+    // The description column must sit physically to the left of the pr-index
+    // (it pushes the pr-index right, rather than appearing after it — see
+    // detail-layout.md, "verplaats pr description naar links"). The pr-index
+    // slides right over a 200ms CSS transition, so poll until it settles
+    // instead of asserting on a single (possibly mid-transition) frame.
+    const prIndex = page.getByTestId('pr-index')
+    await expect
+      .poll(async () => {
+        const infoBox = await info.boundingBox()
+        const prIndexBox = await prIndex.boundingBox()
+        return infoBox.x + infoBox.width <= prIndexBox.x
+      })
+      .toBe(true)
+
     // ↑/↓ do nothing while the description owns the keyboard — the block
     // selection underneath must not move.
     const selectedIdx = await page.locator('[data-testid=block-row].bg-indigo-50').getAttribute('data-idx')

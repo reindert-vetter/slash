@@ -45,11 +45,20 @@ export function statusInfo(status) {
 export default function BlockList(state) {
   return html`
     <aside
+      data-testid="pr-index"
       class="${() =>
         'fixed bottom-[100px] left-6 top-6 flex w-[26rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white ring-1 ring-black/5 transition-all duration-200 ease-out ' +
         (state.mode === 'diff'
           ? '-translate-x-[28rem] opacity-0 pointer-events-none'
-          : 'translate-x-0 opacity-100')}"
+          : // showDescription (stop 1, list-mode only) slides this pr-index one
+            // column-width right so the PR-description panel can take its usual
+            // left-6 spot instead of appearing after it — see PrInfoPanel/
+            // detail-layout.md. 27.5rem = the description panel's own width
+            // (26rem) plus the 1.5rem gap it leaves before the pr-index, so the
+            // two sit flush next to each other exactly like pr-index/<main> do.
+            state.showDescription
+            ? 'translate-x-[27.5rem] opacity-100'
+            : 'translate-x-0 opacity-100')}"
     >
       <header class="shrink-0 border-b border-slate-200 px-4 py-3">
         <div class="flex items-center gap-2">

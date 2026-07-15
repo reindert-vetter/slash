@@ -5,25 +5,52 @@ Rechts van de sidebar staat de `DetailPanel` (`home.mjs`): een `<main>` als
 uitrekken) en horizontaal scrolt (`overflow-x-auto`) zodra ze samen breder zijn
 dan het scherm.
 
-**Eerste kolom: PR-info, stop 1 van de nav-keten, standaard verborgen**
-(`data-testid=pr-info-column`, `w-[26rem] shrink-0`, gerenderd door
-`prInfoCard(state)`, als eerste kind van `<main>` in `DetailPanel`). Deze kolom
-is de meest-linkse stop van de links→rechts navigatieketen beschreven in
-`.claude/rules/keyboard-navigation.md`: `state.showDescription` (default
-`false`) bepaalt of hij bestaat — dicht neemt hij **geen breedte** in (het hele
-`${() => state.showDescription ? html\`…\` : ''}`-blok valt weg, geen rail zoals
-de Onderliggende-code-kaart verderop), open schuift hij de block-kolom naar
-rechts. Bereikt vanuit de blok-index (stop 2, `state.mode==='list'`) met `←`;
-`→` sluit 'm weer. Terwijl hij open is negeert `onKeydown` `↑`/`↓` (geen interne
-cursor). Een witte kaart met titel + Jira-badge, meta-regel (auteur,
-`+add −del`, bestandenaantal, branch, "op GitHub ›"), een
-**Samenvatting**-sectie (Claude-tekst), een **Omschrijving**-sectie (PR-body +
-eventueel een Jira-kadertje), en onderaan review/CI-pills — gestyled als de
-dark-zinc pills in `overview.mjs` maar dan in het lichte kaart-thema
-(`bg-emerald-50`/`bg-rose-50`/`bg-amber-50` i.p.v. `bg-emerald-500/15` etc.). De
-kaart leest **uitsluitend** `state.prMeta`/`state.pr`/`state.prUrl`/
-`state.jiraKey` — nooit `b.code` — zodat hij niet co-subscribed raakt met de
-diff-render (zie de "stuck on loading"-valkuil in `conventions.md`).
+**PR-info-kolom, stop 1 van de nav-keten, standaard verborgen, fysiek links van
+de pr-index** (`data-testid=pr-info-column`, `w-[26rem]`, gerenderd door
+`prInfoCard(state)` binnen een eigen `PrInfoPanel(state)`-component in
+`home.mjs`). Deze kolom is de meest-linkse stop van de links→rechts
+navigatieketen beschreven in `.claude/rules/keyboard-navigation.md`, en staat
+ook **visueel** op de meest-linkse plek van het scherm — niet als eerste kind
+van `<main>` (dat was 'm eerder, maar dan verscheen hij pas ná de pr-index i.p.v.
+ervoor), maar als een **eigen `position:fixed`-paneel**, sibling van `<aside>`
+(de pr-index, `BlockList.mjs`) en `<main>`, gemount vóór beide in
+`home.mjs`. Reden: `<aside>` is zelf `position:fixed` en zit dus **buiten**
+`<main>`'s flex-flow — om de PR-info-kolom er echt links vóór te krijgen (i.p.v.
+erná, zoals een flex-child van `<main>` zou doen) moet hij op hetzelfde niveau
+zitten en de vaste `left-6`-plek van de pr-index overnemen, terwijl de pr-index
+zelf naar rechts opschuift.
+
+`state.showDescription` (default `false`) bepaalt of de kolom bestaat — dicht
+neemt hij **geen ruimte** in (het hele `${() => state.showDescription ? html\`…\`
+: ''}`-blok valt weg, net als voorheen). Open (alleen mogelijk in
+`state.mode==='list'`, zie hieronder) gebeurt er twee dingen tegelijk, beide
+gedreven door dezelfde `state.showDescription`-vlag, dus altijd in lockstep:
+- `PrInfoPanel` verschijnt op `left-6` (de plek waar `<aside>` normaal staat).
+- `<aside>` (de pr-index) schuift zichzelf `27.5rem` naar rechts
+  (`translate-x-[27.5rem]` i.p.v. `translate-x-0`, in `BlockList.mjs`'s eigen
+  class-ternary — vóór de bestaande `mode==='diff'`-check, die voorrang houdt:
+  in diff-mode schuift de pr-index nog steeds volledig weg, ongeacht
+  `showDescription`). 27.5rem = de breedte van de PR-info-kolom (26rem) plus de
+  1.5rem gap ertussen, zodat beide kolommen strak tegen elkaar aan staan — net
+  zo'n gat als tussen de pr-index en `<main>` normaal.
+- `<main>` (`DetailPanel`) schuift op zijn beurt **ook** 27.5rem naar rechts
+  (`left-[56.5rem]` i.p.v. het gebruikelijke `left-[29rem]`, in dezelfde
+  class-ternary als de bestaande `mode==='diff' → left-6`-tak), zodat de
+  block-kolom niet onder de opgeschoven pr-index komt te zitten. Dit is
+  **losgekoppeld van** `<aside>`'s eigen transitie maar gebruikt dezelfde
+  27.5rem-afstand, dus beide bewegen in dezelfde 200ms CSS-transitie in sync.
+
+Bereikt vanuit de pr-index (stop 2, `state.mode==='list'`) met `←`; `→` sluit 'm
+weer. Terwijl hij open is negeert `onKeydown` `↑`/`↓` (geen interne cursor). Een
+witte kaart met titel + Jira-badge, meta-regel (auteur, `+add −del`,
+bestandenaantal, branch, "op GitHub ›"), een **Samenvatting**-sectie
+(Claude-tekst), een **Omschrijving**-sectie (PR-body + eventueel een
+Jira-kadertje), en onderaan review/CI-pills — gestyled als de dark-zinc pills in
+`overview.mjs` maar dan in het lichte kaart-thema (`bg-emerald-50`/`bg-rose-50`/
+`bg-amber-50` i.p.v. `bg-emerald-500/15` etc.). De kaart leest **uitsluitend**
+`state.prMeta`/`state.pr`/`state.prUrl`/`state.jiraKey` — nooit `b.code` —
+zodat hij niet co-subscribed raakt met de diff-render (zie de "stuck on
+loading"-valkuil in `conventions.md`).
 **Progressief laden:** `state.prMeta` (leeg object bij start) wordt door
 `pollPRMeta` in `home.mjs` **wholesale hertoegewezen** op elke poll van
 `GET /api/pr?pr=N` (elke 1.5s, tot de statussen er zijn of na een max van 20

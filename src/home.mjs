@@ -2576,12 +2576,12 @@ function menuOverlay() {
 }
 
 // ── PR-info column ──────────────────────────────────────────────────────────
-// prInfoCard renders the first column of <main>: PR title/Jira badge, meta
-// (author/diffstat/branch/GitHub link), the Claude summary, the PR description
-// (+ Jira description if any), and review/CI pills — each section appearing as
-// soon as its stage of the pr_status workflow has landed in state.prMeta. Reads
-// only state.prMeta/state.pr — never b.code, so it can't race the diff render
-// (see conventions.md).
+// prInfoCard renders the card shown in PrInfoPanel (stop 1 of the nav chain):
+// PR title/Jira badge, meta (author/diffstat/branch/GitHub link), the Claude
+// summary, the PR description (+ Jira description if any), and review/CI
+// pills — each section appearing as soon as its stage of the pr_status
+// workflow has landed in state.prMeta. Reads only state.prMeta/state.pr —
+// never b.code, so it can't race the diff render (see conventions.md).
 
 const REPO_SLUG = 'plug-and-pay/plug-and-pay'
 
@@ -2718,6 +2718,30 @@ function prInfoCard(state) {
   `
 }
 
+// PrInfoPanel — stop 1 of the left→right nav chain: the PR-description column.
+// It is its own fixed-position panel (mounted as a sibling of BlockList/
+// DetailPanel), NOT a flex child of <main> — the pr-index (<aside> in
+// BlockList.mjs) is itself position:fixed and outside <main>'s flex flow, so
+// this panel has to live at that same level to sit flush left of it (at the
+// pr-index's usual left-6 spot) while BlockList slides itself right
+// (translate-x-[27.5rem]) to make room. See the "verplaats pr description naar
+// links" note in detail-layout.md for the full rationale/measurements.
+function PrInfoPanel(state) {
+  return html`
+    <div>
+      ${() =>
+        state.showDescription
+          ? html`<div
+              class="fixed bottom-[100px] left-6 top-6 z-10 flex min-h-0 w-[26rem] flex-col"
+              data-testid="pr-info-column"
+            >
+              ${prInfoCard(state)}
+            </div>`.key('pr-info-column')
+          : ''}
+    </div>
+  `
+}
+
 // DetailPanel — the area right of the fixed sidebar. It shows the block card for
 // the selected row, and the next row's card already (a look-ahead preview). When
 // both cards are from the same file, a dashed connector links them.
@@ -2726,15 +2750,17 @@ function DetailPanel(state) {
     <main
       class="${() =>
         'fixed bottom-[100px] right-6 top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto transition-all duration-200 ease-out ' +
-        (state.mode === 'diff' ? 'left-6' : 'left-[29rem]')}"
+        (state.mode === 'diff'
+          ? 'left-6'
+          : // showDescription (list-mode only) pushes PrInfoPanel to left-6 and
+            // slides the pr-index right by one column-width (27.5rem, see
+            // BlockList.mjs) — <main> needs to clear both, so it shifts the same
+            // 27.5rem past its usual left-[29rem].
+            state.showDescription
+            ? 'left-[56.5rem]'
+            : 'left-[29rem]')}"
       data-testid="detail-panel"
     >
-      ${() =>
-        state.showDescription
-          ? html`<div class="flex min-h-0 w-[26rem] shrink-0 flex-col" data-testid="pr-info-column">
-              ${prInfoCard(state)}
-            </div>`.key('pr-info-column')
-          : ''}
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="block-column">
       ${() => {
         const sel = state.selected
@@ -2942,8 +2968,11 @@ function DetailPanel(state) {
   `
 }
 
-// Mount the sidebar and the detail panel into #app.
+// Mount the sidebar and the detail panel into #app. PrInfoPanel is mounted
+// first so it stacks visually under the pr-index while the latter slides
+// right over it during the ~200ms transition (see BlockList.mjs).
 const app = document.getElementById('app')
+PrInfoPanel(state)(app)
 BlockList(state)(app)
 DetailPanel(state)(app)
 Footer(state)(app)
