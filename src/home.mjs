@@ -2429,11 +2429,13 @@ function onKeydown(e) {
 
   // Stop 1 of the nav chain (the PR-description column) sits to the left of the
   // block-index and owns the keyboard while open: → closes it back to stop 2,
-  // any other arrow is a no-op (it has no internal cursor to walk) so it doesn't
-  // move the block selection underneath it.
+  // ← exits the chain entirely to the PR overview (/pr-overview) — there's
+  // nothing further left than stop 1. No internal cursor to walk otherwise, so
+  // any other key is a no-op and doesn't move the block selection underneath it.
   if (state.showDescription) {
     e.preventDefault()
     if (e.key === 'ArrowRight') state.showDescription = false
+    else if (e.key === 'ArrowLeft') location.href = '/pr-overview'
     return
   }
 

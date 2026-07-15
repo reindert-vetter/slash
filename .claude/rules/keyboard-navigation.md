@@ -11,7 +11,8 @@ keten van **stops**, van links naar rechts over de hele layout:
 1. **Omschrijving** (`prInfoCard`/`state.showDescription`) — de PR-titel/
    samenvatting/beschrijving. **Standaard verborgen** (neemt dan geen breedte
    in — geen rail zoals stop 5's inklap, de kolom valt volledig weg) en de
-   meest-linkse stop.
+   meest-linkse stop. `←` hier verlaat de hele keten naar `/pr-overview` (zie
+   onder) — er is niets links van stop 1.
 2. **PR-blok-index** (`data-testid=pr-index`, de sidebar, `state.mode==='list'`)
    — schuift fysiek naar rechts zodra stop 1 open is, zodat de omschrijving er
    echt links van staat i.p.v. erna (zie `.claude/rules/detail-layout.md`).
@@ -44,6 +45,12 @@ gedrag:
   (`state.searchActive`), dan doet `←` daar nu hetzelfde (naar stop 1, met
   `exitSearch()` om de DOM-focus netjes los te laten) i.p.v. de oude no-op
   ("already the leftmost stop").
+- **Vóór stop 1 (einde van de keten):** `←` terwijl `state.showDescription` open
+  is (er is geen stop 0) navigeert weg uit de PR naar de **PR-inbox**
+  (`location.href = '/pr-overview'`, zie `.claude/rules/pages-and-routing.md`).
+  Kies je daar een PR, dan land je op `/pr/<id>` zonder `sel`-param in de URL,
+  dus `state.selected` staat op zijn default (`0`) — het **eerste blok** is
+  meteen geselecteerd, niet wat eerder op die PR geselecteerd stond.
 - **Stop 2 ↔ 3 / stop 3 ↔ 4:** ongewijzigd — zie de `'list'`/`'diff'`-secties
   hieronder resp. "Kolom-navigatie" in `.claude/rules/detail-layout.md`.
 - **Stop 3/4 ↔ 5:** ongewijzigd — `→` vanuit de diff is `enterRelated()`, `←`

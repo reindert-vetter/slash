@@ -45,7 +45,13 @@ test.describe('PR Review Tree — PR inbox', () => {
 
     await ingested.click()
     await expect(page).toHaveURL(/\/pr\/12903/)
-    await expect(page.locator('[data-testid="block-row"]').first()).toBeVisible()
+    const firstRow = page.locator('[data-testid="block-row"]').first()
+    await expect(firstRow).toBeVisible()
+    // No `sel` param is carried over, so state.selected keeps its default (0):
+    // the first block is selected on arrival, not whatever was selected on a
+    // previous visit to this PR (see the nav-chain "eerste blok" plan).
+    await expect(firstRow).toHaveAttribute('data-idx', '0')
+    await expect(firstRow).toHaveClass(/bg-indigo-50/)
   })
 
   test('status pills backfill after first paint', async ({ page }) => {

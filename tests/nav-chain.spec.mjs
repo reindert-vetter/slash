@@ -42,6 +42,18 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await expect(page.locator('[data-testid=block-row].bg-indigo-50')).toHaveAttribute('data-idx', selectedIdx)
   })
 
+  test('← on stop 1 (the PR-description column) exits the chain to the PR overview', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+
+    await page.keyboard.press('ArrowLeft') // block-index → stop 1 (description)
+    await expect(page.getByTestId('pr-info-column')).toHaveCount(1)
+
+    await page.keyboard.press('ArrowLeft') // stop 1 → nothing further left: the PR overview
+    await expect(page).toHaveURL(/\/pr-overview/)
+    await expect(page.getByTestId('inbox')).toBeVisible()
+  })
+
   test('← from the composer returns to onderliggende code (not the diff); → with nothing deeper reaches Taken; Enter opens the task', async ({
     page,
     request,
