@@ -1,5 +1,28 @@
 import { test, expect } from './_fixtures.mjs'
 
+// evaluateSettled runs an in-page evaluate that's resilient to the documented
+// cold-start mount-race (see .claude/rules/conventions.md): home.mjs's
+// bindUrlState watches keep firing history.replaceState right after
+// 'networkidle', and that burst can tear down the very execution context our
+// evaluate() just started running in ("Execution context was destroyed").
+// waitForLoadState('networkidle') alone doesn't guarantee the burst is over, so
+// on that specific error we just wait for the page to go idle again and retry
+// the whole evaluate — a few attempts, not a broad retries: N sledgehammer, and
+// scoped to this one flaky race rather than every test.
+async function evaluateSettled(page, fn, attempts = 4) {
+  let lastErr
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await page.evaluate(fn)
+    } catch (err) {
+      if (!/context was destroyed/i.test(err.message) || i === attempts - 1) throw err
+      lastErr = err
+      await page.waitForLoadState('networkidle')
+    }
+  }
+  throw lastErr
+}
+
 // Combined approval indicators. The seeded fixture DB has no worktrees, so
 // /api/code (and thus a real diff with changed rows) is unavailable — like the
 // diff/highlight tests, we mount the components directly with inline data and
@@ -83,5 +106,85 @@ test.describe('PR Review Tree — combined approval', () => {
 
     // Header roll-up sums the children with a count: 1+2 / 3+2 = 3/5.
     await expect(host.getByTestId('related-approval-total')).toContainText('3/5 goedgekeurd')
+  })
+
+  // Regression: the emerald checkmark span in paneHTML (Block.mjs) is absolutely
+  // positioned so it should take no flow width, but its HTML used to be preceded
+  // by a plain leading space character — a real text node in the row's
+  // white-space:pre content — which shifted the whole line one monospace column
+  // to the right on an approved row. Mount the same changed line twice (one
+  // approved, one not) and assert the code itself starts at the exact same
+  // horizontal offset in both, while the checkmark stays visible.
+  test('an approved row does not shift its code to the right', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+
+    const offsets = await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const blockMod = await import('/src/Block.mjs')
+      const Block = blockMod.default
+      const makeBlock = (approvedRows) =>
+        reactive({
+          category: 'ACTION',
+          label: 'Foo::bar',
+          status: 'modified',
+          file: 'app/Foo.php',
+          line: 26,
+          name: 'bar',
+          class: 'Foo',
+          approvedRows,
+          code: {
+            old: { start: 26, end: 27, text: 'public function bar(): int {\n}' },
+            new: { start: 26, end: 27, text: 'public function bar(): ?int {\n}' },
+          },
+        })
+
+      const mount = (id, approvedRows) => {
+        const host = document.createElement('div')
+        host.id = id
+        document.body.appendChild(host)
+        const b = makeBlock(approvedRows)
+        // Mirror how home.mjs wires the approval accessor: a function reading
+        // b.approvedRows as a Set, so the pane's checkmark/tint logic sees it.
+        Block(b, { approvedRows: () => blockMod.approvedRowSet(b) })(host)
+        return host
+      }
+
+      const approvedHost = mount('approved-host', [0])
+      const plainHost = mount('plain-host', [])
+
+      // relX = the x offset of the first Prism token inside the changed row,
+      // relative to that row's own <div> — decoupled from where the host sits
+      // on the page, so both mounts are directly comparable. Skip the
+      // absolutely-positioned checkmark overlay itself (present only on the
+      // approved row): it sits at its own left-1.5 offset and isn't part of the
+      // row's normal flow, so including it would compare the wrong element.
+      const relX = (host) => {
+        const row = host.querySelectorAll('code.language-php')[1].querySelector(':scope > div')
+        const token =
+          [...row.children].find((el) => !el.className.includes('absolute')) || row
+        const rowRect = row.getBoundingClientRect()
+        const tokenRect = token.getBoundingClientRect()
+        return tokenRect.left - rowRect.left
+      }
+
+      const hasCheck = (host) =>
+        !!host.querySelector('span[title="Goedgekeurd"]')
+
+      return {
+        approvedX: relX(approvedHost),
+        plainX: relX(plainHost),
+        approvedHasCheck: hasCheck(approvedHost),
+        plainHasCheck: hasCheck(plainHost),
+      }
+    })
+
+    // The checkmark stays visible on the approved row (memory: never hide the
+    // done state) but isn't drawn on the unapproved one.
+    expect(offsets.approvedHasCheck).toBe(true)
+    expect(offsets.plainHasCheck).toBe(false)
+
+    // The code itself starts at the same column either way — no layout shift.
+    expect(offsets.approvedX).toBeCloseTo(offsets.plainX, 1)
   })
 })

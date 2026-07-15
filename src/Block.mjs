@@ -439,9 +439,13 @@ function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Se
     // the new (right) pane normally, and on the old (left) pane only for a pure
     // deletion (no right side) — so a modified row never gets it twice.
     const approveHere = sideKey === 'right' || r.right == null
+    // No leading space here: the span is absolutely positioned so it should
+    // take no flow width, but a plain leading space character would still be
+    // a real char in this white-space:pre row and shift the whole line one
+    // monospace column to the right on an approved row.
     const check =
       isApproved && approveHere
-        ? ' <span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600" title="Goedgekeurd">✓</span>'
+        ? '<span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600" title="Goedgekeurd">✓</span>'
         : ''
     parts.push(`<div class="${cls}"${anchor}${flag}>${check}${body}${marker}</div>`)
 
