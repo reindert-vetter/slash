@@ -209,6 +209,74 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   starten = sanctioned write-weg) — de UI wacht **niet** op deze POST, maar
   pollt `GET /api/pr` en rendert wat er al is (velden van een nog niet-gedraaide
   stage zijn simpelweg leeg/0).
+
+  **Ingest-refresh (nieuwe commits automatisch binnenhalen):** `pr_status`
+  dreef aanvankelijk alleen de merge/closed-detectie; sinds de ingest-refresh
+  gebruikt hij dezelfde `state`-Signal-lus ook om **nieuwe commits op de PR**
+  incrementeel te verwerken, zodat een reviewer niet handmatig
+  `POST /api/ingest` hoeft te draaien na elke push. `PRStateSignal` draagt
+  daarvoor naast `State` ook `BaseSHA`/`HeadSHA` (net als `ReactionSignal.Action`
+  / `ApprovalSignal.Viewed` rijden beide varianten op **hetzelfde** Signal —
+  een workflow kan maar op één Signal-naam tegelijk `WaitSignal`-en): `State`
+  gezet = een lifecycle-observatie (merged/closed, ongewijzigd gedrag);
+  `State` leeg + `HeadSHA` gezet = een ingest-refresh-verzoek.
+  - **`pollIngestRefresh`** (nieuwe, aparte poller-loop, los van elke
+    comment-thread — spiegelt `poll`/`pollInbox`, zelfde heartbeat-cadans:
+    snel `pollInterval` als binnen `heartbeatWindow` een heartbeat kwam, anders
+    traag `idlePollInterval`) checkt op zijn cadans `fetchPRMeta`'s live
+    `headRefOid` tegen het opgeslagen `pr_ingest`-record (zie hieronder). Is
+    die anders, dan signalt hij `PRStateSignal{BaseSHA, HeadSHA}` naar de
+    `pr_status`-tracker. **Belangrijk:** de per-comment-thread-heartbeat
+    (`RelatedPanel.mjs`) pingt alleen wanneer er een taak/thread open staat;
+    zonder open thread zou deze poller altijd op de trage cadans blijven
+    hangen. Daarom pingt `home.mjs` (`startPRStatusHeartbeat`) apart, elke 60s,
+    de `pr_status`-Run-ID zolang de PR-pagina zichtbaar+gefocust is — een
+    operationele ping zonder state-mutatie, dus buiten de write-boundary,
+    zoals de bestaande comment-/inbox-heartbeats.
+  - **`refreshIngestDelta`-Activity** (`ingest.go`): diff't de **eerder
+    opgeslagen** head-SHA (uit de nieuwe `pr_ingest`-tabel, `db.go`) tegen de
+    **nieuw waargenomen** head-SHA (`changedFileNames`, een `git diff
+    --name-only` — geen volledige unified diff nodig om alleen de
+    bestandsnamen te weten) om **precies** te bepalen welke bestanden sinds de
+    vorige ingest wijzigden. Alleen die bestanden worden herscand
+    (`diffBetweenSHAs` + `parseFiles`, gescoped) en via **`upsertPRFileBlocks`**
+    weggeschreven: een DELETE+INSERT die **alleen** de blocks van die
+    bestanden raakt (`DELETE FROM blocks WHERE pr=? AND file IN (...)`) —
+    ieder ander bestand z'n eigen blocks (en dus alles wat aan hun block-id hangt:
+    comments/approvals/callresolve, in aparte SQLite-bestanden zonder FK)
+    blijft volledig ongemoeid. De head-worktree wordt **in place** bijgewerkt
+    (`updateWorktree`: `git checkout --detach <sha>` binnen de bestaande
+    worktree-map, valt terug op de bestaande hard-rebuild `ensureWorktree` als
+    dat faalt) i.p.v. de vorige remove+recreate — die was prima voor een
+    handmatige, incidentele ingest maar te zwaar voor een cadans die elke
+    minuut kan vuren.
+    **Base-SHA gewijzigd** (bv. een rebase op een nieuwere `develop`) maakt een
+    incrementele diff tegen de oude base onveilig; dan valt de Activity terug
+    op de **volledige** bestaande ingest-pipeline (`prepareIngestWorktrees` +
+    `scanAndStoreIngestBlocks`, exact dezelfde full-swap als een handmatige
+    `POST /api/ingest`) — `ingestResult.FullFallback` markeert dat in de
+    workflow-history.
+  - **`pr_ingest`-tabel** (`db.go`, `schemaDDL`): `pr → base_sha, head_sha`,
+    bijgewerkt door **zowel** een volledige ingest (`scanAndStoreIngestBlocks`)
+    als een delta-refresh, zodat de poller altijd weet waar de volgende
+    refresh vandaan moet diffen. Leeg (geen rij) betekent "nog nooit
+    geïngest" — de poller/Activity doen dan niets (een refresh vereist een
+    voorafgaande volledige ingest).
+  - **Relations/callresolve blijven "vol" herberekend, niet delta-scoped:**
+    ná een geslaagde (niet-`Skipped`) refresh roept `prStatusWorkflow` gewoon
+    de bestaande `buildRelations`-Activity aan (dezelfde Activity die
+    `build_relations` ook gebruikt) — over de PR's **volledige huidige**
+    blocklijst (`blocksByPR`, een DB-read, geen re-parse). Bewuste keuze: de
+    kosten van `buildRelations`/`resolveCalls` schalen al met de PR-grootte
+    (niet de repo), en `resolveCalls` bouwt sowieso een hele-worktree
+    symbol-index ongeacht hoeveel blocks je 'm voedt — delta-scopen van *welke*
+    blocks bespaart dus nauwelijks iets, terwijl een relatie tussen twee
+    losse, ongerelateerde bestanden (`event_listener`: dispatcher in bestand A,
+    listener-handle in bestand B) een partiële keep-set juist een risico op
+    stale/verdwenen relaties geeft. Met de **volledige** blocklijst als
+    keep-set kunnen `relations.Replace`/`callresolve.Prune`/`UpsertGo` nooit
+    een geldige rij van een ongewijzigd bestand wegpruunen, en `UpsertGo` raakt
+    sowieso nooit een `searching`/`found`-rij (LLM-owned) aan.
 - **`pr_inbox`-workflow (per repo):** een derde Workflow Type dat de PR-inbox
   bezit — het is de **enige** die GitHub voor het overzicht leest. Een
   `refresh`-Signal (van de UI bij laden én van `pollInbox` op de

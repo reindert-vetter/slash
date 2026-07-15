@@ -31,3 +31,14 @@ CREATE INDEX IF NOT EXISTS idx_edges_callee ON edges(callee_id);
 CREATE INDEX IF NOT EXISTS idx_blocks_approved ON blocks(approved);
 CREATE INDEX IF NOT EXISTS idx_blocks_pr ON blocks(pr);
 CREATE INDEX IF NOT EXISTS idx_blocks_pr_status ON blocks(pr, status);
+
+-- pr_ingest onthoudt de base/head-SHA waar de blocks-tabel van een PR het
+-- laatst mee is gevuld. De ingest-refresh (pr_status's SignalPRState-tak, zie
+-- refreshIngestDelta) diff't de eerder opgeslagen head-SHA tegen een nieuw
+-- waargenomen SHA om precies te bepalen welke bestanden sindsdien wijzigden,
+-- i.p.v. de hele PR opnieuw te scannen bij elke refresh.
+CREATE TABLE IF NOT EXISTS pr_ingest (
+  pr       INTEGER PRIMARY KEY,
+  base_sha TEXT NOT NULL,
+  head_sha TEXT NOT NULL
+);

@@ -125,6 +125,24 @@ navigeerbare lijst tonen.
   deze Activities aangeroepen. `TaskManager.StartIngest(ctx, pr)` start de
   Execution (die zonder Signal synchroon doorloopt tot completion) en geeft de
   `ingestResult`-summary terug.
+- **Incrementele refresh (nieuwe commits, geen volledige re-ingest):** naast
+  deze handmatige, volledige pipeline draait `pr_status` op zijn poll-cadans
+  automatisch een **delta-refresh** zodra een PR's live head-SHA verder staat
+  dan wat het laatst is geïngest (`pollIngestRefresh` → `PRStateSignal` →
+  `refreshIngestDelta`-Activity, `ingest.go`). Die diff't alleen het **eerder
+  opgeslagen** head-SHA (nieuwe `pr_ingest`-tabel, `db.go`) tegen het nieuwe,
+  herscant **alleen de sindsdien gewijzigde bestanden**, en schrijft ze via
+  **`upsertPRFileBlocks`** (een DELETE+INSERT gescoped op precies die
+  bestanden — `DELETE FROM blocks WHERE pr=? AND file IN (...)`) i.p.v.
+  `replacePRBlocks`'s volledige per-PR swap. Elk ander bestand z'n eigen blocks —
+  en dus alles wat aan hun **stabiele** block-id hangt in de aparte
+  comments-/approvals-/callresolve-read-models (geen FK, dus sowieso
+  onaangeroerd) — blijft volledig met rust. Zie de sectie "Ingest-refresh" bij
+  `pr_status` in `.claude/rules/tembed-workflows.md` voor het volledige
+  mechanisme (de heartbeat-cadans, de base-SHA-gewijzigd-fallback naar de
+  volledige pipeline, en waarom relations/callresolve bewust "vol" — over de
+  PR's volledige huidige blocklijst, niet delta-scoped — blijven
+  herberekenen).
 - **Draaien:** `go run . ingest <pr> [-db data/graph.db]` start de
   `ingest`-workflow headless (bouwt een losse engine zonder server-runtime — geen
   poller-resume, geen inbox-fetch, zie `newTasks(..., resumeRuntime)` in

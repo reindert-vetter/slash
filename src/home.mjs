@@ -104,6 +104,12 @@ const state = reactive({
   // Run ID (.../signals/set). Empty until the ensure-call returns (offline: stays
   // empty and approval is then session-only).
   approveRunId: '',
+  // prStatusRunId — the Run ID of this PR's `pr_status` tracker, filled by
+  // loadPRMeta via POST /api/workflows/pr_status. The ingest-refresh heartbeat
+  // loop (see startPRStatusHeartbeat below) pings this Run ID while the PR page
+  // is genuinely active, so pollIngestRefresh keeps its fast cadence even when
+  // no comment thread is open (the only other heartbeat source).
+  prStatusRunId: '',
   // drill — the stack of "drilled-into" children the reviewer has stepped into
   // from the Onderliggende-code panel (Enter on a resolved child). Each entry is
   // either a real block object reused straight from allBlocks (its own relations/
@@ -693,16 +699,55 @@ const PR_META_MAX_POLLS = 20
 // column on whatever partial data it got (and the menu's links on their
 // fallbacks). Starting the tracker is a sanctioned UI write path (an Execution
 // start, fire-and-forget — awaiting it would block on all 3 stages); everything
-// else here is a read.
+// else here is a read. Also captures the tracker's Run ID so the heartbeat loop
+// below can keep its ingest-refresh poller on the fast cadence.
 function loadPRMeta() {
   fetch('/api/workflows/pr_status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pr: state.pr }),
-  }).catch(() => {
-    /* offline — the poll below still reads whatever the read-model already has */
   })
+    .then((res) => (res.ok ? res.json() : null))
+    .then((body) => {
+      if (body && body.runId) {
+        state.prStatusRunId = body.runId
+        startPRStatusHeartbeat()
+      }
+    })
+    .catch(() => {
+      /* offline — the poll below still reads whatever the read-model already has */
+    })
   pollPRMeta(0)
+}
+
+// startPRStatusHeartbeat pings the pr_status tracker's Run ID every 60s while
+// this PR page is genuinely active (visible + focused), so its ingest-refresh
+// poller (pollIngestRefresh, server-side) keeps checking the PR's head SHA on
+// the fast cadence — the per-comment-thread heartbeat only fires while a
+// thread is open, which isn't always the case just from viewing the PR. A
+// heartbeat mutates no durable state (in-memory poll timing only), so this is
+// the same operational-ping exception the comment/inbox heartbeats already use
+// — never a workflow start/signal. Started once loadPRMeta has a Run ID.
+const PR_STATUS_HEARTBEAT_MS = 60_000
+let prStatusHeartbeatStarted = false
+
+function prStatusPageActive() {
+  return document.visibilityState === 'visible' && document.hasFocus()
+}
+
+function sendPRStatusHeartbeat() {
+  if (!state.prStatusRunId || !prStatusPageActive()) return
+  fetch('/api/workflows/' + encodeURIComponent(state.prStatusRunId) + '/heartbeat', { method: 'POST' }).catch(() => {
+    /* best-effort — the poller falls back to its idle cadence regardless */
+  })
+}
+
+function startPRStatusHeartbeat() {
+  if (prStatusHeartbeatStarted) return
+  prStatusHeartbeatStarted = true
+  sendPRStatusHeartbeat()
+  setInterval(sendPRStatusHeartbeat, PR_STATUS_HEARTBEAT_MS)
+  document.addEventListener('visibilitychange', sendPRStatusHeartbeat)
 }
 
 async function pollPRMeta(count) {

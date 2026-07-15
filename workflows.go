@@ -160,10 +160,17 @@ type PRStatusInput struct {
 	PR int `json:"pr"`
 }
 
-// PRStateSignal carries an observed PR state into the pr_status tracker
-// ("open" | "merged" | "closed").
+// PRStateSignal drives the pr_status tracker via SignalPRState. It carries
+// either an observed PR lifecycle state ("merged"/"closed", State != "") from
+// the comment/inbox pollers, or an ingest-refresh request (State == "" &&
+// HeadSHA != "") from pollIngestRefresh, when it observes a head SHA newer
+// than what was last ingested. Both ride the same signal name because a
+// workflow can only WaitSignal on one name at a time (mirrors
+// ReactionSignal.Action / ApprovalSignal.Viewed).
 type PRStateSignal struct {
-	State string `json:"state"`
+	State   string `json:"state,omitempty"`
+	BaseSHA string `json:"baseSHA,omitempty"` // ingest-refresh: newly observed base SHA
+	HeadSHA string `json:"headSHA,omitempty"` // ingest-refresh: newly observed head SHA
 }
 
 // PRInboxInput starts the pr_inbox Workflow Execution for a repo.
@@ -243,6 +250,14 @@ type TaskManager struct {
 	interval    time.Duration // fast cadence (reviewer active)
 	idle        time.Duration // slow cadence + PR-state check (reviewer idle)
 	logf        func(string, ...any)
+
+	// baseCtx is the server-lifetime context background pollers spawned outside
+	// a request (e.g. ensurePRStatus's fresh-poller spawn) run under — a
+	// request-scoped ctx would be cancelled the moment the handler that started
+	// it returns. Set via SetRuntime; nil (and runtimeReady false) for a
+	// one-shot CLI caller, which never spawns background pollers.
+	baseCtx      context.Context
+	runtimeReady bool
 
 	mu       sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + inboxRun
 	lastBeat map[string]time.Time // code-comment/inbox Run ID → last heartbeat
@@ -426,6 +441,27 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		res, err := scanAndStoreIngestBlocks(ctx, m.db, m.dataDir, arg.PR, arg.Shas)
 		if err != nil {
 			return nil, fmt.Errorf("ingest: scan and store blocks: %w", err)
+		}
+		return json.Marshal(res)
+	})
+
+	// Activity: incrementally refresh a PR's blocks after new commits landed on
+	// its head ref (write — scoped to just the changed files via
+	// upsertPRFileBlocks; falls back to a full ingest if the base SHA itself
+	// moved). Driven by pr_status's SignalPRState branch, on the ingest-refresh
+	// poller's cadence (pollIngestRefresh).
+	engine.RegisterActivity("refreshIngestDelta", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR      int    `json:"pr"`
+			BaseSHA string `json:"baseSHA"`
+			HeadSHA string `json:"headSHA"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		res, err := refreshIngestDelta(ctx, m.db, m.dataDir, arg.PR, arg.BaseSHA, arg.HeadSHA)
+		if err != nil {
+			return nil, fmt.Errorf("pr_status: refresh ingest delta: %w", err)
 		}
 		return json.Marshal(res)
 	})
@@ -655,6 +691,18 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	return m
 }
 
+// SetRuntime records the server-lifetime context and whether background
+// pollers may run. newTasks calls this once, right after NewTaskManager,
+// passing resumeRuntime — a one-shot CLI caller (e.g. `slash ingest`) passes
+// false, so ensurePRStatus never spawns a pollIngestRefresh goroutine that
+// would outlive a one-shot process pointlessly. ctx is the long-lived context
+// background pollers run under (never a per-request context, which would be
+// cancelled the moment the handler that started them returns).
+func (m *TaskManager) SetRuntime(ctx context.Context, ready bool) {
+	m.baseCtx = ctx
+	m.runtimeReady = ready
+}
+
 // prInboxWorkflow owns the PR inbox for a repo. It is deterministic: each
 // "refresh" Signal drives one refreshInbox Activity (the only GitHub read for
 // the overview, which writes the read-model). It never completes — a long-lived
@@ -877,6 +925,29 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		w.WaitSignal(SignalPRState, &s)
 		if s.State == "merged" || s.State == "closed" {
 			return json.Marshal(map[string]any{"pr": in.PR, "state": s.State})
+		}
+		// An ingest-refresh request (pollIngestRefresh observed a newer head
+		// SHA than what was last ingested): refresh the delta, then re-derive
+		// relations/callresolve from the PR's full current block list (cheap —
+		// bounded by PR size, read from the DB, not a re-parse — and safe: a
+		// full keep-set never prunes a still-valid unrelated row). Skip the
+		// rebuild entirely when the refresh found nothing new, so a stray/
+		// duplicate signal doesn't pay for a no-op relations rebuild.
+		if s.HeadSHA != "" {
+			var res ingestResult
+			arg := struct {
+				PR      int    `json:"pr"`
+				BaseSHA string `json:"baseSHA"`
+				HeadSHA string `json:"headSHA"`
+			}{PR: in.PR, BaseSHA: s.BaseSHA, HeadSHA: s.HeadSHA}
+			if err := w.ExecuteActivity("refreshIngestDelta", arg, &res); err != nil {
+				return nil, fmt.Errorf("refresh ingest delta: %w", err)
+			}
+			if !res.Skipped {
+				if err := w.ExecuteActivity("buildRelations", BuildRelationsInput{PR: in.PR}, nil); err != nil {
+					return nil, fmt.Errorf("rebuild relations after refresh: %w", err)
+				}
+			}
 		}
 	}
 }
@@ -1126,19 +1197,31 @@ func (m *TaskManager) EnsurePRStatus(pr int) (string, error) {
 // if none is live yet (one tracker per PR, reused across restarts).
 func (m *TaskManager) ensurePRStatus(pr int) (string, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if id, ok := m.prRuns[pr]; ok {
+		m.mu.Unlock()
 		return id, nil
 	}
 	if id := m.findPRStatusLocked(pr); id != "" {
 		m.prRuns[pr] = id
+		m.mu.Unlock()
 		return id, nil
 	}
 	id, err := m.engine.StartWorkflow(WorkflowPRStatus, PRStatusInput{PR: pr})
 	if err != nil {
+		m.mu.Unlock()
 		return "", err
 	}
 	m.prRuns[pr] = id
+	m.mu.Unlock()
+
+	// Start the ingest-refresh poller for this PR's tracker — only when a
+	// server runtime is actually driving background pollers (SetRuntime), and
+	// only right here, when the Execution is genuinely new (a restart's
+	// already-existing tracker is instead picked up by
+	// ResumePRStatusPolling).
+	if m.runtimeReady {
+		go m.pollIngestRefresh(m.baseCtx, id, pr)
+	}
 	return id, nil
 }
 
@@ -1379,6 +1462,62 @@ func (m *TaskManager) pollInbox(ctx context.Context, runID string) {
 		}
 		if err := m.engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
 			m.logf("pr_inbox: refresh signal run=%s: %v", runID, err)
+		}
+	}
+}
+
+// pollIngestRefresh checks, on the heartbeat-driven cadence (fast while a
+// heartbeat for prRunID arrived within heartbeatWindow, else slow — same gate
+// as poll/pollInbox), whether the PR's live head SHA has moved past what was
+// last ingested. If so it signals the pr_status tracker (SignalPRState, State
+// "" so it's read as an ingest-refresh request rather than a lifecycle
+// transition) to run refreshIngestDelta. It stops once the tracker itself is
+// done (merged/closed) — mirrors poll's shutdown check.
+func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, pr int) {
+	ticker := time.NewTicker(m.interval)
+	defer ticker.Stop()
+	var lastPoll time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		m.mu.Lock()
+		beat := m.lastBeat[prRunID]
+		m.mu.Unlock()
+		active := !beat.IsZero() && time.Since(beat) < heartbeatWindow
+		want := m.idle
+		if active {
+			want = m.interval
+		}
+		if !lastPoll.IsZero() && time.Since(lastPoll) < want {
+			continue
+		}
+		lastPoll = time.Now()
+
+		status, err := m.engine.Status(prRunID)
+		if err != nil || status == tembed.StatusCompleted || status == tembed.StatusFailed {
+			return
+		}
+
+		meta, err := fetchPRMeta(ctx, pr)
+		if err != nil {
+			m.logf("pr_status: ingest refresh check pr=%d: %v", pr, err)
+			continue
+		}
+		_, head, ok, err := loadIngestSHAs(m.db, pr)
+		if err != nil {
+			m.logf("pr_status: load ingest state pr=%d: %v", pr, err)
+			continue
+		}
+		if !ok || meta.HeadRefOid == head {
+			continue // no prior ingest yet, or nothing new since
+		}
+		sig := PRStateSignal{BaseSHA: meta.BaseRefOid, HeadSHA: meta.HeadRefOid}
+		if err := m.engine.SignalWorkflow(prRunID, SignalPRState, sig); err != nil {
+			m.logf("pr_status: signal ingest refresh pr=%d: %v", pr, err)
 		}
 	}
 }

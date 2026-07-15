@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -91,6 +92,33 @@ func ensureWorktree(ctx context.Context, dir, sha string) error {
 	return nil
 }
 
+// runGitIn runs a git command inside an arbitrary directory (e.g. a worktree),
+// unlike runGit which always operates on the fixed upstream clone (repoDir).
+func runGitIn(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	full := append([]string{"-C", dir}, args...)
+	cmd := exec.CommandContext(ctx, "git", full...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("git %s (in %s): %w: %s", strings.Join(args, " "), dir, err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+// updateWorktree points an existing worktree at dir to sha in place (a
+// detached checkout inside that worktree), avoiding ensureWorktree's full
+// remove+recreate. The ingest-refresh path (refreshIngestDelta) runs on every
+// poll tick a new head SHA is observed, so re-registering the worktree from
+// scratch each time would be wasteful; falls back to ensureWorktree when the
+// in-place update fails (dir missing, not yet a worktree, or corrupted).
+func updateWorktree(ctx context.Context, dir, sha string) error {
+	if _, err := os.Stat(dir); err == nil {
+		if _, err := runGitIn(ctx, dir, "checkout", "--detach", sha); err == nil {
+			return nil
+		}
+	}
+	return ensureWorktree(ctx, dir, sha)
+}
+
 // diffBetweenSHAs returns the unified diff between two commits, limited to files.
 func diffBetweenSHAs(ctx context.Context, baseSHA, headSHA string, files []string) (string, error) {
 	args := []string{"diff", "--no-color", "--unified=0", baseSHA, headSHA, "--"}
@@ -100,6 +128,25 @@ func diffBetweenSHAs(ctx context.Context, baseSHA, headSHA string, files []strin
 		return "", err
 	}
 	return string(out), nil
+}
+
+// changedFileNames returns the file paths that differ between two commits (no
+// path filter) — cheaper than a full unified diff when only the file list is
+// needed. Used by the ingest-refresh path to discover exactly which files
+// changed since the previously ingested head SHA.
+func changedFileNames(ctx context.Context, oldSHA, newSHA string) ([]string, error) {
+	out, err := runGit(ctx, "diff", "--name-only", oldSHA, newSHA)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
 }
 
 func short(sha string) string {

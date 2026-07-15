@@ -120,12 +120,19 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		jr = &jira.Fake{}
 	}
 	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, ap, cl, jr, db, dataDir, repo)
+	// Record the server-lifetime context + whether background pollers may run,
+	// so ensurePRStatus's fresh-poller spawn uses a context that outlives the
+	// HTTP request that triggered it (see TaskManager.baseCtx).
+	mgr.SetRuntime(ctx, resumeRuntime)
 
 	if err := engine.Recover(); err != nil {
 		return nil, nil, err
 	}
 	if resumeRuntime {
 		mgr.ResumePolling(ctx)
+		// Resume the ingest-refresh poller for every pr_status tracker that was
+		// already running before this restart (mirrors ResumePolling).
+		mgr.ResumePRStatusPolling(ctx)
 		// Own the PR inbox via the workflow: fetch an initial snapshot into the
 		// read-model and start the refresh poller (the UI reads only the read-model).
 		mgr.EnsureInbox(ctx)
@@ -172,6 +179,35 @@ func (m *TaskManager) ResumePolling(ctx context.Context) {
 			}
 			go m.poll(ctx, r.ID, input.PR, rootID, prRunID)
 		}
+	}
+}
+
+// ResumePRStatusPolling restarts the ingest-refresh poller for every waiting
+// pr_status execution after a restart (mirrors ResumePolling for comment
+// threads), so the "check the PR's head SHA" poll keeps running across a
+// server restart.
+func (m *TaskManager) ResumePRStatusPolling(ctx context.Context) {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		m.logf("pr_status: resume polling: %v", err)
+		return
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowPRStatus || r.Status != tembed.StatusWaiting {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var input PRStatusInput
+		if json.Unmarshal(in, &input) != nil || input.PR == 0 {
+			continue
+		}
+		m.mu.Lock()
+		m.prRuns[input.PR] = r.ID
+		m.mu.Unlock()
+		go m.pollIngestRefresh(ctx, r.ID, input.PR)
 	}
 }
 
