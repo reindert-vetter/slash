@@ -32,7 +32,10 @@ const state = reactive({
 
 // ui is separate from state so opening/closing a popover doesn't touch the
 // bits bound into url-less local reactivity elsewhere.
-const ui = reactive({ openPopover: null })
+// ingesting: the pr.number currently running /api/ingest (disables its "Genereer
+// review-boom" button); ingestError: the last ingest failure message, per row
+// (cleared on a fresh attempt or when its popover closes).
+const ui = reactive({ openPopover: null, ingesting: null, ingestError: null })
 
 // ── icons (lucide-style outline set, matching the dash reference exactly) ──
 
@@ -358,18 +361,71 @@ function rowInner(pr, opts) {
   ]
 }
 
-// popover — non-ingested rows have no review tree to open, so a click opens
-// this little menu instead: a plain link to GitHub, plus a Jira link when the
-// title carries a KEY-123-style ticket key. Read-only, no ingest/generate
-// action per this page's read-only contract.
+// togglePopover opens/closes a row's popover, clearing any stale ingest error
+// from a previous row so it never bleeds into a different PR's menu.
+function togglePopover(number) {
+  const opening = ui.openPopover !== number
+  ui.openPopover = opening ? number : null
+  ui.ingestError = null
+}
+
+// generatePage runs the existing ingest workflow endpoint for a non-ingested
+// PR (the sanctioned write path per .claude/rules/workflows-write-boundary.md
+// — this starts a Workflow Execution, it never writes to a module directly).
+// handleIngest (api.go) only answers 200 once the ingest pipeline AND the
+// build_relations workflow have run synchronously, so a plain full-page
+// redirect on success is safe: the fresh /pr/<id> load has everything it
+// needs. On failure we stay on the overview and surface the error inline in
+// the still-open popover; the row itself is untouched (still hasGraph=false),
+// so a retry or a page refresh reflects the real state.
+async function generatePage(pr) {
+  if (ui.ingesting) return // one ingest at a time; button is disabled anyway
+  ui.ingesting = pr.number
+  ui.ingestError = null
+  try {
+    const res = await fetch('/api/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr: pr.number }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => null)
+      throw new Error((body && body.error) || 'Genereren mislukt (' + res.status + ')')
+    }
+    location.href = '/pr/' + pr.number
+  } catch (e) {
+    ui.ingesting = null
+    ui.ingestError = e.message || 'Genereren mislukt'
+  }
+}
+
+// popover — non-ingested rows have no review tree to open yet, so a click
+// opens this little menu: first "Genereer review-boom" (runs the ingest
+// workflow, see generatePage above), then a plain link to GitHub, plus a
+// Jira link when the title carries a KEY-123-style ticket key.
 function popover(pr) {
   const m = (pr.title || '').match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
+  const busy = ui.ingesting === pr.number
   return html`
     <div
       class="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-zinc-700 bg-zinc-800 p-1 shadow-xl"
       data-testid="pr-popover"
       @click="${(e) => e.stopPropagation()}"
     >
+      <button
+        type="button"
+        data-testid="generate-page"
+        ?disabled="${() => ui.ingesting === pr.number}"
+        class="${'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-700 ' +
+        (busy ? 'cursor-not-allowed opacity-60' : '')}"
+        @click="${() => generatePage(pr)}"
+      >
+        ${icon('sparkles', 'h-3.5 w-3.5')} ${busy ? 'Bezig met genereren…' : 'Genereer review-boom'}
+      </button>
+      ${() =>
+        ui.ingestError
+          ? html`<p class="px-2.5 py-1 text-[11px] text-rose-400" data-testid="generate-error">${ui.ingestError}</p>`
+          : ''}
       <a
         href="${pr.url}"
         target="_blank"
@@ -378,16 +434,17 @@ function popover(pr) {
       >
         ${icon('external-link', 'h-3.5 w-3.5')} Open op GitHub
       </a>
-      ${m
-        ? html`<a
-            href="${JIRA_BASE + m[1]}"
-            target="_blank"
-            rel="noreferrer"
-            class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
-          >
-            ${icon('external-link', 'h-3.5 w-3.5')} Open Jira-ticket
-          </a>`
-        : null}
+      ${() =>
+        m
+          ? html`<a
+              href="${JIRA_BASE + m[1]}"
+              target="_blank"
+              rel="noreferrer"
+              class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
+            >
+              ${icon('external-link', 'h-3.5 w-3.5')} Open Jira-ticket
+            </a>`
+          : ''}
     </div>
   `
 }
@@ -424,7 +481,7 @@ function prRowButton(pr, opts) {
       data-nav-row
       class="${'relative ' + ROW_CLASS}"
       style="${indentStyle(opts)}"
-      @click="${() => (ui.openPopover = ui.openPopover === pr.number ? null : pr.number)}"
+      @click="${() => togglePopover(pr.number)}"
     >
       ${rowInner(pr, opts)} ${() => (ui.openPopover === pr.number ? popover(pr) : null)}
     </div>
@@ -982,7 +1039,10 @@ window.addEventListener('mousemove', () => (hoverEnabled = true), { passive: tru
 window.addEventListener('mousedown', (e) => {
   if (ui.openPopover == null) return
   const row = e.target.closest && e.target.closest('[data-pr="' + ui.openPopover + '"]')
-  if (!row) ui.openPopover = null
+  if (!row) {
+    ui.openPopover = null
+    ui.ingestError = null
+  }
 })
 
 // Repaint the nav whenever the visible row set could have changed.

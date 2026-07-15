@@ -72,4 +72,45 @@ test.describe('PR Review Tree — PR inbox', () => {
     await page.goto('/')
     await expect(page).toHaveURL(/\/pr-overview$/)
   })
+
+  // 12801 has no graph yet (not seeded into the blocks DB), so its row opens
+  // the popover instead of linking straight into /pr/<id>.
+  test('generating a review tree from the popover redirects into /pr/<id>', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    await page.route('**/api/ingest', async (route) => {
+      const body = JSON.parse(route.request().postData() || '{}')
+      expect(body.pr).toBe(12801)
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    })
+
+    const row = page.locator('[data-testid="pr-row"][data-pr="12801"]')
+    await row.click()
+    const generate = page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')
+    await expect(generate).toBeVisible()
+    await expect(generate).toHaveText(/Genereer review-boom/)
+
+    await generate.click()
+    await expect(page).toHaveURL(/\/pr\/12801$/)
+  })
+
+  test('a failed generate keeps the popover open with an inline error', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    await page.route('**/api/ingest', async (route) => {
+      await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"gh unreachable"}' })
+    })
+
+    const row = page.locator('[data-testid="pr-row"][data-pr="12801"]')
+    await row.click()
+    const generate = page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')
+    await generate.click()
+
+    await expect(page.locator('[data-testid="generate-error"]')).toHaveText(/gh unreachable/)
+    // Still on the overview, the row is untouched (no graph yet).
+    await expect(page).toHaveURL(/\/pr-overview$/)
+    await expect(generate).toBeEnabled()
+  })
 })

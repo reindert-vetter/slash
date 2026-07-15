@@ -22,10 +22,22 @@ Go-server (`api.go`, `routes`) bepaalt welke shell een route krijgt:
 De startpagina is een **GitHub-inbox**, nagebouwd op GitHub's eigen
 `github.com/pulls`-dashboard: dezelfde secties en taal ("Ready to merge", "Needs
 your review", …), met per rij review-status, CI-checks, reviewers en diff-stats.
-Hij is **volledig read-only** — de inbox muteert nooit state (conform
-`workflows-write-boundary.md`). Een geïngeste PR opent de tree op `/pr/<n>`; een
-niet-geïngeste rij biedt alleen *Open op GitHub* / *Open Jira-ticket* (géén
-ingest-actie vanuit de overview).
+Hij is **volledig read-only** in de zin dat hij nooit direct een module/tabel
+schrijft (conform `workflows-write-boundary.md`). Een geïngeste PR opent de tree
+op `/pr/<n>`; een niet-geïngeste rij opent een popover-menu (`popover(pr)` in
+`src/overview.mjs`) met als **eerste** keuze **"Genereer review-boom"**
+(`data-testid=generate-page`) — die start het bestaande **`POST /api/ingest
+{"pr":N}`**-endpoint (zie `.claude/rules/blocks-and-ingest.md`), de sanctioned
+write-weg (een Workflow Execution starten), niet een directe module-write. De
+knop toont tijdens het genereren "Bezig met genereren…" en is dan `disabled`
+(`ui.ingesting`, tegen een dubbele ingest); `handleIngest` (`api.go`) antwoordt
+pas 200 zodra de ingest-pipeline **en** `EnsureRelations` synchroon zijn
+afgerond, dus `generatePage` doet op succes een simpele volle
+`location.href = '/pr/<n>'`-redirect — de verse paginalaad heeft dan alles al
+nodig. Mislukt het genereren, dan blijft de popover open met de foutmelding
+(`ui.ingestError`, `data-testid=generate-error`) en verandert de rij zelf niet
+(nog steeds `hasGraph:false`); daaronder staan nog steeds *Open op GitHub* /
+*Open Jira-ticket*.
 
 ### GitHub-toegang loopt via een workflow (niet rechtstreeks)
 
