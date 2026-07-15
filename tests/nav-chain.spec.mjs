@@ -42,6 +42,36 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await expect(page.locator('[data-testid=block-row].bg-indigo-50')).toHaveAttribute('data-idx', selectedIdx)
   })
 
+  test('stop 1 and stop 2 get the same on/off indigo focus border as the diff card (stop 3)', async ({ page }) => {
+    await page.goto('/pr/12903')
+
+    // Stop 2 (the pr-index) owns the keyboard by default in list-mode: its
+    // container should carry the same border-indigo-300/ring-indigo-200 pair
+    // the block-diff card uses via diffActive (see Block.mjs / home.mjs).
+    const prIndex = page.getByTestId('pr-index')
+    await expect(prIndex).toHaveClass(/border-indigo-300/)
+    await expect(prIndex).toHaveClass(/ring-indigo-200/)
+
+    // ← moves the keyboard to stop 1 (the description column): stop 2 must
+    // drop its indigo border and stop 1's card must pick it up.
+    await page.keyboard.press('ArrowLeft')
+    const infoCard = page.getByTestId('pr-info-card')
+    await expect(infoCard).toBeVisible()
+    await expect(infoCard).toHaveClass(/border-indigo-300/)
+    await expect(infoCard).toHaveClass(/ring-indigo-200/)
+    await expect(prIndex).not.toHaveClass(/border-indigo-300/)
+
+    // → back to stop 2: the border swaps back.
+    await page.keyboard.press('ArrowRight')
+    await expect(prIndex).toHaveClass(/border-indigo-300/)
+
+    // → into the diff (stop 3): stop 2 must drop its indigo border again,
+    // while the diff card (already covered by drill-focus.spec.mjs) owns it.
+    await page.keyboard.press('ArrowRight')
+    await expect(prIndex).not.toHaveClass(/border-indigo-300/)
+    await expect(page.locator('article').first()).toHaveClass(/border-indigo-300/)
+  })
+
   test('← on stop 1 (the PR-description column) exits the chain to the PR overview', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)

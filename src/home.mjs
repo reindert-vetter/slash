@@ -2819,7 +2819,14 @@ function prStatusSlot(meta) {
 function prInfoCard(state) {
   return html`
     <div
-      class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+      class="${() =>
+        'flex min-h-0 flex-1 flex-col gap-3 overflow-auto rounded-2xl border bg-white p-5 shadow-sm ' +
+        // Light-blue border while the keyboard drives stop 1 (this panel is only
+        // ever mounted while showDescription is true, but read it here anyway so
+        // the binding stays reactive) — mirrors diffActive on the block-diff card.
+        (state.showDescription
+          ? 'border-indigo-300 ring-1 ring-indigo-200'
+          : 'border-slate-200')}"
       data-testid="pr-info-card"
     >
       <div>

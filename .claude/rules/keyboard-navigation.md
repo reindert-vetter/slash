@@ -25,6 +25,23 @@ keten van **stops**, van links naar rechts over de hele layout:
 6. **Comments** (`cs.focus` ∈ `{'new','comment','thread'}`).
 7. **Taken** (`cs.focus==='task'`, de workflow-runs-kolom).
 
+**Focus-highlight per stop:** stops 1-3 show the *same* on/off indigo
+focus border (`border-indigo-300 ring-1 ring-indigo-200`, otherwise the
+neutral grey border) exactly while that stop owns the keyboard, mirroring the
+`diffActive` pattern of the block-diff card (`Block.mjs`): the description card
+(`prInfoCard`, `data-testid=pr-info-card`) while `state.showDescription` is
+true, the pr-index (`data-testid=pr-index`) while `state.mode==='list' &&
+!state.showDescription`, and the block-diff card (stop 3, and each drilled
+column, stop 4) while it owns `focusLevel`. Both `prInfoCard` and the pr-index
+`<aside>` build this into their existing top-level `class="${() => …}"`
+function binding (not a keyed list item), so it just re-evaluates reactively on
+`state.showDescription`/`state.mode` — no arrow.js keyed-node pitfall applies
+here (that pitfall only bites keyed array items like the `Block()` cards, see
+`.claude/rules/conventions.md`). Stop 5 (Onderliggende code) deliberately has
+**no** outer focus border — that was removed on purpose (see the "Onderliggende
+code" section in `.claude/rules/detail-layout.md`), so the chain isn't
+uniformly bordered end-to-end, only stops 1-4.
+
 `→` schuift één stop naar rechts, `←` één stop naar links — dit is
 **bovenop**, niet in plaats van, de bestaande per-stop `↑`/`↓`-navigatie
 (die blijft binnen een stop lopen: block-selectie in de index, wijzigingsgroep

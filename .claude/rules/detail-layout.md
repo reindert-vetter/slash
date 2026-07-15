@@ -41,7 +41,10 @@ gedreven door dezelfde `state.showDescription`-vlag, dus altijd in lockstep:
   27.5rem-afstand, dus beide bewegen in dezelfde 200ms CSS-transitie in sync.
 
 Bereikt vanuit de pr-index (stop 2, `state.mode==='list'`) met `←`; `→` sluit 'm
-weer. Terwijl hij open is negeert `onKeydown` `↑`/`↓` (geen interne cursor). Een
+weer. Terwijl hij open is negeert `onKeydown` `↑`/`↓` (geen interne cursor). Zowel
+deze kaart als de pr-index `<aside>` tonen de **zelfde aan/uit indigo focus-rand**
+als de block-diff-kaart terwijl ze de keyboard hebben — zie "Focus-highlight per
+stop" in `.claude/rules/keyboard-navigation.md` voor het volledige patroon. Een
 witte kaart met titel + Jira-badge, meta-regel (auteur, `+add −del`,
 bestandenaantal, branch, "op GitHub ›"), een **Samenvatting**-sectie
 (Claude-tekst), een **Omschrijving**-sectie (PR-body + eventueel een
