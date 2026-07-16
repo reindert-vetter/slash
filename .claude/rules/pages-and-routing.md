@@ -133,3 +133,24 @@ review/CI-chips, "recent gegenereerd"-lade (lazy `GET /api/prs`), en
 toetsenbord-nav (↑/↓/Home/End/Enter/`/`/→, met de hover-vs-keyboard-flag zodat
 `scrollIntoView` de selectie niet kaapt). UI-proza is Nederlands; de
 GitHub-sectietitels blijven Engels.
+
+**De hover-vs-keyboard-flag (`hoverEnabled`) gate't op een échte
+cursor-positieverandering, niet op het `mousemove`-event zelf.** Elke
+toetsenbordstap (`move`/`moveTo` in `overview.mjs`) zet `hoverEnabled = false`
+vóór `paintSelection()` — die roept altijd `scrollIntoView` aan — juist om te
+voorkomen dat de daaropvolgende scroll een `mouseenter` triggert die de
+keyboard-selectie kaapt. Browsers (Chromium met naam) synthetiseren echter een
+`mousemove`-DOM-event op de **ongewijzigde** cursor-positie om `:hover` na
+zo'n scroll/layout-verandering te resyncen — een kale
+`addEventListener('mousemove', () => hoverEnabled = true)` kan dat niet van een
+echte muisbeweging onderscheiden en zette de flag dus meteen weer aan,
+waarna de rij die toevallig onder de stilstaande cursor lag de selectie
+terugtrok (het gerapporteerde "de PR-items schuiven mee" tijdens
+pijltjestoets-navigatie). De listener bewaart daarom de laatst gezien
+`clientX`/`clientY` en zet `hoverEnabled` alleen aan bij een echte delta.
+Getest in `tests/overview-hover-gate.spec.mjs`: dat dispatcht zelf
+`mousemove`/`mouseenter`-DOM-events (het browser-native scroll-getriggerde
+geval bleek niet deterministisch op te wekken onder Playwright, zie ook de
+`selectRowByKeyboard`-notitie in `overview.spec.mjs`) om de gate zelf te
+bewijzen: zelfde coördinaten kapen de selectie nooit, een echte
+positie-delta doet dat weer normaal.

@@ -966,6 +966,20 @@ async function runSearch(q) {
 // hoverEnabled so a synthetic mouseenter fired by scrollIntoView can't
 // hijack the selection; hoverEnabled only turns back on from a real
 // mousemove.
+//
+// "Real" is load-bearing here: browsers (Chromium in particular) dispatch a
+// synthetic `mousemove` DOM event at the cursor's last known position to
+// resync :hover state whenever content scrolls/re-lays-out underneath a
+// stationary cursor — exactly what our own `scrollIntoView` in
+// paintSelection() triggers on every keyboard step. A plain
+// `addEventListener('mousemove', ...)` can't tell that synthetic event apart
+// from a genuine mouse move, so it kept re-enabling hoverEnabled right after
+// a keypress disabled it, and the very next mouseenter (on whatever row now
+// happens to sit under the idle cursor because the list scrolled) yanked
+// selIndex back — which is exactly what looked like "the items keep sliding
+// along" when navigating with the arrow keys. The fix: only treat a
+// mousemove as real if the pointer's coordinates actually changed since the
+// last one we saw.
 
 let selIndex = -1
 let hoverEnabled = false
@@ -1070,7 +1084,18 @@ function scheduleRepaint() {
   })
 }
 
-window.addEventListener('mousemove', () => (hoverEnabled = true), { passive: true })
+let lastMouseX = null
+let lastMouseY = null
+window.addEventListener(
+  'mousemove',
+  (e) => {
+    if (lastMouseX !== null && e.clientX === lastMouseX && e.clientY === lastMouseY) return
+    lastMouseX = e.clientX
+    lastMouseY = e.clientY
+    hoverEnabled = true
+  },
+  { passive: true },
+)
 
 // Close an open popover on any click outside its owning row.
 window.addEventListener('mousedown', (e) => {
