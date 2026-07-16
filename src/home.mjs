@@ -2916,7 +2916,7 @@ window.addEventListener('keydown', onKeydown)
 function connector() {
   return html`
     <div class="flex h-5 pl-8" data-testid="file-connector">
-      <div class="border-l-2 border-dashed border-slate-300"></div>
+      <div class="border-l-2 border-dashed border-slate-300 dark:border-zinc-700"></div>
     </div>
   `
 }
@@ -2951,7 +2951,7 @@ function stepChevron(dir) {
       data-dir="${dir}"
     >
       <span
-        class="flex h-5 w-8 items-center justify-center rounded-full bg-slate-200 text-slate-500 shadow-sm ring-1 ring-black/5"
+        class="flex h-5 w-8 items-center justify-center rounded-full bg-slate-200 dark:bg-zinc-700 text-slate-500 dark:text-zinc-500 shadow-sm ring-1 ring-black/5"
         .innerHTML="${() => chevron}"
       ></span>
     </div>
@@ -3092,17 +3092,17 @@ function prPill(text, cls) {
 
 function prReviewPill(meta) {
   const d = meta.reviewDecision
-  if (d === 'APPROVED') return prPill('Goedgekeurd', 'bg-emerald-50 text-emerald-700 ring-emerald-200')
-  if (d === 'CHANGES_REQUESTED') return prPill('Wijzigingen gevraagd', 'bg-rose-50 text-rose-700 ring-rose-200')
-  return prPill('Wacht op review', 'bg-amber-50 text-amber-700 ring-amber-200')
+  if (d === 'APPROVED') return prPill('Goedgekeurd', 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-200 dark:ring-emerald-500/30')
+  if (d === 'CHANGES_REQUESTED') return prPill('Wijzigingen gevraagd', 'bg-rose-50 dark:bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-200 dark:ring-rose-500/30')
+  return prPill('Wacht op review', 'bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-amber-200 dark:ring-amber-500/30')
 }
 
 function prChecksPill(meta) {
   const total = Number(meta.checksTotal) || 0
   if (!total) return null
   const passed = Number(meta.checksPassed) || 0
-  if (passed >= total) return prPill('✓ ' + total + ' checks', 'bg-emerald-50 text-emerald-700 ring-emerald-200')
-  return prPill(passed + '/' + total + ' checks', 'bg-slate-100 text-slate-600 ring-slate-200')
+  if (passed >= total) return prPill('✓ ' + total + ' checks', 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-200 dark:ring-emerald-500/30')
+  return prPill(passed + '/' + total + ' checks', 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 ring-slate-200 dark:ring-zinc-800')
 }
 
 function prStatusSlot(meta) {
@@ -3110,7 +3110,7 @@ function prStatusSlot(meta) {
   if (!statusesIn) {
     return [
       html`<span
-        class="inline-flex w-24 animate-pulse items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] ring-1 ring-inset ring-slate-200"
+        class="inline-flex w-24 animate-pulse items-center rounded-full bg-slate-100 dark:bg-zinc-800 px-2 py-0.5 text-[11px] ring-1 ring-inset ring-slate-200 dark:ring-zinc-800"
         aria-hidden="true"
         >${' '}</span
       >`.key('status-skeleton'),
@@ -3123,7 +3123,7 @@ function prStatusSlot(meta) {
       html`<span class="flex flex-wrap items-center gap-1" data-testid="pr-info-reviewers">
         ${reviewers.map((login, i) =>
           html`<span
-            class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-inset ring-slate-200"
+            class="inline-flex items-center rounded-full bg-slate-100 dark:bg-zinc-800 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:text-zinc-400 ring-1 ring-inset ring-slate-200 dark:ring-zinc-800"
             >${login}</span
           >`.key('rev:' + i + ':' + login),
         )}
@@ -3137,18 +3137,18 @@ function prInfoCard(state) {
   return html`
     <div
       class="${() =>
-        'flex min-h-0 flex-1 flex-col gap-3 overflow-auto rounded-2xl border bg-white p-5 shadow-sm ' +
+        'flex min-h-0 flex-1 flex-col gap-3 overflow-auto rounded-2xl border bg-white dark:bg-zinc-900 p-5 shadow-sm ' +
         // Light-blue border while the keyboard drives stop 1 (this panel is only
         // ever mounted while showDescription is true, but read it here anyway so
         // the binding stays reactive) — mirrors diffActive on the block-diff card.
         (state.showDescription
-          ? 'border-indigo-300 ring-1 ring-indigo-200'
-          : 'border-slate-200')}"
+          ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+          : 'border-slate-200 dark:border-zinc-800')}"
       data-testid="pr-info-card"
     >
       <div>
         <div class="flex items-start gap-2">
-          <h1 class="min-w-0 flex-1 text-lg font-semibold leading-snug text-slate-900" data-testid="pr-info-title">
+          <h1 class="min-w-0 flex-1 text-lg font-semibold leading-snug text-slate-900 dark:text-zinc-100" data-testid="pr-info-title">
             ${() => state.prMeta.title || `PR #${state.pr}`}
           </h1>
           ${() =>
@@ -3157,68 +3157,68 @@ function prInfoCard(state) {
                   href="${() => state.prMeta.jiraUrl || JIRA_BASE + state.jiraKey}"
                   target="_blank"
                   rel="noreferrer"
-                  class="shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600 ring-1 ring-inset ring-indigo-200 hover:bg-indigo-100"
+                  class="shrink-0 rounded-full bg-indigo-50 dark:bg-indigo-500/15 px-2 py-0.5 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30 hover:bg-indigo-100 dark:hover:bg-indigo-500/20"
                   data-testid="pr-info-jira-key"
                   >${state.jiraKey}</a
                 >`
               : ''}
         </div>
-        <div class="mt-0.5 font-mono text-[11px] text-slate-400">${REPO_SLUG}#${state.pr}</div>
+        <div class="mt-0.5 font-mono text-[11px] text-slate-400 dark:text-zinc-500">${REPO_SLUG}#${state.pr}</div>
       </div>
-      <div class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px] text-slate-500" data-testid="pr-info-meta">
+      <div class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px] text-slate-500 dark:text-zinc-500" data-testid="pr-info-meta">
         ${() => (state.prMeta.author ? html`<span>${state.prMeta.author}</span>` : '')}
         ${() =>
           state.prMeta.author && (state.prMeta.additions || state.prMeta.deletions)
-            ? html`<span class="text-slate-300">·</span>`
+            ? html`<span class="text-slate-300 dark:text-zinc-600">·</span>`
             : ''}
         ${() =>
           state.prMeta.additions || state.prMeta.deletions
             ? html`<span
-                ><span class="font-medium text-emerald-600">+${state.prMeta.additions || 0}</span>
-                <span class="font-medium text-rose-600">−${state.prMeta.deletions || 0}</span></span
+                ><span class="font-medium text-emerald-600 dark:text-emerald-400">+${state.prMeta.additions || 0}</span>
+                <span class="font-medium text-rose-600 dark:text-rose-400">−${state.prMeta.deletions || 0}</span></span
               >`
             : ''}
-        ${() => (state.prMeta.changedFiles ? html`<span class="text-slate-300">·</span>` : '')}
+        ${() => (state.prMeta.changedFiles ? html`<span class="text-slate-300 dark:text-zinc-600">·</span>` : '')}
         ${() => (state.prMeta.changedFiles ? html`<span>${state.prMeta.changedFiles} bestanden</span>` : '')}
-        ${() => (state.prMeta.headRef ? html`<span class="text-slate-300">·</span>` : '')}
+        ${() => (state.prMeta.headRef ? html`<span class="text-slate-300 dark:text-zinc-600">·</span>` : '')}
         ${() =>
           state.prMeta.headRef
-            ? html`<span class="truncate font-mono text-sky-600" title="Huidige branch">${state.prMeta.headRef}</span>`
+            ? html`<span class="truncate font-mono text-sky-600 dark:text-sky-400" title="Huidige branch">${state.prMeta.headRef}</span>`
             : ''}
-        ${() => (state.prUrl ? html`<span class="text-slate-300">·</span>` : '')}
+        ${() => (state.prUrl ? html`<span class="text-slate-300 dark:text-zinc-600">·</span>` : '')}
         ${() =>
           state.prUrl
-            ? html`<a href="${state.prUrl}" target="_blank" rel="noreferrer" class="text-indigo-600 hover:underline"
+            ? html`<a href="${state.prUrl}" target="_blank" rel="noreferrer" class="text-indigo-600 dark:text-indigo-400 hover:underline"
                 >op GitHub ›</a
               >`
             : ''}
       </div>
-      <div class="rounded-lg bg-emerald-50 p-2.5" data-testid="pr-info-summary">
-        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Doel</div>
+      <div class="rounded-lg bg-emerald-50 dark:bg-emerald-500/15 p-2.5" data-testid="pr-info-summary">
+        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Doel</div>
         ${() =>
           state.prMeta.summary
             ? html`<div
-                class="markdown-body text-[13px] leading-relaxed text-slate-700"
+                class="markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
                 .innerHTML="${() => renderMarkdown(state.prMeta.summary)}"
               ></div>`
-            : html`<p class="text-[13px] italic text-slate-400">samenvatting genereren…</p>`}
+            : html`<p class="text-[13px] italic text-slate-400 dark:text-zinc-500">samenvatting genereren…</p>`}
       </div>
       <div data-testid="pr-info-body">
-        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Omschrijving</div>
+        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Omschrijving</div>
         ${() =>
           state.prMeta.body
             ? html`<div
-                class="markdown-body text-[13px] leading-relaxed text-slate-700"
+                class="markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
                 .innerHTML="${() => renderMarkdown(state.prMeta.body)}"
               ></div>`
-            : html`<p class="text-[13px] text-slate-400">geen omschrijving</p>`}
+            : html`<p class="text-[13px] text-slate-400 dark:text-zinc-500">geen omschrijving</p>`}
         ${() =>
           state.prMeta.jiraTitle
-            ? html`<div class="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5" data-testid="pr-info-jira">
-                <div class="text-[12px] font-medium text-slate-700">Jira: ${state.prMeta.jiraTitle}</div>
+            ? html`<div class="mt-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 p-2.5" data-testid="pr-info-jira">
+                <div class="text-[12px] font-medium text-slate-700 dark:text-zinc-300">Jira: ${state.prMeta.jiraTitle}</div>
                 ${state.prMeta.jiraDesc
                   ? html`<div
-                      class="markdown-body mt-1 text-[12px] leading-relaxed text-slate-600"
+                      class="markdown-body mt-1 text-[12px] leading-relaxed text-slate-600 dark:text-zinc-400"
                       .innerHTML="${() => renderMarkdown(state.prMeta.jiraDesc)}"
                     ></div>`
                   : ''}
@@ -3431,7 +3431,7 @@ function DetailPanel(state) {
                       data-testid="drill-left-hint"
                     >
                       <span
-                        class="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-slate-500 shadow-sm ring-1 ring-black/5"
+                        class="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 dark:bg-zinc-700 text-slate-500 dark:text-zinc-500 shadow-sm ring-1 ring-black/5"
                       >
                         <svg
                           viewBox="0 0 24 24"

@@ -43,8 +43,8 @@ function commandRow(c, i, menu, onRun) {
       class="${() =>
         'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition ' +
         (menu.sel === i
-          ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200'
-          : 'text-slate-700 hover:bg-slate-50')}"
+          ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+          : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       data-testid="command-row"
       @click="${() => onRun(c)}"
       @mousemove="${() => (menu.sel = i)}"
@@ -53,7 +53,7 @@ function commandRow(c, i, menu, onRun) {
       ${() =>
         c.hint
           ? html`<span
-              class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-400"
+              class="shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400 dark:text-zinc-500"
               >${c.hint}</span
             >`
           : ''}
@@ -72,13 +72,13 @@ function commandRow(c, i, menu, onRun) {
 export default function CommandMenu(menu, resolve, onRun) {
   return html`
     <div
-      class="flex max-h-72 min-h-0 w-full flex-col overflow-hidden rounded-xl border border-indigo-300 bg-white shadow-2xl ring-1 ring-indigo-500/20"
+      class="flex max-h-72 min-h-0 w-full flex-col overflow-hidden rounded-xl border border-indigo-300 dark:border-indigo-500 bg-white dark:bg-zinc-900 shadow-2xl ring-1 ring-indigo-500/20"
       data-testid="command-menu"
     >
-      <div class="flex items-start gap-2 border-b border-slate-100 px-3 py-2">
+      <div class="flex items-start gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2">
         <span class="mt-1.5 font-mono text-sm font-bold text-indigo-400">/</span>
         <textarea
-          class="min-h-[1.8rem] flex-1 resize-none bg-transparent py-1 text-sm leading-relaxed text-slate-800 placeholder:text-slate-400 focus:outline-none"
+          class="min-h-[1.8rem] flex-1 resize-none bg-transparent py-1 text-sm leading-relaxed text-slate-800 dark:text-zinc-200 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
           rows="1"
           placeholder="Zoek een commando of schrijf direct een comment…"
           data-testid="command-input"
@@ -88,7 +88,7 @@ export default function CommandMenu(menu, resolve, onRun) {
             menu.sel = 0
           }}"
         ></textarea>
-        <span class="mt-1 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-400"
+        <span class="mt-1 shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-400 dark:text-zinc-500"
           >esc</span
         >
       </div>
@@ -99,7 +99,7 @@ export default function CommandMenu(menu, resolve, onRun) {
         ${() => {
           const list = resolve(menu.query)
           if (list.length === 0) {
-            return html`<p class="px-2.5 py-3 text-[11px] text-slate-400">Geen commando's.</p>`
+            return html`<p class="px-2.5 py-3 text-[11px] text-slate-400 dark:text-zinc-500">Geen commando's.</p>`
           }
           return list.map((c, i) => commandRow(c, i, menu, onRun).key('cmd:' + c.id))
         }}

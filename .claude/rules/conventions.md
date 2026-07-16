@@ -224,6 +224,58 @@
   typography-plugin zonder build-stap. **Geen** GFM-tabellen of
   taak-checklists (`- [ ]`) — bewust buiten scope gehouden, snarkdown ondersteunt
   ze niet en er is geen extensie voor gebouwd.
+- **Thema: dark/light volgt de systeeminstelling (`prefers-color-scheme`), geen
+  eigen toggle.** Beide pagina's (`index.html`/`home.mjs` en
+  `overview.html`/`overview.mjs`) draaien op Tailwind Play CDN's
+  `darkMode: 'media'` (expliciet gezet in een `tailwind.config`-`<script>` vóór
+  de CDN-styles, in plaats van op de default te vertrouwen) — géén
+  `localStorage`-override, géén env-var, géén class op `<html>`. Staat de OS
+  (bv. macOS Systeeminstellingen) op dark, dan matcht de browser
+  `prefers-color-scheme: dark` en passen alle `dark:`-Tailwind-varianten toe;
+  op light idem. `overview.html` had voorheen een **geforceerde** dark-modus
+  (`<html class="dark">` + `darkMode:'class'`, en `overview.mjs` gebruikte
+  kale `zinc-*`-klassen zonder enige `dark:`-variant); dat is verwijderd —
+  `overview.mjs` kreeg een lichte basis-klasse vóór elke voorheen-kale
+  dark-klasse (die laatste kreeg een `dark:`-prefix), symmetrisch met hoe
+  `index.html`/`home.mjs`/`Block.mjs`/`BlockList.mjs`/`RelatedPanel.mjs`/
+  `CommandMenu.mjs`/`Footer.mjs` (voorheen licht-only) een `dark:`-variant
+  achter elke bestaande kleur-klasse kregen.
+  **Kleurenpalet:** neutrals mappen 1-op-1 tussen de twee families die al in de
+  codebase bestonden — licht `slate-*` (`bg-white`/`bg-slate-50/100/200`,
+  `text-slate-900..400`, `border-slate-100/200/300`) ↔ donker `zinc-*`
+  (`bg-zinc-900/950/800/700`, `text-zinc-100..500`,
+  `border-zinc-800/700`, meestal met een `/NN`-opacity-suffix voor een
+  subtielere kaart-tint dan de solide `overview.mjs`-dark-tinten). Semantische
+  accentkleuren (emerald/rose/amber/sky/red/de category-badge-hues in
+  `BlockList.mjs`'s `CATEGORY_STYLE`) behouden hun hue maar krijgen een
+  contrast-passende schakering per modus: een lichte kaart-tint
+  (`bg-emerald-50`/`text-emerald-700`) wordt `dark:bg-emerald-500/15
+  dark:text-emerald-300`, en omgekeerd (`overview.mjs`'s
+  `text-emerald-300`-op-donker wordt licht `text-emerald-700`). Solide,
+  verzadigde accent-knoppen/badges (`bg-indigo-500`, `bg-emerald-600` met
+  `text-white`) en laag-opaciteit rings (`ring-emerald-500/30` e.d.) werken in
+  beide modi zonder wijziging en zijn bewust ongemoeid gelaten — alleen
+  achtergrond/tekst-vlakken die *op de pagina- of kaart-achtergrond* rusten
+  hebben een aparte licht/donker-schakering nodig.
+  **Wat geen Tailwind-`dark:`-variant kan gebruiken** (losse CSS, geen
+  utility-klasse): de Prism-tokenkleuren en de `.markdown-body`-typography in
+  `index.html`'s `<style>`-blok. Die krijgen een eigen
+  `@media (prefers-color-scheme: dark) { … }`-blok met dezelfde
+  selectors (`.language-php .token.*`, `.markdown-body …`) en een
+  GitHub-dark-geïnspireerd Prism-palet + de zinc/indigo-kleuren van de rest
+  van de dark-modus.
+  **Diff-rij-achtergronden** (`Block.mjs`, `paneHTML`) zijn arbitrary-value
+  hex-klassen (`bg-[#fed7dc]` etc., "20% richting wit" gemixt met de
+  Tailwind-rose/emerald-shade — zie `blocks-and-ingest.md`); die kregen een
+  `dark:bg-{kleur}-500/{opacity}`-tegenhanger (bv. `dark:bg-rose-500/25` voor
+  de actieve del-rij, `dark:bg-rose-500/10` voor de filler-tint) in plaats van
+  een tweede hardcoded hex — eenvoudiger en consistent met de rest van het
+  donkere palet.
+  **arrow.js-conform:** waar een class-string via een reactieve
+  `class="${() => ...}"`-functie-binding loopt, zit de `dark:`-klasse gewoon
+  **in dezelfde template-string** als de rest van die waarde (geen aparte
+  losse binding) — dus geen nieuwe valkuil bovenop de bestaande
+  "hele-waarde-in-één-binding"-regel verderop in dit bestand.
 - Go: `net/http` `ServeMux`, handlers per feature. De `/api/`-bridge shelt uit naar
   `gh`/`claude` via `os/exec` — valideer altijd input voordat je het aan een
   subproces geeft.

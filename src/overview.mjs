@@ -143,12 +143,12 @@ const STATE_LABEL = {
 }
 
 function reviewChip(pr, status) {
-  if (pr.isDraft) return chip('Concept', 'bg-zinc-500/15 text-zinc-400 ring-zinc-500/30', 'review-chip', 'git-pull-request')
+  if (pr.isDraft) return chip('Concept', 'bg-slate-100 dark:bg-zinc-500/15 text-slate-500 dark:text-zinc-400 ring-slate-300/50 dark:ring-zinc-500/30', 'review-chip', 'git-pull-request')
   const d = status.reviewDecision
-  if (d === 'APPROVED') return chip('Goedgekeurd', 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30', 'review-chip', 'check')
+  if (d === 'APPROVED') return chip('Goedgekeurd', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'review-chip', 'check')
   if (d === 'CHANGES_REQUESTED')
-    return chip('Wijzigingen gevraagd', 'bg-rose-500/15 text-rose-300 ring-rose-500/30', 'review-chip', 'x')
-  return chip('Wacht op review', 'bg-red-500/15 text-red-300 ring-red-500/30', 'review-chip', 'clock')
+    return chip('Wijzigingen gevraagd', 'bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-500/30', 'review-chip', 'x')
+  return chip('Wacht op review', 'bg-red-500/15 text-red-700 dark:text-red-300 ring-red-500/30', 'review-chip', 'clock')
 }
 
 function checksChip(status) {
@@ -156,12 +156,12 @@ function checksChip(status) {
   const n = status.checksTotal
   const s = status.checksState
   if (s === 'FAILURE' || s === 'ERROR')
-    return chip(n + ' checks', 'bg-rose-500/10 text-rose-300 ring-rose-500/30', 'checks-chip', 'x')
+    return chip(n + ' checks', 'bg-rose-500/10 text-rose-700 dark:text-rose-300 ring-rose-500/30', 'checks-chip', 'x')
   if (s === 'PENDING' || s === 'EXPECTED')
-    return chip(n + ' bezig', 'bg-red-500/10 text-red-300 ring-red-500/30', 'checks-chip', 'clock')
+    return chip(n + ' bezig', 'bg-red-500/10 text-red-700 dark:text-red-300 ring-red-500/30', 'checks-chip', 'clock')
   if (s === 'SUCCESS')
-    return chip(n + ' checks', 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30', 'checks-chip', 'check')
-  return chip(n + ' checks', 'bg-zinc-500/10 text-zinc-400 ring-zinc-500/30', 'checks-chip', 'clock')
+    return chip(n + ' checks', 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'checks-chip', 'check')
+  return chip(n + ' checks', 'bg-slate-100 dark:bg-zinc-500/10 text-slate-500 dark:text-zinc-400 ring-slate-300/50 dark:ring-zinc-500/30', 'checks-chip', 'clock')
 }
 
 function reviewerAvatar(r) {
@@ -176,29 +176,29 @@ function reviewerAvatar(r) {
             src="${r.avatarUrl}"
             alt=""
             loading="lazy"
-            class="${'h-6 w-6 rounded-full object-cover ring-1 ring-zinc-700 ' + (pending ? 'opacity-50 grayscale' : '')}"
+            class="${'h-6 w-6 rounded-full object-cover ring-1 ring-slate-200 dark:ring-zinc-700 ' + (pending ? 'opacity-50 grayscale' : '')}"
           />`
         : html`<span
-            class="${'flex h-6 w-6 items-center justify-center rounded-full bg-zinc-700 text-[10px] font-medium uppercase text-zinc-200 ring-1 ring-zinc-700 ' +
+            class="${'flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 dark:bg-zinc-700 text-[10px] font-medium uppercase text-slate-700 dark:text-zinc-200 ring-1 ring-slate-200 dark:ring-zinc-700 ' +
             (pending ? 'opacity-60' : '')}"
             >${initials}</span
           >`}
       ${r.state === 'APPROVED'
         ? html`<span
-            class="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-white ring-2 ring-zinc-900"
+            class="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-white ring-2 ring-white dark:ring-zinc-900"
             >${icon('check', 'h-2 w-2')}</span
           >`
         : r.state === 'CHANGES_REQUESTED'
           ? html`<span
-              class="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-rose-500 text-white ring-2 ring-zinc-900"
+              class="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-rose-500 text-white ring-2 ring-white dark:ring-zinc-900"
               >${icon('x', 'h-2 w-2')}</span
             >`
           : r.state === 'COMMENTED'
             ? html`<span
-                class="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-zinc-500 text-white ring-2 ring-zinc-900"
+                class="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-slate-400 dark:bg-zinc-500 text-white ring-2 ring-white dark:ring-zinc-900"
                 >${icon('message', 'h-2 w-2')}</span
               >`
-            : html`<span class="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-zinc-600 ring-2 ring-zinc-900"></span>`}
+            : html`<span class="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-slate-300 dark:bg-zinc-600 ring-2 ring-white dark:ring-zinc-900"></span>`}
     </span>
   `
 }
@@ -234,7 +234,7 @@ function statusFor(pr) {
 function statusSkeleton(pr) {
   if (pr.isDraft) return reviewChip(pr, {})
   return html`<span
-    class="inline-flex w-20 animate-pulse items-center rounded-full bg-zinc-700/40 px-2 py-0.5 text-[11px] ring-1 ring-inset ring-zinc-700/40"
+    class="inline-flex w-20 animate-pulse items-center rounded-full bg-slate-200/40 dark:bg-zinc-700/40 px-2 py-0.5 text-[11px] ring-1 ring-inset ring-slate-200/40 dark:ring-zinc-700/40"
     aria-hidden="true"
     >${' '}</span
   >`
@@ -254,13 +254,13 @@ function statusArea(pr) {
 }
 
 function graphChip(pr) {
-  if (pr.hasGraph) return chip('generated', 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30', 'graph-chip', 'sparkles')
-  return chip('op GitHub ›', 'bg-sky-500/15 text-sky-300 ring-sky-500/30', 'graph-chip')
+  if (pr.hasGraph) return chip('generated', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'graph-chip', 'sparkles')
+  return chip('op GitHub ›', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30', 'graph-chip')
 }
 
 function commentsBit(pr) {
   if (!pr.comments) return null
-  return html`<span class="inline-flex items-center gap-1 text-[12px] text-zinc-500"
+  return html`<span class="inline-flex items-center gap-1 text-[12px] text-slate-500 dark:text-zinc-500"
     >${icon('message', 'h-3.5 w-3.5')}${pr.comments}</span
   >`
 }
@@ -274,14 +274,14 @@ function diffStatFragment(pr) {
   if (!add && !del && !files) return null
   return html`
     <span class="flex items-center gap-1.5">
-      <span class="text-zinc-700">·</span>
+      <span class="text-slate-300 dark:text-zinc-700">·</span>
       <span class="inline-flex items-center gap-1.5 text-[11.5px]">
-        <span class="font-medium text-emerald-400">+${add}</span>
-        <span class="font-medium text-rose-400">−${del}</span>
+        <span class="font-medium text-emerald-600 dark:text-emerald-400">+${add}</span>
+        <span class="font-medium text-rose-600 dark:text-rose-400">−${del}</span>
         ${files
           ? html`<span class="flex items-center gap-1"
-              ><span class="text-zinc-600">·</span
-              ><span class="text-zinc-500">${files} file${files === 1 ? '' : 's'}</span></span
+              ><span class="text-slate-400 dark:text-zinc-600">·</span
+              ><span class="text-slate-500 dark:text-zinc-500">${files} file${files === 1 ? '' : 's'}</span></span
             >`
           : null}
       </span>
@@ -297,9 +297,9 @@ function branchFragment(pr) {
   if (!pr.headRefName) return null
   return html`
     <span class="flex items-center gap-1">
-      <span class="text-zinc-700">·</span>
+      <span class="text-slate-300 dark:text-zinc-700">·</span>
       <span
-        class="inline-flex min-w-0 items-center gap-1 font-mono text-[11px] text-sky-400/90"
+        class="inline-flex min-w-0 items-center gap-1 font-mono text-[11px] text-sky-600/90 dark:text-sky-400/90"
         title="Huidige branch"
       >
         ${icon('git-branch', 'h-3 w-3')}<span class="truncate">${pr.headRefName}</span>
@@ -310,11 +310,11 @@ function branchFragment(pr) {
 
 function rowMeta(pr) {
   return html`
-    <div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px] text-zinc-500">
+    <div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px] text-slate-500 dark:text-zinc-500">
       <span class="font-mono">${() => state.repo || ''}#${pr.number}</span>
-      <span class="text-zinc-700">·</span>
+      <span class="text-slate-300 dark:text-zinc-700">·</span>
       <span>${pr.author}</span>
-      <span class="text-zinc-700">·</span>
+      <span class="text-slate-300 dark:text-zinc-700">·</span>
       <span title="${pr.updatedAt || ''}">Bijgewerkt ${relativeTime(pr.updatedAt)}</span>
       ${diffStatFragment(pr)} ${branchFragment(pr)}
     </div>
@@ -322,7 +322,7 @@ function rowMeta(pr) {
 }
 
 function prIcon(pr) {
-  return html`<span class="${'mt-0.5 shrink-0 ' + (pr.isDraft ? 'text-zinc-500' : 'text-emerald-400')}"
+  return html`<span class="${'mt-0.5 shrink-0 ' + (pr.isDraft ? 'text-slate-500 dark:text-zinc-500' : 'text-emerald-600 dark:text-emerald-400')}"
     >${icon('git-pull-request', 'h-4 w-4')}</span
   >`
 }
@@ -331,7 +331,7 @@ function prIcon(pr) {
 // small badge reminds you which section each one would otherwise sit in.
 function sectionBadge(label) {
   return html`<span
-    class="shrink-0 rounded-full bg-zinc-800/80 px-2 py-0.5 text-[10.5px] font-medium text-zinc-400"
+    class="shrink-0 rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2 py-0.5 text-[10.5px] font-medium text-slate-500 dark:text-zinc-400"
     title="Hoort normaal in deze sectie"
     >${label}</span
   >`
@@ -339,7 +339,7 @@ function sectionBadge(label) {
 
 // connectorMark — the little └ that links a stacked row to the one above it.
 function connectorMark() {
-  return html`<span class="-ml-4 shrink-0 select-none font-mono text-[13px] leading-none text-zinc-600" aria-hidden="true"
+  return html`<span class="-ml-4 shrink-0 select-none font-mono text-[13px] leading-none text-slate-400 dark:text-zinc-600" aria-hidden="true"
     >└</span
   >`
 }
@@ -351,7 +351,7 @@ function rowInner(pr, opts) {
     html`
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
-          <h3 class="truncate text-[13.5px] font-semibold text-zinc-100 group-hover:text-white">${pr.title}</h3>
+          <h3 class="truncate text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">${pr.title}</h3>
           ${opts.badge ? sectionBadge(opts.badge) : null}
         </div>
         ${rowMeta(pr)}
@@ -359,7 +359,7 @@ function rowInner(pr, opts) {
     `,
     html`
       <div class="flex shrink-0 items-center gap-3">
-        ${statusArea(pr)} ${commentsBit(pr)} ${graphChip(pr)} ${chevronFilled('h-4 w-4 text-zinc-600 group-hover:text-zinc-300')}
+        ${statusArea(pr)} ${commentsBit(pr)} ${graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
       </div>
     `,
   ]
@@ -425,7 +425,7 @@ function generateAction(pr, busy) {
       type="button"
       data-testid="generate-page"
       ?disabled="${() => ui.ingesting === pr.number}"
-      class="${'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-700 ' +
+      class="${'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 ' +
       (busy ? 'cursor-not-allowed opacity-60' : '')}"
       @click="${() => generatePage(pr)}"
     >
@@ -433,7 +433,7 @@ function generateAction(pr, busy) {
     </button>
     ${() =>
       ui.ingestError
-        ? html`<p class="px-2.5 py-1 text-[11px] text-rose-400" data-testid="generate-error">${ui.ingestError}</p>`
+        ? html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400" data-testid="generate-error">${ui.ingestError}</p>`
         : ''}
   `
 }
@@ -447,7 +447,7 @@ function ingestedActions(pr, busy) {
     <button
       type="button"
       data-testid="open-tree"
-      class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-700"
+      class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700"
       @click="${() => (location.href = '/pr/' + pr.number)}"
     >
       ${icon('sparkles', 'h-3.5 w-3.5')} Open review-boom
@@ -456,7 +456,7 @@ function ingestedActions(pr, busy) {
       type="button"
       data-testid="regenerate-page"
       ?disabled="${() => ui.ingesting === pr.number}"
-      class="${'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-700 ' +
+      class="${'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 ' +
       (busy ? 'cursor-not-allowed opacity-60' : '')}"
       @click="${() => generatePage(pr, { redirect: false })}"
     >
@@ -464,7 +464,7 @@ function ingestedActions(pr, busy) {
     </button>
     ${() =>
       ui.ingestError
-        ? html`<p class="px-2.5 py-1 text-[11px] text-rose-400" data-testid="regenerate-error">${ui.ingestError}</p>`
+        ? html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400" data-testid="regenerate-error">${ui.ingestError}</p>`
         : ''}
   `
 }
@@ -478,7 +478,7 @@ function popover(pr) {
   const busy = ui.ingesting === pr.number
   return html`
     <div
-      class="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-zinc-700 bg-zinc-800 p-1 shadow-xl"
+      class="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-200 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 p-1 shadow-xl"
       data-testid="pr-popover"
       @click="${(e) => e.stopPropagation()}"
     >
@@ -487,7 +487,7 @@ function popover(pr) {
         href="${pr.url}"
         target="_blank"
         rel="noreferrer"
-        class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
+        class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700"
       >
         ${icon('external-link', 'h-3.5 w-3.5')} Open op GitHub
       </a>
@@ -497,7 +497,7 @@ function popover(pr) {
               href="${JIRA_BASE + m[1]}"
               target="_blank"
               rel="noreferrer"
-              class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
+              class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700"
             >
               ${icon('external-link', 'h-3.5 w-3.5')} Open Jira-ticket
             </a>`
@@ -507,7 +507,7 @@ function popover(pr) {
 }
 
 const ROW_CLASS =
-  'group flex items-center gap-3 border-b border-zinc-800/70 px-4 py-3 transition-colors first:rounded-t-xl last:rounded-b-xl last:border-b-0 hover:bg-zinc-800/40'
+  'group flex items-center gap-3 border-b border-slate-100 dark:border-zinc-800/70 px-4 py-3 transition-colors first:rounded-t-xl last:rounded-b-xl last:border-b-0 hover:bg-slate-100 dark:hover:bg-zinc-800/40'
 
 function indentStyle(opts) {
   return opts.depth ? 'padding-left:' + (16 + opts.depth * 22) + 'px' : ''
@@ -539,7 +539,7 @@ function prRow(pr, opts = {}) {
 // listBox — the framed rounded-xl box every group of rows sits in, with thin
 // dividers between rows and no gap (matches dash's listBox/prCard).
 function listBox(items) {
-  return html`<div class="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
+  return html`<div class="overflow-hidden rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
     ${items.map(({ pr, opts }) => prRow(pr, opts || {}))}
   </div>`
 }
@@ -594,11 +594,11 @@ function stackGroup(chain, sectionOf) {
   return html`
     <div data-testid="stack">
       <div class="mb-2 mt-10 flex items-center gap-2 first:mt-0">
-        <span class="text-zinc-500">${icon('git-pull-request', 'h-3.5 w-3.5')}</span>
-        <h2 class="text-[13px] font-semibold text-zinc-200">Gestapelde PR's</h2>
-        <span class="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[11px] text-zinc-400">${chain.length}</span>
-        <span class="truncate text-[11.5px] text-zinc-500"
-          >bouwt op <span class="font-mono text-zinc-400">${root.baseRefName || '?'}</span> — merge van onder naar
+        <span class="text-slate-500 dark:text-zinc-500">${icon('git-pull-request', 'h-3.5 w-3.5')}</span>
+        <h2 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">Gestapelde PR's</h2>
+        <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2 py-0.5 text-[11px] text-slate-500 dark:text-zinc-400">${chain.length}</span>
+        <span class="truncate text-[11.5px] text-slate-500 dark:text-zinc-500"
+          >bouwt op <span class="font-mono text-slate-500 dark:text-zinc-400">${root.baseRefName || '?'}</span> — merge van onder naar
           boven</span
         >
       </div>
@@ -614,7 +614,7 @@ function sectionBlock(sec, filteredPrs) {
   return html`
     <section data-testid="section" data-title="${sec.title}">
       <div class="mb-3 mt-16 flex items-center gap-2 first:mt-6">
-        <h2 class="text-[15px] font-semibold text-zinc-100">${sec.title}</h2>
+        <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">${sec.title}</h2>
       </div>
       ${listBox(filteredPrs.map((pr) => ({ pr })))}
     </section>
@@ -624,14 +624,14 @@ function sectionBlock(sec, filteredPrs) {
 function loadingSkeletonList() {
   return html`
     <div class="flex flex-col gap-2">
-      ${[0, 1, 2].map((i) => html`<div class="h-14 animate-pulse rounded-xl bg-zinc-900/60"></div>`.key('skel:' + i))}
+      ${[0, 1, 2].map((i) => html`<div class="h-14 animate-pulse rounded-xl bg-slate-50 dark:bg-zinc-900/60"></div>`.key('skel:' + i))}
     </div>
   `
 }
 
 function errorCard(msg) {
   return html`<div
-    class="mx-auto max-w-xl rounded-xl border border-rose-900/50 bg-rose-950/30 p-8 text-center text-sm text-rose-300"
+    class="mx-auto max-w-xl rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-950/30 p-8 text-center text-sm text-rose-700 dark:text-rose-300"
   >
     ${msg}
   </div>`
@@ -641,15 +641,15 @@ function headerBlock() {
   return html`
     <header class="mb-4 flex items-end justify-between">
       <div>
-        <h1 class="text-xl font-semibold text-zinc-100">Needs your review</h1>
-        <p class="mt-1 text-sm text-zinc-500">
+        <h1 class="text-xl font-semibold text-slate-900 dark:text-zinc-100">Needs your review</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-zinc-500">
           ${() =>
             'Pull requests die je aandacht nodig hebben — ' +
             (state.repo || '…') +
             (state.generatedFor ? ' · voor ' + state.generatedFor : '')}
         </p>
       </div>
-      <span class="rounded-full bg-zinc-800/80 px-2.5 py-1 text-xs text-zinc-400"
+      <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
         >${() => {
           const n = state.sections.reduce((acc, s) => acc + s.prs.length, 0)
           return n + ' PR' + (n === 1 ? '' : 's')
@@ -681,14 +681,14 @@ function onSearchKeydown(e) {
 function searchBox() {
   return html`
     <div class="relative mb-5">
-      <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500">${icon('search', 'h-4 w-4')}</span>
+      <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 dark:text-zinc-500">${icon('search', 'h-4 w-4')}</span>
       <input
         type="text"
         data-testid="search"
         autocomplete="off"
         spellcheck="false"
         placeholder="${() => `Zoek in alle open PR's van ${state.repo || ''}… (titel, nummer of auteur)`}"
-        class="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 py-2.5 pl-9 pr-3 text-[13px] text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600"
+        class="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 py-2.5 pl-9 pr-3 text-[13px] text-slate-900 dark:text-zinc-100 outline-none placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:border-slate-400 dark:focus:border-zinc-600"
         @input="${onSearchInput}"
         @keydown="${onSearchKeydown}"
       />
@@ -705,12 +705,12 @@ function searchResultsBlock() {
         return html`
           <div>
             <div class="mb-2 mt-6 flex items-center gap-2 first:mt-0">
-              <h2 class="text-[13px] font-semibold text-zinc-200">Alle open PR's — "${state.query}"</h2>
-              <span class="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[11px] text-zinc-400">${results.length}</span>
+              <h2 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">Alle open PR's — "${state.query}"</h2>
+              <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2 py-0.5 text-[11px] text-slate-500 dark:text-zinc-400">${results.length}</span>
             </div>
             ${results.length
               ? listBox(results.map((pr) => ({ pr })))
-              : html`<p class="py-10 text-center text-sm text-zinc-500">Geen resultaten voor “${state.query}”.</p>`}
+              : html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">Geen resultaten voor “${state.query}”.</p>`}
           </div>
         `
       }}
@@ -745,7 +745,7 @@ function mainContent() {
         const out = []
         if (state.cached) {
           out.push(
-            html`<p class="mb-4 text-xs text-amber-400" data-testid="cached">cached — offline snapshot</p>`.key(
+            html`<p class="mb-4 text-xs text-amber-600 dark:text-amber-400" data-testid="cached">cached — offline snapshot</p>`.key(
               'cached-label',
             ),
           )
@@ -759,7 +759,7 @@ function mainContent() {
         })
         if (!chains.length && state.sections.every((s) => s.prs.length === 0)) {
           out.push(
-            html`<p class="py-10 text-center text-sm text-zinc-500">Even geen open pull requests.</p>`.key('empty'),
+            html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">Even geen open pull requests.</p>`.key('empty'),
           )
         }
         return out
@@ -795,14 +795,14 @@ function recentItem(r) {
       data-nav-row
       class="${ROW_CLASS}"
     >
-      <span class="shrink-0 text-emerald-400">${icon('sparkles', 'h-4 w-4')}</span>
+      <span class="shrink-0 text-emerald-600 dark:text-emerald-400">${icon('sparkles', 'h-4 w-4')}</span>
       <div class="min-w-0 flex-1">
-        <span class="text-[13.5px] font-semibold text-zinc-100 group-hover:text-white"
+        <span class="text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white"
           >#${r.pr} · ${r.blocks} blocks · ${r.files} files</span
         >
       </div>
-      ${chip('open tree', 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30', '', 'sparkles')}
-      ${chevronFilled('h-4 w-4 text-zinc-600 group-hover:text-zinc-300')}
+      ${chip('open tree', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', '', 'sparkles')}
+      ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
     </a>
   `.key('recent:' + r.pr)
 }
@@ -812,13 +812,13 @@ function recentDrawer() {
     <div class="mt-8">
       <button
         data-testid="recent"
-        class="group flex w-full cursor-pointer items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-left transition-colors hover:bg-zinc-800/40"
+        class="group flex w-full cursor-pointer items-center gap-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-3 text-left transition-colors hover:bg-slate-100 dark:hover:bg-zinc-800/40"
         @click="${toggleRecent}"
       >
         <span class="${() => 'inline-flex shrink-0 transition-transform ' + (state.recentOpen ? 'rotate-90' : '')}"
-          >${chevronFilled('h-4 w-4 text-zinc-500')}</span
+          >${chevronFilled('h-4 w-4 text-slate-500 dark:text-zinc-500')}</span
         >
-        <span class="text-[13px] font-semibold text-zinc-200">Recent gegenereerd</span>
+        <span class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">Recent gegenereerd</span>
       </button>
       ${() =>
         state.recentOpen
@@ -827,10 +827,10 @@ function recentDrawer() {
                 ${state.recentLoading
                   ? loadingSkeletonList()
                   : state.recentPrs.length === 0
-                    ? html`<div class="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-[12px] text-zinc-500">
+                    ? html`<div class="rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-3 text-[12px] text-slate-500 dark:text-zinc-500">
                         Nog niets gegenereerd.
                       </div>`
-                    : html`<div class="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
+                    : html`<div class="overflow-hidden rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
                         ${state.recentPrs.map((r) => recentItem(r))}
                       </div>`}
               </div>

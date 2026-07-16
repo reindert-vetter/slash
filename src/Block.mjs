@@ -27,13 +27,13 @@ function escapeHtml(s) {
 
 // The word shown top-right of the header, per change status.
 const STATUS_WORD = {
-  added: 'text-emerald-600',
-  modified: 'text-amber-600',
-  removed: 'text-rose-600',
+  added: 'text-emerald-600 dark:text-emerald-400',
+  modified: 'text-amber-600 dark:text-amber-400',
+  removed: 'text-rose-600 dark:text-rose-400',
 }
 
 function statusColor(status) {
-  return STATUS_WORD[status] || 'text-slate-500'
+  return STATUS_WORD[status] || 'text-slate-500 dark:text-zinc-500'
 }
 
 // singleSide returns which pane to show when a block is one-sided: an added block
@@ -108,7 +108,7 @@ export default function Block(b, opts = {}) {
   return html`
     <article
       class="${() =>
-        'flex min-h-0 max-w-full flex-col overflow-hidden rounded-xl border bg-white transition ' +
+        'flex min-h-0 max-w-full flex-col overflow-hidden rounded-xl border bg-white dark:bg-zinc-900 transition ' +
         // Every card uses the full two-pane width, even a one-sided (added/removed)
         // block: it keeps the empty pane dropped (see singleSide below) but stays as
         // wide as a modified block so the layout doesn't jump between block types.
@@ -119,19 +119,19 @@ export default function Block(b, opts = {}) {
         // where there's nothing to hide and the width-stability rule still applies.
         (forcedNewOnly(b, viewModeFn) ? 'w-[42rem] 2xl:w-[49.2rem] ' : 'w-[70rem] 2xl:w-[82rem] ') +
         (preview
-          ? 'max-h-72 border-slate-200 opacity-50'
+          ? 'max-h-72 border-slate-200 dark:border-zinc-800 opacity-50'
           : diffActive()
-          ? 'border-indigo-300 ring-1 ring-indigo-200'
-          : 'border-slate-300 ring-1 ring-black/5')}"
+          ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+          : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"
     >
-      <div class="flex items-center gap-3 border-b border-slate-100 px-4 py-2.5">
+      <div class="flex items-center gap-3 border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
         <span
           class="${() =>
             'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wide ' +
             categoryClass(b.category)}"
           >${() => b.category}</span
         >
-        <h2 class="flex-1 truncate font-mono text-sm font-semibold text-slate-800">
+        <h2 class="flex-1 truncate font-mono text-sm font-semibold text-slate-800 dark:text-zinc-200">
           ${() => b.label}
         </h2>
         <span class="${() => 'shrink-0 text-xs font-medium ' + statusColor(b.status)}"
@@ -140,28 +140,28 @@ export default function Block(b, opts = {}) {
       </div>
 
       <div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2">
-        <span class="font-mono text-xs text-slate-500"
+        <span class="font-mono text-xs text-slate-500 dark:text-zinc-500"
           >${() => b.file + ':' + b.line}</span
         >
         <span class="flex-1"></span>
         ${() =>
           b.tests === false
             ? html`<span
-                class="rounded bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-600"
+                class="rounded bg-rose-50 dark:bg-rose-500/15 px-1.5 py-0.5 text-[11px] font-medium text-rose-600 dark:text-rose-400"
                 >⚑ geen tests</span
               >`
             : ''}
         ${() =>
           b.author
             ? html`<span
-                class="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600"
+                class="rounded bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[11px] font-medium text-slate-600 dark:text-zinc-400"
                 >${b.author}</span
               >`
             : ''}
-        <label class="flex cursor-pointer items-center gap-1 text-xs text-slate-600">
+        <label class="flex cursor-pointer items-center gap-1 text-xs text-slate-600 dark:text-zinc-400">
           <input
             type="checkbox"
-            class="h-3.5 w-3.5 rounded border-slate-300"
+            class="h-3.5 w-3.5 rounded border-slate-300 dark:border-zinc-700"
             checked="${() => blockApproved(b)}"
             .indeterminate="${() => blockPartlyApproved(b)}"
             @change="${() => {
@@ -173,9 +173,9 @@ export default function Block(b, opts = {}) {
         </label>
       </div>
 
-      <p class="border-t border-slate-100 px-4 py-3 text-sm leading-relaxed">
-        <span class="font-semibold text-slate-500">Goal:</span>
-        <span class="${() => (b.description ? 'text-slate-600' : 'italic text-slate-400')}"
+      <p class="border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-sm leading-relaxed">
+        <span class="font-semibold text-slate-500 dark:text-zinc-500">Goal:</span>
+        <span class="${() => (b.description ? 'text-slate-600 dark:text-zinc-400' : 'italic text-slate-400 dark:text-zinc-500')}"
           >${() => b.description || 'nog geen omschrijving'}</span
         >
       </p>
@@ -211,7 +211,7 @@ function codeDiff(
   if (c === undefined) return ''
   if (c === null) {
     return html`<div
-      class="border-t border-slate-100 px-4 py-3 text-xs italic text-slate-400"
+      class="border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-xs italic text-slate-400 dark:text-zinc-500"
       data-testid="code-diff"
     >
       loading code…
@@ -219,7 +219,7 @@ function codeDiff(
   }
   if (c.error) {
     return html`<div
-      class="border-t border-slate-100 px-4 py-3 text-xs text-rose-500"
+      class="border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-xs text-rose-500 dark:text-rose-400"
       data-testid="code-diff"
     >
       ${c.error}
@@ -240,11 +240,11 @@ function codeDiff(
   if (effectiveOnly === 'right') {
     return html`
       <div
-        class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100"
+        class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 bg-emerald-50 text-emerald-700', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn)}
+        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn)}
         ${scrollHint('up')}
         ${scrollHint('down')}
       </div>
@@ -253,11 +253,11 @@ function codeDiff(
   if (effectiveOnly === 'left') {
     return html`
       <div
-        class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100"
+        class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('old', c.old, rows, 'left', 'border-rose-100 bg-rose-50 text-rose-600', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn)}
+        ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn)}
         ${scrollHint('up')}
         ${scrollHint('down')}
       </div>
@@ -265,13 +265,13 @@ function codeDiff(
   }
   return html`
     <div
-      class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100"
+      class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
-      ${codePane('old', c.old, rows, 'left', 'border-rose-100 bg-rose-50 text-rose-600', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn)}
-      <div class="w-px shrink-0 bg-slate-100"></div>
-      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 bg-emerald-50 text-emerald-700', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn)}
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn)}
+      <div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>
+      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn)}
       ${scrollHint('up')}
       ${scrollHint('down')}
     </div>
@@ -300,7 +300,7 @@ function scrollHint(dir) {
       (down
         ? 'bottom-0 bg-gradient-to-t'
         : 'top-0 bg-gradient-to-b') +
-      ' from-white/95 via-white/70 to-transparent'}"
+      ' from-white/95 via-white/70 to-transparent dark:from-zinc-900/95 dark:via-zinc-900/70 dark:to-transparent'}"
     >
       <span
         class="flex h-4 w-6 items-center justify-center rounded-full bg-emerald-500 text-white shadow-sm ring-1 ring-black/5"
@@ -391,7 +391,7 @@ function codePane(
     <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}" data-pane="${side}">
       <div class="no-scrollbar min-h-0 flex-1 overflow-auto" data-scrollsync @scroll="${syncScroll}">
         <code
-          class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700"
+          class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           .innerHTML="${() =>
             paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn())}"
         ></code>
@@ -434,16 +434,16 @@ function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Se
       // Brighter tint + an inset left bar (box-shadow, so it adds no width and
       // the bars of adjacent active rows merge into one continuous accent).
       cls += ' shadow-[inset_3px_0_0_#6366f1]'
-      if (mark === 'del') cls += ' bg-[#fed7dc]' // rose-200 +20% white
-      else if (mark === 'ins') cls += ' bg-[#b9f5d9]' // emerald-200 +20% white
-      else cls += ' bg-indigo-50'
+      if (mark === 'del') cls += ' bg-[#fed7dc] dark:bg-rose-500/25' // rose-200 +20% white
+      else if (mark === 'ins') cls += ' bg-[#b9f5d9] dark:bg-emerald-500/25' // emerald-200 +20% white
+      else cls += ' bg-indigo-50 dark:bg-indigo-500/15'
     } else {
       if (ws) {
         // Whitespace-only re-alignment: no full-line tint (it isn't a real
         // change). Only the shifted whitespace itself is coloured, in the body.
-      } else if (mark === 'del') cls += ' bg-[#ffe9eb]' // rose-100 +20% white
-      else if (mark === 'ins') cls += ' bg-[#dafbea]' // emerald-100 +20% white
-      else if (text === null) cls += ' bg-slate-50' // filler for the missing side
+      } else if (mark === 'del') cls += ' bg-[#ffe9eb] dark:bg-rose-500/10' // rose-100 +20% white
+      else if (mark === 'ins') cls += ' bg-[#dafbea] dark:bg-emerald-500/10' // emerald-100 +20% white
+      else if (text === null) cls += ' bg-slate-50 dark:bg-zinc-800/60' // filler for the missing side
     }
     // A row modified on both sides (a del paired with an ins) gets an intra-line
     // char diff so the reviewer sees *what* changed — the inserted/removed
@@ -482,7 +482,7 @@ function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Se
     // monospace column to the right on an approved row.
     const check =
       isApproved && approveHere
-        ? '<span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600" title="Goedgekeurd">✓</span>'
+        ? '<span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">✓</span>'
         : ''
     parts.push(`<div class="${cls}"${anchor}${flag}>${check}${body}${marker}</div>`)
 
@@ -591,7 +591,7 @@ export const UNDERLINE_CLS = 'underline decoration-2 decoration-[#6366f1] underl
 // gets the indigo underline regardless of `ws`.
 function highlightChanges(r, sideKey, ws, underline) {
   const text = sideKey === 'left' ? r.left : r.right
-  const markCls = ws ? (sideKey === 'left' ? 'bg-rose-200' : 'bg-emerald-200') : ''
+  const markCls = ws ? (sideKey === 'left' ? 'bg-rose-200 dark:bg-rose-500/30' : 'bg-emerald-200 dark:bg-emerald-500/30') : ''
   const { leftMarked, rightMarked } = ws ? charDiffSides(r.left, r.right) : {}
   const marked = ws ? (sideKey === 'left' ? leftMarked : rightMarked) : null
   return markChars(highlight(text), (pi) => {

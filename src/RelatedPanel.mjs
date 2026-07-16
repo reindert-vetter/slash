@@ -832,18 +832,18 @@ function composeTargetHint(target) {
   if (!target) return ''
   return html`
     <div
-      class="rounded-lg border border-indigo-100 bg-indigo-50/60 px-2.5 py-2 text-[11px]"
+      class="rounded-lg border border-indigo-100 dark:border-indigo-500/30 bg-indigo-50/60 dark:bg-indigo-500/10 px-2.5 py-2 text-[11px]"
       data-testid="comment-target"
     >
-      <div class="flex items-center gap-1.5 text-indigo-600">
+      <div class="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400">
         <span class="font-medium">${() => GRAN_LABEL[target.gran] || target.gran}</span>
-        <span class="text-indigo-300">·</span>
+        <span class="text-indigo-300 dark:text-indigo-500">·</span>
         <span class="truncate font-mono font-semibold">${() => target.label}</span>
       </div>
       ${() =>
         target.code
           ? html`<code
-              class="language-php mt-1 block max-h-16 overflow-auto whitespace-pre rounded bg-white/70 px-2 py-1 font-mono text-[11px] leading-relaxed text-slate-700"
+              class="language-php mt-1 block max-h-16 overflow-auto whitespace-pre rounded bg-white/70 dark:bg-zinc-800/70 px-2 py-1 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
               .innerHTML="${() => highlight(target.code)}"
             ></code>`
           : ''}
@@ -880,13 +880,13 @@ function commentRow(c, i) {
       class="${() =>
         'flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left transition ' +
         (selI() === i && cs.focus === 'comment'
-          ? 'bg-indigo-50 ring-1 ring-indigo-200'
+          ? 'bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : selI() === i && (cs.focus === 'thread' || cs.focus === 'comment')
           ? // still the comment whose thread is open in the chat on the right,
             // just not the row the keyboard is on right now: a lighter border
             // keeps it marked without competing with an actively-focused row.
-            'bg-indigo-50/40 ring-1 ring-indigo-100'
-          : 'hover:bg-slate-50')}"
+            'bg-indigo-50/40 dark:bg-indigo-500/10 ring-1 ring-indigo-100 dark:ring-indigo-500/20'
+          : 'hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       data-testid="comment-item"
       @click="${() => {
         cs.sel = i
@@ -894,10 +894,10 @@ function commentRow(c, i) {
         beat()
       }}"
     >
-      <span class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300')}"></span>
+      <span class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
       <span class="flex min-w-0 flex-col gap-0.5">
-        <span class="truncate text-xs font-medium text-slate-800">${() => c.body}</span>
-        <span class="truncate text-[11px] leading-snug text-slate-500" data-testid="comment-meta"
+        <span class="truncate text-xs font-medium text-slate-800 dark:text-zinc-200">${() => c.body}</span>
+        <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
           >${() => c.file + ':' + c.line + ' · ' + c.reactionCount + ' reacties · ' + c.status}</span
         >
       </span>
@@ -916,7 +916,7 @@ function reactionBubble(r, i, total) {
           const sel = cs.focus === 'thread' && cs.threadPos === total - i
           return (
             'max-w-[85%] rounded-2xl px-3 py-1.5 text-xs leading-relaxed ' +
-            (mine ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-700') +
+            (mine ? 'bg-indigo-500 text-white' : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300') +
             (sel ? ' ring-2 ring-indigo-400' : '')
           )
         }}"
@@ -939,21 +939,21 @@ function commentsSection(state, commentTarget, openCompose) {
   }
   return html`
     <section
-      class="flex w-[36rem] shrink-0 max-h-[28rem] min-h-[16rem] flex-row overflow-hidden rounded-xl border border-slate-300 bg-white ring-1 ring-black/5"
+      class="flex w-[36rem] shrink-0 max-h-[28rem] min-h-[16rem] flex-row overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
       data-testid="comments-panel"
     >
-      <div class="flex w-56 shrink-0 flex-col overflow-hidden border-r border-slate-100">
-        <div class="border-b border-slate-100 px-3 py-2.5">
-          <h2 class="text-sm font-semibold text-slate-800">Comments</h2>
-          <p class="text-[11px] text-slate-400">op regels code · live</p>
+      <div class="flex w-56 shrink-0 flex-col overflow-hidden border-r border-slate-100 dark:border-zinc-800/60">
+        <div class="border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2.5">
+          <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">Comments</h2>
+          <p class="text-[11px] text-slate-400 dark:text-zinc-500">op regels code · live</p>
         </div>
         <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto p-1.5">
           <button
             class="${() =>
               'flex w-full items-center gap-2 rounded-md border border-dashed px-2.5 py-2 text-left transition ' +
               (cs.focus === 'new'
-                ? 'border-indigo-400 text-indigo-600 ring-1 ring-indigo-300'
-                : 'border-slate-200 text-slate-400 hover:border-indigo-200 hover:text-indigo-500')}"
+                ? 'border-indigo-400 text-indigo-600 dark:text-indigo-400 ring-1 ring-indigo-300 dark:ring-indigo-500/40'
+                : 'border-slate-200 dark:border-zinc-800 text-slate-400 dark:text-zinc-500 hover:border-indigo-200 dark:hover:border-indigo-500/40 hover:text-indigo-500 dark:hover:text-indigo-400')}"
             data-testid="new-comment"
             @click="${() => (cs.composing = !cs.composing)}"
           >
@@ -972,18 +972,18 @@ function commentsSection(state, commentTarget, openCompose) {
             // a one-element array keeps the slot's shape stable so it re-renders.
             const cts = visibleComments()
             return cts.length === 0
-              ? [html`<p class="px-2.5 py-3 text-[11px] text-slate-400">Nog geen comments.</p>`.key('no-comments')]
+              ? [html`<p class="px-2.5 py-3 text-[11px] text-slate-400 dark:text-zinc-500">Nog geen comments.</p>`.key('no-comments')]
               : cts.map((c, i) => commentRow(c, i).key('comment:' + c.id))
           }}
         </div>
       </div>
 
       <div class="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="comment-thread">
-        <div class="border-b border-slate-100 px-4 py-2.5">
-          <h2 class="truncate text-sm font-semibold text-slate-800">
+        <div class="border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
+          <h2 class="truncate text-sm font-semibold text-slate-800 dark:text-zinc-200">
             ${() => (cs.composing ? 'Nieuwe comment · ' + target() : selComment() ? selComment().body : 'Comments')}
           </h2>
-          <p class="text-[11px] text-slate-400">
+          <p class="text-[11px] text-slate-400 dark:text-zinc-500">
             ${() => (cs.composing ? 'start een task op deze regel' : 'reacties hooken hier op de comment in')}
           </p>
         </div>
@@ -994,13 +994,13 @@ function commentsSection(state, commentTarget, openCompose) {
                 <div class="flex min-h-0 flex-1 flex-col gap-2 p-3">
                   ${() => composeTargetHint(commentTarget ? commentTarget() : null)}
                   <textarea
-                    class="min-h-24 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none"
+                    class="min-h-24 flex-1 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
                     placeholder="Je comment op deze regel…"
                     data-testid="comment-compose"
                   ></textarea>
                   <div class="flex items-center justify-end gap-2">
                     <button
-                      class="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-700"
+                      class="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"
                       @click="${() => (cs.composing = false)}"
                     >
                       Annuleer
@@ -1030,9 +1030,9 @@ function commentsSection(state, commentTarget, openCompose) {
                       reactionBubble(r, i, arr.length).key('msg:' + r.id)
                     )}
                 </div>
-                <div class="flex items-center gap-2 border-t border-slate-100 p-2.5">
+                <div class="flex items-center gap-2 border-t border-slate-100 dark:border-zinc-800/60 p-2.5">
                   <input
-                    class="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300"
+                    class="flex-1 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
                     placeholder="Reageer op deze comment…"
                     data-testid="reaction-compose"
                     @keydown="${(e) => e.key === 'Enter' && sendReaction(false)}"
@@ -1045,7 +1045,7 @@ function commentsSection(state, commentTarget, openCompose) {
                     Stuur
                   </button>
                   <button
-                    class="shrink-0 rounded-lg border border-emerald-300 px-2.5 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50"
+                    class="shrink-0 rounded-lg border border-emerald-300 dark:border-emerald-500/40 px-2.5 py-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/15"
                     data-testid="reaction-resolve"
                     @click="${() => sendReaction(true)}"
                   >
@@ -1077,7 +1077,7 @@ function diffStatBadge(r) {
   if (!r.diff) {
     return html`
       <span
-        class="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-400"
+        class="shrink-0 rounded-full bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500"
         data-testid="related-diffstat"
         title="Aangeroepen definitie is niet gewijzigd in deze PR"
         >Ongewijzigd</span
@@ -1086,12 +1086,12 @@ function diffStatBadge(r) {
   }
   return html`
     <span
-      class="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums"
+      class="shrink-0 rounded-full bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums"
       data-testid="related-diffstat"
       title="Toegevoegde / verwijderde regels in de aangeroepen definitie"
     >
-      <span class="text-emerald-600">+${() => r.diff.add}</span>
-      <span class="text-rose-500">&#8722;${() => r.diff.del}</span>
+      <span class="text-emerald-600 dark:text-emerald-400">+${() => r.diff.add}</span>
+      <span class="text-rose-500 dark:text-rose-400">&#8722;${() => r.diff.del}</span>
     </span>
   `
 }
@@ -1106,7 +1106,7 @@ function approvalBadge(a) {
   return html`
     <span
       class="${'shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold tabular-nums ' +
-      (done ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500')}"
+      (done ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300' : 'bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-500')}"
       data-testid="related-approval"
       title="Goedgekeurde regels"
       >${done ? '✓ ' : ''}${a.done}/${a.total}</span
@@ -1124,30 +1124,30 @@ function relatedCard(r, i, drill) {
   return html`
     <div
       class="${() =>
-        'cursor-pointer rounded-lg border bg-slate-50/60 hover:border-indigo-200 ' +
+        'cursor-pointer rounded-lg border bg-slate-50/60 dark:bg-zinc-800/40 hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
         (selected()
           ? unchanged
-            ? 'border-slate-300 ring-1 ring-slate-200'
-            : 'border-indigo-300 ring-1 ring-indigo-200'
-          : 'border-slate-200')}"
+            ? 'border-slate-300 dark:border-zinc-700 ring-1 ring-slate-200 dark:ring-zinc-800'
+            : 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+          : 'border-slate-200 dark:border-zinc-800')}"
       data-testid="related-item"
       data-active="${() => (selected() ? 'true' : 'false')}"
       @click="${() => drill && drill(r)}"
     >
-      <div class="border-b border-slate-100 px-3 py-1.5">
+      <div class="border-b border-slate-100 dark:border-zinc-800/60 px-3 py-1.5">
         <div class="flex items-baseline gap-2">
-          <span class="min-w-0 flex-1 truncate font-mono text-xs font-semibold text-slate-700">${r.label}</span>
+          <span class="min-w-0 flex-1 truncate font-mono text-xs font-semibold text-slate-700 dark:text-zinc-300">${r.label}</span>
           ${() =>
             KIND_LABEL[r.kind]
               ? html`<span
-                  class="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-indigo-500"
+                  class="shrink-0 rounded-full bg-indigo-50 dark:bg-indigo-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-indigo-500 dark:text-indigo-400"
                   >${KIND_LABEL[r.kind]}</span
                 >`
               : ''}
           ${() =>
             r.source
               ? html`<span
-                  class="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-600"
+                  class="shrink-0 rounded-full bg-amber-50 dark:bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400"
                   title="Gevonden door een LLM"
                   >bron: ${r.source}</span
                 >`
@@ -1155,17 +1155,17 @@ function relatedCard(r, i, drill) {
           ${() => diffStatBadge(r)}
           ${() => approvalBadge(r.approve)}
         </div>
-        <span class="block truncate font-mono text-[10px] text-slate-400" title="${() => r.file + ':' + r.line}"
+        <span class="block truncate font-mono text-[10px] text-slate-400 dark:text-zinc-500" title="${() => r.file + ':' + r.line}"
           >${r.file}:${r.line}</span
         >
       </div>
       ${() =>
         r.code
           ? html`<code
-              class="language-php m-0 block whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700"
+              class="language-php m-0 block whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
               .innerHTML="${() => highlight(r.code)}"
             ></code>`
-          : html`<p class="px-3 py-2 text-[11px] text-slate-400">code laden…</p>`}
+          : html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500">code laden…</p>`}
     </div>
   `
 }
@@ -1206,10 +1206,10 @@ const WORKFLOW_LABELS = {
 
 // STATUS_BADGES maps a run status to its Dutch label + badge colour classes.
 const STATUS_BADGES = {
-  running: { label: 'draait', cls: 'bg-amber-50 text-amber-700 ring-amber-200' },
-  waiting: { label: 'wacht', cls: 'bg-sky-50 text-sky-700 ring-sky-200' },
-  completed: { label: 'klaar', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
-  failed: { label: 'mislukt', cls: 'bg-rose-50 text-rose-700 ring-rose-200' },
+  running: { label: 'draait', cls: 'bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-amber-200 dark:ring-amber-500/30' },
+  waiting: { label: 'wacht', cls: 'bg-sky-50 dark:bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-200 dark:ring-sky-500/30' },
+  completed: { label: 'klaar', cls: 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-200 dark:ring-emerald-500/30' },
+  failed: { label: 'mislukt', cls: 'bg-rose-50 dark:bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-200 dark:ring-rose-500/30' },
 }
 
 // WORKFLOW_STATUS_NOTE maps `${workflow}:${status}` to a short Dutch sentence
@@ -1254,7 +1254,7 @@ function workflowNote(run) {
 // still lands the keyboard cursor on the row (mouse equivalent of → walking
 // here, see toTask) but doesn't navigate anywhere.
 function workflowRow(run, openTask, i) {
-  const badge = STATUS_BADGES[run.status] || { label: run.status, cls: 'bg-slate-50 text-slate-500 ring-slate-200' }
+  const badge = STATUS_BADGES[run.status] || { label: run.status, cls: 'bg-slate-50 dark:bg-zinc-800/60 text-slate-500 dark:text-zinc-500 ring-slate-200 dark:ring-zinc-800' }
   const active = run.status === 'running' || run.status === 'waiting'
   const clickable = !!(run.comment && openTask)
   const focused = () => cs.focus === 'task' && cs.taskSel === i
@@ -1263,8 +1263,8 @@ function workflowRow(run, openTask, i) {
       class="${() =>
         'flex flex-col gap-0.5 rounded-md px-2 py-1.5 ring-1 ring-inset ' +
         (active ? '' : 'opacity-60') +
-        (clickable ? ' cursor-pointer hover:bg-slate-50' : '') +
-        (focused() ? ' ring-indigo-300 bg-indigo-50/60' : ' ring-transparent')}"
+        (clickable ? ' cursor-pointer hover:bg-slate-50 dark:hover:bg-zinc-800/60' : '') +
+        (focused() ? ' ring-indigo-300 dark:ring-indigo-500/40 bg-indigo-50/60 dark:bg-indigo-500/10' : ' ring-transparent')}"
       data-testid="workflow-row"
       data-status="${run.status}"
       data-run-id="${run.runId}"
@@ -1272,7 +1272,7 @@ function workflowRow(run, openTask, i) {
       @click="${() => (clickable ? openTask(run) : toTask(i))}"
     >
       <div class="flex items-center gap-2">
-        <span class="min-w-0 flex-1 truncate text-[12px] text-slate-700" data-testid="workflow-label"
+        <span class="min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-zinc-300" data-testid="workflow-label"
           >${WORKFLOW_LABELS[run.workflow] || run.workflow}</span
         >
         <span
@@ -1281,7 +1281,7 @@ function workflowRow(run, openTask, i) {
           >${badge.label}</span
         >
       </div>
-      <p class="line-clamp-2 text-[11px] leading-snug text-slate-400" data-testid="workflow-note">
+      <p class="line-clamp-2 text-[11px] leading-snug text-slate-400 dark:text-zinc-500" data-testid="workflow-note">
         ${workflowNote(run)}
       </p>
     </div>
@@ -1294,12 +1294,12 @@ function workflowsSection(state, openTask) {
   const doneRuns = () => runs().filter((r) => r.status === 'completed' || r.status === 'failed')
   return html`
     <section
-      class="flex w-[24rem] shrink-0 max-h-[28rem] min-h-[16rem] flex-col overflow-hidden rounded-xl border border-slate-300 bg-white ring-1 ring-black/5"
+      class="flex w-[24rem] shrink-0 max-h-[28rem] min-h-[16rem] flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
       data-testid="workflows-panel"
     >
-      <div class="border-b border-slate-100 px-3 py-2.5">
-        <h2 class="text-sm font-semibold text-slate-800">Taken</h2>
-        <p class="text-[11px] text-slate-400">workflow-runs · deze PR</p>
+      <div class="border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2.5">
+        <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">Taken</h2>
+        <p class="text-[11px] text-slate-400 dark:text-zinc-500">workflow-runs · deze PR</p>
       </div>
       <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-1 overflow-auto p-2">
         ${() => {
@@ -1308,7 +1308,7 @@ function workflowsSection(state, openTask) {
           // array can freeze empty after the first empty render.
           const all = runs()
           if (all.length === 0) {
-            return [html`<p class="px-1 py-2 text-[11px] text-slate-400">Geen taken.</p>`.key('no-workflows')]
+            return [html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">Geen taken.</p>`.key('no-workflows')]
           }
           const rows = []
           const act = activeRuns()
@@ -1319,7 +1319,7 @@ function workflowsSection(state, openTask) {
           let idx = 0
           if (act.length > 0) {
             rows.push(
-              html`<p class="px-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">Actief</p>`.key(
+              html`<p class="px-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500">Actief</p>`.key(
                 'hdr-active'
               )
             )
@@ -1331,7 +1331,7 @@ function workflowsSection(state, openTask) {
           }
           if (done.length > 0) {
             rows.push(
-              html`<p class="px-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">Recent</p>`.key(
+              html`<p class="px-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500">Recent</p>`.key(
                 'hdr-done'
               )
             )
@@ -1384,7 +1384,7 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
     if (!kind) return ''
     return html`
       <p
-        class="mt-1 flex items-start gap-1 text-[11px] text-amber-700"
+        class="mt-1 flex items-start gap-1 text-[11px] text-amber-700 dark:text-amber-300"
         data-testid="related-covers-warning"
       >
         <svg
@@ -1412,7 +1412,7 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
     <aside class="flex min-h-0 shrink-0 flex-row items-start gap-3" data-testid="related-panel">
       <section
         class="${() =>
-          'flex shrink-0 max-h-full min-h-0 flex-col overflow-hidden rounded-xl bg-white transition-[width] ' +
+          'flex shrink-0 max-h-full min-h-0 flex-col overflow-hidden rounded-xl bg-white dark:bg-zinc-900 transition-[width] ' +
           (codeCardCollapsed() ? 'w-12 items-center' : 'w-[30rem]')}"
         data-testid="related-code"
       >
@@ -1421,7 +1421,7 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
             ? html`
                 <button
                   type="button"
-                  class="flex h-full w-full flex-col items-center justify-center gap-1 text-slate-400 hover:bg-slate-50 hover:text-indigo-500"
+                  class="flex h-full w-full flex-col items-center justify-center gap-1 text-slate-400 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
                   data-testid="related-code-collapsed"
                   title="Onderliggende code"
                   aria-label="Onderliggende code tonen"
@@ -1443,10 +1443,10 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
                 </button>
               `
             : html`
-                <div class="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5">
+                <div class="flex items-center gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
                   <div class="min-w-0">
-                    <h2 class="text-sm font-semibold text-slate-800">Onderliggende code</h2>
-                    <p class="text-[11px] text-slate-400" data-testid="related-approval-total">
+                    <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">Onderliggende code</h2>
+                    <p class="text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-approval-total">
                       Code die dit blok aanroept${() => {
                         const a = codeApproval()
                         return a.total ? ` · ${a.done}/${a.total} goedgekeurd` : ''
@@ -1457,7 +1457,7 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
                   ${() =>
                     searching() || pending() > 0
                       ? html`<span
-                          class="ml-auto shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-400"
+                          class="ml-auto shrink-0 rounded-md border border-slate-200 dark:border-zinc-800 px-2 py-1 text-[11px] text-slate-400 dark:text-zinc-500"
                           data-testid="related-searching"
                           >zoeken…</span
                         >`
@@ -1468,7 +1468,7 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
                     // All children render as one flat vertical list, full width, in order.
                     const ks = kids()
                     return ks.length === 0
-                      ? html`<p class="px-1 py-2 text-[11px] text-slate-400">Geen onderliggende code.</p>`
+                      ? html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">Geen onderliggende code.</p>`
                       : ks.map((r, i) => relatedCard(r, i, drill).key('related:' + r.id))
                   }}
                 </div>

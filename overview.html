@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="nl" class="dark">
+<html lang="nl">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,10 +7,14 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌳</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      tailwind.config = { darkMode: 'class' }
+      // No JS toggle: dark/light follows the OS-level appearance setting
+      // (prefers-color-scheme) via Tailwind's 'media' strategy — see
+      // .claude/rules/conventions.md ("Thema: dark/light volgt de
+      // systeeminstelling").
+      tailwind.config = { darkMode: 'media' }
     </script>
   </head>
-  <body class="min-h-screen bg-zinc-950 text-zinc-100 antialiased">
+  <body class="min-h-screen bg-white text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
     <div id="app"></div>
     <script type="module" src="/src/overview.mjs"></script>
   </body>

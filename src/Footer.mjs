@@ -13,7 +13,7 @@ import { blockRows, unitsFor, highlight, markChars, UNDERLINE_CLS } from './Bloc
 // `'call'`-granularity marker. `highlight` escapes the text, the gutter is our own
 // static markup, so the string is safe for the .innerHTML binding.
 function line(mark, text, underline) {
-  const gutter = mark === 'del' ? 'text-rose-500' : 'text-emerald-500'
+  const gutter = mark === 'del' ? 'text-rose-500 dark:text-rose-400' : 'text-emerald-500'
   const code = underline
     ? markChars(highlight(text), (pi) => (underline.has(pi) ? UNDERLINE_CLS : ''))
     : highlight(text)
@@ -61,12 +61,12 @@ function wrapClass(state) {
 export default function Footer(state) {
   return html`
     <footer
-      class="fixed bottom-0 left-0 right-0 z-20 flex h-[100px] justify-center border-t border-slate-200 bg-white px-6 py-2.5"
+      class="fixed bottom-0 left-0 right-0 z-20 flex h-[100px] justify-center border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-2.5"
       data-testid="footer"
     >
       <div class="${() => wrapClass(state)}">
         <p
-          class="shrink-0 truncate text-xs italic text-slate-400"
+          class="shrink-0 truncate text-xs italic text-slate-400 dark:text-zinc-500"
           data-testid="footer-description"
         >
           Description coming soon…
@@ -76,7 +76,7 @@ export default function Footer(state) {
           data-testid="footer-diff"
         >
           <code
-            class="language-php m-0 block font-mono text-[11px] leading-relaxed text-slate-700"
+            class="language-php m-0 block font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
             data-testid="code-diff"
             .innerHTML="${() => {
               const u = activeUnit(state)
@@ -84,9 +84,9 @@ export default function Footer(state) {
               const r = u.row
               let s = ''
               if (r.left !== null)
-                s += `<div class="block whitespace-pre bg-rose-100">${line('del', r.left, u.ulLeft)}</div>`
+                s += `<div class="block whitespace-pre bg-rose-100 dark:bg-rose-500/20">${line('del', r.left, u.ulLeft)}</div>`
               if (r.right !== null)
-                s += `<div class="block whitespace-pre bg-emerald-100">${line('ins', r.right, u.ulRight)}</div>`
+                s += `<div class="block whitespace-pre bg-emerald-100 dark:bg-emerald-500/20">${line('ins', r.right, u.ulRight)}</div>`
               return s
             }}"
           ></code>
