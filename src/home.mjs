@@ -3268,7 +3268,7 @@ function DetailPanel(state) {
   return html`
     <main
       class="${() =>
-        'fixed bottom-[100px] right-6 top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto transition-all duration-200 ease-out ' +
+        'fixed bottom-[100px] right-0 top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto transition-all duration-200 ease-out ' +
         (state.mode === 'diff'
           ? 'left-6'
           : // showDescription (list-mode only) pushes PrInfoPanel to left-6 and
