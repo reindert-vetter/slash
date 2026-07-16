@@ -116,7 +116,22 @@ Elke rij toont onder het label + de status-badge ook een korte **omschrijving**
 ander type een korte Nederlandse zin die uitlegt *waarom* de run in die status
 zit (`WORKFLOW_STATUS_NOTE`, een `${workflow}:${status}`-map, b.v.
 `resolve_call:running` → "zoekt call-definities"), met de kale status als
-fallback wanneer geen combinatie matcht.
+fallback wanneer geen combinatie matcht. **De tekst mag nooit actieve arbeid
+suggereren terwijl de badge "wacht" toont** — `build_relations` draait zijn
+build-Activity één keer synchroon bij start en wacht daarna eindeloos op een
+`rebuild`-Signal (zie `.claude/rules/tembed-workflows.md`), dus `waiting`
+betekent daar altijd "al gebouwd, idle tot de volgende rebuild", nooit "bezig".
+`workflowNote` vervangt de generieke tekst voor die combinatie daarom door een
+concrete samenvatting van wat er al is opgebouwd (`buildRelationsSummary`,
+gelezen uit `state.relations`/`state.callResolve`/`state.testCovers` — dezelfde
+arrays die de rest van het paneel al bijhoudt, geen extra fetch), b.v. "3
+relaties · 5 calls opgelost — wacht op wijzigingen"; zonder bruikbare data valt
+hij terug op de statische `WORKFLOW_STATUS_NOTE`-tekst. Onder de omschrijving
+staat een tweede, nog kleinere regel (`data-testid=workflow-updated`,
+`relTime(run.updatedAt)`) met een relatieve Nederlandse tijdsaanduiding ("net
+nu" / "4 min geleden" / "2 uur geleden" / "1 dag geleden") — `updatedAt` komt al
+mee in `GET /api/workflows` (`WorkflowRunView.UpdatedAt`, `tasks_api.go`), dus
+dit is een pure frontend-toevoeging zonder backend-wijziging.
 
 Een run met een `comment`-ref is **klikbaar** (`cursor-pointer`, de rest is
 puur informatief): de klik roept `openTask(run)` aan, een callback die

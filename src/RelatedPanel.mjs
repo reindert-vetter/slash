@@ -1228,7 +1228,7 @@ const WORKFLOW_STATUS_NOTE = {
   'pr_status:waiting': 'volgt of de PR gemerged/gesloten wordt',
   'build_relations:completed': 'relaties opgebouwd',
   'build_relations:running': 'relaties opbouwen…',
-  'build_relations:waiting': 'relaties opbouwen…',
+  'build_relations:waiting': 'relaties opgebouwd, wacht op wijzigingen',
   'resolve_call:running': 'zoekt call-definities',
   'resolve_call:waiting': 'zoekt call-definities',
   'resolve_call:completed': 'call-definities opgelost',
@@ -1238,11 +1238,52 @@ const WORKFLOW_STATUS_NOTE = {
   'pr_inbox:completed': 'houdt de PR-inbox bij',
 }
 
+// buildRelationsSummary describes what build_relations actually produced for
+// this PR — relation edges + resolved method-calls + resolved test-coverage
+// links — read from the same state RelatedPanel already tracks
+// (state.relations/callResolve/testCovers), no extra fetch needed.
+function buildRelationsSummary(state) {
+  const relCount = state && Array.isArray(state.relations) ? state.relations.length : 0
+  const calls = state && Array.isArray(state.callResolve) ? state.callResolve : []
+  const resolvedCalls = calls.filter((r) => r.status === 'resolved' || r.status === 'found').length
+  const covers = state && Array.isArray(state.testCovers) ? state.testCovers : []
+  const resolvedCovers = covers.filter((r) => r.status === 'resolved' || r.status === 'found').length
+  const parts = []
+  if (relCount > 0) parts.push(relCount + ' relatie' + (relCount === 1 ? '' : 's'))
+  if (resolvedCalls > 0) parts.push(resolvedCalls + ' call' + (resolvedCalls === 1 ? '' : 's') + ' opgelost')
+  if (resolvedCovers > 0) parts.push(resolvedCovers + ' testdekking' + (resolvedCovers === 1 ? '' : 'en'))
+  return parts.join(' · ')
+}
+
+// relTime formats a run's last-update timestamp as a short Dutch relative
+// string ("net nu" / "N min geleden" / "N uur geleden" / "N dagen geleden")
+// so a "wacht"/"draait" badge doesn't leave the reviewer guessing how stale
+// that status actually is.
+function relTime(iso) {
+  if (!iso) return ''
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return ''
+  const diffSec = Math.max(0, Math.floor((Date.now() - t) / 1000))
+  if (diffSec < 60) return 'net nu'
+  const diffMin = Math.floor(diffSec / 60)
+  if (diffMin < 60) return diffMin + ' min geleden'
+  const diffHour = Math.floor(diffMin / 60)
+  if (diffHour < 24) return diffHour + ' uur geleden'
+  const diffDay = Math.floor(diffHour / 24)
+  return diffDay + ' dag' + (diffDay === 1 ? '' : 'en') + ' geleden'
+}
+
 // workflowNote builds the small description line under a run's label + status
 // badge: a rich "label · regel N · snippet" for a code-comment run, else a
 // short explanatory sentence keyed on workflow+status (falling back to the
-// kale status when no combination matches).
-function workflowNote(run) {
+// kale status when no combination matches). build_relations:waiting is a
+// special case: the workflow already ran its build synchronously at start
+// and is now idling on a `rebuild` Signal (see tembed-workflows.md), so
+// "wacht" there never means "actively building" — we replace the generic
+// note with what was actually built (buildRelationsSummary) when that data
+// is available, falling back to the static WORKFLOW_STATUS_NOTE text
+// otherwise.
+function workflowNote(run, state) {
   const c = run.comment
   if (c) {
     const parts = [c.label]
@@ -1251,6 +1292,10 @@ function workflowNote(run) {
     return parts.filter(Boolean).join(' · ')
   }
   if (run.status === 'failed') return 'mislukt'
+  if (run.workflow === 'build_relations' && run.status === 'waiting') {
+    const summary = buildRelationsSummary(state)
+    if (summary) return summary + ' — wacht op wijzigingen'
+  }
   return WORKFLOW_STATUS_NOTE[run.workflow + ':' + run.status] || run.status
 }
 
@@ -1261,7 +1306,7 @@ function workflowNote(run) {
 // `search` options object). Other run types are purely informational — a click
 // still lands the keyboard cursor on the row (mouse equivalent of → walking
 // here, see toTask) but doesn't navigate anywhere.
-function workflowRow(run, openTask, i) {
+function workflowRow(run, openTask, i, state) {
   const badge = STATUS_BADGES[run.status] || { label: run.status, cls: 'bg-slate-50 dark:bg-zinc-800/60 text-slate-500 dark:text-zinc-500 ring-slate-200 dark:ring-zinc-800' }
   const active = run.status === 'running' || run.status === 'waiting'
   const clickable = !!(run.comment && openTask)
@@ -1290,7 +1335,10 @@ function workflowRow(run, openTask, i) {
         >
       </div>
       <p class="line-clamp-2 text-[11px] leading-snug text-slate-400 dark:text-zinc-500" data-testid="workflow-note">
-        ${workflowNote(run)}
+        ${workflowNote(run, state)}
+      </p>
+      <p class="text-[10px] text-slate-300 dark:text-zinc-600" data-testid="workflow-updated">
+        ${relTime(run.updatedAt)}
       </p>
     </div>
   `
@@ -1335,7 +1383,7 @@ function workflowsSection(state, openTask) {
             // running → completed) needs a fresh node, not a patched one —
             // arrow.js only re-runs a keyed node's own bindings on a key
             // change (see the block-card-key convention in conventions.md).
-            for (const r of act) rows.push(workflowRow(r, openTask, idx++).key('run:' + r.runId + ':' + r.status))
+            for (const r of act) rows.push(workflowRow(r, openTask, idx++, state).key('run:' + r.runId + ':' + r.status))
           }
           if (done.length > 0) {
             rows.push(
@@ -1343,7 +1391,7 @@ function workflowsSection(state, openTask) {
                 'hdr-done'
               )
             )
-            for (const r of done) rows.push(workflowRow(r, openTask, idx++).key('run:' + r.runId + ':' + r.status))
+            for (const r of done) rows.push(workflowRow(r, openTask, idx++, state).key('run:' + r.runId + ':' + r.status))
           }
           return rows
         }}
