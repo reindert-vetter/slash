@@ -628,19 +628,22 @@ function signalFileViewed(file, viewed) {
 
 // recomputeLeftList derives state.blocks from allBlocks: everything except the
 // blocks that are nested under a parent in the RelatedPanel — the relation
-// children, PR blocks that are the definition of a resolved method call, and
-// PR blocks that a test's coverage annotation resolves to (all already shown
-// in "Onderliggende code"). A called-and-shown function shouldn't also sit in
-// the left list. Note this is NOT symmetric: a test that COVERS a method
-// stays in the left list even though it also appears as a "covered_by" child
-// under that method — unlike a called definition or a listener, a test is
-// itself a primary reviewable unit (its own diff), not just reference code
-// shown for context. Selection is preserved by block id so a callResolve/
-// testCovers reload (poll after a search) doesn't jump the cursor.
+// children and the PR blocks that are the definition of a resolved method call
+// (both already shown in "Onderliggende code"). A called-and-shown function
+// shouldn't also sit in the left list; those targets often live in files the PR
+// didn't change (pure reference code shown for context). Test coverage is
+// DELIBERATELY exempt: a test must never make another (changed, reviewable)
+// block vanish from the tree. Unlike a call-target or a listener, a covered
+// method that testCoverTargetIds would return is ALWAYS a changed PR block —
+// primary reviewable code (e.g. a brand-new controller the PR adds) — so it
+// stays in the left list, and merely ALSO appears as a "covers" child under the
+// covering test. That mirrors how the test itself already appears both in the
+// list and as a "covered_by" child under the method: test coverage hides
+// neither side. Selection is preserved by block id so a callResolve/testCovers
+// reload (poll after a search) doesn't jump the cursor.
 function recomputeLeftList() {
   const hidden = new Set(state.relations.map((r) => r.childId))
   for (const id of resolvedCallTargetIds()) hidden.add(id)
-  for (const id of testCoverTargetIds()) hidden.add(id)
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
   const q = (state.search || '').trim().toLowerCase()
   state.blocks = state.allBlocks

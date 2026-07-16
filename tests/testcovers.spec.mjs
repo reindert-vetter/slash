@@ -13,15 +13,18 @@ test.describe('PR Review Tree — test coverage', () => {
   }) => {
     await page.goto('/pr/92')
 
-    // The covered production method is pulled out of the left list (like a
-    // resolved method-call target); the test itself stays — it's a primary
-    // reviewable unit, not just reference code.
+    // Test coverage hides NEITHER side: both the covering test AND the covered
+    // production method stay in the left list. The covered method is a changed,
+    // primary reviewable block (unlike a call-target or listener from an
+    // unchanged file), so a test must never make it vanish from the tree.
     const rows = page.getByTestId('block-row')
-    await expect(rows).toHaveCount(1)
-    await expect(rows.nth(0)).toContainText('OrderCoverageTest::testBillingAddress')
+    await expect(rows).toHaveCount(2)
+    await expect(rows.filter({ hasText: 'OrderCoverageTest::testBillingAddress' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'Order::billingAddress' })).toHaveCount(1)
 
-    // Direction 1 (test → geteste methode): the covered method shows as
-    // underlying code, with a diff-stat (it's changed in this PR too).
+    // Direction 1 (test → geteste methode): with the test selected, the covered
+    // method shows as underlying code, with a diff-stat (it's changed too).
+    await rows.filter({ hasText: 'OrderCoverageTest::testBillingAddress' }).click()
     const child = page.getByTestId('related-item')
     await expect(child).toHaveCount(1)
     await expect(child).toContainText('Order::billingAddress')

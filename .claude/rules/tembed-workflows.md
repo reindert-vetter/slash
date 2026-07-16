@@ -603,11 +603,18 @@ call-resolve: een Go-detector eerst, een **beperkte** AI-fallback alleen voor
   regel/call-gebonden begrip. `directChildBlocks`/`nestedPrBlocks` (de
   combinatie-goedkeuringspil) nemen **alleen richting 1** mee (test → geteste
   methode); richting 2 bewust **niet**, om een method↔test-cyclus in die
-  recursieve rollup te vermijden. Een test die zelf **ook** als "gedekt door"
-  onder zijn geteste methode verschijnt blijft desondanks **gewoon in de
-  linkerlijst staan** (`recomputeLeftList`/`testCoverTargetIds` verbergt alleen
-  de **geteste methode** als die zelf een PR-blok is — niet de test): een test
-  is een primair te review-en eenheid, geen pure referentiecode.
+  recursieve rollup te vermijden. **Testdekking verbergt géén enkel blok uit de
+  linkerlijst** — noch de test, noch de geteste methode. Anders dan een
+  call-target of een listener (vaak echt ongewijzigde referentiecode die
+  `resolvedCallTargetIds`/de relatie-children wél uit de lijst halen) is een
+  geteste methode die een PR-blok is **altijd** gewijzigde, primair te-reviewen
+  code (bv. een nieuw toegevoegde controller die de PR introduceert). Een test
+  mag zo'n blok dus nooit uit de tree laten verdwijnen: `recomputeLeftList`
+  voegt `testCoverTargetIds()` **niet** aan de hidden-set toe (de functie
+  bestaat nog, maar wordt niet meer gebruikt om te verbergen). Beide kanten
+  blijven in de lijst én verschijnen daarnaast als elkaars Onderliggende-code-
+  kind: de test toont de geteste methode als `covers`-kind, de methode toont de
+  test als `covered_by`-kind — volledig symmetrisch.
   **Warning** (`data-testid=related-covers-warning`, custom inline SVG,
   in de kaart-header naast `related-approval-total`): getoond zodra het
   gefocuste TEST-blok een `unannotated`- of (na een mislukte AI-zoektocht)
