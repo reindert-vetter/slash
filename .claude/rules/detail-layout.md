@@ -469,3 +469,21 @@ en het paneel er strak naast blijft liggen. In
 `'list'`-mode start `<main>` op `left-[29rem]` (naast de sidebar), in `'diff'`-mode
 op `left-6` (meer ruimte); de kolommen blijven in beide gevallen vanaf links
 inpakken.
+
+**Uitzondering: de `a`-toggle (`state.diffViewMode`, zie
+`.claude/rules/keyboard-navigation.md`) krimpt de kaart naar 60% breedte
+wanneer hij daadwerkelijk een pane verbergt.** Een tweezijdig (`modified`)
+block in `viewMode==='new'` toont — net als een al eenzijdig `added`-block —
+alleen zijn nieuwe/rechter pane, maar in tegenstelling tot dat eenzijdige
+block krimpt de kaart zelf mee naar `w-[42rem] 2xl:w-[49.2rem]` (60% van
+`w-[70rem] 2xl:w-[82rem]`) — een reviewer die bewust de oude kant verbergt wil
+de compactere weergave, anders dan de bewuste breedte-stabiliteit voor
+`added`/`removed`-blocks hierboven (die hebben niets te verbergen, dus blijven
+op de volle breedte, ook met `a` aan). `forcedNewOnly(b, viewMode)` in
+`Block.mjs` is de gedeelde voorwaarde: waar (alleen) voor een echt tweezijdig
+block met `viewMode()==='new'`, gebruikt zowel door `codeDiff` (welke pane(s))
+als door `Block()`'s eigen kaart-`class`-binding (welke breedte) — zo blijven
+pane-drop en breedte-krimp altijd in sync. Geldt automatisch voor **elke**
+zichtbare kaart (top-level geselecteerd/preview én elke gedrilde kolom), want
+ze delen allemaal dezelfde `Block()`-component en dezelfde `viewMode`-opt
+(`() => state.diffViewMode`).

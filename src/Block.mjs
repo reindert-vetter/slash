@@ -47,6 +47,17 @@ function singleSide(b) {
   return null
 }
 
+// forcedNewOnly reports whether the `a` toggle (viewMode) is actually
+// collapsing this block to its new-only pane — only true for a genuinely
+// two-sided (modified) block. A block that's already one-sided (added/
+// removed, singleSide(b) !== null) has nothing to collapse, so the toggle is a
+// no-op for it: it keeps rendering (and sizing) exactly as it always did. Used
+// both by codeDiff (which pane(s) to show) and Block()'s own card width, so
+// the two stay in sync.
+function forcedNewOnly(b, viewMode) {
+  return viewMode() === 'new' && singleSide(b) === null
+}
+
 /**
  * @param {object} b - one block from state.blocks (reactive).
  * @param {object} [opts] - { preview: boolean } dims the look-ahead card.
@@ -101,7 +112,12 @@ export default function Block(b, opts = {}) {
         // Every card uses the full two-pane width, even a one-sided (added/removed)
         // block: it keeps the empty pane dropped (see singleSide below) but stays as
         // wide as a modified block so the layout doesn't jump between block types.
-        'w-[70rem] 2xl:w-[82rem] ' +
+        // Exception: the `a` toggle (viewMode) forcing a genuinely two-sided block
+        // into its new-only pane (forcedNewOnly) deliberately shrinks the card to
+        // 60% of that width instead — a reviewer who explicitly asked to hide the
+        // old side wants the narrower view, unlike an already one-sided block
+        // where there's nothing to hide and the width-stability rule still applies.
+        (forcedNewOnly(b, viewModeFn) ? 'w-[42rem] 2xl:w-[49.2rem] ' : 'w-[70rem] 2xl:w-[82rem] ') +
         (preview
           ? 'max-h-72 border-slate-200 opacity-50'
           : diffActive()
@@ -212,13 +228,15 @@ function codeDiff(
   const rows = blockRows(b)
   const only = singleSide(b)
   // Toggle `a` (home.mjs) forces a two-sided (modified) block down to just its
-  // new pane, full width — same rendering as an already one-sided added block.
-  // A block that's already one-sided (added/removed) has nothing to hide/show
-  // on the other side, so the toggle has no effect there — `only` wins.
-  const effectiveOnly = only || (viewMode() === 'new' ? 'right' : null)
-  // One-sided blocks (added / removed, or a modified block in new-only view)
-  // show just their non-empty pane at full width — no divider, no empty
-  // counterpart.
+  // new pane — see forcedNewOnly, shared with Block()'s own card-width choice
+  // so the pane-drop and the width shrink always agree. A block that's already
+  // one-sided (added/removed) has nothing to hide/show on the other side, so
+  // the toggle has no effect there — `only` wins.
+  const effectiveOnly = only || (forcedNewOnly(b, viewMode) ? 'right' : null)
+  // One-sided blocks (added / removed) render at the card's full width; a
+  // modified block collapsed by the `a` toggle renders at the card's narrower
+  // 60% width (see forcedNewOnly above) — either way, just the non-empty pane,
+  // no divider, no empty counterpart.
   if (effectiveOnly === 'right') {
     return html`
       <div

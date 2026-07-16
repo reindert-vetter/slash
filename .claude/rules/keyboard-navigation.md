@@ -426,24 +426,48 @@ de regel-achtergrond (rood/groen) markeert een echte wijziging nu alleen nog op
 regelniveau. Een lege toegevoegde regel heeft geen tekens en dus geen underline
 (correct: niets te markeren).
 
-## `a` — diff-weergave toggelen (side-by-side ↔ alleen nieuw)
+## `a` — diff-weergave toggelen (side-by-side ↔ alleen nieuw, 60% breed)
 
 **`a`** toggelt globaal, voor **elke zichtbare diff-kaart tegelijk** — de
 geselecteerde/preview-kaart én elke open gedrilde kolom (`state.drill`) — tussen
 de bestaande side-by-side weergave (oud+nieuw, default) en een **alleen-nieuw**-
-weergave (enkel de rechter/nieuwe pane, volle breedte, dezelfde rendering als een
-al one-sided `added`-block). Staat naast `f`/`d`/`s` in `onKeydown` (`home.mjs`),
-dus met dezelfde eerdere guards (command-palette/zoekbox/related-panel actief)
-ervoor — werkt zowel in `'list'`- als `'diff'`-mode, botst niet met typen in een
-invoerveld. De state (`state.diffViewMode`, `'split'`/`'new'`) is efemeer, geen
-URL-binding (net als `showDescription`/`showApproved`). Een al one-sided block
+weergave (enkel de rechter/nieuwe pane). Staat naast `f`/`d`/`s` in `onKeydown`
+(`home.mjs`), dus met dezelfde eerdere guards (command-palette/zoekbox/
+related-panel actief) ervoor — werkt zowel in `'list'`- als `'diff'`-mode.
+**Extra guard, los van die bestaande guards:** `relatedActive()` (`cs.focus !==
+null`) dekt niet elk pad waarop een tekstveld de DOM-focus heeft — `startComment()`
+(o.a. het command-palette-fallback "Maak hiermee een comment") zet alleen
+`cs.composing`, niet `cs.focus`, dus `relatedActive()` blijft daar `false` terwijl
+de composer wél focus heeft. Een letterlijke "a" die je daar typt zou anders door
+deze shortcut worden opgegeten. Vandaar checkt de `a`-handler ook rechtstreeks
+`document.activeElement` (`isEditableFocused()` in `home.mjs`: TEXTAREA/INPUT →
+shortcut doet niets, toets vloeit gewoon het veld in) — een generieke,
+toekomstvaste guard die niet afhangt van welke navigatie-state een veld toevallig
+wel/niet bijhoudt.
+
+De state (`state.diffViewMode`, `'split'`/`'new'`) is efemeer, geen URL-binding
+(net als `showDescription`/`showApproved`). Een al one-sided block
 (`added`/`removed`) heeft geen andere kant om te verbergen/tonen — de toggle
 heeft daar geen effect, `singleSide(b)` blijft leidend (`effectiveOnly` in
-`Block.mjs`'s `codeDiff`). Gelezen als `viewMode()` binnen `Block()`'s eigen
-per-kaart `${() => codeDiff(...)}`-slot (niet in de outer per-kolom closure van
-`home.mjs`) — mirrort hoe die slot al op `b.code` leest, dus een toggle
-her-rendert alleen de diff-structuur van elke zichtbare kaart, niet de
-kaart-bouwende closures zelf.
+`Block.mjs`'s `codeDiff`), en de kaart houdt zijn normale volle breedte. Een
+**echt tweezijdig** (`modified`) block klapt in `viewMode==='new'` wél in tot
+zijn nieuwe pane, én de kaart zelf krimpt dan naar **60% breedte**
+(`w-[42rem] 2xl:w-[49.2rem]` i.p.v. `w-[70rem] 2xl:w-[82rem]`) — anders dan de
+bewuste breedte-stabiliteit voor eenzijdige blocks (zie
+`.claude/rules/detail-layout.md`): een reviewer die bewust de oude kant
+verbergt wil de compactere weergave, niet dezelfde volle breedte met een lege
+helft. `forcedNewOnly(b, viewMode)` in `Block.mjs` is de gedeelde voorwaarde
+achter beide (welke pane(s), welke breedte), zodat ze nooit uit elkaar kunnen
+lopen.
+
+Gelezen als `viewMode()` binnen `Block()`'s eigen per-kaart `${() =>
+codeDiff(...)}`-slot (niet in de outer per-kolom closure van `home.mjs`) —
+mirrort hoe die slot al op `b.code` leest, dus een toggle her-rendert alleen de
+diff-structuur (en, via `forcedNewOnly`, de breedte) van elke zichtbare kaart,
+niet de kaart-bouwende closures zelf. De breedte-ternary zit in dezelfde
+kaart-brede `${() => ...}`-`class`-binding als `diffActive()`/`preview` (al
+reactief, de hele waarde in één keer — geen deel-string-interpolatie, zie de
+arrow.js-class-binding-valkuil in `conventions.md`).
 
 ## Footer: inline preview van de geselecteerde regel
 

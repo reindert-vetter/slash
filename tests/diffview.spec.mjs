@@ -2,8 +2,10 @@ import { test, expect } from './_fixtures.mjs'
 
 // `a` toggles the global diff-pane view (state.diffViewMode, see
 // keyboard-navigation.md "`a` — diff-weergave toggelen") between the default
-// side-by-side rendering and a new-only, full-width rendering — everywhere a
-// Block() card is visible.
+// side-by-side rendering and a new-only rendering — everywhere a Block() card
+// is visible. A genuinely two-sided (modified) block also shrinks to 60% of
+// its normal card width in new-only view (forcedNewOnly in Block.mjs); an
+// already one-sided (added/removed) block is unaffected by the toggle.
 test.describe('PR Review Tree — diff view toggle (`a`)', () => {
   // Direct-mount unit test: Block()'s viewMode opt controls whether codeDiff
   // renders both panes or just the new one, for a genuinely two-sided
@@ -42,23 +44,30 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     })
 
     const panes = page.locator('#view-mode-host code.language-php')
-    // Split (default): both panes render.
+    const card = page.locator('#view-mode-host article')
+    // Split (default): both panes render, full card width.
     await expect(panes).toHaveCount(2)
+    await expect(card).toHaveClass(/w-\[70rem\]/)
+    await expect(card).toHaveClass(/2xl:w-\[82rem\]/)
 
-    // Flip to new-only: only the new/right pane remains, and it takes the full
-    // width (same rendering path as an already one-sided added block).
+    // Flip to new-only: only the new/right pane remains, and the card itself
+    // shrinks to 60% of its normal width (42rem/49.2rem of 70rem/82rem) —
+    // deliberately narrower, not full-width, since a reviewer who hid the old
+    // side wants the more compact view.
     await page.evaluate(() => {
       window.__vm.mode = 'new'
     })
     await expect(panes).toHaveCount(1)
-    const card = page.locator('#view-mode-host article')
-    await expect(card).toHaveClass(/w-\[70rem\]/)
+    await expect(card).toHaveClass(/w-\[42rem\]/)
+    await expect(card).toHaveClass(/2xl:w-\[49\.2rem\]/)
+    await expect(card).not.toHaveClass(/w-\[70rem\]/)
 
-    // Flip back: side by side again.
+    // Flip back: side by side again, full width restored.
     await page.evaluate(() => {
       window.__vm.mode = 'split'
     })
     await expect(panes).toHaveCount(2)
+    await expect(card).toHaveClass(/w-\[70rem\]/)
   })
 
   // An already one-sided (added) block has no old pane to hide, so the toggle
@@ -94,12 +103,18 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     })
 
     const panes = page.locator('#added-view-mode-host code.language-php')
+    const card = page.locator('#added-view-mode-host article')
     await expect(panes).toHaveCount(1)
+    await expect(card).toHaveClass(/w-\[70rem\]/)
 
     await page.evaluate(() => {
       window.__addedVm.mode = 'new'
     })
     await expect(panes).toHaveCount(1)
+    // Width is unaffected too — there's nothing to collapse, so the card keeps
+    // its full width (the 60% shrink only applies to a genuinely two-sided
+    // block, see forcedNewOnly in Block.mjs).
+    await expect(card).toHaveClass(/w-\[70rem\]/)
   })
 
   // End-to-end: pressing `a` in the real app flips the visible block's diff
@@ -118,10 +133,31 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     const panes = diff.locator('code.language-php')
     await expect(panes).toHaveCount(2)
 
+    // The selected card carries the diffActive indigo border while it owns the
+    // keyboard (see Block.mjs) — a reliable, unique way to pick it out from the
+    // dimmed look-ahead preview card.
+    const card = page.locator('article.border-indigo-300')
+    const splitBox = await card.boundingBox()
+
     await page.keyboard.press('a')
     await expect(panes).toHaveCount(1)
+    // The card really shrinks on screen (not just a class string) — 60% of the
+    // split width, well under a loose 80% sanity bound to absorb rounding/
+    // sub-pixel layout without pinning an exact px value.
+    await expect
+      .poll(async () => {
+        const box = await card.boundingBox()
+        return box.width
+      })
+      .toBeLessThan(splitBox.width * 0.8)
 
     await page.keyboard.press('a')
     await expect(panes).toHaveCount(2)
+    await expect
+      .poll(async () => {
+        const box = await card.boundingBox()
+        return box.width
+      })
+      .toBeCloseTo(splitBox.width, 0)
   })
 })
