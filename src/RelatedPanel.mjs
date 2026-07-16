@@ -981,7 +981,15 @@ function commentsSection(state, commentTarget, openCompose) {
       <div class="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="comment-thread">
         <div class="border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
           <h2 class="truncate text-sm font-semibold text-slate-800 dark:text-zinc-200">
-            ${() => (cs.composing ? 'Nieuwe comment · ' + target() : selComment() ? selComment().body : 'Comments')}
+            ${() =>
+              cs.composing
+                ? 'Nieuwe comment · ' + target()
+                : selComment()
+                  ? selComment().body
+                  : // Idle fallback: "Thread", not "Comments" — the list column
+                    // to the left is already titled "Comments", and two bare
+                    // "Comments" headings side by side read as a duplicate.
+                    'Thread'}
           </h2>
           <p class="text-[11px] text-slate-400 dark:text-zinc-500">
             ${() => (cs.composing ? 'start een task op deze regel' : 'reacties hooken hier op de comment in')}

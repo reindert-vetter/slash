@@ -80,7 +80,14 @@ export default function CommandMenu(menu, resolve, onRun) {
         <textarea
           class="min-h-[1.8rem] flex-1 resize-none bg-transparent py-1 text-sm leading-relaxed text-slate-800 dark:text-zinc-200 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
           rows="1"
-          placeholder="Zoek een commando of schrijf direct een comment…"
+          placeholder="${() =>
+            // The compose-kind menu anchors on the (narrow) comment pane, where
+            // the generic placeholder gets cut off mid-sentence without an
+            // ellipsis (a textarea placeholder wraps out of view instead of
+            // truncating) — so that mode gets a shorter prompt that fits.
+            menu.mode === 'compose'
+              ? 'Kies wat er met je comment gebeurt…'
+              : 'Zoek een commando of schrijf direct een comment…'}"
           data-testid="command-input"
           value="${() => menu.query}"
           @input="${(e) => {

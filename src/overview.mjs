@@ -506,7 +506,7 @@ function generateAction(pr) {
       data-testid="generate-page"
       ?disabled="${() => ingestBusy(pr)}"
       class="${() =>
-        'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 ' +
+        'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700 ' +
         (ingestBusy(pr) ? 'cursor-not-allowed opacity-60' : '')}"
       @click="${() => generatePage(pr)}"
     >
@@ -528,7 +528,7 @@ function ingestedActions(pr) {
     <button
       type="button"
       data-testid="open-tree"
-      class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700"
+      class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
       @click="${() => (location.href = '/pr/' + pr.number)}"
     >
       ${icon('sparkles', 'h-3.5 w-3.5')} Open review-boom
@@ -538,7 +538,7 @@ function ingestedActions(pr) {
       data-testid="regenerate-page"
       ?disabled="${() => ingestBusy(pr)}"
       class="${() =>
-        'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 ' +
+        'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700 ' +
         (ingestBusy(pr) ? 'cursor-not-allowed opacity-60' : '')}"
       @click="${() => generatePage(pr, { redirect: false })}"
     >
@@ -554,12 +554,16 @@ function ingestedActions(pr) {
 // popover — every row (ingested or not) opens this same menu on a click: the
 // ingest-related action(s) first (which action depends on pr.hasGraph, see
 // generateAction/ingestedActions above), then a plain link to GitHub, plus a
-// Jira link when the title carries a KEY-123-style ticket key.
+// Jira link when the title carries a KEY-123-style ticket key. The panel gets
+// a solid (white in light mode) background plus a strong shadow + ring: it
+// necessarily overlaps the status pills of the row below, and with a
+// near-page-background tint that overlap read as the pill's text being cut
+// off instead of a floating menu covering it.
 function popover(pr) {
   const m = (pr.title || '').match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
   return html`
     <div
-      class="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-200 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 p-1 shadow-xl"
+      class="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-1 shadow-2xl ring-1 ring-black/5"
       data-testid="pr-popover"
       @click="${(e) => e.stopPropagation()}"
     >
@@ -568,7 +572,7 @@ function popover(pr) {
         href="${pr.url}"
         target="_blank"
         rel="noreferrer"
-        class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700"
+        class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
       >
         ${icon('external-link', 'h-3.5 w-3.5')} Open op GitHub
       </a>
@@ -578,7 +582,7 @@ function popover(pr) {
               href="${JIRA_BASE + m[1]}"
               target="_blank"
               rel="noreferrer"
-              class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700"
+              class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
             >
               ${icon('external-link', 'h-3.5 w-3.5')} Open Jira-ticket
             </a>`
