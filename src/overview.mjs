@@ -605,9 +605,19 @@ function prRow(pr, opts = {}) {
 }
 
 // listBox — the framed rounded-xl box every group of rows sits in, with thin
-// dividers between rows and no gap (matches dash's listBox/prCard).
+// dividers between rows and no gap (matches dash's listBox/prCard). No
+// `overflow-hidden` here (on purpose): each row's popover menu is an
+// absolutely positioned child that renders below the row, and an absolutely
+// positioned child doesn't grow its normal-flow container's height. A short
+// list (very common after computeStacks pulls chained PRs out — often
+// leaving just 1 row in a section) has a container box that ends right at
+// the row's bottom edge, so `overflow-hidden` clips the popover away
+// entirely once the row correctly establishes its own positioning context
+// (see the `relative`-toggle bugfix in paintSelection). The rounded corners
+// still look right without it because each row already carries its own
+// `first:rounded-t-xl last:rounded-b-xl` (see ROW_CLASS).
 function listBox(items) {
-  return html`<div class="overflow-hidden rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
+  return html`<div class="rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
     ${items.map(({ pr, opts }) => prRow(pr, opts || {}))}
   </div>`
 }
@@ -1065,10 +1075,19 @@ function paintSelection() {
       selIndex = i
       paintSelection()
     }
+    // Note: `relative` is deliberately NOT part of this toggle set. prRow's
+    // own template already carries `relative` permanently (its click-opened
+    // popover is `position:absolute` and needs the row as its containing
+    // block) — toggling it here alongside the keyboard-highlight ring used
+    // to strip it from every non-selected row on the very first paint
+    // (selIndex starts at -1, so `classList.remove` ran unconditionally for
+    // every row), leaving the popover positioned relative to <body> instead
+    // of its own row. `z-10` still gets a stacking context from the row's
+    // own always-on `relative`, so nothing here relied on toggling it.
     if (i === selIndex) {
-      el.classList.add('ring-1', 'ring-emerald-500/50', 'rounded-lg', 'relative', 'z-10', 'bg-emerald-500/10')
+      el.classList.add('ring-1', 'ring-emerald-500/50', 'rounded-lg', 'z-10', 'bg-emerald-500/10')
     } else {
-      el.classList.remove('ring-1', 'ring-emerald-500/50', 'rounded-lg', 'relative', 'z-10', 'bg-emerald-500/10')
+      el.classList.remove('ring-1', 'ring-emerald-500/50', 'rounded-lg', 'z-10', 'bg-emerald-500/10')
     }
   })
   if (selIndex >= 0 && rows[selIndex]) rows[selIndex].scrollIntoView({ block: 'nearest' })

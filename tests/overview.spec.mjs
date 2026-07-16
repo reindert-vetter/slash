@@ -24,6 +24,48 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(rows).toHaveCount(4)
   })
 
+  test('the popover on a lone row in a short section is fully clickable, not clipped', async ({ page }) => {
+    // "Ready to merge" has exactly one PR (12801) in the fixture. This used
+    // to reproduce two compounding bugs (see overview.mjs):
+    //  1. paintSelection() toggled the row's `relative` class in and out
+    //     alongside its keyboard-highlight ring, stripping it from every
+    //     non-selected row on the very first paint (selIndex starts at -1) —
+    //     the popover then positioned itself relative to <body> instead of
+    //     its own row.
+    //  2. listBox's `overflow-hidden` container is exactly one row tall for
+    //     a lone-PR section, so once the row correctly re-established itself
+    //     as the popover's containing block, the popover (rendering below
+    //     the row) fell outside the container's box and got clipped away —
+    //     invisible and unclickable, a real click landed on whatever sat
+    //     behind it (e.g. the "Recent gegenereerd" button) instead.
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    const row = page.locator('[data-testid="pr-row"][data-pr="12801"]')
+    await row.click()
+
+    const githubLink = page.locator('[data-testid="pr-popover"] a', { hasText: 'Open op GitHub' })
+    await expect(githubLink).toBeVisible()
+
+    // Resolve the point under the link's center back to the link itself —
+    // this is what actually catches the bug: a clipped/mispositioned element
+    // still reports a bounding box and passes toBeVisible(), but a real
+    // click there would hit whatever's underneath instead.
+    const hitsLink = await githubLink.evaluate((el) => {
+      const r = el.getBoundingClientRect()
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      return !!hit && (el === hit || el.contains(hit))
+    })
+    expect(hitsLink).toBe(true)
+
+    // And a real click should actually activate it (new-tab open, not the
+    // element behind it) — belt and suspenders on top of the geometry check.
+    const [popup] = await Promise.all([page.context().waitForEvent('page'), githubLink.click()])
+    await popup.waitForLoadState('domcontentloaded').catch(() => {})
+    expect(popup.url()).toContain('github.com/blog-org/blog-platform/pull/12801')
+    await popup.close()
+  })
+
   test('stacked PRs surface as their own group', async ({ page }) => {
     await page.goto('/pr-overview')
     await page.waitForLoadState('networkidle')
