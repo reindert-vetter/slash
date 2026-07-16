@@ -392,12 +392,17 @@ function rowInner(pr, opts) {
 }
 
 // togglePopover opens/closes a row's popover, clearing any stale ingest error
-// from a previous row so it never bleeds into a different PR's menu.
+// from a previous row so it never bleeds into a different PR's menu. Opening
+// a popover hands it real keyboard ownership (see the "popover keyboard
+// navigation" section near the list keydown handler below): the first
+// actionable item gets focus once arrow.js has painted the menu, so ↑/↓
+// immediately cycle through it instead of the underlying row list.
 function togglePopover(number) {
   const opening = ui.openPopover !== number
   ui.openPopover = opening ? number : null
   ui.ingestError = null
   ui.ingestErrorFor = null
+  if (opening) requestAnimationFrame(() => focusPopoverItem(0))
 }
 
 // generatePage runs the existing ingest workflow endpoint (the sanctioned
@@ -1084,6 +1089,82 @@ async function runSearch(q) {
 let selIndex = -1
 let hoverEnabled = false
 
+// ── popover keyboard navigation ─────────────────────────────────────────
+// While a popover is open it owns ↑/↓ (and Enter/Escape) outright — the row
+// list's own keyboard nav (move/moveTo/activateSelected below) is suspended
+// for as long as ui.openPopover is set, handled by a dedicated branch at the
+// very top of kbHandler so no key ever falls through to the list.
+
+function popoverItems() {
+  const pop = document.querySelector('[data-testid="pr-popover"]')
+  if (!pop) return []
+  return Array.from(pop.querySelectorAll('button:not([disabled]), a[href]'))
+}
+
+function focusPopoverItem(idx) {
+  const items = popoverItems()
+  if (!items.length) return
+  const i = Math.max(0, Math.min(items.length - 1, idx))
+  items[i].focus()
+}
+
+// movePopover cycles the focused item by `delta`, wrapping around both ends
+// — a real menu-widget feel (↓ from the last item goes back to the first,
+// ↑ from the first wraps to the last).
+function movePopover(delta) {
+  const items = popoverItems()
+  if (!items.length) return
+  const idx = items.indexOf(document.activeElement)
+  const next = idx === -1 ? (delta > 0 ? 0 : items.length - 1) : (idx + delta + items.length) % items.length
+  items[next].focus()
+}
+
+function closePopover() {
+  ui.openPopover = null
+  ui.ingestError = null
+  ui.ingestErrorFor = null
+}
+
+// handlePopoverKey is the entire keyboard surface while a popover is open:
+// ↑/↓ cycle its items, Enter/Space activate the focused item natively (we
+// deliberately do NOT call preventDefault there — the focused element is a
+// real <button>/<a href>, so the browser's own Enter/Space activation just
+// works, identical to a mouse click), Escape closes it. Every other key is
+// swallowed so it can't leak through to the list nav below.
+function handlePopoverKey(e) {
+  switch (e.key) {
+    case 'ArrowDown':
+      e.preventDefault()
+      movePopover(1)
+      return
+    case 'ArrowUp':
+      e.preventDefault()
+      movePopover(-1)
+      return
+    case 'Escape':
+      e.preventDefault()
+      closePopover()
+      return
+    case 'Enter':
+    case ' ':
+      // Let the native button/link activation run.
+      return
+    case 'ArrowLeft':
+    case 'ArrowRight':
+    case 'Home':
+    case 'End':
+    case '/':
+      // These drive the row list (or the search box) the rest of the time —
+      // swallow them here so they can't reach for the list underneath while
+      // the popover has the keyboard, but leave anything else (notably Tab)
+      // alone.
+      e.preventDefault()
+      return
+    default:
+      return
+  }
+}
+
 function currentRows() {
   return Array.from(document.querySelectorAll('[data-nav-row]'))
 }
@@ -1147,6 +1228,7 @@ let kbHandler = null
 function setupKeyboard() {
   if (kbHandler) window.removeEventListener('keydown', kbHandler, true)
   kbHandler = (e) => {
+    if (ui.openPopover != null) return handlePopoverKey(e)
     const active = document.activeElement
     const typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
     if (e.key === '/' && !typing) {
@@ -1210,10 +1292,7 @@ window.addEventListener(
 window.addEventListener('mousedown', (e) => {
   if (ui.openPopover == null) return
   const row = e.target.closest && e.target.closest('[data-pr="' + ui.openPopover + '"]')
-  if (!row) {
-    ui.openPopover = null
-    ui.ingestError = null
-  }
+  if (!row) closePopover()
 })
 
 // Repaint the nav whenever the visible row set could have changed.

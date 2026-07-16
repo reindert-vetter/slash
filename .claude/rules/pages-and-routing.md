@@ -167,3 +167,20 @@ geval bleek niet deterministisch op te wekken onder Playwright, zie ook de
 `selectRowByKeyboard`-notitie in `overview.spec.mjs`) om de gate zelf te
 bewijzen: zelfde coördinaten kapen de selectie nooit, een echte
 positie-delta doet dat weer normaal.
+
+**Zodra een popover open is, bezit hij het toetsenbord — de lijst-navigatie
+hierboven is opgeschort.** `togglePopover` focust bij het openen (via
+`requestAnimationFrame`, na de arrow.js-paint) het **eerste** item in de menu
+(`focusPopoverItem(0)`); `kbHandler` vertakt als **allereerste** check op
+`ui.openPopover != null` naar `handlePopoverKey(e)` — vóór zelfs de
+`/`-zoekbox-shortcut — zodat geen enkele toets nog bij `move`/`moveTo`/
+`activateSelected` terechtkomt zolang het menu open is. In die vertakking: `↑`/`↓`
+cyclen (met wrap-around aan beide uiteinden) door de menu's eigen
+`<button>`/`<a href>`-items (`movePopover`, focus-gebaseerd — geen aparte
+selectie-state, de browser's eigen `:focus` is de bron van waarheid), `Enter`/
+`Space` laat de **native** knop-/link-activatie op het gefocuste element lopen
+(bewust géén `preventDefault` — precies hetzelfde gedrag als een muisklik op
+dat item), `Escape` sluit het menu (`closePopover`, ook hergebruikt door de
+bestaande klik-buiten-de-popover-sluit-listener), en `←`/`→`/`Home`/`End`/`/`
+worden geslikt (`preventDefault`, geen actie) zodat ze niet doorlekken naar de
+rij-lijst; elke andere toets (met name `Tab`) blijft ongemoeid.
