@@ -149,20 +149,47 @@
   `ms.commands`/`ms.sub` — CommandMenu's eigen `${() => labelOf(c)}`-binding ziet
   dan nooit meer iets dan een string, registreert dus geen dependency op iets
   buiten `ms`, en een wees-binding die daaruit voortkomt vuurt (net als de
-  bestaande `ms`-only bindings) nooit meer. **Nog niet opgelost (bewuste
-  scope-keuze, hogere impact maar groter risico):** hetzelfde disposal-gap-
-  patroon zit ook onder de kaart-hertekening in `DetailPanel`/`Block.mjs` (elke
-  keer dat een block-kaart een **nieuwe key** krijgt — preview→selected, code
-  net geladen, focus-niveau-wissel, zie `.claude/rules/detail-layout.md` — wordt
-  de oude `<article>` afgebroken, maar zijn geneste `${() => codeDiff(...)}`-
-  subtree, met zijn `b.approvedRows`/`state.diffViewMode`-lezende
-  `.innerHTML`-bindings, blijft op dezelfde manier hangen). Dat gebeurt al bij
-  **gewoon navigeren** (niet alleen bij goedkeuren) en is vermoedelijk de
-  grootste losse bijdrage aan de "Detached `<div>`/Text"-tellen in een
-  heap-snapshot. Een echte fix vereist dat `Ft` genest-gemonteerde
-  reconciler-subtrees cascadeert — een tweede `LOCAL PATCH` op `vendor/arrow.js`
-  die het hele reconciliatiepad raakt (dus met bredere impact/risico dan deze
-  gerichte `CommandMenu`-fix) — nog niet uitgevoerd.
+  bestaande `ms`-only bindings) nooit meer.
+- **Root-cause fix: `Ft` cascadeert nu genest-gemonteerde reconciler-subtrees
+  op (`LOCAL PATCH 2` in `src/vendor/arrow.js`).** De `CommandMenu`-fix
+  hierboven is een gerichte, app-niveau band-aid (nooit een `label`-functie de
+  boom laten bereiken); hetzelfde disposal-gap-patroon zat **ook** onder de
+  kaart-hertekening in `DetailPanel`/`Block.mjs` (elke keer dat een block-kaart
+  een **nieuwe key** krijgt — preview→selected, code net geladen,
+  focus-niveau-wissel, zie `.claude/rules/detail-layout.md` — werd de oude
+  `<article>` afgebroken, maar zijn geneste `${() => codeDiff(...)}`-subtree,
+  met zijn `b.approvedRows`/`state.diffViewMode`-lezende `.innerHTML`-bindings,
+  bleef op dezelfde manier hangen). Dat gebeurde al bij **gewoon navigeren**
+  (niet alleen bij goedkeuren) en was de grootste losse bijdrage aan
+  onbegrensde geheugengroei tijdens een reviewsessie (met Playwright/CDP
+  heap-snapshots gemeten: +4600 detached DOM-nodes per 60 kaart-hertekeningen
+  vóór de patch, tegen ±30 — ruis — erna; een tweede, timing-gebaseerde proef
+  liet een ~7-8× vertraging zien van een begrensde `b.approvedRows`-mutatie na
+  60 hertekeningen vóór de patch, tegen ~0.85-0.93× — vlak — erna). In plaats
+  van dit per component te blijven pleisteren (elke nieuwe geneste
+  `${() => componentAanroep(...)}`-embedding zou hetzelfde lek weer
+  introduceren) is de daadwerkelijke oorzaak in arrow.js zelf gepatcht: `re(t)`
+  (upstream `createRenderFn`, de reconciler-factory die `Ve`/upstream
+  `createNodeBinding` gebruikt voor élke geneste component/array/template-
+  waarde — `CommandMenu`'s rijen, `Block.mjs`'s `${() => codeDiff(...)}`,
+  `RelatedPanel`'s `.map()`-lijsten, …) registreert nu, via zijn eerste
+  parameter (upstream de SSR-`capture`-vlag, in deze build dood — esbuild
+  tree-shaked elke `if(capture)`-tak weg, bevestigd door de hele functie-body op
+  een losstaand `t`-token te grepen vóórdat 'm werd hergebruikt), één cleanup
+  op de **eigenaar**-node: zodra die eigenaar via `Ft` wordt afgebroken, ruimt
+  deze cleanup ook op wat de reconciler op dat moment gemonteerd houdt, via
+  **dezelfde** bestaande dispatch (`qt`/upstream `removeUnmounted` — cache-voor-
+  hergebruik vs. volledig vernietigen, chunk-of-array) die top-level content
+  altijd al kreeg. Puur additief (3 kleine inserties, geen bestaande regel
+  gewijzigd) en **recursief vanzelf correct**: een geneste reconciler die zelf
+  weer iets nest, registreert zijn eigen cleanup op zijn eigen eigenaar op
+  dezelfde manier. Geverifieerd tegen de echte, niet-geminificeerde upstream-
+  bron (`@arrow-js/core@1.0.6`, `dist/index.mjs` + `dist/chunks/internal-*.mjs`
+  via jsDelivr) om de minified namen (`re`=`createRenderFn`, `Ve`=
+  `createNodeBinding`, `Ft`=`destroyChunk`, `qt`=`removeUnmounted`, `n.u`=
+  `chunk.u`) met zekerheid te herleiden i.p.v. op minified tekst te gokken —
+  zie het `LOCAL PATCH 2`-commentaarblok in `vendor/arrow.js` voor het volledige
+  mechanisme en de exacte herstelinstructie bij een arrow.js-upgrade.
 - **Syntax-highlighting:** Prism 1.29.0 staat gevendord als één ES-module in
   `src/vendor/prism.js` (core + markup + clike + markup-templating + php, met
   `window.Prism={manual:true}` zodat het niet de hele pagina auto-highlightt). De
