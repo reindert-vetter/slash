@@ -2750,6 +2750,11 @@ function onKeydown(e) {
       // drilled columns (or back to the list) is the diff-mode ArrowLeft
       // handling below (state.focusLevel), reached once relatedActive() is
       // false again.
+      // If that exit just happened, re-align <main> on the now-focused diff
+      // column (same call the drill-pop ArrowLeft branch makes below): the
+      // panel navigation scrolls <main> horizontally via scrollIntoView, and
+      // without this the diff card would stay clipped off-screen to the left.
+      if (!relatedActive()) scrollFocusIntoView()
       return
     }
     // Enter on a focused comment row (reply field empty — see commentReplyEmpty)

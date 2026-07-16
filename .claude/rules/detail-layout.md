@@ -292,7 +292,13 @@ plaats van dat arrow.js de bestaande node hergebruikt (zie de valkuil in
 uitgelijnd (`inline:'start'`, ook voor een gedrilde kolom, niet alleen de
 top-level kaart), zodat de kolommen waar je vandaan komt links buiten beeld
 verdwijnen i.p.v. de nieuwe kolom aan de rechterkant te proppen; dezelfde
-functie scrollt ook bij het terugstappen de nu-gefocuste kolom links uit. Elke
+functie scrollt ook bij het terugstappen de nu-gefocuste kolom links uit, én
+bij het verlaten van het `RelatedPanel` terug naar de diff (`onKeydown`'s
+`relatedActive()`-tak in `home.mjs` roept 'm aan zodra `handleRelatedKey` de
+panel-focus heeft losgelaten) — de panel-navigatie scrollt `<main>` horizontaal
+opzij (`scrollIntoView` in `toTask`/`toComment` e.d.), en zonder deze
+her-uitlijning bleef de diff-kaart na `→…→` dan `←…←` links buiten beeld
+afgesneden staan. Elke
 **gefocuste** gedrilde kolom (`state.focusLevel > 0`) toont daarbij een kleine
 grijze **‹-chevron aan zijn linkerrand** (`data-testid=drill-left-hint`, buiten
 de kaart, verticaal gecentreerd) als visuele hint dat er kolommen links buiten
