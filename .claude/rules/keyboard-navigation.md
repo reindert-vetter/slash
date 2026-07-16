@@ -448,26 +448,35 @@ wel/niet bijhoudt.
 De state (`state.diffViewMode`, `'split'`/`'new'`) is efemeer, geen URL-binding
 (net als `showDescription`/`showApproved`). Een al one-sided block
 (`added`/`removed`) heeft geen andere kant om te verbergen/tonen — de toggle
-heeft daar geen effect, `singleSide(b)` blijft leidend (`effectiveOnly` in
-`Block.mjs`'s `codeDiff`), en de kaart houdt zijn normale volle breedte. Een
-**echt tweezijdig** (`modified`) block klapt in `viewMode==='new'` wél in tot
-zijn nieuwe pane, én de kaart zelf krimpt dan naar **60% breedte**
-(`w-[42rem] 2xl:w-[49.2rem]` i.p.v. `w-[70rem] 2xl:w-[82rem]`) — anders dan de
-bewuste breedte-stabiliteit voor eenzijdige blocks (zie
-`.claude/rules/detail-layout.md`): een reviewer die bewust de oude kant
-verbergt wil de compactere weergave, niet dezelfde volle breedte met een lege
-helft. `forcedNewOnly(b, viewMode)` in `Block.mjs` is de gedeelde voorwaarde
-achter beide (welke pane(s), welke breedte), zodat ze nooit uit elkaar kunnen
-lopen.
+heeft daar geen effect op de **pane-keuze**, `singleSide(b)` blijft leidend
+(`effectiveOnly` in `Block.mjs`'s `codeDiff`). Een **echt tweezijdig**
+(`modified`) block klapt in `viewMode==='new'` wél in tot zijn nieuwe pane
+(`forcedNewOnly(b, viewMode)` in `Block.mjs` blijft de voorwaarde hiervoor).
+
+**Maar de kaart-breedte volgt alleen nog `viewMode()`, niet `singleSide`:**
+zodra `viewMode()==='new'` krimpt **elke** zichtbare kaart naar **60% breedte**
+(`w-[42rem] 2xl:w-[49.2rem]` i.p.v. `w-[70rem] 2xl:w-[82rem]`) —
+`modified`/`added`/`removed` allemaal gelijk, plus elke preview/look-ahead-
+kaart en elke gedrilde kolom (ze delen allemaal dezelfde `Block()`-component +
+dezelfde `viewMode`-opt). Dit was eerder beperkt tot het tweezijdige geval
+(een eenzijdig block hield bewust zijn volle breedte, zie de
+breedte-stabiliteitsregel in `.claude/rules/detail-layout.md`); de reviewer
+wil nu dat `a` **alles** even smal maakt zolang hij aanstaat, ongeacht
+block-type. De simpele `narrowed(viewMode)` in `Block.mjs` (enkel
+`viewMode()==='new'`, geen `singleSide`-check) is de voorwaarde achter de
+breedte-ternary; `forcedNewOnly` blijft losstaand de voorwaarde voor de
+pane-keuze — de twee kunnen dus uiteenlopen (een eenzijdig block: `narrowed`
+waar, `forcedNewOnly` onwaar) en dat is bewust zo.
 
 Gelezen als `viewMode()` binnen `Block()`'s eigen per-kaart `${() =>
 codeDiff(...)}`-slot (niet in de outer per-kolom closure van `home.mjs`) —
 mirrort hoe die slot al op `b.code` leest, dus een toggle her-rendert alleen de
-diff-structuur (en, via `forcedNewOnly`, de breedte) van elke zichtbare kaart,
-niet de kaart-bouwende closures zelf. De breedte-ternary zit in dezelfde
-kaart-brede `${() => ...}`-`class`-binding als `diffActive()`/`preview` (al
-reactief, de hele waarde in één keer — geen deel-string-interpolatie, zie de
-arrow.js-class-binding-valkuil in `conventions.md`).
+diff-structuur (via `forcedNewOnly`) en de breedte (via `narrowed`) van elke
+zichtbare kaart, niet de kaart-bouwende closures zelf. De breedte-ternary zit
+in dezelfde kaart-brede `${() => ...}`-`class`-binding als `diffActive()`/
+`preview` (al reactief, de hele waarde in één keer — geen
+deel-string-interpolatie, zie de arrow.js-class-binding-valkuil in
+`conventions.md`).
 
 ## Footer: inline preview van de geselecteerde regel
 

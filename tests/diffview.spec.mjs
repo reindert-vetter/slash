@@ -3,9 +3,11 @@ import { test, expect } from './_fixtures.mjs'
 // `a` toggles the global diff-pane view (state.diffViewMode, see
 // keyboard-navigation.md "`a` — diff-weergave toggelen") between the default
 // side-by-side rendering and a new-only rendering — everywhere a Block() card
-// is visible. A genuinely two-sided (modified) block also shrinks to 60% of
-// its normal card width in new-only view (forcedNewOnly in Block.mjs); an
-// already one-sided (added/removed) block is unaffected by the toggle.
+// is visible. A genuinely two-sided (modified) block also drops its old pane
+// (forcedNewOnly in Block.mjs); an already one-sided (added/removed) block
+// keeps its single pane either way. The card WIDTH, however, shrinks to 60%
+// for every visible card regardless of singleSide (`narrowed` in Block.mjs) —
+// modified, added and removed alike.
 test.describe('PR Review Tree — diff view toggle (`a`)', () => {
   // Direct-mount unit test: Block()'s viewMode opt controls whether codeDiff
   // renders both panes or just the new one, for a genuinely two-sided
@@ -71,8 +73,10 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
   })
 
   // An already one-sided (added) block has no old pane to hide, so the toggle
-  // has no effect on it — it stays single-pane either way.
-  test('viewMode has no effect on an already one-sided (added) block', async ({
+  // has no effect on its pane count — but the card still shrinks to 60% width
+  // like every other visible card, so the layout stays consistent across
+  // block types while `a` is on.
+  test('viewMode narrows an already one-sided (added) block too, but keeps its single pane', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -110,11 +114,62 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await page.evaluate(() => {
       window.__addedVm.mode = 'new'
     })
+    // Still one pane (nothing to drop) — but the card narrows anyway.
     await expect(panes).toHaveCount(1)
-    // Width is unaffected too — there's nothing to collapse, so the card keeps
-    // its full width (the 60% shrink only applies to a genuinely two-sided
-    // block, see forcedNewOnly in Block.mjs).
+    await expect(card).toHaveClass(/w-\[42rem\]/)
+    await expect(card).toHaveClass(/2xl:w-\[49\.2rem\]/)
+    await expect(card).not.toHaveClass(/w-\[70rem\]/)
+
+    await page.evaluate(() => {
+      window.__addedVm.mode = 'split'
+    })
     await expect(card).toHaveClass(/w-\[70rem\]/)
+  })
+
+  // Same as above but for a removed block — the other one-sided status, to
+  // make sure the width follows `narrowed(viewMode)` and not some
+  // added-specific path.
+  test('viewMode narrows an already one-sided (removed) block too', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+
+    await page.evaluate(async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const b = reactive({
+        category: 'ACTION',
+        label: 'Foo::qux',
+        status: 'removed',
+        file: 'app/Foo.php',
+        line: 50,
+        name: 'qux',
+        class: 'Foo',
+        approved: false,
+        code: {
+          old: { start: 50, end: 52, text: 'public function qux(): int {\n    return 3;\n}' },
+          new: null,
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'removed-view-mode-host'
+      document.body.appendChild(host)
+      window.__removedVm = reactive({ mode: 'split' })
+      Block(b, { viewMode: () => window.__removedVm.mode })(host)
+    })
+
+    const panes = page.locator('#removed-view-mode-host code.language-php')
+    const card = page.locator('#removed-view-mode-host article')
+    await expect(panes).toHaveCount(1)
+    await expect(card).toHaveClass(/w-\[70rem\]/)
+
+    await page.evaluate(() => {
+      window.__removedVm.mode = 'new'
+    })
+    await expect(panes).toHaveCount(1)
+    await expect(card).toHaveClass(/w-\[42rem\]/)
+    await expect(card).not.toHaveClass(/w-\[70rem\]/)
   })
 
   // End-to-end: pressing `a` in the real app flips the visible block's diff

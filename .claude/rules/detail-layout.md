@@ -492,19 +492,22 @@ op `left-6` (meer ruimte); de kolommen blijven in beide gevallen vanaf links
 inpakken.
 
 **Uitzondering: de `a`-toggle (`state.diffViewMode`, zie
-`.claude/rules/keyboard-navigation.md`) krimpt de kaart naar 60% breedte
-wanneer hij daadwerkelijk een pane verbergt.** Een tweezijdig (`modified`)
-block in `viewMode==='new'` toont — net als een al eenzijdig `added`-block —
-alleen zijn nieuwe/rechter pane, maar in tegenstelling tot dat eenzijdige
-block krimpt de kaart zelf mee naar `w-[42rem] 2xl:w-[49.2rem]` (60% van
-`w-[70rem] 2xl:w-[82rem]`) — een reviewer die bewust de oude kant verbergt wil
-de compactere weergave, anders dan de bewuste breedte-stabiliteit voor
-`added`/`removed`-blocks hierboven (die hebben niets te verbergen, dus blijven
-op de volle breedte, ook met `a` aan). `forcedNewOnly(b, viewMode)` in
-`Block.mjs` is de gedeelde voorwaarde: waar (alleen) voor een echt tweezijdig
-block met `viewMode()==='new'`, gebruikt zowel door `codeDiff` (welke pane(s))
-als door `Block()`'s eigen kaart-`class`-binding (welke breedte) — zo blijven
-pane-drop en breedte-krimp altijd in sync. Geldt automatisch voor **elke**
+`.claude/rules/keyboard-navigation.md`) krimpt ELKE zichtbare kaart naar 60%
+breedte, ongeacht of hij daadwerkelijk een pane verbergt.** Staat `viewMode
+==='new'`, dan krimpt de kaart naar `w-[42rem] 2xl:w-[49.2rem]` (60% van
+`w-[70rem] 2xl:w-[82rem]`) — voor een tweezijdig (`modified`) block dat dan
+ook echt zijn oude/linker pane verbergt, maar **net zo goed** voor een al
+eenzijdig `added`/`removed`-block dat niets te verbergen heeft. Dit was eerder
+beperkt tot het tweezijdige geval (de bewuste breedte-stabiliteit voor
+eenzijdige blocks won dan); dat is bewust losgelaten: de reviewer wil dat
+`a` **alles wat op dat moment zichtbaar is** even smal maakt, zodat de layout
+niet per block-type verschilt zolang de toggle aanstaat. Twee aparte,
+losgekoppelde voorwaarden in `Block.mjs`: `forcedNewOnly(b, viewMode)` blijft
+ongewijzigd en bepaalt nog altijd **welke pane(s)** `codeDiff` toont (alleen
+relevant voor een echt tweezijdig block — een eenzijdig block toonde toch al
+maar één kant); de nieuwe, simpelere `narrowed(viewMode)` (enkel
+`viewMode()==='new'`, geen `singleSide`-check) bepaalt de **breedte** in
+`Block()`'s eigen kaart-`class`-binding. Geldt automatisch voor **elke**
 zichtbare kaart (top-level geselecteerd/preview én elke gedrilde kolom), want
 ze delen allemaal dezelfde `Block()`-component en dezelfde `viewMode`-opt
 (`() => state.diffViewMode`).

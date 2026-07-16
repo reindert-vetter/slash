@@ -50,12 +50,24 @@ function singleSide(b) {
 // forcedNewOnly reports whether the `a` toggle (viewMode) is actually
 // collapsing this block to its new-only pane — only true for a genuinely
 // two-sided (modified) block. A block that's already one-sided (added/
-// removed, singleSide(b) !== null) has nothing to collapse, so the toggle is a
-// no-op for it: it keeps rendering (and sizing) exactly as it always did. Used
-// both by codeDiff (which pane(s) to show) and Block()'s own card width, so
-// the two stay in sync.
+// removed, singleSide(b) !== null) has nothing to collapse (it already shows
+// only its one pane), so the toggle is a no-op for *pane selection* there.
+// Used by codeDiff to decide which pane(s) to show. NOT used for card width
+// any more — see `narrowed` below, which the reviewer wants to apply
+// uniformly regardless of singleSide.
 function forcedNewOnly(b, viewMode) {
   return viewMode() === 'new' && singleSide(b) === null
+}
+
+// narrowed reports whether the `a` toggle should shrink this card to its 60%
+// width. Unlike forcedNewOnly (pane selection), this deliberately ignores
+// singleSide(b): the reviewer wants EVERY visible card — modified, added,
+// removed, a preview/look-ahead card, or any drilled column — to shrink in
+// lockstep while `a` is on, not just the two-sided blocks that actually have a
+// pane to hide. Shared by every card via the same viewMode option, so this one
+// flag keeps them all in sync.
+function narrowed(viewMode) {
+  return viewMode() === 'new'
 }
 
 /**
@@ -109,15 +121,16 @@ export default function Block(b, opts = {}) {
     <article
       class="${() =>
         'flex min-h-0 max-w-full flex-col overflow-hidden rounded-xl border bg-white dark:bg-zinc-900 transition ' +
-        // Every card uses the full two-pane width, even a one-sided (added/removed)
-        // block: it keeps the empty pane dropped (see singleSide below) but stays as
-        // wide as a modified block so the layout doesn't jump between block types.
-        // Exception: the `a` toggle (viewMode) forcing a genuinely two-sided block
-        // into its new-only pane (forcedNewOnly) deliberately shrinks the card to
-        // 60% of that width instead — a reviewer who explicitly asked to hide the
-        // old side wants the narrower view, unlike an already one-sided block
-        // where there's nothing to hide and the width-stability rule still applies.
-        (forcedNewOnly(b, viewModeFn) ? 'w-[42rem] 2xl:w-[49.2rem] ' : 'w-[70rem] 2xl:w-[82rem] ') +
+        // Every card uses the full two-pane width by default, even a one-sided
+        // (added/removed) block: it keeps the empty pane dropped (see singleSide
+        // below) but stays as wide as a modified block so the layout doesn't jump
+        // between block types. Exception: the `a` toggle (viewMode) — while it's
+        // on, EVERY visible card shrinks to 60% width, regardless of singleSide
+        // (see `narrowed`). A reviewer who explicitly asked to hide the old side
+        // wants the narrower view everywhere, including an already one-sided
+        // block that has no old side to hide in the first place — consistency
+        // across block types wins over the width-stability rule while `a` is on.
+        (narrowed(viewModeFn) ? 'w-[42rem] 2xl:w-[49.2rem] ' : 'w-[70rem] 2xl:w-[82rem] ') +
         (preview
           ? 'max-h-72 border-slate-200 dark:border-zinc-800 opacity-50'
           : diffActive()
