@@ -166,6 +166,28 @@ navigeerbare lijst tonen.
   whitespace krijgt een zachte tint, het woord zelf wordt nooit char-gemarkeerd —
   i.p.v. door de positionele del/ins-pairing te schuiven en ongewijzigde woorden
   als "gewijzigd" te markeren.
+- **`blockRows(b)` is gememoïseerd (`blockRowsCache`, een module-level
+  `WeakMap` in `Block.mjs`), buiten reactive state — anders wordt `diffLines`'s
+  O(n·m)-DP-tabel bij elke aanroep opnieuw gevuld.** `blockRows` heeft 20+
+  call-sites (elke diff-render, elke navigatie-eenheid, en — het duurste geval —
+  `home.mjs`'s `approvalSummaries`-watch, die bij **elke** `state.codeVersion`-bump
+  (dus bij elke code-load, ook een look-ahead-preview tijdens gewoon
+  ↑/↓-navigeren in de sidebar) `subtreeApproveCount`/`blockRows` voor **alle**
+  top-level blocks herberekent). Voor een normaal PHP-block (tientallen regels)
+  is dat onmerkbaar; voor een niet-PHP whole-file-fallback-block (bv. een
+  meerduizend-regelige locale-JSON, zie "Pipeline" hierboven — de scanner valt
+  terug op het hele bestand als parsen faalt) is die DP-tabel `(n+1)×(m+1)`
+  cellen groot en zonder cache een herhaalde belasting: eenmaal gemeten op een
+  9000-regelig JSON-bestand kostte navigeren door de sidebar **na** het
+  aanraken van dat block 400-4900ms per stap (i.p.v. de normale tientallen ms)
+  zolang er nog nieuwe blocks werden aangeraakt, met een 6-15s piek op het
+  eerste contact. De cache-sleutel is de **referentie-identiteit** van
+  `b.code`, niet van `b` zelf: `ensureCode` (`home.mjs`) zet `b.code` altijd
+  **wholesale** (nooit in-place gemuteerd), dus een gewijzigde referentie is
+  een exacte, correcte invalidatie-check — geen staleness-risico. De cache leeft
+  bewust in een module-level `WeakMap`, niet als veld op `b`, om geen
+  arrow.js-reactive-proxy-notify te triggeren op iets dat toch nergens reactief
+  gelezen wordt (hetzelfde patroon als `codeRequested` in `home.mjs`).
 - **Char-diff: alleen regel-achtergrond, geen woord-achtergrond.** Een echt
   gewijzigde regel (paired del/ins, geen `wsOnly`) krijgt zijn rood/groene
   regel-achtergrond (pane-tint), maar de **individuele gewijzigde tekens/woorden

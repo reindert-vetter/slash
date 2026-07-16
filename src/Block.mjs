@@ -761,17 +761,47 @@ function dedent4(oldText, newText) {
   return [strip(oldText), strip(newText)]
 }
 
+// blockRowsCache memoizes blockRows() per block, keyed on b.code's own
+// reference identity (not b itself, since b.code is what actually determines
+// the result — dedent4/alignRows are pure functions of its text). Kept as a
+// module-level WeakMap OUTSIDE reactive state (like home.mjs's
+// codeRequested Set) so reading/writing it never creates or notifies an
+// arrow.js dependency. b.code is always wholesale-reassigned when new code
+// arrives (ensureCode does `b.code = await res.json()`, never an in-place
+// mutation — see home.mjs), so comparing the stored reference against the
+// current one is a correct, exact invalidation check: a cache hit is only
+// possible while b.code is still the exact object it was computed against.
+//
+// This matters because blockRows is called from 20+ sites (every diff render,
+// every navigation-unit computation, and — critically — home.mjs's
+// approvalSummaries watch, which recomputes subtreeApproveCount for EVERY
+// top-level block on every state.codeVersion bump, i.e. on every block's code
+// arriving anywhere, including as a look-ahead preview during plain sidebar
+// navigation). Without memoization, a single large non-PHP block (e.g. a
+// whole-file-fallback block for a multi-thousand-line JSON/locale file — see
+// blocks-and-ingest.md) turns its O(n·m) LCS diff (alignRows/diffLines) into a
+// tax paid again on every subsequent, unrelated navigation step for the rest
+// of the session, which is what made the sidebar "loopt vast" after passing
+// such a block (measured: sidebar ArrowDown steps went from ~50ms to a
+// sustained 400-4900ms, with one 6-15s spike, after a 9000-line block's code
+// arrived — see blocks-and-ingest.md).
+const blockRowsCache = new WeakMap()
+
 // blockRows produces the aligned diff rows for a loaded block (b.code === {old,new}).
 // Returns [] when the code isn't loaded or errored. Shared by codeDiff (rendering)
 // and home.mjs (change navigation) so both agree on the exact same row list.
 export function blockRows(b) {
   const c = b && b.code
   if (!c || c.error) return []
+  const cached = blockRowsCache.get(b)
+  if (cached && cached.code === c) return cached.rows
   const [oldText, newText] = dedent4(
     (c.old && c.old.text) || '',
     (c.new && c.new.text) || '',
   )
-  return alignRows(oldText, newText)
+  const rows = alignRows(oldText, newText)
+  blockRowsCache.set(b, { code: c, rows })
+  return rows
 }
 
 // unitsFor maps a granularity ('group' | 'line' | 'call') to its navigation-unit
