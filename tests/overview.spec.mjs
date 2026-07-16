@@ -110,6 +110,27 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(chip).toBeVisible()
   })
 
+  test('the recent-generated drawer swaps its loading skeleton for the PR list', async ({ page }) => {
+    // Regression: the skeleton/list choice was a *static* ternary inside the
+    // drawer's inner template. arrow.js reused the mounted chunk on the
+    // loading→loaded flip and its statics patcher cannot swap a nested
+    // template in a static slot, so the drawer froze on the skeleton forever
+    // even though GET /api/prs succeeded. Now every branch is a keyed array
+    // (see recentDrawer in overview.mjs + conventions.md).
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    await page.locator('[data-testid="recent"]').click()
+
+    // The seeded DB has at least PR 12903 ingested — real rows must appear.
+    const items = page.locator('[data-testid="recent-item"]')
+    await expect(items.first()).toBeVisible()
+    await expect(items.locator('text=/blocks/').first()).toBeVisible()
+
+    // And no lingering loading skeleton next to them.
+    await expect(page.locator('[data-testid="recent"] ~ * .animate-pulse')).toHaveCount(0)
+  })
+
   test('search filters over all open PRs', async ({ page }) => {
     await page.goto('/pr-overview')
     await page.waitForLoadState('networkidle')

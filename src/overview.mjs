@@ -254,8 +254,21 @@ function statusSkeleton(pr) {
 }
 
 function statusPills(pr, status) {
-  if (!status) return statusSkeleton(pr)
-  return [reviewersStrip(status), reviewChip(pr, status), checksChip(status)]
+  // Always return a keyed array (never a bare template, never nulls in the
+  // array): a stable slot shape keeps arrow.js from reusing a mounted chunk
+  // across the skeleton→pills flip, whose statics patcher would write a nested
+  // template into a Text slot — leaking the template source (`i=>je(n,i)`) as
+  // literal text. The keys encode the chip variant so a status change builds
+  // fresh nodes instead of patching statics. Same house pattern as the
+  // "no-comments" wrap (see .claude/rules/conventions.md).
+  if (!status) return [statusSkeleton(pr).key('skeleton')]
+  const pills = []
+  const strip = reviewersStrip(status)
+  if (strip) pills.push(strip.key('reviewers'))
+  pills.push(reviewChip(pr, status).key('review:' + (pr.isDraft ? 'draft' : status.reviewDecision || 'none')))
+  const checks = checksChip(status)
+  if (checks) pills.push(checks.key('checks:' + (status.checksState || '') + ':' + status.checksTotal))
+  return pills
 }
 
 function statusArea(pr) {
@@ -898,22 +911,27 @@ function recentDrawer() {
         >
         <span class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">Recent gegenereerd</span>
       </button>
-      ${() =>
-        state.recentOpen
-          ? html`
-              <div class="mt-2">
-                ${state.recentLoading
-                  ? loadingSkeletonList()
-                  : state.recentPrs.length === 0
-                    ? html`<div class="rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-3 text-[12px] text-slate-500 dark:text-zinc-500">
-                        Nog niets gegenereerd.
-                      </div>`
-                    : html`<div class="overflow-hidden rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
-                        ${state.recentPrs.map((r) => recentItem(r))}
-                      </div>`}
-              </div>
-            `
-          : null}
+      ${() => {
+        // Always return a keyed array with a distinct key per branch. The
+        // skeleton/list choice used to be a *static* ternary inside the inner
+        // template: arrow.js reused the mounted chunk on the loading→loaded
+        // flip and its statics patcher cannot swap a nested template in a
+        // static slot, so the DOM froze on the skeleton forever. Fresh keys
+        // per branch force fresh nodes instead (see conventions.md).
+        if (!state.recentOpen) return [html`<span class="hidden"></span>`.key('recent:closed')]
+        if (state.recentLoading) return [html`<div class="mt-2">${loadingSkeletonList()}</div>`.key('recent:loading')]
+        if (state.recentPrs.length === 0)
+          return [
+            html`<div class="mt-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-3 text-[12px] text-slate-500 dark:text-zinc-500">
+              Nog niets gegenereerd.
+            </div>`.key('recent:empty'),
+          ]
+        return [
+          html`<div class="mt-2 overflow-hidden rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
+            ${state.recentPrs.map((r) => recentItem(r))}
+          </div>`.key('recent:list'),
+        ]
+      }}
     </div>
   `
 }
