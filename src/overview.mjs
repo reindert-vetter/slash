@@ -33,13 +33,25 @@ const state = reactive({
 // ui is separate from state so opening/closing a popover doesn't touch the
 // bits bound into url-less local reactivity elsewhere.
 // ingesting: the pr.number currently running /api/ingest (disables its "Genereer
-// review-boom"/"Opnieuw genereren" button); ingestError + ingestErrorFor: the
-// last ingest failure message and which PR it belongs to (cleared on a fresh
-// attempt or when its popover closes) — ingestErrorFor lets the standalone
-// regenerate button on an already-ingested row show the error under the right
-// row even though ui.ingesting itself has already reset to null by the time
-// the catch runs.
-const ui = reactive({ openPopover: null, ingesting: null, ingestError: null, ingestErrorFor: null })
+// review-boom"/"Opnieuw genereren" button); ingestStage: the current ingest
+// pipeline stage for that PR ("worktrees"/"scan"/"relations"/""), polled from
+// GET /api/ingest/progress while busy — see INGEST_STAGE_LABELS below;
+// ingestError + ingestErrorFor: the last ingest failure message and which PR it
+// belongs to (cleared on a fresh attempt or when its popover closes) —
+// ingestErrorFor lets the standalone regenerate button on an already-ingested
+// row show the error under the right row even though ui.ingesting itself has
+// already reset to null by the time the catch runs.
+const ui = reactive({ openPopover: null, ingesting: null, ingestStage: '', ingestError: null, ingestErrorFor: null })
+
+// INGEST_STAGE_LABELS — Dutch labels for the busy button while /api/ingest is
+// in flight, backed by the real (ephemeral, in-memory) server-side progress
+// tracked in ingest_progress.go/GET /api/ingest/progress. An unknown/not-yet-
+// polled stage falls back to the generic "Bezig met genereren…".
+const INGEST_STAGE_LABELS = {
+  worktrees: 'Werktrees voorbereiden…',
+  scan: 'Blocks scannen…',
+  relations: 'Relaties opbouwen…',
+}
 
 // ── icons (lucide-style outline set, matching the dash reference exactly) ──
 
@@ -57,6 +69,7 @@ const ICON_PATHS = {
     '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
   'external-link':
     '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  loader: '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
 }
 
 // icon renders one outline SVG (24x24 viewBox, stroke=currentColor). The path
@@ -390,11 +403,43 @@ function togglePopover(number) {
 // `redirect: false` — an already-ingested row's regenerate only refreshes the
 // existing tree's data in the background; the reviewer is still on the
 // overview and didn't ask to be navigated away.
+//
+// While the POST is in flight, generatePage polls GET /api/ingest/progress —
+// a purely in-memory, ephemeral read of which pipeline stage the server is
+// currently running for this PR (see ingest_progress.go) — into ui.ingestStage,
+// so the busy button shows real progress instead of a static "Bezig met
+// genereren…" (see INGEST_STAGE_LABELS + generateAction/ingestedActions below).
+let ingestPollTimer = null
+
+function stopIngestPoll() {
+  if (ingestPollTimer) {
+    clearInterval(ingestPollTimer)
+    ingestPollTimer = null
+  }
+}
+
+async function pollIngestStage(prNumber) {
+  try {
+    const res = await fetch('/api/ingest/progress?pr=' + prNumber)
+    if (!res.ok) return
+    const body = await res.json()
+    // Drop a stale response if a different (or no longer active) ingest has
+    // since taken over — mirrors the ingestErrorFor guard below.
+    if (ui.ingesting === prNumber && body && body.ok) ui.ingestStage = body.stage || ''
+  } catch (e) {
+    // best-effort — the button just keeps its last-known/generic label
+  }
+}
+
 async function generatePage(pr, { redirect = true } = {}) {
   if (ui.ingesting) return // one ingest at a time; button is disabled anyway
   ui.ingesting = pr.number
+  ui.ingestStage = ''
   ui.ingestError = null
   ui.ingestErrorFor = null
+  stopIngestPoll()
+  pollIngestStage(pr.number)
+  ingestPollTimer = setInterval(() => pollIngestStage(pr.number), 800)
   try {
     const res = await fetch('/api/ingest', {
       method: 'POST',
@@ -414,22 +459,45 @@ async function generatePage(pr, { redirect = true } = {}) {
     ui.ingesting = null
     ui.ingestError = e.message || 'Genereren mislukt'
     ui.ingestErrorFor = pr.number
+  } finally {
+    stopIngestPoll()
+    ui.ingestStage = ''
   }
+}
+
+// ingestBusy(pr) / ingestLabel(pr, idleLabel) / ingestIcon(pr) are read from
+// their own nested ${() => …} bindings (not a plain `busy` value captured once
+// when the popover opens) so they actually react to ui.ingesting/ui.ingestStage
+// changing while the popover stays open — the same arrow.js pitfall documented
+// in .claude/rules/conventions.md ("een geneste ${() => canStep(...)}-binding"):
+// a plain-JS ternary computed inside the outer, only-occasionally-rerun
+// ${() => popover(pr)} slot never updates once busy flips mid-render.
+function ingestBusy(pr) {
+  return ui.ingesting === pr.number
+}
+
+function ingestLabel(pr, idleLabel) {
+  return ingestBusy(pr) ? INGEST_STAGE_LABELS[ui.ingestStage] || 'Bezig met genereren…' : idleLabel
+}
+
+function ingestIcon(pr) {
+  return ingestBusy(pr) ? icon('loader', 'h-3.5 w-3.5 animate-spin') : icon('sparkles', 'h-3.5 w-3.5')
 }
 
 // generateAction — the not-yet-ingested case: "Genereer review-boom" runs the
 // ingest workflow (generatePage above) and redirects into /pr/<id> on success.
-function generateAction(pr, busy) {
+function generateAction(pr) {
   return html`
     <button
       type="button"
       data-testid="generate-page"
-      ?disabled="${() => ui.ingesting === pr.number}"
-      class="${'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 ' +
-      (busy ? 'cursor-not-allowed opacity-60' : '')}"
+      ?disabled="${() => ingestBusy(pr)}"
+      class="${() =>
+        'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 ' +
+        (ingestBusy(pr) ? 'cursor-not-allowed opacity-60' : '')}"
       @click="${() => generatePage(pr)}"
     >
-      ${icon('sparkles', 'h-3.5 w-3.5')} ${busy ? 'Bezig met genereren…' : 'Genereer review-boom'}
+      ${() => ingestIcon(pr)} ${() => ingestLabel(pr, 'Genereer review-boom')}
     </button>
     ${() =>
       ui.ingestError
@@ -442,7 +510,7 @@ function generateAction(pr, busy) {
 // straight into the existing tree; "Opnieuw genereren" reruns the ingest
 // workflow in the background (redirect: false — the reviewer stays on the
 // overview, mirrors the old standalone regenerateButton behaviour).
-function ingestedActions(pr, busy) {
+function ingestedActions(pr) {
   return html`
     <button
       type="button"
@@ -455,12 +523,13 @@ function ingestedActions(pr, busy) {
     <button
       type="button"
       data-testid="regenerate-page"
-      ?disabled="${() => ui.ingesting === pr.number}"
-      class="${'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 ' +
-      (busy ? 'cursor-not-allowed opacity-60' : '')}"
+      ?disabled="${() => ingestBusy(pr)}"
+      class="${() =>
+        'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 ' +
+        (ingestBusy(pr) ? 'cursor-not-allowed opacity-60' : '')}"
       @click="${() => generatePage(pr, { redirect: false })}"
     >
-      ${icon('sparkles', 'h-3.5 w-3.5')} ${busy ? 'Bezig met genereren…' : 'Opnieuw genereren'}
+      ${() => ingestIcon(pr)} ${() => ingestLabel(pr, 'Opnieuw genereren')}
     </button>
     ${() =>
       ui.ingestError
@@ -475,14 +544,13 @@ function ingestedActions(pr, busy) {
 // Jira link when the title carries a KEY-123-style ticket key.
 function popover(pr) {
   const m = (pr.title || '').match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
-  const busy = ui.ingesting === pr.number
   return html`
     <div
       class="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-200 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 p-1 shadow-xl"
       data-testid="pr-popover"
       @click="${(e) => e.stopPropagation()}"
     >
-      ${pr.hasGraph ? ingestedActions(pr, busy) : generateAction(pr, busy)}
+      ${pr.hasGraph ? ingestedActions(pr) : generateAction(pr)}
       <a
         href="${pr.url}"
         target="_blank"

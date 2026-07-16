@@ -31,30 +31,43 @@ niet — opent bij een klik hetzelfde popover-menu (`prRow`/`popover(pr)` in
 rij, een `role="button"`-`<div>`, geen `<a>`); alleen de **inhoud** van dat menu
 verschilt op `pr.hasGraph`:
 
-- **`pr.hasGraph === false`** (nog niet geïngest, `generateAction(pr, busy)`):
+- **`pr.hasGraph === false`** (nog niet geïngest, `generateAction(pr)`):
   als **eerste** keuze **"Genereer review-boom"** (`data-testid=generate-page`)
   — die start het bestaande **`POST /api/ingest {"pr":N}`**-endpoint (zie
   `.claude/rules/blocks-and-ingest.md`), de sanctioned write-weg (een Workflow
   Execution starten), niet een directe module-write. De knop toont tijdens het
-  genereren "Bezig met genereren…" en is dan `disabled` (`ui.ingesting`, tegen
-  een dubbele ingest); `handleIngest` (`api.go`) antwoordt pas 200 zodra de
-  ingest-pipeline **en** `EnsureRelations` synchroon zijn afgerond, dus
-  `generatePage` doet op succes een simpele volle `location.href = '/pr/<n>'`-
-  redirect — de verse paginalaad heeft dan alles al nodig. Mislukt het
-  genereren, dan blijft de popover open met de foutmelding (`ui.ingestError`,
-  `data-testid=generate-error`) en verandert de rij zelf niet (nog steeds
-  `hasGraph:false`).
-- **`pr.hasGraph === true`** (al geïngest, `ingestedActions(pr, busy)`): twee
+  genereren een spinner + de **echte pipeline-fase** i.p.v. een statische
+  tekst — "Werktrees voorbereiden…" / "Blocks scannen…" / "Relaties opbouwen…"
+  (`INGEST_STAGE_LABELS`, fallback "Bezig met genereren…" zolang er nog geen
+  fase bekend is) — en is dan `disabled` (`ui.ingesting`, tegen een dubbele
+  ingest). `generatePage` pollt daarvoor elke 800ms
+  **`GET /api/ingest/progress?pr=N`** (`ingest_progress.go`, een puur
+  in-memory, ephemere teller die de `prepareWorktrees`/`scanAndStoreBlocks`/
+  `buildRelations`-Activities in `workflows.go` bijwerken — geen module/
+  read-model, dus binnen de write-boundary-uitzondering voor state-loze pings,
+  zie `.claude/rules/workflows-write-boundary.md`) in `ui.ingestStage`.
+  Zowel de busy-tekst/-icoon als de `disabled`/`class`-styling hangen aan hun
+  **eigen** geneste `${() => …}`-bindings (`ingestBusy`/`ingestLabel`/
+  `ingestIcon`) i.p.v. een plain-JS-ternary op een ooit-gecapturede `busy`-
+  variabele — anders update de knop niet terwijl de popover al openstaat (zie
+  de arrow.js-valkuil in `conventions.md`). `handleIngest` (`api.go`)
+  antwoordt pas 200 zodra de ingest-pipeline **en** `EnsureRelations`
+  synchroon zijn afgerond, dus `generatePage` doet op succes een simpele volle
+  `location.href = '/pr/<n>'`-redirect — de verse paginalaad heeft dan alles al
+  nodig. Mislukt het genereren, dan blijft de popover open met de foutmelding
+  (`ui.ingestError`, `data-testid=generate-error`) en verandert de rij zelf
+  niet (nog steeds `hasGraph:false`).
+- **`pr.hasGraph === true`** (al geïngest, `ingestedActions(pr)`): twee
   keuzes — **"Open review-boom"** (`data-testid=open-tree`, navigeert direct
   naar `location.href = '/pr/' + pr.number`) en **"Opnieuw genereren"**
-  (`data-testid=regenerate-page`) die dezelfde `generatePage`/`ui.ingesting`-
-  flow hergebruikt als de niet-geïngeste tak, maar met `{ redirect: false }`
-  (`generatePage(pr, { redirect })` — default `true` voor de "Genereer"-tak;
-  "Opnieuw genereren" moet **niet** navigeren, de reviewer blijft op de
-  overview en wil alleen de achterliggende data verversen; `ui.ingesting` gaat
-  zelf terug op `null` op succes). Een mislukte regeneratie toont de
-  foutmelding onder de knop, binnen dezelfde popover
-  (`data-testid=regenerate-error`).
+  (`data-testid=regenerate-page`) die dezelfde `generatePage`/`ui.ingesting`/
+  `ui.ingestStage`-flow hergebruikt als de niet-geïngeste tak, maar met
+  `{ redirect: false }` (`generatePage(pr, { redirect })` — default `true`
+  voor de "Genereer"-tak; "Opnieuw genereren" moet **niet** navigeren, de
+  reviewer blijft op de overview en wil alleen de achterliggende data
+  verversen; `ui.ingesting` gaat zelf terug op `null` op succes). Een
+  mislukte regeneratie toont de foutmelding onder de knop, binnen dezelfde
+  popover (`data-testid=regenerate-error`).
 
 Onder beide takken staan ongewijzigd *Open op GitHub* / *Open Jira-ticket*.
 Omdat er nu nooit meer een `<a href="/pr/<id>">` in de rij zit — de navigatie

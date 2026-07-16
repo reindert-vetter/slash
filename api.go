@@ -24,6 +24,7 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	mux.HandleFunc("/api/blockstats", s.handleBlockStats)
 	mux.HandleFunc("/api/code", s.handleCode)
 	mux.HandleFunc("/api/ingest", s.handleIngest)
+	mux.HandleFunc("/api/ingest/progress", s.handleIngestProgress)
 	mux.HandleFunc("/api/prs", s.handlePRs)
 	mux.HandleFunc("/api/prs/search", s.handleSearch)
 	if s.tasks != nil {
@@ -197,6 +198,24 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// The workflow is the only writer; the initial build runs synchronously.
 	s.tasks.manager.EnsureRelations(ctx, req.PR)
 	writeJSON(w, http.StatusOK, res)
+}
+
+// handleIngestProgress serves GET /api/ingest/progress?pr=N — a purely
+// in-memory, ephemeral read of which ingest stage (if any) is currently running
+// for pr, polled by the overview page's "Genereer review-boom"/"Opnieuw
+// genereren" button while POST /api/ingest is in flight. Not a read-model: see
+// ingest_progress.go for why this falls outside the write-boundary rule.
+func (s *server) handleIngestProgress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr, err := strconv.Atoi(r.URL.Query().Get("pr"))
+	if err != nil || pr <= 0 {
+		http.Error(w, "invalid pr", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pr": pr, "stage": ingestStage(pr)})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

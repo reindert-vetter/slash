@@ -35,6 +35,15 @@ puur operationeel). Zo'n ping mag dus rechtstreeks vanuit de UI. **Twijfel je?**
 Raakt het iets durabels (history/read-model/DB) → dan moet het via een
 workflow (start/signal); raakt het niks → dan mag het.
 
+Tweede voorbeeld: `GET /api/ingest/progress?pr=N` (`ingest_progress.go`) leest
+een puur in-memory `map[int]string` (pr → huidige ingest-stage: `worktrees`/
+`scan`/`relations`) die de `prepareWorktrees`/`scanAndStoreBlocks`/
+`buildRelations`-Activities (`workflows.go`) bijwerken terwijl ze draaien. Geen
+module, geen read-model, geen workflow-history-write — puur cosmetische
+voortgang voor de "Genereer review-boom"/"Opnieuw genereren"-knop
+(`src/overview.mjs`, gepollt terwijl `POST /api/ingest` in flight is) en gaat
+verloren bij een herstart, net als de heartbeat-timing.
+
 ## Waarom
 
 De workflow-event-history is de **bron van waarheid**: durable, herspeelbaar,

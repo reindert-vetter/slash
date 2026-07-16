@@ -105,6 +105,37 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(page).toHaveURL(/\/pr\/12801$/)
   })
 
+  // The busy button polls GET /api/ingest/progress (a real, ephemeral
+  // server-side stage tracker — see ingest_progress.go) instead of just
+  // showing a static "Bezig met genereren…". Route-mock both endpoints to
+  // control the timing deterministically.
+  test('generating shows the real ingest stage while busy', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    let resolveIngest
+    const ingestDone = new Promise((resolve) => {
+      resolveIngest = resolve
+    })
+    await page.route('**/api/ingest', async (route) => {
+      await ingestDone
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    })
+    await page.route('**/api/ingest/progress*', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"stage":"scan"}' })
+    })
+
+    const row = page.locator('[data-testid="pr-row"][data-pr="12801"]')
+    await row.click()
+    const generate = page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')
+    await generate.click()
+
+    await expect(generate).toHaveText(/Blocks scannen/)
+
+    resolveIngest()
+    await expect(page).toHaveURL(/\/pr\/12801$/)
+  })
+
   test('a failed generate keeps the popover open with an inline error', async ({ page }) => {
     await page.goto('/pr-overview')
     await page.waitForLoadState('networkidle')

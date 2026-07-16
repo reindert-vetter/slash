@@ -443,6 +443,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &input); err != nil {
 			return nil, err
 		}
+		setIngestStage(input.PR, IngestStageWorktrees)
+		defer clearIngestStage(input.PR)
 		shas, err := prepareIngestWorktrees(ctx, m.dataDir, input.PR)
 		if err != nil {
 			return nil, fmt.Errorf("ingest: prepare worktrees: %w", err)
@@ -462,6 +464,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
+		setIngestStage(arg.PR, IngestStageScan)
+		defer clearIngestStage(arg.PR)
 		res, err := scanAndStoreIngestBlocks(ctx, m.db, m.dataDir, arg.PR, arg.Shas)
 		if err != nil {
 			return nil, fmt.Errorf("ingest: scan and store blocks: %w", err)
@@ -498,6 +502,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &input); err != nil {
 			return nil, err
 		}
+		setIngestStage(input.PR, IngestStageRelations)
+		defer clearIngestStage(input.PR)
 		blocks, err := blocksByPR(m.db, input.PR)
 		if err != nil {
 			return nil, fmt.Errorf("build_relations: load blocks: %w", err)
