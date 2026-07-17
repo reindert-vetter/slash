@@ -31,8 +31,9 @@ const BIN = path.resolve('tests/.tmp/slash')
 
 // seed replicates the seed passes the old webServer command ran: the main
 // blocks fixture (PR 12903), the relations/callresolve fixtures (PR 90/91),
-// and the testcovers fixtures (PR 92/93/94). Everything lands next to the DB
-// (tests/.tmp/w<n>/), so the worker is isolated.
+// the testcovers fixtures (PR 92/93/94), and the tree-descent fixture (PR 95,
+// see _setup.mjs's materializeTreeWorktrees + postapprove-tree.spec.mjs).
+// Everything lands next to the DB (tests/.tmp/w<n>/), so the worker is isolated.
 function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/blocks.json'], { stdio: 'ignore' })
   execFileSync(
@@ -60,6 +61,19 @@ function seed(db) {
       'tests/fixtures/testcovers-blocks.json',
       '-testcovers',
       'tests/fixtures/testcovers.json',
+    ],
+    { stdio: 'ignore' },
+  )
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/tree-blocks.json',
+      '-relations',
+      'tests/fixtures/tree-relations.json',
     ],
     { stdio: 'ignore' },
   )

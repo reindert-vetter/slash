@@ -171,19 +171,53 @@ als de actie goedkeuring **toevoegde** (`toggleApprove`/`toggleCallApprove`
 detecteren dat via `allIn`/`keys.has(key)` **vóór** de mutatie — intrekken van een
 goedkeuring opent dit menu nooit) én er daadwerkelijk nog iets openstaat
 (`afterApproveAction` → `findNextUnapproved()`; niets meer open → het menu blijft
-gewoon dicht, zoals altijd). "Volgende" is **blok-overstijgend**: eerst verder
-binnen het huidige blok op de huidige granulariteit (voorbij `state.change`),
-en als dat blok klaar is, verder door `state.blocks` in sidebar-volgorde
-(altijd op `'group'`-niveau) — met lazy `ensureCode`-fetches voor blokken die
-nog niet bezocht zijn, net als de look-ahead-preview. Alleen **voorwaarts**, geen
-wrap en geen terugzoeken naar eerder overgeslagen units. `findNextUnapproved`
-stasht de gevonden bestemming in `postApproveTarget`; "Ga door" past 'm toe via
-`applyNextUnapproved` (mirror van `openTask`'s block-wissel-reset: een andere
-`state.selected` maakt `state.drill`/`drillCursor`/`focusLevel` leeg) zonder te
-herberekenen — de palette bezit de keyboard zolang hij open is, dus de
-navigatie-state kan intussen niet verschoven zijn. Dit is een eenmalige stap: na
-het navigeren opent er **geen** nieuw vervolgmenu vanzelf — de reviewer keurt de
-nieuwe unit zelf weer goed met `Enter`.
+gewoon dicht, zoals altijd). "Volgende" volgt de review-**boom**, niet enkel de
+platte sidebar-lijst, depth-first (`findNextUnapproved` in `home.mjs`, vier
+stappen op elke aanroep):
+
+1. **Verder binnen de kolom die de keyboard nu bezit** — het top-level block
+   (`state.gran`/`state.change`), of — als er gedrild is (zie "Drillen"/
+   "Kolom-navigatie" in `.claude/rules/detail-layout.md`) — de gedrilde kolom
+   op `state.focusLevel`, met zíjn eigen `state.drillCursor`-cursor
+   (`firstUnapprovedOwnUnit`, ongewijzigd voorwaarts-zoekend op de huidige
+   granulariteit, nu ook toegepast op een gedrilde kolom in plaats van alleen
+   het top-level block).
+2. **Is die kolom klaar, dan omlaag** in zijn **Onderliggende-code**-kinderen
+   (`orderedChildBlocks` — dezelfde volgorde als het paneel toont,
+   `relatedChildren`'s groupTier/prio/grootte-sort, exclusief `covered_by` om
+   de method↔test-cyclus te vermijden — zie `directChildBlocks`/
+   `nestedPrBlocks` in `.claude/rules/blocks-and-ingest.md`), depth-first per
+   kind (`firstUnapprovedInSubtree`, cyclus-veilig via een `seen`-set, mirror
+   van `nestedPrBlocks`): eerst het kind zelf vanaf zijn eerste `'group'`-unit,
+   anders zijn eigen kinderen, enzovoort.
+3. **Is de hele subtree van de gefocuste kolom leeg, dan omhoog**: terug naar
+   de ouder in de huidige drill-stack (een eerdere gedrilde kolom, of het
+   top-level block) en diens **volgende, nog niet geprobeerde** sibling-kind
+   proberen (weer depth-first via `firstUnapprovedInSubtree`) — herhaald
+   omhoog door de hele drill-stack.
+4. **Is ook de hele subtree van het huidige top-level block leeg** (of stond
+   de reviewer niet eens in zijn diff), dan **verder door `state.blocks`** in
+   sidebar-volgorde — nu ook **subtree-bewust** (`firstUnapprovedInSubtree`
+   per kandidaat i.p.v. alleen zijn eigen `'group'`-rijen): een top-level block
+   waarvan alleen een Onderliggende-code-kind nog openstaat wordt niet meer
+   overgeslagen.
+
+Met lazy `ensureCode`-fetches voor elk bezocht block, net als de
+look-ahead-preview. Alleen **voorwaarts**, geen wrap en geen terugzoeken naar
+eerder overgeslagen units. `findNextUnapproved` retourneert een plan
+`{ root, path, gran, change }` (`root` = top-level index, `path` = de keten
+PR-blokken om doorheen te drillen, leeg = het top-level block zelf) en stasht
+het in `postApproveTarget`; "Ga door" past 'm toe via `applyNextUnapproved`,
+dat de huidige `state.drill` naar het gemeenschappelijke voorvoegsel met
+`path` trimt (mirror van `expandColumn`'s trim) en dan alleen het resterende
+stuk drilt (`drillIntoChild`) — zonder de hele stack onnodig af te breken bij
+een naaste sibling-stap. Bij een andere `root` (een ander top-level block)
+reset hij zoals voorheen (`openTask`'s block-wissel-reset: `state.drill`/
+`drillCursor`/`focusLevel` leeg). Dit alles zonder te herberekenen — de
+palette bezit de keyboard zolang hij open is, dus de navigatie-state kan
+intussen niet verschoven zijn. Dit is een eenmalige stap: na het navigeren
+opent er **geen** nieuw vervolgmenu vanzelf — de reviewer keurt de nieuwe unit
+zelf weer goed met `Enter`.
 
 **Vanuit de blokken-index blijft "Ga door" in de index.** Drukte de reviewer
 `Enter` terwijl `state.mode==='list'` was (zie hierboven: het menu ankert dan al
@@ -195,9 +229,13 @@ in `postApproveTarget` (`{ ...target, keepList }`) — synchroon omdat
 `state.mode` tegen de tijd dat de promise resolvet al kan zijn veranderd, maar
 op het moment van de approve-actie zelf nog exact de context is waar de
 reviewer 'm vandaan drukte. `applyNextUnapproved` vertakt op `target.keepList`:
-waar, dan verzet 'm **alleen** `state.selected` (+ `scrollSelectedIntoView()`) —
-géén `state.mode`/`gran`/`change`, geen diff-instap; onwaar, dan het bestaande
-pad (springt de diff van de nieuwe unit in). Het `POSTAPPROVE_COMMANDS[0]`-label
+waar, dan verzet 'm **alleen** `state.selected` (naar `target.root`) +
+`scrollSelectedIntoView()` — `target.path` wordt genegeerd (géén `state.mode`/
+`gran`/`change`, geen diff-instap, geen drill), dus zelfs als het gevonden plan
+door een Onderliggende-code-kind zou lopen blijft "Ga door" vanuit de index bij
+de platte lijst-stap staan — drillen heeft alleen betekenis eenmaal in de
+diff. Onwaar, dan het bestaande pad (drilt zo nodig naar `target.path` en
+springt de diff van de nieuwe unit in). Het `POSTAPPROVE_COMMANDS[0]`-label
 is om die reden ook een **functie** (i.p.v. de vorige kale string), gelezen op
 snapshot-tijd (`openMenu` → `snapshotCommands`, vlak nadat `postApproveTarget`
 gezet is — dezelfde veilige, niet-reactieve timing als het `approve`-label): "Ga

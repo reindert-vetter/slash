@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 95,
+    "file": "app/Actions/TreeParentAction.php",
+    "class": "TreeParentAction",
+    "name": "execute",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 95,
+    "file": "app/Actions/TreeChildAction.php",
+    "class": "TreeChildAction",
+    "name": "run",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  }
+]

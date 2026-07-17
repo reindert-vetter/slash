@@ -404,6 +404,17 @@
   i.p.v. base=merge-base), dan tonen de meeste blokken **geen** wijzigingen en falen
   diff-inhoud-afhankelijke tests. Anker diff-navigatie-tests daarom op een blok dat
   betrouwbaar een wijziging draagt (blok 0 van PR 12903).
+- **Een nieuwe fixture-PR die écht diff-inhoud nodig heeft** (niet alleen
+  child-listing/drill-mechaniek zoals PR 90/91/92/93/94, die bewust géén
+  worktree op disk hebben) kan zijn eigen kleine `data/worktrees/pr-<n>-
+  {base,head}` **programmatisch materialiseren in `globalSetup`**
+  (`tests/_setup.mjs`) i.p.v. op een echte, lokaal-aanwezige `gh`/`git`-ingest
+  te leunen (die niet reproduceerbaar is op een andere machine/CI) — zie
+  `materializeTreeWorktrees` (PR 95, `tests/postapprove-tree.spec.mjs`): een
+  paar hand-geschreven PHP-bestandjes met één echt gewijzigde regel, geschreven
+  vóór elke worker start (shared, read-only, net als de bestaande worktrees),
+  met de bijbehorende `blocks.json`/`relations.json` toegevoegd aan `seed()`
+  in `tests/_fixtures.mjs`.
 - **De harness forceert offline altijd, ongeacht de shell-omgeving:** de
   worker-fixture (`tests/_fixtures.mjs`) start elke server met **zowel
   `SLASH_GITHUB=off` als `SLASH_CLAUDE=off`** hardcoded in de `spawn`-`env`

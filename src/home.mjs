@@ -7,7 +7,6 @@ import BlockList, { isFullyApproved } from './BlockList.mjs'
 import Footer from './Footer.mjs'
 import Block, {
   blockRows,
-  blockApproved,
   changeGroups,
   changedRows,
   diffStat,
@@ -1393,6 +1392,34 @@ function directChildBlocks(b) {
   return [...ids].map((id) => byId.get(id)).filter(Boolean)
 }
 
+// orderedChildBlocks sorts directChildBlocks(b) into the same order the
+// Onderliggende-code panel actually shows them in (relatedChildren's own
+// groupTier/prio/size sort) — used by the postApprove tree-walk
+// (findNextUnapproved) so "Ga door" descends into the same child a reviewer
+// would land on first if they pressed →/Enter themselves, rather than the
+// unsorted relations→calls→testcovers insertion order directChildBlocks
+// returns. Excludes `covered_by` (relatedChildren shows both directions, but
+// directChildBlocks deliberately never includes covered_by — see its own
+// comment — so this filters it back out of relatedChildren's list rather than
+// reintroducing the method↔test cycle). Anything relatedChildren scoped out
+// (e.g. b is the live cursor at gran 'line'/'call', which hides most children
+// outright) still keeps its directChildBlocks entry — just sorted last
+// (fallback rank) — so a child is never silently dropped from the walk, only
+// mis-ordered in that edge case.
+function orderedChildBlocks(b) {
+  const kids = directChildBlocks(b)
+  if (kids.length < 2) return kids
+  const order = relatedChildren(b)
+    .filter((c) => c.kind !== 'covered_by')
+    .map((c) => c.blockId || c.id)
+  const rank = new Map(order.map((id, i) => [id, i]))
+  return [...kids].sort((x, y) => {
+    const rx = rank.has(x.id) ? rank.get(x.id) : Number.MAX_SAFE_INTEGER
+    const ry = rank.has(y.id) ? rank.get(y.id) : Number.MAX_SAFE_INTEGER
+    return rx - ry
+  })
+}
+
 // nestedPrBlocks returns every PR block nested under b, transitively (children,
 // their children, …), cycle-guarded by id — the full set whose approval rolls
 // up into b's combined sidebar count.
@@ -2544,67 +2571,168 @@ function unitFullyApproved(b, unit, gran, all) {
   return rowsInUnit.every((i) => set.has(i))
 }
 
+// firstUnapprovedOwnUnit finds the first not-yet-approved unit within b's own
+// rows only (no descent into its Onderliggende-code children), searching
+// forward from afterIndex + 1 at granularity gran. Pass afterIndex -1 to
+// search from the very start (used when a subtree walk visits a block for the
+// first time). Returns the unit index, or null if nothing ahead in b itself.
+function firstUnapprovedOwnUnit(b, gran, afterIndex) {
+  const rows = blockRows(b)
+  const all = changedRows(rows)
+  const units = unitsFor(rows, gran)
+  for (let i = afterIndex + 1; i < units.length; i++) {
+    if (!unitFullyApproved(b, units[i], gran, all)) return i
+  }
+  return null
+}
+
+// firstUnapprovedInSubtree depth-first searches b's own changes first
+// (always at 'group' granularity — a fresh visit has no finer cursor to
+// resume), then — only once b itself reads as fully approved (or has nothing
+// to approve) — its Onderliggende-code children, in panel order
+// (orderedChildBlocks), recursively. Returns a landing plan relative to b:
+// { path, gran, change }, where `path` is the chain of child PR blocks to
+// drill through from b down to (and including) the block owning the found
+// unit — empty when it's b itself. null once b's whole subtree (itself +
+// every nested child) is fully approved / has nothing to approve. `seen`
+// cycle-guards by id, mirroring nestedPrBlocks (a diamond-shaped relation
+// graph must not infinite-loop this walk). Awaits ensureCode per visited
+// block, same as the existing look-ahead-preview fetches.
+async function firstUnapprovedInSubtree(b, seen = new Set()) {
+  if (!b || seen.has(b.id)) return null
+  seen.add(b.id)
+  await ensureCode(b)
+  const change = firstUnapprovedOwnUnit(b, 'group', -1)
+  if (change !== null) return { path: [], gran: 'group', change }
+  for (const kid of orderedChildBlocks(b)) {
+    const found = await firstUnapprovedInSubtree(kid, seen)
+    if (found) return { path: [kid, ...found.path], gran: found.gran, change: found.change }
+  }
+  return null
+}
+
 // findNextUnapproved locates the next navigation unit that isn't (fully)
-// approved yet, searching forward only: first past the current position within
-// the current block at its current granularity, then — once that block is
-// exhausted or we're not even in diff mode — through state.blocks in sidebar
-// order at 'group' granularity, lazily loading each candidate's code the same
-// way the look-ahead preview does. Returns a landing plan {selected, gran,
-// change}, or null once nothing not-yet-approved remains ahead. Async because a
-// not-yet-visited block's code may still need fetching.
+// approved yet, walking the review TREE depth-first rather than just the flat
+// sidebar list:
+//  1. Forward within whichever column currently owns the keyboard (the
+//     top-level block, or — via state.focusLevel/drillCursor — a drilled
+//     column), at its own current granularity/position.
+//  2. Failing that, DOWN into that column's own Onderliggende-code children
+//     (orderedChildBlocks, panel order), depth-first (firstUnapprovedInSubtree).
+//  3. Failing that (the focused column's whole subtree is exhausted), UP
+//     through the current drill stack's ancestors, trying each one's next
+//     not-yet-tried sibling child.
+//  4. Failing that (the entire current top-level block's subtree is done, or
+//     we weren't even in its diff), ACROSS the rest of state.blocks in
+//     sidebar order — subtree-aware too (firstUnapprovedInSubtree), so a
+//     top-level block whose own rows are done but whose Onderliggende-code
+//     still has an open child no longer gets skipped.
+// Returns a landing plan { root, path, gran, change } — root is the top-level
+// index to select, path the chain of PR-block children to drill through from
+// there down to (and including) the block owning the found unit (empty = the
+// top-level block itself) — or null once nothing not-yet-approved remains
+// ahead anywhere in the tree. Async because a not-yet-visited block's code
+// may still need fetching.
 async function findNextUnapproved() {
-  if (state.mode === 'diff') {
-    const b = state.blocks[state.selected]
-    if (b) {
-      const rows = blockRows(b)
-      const all = changedRows(rows)
-      const units = unitsFor(rows, state.gran)
-      for (let i = state.change + 1; i < units.length; i++) {
-        if (!unitFullyApproved(b, units[i], state.gran, all)) {
-          return { selected: state.selected, gran: state.gran, change: i }
+  const level = state.focusLevel
+  const focused = level > 0 ? state.drill[level - 1] : curBlock()
+  const cur = level > 0 ? state.drillCursor[level - 1] || { change: 0, gran: 'group' } : { gran: state.gran, change: state.change }
+  const inDiff = level > 0 || state.mode === 'diff'
+
+  if (focused && inDiff) {
+    const change = firstUnapprovedOwnUnit(focused, cur.gran, cur.change)
+    if (change !== null) {
+      return { root: state.selected, path: state.drill.slice(0, level), gran: cur.gran, change }
+    }
+    for (const kid of orderedChildBlocks(focused)) {
+      const found = await firstUnapprovedInSubtree(kid)
+      if (found) {
+        return {
+          root: state.selected,
+          path: [...state.drill.slice(0, level), kid, ...found.path],
+          gran: found.gran,
+          change: found.change,
+        }
+      }
+    }
+    for (let lvl = level; lvl > 0; lvl--) {
+      const parent = lvl > 1 ? state.drill[lvl - 2] : curBlock()
+      const current = state.drill[lvl - 1]
+      const siblings = orderedChildBlocks(parent)
+      const idx = siblings.findIndex((s) => s.id === current.id)
+      for (let j = idx + 1; j < siblings.length; j++) {
+        const found = await firstUnapprovedInSubtree(siblings[j])
+        if (found) {
+          return {
+            root: state.selected,
+            path: [...state.drill.slice(0, lvl - 1), siblings[j], ...found.path],
+            gran: found.gran,
+            change: found.change,
+          }
         }
       }
     }
   }
+
   for (let idx = state.selected + 1; idx < state.blocks.length; idx++) {
-    const b = state.blocks[idx]
-    await ensureCode(b)
-    const rows = blockRows(b)
-    const all = changedRows(rows)
-    // No navigable changes here (nothing to approve), or already fully approved
-    // — keep looking at the next block.
-    if (!all.length || blockApproved(b)) continue
-    const units = unitsFor(rows, 'group')
-    const change = units.findIndex((u) => !unitFullyApproved(b, u, 'group', all))
-    if (change < 0) continue
-    return { selected: idx, gran: 'group', change }
+    const found = await firstUnapprovedInSubtree(state.blocks[idx])
+    if (found) return { root: idx, path: found.path, gran: found.gran, change: found.change }
   }
   return null
 }
 
 // applyNextUnapproved jumps the keyboard cursor to a plan findNextUnapproved
-// found — driven by the postApprove menu's "Ga door" command. Mirrors
-// openTask/enterDiff's reset of the drilled-column state when landing on a
-// different block. `target.keepList` (stashed by afterApproveAction) means the
-// approve that triggered this ran from the blokken-index (state.mode was
-// 'list', not 'diff'): stay there — only move the sidebar selection forward,
-// never step into the diff — so approving from the index keeps you in the
-// index instead of dropping you into a block's diff.
+// found — driven by the postApprove menu's "Ga door" command. `target.root`
+// is the top-level block index to select; `target.path` is the chain of
+// Onderliggende-code PR-block children to drill through from there (empty =
+// land directly on the top-level block's own diff). The current state.drill
+// is reconciled against `target.path` by trimming to their common prefix
+// (mirrors expandColumn's trim) and then drilling only the remainder via
+// drillIntoChild, rather than always tearing the whole stack down — so
+// continuing within (or backtracking one sibling up from) an already-drilled
+// subtree doesn't lose context needlessly. `target.keepList` (stashed by
+// afterApproveAction) means the approve that triggered this ran from the
+// blokken-index (state.mode was 'list', not 'diff'): stay there — only move
+// the sidebar selection forward, ignoring `path` entirely — never step into
+// the diff/drill, so approving from the index keeps you in the index instead
+// of dropping you into a block's diff or a drilled child.
 function applyNextUnapproved(target) {
   if (target.keepList) {
-    state.selected = target.selected
+    state.selected = target.root
     scrollSelectedIntoView()
     return
   }
-  if (target.selected !== state.selected) {
-    state.selected = target.selected
+  if (target.root !== state.selected) {
+    state.selected = target.root
     state.drill = []
     state.drillCursor = []
     state.focusLevel = 0
   }
+  let common = 0
+  while (
+    common < state.drill.length &&
+    common < target.path.length &&
+    state.drill[common].id === target.path[common].id
+  ) {
+    common++
+  }
+  state.drill = state.drill.slice(0, common)
+  state.drillCursor = state.drillCursor.slice(0, common)
+  state.focusLevel = common
+  for (let i = common; i < target.path.length; i++) {
+    const kid = target.path[i]
+    drillIntoChild({ blockId: kid.id, id: kid.id, label: kid.label, file: kid.file, code: '', line: kid.line })
+  }
   state.mode = 'diff'
-  state.gran = target.gran
-  state.change = target.change
+  if (target.path.length > 0) {
+    const lvl = target.path.length
+    state.drillCursor = state.drillCursor.map((c, i) =>
+      i === lvl - 1 ? { gran: target.gran, change: target.change } : c,
+    )
+  } else {
+    state.gran = target.gran
+    state.change = target.change
+  }
   scrollChangeIntoView()
 }
 
