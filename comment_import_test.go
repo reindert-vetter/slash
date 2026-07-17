@@ -192,6 +192,78 @@ func TestImportedThreadMirrorsWithoutEcho(t *testing.T) {
 	}
 }
 
+// A reply on an imported PR-wide (issue/review-summary) thread posts a NEW issue
+// comment to the flat PR conversation — NOT the review-reply endpoint — and a
+// resolve is local-only (never touches GitHub).
+func TestPRWideReplyPostsIssueComment(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+
+	in := CodeCommentInput{
+		PR: pr, Author: "boss", Body: "please add a test",
+		Source: "github", Kind: "issue", ImportedRootID: 400, RowStart: -1, RowEnd: -1,
+	}
+	runID, err := m.engine.StartWorkflowID(importedRunID(400), WorkflowTaskCodeComment, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A UI reply → a new issue comment on the PR conversation, never a review reply.
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-1", Source: "ui", Author: "me", Body: "on it"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return gh.IssuePostedCount() == 1 })
+	if gh.PostedCount() != 0 {
+		t.Fatalf("review-reply endpoint posted %d, want 0 (PR-wide reply → issue comment)", gh.PostedCount())
+	}
+
+	// A resolve (Done) is local-only: status flips to resolved, GitHub untouched.
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-2", Source: "ui", Author: "me", Body: "resolved", Done: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, pr)
+		return len(l) == 1 && l[0].Status == "resolved"
+	})
+	if gh.IssuePostedCount() != 1 {
+		t.Fatalf("resolve posted %d issue comments, want 1 (resolve is local-only)", gh.IssuePostedCount())
+	}
+}
+
+// importPRComments never duplicates an app-created comment: a review comment the
+// app itself posted (its GitHub ID recorded in history) is skipped on import,
+// even though its Run ID isn't the deterministic gh-<id> an import would use.
+func TestImportSkipsAppCreatedComment(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+
+	// The app posts a review comment; the Fake returns GitHub ID 1.
+	appRunID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: pr, File: "src/Order.php", Line: 10, Author: "me", Body: "app comment",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Import sees that same review comment (root ID 1) on GitHub — it must be
+	// skipped, not re-imported as a second (gh-1) thread.
+	gh.SetReviewComments([]github.ReviewComment{
+		{ID: 1, Author: "me", Body: "app comment", Path: "src/Order.php", Line: 10, Side: "RIGHT"},
+	})
+	m.importPRComments(ctx, pr)
+
+	list, _ := cs.List(ctx, pr)
+	if len(list) != 1 {
+		t.Fatalf("comments = %d, want 1 (no duplicate of the app-created comment): %+v", len(list), list)
+	}
+	if list[0].ID != appRunID {
+		t.Fatalf("comment id = %q, want the app's run id %q (not an imported gh-1)", list[0].ID, appRunID)
+	}
+}
+
 // A restart resumes an imported thread's reply poller using the root ID from its
 // input (there is no postGithubComment history event to read it from).
 func TestResumePollingImportedThread(t *testing.T) {

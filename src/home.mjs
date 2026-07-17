@@ -46,6 +46,9 @@ import RelatedPanel, {
   taskRuns,
   toggleSidebar,
   sidebarOpen,
+  PrWideComments,
+  handlePrWideKey,
+  isPrWideFocused,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { bindUrlState, num } from './urlState.mjs'
@@ -3137,6 +3140,24 @@ function onKeydown(e) {
     return
   }
 
+  // Stop 1's own PR-wide comment block (PrWideComments/handlePrWideKey, see
+  // RelatedPanel.mjs) owns arrows/Enter/Escape once the reviewer has stepped
+  // into it (↓ from the description) — handled early, mirroring relatedActive()
+  // below, so none of the generic Enter-opens-menu/`/`/f-d-s shortcuts steal
+  // the keystroke while a PR-wide comment/thread has the keyboard. Typed
+  // characters flow into the reply textarea untouched (not preventDefault'd);
+  // only the navigation keys below are claimed here.
+  if (state.showDescription && isPrWideFocused()) {
+    if (
+      ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'Escape'].includes(e.key) ||
+      (e.key === 'Enter' && !e.shiftKey)
+    ) {
+      e.preventDefault()
+      handlePrWideKey(e.key)
+    }
+    return
+  }
+
   // Enter on a filled new-comment composer opens the comment-kind menu (Claude /
   // Git / private / Jira) instead of placing directly. Handled before the
   // relatedActive() branch so it works whether the composer was opened via the
@@ -3356,12 +3377,16 @@ function onKeydown(e) {
   // Stop 1 of the nav chain (the PR-description column) sits to the left of the
   // block-index and owns the keyboard while open: → closes it back to stop 2,
   // ← exits the chain entirely to the PR overview (/pr-overview) — there's
-  // nothing further left than stop 1. No internal cursor to walk otherwise, so
-  // any other key is a no-op and doesn't move the block selection underneath it.
+  // nothing further left than stop 1. Reached here only while the PR-wide
+  // comment sub-block (see above) does NOT itself own the keyboard
+  // (isPrWideFocused() false) — ↓ hands it the keyboard instead (entering its
+  // first entry) when it has any PR-wide comments; a no-op otherwise. Any
+  // other key is a no-op and doesn't move the block selection underneath it.
   if (state.showDescription) {
     e.preventDefault()
     if (e.key === 'ArrowRight') state.showDescription = false
     else if (e.key === 'ArrowLeft') location.href = '/pr-overview'
+    else if (e.key === 'ArrowDown') handlePrWideKey('ArrowDown')
     return
   }
 
@@ -3809,10 +3834,11 @@ function PrInfoPanel(state) {
       ${() =>
         state.showDescription
           ? html`<div
-              class="fixed bottom-[90px] left-6 top-6 z-10 flex min-h-0 w-[26rem] flex-col"
+              class="fixed bottom-[90px] left-6 top-6 z-10 flex min-h-0 w-[26rem] flex-col gap-3"
               data-testid="pr-info-column"
             >
               ${prInfoCard(state)}
+              ${PrWideComments(state)}
             </div>`.key('pr-info-column')
           : ''}
     </div>

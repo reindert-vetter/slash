@@ -11,7 +11,8 @@ import (
 type Fake struct {
 	mu             sync.Mutex
 	nextID         int64
-	Posted         []string // bodies posted (root + replies), in order
+	Posted         []string // review comment/reply bodies posted, in order
+	IssuePosted    []string // issue-comment bodies posted (PR-wide replies), in order
 	Deleted        []int64  // comment IDs deleted, in order
 	replies        []Reply
 	reviewComments []ReviewComment
@@ -78,6 +79,21 @@ func (f *Fake) Reply(_ context.Context, pr int, inReplyTo int64, body string) (i
 	f.nextID++
 	f.Posted = append(f.Posted, body)
 	return f.nextID, nil
+}
+
+func (f *Fake) PostIssueComment(_ context.Context, pr int, body string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextID++
+	f.IssuePosted = append(f.IssuePosted, body)
+	return f.nextID, nil
+}
+
+// IssuePostedCount returns how many issue comments (PR-wide replies) were posted.
+func (f *Fake) IssuePostedCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.IssuePosted)
 }
 
 func (f *Fake) FetchReplies(_ context.Context, pr int, rootID int64) ([]Reply, error) {

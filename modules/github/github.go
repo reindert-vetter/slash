@@ -73,6 +73,11 @@ type Client interface {
 	// endLine (falling back to startLine if endLine is <= 0).
 	PostReviewComment(ctx context.Context, pr int, file string, startLine, endLine int, side, body string) (int64, error)
 	Reply(ctx context.Context, pr int, inReplyTo int64, body string) (int64, error)
+	// PostIssueComment posts a new comment to the PR's flat conversation (the
+	// issues/{pr}/comments endpoint) and returns its ID. This is how a "reply" to
+	// a PR-wide comment (an issue comment / review summary — which have no reply
+	// thread on GitHub) is mirrored: as a new conversation entry.
+	PostIssueComment(ctx context.Context, pr int, body string) (int64, error)
 	FetchReplies(ctx context.Context, pr int, rootID int64) ([]Reply, error)
 	// FetchReviewComments returns the thread-root review comments of pr (those
 	// not in reply to another comment) — the existing comments on the diff,
@@ -161,6 +166,23 @@ func (m *Module) PostReviewComment(ctx context.Context, pr int, file string, sta
 func (m *Module) Reply(ctx context.Context, pr int, inReplyTo int64, body string) (int64, error) {
 	out, err := m.api(ctx, "POST",
 		fmt.Sprintf("repos/%s/pulls/%d/comments/%d/replies", m.repo, pr, inReplyTo),
+		"-f", "body="+body,
+	)
+	if err != nil {
+		return 0, err
+	}
+	var c ghComment
+	if err := json.Unmarshal(out, &c); err != nil {
+		return 0, err
+	}
+	return c.ID, nil
+}
+
+// PostIssueComment posts a new comment to the PR's flat conversation
+// (issues/{pr}/comments) and returns its ID. See the Client interface doc.
+func (m *Module) PostIssueComment(ctx context.Context, pr int, body string) (int64, error) {
+	out, err := m.api(ctx, "POST",
+		fmt.Sprintf("repos/%s/issues/%d/comments", m.repo, pr),
 		"-f", "body="+body,
 	)
 	if err != nil {

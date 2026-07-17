@@ -79,6 +79,42 @@ zijn) en start daarna meteen de poll-lus. Dit alles laadt/pollt ongeacht of de
 kolom op dit moment zichtbaar is — `state.showDescription` bepaalt alleen of hij
 gerenderd wordt, niet of de data er is tegen de tijd dat je 'm opent.
 
+**PR-brede comments (`PrWideComments`, onder `prInfoCard` in dezelfde
+`pr-info-column`):** een tweede kaart (`data-testid=pr-wide-comments`,
+`shrink-0 max-h-[16rem]`, eigen interne scroll), **onder** `prInfoCard` in
+dezelfde `state.showDescription`-gated container in `PrInfoPanel` — hij heeft
+dus **geen eigen zichtbaarheids-toggle**, hij bestaat simpelweg niet totdat de
+kolom zelf gemount wordt. Toont de comments met **`kind !== ''`** —
+GitHub-geïmporteerde issue-comments en review(-summary)-comments zonder
+regel-anker — uit dezelfde `cs.list` die het blok-gescopeerde comments-paneel
+(zie "Comments/taken-sidebar" hieronder) al laadt/pollt (`syncComments`, geen
+tweede fetch); `recomputeView` filtert die daar bewust wég (`!c.kind`), dus
+deze kaart is hun enige plek. Elke rij (`data-testid=pr-wide-item`) toont een
+status-stip (dezelfde `CSTATUS_DOT` als het blok-gescopeerde paneel), een
+kind-badge (`data-testid=pr-wide-kind`, "PR-comment" voor `issue`/`review`,
+"Review" voor `review_summary`), de bestaande `sourceBadge` ("bron: github")
+en een relatieve tijd (`relTime`). Een klik (of `Enter`, zie hieronder) opent
+de thread **inline onder de rij** — anders dan het blok-gescopeerde paneel
+(dat lijst en thread naast elkaar toont) is hier één kolom, dus het
+geselecteerde item toont zijn `threadMessages`/`reactionBubble`'s (hergebruikt,
+ongewijzigd) plus een reply-textarea (`data-testid=pr-wide-compose`) en een
+losse resolve-knop (`data-testid=pr-wide-resolve`) direct onder zijn eigen
+rij. Reply/resolve gaan via **exact hetzelfde** `POST
+/api/workflows/{runId}/signals/reply`-Signal als het blok-gescopeerde paneel
+(`done:false`/`done:true`) — de backend zet een reply op een PR-brede thread
+al om in een nieuwe GitHub-issue-comment en behandelt resolve als
+local-only, dus de frontend heeft geen aparte casus nodig.
+De comment-body-tekst wordt door één kleine gedeelde helper gerenderd
+(`commentBody(c)`, `RelatedPanel.mjs`, hergebruikt door zowel deze kaart als
+het blok-gescopeerde `commentRow`) — puur platte tekst, bewust nog geen
+markdown, maar wél de ene plek waar een latere markdown-pas moet wijzigen.
+**Eigen cursor `pw`** (`RelatedPanel.mjs`, los van `cs.focus`/`cs.sel` van het
+blok-gescopeerde paneel én los van `state.showDescription` zelf): `pw.focus`
+(`null`/`'item'`/`'thread'`) + `pw.sel` + `pw.threadPos` — zie
+`.claude/rules/keyboard-navigation.md` (sectie "PR-brede comments, stop 1")
+voor het volledige toetsenbord-mechanisme (`handlePrWideKey`/
+`isPrWideFocused`, aangeroepen vanuit `home.mjs`'s `onKeydown`).
+
 Daarna de **block-kolom** (`data-testid=block-column`,
 **`shrink-0`** — niet `flex-1`, dus op zijn **natuurlijke diff-breedte**
 (altijd `w-[70rem] 2xl:w-[82rem]`, óók voor een één-zijdig added/removed block —

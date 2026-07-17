@@ -455,6 +455,28 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, nil
 	})
 
+	// Activity: post a reply to a PR-wide (issue/review-summary) thread as a NEW
+	// issue comment on the PR's flat conversation (best-effort). PR-wide comments
+	// have no reply thread on GitHub, so this is how a reply is mirrored. Returns
+	// the new comment's ID (as a postResult) so it's recorded in history —
+	// importPRComments reads that to skip re-importing the app's own reply as a
+	// separate root (knownGithubIDs).
+	engine.RegisterActivity("postGithubIssueComment", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR   int    `json:"pr"`
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		id, err := gh.PostIssueComment(ctx, arg.PR, arg.Body)
+		if err != nil {
+			m.logf("task_code_comment: github issue comment skipped: %v", err)
+			return json.Marshal(postResult{})
+		}
+		return json.Marshal(postResult{RootID: id})
+	})
+
 	// Activity: fetch the PR's meta, ensure its commits are locally reachable, and
 	// materialize the base/head git worktrees (write — creates worktrees on disk).
 	// Returns only the two SHAs + changed file paths, not the worktree contents.
@@ -1329,11 +1351,25 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			return nil, fmt.Errorf("save reaction: %w", err)
 		}
 		// Mirror a UI reaction onto GitHub (best-effort). GitHub-sourced
-		// reactions are not echoed back.
+		// reactions are not echoed back. The mirror path depends on the thread:
+		//   - PR-wide (issue/review-summary): a reply posts a NEW issue comment to
+		//     the flat PR conversation (there is no reply thread on GitHub); a
+		//     resolve (Done) is local-only — GitHub has no resolve for these, so
+		//     it never touches GitHub.
+		//   - Review-diff thread: a reply (and a "/resolve") mirrors as a review
+		//     reply, unchanged.
 		if r.Source == "ui" {
-			_ = w.ExecuteActivity("replyGithub", map[string]any{
-				"pr": in.PR, "rootId": posted.RootID, "body": r.Body,
-			}, nil)
+			if isPRWide(in.Kind) {
+				if !r.Done {
+					_ = w.ExecuteActivity("postGithubIssueComment", map[string]any{
+						"pr": in.PR, "body": r.Body,
+					}, nil)
+				}
+			} else {
+				_ = w.ExecuteActivity("replyGithub", map[string]any{
+					"pr": in.PR, "rootId": posted.RootID, "body": r.Body,
+				}, nil)
+			}
 		}
 		if r.Done {
 			break
@@ -1799,7 +1835,17 @@ func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
 	if err != nil {
 		prRunID = ""
 	}
+	// Skip any GitHub comment already represented by one of this PR's existing
+	// threads — an app-created comment (its posted GitHub ID is in history) or an
+	// app-posted PR-wide reply (also in history) — so importing never duplicates
+	// the app's own comments. StartWorkflowID's gh-<id> key already dedups repeat
+	// imports of the same comment; this additionally dedups against app-created
+	// ones, whose Run ID is NOT gh-<id>.
+	known := m.knownGithubIDs(pr)
 	for _, in := range inputs {
+		if known[in.ImportedRootID] {
+			continue
+		}
 		runID := importedRunID(in.ImportedRootID)
 		if _, err := m.engine.StartWorkflowID(runID, WorkflowTaskCodeComment, in); err != nil {
 			m.logf("import comments: start run=%s pr=%d: %v", runID, pr, err)
@@ -1822,6 +1868,54 @@ func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
 			go m.poll(ctx, runID, pr, in.ImportedRootID, prRunID)
 		}
 	}
+}
+
+// knownGithubIDs returns the set of GitHub comment IDs already represented by
+// one of pr's task_code_comment threads, so importPRComments never re-imports an
+// app-created comment (or an app-posted PR-wide reply) as a duplicate. It reads,
+// per thread: the imported root ID from the input, and every GitHub ID this
+// thread posted (postGithubComment / postGithubIssueComment results in history —
+// the app-created root and any PR-wide replies). All durable (history/input), so
+// it survives a restart. O(runs) — the same scale as ResumePolling.
+func (m *TaskManager) knownGithubIDs(pr int) map[int64]bool {
+	known := map[int64]bool{}
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return known
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowTaskCodeComment {
+			continue
+		}
+		raw, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var in CodeCommentInput
+		if json.Unmarshal(raw, &in) != nil || in.PR != pr {
+			continue
+		}
+		if in.ImportedRootID != 0 {
+			known[in.ImportedRootID] = true
+		}
+		hist, err := m.engine.History(r.ID)
+		if err != nil {
+			continue
+		}
+		for _, ev := range hist {
+			if ev.Type != tembed.EventActivityCompleted {
+				continue
+			}
+			if ev.Name != "postGithubComment" && ev.Name != "postGithubIssueComment" {
+				continue
+			}
+			var pr postResult
+			if json.Unmarshal(ev.Payload, &pr) == nil && pr.RootID != 0 {
+				known[pr.RootID] = true
+			}
+		}
+	}
+	return known
 }
 
 // poll delivers each new GitHub reply as a "reply" Signal. Its cadence follows

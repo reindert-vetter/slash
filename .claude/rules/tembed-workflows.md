@@ -392,8 +392,33 @@ replies worden binnengepolld), i.p.v. read-only kopieën.
   her-posten), zodat de reply-poller draait en UI-replies wél naar de echte
   thread spiegelen; **local** (privé-notitie) → `RootID 0`, alle GitHub-calls
   no-op; **normaal** → posten + `RootID` vastleggen. `saveComment` bewaart
-  `Source`/`Kind`/`CreatedAt`. Echo-preventie in de reply-lus is ongewijzigd:
-  alleen `Source == "ui"` mirror't naar GitHub, `github`-sourced replies niet.
+  `Source`/`Kind`/`CreatedAt`.
+- **Reply-lus per thread-soort (`isPRWide(kind)` = `issue`/`review_summary`/
+  `review`):** echo-preventie ongewijzigd (alleen `Source == "ui"` mirror't naar
+  GitHub, `github`-sourced replies niet), maar het **mirror-pad** hangt af van de
+  thread:
+  - **Review-diff thread** (`Kind ""`): een reply (en een `/resolve`) mirror't als
+    **review-reply** (`replyGithub` → `pulls/{pr}/comments/{rootId}/replies`),
+    ongewijzigd.
+  - **PR-brede thread** (`isPRWide`): PR-brede comments (issue-comments/review-
+    summary's) hebben op GitHub **geen reply-thread** — een reply wordt daarom
+    gemirror'd als een **nieuwe issue-comment** op de platte PR-conversatie
+    (`postGithubIssueComment` → `github.PostIssueComment` →
+    `issues/{pr}/comments`). Die Activity retourneert de nieuwe comment-id als
+    `postResult` zodat 'ie in de history staat (voor de dedup hieronder). Een
+    **resolve** (`Done`) op een PR-brede thread is **alleen lokaal**: GitHub heeft
+    er geen concept voor, dus de workflow raakt GitHub niet aan (`if !r.Done`) —
+    `saveReaction` zet enkel de read-model-status op `resolved`.
+- **Dedup tegen de app z'n eigen comments (`knownGithubIDs`):** `importPRComments`
+  haalt álle GitHub-comment-roots op — óók degene die de app zélf plaatste (een
+  app-review-comment, of een PR-brede reply die als issue-comment werd gepost).
+  Zonder dedup zou dat een duplicaat maken (de app-run heeft géén `gh-<id>` Run
+  ID, dus `StartWorkflowID`-idempotentie vangt 'm niet). `knownGithubIDs(pr)`
+  scant daarom alle `task_code_comment`-runs van de PR en verzamelt hun bekende
+  GitHub-id's — `input.ImportedRootID` + elke `postGithubComment`/
+  `postGithubIssueComment`-result uit de history — en `importPRComments` slaat een
+  comment met een bekend id over. Alles durable (history/input), dus
+  herstart-veilig. O(runs), zelfde schaal als `ResumePolling`.
 - **Importer-glue + poller (`workflows.go`, cadans meeliftend op `pr_status`):**
   `importPRComments(ctx, pr)` leest de blocks (DB), fetcht review + general
   comments (reads-in-glue, zoals `poll`/`pollInbox`), mapt ze, en start per

@@ -62,8 +62,11 @@ vereiste t.o.v. het oudere per-mechanisme gedrag:
   zoekbox (`activateSearch()`); dat is nu **de omschrijving openen**
   (`state.showDescription = true`). `→` vanuit de omschrijving sluit 'm weer
   (`state.showDescription = false`) en geeft de blok-index de keyboard terug.
-  Terwijl de omschrijving open is doen `↑`/`↓` niets (geen interne cursor om te
-  lopen) — dat voorkomt dat ze de block-selectie eronder verschuiven.
+  Terwijl de omschrijving open is doet `↑` niets; `↓` geeft — als er PR-brede
+  comments zijn — de keyboard aan het **PR-brede-comments-blok** onder de kaart
+  (zie de aparte sectie "PR-brede comments, stop 1" verderop); zonder zulke
+  comments is `↓` ook een no-op (geen interne cursor om te lopen anders) — dat
+  voorkomt dat ze de block-selectie eronder verschuiven.
   **De zoekbox is geen eigen stop** — hij hoort bij stop 2 en is niet meer via
   `←` bereikbaar (dat was zijn enige toetsenbord-ingang); hij blijft gewoon
   bereikbaar via een muisklik (en native Tab), en typen filtert zoals altijd
@@ -89,6 +92,65 @@ vereiste t.o.v. het oudere per-mechanisme gedrag:
 - `state.showDescription`/`cs.taskSel`/`cs.sidebarOpen` leven bewust **buiten**
   de URL (net als `menu`/`ui.task` elders) — efemere cursor-state, geen
   navigatiepositie die een refresh moet terugzetten.
+
+### PR-brede comments, stop 1 (`PrWideComments`, `handlePrWideKey`)
+
+Onder de PR-omschrijving-kaart (stop 1) zit een tweede kaart
+(`data-testid=pr-wide-comments`, zie "PR-brede comments" in
+`.claude/rules/detail-layout.md`) met de PR-brede comments (`kind !== ''` —
+GitHub-issue-/review-comments zonder regel-anker). Die heeft een **eigen**
+cursor `pw` (`RelatedPanel.mjs`, los van `cs.focus`/`cs.sel` van het
+blok-gescopeerde comments/taken-paneel en los van `state.showDescription`
+zelf) en een eigen keyboard-handler, `handlePrWideKey(key)`, aangeroepen
+vanuit `home.mjs`'s `onKeydown` **zolang `state.showDescription` waar is** —
+vóór alle generieke shortcuts (`Enter`-opent-menu, `/`, `f`/`d`/`s`), zodat die
+niet per ongeluk een toetsaanslag inpikken terwijl dit blok de keyboard heeft
+(zelfde volgorde-precedent als `relatedActive()` verderop in `onKeydown`).
+`isPrWideFocused()` (`pw.focus !== null`) bepaalt of dit blok momenteel de
+keyboard bezit:
+
+- **`↓` vanuit de omschrijving** (stop 1 zelf, `pw.focus === null`) geeft de
+  keyboard aan dit blok — landt op de **eerste** entry (`pw.focus = 'item'`,
+  `pw.sel = 0`) — mits er PR-brede comments zijn; anders een no-op (de
+  omschrijving houdt de keyboard).
+- **`↓`/`↑`** lopen, terwijl `pw.focus === 'item'`, de platte entry-lijst
+  (`pw.sel`, geklemd op begin/eind); `↑` op de **eerste** entry geeft de
+  keyboard terug aan de omschrijving (`pw.focus = null`) — mirror van hoe `↑`
+  op de eerste regel van de blok-gescopeerde index terug naar de diff stapt.
+- **`Enter`** op een entry (`pw.focus === 'item'`) opent zijn thread
+  (`pw.focus = 'thread'`, `pw.threadPos = 0`, reply-veld gefocust) —
+  functioneel een klik op de rij. Binnen de thread lopen `↑`/`↓` de
+  berichtgeschiedenis (`pw.threadPos`, mirror van `cs.threadPos`); `↓` op de
+  onderkant (`pw.threadPos === 0`, het reply-veld) stapt door naar de
+  **volgende** entry (`pw.focus` terug naar `'item'`), als die bestaat.
+  **`Enter` binnen de thread** is de ontdekbare resolve-snelkoppeling: een
+  **leeg** reply-veld + `Enter` **resolvet** de comment (`done:true`, dezelfde
+  `POST /signals/reply` als de resolve-knop); een **niet-leeg** veld + `Enter`
+  wordt afgehandeld door het veld z'n eigen `@keydown` (verstuurt de reply,
+  `done:false`) — de globale `handlePrWideKey('Enter')`-tak doet in dat geval
+  bewust niets (de `pwComposeEmpty()`-guard), dus geen dubbele send. Shift+Enter
+  blijft een newline (de globale handler negeert `Enter` met `e.shiftKey`).
+- **`←`** stapt, van waar dan ook binnen dit blok (`pw.focus !== null`), één
+  niveau terug: uit een thread naar de rij-focus (`pw.focus = 'item'`), en
+  vanaf de rij-focus terug naar de omschrijving (`pw.focus = null`) — de
+  omschrijving blijft daarbij gewoon open (dit is geen stop-overgang, alleen
+  een interne terugstap). **Pas** wanneer dit blok géén focus heeft
+  (`pw.focus === null`, dus terug op de omschrijving zelf) valt `←` door naar
+  de bestaande stop-1-`←`-afhandeling in `onKeydown` (weg naar `/pr-overview`,
+  zie "Vóór stop 1" hierboven) — `handlePrWideKey('ArrowLeft')` geeft dan
+  `false` terug en de aanroeper (`onKeydown`) doet zelf de navigatie.
+- **`Escape`** sluit dit blok's focus in één klap (`pw.focus = null`), net als
+  `←` vanuit de rij-focus, maar in één stap ongeacht hoe diep je zat (thread of
+  rij).
+- **`Enter` op stop 1 zelf** (de omschrijving-kaart, `pw.focus === null`) blijft
+  ongewijzigd het **PR-brede** command-menu openen (zie hieronder) — dit blok
+  claimt `Enter` alleen zolang het zelf de focus heeft.
+
+Reply/resolve gaan via **hetzelfde** `POST /api/workflows/{runId}/signals/reply`-
+Signal als het blok-gescopeerde comments-paneel — zie "Reviewer-goedkeuring
+persisteren"/"De eerste slash-task" in `.claude/rules/tembed-workflows.md` voor
+het onderliggende `task_code_comment`-mechanisme; er is hier geen aparte
+write-weg nodig (de backend behandelt een PR-brede reply/resolve al correct).
 
 **`Enter`** opent een **command-palette** (`src/CommandMenu.mjs`,
 `data-testid=command-menu`): een doorzoekbaar commando-menu dat als **drijvende

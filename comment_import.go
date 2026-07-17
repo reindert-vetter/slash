@@ -140,6 +140,14 @@ func rowForLine(baseDir, headDir string, b Block, line int, side string) (int, b
 	return 0, false
 }
 
+// isPRWide reports whether a comment Kind is a PR-wide comment (no file:line
+// anchor): an issue comment, a review summary, or a review comment that couldn't
+// be pinned to a block. These live in the PR-info column's comment block, not the
+// block-scoped sidebar, and their replies mirror to GitHub as new issue comments.
+func isPRWide(kind string) bool {
+	return kind == "issue" || kind == "review_summary" || kind == "review"
+}
+
 // importedRunID is the deterministic Run ID an imported GitHub comment's thread
 // gets, so a repeated import (a re-poll, a restart) is a no-op reuse via
 // StartWorkflowID rather than a duplicate Execution.

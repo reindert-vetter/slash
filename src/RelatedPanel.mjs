@@ -157,12 +157,18 @@ function commentUnder(c, t) {
 // changed (e.g. navigating between blocks). Called whenever the list or the scope
 // changes (loadComments / setCommentScope).
 function recomputeView() {
+  // PR-wide comments (kind !== '': imported issue comments / review summaries)
+  // have no file:line anchor — they live in the PR-info column's PR-wide block
+  // (see PrWideComments), never in the block-scoped index. Exclude them here so
+  // they don't leak into the sidebar (esp. list-mode / null-scope, which would
+  // otherwise show the whole list).
+  const anchored = cs.list.filter((c) => !c.kind)
   const s = cs.scope
   if (!s) {
-    cs.view = cs.list
+    cs.view = anchored
     return
   }
-  const inBlock = cs.list.filter((c) => c.file === s.file && c.label === s.label)
+  const inBlock = anchored.filter((c) => c.file === s.file && c.label === s.label)
   cs.view = s.mode !== 'diff' || s.rowStart < 0 ? inBlock : inBlock.filter((c) => commentUnder(c, s))
 }
 
@@ -1072,13 +1078,29 @@ function commentRow(c, i) {
     >
       <span class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
       <span class="flex min-w-0 flex-col gap-0.5">
-        <span class="truncate text-xs font-medium text-slate-800 dark:text-zinc-200">${() => c.body}</span>
+        <span class="flex items-center gap-1.5">
+          <span class="truncate text-xs font-medium text-slate-800 dark:text-zinc-200">${commentBody(c)}</span>
+          ${() => sourceBadge(c)}
+        </span>
         <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
           >${() => c.file + ':' + c.line + ' · ' + c.reactionCount + ' reacties · ' + c.status}</span
         >
       </span>
     </button>
   `
+}
+
+// sourceBadge marks a comment imported from GitHub (source === 'github'), so the
+// reviewer can tell app-placed from imported comments — mirrors the "bron:
+// haiku/sonnet" badge on LLM-resolved related children. Returns '' for an
+// app-placed comment (source '' / 'ui').
+function sourceBadge(c) {
+  if (c.source !== 'github') return ''
+  return html`<span
+    class="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500 dark:bg-zinc-800 dark:text-zinc-400"
+    data-testid="comment-source"
+    >bron: github</span
+  >`
 }
 
 // reactionBubble — one message in the thread. `i`/`total` let it light up when it
@@ -1706,6 +1728,332 @@ export default function RelatedPanel(state, commentTarget, search) {
     <div class="contents" data-testid="related-panel-root">
       ${() => (relatedRailActive() ? relatedRail() : fullCard())}
     </div>
+  `
+}
+
+// ── PR-wide comments (issue/review comments, no file:line anchor) ────────────
+// GitHub-imported issue comments and review summaries (c.kind !== '') have no
+// file:line to anchor them to a block, so they never show in the block-scoped
+// comments index above (recomputeView filters them out) — they live here,
+// under the PR description in the PR-info column (stop 1 of the nav chain,
+// see detail-layout.md / keyboard-navigation.md). They share cs.list (already
+// loaded/polled by syncComments — see CommentsSidebar) but own a *separate*
+// cursor, `pw`: this block's keyboard focus is independent of the block-scoped
+// sidebar's cs.focus/cs.sel, and of the description card itself.
+//
+// pw.focus: null (the description owns the keyboard, nothing selected here) |
+// 'item' (↑/↓ walk the flat entry list) | 'thread' (↑/↓ walk that entry's
+// message history, mirroring cs.focus==='thread'/threadPos above). pw.sel
+// indexes the entry list; the selected entry's thread is always shown inline
+// under its row (unlike the block-scoped sidebar's separate list+thread
+// panes) — 'item' vs 'thread' only changes what the arrows do, not what's
+// rendered.
+const pw = reactive({ focus: null, sel: 0, threadPos: 0, busy: false })
+
+// prWideList is the PR-wide subset of cs.list, in the same (created_at) order
+// cs.list already carries.
+function prWideList() {
+  return cs.list.filter((c) => c.kind)
+}
+
+// pwSelI clamps pw.sel onto the current PR-wide list, like selI() does for
+// the block-scoped index.
+function pwSelI() {
+  const n = prWideList().length
+  return n ? Math.min(pw.sel, n - 1) : 0
+}
+
+function pwSelComment() {
+  return prWideList()[pwSelI()]
+}
+
+function pwReactionCount() {
+  return threadMessages(pwSelComment()).length
+}
+
+function pwScrollIntoView() {
+  requestAnimationFrame(() => {
+    const el = document.querySelectorAll('[data-testid=pr-wide-item]')[pwSelI()]
+    if (el) el.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+// pwFocusThread mirrors focusThread() above: caret in the reply field at the
+// bottom of the thread (threadPos 0), or blurred while walking older messages.
+function pwFocusThread() {
+  requestAnimationFrame(() => {
+    const input = document.querySelector('[data-testid=pr-wide-compose]')
+    if (pw.threadPos === 0) {
+      if (input) input.focus()
+    } else if (input && document.activeElement === input) {
+      input.blur()
+    }
+  })
+}
+
+function pwEnterThread() {
+  pw.focus = 'thread'
+  pw.threadPos = 0
+  pwFocusThread()
+}
+
+// isPrWideFocused reports whether this block currently owns the keyboard
+// (home.mjs's onKeydown checks this, alongside state.showDescription, before
+// letting the generic Enter/`/`/f-d-s shortcuts run — mirrors relatedActive()
+// for the block-scoped panel).
+export function isPrWideFocused() {
+  return pw.focus !== null
+}
+
+// pwComposeEmpty reports whether the focused entry's reply textarea is empty
+// — mirrors commentReplyEmpty/commentReplyEmpty's role: Enter on an empty
+// composer resolves instead of sending a reply (see handlePrWideKey/
+// pwSendReaction).
+function pwComposeEmpty() {
+  const el = document.querySelector('[data-testid=pr-wide-compose]')
+  return !el || el.value.trim() === ''
+}
+
+// pwSendReaction posts a reply (done:false) or resolves (done:true) via the
+// exact same Signal the block-scoped thread uses (sendReaction above) — the
+// backend already turns a reply on a PR-wide thread into a new GitHub issue
+// comment and treats resolve as local-only, so the frontend needs no special
+// casing here.
+async function pwSendReaction(done) {
+  const c = pwSelComment()
+  if (!c) return
+  const el = document.querySelector('[data-testid=pr-wide-compose]')
+  const body = (el && el.value.trim()) || (done ? '/resolve' : '')
+  if (!body) return
+  pw.busy = true
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ author: 'reviewer', body, done }),
+    })
+    if (el) el.value = ''
+    await loadComments(cs.pr)
+  } finally {
+    pw.busy = false
+  }
+}
+
+// handlePrWideKey drives one arrow/Enter/Escape press for this block, called
+// from home.mjs's onKeydown while state.showDescription is true. Returns
+// true/false to report whether it acted on the key — ArrowLeft/ArrowDown from
+// an unfocused block (pw.focus === null) fall through to the caller (which,
+// for ArrowLeft, leaves the whole nav chain to /pr-overview — see
+// keyboard-navigation.md).
+export function handlePrWideKey(key) {
+  const list = prWideList()
+  if (pw.focus === null) {
+    if (key === 'ArrowDown' && list.length) {
+      pw.focus = 'item'
+      pw.sel = 0
+      pw.threadPos = 0
+      pwScrollIntoView()
+      return true
+    }
+    return false
+  }
+  if (key === 'Escape') {
+    pw.focus = null
+    pw.threadPos = 0
+    const el = document.activeElement
+    if (el && el.blur) el.blur()
+    return true
+  }
+  if (pw.focus === 'thread') {
+    if (key === 'ArrowUp') {
+      pw.threadPos = Math.min(pw.threadPos + 1, pwReactionCount())
+      pwFocusThread()
+    } else if (key === 'ArrowDown') {
+      if (pw.threadPos === 0) {
+        // Bottom of the thread (the reply field) — advance to the next entry,
+        // if any (clamped, mirrors handleRelatedKey's flat comment-row walk).
+        if (pwSelI() < list.length - 1) {
+          pw.sel = pwSelI() + 1
+          pw.focus = 'item'
+          pw.threadPos = 0
+          pwScrollIntoView()
+        }
+      } else {
+        pw.threadPos -= 1
+        pwFocusThread()
+      }
+    } else if (key === 'ArrowLeft') {
+      // Back to the row focus (still within this block) — mirrors the
+      // block-scoped thread's own ArrowLeft (which exits the whole panel;
+      // here there's a shallower 'item' level to step back to first).
+      pw.focus = 'item'
+      pw.threadPos = 0
+    } else if (key === 'Enter') {
+      // Only reached when the reply textarea does NOT have DOM focus itself
+      // (isEditableFocused, home.mjs, catches that case first) — a
+      // discoverable resolve shortcut, mirroring the reaction-compose Enter/
+      // resolve-button split above: empty composer + Enter resolves.
+      if (pwComposeEmpty()) pwSendReaction(true)
+    }
+    return true
+  }
+  // pw.focus === 'item'
+  if (key === 'ArrowDown') {
+    if (pwSelI() < list.length - 1) {
+      pw.sel = pwSelI() + 1
+      pwScrollIntoView()
+    }
+  } else if (key === 'ArrowUp') {
+    if (pwSelI() === 0) {
+      pw.focus = null
+      return true
+    }
+    pw.sel = pwSelI() - 1
+    pwScrollIntoView()
+  } else if (key === 'ArrowLeft') {
+    // One step back to the description — mirrors exitRelated()'s "return to
+    // whatever's above" role, but within stop 1 only (never leaves the chain;
+    // the null-focus case above is what falls through to /pr-overview).
+    pw.focus = null
+    pw.threadPos = 0
+  } else if (key === 'Enter') {
+    pwEnterThread()
+  }
+  return true
+}
+
+// PW_KIND_LABEL names the kind badge on a PR-wide entry — issue/review
+// comments read the same ("PR-comment"); a review summary gets its own label.
+const PW_KIND_LABEL = { issue: 'PR-comment', review: 'PR-comment', review_summary: 'Review' }
+
+// commentBody is the single place a comment's body text is rendered — kept
+// tiny and reusable (both here and in the block-scoped commentRow above) so a
+// later markdown pass only has to change one function. Plain reactive text
+// for now, deliberately no markdown rendering yet.
+function commentBody(c) {
+  return () => (c ? c.body : '')
+}
+
+// prWideItem renders one PR-wide entry: a clickable summary row (status dot,
+// kind badge, source badge, relative time, body) that — like toComment() for
+// the block-scoped index — opens its thread right underneath when selected
+// (pw.sel === i), with the same reply/resolve controls as the block-scoped
+// thread (sendReaction), just against pw's own cursor.
+function prWideItem(c, i) {
+  const isSel = () => pwSelI() === i
+  const rowFocused = () => isSel() && pw.focus === 'item'
+  return html`
+    <div
+      class="${() =>
+        'rounded-lg border transition ' +
+        (isSel()
+          ? 'border-indigo-200 dark:border-indigo-500/40 bg-indigo-50/40 dark:bg-indigo-500/10'
+          : 'border-slate-200 dark:border-zinc-800 hover:border-indigo-200 dark:hover:border-indigo-500/40')}"
+      data-testid="pr-wide-item"
+      data-active="${() => (isSel() ? 'true' : 'false')}"
+    >
+      <button
+        type="button"
+        class="${() =>
+          'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left ' +
+          (rowFocused() ? 'ring-1 ring-indigo-300 dark:ring-indigo-500/40' : '')}"
+        @click="${() => {
+          pw.sel = i
+          pwEnterThread()
+        }}"
+      >
+        <span
+          class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"
+        ></span>
+        <span class="flex min-w-0 flex-col gap-0.5">
+          <span class="flex flex-wrap items-center gap-1.5">
+            <span
+              class="rounded-full bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-500 dark:text-zinc-400"
+              data-testid="pr-wide-kind"
+              >${PW_KIND_LABEL[c.kind] || c.kind}</span
+            >
+            ${() => sourceBadge(c)}
+            <span class="text-[10px] text-slate-400 dark:text-zinc-500">${relTime(c.createdAt)}</span>
+          </span>
+          <span class="line-clamp-2 text-xs text-slate-700 dark:text-zinc-300">${commentBody(c)}</span>
+        </span>
+      </button>
+      ${() =>
+        isSel()
+          ? html`<div class="border-t border-slate-100 dark:border-zinc-800/60 p-2.5">
+              <div class="mb-2 flex max-h-40 flex-col gap-1.5 overflow-auto">
+                ${() =>
+                  threadMessages(c).map((r, ti, arr) => reactionBubble(r, ti, arr.length).key('pwmsg:' + r.id))}
+              </div>
+              <div class="flex items-center gap-2">
+                <textarea
+                  class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2 py-1 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
+                  placeholder="Reageer…"
+                  data-testid="pr-wide-compose"
+                  @keydown="${(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      pwSendReaction(false)
+                    }
+                  }}"
+                ></textarea>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-lg bg-indigo-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-indigo-600"
+                  data-testid="pr-wide-send"
+                  @click="${() => pwSendReaction(false)}"
+                >
+                  Stuur
+                </button>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-lg border border-emerald-300 dark:border-emerald-500/40 px-2 py-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/15"
+                  data-testid="pr-wide-resolve"
+                  @click="${() => pwSendReaction(true)}"
+                >
+                  ✓
+                </button>
+              </div>
+            </div>`
+          : ''}
+    </div>
+  `
+}
+
+// PrWideComments — the card mounted below prInfoCard in PrInfoPanel
+// (home.mjs), inside the same state.showDescription-gated container, so it
+// needs no visibility check of its own. `shrink-0 max-h-[16rem]` gives it a
+// bounded, independently-scrolling height under the (flex-1) description
+// card, mirroring how workflowsSection sits under commentsSection in
+// CommentsSidebar (see detail-layout.md).
+export function PrWideComments(state) {
+  syncComments(state ? state.pr : null)
+  return html`
+    <section
+      class="flex min-h-0 shrink-0 max-h-[16rem] flex-col overflow-hidden rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm"
+      data-testid="pr-wide-comments"
+    >
+      <div class="border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
+        <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">PR-comments</h2>
+        <p class="text-[11px] text-slate-400 dark:text-zinc-500">issue- en review-comments op de hele PR</p>
+      </div>
+      <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-1.5 overflow-auto p-2">
+        ${() => {
+          // Always return an ARRAY from this slot (see the "no comments" note
+          // on commentsSection's empty state) — a slot alternating between a
+          // single element and an array can freeze empty after the first
+          // empty render.
+          const list = prWideList()
+          return list.length === 0
+            ? [
+                html`<p class="px-2.5 py-3 text-[11px] text-slate-400 dark:text-zinc-500">
+                  Geen PR-brede comments.
+                </p>`.key('no-pr-wide'),
+              ]
+            : list.map((c, i) => prWideItem(c, i).key('pr-wide:' + c.id))
+        }}
+      </div>
+    </section>
   `
 }
 
