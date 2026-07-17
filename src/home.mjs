@@ -239,9 +239,15 @@ const state = reactive({
 })
 
 // toggleDiffView flips the global diff-pane preference between full side-by-side
-// and new-only (see state.diffViewMode above).
+// and new-only (see state.diffViewMode above). The reactive re-render rebuilds
+// every visible pane's HTML (Block.mjs's codeDiff, .innerHTML) from scratch,
+// which resets each pane's scrollTop to 0 — without re-centring, the diff jumps
+// to the top of the function instead of staying on the active change. Not a
+// navigation step, so no glide (mirrors ensureCode's `false` for a cached/
+// already-loaded re-render, see detail-layout.md).
 function toggleDiffView() {
   state.diffViewMode = state.diffViewMode === 'new' ? 'split' : 'new'
+  scrollChangeIntoView(false)
 }
 
 // isEditableFocused reports whether DOM focus currently sits on a text input —

@@ -218,4 +218,56 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
       })
       .toBeCloseTo(splitBox.width, 0)
   })
+
+  // Regression: toggleDiffView rebuilds every visible pane's HTML (Block.mjs's
+  // codeDiff, via .innerHTML), which resets each pane's scrollTop to 0. Without
+  // re-centring after the toggle, a change deep inside a long function jumped to
+  // the top of the function instead of staying in view. CreatePaymentAction::execute
+  // (block 1) is ~60 lines with its one real change on line 67 (well below the
+  // fold), so scrollChangeIntoView must have actually scrolled the pane down to
+  // reach it — a reliable, non-trivial scrollTop to assert against.
+  test('`a` keeps the active change in view instead of jumping to the top', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.locator('[data-idx="1"]').click()
+    await page.keyboard.press('ArrowRight') // step into the diff, lands on the only change
+
+    const anchor = page.locator('[data-change-active]').first()
+    await expect(anchor).toBeVisible()
+
+    // scrollChangeIntoView already centred the anchor on entry — confirm the
+    // pane actually had to scroll for this fixture (a non-zero baseline), else
+    // this test wouldn't tell the top-jump apart from "there was nothing to
+    // scroll".
+    const scrollTopBefore = await page.evaluate(() => {
+      const el = document.querySelector('[data-change-active]')
+      return el.closest('[data-scrollsync]').scrollTop
+    })
+    expect(scrollTopBefore).toBeGreaterThan(0)
+
+    await page.keyboard.press('a')
+    // The pane's HTML gets rebuilt (fewer/no old-pane) — re-query after the toggle.
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await expect
+      .poll(async () => {
+        return page.evaluate(() => {
+          const el = document.querySelector('[data-change-active]')
+          return el ? el.closest('[data-scrollsync]').scrollTop : -1
+        })
+      })
+      .toBeGreaterThan(0)
+
+    // Toggling back should also keep it in view, not just the one-shot new-only case.
+    await page.keyboard.press('a')
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await expect
+      .poll(async () => {
+        return page.evaluate(() => {
+          const el = document.querySelector('[data-change-active]')
+          return el ? el.closest('[data-scrollsync]').scrollTop : -1
+        })
+      })
+      .toBeGreaterThan(0)
+  })
 })
