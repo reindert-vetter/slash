@@ -1,10 +1,20 @@
 package tembed
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
+
+// ErrDuplicateEvent is returned by Store.AppendEvent when an event already
+// exists at the given (runID, seq) — i.e. some other writer already recorded
+// it. This happens when two engine instances (e.g. two OS processes sharing
+// one database, or a Recover racing a live advance) both replay the same run
+// and both compute the same next seq. It is not data corruption: the loser
+// should simply abandon its attempt and retry against the now-current
+// history (see Workflow.record and Engine.advance).
+var ErrDuplicateEvent = errors.New("tembed: event already exists")
 
 // Run status values.
 const (
@@ -85,6 +95,11 @@ func (m *MemoryStore) SetStatus(runID, status string, at time.Time) error {
 func (m *MemoryStore) AppendEvent(runID string, e Event) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, existing := range m.events[runID] {
+		if existing.Seq == e.Seq {
+			return ErrDuplicateEvent
+		}
+	}
 	m.events[runID] = append(m.events[runID], e)
 	return nil
 }

@@ -126,6 +126,15 @@ func (w *Workflow) SideEffect(out any, fn func() any) {
 }
 
 // record appends an event to the in-memory history and persists it.
+//
+// A duplicate-seq error (ErrDuplicateEvent) means some other writer already
+// recorded this run's next event — e.g. two engine instances (processes)
+// racing on the same store. That is not a fatal storage error: it yields the
+// run via the same blocked-panic mechanism as a pending signal/timer, so
+// Engine.advance abandons this attempt without touching status, and a later
+// advance replays against the now-current, complete history. Any other
+// persist failure (disk full, corrupt DB, ...) still panics loudly — this
+// tolerance is scoped narrowly to the one benign, expected race.
 func (w *Workflow) record(e Event) {
 	e.Seq = len(w.history)
 	if e.Time.IsZero() {
@@ -133,6 +142,9 @@ func (w *Workflow) record(e Event) {
 	}
 	w.history = append(w.history, e)
 	if err := w.engine.store.AppendEvent(w.runID, e); err != nil {
+		if errors.Is(err, ErrDuplicateEvent) {
+			panic(blocked{kind: "concurrent"})
+		}
 		panic(fmt.Sprintf("tembed: persist event: %v", err))
 	}
 }

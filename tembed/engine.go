@@ -219,21 +219,56 @@ func (e *Engine) advance(runID string) {
 
 	now := e.now()
 	switch {
+	case blk != nil && blk.kind == "concurrent":
+		// Another writer already recorded this run's next event (lost a
+		// race, see Workflow.record). Our speculative in-memory event was
+		// never persisted, so durable state is untouched — abandon this
+		// attempt and let the next advance (a poll, a signal, or the next
+		// Recover) replay against the now-current history.
+		e.logf("tembed: concurrent advance for run %s, will retry", runID)
 	case blk != nil && blk.kind == "timer":
 		e.setStatus(runID, StatusWaiting)
 		e.scheduleTimer(runID, blk.fireAt)
 	case blk != nil: // signal
 		e.setStatus(runID, StatusWaiting)
 	case panicked != nil:
-		w.record(Event{Type: EventWorkflowFailed, Error: fmt.Sprintf("panic: %v", panicked)})
+		if safeRecord(w, Event{Type: EventWorkflowFailed, Error: fmt.Sprintf("panic: %v", panicked)}) {
+			e.logf("tembed: concurrent advance for run %s, will retry", runID)
+			return
+		}
 		e.setStatus(runID, StatusFailed)
 	case done && wErr != nil:
-		w.record(Event{Type: EventWorkflowFailed, Error: wErr.Error()})
+		if safeRecord(w, Event{Type: EventWorkflowFailed, Error: wErr.Error()}) {
+			e.logf("tembed: concurrent advance for run %s, will retry", runID)
+			return
+		}
 		e.setStatus(runID, StatusFailed)
 	case done:
-		w.record(Event{Type: EventWorkflowCompleted, Payload: result, Time: now})
+		if safeRecord(w, Event{Type: EventWorkflowCompleted, Payload: result, Time: now}) {
+			e.logf("tembed: concurrent advance for run %s, will retry", runID)
+			return
+		}
 		e.setStatus(runID, StatusCompleted)
 	}
+}
+
+// safeRecord records e on w, tolerating the case where some other writer
+// already recorded this run's next event concurrently (see Workflow.record).
+// It reports whether that happened (concurrent == true), in which case the
+// caller must not touch the run's status — a later advance will retry. Any
+// other panic from record (a real persistence failure) is re-raised.
+func safeRecord(w *Workflow, e Event) (concurrent bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if b, ok := r.(blocked); ok && b.kind == "concurrent" {
+				concurrent = true
+				return
+			}
+			panic(r)
+		}
+	}()
+	w.record(e)
+	return false
 }
 
 func (e *Engine) setStatus(runID, status string) {

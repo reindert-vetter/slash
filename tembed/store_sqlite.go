@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -85,7 +86,19 @@ func (s *SQLiteStore) AppendEvent(runID string, e Event) error {
 		`INSERT INTO events (run_id, seq, type, name, payload, error, time)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		runID, e.Seq, string(e.Type), e.Name, string(e.Payload), e.Error, e.Time.Format(tsLayout))
+	if err != nil && isUniqueConstraintErr(err) {
+		return ErrDuplicateEvent
+	}
 	return err
+}
+
+// isUniqueConstraintErr reports whether err is a SQLite UNIQUE constraint
+// violation (e.g. two writers racing to insert the same (run_id, seq)).
+// modernc.org/sqlite wraps the driver error without a portable typed
+// sentinel we can rely on across versions, so we match on the message —
+// the same phrase that used to reach the caller unfiltered.
+func isUniqueConstraintErr(err error) bool {
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
 func (s *SQLiteStore) LoadRun(runID string) (RunRecord, []Event, error) {
