@@ -43,6 +43,35 @@
   wikkel de lege-staat in een **array van één** (`[html\`<p …>…</p>\`.key('no-comments')]`)
   zodat de slot-vorm stabiel een keyed array blijft. Re-keyen van het paneel of een
   scalar-versieteller hielpen niet; alleen de stabiele array-vorm.
+- **arrow.js — key nooit een template waarvan de hele body één toggelende
+  expressie is (`` html`${() => cond ? sub() : ''}` ``).** Verwant aan de
+  single↔array-valkuil hierboven, maar erger: arrow.js zet de DOM-grenzen van
+  een chunk (`ref.f`/`ref.l`) alleen bij **hydration**; wisselt de geneste
+  reconciler die inhoud later om (template ↔ `''`), dan vervangt hij de DOM
+  **zonder** de `ref` van de eigenaar-chunk bij te werken. Bij een template
+  waarvan de expressie de héle body is, ís die expressie de chunk-grens — de
+  `ref` wijst na één toggle dus naar verwijderde nodes. Staat zo'n template
+  als **keyed item in een lijst**, dan ontspoort de keyed reconcile daarna
+  stap voor stap: `patchKeyedList` bailt op de stale ref (parent `null`), het
+  generieke fallback-pad verliest de chunk (tekst-placeholder i.p.v. de
+  chunk), en een volgende run gebruikt de stale ref als **anchor** — nieuw
+  gemounte items belanden in een detached fragment en verdwijnen uit beeld,
+  waarna twee reconciler-administraties om dezelfde chunks vechten (oneindige
+  microtask-loop, tab bevriest). Zo verdween de look-ahead-preview-kaart bij
+  herhaald ↓/↑ door same-file blocks: `stepChevronSlot` (`home.mjs`) was zo'n
+  kale wrapper, gekeyed als `step-up`/`step-down` in de block-kolom.
+  (Ongepatchte upstream 1.0.6 crasht op hetzelfde scenario al eerder met
+  `expressionPool[effect] is not a function` — LOCAL PATCH 1 maskeert die
+  crash tot stille render-corruptie.) **Oplossing:** geef zo'n slot een
+  **stabiele element-root** en toggle bínnen die root, bv.
+  `` html`<div class="contents">${() => cond ? sub() : ''}</div>` `` — de
+  `ref` wijst dan permanent naar het element. De **statische**
+  `contents`-class is dubbel bewust: `display:contents` haalt de wrapper-box
+  uit de layout (inhoud toont → die is zelf het flex-item; leeg → géén
+  flex-item, dus ook geen `gap`-artefact), én een statische class vermijdt een
+  reactieve attribuut-binding die bij elke navigatiestap opnieuw zou zetten
+  (de flicker-test in `navigate.spec.mjs` eist nul attribuut-mutaties per
+  stap). Regressietest: `tests/step-preview-stability.spec.mjs`.
 - **arrow.js hergebruikt een keyed node zonder z'n function-bindings te
   herdraaien — en verliest soms een `.innerHTML`/attribuut-update bij
   co-subscribers.** Twee samenhangende valkuilen, beide waargenomen in de

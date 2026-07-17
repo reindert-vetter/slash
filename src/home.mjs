@@ -2984,8 +2984,25 @@ function stepChevron(dir) {
 // `${() => menu.open ? menuOverlay() : ''}` toggle) keeps the outer closure's
 // dependency set limited to what it explicitly reads (selected/codeVersion/
 // focusLevel), so a plain navigation step only re-runs this one small binding.
+//
+// The stable <div> root is load-bearing. This used to be a bare-expression
+// template (html`${() => canStep(delta) ? stepChevron(dir) : ''}`), which — as
+// a keyed item in the block-column list — corrupted arrow.js's keyed
+// reconcile: a chunk's DOM boundary (ref.f/ref.l) is only set at hydration,
+// so once the nested toggle swapped its content (chevron ↔ ''), the chunk's
+// ref pointed at removed nodes. The next same-file block step then anchored
+// freshly mounted cards after a detached node — the look-ahead preview card
+// vanished — and a follow-up step locked the tab in an infinite reconcile
+// loop. Wrapping the toggle inside a permanent element keeps ref valid
+// forever. The wrapper's class is a *static* `contents`: display:contents
+// removes the wrapper's own box, so while the chevron shows it passes through
+// as the flex item, and while it's empty it contributes no flex item at all —
+// no gap-3 artifact in either state, and no reactive class attribute that
+// would re-set on every change-step (the flicker test asserts zero attribute
+// mutations per step). See the "bare single-expression keyed template"
+// pitfall in .claude/rules/conventions.md.
 function stepChevronSlot(delta, dir) {
-  return html`${() => (canStep(delta) ? stepChevron(dir) : '')}`
+  return html`<div class="contents">${() => (canStep(delta) ? stepChevron(dir) : '')}</div>`
 }
 
 // menuAnchor returns the element the command palette floats *beneath* (its

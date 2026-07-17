@@ -269,7 +269,13 @@ dan vallen de links terug op de kale PR-URL resp. de Jira-base.
   block-kaart** — onder de kaart (bij `↓`) net boven het gestippelde
   connector-lijntje, of erboven (bij `↑`) — als hint dat de pijl je naar het
   buurblock brengt (`stepChevron`/`canStep(delta)` in `home.mjs`, in de
-  block-kolom náást de kaarten gerenderd). Dit staat los van het **groene
+  block-kolom náást de kaarten gerenderd). Het slot dat dit chevron toggelt
+  (`stepChevronSlot`) heeft bewust een **stabiele element-root** (een statische
+  `display:contents`-wrapper) — een kale keyed `${…}`-wrapper liet hier de
+  chunk-`ref` stale gaan en corrumpeerde de keyed reconcile van de
+  block-kolom (verdwijnende preview-kaart + tab-hang bij herhaald ↓/↑ door
+  same-file blocks); zie de "kale toggelende expressie"-valkuil in
+  `.claude/rules/conventions.md`. Dit staat los van het **groene
   scroll-chevron _binnen_ de kaart** (`scrollHint`/`updateHints` in `Block.mjs`),
   dat enkel nog "er zijn wijzigingen buiten beeld — scroll verder in dít block"
   betekent. Grijs + buiten = je verlaat het block; groen + binnen = blijf scrollen.

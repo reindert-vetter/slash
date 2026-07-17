@@ -345,7 +345,14 @@ grijze step-chevron (`stepChevronSlot`/`canStep` verderop) leest zelf
 rechtstreeks in de outer array-bouwende closure van `DetailPanel` — anders lekt
 die lezing naar de hele closure en herbouwt elke stap alle `Block()`-kaarten met
 verse `activeGroup`/`hintsEnabled`/etc.-closures. Zie de bijbehorende
-arrow.js-valkuil in `.claude/rules/conventions.md`.
+arrow.js-valkuil in `.claude/rules/conventions.md`. Dat geneste slot zit
+bovendien in een **stabiele element-root** (een `<div>` met een statische
+`contents`-class) — niet als kale keyed `${…}`-wrapper: die liet de
+chunk-`ref` stale gaan zodra het chevron toggelde en corrumpeerde daarmee de
+keyed reconcile van de block-kolom (de look-ahead-preview verdween en de tab
+bevroor bij herhaald ↓/↑ door same-file blocks) — zie de "kale toggelende
+expressie"-valkuil in `.claude/rules/conventions.md` en
+`tests/step-preview-stability.spec.mjs`.
 
 `RelatedPanel` is **puur placeholder met dummy data** — nog geen `/api`-koppeling.
 Twee naast elkaar liggende kaarten (Onderliggende code links, comment-blok
