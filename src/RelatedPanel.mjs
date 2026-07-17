@@ -1074,7 +1074,18 @@ function commentsSection(state, commentTarget, openCompose) {
 
 // KIND_LABEL names the relation on a child card. method_call/covers carry no
 // label: they show a +added/-removed diff-stat (diffStatBadge) instead.
-const KIND_LABEL = { event_listener: 'listener', covered_by: 'test' }
+const KIND_LABEL = {
+  event_listener: 'listener',
+  covered_by: 'test',
+  // Laravel request-lifecycle children — the badge names the child's role, seen
+  // from its parent (a route's child is a controller, a controller's child is a
+  // request/resource/model, a request's child is a policy).
+  route_controller: 'controller',
+  controller_request: 'request',
+  controller_resource: 'resource',
+  controller_model: 'model',
+  request_policy: 'policy',
+}
 
 // diffStatBadge shows, for a called method (or a test's covered method), how
 // many lines its definition adds/removes ("+A −R", green/red) instead of a

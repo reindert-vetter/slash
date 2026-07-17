@@ -339,11 +339,48 @@ deze PR gewijzigd is** (beide kanten moeten wijzigen om te koppelen).
   `List(pr)`. `kind` houdt de tabel open voor latere relatietypes.
 - **Analyse-service `relations.go`** (package main, géén module — leest de
   head-worktree = side-effect): `buildRelations(dataDir, pr, blocks)` draait een
-  lijst **detectors** (nu `eventListenerDetector`). De event→listener-map komt
+  lijst **detectors** (nu `eventListenerDetector` + de vijf Laravel-detectors
+  hieronder). De event→listener-map komt
   robuust uit drie bronnen (union): de `handle(EventType $e)`-type-hint, het
   `$listen`-array in een `*ServiceProvider.php`, en `Event::listen(...)`-calls;
   dispatch-sites worden per blok-body gescand (`event(new X`, `X::dispatch(`, …).
   Herbruikt `extractBlockSource` (code.go) om block-bodies te lezen.
+- **Laravel request-keten** — vijf extra **`kind`s**, allemaal **both-changed**
+  (net als `event_listener`: een edge verschijnt alléén als beide blokken in deze
+  PR wijzigen; ongewijzigde bestanden worden nooit als node geïnjecteerd, en het
+  hoogste níveau dát wél wijzigt wordt vanzelf de tree-root omdat `recomputeLeftList`
+  elke child uit de linkerlijst haalt). De head-worktree mag wél vrij gelezen
+  worden voor de mapping (zoals `providerEventMap` ongewijzigde ServiceProviders
+  leest). Middleware is **bewust buiten scope**. De detectors delen `blockIndex`
+  (changed new-side blocks per short class name), `blockText` (leest een blok-body;
+  voor de whole-file `ROUTE`-fallback het hele bestand) en `edgeEmitter` (dedup):
+  - **`route_controller`** (`routeControllerDetector`) — een gewijzigd route-bestand
+    (whole-file `ROUTE`-blok) → de gewijzigde controller-methodes die het aanroept:
+    array-callable `[X::class, 'm']`, string-callable `'Ns\X@m'` (namespace-prefix
+    genegeerd via `shortName`), en resource-routes `Route::(api)resource('p',
+    X::class|'X')` (ook de oude string-controller-vorm) → élke gewijzigde
+    CONTROLLER-methode van die class.
+  - **`controller_request`** (`controllerRequestDetector`) — een gewijzigde
+    controller-methode → het gewijzigde `XRequest`-blok uit een type-hinted
+    parameter (`\w+Request \$`) → alle gewijzigde REQUEST-methodes van die class.
+  - **`controller_resource`** (`controllerResourceDetector`) — controller-methode →
+    de gewijzigde API-Resource die hij bouwt/teruggeeft: `new XResource(`,
+    `XResource::make|collection(`, of het return-type `): XResource`.
+  - **`controller_model`** (`controllerModelDetector`) — controller-methode → het
+    gewijzigde route-model-bound `Model`-blok uit een type-hinted parameter
+    (`ProductGroup $productGroup`), gefilterd op MODEL-categorie zodat
+    Request/Resource/interfaces afvallen → **alle** gewijzigde methodes van die
+    model-class (afgesproken granulariteit: een model-param noemt een class, geen
+    method).
+  - **`request_policy`** (`requestPolicyDetector`) — een gewijzigde
+    `FormRequest::authorize` → de gewijzigde Policy-methode die hij checkt:
+    `->can('ability', XPolicy::class)` (en de array-vorm `[XPolicy::class, …]`),
+    waarbij de **ability** de policy-methode is (`can('show', …)` → `XPolicy::show`).
+    Een `Model::class`-ref resolvt naar zijn Policy via de `$policies`-map in een
+    `*ServiceProvider` (`policiesMap`), met de `{Model}Policy`-conventie als
+    fallback. `POLICY` is een nieuwe categorie (`classify.go`, `app/Policies/`);
+    `isPolicyBlock` valt terug op pad/`Policy`-suffix zodat een nog niet
+    her-geïngest blok ook matcht.
 - **Workflow** (`workflows.go`): `buildRelationsWorkflow` draait de
   `buildRelations`-Activity één keer bij start (synchroon in `StartWorkflow`) en
   opnieuw op elk **`rebuild`**-Signal. `EnsureRelations(ctx, pr)` (spiegelt
@@ -356,9 +393,21 @@ deze PR gewijzigd is** (beide kanten moeten wijzigen om te koppelen).
 - **Frontend:** `home.mjs` laadt de relaties in `loadBlocks`, splitst
   `state.blocks` (top-level = `allBlocks` minus children) van `state.allBlocks`;
   de sidebar + navigatie draaien op `state.blocks`, children renderen in de
-  **Onderliggende code**-kaart (zie `.claude/rules/detail-layout.md`).
-- Tests: `relations_test.go` (detector met beide mapping-bronnen, de
-  beide-kanten-eis, module round-trip, en de workflow-end-to-end);
+  **Onderliggende code**-kaart (zie `.claude/rules/detail-layout.md`). `childrenOf`
+  draagt de relatie-`kind` per child mee (`{ block, kind }`, niet meer hardcoded
+  `event_listener`) zodat `relatedChildren` 'm doorgeeft en `KIND_LABEL`
+  (`RelatedPanel.mjs`) het juiste badge toont — het badge benoemt de **rol van de
+  child** gezien vanaf zijn parent (`route_controller`→"controller",
+  `controller_request`→"request", `controller_resource`→"resource",
+  `controller_model`→"model", `request_policy`→"policy"). De keten nest gratis via
+  drill (een child die zelf een PR-blok is krijgt zijn eigen Onderliggende-code-
+  paneel): route → controller → request/resource/model, en request → policy.
+- Tests: `relations_test.go` (event: detector met beide mapping-bronnen, de
+  beide-kanten-eis, module round-trip, en de workflow-end-to-end; Laravel:
+  `TestBuildRelationsLaravelChain` (alle vijf edges + de array-/string-/resource-
+  route-vormen), `TestBuildRelationsLaravelBothSidesRequired` (geen policy-blok →
+  geen `request_policy`; geen route-blok → geen `route_controller`, maar de
+  controller-downstream-edges vuren wél), en `TestBuildRelationsLaravelWorkflow`);
   `tests/relations.spec.mjs` (Playwright: child weg uit de lijst, wél in het
   paneel — geseed via `slash seed -relations`).
 

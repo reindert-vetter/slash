@@ -160,6 +160,234 @@ func TestRelationsModuleRoundTrip(t *testing.T) {
 	}
 }
 
+// ── Laravel request-lifecycle detectors ─────────────────────────────────────
+
+// writeLaravelFixture lays out a head worktree with a route file, a controller
+// whose show() type-hints a FormRequest + an Eloquent model and returns a
+// Resource, the FormRequest whose authorize() checks a Policy, and the model,
+// resource and policy — enough to exercise all five edges plus the string- and
+// resource-route action forms.
+func writeLaravelFixture(t *testing.T, dataDir string, pr int) {
+	t.Helper()
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"routes/api.php": `<?php
+use App\Http\Controllers\ProductGroupController;
+Route::get('product-groups/{productGroup}', [ProductGroupController::class, 'show']);
+Route::apiResource('promotions', PromotionController::class);
+Route::resource('categories', 'CategoryController')->only(['index']);
+Route::get('legacy', 'App\Http\Controllers\LegacyController@index');
+`,
+		"app/Http/Controllers/ProductGroupController.php": `<?php
+namespace App\Http\Controllers;
+class ProductGroupController {
+    public function show(ProductGroupShowRequest $request, ProductGroup $productGroup): ProductGroupResource {
+        return ProductGroupResource::make($productGroup);
+    }
+}
+`,
+		"app/Http/Controllers/PromotionController.php": `<?php
+namespace App\Http\Controllers;
+class PromotionController {
+    public function index() { return []; }
+}
+`,
+		"app/Http/Controllers/LegacyController.php": `<?php
+namespace App\Http\Controllers;
+class LegacyController {
+    public function index() { return []; }
+}
+`,
+		"app/Http/Controllers/CategoryController.php": `<?php
+namespace App\Http\Controllers;
+class CategoryController {
+    public function index() { return []; }
+}
+`,
+		"app/Http/Requests/ProductGroupShowRequest.php": `<?php
+namespace App\Http\Requests;
+class ProductGroupShowRequest {
+    public function authorize() {
+        return user()->can('show', ProductGroupPolicy::class);
+    }
+    public function rules() { return []; }
+}
+`,
+		"app/Http/Resources/ProductGroupResource.php": `<?php
+namespace App\Http\Resources;
+class ProductGroupResource {
+    public function toArray($request) { return []; }
+}
+`,
+		"app/Models/ProductGroup.php": `<?php
+namespace App\Models;
+class ProductGroup {
+    public function scopeActive($q) { return $q; }
+}
+`,
+		"app/Policies/ProductGroupPolicy.php": `<?php
+namespace App\Policies;
+class ProductGroupPolicy {
+    public function show($user) { return true; }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// laravelFixtureBlocks are the changed (new-side) blocks matching writeLaravelFixture.
+func laravelFixtureBlocks(pr int) []Block {
+	nb := func(file, class, name, cat string) Block {
+		return Block{PR: pr, File: file, Class: class, Name: name, Category: cat, Side: SideNew, Status: StatusModified}
+	}
+	return []Block{
+		nb("routes/api.php", "", "api.php", "ROUTE"),
+		nb("app/Http/Controllers/ProductGroupController.php", "ProductGroupController", "show", "CONTROLLER"),
+		nb("app/Http/Controllers/PromotionController.php", "PromotionController", "index", "CONTROLLER"),
+		nb("app/Http/Controllers/LegacyController.php", "LegacyController", "index", "CONTROLLER"),
+		nb("app/Http/Controllers/CategoryController.php", "CategoryController", "index", "CONTROLLER"),
+		nb("app/Http/Requests/ProductGroupShowRequest.php", "ProductGroupShowRequest", "authorize", "REQUEST"),
+		nb("app/Http/Requests/ProductGroupShowRequest.php", "ProductGroupShowRequest", "rules", "REQUEST"),
+		nb("app/Http/Resources/ProductGroupResource.php", "ProductGroupResource", "toArray", "RESOURCE"),
+		nb("app/Models/ProductGroup.php", "ProductGroup", "scopeActive", "MODEL"),
+		nb("app/Policies/ProductGroupPolicy.php", "ProductGroupPolicy", "show", "POLICY"),
+	}
+}
+
+func blockBy(blocks []Block, class, name string) Block {
+	for _, b := range blocks {
+		if b.Class == class && b.Name == name {
+			return b
+		}
+	}
+	return Block{}
+}
+
+func hasKindEdge(rels []relations.Relation, parent, child Block, kind string) bool {
+	for _, r := range rels {
+		if r.ParentID == parent.ID() && r.ChildID == child.ID() && r.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func countKind(rels []relations.Relation, kind string) int {
+	n := 0
+	for _, r := range rels {
+		if r.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+func TestBuildRelationsLaravelChain(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 55
+	writeLaravelFixture(t, dataDir, pr)
+	blocks := laravelFixtureBlocks(pr)
+	rels := buildRelations(dataDir, pr, blocks)
+
+	route := blockBy(blocks, "", "api.php")
+	ctrl := blockBy(blocks, "ProductGroupController", "show")
+	promo := blockBy(blocks, "PromotionController", "index")
+	legacy := blockBy(blocks, "LegacyController", "index")
+	category := blockBy(blocks, "CategoryController", "index")
+	authorize := blockBy(blocks, "ProductGroupShowRequest", "authorize")
+	rules := blockBy(blocks, "ProductGroupShowRequest", "rules")
+	resource := blockBy(blocks, "ProductGroupResource", "toArray")
+	model := blockBy(blocks, "ProductGroup", "scopeActive")
+	policy := blockBy(blocks, "ProductGroupPolicy", "show")
+
+	// route → controller: array-callable, apiResource, string-callable.
+	if !hasKindEdge(rels, route, ctrl, relations.KindRouteController) {
+		t.Errorf("missing route→controller (array-callable) edge")
+	}
+	if !hasKindEdge(rels, route, promo, relations.KindRouteController) {
+		t.Errorf("missing route→controller (apiResource) edge")
+	}
+	if !hasKindEdge(rels, route, legacy, relations.KindRouteController) {
+		t.Errorf("missing route→controller (string-callable) edge")
+	}
+	if !hasKindEdge(rels, route, category, relations.KindRouteController) {
+		t.Errorf("missing route→controller (string-resource) edge")
+	}
+	// controller → request (both methods of the request are changed → both surface).
+	if !hasKindEdge(rels, ctrl, authorize, relations.KindControllerRequest) {
+		t.Errorf("missing controller→request(authorize) edge")
+	}
+	if !hasKindEdge(rels, ctrl, rules, relations.KindControllerRequest) {
+		t.Errorf("missing controller→request(rules) edge")
+	}
+	// controller → resource / model.
+	if !hasKindEdge(rels, ctrl, resource, relations.KindControllerResource) {
+		t.Errorf("missing controller→resource edge")
+	}
+	if !hasKindEdge(rels, ctrl, model, relations.KindControllerModel) {
+		t.Errorf("missing controller→model edge")
+	}
+	// request → policy: authorize()'s ->can('show', ProductGroupPolicy::class).
+	if !hasKindEdge(rels, authorize, policy, relations.KindRequestPolicy) {
+		t.Errorf("missing request(authorize)→policy(show) edge")
+	}
+	// The policy edge hangs off authorize, not rules.
+	if hasKindEdge(rels, rules, policy, relations.KindRequestPolicy) {
+		t.Errorf("policy edge should not hang off rules()")
+	}
+}
+
+func TestBuildRelationsLaravelBothSidesRequired(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 56
+	writeLaravelFixture(t, dataDir, pr)
+	all := laravelFixtureBlocks(pr)
+
+	// Drop the policy block: request → policy must not fire (child not changed),
+	// but the controller → request edge (its own changed target) still does.
+	var noPolicy []Block
+	for _, b := range all {
+		if b.Class == "ProductGroupPolicy" {
+			continue
+		}
+		noPolicy = append(noPolicy, b)
+	}
+	rels := buildRelations(dataDir, pr, noPolicy)
+	if countKind(rels, relations.KindRequestPolicy) != 0 {
+		t.Errorf("request→policy fired without a changed policy block: %+v", rels)
+	}
+	ctrl := blockBy(all, "ProductGroupController", "show")
+	authorize := blockBy(all, "ProductGroupShowRequest", "authorize")
+	if !hasKindEdge(rels, ctrl, authorize, relations.KindControllerRequest) {
+		t.Errorf("controller→request should still fire without the policy")
+	}
+
+	// Only the controller (no route file block) → no route→controller edges, but
+	// the controller's own downstream edges (request/resource/model) still fire.
+	var noRoute []Block
+	for _, b := range all {
+		if b.Category == "ROUTE" {
+			continue
+		}
+		noRoute = append(noRoute, b)
+	}
+	rels = buildRelations(dataDir, pr, noRoute)
+	if countKind(rels, relations.KindRouteController) != 0 {
+		t.Errorf("route→controller fired without a changed route block: %+v", rels)
+	}
+	if countKind(rels, relations.KindControllerResource) != 1 {
+		t.Errorf("controller→resource should still fire without the route: %+v", rels)
+	}
+}
+
 // The build_relations workflow: EnsureRelations starts it, the buildRelations
 // Activity runs synchronously and fills the relations read-model.
 func TestBuildRelationsWorkflow(t *testing.T) {
@@ -195,5 +423,44 @@ func TestBuildRelationsWorkflow(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Fatalf("relations read-model has %d rows after build, want 2: %+v", len(got), got)
+	}
+}
+
+// TestBuildRelationsLaravelWorkflow: the same Activity fills the read-model with
+// the full route → controller → request/resource/model + request → policy chain.
+func TestBuildRelationsLaravelWorkflow(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 77
+	writeLaravelFixture(t, dataDir, pr)
+	blocks := laravelFixtureBlocks(pr)
+
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := replacePRBlocks(db, pr, blocks); err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err := relations.Open(filepath.Join(dataDir, "relations.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rel.Close()
+
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), rel, testPRMeta(t), nil, nil, nil, nil, nil, db, dataDir, "test/repo")
+
+	ctx := context.Background()
+	m.EnsureRelations(ctx, pr)
+
+	got, err := rel.List(ctx, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 4 route→controller + 2 controller→request + 1 resource + 1 model + 1 policy.
+	if len(got) != 9 {
+		t.Fatalf("relations read-model has %d rows, want 9: %+v", len(got), got)
 	}
 }

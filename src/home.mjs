@@ -869,13 +869,18 @@ async function pollWorkflows() {
   }
 }
 
-// childrenOf returns the child block objects of parent block b (the blocks it
-// is linked to, e.g. the Listener::handle for an event it dispatches).
+// childrenOf returns parent block b's related children as { block, kind } pairs
+// (the blocks it is linked to, e.g. the Listener::handle for an event it
+// dispatches, or the controller under a route). The kind is carried through so
+// the panel badge names the child's role (listener/controller/request/…).
 function childrenOf(b) {
   if (!b || !state.relations || state.relations.length === 0) return []
   return state.relations
     .filter((r) => r.parentId === b.id)
-    .map((r) => state.allBlocks.find((x) => x.id === r.childId))
+    .map((r) => {
+      const block = state.allBlocks.find((x) => x.id === r.childId)
+      return block ? { block, kind: r.kind } : null
+    })
     .filter(Boolean)
 }
 
@@ -974,12 +979,13 @@ function relatedChildren(b) {
   const scoped = isTopCursor && state.mode === 'diff' && state.gran === 'call'
   const evt = scoped
     ? []
-    : childrenOf(b).map((kid) => {
+    : childrenOf(b).map(({ block: kid, kind }) => {
         ensureCode(kid)
         const c = kid.code && !kid.code.error ? kid.code : null
         const code = (c && ((c.new && c.new.text) || (c.old && c.old.text))) || ''
-        // A listener is by definition a changed child block, so it sorts to the top.
-        return { id: kid.id, label: kid.label, file: kid.file, line: kid.line, kind: 'event_listener', code, size: codeSize(code), prio: 0, approve: blockApproveCount(kid) }
+        // A relation child is by definition a changed child block, so it sorts to
+        // the top. `kind` names the edge (event_listener / route_controller / …).
+        return { id: kid.id, label: kid.label, file: kid.file, line: kid.line, kind, code, size: codeSize(code), prio: 0, approve: blockApproveCount(kid) }
       })
   // Resolved/found method calls (Go statically or LLM). Their code + descriptor
   // ride along in the callresolve row (unchanged file → no /api/code fetch).

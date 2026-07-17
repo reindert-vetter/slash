@@ -34,7 +34,20 @@ CREATE INDEX IF NOT EXISTS idx_relations_pr ON relations(pr);
 `
 
 // Kind values (extend as more relation types are added).
-const KindEventListener = "event_listener"
+const (
+	KindEventListener = "event_listener"
+
+	// Laravel request-lifecycle chain (all "both-changed": an edge exists only
+	// when both blocks are changed blocks of this PR). The parent is the higher
+	// level, the child the lower one, so the frontend nests them route → controller
+	// → request/resource/model and request → policy. See relations.go for the
+	// detectors and .claude/rules/tembed-workflows.md.
+	KindRouteController    = "route_controller"    // route file → controller method it dispatches to
+	KindControllerRequest  = "controller_request"  // controller method → its FormRequest (type-hinted param)
+	KindControllerResource = "controller_resource" // controller method → an API Resource it returns/builds
+	KindControllerModel    = "controller_model"    // controller method → a route-model-bound Eloquent model param
+	KindRequestPolicy      = "request_policy"      // FormRequest::authorize → the Policy method it checks
+)
 
 // Relation is one directed parent→child edge between two blocks (by block ID,
 // i.e. "<pr>:<file>:<symbol>"), tagged with its kind.

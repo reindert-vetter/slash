@@ -24,6 +24,11 @@ type relationDetector func(headDir string, pr int, blocks []Block) []relations.R
 
 var relationDetectors = []relationDetector{
 	eventListenerDetector,
+	routeControllerDetector,
+	controllerRequestDetector,
+	controllerResourceDetector,
+	controllerModelDetector,
+	requestPolicyDetector,
 }
 
 // buildRelations runs every detector over the PR's blocks and concatenates the
@@ -245,4 +250,310 @@ func appendBlock(list []Block, b Block) []Block {
 		}
 	}
 	return append(list, b)
+}
+
+// ── Laravel request-lifecycle detectors ─────────────────────────────────────
+//
+// Five "both-changed" detectors (like eventListenerDetector) derive the Laravel
+// request chain: route → controller → request/resource/model, and request →
+// policy. An edge is emitted only when BOTH endpoint blocks are changed
+// (new-side) blocks of this PR — so an unchanged file never appears, and the
+// highest level that IS changed becomes the tree root for free (the frontend's
+// recomputeLeftList pulls every child out of the left list). Block bodies are
+// read from the head worktree with extractBlockSource, exactly like the event
+// detector. Middleware is deliberately out of scope.
+
+// blockIndex indexes a PR's changed (new-side) blocks by short class name for
+// quick "is this class/method a changed block?" lookups.
+type blockIndex struct {
+	byClass map[string][]Block
+}
+
+func indexChangedBlocks(blocks []Block) blockIndex {
+	ix := blockIndex{byClass: map[string][]Block{}}
+	for _, b := range blocks {
+		if b.Side == SideOld {
+			continue
+		}
+		ix.byClass[shortName(b.Class)] = append(ix.byClass[shortName(b.Class)], b)
+	}
+	return ix
+}
+
+// method returns the changed block for class::name, if any.
+func (ix blockIndex) method(class, name string) (Block, bool) {
+	for _, b := range ix.byClass[class] {
+		if b.Name == name {
+			return b, true
+		}
+	}
+	return Block{}, false
+}
+
+// classMethods returns every changed method block of class whose category matches
+// (category "" = any). Used where a reference names a class but no single method
+// (an Eloquent model param, an apiResource, a request/resource whose changed
+// methods all count as underlying code) — mirrors the model-granularity decision.
+func (ix blockIndex) classMethods(class, category string) []Block {
+	var out []Block
+	for _, b := range ix.byClass[class] {
+		if category == "" || b.Category == category {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// blockText reads block b's source from the head worktree (whole file for the
+// whole-file ROUTE fallback block; the method body otherwise).
+func blockText(headDir string, b Block) string {
+	return extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name).Text
+}
+
+// edgeEmitter dedupes parent→child edges (by ID) for one relation kind.
+func edgeEmitter(out *[]relations.Relation, pr int, kind string) func(parent, child Block) {
+	seen := map[string]bool{}
+	return func(parent, child Block) {
+		if parent.ID() == child.ID() {
+			return
+		}
+		key := parent.ID() + "\x00" + child.ID()
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		*out = append(*out, relations.Relation{PR: pr, ParentID: parent.ID(), ChildID: child.ID(), Kind: kind})
+	}
+}
+
+var (
+	// [Foo\Bar::class, 'method'] — the modern array-callable route action.
+	reArrayCallable = regexp.MustCompile(`\[\s*([\\A-Za-z0-9_]+)::class\s*,\s*['"]([A-Za-z0-9_]+)['"]`)
+	// 'Foo\Bar@method' — the old string-callable action (namespace ignored via shortName).
+	reStringCallable = regexp.MustCompile(`['"]([\\A-Za-z0-9_]+)@([A-Za-z0-9_]+)['"]`)
+	// Route::apiResource('prefix', Foo::class) / resource(...) / apiSingleton(...),
+	// including the old string-controller form Route::resource('prefix', 'Foo').
+	reResourceRoute = regexp.MustCompile(`(?:api)?(?:[Rr]esource|[Ss]ingleton)\s*\(\s*['"][^'"]*['"]\s*,\s*(?:([\\A-Za-z0-9_]+)::class|['"]([\\A-Za-z0-9_]+)['"])`)
+
+	// A FormRequest type-hinted parameter: `SomethingRequest $var`.
+	reRequestParam = regexp.MustCompile(`([\\A-Za-z0-9_]*Request)\s+\$`)
+	// An API Resource constructed in a controller body: new XResource( / XResource::make|collection(.
+	reResourceUse = regexp.MustCompile(`new\s+([\\A-Za-z0-9_]+Resource)\s*\(|([\\A-Za-z0-9_]+Resource)::(?:make|collection)\s*\(`)
+	// A Resource named as the method's return type: `): XResource` / `): ?XResource`.
+	reResourceReturn = regexp.MustCompile(`\)\s*:\s*\??([\\A-Za-z0-9_]+Resource)\b`)
+	// Any type-hinted parameter `Foo $var` (filtered to changed models afterwards).
+	reTypedParam = regexp.MustCompile(`([\\A-Za-z0-9_]+)\s+\$`)
+	// FormRequest::authorize policy check: ->can('ability', Policy::class) and the
+	// array form ->can('ability', [Policy::class, ...]).
+	reCanPolicy = regexp.MustCompile(`->\s*can\s*\(\s*['"]([A-Za-z0-9_]+)['"]\s*,\s*\[?\s*([\\A-Za-z0-9_]+)::class`)
+
+	// $policies = [ Model::class => Policy::class, ... ] in an *ServiceProvider.
+	rePoliciesBlock = regexp.MustCompile(`(?s)\$policies\s*=\s*\[(.*?)\]\s*;`)
+	rePolicyEntry   = regexp.MustCompile(`([\\A-Za-z0-9_]+)::class\s*=>\s*([\\A-Za-z0-9_]+)::class`)
+)
+
+// routeControllerDetector links a changed route file to the changed controller
+// methods it dispatches to (array-callable, string-callable, and resource routes).
+func routeControllerDetector(headDir string, pr int, blocks []Block) []relations.Relation {
+	ix := indexChangedBlocks(blocks)
+	var out []relations.Relation
+	emit := edgeEmitter(&out, pr, relations.KindRouteController)
+	for _, route := range blocks {
+		if route.Side == SideOld || route.Category != "ROUTE" {
+			continue
+		}
+		text := blockText(headDir, route)
+		if text == "" {
+			continue
+		}
+		for _, m := range reArrayCallable.FindAllStringSubmatch(text, -1) {
+			if b, ok := ix.method(shortName(m[1]), m[2]); ok && b.Category == "CONTROLLER" {
+				emit(route, b)
+			}
+		}
+		for _, m := range reStringCallable.FindAllStringSubmatch(text, -1) {
+			if b, ok := ix.method(shortName(m[1]), m[2]); ok && b.Category == "CONTROLLER" {
+				emit(route, b)
+			}
+		}
+		// Resource routes name a controller with implicit REST methods → link to
+		// every changed method of that controller.
+		for _, m := range reResourceRoute.FindAllStringSubmatch(text, -1) {
+			ctrl := m[1]
+			if ctrl == "" {
+				ctrl = m[2]
+			}
+			for _, b := range ix.classMethods(shortName(ctrl), "CONTROLLER") {
+				emit(route, b)
+			}
+		}
+	}
+	return out
+}
+
+// controllerRequestDetector links a changed controller method to the changed
+// FormRequest it type-hints as a parameter.
+func controllerRequestDetector(headDir string, pr int, blocks []Block) []relations.Relation {
+	ix := indexChangedBlocks(blocks)
+	var out []relations.Relation
+	emit := edgeEmitter(&out, pr, relations.KindControllerRequest)
+	for _, ctrl := range blocks {
+		if ctrl.Side == SideOld || ctrl.Category != "CONTROLLER" {
+			continue
+		}
+		text := blockText(headDir, ctrl)
+		if text == "" {
+			continue
+		}
+		for _, m := range reRequestParam.FindAllStringSubmatch(text, -1) {
+			for _, b := range ix.classMethods(shortName(m[1]), "REQUEST") {
+				emit(ctrl, b)
+			}
+		}
+	}
+	return out
+}
+
+// controllerResourceDetector links a changed controller method to the changed
+// API Resource it returns or builds (new XResource / XResource::make|collection /
+// a `): XResource` return type).
+func controllerResourceDetector(headDir string, pr int, blocks []Block) []relations.Relation {
+	ix := indexChangedBlocks(blocks)
+	var out []relations.Relation
+	emit := edgeEmitter(&out, pr, relations.KindControllerResource)
+	for _, ctrl := range blocks {
+		if ctrl.Side == SideOld || ctrl.Category != "CONTROLLER" {
+			continue
+		}
+		text := blockText(headDir, ctrl)
+		if text == "" {
+			continue
+		}
+		link := func(name string) {
+			for _, b := range ix.classMethods(shortName(name), "RESOURCE") {
+				emit(ctrl, b)
+			}
+		}
+		for _, m := range reResourceUse.FindAllStringSubmatch(text, -1) {
+			if m[1] != "" {
+				link(m[1])
+			} else {
+				link(m[2])
+			}
+		}
+		for _, m := range reResourceReturn.FindAllStringSubmatch(text, -1) {
+			link(m[1])
+		}
+	}
+	return out
+}
+
+// controllerModelDetector links a changed controller method to the changed
+// Eloquent model it route-model-binds as a parameter — every changed method of
+// that model class surfaces as underlying code (the agreed model granularity).
+func controllerModelDetector(headDir string, pr int, blocks []Block) []relations.Relation {
+	ix := indexChangedBlocks(blocks)
+	var out []relations.Relation
+	emit := edgeEmitter(&out, pr, relations.KindControllerModel)
+	for _, ctrl := range blocks {
+		if ctrl.Side == SideOld || ctrl.Category != "CONTROLLER" {
+			continue
+		}
+		text := blockText(headDir, ctrl)
+		if text == "" {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, m := range reTypedParam.FindAllStringSubmatch(text, -1) {
+			short := shortName(m[1])
+			if seen[short] {
+				continue
+			}
+			seen[short] = true
+			for _, b := range ix.classMethods(short, "MODEL") {
+				emit(ctrl, b)
+			}
+		}
+	}
+	return out
+}
+
+// requestPolicyDetector links a changed FormRequest (its authorize() method) to
+// the changed Policy method it checks. A direct Policy::class reference resolves
+// straight away; a Model::class reference resolves to its Policy via the
+// AuthServiceProvider $policies map, then the App\Policies\{Model}Policy
+// convention. The policy method is the ability name (`->can('show', …)` → show).
+func requestPolicyDetector(headDir string, pr int, blocks []Block) []relations.Relation {
+	ix := indexChangedBlocks(blocks)
+	var out []relations.Relation
+	emit := edgeEmitter(&out, pr, relations.KindRequestPolicy)
+	var modelPolicy map[string]string // built lazily on the first Model::class ref
+	for _, req := range blocks {
+		if req.Side == SideOld || req.Category != "REQUEST" {
+			continue
+		}
+		text := blockText(headDir, req)
+		if text == "" {
+			continue
+		}
+		for _, m := range reCanPolicy.FindAllStringSubmatch(text, -1) {
+			ability, cls := m[1], shortName(m[2])
+			policy := cls
+			if !strings.HasSuffix(cls, "Policy") {
+				if modelPolicy == nil {
+					modelPolicy = policiesMap(headDir)
+				}
+				if p, ok := modelPolicy[cls]; ok {
+					policy = p
+				} else {
+					policy = cls + "Policy"
+				}
+			}
+			if b, ok := ix.method(shortName(policy), ability); ok && isPolicyBlock(b) {
+				emit(req, b)
+			}
+		}
+	}
+	return out
+}
+
+// isPolicyBlock reports whether b is an authorization policy method.
+func isPolicyBlock(b Block) bool {
+	return b.Category == "POLICY" ||
+		strings.Contains(b.File, "app/Policies/") ||
+		strings.HasSuffix(b.Class, "Policy")
+}
+
+// policiesMap scans the head worktree's *ServiceProvider.php files for a
+// $policies = [ Model::class => Policy::class ] map (short class names).
+// Best-effort — an absent/unreadable provider yields an empty map, and the
+// {Model}Policy convention still covers the common case.
+func policiesMap(headDir string) map[string]string {
+	out := map[string]string{}
+	skip := map[string]bool{"vendor": true, "node_modules": true, ".git": true, "storage": true, "public": true, "tests": true}
+	_ = filepath.WalkDir(headDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if skip[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), "ServiceProvider.php") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		if bm := rePoliciesBlock.FindStringSubmatch(string(raw)); bm != nil {
+			for _, e := range rePolicyEntry.FindAllStringSubmatch(bm[1], -1) {
+				out[shortName(e[1])] = shortName(e[2])
+			}
+		}
+		return nil
+	})
+	return out
 }

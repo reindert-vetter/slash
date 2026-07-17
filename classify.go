@@ -193,6 +193,7 @@ var categoryRules = []categoryRule{
 	{func(p string) bool { return hasSeg(p, "app/Http/Controllers/") }, "CONTROLLER"},
 	{func(p string) bool { return hasSeg(p, "app/Http/Requests/") }, "REQUEST"},
 	{func(p string) bool { return hasSeg(p, "app/Http/Resources/") }, "RESOURCE"},
+	{func(p string) bool { return hasSeg(p, "app/Policies/") }, "POLICY"},
 	{func(p string) bool { return hasSeg(p, "app/Models/") }, "MODEL"},
 	{func(p string) bool { return hasSeg(p, "app/Enums/") }, "ENUM"},
 	{func(p string) bool { return hasSeg(p, "app/Jobs/") }, "JOB"},
