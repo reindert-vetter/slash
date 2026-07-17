@@ -1718,7 +1718,16 @@ const COMPOSE_COMMANDS = [
 const POSTAPPROVE_COMMANDS = [
   {
     id: 'postapprove-next',
-    label: 'Ga door naar de volgende niet-goedgekeurde code',
+    // A function label so it can name what "next" actually means: the next
+    // *block* when the triggering approve ran from the blokken-index
+    // (postApproveTarget.keepList, see applyNextUnapproved), else the usual
+    // next changed code. Resolved once, at snapshot time (openMenu →
+    // snapshotCommands), right after afterApproveAction sets postApproveTarget
+    // — same safe, non-reactive read as the 'approve' command's own label.
+    label: () =>
+      postApproveTarget && postApproveTarget.keepList
+        ? 'Ga door naar het volgende niet-goedgekeurde block'
+        : 'Ga door naar de volgende niet-goedgekeurde code',
     hint: 'volgende',
     run: () => {
       if (postApproveTarget) applyNextUnapproved(postApproveTarget)
@@ -2339,8 +2348,17 @@ async function findNextUnapproved() {
 // applyNextUnapproved jumps the keyboard cursor to a plan findNextUnapproved
 // found — driven by the postApprove menu's "Ga door" command. Mirrors
 // openTask/enterDiff's reset of the drilled-column state when landing on a
-// different block.
+// different block. `target.keepList` (stashed by afterApproveAction) means the
+// approve that triggered this ran from the blokken-index (state.mode was
+// 'list', not 'diff'): stay there — only move the sidebar selection forward,
+// never step into the diff — so approving from the index keeps you in the
+// index instead of dropping you into a block's diff.
 function applyNextUnapproved(target) {
+  if (target.keepList) {
+    state.selected = target.selected
+    scrollSelectedIntoView()
+    return
+  }
   if (target.selected !== state.selected) {
     state.selected = target.selected
     state.drill = []
@@ -2363,12 +2381,17 @@ let postApproveTarget = null
 // approval (`approving`, see toggleApprove/toggleCallApprove — un-approving
 // never reaches here). If there's a next not-yet-approved unit ahead, stash it
 // and open the postApprove follow-up menu (continue / close); if nothing's
-// left ahead, leave the menu closed as usual (see runCommand).
+// left ahead, leave the menu closed as usual (see runCommand). `keepList` is
+// captured synchronously, right here — before the async findNextUnapproved
+// gap — so it reflects the mode the reviewer was actually in when they ran the
+// approve action, not whatever state.mode happens to be once the promise
+// resolves.
 function afterApproveAction(approving) {
   if (!approving) return
+  const keepList = state.mode !== 'diff'
   findNextUnapproved().then((target) => {
     if (!target) return
-    postApproveTarget = target
+    postApproveTarget = { ...target, keepList }
     openMenu('postApprove')
   })
 }
@@ -3025,10 +3048,18 @@ function stepChevronSlot(delta, dir) {
 }
 
 // menuAnchor returns the element the command palette floats *beneath* (its
-// vertical anchor): in 'comment' mode, the focused comment row; otherwise the
-// active change row (present in both list-preview and diff mode) if there is
-// one, else the selected block's card, else the sidebar row. Always something
-// on-screen so the menu opens under whatever is selected.
+// vertical anchor): in 'comment' mode, the focused comment row; in
+// blokken-index mode (state.mode==='list', for the 'block'/'postApprove'
+// palettes reached via Enter from the sidebar — see the isIndexMenu() guard
+// below) the selected sidebar row, so the menu opens right there instead of
+// over the list-mode diff preview; otherwise the active change row (present
+// in diff mode) if there is one, else the selected block's card, else the
+// sidebar row. Always something on-screen so the menu opens under whatever is
+// selected.
+function isIndexMenu() {
+  return state.mode === 'list' && (ms.mode === 'block' || ms.mode === 'postApprove')
+}
+
 function menuAnchor() {
   // The comment-kind menu ('compose') anchors under the composer textarea.
   if (ms.mode === 'compose') {
@@ -3043,6 +3074,15 @@ function menuAnchor() {
       document.querySelector('[data-testid="comments-panel"]')
     )
   }
+  // Enter from the blokken-index (list mode): anchor on the selected row
+  // itself, not the list-mode diff preview beneath it (see
+  // .claude/rules/keyboard-navigation.md).
+  if (isIndexMenu()) {
+    return (
+      document.querySelector(`[data-idx="${state.selected}"]`) ||
+      document.querySelector('[data-testid="pr-index"]')
+    )
+  }
   return (
     document.querySelector('[data-change-active]') ||
     document.querySelector('[data-testid="detail-panel"] article') ||
@@ -3052,10 +3092,12 @@ function menuAnchor() {
 
 // menuRegion returns the element whose left+width the palette takes: in
 // 'comment' mode, the comment thread pane (so it sits over the comments panel,
-// under the focused row); otherwise the NEW (right) pane of the selected
-// block's diff, so the menu is half the diff's width and sits over the
-// right-hand side — the new code you're reviewing. Falls back to the OLD pane
-// (a removed block has no new pane), then the whole block column.
+// under the focused row); in blokken-index mode (see isIndexMenu) the whole
+// sidebar, so the menu sits over the index instead of the diff pane; otherwise
+// the NEW (right) pane of the selected block's diff, so the menu is half the
+// diff's width and sits over the right-hand side — the new code you're
+// reviewing. Falls back to the OLD pane (a removed block has no new pane),
+// then the whole block column.
 function menuRegion() {
   // Both comment-scoped menus sit over the comment thread pane.
   if (ms.mode === 'comment' || ms.mode === 'compose') {
@@ -3063,6 +3105,9 @@ function menuRegion() {
       document.querySelector('[data-testid="comment-thread"]') ||
       document.querySelector('[data-testid="comments-panel"]')
     )
+  }
+  if (isIndexMenu()) {
+    return document.querySelector('[data-testid="pr-index"]')
   }
   const scope = document.querySelector('[data-testid="detail-panel"]')
   if (!scope) return null

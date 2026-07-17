@@ -111,6 +111,43 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     await expect(menu).not.toBeVisible()
   })
 
+  // Approving from the blokken-index itself (Enter with no ArrowRight — state.mode
+  // stays 'list') must keep you there: "Ga door" only moves the sidebar selection
+  // forward, it never drops you into a block's diff. See isIndexMenu (menuAnchor/
+  // menuRegion) and the keepList branch of applyNextUnapproved/afterApproveAction.
+  test('approving from the blokken-index stays there: "Ga door" only moves the selection, no diff-instap', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await expect(page).not.toHaveURL(/mode=diff/)
+
+    // Approve block 0's only group via the palette, straight from the index.
+    await page.keyboard.press('Enter')
+    await page.getByTestId('command-input').fill('keur')
+    await page.getByTestId('command-row').first().click()
+
+    // The follow-up opens with the list-mode wording ("... block", not "... code").
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    const rows = page.getByTestId('command-row')
+    await expect(rows.nth(0)).toContainText('Ga door naar het volgende niet-goedgekeurde block')
+    await expect(rows.nth(1)).toContainText('Sluit menu')
+
+    await rows.filter({ hasText: 'Ga door' }).click()
+    await expect(menu).not.toBeVisible()
+
+    // Lands on block 6 (the next not-yet-approved block, same skip-past-1-5 as
+    // the diff-mode case above) but never enters its diff: no `mode=diff` in
+    // the URL, and the sidebar keeps its normal on-screen list-mode placement
+    // (in diff mode it slides fully off-screen — see BlockList.mjs).
+    await expect.poll(() => selParam(page)).toBe(BLOCK6_SEL)
+    await expect(page).not.toHaveURL(/mode=diff/)
+    await expect(page.getByTestId('pr-index')).toHaveClass(/translate-x-0/)
+    await expect(page.getByTestId('pr-index')).not.toHaveClass(/-translate-x-\[28rem\]/)
+  })
+
   test('nothing left ahead: approving the last not-yet-approved unit closes normally', async ({
     page,
   }) => {

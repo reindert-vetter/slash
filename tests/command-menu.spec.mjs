@@ -5,14 +5,16 @@ import { test, expect } from './_fixtures.mjs'
 // runs it, Esc closes. Block navigation is suspended while it's open. See
 // CommandMenu.mjs + home.mjs (menu state, openMenu/closeMenu/runCommand, onKeydown).
 test.describe('PR Review Tree — command palette', () => {
-  test('Enter opens the floating menu just below the selection and Esc closes it', async ({
+  // From the blokken-index (list mode, no ArrowRight yet) the menu anchors on
+  // the selected sidebar row and takes the sidebar's width — "there, not
+  // somewhere else" — rather than the list-mode diff preview in <main>. See
+  // isIndexMenu/menuAnchor/menuRegion in home.mjs.
+  test('Enter from the blokken-index opens the menu at the selected row, not the diff preview', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
-    // Wait for the selected block's diff (the active-change anchor) to render.
-    await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     const menu = page.getByTestId('command-menu')
     await expect(menu).not.toBeVisible()
@@ -25,16 +27,22 @@ test.describe('PR Review Tree — command palette', () => {
     // The Enter keypress itself is not typed into the input.
     await expect(page.getByTestId('command-input')).toHaveValue('')
 
-    // It's positioned just below the active-change anchor (fixed popover): its top
-    // sits at/after the anchor's bottom, and it's been placed (not at 0,0).
+    // It's positioned just below the selected sidebar row (fixed popover): its
+    // top sits at/after the row's bottom, and it's been placed (not at 0,0).
     const anchorBox = page.getByTestId('command-anchor')
     const menuTop = await anchorBox.evaluate((el) => el.getBoundingClientRect().top)
-    const selTop = await page
-      .locator('[data-change-active]')
-      .first()
+    const rowBottom = await page
+      .locator('[data-idx="0"]')
       .evaluate((el) => el.getBoundingClientRect().bottom)
     expect(menuTop).toBeGreaterThan(0)
-    expect(menuTop).toBeGreaterThanOrEqual(selTop - 1)
+    expect(menuTop).toBeGreaterThanOrEqual(rowBottom - 1)
+
+    // It matches the whole sidebar's width, not half the (list-mode) diff pane.
+    const menuWidth = await anchorBox.evaluate((el) => el.getBoundingClientRect().width)
+    const indexWidth = await page
+      .getByTestId('pr-index')
+      .evaluate((el) => el.getBoundingClientRect().width)
+    expect(Math.abs(menuWidth - indexWidth)).toBeLessThan(2)
 
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()

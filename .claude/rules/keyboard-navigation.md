@@ -109,7 +109,14 @@ komt van `menuAnchor()` (de actieve wijzigings-rij `[data-change-active]`, aanwe
 in zowel list-preview als diff-mode; anders de block-kaart, anders de sidebar-rij);
 de breedte + linkerrand van `menuRegion()` (de `[data-pane="new"]`-pane van het
 geselecteerde block; fallback `[data-pane="old"]` voor een verwijderd block, dan de
-hele block-kolom — de `data-pane`-hook zit op `codePane` in `Block.mjs`). **Past het
+hele block-kolom — de `data-pane`-hook zit op `codePane` in `Block.mjs`). **Vanuit
+de blokken-index** (`state.mode==='list'`, voor de `'block'`- en
+`'postApprove'`-palettes — `isIndexMenu()` in `home.mjs`) ankert het menu i.p.v.
+daarop juist op de **geselecteerde sidebar-rij** (`[data-idx="${state.selected}"]`)
+en neemt het de **volle sidebar-breedte** (`[data-testid="pr-index"]`) — niet de
+list-mode diff-preview in `<main>`, die weliswaar ook een `[data-change-active]`
+draagt maar niet is waar de reviewer net op drukte. Zo opent `Enter` vanuit de
+index het menu **bij die rij**, niet ergens anders op het scherm. **Past het
 niet onder het scherm, dan klapt het erboven** (en wordt sowieso in de viewport
 geklemd). Het start `visibility:hidden` tot `positionMenu` het geplaatst heeft (geen
 flits linksboven), en herpositioneert bij resize, scroll (capture, ook
@@ -177,6 +184,25 @@ herberekenen — de palette bezit de keyboard zolang hij open is, dus de
 navigatie-state kan intussen niet verschoven zijn. Dit is een eenmalige stap: na
 het navigeren opent er **geen** nieuw vervolgmenu vanzelf — de reviewer keurt de
 nieuwe unit zelf weer goed met `Enter`.
+
+**Vanuit de blokken-index blijft "Ga door" in de index.** Drukte de reviewer
+`Enter` terwijl `state.mode==='list'` was (zie hierboven: het menu ankert dan al
+op de sidebar-rij, niet de diff-preview), dan zou het oude "Ga door" alsnog de
+diff instappen — dat voelt als een sprong weg uit de index terwijl je daar net
+zat. `afterApproveAction` capture't daarom **synchroon**, vóór de async
+`findNextUnapproved()`-gap, `keepList = state.mode !== 'diff'` en stasht die mee
+in `postApproveTarget` (`{ ...target, keepList }`) — synchroon omdat
+`state.mode` tegen de tijd dat de promise resolvet al kan zijn veranderd, maar
+op het moment van de approve-actie zelf nog exact de context is waar de
+reviewer 'm vandaan drukte. `applyNextUnapproved` vertakt op `target.keepList`:
+waar, dan verzet 'm **alleen** `state.selected` (+ `scrollSelectedIntoView()`) —
+géén `state.mode`/`gran`/`change`, geen diff-instap; onwaar, dan het bestaande
+pad (springt de diff van de nieuwe unit in). Het `POSTAPPROVE_COMMANDS[0]`-label
+is om die reden ook een **functie** (i.p.v. de vorige kale string), gelezen op
+snapshot-tijd (`openMenu` → `snapshotCommands`, vlak nadat `postApproveTarget`
+gezet is — dezelfde veilige, niet-reactieve timing als het `approve`-label): "Ga
+door naar het volgende niet-goedgekeurde **block**" bij `keepList`, anders de
+bestaande "... **code**"-tekst.
 
 Hetzelfde menu-mechanisme bedient ook een **comment-scoped** variant: staat de
 keyboard op een geplaatste comment-rij in `RelatedPanel` (`cs.focus === 'comment'`,
