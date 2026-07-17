@@ -851,10 +851,14 @@ export async function placeComment(state, commentTarget, opts = {}) {
   if (!b || !body) return
   // Capture the exact unit the composer is previewing so the placed comment's
   // thread can show the same code (see composeTargetHint / the thread hint).
+  // commentTarget() follows focusedBlock() (the column that currently owns the
+  // diff keyboard), which may be a drilled column rather than the top-level
+  // selected block `b` — so t.file/t.startLine (not b.file/b.line) are the
+  // ones that must anchor the comment when a drilled column is focused.
   const t = (commentTarget && commentTarget()) || null
   await createComment({
     pr: state.pr,
-    file: b.file,
+    file: (t && t.file) || b.file,
     // Prefer the unit's real source line (see home.mjs' commentTarget/
     // unitLineRange) over the block's own start line; falls back to it when
     // there's no navigable unit (t.startLine is 0).
@@ -994,7 +998,14 @@ function reactionBubble(r, i, total) {
 // regel" button that starts a new Execution on the current block.
 function commentsSection(state, commentTarget, openCompose) {
   syncComments(state ? state.pr : null)
+  // Prefer commentTarget()'s file/line — it follows focusedBlock() (the column
+  // that currently owns the diff keyboard, which may be a drilled column, see
+  // home.mjs) — over the top-level state.selected block, so this header never
+  // shows a different block's file than the one the composer is actually
+  // linked to (see composeTargetHint just below, which already does this).
   const target = () => {
+    const t = commentTarget && commentTarget()
+    if (t) return t.file + ':' + (t.startLine || t.line)
     const b = state && state.blocks && state.blocks[state.selected]
     return b ? b.file + ':' + b.line : 'geen regel geselecteerd'
   }

@@ -2024,12 +2024,20 @@ function drillIntoChild(child) {
 // source as a concrete example). RelatedPanel's composer reads this (via home.mjs)
 // so the reviewer sees exactly what they're commenting on before they finish
 // typing. Falls back to 'group' info in list mode, where there's no active unit.
+// Follows focusedBlock() (the column that currently owns the diff keyboard), not
+// always the top-level curBlock() — a comment started while a drilled column
+// (state.focusLevel > 0) is focused must anchor on *that* column's block + its
+// own drillCursor[focusLevel-1].{gran,change}, mirroring drillNextChange/
+// setDrillGran. A drilled column has no list-mode equivalent (it's always a
+// self-contained diff), so no mode==='diff' guard is needed for that branch.
 function commentTarget() {
-  const b = curBlock()
+  const b = focusedBlock()
   if (!b) return null
   const rows = blockRows(b)
-  const gran = state.mode === 'diff' ? state.gran : 'group'
-  const idx = state.mode === 'diff' ? state.change : 0
+  const level = state.focusLevel
+  const cur = level > 0 ? state.drillCursor[level - 1] || { change: 0, gran: 'group' } : null
+  const gran = level > 0 ? cur.gran : state.mode === 'diff' ? state.gran : 'group'
+  const idx = level > 0 ? cur.change : state.mode === 'diff' ? state.change : 0
   const unit = unitsFor(rows, gran)[idx]
   // No unit (block with no navigable changes): a block-level target with an
   // unknown row range (rowStart -1) — the index then shows all block comments.
@@ -2177,8 +2185,24 @@ function commentScope() {
 // (reads buried in commentScope/commentTarget aren't tracked, and a binding that
 // returns the keyed panel doesn't re-run either), so this is what pushes the
 // fresh scope into RelatedPanel (setCommentScope → cs.view) as the reviewer moves.
+// state.focusLevel/state.drill/state.drillCursor are listed too — commentScope
+// (via commentTarget) now follows focusedBlock() and, at focusLevel > 0, that
+// column's own drillCursor entry, so drilling into (or back out of) a child, or
+// zooming its granularity with f/d/s, must re-fire this the same way a
+// top-level selection/gran/change move already does — otherwise the comment
+// index stays scoped to whichever block owned the cursor before the drill.
 watch(
-  () => [state.selected, state.mode, state.change, state.gran, state.blocks, curBlock() && curBlock().code],
+  () => [
+    state.selected,
+    state.mode,
+    state.change,
+    state.gran,
+    state.blocks,
+    state.focusLevel,
+    state.drill,
+    state.drillCursor,
+    focusedBlock() && focusedBlock().code,
+  ],
   () => setCommentScope(commentScope()),
 )
 

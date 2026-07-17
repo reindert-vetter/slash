@@ -149,6 +149,20 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   fallback als de Go-kant). Er is precies één plek die naar de workflow post
   (`createComment`); elke composer-flow (toetsenbord, klik, de comment-soort-menu's
   "Alleen voor mijzelf") loopt via `placeComment` en krijgt dus dezelfde anchoring.
+  **`commentTarget()` volgt `focusedBlock()`, niet altijd het top-level
+  `curBlock()`:** staat de keyboard op een gedrilde kolom (`state.focusLevel >
+  0`, zie "Drillen"/"Kolom-navigatie" in `.claude/rules/detail-layout.md`), dan
+  moet de referentiecode van een net-gestarte comment het block van díe kolom +
+  diens eigen `state.drillCursor[focusLevel-1].{gran,change}` zijn — niet het
+  top-level block. `placeComment` gebruikt daarom `t.file`/`t.startLine` (uit
+  `commentTarget()`) i.p.v. het top-level `b.file`/`b.line`, en `commentsSection`'s
+  "Nieuwe comment · `<file>:<line>`"-header idem. De `commentScope`-`watch`
+  in `home.mjs` (die `cs.view`, de zichtbare comment-lijst, scope't) moet
+  daarnaast ook `state.focusLevel`/`state.drill`/`state.drillCursor` **inline**
+  in zijn dependency-array opnemen — anders blijft de comment-index na het
+  drillen gescoped op het block van vóór de drill, ook al is de net geplaatste
+  comment zelf correct geanchored (zie de watch-inline-deps-regel in
+  `.claude/rules/conventions.md`). Getest in `tests/drill-comment-target.spec.mjs`.
 - **Privé-notitie (`local`-vlag):** `CodeCommentInput` draagt een
   `Local bool`-vlag. Is die gezet — de UI stuurt 'm bij de keuze **"Alleen voor
   mijzelf"** in het comment-soort-menu (zie `.claude/rules/keyboard-navigation.md`)
