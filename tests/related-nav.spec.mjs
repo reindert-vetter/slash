@@ -26,19 +26,32 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     await page.keyboard.press('ArrowRight') // diff → related-code
   }
 
-  test('g opens the comments sidebar on the composer; ← exits straight back to the diff, sidebar stays open; g toggles it shut', async ({
+  test('g opens the comments sidebar on the "+ Comment op deze regel" row without auto-focusing the composer; Enter opens it; g still toggles the sidebar shut straight away', async ({
     page,
   }) => {
     await stepIntoRelated(page)
 
-    // `g` opens the comments/taken sidebar and lands on the "+ Comment op deze
-    // regel" button (an empty composer, focused so the reviewer can type
-    // straight away) — a deterministic anchor, regardless of where the
-    // keyboard was (the diff, or this related-code card).
+    // `g` opens the comments/taken sidebar and highlights the "+ Comment op
+    // deze regel" row — a deterministic anchor, regardless of where the
+    // keyboard was (the diff, or this related-code card) — but does NOT drop
+    // keyboard focus into the composer, so a second `g` can close the sidebar
+    // right away instead of typing a literal "g" into an already-focused field.
     await page.keyboard.press('g')
     const sidebar = page.getByTestId('comments-sidebar')
     await expect(sidebar).toBeVisible()
     await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
+    await expect(page.getByTestId('comment-compose')).toHaveCount(0)
+
+    // `g` again immediately toggles the sidebar shut — nothing ever stole the
+    // keyboard focus, so the keypress reaches toggleSidebar unhindered.
+    await page.keyboard.press('g')
+    await expect(sidebar).toHaveCount(0)
+    await expect(page.getByTestId('sidebar-collapsed')).toBeVisible()
+
+    // Re-open, then Enter on the highlighted row opens the composer and
+    // focuses it.
+    await page.keyboard.press('g')
+    await page.keyboard.press('Enter')
     await expect(page.getByTestId('comment-compose')).toBeFocused()
 
     // ← exits straight back to the diff in one step — the sidebar stays open.
@@ -47,15 +60,12 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     await expect(sidebar).toBeVisible()
 
     // `g` again — the sidebar is open but the keyboard sits elsewhere (the
-    // diff) — re-focuses the composer instead of closing it.
+    // diff) — re-highlights the row without auto-focusing the composer.
     await page.keyboard.press('g')
-    await expect(page.getByTestId('comment-compose')).toBeFocused()
+    await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
+    await expect(page.getByTestId('comment-compose')).toHaveCount(0)
 
-    // `g` once more would type a literal "g" into the now-focused composer
-    // (same isEditableFocused guard as `a`, see keyboard-navigation.md) — blur
-    // it first (as a click elsewhere/tabbing away would) to exercise the
-    // close-from-inside-the-sidebar path without typing into the field.
-    await page.evaluate(() => document.activeElement && document.activeElement.blur())
+    // `g` once more closes it straight away.
     await page.keyboard.press('g')
     await expect(sidebar).toHaveCount(0)
     await expect(page.getByTestId('sidebar-collapsed')).toBeVisible()
@@ -99,7 +109,8 @@ test.describe('PR Review Tree — related-panel navigation', () => {
 
     await stepIntoRelated(page)
 
-    // g opens the sidebar on the composer; ↓ steps down into the comment index
+    // g opens the sidebar on the "+ Comment op deze regel" row (highlighted,
+    // not yet focused into the composer); ↓ steps down into the comment index
     // (the seeded comment). Landing on the comment shows its history and
     // focuses the reply field, so the reviewer can type a reply straight away.
     await page.keyboard.press('g')

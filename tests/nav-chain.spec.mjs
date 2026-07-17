@@ -147,10 +147,18 @@ test.describe('PR Review Tree — left-right nav chain', () => {
 
     // `g` opens the comments/taken sidebar (independent of the code stop —
     // it's a separate, fixed overlay, not the next stop in the chain) and
-    // lands on the empty composer.
+    // highlights the "+ Comment op deze regel" row — but does NOT auto-focus
+    // the composer (see enterComments in RelatedPanel.mjs: a fresh `g`-open
+    // only highlights the row, so a 2nd `g` can toggle the sidebar shut right
+    // away instead of typing a literal "g" into an already-focused textarea).
     const sidebar = page.getByTestId('comments-sidebar')
     await page.keyboard.press('g')
     await expect(sidebar).toBeVisible()
+    await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
+    await expect(page.getByTestId('comment-compose')).toHaveCount(0)
+
+    // Enter opens the composer and focuses it.
+    await page.keyboard.press('Enter')
     await expect(page.getByTestId('comment-compose')).toBeFocused()
 
     // ← from the composer exits straight back to the diff in one step — not
@@ -163,11 +171,12 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await expect(page.getByTestId('new-comment')).not.toHaveClass(/ring-indigo-300/)
 
     // `g` again — the sidebar is open but the keyboard sits on the diff —
-    // re-focuses the (still empty) composer. Nothing deeper to go from there
-    // — ↓ advances straight to Taken. Exactly one row should carry the
-    // keyboard highlight.
+    // re-highlights the row without auto-focusing the composer. Nothing
+    // deeper to go from there — ↓ advances straight to Taken. Exactly one row
+    // should carry the keyboard highlight.
     await page.keyboard.press('g')
-    await expect(page.getByTestId('comment-compose')).toBeFocused()
+    await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
+    await expect(page.getByTestId('comment-compose')).toHaveCount(0)
     await page.keyboard.press('ArrowDown')
     const active = page.locator('[data-testid=workflow-row][data-active="true"]')
     await expect(active).toHaveCount(1)

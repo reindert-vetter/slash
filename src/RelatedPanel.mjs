@@ -281,12 +281,18 @@ function toNew() {
 }
 
 // enterComments hands the keyboard to the comments/taken sidebar, always
-// landing on the empty composer (row 0) — a deterministic anchor, mirroring
-// enterRelated always landing on the first child / toTask defaulting to row 0.
-// Called by toggleSidebar (`g`, home.mjs) and by a click on the collapsed hint
-// rail — both "open the sidebar and focus comments" paths.
+// landing on the "+ Comment op deze regel" row (row 0) — a deterministic
+// anchor, mirroring enterRelated always landing on the first child /
+// toTask defaulting to row 0. Called by toggleSidebar (`g`, home.mjs) and by
+// a click on the collapsed hint rail — both "open the sidebar and highlight
+// comments" paths. Deliberately does NOT open the composer / focus its
+// textarea (unlike toNew): a fresh `g`-open must leave the keyboard free so a
+// 2nd `g` can toggle the sidebar shut right away instead of typing a literal
+// "g" into an already-focused field (isEditableFocused would swallow it).
+// Enter (home.mjs, via openComposer) is what actually opens the composer.
 function enterComments() {
-  toNew()
+  cs.composing = false
+  cs.focus = 'new'
 }
 
 // toggleSidebar drives `g` (home.mjs' onKeydown), globally (list or diff mode):
@@ -665,6 +671,24 @@ export function isComposeOpen() {
 export function composeHasText() {
   const el = document.querySelector('[data-testid=comment-compose]')
   return !!el && el.value.trim() !== ''
+}
+
+// isNewFocused reports whether the "+ Comment op deze regel" row currently
+// owns the keyboard (highlighted, but — since enterComments no longer
+// auto-opens the composer on a fresh `g` — not necessarily composing yet).
+// home.mjs's Enter handler uses this to know when Enter should open the
+// composer (see openComposer below).
+export function isNewFocused() {
+  return cs.focus === 'new'
+}
+
+// openComposer actually opens the composer (composing=true) and focuses its
+// textarea — the same landing toNew() has always done. Exported so home.mjs's
+// Enter handler can trigger it once the reviewer has highlighted the "+
+// Comment op deze regel" row (cs.focus === 'new') via `g` — a fresh `g`-open
+// only highlights that row (enterComments), it deliberately doesn't call this.
+export function openComposer() {
+  toNew()
 }
 
 // isCommentFocused reports whether a placed comment's row currently owns the

@@ -4,10 +4,12 @@ import { test, expect } from './_fixtures.mjs'
 // detail-layout.md), collapsed by default — open it before touching anything
 // inside it.
 async function placeVia(page, body) {
-  // `g` already opens the sidebar on the empty, focused composer (enterComments
-  // → toNew) — no extra click needed (clicking new-comment again would toggle
-  // it back closed).
+  // `g` opens the sidebar, highlighting the "+ Comment op deze regel" row
+  // (enterComments); Enter then opens the composer and focuses it
+  // (openComposer) — a fresh `g`-open no longer auto-focuses the composer, so
+  // a 2nd `g` can toggle the sidebar shut instead of typing into it.
   await page.keyboard.press('g')
+  await page.keyboard.press('Enter')
   await page.getByTestId('comment-compose').fill(body)
   await page.getByTestId('comment-send').click()
   await page.waitForTimeout(200)

@@ -98,12 +98,21 @@ hij groeit, taken houdt een kleinere, eigen-scrollende hoogte eronder.
 **Getoggeld met `g`** (`toggleSidebar`, geëxporteerd uit `RelatedPanel.mjs`,
 aangeroepen vanuit `home.mjs`'s `onKeydown` — globaal, in zowel `'list'`- als
 `'diff'`-mode, ongeacht of de diff, de Onderliggende-code-kaart of de sidebar
-zelf op dat moment de keyboard heeft): dicht → open + focus op de comments
-(de lege composer, `enterComments`/`toNew`, een deterministisch ankerpunt —
+zelf op dat moment de keyboard heeft): dicht → open + highlight op de "+
+Comment op deze regel"-rij (`enterComments`, een deterministisch ankerpunt —
 mirror van hoe `enterRelated` altijd op het eerste kind landt); open maar de
-keyboard zit elders (diff/Onderliggende code) → focus naar comments, blijft
-open; open én de keyboard zit al in de sidebar (composer/comment-rij/thread/
-taak) → sluiten, keyboard terug naar de diff. Zichtbaarheid leeft in een eigen,
+keyboard zit elders (diff/Onderliggende code) → highlight terug naar die rij,
+blijft open; open én de keyboard zit al in de sidebar (composer/comment-rij/
+thread/taak) → sluiten, keyboard terug naar de diff. **`enterComments` opent
+bewust nog niet de composer/focust nog geen textarea** (anders dan `toNew`,
+dat `startComment`/arrow-navigatie naar rij 0/de restore-flow nog wél
+gebruiken) — alleen highlighten, zodat een **tweede `g`** de sidebar meteen
+weer dichtklapt i.p.v. dat de toets als een letterlijke "g" in het al-
+gefocuste tekstveld belandt (de `isEditableFocused`-guard zou 'm anders
+opeten). Pas **`Enter`** op die gehighlighte rij (`isNewFocused()` +
+`openComposer()` in `home.mjs`, mirror van de `isCommentFocused`/
+`isCodeFocused`/`isTaskFocused`-Enter-branches) opent de composer echt en
+focust de textarea. Zichtbaarheid leeft in een eigen,
 **efemere** vlag `cs.sidebarOpen` (niet in de URL — net als
 `state.showDescription` — een refresh start altijd dichtgeklapt), losgekoppeld
 van `cs.focus`: de sidebar kan open blijven staan terwijl de diff de keyboard

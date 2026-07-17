@@ -26,6 +26,8 @@ import RelatedPanel, {
   placeComment,
   isComposeOpen,
   composeHasText,
+  isNewFocused,
+  openComposer,
   relatedActive,
   enterRelated,
   leaveRelated,
@@ -3011,6 +3013,17 @@ function onKeydown(e) {
       // panel navigation scrolls <main> horizontally via scrollIntoView, and
       // without this the diff card would stay clipped off-screen to the left.
       if (!relatedActive()) scrollFocusIntoView()
+      return
+    }
+    // Enter on the highlighted "+ Comment op deze regel" row opens the
+    // composer (a fresh `g`-open only highlights the row — see enterComments
+    // in RelatedPanel.mjs — so a 2nd `g` can toggle the sidebar shut right
+    // away instead of typing a literal "g" into an already-focused textarea).
+    // Already-open composer is left alone (isComposeOpen guards against
+    // re-triggering while typing).
+    if (e.key === 'Enter' && isNewFocused() && !isComposeOpen()) {
+      e.preventDefault()
+      openComposer()
       return
     }
     // Enter on a focused comment row (reply field empty — see commentReplyEmpty)
