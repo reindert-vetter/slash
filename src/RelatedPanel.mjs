@@ -224,6 +224,75 @@ export function sidebarOpen() {
   return cs.sidebarOpen
 }
 
+// ── Onderliggende-code auto-collapse on a laptop-width viewport ──────────────
+// Once the comments/taken sidebar is open (see sidebarOpen above) on a screen
+// narrower than Tailwind's 2xl breakpoint (1536px — the same threshold the
+// rest of the layout already uses for width scaling, e.g. Block.mjs's
+// w-[70rem] 2xl:w-[82rem]), the sidebar and the full-width Onderliggende-code
+// card compete for room. `viewport` tracks whether the window is at least
+// 2xl-wide via matchMedia (mirrors theme.mjs's system-preference listener),
+// reactively — a resize (or DevTools viewport change) re-evaluates it live.
+const viewport = reactive({
+  wide: typeof window !== 'undefined' ? window.matchMedia('(min-width: 1536px)').matches : true,
+})
+if (typeof window !== 'undefined') {
+  const mq = window.matchMedia('(min-width: 1536px)')
+  const applyMQ = (e) => {
+    viewport.wide = e.matches
+  }
+  if (mq.addEventListener) mq.addEventListener('change', applyMQ)
+  else if (mq.addListener) mq.addListener(applyMQ) // older Safari fallback
+}
+
+// relatedRailActive reports whether the Onderliggende-code card should
+// collapse to a narrow rail (see relatedRail) instead of its full card: the
+// sidebar is open, the viewport is narrower than 2xl, AND the card does not
+// currently own the keyboard. That last condition mirrors the drilled-column
+// rail rule (collapsedColumnHTML, home.mjs): only the column/card that
+// currently owns the keyboard stays full-width, everything else collapses.
+// It guarantees → (enterRelated, which sets cs.focus = 'code') always lands
+// on a fully expanded, navigable card — keyboard navigation never lands on
+// dead/hidden content.
+function relatedRailActive() {
+  return sidebarOpen() && !viewport.wide && cs.focus !== 'code'
+}
+
+// relatedRail — the collapsed state of the Onderliggende-code card: a narrow
+// rail (mirrors collapsedColumnHTML in home.mjs / sidebarHintRail below),
+// icon + vertical label + the current child count, clickable to expand. A
+// click calls enterRelated() directly — the same landing → takes from the
+// diff — which flips cs.focus to 'code' and, via relatedRailActive() above,
+// immediately re-expands this same slot into the full card.
+function relatedRail() {
+  return html`
+    <button
+      type="button"
+      class="flex h-full w-14 shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
+      data-testid="related-collapsed"
+      title="Onderliggende code"
+      aria-label="Onderliggende code tonen"
+      @click="${() => enterRelated()}"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-4 w-4 shrink-0"
+      ><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>
+      <span class="max-h-40 overflow-hidden text-ellipsis text-[10px] font-medium [writing-mode:vertical-rl]"
+        >Onderliggende code</span
+      >
+      <span class="text-[11px] font-semibold tabular-nums" data-testid="related-collapsed-count"
+        >${() => rc.children.length}</span
+      >
+    </button>
+  `
+}
+
 // isCodeFocused reports whether the keyboard is on the Onderliggende-code block
 // (so home.mjs can wire Enter there to the LLM call-search).
 export function isCodeFocused() {
@@ -1571,7 +1640,17 @@ export default function RelatedPanel(state, commentTarget, search) {
   // Clicking a child drills into it as its own diff column — the same path Enter
   // takes on a focused child (drillIntoChild in home.mjs), just mouse-driven.
   const drill = (r) => search && search.drill && search.drill(r)
-  return html`
+  // fullCard is the ordinary, expanded Onderliggende-code card — unchanged from
+  // before the laptop-width auto-collapse (see relatedRailActive/relatedRail
+  // above). Wrapped in its own function (rather than being the direct return
+  // value) so the outer return below can toggle it against relatedRail() from
+  // within a *stable element root* — see the "kale toggelende expressie"
+  // pitfall in conventions.md: a template whose entire body is one toggling
+  // expression corrupts arrow.js's keyed reconcile once it flips shape (here:
+  // <section> ↔ <button>). The `<div class="contents">` wrapper keeps the
+  // outer .key('related-panel') (home.mjs) pointed at a permanent element
+  // while only the inner slot swaps.
+  const fullCard = () => html`
     <section class="flex w-[30rem] shrink-0 max-h-full min-h-0 flex-col overflow-hidden rounded-xl bg-white dark:bg-zinc-900" data-testid="related-code">
       <div class="flex items-center gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
         <div class="min-w-0">
@@ -1603,6 +1682,11 @@ export default function RelatedPanel(state, commentTarget, search) {
         }}
       </div>
     </section>
+  `
+  return html`
+    <div class="contents" data-testid="related-panel-root">
+      ${() => (relatedRailActive() ? relatedRail() : fullCard())}
+    </div>
   `
 }
 

@@ -492,9 +492,38 @@ rechts — zie de layout-alinea hierboven):
   hiervandaan naar comments/taken springt; dat gaat alleen nog via `g`. Het
   geselecteerde blokje krijgt een indigo ring (`data-active=true`). Alle
   blokjes staan **verticaal onder elkaar** op volle breedte (geen
-  pijltjes-hint meer — die is verwijderd) en de kaart klapt nooit meer in tot
-  een rail (dat gebeurde vroeger om ruimte te maken naast de comments/taken-
-  kolommen — nu overbodig, want die zitten niet meer in dezelfde kolom-flow).
+  pijltjes-hint meer — die is verwijderd); de kaart klapt niet meer in om
+  ruimte te maken náást de comments/taken-kolommen (dat gebeurde vroeger toen
+  die nog in dezelfde kolom-flow zaten — nu overbodig, ze zijn een los,
+  `position:fixed` overlay, zie "Comments/taken-sidebar" hieronder).
+
+  **Laptop-breedte auto-inklap naast een open comments/taken-sidebar
+  (`relatedRailActive`/`relatedRail`, `RelatedPanel.mjs`):** die sidebar is wél
+  een los overlay, maar concurreert nog steeds om horizontale ruimte zodra het
+  scherm te smal is om beide comfortabel naast elkaar te tonen. Onder
+  Tailwind's `2xl`-breakpoint (1536px — hetzelfde punt dat de rest van de
+  laag al gebruikt voor breedteschaling, bv. `Block.mjs`'s
+  `w-[70rem] 2xl:w-[82rem]`) klapt de kaart daarom in tot een smalle rail
+  (`data-testid=related-collapsed`, mirror van `collapsedColumnHTML`/
+  `sidebarHintRail`: icoon + verticaal label + het aantal kinderen) zodra
+  **twee** condities gelden: de sidebar staat open (`sidebarOpen()`) én de
+  kaart bezit op dat moment niet de keyboard (`cs.focus !== 'code'`) — die
+  laatste voorwaarde mirrort de bestaande regel voor gedrilde kolommen
+  (`collapsedColumnHTML`, home.mjs): alleen wat de keyboard bezit blijft vol
+  zichtbaar. Dat garandeert dat `→` (`enterRelated`, zet `cs.focus = 'code'`)
+  altijd op de volledig uitgeklapte, navigeerbare kaart landt — nooit op
+  verborgen inhoud. Verlaat je de kaart weer (`←`, `cs.focus = null`) dan
+  klapt hij, zolang de sidebar nog open staat en het scherm smal is, gewoon
+  weer in. Een klik op de rail roept `enterRelated()` rechtstreeks aan — de
+  kaart klapt zo meteen weer uit en pakt de keyboard, net als een verse `→`
+  vanuit de diff. Op een `2xl`+-scherm, of zolang de sidebar dicht is, blijft
+  de kaart altijd de volledige `w-[30rem]`-kaart; `viewport.wide` (een
+  `matchMedia('(min-width: 1536px)')`-listener, mirror van `theme.mjs`'s
+  systeem-preference-listener) houdt dat reactief bij, ook op een resize. De
+  toggle tussen rail en volledige kaart zit — conform de "kale toggelende
+  expressie"-valkuil in `conventions.md` — in een **stabiele element-root**
+  (`<div class="contents" data-testid=related-panel-root">`), niet in de hele
+  body van de template zelf. Zie `tests/related-code-narrow.spec.mjs`.
   De kaart heeft **geen vaste hoogte-cap**: hij groeit met zijn inhoud mee tot
   de volle beschikbare hoogte van de block-kolom en scrollt dan intern
   (`min-h-0`, body `flex-1 overflow-auto`). De code-excerpts **wrappen** (geen
