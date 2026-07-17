@@ -138,6 +138,13 @@ test.describe('PR Review Tree — command palette', () => {
     await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).first().click()
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeVisible()
+    // The palette's "Comment op deze regel" hands the keyboard focus to the
+    // composer directly (startComment mirrors toNew()): the reviewer can type
+    // right away, Onderliggende code collapses to its icon rail, and the
+    // "+ Comment op deze regel" button shows as selected.
+    await expect(composer).toBeFocused()
+    await expect(page.getByTestId('related-code-collapsed')).toBeVisible()
+    await expect(page.getByTestId('new-comment')).toHaveClass(/border-indigo-400/)
     await composer.fill('dit is een notitie')
 
     // Enter opens the kind-menu (not a newline, not a direct place).

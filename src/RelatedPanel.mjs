@@ -576,11 +576,16 @@ export function handleRelatedKey(key, taskCount = 0) {
 }
 
 // startComment opens the "new comment on this line" composer — the command menu
-// (home.mjs) calls it so the reviewer can start a comment task from `/`. It only
-// flips the local composing flag; placing the comment still goes through the
-// workflow (placeComment), so the write-boundary is unchanged.
+// (home.mjs) calls it so the reviewer can start a comment task from `/`. Mirrors
+// toNew(): besides flipping the local composing flag it also hands the keyboard
+// focus to 'new' (so codeCardCollapsed() collapses Onderliggende code and the
+// "+ Comment op deze regel" button shows as selected) and focuses the textarea
+// so the reviewer can type immediately. Placing the comment still goes through
+// the workflow (placeComment), so the write-boundary is unchanged.
 export function startComment() {
   cs.composing = true
+  cs.focus = 'new'
+  focusEl('[data-testid=comment-compose]')
 }
 
 // isComposeOpen reports whether the new-comment composer is currently open, so
