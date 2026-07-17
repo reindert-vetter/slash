@@ -228,6 +228,12 @@ const state = reactive({
   // URL — ephemeral UI state, like `menu`/`ui.task`, not a navigation position a
   // refresh needs to restore.
   showDescription: false,
+  // descriptionExpanded — whether the PR description (Omschrijving) in the
+  // PR-info column is shown in full or truncated (the default). Toggled by both
+  // the "Toon volledige omschrijving"/"Omschrijving inklappen" PR-menu item and
+  // the in-card "meer…"/"Inklappen" affordance — one flag, so they stay in
+  // lockstep. Ephemeral UI state, NOT bound to the URL (like showDescription).
+  descriptionExpanded: false,
   // diffViewMode — the global diff-pane preference, toggled everywhere with `a`
   // (onKeydown): 'split' (default, old+new side by side) or 'new' (only the
   // new/right pane, full width). Read by every visible Block() card (the
@@ -2870,6 +2876,17 @@ const PR_COMMANDS = [
       },
     ],
   },
+  {
+    id: 'pr-toggle-description',
+    // Label is a function so it names the current action; snapshotCommands reads
+    // it once (non-reactively) at open, so it never leaks a reactive binding into
+    // the CommandMenu tree (see the label-function note in conventions.md).
+    label: () => (state.descriptionExpanded ? 'Omschrijving inklappen' : 'Toon volledige omschrijving'),
+    hint: 'omschrijving',
+    run: () => {
+      state.descriptionExpanded = !state.descriptionExpanded
+    },
+  },
 ]
 
 // githubFileLine describes the exact file line the active change sits on, so we
@@ -3648,6 +3665,12 @@ function prStatusSlot(meta) {
   return pills.filter(Boolean)
 }
 
+// DESC_TRUNCATE_AT is the character length past which the PR description is
+// truncated (with a "meer…" affordance) in the PR-info column. A short body
+// renders in full — no misleading toggle. Character-count is deliberate: it's
+// deterministic and needs no DOM measurement (no reactive layout read).
+const DESC_TRUNCATE_AT = 280
+
 function prInfoCard(state) {
   return html`
     <div
@@ -3722,10 +3745,35 @@ function prInfoCard(state) {
         <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Omschrijving</div>
         ${() =>
           state.prMeta.body
-            ? html`<div
-                class="markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
-                .innerHTML="${() => renderMarkdown(state.prMeta.body)}"
-              ></div>`
+            ? state.prMeta.body.length > DESC_TRUNCATE_AT
+              ? // Long body: truncate with a fade + clickable "meer…" affordance
+                // that toggles state.descriptionExpanded (same flag the PR-menu
+                // item drives). The class strings are whole-value function
+                // bindings (no partial interpolation — see the arrow.js
+                // class-binding pitfall in conventions.md).
+                html`<div class="relative" data-testid="pr-info-body-wrap">
+                  <div
+                    class="${() =>
+                      'markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300 ' +
+                      (state.descriptionExpanded ? '' : 'max-h-40 overflow-hidden')}"
+                    .innerHTML="${() => renderMarkdown(state.prMeta.body)}"
+                  ></div>
+                  <button
+                    type="button"
+                    data-testid="pr-info-body-toggle"
+                    @click="${() => (state.descriptionExpanded = !state.descriptionExpanded)}"
+                    class="${() =>
+                      state.descriptionExpanded
+                        ? 'mt-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline'
+                        : 'absolute inset-x-0 bottom-0 flex h-10 cursor-pointer items-end justify-center bg-gradient-to-t from-white via-white/85 to-transparent text-[11px] font-medium text-indigo-600 hover:text-indigo-700 dark:from-zinc-900 dark:via-zinc-900/85 dark:text-indigo-400 dark:hover:text-indigo-300'}"
+                  >
+                    ${() => (state.descriptionExpanded ? 'Inklappen' : 'meer…')}
+                  </button>
+                </div>`
+              : html`<div
+                  class="markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
+                  .innerHTML="${() => renderMarkdown(state.prMeta.body)}"
+                ></div>`
             : html`<p class="text-[13px] text-slate-400 dark:text-zinc-500">geen omschrijving</p>`}
         ${() =>
           state.prMeta.jiraTitle

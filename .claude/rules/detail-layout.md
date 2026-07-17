@@ -48,7 +48,20 @@ stop" in `.claude/rules/keyboard-navigation.md` voor het volledige patroon. Een
 witte kaart met titel + Jira-badge, meta-regel (auteur, `+add −del`,
 bestandenaantal, branch, "op GitHub ›"), een **Samenvatting**-sectie
 (Claude-tekst), een **Omschrijving**-sectie (PR-body + eventueel een
-Jira-kadertje), en onderaan review/CI-pills — gestyled als de dark-zinc pills in
+Jira-kadertje), en onderaan review/CI-pills.
+**Omschrijving-truncatie (`state.descriptionExpanded`, efemeer):** een **lange**
+PR-body (> `DESC_TRUNCATE_AT` = 280 tekens) wordt standaard afgekapt
+(`max-h-40 overflow-hidden`) met onderaan een klikbare fade-affordance
+(`data-testid=pr-info-body-toggle`, "meer…") die de body volledig uitklapt; open
+wordt het een gewone "Inklappen"-link. Een **korte** body rendert altijd
+volledig (geen misleidende toggle — puur op karakter-lengte, dus deterministisch,
+geen DOM-meting). Dezelfde vlag wordt ook getoggeld door het PR-menu-item **"Toon
+volledige omschrijving" / "Omschrijving inklappen"** (`PR_COMMANDS`, `/`-menu, zie
+`.claude/rules/keyboard-navigation.md`), dus in-card-klik en menu blijven in
+lockstep. `state.descriptionExpanded` (default `false`) leeft **buiten de URL**
+(efemeer, net als `showDescription`). De class-strings van de body + toggle zijn
+**hele-waarde** function-bindings (geen deel-interpolatie — arrow.js-valkuil in
+`conventions.md`). De review/CI-pills zijn gestyled als de dark-zinc pills in
 `overview.mjs` maar dan in het lichte kaart-thema (`bg-emerald-50`/`bg-rose-50`/
 `bg-amber-50` i.p.v. `bg-emerald-500/15` etc.). De kaart leest **uitsluitend**
 `state.prMeta`/`state.pr`/`state.prUrl`/`state.jiraKey` — nooit `b.code` —

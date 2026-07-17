@@ -24,10 +24,11 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(page.getByTestId('command-input')).toHaveValue('')
 
     const rows = page.getByTestId('command-row')
-    await expect(rows).toHaveCount(3)
+    await expect(rows).toHaveCount(4)
     await expect(rows.nth(0)).toContainText('Naar PR-overzicht')
     await expect(rows.nth(1)).toContainText('GitHub')
     await expect(rows.nth(2)).toContainText('Jira')
+    await expect(rows.nth(3)).toContainText('Toon volledige omschrijving')
 
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()
@@ -56,7 +57,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
     // Esc backs out to the root, then Jira → its three children.
     await page.keyboard.press('Escape')
-    await expect(rows).toHaveCount(3)
+    await expect(rows).toHaveCount(4)
     await page.getByTestId('command-input').fill('jira')
     await expect(rows).toHaveCount(1)
     await page.keyboard.press('Enter')
@@ -132,9 +133,10 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
     await page.keyboard.press('Enter')
     await expect(menu).toBeVisible()
-    await expect(rows).toHaveCount(3)
+    await expect(rows).toHaveCount(4)
     await expect(rows.nth(0)).toContainText('Naar PR-overzicht')
     await expect(rows.nth(1)).toContainText('GitHub')
     await expect(rows.nth(2)).toContainText('Jira')
+    await expect(rows.nth(3)).toContainText('Toon volledige omschrijving')
   })
 })

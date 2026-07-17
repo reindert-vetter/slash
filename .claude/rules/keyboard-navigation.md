@@ -300,9 +300,15 @@ verse-`ms`-state-split, zie `.claude/rules/conventions.md`.
 
 **`/`** opent een **algemeen, PR-breed tree-menu** (`menu.mode = 'pr'`,
 `PR_COMMANDS` in `home.mjs`) — hetzelfde `CommandMenu`-overlay als `Enter`, maar
-i.p.v. block-acties zijn dit acties op de **hele PR**. Drie root-items: **"Naar
-PR-overzicht"** (navigeert naar `/pr-overview`), **"GitHub"** en **"Jira"**, de
-laatste twee als **submenu** (via het bestaande `children`-mechanisme). Onder
+i.p.v. block-acties zijn dit acties op de **hele PR**. Vier root-items: **"Naar
+PR-overzicht"** (navigeert naar `/pr-overview`), **"GitHub"** en **"Jira"** (de
+middelste twee als **submenu** via het bestaande `children`-mechanisme), en
+**"Toon volledige omschrijving" / "Omschrijving inklappen"** (het laatste item,
+een label-functie die `state.descriptionExpanded` toggelt — dezelfde efemere vlag
+als de in-card "meer…"-affordance in de PR-info-kolom, zie
+`.claude/rules/detail-layout.md`; het label wordt op open-tijd één keer
+gesnapshot door `snapshotCommands`, dus geen reactieve binding lekt de
+`CommandMenu`-boom in). Onder
 GitHub: *Open op GitHub* (opent de PR-pagina) en *Comment plaatsen* (hergebruikt
 de regel-comment-composer `startComment`, net als de block-palette). Onder Jira:
 *Openen in nieuw tab* (deep-link naar het ticket), *Comment plaatsen* en *Subtask
