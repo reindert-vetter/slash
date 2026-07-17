@@ -20,6 +20,7 @@ import Block, {
   updateHints,
 } from './Block.mjs'
 import RelatedPanel, {
+  CommentsSidebar,
   startComment,
   createComment,
   placeComment,
@@ -42,6 +43,7 @@ import RelatedPanel, {
   isTaskFocused,
   focusedTaskRun,
   taskRuns,
+  toggleSidebar,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { bindUrlState, num } from './urlState.mjs'
@@ -2741,15 +2743,31 @@ function onKeydown(e) {
     return
   }
 
-  // Once the reviewer has stepped into the right-hand Related panel (→ from the
-  // diff) it owns the arrows: ↑/↓/←/→ walk the related block, comment index and
-  // thread (see handleRelatedKey in RelatedPanel). Handled before Enter/f/d/s so
-  // those stay suspended while the panel is active — but typed characters (letters,
-  // Enter) are left alone so they flow into the focused reply field, like the menu.
+  // `g` toggles the comments/taken sidebar (CommentsSidebar, see
+  // detail-layout.md) — globally, in both list and diff mode, and regardless
+  // of whether the diff, the inline Onderliggende-code card, or the sidebar
+  // itself currently owns the keyboard (toggleSidebar branches on that).
+  // Handled before the relatedActive() branch below (which would otherwise eat
+  // any key that isn't an arrow/Enter while the sidebar owns the keyboard) so
+  // it also closes the sidebar from inside it. Same isEditableFocused guard as
+  // `a`: a literal "g" typed in the composer/reply field must not toggle.
+  if (e.key === 'g' && !isEditableFocused()) {
+    e.preventDefault()
+    toggleSidebar()
+    return
+  }
+
+  // Once the reviewer has stepped into either the inline Onderliggende-code
+  // card (→ from the diff, cs.focus === 'code') or the comments/taken sidebar
+  // (`g`, cs.focus one of 'new'/'comment'/'thread'/'task') it owns the arrows:
+  // ↑/↓/←/→ walk it (see handleRelatedKey in RelatedPanel). Handled before
+  // Enter/f/d/s so those stay suspended while it's active — but typed
+  // characters (letters, Enter) are left alone so they flow into the focused
+  // reply field, like the menu.
   if (relatedActive()) {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key)) {
       e.preventDefault()
-      // taskRuns(state).length clamps cs.taskSel while the Taken stop (7) owns
+      // taskRuns(state).length clamps cs.taskSel while the Taken stop owns
       // the keyboard — see handleRelatedKey/taskRuns in RelatedPanel.mjs.
       handleRelatedKey(e.key, taskRuns(state).length)
       // Exiting the panel (← / Escape from the code card's first block) just
@@ -2783,9 +2801,10 @@ function onKeydown(e) {
       const child = focusedRelatedChild()
       if (child) drillIntoChild(child)
     }
-    // Enter on the Taken stop (7) opens the focused run the same way clicking it
-    // does (openTask) — only meaningful for a task_code_comment run with a
-    // resolved comment; a purely informational run is a silent no-op there too.
+    // Enter on the Taken stop (comments/taken sidebar) opens the focused run the
+    // same way clicking it does (openTask) — only meaningful for a
+    // task_code_comment run with a resolved comment; a purely informational run
+    // is a silent no-op there too.
     if (e.key === 'Enter' && isTaskFocused()) {
       e.preventDefault()
       const run = focusedTaskRun(taskRuns(state))
@@ -3102,6 +3121,24 @@ function menuOverlay() {
       </div>
     </div>
   `
+}
+
+// MenuHost mounts the command-palette overlay at the top level (sibling of
+// PrInfoPanel/BlockList/DetailPanel/CommentsSidebar), not nested inside
+// <main>. <main> is itself `position:fixed` with an explicit z-index (z-10),
+// which makes it a stacking-context root: any `fixed`/z-indexed descendant
+// (the overlay was z-40/z-50) only stacks *within* <main>'s own subtree —
+// externally the whole thing is capped at <main>'s z-10. That's lower than
+// CommentsSidebar's z-20 (see below), so with the overlay still nested inside
+// <main> the comments/taken sidebar rendered *on top of* an open command
+// menu whenever it overlapped it (the compose-mode menu anchors on the
+// composer, which now lives in that sidebar) — clicks meant for a command row
+// landed on a workflow row underneath instead. Mounting the overlay as a
+// separate top-level element lets its own z-40/z-50 compete directly at the
+// root stacking context, where it correctly wins over both <main> and the
+// sidebar.
+function MenuHost() {
+  return html` <div>${() => (menu.open ? menuOverlay().key('command-overlay') : '')}</div> `
 }
 
 // ── PR-info column ──────────────────────────────────────────────────────────
@@ -3510,21 +3547,30 @@ function DetailPanel(state) {
         })
       }}
       ${() =>
-        RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child), openTask }, () => {
-          if (composeHasText()) openMenu('compose')
-        }).key('related-panel')}
-      ${() => (menu.open ? menuOverlay().key('command-overlay') : '')}
+        RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
     </main>
   `
 }
 
 // Mount the sidebar and the detail panel into #app. PrInfoPanel is mounted
 // first so it stacks visually under the pr-index while the latter slides
-// right over it during the ~200ms transition (see BlockList.mjs).
+// right over it during the ~200ms transition (see BlockList.mjs). CommentsSidebar
+// is its own fixed right-hand overlay (see detail-layout.md) — mounted
+// alongside, not nested inside DetailPanel's <main>, since it's reached via
+// `g` rather than <main>'s column flow.
 const app = document.getElementById('app')
 PrInfoPanel(state)(app)
 BlockList(state)(app)
 DetailPanel(state)(app)
+CommentsSidebar(
+  state,
+  commentTarget,
+  () => {
+    if (composeHasText()) openMenu('compose')
+  },
+  openTask
+)(app)
+MenuHost()(app)
 Footer(state)(app)
 
 // Start with the search box already focused so the reviewer can type straight

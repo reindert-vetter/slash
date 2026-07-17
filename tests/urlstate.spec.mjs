@@ -138,11 +138,10 @@ test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
       })
       .toBe(true)
 
-    // Step into the panel, then → ↓ : the code card hands off to the comments
-    // column (→ lands on the new-comment button) and ↓ steps onto the seeded
-    // comment. (↓ walks within the code card; → is what crosses to the comments.)
+    // Step into the panel, then g ↓ : `g` opens the comments/taken sidebar
+    // (lands on the new-comment button) and ↓ steps onto the seeded comment.
     await intoRelated(page)
-    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('g')
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('comment-item').first()).toHaveClass(/bg-indigo-50/)
     await expect.poll(() => new URL(page.url()).searchParams.get('rel.foc')).toBe('comment')

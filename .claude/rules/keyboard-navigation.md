@@ -10,8 +10,9 @@ keten van **stops**, van links naar rechts over de hele layout:
 
 1. **Omschrijving** (`prInfoCard`/`state.showDescription`) — de PR-titel/
    samenvatting/beschrijving. **Standaard verborgen** (neemt dan geen breedte
-   in — geen rail zoals stop 5's inklap, de kolom valt volledig weg) en de
-   meest-linkse stop. `←` hier verlaat de hele keten naar `/pr-overview` (zie
+   in — de kolom valt volledig weg, geen rail zoals de comments/taken-sidebar's
+   inklap) en de meest-linkse stop. `←` hier verlaat de hele keten naar
+   `/pr-overview` (zie
    onder) — er is niets links van stop 1.
 2. **PR-blok-index** (`data-testid=pr-index`, de sidebar, `state.mode==='list'`)
    — schuift fysiek naar rechts zodra stop 1 open is, zodat de omschrijving er
@@ -21,9 +22,18 @@ keten van **stops**, van links naar rechts over de hele layout:
    strikte stop: alleen bereikbaar via Enter/klik op een Onderliggende-code-kind
    (zie "Drillen" in `.claude/rules/detail-layout.md`), niet via `→`. `←` pelt
    ze wel één voor één terug af, net als de andere stops.
-5. **Onderliggende code** (`RelatedPanel`, `cs.focus==='code'`).
-6. **Comments** (`cs.focus` ∈ `{'new','comment','thread'}`).
-7. **Taken** (`cs.focus==='task'`, de workflow-runs-kolom).
+5. **Onderliggende code** (`RelatedPanel`, `cs.focus==='code'`) — de meest-
+   rechtse stop van deze keten; er is geen `→`/`←`-stop erna.
+
+**Comments en Taken zijn geen stops meer in deze keten.** Ze vormen samen een
+losstaande, **`g`-getoggelde** vaste sidebar (`CommentsSidebar`, zie
+"Comments/taken-sidebar" in `.claude/rules/detail-layout.md`) die je vanuit
+**elke** positie in de app kunt openen/sluiten, ongeacht welke stop van de
+keten hierboven op dat moment de keyboard heeft. Binnen die sidebar lopen
+`↓`/`↑` tussen comments (boven) en taken (eronder, gestapeld); `←` sluit vanaf
+elke plek in de sidebar in één klap terug naar de diff (de sidebar zelf blijft
+open — alleen de keyboard-focus verlaat 'm). Zie die sectie voor het volledige
+mechanisme (`toggleSidebar`/`cs.sidebarOpen`/de hint-rail).
 
 **Focus-highlight per stop:** stops 1-3 show the *same* on/off indigo
 focus border (`border-indigo-300 ring-1 ring-indigo-200`, otherwise the
@@ -45,9 +55,8 @@ uniformly bordered end-to-end, only stops 1-4.
 `→` schuift één stop naar rechts, `←` één stop naar links — dit is
 **bovenop**, niet in plaats van, de bestaande per-stop `↑`/`↓`-navigatie
 (die blijft binnen een stop lopen: block-selectie in de index, wijzigingsgroep
-in de diff, kind in Onderliggende code, rij in comments, rij in Taken).
-Concreet, met de aanpassingen die dit vereiste t.o.v. het oudere per-mechanisme
-gedrag:
+in de diff, kind in Onderliggende code). Concreet, met de aanpassingen die dit
+vereiste t.o.v. het oudere per-mechanisme gedrag:
 
 - **Stop 1 ↔ 2:** `←` in `'list'`-mode (buiten de zoekbox) opende vroeger de
   zoekbox (`activateSearch()`); dat is nu **de omschrijving openen**
@@ -72,31 +81,14 @@ gedrag:
   hieronder resp. "Kolom-navigatie" in `.claude/rules/detail-layout.md`.
 - **Stop 3/4 ↔ 5:** ongewijzigd — `→` vanuit de diff is `enterRelated()`, `←`
   vanuit `cs.focus==='code'` (op het eerste kind, of via `↑` daar) is
-  `exitRelated()`.
-- **Stop 5 ↔ 6:** ongewijzigd — `→` vanuit `'code'` is `gotoRow(1)` (naar de
-  composer).
-- **Binnen/uit stop 6:** **bugfix** — `←` vanuit een comment-rij (`'new'`/
-  `'comment'`, niet `'thread'`) riep voorheen onvoorwaardelijk `exitRelated()`
-  aan en sprong dus in één klap helemaal terug naar de diff, stop 5 overslaand.
-  Dat is nu `toCode()` (terug naar stop 5) — alleen `←` vanuit `cs.focus===
-  'code'` zelf gaat nog zo ver terug als de diff. `←` vanuit `'thread'` blijft
-  ongewijzigd (`toComment()`, één niveau terug naar de comment-rij, geen
-  stop-stap).
-- **Stop 6 ↔ 7:** nieuw. `→` gaat binnen comments eerst zo diep mogelijk
-  (`'comment'` → `'thread'`, ongewijzigd — `enterThread()`); pas als er niks
-  dieper is (`'new'`, de lege composer, of al in `'thread'`) stapt `→` door
-  naar Taken (`toTask(0)`, in `RelatedPanel.mjs`). In Taken lopen `↑`/`↓`
-  door de rijen (`cs.taskSel`, geklemd op `taskRuns(state).length` — de
-  actief-dan-klaar-volgorde die `workflowsSection` ook rendert, zodat rij-index
-  en render altijd overeenkomen); `←` gaat terug naar waar `→` vandaan kwam
-  (`preTaskFocus`: de composer, of dezelfde thread); `→` doet niets (laatste
-  stop). `Enter` (in `home.mjs`, via `isTaskFocused()`/`focusedTaskRun()`) opent
-  de gefocuste run net als een klik (`openTask`) — alleen zinvol voor een
-  `task_code_comment`-run met een gekoppelde comment, stil genegeerd voor de
-  rest. Zie de sectie "Taken" in `.claude/rules/detail-layout.md`.
-- `state.showDescription`/`cs.taskSel` leven bewust **buiten** de URL (net als
-  `menu`/`ui.task` elders) — efemere cursor-state, geen navigatiepositie die een
-  refresh moet terugzetten.
+  `exitRelated()`. `→` vanuit `'code'` doet niets meer — dat sprong vroeger
+  door naar de comments-kolom (`gotoRow(1)`), maar die is geen stop meer in
+  deze keten (zie hierboven en "Comments/taken-sidebar" in
+  `.claude/rules/detail-layout.md`); comments/taken zijn alleen nog via `g`
+  bereikbaar, vanaf elke stop.
+- `state.showDescription`/`cs.taskSel`/`cs.sidebarOpen` leven bewust **buiten**
+  de URL (net als `menu`/`ui.task` elders) — efemere cursor-state, geen
+  navigatiepositie die een refresh moet terugzetten.
 
 **`Enter`** opent een **command-palette** (`src/CommandMenu.mjs`,
 `data-testid=command-menu`): een doorzoekbaar commando-menu dat als **drijvende
@@ -287,11 +279,12 @@ In `'diff'`-mode stapt **`→`** de **Onderliggende-code-kaart** in
 elkaar op volle breedte (geen zij-aan-zij-hint meer) en de kaart is een **pure
 lijst-navigatie**: **`↓`** selecteert het **volgende** blokje (blijft op het
 laatste), **`↑`** het **vorige** blokje — vanaf het **eerste** blokje gaat
-**`↑`** i.p.v. verder terug naar de diff (`exitRelated`). **`→`** springt vanaf
-elk blokje naar de comments-kolom (de **"+ Comment op deze regel"**-knop,
-`gotoRow(1)`); **`←`** gaat vanaf elk blokje terug naar de diff (`exitRelated`).
-Vanuit de comments keert **`↑`** terug naar het laatst-gekozen blokje
-(`cs.codeSel` blijft behouden). Deze paneel-cursor
+**`↑`** i.p.v. verder terug naar de diff (`exitRelated`). **`←`** gaat vanaf elk
+blokje terug naar de diff (`exitRelated`). Deze kaart heeft geen `→` meer die
+'m verlaat — dat sprong vroeger naar de comments-kolom, maar comments/taken
+zitten niet meer in deze keten (zie hierboven en "Comments/taken-sidebar" in
+`.claude/rules/detail-layout.md`); die zijn alleen nog via `g` bereikbaar.
+Deze paneel-cursor
 (`cs.focus`/`codeSel`/`sel`/`threadPos`) leeft in de **URL** onder de eigen
 `rel`-namespace (`rel.foc`/`rel.code`/`rel.csel`/`rel.thr`, via
 `bindUrlState(cs, …, { ns:'rel' })` in `RelatedPanel.mjs`), zodat een refresh je
@@ -323,9 +316,10 @@ gedrilde-kolom-state opruimt). Zie de sectie
 Onderliggende-code-paneel (`cs.codeSel === 0`) geeft de keyboard-focus terug aan
 de diff van **diezelfde** kolom (`handleRelatedKey`'s `exitRelated()`) — dat is
 geen aparte "pop"-stap meer, de kolom-voor-kolom-navigatie hierboven volgt pas
-zodra `relatedActive()` weer `false` is. Deze code-tak zit vóór de generieke
-`gotoRow`-walk in `handleRelatedKey`; de comment-/thread-takken blijven
-ongewijzigd. Visueel: alle blokjes staan verticaal onder elkaar op volle
+zodra `relatedActive()` weer `false` is. Deze code-tak (`cs.focus === 'code'`)
+is volledig losstaand van de comments/taken-sidebar in `handleRelatedKey` —
+zie "Comments/taken-sidebar" in `.claude/rules/detail-layout.md` voor die
+navigatie. Visueel: alle blokjes staan verticaal onder elkaar op volle
 breedte (geen pijltjes-hint meer); het geselecteerde blokje krijgt een indigo ring
 (`data-active=true`). Zie `.claude/rules/detail-layout.md`.
 

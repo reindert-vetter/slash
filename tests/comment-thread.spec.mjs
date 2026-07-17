@@ -21,6 +21,10 @@ test('placed comment shows code snippet + original body as first message', async
   expect((await start.json()).runId).toBeTruthy()
 
   await page.goto('/pr/' + pr)
+  // The comments/taken sidebar is a fixed overlay toggled with `g` (see
+  // detail-layout.md), collapsed by default.
+  await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+  await page.keyboard.press('g')
   const item = page.getByTestId('comment-item').first()
   await expect(item).toBeVisible()
   await item.click()

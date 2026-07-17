@@ -1,10 +1,13 @@
 import { test, expect } from './_fixtures.mjs'
 
 // The left→right navigation chain (see keyboard-navigation.md, "De links→rechts
-// navigatieketen"): PR-description → block-index → diff → onderliggende code →
-// comments → taken. → advances one stop, ← steps one stop back. This exercises
-// the new stop 1 (description toggle) and stop 7 (taken), plus the comments→
-// onderliggende-code ← fix (it used to skip straight to the diff).
+// navigatieketen"): PR-description → block-index → diff → onderliggende code.
+// → advances one stop, ← steps one stop back. Comments/taken are no longer a
+// stop in this chain — they live in a separate, `g`-toggled fixed sidebar (see
+// detail-layout.md): ↓/↑ cross between comments and taken, and ← from
+// anywhere inside the sidebar exits straight back to the diff in one step
+// (the sidebar stays open). This exercises the description toggle (stop 1)
+// and that sidebar mechanism.
 test.describe('PR Review Tree — left-right nav chain', () => {
   test('← on the block-index opens the PR-description column (stop 1), → closes it again', async ({ page }) => {
     await page.goto('/pr/12903')
@@ -84,7 +87,7 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await expect(page.getByTestId('inbox')).toBeVisible()
   })
 
-  test('← from the composer returns to onderliggende code (not the diff); → with nothing deeper reaches Taken; Enter opens the task', async ({
+  test('g opens the comments sidebar; ← exits straight to the diff (sidebar stays open); ↓ with nothing deeper reaches Taken; Enter opens the task', async ({
     page,
     request,
   }) => {
@@ -127,23 +130,35 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     // cs.focus === 'code', mirrored to the URL as rel.foc (block 0 has no
     // underlying-code children here, so there's no selected item to assert on).
     const relFoc = () => new URL(page.url()).searchParams.get('rel.foc')
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await page.keyboard.press('ArrowRight') // list → diff (block 0's one change)
     await page.keyboard.press('ArrowRight') // diff → related panel (code)
     await expect.poll(relFoc).toBe('code')
-    await page.keyboard.press('ArrowRight') // code → new-comment composer (empty)
+
+    // `g` opens the comments/taken sidebar (independent of the code stop —
+    // it's a separate, fixed overlay, not the next stop in the chain) and
+    // lands on the empty composer.
+    const sidebar = page.getByTestId('comments-sidebar')
+    await page.keyboard.press('g')
+    await expect(sidebar).toBeVisible()
     await expect(page.getByTestId('comment-compose')).toBeFocused()
 
-    // Bugfix under test: ← from the composer must land back on the
-    // Onderliggende-code stop, not skip past it straight to the diff (it used
-    // to call exitRelated() unconditionally here).
+    // ← from the composer exits straight back to the diff in one step — not
+    // back to the Onderliggende-code stop — and the sidebar stays open (the
+    // composer itself closes — exitRelated drops cs.composing — so the
+    // "+ Comment op deze regel" button loses its focus ring instead).
     await page.keyboard.press('ArrowLeft')
-    await expect.poll(relFoc).toBe('code')
+    await expect.poll(relFoc).toBe(null)
+    await expect(sidebar).toBeVisible()
+    await expect(page.getByTestId('new-comment')).not.toHaveClass(/ring-indigo-300/)
 
-    // → again into the (still empty) composer. Nothing deeper to go from there
-    // — → advances straight to Taken (stop 7). Exactly one row should carry the
+    // `g` again — the sidebar is open but the keyboard sits on the diff —
+    // re-focuses the (still empty) composer. Nothing deeper to go from there
+    // — ↓ advances straight to Taken. Exactly one row should carry the
     // keyboard highlight.
-    await page.keyboard.press('ArrowRight')
-    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('g')
+    await expect(page.getByTestId('comment-compose')).toBeFocused()
+    await page.keyboard.press('ArrowDown')
     const active = page.locator('[data-testid=workflow-row][data-active="true"]')
     await expect(active).toHaveCount(1)
 

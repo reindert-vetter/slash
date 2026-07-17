@@ -1,14 +1,16 @@
 import { test, expect } from './_fixtures.mjs'
 
 // The "Taken" (workflow runs) column's per-row description + timestamp
-// (workflowNote/relTime in RelatedPanel.mjs). Like blockstats.spec.mjs, we
-// mount RelatedPanel directly with synthetic state on a live page (needed for
-// the Tailwind/Prism CSS from index.html) rather than driving a real
-// build_relations Execution end-to-end: build_relations only ever gets an
-// Execution via a full `POST /api/ingest` (git/gh, offline-unfriendly in this
-// harness — see the SLASH_GITHUB=off note in conventions.md), so this is the
-// established, lower-cost way to exercise the actual rendering code against a
-// realistic API-shaped run object.
+// (workflowNote/relTime in RelatedPanel.mjs). Taken now lives in the fixed
+// comments/taken sidebar (RelatedPanel's CommentsSidebar export, toggled with
+// `g` — see detail-layout.md), not the default export. Like
+// blockstats.spec.mjs, we mount CommentsSidebar directly with synthetic state
+// on a live page (needed for the Tailwind/Prism CSS from index.html) rather
+// than driving a real build_relations Execution end-to-end: build_relations
+// only ever gets an Execution via a full `POST /api/ingest` (git/gh,
+// offline-unfriendly in this harness — see the SLASH_GITHUB=off note in
+// conventions.md), so this is the established, lower-cost way to exercise the
+// actual rendering code against a realistic API-shaped run object.
 test.describe('PR Review Tree — Taken panel: waiting note + relative update time', () => {
   test('a build_relations "wacht" row summarises what was built instead of saying "opbouwen…", and shows a relative update time', async ({
     page,
@@ -17,7 +19,7 @@ test.describe('PR Review Tree — Taken panel: waiting note + relative update ti
 
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
-      const RelatedPanel = (await import('/src/RelatedPanel.mjs')).default
+      const mod = await import('/src/RelatedPanel.mjs')
       const state = reactive({
         pr: 12903,
         workflows: [
@@ -41,7 +43,10 @@ test.describe('PR Review Tree — Taken panel: waiting note + relative update ti
       const host = document.createElement('div')
       host.id = 'wf-notes-host'
       document.body.appendChild(host)
-      RelatedPanel(state, null, {}, null)(host)
+      mod.CommentsSidebar(state, null, null, null)(host)
+      // CommentsSidebar starts collapsed (the hint rail) — open it so the
+      // Taken section (workflowsSection) actually renders.
+      mod.toggleSidebar()
     })
 
     const host = page.locator('#wf-notes-host')
@@ -83,6 +88,8 @@ test.describe('PR Review Tree — Taken panel: waiting note + relative update ti
     expect(runId).toBeTruthy()
 
     await page.goto('/pr/12903')
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await page.keyboard.press('g') // open the comments/taken sidebar (collapsed by default)
     const row = page.locator(`[data-testid=workflow-row][data-run-id="${runId}"]`)
     await expect(row).toBeVisible()
     await expect(row.getByTestId('workflow-updated')).toHaveText(/net nu|\d+ min geleden/)

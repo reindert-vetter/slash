@@ -165,8 +165,9 @@ test.describe('PR Review Tree — change navigation', () => {
   // Comments are the task_code_comment workflow; seeding one is the only write
   // path (POST /api/workflows/task_code_comment). A "+ Comment op deze regel"
   // button leads the list; clicking a comment opens its thread. See RelatedPanel
-  // (commentsSection). The server runs with SLASH_GITHUB=off so seeding never
-  // touches a real repo.
+  // (commentsSection). The comments/taken sidebar is a fixed overlay toggled
+  // with `g` (see detail-layout.md), so it must be opened first. The server
+  // runs with SLASH_GITHUB=off so seeding never touches a real repo.
   test('the new-comment button leads the list; clicking a comment opens its thread', async ({
     page,
     request,
@@ -195,7 +196,9 @@ test.describe('PR Review Tree — change navigation', () => {
     }
 
     await page.goto('/pr/' + pr)
-    const panel = page.getByTestId('related-panel')
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await page.keyboard.press('g') // open the comments/taken sidebar
+    const panel = page.getByTestId('comments-sidebar')
     const items = panel.getByTestId('comment-item')
     const active = /bg-indigo-50/
 
@@ -218,13 +221,14 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(thread.getByTestId('comment-target')).toHaveCount(0)
   })
 
-  // The Onderliggende-code card renders all children as one flat vertical list.
-  // ↓/↑ walk the list (↓ clamps on the last child, ↑ from the first exits back to
-  // the diff); → jumps to the comments column; ← returns to the diff from any
-  // child. Mount RelatedPanel directly with mock children + drive the exported nav
-  // functions so the test is independent of the fixture's child count.
+  // The Onderliggende-code card (RelatedPanel's default export) renders all
+  // children as one flat vertical list, inline next to the diff, unaffected by
+  // the comments/taken sidebar. ↓/↑ walk the list (↓ clamps on the last child,
+  // ↑ from the first exits back to the diff); ← returns to the diff from any
+  // child. Mount RelatedPanel directly with mock children + drive the exported
+  // nav functions so the test is independent of the fixture's child count.
   // See RelatedPanel (enterRelated / handleRelatedKey / relatedCard).
-  test('↓/↑ walk the underlying-code list, → leaves for comments, ↑ from first exits', async ({
+  test('↓/↑ walk the underlying-code list, ↑ from first exits', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -237,7 +241,7 @@ test.describe('PR Review Tree — change navigation', () => {
       host.id = 'related-host'
       document.body.appendChild(host)
       mod.default(state, () => null, { startCallSearch: () => {} })(host)
-      // Three children so we can prove → advances and then clamps on the last.
+      // Three children so we can prove ↓ advances and then clamps on the last.
       const kids = [0, 1, 2].map((i) => ({
         id: 'c' + i,
         label: 'Foo::m' + i,
@@ -283,24 +287,12 @@ test.describe('PR Review Tree — change navigation', () => {
     await key('ArrowUp')
     await inactiveAt(0)
 
-    // → from any child leaves the card for the comments column (the new-comment
-    // button gets focus): the underlying-code card collapses to its icon rail
-    // (so the diff and the comments stay visible together) and its children are
-    // no longer rendered.
+    // ← also exits back to the diff from any child, same as ↑ from the first.
     await page.evaluate(() => window.__rp.enterRelated())
     await key('ArrowDown') // 2nd child
     await activeAt(1)
-    await key('ArrowRight') // → comments column
-    await expect(items).toHaveCount(0)
-    await expect(host.getByTestId('related-code-collapsed')).toBeVisible()
-    await expect(host.getByTestId('new-comment')).toHaveClass(/border-indigo-400/)
-
-    // Clicking the collapsed rail re-expands the card and hands the keyboard
-    // back to the same child that was selected before collapsing.
-    await host.getByTestId('related-code-collapsed').click()
-    await expect(host.getByTestId('related-code-collapsed')).toHaveCount(0)
-    await expect(items).toHaveCount(3)
-    await activeAt(1)
+    await key('ArrowLeft')
+    await inactiveAt(1)
   })
 
   // Selection granularity: f refines group → line → call, d coarsens back. See

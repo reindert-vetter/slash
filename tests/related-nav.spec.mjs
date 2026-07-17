@@ -1,48 +1,64 @@
 import { test, expect } from './_fixtures.mjs'
 
-// Keyboard navigation into the right-hand Related panel. From the diff, → selects
-// the related-code block; → again jumps to the "+ Comment op deze regel" button,
-// then ↓ walks into the comment index; → on a comment opens its thread with the
-// reply field focused; ↑ walks up through the old messages. ← / Esc step back out.
-// See home.mjs (onKeydown → relatedActive/enterRelated/handleRelatedKey) and
-// RelatedPanel.mjs (the cs.focus/threadPos state machine).
+// Keyboard navigation into the inline Onderliggende-code card and the fixed
+// comments/taken sidebar. From the diff, → selects the related-code block
+// (stop 5 of the left→right nav chain, unaffected by the sidebar). The
+// comments/taken sidebar is a separate, `g`-toggled overlay (see
+// detail-layout.md): `g` opens it on the composer; ↓/↑ cross between the
+// comments list and the taken list (stacked vertically); → on a comment opens
+// its thread with the reply field focused; ↑ walks up through the old
+// messages; ← from *anywhere* in the sidebar exits straight back to the diff
+// in one step, and the sidebar stays open. See home.mjs (onKeydown →
+// relatedActive/enterRelated/handleRelatedKey/toggleSidebar) and
+// RelatedPanel.mjs (the cs.focus/threadPos/sidebarOpen state machine).
 test.describe('PR Review Tree — related-panel navigation', () => {
-  // stepIntoRelated: from a fresh load (list mode), → steps into the diff, → again
-  // hands the keyboard to the panel on the related-code block.
+  // stepIntoRelated: from a fresh load (list mode), → steps into the diff, →
+  // again hands the keyboard to the inline Onderliggende-code card.
   async function stepIntoRelated(page) {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await page.keyboard.press('ArrowRight') // list → diff
-    await page.keyboard.press('ArrowRight') // diff → related panel
+    await page.keyboard.press('ArrowRight') // diff → related-code
   }
 
-  test('→ selects the related block (light blue), → opens the new-comment composer, ← exits', async ({
+  test('g opens the comments sidebar on the composer; ← exits straight back to the diff, sidebar stays open; g toggles it shut', async ({
     page,
   }) => {
     await stepIntoRelated(page)
 
-    // The related-code card itself has no outer focus border (that container
-    // border was removed so children read as loose blocks, see RelatedPanel.mjs);
-    // focus moving through it is instead observed via the new-comment composer
-    // it hands off to below.
-
-    // → moves focus to the "+ Comment op deze regel" button (indigo focus ring).
-    // Landing there opens an empty new-comment composer and focuses it, so the
-    // reviewer can type straight away. (↓/↑ now walk the code list instead.)
-    await page.keyboard.press('ArrowRight')
+    // `g` opens the comments/taken sidebar and lands on the "+ Comment op deze
+    // regel" button (an empty composer, focused so the reviewer can type
+    // straight away) — a deterministic anchor, regardless of where the
+    // keyboard was (the diff, or this related-code card).
+    await page.keyboard.press('g')
+    const sidebar = page.getByTestId('comments-sidebar')
+    await expect(sidebar).toBeVisible()
     await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
     await expect(page.getByTestId('comment-compose')).toBeFocused()
 
-    // ↑ walks back up to the related block, closing the composer again.
-    await page.keyboard.press('ArrowUp')
-    await expect(page.getByTestId('new-comment')).not.toHaveClass(/ring-indigo-300/)
-
-    // ← releases the keyboard back to the diff.
+    // ← exits straight back to the diff in one step — the sidebar stays open.
     await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('new-comment')).not.toHaveClass(/ring-indigo-300/)
+    await expect(sidebar).toBeVisible()
+
+    // `g` again — the sidebar is open but the keyboard sits elsewhere (the
+    // diff) — re-focuses the composer instead of closing it.
+    await page.keyboard.press('g')
+    await expect(page.getByTestId('comment-compose')).toBeFocused()
+
+    // `g` once more would type a literal "g" into the now-focused composer
+    // (same isEditableFocused guard as `a`, see keyboard-navigation.md) — blur
+    // it first (as a click elsewhere/tabbing away would) to exercise the
+    // close-from-inside-the-sidebar path without typing into the field.
+    await page.evaluate(() => document.activeElement && document.activeElement.blur())
+    await page.keyboard.press('g')
+    await expect(sidebar).toHaveCount(0)
+    await expect(page.getByTestId('sidebar-collapsed')).toBeVisible()
   })
 
-  test('↓ into the comment index, → opens the thread (reply focused), ↑ selects an old message', async ({
+  test('↓ into the comment index, → opens the thread (reply focused), ↑ selects an old message, ← exits to the diff', async ({
     page,
   }) => {
     // The comment index is scoped to the selected block, so seed the comment on
@@ -76,10 +92,10 @@ test.describe('PR Review Tree — related-panel navigation', () => {
 
     await stepIntoRelated(page)
 
-    // → then ↓ : related block → new-comment button → the first comment in the
-    // index. Landing on the comment shows its history and focuses the reply field,
-    // so the reviewer can type a reply straight away.
-    await page.keyboard.press('ArrowRight')
+    // g opens the sidebar on the composer; ↓ steps down into the comment index
+    // (the seeded comment). Landing on the comment shows its history and
+    // focuses the reply field, so the reviewer can type a reply straight away.
+    await page.keyboard.press('g')
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('comment-item').first()).toHaveClass(/bg-indigo-50/)
     await expect(page.getByTestId('reaction-compose')).toBeFocused()
@@ -96,9 +112,12 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     await expect(page.getByTestId('reaction-bubble').first()).toHaveClass(/ring-indigo-400/)
     await expect(page.getByTestId('reaction-bubble').first()).toContainText('eerste comment')
 
-    // ← steps back out of the thread to the comment index — reply focused again.
+    // ← from inside the thread exits straight back to the diff in one step —
+    // not just one level back to the comment index — and the sidebar stays
+    // open (see toggleSidebar/handleRelatedKey).
     await page.keyboard.press('ArrowLeft')
-    await expect(page.getByTestId('comment-item').first()).toHaveClass(/bg-indigo-50/)
-    await expect(page.getByTestId('reaction-compose')).toBeFocused()
+    await expect(page.getByTestId('comments-sidebar')).toBeVisible()
+    await expect(page.getByTestId('comment-item').first()).not.toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('reaction-compose')).not.toBeFocused()
   })
 })

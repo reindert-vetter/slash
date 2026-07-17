@@ -22,9 +22,12 @@ test('delayed code load + seeded comments: arrow orphan + list update', async ({
     await page.waitForTimeout(400) // comments load; code still pending
     await page.keyboard.press('ArrowRight')
     await page.waitForTimeout(1200) // code arrives late -> re-render
-    // now place a comment live
+    // now place a comment live — the comments/taken sidebar is a fixed
+    // overlay toggled with `g` (see detail-layout.md), collapsed by default.
+    // `g` already opens it on the empty, focused composer (no extra click —
+    // clicking new-comment again would toggle it back closed).
+    await page.keyboard.press('g').catch(() => {})
     const body = 'late ' + i
-    await page.getByTestId('new-comment').click().catch(() => {})
     await page.getByTestId('comment-compose').fill(body).catch(() => {})
     await page.getByTestId('comment-send').click().catch(() => {})
     await page.waitForTimeout(200)
@@ -32,7 +35,7 @@ test('delayed code load + seeded comments: arrow orphan + list update', async ({
     await page.waitForTimeout(150)
     await page.keyboard.press('Enter')
     await page.waitForTimeout(700)
-    const listed = await page.getByTestId('related-panel').getByTestId('comment-item').filter({ hasText: body }).count()
+    const listed = await page.getByTestId('comments-sidebar').getByTestId('comment-item').filter({ hasText: body }).count()
     console.log(`ITER ${i}: listed=${listed} errs=${errors.length} ${errors.length ? JSON.stringify([...new Set(errors)]) : ''}`)
   }
 })

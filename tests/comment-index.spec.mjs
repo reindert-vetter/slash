@@ -57,18 +57,26 @@ test.describe('PR Review Tree — comment index scoping', () => {
     })
     expect(res.ok()).toBeTruthy()
 
-    const item = page.getByTestId('related-panel').getByTestId('comment-item').filter({ hasText: 'commentaar op mijn blok' })
+    // The comment index lives in the fixed comments/taken sidebar, toggled with
+    // `g` (see detail-layout.md) — it renders nothing (just the collapsed hint
+    // rail) until opened.
+    const item = page.getByTestId('comments-sidebar').getByTestId('comment-item').filter({ hasText: 'commentaar op mijn blok' })
 
     // Deep-link to the default (first) block — the comment is on another block, so
     // the block-scoped index does not show it.
     await page.goto('/pr/12903')
     await waitBlock(page, first.label)
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await page.keyboard.press('g')
+    await expect(page.getByTestId('comments-sidebar')).toBeVisible()
     await expect(item).toHaveCount(0)
 
     // Deep-link with its block selected — the comment shows, and its diff row
     // carries a 💬 marker.
     await page.goto('/pr/12903?sel=' + encodeURIComponent(mine.fileLine))
     await waitBlock(page, mine.label)
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('g')
     await expect(item).toHaveCount(1)
     await expect(page.getByTestId('block-column').locator('[data-comment]').first()).toBeVisible()
   })

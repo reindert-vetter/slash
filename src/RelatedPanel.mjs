@@ -45,12 +45,21 @@ const cs = reactive({
   scopeSig: '',
   codeSel: 0,
   // taskSel indexes the flat active+done workflow-run list while
-  // cs.focus === 'task' (stop 7 of the nav chain, see keyboard-navigation.md).
+  // cs.focus === 'task' (the Taken stop of the comments/taken sidebar).
   // Deliberately NOT bound to the URL (unlike codeSel/sel/threadPos below) —
   // it's a step further than any of those flows have gone before and, like
   // `menu`/`ui.task` elsewhere, an ephemeral cursor rather than a navigation
   // position worth restoring on refresh.
   taskSel: 0,
+  // sidebarOpen — whether the comments/taken sidebar (see CommentsSidebar
+  // below) is expanded (comments-on-top-of-taken, w-[36rem]) or collapsed to a
+  // narrow hint rail on the right edge. Toggled with `g` (home.mjs' onKeydown).
+  // Deliberately NOT bound to the URL — ephemeral UI state, like
+  // showDescription/`menu` elsewhere: a refresh always starts collapsed.
+  // Distinct from cs.focus on purpose: the sidebar can stay open while the
+  // keyboard sits elsewhere (diff, or the inline Onderliggende-code card) —
+  // see toggleSidebar/exitSidebarToDiff.
+  sidebarOpen: false,
 })
 
 // The panel cursor survives a browser refresh: focus/codeSel/sel/threadPos live in
@@ -232,7 +241,10 @@ export function enterRelated() {
 // exitRelated releases the keyboard back to the diff and drops any input focus /
 // half-typed new comment. Exported as leaveRelated for home.mjs: drillIntoChild
 // calls it to hand a freshly-drilled column's keyboard to its own diff instead
-// of landing on its Onderliggende-code panel (see the "Drillen" flow).
+// of landing on its Onderliggende-code panel (see the "Drillen" flow). It
+// deliberately never touches cs.sidebarOpen — leaving the code card (or the
+// sidebar, see handleRelatedKey's ArrowLeft below) must not close a sidebar
+// the reviewer left open.
 function exitRelated() {
   cs.focus = null
   cs.composing = false
@@ -250,35 +262,52 @@ function focusEl(sel) {
   })
 }
 
-// toCode / toNew / toComment land on a left-column item. Landing already opens the
-// right pane and drops the caret in it — the reviewer types straight away, no →
-// needed: 'new' shows an empty new-comment composer; a comment shows its history
-// with the reply field focused. 'code' has no input, so it just blurs.
-function toCode() {
-  cs.composing = false
-  cs.focus = 'code'
-  const el = document.activeElement
-  if (el && el.blur) el.blur()
-}
-
+// toNew / toComment land on a left-column item of the comments sidebar. Landing
+// already opens the right pane and drops the caret in it — the reviewer types
+// straight away, no → needed: 'new' shows an empty new-comment composer; a
+// comment shows its history with the reply field focused.
 function toNew() {
   cs.composing = true
   cs.focus = 'new'
   focusEl('[data-testid=comment-compose]')
 }
 
-// preTaskFocus remembers which comments-substop (the 'new' composer or a
-// comment's 'thread') → advanced from into the Taken stop (stop 7 of the nav
-// chain), so ← out of Taken lands back where it left off instead of always
-// resetting to the composer. A plain module `let`, not on `cs` — it's a
-// one-shot breadcrumb for a single step back, not navigation state worth
+// enterComments hands the keyboard to the comments/taken sidebar, always
+// landing on the empty composer (row 0) — a deterministic anchor, mirroring
+// enterRelated always landing on the first child / toTask defaulting to row 0.
+// Called by toggleSidebar (`g`, home.mjs) and by a click on the collapsed hint
+// rail — both "open the sidebar and focus comments" paths.
+function enterComments() {
+  toNew()
+}
+
+// toggleSidebar drives `g` (home.mjs' onKeydown), globally (list or diff mode):
+// closed → open + focus comments; open but the keyboard sits elsewhere (diff,
+// or the inline Onderliggende-code card) → focus comments, stays open; open
+// and already focused inside it (composer/comment/thread/task) → close and
+// hand the keyboard back to the diff. Exported for home.mjs.
+export function toggleSidebar() {
+  const inSidebar = cs.focus === 'new' || cs.focus === 'comment' || cs.focus === 'thread' || cs.focus === 'task'
+  if (cs.sidebarOpen && inSidebar) {
+    cs.sidebarOpen = false
+    exitRelated()
+  } else {
+    openSidebar()
+  }
+}
+
+// preTaskFocus remembers which comments-substop (the 'new' composer, a
+// comment row, or a comment's 'thread') ↓ advanced from into the Taken stop,
+// so ↑ out of Taken lands back where it left off instead of always resetting
+// to the composer. A plain module `let`, not on `cs` — it's a one-shot
+// breadcrumb for a single step back, not navigation state worth
 // exposing/restoring.
 let preTaskFocus = 'new'
 
-// toTask hands the keyboard to the Taken/workflows panel (stop 7), landing on
-// row `i` (default the first row). Reached by → once comments has nowhere
-// deeper left to go (from the composer, or from inside a thread) — see
-// handleRelatedKey.
+// toTask hands the keyboard to the Taken/workflows panel, landing on row `i`
+// (default the first row). Reached by ↓ once comments has nowhere deeper down
+// left to go (the last comment row, the empty composer, or the bottom of a
+// thread) — see handleRelatedKey.
 function toTask(i = 0) {
   preTaskFocus = cs.focus
   cs.composing = false
@@ -442,49 +471,64 @@ function applyRelRestore() {
     cs.focus = 'code'
     scrollCodeIntoView()
   } else if (want.focus === 'new') {
+    // 'new'/'thread'/'comment' are sidebar stops (see cs.sidebarOpen) — a
+    // restored focus there means the sidebar must come back open too, not
+    // just cs.focus, or it would render as the collapsed hint rail with the
+    // keyboard silently sitting on hidden content.
+    cs.sidebarOpen = true
     toNew()
   } else if (want.focus === 'thread') {
+    cs.sidebarOpen = true
     cs.focus = 'thread'
     cs.threadPos = Math.min(want.threadPos, reactionCount())
     focusThread()
   } else if (want.focus === 'comment') {
+    cs.sidebarOpen = true
     toComment()
   }
   // else (focus null): leave the diff with the keyboard, indices restored silently.
 }
 
-// The left column is one flat vertical list the arrows walk: the related-code
-// card (row 0), the "+ Comment op deze regel" button (row 1), then one row per
-// comment (row 2 + i). Modelling it as a single cursor — instead of per-region
-// special cases — is what keeps ↑/↓ deterministic: the same key always moves one
-// row, whatever path you took to get there.
+// The comments column (top of the sidebar) is one flat vertical list the
+// arrows walk: the "+ Comment op deze regel" button (row 0), then one row per
+// comment (row 1 + i). Modelling it as a single cursor — instead of per-region
+// special cases — is what keeps ↑/↓ deterministic: the same key always moves
+// one row, whatever path you took to get there.
 function rowCount() {
-  return 2 + visibleComments().length
+  return 1 + visibleComments().length
 }
 
 // currentRow maps the live focus/selection back to that flat index.
 function currentRow() {
-  if (cs.focus === 'code') return 0
-  if (cs.focus === 'new') return 1
-  return 2 + selI()
+  if (cs.focus === 'new') return 0
+  return 1 + selI()
 }
 
 // gotoRow lands on row `n` (clamped into range) via the matching landing action,
-// so the right pane and input focus follow the cursor. Rows ≥ 2 are comments.
+// so the right pane and input focus follow the cursor. Rows ≥ 1 are comments.
 function gotoRow(n) {
   n = Math.max(0, Math.min(n, rowCount() - 1))
-  if (n === 0) toCode()
-  else if (n === 1) toNew()
+  if (n === 0) toNew()
   else {
-    cs.sel = n - 2
+    cs.sel = n - 1
     toComment()
   }
 }
 
 // handleRelatedKey drives the panel for one arrow/Escape press and returns 'exit'
-// when focus leaves the panel back to the diff (else true). The left column is a
-// flat row walk (gotoRow); the thread is the one region where ↑/↓ mean something
-// else — they walk the message history — and ← steps back out to the comment row.
+// when focus leaves the panel back to the diff (else true). It serves two
+// independent regions that share the same cs.focus enum:
+//  - the inline Onderliggende-code card ('code', reached by → from the diff,
+//    see enterRelated) — unchanged: ↓/↑ walk its children, ← exits to the diff.
+//  - the comments/taken sidebar ('new'/'comment'/'thread'/'task', reached by
+//    `g` — see toggleSidebar) — comments is a flat row walk (gotoRow), thread
+//    is the one region where ↑/↓ mean something else (walk the message
+//    history), and task is its own row walk. ↓/↑ cross between the comments
+//    list and the taken list (the sidebar stacks them vertically, comments on
+//    top of taken); ← from *anywhere* in the sidebar exits straight back to
+//    the diff in one step, leaving the sidebar open (see toggleSidebar's
+//    comment on cs.sidebarOpen) — unlike 'code', which is a single flat region
+//    with nothing to descend into further.
 // `taskCount` is the current length of the Taken/workflows list (see `taskRuns`,
 // exported for the caller to compute from its own state) — needed here only to
 // clamp cs.taskSel while cs.focus === 'task'.
@@ -494,23 +538,29 @@ export function handleRelatedKey(key, taskCount = 0) {
     return 'exit'
   }
   if (cs.focus === 'task') {
-    // Stop 7 (Taken) — the end of the left→right nav chain (see
-    // keyboard-navigation.md). ↑/↓ walk its rows; ← steps back to whichever
-    // comments-substop advanced into it (the composer, or a thread — see
-    // preTaskFocus/toTask); → is a no-op, there is nothing further right.
+    // ↓ walks down the task rows; ↑ at the first row climbs back up into
+    // whichever comments-substop it descended from (preTaskFocus/toTask); ←
+    // exits straight to the diff, sidebar stays open.
     if (key === 'ArrowDown') {
       cs.taskSel = Math.min(cs.taskSel + 1, Math.max(0, taskCount - 1))
       scrollTaskIntoView()
     } else if (key === 'ArrowUp') {
-      cs.taskSel = Math.max(cs.taskSel - 1, 0)
-      scrollTaskIntoView()
-    } else if (key === 'ArrowLeft') {
-      if (preTaskFocus === 'thread') {
-        cs.focus = 'thread'
-        focusThread()
+      if (cs.taskSel === 0) {
+        if (preTaskFocus === 'thread') {
+          cs.focus = 'thread'
+          focusThread()
+        } else if (preTaskFocus === 'comment') {
+          toComment()
+        } else {
+          toNew()
+        }
       } else {
-        toNew()
+        cs.taskSel -= 1
+        scrollTaskIntoView()
       }
+    } else if (key === 'ArrowLeft') {
+      exitRelated()
+      return 'exit'
     }
     return true
   }
@@ -519,21 +569,25 @@ export function handleRelatedKey(key, taskCount = 0) {
       cs.threadPos = Math.min(cs.threadPos + 1, reactionCount())
       focusThread()
     } else if (key === 'ArrowDown') {
-      cs.threadPos = Math.max(cs.threadPos - 1, 0)
-      focusThread()
+      if (cs.threadPos === 0) {
+        // Bottom of the thread (the reply field) — descend into Taken.
+        toTask(0)
+      } else {
+        cs.threadPos -= 1
+        focusThread()
+      }
     } else if (key === 'ArrowLeft') {
-      toComment()
-    } else if (key === 'ArrowRight') {
-      // Comments has nowhere deeper to go from inside a thread — advance to
-      // the next stop (Taken, stop 7).
-      toTask(0)
+      exitRelated()
+      return 'exit'
     }
     return true
   }
   if (cs.focus === 'code') {
-    // The code card is a flat vertical list of underlying-code children. ↓/↑ walk
-    // it (↑ from the first child exits to the diff); → jumps to the comments
-    // column; ← always returns to the diff.
+    // The code card is a flat vertical list of underlying-code children —
+    // unrelated to the comments/taken sidebar (see the function comment
+    // above). ↓/↑ walk it (↑ from the first child exits to the diff); ← always
+    // returns to the diff. → has nowhere left to go — comments/taken is only
+    // reached via `g` now, not by stepping right out of this card.
     const n = rc.children.length
     if (key === 'ArrowDown') {
       if (cs.codeSel < n - 1) {
@@ -547,8 +601,6 @@ export function handleRelatedKey(key, taskCount = 0) {
       }
       cs.codeSel -= 1
       scrollCodeIntoView()
-    } else if (key === 'ArrowRight') {
-      gotoRow(1)
     } else if (key === 'ArrowLeft') {
       exitRelated()
       return 'exit'
@@ -556,20 +608,23 @@ export function handleRelatedKey(key, taskCount = 0) {
     return true
   }
   // cs.focus is 'new' or 'comment' here (the flat comments row-walk).
-  if (key === 'ArrowDown') gotoRow(currentRow() + 1)
-  else if (key === 'ArrowUp') gotoRow(currentRow() - 1)
+  if (key === 'ArrowDown') {
+    if (currentRow() >= rowCount() - 1) {
+      // Last comments row (or the empty composer) — descend into Taken.
+      toTask(0)
+    } else {
+      gotoRow(currentRow() + 1)
+    }
+  } else if (key === 'ArrowUp') gotoRow(currentRow() - 1)
   else if (key === 'ArrowLeft') {
-    // Step back to the Onderliggende-code stop (5), not all the way out to the
-    // diff — only cs.focus === 'code' (handled above) steps out that far. This
-    // used to call exitRelated() unconditionally, skipping stop 5 entirely.
-    toCode()
+    // Exit straight back to the diff, in one step — the sidebar stays open
+    // (see toggleSidebar).
+    exitRelated()
+    return 'exit'
   } else if (key === 'ArrowRight') {
     if (cs.focus === 'comment' && selComment()) {
       // → steps into the thread so ↑ walks the old messages instead of the index.
       enterThread()
-    } else if (cs.focus === 'new') {
-      // The composer has nowhere deeper to go — advance to Taken (stop 7).
-      toTask(0)
     }
   }
   return true
@@ -577,12 +632,13 @@ export function handleRelatedKey(key, taskCount = 0) {
 
 // startComment opens the "new comment on this line" composer — the command menu
 // (home.mjs) calls it so the reviewer can start a comment task from `/`. Mirrors
-// toNew(): besides flipping the local composing flag it also hands the keyboard
-// focus to 'new' (so codeCardCollapsed() collapses Onderliggende code and the
-// "+ Comment op deze regel" button shows as selected) and focuses the textarea
-// so the reviewer can type immediately. Placing the comment still goes through
-// the workflow (placeComment), so the write-boundary is unchanged.
+// toNew(): besides flipping the local composing flag it also opens the sidebar
+// (cs.sidebarOpen) and hands the keyboard focus to 'new' (the "+ Comment op deze
+// regel" button shows as selected) and focuses the textarea so the reviewer can
+// type immediately. Placing the comment still goes through the workflow
+// (placeComment), so the write-boundary is unchanged.
 export function startComment() {
+  cs.sidebarOpen = true
   cs.composing = true
   cs.focus = 'new'
   focusEl('[data-testid=comment-compose]')
@@ -944,7 +1000,7 @@ function commentsSection(state, commentTarget, openCompose) {
   }
   return html`
     <section
-      class="flex w-[36rem] shrink-0 max-h-[28rem] min-h-[16rem] flex-row overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
+      class="flex w-full min-h-0 flex-1 flex-row overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
       data-testid="comments-panel"
     >
       <div class="flex w-56 shrink-0 flex-col overflow-hidden border-r border-slate-100 dark:border-zinc-800/60">
@@ -1194,17 +1250,6 @@ function relatedCard(r, i, drill) {
   `
 }
 
-// codeCardCollapsed reports whether the keyboard focus currently sits in the
-// comment/task block ('new' composer, a comment row, inside its thread, or the
-// Taken/workflows panel) — the panel-cursor states that mean "the reviewer is
-// past the underlying-code stop". While true, the Onderliggende-code card
-// collapses to a narrow icon rail so the diff column and the comments/taken
-// stay visible together. 'code' (or no focus at all — the diff owns the
-// keyboard) keeps the card at full width.
-function codeCardCollapsed() {
-  return cs.focus === 'new' || cs.focus === 'comment' || cs.focus === 'thread' || cs.focus === 'task'
-}
-
 // RelatedPanel — the fixed-width right column: the selected block's underlying
 // (child) code on top, live comments below. `commentTarget` (from home.mjs)
 // reports what an in-progress comment would attach to at the current navigation
@@ -1366,7 +1411,7 @@ function workflowsSection(state, openTask) {
   const doneRuns = () => runs().filter((r) => r.status === 'completed' || r.status === 'failed')
   return html`
     <section
-      class="flex w-[24rem] shrink-0 max-h-[28rem] min-h-[16rem] flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
+      class="flex w-full shrink-0 max-h-[16rem] min-h-[10rem] flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
       data-testid="workflows-panel"
     >
       <div class="border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2.5">
@@ -1416,8 +1461,11 @@ function workflowsSection(state, openTask) {
   `
 }
 
-export default function RelatedPanel(state, commentTarget, search, openCompose) {
-  const openTask = (run) => search && search.openTask && search.openTask(run)
+// RelatedPanel — the inline Onderliggende-code card, rendered next to the diff
+// (stop 5 of the left→right nav chain, see keyboard-navigation.md; unaffected
+// by the comments/taken sidebar below). `search.drill` opens a resolved child
+// as its own diff column.
+export default function RelatedPanel(state, commentTarget, search) {
   const kids = () => rc.children
   // Calls the Go resolver could not pin (status unresolved) + any in flight
   // (searching). Both show the "zoeken…" spinner — the LLM search auto-runs.
@@ -1481,74 +1529,141 @@ export default function RelatedPanel(state, commentTarget, search, openCompose) 
   // takes on a focused child (drillIntoChild in home.mjs), just mouse-driven.
   const drill = (r) => search && search.drill && search.drill(r)
   return html`
-    <aside class="flex min-h-0 shrink-0 flex-row items-start gap-3" data-testid="related-panel">
-      <section
-        class="${() =>
-          'flex shrink-0 max-h-full min-h-0 flex-col overflow-hidden rounded-xl bg-white dark:bg-zinc-900 transition-[width] ' +
-          (codeCardCollapsed() ? 'w-12 items-center' : 'w-[30rem]')}"
-        data-testid="related-code"
-      >
+    <section class="flex w-[30rem] shrink-0 max-h-full min-h-0 flex-col overflow-hidden rounded-xl bg-white dark:bg-zinc-900" data-testid="related-code">
+      <div class="flex items-center gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
+        <div class="min-w-0">
+          <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">Onderliggende code</h2>
+          <p class="text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-approval-total">
+            Code die dit blok aanroept${() => {
+              const a = codeApproval()
+              return a.total ? ` · ${a.done}/${a.total} goedgekeurd` : ''
+            }}
+          </p>
+          ${() => coversWarning()}
+        </div>
         ${() =>
-          codeCardCollapsed()
-            ? html`
-                <button
-                  type="button"
-                  class="flex h-full w-full flex-col items-center justify-center gap-1 text-slate-400 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
-                  data-testid="related-code-collapsed"
-                  title="Onderliggende code"
-                  aria-label="Onderliggende code tonen"
-                  @click="${() => toCode()}"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    class="h-5 w-5"
-                  >
-                    <polyline points="9 8 5 12 9 16"></polyline>
-                    <polyline points="15 8 19 12 15 16"></polyline>
-                  </svg>
-                </button>
-              `
-            : html`
-                <div class="flex items-center gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
-                  <div class="min-w-0">
-                    <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">Onderliggende code</h2>
-                    <p class="text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-approval-total">
-                      Code die dit blok aanroept${() => {
-                        const a = codeApproval()
-                        return a.total ? ` · ${a.done}/${a.total} goedgekeurd` : ''
-                      }}
-                    </p>
-                    ${() => coversWarning()}
-                  </div>
-                  ${() =>
-                    searching() || pending() > 0
-                      ? html`<span
-                          class="ml-auto shrink-0 rounded-md border border-slate-200 dark:border-zinc-800 px-2 py-1 text-[11px] text-slate-400 dark:text-zinc-500"
-                          data-testid="related-searching"
-                          >zoeken…</span
-                        >`
-                      : ''}
-                </div>
-                <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
-                  ${() => {
-                    // All children render as one flat vertical list, full width, in order.
-                    const ks = kids()
-                    return ks.length === 0
-                      ? html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">Geen onderliggende code.</p>`
-                      : ks.map((r, i) => relatedCard(r, i, drill).key('related:' + r.id))
-                  }}
-                </div>
-              `}
-      </section>
+          searching() || pending() > 0
+            ? html`<span
+                class="ml-auto shrink-0 rounded-md border border-slate-200 dark:border-zinc-800 px-2 py-1 text-[11px] text-slate-400 dark:text-zinc-500"
+                data-testid="related-searching"
+                >zoeken…</span
+              >`
+            : ''}
+      </div>
+      <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
+        ${() => {
+          // All children render as one flat vertical list, full width, in order.
+          const ks = kids()
+          return ks.length === 0
+            ? html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">Geen onderliggende code.</p>`
+            : ks.map((r, i) => relatedCard(r, i, drill).key('related:' + r.id))
+        }}
+      </div>
+    </section>
+  `
+}
 
-      ${commentsSection(state, commentTarget, openCompose)}
-      ${workflowsSection(state, openTask)}
-    </aside>
+// ── Comments/taken sidebar (fixed, toggled with `g`) ──────────────────────────
+// A fixed right-hand overlay (mirrors PrInfoPanel's fixed left-hand column,
+// see detail-layout.md), independent of <main>'s horizontal-scrolling column
+// flow: comments on top, taken stacked below. Toggled globally with `g`
+// (toggleSidebar, home.mjs' onKeydown) rather than reached by stepping →
+// through the nav chain — see keyboard-navigation.md. Collapsed
+// (!cs.sidebarOpen) it renders as a narrow hint rail showing the comment count
+// + the running/waiting task count; a click on the rail opens it the same way
+// `g` does.
+
+// runningTaskCount is the number of active (running/waiting) runs — the second
+// number on the collapsed hint rail.
+function runningTaskCount(state) {
+  return taskRuns(state).filter((r) => r.status === 'running' || r.status === 'waiting').length
+}
+
+// openSidebar is the "open it" half of toggleSidebar, also used directly by a
+// click on the collapsed hint rail (which can only ever mean "open").
+function openSidebar() {
+  cs.sidebarOpen = true
+  enterComments()
+}
+
+// sidebarHintRail — the collapsed state: a narrow rail on the right edge with
+// the comment count and the running/waiting task count, clickable to open.
+function sidebarHintRail(state) {
+  return html`
+    <button
+      type="button"
+      class="fixed right-0 top-6 bottom-[100px] z-20 flex w-12 flex-col items-center justify-center gap-4 rounded-l-xl border border-r-0 border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
+      data-testid="sidebar-collapsed"
+      title="Comments &amp; taken (g)"
+      aria-label="Comments en taken tonen"
+      @click="${() => openSidebar()}"
+    >
+      <span class="flex flex-col items-center gap-0.5" data-testid="sidebar-hint-comments">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          class="h-4 w-4"
+        >
+          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+        </svg>
+        <span class="text-[11px] font-semibold tabular-nums" data-testid="sidebar-hint-comments-count"
+          >${() => visibleComments().length}</span
+        >
+      </span>
+      <span class="flex flex-col items-center gap-0.5 text-amber-600 dark:text-amber-400" data-testid="sidebar-hint-tasks">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          class="h-4 w-4"
+        >
+          <circle cx="12" cy="12" r="9"></circle>
+          <polyline points="12 7 12 12 16 14"></polyline>
+        </svg>
+        <span class="text-[11px] font-semibold tabular-nums" data-testid="sidebar-hint-tasks-count"
+          >${() => runningTaskCount(state)}</span
+        >
+      </span>
+    </button>
+  `
+}
+
+// CommentsSidebar — the fixed-position sidebar itself: comments on top, taken
+// stacked below when open (cs.sidebarOpen), else the collapsed hint rail.
+// Mounted once, at top level, alongside PrInfoPanel/BlockList/DetailPanel (see
+// home.mjs) — not inside <main>'s column flow.
+export function CommentsSidebar(state, commentTarget, openCompose, openTaskFn) {
+  const openTask = (run) => openTaskFn && openTaskFn(run)
+  // Load comments (and start the poll/heartbeat) unconditionally, once, at
+  // mount — regardless of whether the sidebar is open. commentsSection() only
+  // runs its own syncComments() call while cs.sidebarOpen is true (it's inside
+  // the collapsible branch below), so without this the comment list — and
+  // hence visibleComments(), which the ↓/↑ row-walk and the hint-rail count
+  // both depend on — would stay empty until the reviewer opens the sidebar
+  // for the first time. Mirrors how state.prMeta/state.workflows already load
+  // progressively regardless of whether their column happens to be visible.
+  syncComments(state ? state.pr : null)
+  return html`
+    <div>
+      ${() =>
+        cs.sidebarOpen
+          ? html`<div
+              class="fixed right-6 top-6 bottom-[100px] z-20 flex w-[36rem] min-h-0 flex-col gap-3"
+              data-testid="comments-sidebar"
+            >
+              ${commentsSection(state, commentTarget, openCompose)}
+              ${workflowsSection(state, openTask)}
+            </div>`.key('comments-sidebar-open')
+          : sidebarHintRail(state).key('comments-sidebar-collapsed')}
+    </div>
   `
 }

@@ -303,9 +303,10 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   `{file,label,gran,line,rowStart,rowEnd,snippet}` — `snippet` is `Body`
   afgekapt op een woordgrens (`commentSnippet`, ~60 tekens + `…`). `RunID` (==
   de comment's id, zie boven) staat al op de buitenste view. Voedt de
-  "Taken"-kolom (`workflows-panel`) in `RelatedPanel`, zie
-  `.claude/rules/detail-layout.md`: de omschrijving per rij en de klik-door-naar-
-  de-comment (`openTask` in `home.mjs`) leunen op dit veld.
+  "Taken"-kolom (`workflows-panel`, onderdeel van `CommentsSidebar` in
+  `RelatedPanel.mjs`), zie `.claude/rules/detail-layout.md`: de omschrijving
+  per rij en de klik-door-naar-de-comment (`openTask` in `home.mjs`) leunen op
+  dit veld.
   Voor de PR-metadata: `POST /api/workflows/pr_status {pr}` (ensure de tracker,
   die synchroon de drie stages draait) + read-only `GET /api/pr?pr=N` (leest
   het `prmeta`-read-model: `{ok,pr,title,url,updatedAt,body,author,additions,

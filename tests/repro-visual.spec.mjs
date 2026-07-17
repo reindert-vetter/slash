@@ -1,7 +1,13 @@
 import { test, expect } from './_fixtures.mjs'
 
+// The comments/taken sidebar is a fixed overlay toggled with `g` (see
+// detail-layout.md), collapsed by default — open it before touching anything
+// inside it.
 async function placeVia(page, body) {
-  await page.getByTestId('new-comment').click()
+  // `g` already opens the sidebar on the empty, focused composer (enterComments
+  // → toNew) — no extra click needed (clicking new-comment again would toggle
+  // it back closed).
+  await page.keyboard.press('g')
   await page.getByTestId('comment-compose').fill(body)
   await page.getByTestId('comment-send').click()
   await page.waitForTimeout(200)
@@ -11,7 +17,7 @@ async function placeVia(page, body) {
   await page.waitForTimeout(800)
 }
 function item(page, body) {
-  return page.getByTestId('related-panel').getByTestId('comment-item').filter({ hasText: body })
+  return page.getByTestId('comments-sidebar').getByTestId('comment-item').filter({ hasText: body })
 }
 
 test('call gran on billingAddress-like block, then re-navigate', async ({ page }) => {
