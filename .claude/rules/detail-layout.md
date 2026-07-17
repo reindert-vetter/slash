@@ -241,7 +241,13 @@ als `workflowsSection` rendert, dus rij-index en keyboard-cursor komen altijd
 overeen); de gefocuste rij krijgt een indigo ring (`data-active=true` op
 `data-testid=workflow-row`). `↑` op de eerste rij klimt terug naar waar `↓`
 vandaan kwam (`preTaskFocus` in `RelatedPanel.mjs`: de composer, een
-comment-rij, of dezelfde thread); `←` sluit de sidebar-focus in één klap
+comment-rij, of dezelfde thread) — terug naar de **composer** highlight't dat
+alleen de "+ Comment op deze regel"-rij (`enterComments`, net als een vers
+`g`-open), zonder 'm meteen te openen/focussen; pas een expliciete `Enter`
+(`isNewFocused`+`openComposer`, `home.mjs`) opent 'm. Terug naar een
+**comment-rij**/**thread** focust nog steeds meteen het reply-veld, zoals de
+gewone rij-navigatie binnen comments dat altijd al doet. `←` sluit de
+sidebar-focus in één klap
 richting de diff (zie hierboven), ongeacht `preTaskFocus`. `Enter`
 (afgehandeld in `home.mjs`, niet in `RelatedPanel.mjs` — `openTask` leeft daar
 omdat het de gedeelde navigatie-`state` aanstuurt) opent de gefocuste run net als

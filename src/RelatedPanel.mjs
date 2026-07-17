@@ -384,7 +384,9 @@ export function toggleSidebar() {
 // so ↑ out of Taken lands back where it left off instead of always resetting
 // to the composer. A plain module `let`, not on `cs` — it's a one-shot
 // breadcrumb for a single step back, not navigation state worth
-// exposing/restoring.
+// exposing/restoring. Note: landing back on 'new' (see handleRelatedKey's
+// ArrowUp branch) only highlights the composer row via enterComments — it
+// does not auto-open/focus it, unlike the 'comment'/'thread' cases.
 let preTaskFocus = 'new'
 
 // toTask hands the keyboard to the Taken/workflows panel, landing on row `i`
@@ -622,8 +624,10 @@ export function handleRelatedKey(key, taskCount = 0) {
   }
   if (cs.focus === 'task') {
     // ↓ walks down the task rows; ↑ at the first row climbs back up into
-    // whichever comments-substop it descended from (preTaskFocus/toTask); ←
-    // exits straight to the diff, sidebar stays open.
+    // whichever comments-substop it descended from (preTaskFocus/toTask) —
+    // climbing back to the composer only highlights it (see enterComments
+    // below), a comment row or thread still auto-focuses its reply field as
+    // before; ← exits straight to the diff, sidebar stays open.
     if (key === 'ArrowDown') {
       cs.taskSel = Math.min(cs.taskSel + 1, Math.max(0, taskCount - 1))
       scrollTaskIntoView()
@@ -635,7 +639,13 @@ export function handleRelatedKey(key, taskCount = 0) {
         } else if (preTaskFocus === 'comment') {
           toComment()
         } else {
-          toNew()
+          // preTaskFocus is 'new' — climb back to the composer substop the
+          // same way a fresh `g`-open lands on it (enterComments): highlight
+          // the "+ Comment op deze regel" row only, don't auto-open/focus the
+          // composer. Mirrors the `g` rationale (don't hijack the keyboard
+          // into a textarea the reviewer didn't explicitly ask to type into) —
+          // an explicit Enter (isNewFocused + openComposer, home.mjs) opens it.
+          enterComments()
         }
       } else {
         cs.taskSel -= 1

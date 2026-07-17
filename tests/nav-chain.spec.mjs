@@ -181,6 +181,17 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     const active = page.locator('[data-testid=workflow-row][data-active="true"]')
     await expect(active).toHaveCount(1)
 
+    // ↑ from the first Taken row climbs back to the composer substop — but,
+    // like the `g`-open above, only highlights the "+ Comment op deze regel"
+    // row. It must NOT auto-open/focus the composer (see enterComments in
+    // RelatedPanel.mjs's handleRelatedKey ArrowUp branch).
+    await page.keyboard.press('ArrowUp')
+    await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
+    await expect(page.getByTestId('comment-compose')).toHaveCount(0)
+    // Re-enter Taken to continue the walk below.
+    await page.keyboard.press('ArrowDown')
+    await expect(active).toHaveCount(1)
+
     // Walk ↓ until the highlighted row is the one for our seeded run (other
     // workflow types for this PR — pr_status, build_relations, … — sit in the
     // same list), then confirm the reachable count so the loop can't spin
