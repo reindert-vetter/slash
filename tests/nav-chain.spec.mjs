@@ -47,6 +47,11 @@ test.describe('PR Review Tree — left-right nav chain', () => {
 
   test('stop 1 and stop 2 get the same on/off indigo focus border as the diff card (stop 3)', async ({ page }) => {
     await page.goto('/pr/12903')
+    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
+    // in home.mjs) carries no local diff; select block 1
+    // (CreatePaymentAction::execute) so → into the diff (stop 3) actually
+    // enters diff mode.
+    await page.locator('[data-idx="1"]').click()
 
     // Stop 2 (the pr-index) owns the keyboard by default in list-mode: its
     // container should carry the same border-indigo-300/ring-indigo-200 pair
@@ -91,15 +96,20 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     page,
     request,
   }) => {
-    // Block 0 of PR 12903 is the one fixture block guaranteed to carry a real
-    // diff (see the data caveat in conventions.md) — it has exactly one changed
-    // line, so there's no "later, non-colliding" unit within it to place a
-    // comment on without landing in the same scope other specs already use for
-    // their own block-0 comments (comment-index.spec.mjs, related-nav.spec.mjs).
-    // Comments are scoped per BLOCK, but Taken (the workflows list) is scoped to
-    // the whole PR — so seed the comment on a *different* block (index 1) that
-    // nothing else here touches; it still shows up as a Taken row for this PR,
-    // with zero risk of also surfacing in block 0's comment index.
+    // Block 1 of the left list (CreatePaymentAction::execute — block 0,
+    // ContractController::index, sorts first as the sole CONTROLLER, see
+    // categoryRank in home.mjs, but has no local diff) is the one fixture
+    // block guaranteed to carry a real diff (see the data caveat in
+    // conventions.md) — it has exactly one changed line, so there's no
+    // "later, non-colliding" unit within it to place a comment on without
+    // landing in the same scope other specs already use for their own
+    // comments on it (comment-index.spec.mjs, related-nav.spec.mjs).
+    // Comments are scoped per BLOCK, but Taken (the workflows list) is scoped
+    // to the whole PR — so seed the comment on a *different* block
+    // (findOrCreateCustomer — index 1 of the raw, unsorted /api/blocks
+    // response, distinct from the UI's sorted list index used below) that
+    // nothing else here touches; it still shows up as a Taken row for this
+    // PR, with zero risk of also surfacing in this block's comment index.
     const blocks = await (await request.get('/api/blocks?pr=12903')).json()
     const other = blocks[1]
     const start = await request.post('/api/workflows/task_code_comment', {
@@ -124,14 +134,14 @@ test.describe('PR Review Tree — left-right nav chain', () => {
       .toBe(true)
 
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.locator('[data-idx="1"]').click() // CreatePaymentAction::execute
     // The related-code card has no outer focus border anymore (removed so its
     // children read as loose blocks); the code stop owning the keyboard shows as
-    // cs.focus === 'code', mirrored to the URL as rel.foc (block 0 has no
+    // cs.focus === 'code', mirrored to the URL as rel.foc (this block has no
     // underlying-code children here, so there's no selected item to assert on).
     const relFoc = () => new URL(page.url()).searchParams.get('rel.foc')
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
-    await page.keyboard.press('ArrowRight') // list → diff (block 0's one change)
+    await page.keyboard.press('ArrowRight') // list → diff (this block's one change)
     await page.keyboard.press('ArrowRight') // diff → related panel (code)
     await expect.poll(relFoc).toBe('code')
 
@@ -195,7 +205,13 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     // showDescription:true simultaneously true, which the layout never expects
     // (see detail-layout.md) — the description card rendered behind the diff
     // card instead of beside it.
-    await page.goto('/pr/12903?mode=diff&sel=app%2FActions%2FAddUpsell.php%3A33')
+    // sel targets CreatePaymentAction::execute (app/Actions/CreatePaymentAction.php:26),
+    // the block that reliably carries a real change (see conventions.md) — a
+    // restored mode=diff on a block with zero change groups gets auto-corrected
+    // back to 'list' on load (see the mode/groups.length guard in ensureCode,
+    // home.mjs), which would make this deep link start in list mode already and
+    // defeat the point of this regression test.
+    await page.goto('/pr/12903?mode=diff&sel=app%2FActions%2FCreatePaymentAction.php%3A26')
     await expect(page.getByTestId('block-column')).toBeVisible()
 
     const info = page.getByTestId('pr-info-column')

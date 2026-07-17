@@ -174,13 +174,16 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
   // End-to-end: pressing `a` in the real app flips the visible block's diff
   // between side-by-side and new-only, and `a` again flips it back. Anchored
-  // on block 0 of PR 12903, which reliably carries a real (two-sided) change
-  // — see the data caveat in conventions.md.
+  // on block 1 of PR 12903 (CreatePaymentAction::execute), which reliably
+  // carries a real (two-sided) change — see the data caveat in
+  // conventions.md. Block 0 (ContractController::index) sorts first as the
+  // sole CONTROLLER (categoryRank in home.mjs) but has no local diff.
   test('`a` toggles the live diff card between side-by-side and new-only', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.locator('[data-idx="1"]').click()
+    await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
 
     await page.keyboard.press('ArrowRight') // step into the diff
     const diff = page.getByTestId('code-diff').first()

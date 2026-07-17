@@ -16,7 +16,10 @@ test.describe('PR Review Tree — related-panel navigation', () => {
   // again hands the keyboard to the inline Onderliggende-code card.
   async function stepIntoRelated(page) {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
+    // in home.mjs) has no local diff to preview; select block 1
+    // (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await page.keyboard.press('ArrowRight') // list → diff
@@ -62,11 +65,15 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     page,
   }) => {
     // The comment index is scoped to the selected block, so seed the comment on
-    // whatever block loads first — read its file/label from the card. An unknown
-    // row anchor (rowStart -1) means "block-level", so it shows for that block
+    // the same block stepIntoRelated below will select (block 1,
+    // CreatePaymentAction::execute — block 0, ContractController::index, sorts
+    // first as the sole CONTROLLER, see categoryRank in home.mjs, but carries
+    // no local diff) — read its file/label from the card. An unknown row
+    // anchor (rowStart -1) means "block-level", so it shows for that block
     // whatever unit is selected. Writes still go through the workflow endpoints
     // (start + reply signal), so the write-boundary holds.
     await page.goto('/pr/12903')
+    await page.locator('[data-idx="1"]').click()
     const card = page.getByTestId('block-column').locator('article').first()
     await expect(card).toBeVisible()
     const label = (await card.locator('h2').first().innerText()).trim()

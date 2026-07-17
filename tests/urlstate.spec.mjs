@@ -37,11 +37,15 @@ test.describe('PR Review Tree — URL state persistence', () => {
     await page.keyboard.press('ArrowDown')
     const second = await fileLineOf(page)
     await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe(second)
-    // Step back to the first block: it is a `modified` block with a change to step
-    // into, so enterDiff has change groups to land on (the diff content comes from
-    // the base/head worktrees).
+    // Step back to the first block to prove the round trip, then step down
+    // again onto the second block: the first block (ContractController::index,
+    // CONTROLLER-first — see categoryRank in home.mjs) has no local diff, but
+    // the second (CreatePaymentAction::execute) reliably carries a change to
+    // step into (the diff content comes from the base/head worktrees).
     await page.keyboard.press('ArrowUp')
     await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe(first)
+    await page.keyboard.press('ArrowDown')
+    await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe(second)
 
     // enterDiff needs the block's code loaded to know its change groups; wait for
     // the lazy fetch to settle before stepping in.
@@ -86,7 +90,10 @@ test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
   // intoRelated: list → diff → hand the keyboard to the panel (focus 'code').
   async function intoRelated(page) {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
+    // in home.mjs) has no local diff to preview; select block 1
+    // (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await page.keyboard.press('ArrowRight') // list → diff
     await page.keyboard.press('ArrowRight') // diff → related panel
@@ -119,10 +126,12 @@ test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
   })
 
   test('landing on a comment survives a reload (restore via the comments load)', async ({ page }) => {
-    // Seed a block-level comment on whatever block loads first (rowStart -1 = shown
-    // for the whole block), the same way related-nav does — writes go through the
-    // workflow endpoint, so the write-boundary holds.
+    // Seed a block-level comment (rowStart -1 = shown for the whole block) on
+    // the same block intoRelated below will select (block 1,
+    // CreatePaymentAction::execute), the same way related-nav does — writes go
+    // through the workflow endpoint, so the write-boundary holds.
     await page.goto('/pr/12903')
+    await page.locator('[data-idx="1"]').click()
     const card = page.getByTestId('block-column').locator('article').first()
     await expect(card).toBeVisible()
     const label = (await card.locator('h2').first().innerText()).trim()

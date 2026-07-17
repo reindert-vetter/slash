@@ -98,7 +98,12 @@ test.describe('PR Review Tree — change navigation', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first now, see
+    // categoryRank in home.mjs) has no local diff to step through; select
+    // block 1 (CreatePaymentAction::execute), the block with a reliable
+    // change used by the rest of this file's cross-block-flow tests.
+    await page.locator('[data-idx="1"]').click()
+    await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
 
     // Wait for the selected block's diff to load.
     const panel = page.getByTestId('detail-panel')
@@ -120,46 +125,57 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(panel).toHaveClass(/left-\[29rem\]/)
   })
 
-  // Cross-block flow only continues within the SAME file. In the fixture blocks
-  // 0 and 1 are both CreatePaymentAction.php (linked by the connector) while
-  // block 2 is a different file (ProcessCartAction.php). Walking ↓ off the end of
-  // block 0 should flow into block 1, but must stop at the file boundary before
-  // block 2. Walking ↑ off the top of block 1 flows back into block 0 and stops.
+  // Cross-block flow only continues within the SAME file. In the fixture,
+  // block 0 (ContractController::index) sorts first as the sole CONTROLLER
+  // (see categoryRank in home.mjs), then blocks 1 and 2 are both
+  // CreatePaymentAction.php (linked by the connector) while block 3 is a
+  // different file (ProcessCartAction.php). Walking ↓ off the end of block 1
+  // should flow into block 2, but must stop at the file boundary before
+  // block 3. Walking ↑ off the top of block 2 flows back into block 1 and stops.
   const selected = (page, i) => expect(page.locator(`[data-idx="${i}"]`))
 
   test('↓ flows into the next same-file block but stops at the file boundary', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.locator('[data-idx="1"]').click()
+    await selected(page, 1).toHaveClass(/bg-indigo-50/)
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
 
-    // Step into block 0's diff, then walk down well past its changes. More presses
+    // Step into block 1's diff, then walk down well past its changes. More presses
     // than either block can have groups, so we're guaranteed to reach the boundary.
     await page.keyboard.press('ArrowRight')
     for (let n = 0; n < 40; n++) await page.keyboard.press('ArrowDown')
 
-    // Landed on block 1 (same file) and never crossed into block 2 (other file).
-    await selected(page, 1).toHaveClass(/bg-indigo-50/)
-    await selected(page, 2).not.toHaveClass(/bg-indigo-50/)
+    // Landed on block 2 (same file) and never crossed into block 3 (other file).
+    await selected(page, 2).toHaveClass(/bg-indigo-50/)
+    await selected(page, 3).not.toHaveClass(/bg-indigo-50/)
   })
 
   test('↑ flows back into the previous same-file block and stops at the top', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
-    // Select block 1 (findOrCreateCustomer, same file as block 0) and step in.
+    // Block 2 (findOrCreateCustomer) carries no local diff of its own, so
+    // entering the diff directly on it would silently no-op (enterDiff bails
+    // when groupsFor(b) is empty). Step in via block 1 (execute, the reliable
+    // diff) and flow all the way down into block 2 first (same mechanism as
+    // the previous test), then reverse: flowing back up must land on block 1
+    // and stop there — block 0 is a different file, so there's no earlier
+    // same-file neighbour to flow into.
     await page.locator('[data-idx="1"]').click()
-    await selected(page, 1).toHaveClass(/bg-indigo-50/)
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
 
     await page.keyboard.press('ArrowRight')
+    for (let n = 0; n < 40; n++) await page.keyboard.press('ArrowDown')
+    await selected(page, 2).toHaveClass(/bg-indigo-50/) // sanity: flowed into block 2
+
     for (let n = 0; n < 40; n++) await page.keyboard.press('ArrowUp')
 
-    // Flowed back into block 0 and stopped there (no previous same-file block).
-    await selected(page, 0).toHaveClass(/bg-indigo-50/)
+    // Flowed back into block 1 and stopped there (no previous same-file block).
+    await selected(page, 1).toHaveClass(/bg-indigo-50/)
   })
 
   // Comments are the task_code_comment workflow; seeding one is the only write
@@ -460,12 +476,15 @@ test.describe('PR Review Tree — change navigation', () => {
   test('f on a single-line group jumps straight to call; d coarsens back', async ({
     page,
   }) => {
-    // Use the default-selected block 0 (proven to load in the other nav tests).
-    // Its first change group spans a single row, so refining it with f has no
-    // meaningful 'line' step (line == the whole group) and jumps straight to
-    // 'call'. See home.mjs (setGran).
+    // Use block 1 (CreatePaymentAction::execute, proven to load in the other
+    // nav tests — block 0 is now ContractController::index, the CONTROLLER
+    // sorted first, which carries no local diff). Its first change group
+    // spans a single row, so refining it with f has no meaningful 'line' step
+    // (line == the whole group) and jumps straight to 'call'. See home.mjs
+    // (setGran).
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.locator('[data-idx="1"]').click()
+    await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
@@ -511,15 +530,17 @@ test.describe('PR Review Tree — change navigation', () => {
   // (article class, category/status badges, description, approve checkbox) — on
   // every single step, a visible flicker for what should be just the highlight
   // moving. See stepChevronSlot in home.mjs / the flicker note in
-  // detail-layout.md. Block 0's first change group is a single row with several
-  // call segments (see the previous test), so refining to 'call' and stepping to
-  // the next segment stays within the same block while state.change advances —
-  // exactly the scenario that used to flicker.
+  // detail-layout.md. Block 1's (CreatePaymentAction::execute) first change
+  // group is a single row with several call segments (see the previous test),
+  // so refining to 'call' and stepping to the next segment stays within the
+  // same block while state.change advances — exactly the scenario that used
+  // to flicker.
   test('a change-step within the same block only patches the highlight, not the whole card', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.locator('[data-idx="1"]').click()
+    await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
     await page.keyboard.press('ArrowRight')
@@ -557,6 +578,9 @@ test.describe('PR Review Tree — change navigation', () => {
   // (sKey → setGran(-1)), never walking the calls. See home.mjs.
   test('on the call level f steps to the next call and s zooms back out', async ({ page }) => {
     await page.goto('/pr/12903')
+    // Block 0 (ContractController::index) carries no local diff now that
+    // CONTROLLER sorts first — select block 1 (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
 
@@ -585,12 +609,15 @@ test.describe('PR Review Tree — change navigation', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
+    // Block 0 (ContractController::index) carries no local diff now that
+    // CONTROLLER sorts first — select block 1 (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
     const footer = page.getByTestId('footer')
     const footerDiff = footer.getByTestId('code-diff')
 
-    // Step into the diff of the default block (single-row first group) and refine:
+    // Step into the diff of block 1 (single-row first group) and refine:
     // f jumps straight to call, still one row, so the footer shows the +/- diff and
     // the active segment carries the same indigo underline as the pane.
     await page.keyboard.press('ArrowRight')

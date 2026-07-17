@@ -14,9 +14,11 @@ import { test, expect } from './_fixtures.mjs'
 // "bare single-expression keyed template" pitfall in
 // .claude/rules/conventions.md.
 //
-// PR 12903's blocks 0+1 are same-file (CreatePaymentAction::execute /
-// ::findOrCreateCustomer), and block 0 reliably carries a change (see the
-// data note in conventions.md), so the ↓/↑ flow-through is exercised for real.
+// PR 12903's blocks 1+2 are same-file (CreatePaymentAction::execute /
+// ::findOrCreateCustomer — block 0 sorts first as the sole CONTROLLER, see
+// categoryRank in home.mjs, but carries no local diff), and block 1 reliably
+// carries a change (see the data note in conventions.md), so the ↓/↑
+// flow-through is exercised for real.
 test('look-ahead preview survives repeated down/up same-file block steps', async ({ page }) => {
   test.setTimeout(120000)
   const errors = []
@@ -24,9 +26,12 @@ test('look-ahead preview survives repeated down/up same-file block steps', async
 
   await page.goto('/pr/12903')
   await page.waitForLoadState('networkidle')
+  // Select block 1 (CreatePaymentAction::execute) instead of the
+  // default-selected block 0 (ContractController::index, no local diff).
+  await page.locator('[data-idx="1"]').click()
 
   const cards = page.locator('[data-testid="block-column"] article')
-  // List mode: selected block 0 + look-ahead preview of block 1.
+  // List mode: selected block 1 + look-ahead preview of block 2.
   await expect(cards).toHaveCount(2)
 
   await page.keyboard.press('ArrowRight')
@@ -41,19 +46,19 @@ test('look-ahead preview survives repeated down/up same-file block steps', async
       await page.keyboard.press('ArrowDown')
       if ((await sel()) !== startSel) break
     }
-    expect(await sel(), `cycle ${cycle}: ↓ should flow into block 1`).not.toBe(startSel)
+    expect(await sel(), `cycle ${cycle}: ↓ should flow into block 2`).not.toBe(startSel)
     expect(await cards.count(), `cycle ${cycle} after ↓: both cards present`).toBe(2)
 
-    // ↑ back until we land on block 0 again (on its last change).
+    // ↑ back until we land on block 1 again (on its last change).
     for (let i = 0; i < 30; i++) {
       await page.keyboard.press('ArrowUp')
       if ((await sel()) === startSel) break
     }
-    expect(await sel(), `cycle ${cycle}: ↑ should flow back into block 0`).toBe(startSel)
-    // The preview card of block 1 must still sit below the selected card —
+    expect(await sel(), `cycle ${cycle}: ↑ should flow back into block 1`).toBe(startSel)
+    // The preview card of block 2 must still sit below the selected card —
     // this is what used to vanish after 1-2 cycles.
     expect(await cards.count(), `cycle ${cycle} after ↑: both cards present`).toBe(2)
-    // Back on block 0's last change the step-down chevron cue must be visible
+    // Back on block 1's last change the step-down chevron cue must be visible
     // again (this is the toggling slot that used to go stale).
     await expect(
       page.locator('[data-testid="step-chevron"][data-dir="down"]'),

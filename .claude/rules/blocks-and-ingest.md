@@ -93,6 +93,23 @@ navigeerbare lijst tonen.
   gedeelde fixtures bewezen (incl. pure deletion + ws-only). Frontend:
   `home.mjs` (`loadBlockStats` → `state.blockTotals`); `blockApproveCount` prefereert
   dit backend-`total`.
+- **Sorteervolgorde van de linkerlijst (`categoryRank` in `recomputeLeftList`,
+  `home.mjs`):** de linkerlijst is niet zomaar ingest-/bronvolgorde — hij
+  sorteert op categorie-prioriteit: **ROUTE** eerst (de wortel van de
+  route→controller→request/resource/model-hiërarchie, zie Taak 7), dan
+  **CONTROLLER**, dan de rest ongewijzigd. De sort gebeurt **na** de bestaande
+  filters (children/resolved-call-targets/zoekterm) en is een **stabiele**
+  sort (`Array.prototype.sort`, gegarandeerd stabiel in moderne JS-engines) —
+  binnen elke rank blijft de oorspronkelijke volgorde dus intact. Dit is
+  veilig voor `sameFileNeighbour`/`stepBlock` (de same-file-connector +
+  `↑`/`↓`-doorstroom naar een buurblock, zie `keyboard-navigation.md`): die
+  kijken alleen naar de **directe index-buur** in `state.blocks`, maar omdat
+  `classify.go` de categorie uit het bestandspad afleidt, delen alle blokken
+  van hetzelfde bestand altijd dezelfde categorie en dus dezelfde rank — de
+  stabiele sort houdt ze daardoor gegarandeerd aan elkaar. `sel`/refresh-
+  restore blijven ongemoeid: die zoeken op block-**id**/`file:line`, niet op
+  index (zie de URL-state-sectie in `CLAUDE.md`), dus een andere volgorde
+  verandert niets aan waar een herstelde selectie landt.
 - **Verbergen van goedgekeurde blokken (`BlockList.mjs`):** volledig goedgekeurde
   **top-level** blokken (de pill `done === total`, subtree) worden standaard
   **verborgen** uit de "Start"-lijst; een knop onderin (`data-testid=toggle-approved`,

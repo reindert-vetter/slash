@@ -50,7 +50,11 @@ test.describe('PR Review Tree — command palette', () => {
 
   test('typing fuzzy-filters and Enter runs the selected command', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first, see categoryRank
+    // in home.mjs) carries no local diff — approving it would be vacuously
+    // checked already (0/0 changed rows). Select block 1
+    // (CreatePaymentAction::execute), which reliably has one changed row.
+    await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await expect(approve).not.toBeChecked()
@@ -75,7 +79,10 @@ test.describe('PR Review Tree — command palette', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first) carries no local
+    // diff, so its comment-target snippet would be empty; select block 1
+    // (CreatePaymentAction::execute), which has a real changed line.
+    await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
 
     // Nothing should be posted yet — the fallback only opens the composer, it
@@ -186,7 +193,10 @@ test.describe('PR Review Tree — command palette', () => {
 
   test('the approve command toggles the selected block', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first) has no changed
+    // rows, so its checkbox would be vacuously checked already; select block 1
+    // (CreatePaymentAction::execute), which has one changed row to approve.
+    await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await expect(approve).not.toBeChecked()
@@ -204,7 +214,9 @@ test.describe('PR Review Tree — command palette', () => {
   // the selected lines / line / call at the active granularity.
   test('the approve label follows the selection granularity', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first) has no local diff
+    // to preview; select block 1 (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -306,7 +318,9 @@ test.describe('PR Review Tree — command palette', () => {
 
   test('the menu covers the right (new) pane — half width, right side', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first) has no local diff
+    // to step into; select block 1 (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -346,6 +360,9 @@ test.describe('PR Review Tree — command palette', () => {
     // must move up rather than spill off the bottom. Either way it stays on-screen.
     await page.setViewportSize({ width: 1400, height: 520 })
     await page.goto('/pr/12903')
+    // Block 0 (ContractController::index, CONTROLLER-first) has no local diff
+    // to preview; select block 1 (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
 

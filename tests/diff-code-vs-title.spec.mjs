@@ -24,9 +24,12 @@ import { test, expect } from './_fixtures.mjs'
 // crash) with this same down/up cycle.
 //
 // This walks the exact down/up cycle from step-preview-stability.spec.mjs
-// (PR 12903, blocks 0+1 same-file) and asserts the rendered diff text always
-// matches the *currently selected* card's own block — verified against that
-// block's own source from /api/code — never a neighbour's stale code.
+// (PR 12903, blocks 1+2 same-file — CreatePaymentAction::execute /
+// findOrCreateCustomer; block 0 sorts first as the sole CONTROLLER, see
+// categoryRank in home.mjs, but carries no local diff) and asserts the
+// rendered diff text always matches the *currently selected* card's own
+// block — verified against that block's own source from /api/code — never a
+// neighbour's stale code.
 test("diff pane never shows a neighbour block's code after a down/up cycle", async ({ page }) => {
   test.setTimeout(120000)
   const errors = []
@@ -34,6 +37,11 @@ test("diff pane never shows a neighbour block's code after a down/up cycle", asy
 
   await page.goto('/pr/12903')
   await page.waitForLoadState('networkidle')
+  // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
+  // in home.mjs) carries no local diff, so ArrowRight would silently stay in
+  // list mode; select block 1 (CreatePaymentAction::execute), the same-file
+  // pair (with block 2) this down/up cycle exercises.
+  await page.locator('[data-idx="1"]').click()
   await page.keyboard.press('ArrowRight')
   await expect(page).toHaveURL(/mode=diff/)
 

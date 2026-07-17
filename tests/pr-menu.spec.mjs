@@ -7,7 +7,10 @@ import { test, expect } from './_fixtures.mjs'
 test.describe('PR Review Tree — `/` PR menu', () => {
   test('`/` opens the PR-wide tree with overview / GitHub / Jira', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
+    // in home.mjs) has no local diff to preview; select block 1
+    // (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -32,7 +35,10 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
   test('GitHub opens a submenu (open / comment); Jira opens its three items', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
+    // in home.mjs) has no local diff to preview; select block 1
+    // (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -62,7 +68,10 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
   test('GitHub → Comment plaatsen opens the line-comment composer', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
+    // in home.mjs) has no local diff to preview; select block 1
+    // (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -78,7 +87,10 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
   test('Naar PR-overzicht navigates to the overview', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
+    // in home.mjs) has no local diff to preview; select block 1
+    // (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -96,7 +108,10 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
+    // in home.mjs) has no local diff to preview; select block 1
+    // (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 

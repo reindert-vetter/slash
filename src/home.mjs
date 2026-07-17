@@ -643,6 +643,23 @@ function signalFileViewed(file, viewed) {
 // list and as a "covered_by" child under the method: test coverage hides
 // neither side. Selection is preserved by block id so a callResolve/testCovers
 // reload (poll after a search) doesn't jump the cursor.
+//
+// categoryRank orders the left list by Laravel-hierarchy priority: ROUTE first
+// (the tree's root), then CONTROLLER, then everything else — used as a stable
+// sort key below. Blocks that share a category always come from files
+// classified the same way (classify.go derives category from the file path),
+// so blocks from the same file always land in the same rank and — because
+// Array.prototype.sort is a stable sort in modern engines — stay adjacent to
+// each other in their original (ingest/source) order within that rank. That
+// adjacency matters: sameFileNeighbour/stepBlock (the same-file connector
+// hint + ↑/↓ block-to-block flow, see keyboard-navigation.md) only look at
+// the immediate index neighbour, so splitting a file's blocks apart would
+// silently break that navigation.
+function categoryRank(cat) {
+  if (cat === 'ROUTE') return 0
+  if (cat === 'CONTROLLER') return 1
+  return 2
+}
 function recomputeLeftList() {
   const hidden = new Set(state.relations.map((r) => r.childId))
   for (const id of resolvedCallTargetIds()) hidden.add(id)
@@ -651,6 +668,7 @@ function recomputeLeftList() {
   state.blocks = state.allBlocks
     .filter((b) => !hidden.has(b.id))
     .filter((b) => !q || (b.label + ' ' + b.category).toLowerCase().includes(q))
+    .sort((a, b) => categoryRank(a.category) - categoryRank(b.category))
   const at = state.blocks.findIndex((b) => b.id === selId)
   state.selected = at >= 0 ? at : Math.min(state.selected, Math.max(0, state.blocks.length - 1))
 }

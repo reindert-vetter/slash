@@ -1,14 +1,18 @@
 import { test, expect } from './_fixtures.mjs'
 
-// The fixture (tests/fixtures/blocks.json) has 9 blocks. They render sorted by
-// (file, line); this is the expected label order. The first two share a file
-// (CreatePaymentAction.php) — that adjacency drives the connector test.
+// The fixture (tests/fixtures/blocks.json) has 9 blocks. The left list sorts by
+// category priority (ROUTE first, then CONTROLLER, then everything else,
+// stable — see categoryRank in home.mjs); this fixture has no ROUTE block, so
+// the sole CONTROLLER (ContractController::index) moves to the front and
+// everything else keeps its original (file, line) order behind it. Rows 1-2
+// share a file (CreatePaymentAction.php) — that adjacency drives the connector
+// test.
 const EXPECTED_LABELS = [
+  'ContractController::index',
   'CreatePaymentAction::execute',
   'CreatePaymentAction::findOrCreateCustomer',
   'ProcessCartAction::handle',
   'AddressType::fromString',
-  'ContractController::index',
   'Address::billingAddress',
   'Order::address',
   'up',
@@ -33,10 +37,11 @@ test.describe('PR Review Tree — block list', () => {
     // Category tags and status glyphs show up. The status is rendered as a mark
     // (see BlockList STATUS_STYLE): modified = -/+, added = +, removed = -. The
     // coloured status span is the only element in the row with that status colour.
-    await expect(rows.nth(0)).toContainText('ACTION')
+    await expect(rows.nth(0)).toContainText('CONTROLLER')
     await expect(rows.nth(0).locator('.text-amber-600')).toHaveText('-/+') // modified
-    await expect(rows.nth(3)).toContainText('ENUM')
-    await expect(rows.nth(3).locator('.text-emerald-600')).toHaveText('+') // added
+    await expect(rows.nth(1)).toContainText('ACTION')
+    await expect(rows.nth(4)).toContainText('ENUM')
+    await expect(rows.nth(4).locator('.text-emerald-600')).toHaveText('+') // added
     await expect(rows.nth(6).locator('.text-rose-600')).toHaveText('-') // removed
     await expect(rows.nth(7)).toContainText('MIGRATION')
   })
@@ -86,7 +91,7 @@ test.describe('PR Review Tree — block list', () => {
     // Selected (0) + look-ahead (1) = two cards.
     await expect(cards).toHaveCount(2)
     await expect(cards.nth(0)).toContainText(EXPECTED_LABELS[0])
-    await expect(cards.nth(0)).toContainText('app/Actions/CreatePaymentAction.php:26')
+    await expect(cards.nth(0)).toContainText('app/Http/Controllers/Api/ContractController.php:30')
     await expect(cards.nth(1)).toContainText(EXPECTED_LABELS[1])
     // The look-ahead card is dimmed.
     await expect(cards.nth(1)).toHaveClass(/opacity-50/)
@@ -110,10 +115,15 @@ test.describe('PR Review Tree — block list', () => {
     const panel = page.getByTestId('detail-panel')
     const connector = panel.getByTestId('file-connector')
 
-    // Rows 0 and 1 are both in CreatePaymentAction.php → connector shown.
+    // Row 0 (ContractController, CONTROLLER-first) and row 1 (CreatePaymentAction
+    // execute) differ → no connector.
+    await expect(connector).toHaveCount(0)
+
+    // Rows 1 and 2 are both in CreatePaymentAction.php → connector shown.
+    await page.keyboard.press('ArrowDown')
     await expect(connector).toHaveCount(1)
 
-    // Row 1 (findOrCreateCustomer) and row 2 (ProcessCartAction) differ → none.
+    // Row 2 (findOrCreateCustomer) and row 3 (ProcessCartAction) differ → none.
     await page.keyboard.press('ArrowDown')
     await expect(connector).toHaveCount(0)
 
