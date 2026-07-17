@@ -1110,6 +1110,15 @@ function commentsSection(state, commentTarget, openCompose) {
     const b = state && state.blocks && state.blocks[state.selected]
     return b ? b.file + ':' + b.line : 'geen regel geselecteerd'
   }
+  // The `new-comment` button's "open" click (below) routes through openComposer()
+  // (toNew()) instead of a bare `cs.composing = !cs.composing` toggle: that used
+  // to leave cs.focus untouched, so a click here while cs.focus wasn't already
+  // 'new' opened the textarea without relatedActive() ever becoming true —
+  // home.mjs's onKeydown then had no signal that a real editable field owned DOM
+  // focus, and s/d/f/arrows/`/` leaked through as global shortcuts instead of
+  // flowing into the composer. openComposer() keeps cs.focus in lockstep with
+  // cs.composing, like every other path into this composer (toNew/startComment).
+  // See keyboard-navigation.md and the isEditableFocused() fallback in home.mjs.
   return html`
     <section
       class="flex w-full min-h-0 flex-1 flex-row overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
@@ -1128,7 +1137,7 @@ function commentsSection(state, commentTarget, openCompose) {
                 ? 'border-indigo-400 text-indigo-600 dark:text-indigo-400 ring-1 ring-indigo-300 dark:ring-indigo-500/40'
                 : 'border-slate-200 dark:border-zinc-800 text-slate-400 dark:text-zinc-500 hover:border-indigo-200 dark:hover:border-indigo-500/40 hover:text-indigo-500 dark:hover:text-indigo-400')}"
             data-testid="new-comment"
-            @click="${() => (cs.composing = !cs.composing)}"
+            @click="${() => (cs.composing ? (cs.composing = false) : openComposer())}"
           >
             <span
               class="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-current text-[11px] leading-none"

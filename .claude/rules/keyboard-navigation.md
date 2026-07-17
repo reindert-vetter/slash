@@ -518,6 +518,45 @@ in dezelfde kaart-brede `${() => ...}`-`class`-binding als `diffActive()`/
 deel-string-interpolatie, zie de arrow.js-class-binding-valkuil in
 `conventions.md`).
 
+## Generieke input-focus-guard (typen in een veld mag nooit door een shortcut worden opgegeten)
+
+`relatedActive()` (`cs.focus !== null`) is de bestaande "vangnet"-branch die
+onbedoelde shortcuts al onderdrukt zolang een tekstveld (composer/reply) via de
+juiste weg is geopend — dat blok eindigt onvoorwaardelijk in een `return`, dus
+elke toets die er niet expliciet in gematcht wordt (letters, `/`, ongematchte
+Enter-varianten) vloeit gewoon door naar het gefocuste veld. Maar dat vangnet
+werkt alleen als `cs.focus` daadwerkelijk in lockstep staat met de echte
+DOM-focus. Eén concrete plek waar dat niet zo was: de "+ Comment op deze
+regel"-knop (`data-testid=new-comment`, `RelatedPanel.mjs`) opende de composer
+ooit met een kale `cs.composing = !cs.composing`-toggle, zonder `cs.focus` te
+zetten — een klik erop terwijl `cs.focus` toevallig niet al `'new'` was, opende
+dus een gefocust tekstveld terwijl `relatedActive()` `false` bleef. `onKeydown`
+had dan geen enkel signaal dat er een editable veld met DOM-focus was, en
+`s`/`d`/`f`/pijltjes/`/` werden als globale shortcuts afgevangen in plaats van
+in het veld te belanden (de reviewer kon niet meer typen). Gefixt door de knop
+via `openComposer()` (`toNew()`) te laten openen — precies dezelfde route als
+elk ander pad naar deze composer (`toNew`/`startComment`), die `cs.focus` en
+`cs.composing` altijd samen zet.
+
+Als **extra, toekomstvaste laag** (voor elk ander/toekomstig invoerveld waarvan
+de eigen app-state-focus-vlag ooit niet in sync blijkt met de echte DOM-focus —
+zoals hierboven) checkt `onKeydown` na de `relatedActive()`-branch, vóór `/`,
+nog één keer rechtstreeks `document.activeElement`
+(`isEditableFocused()` — dezelfde helper als de `a`-guard hierboven): staat de
+DOM-focus op een TEXTAREA/INPUT en heeft geen eerdere branch de toets al
+geclaimd, dan doet geen enkele resterende globale shortcut (`/`, `f`/`d`/`s`,
+`a`, pijltjes, de block-palette-Enter) iets — de toets vloeit gewoon het veld
+in. **`Escape`** is binnen deze fallback de expliciete "haal me eruit"-toets
+(roept `leaveRelated()` aan — blur + `cs.focus = null` + `cs.composing =
+false`, mirror van `handleRelatedKey`'s Escape-afhandeling in de
+`relatedActive()`-branch). **`Tab`** krijgt bewust geen eigen afhandeling: de
+browser verplaatst de DOM-focus native naar het volgende focusbare element,
+waarna de eerstvolgende toetsaanslag deze tak sowieso niet meer raakt (`isEditableFocused()`
+is dan `false`). De zoekbox (`BlockList.mjs`) heeft dit patroon al langer op
+zijn eigen, nog directere manier: `@focus`/`@blur` zetten `state.searchActive`
+rechtstreeks op echte DOM-focus (geen los toggle-pad), dus die hoeft niet op
+deze fallback te leunen.
+
 ## Footer: inline preview van de geselecteerde regel
 
 Onder de panels zit een vaste footer (`src/Footer.mjs`, `data-testid=footer`, de

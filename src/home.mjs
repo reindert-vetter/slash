@@ -3061,10 +3061,29 @@ function onKeydown(e) {
     return
   }
 
+  // Fallback safety net: DOM focus still sits in a real editable field here, but
+  // none of the branches above claimed the key (menu/search/compose-Enter/`g`/
+  // relatedActive) — e.g. an editable field whose own app-state focus flag
+  // (cs.focus/state.searchActive) isn't wired up to match real DOM focus (see
+  // the isEditableFocused() note in conventions.md). Don't let any of the
+  // remaining global shortcuts (`/`, f/d/s, `a`, arrows, the block-palette Enter)
+  // steal the keystroke — let it flow into the field instead. Escape is the
+  // explicit "get me out" gesture (mirrors handleRelatedKey's Escape handling
+  // above); Tab keeps its native browser behavior (moves DOM focus elsewhere,
+  // so the next keydown no longer matches this branch).
+  if (isEditableFocused()) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      leaveRelated()
+    }
+    return
+  }
+
   // `/` opens the general PR-wide tree menu (overview / GitHub / Jira). Like
   // Enter it's handled before the empty-blocks guard so it works while loading.
   // A focused input (the comment composer/reply) is already handled by the
-  // relatedActive() branch above, so a typed `/` there never reaches here.
+  // relatedActive() branch, or by the isEditableFocused() fallback just above,
+  // so a typed `/` there never reaches here.
   if (e.key === '/') {
     e.preventDefault()
     openMenu('pr')
