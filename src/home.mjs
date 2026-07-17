@@ -1811,11 +1811,26 @@ const COMMENT_COMMANDS = [
 
 // COMPOSE_COMMANDS — shown when Enter (or the composer button) is pressed on a
 // filled new-comment composer (menu mode 'compose'): choose what to do with the
-// typed text. Only "Alleen voor mijzelf" acts today — it places a private note
-// (createComment with local:true → the workflow skips the GitHub post). The
-// Claude/Git/Jira items are placeholders (like the Jira items in PR_COMMANDS).
+// typed text. "Plaats comment" (the default, first item — the menu opens with
+// ms.sel reset to 0, see openMenu) posts a normal, public comment (the same
+// placeComment path as ever, without opts.local) so the plain "type, Enter,
+// Enter" flow still places a real comment. "Alleen voor mijzelf" places a
+// private note instead (createComment with local:true → the workflow skips the
+// GitHub post). The Claude/Git/Jira items are placeholders (like the Jira items
+// in PR_COMMANDS). Both real-placing items refresh the Taken column right after
+// (pollWorkflows) — task_code_comment starts a new workflow run per comment,
+// and this is more immediate than waiting for the next WORKFLOWS_POLL_MS tick.
 // The Git label names the current selection unit (groep/regel/call) via granNoun.
 const COMPOSE_COMMANDS = [
+  {
+    id: 'compose-post',
+    label: 'Plaats comment',
+    hint: 'post',
+    run: async () => {
+      await placeComment(state, commentTarget)
+      pollWorkflows()
+    },
+  },
   {
     id: 'compose-claude',
     label: 'Claude commando',
@@ -1835,7 +1850,10 @@ const COMPOSE_COMMANDS = [
     id: 'compose-self',
     label: 'Alleen voor mijzelf',
     hint: 'privé',
-    run: () => placeComment(state, commentTarget, { local: true }),
+    run: async () => {
+      await placeComment(state, commentTarget, { local: true })
+      pollWorkflows()
+    },
   },
   {
     id: 'compose-jira',

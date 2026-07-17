@@ -232,17 +232,29 @@ Datzelfde `CommandMenu`-mechanisme bedient ook een **comment-soort-menu**
 (`menu.mode = 'compose'`, `COMPOSE_COMMANDS` in `home.mjs`): staat de composer
 open én is er tekst getypt, dan opent **`Enter`** (en de composer-knop
 **"Plaats…"**, via de `openCompose`-prop van `RelatedPanel`) niet meteen de
-comment, maar een menu met vier keuzes wat ermee moet gebeuren: *Claude commando*
-(placeholder), *Laat Claude dit implementeren (groep/regel/call)* — placeholder,
-label benoemt de huidige unit via `granNoun()` uit `commentTarget()` —, *Alleen
-voor mijzelf* en *Jira* (een submenu met *Comment op ticket* / *Subtaak aanmaken* /
-*Nieuwe taak aanmaken*, alle drie placeholder). Alleen **"Alleen voor mijzelf"**
-plaatst echt: `placeComment(state, commentTarget, { local: true })` → een
-**privé-notitie** die wél als comment wordt opgeslagen maar niet naar GitHub gaat
-(zie de `local`-vlag in `.claude/rules/tembed-workflows.md`). De Enter-tak zit
-in `onKeydown` **vóór** de `relatedActive()`-tak (`isComposeOpen()` +
-`composeHasText()`, beide uit `RelatedPanel.mjs`), zodat hij werkt of de composer
-nu via toetsenbord (`cs.focus==='new'`) of via de knop geopend is; **Shift+Enter**
+comment, maar een menu met vijf keuzes wat ermee moet gebeuren: **"Plaats
+comment"** (het **default/eerste** item — het menu opent met `ms.sel` op 0,
+dus "typ, Enter, Enter" plaatst 'm nog steeds net zo direct als voorheen),
+*Claude commando* (placeholder), *Laat Claude dit implementeren
+(groep/regel/call)* — placeholder, label benoemt de huidige unit via
+`granNoun()` uit `commentTarget()` —, *Alleen voor mijzelf* en *Jira* (een
+submenu met *Comment op ticket* / *Subtaak aanmaken* / *Nieuwe taak aanmaken*,
+alle drie placeholder). **"Plaats comment"** en **"Alleen voor mijzelf"**
+plaatsen allebei écht: `placeComment(state, commentTarget)` resp.
+`placeComment(state, commentTarget, { local: true })` — het eerste post een
+**normale, publieke** comment (dezelfde bestaande `createComment`-weg, gewoon
+zonder `opts.local`), het tweede een **privé-notitie** die wél als comment
+wordt opgeslagen maar niet naar GitHub gaat (zie de `local`-vlag in
+`.claude/rules/tembed-workflows.md`). Beide `run`-functies zijn `async` en
+roepen na een geslaagde `placeComment` meteen `pollWorkflows()` aan — zonder
+dat verschijnt de net gestarte `task_code_comment`-run pas op de eerstvolgende
+`WORKFLOWS_POLL_MS`-tick (2.5s) in de Taken-kolom (`workflows-panel`, zie
+`.claude/rules/detail-layout.md`) i.p.v. meteen. De Claude/Git/Jira-items
+blijven placeholders (geen `pollWorkflows`-aanroep, ze schrijven niets). De
+Enter-tak zit in `onKeydown` **vóór** de `relatedActive()`-tak
+(`isComposeOpen()` + `composeHasText()`, beide uit `RelatedPanel.mjs`), zodat
+hij werkt of de composer nu via toetsenbord (`cs.focus==='new'`) of via de
+knop geopend is; **Shift+Enter**
 valt erbuiten en blijft dus een newline in de composer. Belangrijk: dit was de
 eerste flow die een menu **over** de open composer opent — daardoor kwam een
 latente arrow.js-wees-binding-bug boven (menu-heropen-crash), opgelost met de
