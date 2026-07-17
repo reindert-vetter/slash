@@ -270,17 +270,53 @@
   typography-plugin zonder build-stap. **Geen** GFM-tabellen of
   taak-checklists (`- [ ]`) — bewust buiten scope gehouden, snarkdown ondersteunt
   ze niet en er is geen extensie voor gebouwd.
-- **Thema: dark/light volgt de systeeminstelling (`prefers-color-scheme`), geen
-  eigen toggle.** Beide pagina's (`index.html`/`home.mjs` en
-  `overview.html`/`overview.mjs`) draaien op Tailwind Play CDN's
-  `darkMode: 'media'` (expliciet gezet in een `tailwind.config`-`<script>` vóór
-  de CDN-styles, in plaats van op de default te vertrouwen) — géén
-  `localStorage`-override, géén env-var, géén class op `<html>`. Staat de OS
-  (bv. macOS Systeeminstellingen) op dark, dan matcht de browser
-  `prefers-color-scheme: dark` en passen alle `dark:`-Tailwind-varianten toe;
-  op light idem. `overview.html` had voorheen een **geforceerde** dark-modus
-  (`<html class="dark">` + `darkMode:'class'`, en `overview.mjs` gebruikte
-  kale `zinc-*`-klassen zonder enige `dark:`-variant); dat is verwijderd —
+- **Thema: systeem/licht/donker, met een handmatige rondloop-knop
+  (`src/theme.mjs`).** Het thema volgde ooit **uitsluitend** de
+  systeeminstelling (`prefers-color-scheme`, Tailwind `darkMode:'media'`,
+  geen eigen toggle); die keuze is teruggedraaid — een reviewer wil soms
+  bewust licht/donker forceren, los van de OS-instelling. `src/theme.mjs` is
+  de gedeelde (geen component, pure utility, zoals `urlState.mjs`) module voor
+  beide pagina's:
+  - **Drie staten**, geen binaire aan/uit: `theme.pref` ∈
+    `'system'|'light'|'dark'` (default `'system'`). Een binaire toggle zou een
+    reviewer die op "licht" klikte terwijl de OS op dark staat geen weg terug
+    naar "volg systeem" geven zonder de OS-instelling zelf te wijzigen.
+  - **Tailwind draait op `darkMode: 'selector'`** (niet meer `'media'`, in
+    hetzelfde `tailwind.config`-`<script>` vóór de CDN-styles) — elke
+    bestaande `dark:`-utility blijft ongewijzigd werken, alleen de trigger
+    verandert van de media-query naar de **aanwezigheid van een `.dark`-class**
+    op `<html>`.
+  - `theme.mjs`'s `applyTheme(pref)` zet die `.dark`-class **plus** een
+    `data-theme="light"|"dark"` attribuut op `<html>` (voor de losse CSS
+    hieronder, die geen class kan lezen), berekend als `pref==='system' ?
+    matchMedia(...).matches : pref==='dark'`. `initTheme()` (aangeroepen als
+    module-side-effect vanuit zowel `home.mjs` als `overview.mjs`) past 'm
+    initieel toe, abonneert een `watch(() => theme.pref, applyTheme)` (de
+    toggle) én een `matchMedia('(prefers-color-scheme: dark)')`
+    `'change'`-listener die alleen ingrijpt zolang `pref === 'system'` — zo
+    blijft "systeem" ook **live** volgen als de OS-instelling wijzigt terwijl
+    de pagina open staat.
+  - **Anti-flash:** vóór de Tailwind-CDN-`<script>` staat in beide shells
+    (`index.html`/`overview.html`) een **inline** `<script>` dat dezelfde
+    localStorage-lees + class/attribuut-zet-logica dupliceert (niet
+    importeert — ES-modules laden async, en dit moet vóór de eerste paint
+    draaien). `theme.mjs`'s `initTheme()` neemt het daarna gewoon reactief
+    over; geen zichtbare flits van het verkeerde thema bij page-load.
+  - **De knop** (`themeToggleButton(cls)`, `data-testid=theme-toggle`, één
+    gedeelde component-functie die beide pagina's importeren): een klik cyclet
+    `system → light → dark → system` (`cycleTheme()`, persisteert meteen naar
+    `localStorage`) en toont een monitor/zon/maan-icoon voor de huidige staat.
+    Plek: de **footer** (`Footer.mjs`, `/pr/<id>` — rechtsonder, absoluut
+    gepositioneerd in de altijd-zichtbare footer-strip) en de **overview-
+    header** (`overview.mjs`'s `headerBlock`, naast de bestaande PR-teller-pill,
+    `/pr-overview` heeft geen footer).
+  - **Persistentie:** `localStorage.getItem/setItem('theme', ...)` —
+    bewust **buiten** `bindUrlState`/de query-string (geen navigatiepositie,
+    hoort niet in een deelbare link) maar ook niet efemeer zoals
+    `state.showApproved` (een thema-keuze wil je onthouden over een refresh).
+  `overview.html` had ooit een **geforceerde** dark-modus (`<html
+  class="dark">` + `darkMode:'class'`, en `overview.mjs` gebruikte kale
+  `zinc-*`-klassen zonder enige `dark:`-variant); dat is verwijderd —
   `overview.mjs` kreeg een lichte basis-klasse vóór elke voorheen-kale
   dark-klasse (die laatste kreeg een `dark:`-prefix), symmetrisch met hoe
   `index.html`/`home.mjs`/`Block.mjs`/`BlockList.mjs`/`RelatedPanel.mjs`/
@@ -305,9 +341,13 @@
   hebben een aparte licht/donker-schakering nodig.
   **Wat geen Tailwind-`dark:`-variant kan gebruiken** (losse CSS, geen
   utility-klasse): de Prism-tokenkleuren en de `.markdown-body`-typography in
-  `index.html`'s `<style>`-blok. Die krijgen een eigen
-  `@media (prefers-color-scheme: dark) { … }`-blok met dezelfde
-  selectors (`.language-php .token.*`, `.markdown-body …`) en een
+  `index.html`'s `<style>`-blok. Die staan in **twee** gelijke blokken: het
+  bestaande `@media (prefers-color-scheme: dark) { … }`-blok (fallback voor
+  het moment vóór `theme.mjs` heeft gedraaid) én een **`:root[data-theme=
+  "dark"] …`-mirror** ernaast (elke selector letterlijk gedupliceerd met dat
+  attribuut-prefix — bewust géén CSS-nesting, voor maximale
+  browser-compatibiliteit) die daadwerkelijk wint zodra de handmatige toggle
+  de OS-instelling overridet. Beide delen hetzelfde palet: een
   GitHub-dark-geïnspireerd Prism-palet + de zinc/indigo-kleuren van de rest
   van de dark-modus.
   **Diff-rij-achtergronden** (`Block.mjs`, `paneHTML`) zijn arbitrary-value

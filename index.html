@@ -5,13 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PR Review Tree</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌳</text></svg>">
+    <script>
+      // Anti-flash: apply the persisted theme choice synchronously, before
+      // Tailwind's CDN script even parses (let alone paints) — see
+      // src/theme.mjs, which re-applies this reactively once the app module
+      // loads and keeps 'system' live via a matchMedia listener. Duplicated
+      // here (not imported) because ES modules load async and this must run
+      // before the very first paint.
+      ;(function () {
+        var pref = 'system'
+        try {
+          var v = localStorage.getItem('theme')
+          if (v === 'light' || v === 'dark' || v === 'system') pref = v
+        } catch (e) {}
+        var dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+        var root = document.documentElement
+        root.classList.toggle('dark', dark)
+        root.setAttribute('data-theme', dark ? 'dark' : 'light')
+      })()
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      // No JS toggle: dark/light follows the OS-level appearance setting
-      // (prefers-color-scheme) via Tailwind's 'media' strategy — see
-      // .claude/rules/conventions.md ("Thema: dark/light volgt de
-      // systeeminstelling").
-      tailwind.config = { darkMode: 'media' }
+      // Manual dark/light toggle (src/theme.mjs, three-state: system/light/
+      // dark) — 'selector' makes every dark: utility key off a `.dark` class
+      // on <html> instead of prefers-color-scheme directly. See
+      // .claude/rules/conventions.md ("Thema: systeem/licht/donker").
+      tailwind.config = { darkMode: 'selector' }
     </script>
     <style>
       /* Keep programmatic scrolling (scrollIntoView for keyboard nav) but hide
@@ -166,14 +185,19 @@
         margin: 0.6em 0;
       }
 
-      /* Dark-mode overrides for the two colour blocks above, following the OS
-         appearance setting (prefers-color-scheme) — no JS toggle. Tailwind's
-         own utility classes handle their own dark: variants; these two are
-         plain CSS (Prism token colours + markdown-body element styling), so
-         they need their own @media block instead. Palette: Prism follows a
-         GitHub-dark-inspired set (same category-per-hue mapping as the light
-         palette above); markdown-body reuses the zinc/indigo dark palette
-         used across the rest of the app (see .claude/rules/conventions.md). */
+      /* Dark-mode overrides for the two colour blocks above. Tailwind's own
+         utility classes handle their own dark: variants via the `.dark` class
+         (see the tailwind.config script above); these two are plain CSS
+         (Prism token colours + markdown-body element styling), so they can't
+         key off that class and need their own selectors instead. Two
+         equivalent blocks: `@media (prefers-color-scheme: dark)` covers the
+         instant before src/theme.mjs has run (and a browser with JS
+         disabled, following the OS setting only), `:root[data-theme="dark"]`
+         is what actually applies once the reactive theme toggle overrides the
+         OS default (systeem/licht/donker, see .claude/rules/conventions.md).
+         Palette: Prism follows a GitHub-dark-inspired set (same
+         category-per-hue mapping as the light palette above); markdown-body
+         reuses the zinc/indigo dark palette used across the rest of the app. */
       @media (prefers-color-scheme: dark) {
         .language-php .token.comment,
         .language-php .token.prolog,
@@ -242,6 +266,77 @@
         .markdown-body hr {
           border-top-color: #3f3f46;
         }
+      }
+
+      /* Same rules as the @media block above, mirrored for the manual theme
+         toggle (src/theme.mjs sets data-theme on <html>) — see the comment
+         above the @media block. */
+      :root[data-theme='dark'] .language-php .token.comment,
+      :root[data-theme='dark'] .language-php .token.prolog,
+      :root[data-theme='dark'] .language-php .token.doctype,
+      :root[data-theme='dark'] .language-php .token.cdata {
+        color: #8b949e;
+      }
+      :root[data-theme='dark'] .language-php .token.punctuation {
+        color: #c9d1d9;
+      }
+      :root[data-theme='dark'] .language-php .token.property,
+      :root[data-theme='dark'] .language-php .token.variable,
+      :root[data-theme='dark'] .language-php .token.regex,
+      :root[data-theme='dark'] .language-php .token.tag,
+      :root[data-theme='dark'] .language-php .token.symbol,
+      :root[data-theme='dark'] .language-php .token.deleted {
+        color: #ffa657;
+      }
+      :root[data-theme='dark'] .language-php .token.boolean,
+      :root[data-theme='dark'] .language-php .token.number,
+      :root[data-theme='dark'] .language-php .token.constant {
+        color: #79c0ff;
+      }
+      :root[data-theme='dark'] .language-php .token.selector,
+      :root[data-theme='dark'] .language-php .token.attr-name,
+      :root[data-theme='dark'] .language-php .token.string,
+      :root[data-theme='dark'] .language-php .token.char,
+      :root[data-theme='dark'] .language-php .token.builtin,
+      :root[data-theme='dark'] .language-php .token.inserted {
+        color: #7ee787;
+      }
+      :root[data-theme='dark'] .language-php .token.operator,
+      :root[data-theme='dark'] .language-php .token.entity,
+      :root[data-theme='dark'] .language-php .token.url,
+      :root[data-theme='dark'] .language-php .token.atrule,
+      :root[data-theme='dark'] .language-php .token.attr-value,
+      :root[data-theme='dark'] .language-php .token.keyword {
+        color: #ff7b72;
+      }
+      :root[data-theme='dark'] .language-php .token.function,
+      :root[data-theme='dark'] .language-php .token.class-name {
+        color: #d2a8ff;
+      }
+
+      :root[data-theme='dark'] .markdown-body h1,
+      :root[data-theme='dark'] .markdown-body h2,
+      :root[data-theme='dark'] .markdown-body h3,
+      :root[data-theme='dark'] .markdown-body h4,
+      :root[data-theme='dark'] .markdown-body h5,
+      :root[data-theme='dark'] .markdown-body h6 {
+        color: #e4e4e7;
+      }
+      :root[data-theme='dark'] .markdown-body blockquote {
+        border-left-color: #3f3f46;
+        color: #a1a1aa;
+      }
+      :root[data-theme='dark'] .markdown-body a {
+        color: #818cf8;
+      }
+      :root[data-theme='dark'] .markdown-body code {
+        background: #27272a;
+      }
+      :root[data-theme='dark'] .markdown-body pre {
+        background: #18181b;
+      }
+      :root[data-theme='dark'] .markdown-body hr {
+        border-top-color: #3f3f46;
       }
     </style>
   </head>

@@ -8,6 +8,9 @@
 // /data/inbox.json snapshot when the live endpoint is unreachable.
 
 import { reactive, html, watch } from './vendor/arrow.js'
+import { initTheme, themeToggleButton } from './theme.mjs'
+
+initTheme()
 
 // Configure this to your Jira instance — used only to build the "Open
 // Jira-ticket" popover link when a PR title contains a KEY-123-style key.
@@ -749,12 +752,15 @@ function headerBlock() {
             (state.generatedFor ? ' · voor ' + state.generatedFor : '')}
         </p>
       </div>
-      <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
-        >${() => {
-          const n = state.sections.reduce((acc, s) => acc + s.prs.length, 0)
-          return n + ' PR' + (n === 1 ? '' : 's')
-        }}</span
-      >
+      <div class="flex items-center gap-2">
+        <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
+          >${() => {
+            const n = state.sections.reduce((acc, s) => acc + s.prs.length, 0)
+            return n + ' PR' + (n === 1 ? '' : 's')
+          }}</span
+        >
+        ${themeToggleButton('h-7 w-7')}
+      </div>
     </header>
   `
 }

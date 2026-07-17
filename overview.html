@@ -5,13 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Needs your review — PR Review Tree</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌳</text></svg>">
+    <script>
+      // Anti-flash: apply the persisted theme choice synchronously, before
+      // Tailwind's CDN script even parses (let alone paints) — see
+      // src/theme.mjs, which re-applies this reactively once the app module
+      // loads and keeps 'system' live via a matchMedia listener. Duplicated
+      // here (not imported) because ES modules load async and this must run
+      // before the very first paint.
+      ;(function () {
+        var pref = 'system'
+        try {
+          var v = localStorage.getItem('theme')
+          if (v === 'light' || v === 'dark' || v === 'system') pref = v
+        } catch (e) {}
+        var dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+        var root = document.documentElement
+        root.classList.toggle('dark', dark)
+        root.setAttribute('data-theme', dark ? 'dark' : 'light')
+      })()
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      // No JS toggle: dark/light follows the OS-level appearance setting
-      // (prefers-color-scheme) via Tailwind's 'media' strategy — see
-      // .claude/rules/conventions.md ("Thema: dark/light volgt de
-      // systeeminstelling").
-      tailwind.config = { darkMode: 'media' }
+      // Manual dark/light toggle (src/theme.mjs, three-state: system/light/
+      // dark) — 'selector' makes every dark: utility key off a `.dark` class
+      // on <html> instead of prefers-color-scheme directly. See
+      // .claude/rules/conventions.md ("Thema: systeem/licht/donker").
+      tailwind.config = { darkMode: 'selector' }
     </script>
   </head>
   <body class="min-h-screen bg-white text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">

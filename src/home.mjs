@@ -48,6 +48,9 @@ import RelatedPanel, {
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
+import { initTheme } from './theme.mjs'
+
+initTheme()
 
 // The PR under review comes from the path: /pr/<id>. Without one there's nothing
 // to show, so bounce to the overview page that lists the ingested PRs.
