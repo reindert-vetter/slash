@@ -216,6 +216,14 @@ export function relatedActive() {
   return cs.focus !== null
 }
 
+// sidebarOpen reports whether the comments/taken sidebar (CommentsSidebar,
+// toggled with `g`) is expanded or collapsed to its hint rail. home.mjs reads
+// this to keep <main>'s right-hand margin clear of whichever one is showing
+// (see the DetailPanel comment in home.mjs and detail-layout.md).
+export function sidebarOpen() {
+  return cs.sidebarOpen
+}
+
 // isCodeFocused reports whether the keyboard is on the Onderliggende-code block
 // (so home.mjs can wire Enter there to the LLM call-search).
 export function isCodeFocused() {

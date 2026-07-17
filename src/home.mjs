@@ -44,6 +44,7 @@ import RelatedPanel, {
   focusedTaskRun,
   taskRuns,
   toggleSidebar,
+  sidebarOpen,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { bindUrlState, num } from './urlState.mjs'
@@ -3471,7 +3472,16 @@ function DetailPanel(state) {
   return html`
     <main
       class="${() =>
-        'fixed bottom-[100px] right-0 top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto transition-all duration-200 ease-out ' +
+        'fixed bottom-[100px] top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto transition-all duration-200 ease-out ' +
+        // Right margin clears the comments/taken sidebar (RelatedPanel.mjs),
+        // which is a separate position:fixed overlay with a higher z-index —
+        // without this, <main>'s last column (Onderliggende code, or the
+        // rightmost drilled column) scrolls in behind it. Collapsed it's a
+        // 3rem hint rail flush against the edge (right-0, w-12); open it's
+        // right-6 (1.5rem) + w-[36rem], so its left edge sits 37.5rem in. Both
+        // get the same 1.5rem breathing-room gap used elsewhere for this kind
+        // of panel-to-panel spacing (see left-[56.5rem] below).
+        (sidebarOpen() ? 'right-[39rem] ' : 'right-[4.5rem] ') +
         (state.mode === 'diff'
           ? 'left-6'
           : // showDescription (list-mode only) pushes PrInfoPanel to left-6 and

@@ -120,6 +120,27 @@ met het **aantal actieve (draaiende/wachtende) taken**
 `taskRuns`). Puur een hint — geen eigen klik-acties per getal, alleen de hele
 rail is klikbaar.
 
+**`<main>` reserveert een reactieve rechter-marge om niet achter de rail/
+sidebar te verdwijnen.** Beide zijn losse `position:fixed`-overlays met een
+**hogere** z-index dan `<main>` (`z-20` vs. `<main>`'s `z-10`), dus zonder marge
+zou `<main>`'s meest-rechtse kolom (de Onderliggende-code-kaart, of de
+meest-rechtse gedrilde kolom) er zichtbaar achter/onder verdwijnen zodra je
+`<main>` volledig naar rechts scrolt — `<main>`'s eigen `overflow-x-auto` clipt
+toch niets voorbij zijn eigen rechterrand, dus wat je ziet blijft altijd binnen
+die rand. `DetailPanel`'s class-binding (`home.mjs`) leest daarvoor
+`sidebarOpen()` (geëxporteerd uit `RelatedPanel.mjs`, een dunne lezer op
+`cs.sidebarOpen` — `cs` is module-privé, dus `home.mjs` kan het niet direct
+lezen, hetzelfde patroon als `isCodeFocused`/`relatedActive`) in dezelfde
+functie-binding als de bestaande `state.showDescription`-ternary voor de
+linker-marge: dicht (de rail, `right-0 w-12` = 3rem) → `right-[4.5rem]`; open
+(`right-6 w-[36rem]`, dus de linkerrand van de sidebar ligt op `1.5rem + 36rem
+= 37.5rem`) → `right-[39rem]`. Beide tellen er bovenop nog 1.5rem
+ademruimte bij — dezelfde gap-conventie als de PR-info-kolom-marge
+(`left-[56.5rem]` = 26rem + 1.5rem, zie boven). Omdat de klasse-string één
+geheel blijft (geen deel-interpolatie) en dit een gewone attribute-function-
+binding is (geen keyed array-item), is hier geen arrow.js-valkuil uit
+`conventions.md` van toepassing.
+
 **Toetsenbord binnen de sidebar:** comments is een platte rij-lijst (de lege
 composer op rij 0, dan één rij per comment — zie `rowCount`/`currentRow`/
 `gotoRow` in `RelatedPanel.mjs`), taken een eigen rij-lijst
