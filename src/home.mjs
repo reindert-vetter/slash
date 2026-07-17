@@ -2044,6 +2044,11 @@ function expandColumn(level) {
   state.drillCursor = state.drillCursor.slice(0, level)
   state.focusLevel = level
   scrollFocusIntoView()
+  // Same rekey-resets-scrollTop issue as the ← handler in onKeydown (a rail
+  // click is the same focus-transition, just triggered by mouse) — re-centre
+  // the now-focused column's active change instead of leaving it scrolled to
+  // the top of its pane.
+  scrollChangeIntoView(false)
 }
 
 // collapsedColumnHTML renders the narrow rail a non-focused column shrinks to
@@ -3179,6 +3184,13 @@ function onKeydown(e) {
         state.drillCursor = state.drillCursor.slice(0, state.focusLevel - 1)
         state.focusLevel -= 1
         scrollFocusIntoView()
+        // The parent column's card gets a fresh key on this foc/unfoc flip
+        // (see the block-card .key(...) rekey comment above), so its fresh
+        // [data-scrollsync] pane starts at scrollTop 0 — without this, a long
+        // parent block (many lines above the active change) would leave the
+        // reviewer stranded at the top instead of at the edited row. Mirrors
+        // drillIntoChild's own scrollFocusIntoView() + scrollChangeIntoView(false).
+        scrollChangeIntoView(false)
       } else {
         // Already on the top-level block's own diff (no drilled column focused):
         // the existing diff→list transition. Also drop any drilled columns —

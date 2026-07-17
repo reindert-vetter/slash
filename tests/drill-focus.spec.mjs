@@ -184,3 +184,88 @@ test('f/d/s zoom a drilled column\'s own granularity (group → line → call)',
   await page.waitForTimeout(150)
   await expect(underline).toHaveCount(0)
 })
+
+// Verifies the ← drill-pop scroll-restore fix: closing a drilled column must
+// re-centre the parent column's active change, not just leave it scrolled to
+// the top. The parent card gets a fresh key on this foc/unfoc flip (see the
+// block-card .key(...) rekey comment in home.mjs), so its [data-scrollsync]
+// pane starts at scrollTop 0 on rebuild — without scrollChangeIntoView(false)
+// after scrollFocusIntoView() in the ← handler, a parent block whose active
+// change sits well below the top of its own diff (CreatePaymentAction::execute
+// here — a real ~60-line function, changed line sits ~40 lines in, see
+// "Data-kanttekening" in conventions.md for why we anchor on this block) would
+// leave the reviewer stranded above the edit row.
+test('closing a drilled column re-scrolls the parent to its active change (not the top)', async ({
+  page,
+}) => {
+  await page.route('**/api/relations?pr=12903', async (route) => {
+    await route.fulfill({
+      json: [
+        {
+          pr: 12903,
+          parentId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
+          childId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::findOrCreateCustomer',
+          kind: 'event_listener',
+        },
+      ],
+    })
+  })
+
+  await page.goto('/pr/12903')
+
+  const rows = page.getByTestId('block-row')
+  await rows.filter({ hasText: 'CreatePaymentAction::execute' }).click()
+
+  const panel = page.getByTestId('detail-panel')
+  await expect(panel.locator('code.language-php').first()).toBeVisible()
+  await page.keyboard.press('ArrowRight')
+  await page.waitForTimeout(200)
+
+  const blockColumn = page.getByTestId('block-column')
+  // scrollChangeIntoView already ran once on entering the diff (enterDiff);
+  // capture that as the "correctly scrolled" baseline before drilling away.
+  const scrollTopOf = async (scope) =>
+    scope.evaluate((el) => {
+      const anchor = el.querySelector('[data-change-active]')
+      const container = anchor && anchor.closest('[data-scrollsync]')
+      return container ? container.scrollTop : null
+    })
+  const baseline = await scrollTopOf(blockColumn)
+  expect(baseline).not.toBeNull()
+  expect(baseline).toBeGreaterThan(0)
+
+  const child = page.getByTestId('related-item')
+  await expect(child).toContainText('findOrCreateCustomer')
+  await child.click()
+
+  const drillColumn = page.getByTestId('drill-column')
+  await expect(drillColumn).toHaveCount(1)
+  await page.waitForTimeout(300)
+
+  // Close the drilled column: focus steps back onto the parent's own diff.
+  await page.keyboard.press('ArrowLeft')
+  await page.waitForTimeout(300)
+  await expect(drillColumn).toHaveCount(0)
+  const blockArticle = blockColumn.locator('article').first()
+  await expect(blockArticle).toHaveClass(/border-indigo-300/)
+
+  // The parent's card was rebuilt (fresh key) for this focus change, so a
+  // stale scrollTop reading would be misleading — assert against the fresh
+  // container instead of relying on `baseline`'s own scrollTop value staying
+  // numerically identical (only that it's re-centred, not reset to 0).
+  const restored = await scrollTopOf(blockColumn)
+  expect(restored).not.toBeNull()
+  expect(restored).toBeGreaterThan(0)
+
+  // Stronger check: the active-change anchor itself must be within the
+  // container's visible viewport, not scrolled out of view above it.
+  const inView = await blockColumn.evaluate((el) => {
+    const anchor = el.querySelector('[data-change-active]')
+    const container = anchor && anchor.closest('[data-scrollsync]')
+    if (!anchor || !container) return false
+    const a = anchor.getBoundingClientRect()
+    const c = container.getBoundingClientRect()
+    return a.top >= c.top && a.bottom <= c.bottom
+  })
+  expect(inView).toBe(true)
+})
