@@ -362,6 +362,37 @@ terugstappen). De chevron zit in de kolom-`.key` verdisconteerd via de
 bestaande `foc`/`unfoc`-component, dus hij verschijnt/verdwijnt met een verse
 kaart i.p.v. een hergebruikte node.
 
+**Niet-gefocuste kolommen klappen in tot een smalle rail** — zodra
+`state.focusLevel` op een gedrilde kolom staat (dus `state.drill.length > 0`),
+heeft élke kolom die niet die focus heeft (de top-level block-kaart bij
+`focusLevel > 0`, én elke gedrilde kolom vóór de gefocuste — nooit erna, want
+`focusLevel` is altijd `state.drill.length`, dus de gefocuste kolom is altijd de
+meest rechtse) geen zin meer om op volle diff-breedte te tonen: er valt niets te
+reviewen op een kolom die de pijltjestoetsen niet bezit, en de ruimte kan naar de
+kolom die ze wél bezit. `collapsedColumnHTML(b, level, testid, drillIdx)`
+(`home.mjs`) rendert die kolom dan als een smalle knop (`w-14`, volle hoogte via
+de bestaande flex-stretch van `<main>`, geen losse CSS nodig) met een pijl-icoon
++ een verticaal afgekapt label (`b.label`'s laatste `::`-segment, dus de
+methode-/classnaam) — stijl geleend van `RelatedPanel.mjs`'s
+`sidebarHintRail`. Testids: `data-testid=block-collapsed` (top-level) resp.
+`data-testid=drill-collapsed` + `data-drill-idx` (gedrilde kolom, mirror van de
+bestaande `drill-column`/`data-drill-idx`). Klikken roept **`expandColumn(level)`**
+aan: functioneel identiek aan `←` herhaald indrukken tot je op dat niveau staat
+— `state.drill`/`state.drillCursor` worden afgekapt tot `level` en
+`state.focusLevel = level`, dus alles wat verder gedrild was dan het geklikte
+niveau wordt weggegooid (bewust dezelfde semantiek als de bestaande `←`-pop, niet
+een "laat het kind openstaan maar verberg 'm"-variant — dat zou het
+single-focus-eigenaar-model van deze sectie breken). Beide render-plekken
+vertakken hierop met **gewone JS-if's binnen hun bestaande, al-op-`focusLevel`-
+geabonneerde bindingen** (de top-level `${() => {...}}`-slot in `block-column`,
+en de per-item `.map()`-callback in de gedrilde-kolommenlijst) — geen nieuwe
+geneste reactieve slot, dus geen nieuwe keyed-node-valkuil: de top-level slot
+blijft een array retourneren (`[collapsedColumnHTML(...).key(...)]`, nooit een
+los element — de single↔array-valkuil in `conventions.md`), en de gedrilde-
+kolommenlijst rebuildt sowieso al bij elke `focusLevel`-wissel (de bestaande
+`foc`/`unfoc`-key), dus de rail-vs-kaart-keuze daar hoeft geen eigen key-trigger.
+Zie `tests/drill-collapse.spec.mjs` (één en twee niveaus diep).
+
 De block-kaart-`.key(...)` codeert **rol** (`sel`/`prev`) **én code-status**
 (`load`/`code`/`err`), zodat arrow.js een **verse** kaart bouwt zodra een block
 van preview→geselecteerd gaat (↓/↑ op een al gepreviewd block) of z'n code

@@ -52,11 +52,14 @@ test('drilled columns are navigable left/right with the keyboard', async ({ page
   await page.waitForTimeout(300)
 
   // 1. Focus lands on the NEW diff column, not its Onderliggende-code panel:
-  // the drilled column's article carries the focused-diff border, the
-  // top-level block's article no longer does, and no related-item shows the
-  // "selected" ring (the panel isn't focused).
+  // the drilled column's article carries the focused-diff border, and the
+  // top-level block column collapsed to a rail (no article left in it — see
+  // drill-collapse.spec.mjs for the rail itself) since it no longer owns the
+  // keyboard. No related-item shows the "selected" ring (the panel isn't
+  // focused).
   await expect(drillArticle).toHaveClass(/border-indigo-300/)
-  await expect(blockArticle).not.toHaveClass(/border-indigo-300/)
+  await expect(page.locator('[data-testid="block-column"] article')).toHaveCount(0)
+  await expect(page.getByTestId('block-collapsed')).toBeVisible()
   const activeItem = page.locator('[data-testid="related-item"][data-active="true"]')
   await expect(activeItem).toHaveCount(0)
 

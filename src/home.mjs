@@ -1894,6 +1894,56 @@ function scrollFocusIntoView(level = state.focusLevel) {
   })
 }
 
+// expandColumn refocuses the keyboard on an earlier column that's currently
+// collapsed to a rail (see collapsedColumnHTML) — the top-level block (level 0)
+// or a previously drilled-into column (level 1..drill.length). It's a direct
+// jump to the same end state as pressing ← repeatedly from the current focus
+// down to `level`: any columns drilled further right than `level` are
+// discarded (same single-focus-owner model as the ← handler in onKeydown), so
+// clicking a rail never leaves two columns "open" at once.
+function expandColumn(level) {
+  if (level >= state.focusLevel) return
+  state.drill = state.drill.slice(0, level)
+  state.drillCursor = state.drillCursor.slice(0, level)
+  state.focusLevel = level
+  scrollFocusIntoView()
+}
+
+// collapsedColumnHTML renders the narrow rail a non-focused column shrinks to
+// once drilling has opened a column further right (see DetailPanel) — it
+// reclaims horizontal room for the focused column. `level` is the column's own
+// index in the virtual [top-level block, ...state.drill] list; clicking it
+// calls expandColumn(level) to bring the keyboard focus back onto it.
+// `drillIdx` (drilled columns only, null for the top-level rail) is exposed as
+// data-drill-idx so it lines up with the open drill-column's own attribute.
+function collapsedColumnHTML(b, level, testid, drillIdx = null) {
+  const label = (b.label || b.name || '').split('::').pop() || ''
+  return html`
+    <button
+      type="button"
+      class="flex h-full w-14 shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
+      data-testid="${testid}"
+      data-drill-idx="${drillIdx === null ? '' : drillIdx}"
+      title="${b.label || ''}"
+      @click="${() => expandColumn(level)}"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-4 w-4 shrink-0"
+      ><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>
+      <span class="max-h-40 overflow-hidden text-ellipsis text-[10px] font-medium [writing-mode:vertical-rl]"
+        >${label}</span
+      >
+    </button>
+  `
+}
+
 // drillIntoChild opens a child from the Onderliggende-code panel as its own diff
 // column, appended to the right of the current drill stack (Enter on a resolved
 // child in the panel — see the Enter handling in onKeydown). If the child is
@@ -3423,6 +3473,17 @@ function DetailPanel(state) {
         void state.codeVersion
         void state.focusLevel
         const focusedHere = state.focusLevel === 0
+        // Once a drilled column owns the keyboard (focusLevel > 0, which only
+        // ever happens with at least one open drill column — see
+        // expandColumn), this column no longer needs its own diff visible:
+        // collapse it to a narrow rail so the focused column gets the freed
+        // width. Stays a keyed array of one (not a bare element) so this slot
+        // never flips between a scalar and an array shape — see the
+        // single↔array arrow.js pitfall in conventions.md.
+        if (!focusedHere) {
+          const selectedBlock = state.blocks[sel] || {}
+          return [collapsedColumnHTML(selectedBlock, 0, 'block-collapsed').key('block-collapsed')]
+        }
         const pair = state.blocks
           .map((b, i) => ({ b, i }))
           .filter(({ i }) => i === sel || i === sel + 1)
@@ -3556,6 +3617,18 @@ function DetailPanel(state) {
           const level = i + 1
           const focusedHere = state.focusLevel === level
           const codeState = b.code && !b.code.error ? 'code' : b.code && b.code.error ? 'err' : 'load'
+          // A drilled column that no longer owns the keyboard (a deeper column
+          // has been drilled into since) collapses to a rail too — same
+          // reasoning as the top-level block-column above. This branch is
+          // plain JS inside the .map() callback (not a nested reactive slot),
+          // and the whole per-item template is already rebuilt fresh whenever
+          // this outer binding re-runs (it's subscribed to focusLevel), so no
+          // new keyed-node pitfall is introduced.
+          if (!focusedHere) {
+            return collapsedColumnHTML(b, level, 'drill-collapsed', i).key(
+              'drill-collapsed:' + i + ':' + b.file + ':' + b.label + ':' + b.id,
+            )
+          }
           return html`
             <div class="relative flex min-h-0 shrink-0 flex-col gap-3" data-testid="drill-column" data-drill-idx="${i}">
               ${focusedHere

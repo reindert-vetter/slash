@@ -336,9 +336,13 @@ gedrilde kolom, waarna de focus terugvalt op de diff van de parent-kolom (het
 gesloten kind verschijnt weer in diens Onderliggende-code-lijst) — herhaald `←`
 pelt zo niveau voor niveau terug tot het oorspronkelijke top-level block, waar
 nóg een `←` pas de hele diff-sessie verlaat (en dan ook de resterende
-gedrilde-kolom-state opruimt). Zie de sectie
+gedrilde-kolom-state opruimt). Elke kolom die daarbij niet de focus heeft klapt
+in tot een smalle rail (icoon + afgekapt label); een **muisklik op zo'n rail**
+is een snelkoppeling die functioneel hetzelfde doet als herhaald `←` — het
+springt direct naar dat niveau (`expandColumn`) en gooit alles wat verder
+gedrild was weg. Zie de sectie
 "Kolom-navigatie" in `.claude/rules/detail-layout.md` voor het volledige
-`state.focusLevel`-mechanisme. `←`/`Escape` vanaf de eerste positie van het
+`state.focusLevel`-mechanisme + de rail. `←`/`Escape` vanaf de eerste positie van het
 Onderliggende-code-paneel (`cs.codeSel === 0`) geeft de keyboard-focus terug aan
 de diff van **diezelfde** kolom (`handleRelatedKey`'s `exitRelated()`) — dat is
 geen aparte "pop"-stap meer, de kolom-voor-kolom-navigatie hierboven volgt pas
