@@ -271,6 +271,16 @@ dan vallen de links terug op de kale PR-URL resp. de Jira-base.
   standaard **verborgen** uit deze lijst (knop onderin klapt ze uit); de "Start"-kop
   toont een PR-brede goedkeurings-teller. Zie de sectie "Verbergen van goedgekeurde
   blokken" + "Server-side `total`" in `.claude/rules/blocks-and-ingest.md`.
+  **`↑`/`↓` slaan een verborgen (goedgekeurd) blok over** (`stepVisibleSelected`
+  in `home.mjs`, gebruikt door zowel de gewone als de zoekbox-actieve
+  ArrowDown/ArrowUp-tak): `state.selected` is een raw index in `state.blocks`,
+  maar `BlockList.mjs`'s `renderList` rendert géén rij voor een verborgen
+  (goedgekeurd) blok. Zonder deze stap landde `state.selected` soms op zo'n
+  onzichtbare index — geen rij in de sidebar toonde de indigo-highlight,
+  wat aanvoelde als "dit blok is niet meer selecteerbaar", vooral na veel
+  ↓/↑ diep in een reviewsessie met meerdere al-goedgekeurde blokken. Is er in
+  die richting geen zichtbaar blok meer, dan blijft de selectie op de huidige
+  (al zichtbare) positie staan i.p.v. op de verborgen staart te landen.
 - **`'diff'`**: `↑`/`↓` lopen door de **wijzigingen** van dat block, `←` stapt
   terug naar de lijst. Loop je voorbij de **laatste** wijziging (`↓`) of de
   **eerste** (`↑`) — je kunt niet verder binnen dit block — dan stap je door

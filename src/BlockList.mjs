@@ -114,7 +114,7 @@ export default function BlockList(state) {
 // completely approved — the same green ✓ state the row pill shows. Driven by the
 // server-backed combined-approval summary (state.approvalSummaries), so it's right
 // even before a block's code has lazily loaded.
-function isFullyApproved(state, b) {
+export function isFullyApproved(state, b) {
   const s = state.approvalSummaries && state.approvalSummaries[b.id]
   return !!s && s.total > 0 && s.done === s.total
 }

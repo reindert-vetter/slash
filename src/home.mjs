@@ -3,7 +3,7 @@
 // up/down keyboard navigation through the flat list.
 
 import { reactive, html, watch } from './vendor/arrow.js'
-import BlockList from './BlockList.mjs'
+import BlockList, { isFullyApproved } from './BlockList.mjs'
 import Footer from './Footer.mjs'
 import Block, {
   blockRows,
@@ -675,6 +675,29 @@ function recomputeLeftList() {
     .sort((a, b) => categoryRank(a.category) - categoryRank(b.category))
   const at = state.blocks.findIndex((b) => b.id === selId)
   state.selected = at >= 0 ? at : Math.min(state.selected, Math.max(0, state.blocks.length - 1))
+}
+
+// stepVisibleSelected walks state.selected one raw state.blocks index at a time
+// in the direction of dir (+1 down, -1 up), skipping any index BlockList's
+// renderList would hide (a fully-approved block while state.showApproved is
+// false — see isFullyApproved). Plain ArrowDown/ArrowUp used to do
+// `state.selected = clamp(state.selected + dir, 0, length-1)`, a raw index step
+// that ignores which indices actually have a rendered row: landing on a hidden
+// one leaves the sidebar with NO row highlighted (state.selected points past
+// the DOM), which reads as "this block won't select" and, with enough
+// approved-and-hidden blocks stacked together deep in a review session,
+// can take several presses to visibly move at all. If nothing selectable
+// remains in that direction, stays put on the current (already-visible)
+// selection rather than jumping into a trailing run of hidden blocks.
+function stepVisibleSelected(dir) {
+  const last = state.blocks.length - 1
+  let i = state.selected
+  let candidate = i
+  for (;;) {
+    candidate += dir
+    if (candidate < 0 || candidate > last) return i
+    if (state.showApproved || !isFullyApproved(state, state.blocks[candidate])) return candidate
+  }
 }
 
 // setSearch is the search box's input handler: refilter the left list and jump
@@ -2834,11 +2857,11 @@ function onKeydown(e) {
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      state.selected = Math.min(state.selected + 1, state.blocks.length - 1)
+      state.selected = stepVisibleSelected(1)
       scrollSelectedIntoView()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      state.selected = Math.max(state.selected - 1, 0)
+      state.selected = stepVisibleSelected(-1)
       scrollSelectedIntoView()
     } else if (e.key === 'ArrowRight' || e.key === 'Enter') {
       e.preventDefault()
@@ -3044,12 +3067,12 @@ function onKeydown(e) {
 
   if (e.key === 'ArrowDown') {
     e.preventDefault()
-    state.selected = Math.min(state.selected + 1, state.blocks.length - 1)
+    state.selected = stepVisibleSelected(1)
     scrollSelectedIntoView()
     scrollChangeIntoView(false)
   } else if (e.key === 'ArrowUp') {
     e.preventDefault()
-    state.selected = Math.max(state.selected - 1, 0)
+    state.selected = stepVisibleSelected(-1)
     scrollSelectedIntoView()
     scrollChangeIntoView(false)
   } else if (e.key === 'ArrowRight') {
