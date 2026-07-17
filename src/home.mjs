@@ -3478,7 +3478,7 @@ function PrInfoPanel(state) {
       ${() =>
         state.showDescription
           ? html`<div
-              class="fixed bottom-[100px] left-6 top-6 z-10 flex min-h-0 w-[26rem] flex-col"
+              class="fixed bottom-[90px] left-6 top-6 z-10 flex min-h-0 w-[26rem] flex-col"
               data-testid="pr-info-column"
             >
               ${prInfoCard(state)}
@@ -3495,7 +3495,7 @@ function DetailPanel(state) {
   return html`
     <main
       class="${() =>
-        'fixed bottom-[100px] top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto transition-all duration-200 ease-out ' +
+        'fixed bottom-[90px] top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto transition-all duration-200 ease-out ' +
         // Right margin clears the comments/taken sidebar (RelatedPanel.mjs),
         // which is a separate position:fixed overlay with a higher z-index —
         // without this, <main>'s last column (Onderliggende code, or the

@@ -47,7 +47,7 @@ export default function BlockList(state) {
     <aside
       data-testid="pr-index"
       class="${() =>
-        'fixed bottom-[100px] left-6 top-6 flex w-[26rem] flex-col overflow-hidden rounded-xl border bg-white dark:bg-zinc-900 transition-all duration-200 ease-out ' +
+        'fixed bottom-[90px] left-6 top-6 flex w-[26rem] flex-col overflow-hidden rounded-xl border bg-white dark:bg-zinc-900 transition-all duration-200 ease-out ' +
         // Light-blue border while the keyboard drives stop 2 (list-mode, not
         // showing the description) — mirrors diffActive on the block-diff card
         // and the stop-1 border above, so all three stops highlight the same way.

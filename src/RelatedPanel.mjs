@@ -1611,7 +1611,7 @@ function sidebarHintRail(state) {
   return html`
     <button
       type="button"
-      class="fixed right-0 top-6 bottom-[100px] z-20 flex w-12 flex-col items-center justify-center gap-4 rounded-l-xl border border-r-0 border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
+      class="fixed right-0 top-6 bottom-[90px] z-20 flex w-12 flex-col items-center justify-center gap-4 rounded-l-xl border border-r-0 border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
       data-testid="sidebar-collapsed"
       title="Comments &amp; taken (g)"
       aria-label="Comments en taken tonen"
@@ -1676,7 +1676,7 @@ export function CommentsSidebar(state, commentTarget, openCompose, openTaskFn) {
       ${() =>
         cs.sidebarOpen
           ? html`<div
-              class="fixed right-6 top-6 bottom-[100px] z-20 flex w-[36rem] min-h-0 flex-col gap-3"
+              class="fixed right-6 top-6 bottom-[90px] z-20 flex w-[36rem] min-h-0 flex-col gap-3"
               data-testid="comments-sidebar"
             >
               ${commentsSection(state, commentTarget, openCompose)}
