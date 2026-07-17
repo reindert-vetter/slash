@@ -16,6 +16,34 @@ func openTest(t *testing.T) *Module {
 	return m
 }
 
+// Save round-trips the Source and Kind columns (github-imported / PR-wide
+// comments), and defaults them to "" for a plain app-placed comment.
+func TestSourceAndKindRoundTrip(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	if err := m.Save(ctx, Comment{ID: "g1", RunID: "g1", PR: 1, Body: "overall LGTM",
+		Source: "github", Kind: "review_summary", RowStart: -1, RowEnd: -1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Save(ctx, Comment{ID: "u1", RunID: "u1", PR: 1, File: "a.php", Line: 1, Body: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := m.List(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Comment{}
+	for _, c := range list {
+		got[c.ID] = c
+	}
+	if g := got["g1"]; g.Source != "github" || g.Kind != "review_summary" {
+		t.Fatalf("g1 source=%q kind=%q, want github/review_summary", g.Source, g.Kind)
+	}
+	if u := got["u1"]; u.Source != "" || u.Kind != "" {
+		t.Fatalf("u1 source=%q kind=%q, want empty/empty", u.Source, u.Kind)
+	}
+}
+
 func TestSetStatus(t *testing.T) {
 	m := openTest(t)
 	ctx := context.Background()
@@ -64,8 +92,8 @@ func TestSearchByPathPrefix(t *testing.T) {
 		prefix string
 		want   int
 	}{
-		{"/pr-123", 3},                             // whole PR
-		{"/pr-123/app/Foo.php", 2},                 // one file
+		{"/pr-123", 3},                                // whole PR
+		{"/pr-123/app/Foo.php", 2},                    // one file
 		{"/pr-123/app/Foo.php/Foo::bar/group-5-9", 1}, // one unit
 		{"/pr-456", 1},
 		{"/pr-999", 0},

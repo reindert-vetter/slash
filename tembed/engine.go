@@ -109,6 +109,18 @@ func newRunID() string {
 // StartWorkflow creates a new run of the named workflow with input (JSON-
 // encoded) and drives it until it blocks or completes. It returns the run ID.
 func (e *Engine) StartWorkflow(name string, input any) (string, error) {
+	return e.StartWorkflowID(newRunID(), name, input)
+}
+
+// StartWorkflowID is StartWorkflow with a caller-supplied run ID, making the
+// start idempotent: if a run with id already exists (any status), it is a no-op
+// that returns id unchanged — the existing run is left exactly as it is. This
+// lets a caller derive a deterministic ID from an external key (e.g.
+// "gh-<commentID>") so a repeated start — the same poll running twice, or a
+// restart re-observing the same GitHub comment — never creates a second
+// Execution. The existence check + create is done under the run lock so two
+// concurrent starts of the same id can't both create.
+func (e *Engine) StartWorkflowID(id, name string, input any) (string, error) {
 	e.mu.Lock()
 	_, ok := e.workflows[name]
 	e.mu.Unlock()
@@ -119,7 +131,16 @@ func (e *Engine) StartWorkflow(name string, input any) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("tembed: marshal input: %w", err)
 	}
-	id := newRunID()
+
+	l := e.runLock(id)
+	l.Lock()
+	defer l.Unlock()
+
+	// Idempotent reuse: a run with this ID already exists → no-op.
+	if _, _, err := e.store.LoadRun(id); err == nil {
+		return id, nil
+	}
+
 	now := e.now()
 	rec := RunRecord{ID: id, Workflow: name, Status: StatusRunning, CreatedAt: now, UpdatedAt: now}
 	if err := e.store.CreateRun(rec); err != nil {
@@ -129,9 +150,6 @@ func (e *Engine) StartWorkflow(name string, input any) (string, error) {
 		return "", err
 	}
 
-	l := e.runLock(id)
-	l.Lock()
-	defer l.Unlock()
 	e.advance(id)
 	return id, nil
 }

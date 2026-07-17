@@ -36,7 +36,9 @@ CREATE TABLE IF NOT EXISTS comments (
   row_start      INTEGER NOT NULL DEFAULT -1,
   row_end        INTEGER NOT NULL DEFAULT -1,
   seg            TEXT NOT NULL DEFAULT '',
-  path           TEXT NOT NULL DEFAULT ''
+  path           TEXT NOT NULL DEFAULT '',
+  source         TEXT NOT NULL DEFAULT '',
+  kind           TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS reactions (
@@ -85,7 +87,16 @@ type Comment struct {
 	// commentPath in workflows.go) and indexed, so a prefix match finds every
 	// comment under a scope: /pr-123 (whole PR), /pr-123/<file> (one file),
 	// …/<label> (one block), …/<codeRef> (one navigation unit).
-	Path      string     `json:"path,omitempty"`
+	Path string `json:"path,omitempty"`
+	// Source is where the comment originated: "ui" (placed in this app, the
+	// default) or "github" (imported from an existing GitHub review/PR comment).
+	// The frontend badges GitHub-sourced comments; the workflow never re-posts a
+	// github-sourced root back to GitHub (it already exists there).
+	Source string `json:"source,omitempty"`
+	// Kind classifies a comment's anchor: "" for a normal line/block comment
+	// (has file:line), or "issue"/"review_summary" for a PR-wide comment with no
+	// file:line anchor (shown in the PR-info column, not the block-scoped index).
+	Kind      string     `json:"kind,omitempty"`
 	Reactions []Reaction `json:"reactions,omitempty"`
 }
 
@@ -139,6 +150,8 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE comments ADD COLUMN row_end INTEGER NOT NULL DEFAULT -1`,
 		`ALTER TABLE comments ADD COLUMN seg TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE comments ADD COLUMN path TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE comments ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE comments ADD COLUMN kind TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -162,13 +175,13 @@ func (m *Module) Save(ctx context.Context, c Comment) error {
 	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO comments
-		   (id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path)
+		   (id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind)
 		 VALUES (?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT reaction_count FROM comments WHERE id = ?), 0),
 		   COALESCE((SELECT status FROM comments WHERE id = ?), ?),
-		   ?,?,?,?,?,?,?)`,
+		   ?,?,?,?,?,?,?,?,?)`,
 		c.ID, c.RunID, c.PR, c.File, c.Line, c.Author, c.Body, c.CreatedAt, c.ID, c.ID, c.Status,
-		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg, c.Path)
+		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg, c.Path, c.Source, c.Kind)
 	return err
 }
 
@@ -249,7 +262,7 @@ func (m *Module) Search(ctx context.Context, prefix string) ([]Comment, error) {
 // query runs the comment select with an optional WHERE clause + args and
 // attaches each comment's reactions. Shared by List and Search.
 func (m *Module) query(ctx context.Context, where string, args ...any) ([]Comment, error) {
-	q := `SELECT id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path
+	q := `SELECT id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind
 	      FROM comments`
 	if where != "" {
 		q += ` ` + where
@@ -267,7 +280,7 @@ func (m *Module) query(ctx context.Context, where string, args ...any) ([]Commen
 		var c Comment
 		if err := rows.Scan(&c.ID, &c.RunID, &c.PR, &c.File, &c.Line, &c.Author,
 			&c.Body, &c.CreatedAt, &c.ReactionCount, &c.Status, &c.Code, &c.Gran, &c.Label,
-			&c.RowStart, &c.RowEnd, &c.Seg, &c.Path); err != nil {
+			&c.RowStart, &c.RowEnd, &c.Seg, &c.Path, &c.Source, &c.Kind); err != nil {
 			return nil, err
 		}
 		byID[c.ID] = len(out)

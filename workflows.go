@@ -143,6 +143,24 @@ type CodeCommentInput struct {
 	// and every downstream github call (poller, reply mirror, delete) no-ops via
 	// its existing RootID == 0 guard.
 	Local bool `json:"local"`
+	// ImportedRootID is set when this comment is imported from an existing GitHub
+	// comment (a thread-root that already lives on GitHub, made outside this app).
+	// The workflow then SKIPS postGithubComment (it's already there) but still
+	// records posted.RootID = ImportedRootID, so the reply poller runs and UI
+	// replies mirror to the real thread — unlike Local, which disables all that.
+	ImportedRootID int64 `json:"importedRootId"`
+	// Source is "ui" (placed in this app, default) or "github" (imported). Stored
+	// on the comment; the frontend badges github-sourced comments.
+	Source string `json:"source"`
+	// Kind classifies the comment's anchor: "" (a normal line/block comment) or
+	// "issue"/"review_summary"/"review" for a PR-wide comment with no file:line
+	// anchor (shown in the PR-info column, not the block-scoped index). "review"
+	// is a review comment that couldn't be pinned to any block.
+	Kind string `json:"kind"`
+	// CreatedAt carries an imported comment's original GitHub timestamp so the
+	// thread shows when it was really written (saveComment defaults it to now when
+	// empty, for app-placed comments).
+	CreatedAt string `json:"createdAt"`
 }
 
 // ReactionSignal is the payload of a "reply" Signal. It carries either a
@@ -283,12 +301,13 @@ type TaskManager struct {
 	baseCtx      context.Context
 	runtimeReady bool
 
-	mu       sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + inboxRun
-	lastBeat map[string]time.Time // code-comment/inbox Run ID → last heartbeat
-	prRuns   map[int]string       // PR → pr_status Run ID
-	relRuns  map[int]string       // PR → build_relations Run ID
-	apprRuns map[int]string       // PR → approve Run ID
-	inboxRun string               // pr_inbox Run ID (one per repo/process)
+	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + inboxRun + importPolled
+	lastBeat     map[string]time.Time // code-comment/inbox Run ID → last heartbeat
+	prRuns       map[int]string       // PR → pr_status Run ID
+	relRuns      map[int]string       // PR → build_relations Run ID
+	apprRuns     map[int]string       // PR → approve Run ID
+	inboxRun     string               // pr_inbox Run ID (one per repo/process)
+	importPolled map[string]bool      // imported-thread Run ID → poller running (dedup, operational)
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
@@ -297,7 +316,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
 		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{},
-		logf: log.Printf,
+		importPolled: map[string]bool{},
+		logf:         log.Printf,
 	}
 
 	// Activity: fetch the inbox from GitHub and store it in the read-model
@@ -1251,19 +1271,27 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	// lands in the read-model via the workflow, not from the UI.
 	comment := comments.Comment{
 		ID: runID, RunID: runID, PR: in.PR, File: in.File, Line: in.Line,
-		Author: in.Author, Body: in.Body,
+		Author: in.Author, Body: in.Body, CreatedAt: in.CreatedAt,
 		Code: in.Code, Gran: in.Gran, Label: in.Label,
 		RowStart: in.RowStart, RowEnd: in.RowEnd, Seg: in.Seg,
-		Path: commentPath(in, runID),
+		Path: commentPath(in, runID), Source: in.Source, Kind: in.Kind,
 	}
 	if err := w.ExecuteActivity("saveComment", comment, nil); err != nil {
 		return nil, fmt.Errorf("save comment: %w", err)
 	}
-	// A local (private) note is never posted to GitHub — posted stays the
-	// zero-value (RootID 0), so the poller isn't started and reply/delete mirrors
-	// no-op. Gating on in.Local (input, not live state) keeps replay deterministic.
+	// Decide the GitHub root comment ID this thread mirrors to, without ever
+	// posting twice. Three input-driven (so replay-deterministic) cases:
+	//   - Imported (ImportedRootID != 0): the comment already exists on GitHub —
+	//     skip postGithubComment but record its known RootID, so the poller runs
+	//     and UI replies still mirror to the real thread.
+	//   - Local (private note): never touches GitHub — RootID stays 0, disabling
+	//     the poller and every reply/delete mirror via the existing RootID == 0 guard.
+	//   - Normal: post it and record the new RootID.
 	var posted postResult
-	if !in.Local {
+	switch {
+	case in.ImportedRootID != 0:
+		posted.RootID = in.ImportedRootID
+	case !in.Local:
 		if err := w.ExecuteActivity("postGithubComment", in, &posted); err != nil {
 			return nil, fmt.Errorf("post github comment: %w", err)
 		}
@@ -1388,6 +1416,9 @@ func (m *TaskManager) ensurePRStatus(pr int) (string, error) {
 	// ResumePRStatusPolling).
 	if m.runtimeReady {
 		go m.pollIngestRefresh(m.baseCtx, id, pr)
+		// Import existing GitHub comments as live threads, and keep polling for
+		// new ones on the same heartbeat cadence (mirrors pollIngestRefresh).
+		go m.pollImportComments(m.baseCtx, id, pr)
 	}
 	return id, nil
 }
@@ -1685,6 +1716,110 @@ func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, pr 
 		sig := PRStateSignal{BaseSHA: meta.BaseRefOid, HeadSHA: meta.HeadRefOid}
 		if err := m.engine.SignalWorkflow(prRunID, SignalPRState, sig); err != nil {
 			m.logf("pr_status: signal ingest refresh pr=%d: %v", pr, err)
+		}
+	}
+}
+
+// pollImportComments imports existing GitHub comments (review-diff threads and
+// PR-wide issue/review comments) as live task_code_comment Executions, then keeps
+// checking for new ones on the same heartbeat-driven cadence as pollIngestRefresh
+// (fast while a heartbeat for prRunID arrived within heartbeatWindow, else slow).
+// It stops once the pr_status tracker is done (merged/closed). Reading GitHub in
+// glue mirrors poll/pollInbox; the only write is starting an Execution (the
+// sanctioned path), made idempotent by the deterministic gh-<id> Run ID.
+func (m *TaskManager) pollImportComments(ctx context.Context, prRunID string, pr int) {
+	ticker := time.NewTicker(m.interval)
+	defer ticker.Stop()
+	// Run one import immediately (don't wait a whole tick to surface existing
+	// comments on first load), then gate later ticks to the cadence.
+	m.importPRComments(ctx, pr)
+	lastPoll := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		m.mu.Lock()
+		beat := m.lastBeat[prRunID]
+		m.mu.Unlock()
+		active := !beat.IsZero() && time.Since(beat) < heartbeatWindow
+		want := m.idle
+		if active {
+			want = m.interval
+		}
+		if !lastPoll.IsZero() && time.Since(lastPoll) < want {
+			continue
+		}
+		lastPoll = time.Now()
+
+		status, err := m.engine.Status(prRunID)
+		if err != nil || status == tembed.StatusCompleted || status == tembed.StatusFailed {
+			return
+		}
+		m.importPRComments(ctx, pr)
+	}
+}
+
+// importPRComments fetches pr's existing GitHub comments, maps each to a
+// CodeCommentInput, and starts a task_code_comment Execution per comment with a
+// deterministic gh-<id> Run ID — so a re-import (a re-poll, a restart) is a
+// StartWorkflowID no-op rather than a duplicate. It then launches the per-thread
+// reply poller for any thread not already being polled. The GitHub fetch is a
+// read (like poll/pollInbox); the Execution start is the only write.
+func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
+	var blocks []Block
+	if m.db != nil {
+		var err error
+		if blocks, err = blocksByPR(m.db, pr); err != nil {
+			m.logf("import comments: blocks pr=%d: %v", pr, err)
+			// Continue anyway — general (PR-wide) comments don't need blocks, and a
+			// review comment with no blocks just degrades to PR-wide.
+		}
+	}
+
+	var inputs []CodeCommentInput
+	if reviews, err := m.gh.FetchReviewComments(ctx, pr); err != nil {
+		m.logf("import comments: fetch review comments pr=%d: %v", pr, err)
+	} else {
+		for _, rc := range reviews {
+			inputs = append(inputs, mapReviewComment(m.dataDir, pr, blocks, rc))
+		}
+	}
+	if general, err := m.gh.FetchGeneralComments(ctx, pr); err != nil {
+		m.logf("import comments: fetch general comments pr=%d: %v", pr, err)
+	} else {
+		for _, gc := range general {
+			inputs = append(inputs, mapGeneralComment(pr, gc))
+		}
+	}
+
+	prRunID, err := m.ensurePRStatus(pr)
+	if err != nil {
+		prRunID = ""
+	}
+	for _, in := range inputs {
+		runID := importedRunID(in.ImportedRootID)
+		if _, err := m.engine.StartWorkflowID(runID, WorkflowTaskCodeComment, in); err != nil {
+			m.logf("import comments: start run=%s pr=%d: %v", runID, pr, err)
+			continue
+		}
+		// Start the reply poller once per thread. Only imported review-diff
+		// threads have a live GitHub thread to poll; a PR-wide (Kind != "")
+		// comment has no reply thread on the reviews/issues endpoints we mirror,
+		// so it needs no poller (its RootID guards the reply mirror anyway).
+		if in.Kind != "" || in.ImportedRootID == 0 {
+			continue
+		}
+		m.mu.Lock()
+		already := m.importPolled[runID]
+		if !already {
+			m.importPolled[runID] = true
+		}
+		m.mu.Unlock()
+		if !already {
+			go m.poll(ctx, runID, pr, in.ImportedRootID, prRunID)
 		}
 	}
 }

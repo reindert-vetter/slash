@@ -9,14 +9,16 @@ import (
 // Fake is an in-memory Client for tests and local (no-gh) runs. It records
 // posted comments/replies and returns whatever replies the test enqueues.
 type Fake struct {
-	mu      sync.Mutex
-	nextID  int64
-	Posted  []string // bodies posted (root + replies), in order
-	Deleted []int64  // comment IDs deleted, in order
-	replies []Reply
-	prState string          // "" reads as "open"
-	prMeta  Meta            // returned by PRMeta (SetPRMeta overrides)
-	viewed  map[string]bool // "pr|path" -> viewed
+	mu             sync.Mutex
+	nextID         int64
+	Posted         []string // bodies posted (root + replies), in order
+	Deleted        []int64  // comment IDs deleted, in order
+	replies        []Reply
+	reviewComments []ReviewComment
+	general        []GeneralComment
+	prState        string          // "" reads as "open"
+	prMeta         Meta            // returned by PRMeta (SetPRMeta overrides)
+	viewed         map[string]bool // "pr|path" -> viewed
 
 	lastStartLine int
 	lastEndLine   int
@@ -84,6 +86,36 @@ func (f *Fake) FetchReplies(_ context.Context, pr int, rootID int64) ([]Reply, e
 	out := make([]Reply, len(f.replies))
 	copy(out, f.replies)
 	return out, nil
+}
+
+func (f *Fake) FetchReviewComments(_ context.Context, pr int) ([]ReviewComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]ReviewComment, len(f.reviewComments))
+	copy(out, f.reviewComments)
+	return out, nil
+}
+
+// SetReviewComments makes the next FetchReviewComments calls return cs.
+func (f *Fake) SetReviewComments(cs []ReviewComment) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reviewComments = cs
+}
+
+func (f *Fake) FetchGeneralComments(_ context.Context, pr int) ([]GeneralComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]GeneralComment, len(f.general))
+	copy(out, f.general)
+	return out, nil
+}
+
+// SetGeneralComments makes the next FetchGeneralComments calls return cs.
+func (f *Fake) SetGeneralComments(cs []GeneralComment) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.general = cs
 }
 
 func (f *Fake) PRState(_ context.Context, pr int) (string, error) {

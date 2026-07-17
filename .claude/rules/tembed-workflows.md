@@ -24,6 +24,19 @@ niets van PR's, blocks of gh; hou het zo.
 - **Signals** zijn gebufferd: een signaal dat vóór de `WaitSignal` aankomt wacht
   tot de workflow erom vraagt. **Timers** (`Sleep`) zijn durable (absolute
   fire-time in de history, herpland bij `Recover`).
+- **Deterministische, idempotente start (`StartWorkflowID`):** `StartWorkflow`
+  genereert een willekeurige Run ID; `StartWorkflowID(id, name, input)` neemt de
+  Run ID van de **caller** en is **idempotent** — bestaat er al een run met die
+  `id` (welke status dan ook), dan is het een **no-op reuse** die `id` teruggeeft
+  en de bestaande run (én zijn oorspronkelijke input) ongemoeid laat. De
+  existence-check + create staat onder de run-lock, dus twee gelijktijdige starts
+  van dezelfde `id` kunnen nooit allebei aanmaken. Zo kan een caller een
+  **deterministische** Run ID afleiden uit een externe sleutel (b.v.
+  `gh-<commentID>`) zodat een herhaalde start — dezelfde poll die twee keer
+  draait, of een herstart die dezelfde GitHub-comment opnieuw ziet — nooit een
+  tweede Execution maakt. De Run ID komt van de caller (glue), niet uit de
+  workflow-body, dus dit schendt de determinisme-eis van de body niet. Gebruikt
+  door de comment-import (zie "Bestaande GitHub-comments importeren").
 - **Opslag** via de `Store`-interface: `MemoryStore` (tests), `JSONLStore` (één
   leesbaar bestand per run), `SQLiteStore` (pure-Go `modernc.org/sqlite`, geen
   cgo) en `MultiStore` om te combineren (SQLite voor queries + JSONL als
@@ -338,6 +351,86 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   `pr_status`-fetcht-PR-meta, plus `pr_inbox`-refresh-vult-read-model);
   `tests/pr-menu.spec.mjs` (Playwright: het `/`-menu en zijn submenu's); modules
   zijn puur en los testbaar.
+
+## Bestaande GitHub-comments importeren (levende threads)
+
+Comments die **buiten de app** op de PR zijn geplaatst (of vóór ingest) staan
+niet vanzelf in het `comments`-read-model — de app kende alleen comments die het
+zélf via `task_code_comment` plaatste. De import haalt ze binnen en maakt er
+**volwaardige, levende threads** van (reageren spiegelt naar GitHub, GitHub-
+replies worden binnengepolld), i.p.v. read-only kopieën.
+
+- **Fetch (`modules/github`):** `FetchReviewComments(pr)` geeft de **thread-roots**
+  van de diff-review-comments (`in_reply_to_id == 0`, gepagineerd via
+  `apiPaginate`); `FetchGeneralComments(pr)` geeft de **PR-brede** comments zonder
+  file:line — de issue-conversatie (`issues/{pr}/comments`) én de niet-lege
+  bodies van ingediende reviews (`pulls/{pr}/reviews`, `Kind` `issue` resp.
+  `review_summary`). Replies op een geïmporteerde root komen daarna via het
+  bestaande `FetchReplies`-pad binnen. `github.Fake` heeft
+  `SetReviewComments`/`SetGeneralComments` voor tests.
+- **Mapping (`comment_import.go`, package main — leest de head/base-worktree, dus
+  een read-only side-effect zoals `blockstats.go`/`/api/code`):**
+  `mapReviewComment(dataDir, pr, blocks, gc)` mapt een review-comment's
+  `file:line(+side)` naar een block + **aligned-row-anker** in **exact dezelfde**
+  index-ruimte als approvals/app-comments (`dedent4` → `alignRows` +
+  `rowForLine`, dat de source-regel op de gekozen kant naar zijn rij-index telt
+  vanaf de block-`Start`). Vindt hij het block + de rij → een gewone
+  block-gescopete regel-comment (`Kind ""`); vindt hij het block maar niet de
+  exacte rij → `RowStart -1` (overal binnen het block getoond, de bestaande
+  "onbekend anker"-conventie); vindt hij géén block → **PR-breed** (`Kind
+  "review"`, leeg `Label`). `mapGeneralComment` maakt altijd een ankerloze
+  PR-brede input (`Kind` `issue`/`review_summary`). Alle drie dragen
+  `ImportedRootID`/`Source "github"`/`Author`/`CreatedAt` (de originele
+  GitHub-timestamp) mee. LEFT-side (verwijderde regel) comments matchen het block
+  via zijn **oude** source-range (base-worktree), want de opgeslagen
+  `Line`/`EndLine` zijn head-coördinaten.
+- **Workflow-tak (`taskCodeCommentWorkflow`):** `CodeCommentInput` kreeg
+  `ImportedRootID`/`Source`/`Kind`/`CreatedAt`. De posting-keuze is input-gedreven
+  (dus replay-deterministisch) in drie gevallen: **geïmporteerd**
+  (`ImportedRootID != 0`) → **sla `postGithubComment` over** maar zet
+  `posted.RootID = in.ImportedRootID` (de comment bestáát al op GitHub — nooit
+  her-posten), zodat de reply-poller draait en UI-replies wél naar de echte
+  thread spiegelen; **local** (privé-notitie) → `RootID 0`, alle GitHub-calls
+  no-op; **normaal** → posten + `RootID` vastleggen. `saveComment` bewaart
+  `Source`/`Kind`/`CreatedAt`. Echo-preventie in de reply-lus is ongewijzigd:
+  alleen `Source == "ui"` mirror't naar GitHub, `github`-sourced replies niet.
+- **Importer-glue + poller (`workflows.go`, cadans meeliftend op `pr_status`):**
+  `importPRComments(ctx, pr)` leest de blocks (DB), fetcht review + general
+  comments (reads-in-glue, zoals `poll`/`pollInbox`), mapt ze, en start per
+  comment een Execution met `StartWorkflowID("gh-<id>", …)` — de **enige write**,
+  idempotent gemaakt door de deterministische Run ID. `pollImportComments(ctx,
+  prRunID, pr)` draait één import meteen en daarna op de heartbeat-cadans
+  (spiegel van `pollIngestRefresh`: snel binnen `heartbeatWindow`, anders traag),
+  en stopt zodra de `pr_status`-tracker klaar is (merged/closed). Gestart naast
+  `pollIngestRefresh` in `ensurePRStatus` (nieuwe tracker) en `ResumePRStatusPolling`
+  (na herstart). Voor elke geïmporteerde **review-diff** thread (niet PR-breed)
+  start het de per-thread reply-`poll`; een in-memory `importPolled`-set (dedup,
+  operationeel — reconstrueerd door `ResumePolling` na herstart) voorkomt een
+  tweede poller per run bij een volgende import-tick.
+- **Herstart (`ResumePolling`):** de root-ID van een geïmporteerde thread leeft in
+  de **input** (`ImportedRootID`), niet in een `postGithubComment`-history-event
+  (dat is er niet), dus `ResumePolling` leest 'm daaruit en markeert de run in
+  `importPolled`.
+- **Kanttekening — reply-dedup leunt op de DB, niet op de poller-`seen`-map:**
+  de per-poller `seen[replyID]`-map (in `poll`) is een snelheids-cache die bij
+  herstart leeg begint; dat is veilig omdat `comments.AddReaction`
+  **`INSERT OR IGNORE`** op de reactie-id (`gh-<id>`) doet en de count alleen bij
+  een echt nieuwe rij ophoogt ("already recorded — no double count"). Herstart
+  → poller her-signalt alle replies → geen dubbeltelling. Ditzelfde contract
+  maakt de `StartWorkflowID`-dedup en de `seen`-reset samen herstart-veilig; hou
+  het intact.
+- **Read-model & frontend:** `comments.Comment` kreeg `Source` (`ui`/`github`) +
+  `Kind` kolommen (lichte `migrate`, `ALTER TABLE … ADD COLUMN`). `GET
+  /api/comments?pr=N` serveert de geïmporteerde comments automatisch — geen nieuw
+  endpoint. De frontend badge't `source: github` en toont de PR-brede comments
+  (`Kind != ""`) in een eigen blok onder de PR-info-kolom (zie
+  `.claude/rules/detail-layout.md`), los van de block-gescopete comments-sidebar.
+- Tests: `comment_import_test.go` (mapping-anker + PR-wide-degradatie + general;
+  `importPRComments` vult read-model met `source github`, **her-post nooit**, en
+  is idempotent bij her-import; een geïmporteerde thread spiegelt een UI-reply en
+  echoot een GitHub-reply niet; herstart hervat de poller via de input-root-ID),
+  `modules/comments/comments_test.go` (`Source`/`Kind` round-trip),
+  `tembed/engine_test.go` (`StartWorkflowID`-idempotentie).
 
 ## Relaties tussen blokken (`build_relations` + `modules/relations`)
 

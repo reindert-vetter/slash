@@ -35,6 +35,34 @@ type Reply struct {
 	Done   bool   `json:"done"` // reviewer resolved the thread (body contains /resolve)
 }
 
+// ReviewComment is a top-level (thread-root) review comment on the diff of a PR:
+// one anchored to a file line, made on GitHub (possibly outside this app). Its
+// replies are fetched separately via FetchReplies once it is imported as a live
+// thread.
+type ReviewComment struct {
+	ID        int64  `json:"id"`
+	Author    string `json:"author"`
+	Body      string `json:"body"`
+	Path      string `json:"path"`      // file the comment anchors to
+	Line      int    `json:"line"`      // line on Side (falls back to original_line)
+	StartLine int    `json:"startLine"` // 0 for a single-line comment
+	Side      string `json:"side"`      // "RIGHT" (new) | "LEFT" (old)
+	CreatedAt string `json:"createdAt"`
+	HTMLURL   string `json:"htmlUrl"`
+}
+
+// GeneralComment is a PR-wide comment with no file:line anchor: either an issue
+// comment (the PR conversation) or a review summary (the body of a submitted
+// review). Kind distinguishes the two.
+type GeneralComment struct {
+	ID        int64  `json:"id"`
+	Author    string `json:"author"`
+	Body      string `json:"body"`
+	CreatedAt string `json:"createdAt"`
+	HTMLURL   string `json:"htmlUrl"`
+	Kind      string `json:"kind"` // "issue" | "review_summary"
+}
+
 // Client is the module's behaviour, so callers (workflows, tests) can depend on
 // an interface and swap in Fake.
 type Client interface {
@@ -46,6 +74,15 @@ type Client interface {
 	PostReviewComment(ctx context.Context, pr int, file string, startLine, endLine int, side, body string) (int64, error)
 	Reply(ctx context.Context, pr int, inReplyTo int64, body string) (int64, error)
 	FetchReplies(ctx context.Context, pr int, rootID int64) ([]Reply, error)
+	// FetchReviewComments returns the thread-root review comments of pr (those
+	// not in reply to another comment) — the existing comments on the diff,
+	// including ones made outside this app, so they can be imported as live
+	// threads.
+	FetchReviewComments(ctx context.Context, pr int) ([]ReviewComment, error)
+	// FetchGeneralComments returns the PR-wide comments with no file:line
+	// anchor: the issue-conversation comments and the non-empty bodies of
+	// submitted reviews (review summaries).
+	FetchGeneralComments(ctx context.Context, pr int) ([]GeneralComment, error)
 	// PRState reports the lifecycle state of a PR: "open", "merged", or "closed".
 	PRState(ctx context.Context, pr int) (string, error)
 	// PRMeta fetches the PR's title and web URL.
@@ -66,10 +103,17 @@ type Module struct {
 func New(repo string) *Module { return &Module{repo: repo} }
 
 type ghComment struct {
-	ID        int64                  `json:"id"`
-	Body      string                 `json:"body"`
-	User      struct{ Login string } `json:"user"`
-	InReplyTo int64                  `json:"in_reply_to_id"`
+	ID           int64                  `json:"id"`
+	Body         string                 `json:"body"`
+	User         struct{ Login string } `json:"user"`
+	InReplyTo    int64                  `json:"in_reply_to_id"`
+	Path         string                 `json:"path"`
+	Line         int                    `json:"line"`
+	OriginalLine int                    `json:"original_line"`
+	StartLine    int                    `json:"start_line"`
+	Side         string                 `json:"side"`
+	CreatedAt    string                 `json:"created_at"`
+	HTMLURL      string                 `json:"html_url"`
 }
 
 // PostReviewComment posts a review comment on file (anchored to the PR head
@@ -153,6 +197,73 @@ func (m *Module) FetchReplies(ctx context.Context, pr int, rootID int64) ([]Repl
 		})
 	}
 	return replies, nil
+}
+
+// FetchReviewComments returns the thread-root review comments of pr (in_reply_to
+// == 0). See the Client interface doc.
+func (m *Module) FetchReviewComments(ctx context.Context, pr int) ([]ReviewComment, error) {
+	var all []ghComment
+	if err := m.apiPaginate(ctx, fmt.Sprintf("repos/%s/pulls/%d/comments", m.repo, pr), &all); err != nil {
+		return nil, err
+	}
+	var out []ReviewComment
+	for _, c := range all {
+		if c.InReplyTo != 0 {
+			continue // a reply — imported via FetchReplies once the root is live
+		}
+		line := c.Line
+		if line == 0 {
+			line = c.OriginalLine // outdated comment: fall back to the original line
+		}
+		side := c.Side
+		if side == "" {
+			side = "RIGHT"
+		}
+		out = append(out, ReviewComment{
+			ID: c.ID, Author: c.User.Login, Body: c.Body,
+			Path: c.Path, Line: line, StartLine: c.StartLine, Side: side,
+			CreatedAt: c.CreatedAt, HTMLURL: c.HTMLURL,
+		})
+	}
+	return out, nil
+}
+
+// FetchGeneralComments returns the PR-wide comments (issue comments + review
+// summaries). See the Client interface doc.
+func (m *Module) FetchGeneralComments(ctx context.Context, pr int) ([]GeneralComment, error) {
+	var out []GeneralComment
+
+	var issues []ghComment
+	if err := m.apiPaginate(ctx, fmt.Sprintf("repos/%s/issues/%d/comments", m.repo, pr), &issues); err != nil {
+		return nil, err
+	}
+	for _, c := range issues {
+		out = append(out, GeneralComment{
+			ID: c.ID, Author: c.User.Login, Body: c.Body,
+			CreatedAt: c.CreatedAt, HTMLURL: c.HTMLURL, Kind: "issue",
+		})
+	}
+
+	var reviews []struct {
+		ID          int64                  `json:"id"`
+		Body        string                 `json:"body"`
+		User        struct{ Login string } `json:"user"`
+		SubmittedAt string                 `json:"submitted_at"`
+		HTMLURL     string                 `json:"html_url"`
+	}
+	if err := m.apiPaginate(ctx, fmt.Sprintf("repos/%s/pulls/%d/reviews", m.repo, pr), &reviews); err != nil {
+		return nil, err
+	}
+	for _, r := range reviews {
+		if strings.TrimSpace(r.Body) == "" {
+			continue // approve/request-changes with no written summary
+		}
+		out = append(out, GeneralComment{
+			ID: r.ID, Author: r.User.Login, Body: r.Body,
+			CreatedAt: r.SubmittedAt, HTMLURL: r.HTMLURL, Kind: "review_summary",
+		})
+	}
+	return out, nil
 }
 
 func (m *Module) headSHA(ctx context.Context, pr int) (string, error) {
@@ -286,6 +397,41 @@ func (m *Module) prNodeID(ctx context.Context, owner, name string, pr int) (stri
 		return "", fmt.Errorf("pr node id not found for %s/%s#%d", owner, name, pr)
 	}
 	return res.Data.Repository.PullRequest.ID, nil
+}
+
+// apiPaginate GETs a list endpoint page by page (per_page=100) and unmarshals
+// the concatenation of every page into out (a pointer to a slice). It stops on
+// the first empty page. Used for the review/issue/review-comment lists, which
+// can exceed one page on a busy PR.
+func (m *Module) apiPaginate(ctx context.Context, endpoint string, out any) error {
+	sep := "?"
+	if strings.Contains(endpoint, "?") {
+		sep = "&"
+	}
+	// out must be *[]T; accumulate into a fresh JSON array we re-decode at the end.
+	var combined []json.RawMessage
+	for page := 1; ; page++ {
+		raw, err := m.api(ctx, "GET", fmt.Sprintf("%s%sper_page=100&page=%d", endpoint, sep, page))
+		if err != nil {
+			return err
+		}
+		var chunk []json.RawMessage
+		if err := json.Unmarshal(raw, &chunk); err != nil {
+			return err
+		}
+		if len(chunk) == 0 {
+			break
+		}
+		combined = append(combined, chunk...)
+		if len(chunk) < 100 {
+			break // last (partial) page
+		}
+	}
+	merged, err := json.Marshal(combined)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(merged, out)
 }
 
 func (m *Module) api(ctx context.Context, method, endpoint string, args ...string) ([]byte, error) {

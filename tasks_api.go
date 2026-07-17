@@ -184,12 +184,24 @@ func (m *TaskManager) ResumePolling(ctx context.Context) {
 		if json.Unmarshal(in, &input) != nil {
 			continue
 		}
-		rootID, _ := m.rootID(r.ID)
+		// An imported thread's root ID lives in its input, not in a
+		// postGithubComment history event (it was never posted), so prefer that.
+		rootID := input.ImportedRootID
+		if rootID == 0 {
+			rootID, _ = m.rootID(r.ID)
+		}
 		if rootID != 0 {
 			prRunID, err := m.ensurePRStatus(input.PR)
 			if err != nil {
 				m.logf("task_code_comment: resume ensure pr_status pr=%d: %v", input.PR, err)
 				prRunID = ""
+			}
+			// Mark imported threads as polled so a concurrent importPRComments
+			// tick doesn't start a second poller for the same run.
+			if input.ImportedRootID != 0 {
+				m.mu.Lock()
+				m.importPolled[r.ID] = true
+				m.mu.Unlock()
 			}
 			go m.poll(ctx, r.ID, input.PR, rootID, prRunID)
 		}
@@ -222,6 +234,9 @@ func (m *TaskManager) ResumePRStatusPolling(ctx context.Context) {
 		m.prRuns[input.PR] = r.ID
 		m.mu.Unlock()
 		go m.pollIngestRefresh(ctx, r.ID, input.PR)
+		// Resume importing/polling this PR's GitHub comments too (mirrors the
+		// fresh-tracker spawn in ensurePRStatus).
+		go m.pollImportComments(ctx, r.ID, input.PR)
 	}
 }
 

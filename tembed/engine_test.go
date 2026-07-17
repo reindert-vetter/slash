@@ -17,6 +17,60 @@ type greetResult struct {
 	Message string `json:"message"`
 }
 
+func TestStartWorkflowIDIsIdempotent(t *testing.T) {
+	e := New(NewMemoryStore())
+
+	var runs int32
+	e.RegisterActivity("count", func(context.Context, []byte) ([]byte, error) {
+		atomic.AddInt32(&runs, 1)
+		return nil, nil
+	})
+	e.RegisterWorkflow("job", func(w *Workflow, _ []byte) ([]byte, error) {
+		return nil, w.ExecuteActivity("count", nil, nil)
+	})
+
+	id1, err := e.StartWorkflowID("gh-42", "job", greetInput{Name: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second start with the same ID is a no-op reuse: same ID back, the
+	// workflow body (and its activity) does not run again, and the original
+	// input is left untouched.
+	id2, err := e.StartWorkflowID("gh-42", "job", greetInput{Name: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id1 != "gh-42" || id2 != "gh-42" {
+		t.Fatalf("ids = %q,%q, want gh-42,gh-42", id1, id2)
+	}
+	if n := atomic.LoadInt32(&runs); n != 1 {
+		t.Fatalf("activity ran %d times, want 1 (second start must be a no-op)", n)
+	}
+	in, err := e.Input(id1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gi greetInput
+	_ = json.Unmarshal(in, &gi)
+	if gi.Name != "a" {
+		t.Fatalf("input = %q, want the first start's input %q", gi.Name, "a")
+	}
+	// Only one run exists.
+	rr, err := e.Runs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range rr {
+		if r.ID == "gh-42" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("found %d runs with id gh-42, want 1", n)
+	}
+}
+
 func TestActivityRunsOnceAndReplays(t *testing.T) {
 	store := NewMemoryStore()
 	e := New(store)
