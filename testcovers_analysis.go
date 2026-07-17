@@ -55,10 +55,20 @@ var (
 	reClassKeyword = regexp.MustCompile(`(?m)^\s*(?:abstract\s+|final\s+)?class\s+[A-Za-z_]`)
 )
 
+// classZoneFromLine is the absolute file line classZone's returned text
+// always starts at — line 1, since classZone slices from the top of the file.
+const classZoneFromLine = 1
+
 // coverTarget is one parsed coverage annotation: either a fully-named method
 // (Class + Method set) or a class-only reference (Class set, Method empty).
 type coverTarget struct {
 	class, method, annotation string
+	// line is the absolute source line, within the TEST's own file, where
+	// this annotation sits (see matchLine in relations.go) — carried onto
+	// testcovers.Entry.Line so the frontend can scope/reorder the
+	// "Onderliggende code" panel by the reviewer's selected group/line (see
+	// .claude/rules/detail-layout.md, "Group-herordening").
+	line int
 }
 
 // scanTestCovers scans every changed TEST-category block in the PR (a
@@ -101,12 +111,12 @@ func scanTestCovers(dataDir string, pr int, blocks []Block) []testcovers.Entry {
 			continue
 		}
 
-		zone, hasTestAttr := methodZone(fi.lines, fi.fileBlocks, b)
+		zone, zoneFrom, hasTestAttr := methodZone(fi.lines, fi.fileBlocks, b)
 		if !isTestMethod(b.Name, hasTestAttr) {
 			continue
 		}
 
-		out = append(out, coverEntriesForTest(idx, headDir, pr, b, zone, fi.classZone)...)
+		out = append(out, coverEntriesForTest(idx, headDir, pr, b, zone, zoneFrom, fi.classZone)...)
 	}
 	return out
 }
@@ -127,9 +137,11 @@ func classZone(src string) string {
 // methodZone returns the raw source text immediately above block b's
 // declaration line — its attributes + docblock — bounded by the previous
 // same-file block's end line (or a 40-line cap for the first method in a
-// class, when no clean boundary is nearby), and whether a #[Test] attribute
-// or "@test" docblock tag sits in that zone.
-func methodZone(lines []string, fileBlocks []Block, b Block) (zone string, hasTestAttr bool) {
+// class, when no clean boundary is nearby), the absolute file line that text
+// starts at (from — the anchor coverTargets converts a match offset into via
+// matchLine), and whether a #[Test] attribute or "@test" docblock tag sits in
+// that zone.
+func methodZone(lines []string, fileBlocks []Block, b Block) (zone string, from int, hasTestAttr bool) {
 	prevEnd := 0
 	for _, fb := range fileBlocks {
 		if fb.Line == b.Line && fb.Name == b.Name && fb.Class == b.Class {
@@ -139,7 +151,7 @@ func methodZone(lines []string, fileBlocks []Block, b Block) (zone string, hasTe
 			prevEnd = fb.EndLine
 		}
 	}
-	from := prevEnd + 1
+	from = prevEnd + 1
 	if b.Line-from > 40 {
 		from = b.Line - 40
 	}
@@ -148,11 +160,11 @@ func methodZone(lines []string, fileBlocks []Block, b Block) (zone string, hasTe
 	}
 	to := b.Line - 1
 	if to < from || to > len(lines) {
-		return "", false
+		return "", 0, false
 	}
 	zone = strings.Join(lines[from-1:to], "\n")
 	hasTestAttr = reTestAttr.MatchString(zone) || reTestDocblock.MatchString(zone)
-	return zone, hasTestAttr
+	return zone, from, hasTestAttr
 }
 
 // isTestMethod reports whether a scanned block looks like a PHPUnit test
@@ -169,12 +181,14 @@ func isTestMethod(name string, hasTestAttr bool) bool {
 // "@coversDefaultClass"), then any class-wide annotation — checked in the
 // method's own zone first, falling back to the file's class zone only when
 // the method named nothing at all (a per-method annotation always wins over
-// the file-wide default).
-func coverTargets(zone, classZoneText string) []coverTarget {
+// the file-wide default). zoneFrom/classZoneFrom are the absolute file lines
+// zone/classZoneText each start at (see methodZone/classZoneFromLine), used
+// to anchor each target's line via matchLine.
+func coverTargets(zone, classZoneText string, zoneFrom, classZoneFrom int) []coverTarget {
 	var targets []coverTarget
 
 	for _, m := range reCoversMethodAttr.FindAllStringSubmatch(zone, -1) {
-		targets = append(targets, coverTarget{class: m[1], method: m[2], annotation: "CoversMethod"})
+		targets = append(targets, coverTarget{class: m[1], method: m[2], annotation: "CoversMethod", line: matchLine(zone, m[0], zoneFrom)})
 	}
 
 	defaultClass := ""
@@ -182,20 +196,24 @@ func coverTargets(zone, classZoneText string) []coverTarget {
 		defaultClass = m[1]
 	}
 	for _, m := range reCoversDocblock.FindAllStringSubmatch(zone, -1) {
-		targets = append(targets, docblockTarget(m[1], defaultClass)...)
+		line := matchLine(zone, m[0], zoneFrom)
+		for _, t := range docblockTarget(m[1], defaultClass) {
+			t.line = line
+			targets = append(targets, t)
+		}
 	}
 
 	for _, m := range reCoversClassAttr.FindAllStringSubmatch(zone, -1) {
-		targets = append(targets, coverTarget{class: m[1], annotation: "CoversClass"})
+		targets = append(targets, coverTarget{class: m[1], annotation: "CoversClass", line: matchLine(zone, m[0], zoneFrom)})
 	}
 
 	if len(targets) == 0 {
 		for _, m := range reCoversClassAttr.FindAllStringSubmatch(classZoneText, -1) {
-			targets = append(targets, coverTarget{class: m[1], annotation: "CoversClass"})
+			targets = append(targets, coverTarget{class: m[1], annotation: "CoversClass", line: matchLine(classZoneText, m[0], classZoneFrom)})
 		}
 		for _, m := range reCoversDocblock.FindAllStringSubmatch(classZoneText, -1) {
 			if !strings.Contains(m[1], "::") && !strings.HasPrefix(m[1], "::") {
-				targets = append(targets, coverTarget{class: m[1], annotation: "@covers-class"})
+				targets = append(targets, coverTarget{class: m[1], annotation: "@covers-class", line: matchLine(classZoneText, m[0], classZoneFrom)})
 			}
 		}
 	}
@@ -227,8 +245,8 @@ func docblockTarget(raw, defaultClass string) []coverTarget {
 // a method-level annotation already resolved that same class precisely (no
 // point asking the LLM again). No target surviving at all → one "unannotated"
 // row.
-func coverEntriesForTest(idx *symbolIndex, headDir string, pr int, b Block, zone, classZoneText string) []testcovers.Entry {
-	targets := coverTargets(zone, classZoneText)
+func coverEntriesForTest(idx *symbolIndex, headDir string, pr int, b Block, zone string, zoneFrom int, classZoneText string) []testcovers.Entry {
+	targets := coverTargets(zone, classZoneText, zoneFrom, classZoneFromLine)
 
 	resolvedClasses := map[string]bool{}
 	seen := map[string]bool{}
@@ -249,7 +267,7 @@ func coverEntriesForTest(idx *symbolIndex, headDir string, pr int, b Block, zone
 		resolvedClasses[shortName(t.class)] = true
 		code := blockSource(headDir, *def)
 		rows = append(rows, testcovers.Entry{
-			PR: pr, TestID: b.ID(), TargetKey: key, Status: testcovers.StatusResolved, Annotation: t.annotation,
+			PR: pr, TestID: b.ID(), TargetKey: key, Status: testcovers.StatusResolved, Annotation: t.annotation, Line: t.line,
 			CoveredFile: def.File, CoveredClass: def.Class, CoveredMethod: def.Name, CoveredLine: def.Line, CoveredCode: code.Text,
 		})
 	}
@@ -268,7 +286,7 @@ func coverEntriesForTest(idx *symbolIndex, headDir string, pr int, b Block, zone
 		seen[key] = true
 		rows = append(rows, testcovers.Entry{
 			PR: pr, TestID: b.ID(), TargetKey: key, Status: testcovers.StatusUnresolved,
-			Annotation: t.annotation, CoveredClass: short,
+			Annotation: t.annotation, CoveredClass: short, Line: t.line,
 		})
 	}
 	if len(rows) == 0 {

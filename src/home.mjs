@@ -916,17 +916,20 @@ async function pollWorkflows() {
   }
 }
 
-// childrenOf returns parent block b's related children as { block, kind } pairs
-// (the blocks it is linked to, e.g. the Listener::handle for an event it
+// childrenOf returns parent block b's related children as { block, kind, line }
+// triples (the blocks it is linked to, e.g. the Listener::handle for an event it
 // dispatches, or the controller under a route). The kind is carried through so
-// the panel badge names the child's role (listener/controller/request/…).
+// the panel badge names the child's role (listener/controller/request/…). line
+// is the absolute source line, within b's own text, where the backend detector
+// found this relation's trigger (relations.Relation.Line, see relations.go's
+// matchLine) — used by relatedChildren's group-level reordering below.
 function childrenOf(b) {
   if (!b || !state.relations || state.relations.length === 0) return []
   return state.relations
     .filter((r) => r.parentId === b.id)
     .map((r) => {
       const block = state.allBlocks.find((x) => x.id === r.childId)
-      return block ? { block, kind: r.kind } : null
+      return block ? { block, kind: r.kind, line: r.line } : null
     })
     .filter(Boolean)
 }
@@ -998,6 +1001,27 @@ function callScopeMethods(b, rows) {
   return methods
 }
 
+// groupLineRange returns the absolute new-side source line range the
+// reviewer's currently selected *group* unit covers, or null when group-level
+// reordering doesn't apply (not diff mode, not gran 'group', a drilled
+// non-focused block, or the unit/code isn't available yet — mirrors
+// callScopeMethods' own guards). relatedChildren uses this to decide whether a
+// relation/testcovers row's recorded site line (see childrenOf/
+// resolvedTestCoverChildren) sits "inside" the reviewer's current selection —
+// unlike callScopeMethods (row-index based, for method-call children), a
+// relation/testcovers row only carries an absolute *source* line
+// (relations.Relation.Line / testcovers.Entry.Line), so this reuses
+// unitLineRange's row→line mapping instead.
+function groupLineRange(b, rows) {
+  if (state.mode !== 'diff' || state.gran !== 'group') return null
+  if (state.drill.length && b !== curBlock()) return null
+  const unit = unitsFor(rows, 'group')[state.change]
+  if (!unit) return null
+  const { startLine, endLine, side } = unitLineRange(b, rows, unit)
+  if (side !== 'RIGHT' || !startLine) return null
+  return { startLine, endLine }
+}
+
 // relatedChildren describes the selected block's children for the RelatedPanel:
 // the resolved method calls it makes (coupled to the call in the diff) plus the
 // event listeners it is linked to. It lazily loads any child block's code and
@@ -1005,11 +1029,25 @@ function callScopeMethods(b, rows) {
 // gran/change/relations/callResolve + each child's code — so the panel follows
 // the cursor and re-renders as child code arrives.
 //
-// Ordering (coarser than 'call'; see resolvedCallChildren for the per-item prio):
-// a called method whose definition is *also changed in this PR* comes first, then
-// calls sitting on a recently-changed diff line, then the rest. At 'call'
-// granularity the list is narrowed to just the active call's method, so the event
-// listeners (a block-level relation, not this call) are dropped there.
+// Scoping/ordering by the reviewer's current selection, from finest to
+// coarsest granularity:
+//  - 'call'/'line': HIDDEN outright — only children whose site sits under the
+//    active call/line remain (see callScopeMethods for method-call children;
+//    a relation/covers child has no site *within* that fine a unit at all, so
+//    it drops out entirely — "onderliggende code van die line/call", not the
+//    whole block's).
+//  - 'group': NOT hidden, only REORDERED — a child whose site (childrenOf's
+//    line / a `covers` row's testcovers.Entry.Line) falls inside the selected
+//    group's line range sorts first (groupTier 0); everything else (out of
+//    range, or with no site to compare at all — `covered_by`, which the test
+//    file itself carries the annotation for, and a `found` covers row that
+//    didn't carry a Line forward, see testcovers.Entry.Line) keeps its
+//    existing prio-based order below that (groupTier 1) — "onderaan, maar
+//    boven ongewijzigd" for `covered_by` falls out for free, since its prio 0
+//    already outranks an unchanged (prio 2) call within that tier.
+//  - 'group' in list mode, or no active unit: groupTier is a uniform 0 for
+//    everyone (groupLineRange returns null), so ordering is unaffected — the
+//    existing prio/size sort, exactly as before this feature.
 // codeSize counts the non-blank lines of a child's source — a rough "how much
 // code changed here" measure used to order same-priority children in the
 // Onderliggende-code panel (substantial methods above one-line accessors).
@@ -1019,59 +1057,85 @@ function codeSize(code) {
 }
 
 function relatedChildren(b) {
-  // Call-level scoping (dropping the block-level event listeners) only applies
-  // to the top-level selected block's own cursor — a drilled-into child has no
-  // independent gran/change cursor (see callScopeMethods).
+  // Both the hide (line/call) and the reorder (group) scoping only apply to
+  // the top-level selected block's own cursor — a drilled-into child has no
+  // independent gran/change cursor (see callScopeMethods/groupLineRange).
   const isTopCursor = b === curBlock() && !state.drill.length
-  const scoped = isTopCursor && state.mode === 'diff' && state.gran === 'call'
+  const scoped = isTopCursor && state.mode === 'diff' && (state.gran === 'call' || state.gran === 'line')
+  const rows = blockRows(b)
+  const range = isTopCursor ? groupLineRange(b, rows) : null
+  const inRange = (line) => range != null && line != null && line >= range.startLine && line <= range.endLine
   const evt = scoped
     ? []
-    : childrenOf(b).map(({ block: kid, kind }) => {
+    : childrenOf(b).map(({ block: kid, kind, line: siteLine }) => {
         ensureCode(kid)
         const c = kid.code && !kid.code.error ? kid.code : null
         const code = (c && ((c.new && c.new.text) || (c.old && c.old.text))) || ''
         // A relation child is by definition a changed child block, so it sorts to
-        // the top. `kind` names the edge (event_listener / route_controller / …).
-        return { id: kid.id, label: kid.label, file: kid.file, line: kid.line, kind, code, size: codeSize(code), prio: 0, approve: blockApproveCount(kid) }
+        // the top (within its groupTier). `kind` names the edge
+        // (event_listener / route_controller / …).
+        return {
+          id: kid.id,
+          label: kid.label,
+          file: kid.file,
+          line: kid.line,
+          kind,
+          code,
+          size: codeSize(code),
+          prio: 0,
+          approve: blockApproveCount(kid),
+          groupTier: range ? (inRange(siteLine) ? 0 : 1) : 0,
+        }
       })
   // Resolved/found method calls (Go statically or LLM). Their code + descriptor
   // ride along in the callresolve row (unchanged file → no /api/code fetch).
   const calls = resolvedCallChildren(b)
   // Test-coverage children — block-level like event listeners, not tied to a
-  // diff line/call, so they're dropped at the same 'call' scoping as the
+  // diff line/call, so they're dropped at the same line/call scoping as the
   // listeners: b → the method(s) it covers (if b is a test), and the test(s)
   // that cover b (if b is a production method).
-  const covers = scoped ? [] : resolvedTestCoverChildren(b)
-  const coveredBy = scoped ? [] : coveredByChildren(b)
-  // Sort by priority (0 = also-changed child block, 1 = call on a changed line,
-  // 2 = unchanged call), then — within a priority — biggest child first, so the
-  // substantial modified code the reviewer cares about leads while trivial
-  // one-liners (e.g. Eloquent relation accessors, which are also `added` PR
-  // blocks and thus tie at prio 0) drop below it. `size` is the child's line
-  // count (embedded childCode for calls, loaded code for listeners); a child
-  // whose code hasn't arrived yet is size 0 and sinks until it loads. Ties keep
-  // the resolver-emit (source) order (Array.prototype.sort is stable).
+  const covers = scoped ? [] : resolvedTestCoverChildren(b, range)
+  const coveredBy = scoped ? [] : coveredByChildren(b, range)
+  // Sort by groupTier first (see the scoping doc above — a no-op 0 for
+  // everyone outside 'group' diff-mode), then priority (0 = also-changed
+  // child block, 1 = call on a changed line, 2 = unchanged call), then —
+  // within a priority — biggest child first, so the substantial modified code
+  // the reviewer cares about leads while trivial one-liners (e.g. Eloquent
+  // relation accessors, which are also `added` PR blocks and thus tie at prio
+  // 0) drop below it. `size` is the child's line count (embedded childCode
+  // for calls, loaded code for listeners); a child whose code hasn't arrived
+  // yet is size 0 and sinks until it loads. Ties keep the resolver-emit
+  // (source) order (Array.prototype.sort is stable).
   return evt
     .concat(covers)
     .concat(coveredBy)
     .concat(calls)
-    .sort((x, y) => x.prio - y.prio || y.size - x.size)
+    .sort((x, y) => (x.groupTier || 0) - (y.groupTier || 0) || x.prio - y.prio || y.size - x.size)
 }
 
 // resolvedCallChildren maps the caller block's resolved/found call rows to child
-// descriptors for the Onderliggende-code panel — scoped to the current call (at
-// gran 'call') and tagged with an ordering priority. `source` names the LLM model
-// when it was resolved by one (status found); Go-resolved rows leave it empty.
+// descriptors for the Onderliggende-code panel — tagged with an ordering
+// priority, and scoped to the reviewer's current selection: HIDDEN outright at
+// 'line'/'call' (only the calls under the active line/call segment remain —
+// see callScopeMethods), REORDERED (not hidden) at 'group' — an in-scope call
+// sorts first (groupTier 0 via relatedChildren's sort), the rest keep their
+// existing prio-based order below it (groupTier 1). `source` names the LLM
+// model when it was resolved by one (status found); Go-resolved rows leave it
+// empty.
 function resolvedCallChildren(b) {
   if (!b) return []
   const resolved = callRows(b).filter((r) => r.status === 'resolved' || r.status === 'found')
   if (resolved.length === 0) return []
   const rows = blockRows(b)
   const scope = callScopeMethods(b, rows)
+  // callScopeMethods scopes at every diff granularity (group/line/call) — only
+  // hide outright at line/call; at group, keep everything and let groupTier
+  // (below) reorder instead.
+  const hideOutOfScope = state.mode === 'diff' && state.gran !== 'group'
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
   const changed = new Set(changedRows(rows))
   return resolved
-    .filter((r) => scope == null || scope.has(r.callKey))
+    .filter((r) => scope == null || !hideOutOfScope || scope.has(r.callKey))
     .map((r) => {
       const childId = callChildId(r)
       const prBlock = byId.get(childId)
@@ -1107,6 +1171,11 @@ function resolvedCallChildren(b) {
         // 1 = the call sits on a changed line, 2 = an unchanged call. Drives the
         // panel ordering (see relatedChildren).
         prio: prBlock ? 0 : onChangedLine ? 1 : 2,
+        // 0 = this call's site sits inside the reviewer's selected group (see
+        // relatedChildren's sort); a no-op 0 outside group-diff-mode (scope is
+        // null in list mode, or the filter above already dropped anything out
+        // of scope at line/call).
+        groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
       }
     })
 }
@@ -1147,7 +1216,14 @@ function coveredChildId(r) {
 // rows to child descriptors — direction 1 (test → geteste methode): b must be
 // the covering test. Its code + descriptor ride along in the testcovers row
 // (unchanged file → no /api/code fetch), mirroring resolvedCallChildren.
-function resolvedTestCoverChildren(b) {
+// range (relatedChildren's groupLineRange result, or null outside group-diff
+// mode) scores each row's groupTier: r.line is the absolute line — within b's
+// own test file — the annotation sits on (testcovers.Entry.Line, only ever
+// set on a Go-resolved row, see modules/testcovers/testcovers.go); an
+// LLM-`found` row that escalated from a class-level-only annotation never
+// carries a Line, so it falls through to groupTier 1 like anything else with
+// no site to compare.
+function resolvedTestCoverChildren(b, range) {
   if (!b) return []
   const resolved = testCoverRows(b).filter((r) => r.status === 'resolved' || r.status === 'found')
   if (resolved.length === 0) return []
@@ -1171,6 +1247,7 @@ function resolvedTestCoverChildren(b) {
       // call is (the annotation covers the whole test), so there's no
       // "on a changed line" middle tier — just changed-in-this-PR (0) or not (2).
       prio: prBlock ? 0 : 2,
+      groupTier: range && r.line ? (r.line >= range.startLine && r.line <= range.endLine ? 0 : 1) : 0,
     }
   })
 }
@@ -1180,7 +1257,13 @@ function resolvedTestCoverChildren(b) {
 // changed PR block (the covered method), and the covering test must also be a
 // PR block (guaranteed: a test_covers row only exists for a test the PR
 // changed). Always prio 0 — the test is by definition a changed block.
-function coveredByChildren(b) {
+// The annotation lives in the *test's* own file, never in b's, so there is no
+// site within b to compare against range at all — a covered_by child always
+// sorts into the "not in scope" groupTier 1 at 'group' granularity, same as
+// any other child with nothing to anchor on. Its prio 0 still keeps it above
+// an unchanged (prio 2) call within that shared tier ("onderaan, maar boven
+// ongewijzigd" — see relatedChildren's scoping doc).
+function coveredByChildren(b, range) {
   if (!b || !state.testCovers) return []
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
   const seen = new Set()
@@ -1207,6 +1290,10 @@ function coveredByChildren(b) {
       approve: blockApproveCount(test),
       diff: diffStat(blockRows(test)),
       prio: 0,
+      // No site within b to compare against range — always "not in scope" at
+      // 'group' granularity (a no-op 0 outside it, when range is null). See
+      // this function's doc comment.
+      groupTier: range ? 1 : 0,
     })
   }
   return out

@@ -86,8 +86,8 @@ func eventListenerDetector(headDir string, pr int, blocks []Block) []relations.R
 		if b.Side == SideOld {
 			continue
 		}
-		for _, ev := range dispatchedEvents(headDir, b) {
-			for _, listener := range listenerByEvent[ev] {
+		for _, site := range dispatchedEvents(headDir, b) {
+			for _, listener := range listenerByEvent[site.event] {
 				if listener.ID() == b.ID() {
 					continue // no self-edge (a listener that re-dispatches its own event)
 				}
@@ -97,7 +97,7 @@ func eventListenerDetector(headDir string, pr int, blocks []Block) []relations.R
 				}
 				seen[key] = true
 				out = append(out, relations.Relation{
-					PR: pr, ParentID: b.ID(), ChildID: listener.ID(), Kind: relations.KindEventListener,
+					PR: pr, ParentID: b.ID(), ChildID: listener.ID(), Kind: relations.KindEventListener, Line: site.line,
 				})
 			}
 		}
@@ -142,14 +142,24 @@ func handleEventType(headDir string, b Block) string {
 	return shortName(m[1])
 }
 
-// dispatchedEvents returns the short class names of the events dispatched inside
-// block b's (new-side) body.
-func dispatchedEvents(headDir string, b Block) []string {
+// dispatchSite is one dispatched event found in a block's body, plus the
+// absolute file line of the dispatch call — the anchor a resulting
+// event_listener relation carries (relations.Relation.Line) so the frontend
+// can scope/reorder the "Onderliggende code" panel by the reviewer's
+// currently selected group/line (see detail-layout.md).
+type dispatchSite struct {
+	event string
+	line  int
+}
+
+// dispatchedEvents returns the short class names (+ site line) of the events
+// dispatched inside block b's (new-side) body.
+func dispatchedEvents(headDir string, b Block) []dispatchSite {
 	src := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name)
 	if src.Text == "" {
 		return nil
 	}
-	var out []string
+	var out []dispatchSite
 	seen := map[string]bool{}
 	for _, re := range reDispatchRegexes {
 		for _, m := range re.FindAllStringSubmatch(src.Text, -1) {
@@ -158,7 +168,7 @@ func dispatchedEvents(headDir string, b Block) []string {
 				continue
 			}
 			seen[ev] = true
-			out = append(out, ev)
+			out = append(out, dispatchSite{event: ev, line: matchLine(src.Text, m[0], src.Start)})
 		}
 	}
 	return out
@@ -305,15 +315,36 @@ func (ix blockIndex) classMethods(class, category string) []Block {
 }
 
 // blockText reads block b's source from the head worktree (whole file for the
-// whole-file ROUTE fallback block; the method body otherwise).
-func blockText(headDir string, b Block) string {
-	return extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name).Text
+// whole-file ROUTE fallback block; the method body otherwise), plus the
+// absolute line the returned text starts at (codeSide.Start — the real
+// declaration line from a fresh scan, not b's own possibly-stale Line field).
+// A detector converts a regex match's byte offset within Text to an absolute
+// file line via matchLine(text, match, result.Start).
+func blockText(headDir string, b Block) codeSide {
+	return extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name)
+}
+
+// matchLine converts a byte offset within text — as blockText/
+// extractBlockSource return it, starting at fromLine — to an absolute file
+// line, by counting the newlines up to the first occurrence of match. This
+// anchors a detector's regex match to a concrete line so the frontend can
+// scope/reorder the "Onderliggende code" panel by the reviewer's selected
+// group/line (see .claude/rules/detail-layout.md, "Group-herordening").
+// Anchoring on the first occurrence of the literal matched text is
+// approximate for a byte-identical repeated match — harmless here, since Line
+// is a soft ordering/scoping hint, not an identity key.
+func matchLine(text, match string, fromLine int) int {
+	i := strings.Index(text, match)
+	if i < 0 {
+		return fromLine
+	}
+	return fromLine + strings.Count(text[:i], "\n")
 }
 
 // edgeEmitter dedupes parent→child edges (by ID) for one relation kind.
-func edgeEmitter(out *[]relations.Relation, pr int, kind string) func(parent, child Block) {
+func edgeEmitter(out *[]relations.Relation, pr int, kind string) func(parent, child Block, line int) {
 	seen := map[string]bool{}
-	return func(parent, child Block) {
+	return func(parent, child Block, line int) {
 		if parent.ID() == child.ID() {
 			return
 		}
@@ -322,7 +353,7 @@ func edgeEmitter(out *[]relations.Relation, pr int, kind string) func(parent, ch
 			return
 		}
 		seen[key] = true
-		*out = append(*out, relations.Relation{PR: pr, ParentID: parent.ID(), ChildID: child.ID(), Kind: kind})
+		*out = append(*out, relations.Relation{PR: pr, ParentID: parent.ID(), ChildID: child.ID(), Kind: kind, Line: line})
 	}
 }
 
@@ -362,18 +393,19 @@ func routeControllerDetector(headDir string, pr int, blocks []Block) []relations
 		if route.Side == SideOld || route.Category != "ROUTE" {
 			continue
 		}
-		text := blockText(headDir, route)
+		src := blockText(headDir, route)
+		text := src.Text
 		if text == "" {
 			continue
 		}
 		for _, m := range reArrayCallable.FindAllStringSubmatch(text, -1) {
 			if b, ok := ix.method(shortName(m[1]), m[2]); ok && b.Category == "CONTROLLER" {
-				emit(route, b)
+				emit(route, b, matchLine(text, m[0], src.Start))
 			}
 		}
 		for _, m := range reStringCallable.FindAllStringSubmatch(text, -1) {
 			if b, ok := ix.method(shortName(m[1]), m[2]); ok && b.Category == "CONTROLLER" {
-				emit(route, b)
+				emit(route, b, matchLine(text, m[0], src.Start))
 			}
 		}
 		// Resource routes name a controller with implicit REST methods → link to
@@ -383,8 +415,9 @@ func routeControllerDetector(headDir string, pr int, blocks []Block) []relations
 			if ctrl == "" {
 				ctrl = m[2]
 			}
+			line := matchLine(text, m[0], src.Start)
 			for _, b := range ix.classMethods(shortName(ctrl), "CONTROLLER") {
-				emit(route, b)
+				emit(route, b, line)
 			}
 		}
 	}
@@ -401,13 +434,15 @@ func controllerRequestDetector(headDir string, pr int, blocks []Block) []relatio
 		if ctrl.Side == SideOld || ctrl.Category != "CONTROLLER" {
 			continue
 		}
-		text := blockText(headDir, ctrl)
+		src := blockText(headDir, ctrl)
+		text := src.Text
 		if text == "" {
 			continue
 		}
 		for _, m := range reRequestParam.FindAllStringSubmatch(text, -1) {
+			line := matchLine(text, m[0], src.Start)
 			for _, b := range ix.classMethods(shortName(m[1]), "REQUEST") {
-				emit(ctrl, b)
+				emit(ctrl, b, line)
 			}
 		}
 	}
@@ -425,24 +460,26 @@ func controllerResourceDetector(headDir string, pr int, blocks []Block) []relati
 		if ctrl.Side == SideOld || ctrl.Category != "CONTROLLER" {
 			continue
 		}
-		text := blockText(headDir, ctrl)
+		src := blockText(headDir, ctrl)
+		text := src.Text
 		if text == "" {
 			continue
 		}
-		link := func(name string) {
+		link := func(name string, line int) {
 			for _, b := range ix.classMethods(shortName(name), "RESOURCE") {
-				emit(ctrl, b)
+				emit(ctrl, b, line)
 			}
 		}
 		for _, m := range reResourceUse.FindAllStringSubmatch(text, -1) {
+			line := matchLine(text, m[0], src.Start)
 			if m[1] != "" {
-				link(m[1])
+				link(m[1], line)
 			} else {
-				link(m[2])
+				link(m[2], line)
 			}
 		}
 		for _, m := range reResourceReturn.FindAllStringSubmatch(text, -1) {
-			link(m[1])
+			link(m[1], matchLine(text, m[0], src.Start))
 		}
 	}
 	return out
@@ -459,7 +496,8 @@ func controllerModelDetector(headDir string, pr int, blocks []Block) []relations
 		if ctrl.Side == SideOld || ctrl.Category != "CONTROLLER" {
 			continue
 		}
-		text := blockText(headDir, ctrl)
+		src := blockText(headDir, ctrl)
+		text := src.Text
 		if text == "" {
 			continue
 		}
@@ -470,8 +508,9 @@ func controllerModelDetector(headDir string, pr int, blocks []Block) []relations
 				continue
 			}
 			seen[short] = true
+			line := matchLine(text, m[0], src.Start)
 			for _, b := range ix.classMethods(short, "MODEL") {
-				emit(ctrl, b)
+				emit(ctrl, b, line)
 			}
 		}
 	}
@@ -492,7 +531,8 @@ func requestPolicyDetector(headDir string, pr int, blocks []Block) []relations.R
 		if req.Side == SideOld || req.Category != "REQUEST" {
 			continue
 		}
-		text := blockText(headDir, req)
+		src := blockText(headDir, req)
+		text := src.Text
 		if text == "" {
 			continue
 		}
@@ -510,7 +550,7 @@ func requestPolicyDetector(headDir string, pr int, blocks []Block) []relations.R
 				}
 			}
 			if b, ok := ix.method(shortName(policy), ability); ok && isPolicyBlock(b) {
-				emit(req, b)
+				emit(req, b, matchLine(text, m[0], src.Start))
 			}
 		}
 	}

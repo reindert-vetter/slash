@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS relations (
 CREATE INDEX IF NOT EXISTS idx_relations_pr ON relations(pr);
 `
 
+// migrate adds columns introduced after the first schema so an existing
+// relations.db picks them up. CREATE TABLE IF NOT EXISTS never alters an
+// existing table, so the line column needs an explicit ADD; a
+// duplicate-column error just means the DB is already up to date.
+func migrate(db *sql.DB) {
+	_, _ = db.Exec(`ALTER TABLE relations ADD COLUMN line INTEGER NOT NULL DEFAULT 0`)
+}
+
 // Kind values (extend as more relation types are added).
 const (
 	KindEventListener = "event_listener"
@@ -56,6 +64,13 @@ type Relation struct {
 	ParentID string `json:"parentId"`
 	ChildID  string `json:"childId"`
 	Kind     string `json:"kind"`
+	// Line is the absolute source line, within the parent block's own text,
+	// where the detector found this relation's trigger (a dispatch call, a
+	// route action, a type-hinted param, …) — see relations.go's matchLine.
+	// Used by the frontend to scope/reorder the "Onderliggende code" panel by
+	// the reviewer's currently selected group/line (detail-layout.md). 0 for
+	// any relation predating this field (a stale row before a rebuild).
+	Line int `json:"line"`
 }
 
 // Module owns the relations store.
@@ -71,6 +86,7 @@ func Open(path string) (*Module, error) {
 		db.Close()
 		return nil, fmt.Errorf("relations: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
 }
 
@@ -79,6 +95,7 @@ func New(db *sql.DB) (*Module, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("relations: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
 }
 
@@ -99,13 +116,13 @@ func (m *Module) Replace(ctx context.Context, pr int, rels []Relation) error {
 		return err
 	}
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT OR IGNORE INTO relations (pr, parent_id, child_id, kind) VALUES (?,?,?,?)`)
+		`INSERT OR IGNORE INTO relations (pr, parent_id, child_id, kind, line) VALUES (?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, r := range rels {
-		if _, err := stmt.ExecContext(ctx, pr, r.ParentID, r.ChildID, r.Kind); err != nil {
+		if _, err := stmt.ExecContext(ctx, pr, r.ParentID, r.ChildID, r.Kind, r.Line); err != nil {
 			return err
 		}
 	}
@@ -116,7 +133,7 @@ func (m *Module) Replace(ctx context.Context, pr int, rels []Relation) error {
 // for the UI/API.
 func (m *Module) List(ctx context.Context, pr int) ([]Relation, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT pr, parent_id, child_id, kind FROM relations WHERE pr = ? ORDER BY parent_id, child_id, kind`, pr)
+		`SELECT pr, parent_id, child_id, kind, line FROM relations WHERE pr = ? ORDER BY parent_id, child_id, kind`, pr)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +141,7 @@ func (m *Module) List(ctx context.Context, pr int) ([]Relation, error) {
 	var out []Relation
 	for rows.Next() {
 		var r Relation
-		if err := rows.Scan(&r.PR, &r.ParentID, &r.ChildID, &r.Kind); err != nil {
+		if err := rows.Scan(&r.PR, &r.ParentID, &r.ChildID, &r.Kind, &r.Line); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

@@ -4,5 +4,19 @@
     "parentId": "90:app/Actions/PlaceOrderAction.php:PlaceOrderAction::execute",
     "childId": "90:app/Listeners/SendOrderMail.php:SendOrderMail::handle",
     "kind": "event_listener"
+  },
+  {
+    "pr": 12903,
+    "parentId": "12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute",
+    "childId": "12903:zzz_test_support/GroupScopeChildA.php:GroupScopeChildA::run",
+    "kind": "event_listener",
+    "line": 67
+  },
+  {
+    "pr": 12903,
+    "parentId": "12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute",
+    "childId": "12903:zzz_test_support/GroupScopeChildB.php:GroupScopeChildB::run",
+    "kind": "event_listener",
+    "line": 30
   }
 ]

@@ -349,9 +349,19 @@ betekenis-gedreven i.p.v. tekstueel. De eerste relatie-`kind`:
 deze PR gewijzigd is** (beide kanten moeten wijzigen om te koppelen).
 
 - **`modules/relations`** (`data/relations.db`): het read-model,
-  `relations(pr, parent_id, child_id, kind)` (block-id = `<pr>:<file>:<symbol>`).
-  Write `Replace(pr, rels)` (workflow-only, full-swap per PR → replay-safe), read
-  `List(pr)`. `kind` houdt de tabel open voor latere relatietypes.
+  `relations(pr, parent_id, child_id, kind, line)` (block-id =
+  `<pr>:<file>:<symbol>`). `line` is de **absolute broncoderegel, binnen de
+  parent's eigen tekst**, waar de detector de trigger van deze relatie vond
+  (een dispatch-call, een route-actie, een type-hinted param, …) — de
+  frontend gebruikt 'm om het Onderliggende-code-paneel te herordenen op de
+  door de reviewer geselecteerde `group`-unit (zie `groupLineRange`/
+  `relatedChildren` in `home.mjs`, en de "Onderliggende code"-sectie in
+  `.claude/rules/detail-layout.md`); `0` voor een rij van vóór dit veld (een
+  oude rij die pas bij de volgende rebuild een echte waarde krijgt). Write
+  `Replace(pr, rels)` (workflow-only, full-swap per PR → replay-safe), read
+  `List(pr)`. `kind` houdt de tabel open voor latere relatietypes. Een lichte
+  `migrate` voegt `line` toe aan een bestaande DB (`ALTER TABLE … ADD COLUMN`,
+  dubbele-kolom-fout genegeerd — hetzelfde patroon als de comments-module).
 - **Analyse-service `relations.go`** (package main, géén module — leest de
   head-worktree = side-effect): `buildRelations(dataDir, pr, blocks)` draait een
   lijst **detectors** (nu `eventListenerDetector` + de vijf Laravel-detectors
@@ -360,6 +370,16 @@ deze PR gewijzigd is** (beide kanten moeten wijzigen om te koppelen).
   `$listen`-array in een `*ServiceProvider.php`, en `Event::listen(...)`-calls;
   dispatch-sites worden per blok-body gescand (`event(new X`, `X::dispatch(`, …).
   Herbruikt `extractBlockSource` (code.go) om block-bodies te lezen.
+  `blockText(headDir, b)` geeft niet meer alleen tekst terug maar de volledige
+  `codeSide` (tekst + de absolute startregel `Start` van een **verse** scan —
+  niet b's eigen, mogelijk verouderde `Line`-veld): elke detector converteert
+  de byte-offset van zijn regex-match binnen die tekst naar een absolute
+  bestandsregel via **`matchLine(text, match, fromLine)`** (telt de `\n`'s tot
+  de eerste occurrence van de matched tekst) en geeft die mee aan `emit`/de
+  relation zelf. Puur additief — geen detector-gedrag gewijzigd, alleen een
+  extra regel-anker vastgelegd; `TestBuildRelationsLaravelChainCapturesLine`
+  (`relations_test.go`) verifieert 'm tegen een onafhankelijke scan van de
+  fixture-broncode.
 - **Laravel request-keten** — vijf extra **`kind`s**, allemaal **both-changed**
   (net als `event_listener`: een edge verschijnt alléén als beide blokken in deze
   PR wijzigen; ongewijzigde bestanden worden nooit als node geïnjecteerd, en het
@@ -604,10 +624,24 @@ call-resolve: een Go-detector eerst, een **beperkte** AI-fallback alleen voor
   **volledige child-descriptor + codetekst**, niet alleen een block-id-paar.
 - **`modules/testcovers`** (`data/testcovers.db`): het read-model
   `test_covers(pr, test_id, target_key, status, covered_*, annotation, model,
-  confidence, updated_at)`, PK `(pr, test_id, target_key)`. `target_key` mirrort
-  callresolve's `call_key`: `"method:Class::method"` voor een statisch
+  confidence, updated_at, line)`, PK `(pr, test_id, target_key)`. `target_key`
+  mirrort callresolve's `call_key`: `"method:Class::method"` voor een statisch
   opgeloste annotatie, `"class:Class"` voor een class-niveau-annotatie
-  (AI-territorium), `"none"` voor "geen annotatie". Zes statussen — de vijf van
+  (AI-territorium), `"none"` voor "geen annotatie". `line` (distinct van
+  `covered_line`, de declaratieregel van de **geteste** methode) is de
+  absolute broncoderegel **binnen het testbestand zelf** waar de
+  coverage-annotatie staat — vastgelegd door de Go-scan (`coverTarget.line` in
+  `testcovers_analysis.go`, via dezelfde `matchLine`-aanpak als de
+  relations-detectors) en gebruikt door de frontend om het
+  Onderliggende-code-paneel te herordenen op de geselecteerde `group`-unit
+  (zie `groupLineRange`/`resolvedTestCoverChildren` in `home.mjs`, en de
+  "Onderliggende code"-sectie in `.claude/rules/detail-layout.md`). Alleen
+  gezet op een `resolved`/`unresolved` rij (de annotatie leeft in de tekst die
+  de Go-scan doorzoekt); een `found`-rij die van een `unresolved`
+  class-only-annotatie escaleerde (zie hieronder) draagt 'm bewust **niet**
+  door — te veel extra plumbing (API/workflow/Activity-payload) voor dit
+  smalle AI-pad, dus zo'n rij degradeert naar dezelfde "niet in de group"-tier
+  als `covered_by` (zie `detail-layout.md`). Zes statussen — de vijf van
   `callresolve` plus één nieuwe terminale:
   - **`resolved`** — een **method-niveau** annotatie (`#[CoversMethod(Class::class,
     'method')]`, `@covers Class::method`, of `@coversDefaultClass` +

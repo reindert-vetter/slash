@@ -205,6 +205,49 @@ func TestScanTestCoversAnnotationForms(t *testing.T) {
 	}
 }
 
+// TestScanTestCoversCapturesLine verifies that a resolved (method-level) and
+// an unresolved (class-level-only) annotation each carry the absolute source
+// line, within the TEST's own file, where the annotation itself sits — see
+// coverTarget.line / methodZone's `from`. The frontend's group-scoping/
+// reordering of the "Onderliggende code" panel (detail-layout.md) depends on
+// this. Line numbers are the fixture's own (see writeTestCoversFixtureRepo):
+// #[CoversMethod(Order::class, 'billingAddress')] sits on line 12, and
+// #[CoversClass(Order::class)] on line 34.
+func TestScanTestCoversCapturesLine(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 12
+	writeTestCoversFixtureRepo(t, dataDir, pr)
+
+	blocks := testCoversBlocks(t, dataDir, pr, "tests/Feature/OrderCoverageTest.php")
+	entries := scanTestCovers(dataDir, pr, blocks)
+
+	testID := func(method string) string {
+		for _, b := range blocks {
+			if b.Name == method {
+				return b.ID()
+			}
+		}
+		t.Fatalf("no block named %s", method)
+		return ""
+	}
+
+	e, ok := findCoverEntry(entries, testID("testBillingAddressAttribute"), "method:Order::billingAddress")
+	if !ok {
+		t.Fatalf("CoversMethod entry not found")
+	}
+	if e.Line != 12 {
+		t.Errorf("CoversMethod Line = %d, want 12", e.Line)
+	}
+
+	e, ok = findCoverEntry(entries, testID("testCoversClassOnly"), "class:Order")
+	if !ok {
+		t.Fatalf("CoversClass entry not found")
+	}
+	if e.Line != 34 {
+		t.Errorf("CoversClass Line = %d, want 34", e.Line)
+	}
+}
+
 func TestScanTestCoversBareClassFallback(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 10

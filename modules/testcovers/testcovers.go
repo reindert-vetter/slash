@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS test_covers (
 CREATE INDEX IF NOT EXISTS idx_test_covers_pr ON test_covers(pr);
 `
 
+// migrate adds columns introduced after the first schema so an existing
+// testcovers.db picks them up. CREATE TABLE IF NOT EXISTS never alters an
+// existing table, so the line column needs an explicit ADD; a
+// duplicate-column error just means the DB is already up to date.
+func migrate(db *sql.DB) {
+	_, _ = db.Exec(`ALTER TABLE test_covers ADD COLUMN line INTEGER NOT NULL DEFAULT 0`)
+}
+
 // Status values.
 const (
 	StatusResolved    = "resolved"    // a method-level annotation, verified statically
@@ -85,6 +93,19 @@ type Entry struct {
 	Model         string `json:"model"`
 	Confidence    string `json:"confidence"`
 	UpdatedAt     string `json:"updatedAt"`
+	// Line is the absolute source line, within the TEST's own file, where the
+	// coverage annotation sits (see testcovers_analysis.go's coverTarget.line)
+	// — distinct from CoveredLine (the covered production method's own
+	// declaration line). Used by the frontend to scope/reorder the
+	// "Onderliggende code" panel by the reviewer's selected group/line
+	// (detail-layout.md). Set on the Go-produced `resolved`/`unresolved` rows
+	// (the annotation lives in the test's own text); an LLM-resolved `found`
+	// row (escalated from an `unresolved` class-only annotation) does not
+	// carry it forward and leaves it 0 — see resolve_test_covers.go. A found
+	// row therefore never sorts into the current-group tier; it degrades to
+	// the same "not in scope" bucket as `covered_by` (see src/home.mjs's
+	// relatedChildren).
+	Line int `json:"line"`
 }
 
 // Module owns the test-coverage store.
@@ -100,6 +121,7 @@ func Open(path string) (*Module, error) {
 		db.Close()
 		return nil, fmt.Errorf("testcovers: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
 }
 
@@ -108,6 +130,7 @@ func New(db *sql.DB) (*Module, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("testcovers: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
 }
 
@@ -129,8 +152,8 @@ func (m *Module) UpsertGo(ctx context.Context, entries []Entry) error {
 
 	stmt, err := tx.PrepareContext(ctx, `
 INSERT INTO test_covers
-  (pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  (pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at, line)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(pr, test_id, target_key) DO UPDATE SET
   status         = excluded.status,
   covered_file   = excluded.covered_file,
@@ -141,7 +164,8 @@ ON CONFLICT(pr, test_id, target_key) DO UPDATE SET
   annotation     = excluded.annotation,
   model          = excluded.model,
   confidence     = excluded.confidence,
-  updated_at     = excluded.updated_at
+  updated_at     = excluded.updated_at,
+  line           = excluded.line
 WHERE test_covers.status NOT IN ('searching','found','notfound')`)
 	if err != nil {
 		return err
@@ -152,7 +176,7 @@ WHERE test_covers.status NOT IN ('searching','found','notfound')`)
 		if _, err := stmt.ExecContext(ctx,
 			e.PR, e.TestID, e.TargetKey, e.Status,
 			e.CoveredFile, e.CoveredClass, e.CoveredMethod, e.CoveredLine, e.CoveredCode,
-			e.Annotation, e.Model, e.Confidence, now()); err != nil {
+			e.Annotation, e.Model, e.Confidence, now(), e.Line); err != nil {
 			return err
 		}
 	}
@@ -212,11 +236,11 @@ ON CONFLICT(pr, test_id, target_key) DO UPDATE SET status = excluded.status, upd
 func (m *Module) Save(ctx context.Context, e Entry) error {
 	_, err := m.db.ExecContext(ctx, `
 INSERT OR REPLACE INTO test_covers
-  (pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  (pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at, line)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.PR, e.TestID, e.TargetKey, e.Status,
 		e.CoveredFile, e.CoveredClass, e.CoveredMethod, e.CoveredLine, e.CoveredCode,
-		e.Annotation, e.Model, e.Confidence, now())
+		e.Annotation, e.Model, e.Confidence, now(), e.Line)
 	return err
 }
 
@@ -224,7 +248,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 // READ — safe for the UI/API.
 func (m *Module) List(ctx context.Context, pr int) ([]Entry, error) {
 	rows, err := m.db.QueryContext(ctx, `
-SELECT pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at
+SELECT pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at, line
 FROM test_covers WHERE pr = ? ORDER BY test_id, target_key`, pr)
 	if err != nil {
 		return nil, err
@@ -235,7 +259,7 @@ FROM test_covers WHERE pr = ? ORDER BY test_id, target_key`, pr)
 		var e Entry
 		if err := rows.Scan(&e.PR, &e.TestID, &e.TargetKey, &e.Status,
 			&e.CoveredFile, &e.CoveredClass, &e.CoveredMethod, &e.CoveredLine, &e.CoveredCode,
-			&e.Annotation, &e.Model, &e.Confidence, &e.UpdatedAt); err != nil {
+			&e.Annotation, &e.Model, &e.Confidence, &e.UpdatedAt, &e.Line); err != nil {
 			return nil, err
 		}
 		out = append(out, e)

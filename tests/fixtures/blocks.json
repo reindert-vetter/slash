@@ -97,5 +97,27 @@
     "endLine": 34,
     "status": "added",
     "side": "new"
+  },
+  {
+    "pr": 12903,
+    "file": "zzz_test_support/GroupScopeChildA.php",
+    "class": "GroupScopeChildA",
+    "name": "run",
+    "category": "ACTION",
+    "line": 1,
+    "endLine": 5,
+    "status": "added",
+    "side": "new"
+  },
+  {
+    "pr": 12903,
+    "file": "zzz_test_support/GroupScopeChildB.php",
+    "class": "GroupScopeChildB",
+    "name": "run",
+    "category": "ACTION",
+    "line": 1,
+    "endLine": 5,
+    "status": "added",
+    "side": "new"
   }
 ]

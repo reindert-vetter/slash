@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/reindert-vetter/tembed"
@@ -342,6 +343,55 @@ func TestBuildRelationsLaravelChain(t *testing.T) {
 	// The policy edge hangs off authorize, not rules.
 	if hasKindEdge(rels, rules, policy, relations.KindRequestPolicy) {
 		t.Errorf("policy edge should not hang off rules()")
+	}
+}
+
+// TestBuildRelationsLaravelChainCapturesLine verifies that every detector
+// anchors its relation to the real absolute line of its own regex match (see
+// matchLine/blockText in relations.go) — the frontend's group-scoping/
+// reordering of the "Onderliggende code" panel (detail-layout.md) depends on
+// this being the reviewer-visible source line, not e.g. always 0 or the
+// block's own (possibly stale) declaration line. Checked against a line found
+// independently by scanning the fixture's own raw source, so this fails if
+// the anchor drifts for any reason — a wrong detector Line, or a wrong
+// blockText/matchLine offset.
+func TestBuildRelationsLaravelChainCapturesLine(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 61
+	writeLaravelFixture(t, dataDir, pr)
+	blocks := laravelFixtureBlocks(pr)
+	rels := buildRelations(dataDir, pr, blocks)
+
+	ctrl := blockBy(blocks, "ProductGroupController", "show")
+	resource := blockBy(blocks, "ProductGroupResource", "toArray")
+
+	_, headDir := worktreeDirs(dataDir, pr)
+	raw, err := os.ReadFile(filepath.Join(headDir, "app/Http/Controllers/ProductGroupController.php"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLine := 0
+	for i, line := range strings.Split(string(raw), "\n") {
+		if strings.Contains(line, "ProductGroupResource::make") {
+			wantLine = i + 1
+			break
+		}
+	}
+	if wantLine == 0 {
+		t.Fatal("fixture line for ProductGroupResource::make not found")
+	}
+
+	got, found := -1, false
+	for _, r := range rels {
+		if r.ParentID == ctrl.ID() && r.ChildID == resource.ID() && r.Kind == relations.KindControllerResource {
+			got, found = r.Line, true
+		}
+	}
+	if !found {
+		t.Fatalf("controller_resource edge not found: %+v", rels)
+	}
+	if got != wantLine {
+		t.Errorf("controller_resource Line = %d, want %d (the ProductGroupResource::make line)", got, wantLine)
 	}
 }
 

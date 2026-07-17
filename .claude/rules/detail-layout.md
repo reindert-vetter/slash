@@ -513,7 +513,8 @@ rechts — zie de layout-alinea hierboven):
   `kind=covered_by` (een geteste productiemethode toont "gedekt door
   TestX::testY" — de test zelf, hergebruikt als bestaand PR-blok). Uit
   `GET /api/testcovers`; beide zijn **block-level** (zoals de listener-
-  children) en vallen dus ook weg op `gran==='call'`. Ontbreekt een bruikbare
+  children) en vallen dus ook weg op `gran==='line'`/`'call'` (zie de
+  scoping/herordening-alinea hieronder). Ontbreekt een bruikbare
   coverage-annotatie op een test, dan toont de kaart-header i.p.v. een child
   een **warning** (`data-testid=related-covers-warning`, custom inline SVG +
   uitleg — nooit een AI-gok). Zie `.claude/rules/tembed-workflows.md` (sectie
@@ -522,11 +523,36 @@ rechts — zie de layout-alinea hierboven):
   koppelt elke resolved call aan het diff-segment waar hij staat. Op het fijnste
   niveau (`gran==='call'`) toont de kaart **precies de method van die ene call** —
   land op `->billingAddress` en je ziet `Order::billingAddress`; een segment
-  zonder resolved call geeft een lege kaart. Op de grovere niveaus (line/group)
-  scope't hij op de **regels van de geselecteerde unit**: alleen de calls waarvan
-  de call-site binnen `[unit.start, unit.end]` valt — dus je ziet nooit een call
-  van een regel die je níét hebt geselecteerd. Alleen in **list-mode** (geen diff)
-  toont hij **alle** resolved calls van het block. De getoonde calls zijn
+  zonder resolved call geeft een lege kaart. Op `gran==='line'` scope't hij op de
+  **regels van de geselecteerde unit**: alleen de calls waarvan de call-site binnen
+  `[unit.start, unit.end]` valt. Op **`line`/`call` is dit een harde filter (verbergen)**
+  — je ziet nooit een call, listener-, `covers`-/`covered_by`-child van een regel
+  die je níét hebt geselecteerd (`relatedChildren`'s `scoped`-vlag in `home.mjs`,
+  precies wat "als ik een line/call selecteer wil ik alleen de onderliggende code
+  van die line/call" vraagt). Alleen in **list-mode** (geen diff) toont hij **alle**
+  resolved calls van het block.
+  **Op `gran==='group'` wordt niet verborgen maar geherordend:** een group omvat
+  vaak meerdere regels/aanroepen, dus een relatie-/`covers`-/`method_call`-child
+  die niet exact op de geselecteerde regel(s) zit, verdwijnt niet — hij zakt alleen
+  onder de kinderen die er wél op zitten. Elke relatie/annotatie draagt daarvoor
+  sinds kort een **absolute broncoderegel** (server-side vastgelegd door de
+  detector die 'm vond — `relations.Relation.Line` resp. `testcovers.Entry.Line`,
+  zie `.claude/rules/tembed-workflows.md`); `groupLineRange(b, rows)` in `home.mjs`
+  zet de geselecteerde group-unit om naar diezelfde absolute regelrange
+  (`unitLineRange`, ongewijzigd hergebruikt) en `relatedChildren` sorteert eerst op
+  die **`groupTier`** (0 = binnen de group, 1 = erbuiten) vóór de bestaande
+  `prio`/`size`-sort — dus binnen elke tier blijft de onderstaande ordening gewoon
+  gelden. Een `covered_by`-child (de test die een productiemethode dekt) heeft
+  **geen** aanknopingspunt binnen de bekeken block — de annotatie staat in het
+  testbestand, niet in de productiecode — en zit dus altijd in tier 1; zijn eigen
+  `prio 0` houdt 'm daarbinnen nog steeds boven een `prio 2` (ongewijzigde) call:
+  "onderaan, maar boven ongewijzigd". Een LLM-`found`-`covers`-rij die van een
+  class-only-annotatie escaleerde draagt om dezelfde reden ook geen `Line`
+  (`resolve_test_covers.go` threadt 'm bewust niet door) en degradeert zo naar
+  diezelfde tier 1. Buiten `gran==='group'` (list-mode, of op line/call waar de
+  filter toch al alleen in-scope items overlaat) is `groupTier` overal `0` — een
+  no-op, de sortering is dan exact zoals vóór deze herordening.
+  De getoonde calls zijn (binnen hun tier)
   **geordend**: eerst een call waarvan de definitie zélf in deze PR wijzigt (een
   echt child-blok, `prio 0`), dan calls op een recent gewijzigde regel (`prio 1`),
   dan de rest (`prio 2`). **Binnen dezelfde prio** wint de **grootste** child
@@ -538,7 +564,7 @@ rechts — zie de layout-alinea hierboven):
   zouden anders op bron-volgorde vóór een echt gewijzigde method kunnen landen. Een
   child wiens code nog niet binnen is telt als `size 0` en zakt tot hij laadt;
   gelijke prio+size houdt de bron-volgorde (stabiele sort). De listener-children
-  (block-niveau) vallen op call-niveau weg. In de kaart-header is de **titel (`class::method`) altijd
+  (block-niveau) vallen op `line`/`call`-niveau weg. In de kaart-header is de **titel (`class::method`) altijd
   zichtbaar** (krijgt de eerste regel, truncat pas bij extreme lengte); het
   **bestandspad** staat eronder op een eigen regel en truncat als het niet past.
   **Reactiviteit:** de lijst wordt **niet** in de render-binding van `RelatedPanel`
