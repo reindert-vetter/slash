@@ -270,6 +270,18 @@
   typography-plugin zonder build-stap. **Geen** GFM-tabellen of
   taak-checklists (`- [ ]`) — bewust buiten scope gehouden, snarkdown ondersteunt
   ze niet en er is geen extensie voor gebouwd.
+  **Ook comment-bodies renderen als Markdown** (`RelatedPanel.mjs`): `commentBody(c)`
+  is de **enige** plek die een comment-body rendert (`() => renderMarkdown(c.body)`,
+  `.innerHTML`-binding) — hergebruikt door `commentRow` (de comment-rij-preview),
+  `reactionBubble` (elke thread-bubble, zowel het block-scoped comment-paneel als
+  het PR-brede `prWideItem`) en dus automatisch ook een toekomstig vierde render-punt.
+  De input (composer-`<textarea>`/`<input>`) is een kaal tekstveld zonder
+  restrictie — "markdown-input ondersteunen" was dus al gratis, alleen de
+  weergave miste `renderMarkdown`. **Bewust buiten `commentBody` gehouden:** de
+  eenregelige, `truncate`/`line-clamp`-titel-contexten waar opgemaakte structuur
+  weinig toevoegt en een halfafgekapte `**`/code-fence lelijker oogt dan kale
+  tekst — de thread-header-titel (`selComment().body`) en `workflowNote`'s
+  Taken-snippet blijven daarom platte tekst.
 - **Thema: systeem/licht/donker, met een handmatige rondloop-knop
   (`src/theme.mjs`).** Het thema volgde ooit **uitsluitend** de
   systeeminstelling (`prefers-color-scheme`, Tailwind `darkMode:'media'`,

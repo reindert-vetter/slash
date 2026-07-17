@@ -12,7 +12,7 @@ test('placed comment shows code snippet + original body as first message', async
       file: 'test.php',
       line: 1,
       author: 'reviewer',
-      body: 'dit is de eerste comment',
+      body: 'dit is de **eerste** comment',
       code: '$order->total();',
       gran: 'call',
       label: 'Order::total',
@@ -35,4 +35,8 @@ test('placed comment shows code snippet + original body as first message', async
 
   // Feature 2: the original comment body appears as the first chat bubble.
   await expect(page.getByTestId('reaction-bubble').first()).toContainText('dit is de eerste comment')
+
+  // The body is rendered as Markdown (renderMarkdown, commentBody in
+  // RelatedPanel.mjs), not shown as plain text: **eerste** becomes <strong>.
+  await expect(page.getByTestId('reaction-bubble').first().locator('strong')).toHaveText('eerste')
 })

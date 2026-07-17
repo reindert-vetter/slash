@@ -8,6 +8,7 @@ import { html } from './vendor/arrow.js'
 import { reactive } from './vendor/arrow.js'
 import { highlight } from './Block.mjs'
 import { bindUrlState, num } from './urlState.mjs'
+import { renderMarkdown } from './markdown.mjs'
 
 // ── Real comments (task_code_comment workflow) ────────────────────────────────
 // This section IS wired to the API. Placing a comment starts a Workflow
@@ -1079,7 +1080,10 @@ function commentRow(c, i) {
       <span class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
       <span class="flex min-w-0 flex-col gap-0.5">
         <span class="flex items-center gap-1.5">
-          <span class="truncate text-xs font-medium text-slate-800 dark:text-zinc-200">${commentBody(c)}</span>
+          <span
+            class="truncate text-xs font-medium text-slate-800 dark:text-zinc-200"
+            .innerHTML="${commentBody(c)}"
+          ></span>
           ${() => sourceBadge(c)}
         </span>
         <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
@@ -1119,9 +1123,8 @@ function reactionBubble(r, i, total) {
           )
         }}"
         data-testid="reaction-bubble"
-      >
-        ${() => r.body}
-      </div>
+        .innerHTML="${commentBody(r)}"
+      ></div>
     </div>
   `
 }
@@ -1927,11 +1930,14 @@ export function handlePrWideKey(key) {
 const PW_KIND_LABEL = { issue: 'PR-comment', review: 'PR-comment', review_summary: 'Review' }
 
 // commentBody is the single place a comment's body text is rendered — kept
-// tiny and reusable (both here and in the block-scoped commentRow above) so a
-// later markdown pass only has to change one function. Plain reactive text
-// for now, deliberately no markdown rendering yet.
+// tiny and reusable (block-scoped commentRow/reactionBubble and the PR-wide
+// prWideItem) so this one function drives markdown rendering everywhere a
+// comment body shows up. Returns a getter of a *safe HTML string* (via the
+// same renderMarkdown used by prInfoCard for the PR summary/description, see
+// markdown.mjs) meant for an `.innerHTML` binding — never a plain-text slot,
+// see the arrow.js `.innerHTML` convention in conventions.md.
 function commentBody(c) {
-  return () => (c ? c.body : '')
+  return () => (c ? renderMarkdown(c.body) : '')
 }
 
 // prWideItem renders one PR-wide entry: a clickable summary row (status dot,
@@ -1975,7 +1981,10 @@ function prWideItem(c, i) {
             ${() => sourceBadge(c)}
             <span class="text-[10px] text-slate-400 dark:text-zinc-500">${relTime(c.createdAt)}</span>
           </span>
-          <span class="line-clamp-2 text-xs text-slate-700 dark:text-zinc-300">${commentBody(c)}</span>
+          <span
+            class="line-clamp-2 text-xs text-slate-700 dark:text-zinc-300"
+            .innerHTML="${commentBody(c)}"
+          ></span>
         </span>
       </button>
       ${() =>
