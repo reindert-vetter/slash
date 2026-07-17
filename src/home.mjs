@@ -3575,7 +3575,17 @@ Footer(state)(app)
 
 // Start with the search box already focused so the reviewer can type straight
 // away — a frame later, once BlockList has rendered the input into the DOM.
-requestAnimationFrame(activateSearch)
+// Only when landing in list mode: a diff deep-link (state.mode restored to
+// 'diff' from the URL, see bindUrlState above) must not hijack keyboard focus
+// into the search box. Without this guard, state.searchActive ended up true
+// while state.mode stayed 'diff', so onKeydown's searchActive branch (which
+// assumes list mode) caught a bare ArrowLeft before the diff-mode branch ever
+// ran, jumping straight to stop 1 (the description) instead of stop 2 (the
+// block index) — and left mode:'diff' + showDescription:true simultaneously
+// true, an invalid combination the layout never expects (see the
+// state.mode==='diff' ? 'left-6' : ... ternary above), which is what made the
+// description render behind the diff card instead of beside it.
+if (state.mode === 'list') requestAnimationFrame(activateSearch)
 
 // Kick off the initial load.
 loadBlocks()

@@ -182,6 +182,46 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await expect(page.getByTestId('reaction-compose')).toBeFocused()
   })
 
+  test('← from a diff deep-link goes to the block-index first, then the description on a second ←', async ({
+    page,
+  }) => {
+    // Regression test: loading straight into mode=diff (a deep link, as opposed
+    // to navigating there via →) used to auto-focus the search box on load
+    // regardless of the restored mode. That left state.searchActive true while
+    // state.mode stayed 'diff', so a bare ArrowLeft was caught by onKeydown's
+    // searchActive branch (which assumes list mode) before the diff-mode branch
+    // ever ran — jumping straight to stop 1 (the description) instead of first
+    // landing on stop 2 (the block-index), and leaving mode:'diff' +
+    // showDescription:true simultaneously true, which the layout never expects
+    // (see detail-layout.md) — the description card rendered behind the diff
+    // card instead of beside it.
+    await page.goto('/pr/12903?mode=diff&sel=app%2FActions%2FAddUpsell.php%3A33')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+
+    const info = page.getByTestId('pr-info-column')
+    await expect(info).toHaveCount(0)
+
+    // First ← must land on the block-index (stop 2), not the description.
+    await page.keyboard.press('ArrowLeft')
+    await expect(page).not.toHaveURL(/mode=diff/) // list is the default mode, omitted from the URL
+    await expect(info).toHaveCount(0)
+    await expect(page.getByTestId('pr-index')).toBeVisible()
+
+    // Second ← steps one stop further left, onto the description (stop 1) —
+    // and it must sit physically beside, not behind, the block-index/diff.
+    await page.keyboard.press('ArrowLeft')
+    await expect(info).toHaveCount(1)
+    await expect(info).toBeVisible()
+    const prIndex = page.getByTestId('pr-index')
+    await expect
+      .poll(async () => {
+        const infoBox = await info.boundingBox()
+        const prIndexBox = await prIndex.boundingBox()
+        return infoBox.x + infoBox.width <= prIndexBox.x
+      })
+      .toBe(true)
+  })
+
   test('stop 1 summary section is labelled "Doel" with a light-green background', async ({ page }) => {
     await page.goto('/pr/12903')
     await page.keyboard.press('ArrowLeft') // block-index → stop 1 (description)
