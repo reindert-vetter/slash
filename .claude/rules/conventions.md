@@ -72,6 +72,23 @@
   reactieve attribuut-binding die bij elke navigatiestap opnieuw zou zetten
   (de flicker-test in `navigate.spec.mjs` eist nul attribuut-mutaties per
   stap). Regressietest: `tests/step-preview-stability.spec.mjs`.
+  **Neveneffect, apart bevestigd:** dezelfde ontsporing corrumpeerde ook een
+  héél andere geneste `${() => componentAanroep(...)}`-embedding in dezelfde
+  block-kolomlijst — `Block.mjs`'s `${() => codeDiff(...)}` — met een
+  zichtbaar, stil symptoom: na een same-file ↓/↑-cyclus toonde de
+  geselecteerde kaart de **juiste titel** (`class::method`, een gewone
+  reactieve tekst-binding, dus zelf niet aangetast) maar de **code van het
+  vórige geselecteerde block** — geen crash, gewoon foutieve inhoud, tenzij je
+  toevallig ook de eerder beschreven `Cannot read properties of null (reading
+  'after')`-crash raakte. Bevestigd door de exacte fix-commit te bracketen met
+  een git-worktree-vergelijking (vóór/na) tegen dezelfde echte PR-data: vóór de
+  `stepChevronSlot`-fix reproduceerde de mismatch + crash betrouwbaar, erna
+  niet meer — dus **geen aparte fix nodig**, dezelfde stabiele-element-root
+  loste 'm mee op. Regressietest: `tests/diff-code-vs-title.spec.mjs` (dezelfde
+  ↓/↑-cyclus als `step-preview-stability.spec.mjs`, maar verifieert i.p.v. de
+  preview-kaart-aanwezigheid dat de gerenderde diff-tekst van de geselecteerde
+  kaart altijd bij dát block's eigen `/api/code`-bron hoort — nooit bij een
+  buurblock).
 - **arrow.js hergebruikt een keyed node zonder z'n function-bindings te
   herdraaien — en verliest soms een `.innerHTML`/attribuut-update bij
   co-subscribers.** Twee samenhangende valkuilen, beide waargenomen in de
