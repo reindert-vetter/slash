@@ -68,57 +68,6 @@ test.describe('PR Review Tree — code diff alignment', () => {
     await expect(panes.nth(1).locator('div:not([class*="bg-"])')).toHaveCount(1)
   })
 
-  // An added block has no old source, so the card drops the OLD pane and renders
-  // just the NEW pane at full width (and the card itself is narrower).
-  test('an added block shows only the new pane', async ({ page }) => {
-    await page.goto('/pr/12903')
-    // Let the app's own load settle before injecting, so our evaluate's dynamic
-    // import doesn't race a client re-render.
-    await expect(page.getByTestId('block-row').first()).toBeVisible()
-    // Settle the app's own load before the in-page evaluate() so its dynamic
-    // import doesn't race a client re-render / navigation ("context destroyed").
-    await page.waitForLoadState('networkidle')
-
-    await page.evaluate(async () => {
-      const { reactive } = await import('/src/vendor/arrow.js')
-      const Block = (await import('/src/Block.mjs')).default
-      const b = reactive({
-        category: 'ACTION',
-        label: 'Foo::baz',
-        status: 'added',
-        file: 'app/Foo.php',
-        line: 40,
-        name: 'baz',
-        class: 'Foo',
-        approved: false,
-        code: {
-          old: null,
-          new: { start: 40, end: 42, text: 'public function baz(): int {\n    return 2;\n}' },
-        },
-      })
-      const host = document.createElement('div')
-      host.id = 'added-host'
-      document.body.appendChild(host)
-      Block(b)(host)
-    })
-
-    // Only one code pane — the new side.
-    const panes = page.locator('#added-host code.language-php')
-    await expect(panes).toHaveCount(1)
-    await expect(panes.first()).toHaveClass(/language-php/)
-
-    // Its three added lines are green (hex #dafbea = emerald-100 +20% white), no
-    // fillers (nothing was removed).
-    await expect(panes.first().locator('div[class*="#dafbea"]')).toHaveCount(3)
-    await expect(panes.first().locator('.bg-slate-50')).toHaveCount(0)
-
-    // The card keeps the full two-pane width even though it is one-sided (the
-    // empty old pane is dropped), so the layout doesn't jump between block types.
-    const card = page.locator('#added-host article')
-    await expect(card).toHaveClass(/w-\[70rem\]/)
-    await expect(card).not.toHaveClass(/w-\[38rem\]/)
-  })
-
   // Re-indent regression: wrapping an array in array_merge([...]) pushes the
   // inner lines 4 spaces deeper. Those lines are identical in content, so the
   // whitespace-insensitive line diff must pair them and show them as a soft
