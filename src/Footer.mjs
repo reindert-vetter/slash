@@ -1,7 +1,8 @@
-// Footer — the fixed bottom bar under the sidebar and detail panel. It holds a
-// placeholder for a future description of the selected change, and — only when
-// the active change is a single line — the inline diff of that one line
-// (- removed / + added). The panels above reserve 90px for it.
+// Footer — the fixed bottom bar under the sidebar and detail panel. It is only
+// shown while a diff is open (any granularity — group, line or call); it holds
+// the inline diff of the active line (- removed / + added, when the active
+// unit is a single row) plus a placeholder for a future description. In list
+// mode (no diff open) it is hidden entirely. The panels above reserve 90px for it.
 
 import { html } from './vendor/arrow.js'
 import { blockRows, unitsFor, highlight, markChars, UNDERLINE_CLS } from './Block.mjs'
@@ -60,9 +61,19 @@ function wrapClass(state) {
 }
 
 export default function Footer(state) {
+  // Only reveal the footer while a diff is open — any granularity (group,
+  // line or call) — since there is nothing to preview in list mode. The
+  // inline diff *content* below (activeUnit) is unrelated and still only
+  // appears once the active unit narrows to a single row; a multi-row group
+  // just shows the bar with the placeholder description, no diff. The whole
+  // class string is one reactive function binding (arrow.js requires the
+  // full attribute value in a single binding, see .claude/rules/conventions.md);
+  // the `hidden` toggle just adds/removes `display:none` on the stable <footer>
+  // root, so no keyed-node pitfall applies.
   return html`
     <footer
-      class="fixed bottom-0 left-0 right-0 z-20 flex h-[90px] justify-center border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-2.5"
+      class="${() =>
+        `fixed bottom-0 left-0 right-0 z-20 ${state.mode === 'diff' ? 'flex' : 'hidden'} h-[90px] justify-center border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-2.5`}"
       data-testid="footer"
     >
       <div class="absolute right-4 top-1/2 -translate-y-1/2">${themeToggleButton('h-8 w-8')}</div>

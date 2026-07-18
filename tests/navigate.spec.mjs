@@ -632,4 +632,30 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(footerDiff.locator('div.block')).not.toHaveCount(0)
     await expect(footer.locator('span[class*="decoration-[#6366f1]"]')).toHaveCount(0)
   })
+
+  // The footer bar itself is only visible while a diff is open (any
+  // granularity), not just when the active unit happens to be a single row —
+  // it stays hidden in list mode, appears on stepping into the diff, and
+  // remains visible on a multi-row 'group' unit (even though that unit shows
+  // no inline diff content). See Footer.mjs.
+  test('the footer bar is hidden in list mode and visible for any diff granularity', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.locator('[data-idx="1"]').click()
+    const footer = page.getByTestId('footer')
+
+    // List mode: no diff open, footer hidden.
+    await expect(footer).toBeHidden()
+
+    // Step into the diff (starts on 'group'): footer visible even if the
+    // group spans multiple rows.
+    await page.keyboard.press('ArrowRight')
+    await expect(page).toHaveURL(/sel=/)
+    await expect(footer).toBeVisible()
+
+    // ← back to the list: hidden again.
+    await page.keyboard.press('ArrowLeft')
+    await expect(footer).toBeHidden()
+  })
 })

@@ -678,17 +678,25 @@ deze fallback te leunen.
 ## Footer: inline preview van de geselecteerde regel
 
 Onder de panels zit een vaste footer (`src/Footer.mjs`, `data-testid=footer`, de
-panels reserveren er 100px voor). Zodra de **geselecteerde unit precies één regel**
-beslaat toont hij die regel als inline diff (`- oud` / `+ nieuw`,
-Prism-highlighted). De footer volgt het **huidige granulariteitsniveau** via
-dezelfde `unitsFor(rows, state.gran)` als de navigatie (in `'list'`-mode de eerste
-groep, in `'diff'`-mode `state.change`): omdat een `'line'`- of `'call'`-unit
-altijd één rij is, verschijnt de regel dus **altijd** in de footer zodra je met
-`f` tot één regel (of één edit) verfijnt. Meer-regelige selecties (b.v. een brede
-groep) geven `null` → geen inline diff. Lange regels (>`WIDE_AT` tekens) laten de
-`max-w` los zodat de footer de volle breedte gebruikt. Op `'call'`-niveau
-onderstreept de footer het **actieve segment** in dezelfde indigo als de panes:
-`activeUnit` geeft de `left`/`right`-underline-sets van de unit mee aan `line()`,
-dat via het geëxporteerde `markChars` + `UNDERLINE_CLS` (uit `Block.mjs`) precies
-die tekens onderstreept (op `'group'`/`'line'` hebben de units geen set → geen
-underline).
+panels reserveren er 100px voor). De footer is **alleen zichtbaar zolang een
+diff open staat** (`state.mode === 'diff'`) — ongeacht de granulariteit
+(`group`, `line` of `call`); in `'list'`-mode (geen diff open) is de hele
+footer **verborgen** (`hidden` i.p.v. `flex` op de stabiele `<footer>`-root —
+de class-string is één reactieve `class="${() => …}"`-functie-binding, dus
+geen keyed-node-valkuil, zie `.claude/rules/conventions.md`). **Los daarvan**
+toont de footer, zodra hij zichtbaar is, alleen een inline diff (`- oud` /
+`+ nieuw`, Prism-highlighted) als de **geselecteerde unit precies één regel**
+beslaat — een meerregelige groep laat de footer-balk gewoon staan (met de
+placeholder-omschrijving), maar zonder diff-inhoud. Deze inline-diff-inhoud
+volgt het **huidige granulariteitsniveau** via dezelfde
+`unitsFor(rows, state.gran)` als de navigatie (`state.change` binnen
+`'diff'`-mode): omdat een `'line'`- of `'call'`-unit altijd één rij is,
+verschijnt de inline diff dus altijd zodra je met `f` tot één regel (of één
+edit) verfijnt. Meer-regelige selecties (b.v. een brede groep) geven `null` →
+geen inline diff (footer zelf blijft zichtbaar). Lange regels (>`WIDE_AT`
+tekens) laten de `max-w` los zodat de footer de volle breedte gebruikt. Op
+`'call'`-niveau onderstreept de footer het **actieve segment** in dezelfde
+indigo als de panes: `activeUnit` geeft de `left`/`right`-underline-sets van
+de unit mee aan `line()`, dat via het geëxporteerde `markChars` +
+`UNDERLINE_CLS` (uit `Block.mjs`) precies die tekens onderstreept (op
+`'group'`/`'line'` hebben de units geen set → geen underline).
