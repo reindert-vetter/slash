@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS call_resolutions (
   caller_id    TEXT    NOT NULL,
   call_key     TEXT    NOT NULL,
   status       TEXT    NOT NULL,
+  kind         TEXT    NOT NULL DEFAULT 'method_call',
   child_file   TEXT    NOT NULL DEFAULT '',
   child_class  TEXT    NOT NULL DEFAULT '',
   child_method TEXT    NOT NULL DEFAULT '',
@@ -47,6 +48,14 @@ CREATE TABLE IF NOT EXISTS call_resolutions (
 
 CREATE INDEX IF NOT EXISTS idx_call_resolutions_pr ON call_resolutions(pr);
 `
+
+// migrate adds columns introduced after the first schema so an existing
+// callresolve.db picks them up. CREATE TABLE IF NOT EXISTS never alters an
+// existing table, so the kind column needs an explicit ADD; a
+// duplicate-column error just means the DB is already up to date.
+func migrate(db *sql.DB) {
+	_, _ = db.Exec(`ALTER TABLE call_resolutions ADD COLUMN kind TEXT NOT NULL DEFAULT 'method_call'`)
+}
 
 // Status values.
 const (
@@ -63,12 +72,25 @@ const (
 	ModelSonnet = "sonnet"
 )
 
+// Kind values name what a resolved row actually points at. The default,
+// "method_call", is a call site resolved to a defining method (the original,
+// only kind before this column existed) — every existing entry-producing rule
+// keeps leaving Kind empty in Go and gets normalized to KindMethodCall at
+// write time (see UpsertGo/Save), so only the newer, class-level rules below
+// need to set it explicitly.
+const (
+	KindMethodCall     = "method_call"     // a call site resolved to a defining method (default)
+	KindModelUsage     = "model_usage"     // a changed line uses an Eloquent model (new/static) → the model as a whole
+	KindMigrationModel = "migration_model" // a changed migration's Schema::create/table → its Eloquent model
+)
+
 // Entry is one call-site → definition resolution.
 type Entry struct {
 	PR          int    `json:"pr"`
 	CallerID    string `json:"callerId"`
 	CallKey     string `json:"callKey"`
 	Status      string `json:"status"`
+	Kind        string `json:"kind"`
 	ChildFile   string `json:"childFile"`
 	ChildClass  string `json:"childClass"`
 	ChildMethod string `json:"childMethod"`
@@ -92,6 +114,7 @@ func Open(path string) (*Module, error) {
 		db.Close()
 		return nil, fmt.Errorf("callresolve: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
 }
 
@@ -100,6 +123,7 @@ func New(db *sql.DB) (*Module, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("callresolve: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
 }
 
@@ -120,10 +144,11 @@ func (m *Module) UpsertGo(ctx context.Context, entries []Entry) error {
 
 	stmt, err := tx.PrepareContext(ctx, `
 INSERT INTO call_resolutions
-  (pr, caller_id, call_key, status, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+  (pr, caller_id, call_key, status, kind, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(pr, caller_id, call_key) DO UPDATE SET
   status       = excluded.status,
+  kind         = excluded.kind,
   child_file   = excluded.child_file,
   child_class  = excluded.child_class,
   child_method = excluded.child_method,
@@ -139,8 +164,12 @@ WHERE call_resolutions.status NOT IN ('searching','found')`)
 	defer stmt.Close()
 
 	for _, e := range entries {
+		kind := e.Kind
+		if kind == "" {
+			kind = KindMethodCall
+		}
 		if _, err := stmt.ExecContext(ctx,
-			e.PR, e.CallerID, e.CallKey, e.Status,
+			e.PR, e.CallerID, e.CallKey, e.Status, kind,
 			e.ChildFile, e.ChildClass, e.ChildMethod, e.ChildLine, e.ChildCode,
 			e.Model, e.Confidence, now()); err != nil {
 			return err
@@ -201,11 +230,15 @@ ON CONFLICT(pr, caller_id, call_key) DO UPDATE SET status = excluded.status, upd
 // Save upserts one LLM-produced resolution (found or notfound). WRITE —
 // workflow-Activity-only.
 func (m *Module) Save(ctx context.Context, e Entry) error {
+	kind := e.Kind
+	if kind == "" {
+		kind = KindMethodCall
+	}
 	_, err := m.db.ExecContext(ctx, `
 INSERT OR REPLACE INTO call_resolutions
-  (pr, caller_id, call_key, status, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		e.PR, e.CallerID, e.CallKey, e.Status,
+  (pr, caller_id, call_key, status, kind, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		e.PR, e.CallerID, e.CallKey, e.Status, kind,
 		e.ChildFile, e.ChildClass, e.ChildMethod, e.ChildLine, e.ChildCode,
 		e.Model, e.Confidence, now())
 	return err
@@ -215,7 +248,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 // for the UI/API.
 func (m *Module) List(ctx context.Context, pr int) ([]Entry, error) {
 	rows, err := m.db.QueryContext(ctx, `
-SELECT pr, caller_id, call_key, status, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at
+SELECT pr, caller_id, call_key, status, kind, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at
 FROM call_resolutions WHERE pr = ? ORDER BY caller_id, call_key`, pr)
 	if err != nil {
 		return nil, err
@@ -224,7 +257,7 @@ FROM call_resolutions WHERE pr = ? ORDER BY caller_id, call_key`, pr)
 	var out []Entry
 	for rows.Next() {
 		var e Entry
-		if err := rows.Scan(&e.PR, &e.CallerID, &e.CallKey, &e.Status,
+		if err := rows.Scan(&e.PR, &e.CallerID, &e.CallKey, &e.Status, &e.Kind,
 			&e.ChildFile, &e.ChildClass, &e.ChildMethod, &e.ChildLine, &e.ChildCode,
 			&e.Model, &e.Confidence, &e.UpdatedAt); err != nil {
 			return nil, err

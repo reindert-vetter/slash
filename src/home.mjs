@@ -1338,10 +1338,16 @@ function resolvedCallChildren(b) {
         // reuse the real block object — with its own diff, approval and recursive
         // Onderliggende-code panel — instead of a code-only synthetic frame.
         blockId: prBlock ? prBlock.id : '',
-        label: r.childClass ? `${r.childClass}::${r.childMethod}` : r.childMethod || r.callKey,
+        // A class-level resolution (model_usage/migration_model — childMethod
+        // empty, the whole class is the child, never one of its methods) shows
+        // the bare model name, not the "Class::" produced by the method-call
+        // template below (see .claude/rules/tembed-workflows.md).
+        label: r.childMethod
+          ? `${r.childClass}::${r.childMethod}`
+          : r.childClass || r.callKey,
         file: r.childFile,
         line: r.childLine,
-        kind: 'method_call',
+        kind: r.kind || 'method_call',
         code: r.childCode || '',
         // The code rides embedded in the callresolve row (no lazy fetch), so an
         // empty childCode is a final state — "geen code gevonden", never loading.

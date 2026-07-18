@@ -714,6 +714,9 @@ class ProductGroupResource {
 	if e.ChildClass != "ProductGroup" || e.ChildMethod != "" {
 		t.Errorf("ProductGroup: child=%q::%q, want ProductGroup::<empty>", e.ChildClass, e.ChildMethod)
 	}
+	if e.Kind != callresolve.KindModelUsage {
+		t.Errorf("ProductGroup: kind=%q, want %q", e.Kind, callresolve.KindModelUsage)
+	}
 	if e.ChildCode == "" || !strings.Contains(e.ChildCode, "class ProductGroup") {
 		t.Errorf("ProductGroup: child code missing the class body, got %q", e.ChildCode)
 	}
@@ -799,5 +802,228 @@ class Order extends Model {
 	}
 	if e.Status != callresolve.StatusResolved || e.ChildClass != "Order" || e.ChildMethod != "" {
 		t.Errorf("Order: got %+v, want resolved Order::<empty>", e)
+	}
+}
+
+// migrationBlock builds the two blocks (up/down) that classify.go produces for
+// a migration file's anonymous `return new class extends Migration { ... }`
+// (Class == "", see classify_test.go / the real blocks in data/graph.db).
+func migrationUpBlock(pr int, file string) Block {
+	return Block{PR: pr, File: file, Class: "", Name: "up", Category: "MIGRATION", Side: SideNew, Status: StatusAdded}
+}
+
+func migrationDownBlock(pr int, file string) Block {
+	return Block{PR: pr, File: file, Class: "", Name: "down", Category: "MIGRATION", Side: SideNew, Status: StatusAdded}
+}
+
+// findCallresolveEntry mirrors findEntry but also filters by caller — needed
+// once several migrations share a table-derived call key.
+func findCallresolveEntry(entries []callresolve.Entry, callerID, callKey string) (callresolve.Entry, bool) {
+	for _, e := range entries {
+		if e.CallerID == callerID && e.CallKey == callKey {
+			return e, true
+		}
+	}
+	return callresolve.Entry{}, false
+}
+
+// TestResolveMigrationModelsConvention: a changed migration's Schema::create
+// resolves to the model via the Eloquent naming convention (no explicit
+// $table override) — the common case described in
+// .claude/rules/tembed-workflows.md, "migration → model": the model itself is
+// NOT changed by this PR, so it must still surface as underlying code.
+func TestResolveMigrationModelsConvention(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 60
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"database/migrations/2026_01_01_000000_create_product_groups_table.php": `<?php
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('product_groups', function (Blueprint $table) {
+            $table->id();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('product_groups');
+    }
+};
+`,
+		"app/Models/ProductGroup.php": `<?php
+namespace App\Models;
+class ProductGroup extends Model {
+    protected $fillable = ['name'];
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	migFile := "database/migrations/2026_01_01_000000_create_product_groups_table.php"
+	up := migrationUpBlock(pr, migFile)
+	down := migrationDownBlock(pr, migFile)
+
+	entries := resolveMigrationModels(dataDir, pr, []Block{up, down})
+
+	e, ok := findCallresolveEntry(entries, up.ID(), "migration_model:product_groups")
+	if !ok {
+		t.Fatalf("no migration_model entry for product_groups, got %+v", entries)
+	}
+	if e.Status != callresolve.StatusResolved || e.Kind != callresolve.KindMigrationModel {
+		t.Errorf("got status=%q kind=%q, want resolved/%q", e.Status, e.Kind, callresolve.KindMigrationModel)
+	}
+	if e.ChildClass != "ProductGroup" || e.ChildMethod != "" {
+		t.Errorf("child=%q::%q, want ProductGroup::<empty>", e.ChildClass, e.ChildMethod)
+	}
+	if !strings.Contains(e.ChildCode, "class ProductGroup") {
+		t.Errorf("expected whole-class model excerpt, got %q", e.ChildCode)
+	}
+
+	// The 'down' block never produces its own entries (only 'up' is scanned).
+	for _, en := range entries {
+		if en.CallerID == down.ID() {
+			t.Errorf("unexpected entry for the 'down' block: %+v", en)
+		}
+	}
+}
+
+// TestResolveMigrationModelsExplicitTable: a model with an explicit
+// `protected $table` override wins over the naming convention — a migration
+// on 'pg' (which the convention would map to a nonexistent "Pg" class) still
+// resolves to the model that declares $table = 'pg'.
+func TestResolveMigrationModelsExplicitTable(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 61
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"database/migrations/2026_01_02_000000_create_pg_table.php": `<?php
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('pg', function ($table) {
+            $table->id();
+        });
+    }
+
+    public function down(): void
+    {
+    }
+};
+`,
+		"app/Models/ProductGroup.php": `<?php
+namespace App\Models;
+class ProductGroup extends Model {
+    protected $table = 'pg';
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	migFile := "database/migrations/2026_01_02_000000_create_pg_table.php"
+	up := migrationUpBlock(pr, migFile)
+
+	entries := resolveMigrationModels(dataDir, pr, []Block{up})
+
+	e, ok := findCallresolveEntry(entries, up.ID(), "migration_model:pg")
+	if !ok {
+		t.Fatalf("no migration_model entry for 'pg', got %+v", entries)
+	}
+	if e.ChildClass != "ProductGroup" {
+		t.Errorf("child class=%q, want ProductGroup (via explicit $table override)", e.ChildClass)
+	}
+}
+
+// TestResolveMigrationModelsMultipleTablesDeduped: a migration touching two
+// tables (Schema::create + Schema::table) gets one deduped child per table;
+// an unmappable table produces no entry (no LLM fallback — stays silent).
+func TestResolveMigrationModelsMultipleTablesDeduped(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 62
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"database/migrations/2026_01_03_000000_link_contracts_and_orders.php": `<?php
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('contracts', function ($table) {
+            $table->string('proration')->nullable();
+        });
+        Schema::table('contracts', function ($table) {
+            $table->string('extra')->nullable();
+        });
+        Schema::table('mystery_widgets', function ($table) {
+            $table->string('foo')->nullable();
+        });
+    }
+
+    public function down(): void
+    {
+    }
+};
+`,
+		"app/Models/Contract.php": `<?php
+namespace App\Models;
+class Contract extends Model {
+    protected $fillable = ['proration'];
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	migFile := "database/migrations/2026_01_03_000000_link_contracts_and_orders.php"
+	up := migrationUpBlock(pr, migFile)
+
+	entries := resolveMigrationModels(dataDir, pr, []Block{up})
+
+	count := 0
+	for _, en := range entries {
+		if en.CallKey == "migration_model:contracts" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("got %d 'contracts' entries, want 1 (deduped across two Schema::table calls)", count)
+	}
+	if _, ok := findCallresolveEntry(entries, up.ID(), "migration_model:mystery_widgets"); ok {
+		t.Error("expected no entry for an unmappable table ('mystery_widgets' has no model) — should stay silent, not unresolved")
+	}
+	if len(entries) != 1 {
+		t.Errorf("got %d total entries, want exactly 1 (contracts only)", len(entries))
 	}
 }

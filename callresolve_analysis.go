@@ -30,6 +30,11 @@ type symbolIndex struct {
 	commands   map[string]Block   // artisan command name (accounting:import) → its handle method
 	facades    map[string]string  // Laravel facade short name → accessor class short name
 	models     map[string]Block   // Eloquent model short name (app/Models/) → its whole-class block
+	// modelTables maps an explicit `protected $table = 'name'` override (app/Models/)
+	// to the model's short class name — the migrationModel rule's primary mapping
+	// source (see resolveMigrationModels); the Eloquent naming convention
+	// (singularize + Studly) is only its fallback.
+	modelTables map[string]string
 }
 
 var idxSkipDirs = map[string]bool{
@@ -40,13 +45,14 @@ var idxSkipDirs = map[string]bool{
 // buildSymbolIndex walks the head worktree once and indexes every class method.
 func buildSymbolIndex(headDir string) *symbolIndex {
 	idx := &symbolIndex{
-		byClass:    map[string][]Block{},
-		byMethod:   map[string][]Block{},
-		scopeAlias: map[string][]Block{},
-		enums:      map[string][]Block{},
-		commands:   map[string]Block{},
-		facades:    map[string]string{},
-		models:     map[string]Block{},
+		byClass:     map[string][]Block{},
+		byMethod:    map[string][]Block{},
+		scopeAlias:  map[string][]Block{},
+		enums:       map[string][]Block{},
+		commands:    map[string]Block{},
+		facades:     map[string]string{},
+		models:      map[string]Block{},
+		modelTables: map[string]string{},
 	}
 	_ = filepath.WalkDir(headDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -119,6 +125,14 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		if hasSeg(rel, "app/Models/") {
 			for _, b := range scanModels(src, rel) {
 				idx.models[shortName(b.Class)] = b
+			}
+			// An explicit `protected $table = 'name'` overrides the Eloquent naming
+			// convention — record it so resolveMigrationModels's Schema::create/table
+			// mapping prefers it over singularize+Studly.
+			if tm := reModelTable.FindStringSubmatch(string(src)); tm != nil {
+				for _, b := range scanModels(src, rel) {
+					idx.modelTables[tm[1]] = shortName(b.Class)
+				}
 			}
 		}
 		return nil
@@ -352,6 +366,12 @@ var (
 	// bridges the method signature and its return; RE2 supports [\s\S]*?).
 	reFacadeClass    = regexp.MustCompile(`class\s+([A-Za-z_]\w*)\s+extends\s+[\\\w]*Facade\b`)
 	reFacadeAccessor = regexp.MustCompile(`getFacadeAccessor\b[\s\S]*?return\s+([\\A-Za-z_][\\\w]*)::class`)
+	// reModelTable matches an Eloquent model's explicit table override
+	// (`protected $table = 'product_groups';`) — see resolveMigrationModels.
+	reModelTable = regexp.MustCompile(`\$table\s*=\s*['"]([a-zA-Z0-9_]+)['"]`)
+	// reSchemaTable matches a migration's `Schema::create('table', ...)` or
+	// `Schema::table('table', ...)` call — see resolveMigrationModels.
+	reSchemaTable = regexp.MustCompile(`Schema::(?:create|table)\(\s*['"]([a-zA-Z0-9_]+)['"]`)
 )
 
 // resolveCalls scans every changed new-side block for method calls and resolves
@@ -386,7 +406,11 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		callerID := b.ID()
 		seen := map[string]bool{} // call keys already emitted for this caller
 
-		emit := func(key string, def *Block) {
+		// emitKind is emit's underlying implementation with an explicit Kind — used
+		// by rule 2c to tag its rows "model_usage" instead of the default
+		// "method_call" (see callresolve.Kind*). emit is the plain-call shorthand
+		// used by every other rule.
+		emitKind := func(key string, def *Block, kind string) {
 			if key == "" || seen[key] {
 				return
 			}
@@ -394,6 +418,7 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			if def == nil {
 				out = append(out, callresolve.Entry{
 					PR: pr, CallerID: callerID, CallKey: key, Status: callresolve.StatusUnresolved,
+					Kind: kind,
 				})
 				return
 			}
@@ -403,9 +428,13 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			code := blockSource(headDir, *def)
 			out = append(out, callresolve.Entry{
 				PR: pr, CallerID: callerID, CallKey: key, Status: callresolve.StatusResolved,
+				Kind:      kind,
 				ChildFile: def.File, ChildClass: def.Class, ChildMethod: def.Name,
 				ChildLine: def.Line, ChildCode: code.Text,
 			})
+		}
+		emit := func(key string, def *Block) {
+			emitKind(key, def, callresolve.KindMethodCall)
 		}
 
 		// 1. $this->m( / self::m( / static::m( → a method on the caller's own class.
@@ -445,12 +474,12 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		// in this block.
 		for _, m := range reNewObj.FindAllStringSubmatch(scan, -1) {
 			if def, ok := idx.models[shortName(m[1])]; ok {
-				emit(shortName(m[1]), &def)
+				emitKind(shortName(m[1]), &def, callresolve.KindModelUsage)
 			}
 		}
 		for _, m := range reStaticCall.FindAllStringSubmatch(scan, -1) {
 			if def, ok := idx.models[shortName(m[1])]; ok {
-				emit(shortName(m[1]), &def)
+				emitKind(shortName(m[1]), &def, callresolve.KindModelUsage)
 			}
 		}
 		// 3. Foo::m( → static method on Foo (skip self/static/parent handled
@@ -589,6 +618,83 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		}
 	}
 	return out
+}
+
+// resolveMigrationModels links a changed migration's `up` method to the
+// Eloquent model(s) it defines/alters — so a reviewer sees the model as
+// "Onderliggende code" even when it was NOT itself changed by this PR (the
+// common case: a migration adds a column to an already-existing model). This
+// is deliberately a callresolve rule, not a both-changed relations detector —
+// see .claude/rules/tembed-workflows.md ("migration → model"). Go-only, no LLM
+// fallback: a migration whose table can't be mapped to a known model just
+// produces no child (silent), never an "unresolved" row.
+func resolveMigrationModels(dataDir string, pr int, blocks []Block) []callresolve.Entry {
+	_, headDir := worktreeDirs(dataDir, pr)
+	idx := buildSymbolIndex(headDir)
+
+	var out []callresolve.Entry
+	for _, b := range blocks {
+		if b.Side == SideOld || b.Category != "MIGRATION" || b.Name != "up" {
+			continue
+		}
+		src := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name)
+		if src.Text == "" {
+			continue
+		}
+		callerID := b.ID()
+		seenTable := map[string]bool{}
+		for _, m := range reSchemaTable.FindAllStringSubmatch(src.Text, -1) {
+			table := m[1]
+			if seenTable[table] {
+				continue
+			}
+			seenTable[table] = true
+
+			class, ok := idx.modelTables[table]
+			if !ok {
+				class = studly(singularizeTable(table))
+			}
+			def, ok := idx.models[class]
+			if !ok {
+				continue // no known model for this table — stay silent, no LLM
+			}
+			out = append(out, callresolve.Entry{
+				PR: pr, CallerID: callerID, CallKey: "migration_model:" + table,
+				Status: callresolve.StatusResolved, Kind: callresolve.KindMigrationModel,
+				ChildFile: def.File, ChildClass: def.Class, ChildMethod: "",
+				ChildLine: def.Line, ChildCode: blockSource(headDir, def).Text,
+			})
+		}
+	}
+	return out
+}
+
+// singularizeTable is a pragmatic (English, non-exhaustive) singularizer for a
+// snake_case table name — the fallback mapping source when a model has no
+// explicit `$table` override. Deliberately not a full inflector: it covers the
+// common Laravel table-naming patterns ("-ies" → "-y", trailing "-s" dropped),
+// not every irregular English plural.
+func singularizeTable(table string) string {
+	if strings.HasSuffix(table, "ies") && len(table) > 3 {
+		return table[:len(table)-3] + "y"
+	}
+	if strings.HasSuffix(table, "s") && !strings.HasSuffix(table, "ss") {
+		return table[:len(table)-1]
+	}
+	return table
+}
+
+// studly converts a snake_case name to StudlyCase (Laravel's naming
+// convention for a model class derived from its table).
+func studly(s string) string {
+	parts := strings.Split(s, "_")
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(p[:1]) + p[1:]
+	}
+	return strings.Join(parts, "")
 }
 
 // enumCaseCandidates returns the enums named recv that actually define case (or

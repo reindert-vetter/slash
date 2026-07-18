@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 101,
+    "file": "app/Http/Controllers/ProductGroupController.php",
+    "class": "ProductGroupController",
+    "name": "store",
+    "category": "CONTROLLER",
+    "line": 10,
+    "endLine": 24,
+    "status": "modified",
+    "side": "new"
+  }
+]

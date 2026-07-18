@@ -752,6 +752,71 @@ fallback.
   `callresolve.db` zodat Playwright de `method_call`-children rendert zonder
   resolver-run (`tests/fixtures/callresolve.json`, PR 91 in `relations.spec.mjs` —
   bewijst o.a. dat het Onderliggende-code-paneel de blok-selectie volgt).
+- **`kind`-kolom (`call_resolutions.kind`, default `method_call`):** onderscheidt
+  een gewone call-resolutie van een **class-niveau** child (`ChildMethod` leeg —
+  het hele model, geen method). `Entry.Kind` in Go: leeg → genormaliseerd naar
+  `KindMethodCall` bij het schrijven (`UpsertGo`/`Save` in
+  `modules/callresolve`), dus geen van de bestaande call-emittende regels (1
+  t/m 6) hoefde aangepast — alleen `emitKind` (de nieuwe onderliggende
+  implementatie van `emit`, met een expliciete `kind`-parameter) wordt door
+  rule 2c (`KindModelUsage`) en `resolveMigrationModels` (`KindMigrationModel`,
+  zie hieronder) aangeroepen. Een bestaande `callresolve.db` migreert via een
+  lichte `ALTER TABLE … ADD COLUMN` (dubbele-kolom-fout genegeerd — het
+  standaardpatroon uit `relations`/`comments`). Frontend: `resolvedCallChildren`
+  (`home.mjs`) neemt `r.kind` **over** i.p.v. altijd `'method_call'` te
+  hardcoden, en het **label** vertakt op `r.childMethod` (leeg → kale
+  `r.childClass`, gevuld → het bestaande `Class::method`-template) — dit gold al
+  vóór deze kolom bestond voor rule 2c's model-usage-children (die toonden
+  ooit een `"ProductGroup::"` met een lege, lelijke `::`-staart) en geldt nu
+  ook voor `migration_model`. `KIND_LABEL` (`RelatedPanel.mjs`) koppelt zowel
+  `model_usage` als `migration_model` aan het badge-woord **"model"**; de
+  `diffStatBadge`/`unchanged`-helpers herkennen beide kinds naast
+  `method_call`/`covers` (gedeelde `DIFFSTAT_KINDS`-set) zodat ze óók een
+  `+A −R`/`Ongewijzigd`-badge en grijze "ongewijzigd"-ringstijl krijgen, exact
+  als een gewone call-child.
+- **Migratie → model (`resolveMigrationModels`, `callresolve_analysis.go`):**
+  een gewijzigde migratie hoort meestal bij een **al bestaand, ongewijzigd**
+  model — het hoofdgeval is "kolom toevoegen aan een bestaande tabel", niet
+  "nieuw model + nieuwe migratie tegelijk". Dat maakt dit een **callresolve**-
+  regel (mag naar een ongewijzigd bestand wijzen), geen `relations`-detector
+  (die zijn allemaal both-changed, zie de Laravel-keten hierboven) — en zonder
+  LLM-fallback: de mapping is regelgebaseerd en deterministisch, dus een
+  migratie die niet te mappen valt levert **stil niets** op (geen
+  `unresolved`-rij, geen "Zoek"-knop). Scope: elk gewijzigd
+  `Category == "MIGRATION" && Name == "up"`-blok (een migratie is altijd de
+  anonieme `return new class extends Migration {...}`, dus `Class == ""` — zie
+  `classify.go`'s `database/migrations/`-regel en `phpscan.go`'s
+  anonieme-class-afhandeling; alleen `up` telt, `down` nooit). Per
+  `Schema::create('tabel', ...)`/`Schema::table('tabel', ...)`-match
+  (`reSchemaTable`, beide tellen — een kolom-migratie hoort net zo goed bij
+  zijn model als een create-migratie) in de `up`-body: tabel → model via (1)
+  een expliciete `protected $table = '...'`-override
+  (`idx.modelTables`, gevuld tijdens dezelfde `buildSymbolIndex`-worktree-walk
+  als `idx.models`/`scanModels` — geen tweede walk) of (2) de Eloquent-conventie
+  (`singularizeTable` — een bewust **pragmatische**, niet-volledige
+  inflector: `-ies`→`-y`, trailing `-s` weg — gevolgd door `studly`). Eén
+  gededupte child per distinct tabel (`seenTable` binnen de migratie — twee
+  `Schema::table`-calls op dezelfde tabel geven dus nooit twee children), child
+  = het `idx.models`-whole-class-blok (hetzelfde synthetische blok als rule
+  2c hierboven — `ChildMethod` leeg, kale modelnaam-label). `CallKey` =
+  `"migration_model:" + tabel` (nooit botsend met een echte method-call-key,
+  die bevat geen `:`). De entries van deze functie worden in de
+  `build_relations`-Activity (`workflows.go`) **samengevoegd** met
+  `resolveCalls`'s entries vóór de ene `UpsertGo`/`Prune`-aanroep — dus geen
+  aparte prune-scope nodig, migratie-rijen zitten vanzelf in de keep-set zolang
+  hun migratie in de PR blijft wijzigen.
+- Tests: `TestResolveMigrationModelsConvention`/`ExplicitTable`/
+  `MultipleTablesDeduped` (`callresolve_analysis_test.go`, fixture-PHP: een
+  `Schema::create`-migratie die via de conventie naar zijn model resolvt, een
+  `$table`-override die de conventie overstemt, en een migratie met twee
+  `Schema::table`-calls op dezelfde tabel + een niet-mapbare tabel — gededupt
+  resp. stil overgeslagen); `TestKindRoundTrip`/`TestMigrateAddsKindColumn`
+  (`modules/callresolve/callresolve_test.go`: lege Kind normaliseert naar
+  `method_call` via zowel `UpsertGo` als `Save`, een expliciete Kind
+  round-trippt, en een DB zonder de kolom migreert bij `Open`).
+  Playwright: `tests/migration-model.spec.mjs` (PR 101, `migrationmodel-*.json`
+  — bewijst dat zowel een `model_usage`- als een `migration_model`-child een
+  kale modelnaam + "model"-badge tonen, nooit de `Class::`-vorm).
 
 ## Testdekking koppelen (`resolve_test_covers` + `modules/testcovers`)
 

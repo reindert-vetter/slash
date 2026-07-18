@@ -1336,14 +1336,21 @@ const KIND_LABEL = {
   controller_resource: 'resource',
   controller_model: 'model',
   request_policy: 'policy',
+  // Class-level callresolve children — the whole model as a child, not one of
+  // its methods (see .claude/rules/tembed-workflows.md, "migration → model").
+  model_usage: 'model',
+  migration_model: 'model',
 }
 
 // diffStatBadge shows, for a called method (or a test's covered method), how
 // many lines its definition adds/removes ("+A −R", green/red) instead of a
 // word label. A call/covered method into an unchanged file has no diff
-// (r.diff == null) → a grey "Ongewijzigd" badge.
+// (r.diff == null) → a grey "Ongewijzigd" badge. Also covers the class-level
+// callresolve kinds (model_usage/migration_model) — they carry a diff just
+// like a method_call child.
+const DIFFSTAT_KINDS = new Set(['method_call', 'covers', 'model_usage', 'migration_model'])
 function diffStatBadge(r) {
-  if (r.kind !== 'method_call' && r.kind !== 'covers') return ''
+  if (!DIFFSTAT_KINDS.has(r.kind)) return ''
   if (!r.diff) {
     return html`
       <span
@@ -1546,7 +1553,7 @@ function relatedCard(r, i, drill) {
   const selected = () => cs.focus === 'code' && i === cs.codeSel
   // An unchanged call/covered-method target (into a file this PR doesn't touch)
   // has no diff to review, so its selection highlight is grey rather than indigo.
-  const unchanged = (r.kind === 'method_call' || r.kind === 'covers') && !r.diff
+  const unchanged = DIFFSTAT_KINDS.has(r.kind) && !r.diff
   const nested = Array.isArray(r.nested) ? r.nested : []
   return html`
     <div class="flex items-start">

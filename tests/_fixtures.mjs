@@ -153,6 +153,24 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Migration→model / model-usage fixture (PR 101, migration-model.spec.mjs): one
+  // caller with two class-level callresolve children (kind model_usage and
+  // migration_model) — both must render a bare model-name label ("ProductGroup",
+  // not "ProductGroup::") and a "model" badge, never the Class:: template used by
+  // a regular method_call child.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/migrationmodel-blocks.json',
+      '-callresolve',
+      'tests/fixtures/migrationmodel-callresolve.json',
+    ],
+    { stdio: 'ignore' },
+  )
   // Deleted-file fixture (PR 98, removed-file.spec.mjs): one block whose whole
   // file was deleted by the PR (fileDeleted: true) plus a loose removed method
   // in a file that still exists — drives the "Verwijderd bestand"/"Verwijderd"

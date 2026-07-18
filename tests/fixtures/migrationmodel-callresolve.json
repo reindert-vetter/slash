@@ -1,0 +1,26 @@
+[
+  {
+    "pr": 101,
+    "callerId": "101:app/Http/Controllers/ProductGroupController.php:ProductGroupController::store",
+    "callKey": "ProductGroup",
+    "status": "resolved",
+    "kind": "model_usage",
+    "childFile": "app/Models/ProductGroup.php",
+    "childClass": "ProductGroup",
+    "childMethod": "",
+    "childLine": 3,
+    "childCode": "class ProductGroup extends Model\n{\n    protected $fillable = ['name'];\n}"
+  },
+  {
+    "pr": 101,
+    "callerId": "101:app/Http/Controllers/ProductGroupController.php:ProductGroupController::store",
+    "callKey": "migration_model:orders",
+    "status": "resolved",
+    "kind": "migration_model",
+    "childFile": "app/Models/Order.php",
+    "childClass": "Order",
+    "childMethod": "",
+    "childLine": 3,
+    "childCode": "class Order extends Model\n{\n    protected $fillable = ['total'];\n}"
+  }
+]
