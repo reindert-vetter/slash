@@ -1703,8 +1703,8 @@ export default function RelatedPanel(state, commentTarget, search) {
   // outer .key('related-panel') (home.mjs) pointed at a permanent element
   // while only the inner slot swaps.
   const fullCard = () => html`
-    <section class="flex w-[30rem] shrink-0 max-h-full min-h-0 flex-col overflow-hidden rounded-xl bg-white dark:bg-zinc-900" data-testid="related-code">
-      <div class="flex items-center gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
+    <section class="flex w-[30rem] shrink-0 max-h-full min-h-0 flex-col overflow-hidden" data-testid="related-code">
+      <div class="flex items-center gap-2 px-4 py-2.5">
         <div class="min-w-0">
           <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">Onderliggende code</h2>
           <p class="text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-approval-total">
