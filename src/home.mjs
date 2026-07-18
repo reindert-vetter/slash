@@ -510,8 +510,19 @@ async function loadBlocks() {
   applyBlockRefRestore()
   loadCallResolve()
   loadTestCovers()
-  loadApprovals()
-  loadBlockStats()
+  // Hidden-ness (a fully-approved block while state.showApproved is false) only
+  // becomes knowable once BOTH the approvals and the server-side totals are in
+  // — isFullyApproved reads state.approvalSummaries, which the decoupled
+  // approval-rollup watch recomputes from exactly those inputs. Await them,
+  // give arrow.js a couple of microtask turns to flush that watch (the same
+  // openTask precedent as selectComment's scope wait), then clamp a selection
+  // that landed on a hidden block onto the first visible one. Deliberately
+  // AFTER applyBlockRefRestore: a restored ?sel= pointing at a visible block
+  // always wins, only a hidden outcome gets corrected.
+  await Promise.all([loadApprovals(), loadBlockStats()])
+  await Promise.resolve()
+  await Promise.resolve()
+  clampSelectedToVisible()
 }
 
 // loadBlockStats fetches the server-computed per-block approval totals (the number
@@ -716,12 +727,40 @@ function stepVisibleSelected(dir) {
   }
 }
 
+// clampSelectedToVisible moves state.selected off a block BlockList's renderList
+// doesn't render (fully approved while state.showApproved is false — the exact
+// same isFullyApproved criterion) onto the FIRST visible block. state.selected
+// is a raw index into state.blocks, so a selection restored from the URL
+// (?sel=file:line via applyBlockRefRestore) or reset to 0 by a search recompute
+// (setSearch) can land on a hidden index: the detail panel then shows a block
+// while NO sidebar row highlights, which reads as a lost selection. The search
+// filter itself needs no separate check here — recomputeLeftList removes
+// filtered-out blocks from state.blocks entirely and clamps the index, so only
+// the hidden-approved case can remain. Called ONLY from the load/search
+// recomputation paths — never from the live approve flow, so approving the
+// block you're looking at still keeps it selected (stepVisibleSelected handles
+// walking off it). No visible block at all → leave the selection alone
+// (mirrors stepVisibleSelected's stay-put behaviour).
+function clampSelectedToVisible() {
+  const b = state.blocks[state.selected]
+  if (!b) return
+  if (state.showApproved || !isFullyApproved(state, b)) return
+  const idx = state.blocks.findIndex((x) => !isFullyApproved(state, x))
+  if (idx >= 0) {
+    state.selected = idx
+    scrollSelectedIntoView()
+  }
+}
+
 // setSearch is the search box's input handler: refilter the left list and jump
 // the selection to the top match so ↑/↓ walk the results from the first hit.
 function setSearch(q) {
   state.search = q
   recomputeLeftList()
   state.selected = 0
+  // The top match can be a hidden (fully-approved) block — land on the first
+  // visible one instead so a row always highlights (see clampSelectedToVisible).
+  clampSelectedToVisible()
   scrollSelectedIntoView()
 }
 
