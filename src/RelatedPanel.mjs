@@ -2039,7 +2039,15 @@ export function PrWideComments(state) {
   syncComments(state ? state.pr : null)
   return html`
     <section
-      class="flex min-h-0 shrink-0 max-h-[16rem] flex-col overflow-hidden rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm"
+      class="${() =>
+        'flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm ' +
+        // Height is proportional to which of the two pr-info-column cards owns
+        // the keyboard: 3/4 while navigating this block (isPrWideFocused, i.e.
+        // pw.focus !== null), 1/3 while the description above it is selected —
+        // the complement of prInfoCard's own 1/4 / 2/3 (home.mjs). Both use
+        // flex-grow with a 0 basis (like flex-1), so the ratio is purely the
+        // two numbers. See detail-layout.md.
+        (isPrWideFocused() ? 'flex-[3]' : 'flex-1')}"
       data-testid="pr-wide-comments"
     >
       <div class="border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">

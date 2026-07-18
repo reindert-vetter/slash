@@ -3700,7 +3700,14 @@ function prInfoCard(state) {
   return html`
     <div
       class="${() =>
-        'flex min-h-0 flex-1 flex-col gap-3 overflow-auto rounded-2xl border bg-white dark:bg-zinc-900 p-5 shadow-sm ' +
+        'flex min-h-0 flex-col gap-3 overflow-auto rounded-2xl border bg-white dark:bg-zinc-900 p-5 shadow-sm ' +
+        // Height is proportional to which of the two pr-info-column cards owns
+        // the keyboard: 2/3 while this description card is selected
+        // (isPrWideFocused false, pw.focus === null), 1/4 while navigating the
+        // PR-wide comment block below it (the complement of its own 3/4/1/3,
+        // see PrWideComments in RelatedPanel.mjs). Both use flex-grow with a
+        // 0 basis (like flex-1), so the ratio is purely the two numbers.
+        (isPrWideFocused() ? 'flex-1 ' : 'flex-[2] ') +
         // Light-blue border while the keyboard drives stop 1 (this panel is only
         // ever mounted while showDescription is true, but read it here anyway so
         // the binding stays reactive) — mirrors diffActive on the block-diff card.

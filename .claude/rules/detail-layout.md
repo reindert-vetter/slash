@@ -80,11 +80,22 @@ kolom op dit moment zichtbaar is — `state.showDescription` bepaalt alleen of h
 gerenderd wordt, niet of de data er is tegen de tijd dat je 'm opent.
 
 **PR-brede comments (`PrWideComments`, onder `prInfoCard` in dezelfde
-`pr-info-column`):** een tweede kaart (`data-testid=pr-wide-comments`,
-`shrink-0 max-h-[16rem]`, eigen interne scroll), **onder** `prInfoCard` in
-dezelfde `state.showDescription`-gated container in `PrInfoPanel` — hij heeft
-dus **geen eigen zichtbaarheids-toggle**, hij bestaat simpelweg niet totdat de
-kolom zelf gemount wordt. Toont de comments met **`kind !== ''`** —
+`pr-info-column`):** een tweede kaart (`data-testid=pr-wide-comments`, eigen
+interne scroll), **onder** `prInfoCard` in dezelfde
+`state.showDescription`-gated container in `PrInfoPanel` — hij heeft dus
+**geen eigen zichtbaarheids-toggle**, hij bestaat simpelweg niet totdat de
+kolom zelf gemount wordt.
+**Hoogte-verdeling volgt wie van de twee kaarten de keyboard bezit
+(`isPrWideFocused()`, leest `pw.focus`):** staat de keyboard op de
+omschrijving (`pw.focus === null`) dan krijgt `prInfoCard` `flex-[2]` (2/3)
+en deze kaart `flex-1` (1/3); navigeer je in dit blok (`pw.focus !== null`)
+dan draait het om — deze kaart krijgt `flex-[3]` (3/4), `prInfoCard` zakt naar
+`flex-1` (1/4). Beide class-bindingen zijn reactieve hele-waarde-functies
+(`${() => ...}`, conform de arrow.js-class-binding-conventie) die dezelfde
+`isPrWideFocused()` lezen — `flex-1`/`flex-[n]` zetten allebei een 0%
+flex-basis, dus de verhouding komt puur uit de twee grow-getallen. Vervangt de
+eerdere vaste `shrink-0 max-h-[16rem]`-cap. Toont de comments met
+**`kind !== ''`** —
 GitHub-geïmporteerde issue-comments en review(-summary)-comments zonder
 regel-anker — uit dezelfde `cs.list` die het blok-gescopeerde comments-paneel
 (zie "Comments/taken-sidebar" hieronder) al laadt/pollt (`syncComments`, geen
