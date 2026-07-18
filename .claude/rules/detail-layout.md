@@ -169,26 +169,49 @@ hij groeit, taken houdt een kleinere, eigen-scrollende hoogte eronder.
 **Getoggeld met `g`** (`toggleSidebar`, geëxporteerd uit `RelatedPanel.mjs`,
 aangeroepen vanuit `home.mjs`'s `onKeydown` — globaal, in zowel `'list'`- als
 `'diff'`-mode, ongeacht of de diff, de Onderliggende-code-kaart of de sidebar
-zelf op dat moment de keyboard heeft): dicht → open + highlight op de "+
-Comment op deze regel"-rij (`enterComments`, een deterministisch ankerpunt —
-mirror van hoe `enterRelated` altijd op het eerste kind landt); open maar de
-keyboard zit elders (diff/Onderliggende code) → highlight terug naar die rij,
-blijft open; open én de keyboard zit al in de sidebar (composer/comment-rij/
-thread/taak) → sluiten, keyboard terug naar de diff. **`enterComments` opent
-bewust nog niet de composer/focust nog geen textarea** (anders dan `toNew`,
-dat `startComment`/arrow-navigatie naar rij 0/de restore-flow nog wél
-gebruiken) — alleen highlighten, zodat een **tweede `g`** de sidebar meteen
-weer dichtklapt i.p.v. dat de toets als een letterlijke "g" in het al-
-gefocuste tekstveld belandt (de `isEditableFocused`-guard zou 'm anders
-opeten). Pas **`Enter`** op die gehighlighte rij (`isNewFocused()` +
-`openComposer()` in `home.mjs`, mirror van de `isCommentFocused`/
-`isCodeFocused`/`isTaskFocused`-Enter-branches) opent de composer echt en
-focust de textarea. Zichtbaarheid leeft in een eigen,
-**efemere** vlag `cs.sidebarOpen` (niet in de URL — net als
-`state.showDescription` — een refresh start altijd dichtgeklapt), losgekoppeld
-van `cs.focus`: de sidebar kan open blijven staan terwijl de diff de keyboard
-heeft (na `←`, zie hieronder). Een klik op de collapsed hint-rail (zie
-hieronder) volgt dezelfde open+focus-logica als `g` (`openSidebar`).
+zelf op dat moment de keyboard heeft): dicht → open + **herstel de laatste
+comment-plek van deze sessie** (`restoreLastSidebarFocus`, zie hieronder), of —
+zonder zo'n herinnering — highlight op de "+ Comment op deze regel"-rij
+(`enterComments`, een deterministisch ankerpunt — mirror van hoe `enterRelated`
+altijd op het eerste kind landt); open maar de keyboard zit elders (diff/
+Onderliggende code) → highlight terug naar die rij, blijft open; open én de
+keyboard zit al in de sidebar (composer/comment-rij/thread/taak) → sluiten,
+keyboard terug naar de diff. **`enterComments` opent bewust nog niet de
+composer/focust nog geen textarea** (anders dan `toNew`, dat
+`startComment`/arrow-navigatie naar rij 0/de restore-flow nog wél gebruiken) —
+alleen highlighten, zodat een **tweede `g`** de sidebar meteen weer
+dichtklapt i.p.v. dat de toets als een letterlijke "g" in het al-gefocuste
+tekstveld belandt (de `isEditableFocused`-guard zou 'm anders opeten). Pas
+**`Enter`** op die gehighlighte rij (`isNewFocused()` + `openComposer()` in
+`home.mjs`, mirror van de `isCommentFocused`/`isCodeFocused`/
+`isTaskFocused`-Enter-branches) opent de composer echt en focust de textarea.
+Zichtbaarheid leeft in een eigen, **efemere** vlag `cs.sidebarOpen` (niet in de
+URL — net als `state.showDescription` — een refresh start altijd
+dichtgeklapt), losgekoppeld van `cs.focus`: de sidebar kan open blijven staan
+terwijl de diff de keyboard heeft (na `←`, zie hieronder). Een klik op de
+collapsed hint-rail (zie hieronder) volgt dezelfde open+focus-logica als `g`
+(`openSidebar`).
+
+**`g`-uit → `g`-terug herstelt binnen dezelfde sessie de laatste
+comment-/thread-rij** (niet enkel "open op rij 0"). Elke keer dat de sidebar de
+keyboard verlaat via `exitRelated` (`←` vanuit de sidebar, of de sluitende
+`g`-tak hierboven) en `cs.focus` op dat moment `'new'`/`'comment'`/`'thread'`
+was, snapshot't `exitRelated` dat in de module-`let` `lastSidebarFocus`
+(`{focus, sel, threadPos}` — bewust **niet** `'code'` of `'task'`, en bewust
+**niet** op `cs`/in de URL: dit is een puur binnen-sessie geheugen, geen
+navigatiepositie-restore — die bestaat al apart voor `cs.focus`/`sel`/
+`threadPos` via de `rel`-URL-namespace, en `cs.sidebarOpen` zelf blijft
+gewoon buiten de URL, dus een refresh start nog altijd dichtgeklapt). Een
+volgende `openSidebar` (`g`, of een klik op de hint-rail) roept
+`restoreLastSidebarFocus` aan: was de laatste plek een comment-rij of een
+thread, dan landt de keyboard daar weer (rij-index geklemd op de actueel
+zichtbare comment-lijst, `threadPos` geklemd op de thread-lengte — mirror van
+`applyRelRestore`'s clamping); was de laatste plek de composer-rij zelf, of
+bestaat er nog geen herinnering, of is de onthouden comment/thread niet meer
+zichtbaar (verwijderd, of de reviewer zit inmiddels op een ander block/unit
+waarvan de comment-scope leeg is), dan valt het terug op de bestaande
+`enterComments()`-landing (rij 0, alleen highlighten). Mirrort het
+`preTaskFocus`-patroon. Test: `tests/sidebar-focus-restore.spec.mjs`.
 
 **Dichtgeklapt** (`!cs.sidebarOpen`) rendert de sidebar als een smalle
 hint-rail op de rechterrand (`data-testid=sidebar-collapsed`, `right-0 w-12`,

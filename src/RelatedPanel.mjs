@@ -324,6 +324,18 @@ export function enterRelated() {
   scrollCodeIntoView()
 }
 
+// lastSidebarFocus remembers the comments-sidebar substop (only 'new'/
+// 'comment'/'thread' — never 'code' or 'task') the keyboard sat on the last
+// time it left the sidebar this session (← or a closing `g`, both go through
+// exitRelated below), so a later `g`-reopen (openSidebar) can land back there
+// instead of always resetting to the composer row. Deliberately a plain
+// module `let`, not on `cs`/the URL: this is a within-session memory only —
+// the reviewer asked for "g out, g back → same spot", not a refresh-restore
+// (that already exists separately for cs.focus/sel/threadPos via the `rel`
+// URL namespace, and cs.sidebarOpen itself deliberately stays out of the URL,
+// see the sidebarOpen field comment above). Mirrors the preTaskFocus pattern.
+let lastSidebarFocus = null
+
 // exitRelated releases the keyboard back to the diff and drops any input focus /
 // half-typed new comment. Exported as leaveRelated for home.mjs: drillIntoChild
 // calls it to hand a freshly-drilled column's keyboard to its own diff instead
@@ -332,6 +344,9 @@ export function enterRelated() {
 // sidebar, see handleRelatedKey's ArrowLeft below) must not close a sidebar
 // the reviewer left open.
 function exitRelated() {
+  if (cs.focus === 'new' || cs.focus === 'comment' || cs.focus === 'thread') {
+    lastSidebarFocus = { focus: cs.focus, sel: cs.sel, threadPos: cs.threadPos }
+  }
   cs.focus = null
   cs.composing = false
   const el = document.activeElement
@@ -2263,10 +2278,43 @@ function runningTaskCount(state) {
 }
 
 // openSidebar is the "open it" half of toggleSidebar, also used directly by a
-// click on the collapsed hint rail (which can only ever mean "open").
+// click on the collapsed hint rail (which can only ever mean "open"). Restores
+// the last comments-sidebar spot (see restoreLastSidebarFocus) instead of
+// always resetting to the composer row.
 function openSidebar() {
   cs.sidebarOpen = true
-  enterComments()
+  restoreLastSidebarFocus()
+}
+
+// restoreLastSidebarFocus lands the keyboard back on the comment/thread the
+// reviewer left last this session (lastSidebarFocus, set by exitRelated),
+// falling back to the default enterComments() landing (row 0, highlight only
+// — see its own comment for why that doesn't auto-open the composer) when:
+// there is no remembered spot yet, it was the composer row itself (which is
+// exactly what enterComments already lands on), or the remembered comment is
+// no longer visible (deleted, or the reviewer since moved to a block/unit
+// whose comment scope is now empty). A remembered index past the end of a
+// shrunk-but-non-empty list clamps to the last comment instead of bouncing to
+// the default, mirroring applyRelRestore's clamping.
+function restoreLastSidebarFocus() {
+  const want = lastSidebarFocus
+  if (!want || want.focus === 'new') {
+    enterComments()
+    return
+  }
+  const n = visibleComments().length
+  if (n === 0) {
+    enterComments()
+    return
+  }
+  cs.sel = Math.min(want.sel, n - 1)
+  if (want.focus === 'thread') {
+    cs.focus = 'thread'
+    cs.threadPos = Math.min(want.threadPos, reactionCount())
+    focusThread()
+  } else {
+    toComment()
+  }
 }
 
 // sidebarHintRail — the collapsed state: a narrow rail on the right edge with
