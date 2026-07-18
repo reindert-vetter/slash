@@ -275,42 +275,111 @@ test.describe('PR Review Tree — PR inbox', () => {
     for (let i = 0; i < idx; i++) await page.keyboard.press('ArrowDown')
   }
 
-  // Enter and ArrowRight must be interchangeable on the keyboard-selected row
-  // (src/overview.mjs's setupKeyboard: both call activateSelected()). On a
-  // non-generated row (12801, no graph yet) that means both keys open the
-  // popover with "Genereer review-boom" first, same as a mouse click would.
-  for (const key of ['Enter', 'ArrowRight']) {
-    test(`${key} opens the popover on a non-generated row, same as a click`, async ({ page }) => {
-      await page.goto('/pr-overview')
-      await page.waitForLoadState('networkidle')
+  // Enter always just opens the popover menu on the keyboard-selected row
+  // (src/overview.mjs's setupKeyboard: Enter calls activateSelected(),
+  // unchanged). On a non-generated row (12801, no graph yet) that means
+  // Enter opens the popover with "Genereer review-boom" first, same as a
+  // mouse click would — it never navigates or generates by itself.
+  test('Enter opens the popover on a non-generated row, same as a click', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
 
-      await selectRowByKeyboard(page, 12801)
-      await page.keyboard.press(key)
+    await selectRowByKeyboard(page, 12801)
+    await page.keyboard.press('Enter')
 
-      const generate = page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')
-      await expect(generate).toBeVisible()
-      await expect(generate).toHaveText(/Genereer review-boom/)
-      // No navigation happened — a non-generated row never links anywhere.
-      await expect(page).toHaveURL(/\/pr-overview$/)
+    const generate = page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')
+    await expect(generate).toBeVisible()
+    await expect(generate).toHaveText(/Genereer review-boom/)
+    // No navigation happened — a non-generated row never links anywhere.
+    await expect(page).toHaveURL(/\/pr-overview$/)
+  })
+
+  // On an already-generated row (12903 has a graph), Enter opens the same
+  // popover as a click would — with the ingested action set ("Open
+  // review-boom" / "Opnieuw genereren") instead of "Genereer" — but does not
+  // navigate by itself; it takes the popover's own "Open review-boom" click
+  // to actually go to /pr/<id>.
+  test('Enter opens the popover on a generated row, same as a click', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    await selectRowByKeyboard(page, 12903)
+    await page.keyboard.press('Enter')
+
+    const openTree = page.locator('[data-testid="pr-popover"] [data-testid="open-tree"]')
+    await expect(openTree).toBeVisible()
+    await expect(openTree).toHaveText(/Open review-boom/)
+    // No navigation happened yet — only the popover opened.
+    await expect(page).toHaveURL(/\/pr-overview$/)
+  })
+
+  // ArrowRight deliberately diverges from Enter: it's the "act now" key
+  // (mirrors the → convention on /pr/<id>, see .claude/rules/keyboard-
+  // navigation.md), not "open the menu". On an already-generated row it
+  // jumps straight into the tree — no popover ever shows.
+  test('ArrowRight navigates straight into an already-generated row, no popover', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    await selectRowByKeyboard(page, 12903)
+    await page.keyboard.press('ArrowRight')
+
+    await expect(page).toHaveURL(/\/pr\/12903$/)
+    await expect(page.locator('[data-testid="pr-popover"]')).toHaveCount(0)
+  })
+
+  // On a not-yet-ingested row, ArrowRight generates the tree and lands in it
+  // automatically on success — reusing the existing popover's busy/stage UI
+  // (opened automatically, not by a click) rather than introducing new
+  // markup. See openOrGenerate/activateSelectedForward in src/overview.mjs.
+  test('ArrowRight generates a not-yet-ingested row and opens it automatically', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    let resolveIngest
+    const ingestDone = new Promise((resolve) => {
+      resolveIngest = resolve
     })
-  }
-
-  // On an already-generated row (12903 has a graph), both keys must open the
-  // same popover as a click would — but with the ingested action set
-  // ("Open review-boom" / "Opnieuw genereren") instead of "Genereer".
-  for (const key of ['Enter', 'ArrowRight']) {
-    test(`${key} opens the popover on a generated row, same as a click`, async ({ page }) => {
-      await page.goto('/pr-overview')
-      await page.waitForLoadState('networkidle')
-
-      await selectRowByKeyboard(page, 12903)
-      await page.keyboard.press(key)
-
-      const openTree = page.locator('[data-testid="pr-popover"] [data-testid="open-tree"]')
-      await expect(openTree).toBeVisible()
-      await expect(openTree).toHaveText(/Open review-boom/)
-      // No navigation happened yet — only the popover opened.
-      await expect(page).toHaveURL(/\/pr-overview$/)
+    await page.route('**/api/ingest', async (route) => {
+      const body = JSON.parse(route.request().postData() || '{}')
+      expect(body.pr).toBe(12801)
+      await ingestDone
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
     })
-  }
+    await page.route('**/api/ingest/progress*', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"stage":"scan"}' })
+    })
+
+    await selectRowByKeyboard(page, 12801)
+    await page.keyboard.press('ArrowRight')
+
+    // The popover opened by itself (no click) and shows the same busy state
+    // a mouse-driven "Genereer review-boom" click would.
+    const generate = page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')
+    await expect(generate).toBeVisible()
+    await expect(generate).toHaveText(/Blocks scannen/)
+
+    resolveIngest()
+    await expect(page).toHaveURL(/\/pr\/12801$/)
+  })
+
+  // A failed ArrowRight-triggered generate behaves exactly like a failed
+  // click: the popover stays open with the inline error, the reviewer stays
+  // on the overview.
+  test('a failed ArrowRight generate keeps the popover open with an inline error', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    await page.route('**/api/ingest', async (route) => {
+      await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"gh unreachable"}' })
+    })
+
+    await selectRowByKeyboard(page, 12801)
+    await page.keyboard.press('ArrowRight')
+
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="generate-error"]')).toHaveText(
+      /gh unreachable/,
+    )
+    await expect(page).toHaveURL(/\/pr-overview$/)
+  })
 })

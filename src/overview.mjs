@@ -1269,6 +1269,73 @@ function activateSelected() {
   el.click()
 }
 
+// findPrByNumber looks up a PR object (carrying hasGraph) by number across
+// every place a pr-row can currently be rendered from: the live sections
+// (including PRs lifted into a stack — those are the same object references
+// pushed into `all` in mainContent, so they're found here too) and, when the
+// search box is active, the search results. recentPrs is deliberately not
+// searched: its rows are plain <a href> links (already handled by the
+// a[href] branch in activateSelectedForward below), not popover rows, and it
+// doesn't carry hasGraph anyway.
+function findPrByNumber(number) {
+  for (const sec of state.sections) {
+    const found = sec.prs.find((p) => p.number === number)
+    if (found) return found
+  }
+  if (Array.isArray(state.searchResults)) {
+    const found = state.searchResults.find((p) => p.number === number)
+    if (found) return found
+  }
+  return null
+}
+
+// openOrGenerate is the → ("go right") action for a pr-row: unlike Enter
+// (which always just opens the popover menu, unchanged), → means "act now" —
+// jump straight into the tree if it exists, or generate it and land there
+// automatically once it's ready. A hasGraph PR navigates immediately, exactly
+// like clicking "Open review-boom". A not-yet-ingested PR opens its popover
+// (togglePopover — at this call site ui.openPopover is always null, since
+// kbHandler only reaches here when no popover is already open, so this always
+// opens rather than toggles closed) and immediately fires generatePage(pr)
+// with the default redirect:true — this reuses 100% of the existing busy
+// spinner/stage-label/inline-error UI (ingestBusy/ingestLabel/ingestIcon,
+// generate-error) with zero new markup: it's functionally "click the row,
+// click Genereer" collapsed into one keystroke. On success generatePage
+// itself redirects into /pr/<id>; on failure the popover stays open with the
+// same inline error a mouse-driven attempt would show.
+function openOrGenerate(pr) {
+  if (pr.hasGraph) {
+    location.href = '/pr/' + pr.number
+    return
+  }
+  togglePopover(pr.number)
+  generatePage(pr)
+}
+
+// activateSelectedForward is → 's row-activation counterpart to
+// activateSelected (which Enter keeps using unchanged). A recent-drawer item
+// is a plain <a href> and already means "go there now", so it's handled
+// identically to Enter. A pr-row instead resolves its PR object (via
+// data-pr + findPrByNumber) and routes through openOrGenerate; if the PR
+// can't be resolved (shouldn't happen — defensive only) it falls back to the
+// existing activateSelected() so → never becomes a dead key.
+function activateSelectedForward() {
+  const rows = currentRows()
+  const el = rows[selIndex]
+  if (!el) return
+  if (el.matches('a[href]')) {
+    location.href = el.getAttribute('href')
+    return
+  }
+  const number = Number(el.dataset.pr)
+  const pr = findPrByNumber(number)
+  if (!pr) {
+    activateSelected()
+    return
+  }
+  openOrGenerate(pr)
+}
+
 let kbHandler = null
 function setupKeyboard() {
   if (kbHandler) window.removeEventListener('keydown', kbHandler, true)
@@ -1306,7 +1373,7 @@ function setupKeyboard() {
         break
       case 'ArrowRight':
         e.preventDefault()
-        activateSelected()
+        activateSelectedForward()
         break
     }
   }

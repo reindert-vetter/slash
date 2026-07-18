@@ -191,6 +191,26 @@ anders-geordende resultatenset laat de ring nooit op de enige overgebleven,
 niet-geselecteerde rij landen; de lade dicht-klappen met een selectie erin
 laat de selectie los i.p.v. 'm op een pr-row te laten landen).
 
+**`→` en `Enter` betekenen bewust iets anders op de geselecteerde rij.**
+`Enter` (`activateSelected`) blijft ongewijzigd: klik op de rij, wat het
+popover-menu opent (of, voor een "Recent gegenereerd"-item, direct navigeert —
+dat is al een `<a href>`). `→` (`activateSelectedForward`) is de "ga meteen
+door"-toets, analoog aan de `→`-conventie op `/pr/<id>` (zie
+`keyboard-navigation.md`: `→` stapt een stop verder, `Enter` opent een menu):
+op een `hasGraph`-rij navigeert `→` **direct** naar `/pr/<n>` (identiek aan
+"Open review-boom", geen popover zichtbaar); op een niet-geïngeste rij opent
+`→` (`openOrGenerate`) hetzelfde popover als `Enter` zou doen — nodig om de
+bestaande busy-spinner/stage-tekst/foutmelding te tonen tijdens het genereren,
+geen nieuwe UI — en vuurt meteen `generatePage(pr)` (default `redirect:true`)
+af, zodat de tree bij succes automatisch opent. Faalt het, dan blijft het
+popover open met dezelfde inline foutmelding als een muis-gedreven poging.
+`findPrByNumber` zoekt het `pr`-object (met `hasGraph`) op via `data-pr` in
+`state.sections` (dekt ook gestapelde rijen — dezelfde objectreferenties) en
+`state.searchResults`; geen match (defensief) valt terug op het bestaande
+`activateSelected()`. `handlePopoverKey` blijft `→` afvangen zolang een
+popover al open is, dus een tweede `→`-druk op een net geopend
+genereer-popover doet niets extra's.
+
 **De "Recent gegenereerd"-lade doet mee in de `↓`-navigatie zodra hij
 openstaat** — bewuste keuze: `currentRows()` blijft simpelweg alle
 `[data-nav-row]`-elementen (zowel `pr-row` als `recent-item`), dus zodra de
