@@ -9,6 +9,7 @@ import { reactive } from './vendor/arrow.js'
 import { highlight } from './Block.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
+import { avatarHTML } from './avatar.mjs'
 
 // ── Real comments (task_code_comment workflow) ────────────────────────────────
 // This section IS wired to the API. Placing a comment starts a Workflow
@@ -1079,13 +1080,17 @@ function commentRow(c, i) {
     >
       <span class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
       <span class="flex min-w-0 flex-col gap-0.5">
-        <span class="flex items-center gap-1.5">
-          <span
-            class="truncate text-xs font-medium text-slate-800 dark:text-zinc-200"
-            .innerHTML="${commentBody(c)}"
-          ></span>
+        <span class="flex items-center gap-1.5" data-testid="comment-author-line">
+          ${avatarHTML(c.author, c.avatarUrl, 'h-4 w-4')}
+          <span class="truncate text-[11px] font-medium text-slate-600 dark:text-zinc-400" data-testid="comment-author"
+            >${c.author || 'onbekend'}</span
+          >
           ${() => sourceBadge(c)}
         </span>
+        <span
+          class="truncate text-xs font-medium text-slate-800 dark:text-zinc-200"
+          .innerHTML="${commentBody(c)}"
+        ></span>
         <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
           >${() => c.file + ':' + c.line + ' · ' + c.reactionCount + ' reacties · ' + c.status}</span
         >
@@ -1109,10 +1114,19 @@ function sourceBadge(c) {
 
 // reactionBubble — one message in the thread. `i`/`total` let it light up when it
 // is the one the reviewer walked up to (cs.threadPos counts from the bottom).
+// Each bubble carries its own author's avatar+name above it — reactions/replies
+// have an `author` just like the comment root (see threadMessages), so this
+// works for every message in the thread, not only the opening one.
 function reactionBubble(r, i, total) {
   const mine = r.source === 'ui'
   return html`
-    <div class="${() => 'flex ' + (mine ? 'justify-end' : 'justify-start')}">
+    <div class="${() => 'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}">
+      <div class="flex items-center gap-1" data-testid="reaction-author-line">
+        ${avatarHTML(r.author, r.avatarUrl, 'h-4 w-4')}
+        <span class="text-[10px] font-medium text-slate-500 dark:text-zinc-400" data-testid="reaction-author"
+          >${r.author || 'onbekend'}</span
+        >
+      </div>
       <div
         class="${() => {
           const sel = cs.focus === 'thread' && cs.threadPos === total - i
@@ -1966,7 +1980,11 @@ function prWideItem(c, i) {
           class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"
         ></span>
         <span class="flex min-w-0 flex-col gap-0.5">
-          <span class="flex flex-wrap items-center gap-1.5">
+          <span class="flex flex-wrap items-center gap-1.5" data-testid="pr-wide-author-line">
+            ${avatarHTML(c.author, c.avatarUrl, 'h-4 w-4')}
+            <span class="text-[11px] font-medium text-slate-600 dark:text-zinc-400" data-testid="pr-wide-author"
+              >${c.author || 'onbekend'}</span
+            >
             <span
               class="rounded-full bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-500 dark:text-zinc-400"
               data-testid="pr-wide-kind"

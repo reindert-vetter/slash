@@ -9,6 +9,7 @@
 
 import { reactive, html, watch } from './vendor/arrow.js'
 import { initTheme, themeToggleButton } from './theme.mjs'
+import { avatarHTML } from './avatar.mjs'
 
 initTheme()
 
@@ -182,23 +183,18 @@ function checksChip(status) {
 
 function reviewerAvatar(r) {
   const login = r.login || '?'
-  const initials = login.slice(0, 2).toUpperCase()
   const pending = r.state !== 'APPROVED' && r.state !== 'CHANGES_REQUESTED' && r.state !== 'COMMENTED'
   const label = STATE_LABEL[r.state] || r.state || ''
+  // Precompute per the branch avatarHTML takes internally (image vs
+  // initials-fallback), so the pending-dimming keeps looking exactly like it
+  // did before this circle was extracted into the shared avatarHTML helper.
+  const extra = pending ? (r.avatarUrl ? 'opacity-50 grayscale' : 'opacity-60') : ''
+  // avatarHTML derives initials from just the first two characters, so
+  // passing "login — label" as the name keeps the same tooltip text the
+  // reviewer strip had before, without a separate title param.
   return html`
-    <span class="relative inline-block" title="${login + ' — ' + label}">
-      ${r.avatarUrl
-        ? html`<img
-            src="${r.avatarUrl}"
-            alt=""
-            loading="lazy"
-            class="${'h-6 w-6 rounded-full object-cover ring-1 ring-slate-200 dark:ring-zinc-700 ' + (pending ? 'opacity-50 grayscale' : '')}"
-          />`
-        : html`<span
-            class="${'flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 dark:bg-zinc-700 text-[10px] font-medium uppercase text-slate-700 dark:text-zinc-200 ring-1 ring-slate-200 dark:ring-zinc-700 ' +
-            (pending ? 'opacity-60' : '')}"
-            >${initials}</span
-          >`}
+    <span class="relative inline-block">
+      ${avatarHTML(login + ' — ' + label, r.avatarUrl, 'h-6 w-6', extra)}
       ${r.state === 'APPROVED'
         ? html`<span
             class="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-white ring-2 ring-white dark:ring-zinc-900"

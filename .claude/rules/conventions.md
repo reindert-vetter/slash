@@ -282,6 +282,34 @@
   weinig toevoegt en een halfafgekapte `**`/code-fence lelijker oogt dan kale
   tekst — de thread-header-titel (`selComment().body`) en `workflowNote`'s
   Taken-snippet blijven daarom platte tekst.
+- **Gedeelde avatar-helper (`src/avatar.mjs`), auteur+avatar bij elke
+  comment/reply.** `avatarHTML(name, avatarUrl, sizeCls, extraCls)` is
+  geëxtraheerd uit `overview.mjs`'s `reviewerAvatar` (de reviewer-avatars in
+  de PR-lijst): een `<img>` als er een `avatarUrl` is, anders een
+  initialen-cirkel (eerste twee letters, uppercase) — exact dezelfde kleuren/
+  vorm als de PR-lijst. `reviewerAvatar` roept 'm nu zelf aan voor zijn eigen
+  cirkel (de goedgekeurd/wijzigingen-gevraagd-badge eromheen blijft lokaal in
+  `overview.mjs`). Een `<img>` valt bij een laad-fout terug op dezelfde
+  initialen-cirkel via een statische `onerror`-attribuut-string (geen
+  reactieve binding nodig — dat is geen arrow.js-valkuil, `onerror` wordt hier
+  nooit door arrow.js zelf gezet) zodat een onbereikbare/offline afbeelding
+  (bv. `SLASH_GITHUB=off`-tests) nooit een broken-image-icoon achterlaat.
+  `RelatedPanel.mjs` gebruikt 'm in `commentRow` (comment-rij, `h-4 w-4`),
+  `reactionBubble` (elke thread-bubble — de synthetische opening én elke
+  reactie, beide dragen al een `author`, zie `threadMessages`) en `prWideItem`
+  (de PR-brede comments): auteur-naam + avatar op een eigen regel boven de
+  body/kind-badge (`data-testid=comment-author`/`reaction-author`/
+  `pr-wide-author`, plus de bijbehorende `*-author-line`-wrapper). **Datamodel-
+  kanttekening:** comments/reacties (`modules/comments`) dragen wél een
+  `author`-login (`Comment.Author`/`Reaction.Author`, ook gevuld voor
+  GitHub-geïmporteerde comments/replies, zie `comment_import.go`), maar
+  **geen avatar-URL** — de GitHub-fetch (`modules/github`) threadt alleen
+  `user.login` door, nooit `user.avatar_url`. Elke comment-/reply-avatar
+  rendert dus vandaag altijd als initialen-cirkel; een latere backend-
+  uitbreiding (avatar-URL meenemen in `ghComment`/`Reply`/`ReviewComment`/
+  `GeneralComment` + een nieuwe kolom in `comments.db`) zou de echte
+  GitHub-profielfoto laten verschijnen zonder de frontend te hoeven wijzigen
+  (`avatarHTML` ondersteunt het al). Zie `tests/comment-author-avatar.spec.mjs`.
 - **Thema: systeem/licht/donker, met een handmatige rondloop-knop
   (`src/theme.mjs`).** Het thema volgde ooit **uitsluitend** de
   systeeminstelling (`prefers-color-scheme`, Tailwind `darkMode:'media'`,
