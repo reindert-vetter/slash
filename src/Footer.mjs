@@ -8,6 +8,12 @@
 // bottom-[…] bindings in home.mjs/RelatedPanel.mjs), so the footer may grow
 // without sliding under the content.
 //
+// The theme toggle (system/light/dark) used to live in this footer's top-right
+// corner, but that made it unreachable in list mode (the footer is hidden
+// there) — it is now its own always-visible fixed element, mounted alongside
+// this Footer in home.mjs (see ThemeToggleCorner there), so it stays clickable
+// regardless of state.mode.
+//
 // The footer reads ONLY the plain snapshots state.footerUnit/state.footerExplain
 // that home.mjs' footer watch pushes (the setRelated/setCommentScope decoupling
 // pattern): it never touches blockRows/b.code itself — that would make it a
@@ -18,7 +24,6 @@
 
 import { html } from './vendor/arrow.js'
 import { highlight, markChars, UNDERLINE_CLS } from './Block.mjs'
-import { themeToggleButton } from './theme.mjs'
 
 // line builds the innerHTML for one footer diff line: a non-selectable +/- gutter
 // followed by the Prism-highlighted PHP, so it reads exactly like a row in the
@@ -77,7 +82,6 @@ export default function Footer(state) {
         `fixed bottom-0 left-0 right-0 z-20 ${state.mode === 'diff' ? 'flex' : 'hidden'} ${state.footerExplain ? 'h-[140px]' : 'h-[90px]'} justify-center border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-2.5`}"
       data-testid="footer"
     >
-      <div class="absolute right-4 top-1/2 -translate-y-1/2">${themeToggleButton('h-8 w-8')}</div>
       <div class="${() => wrapClass(state)}">
         <p
           class="${() =>

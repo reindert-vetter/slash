@@ -704,8 +704,10 @@ de class-string is één reactieve `class="${() => …}"`-functie-binding, dus
 geen keyed-node-valkuil, zie `.claude/rules/conventions.md`). **Los daarvan**
 toont de footer, zodra hij zichtbaar is, alleen een inline diff (`- oud` /
 `+ nieuw`, Prism-highlighted) als de **geselecteerde unit precies één regel**
-beslaat — een meerregelige groep laat de footer-balk gewoon staan (leeg, op de
-theme-toggle en eventueel de AI-omschrijving na), maar zonder diff-inhoud.
+beslaat — een meerregelige groep laat de footer-balk gewoon staan (leeg, op
+eventueel de AI-omschrijving na), maar zonder diff-inhoud. De theme-toggle zit
+niet meer in de footer — zie "Thema" in `.claude/rules/conventions.md`
+(`ThemeToggleCorner` in `home.mjs`, altijd zichtbaar, ongeacht `state.mode`).
 Deze inline-diff-inhoud volgt de **gefocuste kolom en diens huidige
 granulariteit/cursor** — het top-level block (`state.gran`/`state.change`) op
 `focusLevel 0`, of de eigen `state.drillCursor[focusLevel-1]`-cursor van een

@@ -318,10 +318,21 @@
     gedeelde component-functie die beide pagina's importeren): een klik cyclet
     `system → light → dark → system` (`cycleTheme()`, persisteert meteen naar
     `localStorage`) en toont een monitor/zon/maan-icoon voor de huidige staat.
-    Plek: de **footer** (`Footer.mjs`, `/pr/<id>` — rechtsonder, absoluut
-    gepositioneerd in de altijd-zichtbare footer-strip) en de **overview-
-    header** (`overview.mjs`'s `headerBlock`, naast de bestaande PR-teller-pill,
-    `/pr-overview` heeft geen footer).
+    Plek: op `/pr/<id>` een **eigen, altijd-zichtbaar `position:fixed`-element**
+    (`ThemeToggleCorner()` in `home.mjs`, `data-testid=theme-toggle-corner`,
+    `bottom-6 left-6 z-30`) — **niet** in `Footer.mjs` (die footer toont zich
+    alleen in `state.mode==='diff'`, zie "Footer" in
+    `.claude/rules/keyboard-navigation.md`; de knop zat daar ooit in de
+    rechterbovenhoek van de footer-strip, maar was daardoor onbereikbaar in
+    list-mode — een regressie die `tests/theme.spec.mjs` ving). Zowel
+    `PrInfoPanel` als `DetailPanel` reserveren toch al een
+    `bottom-[90px]`/`[140px]`-strook voor de footer, **ongeacht** `state.mode`
+    (zie de `class`-bindingen in `home.mjs`), dus `bottom-6 left-6` valt in die
+    reservering — leeg zolang de footer verborgen is, en met `z-30` (boven de
+    footer's `z-20`) zichtbaar bovenop de footer-achtergrond zodra die wél
+    toont. Op `/pr-overview` (geen footer, geen `state.mode`) staat de knop
+    zoals voorheen in de **overview-header** (`overview.mjs`'s `headerBlock`,
+    naast de bestaande PR-teller-pill).
   - **Persistentie:** `localStorage.getItem/setItem('theme', ...)` —
     bewust **buiten** `bindUrlState`/de query-string (geen navigatiepositie,
     hoort niet in een deelbare link) maar ook niet efemeer zoals

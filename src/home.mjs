@@ -53,7 +53,7 @@ import RelatedPanel, {
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
-import { initTheme } from './theme.mjs'
+import { initTheme, themeToggleButton } from './theme.mjs'
 
 initTheme()
 
@@ -4148,6 +4148,27 @@ function PrInfoPanel(state) {
   `
 }
 
+// ThemeToggleCorner — the theme toggle (system/light/dark, src/theme.mjs), as
+// its own always-visible fixed element, a sibling of PrInfoPanel/BlockList/
+// DetailPanel/CommentsSidebar/Footer. It used to live inside Footer.mjs's
+// top-right corner, but the footer itself is only shown in diff mode
+// (state.mode==='diff') — that made the toggle unreachable in list mode. Both
+// PrInfoPanel and DetailPanel already reserve a bottom-[90px]/[140px] strip
+// for the footer regardless of state.mode (see their class bindings above), so
+// bottom-6 left-6 sits inside that reserved, otherwise-empty band in both
+// modes: below the pr-index/PrInfoPanel column (which stops at
+// bottom-[90px]), and clear of the comments/taken sidebar (a right-hand
+// overlay, see detail-layout.md). z-30 keeps it above the footer (z-20) for
+// the moments the footer is visible and would otherwise render its white
+// background over the same corner.
+function ThemeToggleCorner() {
+  return html`
+    <div class="fixed bottom-6 left-6 z-30" data-testid="theme-toggle-corner">
+      ${themeToggleButton('h-8 w-8 bg-white dark:bg-zinc-900 shadow-sm ring-1 ring-slate-200 dark:ring-zinc-800')}
+    </div>
+  `
+}
+
 // DetailPanel — the area right of the fixed sidebar. It shows the block card for
 // the selected row, and the next row's card already (a look-ahead preview). When
 // both cards are from the same file, a dashed connector links them.
@@ -4432,6 +4453,7 @@ CommentsSidebar(
 )(app)
 MenuHost()(app)
 Footer(state)(app)
+ThemeToggleCorner()(app)
 
 // Start with the search box already focused so the reviewer can type straight
 // away — a frame later, once BlockList has rendered the input into the DOM.

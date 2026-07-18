@@ -1,6 +1,8 @@
 // theme.mjs — the three-state (system / light / dark) theme preference,
-// shared between /pr/<id> (index.html + home.mjs, via Footer.mjs) and
-// /pr-overview (overview.html + overview.mjs). Persisted in localStorage —
+// shared between /pr/<id> (index.html + home.mjs, via ThemeToggleCorner — an
+// always-visible fixed element, deliberately not inside Footer.mjs, which is
+// only shown in diff mode) and /pr-overview (overview.html + overview.mjs).
+// Persisted in localStorage —
 // deliberately *not* the URL (bindUrlState/urlState.mjs): a theme choice isn't
 // a navigation position you'd want in a shareable link, but it should survive
 // a refresh, so a plain efemeral reactive() alone (like state.showApproved)

@@ -90,6 +90,14 @@ test.describe('theme — manual toggle (systeem/licht/donker)', () => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('pr-index')).toBeVisible()
     const toggle = page.getByTestId('theme-toggle')
+
+    // The toggle lives in its own always-visible fixed element
+    // (ThemeToggleCorner, home.mjs), not inside the footer — the footer itself
+    // is hidden in list mode (state.mode==='list', see the "Footer" section in
+    // keyboard-navigation.md), so this pins down that the toggle is reachable
+    // regardless: it must be visible (and clickable) here even though the
+    // footer is not.
+    await expect(page.getByTestId('footer')).toBeHidden()
     await expect(toggle).toBeVisible()
 
     const isDark = () => page.evaluate(() => document.documentElement.classList.contains('dark'))
