@@ -2395,11 +2395,15 @@ function sidebarHintRail(state) {
     <button
       type="button"
       class="${() =>
-        // The footer grows to 140px while it shows an AI unit description
-        // (state.footerExplain, diff-mode only) — mirror <main>'s reactive
-        // bottom reservation so the rail never slides in behind it. Whole-value
-        // function binding (arrow.js class rule, see conventions.md).
-        `fixed right-0 top-6 ${state && state.footerExplain ? 'bottom-[140px]' : 'bottom-[90px]'} z-20 flex w-12 flex-col items-center justify-center gap-4 rounded-l-xl border border-r-0 border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400`}"
+        // Mirror <main>'s reactive bottom reservation (home.mjs's DetailPanel):
+        // none once the footer has nothing to show (state.footerVisible
+        // false), 90px for just the inline diff, 140px while it also shows an
+        // AI unit description — so the rail never slides in behind it, but
+        // doesn't reserve dead space once the footer itself is gone. Whole-
+        // value function binding (arrow.js class rule, see conventions.md).
+        `fixed right-0 top-6 ${
+          !(state && state.footerVisible) ? 'bottom-6' : state.footerExplain ? 'bottom-[140px]' : 'bottom-[90px]'
+        } z-20 flex w-12 flex-col items-center justify-center gap-4 rounded-l-xl border border-r-0 border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400`}"
       data-testid="sidebar-collapsed"
       title="Comments &amp; taken (g)"
       aria-label="Comments en taken tonen"
@@ -2465,9 +2469,12 @@ export function CommentsSidebar(state, commentTarget, openCompose, openTaskFn) {
         cs.sidebarOpen
           ? html`<div
               class="${() =>
-                // Reactive bottom reservation: the footer grows to 140px while
-                // it shows an AI unit description (see sidebarHintRail above).
-                `fixed right-6 top-6 ${state && state.footerExplain ? 'bottom-[140px]' : 'bottom-[90px]'} z-20 flex w-[36rem] min-h-0 flex-col gap-3`}"
+                // Reactive bottom reservation, same 3-way rule as
+                // sidebarHintRail above (mirrors <main>'s DetailPanel binding
+                // in home.mjs).
+                `fixed right-6 top-6 ${
+                  !(state && state.footerVisible) ? 'bottom-6' : state.footerExplain ? 'bottom-[140px]' : 'bottom-[90px]'
+                } z-20 flex w-[36rem] min-h-0 flex-col gap-3`}"
               data-testid="comments-sidebar"
             >
               ${commentsSection(state, commentTarget, openCompose)}

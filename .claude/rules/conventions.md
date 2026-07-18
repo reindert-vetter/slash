@@ -89,6 +89,34 @@
   preview-kaart-aanwezigheid dat de gerenderde diff-tekst van de geselecteerde
   kaart altijd bij dát block's eigen `/api/code`-bron hoort — nooit bij een
   buurblock).
+- **arrow.js — een STATISCH geïnterpoleerde waarde die per instantie template
+  óf string is (`` ${cond ? html`…` : ''} `` zonder `() =>`) lekt bij
+  chunk-hergebruik de template-functie als tekst.** Waargenomen in de
+  drill-hint-chips van `RelatedPanel.mjs`: op de plek van de approval-teller
+  verscheen letterlijk **`i=>je(n,i)`** — dat is (in de gevendorde,
+  geminificeerde build) de template-functie zelf: `html`` ` retourneert
+  `const n=(i=>je(n,i)); n.isT=!0` (`bt` in `vendor/arrow.js`). Mechanisme:
+  hydrateert een chunk zo'n statisch slot met de **string**-tak (`''`), dan
+  registreert `Ve` een **Text-node-binding** voor dat slot en blijft het chunk
+  herbruikbaar (`r` blijft true); arrow cachet chunks per template-shape (`g`)
+  en hergebruikt zo'n gecacht chunk voor een latere instantie met dezelfde
+  shape (`U`→`pe`). Het statische patch-pad `pe` kent maar drie gevallen —
+  attribuut, functie-binding, of **`textNode.data = waarde`** — dus is de
+  nieuwe waarde een **template**, dan wordt de template-functie naar
+  `Text.data` geschreven en gestringificeerd. (Hydrateert de template-tak
+  eerst, dan zet die juist `r=false` — vandaar dat de bug intermitterend is en
+  een verse eerste render 'm niet toont.) **Oplossing, twee toegestane
+  vormen:** (1) maak het slot **altijd een string** — bereken de tekst vooraf
+  als platte string op de descriptor (bv. `approveText` in
+  `nestedChangedKids`, `home.mjs`) en rendeer in een altijd-aanwezig element
+  (verbergen kan met een vooraf berekende hele-waarde class); of (2) maak er
+  een **`${() => …}`-functie-binding** van — arrow's reactieve pad (`re`)
+  handelt template↔`''`-wissels wél correct af, en een closure die alleen een
+  plat (niet-reactief) descriptor-object leest registreert geen deps en kan
+  dus niets co-subscriben. Statisch een template interpoleren mag alléén als
+  dat slot in élke instantie van die shape een template is (zoals `testsBar`'s
+  altijd-gevulde chip-`.map()`). Regressietest: de `=>`-assert in
+  `tests/related-nested-chip.spec.mjs`.
 - **arrow.js hergebruikt een keyed node zonder z'n function-bindings te
   herdraaien — en verliest soms een `.innerHTML`/attribuut-update bij
   co-subscribers.** Twee samenhangende valkuilen, beide waargenomen in de
@@ -346,21 +374,26 @@
     gedeelde component-functie die beide pagina's importeren): een klik cyclet
     `system → light → dark → system` (`cycleTheme()`, persisteert meteen naar
     `localStorage`) en toont een monitor/zon/maan-icoon voor de huidige staat.
-    Plek: op `/pr/<id>` een **eigen, altijd-zichtbaar `position:fixed`-element**
-    (`ThemeToggleCorner()` in `home.mjs`, `data-testid=theme-toggle-corner`,
-    `bottom-6 left-6 z-30`) — **niet** in `Footer.mjs` (die footer toont zich
-    alleen in `state.mode==='diff'`, zie "Footer" in
-    `.claude/rules/keyboard-navigation.md`; de knop zat daar ooit in de
-    rechterbovenhoek van de footer-strip, maar was daardoor onbereikbaar in
-    list-mode — een regressie die `tests/theme.spec.mjs` ving). Zowel
-    `PrInfoPanel` als `DetailPanel` reserveren toch al een
-    `bottom-[90px]`/`[140px]`-strook voor de footer, **ongeacht** `state.mode`
-    (zie de `class`-bindingen in `home.mjs`), dus `bottom-6 left-6` valt in die
-    reservering — leeg zolang de footer verborgen is, en met `z-30` (boven de
-    footer's `z-20`) zichtbaar bovenop de footer-achtergrond zodra die wél
-    toont. Op `/pr-overview` (geen footer, geen `state.mode`) staat de knop
-    zoals voorheen in de **overview-header** (`overview.mjs`'s `headerBlock`,
-    naast de bestaande PR-teller-pill).
+    Plek op `/pr/<id>`: een **smalle rij in `prInfoCard`** (`home.mjs`,
+    `data-testid=pr-info-theme-row`), direct vóór de PR-samenvatting
+    (`data-testid=pr-info-summary`) — **niet** meer een eigen, altijd-
+    zichtbaar `position:fixed`-hoekelement (de oudere `ThemeToggleCorner`,
+    `bottom-6 left-6 z-30`, is verwijderd) en ook niet in `Footer.mjs` (die
+    footer toont zich sinds kort alleen nog als er daadwerkelijk iets te
+    previewen is, `state.footerVisible`, zie "Footer" in
+    `.claude/rules/keyboard-navigation.md` — geen betrouwbare plek voor een
+    permanent bereikbare knop). Bewuste consequentie: `prInfoCard` bestaat
+    alleen terwijl `state.showDescription` waar is (stop 1 van de
+    links→rechts-navigatieketen, zie `detail-layout.md`), dus de knop is
+    **niet** meer standaard zichtbaar — dat is hier expliciet akkoord
+    bevonden, anders dan de eerdere `ThemeToggleCorner`-oplossing die juist
+    was ingevoerd om de knop *wél* altijd bereikbaar te maken (de knop zat
+    daarvóór in de rechterbovenhoek van de footer-strip en was daardoor
+    onbereikbaar in list-mode — zie `tests/theme.spec.mjs`, dat nu andersom
+    eerst `←` naar stop 1 drukt vóór het de knop verwacht). Op `/pr-overview`
+    (geen footer, geen `state.mode`) staat de knop ongewijzigd in de
+    **overview-header** (`overview.mjs`'s `headerBlock`, naast de bestaande
+    PR-teller-pill) — die pagina heeft geen `showDescription`-gating.
   - **Persistentie:** `localStorage.getItem/setItem('theme', ...)` —
     bewust **buiten** `bindUrlState`/de query-string (geen navigatiepositie,
     hoort niet in een deelbare link) maar ook niet efemeer zoals

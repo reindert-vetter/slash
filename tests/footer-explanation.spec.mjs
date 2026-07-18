@@ -52,9 +52,10 @@ test.describe('PR Review Tree — footer AI description for if-units', () => {
     page,
   }) => {
     await page.goto('/pr/97')
-    // Only the parent is in the left list; the child is pulled into
-    // "Onderliggende code" via the event_listener relation.
-    await expect(page.getByTestId('block-row')).toHaveCount(1)
+    // The parent + ExplainNoIfAction (unrelated, see the test below) are in
+    // the left list; the child is pulled into "Onderliggende code" via the
+    // event_listener relation.
+    await expect(page.getByTestId('block-row')).toHaveCount(2)
     await expect(page.getByTestId('related-item').first()).toContainText('ExplainChildAction::handle')
 
     // Enter the parent's diff → the footer shows the parent's group description.
@@ -75,5 +76,41 @@ test.describe('PR Review Tree — footer AI description for if-units', () => {
     // the footer follows back.
     await page.keyboard.press('ArrowLeft')
     await expect(description).toContainText('Deze groep introduceert een if-statement')
+  })
+
+  // ExplainNoIfAction's one change group is a plain, multi-line reassignment
+  // with no if-statement: neither the inline one-line diff (footerUnit, the
+  // group spans 2 rows) nor the AI description (footerExplain, no "if" in the
+  // text) has anything to show — state.footerVisible stays false. The footer
+  // bar must disappear entirely (not just its content), and the panels that
+  // reserve space for it (<main>, the comments/taken sidebar rail) must fall
+  // back to their no-reservation bottom-6, not the old always-90px floor.
+  test('a multi-row group with no if hides the footer bar AND its reserved space', async ({ page }) => {
+    await page.goto('/pr/97')
+    const row = page.getByTestId('block-row').filter({ hasText: 'ExplainNoIfAction::execute' })
+    await expect(row).toBeVisible()
+    await page.keyboard.press('Escape')
+    await row.click()
+
+    const footer = page.getByTestId('footer')
+    await expect(footer).toBeHidden() // list mode: footer never shows anyway
+
+    await page.keyboard.press('ArrowRight')
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+
+    // The only change group is the 2-line reassignment, with no if — the
+    // footer bar (and its description/inline-diff content) stays hidden even
+    // though a diff is open, unlike the old state.mode==='diff'-only rule.
+    await expect(footer).toBeHidden()
+    await expect(footer.getByTestId('footer-description')).toBeHidden()
+
+    // No reserved bottom strip: <main> (detail-panel) falls back to bottom-6
+    // instead of the old always-at-least-90px floor.
+    await expect(page.getByTestId('detail-panel')).toHaveClass(/bottom-6\b/)
+    await expect(page.getByTestId('detail-panel')).not.toHaveClass(/bottom-\[90px\]/)
+    await expect(page.getByTestId('detail-panel')).not.toHaveClass(/bottom-\[140px\]/)
+
+    // The comments/taken sidebar's collapsed hint-rail mirrors the same rule.
+    await expect(page.getByTestId('sidebar-collapsed')).toHaveClass(/bottom-6\b/)
   })
 })

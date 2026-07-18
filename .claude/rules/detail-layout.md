@@ -153,9 +153,11 @@ kolom-flow — zie de sectie "Comments/taken-sidebar" hieronder.
 
 Comments en Taken vormen samen een **eigen `position:fixed` paneel aan de
 rechterkant van het scherm** (`RelatedPanel.mjs`'s `CommentsSidebar`-export,
-`data-testid=comments-sidebar`, `right-6 top-6 w-[36rem]`, met een **reactieve**
-bottom-reservering — `bottom-[90px]`, of `bottom-[140px]` zolang de footer een
-AI-omschrijving toont (`state.footerExplain`, zie de Footer-sectie in
+`data-testid=comments-sidebar`, `right-6 top-6 w-[36rem]`, met een **reactieve**,
+3-weg bottom-reservering — `bottom-6` (geen reservering) zodra de footer niets
+toont (`!state.footerVisible`), `bottom-[90px]` zodra alleen de inline diff
+toont, of `bottom-[140px]` zolang de footer ook een AI-omschrijving toont
+(`state.footerExplain`, zie de Footer-sectie in
 `.claude/rules/keyboard-navigation.md`); de collapsed hint-rail spiegelt dat) —
 mirror van hoe `PrInfoPanel` een vast paneel links is (zie de sectie
 hierboven), **los van** `<main>`'s horizontaal scrollende kolom-flow. Gemount

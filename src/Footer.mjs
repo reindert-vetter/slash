@@ -1,18 +1,21 @@
 // Footer — the fixed bottom bar under the sidebar and detail panel. It is only
-// shown while a diff is open (any granularity — group, line or call); it holds
-// an AI-generated Dutch description of the focused unit's if-statement (when
-// the line/group contains one — see the footer watch in home.mjs) above the
-// inline diff of the active line (- removed / + added, when the active unit is
-// a single row). In list mode (no diff open) it is hidden entirely. The panels
-// above reserve 90px for it — 140px while a description shows (the reactive
-// bottom-[…] bindings in home.mjs/RelatedPanel.mjs), so the footer may grow
-// without sliding under the content.
+// shown once there is actually something to preview: state.footerVisible
+// (derived in home.mjs's updateFooter() as
+// `!!(state.footerUnit || state.footerExplain)`) — the AI-generated Dutch
+// description of the focused unit's if-statement, or the inline diff of the
+// active line (- removed / + added, when the active unit is a single row).
+// A multi-row group with neither (no if, not a single row) hides the bar
+// entirely, rather than showing an empty balk for the whole diff-mode
+// session as before. The panels above reserve 0/90/140px to match (0 when
+// !footerVisible, 90 with just the inline diff, 140 while a description also
+// shows — the reactive bottom-[…] bindings in home.mjs/RelatedPanel.mjs), so
+// nothing is reserved when the footer itself is gone.
 //
 // The theme toggle (system/light/dark) used to live in this footer's top-right
-// corner, but that made it unreachable in list mode (the footer is hidden
-// there) — it is now its own always-visible fixed element, mounted alongside
-// this Footer in home.mjs (see ThemeToggleCorner there), so it stays clickable
-// regardless of state.mode.
+// corner, then in its own always-visible fixed corner element — it now lives
+// in prInfoCard (home.mjs), in a slim row just above the PR summary, since the
+// footer here is no longer reliably present to anchor a corner slot to (see
+// the "Thema" section in conventions.md).
 //
 // The footer reads ONLY the plain snapshots state.footerUnit/state.footerExplain
 // that home.mjs' footer watch pushes (the setRelated/setCommentScope decoupling
@@ -65,21 +68,18 @@ function explainText(state) {
 }
 
 export default function Footer(state) {
-  // Only reveal the footer while a diff is open — any granularity (group,
-  // line or call) — since there is nothing to preview in list mode. The
-  // inline diff *content* below (state.footerUnit) is unrelated and still only
-  // appears once the active unit narrows to a single row; a multi-row group
-  // just shows the bar (with, when its lines contain an if, only the AI
-  // description). The footer grows to 140px while the description shows so 1-2
-  // full sentences fit above the inline diff. Every class string is one
+  // Only reveal the footer once state.footerVisible is true — there is
+  // nothing to preview otherwise (list mode, or a multi-row group with no
+  // if-statement). The footer grows to 140px while the description shows so
+  // 1-2 full sentences fit above the inline diff. Every class string is one
   // reactive function binding (arrow.js requires the full attribute value in
-  // a single binding, see .claude/rules/conventions.md); the `hidden` toggles
-  // just add/remove `display:none` on stable roots, so no keyed-node pitfall
-  // applies.
+  // a single binding, see .claude/rules/conventions.md); the `hidden` toggle
+  // just adds/removes `display:none` on this stable <footer> root, so no
+  // keyed-node pitfall applies.
   return html`
     <footer
       class="${() =>
-        `fixed bottom-0 left-0 right-0 z-20 ${state.mode === 'diff' ? 'flex' : 'hidden'} ${state.footerExplain ? 'h-[140px]' : 'h-[90px]'} justify-center border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-2.5`}"
+        `fixed bottom-0 left-0 right-0 z-20 ${state.footerVisible ? 'flex' : 'hidden'} ${state.footerExplain ? 'h-[140px]' : 'h-[90px]'} justify-center border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-2.5`}"
       data-testid="footer"
     >
       <div class="${() => wrapClass(state)}">

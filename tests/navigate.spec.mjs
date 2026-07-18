@@ -633,11 +633,14 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(footer.locator('span[class*="decoration-[#6366f1]"]')).toHaveCount(0)
   })
 
-  // The footer bar itself is only visible while a diff is open (any
-  // granularity), not just when the active unit happens to be a single row —
-  // it stays hidden in list mode, appears on stepping into the diff, and
-  // remains visible on a multi-row 'group' unit (even though that unit shows
-  // no inline diff content). See Footer.mjs.
+  // The footer bar's own visibility is state.footerVisible
+  // (!!(footerUnit || footerExplain), see Footer.mjs/home.mjs), not simply
+  // state.mode==='diff' — a multi-row 'group' unit with no if-statement hides
+  // the bar entirely (see footer-explanation.spec.mjs). This block's first
+  // group happens to contain an if, so footerExplain keeps the bar visible
+  // here even though the group is multi-row and shows no inline diff content;
+  // it still hides in list mode (no diff open at all → footerUnitInfo is
+  // null).
   test('the footer bar is hidden in list mode and visible for any diff granularity', async ({
     page,
   }) => {

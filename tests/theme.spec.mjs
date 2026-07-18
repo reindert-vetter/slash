@@ -89,15 +89,20 @@ test.describe('theme — manual toggle (systeem/licht/donker)', () => {
     await page.emulateMedia({ colorScheme: 'light' })
     await page.goto('/pr/12903')
     await expect(page.getByTestId('pr-index')).toBeVisible()
-    const toggle = page.getByTestId('theme-toggle')
 
-    // The toggle lives in its own always-visible fixed element
-    // (ThemeToggleCorner, home.mjs), not inside the footer — the footer itself
-    // is hidden in list mode (state.mode==='list', see the "Footer" section in
-    // keyboard-navigation.md), so this pins down that the toggle is reachable
-    // regardless: it must be visible (and clickable) here even though the
-    // footer is not.
+    // The toggle lives in a slim row in prInfoCard, just above the PR summary
+    // (data-testid=pr-info-summary) — see the "Thema" section in
+    // conventions.md. That card only mounts while the PR-description column is
+    // open (state.showDescription, stop 1 of the nav chain), so it is not
+    // visible by default; open it with the same ← that reaches stop 1 (see
+    // keyboard-navigation.md). The footer itself stays hidden throughout this
+    // test (no diff is open), which is fine — the toggle no longer depends on
+    // it.
     await expect(page.getByTestId('footer')).toBeHidden()
+    await expect(page.getByTestId('theme-toggle')).toHaveCount(0)
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('pr-info-column')).toBeVisible()
+    const toggle = page.getByTestId('theme-toggle')
     await expect(toggle).toBeVisible()
 
     const isDark = () => page.evaluate(() => document.documentElement.classList.contains('dark'))
@@ -128,6 +133,12 @@ test.describe('theme — manual toggle (systeem/licht/donker)', () => {
     expect(await stored()).toBe('dark')
     expect(await isDark()).toBe(true)
     expect(await dataTheme()).toBe('dark')
+
+    // state.showDescription is ephemeral (not in the URL) — a reload closes
+    // stop 1 again, so the toggle is gone until it's reopened.
+    await expect(page.getByTestId('theme-toggle')).toHaveCount(0)
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('pr-info-column')).toBeVisible()
 
     // dark -> system (OS is still emulated light, so this flips back to light)
     await page.getByTestId('theme-toggle').click()

@@ -271,6 +271,12 @@ const state = reactive({
   // ephemeral (never in the URL).
   footerUnit: null,
   footerExplain: null,
+  // footerVisible — derived by updateFooter(): true once footerUnit or
+  // footerExplain has something to show. The footer bar (Footer.mjs) and
+  // every bottom-reservation binding (DetailPanel, RelatedPanel's sidebar/
+  // rail) read this instead of state.mode, so the bar + its reserved space
+  // disappear entirely rather than showing an empty balk.
+  footerVisible: false,
 })
 
 // toggleDiffView flips the global diff-pane preference between full side-by-side
@@ -3000,8 +3006,19 @@ async function requestExplain(req) {
 // updateFooter pushes the focused unit's snapshots into state.footerUnit/
 // state.footerExplain and auto-schedules the AI generation for an if-containing
 // line/group unit that has no (matching-hash) explanation yet. A stored row
-// with an empty codeHash matches any hash (seeded test fixtures).
+// with an empty codeHash matches any hash (seeded test fixtures). It also
+// derives state.footerVisible = !!(footerUnit || footerExplain) — the single
+// source of truth Footer.mjs and every bottom-reservation binding read (see
+// the "Footer" section in keyboard-navigation.md): the footer bar + its
+// reserved space disappear entirely once neither snapshot has anything to
+// show (a multi-row group with no if), rather than staying visible-but-empty
+// for the whole diff-mode session as before.
 function updateFooter() {
+  computeFooterSnapshots()
+  state.footerVisible = !!(state.footerUnit || state.footerExplain)
+}
+
+function computeFooterSnapshots() {
   const info = footerUnitInfo()
   state.footerUnit = info ? info.unitRow : null
   const req = info && info.explain
@@ -4404,6 +4421,10 @@ function prInfoCard(state) {
               >`
             : ''}
       </div>
+      <div class="flex items-center justify-between" data-testid="pr-info-theme-row">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Weergave</span>
+        ${themeToggleButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
+      </div>
       <div class="rounded-lg bg-emerald-50 dark:bg-emerald-500/15 p-2.5" data-testid="pr-info-summary">
         <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Doel</div>
         ${() =>
@@ -4482,34 +4503,13 @@ function PrInfoPanel(state) {
       ${() =>
         state.showDescription
           ? html`<div
-              class="fixed bottom-[90px] left-6 top-6 z-10 flex min-h-0 w-[26rem] flex-col gap-3"
+              class="fixed bottom-6 left-6 top-6 z-10 flex min-h-0 w-[26rem] flex-col gap-3"
               data-testid="pr-info-column"
             >
               ${prInfoCard(state)}
               ${PrWideComments(state)}
             </div>`.key('pr-info-column')
           : ''}
-    </div>
-  `
-}
-
-// ThemeToggleCorner — the theme toggle (system/light/dark, src/theme.mjs), as
-// its own always-visible fixed element, a sibling of PrInfoPanel/BlockList/
-// DetailPanel/CommentsSidebar/Footer. It used to live inside Footer.mjs's
-// top-right corner, but the footer itself is only shown in diff mode
-// (state.mode==='diff') — that made the toggle unreachable in list mode. Both
-// PrInfoPanel and DetailPanel already reserve a bottom-[90px]/[140px] strip
-// for the footer regardless of state.mode (see their class bindings above), so
-// bottom-6 left-6 sits inside that reserved, otherwise-empty band in both
-// modes: below the pr-index/PrInfoPanel column (which stops at
-// bottom-[90px]), and clear of the comments/taken sidebar (a right-hand
-// overlay, see detail-layout.md). z-30 keeps it above the footer (z-20) for
-// the moments the footer is visible and would otherwise render its white
-// background over the same corner.
-function ThemeToggleCorner() {
-  return html`
-    <div class="fixed bottom-6 left-6 z-30" data-testid="theme-toggle-corner">
-      ${themeToggleButton('h-8 w-8 bg-white dark:bg-zinc-900 shadow-sm ring-1 ring-slate-200 dark:ring-zinc-800')}
     </div>
   `
 }
@@ -4522,10 +4522,12 @@ function DetailPanel(state) {
     <main
       class="${() =>
         'fixed top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto transition-all duration-200 ease-out ' +
-        // The footer grows from 90px to 140px while it shows an AI unit
-        // description (state.footerExplain, diff-mode only) — reserve the
-        // matching bottom strip so the columns never slide in behind it.
-        (state.footerExplain ? 'bottom-[140px] ' : 'bottom-[90px] ') +
+        // Reserve a bottom strip matching the footer's own visibility/height
+        // (state.footerVisible/state.footerExplain, see Footer.mjs): none when
+        // the footer has nothing to show, 90px for just the inline diff, 140px
+        // while it also shows an AI unit description — so the columns never
+        // slide in behind it, but don't leave dead space once it's gone either.
+        (!state.footerVisible ? 'bottom-6 ' : state.footerExplain ? 'bottom-[140px] ' : 'bottom-[90px] ') +
         // Right margin clears the comments/taken sidebar (RelatedPanel.mjs),
         // which is a separate position:fixed overlay with a higher z-index —
         // without this, <main>'s last column (Onderliggende code, or the
@@ -4802,7 +4804,6 @@ MenuHost()(app)
 // would be capped at <main>'s own z-10 stacking context.
 CallArrowsHost()(app)
 Footer(state)(app)
-ThemeToggleCorner()(app)
 
 // Start with the search box already focused so the reviewer can type straight
 // away — a frame later, once BlockList has rendered the input into the DOM.

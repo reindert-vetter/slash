@@ -720,20 +720,42 @@ deze fallback te leunen.
 
 ## Footer: inline preview van de geselecteerde regel + AI-omschrijving bij een if
 
-Onder de panels zit een vaste footer (`src/Footer.mjs`, `data-testid=footer`, de
-panels reserveren er 90px voor — **140px zodra de AI-omschrijving toont**, zie
-onder). De footer is **alleen zichtbaar zolang een
-diff open staat** (`state.mode === 'diff'`) — ongeacht de granulariteit
-(`group`, `line` of `call`); in `'list'`-mode (geen diff open) is de hele
-footer **verborgen** (`hidden` i.p.v. `flex` op de stabiele `<footer>`-root —
-de class-string is één reactieve `class="${() => …}"`-functie-binding, dus
-geen keyed-node-valkuil, zie `.claude/rules/conventions.md`). **Los daarvan**
-toont de footer, zodra hij zichtbaar is, alleen een inline diff (`- oud` /
-`+ nieuw`, Prism-highlighted) als de **geselecteerde unit precies één regel**
-beslaat — een meerregelige groep laat de footer-balk gewoon staan (leeg, op
-eventueel de AI-omschrijving na), maar zonder diff-inhoud. De theme-toggle zit
-niet meer in de footer — zie "Thema" in `.claude/rules/conventions.md`
-(`ThemeToggleCorner` in `home.mjs`, altijd zichtbaar, ongeacht `state.mode`).
+Onder de panels zit een vaste footer (`src/Footer.mjs`, `data-testid=footer`).
+Anders dan voorheen is de footer **niet** zichtbaar zodra er een diff open
+staat — hij is alleen zichtbaar zodra er **daadwerkelijk iets te tonen is**:
+`state.footerVisible` (afgeleid in `home.mjs`'s `updateFooter()` als
+`!!(state.footerUnit || state.footerExplain)`, zie hieronder voor wat die twee
+snapshots zijn). Een meerregelige groep zónder if-statement (geen
+`footerUnit`, geen `footerExplain`) laat de footer-balk dus **volledig**
+verdwijnen (`hidden` i.p.v. `flex` op de stabiele `<footer>`-root — de
+class-string blijft één reactieve `class="${() => …}"`-functie-binding, dus
+geen keyed-node-valkuil, zie `.claude/rules/conventions.md`) in plaats van een
+lege balk te tonen zoals voorheen. `footerUnitInfo` (`home.mjs`) blijft buiten
+`state.mode==='diff'` `null` retourneren, dus `footerVisible` is in list-mode
+altijd `false` — dat gedrag is dus ongewijzigd, alleen strenger binnen
+diff-mode zelf.
+
+**Ruimte-reservering volgt dezelfde vlag, 3-weg in plaats van de oude vaste
+90/140px-vloer:** `DetailPanel`/`<main>` (`home.mjs`) en de comments/taken-
+sidebar + collapsed hint-rail (`RelatedPanel.mjs`) reserveren `bottom-6` (geen
+reservering) zodra `!state.footerVisible`, `bottom-[90px]` zodra alleen de
+inline diff toont, en `bottom-[140px]` zodra ook de AI-omschrijving toont — nu
+verdwijnt de gereserveerde ruimte dus mee met de balk zelf, in plaats van
+altijd minstens 90px leeg te laten staan. De pr-index (`BlockList.mjs`) en de
+PR-info-kolom (`PrInfoPanel`, `home.mjs`) reserveren sinds deze wijziging
+helemaal niets meer voor de footer (`bottom-6`, was een vaste, nooit-reactieve
+`bottom-[90px]`) — beide zijn alleen in list-mode zichtbaar, waar de footer
+sowieso nooit toont, dus die reservering was al dode ruimte.
+
+De theme-toggle zit niet in de footer — zie "Thema" in
+`.claude/rules/conventions.md` (een smalle rij in `prInfoCard`, boven de
+PR-samenvatting; de oudere `ThemeToggleCorner` — een altijd-zichtbaar fixed
+element linksonder — bestaat niet meer).
+
+**Los van de zichtbaarheid van de balk zelf** toont de footer een inline diff
+(`- oud` / `+ nieuw`, Prism-highlighted) alleen als de **geselecteerde unit
+precies één regel** beslaat — een meerregelige groep mét een if-statement toont
+dus wél de balk (voor de AI-omschrijving) maar geen inline-diff-inhoud.
 Deze inline-diff-inhoud volgt de **gefocuste kolom en diens huidige
 granulariteit/cursor** — het top-level block (`state.gran`/`state.change`) op
 `focusLevel 0`, of de eigen `state.drillCursor[focusLevel-1]`-cursor van een
@@ -741,8 +763,7 @@ gedrilde kolom (zie "Kolom-navigatie" in `.claude/rules/detail-layout.md`) —
 via dezelfde `unitsFor(rows, gran)` als de navigatie: omdat een `'line'`- of
 `'call'`-unit altijd één rij is,
 verschijnt de inline diff dus altijd zodra je met `f` tot één regel (of één
-edit) verfijnt. Meer-regelige selecties (b.v. een brede groep) geven `null` →
-geen inline diff (footer zelf blijft zichtbaar). Lange regels (>`WIDE_AT`
+edit) verfijnt. Lange regels (>`WIDE_AT`
 tekens) laten de `max-w` los zodat de footer de volle breedte gebruikt. Op
 `'call'`-niveau onderstreept de footer het **actieve segment** in dezelfde
 indigo als de panes via het geëxporteerde `markChars` +
@@ -754,9 +775,10 @@ eigen, ontkoppelde footer-`watch` (het `setRelated`/`setCommentScope`-patroon,
 inline deps incl. `state.drillCursor` en `focusedBlock().code`) die twee platte
 snapshots pusht: `state.footerUnit` (de ene aligned rij + underline-arrays van
 de actieve unit, `null` bij meerregelig) en `state.footerExplain` (zie
-hieronder). Zo wordt de footer nooit een co-subscriber op de code van het
-gefocuste block (de "stuck on loading"-race, zie `conventions.md`) én volgt hij
-gratis de gedrilde-kolom-cursor.
+hieronder), en daarna in dezelfde `updateFooter()` de afgeleide
+`state.footerVisible` zet. Zo wordt de footer nooit een co-subscriber op de
+code van het gefocuste block (de "stuck on loading"-race, zie
+`conventions.md`) én volgt hij gratis de gedrilde-kolom-cursor.
 
 **AI-omschrijving bij een if-statement (`data-testid=footer-description`):**
 bevat de tekst van de gefocuste **`group`- of `line`-unit** (nooit `call`, en
