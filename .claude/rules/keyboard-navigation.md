@@ -399,23 +399,31 @@ dan vallen de links terug op de kale PR-URL resp. de Jira-base.
   ↓/↑ diep in een reviewsessie met meerdere al-goedgekeurde blokken. Is er in
   die richting geen zichtbaar blok meer, dan blijft de selectie op de huidige
   (al zichtbare) positie staan i.p.v. op de verborgen staart te landen.
-  **Hetzelfde gat bestond op de load-/zoek-paden** (`clampSelectedToVisible` in
-  `home.mjs`): een refresh herstelt `?sel=file:line` óók naar een verborgen
-  blok (`applyBlockRefRestore`), en `setSearch` reset naar index 0 — dat kan
-  net zo goed een verborgen blok zijn. Beide paden clampen daarom nu naar het
-  **eerste zichtbare** blok, met exact hetzelfde `isFullyApproved`-criterium
-  als `renderList` (geen zichtbaar blok → selectie blijft staan, mirror van
-  `stepVisibleSelected`; de zoekfilter zelf hoeft geen aparte check — een
-  weggefilterd blok zit überhaupt niet meer in `state.blocks`). Volgorde is
-  load-bearing: op het load-pad draait de clamp pas **ná**
-  `applyBlockRefRestore` (een herstelde `?sel=` naar een zichtbaar blok wint
-  altijd) én nadat `loadBlocks` `loadApprovals`/`loadBlockStats` ge-await
+  **Hetzelfde gat bestond op de load-/zoek-paden, en die lossen het elk anders
+  op** (`revealSelectedIfHidden`/`clampSelectedToVisible` in `home.mjs`):
+  - **Load/refresh-restore → onthullen.** Een refresh herstelt `?sel=file:line`
+    óók naar een verborgen blok (`applyBlockRefRestore`) — dat is de **eigen**
+    positie van de reviewer, dus i.p.v. de selectie weg te verplaatsen klapt
+    `revealSelectedIfHidden` de goedgekeurde sectie open
+    (`state.showApproved = true` + `scrollSelectedIntoView`): het blok wordt
+    zichtbaar en blijft geselecteerd/gehighlight. Al zichtbaar → no-op.
+  - **Zoeken → clampen.** `setSearch` reset naar index 0 — een synthetische
+    landing, niet de eigen positie van de reviewer. Typen mag nooit ineens
+    alle goedgekeurde blokken PR-breed onthullen (en typt niet terug dicht),
+    dus daar verplaatst `clampSelectedToVisible` de selectie naar de **eerste
+    zichtbare** match (geen zichtbaar blok → selectie blijft staan, mirror van
+    `stepVisibleSelected`; de zoekfilter zelf hoeft geen aparte check — een
+    weggefilterd blok zit überhaupt niet meer in `state.blocks`).
+  Beide gebruiken exact hetzelfde `isFullyApproved`-criterium als `renderList`.
+  Volgorde is load-bearing: op het load-pad draait de reveal pas **ná**
+  `applyBlockRefRestore` (een herstelde `?sel=` naar een zichtbaar blok is een
+  no-op) én nadat `loadBlocks` `loadApprovals`/`loadBlockStats` ge-await
   heeft plus een paar microtask-ticks zodat de `approvalSummaries`-watch
   geflusht is (het `openTask`-precedent) — eerder is "verborgen" nog niet
-  kenbaar en zou de clamp een no-op zijn. De **live** approve-flow blijft
+  kenbaar en zou de reveal een no-op zijn. De **live** approve-flow blijft
   bewust ongemoeid: een blok goedkeuren terwijl je erop staat houdt het
-  geselecteerd (er hangt géén clamp aan de `approvalSummaries`-watch zelf).
-  Regressietest: `tests/selected-visible-clamp.spec.mjs`.
+  geselecteerd (er hangt géén reveal/clamp aan de `approvalSummaries`-watch
+  zelf). Regressietest: `tests/selected-reveal-hidden.spec.mjs`.
 - **`'diff'`**: `↑`/`↓` lopen door de **wijzigingen** van dat block, `←` stapt
   terug naar de lijst. Loop je voorbij de **laatste** wijziging (`↓`) of de
   **eerste** (`↑`) — je kunt niet verder binnen dit block — dan stap je door

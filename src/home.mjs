@@ -535,14 +535,15 @@ async function loadBlocks() {
   // — isFullyApproved reads state.approvalSummaries, which the decoupled
   // approval-rollup watch recomputes from exactly those inputs. Await them,
   // give arrow.js a couple of microtask turns to flush that watch (the same
-  // openTask precedent as selectComment's scope wait), then clamp a selection
-  // that landed on a hidden block onto the first visible one. Deliberately
-  // AFTER applyBlockRefRestore: a restored ?sel= pointing at a visible block
-  // always wins, only a hidden outcome gets corrected.
+  // openTask precedent as selectComment's scope wait), then reveal a selection
+  // that landed on a hidden block by unfolding the approved section (the
+  // reviewer keeps their own selection). Deliberately AFTER
+  // applyBlockRefRestore: a restored ?sel= pointing at a visible block is a
+  // no-op, only a hidden outcome triggers the reveal.
   await Promise.all([loadApprovals(), loadBlockStats()])
   await Promise.resolve()
   await Promise.resolve()
-  clampSelectedToVisible()
+  revealSelectedIfHidden()
 }
 
 // loadBlockStats fetches the server-computed per-block approval totals (the number
@@ -747,20 +748,36 @@ function stepVisibleSelected(dir) {
   }
 }
 
-// clampSelectedToVisible moves state.selected off a block BlockList's renderList
-// doesn't render (fully approved while state.showApproved is false — the exact
-// same isFullyApproved criterion) onto the FIRST visible block. state.selected
-// is a raw index into state.blocks, so a selection restored from the URL
-// (?sel=file:line via applyBlockRefRestore) or reset to 0 by a search recompute
-// (setSearch) can land on a hidden index: the detail panel then shows a block
-// while NO sidebar row highlights, which reads as a lost selection. The search
+// revealSelectedIfHidden unfolds the approved section (state.showApproved =
+// true) when state.selected points at a block BlockList's renderList doesn't
+// render (fully approved while state.showApproved is false — the exact same
+// isFullyApproved criterion). A selection restored from the URL
+// (?sel=file:line via applyBlockRefRestore) is the reviewer's OWN position:
+// moving it away to the first visible block (the earlier
+// clampSelectedToVisible behaviour) read as a lost selection — instead the
+// hidden block is revealed and highlights. Visible already (or no block at
+// all) → no-op. Called ONLY from the load path — never from the live approve
+// flow (approving the block you're looking at keeps it selected and visible;
+// stepVisibleSelected handles walking off it), and deliberately NOT from
+// setSearch (see clampSelectedToVisible below).
+function revealSelectedIfHidden() {
+  const b = state.blocks[state.selected]
+  if (!b) return
+  if (state.showApproved || !isFullyApproved(state, b)) return
+  state.showApproved = true
+  scrollSelectedIntoView()
+}
+
+// clampSelectedToVisible moves state.selected off a hidden (fully-approved,
+// !showApproved) block onto the FIRST visible one. Only used by setSearch:
+// its `selected = 0` reset is a synthetic landing, not the reviewer's own
+// position, so typing a query must never suddenly unfold every approved block
+// PR-wide (and there is no way to fold it back by typing on) — clamping to
+// the first visible match is the least surprising outcome there. The search
 // filter itself needs no separate check here — recomputeLeftList removes
 // filtered-out blocks from state.blocks entirely and clamps the index, so only
-// the hidden-approved case can remain. Called ONLY from the load/search
-// recomputation paths — never from the live approve flow, so approving the
-// block you're looking at still keeps it selected (stepVisibleSelected handles
-// walking off it). No visible block at all → leave the selection alone
-// (mirrors stepVisibleSelected's stay-put behaviour).
+// the hidden-approved case can remain. No visible block at all → leave the
+// selection alone (mirrors stepVisibleSelected's stay-put behaviour).
 function clampSelectedToVisible() {
   const b = state.blocks[state.selected]
   if (!b) return
@@ -779,7 +796,8 @@ function setSearch(q) {
   recomputeLeftList()
   state.selected = 0
   // The top match can be a hidden (fully-approved) block — land on the first
-  // visible one instead so a row always highlights (see clampSelectedToVisible).
+  // visible one instead so a row always highlights (see clampSelectedToVisible;
+  // deliberately a clamp, not a reveal — see the comments above).
   clampSelectedToVisible()
   scrollSelectedIntoView()
 }
