@@ -692,10 +692,11 @@ zijn eigen, nog directere manier: `@focus`/`@blur` zetten `state.searchActive`
 rechtstreeks op echte DOM-focus (geen los toggle-pad), dus die hoeft niet op
 deze fallback te leunen.
 
-## Footer: inline preview van de geselecteerde regel
+## Footer: inline preview van de geselecteerde regel + AI-omschrijving bij een if
 
 Onder de panels zit een vaste footer (`src/Footer.mjs`, `data-testid=footer`, de
-panels reserveren er 100px voor). De footer is **alleen zichtbaar zolang een
+panels reserveren er 90px voor — **140px zodra de AI-omschrijving toont**, zie
+onder). De footer is **alleen zichtbaar zolang een
 diff open staat** (`state.mode === 'diff'`) — ongeacht de granulariteit
 (`group`, `line` of `call`); in `'list'`-mode (geen diff open) is de hele
 footer **verborgen** (`hidden` i.p.v. `flex` op de stabiele `<footer>`-root —
@@ -704,16 +705,52 @@ geen keyed-node-valkuil, zie `.claude/rules/conventions.md`). **Los daarvan**
 toont de footer, zodra hij zichtbaar is, alleen een inline diff (`- oud` /
 `+ nieuw`, Prism-highlighted) als de **geselecteerde unit precies één regel**
 beslaat — een meerregelige groep laat de footer-balk gewoon staan (leeg, op de
-theme-toggle na), maar zonder diff-inhoud. Deze inline-diff-inhoud
-volgt het **huidige granulariteitsniveau** via dezelfde
-`unitsFor(rows, state.gran)` als de navigatie (`state.change` binnen
-`'diff'`-mode): omdat een `'line'`- of `'call'`-unit altijd één rij is,
+theme-toggle en eventueel de AI-omschrijving na), maar zonder diff-inhoud.
+Deze inline-diff-inhoud volgt de **gefocuste kolom en diens huidige
+granulariteit/cursor** — het top-level block (`state.gran`/`state.change`) op
+`focusLevel 0`, of de eigen `state.drillCursor[focusLevel-1]`-cursor van een
+gedrilde kolom (zie "Kolom-navigatie" in `.claude/rules/detail-layout.md`) —
+via dezelfde `unitsFor(rows, gran)` als de navigatie: omdat een `'line'`- of
+`'call'`-unit altijd één rij is,
 verschijnt de inline diff dus altijd zodra je met `f` tot één regel (of één
 edit) verfijnt. Meer-regelige selecties (b.v. een brede groep) geven `null` →
 geen inline diff (footer zelf blijft zichtbaar). Lange regels (>`WIDE_AT`
 tekens) laten de `max-w` los zodat de footer de volle breedte gebruikt. Op
 `'call'`-niveau onderstreept de footer het **actieve segment** in dezelfde
-indigo als de panes: `activeUnit` geeft de `left`/`right`-underline-sets van
-de unit mee aan `line()`, dat via het geëxporteerde `markChars` +
-`UNDERLINE_CLS` (uit `Block.mjs`) precies die tekens onderstreept (op
+indigo als de panes via het geëxporteerde `markChars` +
+`UNDERLINE_CLS` (uit `Block.mjs`) — precies die tekens onderstreept (op
 `'group'`/`'line'` hebben de units geen set → geen underline).
+
+**De footer leest zelf géén `blockRows`/`b.code` meer.** `home.mjs` heeft een
+eigen, ontkoppelde footer-`watch` (het `setRelated`/`setCommentScope`-patroon,
+inline deps incl. `state.drillCursor` en `focusedBlock().code`) die twee platte
+snapshots pusht: `state.footerUnit` (de ene aligned rij + underline-arrays van
+de actieve unit, `null` bij meerregelig) en `state.footerExplain` (zie
+hieronder). Zo wordt de footer nooit een co-subscriber op de code van het
+gefocuste block (de "stuck on loading"-race, zie `conventions.md`) én volgt hij
+gratis de gedrilde-kolom-cursor.
+
+**AI-omschrijving bij een if-statement (`data-testid=footer-description`):**
+bevat de tekst van de gefocuste **`group`- of `line`-unit** (nooit `call`, en
+alleen in diff-mode) een `if`/`elseif`/`else if` (`reIfStatement` in
+`home.mjs` — een kale regex op de regeltekst, false-positives in
+strings/comments bewust geaccepteerd), dan toont de footer boven de inline
+diff een korte Nederlandse AI-uitleg van wat de conditie controleert en
+wanneer de tak loopt. Die komt uit het `explanations`-read-model
+(`GET /api/explanations?pr=N`), gegenereerd door het **`explain_code`**-workflow
+(Haiku, context-only — zie `.claude/rules/tembed-workflows.md`). De generatie
+start **automatisch** met een debounce (`EXPLAIN_DEBOUNCE_MS`, 600ms — doorheen
+pijlen vuurt niets) via `POST /api/workflows/explain_code`, client-side
+gededupt (`explainRequested`) én server-side idempotent (deterministische Run
+ID per unit+code-hash, `StartWorkflowID`). Zolang de run loopt toont de regel
+"AI-omschrijving genereren…" (pulserend); een `failed`-rij (offline,
+`SLASH_CLAUDE=off`) verbergt de regel weer. De rij-match gaat op
+`blockId|unitKey` (unitKey = `group-<start>-<end>`/`line-<row>`, dezelfde
+codeRef-vorm als `commentPath`) plus een **code-hash-check** (`fnv1a` over
+unit-code + context): een stale rij van vóór een nieuwe commit wordt genegeerd
+en opnieuw gegenereerd; een geseede rij met lege hash matcht altijd
+(test-fixtures). Terwijl de omschrijving toont groeit de footer van 90px naar
+**140px** en reserveren `<main>` (`home.mjs`) en de comments/taken-sidebar +
+hint-rail (`RelatedPanel.mjs`) reactief `bottom-[140px]` i.p.v.
+`bottom-[90px]`, zodat niets achter de footer schuift. Zie
+`tests/footer-explanation.spec.mjs` (incl. het gedrilde-kolom-geval).

@@ -78,6 +78,26 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Footer AI-explanation fixture (PR 97, footer-explanation.spec.mjs): a
+  // block whose change introduces an if-statement (worktrees materialized in
+  // _setup.mjs) plus pre-seeded explanations, so the footer renders the AI
+  // description without an LLM run (a fixture row's empty codeHash matches
+  // any hash — see loadExplanations/updateFooter in home.mjs).
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/explain-blocks.json',
+      '-relations',
+      'tests/fixtures/explain-relations.json',
+      '-explanations',
+      'tests/fixtures/explanations.json',
+    ],
+    { stdio: 'ignore' },
+  )
   // Empty-code fixture (PR 96, related-empty-code.spec.mjs): a resolved call
   // whose embedded childCode is empty — must render "geen code gevonden"
   // immediately, never "code laden…".

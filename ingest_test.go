@@ -32,7 +32,7 @@ func TestIngestWorkflowEndToEnd(t *testing.T) {
 	defer db.Close()
 
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, db, dataDir, repoSlug)
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
 
 	res, err := m.StartIngest(context.Background(), pr)
 	if err != nil {

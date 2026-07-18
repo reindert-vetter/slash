@@ -853,6 +853,58 @@ call-resolve: een Go-detector eerst, een **beperkte** AI-fallback alleen voor
   `slash seed … -testcovers <testcovers.json>` (mirror van `-callresolve`,
   `tests/fixtures/testcovers.json` + `testcovers-blocks.json`, PR 92/93/94).
 
+## AI-omschrijving van een if-unit (`explain_code` + `modules/explanations`)
+
+Een klein Workflow Type, **`explain_code`**, genereert de **footer-omschrijving**:
+een korte Nederlandse Haiku-uitleg van het if-statement in de gefocuste
+`line`/`group`-navigatie-unit (zie de Footer-sectie in
+`.claude/rules/keyboard-navigation.md` voor de frontend-kant). Eén Execution
+per **unit + code-hash**, geen Signals — hij completet meteen.
+
+- **`modules/explanations`** (`data/explanations.db`): het read-model
+  `explanations(pr, block_id, unit_key, code_hash, status, text, model,
+  updated_at)`, PK `(pr, block_id, unit_key)` — maximaal één levende rij per
+  unit; een nieuwe hash (nieuwe commit) overschrijft de oude rij.
+  `status`: `searching`/`done`/`failed` (`failed` is terminaal — offline/
+  Claude-hiccup, de footer toont dan niets en vraagt niet opnieuw). Writes
+  (`SaveSearching`/`Save`) workflow-only; `List(pr)` read-only. Een rij met
+  **lege `code_hash`** matcht frontend-side elke hash (seed-fixtures).
+- **Input-gedreven, geen worktree-reads:** `ExplainCodeInput` draagt álles wat
+  de LLM ziet — de unit-code (new-side tekst van de aligned rows), de
+  omringende blokcode als context (frontend-truncated,
+  `EXPLAIN_CONTEXT_LINES`), bestand/label/gran, de `unitKey`
+  (`group-<start>-<end>`/`line-<row>`, dezelfde codeRef-vorm als
+  `commentPath`) en de `codeHash` (frontend-`fnv1a` over code+context; de
+  backend slaat 'm alleen op). De workflow-body is dus een pure functie van
+  zijn input.
+- **Workflow** (`workflows.go` + `explain.go`): `markExplainSearching` →
+  `generateExplanation` (Haiku via `modules/claude`, **context-only** — geen
+  tools, geen Sonnet-escalatie; lege output → `failed`) → `saveExplanation`.
+  De done/failed-beslissing leest het **opgeslagen** Activity-resultaat
+  (history), dus replay-deterministisch.
+- **Idempotente start:** `StartExplainCode` gebruikt `StartWorkflowID` met een
+  **deterministische Run ID** (`explainRunID`: `expl-` + sha256 over
+  pr|blockId|unitKey|codeHash, gehasht omdat block-id's paden/dubbele punten
+  bevatten en Run ID's als JSONL-bestandsnaam dienen) — een herhaalde selectie
+  of dubbele POST hergebruikt de bestaande run i.p.v. een tweede LLM-call.
+- **Endpoints:** `POST /api/workflows/explain_code` (start; body
+  `{pr, blockId, file, label, gran, unitKey, codeHash, code, context}`) en
+  read-only `GET /api/explanations?pr=N`.
+- **Frontend** (`home.mjs`): de footer-`watch` detecteert een if in de
+  gefocuste unit (`reIfStatement`), toont "genereren…" en start de workflow
+  automatisch met een 600ms-debounce, client-side gededupt
+  (`explainRequested`) en pas nadat het read-model minstens één keer geladen
+  is (`explanationsLoaded` — anders zou een verse run een al bestaande/geseede
+  rij overschrijven vóór de eerste GET binnen was). `SLASH_CLAUDE=off` →
+  `claude.Fake` → `failed`-rij → footer stil.
+- Tests: `explain_test.go` (Fake-Haiku → done-rij + Nederlandse prompt-check,
+  idempotente herstart, offline → failed),
+  `modules/explanations/explanations_test.go` (round-trip + hash-supersede),
+  `tests/footer-explanation.spec.mjs` (geseede weergave, if vs. geen if,
+  gedrilde kolom; PR 97, geseed via `slash seed … -explanations
+  <explanations.json>` + de in `tests/_setup.mjs` gematerialiseerde
+  `pr-97`-worktrees).
+
 ## Reviewer-goedkeuring persisteren (`approve` + `modules/approvals`)
 
 Een vijfde Workflow Type, **`approve`** (één Execution per PR), maakt reviewer-

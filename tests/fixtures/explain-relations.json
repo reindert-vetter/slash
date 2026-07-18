@@ -1,0 +1,8 @@
+[
+  {
+    "pr": 97,
+    "parentId": "97:app/Actions/ExplainAction.php:ExplainAction::execute",
+    "childId": "97:app/Actions/ExplainChildAction.php:ExplainChildAction::handle",
+    "kind": "event_listener"
+  }
+]

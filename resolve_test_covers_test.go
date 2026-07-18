@@ -22,7 +22,7 @@ func resolveTestCoversManager(t *testing.T, dataDir string, fake *claude.Fake) (
 	}
 	t.Cleanup(func() { tc.Close() })
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, tc, nil, fake, nil, nil, dataDir, "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, tc, nil, nil, fake, nil, nil, dataDir, "test/repo")
 	return m, tc
 }
 

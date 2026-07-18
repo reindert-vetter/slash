@@ -10,6 +10,7 @@ export default function globalSetup() {
   mkdirSync('tests/.tmp', { recursive: true })
   execSync('go build -o tests/.tmp/slash .', { stdio: 'inherit' })
   materializeTreeWorktrees()
+  materializeExplainWorktrees()
 }
 
 // materializeTreeWorktrees writes the (gitignored, normally real-git-derived)
@@ -48,4 +49,45 @@ class ${name}
   write('head', 'app/Actions/TreeParentAction.php', file('TreeParentAction', 'execute', 2))
   write('base', 'app/Actions/TreeChildAction.php', file('TreeChildAction', 'run', 1))
   write('head', 'app/Actions/TreeChildAction.php', file('TreeChildAction', 'run', 2))
+}
+
+// materializeExplainWorktrees writes the synthetic PR 97 fixture worktrees for
+// footer-explanation.spec.mjs (same rationale as materializeTreeWorktrees
+// above): a parent function whose change introduces an if-statement, plus an
+// event_listener child (tests/fixtures/explain-relations.json) with its own
+// if-introducing change — so the footer's AI-description flow has a real,
+// deterministic diff whose aligned rows — and thus the seeded unit keys
+// group-2-4/line-2, see tests/fixtures/explanations.json — are fully fixed by
+// these file contents, for both the top-level block and a drilled column.
+function materializeExplainWorktrees() {
+  const file = (name, method, varName, body) => `<?php
+
+namespace App\\Actions;
+
+class ${name}
+{
+    public function ${method}()
+    {
+${body}
+        return $${varName};
+    }
+}
+`
+  const write = (side, relPath, contents) => {
+    const full = `data/worktrees/pr-97-${side}/${relPath}`
+    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
+    writeFileSync(full, contents)
+  }
+  write('base', 'app/Actions/ExplainAction.php', file('ExplainAction', 'execute', 'value', '        $value = 1;'))
+  write(
+    'head',
+    'app/Actions/ExplainAction.php',
+    file('ExplainAction', 'execute', 'value', '        if ($value > 0) {\n            $value = 2;\n        }'),
+  )
+  write('base', 'app/Actions/ExplainChildAction.php', file('ExplainChildAction', 'handle', 'amount', '        $amount = 5;'))
+  write(
+    'head',
+    'app/Actions/ExplainChildAction.php',
+    file('ExplainChildAction', 'handle', 'amount', '        if ($amount > 10) {\n            $amount = 20;\n        }'),
+  )
 }

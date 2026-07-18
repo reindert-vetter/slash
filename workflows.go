@@ -17,6 +17,7 @@ import (
 	"slash/modules/callresolve"
 	"slash/modules/claude"
 	"slash/modules/comments"
+	"slash/modules/explanations"
 	"slash/modules/github"
 	"slash/modules/inbox"
 	"slash/modules/jira"
@@ -76,6 +77,13 @@ const (
 	// "unannotated" and only ever shown as a warning. One Execution per resolve
 	// request; it completes when done.
 	WorkflowResolveTestCovers = "resolve_test_covers"
+	// WorkflowExplainCode is the Workflow Type that generates a short Dutch AI
+	// description of the if-statement inside one selected navigation unit (a
+	// line/group of a block's diff), shown in the footer. One Execution per
+	// unit+code-hash, started idempotently via a deterministic Run ID (see
+	// explainRunID) so a repeated selection never triggers a second LLM call; it
+	// completes when done (no signals). Haiku, context-only — no escalation.
+	WorkflowExplainCode = "explain_code"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -259,6 +267,26 @@ type ResolveTestCoversInput struct {
 	Classes   []string `json:"classes"`
 }
 
+// ExplainCodeInput starts an explain_code Execution: it asks Haiku to describe
+// (in Dutch, 1-2 sentences) the if-statement inside one selected navigation
+// unit. Everything the LLM sees travels in the input — the unit's code plus
+// the surrounding block source — so the workflow body stays a pure function of
+// its input (no worktree reads). UnitKey addresses the unit within the block
+// in aligned-row space (`group-<start>-<end>` / `line-<row>`, the same codeRef
+// shape as commentPath); CodeHash fingerprints Code+Context so a stale row is
+// ignored by the frontend after the code changes.
+type ExplainCodeInput struct {
+	PR       int    `json:"pr"`
+	BlockID  string `json:"blockId"`
+	File     string `json:"file"`
+	Label    string `json:"label"`
+	Gran     string `json:"gran"`
+	UnitKey  string `json:"unitKey"`
+	CodeHash string `json:"codeHash"`
+	Code     string `json:"code"`
+	Context  string `json:"context"`
+}
+
 // IngestInput starts an ingest Workflow Execution for one PR.
 type IngestInput struct {
 	PR int `json:"pr"`
@@ -284,6 +312,7 @@ type TaskManager struct {
 	callresolve *callresolve.Module
 	testcovers  *testcovers.Module
 	approvals   *approvals.Module
+	explain     *explanations.Module
 	claude      claude.Client
 	jira        jira.Client
 	db          *sql.DB
@@ -311,9 +340,9 @@ type TaskManager struct {
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
-func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, tc *testcovers.Module, ap *approvals.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
+func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, tc *testcovers.Module, ap *approvals.Module, ex *explanations.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
 	m := &TaskManager{
-		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
+		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
 		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{},
 		importPolled: map[string]bool{},
@@ -674,6 +703,54 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(map[string]int{"saved": len(entries)})
 	})
 
+	// Activity: mark a unit's explanation as in-progress in the explanations
+	// read-model (write, workflow-driven).
+	engine.RegisterActivity("markExplainSearching", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg ExplainCodeInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.explain == nil {
+			return nil, nil
+		}
+		return nil, m.explain.SaveSearching(ctx, explanations.Entry{
+			PR: arg.PR, BlockID: arg.BlockID, UnitKey: arg.UnitKey, CodeHash: arg.CodeHash,
+		})
+	})
+
+	// Activity: ask Haiku (context-only, no tools — everything it needs travels
+	// in the input) for a short Dutch description of the unit's if-statement.
+	// Shells out to the claude CLI — a side effect, hence an Activity. Best-effort:
+	// a Claude hiccup yields empty text (the workflow then records "failed")
+	// rather than sinking the run.
+	engine.RegisterActivity("generateExplanation", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg ExplainCodeInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.claude == nil {
+			return json.Marshal(map[string]string{"text": ""})
+		}
+		text, err := m.claude.Run(ctx, claude.RunRequest{Prompt: explainPrompt(arg), Model: claude.ModelHaiku})
+		if err != nil {
+			m.logf("explain_code: generate pr=%d %s/%s skipped: %v", arg.PR, arg.BlockID, arg.UnitKey, err)
+			text = ""
+		}
+		return json.Marshal(map[string]string{"text": strings.TrimSpace(text)})
+	})
+
+	// Activity: persist the finished explanation (write, workflow-driven).
+	engine.RegisterActivity("saveExplanation", func(ctx context.Context, in []byte) ([]byte, error) {
+		var e explanations.Entry
+		if err := json.Unmarshal(in, &e); err != nil {
+			return nil, err
+		}
+		if m.explain == nil {
+			return nil, nil
+		}
+		return nil, m.explain.Save(ctx, e)
+	})
+
 	// Activity: stage 1 of the pr_status tracker — fetch the PR's basics (title,
 	// URL, body, author, diff-stats, head ref) from GitHub, derive a Jira key from
 	// the title and fetch that issue (best-effort), then store all of it in the
@@ -821,6 +898,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowIngest, ingestWorkflow)
 	engine.RegisterWorkflow(WorkflowResolveCall, resolveCallWorkflow)
 	engine.RegisterWorkflow(WorkflowResolveTestCovers, resolveTestCoversWorkflow)
+	engine.RegisterWorkflow(WorkflowExplainCode, explainCodeWorkflow)
 	engine.RegisterWorkflow(WorkflowApprove, approveWorkflow)
 	return m
 }
@@ -1029,6 +1107,51 @@ func resolveCallWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 // Starting an Execution is the sanctioned UI write path.
 func (m *TaskManager) StartResolveCall(in ResolveCallInput) (string, error) {
 	return m.engine.StartWorkflow(WorkflowResolveCall, in)
+}
+
+// explainCodeWorkflow generates the footer's AI description of a unit's
+// if-statement. Deterministic: the LLM call is an Activity, the done/failed
+// decision reads that Activity's recorded result (history), and the Activity
+// order/count is fixed — mark searching, generate, save.
+func explainCodeWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in ExplainCodeInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	if err := w.ExecuteActivity("markExplainSearching", in, nil); err != nil {
+		return nil, fmt.Errorf("mark searching: %w", err)
+	}
+	var gen struct {
+		Text string `json:"text"`
+	}
+	if err := w.ExecuteActivity("generateExplanation", in, &gen); err != nil {
+		return nil, fmt.Errorf("generate explanation: %w", err)
+	}
+	status := explanations.StatusDone
+	model := "haiku"
+	if gen.Text == "" {
+		// Offline (claude.Fake) or a Claude hiccup: record a terminal "failed"
+		// row so the frontend stops showing "genereren…" and never re-requests
+		// this exact unit+code (the deterministic Run ID already dedups).
+		status = explanations.StatusFailed
+		model = ""
+	}
+	if err := w.ExecuteActivity("saveExplanation", explanations.Entry{
+		PR: in.PR, BlockID: in.BlockID, UnitKey: in.UnitKey, CodeHash: in.CodeHash,
+		Status: status, Text: gen.Text, Model: model,
+	}, nil); err != nil {
+		return nil, fmt.Errorf("save explanation: %w", err)
+	}
+	return json.Marshal(map[string]string{"status": status})
+}
+
+// StartExplainCode launches an explain_code Execution under its deterministic
+// Run ID (explainRunID) — StartWorkflowID makes a repeated start for the same
+// unit+code an idempotent no-op reuse, so the UI can fire on every qualifying
+// selection without ever duplicating an LLM call. Starting an Execution is the
+// sanctioned UI write path.
+func (m *TaskManager) StartExplainCode(in ExplainCodeInput) (string, error) {
+	return m.engine.StartWorkflowID(explainRunID(in), WorkflowExplainCode, in)
 }
 
 // resolveTestCoversWorkflow resolves a test's class-level-only coverage

@@ -1429,6 +1429,8 @@ const WORKFLOW_LABELS = {
   pr_status: 'PR-status',
   build_relations: 'Relaties',
   resolve_call: 'Call zoeken',
+  resolve_test_covers: 'Testdekking',
+  explain_code: 'AI-omschrijving',
   approve: 'Goedkeuring',
   pr_inbox: 'Inbox',
 }
@@ -1453,6 +1455,8 @@ const WORKFLOW_STATUS_NOTE = {
   'resolve_call:running': 'zoekt call-definities',
   'resolve_call:waiting': 'zoekt call-definities',
   'resolve_call:completed': 'call-definities opgelost',
+  'explain_code:running': 'omschrijving genereren…',
+  'explain_code:completed': 'omschrijving gegenereerd',
   'approve:waiting': 'wacht op goedkeuringen',
   'pr_inbox:running': 'houdt de PR-inbox bij',
   'pr_inbox:waiting': 'houdt de PR-inbox bij',
@@ -2117,7 +2121,12 @@ function sidebarHintRail(state) {
   return html`
     <button
       type="button"
-      class="fixed right-0 top-6 bottom-[90px] z-20 flex w-12 flex-col items-center justify-center gap-4 rounded-l-xl border border-r-0 border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
+      class="${() =>
+        // The footer grows to 140px while it shows an AI unit description
+        // (state.footerExplain, diff-mode only) — mirror <main>'s reactive
+        // bottom reservation so the rail never slides in behind it. Whole-value
+        // function binding (arrow.js class rule, see conventions.md).
+        `fixed right-0 top-6 ${state && state.footerExplain ? 'bottom-[140px]' : 'bottom-[90px]'} z-20 flex w-12 flex-col items-center justify-center gap-4 rounded-l-xl border border-r-0 border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400`}"
       data-testid="sidebar-collapsed"
       title="Comments &amp; taken (g)"
       aria-label="Comments en taken tonen"
@@ -2182,7 +2191,10 @@ export function CommentsSidebar(state, commentTarget, openCompose, openTaskFn) {
       ${() =>
         cs.sidebarOpen
           ? html`<div
-              class="fixed right-6 top-6 bottom-[90px] z-20 flex w-[36rem] min-h-0 flex-col gap-3"
+              class="${() =>
+                // Reactive bottom reservation: the footer grows to 140px while
+                // it shows an AI unit description (see sidebarHintRail above).
+                `fixed right-6 top-6 ${state && state.footerExplain ? 'bottom-[140px]' : 'bottom-[90px]'} z-20 flex w-[36rem] min-h-0 flex-col gap-3`}"
               data-testid="comments-sidebar"
             >
               ${commentsSection(state, commentTarget, openCompose)}

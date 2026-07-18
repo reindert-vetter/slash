@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"slash/modules/callresolve"
+	"slash/modules/explanations"
 	"slash/modules/relations"
 	"slash/modules/testcovers"
 )
@@ -216,10 +217,11 @@ func runSeedCmd(args []string) {
 	relFrom := fs.String("relations", "", "optional path to a relations JSON fixture (seeded into relations.db)")
 	crFrom := fs.String("callresolve", "", "optional path to a call-resolutions JSON fixture (seeded into callresolve.db)")
 	tcFrom := fs.String("testcovers", "", "optional path to a test-coverage JSON fixture (seeded into testcovers.db)")
+	exFrom := fs.String("explanations", "", "optional path to an AI-explanations JSON fixture (seeded into explanations.db)")
 	_ = fs.Parse(args)
 
 	if *from == "" {
-		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>] [-callresolve <callresolve.json>] [-testcovers <testcovers.json>]")
+		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>] [-callresolve <callresolve.json>] [-testcovers <testcovers.json>] [-explanations <explanations.json>]")
 	}
 	raw, err := os.ReadFile(*from)
 	if err != nil {
@@ -257,6 +259,37 @@ func runSeedCmd(args []string) {
 	if *tcFrom != "" {
 		seedTestCovers(dbPath(*dbFlag), *tcFrom)
 	}
+	if *exFrom != "" {
+		seedExplanations(dbPath(*dbFlag), *exFrom)
+	}
+}
+
+// seedExplanations loads AI unit-explanations from a JSON fixture into the
+// explanations.db next to the blocks DB, so tests can render the footer's
+// AI description without an LLM run. A fixture row with an empty codeHash
+// matches any hash on the frontend (see loadExplanations in home.mjs).
+func seedExplanations(dbPath, from string) {
+	raw, err := os.ReadFile(from)
+	if err != nil {
+		log.Fatalf("read explanations fixture: %v", err)
+	}
+	var entries []explanations.Entry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		log.Fatalf("parse explanations fixture: %v", err)
+	}
+	ex, err := explanations.Open(filepath.Join(filepath.Dir(dbPath), "explanations.db"))
+	if err != nil {
+		log.Fatalf("open explanations db: %v", err)
+	}
+	defer ex.Close()
+
+	ctx := context.Background()
+	for _, e := range entries {
+		if err := ex.Save(ctx, e); err != nil {
+			log.Fatalf("seed explanations %s/%s: %v", e.BlockID, e.UnitKey, err)
+		}
+	}
+	log.Printf("seeded %d explanations from %s", len(entries), from)
 }
 
 // seedTestCovers loads test-coverage entries from a JSON fixture into the

@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 97,
+    "file": "app/Actions/ExplainAction.php",
+    "class": "ExplainAction",
+    "name": "execute",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 13,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 97,
+    "file": "app/Actions/ExplainChildAction.php",
+    "class": "ExplainChildAction",
+    "name": "handle",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 13,
+    "status": "modified",
+    "side": "new"
+  }
+]

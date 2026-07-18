@@ -244,6 +244,25 @@ const state = reactive({
   // — see Block.mjs's codeDiff. Ephemeral UI state, not bound to the URL, like
   // showDescription/showApproved above.
   diffViewMode: 'split',
+  // explanations — the AI unit-explanation read-model (GET /api/explanations):
+  // per `${blockId}|${unitKey}` an entry { codeHash, status, text }, generated
+  // by the explain_code workflow for a line/group unit containing an
+  // if-statement. Reassigned wholesale on every load so the footer watch
+  // re-fires. See the footer-explanation block below.
+  explanations: {},
+  // footerUnit / footerExplain — plain snapshots the footer renders, pushed by
+  // the decoupled footer watch below (the setRelated/setCommentScope pattern):
+  // the footer never reads blockRows/b.code itself, so it can't become a
+  // co-subscriber on the focused block's code and re-trigger the diff
+  // "stuck on loading" race — and it follows the *focused* column (a drilled
+  // column's own cursor included), which plain state.selected/gran/change
+  // reads could not. footerUnit is the single aligned row of the active unit
+  // (null for multi-row units); footerExplain is the AI description of the
+  // unit's if-statement ({ status: 'searching'|'done', text }, null when the
+  // unit has no if / the generation failed / not in diff mode). Both are
+  // ephemeral (never in the URL).
+  footerUnit: null,
+  footerExplain: null,
 })
 
 // toggleDiffView flips the global diff-pane preference between full side-by-side
@@ -510,6 +529,7 @@ async function loadBlocks() {
   applyBlockRefRestore()
   loadCallResolve()
   loadTestCovers()
+  loadExplanations()
   // Hidden-ness (a fully-approved block while state.showApproved is false) only
   // becomes knowable once BOTH the approvals and the server-side totals are in
   // — isFullyApproved reads state.approvalSummaries, which the decoupled
@@ -812,6 +832,32 @@ async function loadCallResolve() {
     /* offline — keep whatever we have */
   }
 }
+
+// loadExplanations fetches the PR's AI unit-explanations into state (keyed
+// `${blockId}|${unitKey}`). Best-effort: a transient failure just yields no
+// rows. Reassigns the map wholesale so the footer watch re-fires when a
+// generation completes.
+async function loadExplanations() {
+  try {
+    const res = await fetch(`/api/explanations?pr=${state.pr}`)
+    if (!res.ok) return
+    const rows = await res.json()
+    if (!Array.isArray(rows)) return
+    const map = {}
+    for (const e of rows) map[`${e.blockId}|${e.unitKey}`] = e
+    state.explanations = map
+    explanationsLoaded = true
+  } catch (_) {
+    /* offline — keep whatever we have */
+  }
+}
+
+// explanationsLoaded gates the auto-launched explain requests until the
+// read-model has been fetched at least once: without it, landing on an
+// if-unit right after page load could fire a fresh explain_code run for a
+// unit whose (possibly seeded/cached) explanation simply hadn't arrived yet —
+// and that run's searching/failed row would overwrite the good one.
+let explanationsLoaded = false
 
 // testCoverTargetIds returns the ids of PR blocks that are the covered-method
 // target of some resolved/found test-coverage row — mirrors
@@ -2485,6 +2531,203 @@ watch(
   },
 )
 
+// ── Footer: focused unit + AI if-statement description ─────────────────────
+// The footer shows (1) the inline diff of the focused single-row unit and
+// (2) a short Dutch AI description whenever the focused line/group unit
+// contains an if-statement (the explain_code workflow). Both follow the
+// column that owns the diff keyboard — the top-level block on focusLevel 0
+// (state.gran/state.change) or a drilled column's own drillCursor entry — and
+// are pushed into plain state.footerUnit/state.footerExplain by the decoupled
+// watch below, so Footer.mjs never reads blockRows/b.code itself (the
+// co-subscriber pitfall, see conventions.md).
+
+// reIfStatement detects an if/elseif/else-if statement in the raw unit text.
+// Deliberately a plain regex on the line text — a parser is overkill for a
+// cosmetic hint, so an "if(" inside a string/comment is an accepted false
+// positive.
+const reIfStatement = /(?:^|[^\w$])(?:else\s+)?(?:if|elseif)\s*\(/
+
+// fnv1a is a tiny 32-bit content hash for the explain request's code+context.
+// It only has to be stable between the frontend and the stored read-model row
+// (the backend stores whatever hash the frontend sent), not cryptographic.
+function fnv1a(s) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16)
+}
+
+// EXPLAIN_CONTEXT_LINES caps how much surrounding block source travels in the
+// explain prompt — enough for Haiku to understand the condition, small enough
+// to keep the prompt (and the workflow input in the event history) bounded.
+const EXPLAIN_CONTEXT_LINES = 120
+
+// explainContext returns the focused block's new-side source (old side for a
+// pure removal), truncated, as prompt context for the LLM.
+function explainContext(b) {
+  const c = b && b.code
+  const text = (c && ((c.new && c.new.text) || (c.old && c.old.text))) || ''
+  return text.split('\n').slice(0, EXPLAIN_CONTEXT_LINES).join('\n')
+}
+
+// footerUnitInfo computes everything the footer needs about the focused unit:
+// the single aligned row for the inline diff (multi-row units → null, we only
+// preview one-liners), and — for a line/group unit whose text contains an
+// if-statement — the explain-request descriptor (blockId + unitKey in the
+// commentPath codeRef shape + code/context + hash). Follows focusedBlock() and
+// the focused column's own cursor, so a drilled column previews its own unit.
+function footerUnitInfo() {
+  if (state.mode !== 'diff') return null
+  const b = focusedBlock()
+  if (!b) return null
+  const level = state.focusLevel
+  const cur =
+    level > 0
+      ? state.drillCursor[level - 1] || { change: 0, gran: 'group' }
+      : { change: state.change, gran: state.gran }
+  const rows = blockRows(b)
+  const unit = unitsFor(rows, cur.gran)[cur.change]
+  if (!unit) return null
+  const single = unit.start === unit.end ? rows[unit.start] : null
+  const info = {
+    unitRow: single
+      ? {
+          left: single.left,
+          right: single.right,
+          // Sets don't survive a reactive proxy reliably — carry plain arrays,
+          // Footer.mjs rebuilds the Sets it feeds to markChars.
+          ulLeft: unit.left ? [...unit.left] : null,
+          ulRight: unit.right ? [...unit.right] : null,
+        }
+      : null,
+    explain: null,
+  }
+  // Only line/group units get an AI description ('call' and list mode don't).
+  if (cur.gran !== 'group' && cur.gran !== 'line') return info
+  let code = ''
+  for (let i = unit.start; i <= unit.end; i++) {
+    const r = rows[i]
+    const t = r && (r.right != null ? r.right : r.left)
+    if (t != null) code += (code ? '\n' : '') + t
+  }
+  if (!reIfStatement.test(code)) return info
+  const context = explainContext(b)
+  info.explain = {
+    blockId: b.id,
+    file: b.file,
+    label: b.label,
+    gran: cur.gran,
+    unitKey: cur.gran === 'group' ? `group-${unit.start}-${unit.end}` : `line-${unit.start}`,
+    code,
+    context,
+    codeHash: fnv1a(code + '\n ' + context),
+  }
+  return info
+}
+
+// explainRequested dedups auto-launched explain runs per blockId+unitKey+hash
+// (mirrors searchRequested for resolve_call) — on top of the server-side
+// idempotent StartWorkflowID, so a re-selection never even re-POSTs.
+const explainRequested = new Set()
+
+// EXPLAIN_DEBOUNCE_MS delays the explain request until the cursor rests on the
+// unit, so arrowing through a block doesn't fire a request per stop.
+const EXPLAIN_DEBOUNCE_MS = 600
+let explainTimer = null
+let explainPendingKey = ''
+
+// scheduleExplain arms the debounced explain request for the focused unit; a
+// cursor move before the timer fires re-arms it for the new unit instead.
+function scheduleExplain(req) {
+  const key = `${req.blockId}|${req.unitKey}|${req.codeHash}`
+  explainPendingKey = key
+  if (explainRequested.has(key)) return // already fired — the poll loop finishes it
+  clearTimeout(explainTimer)
+  explainTimer = setTimeout(() => {
+    if (explainPendingKey !== key || explainRequested.has(key)) return
+    explainRequested.add(key)
+    requestExplain(req)
+  }, EXPLAIN_DEBOUNCE_MS)
+}
+
+// requestExplain starts the explain_code workflow (the sanctioned write path —
+// POST a workflow start; the workflow's Activities do the LLM call and the
+// read-model write) and then polls the read-model until the entry lands.
+// Best-effort: offline, the row simply never appears and the footer's
+// "genereren…" resolves to nothing on the failed row (or stays absent).
+async function requestExplain(req) {
+  try {
+    await fetch('/api/workflows/explain_code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr: state.pr, ...req }),
+    })
+  } catch (_) {
+    /* offline — leave the read-model untouched */
+  }
+  // The POST usually returns only after the workflow completed (no signals),
+  // so the first reload already lands the row; the bounded loop covers an
+  // idempotent reuse of a still-running Execution.
+  for (let i = 0; i < 20; i++) {
+    await loadExplanations()
+    const e = state.explanations[`${req.blockId}|${req.unitKey}`]
+    if (e && e.status !== 'searching') return
+    await new Promise((r) => setTimeout(r, 1500))
+  }
+}
+
+// updateFooter pushes the focused unit's snapshots into state.footerUnit/
+// state.footerExplain and auto-schedules the AI generation for an if-containing
+// line/group unit that has no (matching-hash) explanation yet. A stored row
+// with an empty codeHash matches any hash (seeded test fixtures).
+function updateFooter() {
+  const info = footerUnitInfo()
+  state.footerUnit = info ? info.unitRow : null
+  const req = info && info.explain
+  if (!req) {
+    state.footerExplain = null
+    explainPendingKey = ''
+    return
+  }
+  const e = state.explanations[`${req.blockId}|${req.unitKey}`]
+  const hashOk = e && (e.codeHash === req.codeHash || e.codeHash === '')
+  if (hashOk && e.status === 'done' && e.text) {
+    state.footerExplain = { status: 'done', text: e.text }
+    return
+  }
+  if (hashOk && e.status === 'failed') {
+    // Terminal: the LLM had nothing (offline/hiccup) — show nothing, and don't
+    // re-request (the deterministic Run ID would no-op anyway).
+    state.footerExplain = null
+    return
+  }
+  state.footerExplain = { status: 'searching', text: '' }
+  if (explanationsLoaded) scheduleExplain(req)
+}
+
+// Bridge state → the footer. Same decoupling as setCommentScope/setRelated,
+// and the getter follows the same rule: list the navigation state INLINE —
+// including state.drillCursor (a drilled column's own gran/change move must
+// re-fire this) and the focused block's lazily-loaded code.
+watch(
+  () => [
+    state.selected,
+    state.mode,
+    state.change,
+    state.gran,
+    state.blocks,
+    state.focusLevel,
+    state.drill,
+    state.drillCursor,
+    state.codeVersion,
+    state.explanations,
+    focusedBlock() && focusedBlock().code,
+  ],
+  () => updateFooter(),
+)
+
 // Bridge approval + code state → per-block combined-approval summaries the
 // sidebar reads (state.approvalSummaries). Decoupled from the render for the
 // same reason as setCommentScope/setRelated: the sidebar reads a plain snapshot
@@ -3912,7 +4155,11 @@ function DetailPanel(state) {
   return html`
     <main
       class="${() =>
-        'fixed bottom-[90px] top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto transition-all duration-200 ease-out ' +
+        'fixed top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto transition-all duration-200 ease-out ' +
+        // The footer grows from 90px to 140px while it shows an AI unit
+        // description (state.footerExplain, diff-mode only) — reserve the
+        // matching bottom strip so the columns never slide in behind it.
+        (state.footerExplain ? 'bottom-[140px] ' : 'bottom-[90px] ') +
         // Right margin clears the comments/taken sidebar (RelatedPanel.mjs),
         // which is a separate position:fixed overlay with a higher z-index —
         // without this, <main>'s last column (Onderliggende code, or the

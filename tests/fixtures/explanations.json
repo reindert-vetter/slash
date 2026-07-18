@@ -1,0 +1,29 @@
+[
+  {
+    "pr": 97,
+    "blockId": "97:app/Actions/ExplainAction.php:ExplainAction::execute",
+    "unitKey": "group-2-4",
+    "codeHash": "",
+    "status": "done",
+    "text": "Deze groep introduceert een if-statement: de waarde wordt alleen op 2 gezet als hij positief is.",
+    "model": "haiku"
+  },
+  {
+    "pr": 97,
+    "blockId": "97:app/Actions/ExplainAction.php:ExplainAction::execute",
+    "unitKey": "line-2",
+    "codeHash": "",
+    "status": "done",
+    "text": "Deze conditie controleert of de waarde positief is; alleen dan loopt de tak.",
+    "model": "haiku"
+  },
+  {
+    "pr": 97,
+    "blockId": "97:app/Actions/ExplainChildAction.php:ExplainChildAction::handle",
+    "unitKey": "group-2-4",
+    "codeHash": "",
+    "status": "done",
+    "text": "Het onderliggende blok krijgt een if: het bedrag wordt alleen op 20 gezet als het boven de 10 ligt.",
+    "model": "haiku"
+  }
+]

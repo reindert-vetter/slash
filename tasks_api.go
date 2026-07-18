@@ -16,6 +16,7 @@ import (
 	"slash/modules/callresolve"
 	"slash/modules/claude"
 	"slash/modules/comments"
+	"slash/modules/explanations"
 	"slash/modules/github"
 	"slash/modules/inbox"
 	"slash/modules/jira"
@@ -36,6 +37,7 @@ type tasks struct {
 	callresolve *callresolve.Module
 	testcovers  *testcovers.Module
 	approvals   *approvals.Module
+	explain     *explanations.Module
 }
 
 // newTasks builds the tembed engine (SQLite + JSONL, so comments live in the
@@ -113,6 +115,18 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		tc.Close()
 		return nil, nil, err
 	}
+	ex, err := explanations.Open(dataDir + "/explanations.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -132,7 +146,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	if os.Getenv("SLASH_JIRA") == "off" {
 		jr = &jira.Fake{}
 	}
-	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, tc, ap, cl, jr, db, dataDir, repo)
+	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, tc, ap, ex, cl, jr, db, dataDir, repo)
 	// Record the server-lifetime context + whether background pollers may run,
 	// so ensurePRStatus's fresh-poller spawn uses a context that outlives the
 	// HTTP request that triggered it (see TaskManager.baseCtx).
@@ -159,9 +173,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = cr.Close()
 		_ = tc.Close()
 		_ = ap.Close()
+		_ = ex.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -338,6 +353,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// POST /api/workflows/resolve_test_covers → start an LLM test-coverage
 	// resolution execution (class-level-only annotations only).
 	mux.HandleFunc("/api/workflows/resolve_test_covers", s.handleResolveTestCovers)
+	// POST /api/workflows/explain_code → start (idempotently, via a
+	// deterministic Run ID) an AI-explanation execution for one navigation unit
+	// containing an if-statement (the footer description).
+	mux.HandleFunc("/api/workflows/explain_code", s.handleExplainCode)
 	// POST /api/workflows/pr_status {pr} → ensure the per-PR lifecycle tracker
 	// (its start fetches the PR's metadata into the prmeta read-model).
 	mux.HandleFunc("/api/workflows/pr_status", s.handlePRStatusStart)
@@ -361,6 +380,9 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// covered method, both statically resolved and LLM-resolved, plus the
 	// unannotated/unresolved rows behind the warning icon / "Zoek" action)
 	mux.HandleFunc("/api/testcovers", s.handleTestCovers)
+	// GET /api/explanations?pr=N → read-only AI unit-explanation read-model
+	// (the footer's "AI-omschrijving" per if-containing line/group).
+	mux.HandleFunc("/api/explanations", s.handleExplanations)
 	// The inbox is owned by the pr_inbox workflow; these endpoints read its
 	// read-model (never GitHub directly).
 	mux.HandleFunc("/api/inbox", s.handleInbox)
@@ -427,7 +449,7 @@ func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "approve" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" {
 		http.NotFound(w, r)
 		return
 	}
@@ -657,6 +679,55 @@ func (s *server) handleCallResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	if list == nil {
 		list = []callresolve.Entry{}
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// handleExplainCode starts an explain_code Workflow Execution (POST) — the
+// sanctioned UI write path for the footer's AI unit description. The workflow
+// asks Haiku (context-only) to describe the unit's if-statement and writes the
+// explanations read-model. Idempotent per unit+code-hash (StartWorkflowID).
+func (s *server) handleExplainCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in ExplainCodeInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil ||
+		in.PR <= 0 || in.BlockID == "" || in.UnitKey == "" || in.CodeHash == "" || in.Code == "" {
+		http.Error(w, "invalid explain request", http.StatusBadRequest)
+		return
+	}
+	if strings.Contains(in.File, "..") {
+		http.Error(w, "invalid file", http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.StartExplainCode(in)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleExplanations serves GET /api/explanations?pr=N — the read-only AI
+// unit-explanation read-model the footer renders.
+func (s *server) handleExplanations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr := 0
+	if v := r.URL.Query().Get("pr"); v != "" {
+		pr, _ = strconv.Atoi(v)
+	}
+	list, err := s.tasks.explain.List(r.Context(), pr)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []explanations.Entry{}
 	}
 	writeJSON(w, http.StatusOK, list)
 }
