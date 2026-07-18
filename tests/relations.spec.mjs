@@ -18,8 +18,7 @@ test.describe('PR Review Tree — block relations', () => {
 
     // The child shows in the "Onderliggende code" panel (top-right of the block).
     const related = page.getByTestId('related-code')
-    await expect(related).toContainText('Onderliggende code')
-    const child = page.getByTestId('related-item')
+    const child = related.getByTestId('related-item')
     await expect(child).toHaveCount(1)
     await expect(child).toContainText('SendOrderMail::handle')
     await expect(child).toContainText('app/Listeners/SendOrderMail.php')

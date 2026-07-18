@@ -29,8 +29,7 @@ async function evaluateSettled(page, fn, attempts = 4) {
 // assert the DOM. Two surfaces:
 //  • the sidebar row: the block + all its nested blocks' approval, rolled up by
 //    home.mjs into state.approvalSummaries (here supplied directly).
-//  • the "Onderliggende code" panel: each child's own approval badge plus a
-//    header roll-up of the children shown.
+//  • the "Onderliggende code" panel: each child's own approval badge.
 test.describe('PR Review Tree — combined approval', () => {
   test('the sidebar row shows the combined done/total, green + ✓ when complete', async ({
     page,
@@ -78,9 +77,7 @@ test.describe('PR Review Tree — combined approval', () => {
     await expect(pills.nth(0)).toHaveClass(/emerald/)
   })
 
-  test('the underlying-code panel shows a per-child badge and a header roll-up', async ({
-    page,
-  }) => {
+  test('the underlying-code panel shows a per-child badge', async ({ page }) => {
     await page.goto('/pr/12903')
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -107,9 +104,6 @@ test.describe('PR Review Tree — combined approval', () => {
     await expect(badges).toHaveCount(2)
     await expect(badges.nth(0)).toHaveText('1/3')
     await expect(badges.nth(1)).toContainText('✓ 2/2')
-
-    // Header roll-up sums the children with a count: 1+2 / 3+2 = 3/5.
-    await expect(host.getByTestId('related-approval-total')).toContainText('3/5 goedgekeurd')
   })
 
   // Regression: the emerald checkmark span in paneHTML (Block.mjs) is absolutely

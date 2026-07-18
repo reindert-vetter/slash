@@ -1634,19 +1634,6 @@ export default function RelatedPanel(state, commentTarget, search) {
   // Calls the Go resolver could not pin (status unresolved) + any in flight
   // (searching). Both show the "zoeken…" spinner — the LLM search auto-runs.
   const unresolved = () => rc.unresolved
-  // codeApproval rolls up the approval counts of the shown children (those that
-  // are PR blocks with changed rows) into one { done, total } for the header.
-  const codeApproval = () => {
-    let done = 0
-    let total = 0
-    for (const r of rc.children) {
-      if (r.approve) {
-        done += r.approve.done
-        total += r.approve.total
-      }
-    }
-    return { done, total }
-  }
   const pending = () => unresolved().filter((r) => r.status === 'unresolved').length
   const searching = () => unresolved().some((r) => r.status === 'searching')
   // coversWarning renders the "dekking niet te bepalen" line under the card
@@ -1703,28 +1690,17 @@ export default function RelatedPanel(state, commentTarget, search) {
   // outer .key('related-panel') (home.mjs) pointed at a permanent element
   // while only the inner slot swaps.
   const fullCard = () => html`
-    <section class="flex w-[30rem] shrink-0 max-h-full min-h-0 flex-col overflow-hidden" data-testid="related-code">
-      <div class="flex items-center gap-2 px-4 py-2.5">
-        <div class="min-w-0">
-          <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">Onderliggende code</h2>
-          <p class="text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-approval-total">
-            Code die dit blok aanroept${() => {
-              const a = codeApproval()
-              return a.total ? ` · ${a.done}/${a.total} goedgekeurd` : ''
-            }}
-          </p>
-          ${() => coversWarning()}
-        </div>
-        ${() =>
-          searching() || pending() > 0
-            ? html`<span
-                class="ml-auto shrink-0 rounded-md border border-slate-200 dark:border-zinc-800 px-2 py-1 text-[11px] text-slate-400 dark:text-zinc-500"
-                data-testid="related-searching"
-                >zoeken…</span
-              >`
-            : ''}
-      </div>
+    <section class="relative flex w-[30rem] shrink-0 max-h-full min-h-0 flex-col overflow-hidden" data-testid="related-code">
+      ${() =>
+        searching() || pending() > 0
+          ? html`<span
+              class="absolute right-2 top-2 z-10 shrink-0 rounded-md border border-slate-200 dark:border-zinc-800 bg-white/90 dark:bg-zinc-900/90 px-2 py-1 text-[11px] text-slate-400 dark:text-zinc-500"
+              data-testid="related-searching"
+              >zoeken…</span
+            >`
+          : ''}
       <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
+        ${() => coversWarning()}
         ${() => {
           // All children render as one flat vertical list, full width, in order.
           const ks = kids()
