@@ -82,7 +82,7 @@ export default function Footer(state) {
           class="shrink-0 truncate text-xs italic text-slate-400 dark:text-zinc-500"
           data-testid="footer-description"
         >
-          Description coming soon…
+          Omschrijving volgt nog…
         </p>
         <div
           class="no-scrollbar min-h-0 flex-1 overflow-auto"

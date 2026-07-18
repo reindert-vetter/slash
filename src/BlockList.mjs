@@ -74,22 +74,22 @@ export default function BlockList(state) {
             >START</span
           >
           <h1 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">
-            Start — where do you want to begin?
+            Start — waar wil je beginnen?
           </h1>
         </div>
         <p class="mt-1 text-xs text-slate-500 dark:text-zinc-500">
           <span class="font-medium text-slate-700 dark:text-zinc-300"
             >${() => state.blocks.length}</span
           >
-          starting points &nbsp;·&nbsp; ↑ ↓ to choose · → to step into the diff ·
-          ← to search
+          startpunten &nbsp;·&nbsp; ↑ ↓ om te kiezen · → om de diff in te stappen ·
+          ← om te zoeken
         </p>
         ${() => approvalSummaryLine(state)}
         <input
           id="block-search"
           data-testid="block-search"
           type="text"
-          placeholder="Search starting points…"
+          placeholder="Zoek startpunten…"
           autocomplete="off"
           spellcheck="false"
           class="${() =>
