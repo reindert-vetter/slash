@@ -1385,6 +1385,7 @@ function relatedCard(r, i, drill) {
             : 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-200 dark:border-zinc-800')}"
       data-testid="related-item"
+      data-child-id="${r.id}"
       data-active="${() => (selected() ? 'true' : 'false')}"
       @click="${() => drill && drill(r)}"
     >

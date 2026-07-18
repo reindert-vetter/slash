@@ -535,7 +535,12 @@ function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Se
       isApproved && approveHere
         ? '<span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">✓</span>'
         : ''
-    parts.push(`<div class="${cls}"${anchor}${flag}>${check}${body}${marker}</div>`)
+    // data-row carries the aligned-row index: the DOM child index can't be used
+    // to find a row (the partial-call circle rows below insert extra divs), and
+    // only the active group's first row has an anchor otherwise. Used by the
+    // call-arrow overlay (src/callArrows.mjs) to anchor an arrow on the exact
+    // call-site row.
+    parts.push(`<div class="${cls}"${anchor}${flag} data-row="${i}">${check}${body}${marker}</div>`)
 
     // Partial call approval: once at least one — but not all — of this row's
     // call segments is approved, an open circle marks every segment still

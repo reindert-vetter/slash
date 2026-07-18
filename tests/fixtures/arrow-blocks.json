@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 100,
+    "file": "app/Actions/ArrowCallerAction.php",
+    "class": "ArrowCallerAction",
+    "name": "execute",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 12,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 100,
+    "file": "app/Services/ArrowHelperService.php",
+    "class": "ArrowHelperService",
+    "name": "arrowHelper",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  }
+]

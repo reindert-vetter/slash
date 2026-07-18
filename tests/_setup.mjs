@@ -12,6 +12,7 @@ export default function globalSetup() {
   materializeTreeWorktrees()
   materializeExplainWorktrees()
   materializeTestsGroupWorktrees()
+  materializeArrowWorktrees()
 }
 
 // materializeTreeWorktrees writes the (gitignored, normally real-git-derived)
@@ -93,6 +94,53 @@ class ${name}
   write('head', 'tests/Feature/TgOrderBillingTest.php', file('Tests\\Feature', 'TgOrderBillingTest', 'testBilling', 2))
   write('base', 'tests/Feature/TgOrderShippingTest.php', file('Tests\\Feature', 'TgOrderShippingTest', 'testShipping', 1))
   write('head', 'tests/Feature/TgOrderShippingTest.php', file('Tests\\Feature', 'TgOrderShippingTest', 'testShipping', 2))
+}
+
+// materializeArrowWorktrees writes the synthetic PR 100 fixture worktrees for
+// call-arrows.spec.mjs (same rationale as materializeTreeWorktrees above): a
+// caller whose two adjacent changed lines each call a resolved method —
+// `arrowHelper` resolves to ArrowHelperService::arrowHelper, itself a changed
+// PR 100 block (so the call-arrow overlay draws an arrow to its child card),
+// while `arrowPlain` resolves to a file the PR doesn't touch (an "Ongewijzigd"
+// child — no arrow). Seeded via tests/fixtures/arrow-blocks.json +
+// arrow-callresolve.json.
+function materializeArrowWorktrees() {
+  const caller = (h, p) => `<?php
+
+namespace App\\Actions;
+
+class ArrowCallerAction
+{
+    public function execute()
+    {
+        $value = $this->calc->arrowHelper(${h});
+        $other = $this->calc->arrowPlain(${p});
+        return $value + $other;
+    }
+}
+`
+  const helper = (value) => `<?php
+
+namespace App\\Services;
+
+class ArrowHelperService
+{
+    public function arrowHelper()
+    {
+        $value = ${value};
+        return $value;
+    }
+}
+`
+  const write = (side, relPath, contents) => {
+    const full = `data/worktrees/pr-100-${side}/${relPath}`
+    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
+    writeFileSync(full, contents)
+  }
+  write('base', 'app/Actions/ArrowCallerAction.php', caller(1, 1))
+  write('head', 'app/Actions/ArrowCallerAction.php', caller(2, 3))
+  write('base', 'app/Services/ArrowHelperService.php', helper(1))
+  write('head', 'app/Services/ArrowHelperService.php', helper(2))
 }
 
 function materializeExplainWorktrees() {

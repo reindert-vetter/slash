@@ -51,6 +51,7 @@ import RelatedPanel, {
   isPrWideFocused,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
+import { CallArrowsHost, setCallArrows } from './callArrows.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
@@ -1350,6 +1351,43 @@ function resolvedCallChildren(b) {
     })
 }
 
+// callArrowPairs computes the arrow start/end pairs for the call-arrow overlay
+// (src/callArrows.mjs): one flowing arrow per *changed* method_call child (its
+// definition is itself a PR block — an unchanged "Ongewijzigd" target never
+// gets one) whose call site sits inside the ACTIVE navigation unit. Scope
+// mirrors the panel's own scoping exactly (callScopeMethods): at gran 'call'
+// the one segment under the cursor, at 'line'/'group' any site on a row within
+// the unit's range — so an arrow only ever points at a child card the panel is
+// actually showing (at 'group' those are the groupTier-0 children sorted to
+// the top). One pair per child (the first in-scope site), diff mode only, and
+// only for the top-level cursor: a drilled column has no cursor-scoped panel
+// (see callScopeMethods), so arrows stay off while drilled. Called from the
+// setRelated watch CALLBACK (untracked) — never from a render binding, so it
+// can't co-subscribe on b.code with the diff render (conventions.md).
+function callArrowPairs(b) {
+  if (!b || state.mode !== 'diff' || state.focusLevel !== 0 || state.drill.length) return []
+  if (b !== curBlock()) return []
+  const rows = blockRows(b)
+  const unit = unitsFor(rows, state.gran)[state.change]
+  if (!unit) return []
+  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const pairs = []
+  for (const r of callRows(b)) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    if (!byId.has(callChildId(r))) continue // only a changed target (a real PR block)
+    const sites = findCallSites(rows, r.callKey)
+    const site =
+      state.gran === 'call'
+        ? sites.find((s) => s.row === unit.start && s.segStart === unit.segStart)
+        : sites.find((s) => s.row >= unit.start && s.row <= unit.end)
+    if (!site) continue
+    // childId matches relatedCard's data-child-id (the caller-scoped panel
+    // descriptor id, see resolvedCallChildren).
+    pairs.push({ row: site.row, childId: b.id + '::' + r.callKey })
+  }
+  return pairs
+}
+
 // callRows returns the call-resolution rows whose caller is block b.
 function callRows(b) {
   if (!b || !state.callResolve) return []
@@ -2615,6 +2653,9 @@ watch(
       if (state.testsExpanded) state.testsExpanded = false
     }
     setRelated(relatedChildren(b), unresolvedCalls(b).concat(unresolvedTestCovers(b)), testCoverWarning(b))
+    // Push the call→child arrow pairs for the overlay (same untracked-callback
+    // decoupling as setRelated itself — see callArrowPairs / callArrows.mjs).
+    setCallArrows(callArrowPairs(b))
     // Auto-run the LLM fallback for any calls/test-coverage targets the Go
     // resolver couldn't pin — no button (deduped per caller+callKey resp.
     // test+class, so this is cheap on every panel re-fire).
@@ -4570,6 +4611,10 @@ CommentsSidebar(
   openTask
 )(app)
 MenuHost()(app)
+// The call-arrow overlay: one static fixed <svg> drawn imperatively (see
+// src/callArrows.mjs). Top-level like MenuHost — inside <main> its z-index
+// would be capped at <main>'s own z-10 stacking context.
+CallArrowsHost()(app)
 Footer(state)(app)
 ThemeToggleCorner()(app)
 

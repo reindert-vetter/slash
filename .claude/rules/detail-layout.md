@@ -672,6 +672,39 @@ rechts — zie de layout-alinea hierboven):
   test-ids (verse node per toggle, conform de keyed-node-valkuil in
   `conventions.md`). Test: `tests/related-tests-group.spec.mjs` (fixture-PR
   99, `testsgroup-*.json` + `materializeTestsGroupWorktrees`).
+  **Call-pijl-overlay (`src/callArrows.mjs`):** een **vloeiende indigo
+  bezier-pijl** loopt van de gewijzigde call-site in de **actieve
+  navigatie-unit** (rechterrand van de new-pane, op de hoogte van de
+  call-site-rij) naar de bijbehorende **gewijzigde** kind-kaart in deze kaart —
+  uitsluitend voor een `method_call`-child wiens definitie zélf een PR-blok is
+  (een `Ongewijzigd`-target krijgt nooit een pijl), één pijl per matchend kind
+  (de eerste in-scope call-site), alleen in diff-mode en alleen op de top-level
+  cursor (`focusLevel === 0`, niet gedrild — een gedrilde kolom heeft geen
+  cursor-gescoped paneel, zie `callScopeMethods`). De scope spiegelt de
+  paneel-scoping exact: op `call` het ene actieve segment, op `line`/`group`
+  elke site binnen de unit-range — een pijl wijst dus altijd naar een kaart
+  die het paneel toont. **Bewust een imperatieve teken-laag**, geen reactieve
+  template (het `updateHints`/`positionMenu`-model): `callArrowPairs` in
+  `home.mjs` berekent de paren in de **callback** van de bestaande
+  `setRelated`-watch (untracked — geen nieuwe reactieve `b.code`-lezer, dus
+  geen stuck-on-loading-race) en duwt ze via `setCallArrows` naar
+  `callArrows.mjs`, dat puur DOM leest (`getBoundingClientRect` op de
+  `data-row`-rij in `paneHTML` resp. de `data-child-id`-kaart op
+  `relatedCard` — twee statische attributen) en één **statisch gemount**
+  `position:fixed` `<svg data-testid=call-arrows>` (top-level naast
+  `MenuHost`, `z-[15]`: boven `<main>`'s z-10, onder de sidebar-z-20 en het
+  command-menu; `pointer-events:none`) imperatief hertekent (path
+  `data-testid=call-arrow`, stroke `#6366f1` op 0.45 opacity + arrowhead-
+  marker). De svg wordt per draw exact over `<main>`'s rect gelegd en clipt
+  zichzelf — pijlen tekenen nooit over de pr-index/PR-info/sidebar/footer
+  heen. Hertekenen: rAF-gecoalesced op de watch zelf, `resize`, capture-
+  `scroll` (ook inner scrollers — het `repositionMenu`-precedent) en een
+  250ms-settle na elke push (de 200ms breedte-transities, à la `openMenu`).
+  Een call-site-rij die uit de diff-viewport is gescrold verliest zijn pijl
+  (dezelfde zichtbaarheidsregel als `updateHints`); een kind-kaart die intern
+  is weggescrold houdt een op de paneelrand **geclampte** pijl. Test:
+  `tests/call-arrows.spec.mjs` (fixture-PR 100, `arrow-*.json` +
+  `materializeArrowWorktrees` in `tests/_setup.mjs`).
   De kaart **volgt de cursor**: `home.mjs` (`callScopeMethods`/`findCallSites`)
   koppelt elke resolved call aan het diff-segment waar hij staat. Op het fijnste
   niveau (`gran==='call'`) toont de kaart **precies de method van die ene call** —

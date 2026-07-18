@@ -136,6 +136,23 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Call-arrow fixture (PR 100, call-arrows.spec.mjs): a caller with two
+  // adjacent changed call lines — one resolves to a changed PR block (arrow),
+  // one to an unchanged file (no arrow). Worktrees materialized in _setup.mjs
+  // (materializeArrowWorktrees) so the diff is keyboard-navigable.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/arrow-blocks.json',
+      '-callresolve',
+      'tests/fixtures/arrow-callresolve.json',
+    ],
+    { stdio: 'ignore' },
+  )
   // Deleted-file fixture (PR 98, removed-file.spec.mjs): one block whose whole
   // file was deleted by the PR (fileDeleted: true) plus a loose removed method
   // in a file that still exists — drives the "Verwijderd bestand"/"Verwijderd"

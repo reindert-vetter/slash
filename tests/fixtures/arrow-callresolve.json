@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 100,
+    "callerId": "100:app/Actions/ArrowCallerAction.php:ArrowCallerAction::execute",
+    "callKey": "arrowHelper",
+    "status": "resolved",
+    "childFile": "app/Services/ArrowHelperService.php",
+    "childClass": "ArrowHelperService",
+    "childMethod": "arrowHelper",
+    "childLine": 7,
+    "childCode": "public function arrowHelper()\n{\n    $value = 2;\n    return $value;\n}"
+  },
+  {
+    "pr": 100,
+    "callerId": "100:app/Actions/ArrowCallerAction.php:ArrowCallerAction::execute",
+    "callKey": "arrowPlain",
+    "status": "resolved",
+    "childFile": "app/Services/ArrowPlainService.php",
+    "childClass": "ArrowPlainService",
+    "childMethod": "arrowPlain",
+    "childLine": 7,
+    "childCode": "public function arrowPlain()\n{\n    return 3;\n}"
+  }
+]
