@@ -36,10 +36,24 @@ func wholeFileBlock(src []byte, filename string) Block {
 	}
 }
 
+// classHeaderSentinel is the synthetic method name for a class's "header"
+// region: everything between the class/trait/enum's opening brace and its
+// first method declaration (trait use-statements, constants, properties —
+// e.g. `$fillable`/`$casts` arrays). Captured as one block so changes there
+// show up in the block list instead of vanishing. Deterministic and stable
+// so added/modified/removed symbol-matching between commits works like any
+// other block.
+const classHeaderSentinel = "<class-header>"
+
 // classFrame is a class/trait/interface/enum context on the stack.
 type classFrame struct {
 	name      string
 	openDepth int // brace depth the body lives within
+
+	// Header-block tracking (class/trait/enum only — see classHeaderSentinel).
+	headerEligible bool // named class/trait/enum (not interface, not anonymous)
+	headerLine     int  // first line inside the body; 0 = not yet seen
+	headerClosed   bool // true once the first method declaration closed the region
 }
 
 // scanPHP scans the source. ok=false means: imbalance → let the caller fall back
@@ -58,9 +72,21 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 		}
 		return classes[len(classes)-1].name
 	}
-	// popClasses removes frames whose body has been closed.
+	// popClasses removes frames whose body has been closed. A frame that never
+	// saw a method declaration emits its class-header block here, spanning the
+	// whole body (see classHeaderSentinel).
 	popClasses := func() {
 		for len(classes) > 0 && depth < classes[len(classes)-1].openDepth {
+			top := classes[len(classes)-1]
+			if top.headerEligible && !top.headerClosed && top.headerLine > 0 && top.headerLine <= line-1 {
+				blocks = append(blocks, Block{
+					File:    filename,
+					Class:   top.name,
+					Name:    classHeaderSentinel,
+					Line:    top.headerLine,
+					EndLine: line - 1,
+				})
+			}
 			classes = classes[:len(classes)-1]
 		}
 	}
@@ -119,6 +145,12 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 		case c == '{':
 			depth++
 			i++
+			if len(classes) > 0 {
+				top := &classes[len(classes)-1]
+				if top.headerEligible && top.headerLine == 0 && depth == top.openDepth {
+					top.headerLine = line + 1
+				}
+			}
 		case c == '}':
 			depth--
 			i++
@@ -134,13 +166,40 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 				if bodyAt >= 0 {
 					// Push a frame; the body opens at the next '{' (depth becomes
 					// depth+1), so openDepth = depth+1.
-					classes = append(classes, classFrame{name: name, openDepth: depth + 1})
+					classes = append(classes, classFrame{
+						name:      name,
+						openDepth: depth + 1,
+						// Only a named class/trait/enum gets a header block —
+						// interfaces have no header content worth capturing, and an
+						// anonymous class has no stable name to key it on.
+						headerEligible: name != "" && word != "interface",
+					})
 				}
 				i = end
 			case "function":
+				declLine := line
+				var headerFrame *classFrame
+				if len(classes) > 0 {
+					top := &classes[len(classes)-1]
+					if top.headerEligible && !top.headerClosed && depth == top.openDepth {
+						headerFrame = top
+					}
+				}
 				b, next, isDecl := scanFunction(s, end, &line, filename, currentClass())
 				if isDecl {
 					blocks = append(blocks, b)
+					if headerFrame != nil {
+						headerFrame.headerClosed = true
+						if headerFrame.headerLine > 0 && headerFrame.headerLine <= declLine-1 {
+							blocks = append(blocks, Block{
+								File:    filename,
+								Class:   headerFrame.name,
+								Name:    classHeaderSentinel,
+								Line:    headerFrame.headerLine,
+								EndLine: declLine - 1,
+							})
+						}
+					}
 				}
 				i = next
 			default:

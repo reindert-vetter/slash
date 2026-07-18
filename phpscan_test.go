@@ -147,6 +147,164 @@ func TestImbalanceFallsBack(t *testing.T) {
 	}
 }
 
+func TestClassHeaderBlockWithMethod(t *testing.T) {
+	src := `<?php
+final class ProductGroup extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'name',
+    ];
+
+    public function __construct()
+    {
+        parent::__construct();
+    }
+
+    public function items()
+    {
+        return $this->hasMany(Item::class);
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Models/ProductGroup.php")
+	if !hasSymbol(got, "ProductGroup::<class-header>") {
+		t.Fatalf("expected a class-header block, got %v", symbols(got))
+	}
+	if !hasSymbol(got, "ProductGroup::__construct") || !hasSymbol(got, "ProductGroup::items") {
+		t.Fatalf("expected the methods to still be their own blocks, got %v", symbols(got))
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected exactly 3 blocks, got %d: %v", len(got), symbols(got))
+	}
+	var header Block
+	for _, b := range got {
+		if b.symbol() == "ProductGroup::<class-header>" {
+			header = b
+		}
+	}
+	// Body opens on line 3 ("{"); header content starts line 4 ("use HasFactory;")
+	// and must end just before the constructor's declaration line.
+	if header.Line != 4 {
+		t.Fatalf("expected header Line=4, got %d", header.Line)
+	}
+	var ctor Block
+	for _, b := range got {
+		if b.symbol() == "ProductGroup::__construct" {
+			ctor = b
+		}
+	}
+	if header.EndLine != ctor.Line-1 {
+		t.Fatalf("expected header EndLine=%d (ctor.Line-1), got %d", ctor.Line-1, header.EndLine)
+	}
+}
+
+func TestClassHeaderBlockWithoutAnyMethod(t *testing.T) {
+	src := `<?php
+class Config
+{
+    use SomeTrait;
+
+    const VERSION = 1;
+}
+`
+	got := ScanBlocks([]byte(src), "app/Models/Config.php")
+	if len(got) != 1 || got[0].symbol() != "Config::<class-header>" {
+		t.Fatalf("expected the whole body to be one class-header block, got %v", symbols(got))
+	}
+	// Body opens line 3; the last content line is line 6 (the closing brace is
+	// line 7).
+	if got[0].Line != 4 || got[0].EndLine != 6 {
+		t.Fatalf("expected Line=4 EndLine=6, got Line=%d EndLine=%d", got[0].Line, got[0].EndLine)
+	}
+}
+
+func TestClassHeaderBlockPerClassInSameFile(t *testing.T) {
+	src := `<?php
+class A
+{
+    use TraitA;
+
+    public function foo()
+    {
+        return 1;
+    }
+}
+
+class B
+{
+    use TraitB;
+
+    public function bar()
+    {
+        return 2;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Multi.php")
+	if !hasSymbol(got, "A::<class-header>") || !hasSymbol(got, "B::<class-header>") {
+		t.Fatalf("expected a class-header block per class, got %v", symbols(got))
+	}
+	if !hasSymbol(got, "A::foo") || !hasSymbol(got, "B::bar") {
+		t.Fatalf("expected both methods, got %v", symbols(got))
+	}
+}
+
+func TestNoClassHeaderBlockWhenBodyEmptyOrNoRoom(t *testing.T) {
+	// The constructor is the very first thing after the opening brace — there
+	// is no header content, so no class-header block should be emitted.
+	src := `<?php
+class Bare
+{
+    public function __construct()
+    {
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Bare.php")
+	if hasSymbol(got, "Bare::<class-header>") {
+		t.Fatalf("did not expect a class-header block, got %v", symbols(got))
+	}
+	if !hasSymbol(got, "Bare::__construct") {
+		t.Fatalf("expected the constructor block, got %v", symbols(got))
+	}
+}
+
+func TestInterfaceHasNoClassHeaderBlock(t *testing.T) {
+	src := `<?php
+interface Repo {
+    public function find(int $id): ?Model;
+    public function all(): array;
+}
+`
+	got := ScanBlocks([]byte(src), "app/Repository/Repo.php")
+	if hasSymbol(got, "Repo::<class-header>") {
+		t.Fatalf("interfaces must not get a class-header block, got %v", symbols(got))
+	}
+}
+
+func TestAnonymousClassHasNoClassHeaderBlock(t *testing.T) {
+	src := `<?php
+use Illuminate\Database\Migrations\Migration;
+return new class extends Migration {
+    protected $x = 1;
+    public function up(): void {
+        Schema::table('addresses', function ($t) { $t->string('type'); });
+    }
+    public function down(): void {
+        //
+    }
+};
+`
+	got := ScanBlocks([]byte(src), "database/migrations/2026_add_type.php")
+	for _, b := range got {
+		if b.Name == classHeaderSentinel {
+			t.Fatalf("anonymous class must not get a class-header block, got %v", symbols(got))
+		}
+	}
+}
+
 func TestStringWithBracesAndKeywords(t *testing.T) {
 	src := `<?php
 class S {
