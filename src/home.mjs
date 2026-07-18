@@ -1097,6 +1097,11 @@ function relatedChildren(b) {
           line: kid.line,
           kind,
           code,
+          // True only while the lazy /api/code fetch is still in flight
+          // (ensureCode sets kid.code to an object — even { error } — once it
+          // completes). Lets the panel tell "code laden…" apart from a finished
+          // load that turned out empty ("geen code gevonden").
+          loading: !kid.code,
           size: codeSize(code),
           prio: 0,
           approve: blockApproveCount(kid),
@@ -1172,6 +1177,9 @@ function resolvedCallChildren(b) {
         line: r.childLine,
         kind: 'method_call',
         code: r.childCode || '',
+        // The code rides embedded in the callresolve row (no lazy fetch), so an
+        // empty childCode is a final state — "geen code gevonden", never loading.
+        loading: false,
         // Line count of the child definition — the secondary sort key in
         // relatedChildren (bigger modified methods lead their prio group).
         size: codeSize(r.childCode || ''),
@@ -1255,6 +1263,9 @@ function resolvedTestCoverChildren(b, range) {
       line: r.coveredLine,
       kind: 'covers',
       code: r.coveredCode || '',
+      // Embedded in the testcovers row (no lazy fetch) — empty means final,
+      // mirroring resolvedCallChildren.
+      loading: false,
       size: codeSize(r.coveredCode || ''),
       source: r.status === 'found' ? r.model : '',
       approve: prBlock ? blockApproveCount(prBlock) : null,
@@ -1301,6 +1312,9 @@ function coveredByChildren(b, range) {
       line: test.line,
       kind: 'covered_by',
       code,
+      // Lazy PR-block code, same rule as the relation children above: loading
+      // only while ensureCode's fetch is still in flight.
+      loading: !test.code,
       size: codeSize(code),
       source: r.status === 'found' ? r.model : '',
       approve: blockApproveCount(test),

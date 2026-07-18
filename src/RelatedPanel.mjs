@@ -1401,7 +1401,11 @@ function relatedCard(r, i, drill) {
               class="language-php m-0 block whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
               .innerHTML="${() => highlight(r.code)}"
             ></code>`
-          : html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500">code laden…</p>`}
+          : r.loading
+            ? html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500">code laden…</p>`
+            : html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-empty">
+                geen code gevonden
+              </p>`}
     </div>
   `
 }
@@ -1722,7 +1726,17 @@ export default function RelatedPanel(state, commentTarget, search) {
           const ks = kids()
           return ks.length === 0
             ? html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">Geen onderliggende code.</p>`
-            : ks.map((r, i) => relatedCard(r, i, drill).key('related:' + r.id))
+            : ks.map((r, i) =>
+                // The key encodes the code-load state (load/code/empty) next to
+                // the child id — the block-card precedent from conventions.md:
+                // arrow.js reuses a keyed node via move+patch WITHOUT re-running
+                // its function bindings against the fresh descriptor object, so
+                // without this the "code laden…" → code/"geen code gevonden"
+                // transition can freeze on the old closure.
+                relatedCard(r, i, drill).key(
+                  'related:' + r.id + ':' + (r.code ? 'code' : r.loading ? 'load' : 'empty'),
+                ),
+              )
         }}
       </div>
     </section>

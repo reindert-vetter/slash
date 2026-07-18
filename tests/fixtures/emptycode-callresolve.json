@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 96,
+    "callerId": "96:app/Actions/GammaAction.php:GammaAction::run",
+    "callKey": "resolveGamma",
+    "status": "resolved",
+    "childFile": "app/Services/GammaService.php",
+    "childClass": "GammaTarget",
+    "childMethod": "resolveGamma",
+    "childLine": 42,
+    "childCode": ""
+  }
+]

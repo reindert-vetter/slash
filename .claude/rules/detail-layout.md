@@ -549,6 +549,22 @@ rechts — zie de layout-alinea hierboven):
   de poll na een zoekactie), en bewaart de selectie op **block-id** zodat een
   callResolve-reload de cursor niet verspringt.
   Zie `.claude/rules/tembed-workflows.md` (sectie "Relaties tussen blokken").
+  **"code laden…" vs. "geen code gevonden":** elke child-descriptor draagt een
+  `loading`-vlag (gezet in `home.mjs`, dus in de `setRelated`-watch-keten — nooit
+  door `RelatedPanel` zelf `b.code` te laten lezen): voor een **lazy** PR-blok-
+  child (relatie-child/`covered_by`) is dat `!kid.code` — `ensureCode` zet
+  `kid.code` altijd op een object zodra de `/api/code`-fetch afrondt, óók bij
+  een fout (`{error}`) — voor een **embedded**-code child
+  (`method_call`/`covers`, code zit synchroon in de callresolve/testcovers-rij)
+  hard `false`. `relatedCard` rendert daarop drie-weg: code → excerpt; leeg +
+  `loading` → "code laden…"; leeg + niet-loading (afgeronde load die leeg/error
+  bleek, of een lege embedded `childCode`) → de eind-staat **"geen code
+  gevonden"** (`data-testid=related-empty`, zelfde grijze stijl). De item-key
+  codeert die staat mee (`related:<id>:code|load|empty`) — het block-kaart-
+  precedent uit `conventions.md`, anders kan de laden→code/leeg-transitie op
+  een hergebruikte keyed node bevriezen. Regressietest:
+  `tests/related-empty-code.spec.mjs` (PR 96, embedded leeg; PR 90, lazy load
+  die leeg afrondt).
   De kaart is een **navigeerbare lijst**: `→` vanuit de diff selecteert het
   **eerste** blokje (`cs.codeSel=0`); `↓`/`↑` lopen daarna langs de blokjes
   (klemt op het eerste/laatste — `↑` op het eerste blokje stapt terug uit naar

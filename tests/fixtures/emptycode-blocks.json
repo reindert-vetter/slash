@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 96,
+    "file": "app/Actions/GammaAction.php",
+    "class": "GammaAction",
+    "name": "run",
+    "category": "ACTION",
+    "line": 20,
+    "endLine": 34,
+    "status": "modified",
+    "side": "new"
+  }
+]
