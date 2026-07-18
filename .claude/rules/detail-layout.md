@@ -649,6 +649,29 @@ rechts — zie de layout-alinea hierboven):
   een **warning** (`data-testid=related-covers-warning`, custom inline SVG +
   uitleg — nooit een AI-gok). Zie `.claude/rules/tembed-workflows.md` (sectie
   "Testdekking koppelen").
+  **Dekkende tests groeperen in een horizontaal balkje** (`groupTestChildren`
+  in `home.mjs` + `testsBar` in `RelatedPanel.mjs`): zodra een blok naast zijn
+  `covered_by`-kinderen (de dekkende tests) óók **andere** (niet-test)
+  kinderen toont, klappen die tests samen tot één horizontale rij
+  (`data-testid=related-tests-bar`: chevron + "N tests"-pill + één compacte
+  chip per testmethode, `data-testid=related-tests-chip`) op de plek waar de
+  eerste test in de sortering stond — zo duwen ze de echte onderliggende code
+  niet omlaag. Klik of `Enter` op het balkje **toggelt** de uitklap
+  (`state.testsExpanded`, efemeer — niet in de URL, reset naar dicht bij een
+  blok-wissel via `lastRelatedBlockId` in de `setRelated`-watch-callback;
+  `state.testsExpanded` staat als inline dep in die watch-getter): uitgeklapt
+  verschijnen de tests als **gewone kind-kaarten direct onder het balkje**
+  (het balkje blijft staan als inklap-toggle). Zijn er **geen** andere
+  kinderen (of geen tests), dan is dit een no-op — de tests renderen als
+  gewone kaarten, zoals voorheen. Het groep-item rijdt mee **in** de
+  kind-lijst zelf (een synthetische `kind:'tests_group'`-descriptor), dus de
+  paneel-cursor (`cs.codeSel` indexeert `rc.children` 1-op-1) heeft geen
+  aparte casus: `Enter`/klik landen in `drillIntoChild`, dat op de kind
+  vertakt (toggle i.p.v. drillen); `orderedChildBlocks` filtert 'm er — net
+  als `covered_by` — uit. De `.key` van het balkje codeert open/dicht + de
+  test-ids (verse node per toggle, conform de keyed-node-valkuil in
+  `conventions.md`). Test: `tests/related-tests-group.spec.mjs` (fixture-PR
+  99, `testsgroup-*.json` + `materializeTestsGroupWorktrees`).
   De kaart **volgt de cursor**: `home.mjs` (`callScopeMethods`/`findCallSites`)
   koppelt elke resolved call aan het diff-segment waar hij staat. Op het fijnste
   niveau (`gran==='call'`) toont de kaart **precies de method van die ene call** —

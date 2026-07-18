@@ -11,6 +11,7 @@ export default function globalSetup() {
   execSync('go build -o tests/.tmp/slash .', { stdio: 'inherit' })
   materializeTreeWorktrees()
   materializeExplainWorktrees()
+  materializeTestsGroupWorktrees()
 }
 
 // materializeTreeWorktrees writes the (gitignored, normally real-git-derived)
@@ -59,6 +60,41 @@ class ${name}
 // deterministic diff whose aligned rows — and thus the seeded unit keys
 // group-2-4/line-2, see tests/fixtures/explanations.json — are fully fixed by
 // these file contents, for both the top-level block and a drilled column.
+// materializeTestsGroupWorktrees writes the synthetic PR 99 fixture worktrees
+// for related-tests-group.spec.mjs (same rationale as materializeTreeWorktrees
+// above): one production method plus two test methods, each with one real
+// changed line, so keyboard navigation can genuinely enter the production
+// block's diff (→) and step into its Onderliggende-code panel — where the two
+// covering tests (tests/fixtures/testsgroup-testcovers.json) group into the
+// horizontal tests bar next to a seeded resolved call
+// (tests/fixtures/testsgroup-callresolve.json, the "other" non-test child).
+function materializeTestsGroupWorktrees() {
+  const file = (ns, name, method, value) => `<?php
+
+namespace ${ns};
+
+class ${name}
+{
+    public function ${method}()
+    {
+        $value = ${value};
+        return $value;
+    }
+}
+`
+  const write = (side, relPath, contents) => {
+    const full = `data/worktrees/pr-99-${side}/${relPath}`
+    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
+    writeFileSync(full, contents)
+  }
+  write('base', 'app/Models/TgOrder.php', file('App\\Models', 'TgOrder', 'billingAddress', 1))
+  write('head', 'app/Models/TgOrder.php', file('App\\Models', 'TgOrder', 'billingAddress', 2))
+  write('base', 'tests/Feature/TgOrderBillingTest.php', file('Tests\\Feature', 'TgOrderBillingTest', 'testBilling', 1))
+  write('head', 'tests/Feature/TgOrderBillingTest.php', file('Tests\\Feature', 'TgOrderBillingTest', 'testBilling', 2))
+  write('base', 'tests/Feature/TgOrderShippingTest.php', file('Tests\\Feature', 'TgOrderShippingTest', 'testShipping', 1))
+  write('head', 'tests/Feature/TgOrderShippingTest.php', file('Tests\\Feature', 'TgOrderShippingTest', 'testShipping', 2))
+}
+
 function materializeExplainWorktrees() {
   const file = (name, method, varName, body) => `<?php
 

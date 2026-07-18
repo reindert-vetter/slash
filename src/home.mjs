@@ -154,6 +154,12 @@ const state = reactive({
   // diff→list transition. focusedBlock() follows this, not always the deepest
   // entry, so the Onderliggende-code panel + tasks slide along with the focus.
   focusLevel: 0,
+  // testsExpanded — whether the Onderliggende-code panel's grouped covering
+  // tests (the horizontal "tests bar", see groupTestChildren) are expanded
+  // into ordinary child cards below the bar. Ephemeral (never in the URL,
+  // like showDescription/diffViewMode) and reset to collapsed whenever the
+  // panel moves to another block (see the setRelated watch below).
+  testsExpanded: false,
   selected: 0,
   // blockRef — the URL-facing identity of the selected block: `${file}:${line}`
   // instead of its raw index into state.blocks. An index shifts whenever the
@@ -1230,11 +1236,48 @@ function relatedChildren(b) {
   // for calls, loaded code for listeners); a child whose code hasn't arrived
   // yet is size 0 and sinks until it loads. Ties keep the resolver-emit
   // (source) order (Array.prototype.sort is stable).
-  return evt
+  const sorted = evt
     .concat(covers)
     .concat(coveredBy)
     .concat(calls)
     .sort((x, y) => (x.groupTier || 0) - (y.groupTier || 0) || x.prio - y.prio || y.size - x.size)
+  return groupTestChildren(b, sorted)
+}
+
+// groupTestChildren collapses the covering tests (kind covered_by — the tests
+// that cover this production block) into ONE horizontal "tests bar" descriptor
+// when the panel ALSO shows other (non-test) children, so the tests don't push
+// the actual underlying code down the list. Clicking/Enter on the bar toggles
+// state.testsExpanded (both land in drillIntoChild, which branches on the
+// kind); expanded, the test cards render as ordinary children directly below
+// the bar, which stays put as the collapse toggle. With no other children (or
+// no tests at all) this is a no-op — the tests render as plain cards, exactly
+// as before. The bar rides along IN the children list itself (at the position
+// the first test sorted to), so the panel cursor stays 1:1 with the visible
+// rows (cs.codeSel indexes rc.children) without any special casing in
+// RelatedPanel's keyboard walk.
+function groupTestChildren(b, sorted) {
+  const tests = sorted.filter((c) => c.kind === 'covered_by')
+  if (tests.length === 0 || tests.length === sorted.length) return sorted
+  const others = sorted.filter((c) => c.kind !== 'covered_by')
+  // The bar takes the slot of the first test in the sorted order: count the
+  // non-test children ahead of it (relative order within both partitions is
+  // preserved, sorted is never mutated).
+  let at = 0
+  for (const c of sorted) {
+    if (c.kind === 'covered_by') break
+    at++
+  }
+  const group = {
+    id: 'tests-group:' + b.id,
+    kind: 'tests_group',
+    count: tests.length,
+    tests,
+    expanded: state.testsExpanded,
+  }
+  return others
+    .slice(0, at)
+    .concat([group], state.testsExpanded ? tests : [], others.slice(at))
 }
 
 // resolvedCallChildren maps the caller block's resolved/found call rows to child
@@ -1536,7 +1579,10 @@ function orderedChildBlocks(b) {
   const kids = directChildBlocks(b)
   if (kids.length < 2) return kids
   const order = relatedChildren(b)
-    .filter((c) => c.kind !== 'covered_by')
+    // tests_group is the collapsed covering-tests bar (groupTestChildren) —
+    // pure presentation, never a walkable child block, so drop it alongside
+    // the covered_by entries it wraps.
+    .filter((c) => c.kind !== 'covered_by' && c.kind !== 'tests_group')
     .map((c) => c.blockId || c.id)
   const rank = new Map(order.map((id, i) => [id, i]))
   return [...kids].sort((x, y) => {
@@ -2250,6 +2296,15 @@ function collapsedColumnHTML(b, level, testid, drillIdx = null) {
 // synthetic frame and lazily fetch its code the same way a real block does.
 function drillIntoChild(child) {
   if (!child) return
+  // The tests-group bar (the grouped covering tests, see groupTestChildren) is
+  // not a drillable child: activating it — click and Enter both land here —
+  // toggles the expansion instead. The setRelated watch lists
+  // state.testsExpanded as an inline dep, so the panel re-renders with the
+  // test cards inserted below (or removed from under) the bar.
+  if (child.kind === 'tests_group') {
+    state.testsExpanded = !state.testsExpanded
+    return
+  }
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
   // A method-call child's own `id` is caller-scoped (b.id + '::' + callKey), so it
   // never matches a real block; its `blockId` points at the definition's PR block
@@ -2501,6 +2556,12 @@ watch(
   () => setCommentScope(commentScope()),
 )
 
+// lastRelatedBlockId tracks which block the underlying-code panel showed on
+// the previous watch run — plain module state (not reactive; only used to
+// detect a block switch inside the callback below, which then collapses the
+// tests bar again).
+let lastRelatedBlockId = null
+
 // Bridge state → RelatedPanel's underlying-code card. Same reasoning as the
 // comment-scope watch above, and the getter must follow the *same* rule: list the
 // navigation state INLINE. Burying every reactive read inside relatedChildren()/
@@ -2536,10 +2597,23 @@ watch(
     state.approvalSummaries,
     state.blockTotals,
     state.drill,
+    // testsExpanded so toggling the grouped covering-tests bar (see
+    // groupTestChildren/drillIntoChild) re-pushes the children list with the
+    // test cards inserted/removed.
+    state.testsExpanded,
     focusedBlock() && focusedBlock().code,
   ],
   () => {
     const b = focusedBlock()
+    // A block switch collapses the tests bar again (ephemeral cursor state,
+    // like showDescription): the expansion belongs to the block it was opened
+    // on. Guarded assignment — testsExpanded is a dep of this watch, so only
+    // write when it actually changes (one extra settle-fire, then stable).
+    const bid = b ? b.id : null
+    if (bid !== lastRelatedBlockId) {
+      lastRelatedBlockId = bid
+      if (state.testsExpanded) state.testsExpanded = false
+    }
     setRelated(relatedChildren(b), unresolvedCalls(b).concat(unresolvedTestCovers(b)), testCoverWarning(b))
     // Auto-run the LLM fallback for any calls/test-coverage targets the Go
     // resolver couldn't pin — no button (deduped per caller+callKey resp.

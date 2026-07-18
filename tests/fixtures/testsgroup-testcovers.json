@@ -1,0 +1,26 @@
+[
+  {
+    "pr": 99,
+    "testId": "99:tests/Feature/TgOrderBillingTest.php:TgOrderBillingTest::testBilling",
+    "targetKey": "method:TgOrder::billingAddress",
+    "status": "resolved",
+    "coveredFile": "app/Models/TgOrder.php",
+    "coveredClass": "TgOrder",
+    "coveredMethod": "billingAddress",
+    "coveredLine": 7,
+    "coveredCode": "public function billingAddress()\n{\n    $value = 2;\n    return $value;\n}",
+    "annotation": "CoversMethod"
+  },
+  {
+    "pr": 99,
+    "testId": "99:tests/Feature/TgOrderShippingTest.php:TgOrderShippingTest::testShipping",
+    "targetKey": "method:TgOrder::billingAddress",
+    "status": "resolved",
+    "coveredFile": "app/Models/TgOrder.php",
+    "coveredClass": "TgOrder",
+    "coveredMethod": "billingAddress",
+    "coveredLine": 7,
+    "coveredCode": "public function billingAddress()\n{\n    $value = 2;\n    return $value;\n}",
+    "annotation": "CoversMethod"
+  }
+]

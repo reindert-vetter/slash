@@ -1,0 +1,35 @@
+[
+  {
+    "pr": 99,
+    "file": "app/Models/TgOrder.php",
+    "class": "TgOrder",
+    "name": "billingAddress",
+    "category": "MODEL",
+    "line": 7,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 99,
+    "file": "tests/Feature/TgOrderBillingTest.php",
+    "class": "TgOrderBillingTest",
+    "name": "testBilling",
+    "category": "TEST",
+    "line": 7,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 99,
+    "file": "tests/Feature/TgOrderShippingTest.php",
+    "class": "TgOrderShippingTest",
+    "name": "testShipping",
+    "category": "TEST",
+    "line": 7,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  }
+]

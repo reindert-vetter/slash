@@ -500,7 +500,11 @@ function scrollCommentIntoView() {
 // highlight first), mirroring scrollCommentIntoView.
 function scrollCodeIntoView() {
   requestAnimationFrame(() => {
-    const el = document.querySelector('[data-testid=related-item][data-active=true]')
+    // The cursor can sit on an ordinary child card OR on the grouped
+    // covering-tests bar (see testsBar) — both carry data-active.
+    const el = document.querySelector(
+      '[data-testid=related-item][data-active=true], [data-testid=related-tests-bar][data-active=true]',
+    )
     if (el) el.scrollIntoView({ block: 'nearest' })
   })
 }
@@ -1424,6 +1428,49 @@ function relatedCard(r, i, drill) {
   `
 }
 
+// testsBar renders the grouped covering tests as ONE horizontal row (a
+// `tests_group` descriptor, built by home.mjs' groupTestChildren whenever a
+// block has covered_by children AND other, non-test children): a chevron, a
+// count pill and one compact chip per test (its method name). It participates
+// in the panel cursor exactly like a card — cs.codeSel indexes rc.children,
+// which contains this descriptor at the slot the first test sorted to — and
+// click/Enter toggle the expansion through the same drill callback a card
+// uses (drillIntoChild branches on the kind). The chevron/data-expanded/chips
+// are static interpolations on purpose: the descriptor is a plain object and
+// every toggle rebuilds the keyed node (the key encodes open/closed, see
+// fullCard), so nothing here needs its own reactive binding.
+function testsBar(r, i, drill) {
+  const selected = () => cs.focus === 'code' && i === cs.codeSel
+  return html`
+    <div
+      class="${() =>
+        'flex cursor-pointer items-center gap-2 overflow-hidden rounded-lg border bg-slate-50/60 dark:bg-zinc-800/40 px-3 py-2 hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
+        (selected()
+          ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+          : 'border-slate-200 dark:border-zinc-800')}"
+      data-testid="related-tests-bar"
+      data-active="${() => (selected() ? 'true' : 'false')}"
+      data-expanded="${r.expanded ? 'true' : 'false'}"
+      title="${r.expanded ? 'Tests inklappen' : 'Tests uitklappen'}"
+      @click="${() => drill && drill(r)}"
+    >
+      <span class="shrink-0 text-[10px] text-slate-400 dark:text-zinc-500">${r.expanded ? '▾' : '▸'}</span>
+      <span
+        class="shrink-0 rounded-full bg-indigo-50 dark:bg-indigo-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-indigo-500 dark:text-indigo-400"
+        >${r.count === 1 ? '1 test' : r.count + ' tests'}</span
+      >
+      ${r.tests.map((t) =>
+        html`<span
+          class="min-w-0 shrink truncate rounded-md border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-slate-600 dark:text-zinc-400"
+          data-testid="related-tests-chip"
+          title="${t.label}"
+          >${t.label && t.label.includes('::') ? t.label.split('::').pop() : t.label}</span
+        >`.key('chip:' + t.id),
+      )}
+    </div>
+  `
+}
+
 // RelatedPanel — the fixed-width right column: the selected block's underlying
 // (child) code on top, live comments below. `commentTarget` (from home.mjs)
 // reports what an in-progress comment would attach to at the current navigation
@@ -1726,10 +1773,19 @@ export default function RelatedPanel(state, commentTarget, search) {
                 // arrow.js reuses a keyed node via move+patch WITHOUT re-running
                 // its function bindings against the fresh descriptor object, so
                 // without this the "code laden…" → code/"geen code gevonden"
-                // transition can freeze on the old closure.
-                relatedCard(r, i, drill).key(
-                  'related:' + r.id + ':' + (r.code ? 'code' : r.loading ? 'load' : 'empty'),
-                ),
+                // transition can freeze on the old closure. The tests-group bar
+                // key encodes open/closed + the grouped test ids instead, so a
+                // toggle (or a changed test set) always builds a fresh node.
+                r.kind === 'tests_group'
+                  ? testsBar(r, i, drill).key(
+                      'tests-group:' +
+                        (r.expanded ? 'open' : 'closed') +
+                        ':' +
+                        r.tests.map((t) => t.id).join('|'),
+                    )
+                  : relatedCard(r, i, drill).key(
+                      'related:' + r.id + ':' + (r.code ? 'code' : r.loading ? 'load' : 'empty'),
+                    ),
               )
         }}
       </div>

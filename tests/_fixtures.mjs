@@ -33,8 +33,9 @@ const BIN = path.resolve('tests/.tmp/slash')
 // blocks fixture (PR 12903), the relations/callresolve fixtures (PR 90/91),
 // the testcovers fixtures (PR 92/93/94), the tree-descent fixture (PR 95,
 // see _setup.mjs's materializeTreeWorktrees + postapprove-tree.spec.mjs), and
-// the empty-child-code fixture (PR 96, related-empty-code.spec.mjs), and the
-// deleted-file fixture (PR 98, removed-file.spec.mjs).
+// the empty-child-code fixture (PR 96, related-empty-code.spec.mjs), the
+// deleted-file fixture (PR 98, removed-file.spec.mjs), and the tests-group
+// fixture (PR 99, related-tests-group.spec.mjs).
 // Everything lands next to the DB (tests/.tmp/w<n>/), so the worker is isolated.
 function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/blocks.json'], { stdio: 'ignore' })
@@ -112,6 +113,26 @@ function seed(db) {
       'tests/fixtures/emptycode-blocks.json',
       '-callresolve',
       'tests/fixtures/emptycode-callresolve.json',
+    ],
+    { stdio: 'ignore' },
+  )
+  // Tests-group fixture (PR 99, related-tests-group.spec.mjs): a production
+  // method with TWO covering tests (covered_by children) AND a resolved call
+  // (a non-test child) — drives the horizontal tests bar in the
+  // Onderliggende-code panel. Worktrees materialized in _setup.mjs
+  // (materializeTestsGroupWorktrees) so the diff is keyboard-navigable.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/testsgroup-blocks.json',
+      '-testcovers',
+      'tests/fixtures/testsgroup-testcovers.json',
+      '-callresolve',
+      'tests/fixtures/testsgroup-callresolve.json',
     ],
     { stdio: 'ignore' },
   )

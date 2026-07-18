@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 99,
+    "callerId": "99:app/Models/TgOrder.php:TgOrder::billingAddress",
+    "callKey": "formatAddress",
+    "status": "resolved",
+    "childFile": "app/Services/AddressFormatter.php",
+    "childClass": "AddressFormatter",
+    "childMethod": "formatAddress",
+    "childLine": 5,
+    "childCode": "public function formatAddress(): string\n{\n    return 'formatted';\n}"
+  }
+]
