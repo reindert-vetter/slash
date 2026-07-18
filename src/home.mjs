@@ -1216,6 +1216,9 @@ function relatedChildren(b) {
           prio: 0,
           approve: blockApproveCount(kid),
           groupTier: range ? (inRange(siteLine) ? 0 : 1) : 0,
+          // The child's own changed grandchildren — the drill-hint chips the
+          // panel shows to the right of this card (see nestedChangedKids).
+          nested: nestedChangedKids(kid, b.id),
         }
       })
   // Resolved/found method calls (Go statically or LLM). Their code + descriptor
@@ -1347,6 +1350,10 @@ function resolvedCallChildren(b) {
         // null in list mode, or the filter above already dropped anything out
         // of scope at line/call).
         groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
+        // Drill-hint chips: only a call whose definition is itself a PR block
+        // can have changed grandchildren — an unchanged ("Ongewijzigd") or
+        // synthetic target never gets a chip (see nestedChangedKids).
+        nested: prBlock ? nestedChangedKids(prBlock, b.id) : [],
       }
     })
 }
@@ -1459,6 +1466,9 @@ function resolvedTestCoverChildren(b, range) {
       // "on a changed line" middle tier — just changed-in-this-PR (0) or not (2).
       prio: prBlock ? 0 : 2,
       groupTier: range && r.line ? (r.line >= range.startLine && r.line <= range.endLine ? 0 : 1) : 0,
+      // Drill-hint chips — same rule as method calls: only a covered method
+      // that is itself a PR block can carry changed grandchildren.
+      nested: prBlock ? nestedChangedKids(prBlock, b.id) : [],
     }
   })
 }
@@ -1508,6 +1518,9 @@ function coveredByChildren(b, range) {
       // 'group' granularity (a no-op 0 outside it, when range is null). See
       // this function's doc comment.
       groupTier: range ? 1 : 0,
+      // Drill-hint chips: the covering test is a real PR block, so it can
+      // have changed grandchildren of its own (e.g. the methods it covers).
+      nested: nestedChangedKids(test, b.id),
     })
   }
   return out
@@ -1597,6 +1610,32 @@ function directChildBlocks(b) {
     if (byId.has(coveredChildId(r))) ids.add(coveredChildId(r))
   }
   return [...ids].map((id) => byId.get(id)).filter(Boolean)
+}
+
+// nestedChangedKids maps a panel child's own PR-block children to the small,
+// plain chip descriptors the Onderliggende-code panel renders as drill hints
+// next to that child's card (`r.nested` → relatedCard's connector + chips in
+// RelatedPanel.mjs): per child card the reviewer sees there is *more changed
+// code underneath* before drilling into it. Only changed blocks qualify:
+// directChildBlocks already returns nothing but PR blocks — a call/covered
+// method into a file this PR doesn't touch is never a PR block, so an
+// "Ongewijzigd"/synthetic target never gets a chip — and a block with nothing
+// reviewable left (no approval total AND no change status) is dropped too.
+// parentId guards the direct A↔B cycle: a grandchild that IS the block whose
+// panel we're rendering isn't "more underneath", it's where the reviewer
+// already is. Flat plain objects on purpose: RelatedPanel receives these via
+// setRelated's push and must never read live block state itself (the same
+// decoupling as the rest of the descriptor — see the setRelated watch).
+function nestedChangedKids(prBlock, parentId) {
+  if (!prBlock) return []
+  const out = []
+  for (const kid of directChildBlocks(prBlock)) {
+    if (kid.id === parentId || kid.id === prBlock.id) continue
+    const approve = blockApproveCount(kid)
+    if (!approve.total && kid.status === 'unchanged') continue
+    out.push({ id: kid.id, label: kid.label, file: kid.file, line: kid.line, status: kid.status, approve })
+  }
+  return out
 }
 
 // orderedChildBlocks sorts directChildBlocks(b) into the same order the

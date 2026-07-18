@@ -7,6 +7,7 @@
 import { html } from './vendor/arrow.js'
 import { reactive } from './vendor/arrow.js'
 import { highlight } from './Block.mjs'
+import { statusInfo } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { avatarHTML } from './avatar.mjs'
@@ -1368,17 +1369,104 @@ function approvalBadge(a) {
   `
 }
 
+// NESTED_CHIP_CAP caps how many drill-hint chips render next to a child card;
+// anything beyond it collapses into a "+N meer" line so a fan-out child can't
+// blow up the card's height.
+const NESTED_CHIP_CAP = 3
+
+// nestedChip renders one drill-hint chip: a narrow block naming a changed
+// grandchild (title, file, change status, approval) of the child card it sits
+// next to — the "there is more underneath" cue. Clicking it drills TWO levels
+// in one go: first into the parent card's child (the ordinary card drill),
+// then straight into this grandchild (drillIntoChild resolves the real PR
+// block via blockId — every chip target is a PR block by construction, see
+// home.mjs' nestedChangedKids). stopPropagation keeps the click from ALSO
+// triggering the card's own one-level drill. All interpolations are static on
+// purpose (the testsBar precedent): the descriptor is a plain object and the
+// card's key encodes the nested signature (see fullCard), so every change
+// builds a fresh node — no reactive binding needed here.
+function nestedChip(r, k, drill) {
+  const st = statusInfo(k.status)
+  const approved = k.approve && k.approve.total > 0 && k.approve.done === k.approve.total
+  return html`
+    <button
+      type="button"
+      class="w-full rounded-md border border-slate-200 dark:border-zinc-800 bg-slate-50/60 dark:bg-zinc-800/40 px-1.5 py-1 text-left hover:border-indigo-200 dark:hover:border-indigo-500/40"
+      data-testid="related-nested-chip"
+      title="${k.label + ' · ' + k.file}"
+      @click="${(e) => {
+        e.stopPropagation()
+        if (!drill) return
+        drill(r)
+        drill({ blockId: k.id, id: k.id, label: k.label, file: k.file, line: k.line, code: '' })
+      }}"
+    >
+      <span class="block truncate font-mono text-[10px] font-semibold text-slate-700 dark:text-zinc-300"
+        >${k.label && k.label.includes('::') ? k.label.split('::').pop() : k.label}</span
+      >
+      <span class="block truncate font-mono text-[9px] text-slate-400 dark:text-zinc-500">${k.file.split('/').pop()}</span>
+      <span class="mt-0.5 flex items-center gap-1">
+        <span class="${'truncate text-[9px] font-medium uppercase tracking-wide ' + st.cls}" data-testid="related-nested-status"
+          >${k.status}</span
+        >
+        ${k.approve && k.approve.total > 0
+          ? html`<span
+              class="${'ml-auto shrink-0 rounded-full px-1 py-px text-[9px] font-semibold tabular-nums ' +
+              (approved
+                ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                : 'bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-500')}"
+              data-testid="related-nested-approval"
+              title="Goedgekeurde regels"
+              >${approved ? '✓ ' : ''}${k.approve.done}/${k.approve.total}</span
+            >`
+          : ''}
+      </span>
+    </button>
+  `
+}
+
+// nestedChipColumn renders the connector dash + the stacked chips to the right
+// of a child card, for its changed grandchildren (r.nested, capped at
+// NESTED_CHIP_CAP + a "+N meer" remainder line).
+function nestedChipColumn(r, drill) {
+  const kids = r.nested.slice(0, NESTED_CHIP_CAP)
+  const more = r.nested.length - kids.length
+  return html`
+    <div class="flex shrink-0 items-start">
+      <div class="mt-5 h-px w-3 shrink-0 border-t border-dashed border-slate-300 dark:border-zinc-700"></div>
+      <div class="flex w-36 shrink-0 flex-col gap-1" data-testid="related-nested">
+        ${kids.map((k) => nestedChip(r, k, drill).key('nested:' + k.id))}
+        ${more > 0
+          ? html`<span class="px-1 text-[9px] text-slate-400 dark:text-zinc-500" data-testid="related-nested-more"
+              >+${more} meer</span
+            >`
+          : ''}
+      </div>
+    </div>
+  `
+}
+
 // relatedCard renders one child block: a header (label + file:line + relation
 // kind) and a short, non-interactive code excerpt highlighted like the panes.
+// The card sits in a flex row with, when the child itself has changed
+// grandchildren (r.nested), a dashed connector to a narrow chip column on the
+// right (nestedChipColumn) — the drill-hint that there is more underneath.
+// The row div is the template's stable root; the chip column is a static
+// interpolation (fresh keyed node per nested change — the key in fullCard
+// encodes the nested signature). data-child-id stays on the inner card, so
+// the call-arrow overlay (callArrows.mjs, which targets the card's LEFT edge)
+// is unaffected by the chips on the right.
 function relatedCard(r, i, drill) {
   const selected = () => cs.focus === 'code' && i === cs.codeSel
   // An unchanged call/covered-method target (into a file this PR doesn't touch)
   // has no diff to review, so its selection highlight is grey rather than indigo.
   const unchanged = (r.kind === 'method_call' || r.kind === 'covers') && !r.diff
+  const nested = Array.isArray(r.nested) ? r.nested : []
   return html`
+    <div class="flex items-start">
     <div
       class="${() =>
-        'cursor-pointer rounded-lg border bg-slate-50/60 dark:bg-zinc-800/40 hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
+        'min-w-0 flex-1 cursor-pointer rounded-lg border bg-slate-50/60 dark:bg-zinc-800/40 hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
         (selected()
           ? unchanged
             ? 'border-slate-300 dark:border-zinc-700 ring-1 ring-slate-200 dark:ring-zinc-800'
@@ -1425,6 +1513,8 @@ function relatedCard(r, i, drill) {
             : html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-empty">
                 geen code gevonden
               </p>`}
+    </div>
+    ${nested.length ? nestedChipColumn(r, drill) : ''}
     </div>
   `
 }
@@ -1777,6 +1867,10 @@ export default function RelatedPanel(state, commentTarget, search) {
                 // transition can freeze on the old closure. The tests-group bar
                 // key encodes open/closed + the grouped test ids instead, so a
                 // toggle (or a changed test set) always builds a fresh node.
+                // The card key also carries the nested drill-hint signature
+                // (grandchild ids + their approval done-counts): the chips are
+                // static interpolations, so a changed set — or an approval tick
+                // inside a chip — must flip the key to build a fresh node.
                 r.kind === 'tests_group'
                   ? testsBar(r, i, drill).key(
                       'tests-group:' +
@@ -1785,7 +1879,14 @@ export default function RelatedPanel(state, commentTarget, search) {
                         r.tests.map((t) => t.id).join('|'),
                     )
                   : relatedCard(r, i, drill).key(
-                      'related:' + r.id + ':' + (r.code ? 'code' : r.loading ? 'load' : 'empty'),
+                      'related:' +
+                        r.id +
+                        ':' +
+                        (r.code ? 'code' : r.loading ? 'load' : 'empty') +
+                        ':n' +
+                        (Array.isArray(r.nested)
+                          ? r.nested.map((k) => k.id + '@' + (k.approve ? k.approve.done : 0)).join('|')
+                          : ''),
                     ),
               )
         }}

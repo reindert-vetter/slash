@@ -630,6 +630,36 @@ rechts — zie de layout-alinea hierboven):
   `relatedChildren`/`resolvedCallChildren` in `home.mjs` via `blockApproveCount`);
   dezelfde rollup zit als combinatie-pill op de sidebar-rij — zie de
   gecombineerde-goedkeuring-uitleg in `.claude/rules/blocks-and-ingest.md`.
+  **Drill-hint-chips (streepje naar rechts):** elk kind waarvan het blok **zélf**
+  nog gewijzigde onderliggende code heeft, toont rechts van zijn kaart een kort
+  **gestippeld streepje** naar een smalle chip-kolom
+  (`data-testid=related-nested`, `w-36`): per gewijzigd kleinkind één chip
+  (`data-testid=related-nested-chip`) met **titel** (laatste `::`-segment),
+  **file** (basename), **status**-woord (`added`/`modified`/`removed`, gekleurd
+  via `statusInfo` uit `BlockList.mjs`) en de **approval `done/total`**
+  (`data-testid=related-nested-approval`, `blockApproveCount` van het kleinkind
+  zelf — bewust niet subtree, badge-consistent met `related-approval`; verborgen
+  bij `total 0`). Gecapt op **3 chips + "+N meer"**
+  (`data-testid=related-nested-more`). De data komt uit
+  `nestedChangedKids(prBlock, parentId)` in `home.mjs` (platte descriptors op
+  `r.nested`, gebouwd in dezelfde descriptor-builders/`setRelated`-watch als de
+  rest): `directChildBlocks` levert per definitie alleen **PR-blokken**, dus een
+  `Ongewijzigd`/synthetisch call-target krijgt nooit een chip (een call-child
+  zonder `prBlock` krijgt expliciet `nested: []`); `parentId` filtert de directe
+  A↔B-cyclus weg. Chips liften gewoon mee op de descriptor, dus ze verschijnen
+  op elke granulariteit waar het kind zelf zichtbaar is (ook `line`/`call`). Een
+  **klik op een chip drilt twee niveaus in één keer** (eerst het kind, dan het
+  kleinkind — twee `drillIntoChild`-stappen via dezelfde `drill`-callback, met
+  `stopPropagation` zodat de kaart-klik er niet óók één-niveau overheen drilt);
+  `Enter` op de kaart blijft de gewone één-niveau-drill. arrow.js-details: de
+  kaart-root van `relatedCard` is nu een flex-rij (kaart `min-w-0 flex-1`, chips
+  ernaast als **statische** interpolaties, het `testsBar`-precedent) en de
+  kaart-`.key` in `fullCard` codeert de **nested-signatuur** (kleinkind-ids +
+  hun `approve.done`) naast de code-status, zodat een gewijzigde set of een
+  approval-tik altijd een verse node bouwt. `data-child-id` blijft op de
+  binnenste kaart, dus de call-pijl-overlay (die op de **linker**rand van de
+  kaart mikt) heeft geen last van de chips rechts. Het `tests_group`-balkje
+  (zie hieronder) krijgt géén chips. Zie `tests/related-nested-chip.spec.mjs`.
   Náást de listener-children toont dezelfde kaart ook de **methode-aanroepen** die
   het block doet, gekoppeld aan hun **definitie** — ook uit ongewijzigde bestanden
   (`kind=method_call`, uit `GET /api/callresolve`, code + descriptor zitten in de
