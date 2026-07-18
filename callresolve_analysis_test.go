@@ -649,3 +649,155 @@ class PlainThing {
 		t.Error("new PlainThing() (no __construct) should not produce a call entry")
 	}
 }
+
+// TestResolveCallsModelUsage: a controller that instantiates + statically calls
+// an Eloquent model (app/Models/) gets ONE deduped child pointing at the whole
+// model — never the constructor, even when the model defines one explicitly —
+// while unrelated method calls on the model variable (fill/save, both
+// unresolved: they are inherited from Eloquent's base class and never defined
+// in the app) and a resource-class resolution are left untouched.
+func TestResolveCallsModelUsage(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 55
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Http/Controllers/ProductGroupController.php": `<?php
+namespace App\Http\Controllers;
+class ProductGroupController {
+    public function store($request) {
+        $productGroup = new ProductGroup();
+        $productGroup->fill($request->validated());
+        $productGroup->save();
+        $resource = ProductGroupResource::make($productGroup);
+        return $resource;
+    }
+}
+`,
+		"app/Models/ProductGroup.php": `<?php
+namespace App\Models;
+class ProductGroup extends Model {
+    public function __construct(array $attributes = []) {
+        parent::__construct($attributes);
+    }
+    protected $fillable = ['name'];
+}
+`,
+		"app/Http/Resources/ProductGroupResource.php": `<?php
+namespace App\Http\Resources;
+class ProductGroupResource {
+    public static function make($resource = null) {}
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Http/Controllers/ProductGroupController.php", Class: "ProductGroupController", Name: "store", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	// Exactly one model child, keyed by the model's short name, whole-class
+	// (no method) — not the constructor, despite one existing.
+	e, ok := findEntry(entries, "ProductGroup")
+	if !ok {
+		t.Fatal("no entry for model usage 'ProductGroup'")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("ProductGroup: status=%q, want resolved", e.Status)
+	}
+	if e.ChildClass != "ProductGroup" || e.ChildMethod != "" {
+		t.Errorf("ProductGroup: child=%q::%q, want ProductGroup::<empty>", e.ChildClass, e.ChildMethod)
+	}
+	if e.ChildCode == "" || !strings.Contains(e.ChildCode, "class ProductGroup") {
+		t.Errorf("ProductGroup: child code missing the class body, got %q", e.ChildCode)
+	}
+	// The whole-class excerpt is expected to span the full class body
+	// (including its constructor) — it just isn't the *target* of the edge.
+	if !strings.Contains(e.ChildCode, "__construct") {
+		t.Errorf("ProductGroup: expected whole-class excerpt to include __construct, got %q", e.ChildCode)
+	}
+
+	// Only one "ProductGroup" entry — the static/new usages dedupe into one.
+	count := 0
+	for _, en := range entries {
+		if en.CallKey == "ProductGroup" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("got %d ProductGroup entries, want 1 (deduped)", count)
+	}
+
+	// The inherited Eloquent methods stay unresolved — untouched by this change.
+	for _, key := range []string{"fill", "save"} {
+		e, ok := findEntry(entries, key)
+		if !ok {
+			t.Fatalf("no entry for %q", key)
+		}
+		if e.Status != callresolve.StatusUnresolved {
+			t.Errorf("%s: status=%q, want unresolved", key, e.Status)
+		}
+	}
+
+	// The resource resolution is unaffected by the model change.
+	res, ok := findEntry(entries, "make")
+	if !ok {
+		t.Fatal("no entry for 'make'")
+	}
+	if res.Status != callresolve.StatusResolved || res.ChildClass != "ProductGroupResource" {
+		t.Errorf("make: got %+v, want resolved ProductGroupResource::make", res)
+	}
+}
+
+// TestResolveCallsModelWithoutConstructor: the common case — a model with no
+// explicit constructor still surfaces as underlying code (rule 2b's "no
+// definition to point at" skip must not apply to models).
+func TestResolveCallsModelWithoutConstructor(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 56
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Services/OrderCreator.php": `<?php
+namespace App\Services;
+class OrderCreator {
+    public function create($attrs) {
+        $order = new Order();
+        $order->fill($attrs);
+        return $order;
+    }
+}
+`,
+		"app/Models/Order.php": `<?php
+namespace App\Models;
+class Order extends Model {
+    protected $fillable = ['total'];
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Services/OrderCreator.php", Class: "OrderCreator", Name: "create", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "Order")
+	if !ok {
+		t.Fatal("no entry for model usage 'Order' (no explicit constructor)")
+	}
+	if e.Status != callresolve.StatusResolved || e.ChildClass != "Order" || e.ChildMethod != "" {
+		t.Errorf("Order: got %+v, want resolved Order::<empty>", e)
+	}
+}

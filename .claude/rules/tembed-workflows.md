@@ -670,6 +670,30 @@ fallback.
   `methodOnClass(accessor, m)` als `Foo` een geïndexeerde facade is. Een method
   die óók op de accessor niet bestaat (b.v. de framework-`Manager::forgetDrivers()`
   ná `providers()`, vendor is niet geïndexeerd) blijft `unresolved` → automatische LLM-search.
+  **Eloquent-model als geheel** (regel 2c, `new Model()`/`Model::…`): gebruikt een
+  controller/service een Eloquent-model (`new ProductGroup()`, `ProductGroup::query()`
+  — bv. gevolgd door `->fill()`/`->save()`), dan wil de reviewer **het model zelf**
+  als Onderliggende code zien, niet zijn constructor of een losse geërfde
+  Eloquent-methode (`fill`/`save`/`query` zijn nooit in de app gedefinieerd en
+  blijven dus gewoon `unresolved`, ongewijzigd). `buildSymbolIndex` indexeert elk
+  bestand onder `app/Models/` (`hasSeg(rel, "app/Models/")`) met `scanModels` —
+  een **whole-class synthetisch blok** per class-declaratie (`Class` = de
+  modelnaam, `Name` leeg, spant de hele class-body — mirror van `scanEnums`,
+  `blockSource` valt voor de lege `Name` terug op line-slicing) — in een aparte
+  `idx.models`-map (modelnaam → blok). Rule 2c scant `new Foo(`
+  (`reNewObj`) én `Foo::m(` (`reStaticCall`) op een receiver die in `idx.models`
+  zit en emit **één** child per model (call-key = modelnaam, `seen`-gededupt —
+  instantiatie + een latere statische call op hetzelfde model in één blok geven
+  dus nooit twee children), met `ChildClass` = de modelnaam en **`ChildMethod`
+  leeg** — de frontend-`blockLabel`-conventie toont dan de kale modelnaam
+  (`ProductGroup`), geen `::method`. Rule 2b (`new Foo()` → constructor) **sluit
+  een model-class expliciet uit** (`idx.models[class]`-check) — ook als het model
+  wél een expliciete `__construct` heeft, wijst dit nooit naar de constructor: de
+  reviewer wil het model, niet zijn constructor-body. Diffstat/`Ongewijzigd`-badge
+  komen gratis mee (hetzelfde mechanisme als elk ander `method_call`-child, op
+  basis van of `ChildFile` in de PR wijzigt). Andere resoluties op dezelfde regel
+  (bv. `ProductGroupResource::make($productGroup)` → de resource-class) blijven
+  ongemoeid — dit is een aanvullende child, geen vervanging.
 - **`modules/claude`** (`modules/claude/claude.go`): de CLI-bridge naar `claude`
   (`Client`-interface + `Fake`, patroon van `modules/github`). `Run` shelt uit
   naar `claude -p <prompt> --model <id>` met context-timeout; agentisch (Sonnet)
@@ -714,7 +738,11 @@ fallback.
   macro-call → `Builder::joinAddress`, de gewijzigde-regels-restrictie met een
   echte base+head-diff, een enum-case → `AddressType::BILLING`, een
   geschedulede `->command('accounting:import …')` → `AccountingImport::handle`,
-  en een facade-call `AccountingClient::providers()` → `AccountingDriver::providers`),
+  een facade-call `AccountingClient::providers()` → `AccountingDriver::providers`,
+  en `TestResolveCallsModelUsage`/`TestResolveCallsModelWithoutConstructor`
+  (`new Model()`/`Model::…` → één gededupte whole-class model-child, nooit de
+  constructor ondanks dat die soms bestaat, `fill`/`save` blijven `unresolved`,
+  een resource-resolutie op dezelfde regel blijft ongemoeid)),
   `resolve_call_test.go` (Haiku-confident → found; escalatie naar Sonnet;
   notfound; verificatie weigert een verzonnen definitie), en
   `modules/callresolve/callresolve_test.go` (round-trip + UpsertGo bewaart LLM +

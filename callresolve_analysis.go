@@ -29,6 +29,7 @@ type symbolIndex struct {
 	enums      map[string][]Block // enum short name → its declaration block(s)
 	commands   map[string]Block   // artisan command name (accounting:import) → its handle method
 	facades    map[string]string  // Laravel facade short name → accessor class short name
+	models     map[string]Block   // Eloquent model short name (app/Models/) → its whole-class block
 }
 
 var idxSkipDirs = map[string]bool{
@@ -45,6 +46,7 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		enums:      map[string][]Block{},
 		commands:   map[string]Block{},
 		facades:    map[string]string{},
+		models:     map[string]Block{},
 	}
 	_ = filepath.WalkDir(headDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -111,9 +113,41 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		for f, acc := range scanFacades(src) {
 			idx.facades[f] = acc
 		}
+		// An Eloquent model (app/Models/) is indexed as a whole-class block so a
+		// `new Model()`/`Model::` usage can point at the model itself rather than a
+		// single method — see scanModels.
+		if hasSeg(rel, "app/Models/") {
+			for _, b := range scanModels(src, rel) {
+				idx.models[shortName(b.Class)] = b
+			}
+		}
 		return nil
 	})
 	return idx
+}
+
+// scanModels finds PHP class declarations in an Eloquent model file and returns
+// one synthetic block per class (Class = the class name, Name empty), spanning
+// the whole declaration — mirrors scanEnums. blockSource falls back to
+// line-slicing for it since ScanBlocks never surfaces a class-level symbol.
+func scanModels(src []byte, filename string) []Block {
+	s := string(src)
+	var out []Block
+	for _, loc := range reModelClassDef.FindAllStringSubmatchIndex(s, -1) {
+		name := s[loc[2]:loc[3]]
+		i := loc[1]
+		for i < len(s) && s[i] != '{' {
+			i++
+		}
+		if i >= len(s) {
+			continue
+		}
+		startLine := 1 + strings.Count(s[:loc[0]], "\n")
+		bodyLine := 1 + strings.Count(s[:i], "\n")
+		endLine, _ := skipBody(s, i, &bodyLine)
+		out = append(out, Block{File: filename, Class: name, Line: startLine, EndLine: endLine})
+	}
+	return out
 }
 
 // scanEnums finds PHP enum declarations and returns one synthetic block per
@@ -299,6 +333,10 @@ var (
 	reRelationCall = regexp.MustCompile(`\b(?:hasOne|hasMany|belongsTo|belongsToMany|morphOne|morphMany|morphTo|morphToMany|hasOneThrough|hasManyThrough|morphedByMany)\s*\(`)
 	// reEnumDef matches a PHP enum declaration line.
 	reEnumDef = regexp.MustCompile(`(?m)^\s*enum\s+([A-Za-z_]\w*)`)
+	// reModelClassDef matches a PHP class declaration line (used only within
+	// app/Models/ files, see scanModels), so a model surfaces as one whole-class
+	// block rather than a single method.
+	reModelClassDef = regexp.MustCompile(`(?m)^\s*(?:abstract\s+|final\s+)*class\s+([A-Za-z_]\w*)`)
 	// reStaticRef matches Foo::name — with or without a call; a trailing `(`
 	// (a static call, rule 3's territory) is filtered by inspecting the char
 	// after the match, like reArrowProp.
@@ -387,11 +425,32 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		// call key is the class short name (not "__construct") so distinct
 		// constructions never collapse and the frontend's findCallSites matches
 		// `Foo(`. A class with no explicit constructor (no __construct block) is
-		// skipped — there is no definition to point at.
+		// skipped — there is no definition to point at. An Eloquent model
+		// (app/Models/) is excluded here — rule 2c below points at the model
+		// itself, never its constructor.
 		for _, m := range reNewObj.FindAllStringSubmatch(scan, -1) {
 			class := shortName(m[1])
+			if _, isModel := idx.models[class]; isModel {
+				continue
+			}
 			if def := methodOnClass(idx, class, "__construct"); def != nil {
 				emit(class, def)
+			}
+		}
+		// 2c. new Model(...) / Model::... on an Eloquent model (app/Models/) → the
+		// model as a whole, not a method: "this model is used here". One deduped
+		// child per model class (key = the model's short name, matching the
+		// frontend's findCallSites `Foo(`/`Foo::` lookup), regardless of how many
+		// times or in how many ways (instantiation, static call) the model is used
+		// in this block.
+		for _, m := range reNewObj.FindAllStringSubmatch(scan, -1) {
+			if def, ok := idx.models[shortName(m[1])]; ok {
+				emit(shortName(m[1]), &def)
+			}
+		}
+		for _, m := range reStaticCall.FindAllStringSubmatch(scan, -1) {
+			if def, ok := idx.models[shortName(m[1])]; ok {
+				emit(shortName(m[1]), &def)
 			}
 		}
 		// 3. Foo::m( → static method on Foo (skip self/static/parent handled
