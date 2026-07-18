@@ -433,6 +433,14 @@ van dat niveau (en dus, aan de randen, de sibling-wandeling hierboven), `0`
 bewerkt zoals altijd `state.gran`/`state.change`. Zie
 `tests/drill-sibling-walk.spec.mjs`.
 
+**De `Enter`-command-palette-approve-actie volgt datzelfde `focusLevel`-patroon**
+(`approveContext()` in `home.mjs`): zonder die functie keurde "Keur … goed"
+onzichtbaar het TOP-LEVEL block/cursor goed terwijl een gedrilde kolom de
+keyboard had — de reviewer zag in de gedrilde kolom niets gebeuren (het
+gerapporteerde "ik kan niks in onderliggende code goedkeuren"). Zie de
+"Enter — command-palette"-sectie in `.claude/rules/keyboard-navigation.md` en
+`tests/drill-approve.spec.mjs`.
+
 - **Direct na het drillen staat de focus op de diff van de nieuwe kolom** —
   niet op zijn Onderliggende-code-paneel. `drillIntoChild` roept daarvoor
   `leaveRelated()` (de geëxporteerde `exitRelated` uit `RelatedPanel.mjs`) aan

@@ -3111,26 +3111,46 @@ watch(
   },
 )
 
+// approveContext resolves which block + granularity/unit-index an approve
+// action right now targets: mirrors findNextUnapproved's own level-branch
+// (and fKey/dKey/sKey's setDrillGran branch) — a focused DRILLED column
+// (state.focusLevel > 0) approves against ITS OWN block + its own
+// drillCursor unit, not the top-level curBlock()/state.gran/state.change.
+// A drilled column is always "in diff" (it has no list mode of its own), so
+// `mode` is hardcoded 'diff' in that branch.
+function approveContext() {
+  const level = state.focusLevel
+  if (level > 0) {
+    const cur = state.drillCursor[level - 1] || { change: 0, gran: 'group' }
+    return { b: state.drill[level - 1], mode: 'diff', gran: cur.gran, change: cur.change }
+  }
+  return { b: curBlock(), mode: state.mode, gran: state.gran, change: state.change }
+}
+
 // approveNoun names what an approve action *right now* covers, for the label: the
 // whole block in list mode, else the current navigation unit at the active
-// granularity (a run of lines / one line / one call).
-function approveNoun() {
-  if (state.mode !== 'diff') return 'dit block'
-  if (state.gran === 'line') return 'deze regel'
-  if (state.gran === 'call') return 'deze call'
+// granularity (a run of lines / one line / one call). Takes an explicit ctx
+// (default approveContext()) so a caller that already resolved one (e.g. the
+// COMMANDS label, which also needs it for the done/undone check) doesn't
+// re-derive it.
+function approveNoun(ctx = approveContext()) {
+  if (ctx.mode !== 'diff') return 'dit block'
+  if (ctx.gran === 'line') return 'deze regel'
+  if (ctx.gran === 'call') return 'deze call'
   return 'deze regels'
 }
 
 // approveTargetRows returns the changed row indices an approve action covers now:
 // the current navigation unit's rows in diff mode, or the whole block in list mode
-// (where there's no active unit).
-function approveTargetRows() {
-  const b = curBlock()
+// (where there's no active unit). Takes an explicit ctx (default
+// approveContext()), same reason as approveNoun.
+function approveTargetRows(ctx = approveContext()) {
+  const b = ctx.b
   if (!b) return []
   const rows = blockRows(b)
   const all = changedRows(rows)
-  if (state.mode !== 'diff') return all
-  const unit = unitsFor(rows, state.gran)[state.change]
+  if (ctx.mode !== 'diff') return all
+  const unit = unitsFor(rows, ctx.gran)[ctx.change]
   if (!unit) return all
   return all.filter((i) => i >= unit.start && i <= unit.end)
 }
@@ -3143,15 +3163,19 @@ function approveTargetRows() {
 // to toggleCallApprove, which approves just the one segment instead of the whole
 // row. Only called from the command palette (COMMANDS' 'approve' item) — the top
 // checkbox in Block.mjs calls toggleBlockApproval directly and doesn't run
-// afterApproveAction, per the postApprove-menu scope decision below.
+// afterApproveAction, per the postApprove-menu scope decision below. Resolves
+// approveContext() ONCE up front so the whole action (including the call-
+// granularity fast path) targets a focused drilled column's own block/unit
+// instead of the top-level curBlock()/state.gran/state.change.
 function toggleApprove() {
-  const b = curBlock()
+  const ctx = approveContext()
+  const b = ctx.b
   if (!b) return
-  if (state.mode === 'diff' && state.gran === 'call') {
-    toggleCallApprove(b)
+  if (ctx.mode === 'diff' && ctx.gran === 'call') {
+    toggleCallApprove(b, ctx.change)
     return
   }
-  const target = approveTargetRows()
+  const target = approveTargetRows(ctx)
   if (!target.length) return
   const set = approvedRowSet(b)
   const allIn = target.every((i) => set.has(i))
@@ -3163,17 +3187,20 @@ function toggleApprove() {
 }
 
 // toggleCallApprove flips approval of exactly the one call segment the
-// keyboard is currently on (state.change at gran 'call'), tracked at
-// sub-row granularity in b.approvedCalls (see callKey). A row that was fully
-// approved is first expanded into its individual segment keys so unapproving
-// one doesn't lose the others; conversely, once every segment of a row ends up
-// approved, it graduates into b.approvedRows (and its approvedCalls entries are
-// dropped) so the coarser group/line approval and the checkbox summary see it
-// too. Both arrays are always reassigned, never mutated in place, so arrow.js
+// keyboard is currently on, tracked at sub-row granularity in b.approvedCalls
+// (see callKey). `change` is the call-granularity unit index to act on —
+// state.change for the top-level block, or a focused drilled column's own
+// drillCursor.change (see approveContext/toggleApprove) — defaulting to
+// state.change for any other caller. A row that was fully approved is first
+// expanded into its individual segment keys so unapproving one doesn't lose
+// the others; conversely, once every segment of a row ends up approved, it
+// graduates into b.approvedRows (and its approvedCalls entries are dropped)
+// so the coarser group/line approval and the checkbox summary see it too.
+// Both arrays are always reassigned, never mutated in place, so arrow.js
 // re-renders the checkmark/circle indicators.
-function toggleCallApprove(b) {
+function toggleCallApprove(b, change = state.change) {
   const rows = blockRows(b)
-  const unit = unitsFor(rows, 'call')[state.change]
+  const unit = unitsFor(rows, 'call')[change]
   if (!unit) return
   const row = unit.start
   const segs = rowCallSegments(rows, row)
@@ -3412,15 +3439,16 @@ const COMMANDS = [
   {
     id: 'approve',
     label: () => {
-      const b = curBlock()
-      const noun = approveNoun()
+      const ctx = approveContext()
+      const b = ctx.b
+      const noun = approveNoun(ctx)
       let done
-      if (b && state.mode === 'diff' && state.gran === 'call') {
-        const unit = unitsFor(blockRows(b), 'call')[state.change]
+      if (b && ctx.mode === 'diff' && ctx.gran === 'call') {
+        const unit = unitsFor(blockRows(b), 'call')[ctx.change]
         done = callUnitApproved(b, unit)
       } else {
         const set = b ? approvedRowSet(b) : new Set()
-        const target = approveTargetRows()
+        const target = approveTargetRows(ctx)
         done = target.length > 0 && target.every((i) => set.has(i))
       }
       return done ? `Trek goedkeuring van ${noun} in` : `Keur ${noun} goed`

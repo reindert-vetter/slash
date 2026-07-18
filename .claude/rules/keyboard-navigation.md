@@ -207,6 +207,19 @@ zodat de keyboard-handler exact dezelfde gefilterde lijst als de render doorloop
 **gescoped op de huidige navigatie-unit** (`toggleApprove`/`approveTargetRows`): in
 list-mode het hele block, in diff-mode de geselecteerde groep/regel/call — hij
 keurt exact de rijen van die unit goed (of trekt ze in als ze al goedgekeurd zijn).
+**`focusLevel`/`drillCursor`-bewust:** een gedrilde Onderliggende-code-kolom
+(`state.focusLevel > 0`, zie "Drillen"/"Kolom-navigatie" in
+`.claude/rules/detail-layout.md`) heeft zijn eigen block + eigen
+`change`/`gran`-cursor (`state.drillCursor[focusLevel-1]`) — de approve-actie
+moet dáár op werken, niet op het top-level block. `approveContext()` (`home.mjs`)
+resolvt dat ene keer (`{ block, mode, gran, change }`, mirror van
+`findNextUnapproved`/`fKey`/`dKey`/`setDrillGran`'s eigen `focusLevel`-branch);
+`approveNoun`/`approveTargetRows`/`toggleApprove`/`toggleCallApprove` en het
+`COMMANDS`-label nemen die context aan i.p.v. rechtstreeks `curBlock()`/
+`state.gran`/`state.change` te lezen. Zonder dit keurde `Enter` → "Keur …
+goed" terwijl een gedrilde kolom de keyboard had onzichtbaar het TOP-LEVEL
+block goed/af in plaats van de gedrilde child — zie
+`tests/drill-approve.spec.mjs`.
 Het label is een functie zodat het live meebeweegt én de unit benoemt
 (`approveNoun`): "Keur dit block goed" (list), "Keur deze regels goed" (group),
 "Keur deze regel goed" (line), "Keur deze call goed" (call), en "Trek goedkeuring
