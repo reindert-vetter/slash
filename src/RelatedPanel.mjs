@@ -6,7 +6,7 @@
 
 import { html } from './vendor/arrow.js'
 import { reactive } from './vendor/arrow.js'
-import { highlight } from './Block.mjs'
+import { highlight, blockLabel } from './Block.mjs'
 import { statusInfo } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
@@ -1384,65 +1384,107 @@ function approvalBadge(a) {
   `
 }
 
-// NESTED_CHIP_CAP caps how many drill-hint chips render next to a child card;
-// anything beyond it collapses into a "+N meer" line so a fan-out child can't
-// blow up the card's height.
+// NESTED_CHIP_CAP caps how many drill-hint chips render next to a child card
+// (or under a chip, recursively) at any one level; anything beyond it
+// collapses into a "+N meer" line so a fan-out child can't blow up the
+// card's height. Shared by every nesting depth — the cap is per level, not
+// cumulative.
 const NESTED_CHIP_CAP = 3
 
+// chipDrillTarget builds the plain object drillIntoChild expects for a chip
+// (or ancestor chip) target — every chip's `id` IS a real PR block id (built
+// by home.mjs' nestedChangedKids from directChildBlocks), so drillIntoChild's
+// `byId.get(child.blockId)` always resolves it to the real block. Shared by
+// nestedChip's own click target and by the ancestor chain a deeper sub-chip
+// must drill through first.
+function chipDrillTarget(k) {
+  return { blockId: k.id, id: k.id, label: k.label, file: k.file, line: k.line, code: '' }
+}
+
+// nestedDiffStat renders a chip's own +added/−removed diff-stat, or a grey
+// "…" placeholder while its lazily-loaded code (home.mjs' nestedChangedKids
+// calls ensureCode for every chip target) is still in flight — every chip
+// target is, by construction, a changed PR block, so it always eventually
+// gets a real diff-stat, never the "Ongewijzigd" badge diffStatBadge shows
+// for an unchanged call/covered-method target. A `${() => …}`-function
+// binding (never a static interpolation) — see the "i=>je(n,i)" pitfall in
+// conventions.md: the loading↔loaded swap is a template↔template shape
+// change, and every nestedChip instance shares this same call site.
+function nestedDiffStat(k) {
+  if (k.loading) {
+    return html`<span
+      class="shrink-0 rounded-full bg-slate-100 dark:bg-zinc-800 px-1 py-px text-[9px] font-medium text-slate-400 dark:text-zinc-500"
+      data-testid="related-nested-diffstat"
+      >…</span
+    >`
+  }
+  const d = k.diff || { add: 0, del: 0 }
+  return html`
+    <span
+      class="shrink-0 rounded-full bg-slate-100 dark:bg-zinc-800 px-1 py-px text-[9px] font-semibold tabular-nums"
+      data-testid="related-nested-diffstat"
+    >
+      <span class="text-emerald-600 dark:text-emerald-400">+${d.add}</span>
+      <span class="text-rose-500 dark:text-rose-400">&#8722;${d.del}</span>
+    </span>
+  `
+}
+
 // nestedChip renders one drill-hint chip: a narrow block naming a changed
-// grandchild (title, file, change status, approval) of the child card it sits
-// next to — the "there is more underneath" cue. Clicking it drills TWO levels
-// in one go: first into the parent card's child (the ordinary card drill),
-// then straight into this grandchild (drillIntoChild resolves the real PR
-// block via blockId — every chip target is a PR block by construction, see
-// home.mjs' nestedChangedKids). stopPropagation keeps the click from ALSO
-// triggering the card's own one-level drill. All interpolations are static on
-// purpose (the testsBar precedent): the descriptor is a plain object and the
-// card's key encodes the nested signature (see fullCard), so every change
-// builds a fresh node — no reactive binding needed here.
-function nestedChip(r, k, drill) {
+// (grand)child (full class::method label, its own diff-stat, its approval
+// done/total — no file line, that only lives in `title`) of the card/chip it
+// sits next to — the "there is more underneath" cue. `ancestors` is the
+// ordered chain of drill targets (the parent card's own descriptor `r`, then
+// every ancestor chip in between) to drill through before finally drilling
+// into `k` itself — one click at depth d drills d+1 levels in one go
+// (drillIntoChild resolves each via blockId; every chip target is a PR block
+// by construction, see home.mjs' nestedChangedKids). stopPropagation keeps
+// the click from ALSO triggering the card's own one-level drill.
+//
+// Two of this chip's slots deliberately use DIFFERENT fix patterns for the
+// same underlying arrow.js pitfall (a static `${cond ? html`…` : ''}`
+// template↔string ternary corrupts once arrow.js reuses this shared call
+// site's cached chunk across sibling instances whose condition differs — see
+// conventions.md, the "i=>je(n,i)" regression):
+//  - the approval badge is ALWAYS rendered (fix-vorm 1): `k.approveText`/
+//    `k.approveCls` are plain strings precomputed on the descriptor
+//    (home.mjs' nestedChangedKids) — an always-present element, `hidden`
+//    when there's nothing to approve, so the slot's shape never toggles;
+//  - the diff-stat and the recursive sub-chip list genuinely swap between
+//    two different templates (loading vs. loaded; present vs. absent), so
+//    those go through a `${() => …}`-function binding (fix-vorm 2) instead.
+function nestedChip(ancestors, k, drill) {
   const st = statusInfo(k.status)
-  const approved = k.approve && k.approve.total > 0 && k.approve.done === k.approve.total
   return html`
     <button
       type="button"
       class="w-full rounded-md border border-slate-200 dark:border-zinc-800 bg-slate-50/60 dark:bg-zinc-800/40 px-1.5 py-1 text-left hover:border-indigo-200 dark:hover:border-indigo-500/40"
       data-testid="related-nested-chip"
-      title="${k.label + ' · ' + k.file}"
+      title="${blockLabel(k) + ' · ' + k.file}"
       @click="${(e) => {
         e.stopPropagation()
         if (!drill) return
-        drill(r)
-        drill({ blockId: k.id, id: k.id, label: k.label, file: k.file, line: k.line, code: '' })
+        for (const a of ancestors) drill(a)
+        drill(chipDrillTarget(k))
       }}"
     >
-      <span class="block truncate font-mono text-[10px] font-semibold text-slate-700 dark:text-zinc-300"
-        >${k.label && k.label.includes('::') ? k.label.split('::').pop() : k.label}</span
-      >
-      <span class="block truncate font-mono text-[9px] text-slate-400 dark:text-zinc-500">${k.file.split('/').pop()}</span>
+      <span class="block truncate font-mono text-[10px] font-semibold text-slate-700 dark:text-zinc-300">${blockLabel(k)}</span>
       <span class="mt-0.5 flex items-center gap-1">
         <span class="${'truncate text-[9px] font-medium uppercase tracking-wide ' + st.cls}" data-testid="related-nested-status"
           >${k.status}</span
         >
-        ${k.approve && k.approve.total > 0
-          ? html`<span
-              class="${'ml-auto shrink-0 rounded-full px-1 py-px text-[9px] font-semibold tabular-nums ' +
-              (approved
-                ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
-                : 'bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-500')}"
-              data-testid="related-nested-approval"
-              title="Goedgekeurde regels"
-              >${approved ? '✓ ' : ''}${k.approve.done}/${k.approve.total}</span
-            >`
-          : ''}
+        ${() => nestedDiffStat(k)}
+        <span class="${k.approveCls}" data-testid="related-nested-approval" title="Goedgekeurde regels">${k.approveText}</span>
       </span>
+      ${() =>
+        k.nested && k.nested.length ? nestedSubChips([...ancestors, chipDrillTarget(k)], k.nested, drill) : ''}
     </button>
   `
 }
 
-// nestedChipColumn renders the connector dash + the stacked chips to the right
-// of a child card, for its changed grandchildren (r.nested, capped at
-// NESTED_CHIP_CAP + a "+N meer" remainder line).
+// nestedChipColumn renders the connector dash + the stacked top-level chips to
+// the right of a child card, for its changed grandchildren (r.nested, capped
+// at NESTED_CHIP_CAP + a "+N meer" remainder line).
 function nestedChipColumn(r, drill) {
   const kids = r.nested.slice(0, NESTED_CHIP_CAP)
   const more = r.nested.length - kids.length
@@ -1450,13 +1492,42 @@ function nestedChipColumn(r, drill) {
     <div class="flex shrink-0 items-start">
       <div class="mt-5 h-px w-3 shrink-0 border-t border-dashed border-slate-300 dark:border-zinc-700"></div>
       <div class="flex w-36 shrink-0 flex-col gap-1" data-testid="related-nested">
-        ${kids.map((k) => nestedChip(r, k, drill).key('nested:' + k.id))}
-        ${more > 0
+        ${kids.map((k) => nestedChip([r], k, drill).key('nested:' + k.id))}
+        ${() =>
+          more > 0
+            ? html`<span class="px-1 text-[9px] text-slate-400 dark:text-zinc-500" data-testid="related-nested-more"
+                >+${more} meer</span
+              >`
+            : ''}
+      </div>
+    </div>
+  `
+}
+
+// nestedSubChips renders the indented, recursive sub-chip list under a chip
+// whose own block has further changed grandchildren (depth-capped at
+// NESTED_DEPTH by home.mjs' nestedChangedKids). Deliberately its OWN
+// `html`…`` literal — not nestedChipColumn reused with a "connector on/off"
+// flag — because sharing one call site whose rendered shape (dashed
+// connector + w-36 vs. plain indented block) differed per invocation would
+// reintroduce the exact same static-shape-cache pitfall this component
+// exists to avoid, just one level up (at the container instead of the chip).
+function nestedSubChips(ancestors, kids, drill) {
+  const capped = kids.slice(0, NESTED_CHIP_CAP)
+  const more = kids.length - capped.length
+  const path = ancestors.map((a) => a.id).join('>')
+  return html`
+    <div
+      class="mt-1 flex flex-col gap-1 border-l border-dashed border-slate-300 dark:border-zinc-700 pl-2"
+      data-testid="related-nested-sub"
+    >
+      ${capped.map((k) => nestedChip(ancestors, k, drill).key(path + '>' + k.id))}
+      ${() =>
+        more > 0
           ? html`<span class="px-1 text-[9px] text-slate-400 dark:text-zinc-500" data-testid="related-nested-more"
               >+${more} meer</span
             >`
           : ''}
-      </div>
     </div>
   `
 }
@@ -1529,7 +1600,7 @@ function relatedCard(r, i, drill) {
                 geen code gevonden
               </p>`}
     </div>
-    ${nested.length ? nestedChipColumn(r, drill) : ''}
+    ${() => (nested.length ? nestedChipColumn(r, drill) : '')}
     </div>
   `
 }
@@ -1882,10 +1953,12 @@ export default function RelatedPanel(state, commentTarget, search) {
                 // transition can freeze on the old closure. The tests-group bar
                 // key encodes open/closed + the grouped test ids instead, so a
                 // toggle (or a changed test set) always builds a fresh node.
-                // The card key also carries the nested drill-hint signature
-                // (grandchild ids + their approval done-counts): the chips are
-                // static interpolations, so a changed set — or an approval tick
-                // inside a chip — must flip the key to build a fresh node.
+                // The card key also carries the recursive nested drill-hint
+                // signature (r.nestedSig, precomputed by home.mjs'
+                // nestedChangedKids/nestedSigOf — every id/status/diff/
+                // approval anywhere in the chip subtree, not just the direct
+                // children): any change at any depth must flip the key to
+                // build a fresh node.
                 r.kind === 'tests_group'
                   ? testsBar(r, i, drill).key(
                       'tests-group:' +
@@ -1899,9 +1972,7 @@ export default function RelatedPanel(state, commentTarget, search) {
                         ':' +
                         (r.code ? 'code' : r.loading ? 'load' : 'empty') +
                         ':n' +
-                        (Array.isArray(r.nested)
-                          ? r.nested.map((k) => k.id + '@' + (k.approve ? k.approve.done : 0)).join('|')
-                          : ''),
+                        (r.nestedSig || ''),
                     ),
               )
         }}

@@ -17,6 +17,7 @@ import Block, {
   rowCallSegments,
   unitsFor,
   updateHints,
+  blockLabel,
 } from './Block.mjs'
 import RelatedPanel, {
   CommentsSidebar,
@@ -1197,6 +1198,10 @@ function relatedChildren(b) {
         ensureCode(kid)
         const c = kid.code && !kid.code.error ? kid.code : null
         const code = (c && ((c.new && c.new.text) || (c.old && c.old.text))) || ''
+        // The child's own changed grandchildren — the drill-hint chips the
+        // panel shows to the right of this card (see nestedChangedKids) —
+        // plus their recursive key-signature for fullCard's card key.
+        const nested = nestedChangedKids(kid, b.id)
         // A relation child is by definition a changed child block, so it sorts to
         // the top (within its groupTier). `kind` names the edge
         // (event_listener / route_controller / …).
@@ -1216,9 +1221,8 @@ function relatedChildren(b) {
           prio: 0,
           approve: blockApproveCount(kid),
           groupTier: range ? (inRange(siteLine) ? 0 : 1) : 0,
-          // The child's own changed grandchildren — the drill-hint chips the
-          // panel shows to the right of this card (see nestedChangedKids).
-          nested: nestedChangedKids(kid, b.id),
+          nested,
+          nestedSig: nestedSigOf(nested),
         }
       })
   // Resolved/found method calls (Go statically or LLM). Their code + descriptor
@@ -1314,6 +1318,10 @@ function resolvedCallChildren(b) {
       // (mirrors relatedChildren loading a listener's code).
       if (prBlock) ensureCode(prBlock)
       const onChangedLine = findCallSites(rows, r.callKey).some((s) => changed.has(s.row))
+      // Drill-hint chips: only a call whose definition is itself a PR block
+      // can have changed grandchildren — an unchanged ("Ongewijzigd") or
+      // synthetic target never gets a chip (see nestedChangedKids).
+      const nested = prBlock ? nestedChangedKids(prBlock, b.id) : []
       return {
         id: b.id + '::' + r.callKey,
         // The PR-block id this call resolves to, when its definition is itself
@@ -1350,10 +1358,8 @@ function resolvedCallChildren(b) {
         // null in list mode, or the filter above already dropped anything out
         // of scope at line/call).
         groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
-        // Drill-hint chips: only a call whose definition is itself a PR block
-        // can have changed grandchildren — an unchanged ("Ongewijzigd") or
-        // synthetic target never gets a chip (see nestedChangedKids).
-        nested: prBlock ? nestedChangedKids(prBlock, b.id) : [],
+        nested,
+        nestedSig: nestedSigOf(nested),
       }
     })
 }
@@ -1446,6 +1452,9 @@ function resolvedTestCoverChildren(b, range) {
   return resolved.map((r) => {
     const prBlock = byId.get(coveredChildId(r))
     if (prBlock) ensureCode(prBlock)
+    // Drill-hint chips — same rule as method calls: only a covered method
+    // that is itself a PR block can carry changed grandchildren.
+    const nested = prBlock ? nestedChangedKids(prBlock, b.id) : []
     return {
       id: b.id + '::' + r.targetKey,
       blockId: prBlock ? prBlock.id : '',
@@ -1466,9 +1475,8 @@ function resolvedTestCoverChildren(b, range) {
       // "on a changed line" middle tier — just changed-in-this-PR (0) or not (2).
       prio: prBlock ? 0 : 2,
       groupTier: range && r.line ? (r.line >= range.startLine && r.line <= range.endLine ? 0 : 1) : 0,
-      // Drill-hint chips — same rule as method calls: only a covered method
-      // that is itself a PR block can carry changed grandchildren.
-      nested: prBlock ? nestedChangedKids(prBlock, b.id) : [],
+      nested,
+      nestedSig: nestedSigOf(nested),
     }
   })
 }
@@ -1498,6 +1506,9 @@ function coveredByChildren(b, range) {
     ensureCode(test)
     const c = test.code && !test.code.error ? test.code : null
     const code = (c && ((c.new && c.new.text) || (c.old && c.old.text))) || ''
+    // Drill-hint chips: the covering test is a real PR block, so it can have
+    // changed grandchildren of its own (e.g. the methods it covers).
+    const nested = nestedChangedKids(test, b.id)
     out.push({
       id: test.id,
       blockId: test.id,
@@ -1518,9 +1529,8 @@ function coveredByChildren(b, range) {
       // 'group' granularity (a no-op 0 outside it, when range is null). See
       // this function's doc comment.
       groupTier: range ? 1 : 0,
-      // Drill-hint chips: the covering test is a real PR block, so it can
-      // have changed grandchildren of its own (e.g. the methods it covers).
-      nested: nestedChangedKids(test, b.id),
+      nested,
+      nestedSig: nestedSigOf(nested),
     })
   }
   return out
@@ -1612,30 +1622,92 @@ function directChildBlocks(b) {
   return [...ids].map((id) => byId.get(id)).filter(Boolean)
 }
 
+// NESTED_DEPTH caps how many chip levels render under a card: 1 (the direct
+// drill-hint chips) plus their own recursive sub-chips, no deeper — the panel
+// column is narrow and each level multiplies ensureCode fetches, and looking
+// deeper than that is what drilling itself is for.
+const NESTED_DEPTH = 2
+
 // nestedChangedKids maps a panel child's own PR-block children to the small,
 // plain chip descriptors the Onderliggende-code panel renders as drill hints
 // next to that child's card (`r.nested` → relatedCard's connector + chips in
-// RelatedPanel.mjs): per child card the reviewer sees there is *more changed
-// code underneath* before drilling into it. Only changed blocks qualify:
-// directChildBlocks already returns nothing but PR blocks — a call/covered
-// method into a file this PR doesn't touch is never a PR block, so an
-// "Ongewijzigd"/synthetic target never gets a chip — and a block with nothing
-// reviewable left (no approval total AND no change status) is dropped too.
-// parentId guards the direct A↔B cycle: a grandchild that IS the block whose
-// panel we're rendering isn't "more underneath", it's where the reviewer
-// already is. Flat plain objects on purpose: RelatedPanel receives these via
-// setRelated's push and must never read live block state itself (the same
-// decoupling as the rest of the descriptor — see the setRelated watch).
-function nestedChangedKids(prBlock, parentId) {
-  if (!prBlock) return []
+// RelatedPanel.mjs, recursively via `k.nested`): per child card/chip the
+// reviewer sees there is *more changed code underneath* before drilling into
+// it. Only changed blocks qualify: directChildBlocks already returns nothing
+// but PR blocks — a call/covered method into a file this PR doesn't touch is
+// never a PR block, so an "Ongewijzigd"/synthetic target never gets a chip —
+// and a block with nothing reviewable left (no approval total AND no change
+// status) is dropped too. `parentId` guards the direct A↔B cycle: a
+// grandchild that IS the block whose card/chip we're rendering isn't "more
+// underneath", it's where the reviewer already is. `seen` is a single Set
+// shared across the WHOLE recursive call (the nestedPrBlocks pattern) so a
+// longer cycle (A→B→C→A) can't loop either — depth is additionally hard-capped
+// at NESTED_DEPTH regardless. Each descriptor precomputes its own diff-stat
+// (ensureCode + diffStat, lazily filled in as the chip target's code loads —
+// same pattern resolvedCallChildren already uses for a method-call target)
+// and its approval text/class as plain, always-safe strings (`approveText`/
+// `approveCls` — see the "i=>je(n,i)" fix-vorm-1 note in conventions.md and
+// nestedChip's own doc comment in RelatedPanel.mjs). Flat plain objects on
+// purpose: RelatedPanel receives these via setRelated's push and must never
+// read live block state itself (the same decoupling as the rest of the
+// descriptor — see the setRelated watch).
+function nestedChangedKids(prBlock, parentId, seen = new Set(), depth = 0) {
+  if (!prBlock || depth >= NESTED_DEPTH) return []
+  seen.add(prBlock.id)
   const out = []
   for (const kid of directChildBlocks(prBlock)) {
-    if (kid.id === parentId || kid.id === prBlock.id) continue
+    if (kid.id === parentId || seen.has(kid.id)) continue
     const approve = blockApproveCount(kid)
     if (!approve.total && kid.status === 'unchanged') continue
-    out.push({ id: kid.id, label: kid.label, file: kid.file, line: kid.line, status: kid.status, approve })
+    ensureCode(kid)
+    const loaded = kid.code && !kid.code.error
+    const done = approve.done === approve.total
+    out.push({
+      id: kid.id,
+      label: kid.label,
+      file: kid.file,
+      line: kid.line,
+      status: kid.status,
+      approve,
+      // Precomputed strings, not a conditional template — always the same
+      // rendered shape, hidden via class rather than omitted.
+      approveText: approve.total > 0 ? (done ? '✓ ' : '') + approve.done + '/' + approve.total : '',
+      approveCls:
+        approve.total > 0
+          ? 'ml-auto shrink-0 rounded-full px-1 py-px text-[9px] font-semibold tabular-nums ' +
+            (done
+              ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+              : 'bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-500')
+          : 'hidden',
+      loading: !loaded,
+      diff: loaded ? diffStat(blockRows(kid)) : null,
+      nested: nestedChangedKids(kid, prBlock.id, seen, depth + 1),
+    })
   }
   return out
+}
+
+// nestedSigOf builds the recursive key-signature for a chip subtree (id +
+// status + diff + approval, at every depth) so relatedCard's key (fullCard,
+// RelatedPanel.mjs) can flip on ANY change anywhere in the tree — not just
+// the direct children — forcing a fresh node instead of a reused one whose
+// function bindings wouldn't rerun (see the block-card key precedent in
+// conventions.md).
+function nestedSigOf(list) {
+  if (!Array.isArray(list) || !list.length) return ''
+  return list
+    .map(
+      (k) =>
+        k.id +
+        ':' +
+        k.status +
+        ':' +
+        (k.diff ? k.diff.add + '-' + k.diff.del : k.loading ? 'L' : '0-0') +
+        ':' +
+        (k.approve ? k.approve.done + '/' + k.approve.total : '0/0') +
+        (k.nested && k.nested.length ? '[' + nestedSigOf(k.nested) + ']' : ''),
+    )
+    .join('|')
 }
 
 // orderedChildBlocks sorts directChildBlocks(b) into the same order the
@@ -2335,7 +2407,7 @@ function expandColumn(level) {
 // `drillIdx` (drilled columns only, null for the top-level rail) is exposed as
 // data-drill-idx so it lines up with the open drill-column's own attribute.
 function collapsedColumnHTML(b, level, testid, drillIdx = null) {
-  const label = (b.label || b.name || '').split('::').pop() || ''
+  const label = blockLabel(b)
   return html`
     <button
       type="button"
