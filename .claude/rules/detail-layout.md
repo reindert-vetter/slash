@@ -396,15 +396,40 @@ altijd), `1..state.drill.length` indexeert `state.drill[level-1]` met zijn eigen
 cursor in `state.drillCursor[level-1]` (`{change, gran}`, een spiegeling van
 `state.change`/`state.gran`). Een gedrilde kolom zoomt dus **wél** met `f`/`d`/`s`
 (group → line → call, exact dezelfde `setGran`-logica als het top-level block,
-maar dan als `setDrillGran(level, delta)` op zijn eigen `drillCursor`-entry) —
-alleen stroomt hij niet door naar een same-file buurblock aan de randen van zijn
-change-lijst: het blijft een op zichzelf staande diff, dus op de eerste/laatste
-unit (ook op `call`-niveau) stopt de navigatie binnen de kolom in plaats van
-naar een ander block te springen (`drillNextChange`/`drillPrevChange` klemmen op
-de units van `cursor.gran`, i.p.v. `sameFileNeighbour`/`stepBlock` zoals
-`nextChange`/`prevChange` dat voor niveau 0 doen). `fKey`/`dKey`/`sKey` in
+maar dan als `setDrillGran(level, delta)` op zijn eigen `drillCursor`-entry).
+Anders dan een same-file buurblock op niveau 0 (`sameFileNeighbour`/`stepBlock`,
+alleen voor de top-level cursor) bestaat er voor een gedrilde kolom geen
+"volgend block" om doorheen te lopen — maar wel een **sibling**: loopt
+`↓`/`f`(op `call`) voorbij de **laatste** unit van de kolom (of `↑`/`d` voorbij
+de **eerste**), dan stapt de navigatie **zijwaarts** naar de volgende/vorige
+child in de Onderliggende-code-lijst van de **parent**-kolom, in plaats van te
+klemmen — de reviewer loopt zo de hele onderliggende-code-boom van een block
+top-tot-bottom door zonder telkens `←` te hoeven drukken om een volgende
+sibling te bereiken. Dit **vervangt de gedrilde kolom op hetzelfde niveau**
+(`drillToSibling`: pop de huidige `state.drill`/`drillCursor`-entry, dan
+`drillIntoChild(sibling)`, wat meteen een verse entry op diezelfde diepte
+terugzet) — het stapelt nooit dieper. `drillSiblingContext` bepaalt de parent
+(`curBlock()` op niveau 1, anders `state.drill[level-2]` — werkt dus op elke
+drill-diepte) en zijn sibling-lijst: exact `relatedChildren(parent)` (dezelfde
+lijst/volgorde als het paneel toont als de parent gefocust zou zijn), minus de
+niet-drilbare `tests_group`-toggle-balk; de huidige kolom wordt daarin
+teruggevonden via `blockId`-of-`id` (hetzelfde patroon als `drillIntoChild`
+zelf gebruikt om een descriptor naar een echt block of synthetisch frame te
+resolven). **Geen wrap-around**: op de laatste/eerste sibling klemt de
+navigatie nog steeds gewoon, zoals voorheen. Zijwaarts vooruit (`↓`) landt op
+de nieuwe kolom's **eerste** `group`-unit (de normale `drillIntoChild`-default);
+zijwaarts terug (`↑`) landt op zijn **laatste** `group`-unit — mirror van de
+bestaande `stepBlock`-conventie ("stepping up lands on the last change") —
+best-effort synchroon: is de sibling's code nog niet geladen, dan valt het
+terug op de eerste unit i.p.v. te wachten (geen `pendingLast`-achtige
+deferral, bewust simpel gehouden). `dKey`'s `call`-niveau-guard
+(`cur.change > 0`) is verruimd met `hasPrevDrillSibling()` zodat `d` op het
+allereerste call-segment ook al terugstapt naar de vorige sibling, mirror van
+de top-level `dKey`'s `sameFileNeighbour(-1)`-check. `fKey`/`dKey`/`sKey` in
 `home.mjs` vertakken op `state.focusLevel`: `> 0` bewerkt de drillCursor-entry
-van dat niveau, `0` bewerkt zoals altijd `state.gran`/`state.change`.
+van dat niveau (en dus, aan de randen, de sibling-wandeling hierboven), `0`
+bewerkt zoals altijd `state.gran`/`state.change`. Zie
+`tests/drill-sibling-walk.spec.mjs`.
 
 - **Direct na het drillen staat de focus op de diff van de nieuwe kolom** —
   niet op zijn Onderliggende-code-paneel. `drillIntoChild` roept daarvoor

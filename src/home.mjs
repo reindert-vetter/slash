@@ -496,14 +496,16 @@ function fKey() {
 // dKey — go back. On 'call' it steps to the previous call (flowing back into the
 // previous same-file block like ↑); at the very first call, with nowhere to flow,
 // it zooms back out to 'line'. On the coarser levels it just zooms out one step.
-// For a focused drilled column it does the same, scoped to its own drillCursor,
-// except at the first call it always zooms out (no same-file column to flow into).
+// For a focused drilled column it does the same, scoped to its own drillCursor —
+// including flowing back into the previous sibling at the very first call
+// (hasPrevDrillSibling, mirroring the top level's sameFileNeighbour(-1) check);
+// only with no previous sibling does it zoom out to 'line' instead.
 function dKey() {
   if (state.mode !== 'diff') return
   const level = state.focusLevel
   if (level > 0) {
     const cur = state.drillCursor[level - 1] || { change: 0, gran: 'group' }
-    if (cur.gran === 'call' && cur.change > 0) drillPrevChange()
+    if (cur.gran === 'call' && (cur.change > 0 || hasPrevDrillSibling())) drillPrevChange()
     else setDrillGran(level, -1)
     return
   }
@@ -2299,12 +2301,69 @@ function focusedBlock() {
   return state.focusLevel === 0 ? curBlock() : state.drill[state.focusLevel - 1]
 }
 
+// drillSiblingContext locates, for the drilled column at `level` (1-based,
+// matching state.drill's indexing), its PARENT block plus its own position in
+// that parent's Onderliggende-code list — the sibling list drillNextChange/
+// drillPrevChange walk once the column's own diff is exhausted (see below).
+// The parent is curBlock() for the first drill layer, or the previous drilled
+// column for anything deeper — so this works at any drill depth. Siblings are
+// exactly relatedChildren(parent) (the same list/order the panel shows when the
+// parent is focused), minus the tests_group toggle-bar (not a real drillable
+// child — see drillIntoChild). The current entry is matched back into that list
+// via blockId-or-id, mirroring how drillIntoChild itself resolves a descriptor
+// into a real block (existing.id) or a synthetic frame (frame.id = child.id).
+// Returns null if there's no parent, no relations loaded yet, or (defensively)
+// no match — any of which just means "nowhere to walk sideways".
+function drillSiblingContext() {
+  const level = state.focusLevel
+  if (level < 1) return null
+  const parent = level === 1 ? curBlock() : state.drill[level - 2]
+  if (!parent) return null
+  const siblings = relatedChildren(parent).filter((c) => c.kind !== 'tests_group')
+  const cur = state.drill[level - 1]
+  if (!cur) return null
+  const idx = siblings.findIndex((s) => (s.blockId && s.blockId === cur.id) || s.id === cur.id)
+  if (idx === -1) return null
+  return { siblings, idx }
+}
+
+// drillToSibling replaces the drilled column at the CURRENT focus level with
+// `sibling` — pop this level's entry, then drillIntoChild(sibling), which
+// pushes a fresh entry right back at the same depth (drill.length ends up
+// unchanged). This is a sideways walk between siblings, not a step deeper.
+// `atEnd` lands the fresh column on its last 'group' unit instead of the
+// default first one (drillIntoChild always starts at {change:0, gran:'group'})
+// — used when arriving via ↑/d from the top of the next column, mirroring the
+// existing stepBlock convention ("stepping up lands on the last change"). Best
+// effort/synchronous: if the sibling's rows aren't available yet (rare — every
+// sibling shown in relatedChildren already has ensureCode in flight, but a
+// slow fetch could still be pending), it falls back to landing on the first
+// unit rather than deferring like stepBlock's pendingLast — kept simple on
+// purpose, since a fresh drill always shows the diff needed to keep navigating.
+function drillToSibling(sibling, atEnd) {
+  const level = state.focusLevel
+  state.drill = state.drill.slice(0, level - 1)
+  state.drillCursor = state.drillCursor.slice(0, level - 1)
+  state.focusLevel = level - 1
+  drillIntoChild(sibling)
+  if (atEnd) {
+    const b = state.drill[state.drill.length - 1]
+    const units = unitsFor(blockRows(b), 'group')
+    if (units.length > 1) setDrillChange(state.focusLevel, units.length - 1)
+  }
+}
+
 // drillNextChange / drillPrevChange walk the *drilled* column that currently
 // owns the diff keyboard (state.focusLevel > 0) through the units of its own
 // current granularity (drillCursor.gran) — the same unitsFor walk as the
-// top-level nextChange/prevChange, just scoped to that column's rows. Unlike
-// the top level, a drilled column never flows into a same-file neighbour — it's
-// a single, self-contained diff — so this just clamps at both ends.
+// top-level nextChange/prevChange, just scoped to that column's rows. A
+// drilled column never flows into a same-file neighbour (that concept doesn't
+// exist for it — see sameFileNeighbour/stepBlock, top-level only), but running
+// off its last/first unit DOES flow sideways into the next/previous sibling in
+// the parent's Onderliggende-code list (drillSiblingContext/drillToSibling) —
+// the reviewer walks the whole "onderliggende code" tree top to bottom instead
+// of getting stuck at the edge of one child. No wrap-around: at the last/first
+// sibling this still just clamps, exactly as before this feature.
 function drillNextChange() {
   const level = state.focusLevel
   const b = state.drill[level - 1]
@@ -2313,7 +2372,11 @@ function drillNextChange() {
   if (cur.change < units.length - 1) {
     setDrillChange(level, cur.change + 1)
     scrollChangeIntoView()
+    return
   }
+  const ctx = drillSiblingContext()
+  const next = ctx && ctx.siblings[ctx.idx + 1]
+  if (next) drillToSibling(next, false)
 }
 
 function drillPrevChange() {
@@ -2322,7 +2385,19 @@ function drillPrevChange() {
   if (cur.change > 0) {
     setDrillChange(level, cur.change - 1)
     scrollChangeIntoView()
+    return
   }
+  const ctx = drillSiblingContext()
+  const prev = ctx && ctx.siblings[ctx.idx - 1]
+  if (prev) drillToSibling(prev, true)
+}
+
+// hasPrevDrillSibling reports whether the drilled column at the current focus
+// level has a previous sibling to flow back into — used by dKey's 'call'-level
+// guard below, mirroring the top-level dKey's `sameFileNeighbour(-1)` check.
+function hasPrevDrillSibling() {
+  const ctx = drillSiblingContext()
+  return !!(ctx && ctx.idx > 0)
 }
 
 // setDrillChange reassigns state.drillCursor wholesale (never mutates an entry

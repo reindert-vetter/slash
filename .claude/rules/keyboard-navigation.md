@@ -601,10 +601,19 @@ zie "Drillen"/"Kolom-navigatie" in `.claude/rules/detail-layout.md`) — exact
 dezelfde group→line→call-zoom, maar op de eigen `{change, gran}`-cursor van die
 kolom in `state.drillCursor[focusLevel-1]` (`setDrillGran`/`drillNextChange`/
 `drillPrevChange` in `home.mjs`, spiegelbeeld van `setGran`/`nextChange`/
-`prevChange`). Het enige verschil: een gedrilde kolom is een op zichzelf staande
-diff, dus op `'call'` stroomt hij aan de eerste/laatste call **niet** door naar
-een same-file buurblock (dat bestaat niet voor een gedrilde kolom) — daar zoomt
-`f`/`d` gewoon terug naar `'line'` i.p.v. verder te lopen. Verfijn je een groep die precies
+`prevChange`). Een gedrilde kolom is een op zichzelf staande diff, dus er
+bestaat geen same-file buurblock om op `'call'` aan de eerste/laatste call
+doorheen te stromen — maar wél een **sibling**: loopt `f`/`↓` (of `d`/`↑`)
+voorbij de laatste (resp. eerste) call van de kolom, dan stapt de kolom
+zijwaarts naar de volgende/vorige child in de Onderliggende-code-lijst van de
+**parent**-kolom (op elk niveau, elke granulariteit — niet alleen `'call'`), en
+**vervangt** zichzelf daarmee op dezelfde diepte, i.p.v. terug te zoomen naar
+`'line'` zoals voorheen. Alleen als er géén sibling meer is (of nooit was — een
+enige child) zoomt `f`/`d` alsnog terug naar `'line'`, zoals vanouds. Zie de
+"Kolom-navigatie"-sectie in `.claude/rules/detail-layout.md`
+(`drillSiblingContext`/`drillToSibling`) voor het volledige mechanisme,
+inclusief de ↑-symmetrie (landt op de vorige sibling's láátste unit, mirror van
+`stepBlock`) en de aangepaste `dKey`-guard. Verfijn je een groep die precies
 **één regel** beslaat (`cur.end === cur.start`), dan slaat `f` het `'line'`-niveau
 over en springt direct naar `'call'` (er is dan geen zinvolle line-stap: de regel
 ís de groep); `s`/`d` lopen wél stap-voor-stap terug (`call → line → group`). De
