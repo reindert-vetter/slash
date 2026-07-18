@@ -3818,6 +3818,16 @@ function isIndexMenu() {
   return state.mode === 'list' && (ms.mode === 'block' || ms.mode === 'postApprove')
 }
 
+// isDescriptionMenu — the PR-wide menu ('pr' mode, opened with Enter or `/`)
+// while stop 1 (the PR-description column, state.showDescription) owns the
+// keyboard: anchor it on the description card itself instead of the diff
+// region far to the right (mirror of the isIndexMenu exception above). The
+// pr-info-column only exists in the DOM while showDescription is true, so the
+// selectors below always resolve while this returns true.
+function isDescriptionMenu() {
+  return state.showDescription && ms.mode === 'pr'
+}
+
 function menuAnchor() {
   // The comment-kind menu ('compose') anchors under the composer textarea.
   if (ms.mode === 'compose') {
@@ -3839,6 +3849,15 @@ function menuAnchor() {
     return (
       document.querySelector(`[data-idx="${state.selected}"]`) ||
       document.querySelector('[data-testid="pr-index"]')
+    )
+  }
+  // The PR-wide menu on stop 1 anchors on the description card (the card is
+  // tall, so positionMenu usually flips the palette above/clamps it near the
+  // top of the column — still right by the description, which is the point).
+  if (isDescriptionMenu()) {
+    return (
+      document.querySelector('[data-testid="pr-info-card"]') ||
+      document.querySelector('[data-testid="pr-info-column"]')
     )
   }
   return (
@@ -3866,6 +3885,11 @@ function menuRegion() {
   }
   if (isIndexMenu()) {
     return document.querySelector('[data-testid="pr-index"]')
+  }
+  // Stop 1: the palette takes the description column's full left+width
+  // (26rem) — mirror of how the index menu takes the whole sidebar.
+  if (isDescriptionMenu()) {
+    return document.querySelector('[data-testid="pr-info-column"]')
   }
   const scope = document.querySelector('[data-testid="detail-panel"]')
   if (!scope) return null

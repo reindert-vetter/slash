@@ -178,7 +178,16 @@ daarop juist op de **geselecteerde sidebar-rij** (`[data-idx="${state.selected}"
 en neemt het de **volle sidebar-breedte** (`[data-testid="pr-index"]`) — niet de
 list-mode diff-preview in `<main>`, die weliswaar ook een `[data-change-active]`
 draagt maar niet is waar de reviewer net op drukte. Zo opent `Enter` vanuit de
-index het menu **bij die rij**, niet ergens anders op het scherm. **Past het
+index het menu **bij die rij**, niet ergens anders op het scherm. **Op stop 1**
+(het PR-brede `'pr'`-menu terwijl `state.showDescription` waar is —
+`isDescriptionMenu()` in `home.mjs`, geldt voor zowel `Enter` als `/` daar)
+ankert het menu op de **omschrijving-kaart** (`[data-testid="pr-info-card"]`)
+en neemt het de **volle breedte van de omschrijving-kolom**
+(`[data-testid="pr-info-column"]`, 26rem) — mirror van de blokken-index-
+uitzondering; omdat de kaart hoog is klapt het menu daar meestal boven/over de
+kolom (de bestaande flip+clamp), maar altijd bíj de omschrijving i.p.v. bij de
+diff-regio rechts. Buiten stop 1 houdt het `'pr'`-menu (`/`) gewoon de
+default-diff-positionering. Test: `tests/pr-description-menu.spec.mjs`. **Past het
 niet onder het scherm, dan klapt het erboven** (en wordt sowieso in de viewport
 geklemd). Het start `visibility:hidden` tot `positionMenu` het geplaatst heeft (geen
 flits linksboven), en herpositioneert bij resize, scroll (capture, ook
