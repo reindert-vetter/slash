@@ -1,8 +1,8 @@
 // Footer — the fixed bottom bar under the sidebar and detail panel. It is only
 // shown while a diff is open (any granularity — group, line or call); it holds
 // the inline diff of the active line (- removed / + added, when the active
-// unit is a single row) plus a placeholder for a future description. In list
-// mode (no diff open) it is hidden entirely. The panels above reserve 90px for it.
+// unit is a single row). In list mode (no diff open) it is hidden entirely.
+// The panels above reserve 90px for it.
 
 import { html } from './vendor/arrow.js'
 import { blockRows, unitsFor, highlight, markChars, UNDERLINE_CLS } from './Block.mjs'
@@ -65,11 +65,11 @@ export default function Footer(state) {
   // line or call) — since there is nothing to preview in list mode. The
   // inline diff *content* below (activeUnit) is unrelated and still only
   // appears once the active unit narrows to a single row; a multi-row group
-  // just shows the bar with the placeholder description, no diff. The whole
-  // class string is one reactive function binding (arrow.js requires the
-  // full attribute value in a single binding, see .claude/rules/conventions.md);
-  // the `hidden` toggle just adds/removes `display:none` on the stable <footer>
-  // root, so no keyed-node pitfall applies.
+  // just shows the (empty) bar, no diff. The whole class string is one
+  // reactive function binding (arrow.js requires the full attribute value in
+  // a single binding, see .claude/rules/conventions.md); the `hidden` toggle
+  // just adds/removes `display:none` on the stable <footer> root, so no
+  // keyed-node pitfall applies.
   return html`
     <footer
       class="${() =>
@@ -78,12 +78,6 @@ export default function Footer(state) {
     >
       <div class="absolute right-4 top-1/2 -translate-y-1/2">${themeToggleButton('h-8 w-8')}</div>
       <div class="${() => wrapClass(state)}">
-        <p
-          class="shrink-0 truncate text-xs italic text-slate-400 dark:text-zinc-500"
-          data-testid="footer-description"
-        >
-          Omschrijving volgt nog…
-        </p>
         <div
           class="no-scrollbar min-h-0 flex-1 overflow-auto"
           data-testid="footer-diff"

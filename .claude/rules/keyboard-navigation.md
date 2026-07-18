@@ -686,8 +686,8 @@ de class-string is één reactieve `class="${() => …}"`-functie-binding, dus
 geen keyed-node-valkuil, zie `.claude/rules/conventions.md`). **Los daarvan**
 toont de footer, zodra hij zichtbaar is, alleen een inline diff (`- oud` /
 `+ nieuw`, Prism-highlighted) als de **geselecteerde unit precies één regel**
-beslaat — een meerregelige groep laat de footer-balk gewoon staan (met de
-placeholder-omschrijving), maar zonder diff-inhoud. Deze inline-diff-inhoud
+beslaat — een meerregelige groep laat de footer-balk gewoon staan (leeg, op de
+theme-toggle na), maar zonder diff-inhoud. Deze inline-diff-inhoud
 volgt het **huidige granulariteitsniveau** via dezelfde
 `unitsFor(rows, state.gran)` als de navigatie (`state.change` binnen
 `'diff'`-mode): omdat een `'line'`- of `'call'`-unit altijd één rij is,
