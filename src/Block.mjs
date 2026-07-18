@@ -47,6 +47,19 @@ export function removedLabel(b) {
   return null
 }
 
+// blockLabel returns the full display label for a block (or a plain label
+// string): `class::method`, falling back to just the bare name when the block
+// has no class ("class::method everywhere"). Shared by the drill-hint chips
+// (RelatedPanel.mjs) and the collapsed column rails (home.mjs'
+// collapsedColumnHTML) so no render spot shortens a label to only the method
+// name anymore.
+export function blockLabel(x) {
+  if (!x) return ''
+  if (typeof x === 'string') return x
+  if (x.class && x.name) return x.class + '::' + x.name
+  return x.label || x.name || ''
+}
+
 // Shared rose emphasis for the removed-file/removed markers (card badge and
 // diff banner) — deliberately louder than the plain status word.
 const REMOVED_BADGE_CLS =
@@ -137,16 +150,16 @@ export default function Block(b, opts = {}) {
     <article
       class="${() =>
         'flex min-h-0 max-w-full flex-col overflow-hidden rounded-xl border bg-white dark:bg-zinc-900 transition ' +
-        // Every card uses the full two-pane width by default, even a one-sided
-        // (added/removed) block: it keeps the empty pane dropped (see singleSide
-        // below) but stays as wide as a modified block so the layout doesn't jump
-        // between block types. Exception: the `a` toggle (viewMode) — while it's
-        // on, EVERY visible card shrinks to 60% width, regardless of singleSide
-        // (see `narrowed`). A reviewer who explicitly asked to hide the old side
-        // wants the narrower view everywhere, including an already one-sided
-        // block that has no old side to hide in the first place — consistency
-        // across block types wins over the width-stability rule while `a` is on.
-        (narrowed(viewModeFn) ? 'w-[42rem] 2xl:w-[49.2rem] ' : 'w-[70rem] 2xl:w-[82rem] ') +
+        // A one-sided (added/removed) block only ever shows a single pane, so it
+        // renders at the narrow (60%) width by default — the same width the `a`
+        // toggle gives every card. A two-sided (modified) block keeps the full
+        // two-pane width, and the `a` toggle (viewMode==='new', see `narrowed`)
+        // then shrinks EVERY visible card — modified included — to that same
+        // narrow width in lockstep. So the narrow width applies whenever the card
+        // is single-side OR `a` is on.
+        (narrowed(viewModeFn) || singleSide(b)
+          ? 'w-[42rem] 2xl:w-[49.2rem] '
+          : 'w-[70rem] 2xl:w-[82rem] ') +
         (preview
           ? 'max-h-72 border-slate-200 dark:border-zinc-800 opacity-50'
           : diffActive()

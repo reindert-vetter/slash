@@ -133,10 +133,11 @@ voor het volledige toetsenbord-mechanisme (`handlePrWideKey`/
 
 Daarna de **block-kolom** (`data-testid=block-column`,
 **`shrink-0`** — niet `flex-1`, dus op zijn **natuurlijke diff-breedte**
-(altijd `w-[70rem] 2xl:w-[82rem]`, óók voor een één-zijdig added/removed block —
-dat laat weliswaar de lege pane weg (`singleSide` in `Block.mjs`) maar houdt
-dezelfde breedte als een modified block, zodat de layout niet springt tussen
-block-types) i.p.v. de resterende
+(`w-[70rem] 2xl:w-[82rem]` voor een tweezijdig `modified` block; een **één-zijdig
+added/removed block** toont maar één pane (`singleSide` in `Block.mjs`) en krijgt
+daarom **dezelfde smalle 60%-breedte** `w-[42rem] 2xl:w-[49.2rem]` als de `a`-toggle
+— eenzijdig is altijd smal, ongeacht `a`, want er valt niets naast te tonen)
+i.p.v. de resterende
 ruimte op te vullen) met de kaart van het geselecteerde block plus de
 look-ahead-preview van het volgende block (dashed connector als ze uit hetzelfde
 bestand komen). **Direct náást** die kolom (niet aan de rechterrand van het
@@ -630,36 +631,56 @@ rechts — zie de layout-alinea hierboven):
   `relatedChildren`/`resolvedCallChildren` in `home.mjs` via `blockApproveCount`);
   dezelfde rollup zit als combinatie-pill op de sidebar-rij — zie de
   gecombineerde-goedkeuring-uitleg in `.claude/rules/blocks-and-ingest.md`.
-  **Drill-hint-chips (streepje naar rechts):** elk kind waarvan het blok **zélf**
-  nog gewijzigde onderliggende code heeft, toont rechts van zijn kaart een kort
-  **gestippeld streepje** naar een smalle chip-kolom
-  (`data-testid=related-nested`, `w-36`): per gewijzigd kleinkind één chip
-  (`data-testid=related-nested-chip`) met **titel** (laatste `::`-segment),
-  **file** (basename), **status**-woord (`added`/`modified`/`removed`, gekleurd
-  via `statusInfo` uit `BlockList.mjs`) en de **approval `done/total`**
-  (`data-testid=related-nested-approval`, `blockApproveCount` van het kleinkind
-  zelf — bewust niet subtree, badge-consistent met `related-approval`; verborgen
-  bij `total 0`). Gecapt op **3 chips + "+N meer"**
-  (`data-testid=related-nested-more`). De data komt uit
-  `nestedChangedKids(prBlock, parentId)` in `home.mjs` (platte descriptors op
-  `r.nested`, gebouwd in dezelfde descriptor-builders/`setRelated`-watch als de
-  rest): `directChildBlocks` levert per definitie alleen **PR-blokken**, dus een
+  **Drill-hint-chips (streepje naar rechts, recursieve mini-boom):** elk kind
+  waarvan het blok **zélf** nog gewijzigde onderliggende code heeft, toont
+  rechts van zijn kaart een kort **gestippeld streepje** naar een smalle
+  chip-kolom (`data-testid=related-nested`, `w-36`): per gewijzigd
+  (achter)kleinkind één chip (`data-testid=related-nested-chip`) met het
+  **volledige `class::method`-label** (kale naam als er geen class is — de
+  gedeelde `blockLabel`-helper in `Block.mjs`, "class::method overal"), een
+  eigen **diffstat `+A −B`** (groen/rood, `data-testid=related-nested-diffstat`,
+  `diffStat` over de lazy-ge-`ensureCode`de kid; een grijze **`…`**-placeholder
+  zolang die code nog laadt — nooit "Ongewijzigd", elk chip-target is per
+  definitie een gewijzigd PR-blok) en de **approval `done/total`**
+  (`data-testid=related-nested-approval`, `blockApproveCount` van het blok
+  zelf — bewust niet subtree; ✓-prefix bij volledig; verborgen bij `total 0`).
+  Géén file-regel in de chip (het volledige `label · file` zit in `title`).
+  **Recursief**: elke chip toont ingesprongen (`data-testid=
+  related-nested-sub`) zijn eigen gewijzigde kinderen, tot een **diepte-cap
+  van 2 chip-niveaus** onder de kaart (`NESTED_DEPTH`, `home.mjs` — de kolom
+  is smal, elk niveau multipliceert `ensureCode`-fetches, en dieper kijken is
+  waar drillen voor is); per niveau gecapt op **3 chips + "+N meer"**
+  (`data-testid=related-nested-more`), cycle-safe via een gedeelde `seen`-set
+  (het `nestedPrBlocks`-patroon). De data komt uit
+  `nestedChangedKids(prBlock, parentId, seen, depth)` in `home.mjs` (platte
+  descriptors op `r.nested` + een recursieve key-signatuur `r.nestedSig` via
+  `nestedSigOf`, gebouwd in dezelfde descriptor-builders/`setRelated`-watch
+  als de rest — nooit in een render-binding, dus geen `b.code`-race):
+  `directChildBlocks` levert per definitie alleen **PR-blokken**, dus een
   `Ongewijzigd`/synthetisch call-target krijgt nooit een chip (een call-child
-  zonder `prBlock` krijgt expliciet `nested: []`); `parentId` filtert de directe
-  A↔B-cyclus weg. Chips liften gewoon mee op de descriptor, dus ze verschijnen
-  op elke granulariteit waar het kind zelf zichtbaar is (ook `line`/`call`). Een
-  **klik op een chip drilt twee niveaus in één keer** (eerst het kind, dan het
-  kleinkind — twee `drillIntoChild`-stappen via dezelfde `drill`-callback, met
-  `stopPropagation` zodat de kaart-klik er niet óók één-niveau overheen drilt);
-  `Enter` op de kaart blijft de gewone één-niveau-drill. arrow.js-details: de
-  kaart-root van `relatedCard` is nu een flex-rij (kaart `min-w-0 flex-1`, chips
-  ernaast als **statische** interpolaties, het `testsBar`-precedent) en de
-  kaart-`.key` in `fullCard` codeert de **nested-signatuur** (kleinkind-ids +
-  hun `approve.done`) naast de code-status, zodat een gewijzigde set of een
-  approval-tik altijd een verse node bouwt. `data-child-id` blijft op de
-  binnenste kaart, dus de call-pijl-overlay (die op de **linker**rand van de
-  kaart mikt) heeft geen last van de chips rechts. Het `tests_group`-balkje
-  (zie hieronder) krijgt géén chips. Zie `tests/related-nested-chip.spec.mjs`.
+  zonder `prBlock` krijgt expliciet `nested: []`). Chips liften mee op de
+  descriptor, dus ze verschijnen op elke granulariteit waar het kind zelf
+  zichtbaar is (ook `line`/`call`). Een **klik op een chip op diepte d drilt
+  d+1 niveaus in één keer** (het kaart-kind, dan elke ancestor-chip, dan de
+  chip zelf — sequentiële `drillIntoChild`-stappen via dezelfde
+  `drill`-callback, met `stopPropagation` zodat de kaart-klik er niet óók
+  één-niveau overheen drilt); `Enter` op de kaart blijft de gewone
+  één-niveau-drill. arrow.js-details: de kaart-root van `relatedCard` is een
+  flex-rij (kaart `min-w-0 flex-1`); de approval-teller is een **vooraf
+  berekende string** (`approveText`) in een altijd-aanwezig element, en elke
+  conditionele sub-template (chip-kolom, diffstat, sub-lijst) loopt via een
+  **`${() => …}`-functie-binding** — nooit een statische template↔string-
+  ternary, die lekte arrow's template-functie (`i=>je(n,i)`) als tekst bij
+  chunk-hergebruik, zie de "statische template↔string slot"-valkuil in
+  `.claude/rules/conventions.md`. De kaart-`.key` in `fullCard` draagt
+  `r.nestedSig` zodat elke boom-wijziging (set/approval/diff-geladen) een
+  verse node bouwt; chip-keys zijn het **id-pad** (zelfde id kan onder twee
+  parents hangen). `data-child-id` blijft op de binnenste kaart, dus de
+  call-pijl-overlay (die op de **linker**rand van de kaart mikt) heeft geen
+  last van de chips rechts. Het `tests_group`-balkje (zie hieronder) krijgt
+  géén chips. De ingeklapte kolom-rails (`collapsedColumnHTML`, `home.mjs`)
+  tonen sinds deze change óók het volledige `class::method`-label via dezelfde
+  `blockLabel`-helper. Zie `tests/related-nested-chip.spec.mjs`.
   Náást de listener-children toont dezelfde kaart ook de **methode-aanroepen** die
   het block doet, gekoppeld aan hun **definitie** — ook uit ongewijzigde bestanden
   (`kind=method_call`, uit `GET /api/callresolve`, code + descriptor zitten in de

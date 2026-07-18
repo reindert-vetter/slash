@@ -73,10 +73,10 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
   })
 
   // An already one-sided (added) block has no old pane to hide, so the toggle
-  // has no effect on its pane count — but the card still shrinks to 60% width
-  // like every other visible card, so the layout stays consistent across
-  // block types while `a` is on.
-  test('viewMode narrows an already one-sided (added) block too, but keeps its single pane', async ({
+  // A one-sided (added/removed) block only ever shows one pane, so it renders
+  // at the narrow (60%) width by default — the same width the `a` toggle gives
+  // every card — and stays narrow regardless of viewMode.
+  test('a one-sided (added) block is narrow by default and stays narrow regardless of viewMode', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -108,28 +108,32 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     const panes = page.locator('#added-view-mode-host code.language-php')
     const card = page.locator('#added-view-mode-host article')
-    await expect(panes).toHaveCount(1)
-    await expect(card).toHaveClass(/w-\[70rem\]/)
-
-    await page.evaluate(() => {
-      window.__addedVm.mode = 'new'
-    })
-    // Still one pane (nothing to drop) — but the card narrows anyway.
+    // Narrow by default — one pane, so the 60% width applies without `a`.
     await expect(panes).toHaveCount(1)
     await expect(card).toHaveClass(/w-\[42rem\]/)
     await expect(card).toHaveClass(/2xl:w-\[49\.2rem\]/)
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
 
     await page.evaluate(() => {
+      window.__addedVm.mode = 'new'
+    })
+    // `a` on: still one pane, still narrow — no change for a one-sided block.
+    await expect(panes).toHaveCount(1)
+    await expect(card).toHaveClass(/w-\[42rem\]/)
+    await expect(card).not.toHaveClass(/w-\[70rem\]/)
+
+    await page.evaluate(() => {
       window.__addedVm.mode = 'split'
     })
-    await expect(card).toHaveClass(/w-\[70rem\]/)
+    // Flipped back to split: a one-sided block stays narrow regardless.
+    await expect(card).toHaveClass(/w-\[42rem\]/)
+    await expect(card).not.toHaveClass(/w-\[70rem\]/)
   })
 
   // Same as above but for a removed block — the other one-sided status, to
-  // make sure the width follows `narrowed(viewMode)` and not some
+  // make sure the narrow-by-default width follows singleSide and not some
   // added-specific path.
-  test('viewMode narrows an already one-sided (removed) block too', async ({
+  test('a one-sided (removed) block is narrow by default too', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -161,8 +165,10 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     const panes = page.locator('#removed-view-mode-host code.language-php')
     const card = page.locator('#removed-view-mode-host article')
+    // Narrow by default — one pane.
     await expect(panes).toHaveCount(1)
-    await expect(card).toHaveClass(/w-\[70rem\]/)
+    await expect(card).toHaveClass(/w-\[42rem\]/)
+    await expect(card).not.toHaveClass(/w-\[70rem\]/)
 
     await page.evaluate(() => {
       window.__removedVm.mode = 'new'
