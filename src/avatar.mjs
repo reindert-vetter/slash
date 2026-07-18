@@ -34,7 +34,7 @@ export function avatarHTML(name, avatarUrl, sizeCls = 'h-6 w-6', extraCls = '') 
   if (!avatarUrl) {
     return html`<span class="${FALLBACK_CLS + ' ' + sizeCls + ' ' + extraCls}" title="${title}" data-testid="avatar-fallback">${initials}</span>`
   }
-  return html`<span class="relative inline-flex shrink-0 ${sizeCls}" title="${title}" data-testid="avatar">
+  return html`<span class="${'relative inline-flex shrink-0 ' + sizeCls}" title="${title}" data-testid="avatar">
     <img
       src="${avatarUrl}"
       alt=""
