@@ -125,7 +125,7 @@ test.describe('PR Review Tree — PR inbox', () => {
     // The seeded DB has at least PR 12903 ingested — real rows must appear.
     const items = page.locator('[data-testid="recent-item"]')
     await expect(items.first()).toBeVisible()
-    await expect(items.locator('text=/blocks/').first()).toBeVisible()
+    await expect(items.locator('text=/blok(ken)?/').first()).toBeVisible()
 
     // And no lingering loading skeleton next to them.
     await expect(page.locator('[data-testid="recent"] ~ * .animate-pulse')).toHaveCount(0)

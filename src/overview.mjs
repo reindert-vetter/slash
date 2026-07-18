@@ -904,10 +904,10 @@ function recentItem(r) {
       <span class="shrink-0 text-emerald-600 dark:text-emerald-400">${icon('sparkles', 'h-4 w-4')}</span>
       <div class="min-w-0 flex-1">
         <span class="text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white"
-          >#${r.pr} · ${r.blocks} blocks · ${r.files} files</span
+          >#${r.pr} · ${r.blocks} ${r.blocks === 1 ? 'blok' : 'blokken'} · ${r.files} ${r.files === 1 ? 'bestand' : 'bestanden'}</span
         >
       </div>
-      ${chip('open tree', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', '', 'sparkles')}
+      ${chip('open boom', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', '', 'sparkles')}
       ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
     </a>
   `.key('recent:' + r.pr)
