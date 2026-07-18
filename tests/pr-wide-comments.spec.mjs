@@ -136,7 +136,7 @@ test.describe('PR-wide comment block (C2)', () => {
     expect(replyBody.done).toBe(true)
   })
 
-  test('the description/comment-block height ratio flips with focus (2/3 vs 3/4)', async ({ page }) => {
+  test('the description/comment-block height ratio flips with focus (3/5 vs 5/6)', async ({ page }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toBeVisible()
@@ -146,10 +146,10 @@ test.describe('PR-wide comment block (C2)', () => {
     const wide = page.getByTestId('pr-wide-comments')
     await expect(wide).toBeVisible()
 
-    // Description selected: prInfoCard flex-[2] vs pr-wide-comments flex-1.
-    // The real ratio lands a bit above the "pure" 2:1 (prInfoCard's p-5 border
-    // adds a small fixed floor to its share, see the flex-grow note in
-    // detail-layout.md) — assert generously below that (1.9) so this stays
+    // Description selected: prInfoCard flex-[3] vs pr-wide-comments flex-[2].
+    // The real ratio lands a bit above the "pure" 1.5:1 (prInfoCard's p-5
+    // border adds a small fixed floor to its share, see the flex-grow note in
+    // detail-layout.md) — assert generously below that (1.4) so this stays
     // robust to sub-pixel/font-metric variance across machines.
     let cardH, wideH
     await expect
@@ -158,11 +158,11 @@ test.describe('PR-wide comment block (C2)', () => {
         wideH = (await wide.boundingBox()).height
         return cardH / wideH
       })
-      .toBeGreaterThan(1.9)
+      .toBeGreaterThan(1.4)
     const [cardH1, wideH1] = [cardH, wideH]
 
-    // ↓ hands the keyboard to the PR-wide block: flex-[3] vs flex-1 -> the
-    // ratio flips, and pr-wide-comments now clearly dominates.
+    // ↓ hands the keyboard to the PR-wide block: flex-[5] vs flex-1 -> the
+    // ratio flips, and pr-wide-comments now dominates much more strongly.
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('pr-wide-item').first()).toHaveAttribute('data-active', 'true')
 
@@ -172,10 +172,10 @@ test.describe('PR-wide comment block (C2)', () => {
         wideH = (await wide.boundingBox()).height
         return wideH / cardH
       })
-      .toBeGreaterThan(2.0)
+      .toBeGreaterThan(3.0)
 
-    // The description's share shrank substantially (~2/3 -> ~1/4 of the
-    // column) and the comment block's share grew substantially (~1/3 -> ~3/4)
+    // The description's share shrank substantially (~3/5 -> ~1/6 of the
+    // column) and the comment block's share grew substantially (~2/5 -> ~5/6)
     // — the two states are clearly distinct, not just noise.
     expect(cardH).toBeLessThan(cardH1 * 0.6)
     expect(wideH).toBeGreaterThan(wideH1 * 1.8)
