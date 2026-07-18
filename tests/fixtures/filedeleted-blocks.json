@@ -1,0 +1,36 @@
+[
+  {
+    "pr": 98,
+    "file": "app/Services/LegacyExporter.php",
+    "class": "LegacyExporter",
+    "name": "export",
+    "category": "SERVICE",
+    "line": 8,
+    "endLine": 14,
+    "status": "removed",
+    "fileDeleted": true,
+    "side": "old"
+  },
+  {
+    "pr": 98,
+    "file": "app/Services/OrderService.php",
+    "class": "OrderService",
+    "name": "legacyTotals",
+    "category": "SERVICE",
+    "line": 22,
+    "endLine": 28,
+    "status": "removed",
+    "side": "old"
+  },
+  {
+    "pr": 98,
+    "file": "app/Services/OrderService.php",
+    "class": "OrderService",
+    "name": "build",
+    "category": "SERVICE",
+    "line": 8,
+    "endLine": 18,
+    "status": "modified",
+    "side": "new"
+  }
+]

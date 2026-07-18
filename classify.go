@@ -155,6 +155,10 @@ func classifyFile(pr int, path string, oldBlocks, newBlocks []Block, fd *fileDif
 		sym := ob.symbol()
 		if _, inNew := newBySym[sym]; !inNew || fileDeleted {
 			ob.Status = StatusRemoved
+			// A whole-file deletion (file absent from the head worktree — git's
+			// `+++ /dev/null` case) is a stronger signal than a single removed
+			// method; persist it so the frontend can mark the file prominently.
+			ob.FileDeleted = fileDeleted
 			out = append(out, ob)
 		}
 	}

@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS blocks (
   line       INTEGER NOT NULL,          -- declaratieregel
   end_line   INTEGER NOT NULL DEFAULT 0,-- regel van de sluitende brace
   status     TEXT NOT NULL DEFAULT '',  -- added|removed|modified
+  file_deleted INTEGER NOT NULL DEFAULT 0, -- 0/1: het HELE bestand is door de PR verwijderd
+                                           -- (afwezig in de head-worktree, git's "+++ /dev/null")
   side       TEXT NOT NULL DEFAULT 'new',-- new|old: welke worktree line/end_line duiden
   pr         INTEGER NOT NULL DEFAULT 0, -- PR-nummer waar dit block bij hoort
   approved   INTEGER NOT NULL DEFAULT 0  -- 0/1: door de reviewer goedgekeurd?

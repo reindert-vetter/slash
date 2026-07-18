@@ -127,6 +127,33 @@ navigeerbare lijst tonen.
   twee detached worktrees onder `data/worktrees/pr-<pr>-{base,head}` (**absolute
   paden**!) → `git diff --unified=0` → PHP-scanner (`phpscan.go`, brace-lexer, geen
   externe parser) → classificeren (`classify.go`) → opslaan. Zie skill `ingest-pr`.
+- **Echt verwijderd bestand (`file_deleted`):** "alle blocks van dit bestand zijn
+  `removed`" is géén betrouwbaar bestand-verwijderd-signaal (de blocks-tabel bevat
+  alleen *getroffen* blocks — een bestand met één verwijderde methode blijft
+  gewoon bestaan). Het echte signaal komt uit de scan: `parseOneFile`
+  (`parse_pool.go`) leest beide worktrees en een bestand dat **afwezig is in de
+  head-worktree** (equivalent aan git's `+++ /dev/null`) is echt verwijderd;
+  `classifyFile` stamped dat als `FileDeleted` op elk removed block van dat
+  bestand. Gepersisteerd als kolom `file_deleted` (0/1) op `blocks` (lichte
+  migrate in `openDB`: `ALTER TABLE … ADD COLUMN`, dubbele-kolom-fout genegeerd —
+  zelfde patroon als de comments/relations-modules; `schemaDDL` + `schema.sql` in
+  sync), meegeschreven door zowel `replacePRBlocks` als `upsertPRFileBlocks` en
+  gelezen door `blocksByPR` → `fileDeleted` in `/api/blocks` (via het gewone
+  struct-tag, geen `MarshalJSON`-special-case). De frontend markeert het op
+  **drie** plekken, allemaal rose/bold en Nederlands, via de gedeelde helper
+  `removedLabel(b)` (`Block.mjs`): "Verwijderd bestand" bij `fileDeleted`,
+  "Verwijderd" voor een losse removed-methode — (1) de **kaart-kop-badge**
+  (`data-testid=block-status-badge`, vervangt het kale statuswoord; één stabiele
+  span met hele-waarde class/tekst-function-bindings), (2) de **sidebar-pil**
+  (`data-testid=block-row-removed`, `removedPill` in `BlockList.mjs`, genest slot
+  naast `approvalPill` — `statusInfo`/`STATUS_STYLE` ongewijzigd), en (3) de
+  **diff-banner** (`data-testid=removed-banner`) boven de old-only pane in
+  `codeDiff`'s `effectiveOnly==='left'`-tak (alleen die tak is geherstructureerd:
+  buitenste `flex-col` houdt `data-testid=code-diff`/`data-hints`, een geneste
+  `relative` flex-row draagt pane + scroll-hints zodat `updateHints`/`syncScroll`
+  blijven werken). Tests: `classify_test.go` (detectie, DB-round-trip via beide
+  write-paden, migrate) en `tests/removed-file.spec.mjs` (PR 98-fixture
+  `tests/fixtures/filedeleted-blocks.json`).
 - **Draait als de `ingest`-workflow (write-boundary):** de blocks-tabel-write +
   de git-worktree-mutaties gebeuren niet meer rechtstreeks vanuit een
   HTTP-handler of de CLI, maar binnen een tembed **Workflow Execution** (Workflow

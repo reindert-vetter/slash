@@ -36,6 +36,22 @@ function statusColor(status) {
   return STATUS_WORD[status] || 'text-slate-500 dark:text-zinc-500'
 }
 
+// removedLabel returns the prominent Dutch label for deleted code: a block
+// whose whole file was deleted by the PR (b.fileDeleted, the reliable
+// backend signal — git's `+++ /dev/null`) reads "Verwijderd bestand"; a loose
+// removed block in a file that still exists reads "Verwijderd". Null for
+// every other block — the caller falls back to the plain status word.
+export function removedLabel(b) {
+  if (b.fileDeleted) return 'Verwijderd bestand'
+  if (b.status === 'removed') return 'Verwijderd'
+  return null
+}
+
+// Shared rose emphasis for the removed-file/removed markers (card badge and
+// diff banner) — deliberately louder than the plain status word.
+const REMOVED_BADGE_CLS =
+  'shrink-0 rounded px-1.5 py-0.5 text-xs font-bold bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300'
+
 // singleSide returns which pane to show when a block is one-sided: an added block
 // has no old source (show only 'right'/new), a removed block has no new source
 // (show only 'left'/old). Modified blocks keep both panes (null). This lets the
@@ -147,8 +163,14 @@ export default function Block(b, opts = {}) {
         <h2 class="flex-1 truncate font-mono text-sm font-semibold text-slate-800 dark:text-zinc-200">
           ${() => b.label}
         </h2>
-        <span class="${() => 'shrink-0 text-xs font-medium ' + statusColor(b.status)}"
-          >${() => b.status}</span
+        <span
+          data-testid="block-status-badge"
+          class="${() =>
+            // One stable span whose whole class/text flip together (whole-value
+            // function bindings, see conventions.md): a prominent rose badge for
+            // deleted code (fileDeleted / removed), else the plain status word.
+            removedLabel(b) ? REMOVED_BADGE_CLS : 'shrink-0 text-xs font-medium ' + statusColor(b.status)}"
+          >${() => removedLabel(b) || b.status}</span
         >
       </div>
 
@@ -187,7 +209,7 @@ export default function Block(b, opts = {}) {
       </div>
 
       <p class="border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-sm leading-relaxed">
-        <span class="font-semibold text-slate-500 dark:text-zinc-500">Goal:</span>
+        <span class="font-semibold text-slate-500 dark:text-zinc-500">Doel:</span>
         <span class="${() => (b.description ? 'text-slate-600 dark:text-zinc-400' : 'italic text-slate-400 dark:text-zinc-500')}"
           >${() => b.description || 'nog geen omschrijving'}</span
         >
@@ -264,15 +286,31 @@ function codeDiff(
     `
   }
   if (effectiveOnly === 'left') {
+    // A left-only pane is exclusively the removed case, so this branch carries
+    // the prominent "deleted" banner. The outer div keeps data-testid=code-diff
+    // + data-hints (syncScroll's closest() and the hint styling hang off it);
+    // the pane + scroll hints move into a nested relative flex-row so the
+    // absolutely-positioned hints overlay only the code, not the banner.
     return html`
       <div
-        class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
+        class="flex min-h-0 flex-1 flex-col overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn)}
-        ${scrollHint('up')}
-        ${scrollHint('down')}
+        <div
+          data-testid="removed-banner"
+          class="shrink-0 border-b border-rose-200 dark:border-rose-500/30 bg-rose-100 dark:bg-rose-500/20 px-4 py-1.5 text-xs font-bold text-rose-700 dark:text-rose-300"
+        >
+          ${() =>
+            b.fileDeleted
+              ? 'Verwijderd bestand — deze code bestaat niet meer'
+              : 'Verwijderd — deze code bestaat niet meer'}
+        </div>
+        <div class="relative flex min-h-0 flex-1 overflow-hidden">
+          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn)}
+          ${scrollHint('up')}
+          ${scrollHint('down')}
+        </div>
       </div>
     `
   }

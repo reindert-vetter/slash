@@ -28,9 +28,13 @@ type Block struct {
 	Category string `json:"category"`
 	Line     int    `json:"line"`     // declaration line
 	EndLine  int    `json:"endLine"`  // line of the closing brace
-	Status   string `json:"status"`   // added|removed|modified
-	Side     string `json:"side"`     // new|old
-	Approved bool   `json:"approved"` // approved by the reviewer?
+	Status   string `json:"status"` // added|removed|modified
+	// FileDeleted marks a block whose whole file was deleted by the PR (the
+	// file is absent from the head worktree — git's `+++ /dev/null` case), as
+	// opposed to a single removed method in a file that still exists.
+	FileDeleted bool   `json:"fileDeleted"`
+	Side        string `json:"side"`     // new|old
+	Approved    bool   `json:"approved"` // approved by the reviewer?
 	Label    string `json:"label"`    // "Class::method" or "name" — for the frontend
 }
 

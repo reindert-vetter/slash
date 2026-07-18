@@ -33,7 +33,8 @@ const BIN = path.resolve('tests/.tmp/slash')
 // blocks fixture (PR 12903), the relations/callresolve fixtures (PR 90/91),
 // the testcovers fixtures (PR 92/93/94), the tree-descent fixture (PR 95,
 // see _setup.mjs's materializeTreeWorktrees + postapprove-tree.spec.mjs), and
-// the empty-child-code fixture (PR 96, related-empty-code.spec.mjs).
+// the empty-child-code fixture (PR 96, related-empty-code.spec.mjs), and the
+// deleted-file fixture (PR 98, removed-file.spec.mjs).
 // Everything lands next to the DB (tests/.tmp/w<n>/), so the worker is isolated.
 function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/blocks.json'], { stdio: 'ignore' })
@@ -112,6 +113,15 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/emptycode-callresolve.json',
     ],
+    { stdio: 'ignore' },
+  )
+  // Deleted-file fixture (PR 98, removed-file.spec.mjs): one block whose whole
+  // file was deleted by the PR (fileDeleted: true) plus a loose removed method
+  // in a file that still exists — drives the "Verwijderd bestand"/"Verwijderd"
+  // markers (card badge, sidebar pill, diff banner).
+  execFileSync(
+    BIN,
+    ['seed', '-db', db, '-from', 'tests/fixtures/filedeleted-blocks.json'],
     { stdio: 'ignore' },
   )
 }

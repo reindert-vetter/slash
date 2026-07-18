@@ -3,6 +3,7 @@
 // parent (home.mjs) mounts it and owns the keyboard navigation.
 
 import { html } from './vendor/arrow.js'
+import { removedLabel } from './Block.mjs'
 
 // Tailwind classes per category tag, so the pills read like the screenshot.
 const CATEGORY_STYLE = {
@@ -206,12 +207,30 @@ function row(state, b, i) {
         title="${b.label}"
         >${b.label}</span
       >
+      ${() => removedPill(b)}
       ${() => approvalPill(state, b)}
       <span class="${() => 'shrink-0 text-xs font-medium ' + st.cls}"
         >${st.mark}</span
       >
     </div>
   `.key(b.file + ':' + b.label + ':' + b.side)
+}
+
+// removedPill marks deleted code prominently in the sidebar: a rose pill
+// "Verwijderd bestand" for a block whose whole file was deleted by the PR
+// (b.fileDeleted, the reliable backend signal), or "Verwijderd" for a loose
+// removed block. '' for everything else — same nested-slot shape as
+// approvalPill below, so no keyed-list pitfall applies (see conventions.md).
+function removedPill(b) {
+  const label = removedLabel(b)
+  if (!label) return ''
+  return html`
+    <span
+      data-testid="block-row-removed"
+      class="shrink-0 rounded bg-rose-100 dark:bg-rose-500/20 px-1 py-0.5 text-[10px] font-bold text-rose-700 dark:text-rose-300"
+      >${label}</span
+    >
+  `
 }
 
 // approvalPill shows the combined approval progress of a block *and every block
