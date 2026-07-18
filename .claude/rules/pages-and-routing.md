@@ -168,6 +168,44 @@ geval bleek niet deterministisch op te wekken onder Playwright, zie ook de
 bewijzen: zelfde coördinaten kapen de selectie nooit, een echte
 positie-delta doet dat weer normaal.
 
+**De keyboard-selectie volgt identiteit (`selKey`/`data-nav-key`), niet enkel
+een array-positie (`selIndex`).** Elke navigeerbare rij (`prRow` én
+`recentItem`) draagt naast `data-nav-row`/`data-pr` ook een stabiel
+`data-nav-key` (dezelfde string als de arrow.js `.key(...)` van die rij, bv.
+`"row:12903"`/`"recent:12903"`). `move`/`moveTo` zetten bij elke stap zowel
+`selIndex` als `selKey`; `paintSelection()` roept vóór het schilderen altijd
+eerst `reanchorSelection(rows)` aan, die `selIndex` **herleidt uit `selKey`**
+tegen de op dat moment aanwezige `currentRows()` — staat die rij er nog, dan
+volgt de ring 'm naar zijn (eventueel verschoven) positie; is-ie echt weg, dan
+wordt de selectie **losgelaten** (`selIndex = -1`, geen ring) in plaats van op
+een willekeurige andere rij te belanden. Dit was nodig omdat de onderliggende
+rijenlijst kan veranderen zonder dat de reviewer zelf een pijltje indrukt: een
+zoekopdracht typen/wissen (vervangt de hele rijenset door een andere,
+mogelijk kortere/anders-geordende), een achtergrond-snapshot-reload
+(`reloadSnapshot`, elke 60s), of de "Recent gegenereerd"-lade openen/sluiten
+(zie hieronder) — met een kale positionele `selIndex` bleef de ring dan op
+"wat er toevallig op die plek staat" hangen, vrijwel altijd een andere PR dan
+de reviewer had geselecteerd. Getest in
+`tests/overview-selection-identity.spec.mjs` (zoeken naar een korte,
+anders-geordende resultatenset laat de ring nooit op de enige overgebleven,
+niet-geselecteerde rij landen; de lade dicht-klappen met een selectie erin
+laat de selectie los i.p.v. 'm op een pr-row te laten landen).
+
+**De "Recent gegenereerd"-lade doet mee in de `↓`-navigatie zodra hij
+openstaat** — bewuste keuze: `currentRows()` blijft simpelweg alle
+`[data-nav-row]`-elementen (zowel `pr-row` als `recent-item`), dus zodra de
+lade open is stroomt `↓` vanaf de laatste PR-rij gewoon door in de
+lade-items, in DOM-volgorde. Dicht is de lade leeg (geen `recent-item`s in de
+DOM), dus dan doet hij niet mee — en sluit je 'm terwijl de selectie op een
+lade-item stond, dan laat de identiteits-herijking hierboven die selectie los
+(geen ring) i.p.v. 'm op een overgebleven pr-row te plakken.
+
+Ook: **`Escape` in de zoekbox blurt het veld** (naast het wissen van
+`state.query`) — anders bleef `document.activeElement` op de (nu lege) input
+staan en at `kbHandler`'s `typing`-guard (`active.tagName === 'INPUT'`) élke
+volgende pijltjestoets op, wat aanvoelde als "de pijltjes doen niks meer" tot
+de reviewer handmatig wegklikte/tabte.
+
 **Zodra een popover open is, bezit hij het toetsenbord — de lijst-navigatie
 hierboven is opgeschort.** `togglePopover` focust bij het openen (via
 `requestAnimationFrame`, na de arrow.js-paint) het **eerste** item in de menu

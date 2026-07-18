@@ -616,6 +616,7 @@ function prRow(pr, opts = {}) {
       data-testid="pr-row"
       data-pr="${pr.number}"
       data-nav-row
+      data-nav-key="${'row:' + pr.number}"
       class="${'relative ' + ROW_CLASS}"
       style="${indentStyle(opts)}"
       @click="${() => togglePopover(pr.number)}"
@@ -777,6 +778,11 @@ function onSearchKeydown(e) {
     e.target.value = ''
     state.query = ''
     state.searchResults = null
+    // Also drop DOM focus so the row list's own ArrowDown/ArrowUp nav works
+    // again immediately — otherwise kbHandler's `typing` guard (this is
+    // still an INPUT) keeps swallowing arrow keys until the reviewer
+    // manually clicks/Tabs away, which reads as "arrow keys do nothing".
+    e.target.blur()
   }
 }
 
@@ -895,6 +901,7 @@ function recentItem(r) {
       data-testid="recent-item"
       data-pr="${r.pr}"
       data-nav-row
+      data-nav-key="${'recent:' + r.pr}"
       class="${ROW_CLASS}"
     >
       <span class="shrink-0 text-emerald-600 dark:text-emerald-400">${icon('sparkles', 'h-4 w-4')}</span>
@@ -1088,7 +1095,23 @@ async function runSearch(q) {
 // mousemove as real if the pointer's coordinates actually changed since the
 // last one we saw.
 
+// selIndex is the derived position used for painting/scrolling; selKey is
+// the actual source of truth — the stable `data-nav-key` of the row the
+// reviewer selected (see prRow/recentItem). Tracking identity instead of a
+// bare array position matters because the underlying row set can change
+// out from under the reviewer without any keypress of their own: a
+// background snapshot reload (reloadSnapshot, every 60s) can reorder PRs
+// across sections/stacks, toggling "Recent gegenereerd" appends/removes
+// rows, and typing/clearing the search box swaps the entire row set for an
+// unrelated one. Before this fix, selIndex stayed a raw number through all
+// of that, so paintSelection() kept re-highlighting "whatever row now sits
+// at that position" — often a completely different PR than the one the
+// reviewer actually selected. reanchorSelection() (below) re-derives
+// selIndex from selKey on every repaint; if the selected row is genuinely
+// gone it releases the selection (no ring) instead of drifting onto an
+// unrelated row.
 let selIndex = -1
+let selKey = null
 let hoverEnabled = false
 
 // ── popover keyboard navigation ─────────────────────────────────────────
@@ -1171,13 +1194,31 @@ function currentRows() {
   return Array.from(document.querySelectorAll('[data-nav-row]'))
 }
 
+// reanchorSelection re-derives selIndex from the stable selKey identity
+// against the row list currently in the DOM. Called at the top of every
+// paintSelection() — including the repaint-only path (scheduleRepaint,
+// triggered by a data change, not a keypress) — so a reshuffled/replaced
+// row set never leaves the ring on an unrelated row: if selKey's row is
+// still present, the ring simply follows it to its new position; if it
+// genuinely isn't there anymore, the selection is released (selIndex = -1)
+// rather than drifting onto whatever now happens to occupy the old slot.
+function reanchorSelection(rows) {
+  if (selKey == null) {
+    selIndex = -1
+    return
+  }
+  selIndex = rows.findIndex((el) => el.dataset.navKey === selKey)
+}
+
 function paintSelection() {
   const rows = currentRows()
+  reanchorSelection(rows)
   rows.forEach((el, i) => {
     el.dataset.navIndex = String(i)
     el.onmouseenter = () => {
       if (!hoverEnabled) return
       selIndex = i
+      selKey = el.dataset.navKey || null
       paintSelection()
     }
     // Note: `relative` is deliberately NOT part of this toggle set. prRow's
@@ -1203,6 +1244,7 @@ function move(delta) {
   if (!rows.length) return
   const base = selIndex < 0 ? (delta > 0 ? -1 : 0) : selIndex
   selIndex = Math.max(0, Math.min(rows.length - 1, base + delta))
+  selKey = rows[selIndex] ? rows[selIndex].dataset.navKey || null : null
   hoverEnabled = false
   paintSelection()
 }
@@ -1211,6 +1253,7 @@ function moveTo(idx) {
   const rows = currentRows()
   if (!rows.length) return
   selIndex = Math.max(0, Math.min(rows.length - 1, idx))
+  selKey = rows[selIndex] ? rows[selIndex].dataset.navKey || null : null
   hoverEnabled = false
   paintSelection()
 }
