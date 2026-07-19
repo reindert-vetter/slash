@@ -1074,12 +1074,20 @@ func resolveCallWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("resolve haiku: %w", err)
 	}
 
-	// Escalate the calls Haiku did not confidently find to Sonnet (agentic).
+	// Escalate to Sonnet (agentic) only the calls Haiku did not find AND for
+	// which the Go index had at least one static candidate. A call with zero
+	// candidates is near-always a vendor/framework method (Eloquent/Blueprint/
+	// PHPUnit builtins, PHP language builtins) whose source simply isn't in
+	// the worktree — Sonnet's agentic Grep can't invent a definition that
+	// isn't there either, so escalating it only pays the ~4.5x Sonnet cost
+	// for a result that was already determined. Deterministic: HadCandidates
+	// is part of the recorded Haiku Activity result (history), not a live
+	// re-derivation, so replay makes the same escalation decision every time.
 	byKey := map[string]callresolve.Entry{}
 	var escalate []string
 	for _, e := range haiku {
 		byKey[e.CallKey] = e
-		if e.Status != callresolve.StatusFound {
+		if e.Status != callresolve.StatusFound && e.HadCandidates {
 			escalate = append(escalate, e.CallKey)
 		}
 	}

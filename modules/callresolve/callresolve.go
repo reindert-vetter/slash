@@ -99,6 +99,14 @@ type Entry struct {
 	Model       string `json:"model"`
 	Confidence  string `json:"confidence"`
 	UpdatedAt   string `json:"updatedAt"`
+	// HadCandidates records whether the Go static index had ANY candidate
+	// definition for this call at resolution time — not persisted to the DB
+	// (no column), it exists only to travel through the resolveWithModel
+	// Activity's JSON result so resolveCallWorkflow's escalation decision can
+	// read it deterministically from history on replay. See
+	// resolveCallsWithModel (resolve_call.go) and resolveCallWorkflow
+	// (workflows.go).
+	HadCandidates bool `json:"hadCandidates"`
 }
 
 // Module owns the call-resolution store.

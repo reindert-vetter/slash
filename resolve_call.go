@@ -54,14 +54,16 @@ func resolveCallsWithModel(ctx context.Context, cl claude.Client, dataDir string
 
 	out := make([]callresolve.Entry, 0, len(arg.Calls))
 	for _, call := range arg.Calls {
+		cands := idx.candidates(call)
 		entry := callresolve.Entry{
 			PR: arg.PR, CallerID: arg.CallerID, CallKey: call,
 			Status: callresolve.StatusNotfound, Model: shortModel,
+			HadCandidates: len(cands) > 0,
 		}
 
 		req := claude.RunRequest{
 			Model:        arg.Model,
-			Prompt:       resolvePrompt(arg, call, idx.candidates(call), callerSrc.Text, agentic),
+			Prompt:       resolvePrompt(arg, call, cands, callerSrc.Text, agentic),
 			SystemPrompt: claude.ResolveCallSystemPrompt,
 		}
 		if agentic {

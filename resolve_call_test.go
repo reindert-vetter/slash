@@ -80,6 +80,36 @@ func TestResolveCallEscalatesToSonnet(t *testing.T) {
 	}
 }
 
+// A call with zero static candidates (a vendor/framework method — nothing in
+// the fixture worktree defines "assertStatus") never escalates to Sonnet, even
+// though Haiku answers found=false: Sonnet's agentic search can't invent a
+// definition that isn't in the worktree either, so escalating would only pay
+// the Sonnet cost for a result that is already determined. Pairs with
+// TestResolveCallEscalatesToSonnet above, which pins the other side of the
+// HadCandidates gate: "fetch" has candidates (RepoA/RepoB both define it, so
+// it's ambiguous rather than unresolvable) and does still escalate.
+func TestResolveCallNoEscalationWithoutCandidates(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 25
+	writeCallFixtureRepo(t, dataDir, pr)
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelHaiku, `{"found":false,"confidence":"low"}`)
+	fake.SetOutput(claude.ModelSonnet, `{"found":true,"file":"app/Repos/RepoA.php","class":"RepoA","method":"fetch","confidence":"high"}`)
+	m, cr := resolveCallManager(t, dataDir, fake)
+
+	if _, err := m.StartResolveCall(callInput(pr, "assertStatus")); err != nil {
+		t.Fatal(err)
+	}
+
+	e := onlyEntry(t, cr, pr)
+	if e.Status != callresolve.StatusNotfound {
+		t.Fatalf("entry = %+v, want notfound (no escalation without candidates)", e)
+	}
+	if n := fake.CallCount(); n != 1 {
+		t.Fatalf("claude called %d times, want 1 (Haiku only, no Sonnet escalation)", n)
+	}
+}
+
 // Neither model finds it (offline/empty Fake output) → notfound.
 func TestResolveCallNotFound(t *testing.T) {
 	dataDir := t.TempDir()

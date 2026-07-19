@@ -771,6 +771,25 @@ fallback.
   `saveResolutions`. **Puur automatisch, géén signal.** Elke LLM-claim wordt
   tegen de worktree geverifieerd (`verifyDefinition` + path-containment) vóór hij
   `found` wordt.
+  **Escalatie is gegateerd op `HadCandidates`, niet op blote `Status !=
+  Found`:** `callresolve.Entry.HadCandidates` (niet gepersisteerd — geen
+  kolom, reist alleen mee in het JSON-resultaat van de `resolveWithModel`-
+  Activity zodat de escalatiebeslissing 'm deterministisch uit de history
+  leest bij replay) registreert of de Go-index bij resolutietijd **überhaupt
+  één statische kandidaat** had voor die call. Een call met **nul** kandidaten
+  is vrijwel altijd een vendor/framework-methode (Eloquent/Schema-
+  Blueprint/PHPUnit-builtins, PHP-taal-builtins als `::cases()`) waarvan de
+  bron domweg niet in de worktree zit — Sonnet's agentische Grep kan dan
+  evenmin iets vinden, dus escaleren betaalt alleen de ~4,5x Sonnet-kost voor
+  een uitkomst die al vaststaat. Een token-onderzoek van PR 12895 bevestigde
+  dit hard: van 146 escalaties naar Sonnet kwamen er 144 (~99%) ook bij
+  Sonnet als `notfound` terug, en 118 van de 151 Haiku-calls kwamen uit
+  `tests/*`/`database/migrations/*` — precies de bestandssoorten die vrijwel
+  uitsluitend framework-DSL aanroepen (`assertStatus`, `postJson`,
+  `dropColumn`, …). Alleen `Status != Found && HadCandidates` triggert nog een
+  Sonnet-call; `TestResolveCallNoEscalationWithoutCandidates`/
+  `TestResolveCallEscalatesToSonnet` (`resolve_call_test.go`) pinnen beide
+  kanten van die gate.
 - **Endpoints:** `POST /api/workflows/resolve_call` (start; body `{pr, callerId,
   callerFile, callerClass, callerName, calls}`) en read-only
   `GET /api/callresolve?pr=N`. De `buildRelations`-Activity schrijft de Go-rijen
