@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -80,14 +81,16 @@ func TestResolveCallEscalatesToSonnet(t *testing.T) {
 	}
 }
 
-// A call with zero static candidates (a vendor/framework method — nothing in
-// the fixture worktree defines "assertStatus") never escalates to Sonnet, even
-// though Haiku answers found=false: Sonnet's agentic search can't invent a
-// definition that isn't in the worktree either, so escalating would only pay
-// the Sonnet cost for a result that is already determined. Pairs with
-// TestResolveCallEscalatesToSonnet above, which pins the other side of the
-// HadCandidates gate: "fetch" has candidates (RepoA/RepoB both define it, so
-// it's ambiguous rather than unresolvable) and does still escalate.
+// A call with zero static candidates (nothing in the fixture worktree defines
+// "someUnknownHelper") never escalates to Sonnet, even though Haiku answers
+// found=false: Sonnet's agentic search can't invent a definition that isn't in
+// the worktree either, so escalating would only pay the Sonnet cost for a
+// result that is already determined. Deliberately not a denylisted name (see
+// TestResolveCallVendorBuiltinSkipsLLM below), so this isolates the
+// HadCandidates gate itself — Haiku is still called once, it just doesn't
+// escalate. Pairs with TestResolveCallEscalatesToSonnet above, which pins the
+// other side of the gate: "fetch" has candidates (RepoA/RepoB both define it,
+// so it's ambiguous rather than unresolvable) and does still escalate.
 func TestResolveCallNoEscalationWithoutCandidates(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 25
@@ -97,7 +100,7 @@ func TestResolveCallNoEscalationWithoutCandidates(t *testing.T) {
 	fake.SetOutput(claude.ModelSonnet, `{"found":true,"file":"app/Repos/RepoA.php","class":"RepoA","method":"fetch","confidence":"high"}`)
 	m, cr := resolveCallManager(t, dataDir, fake)
 
-	if _, err := m.StartResolveCall(callInput(pr, "assertStatus")); err != nil {
+	if _, err := m.StartResolveCall(callInput(pr, "someUnknownHelper")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,6 +110,72 @@ func TestResolveCallNoEscalationWithoutCandidates(t *testing.T) {
 	}
 	if n := fake.CallCount(); n != 1 {
 		t.Fatalf("claude called %d times, want 1 (Haiku only, no Sonnet escalation)", n)
+	}
+}
+
+// A denylisted vendor/framework builtin (assertStatus) with zero static
+// candidates never even reaches Haiku: the whole point of the denylist is to
+// skip the LLM call entirely for a name that can never resolve.
+func TestResolveCallVendorBuiltinSkipsLLM(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 27
+	writeCallFixtureRepo(t, dataDir, pr)
+	fake := claude.NewFake()
+	// Programmed outputs would make this call "resolve" if the LLM were
+	// invoked at all — proving the skip, not just an absence of output.
+	fake.SetOutput(claude.ModelHaiku, `{"found":true,"file":"app/Repos/RepoA.php","class":"RepoA","method":"fetch","confidence":"high"}`)
+	m, cr := resolveCallManager(t, dataDir, fake)
+
+	if _, err := m.StartResolveCall(callInput(pr, "assertStatus")); err != nil {
+		t.Fatal(err)
+	}
+
+	e := onlyEntry(t, cr, pr)
+	if e.Status != callresolve.StatusNotfound {
+		t.Fatalf("entry = %+v, want notfound (vendor builtin never resolves)", e)
+	}
+	if n := fake.CallCount(); n != 0 {
+		t.Fatalf("claude called %d times, want 0 (vendor builtin skips the LLM entirely)", n)
+	}
+}
+
+// The same denylisted name ("table") resolves normally once the app
+// worktree actually defines it — the denylist gate only ever fires on
+// len(candidates)==0, so it must never suppress a genuine app-defined match
+// that merely happens to share a name with a Schema Blueprint builtin.
+func TestResolveCallVendorBuiltinDoesNotSuppressRealCandidate(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 28
+	writeCallFixtureRepo(t, dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, pr)
+	// Add an app class that defines its own "table" method — same name as
+	// the denylisted Schema Blueprint builtin, but a real app candidate.
+	tableFile := filepath.Join(headDir, "app/Reports/ReportBuilder.php")
+	if err := os.MkdirAll(filepath.Dir(tableFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tableFile, []byte(`<?php
+namespace App\Reports;
+class ReportBuilder {
+    public function table() {}
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelHaiku, `{"found":true,"file":"app/Reports/ReportBuilder.php","class":"ReportBuilder","method":"table","confidence":"high"}`)
+	m, cr := resolveCallManager(t, dataDir, fake)
+
+	if _, err := m.StartResolveCall(callInput(pr, "table")); err != nil {
+		t.Fatal(err)
+	}
+
+	e := onlyEntry(t, cr, pr)
+	if e.Status != callresolve.StatusFound || e.Model != callresolve.ModelHaiku {
+		t.Fatalf("entry = %+v, want found by haiku (real app candidate must not be suppressed)", e)
+	}
+	if n := fake.CallCount(); n != 1 {
+		t.Fatalf("claude called %d times, want 1 (denylist must not skip a call with a real candidate)", n)
 	}
 }
 

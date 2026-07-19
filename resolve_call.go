@@ -28,6 +28,37 @@ type resolveArg struct {
 	Model       string   `json:"model"` // claude.ModelHaiku | claude.ModelSonnet
 }
 
+// vendorBuiltinNames is a small, curated denylist of extremely common
+// PHPUnit/Laravel/PHP built-in method names that are never defined in an
+// app's own worktree — their source lives in vendor/ (not committed) or is a
+// PHP language builtin. A token study of PR 12895 found that these names
+// (Laravel's HTTP-test DSL, the Schema migration Blueprint, native enum
+// ::cases()) accounted for the overwhelming majority of resolve_call's LLM
+// spend, none of which either Haiku or the agentic Sonnet pass could ever
+// resolve — there is nothing in the worktree for either model to find. This
+// denylist only ever applies when the Go index also found zero static
+// candidates (see resolveCallsWithModel below): it can therefore never
+// suppress a genuine app-defined match with the same name — if the app did
+// define e.g. its own "table" method somewhere, candidates() would be
+// non-empty and the call would follow the normal LLM path untouched.
+var vendorBuiltinNames = map[string]bool{
+	// PHPUnit/Laravel HTTP-test DSL.
+	"assertStatus": true, "postJson": true, "getJson": true, "putJson": true,
+	"patchJson": true, "deleteJson": true, "assertDatabaseHas": true,
+	// Schema migration Blueprint.
+	"nullable": true, "unique": true, "dropColumn": true, "dropIndex": true,
+	"softDeletes": true, "table": true,
+	// PHP language builtin (native enum method).
+	"cases": true,
+}
+
+// isVendorBuiltin reports whether call is a well-known vendor/framework/PHP
+// builtin method name that can never resolve to app code — either an exact
+// vendorBuiltinNames match, or any "assertJson*" PHPUnit assertion.
+func isVendorBuiltin(call string) bool {
+	return vendorBuiltinNames[call] || strings.HasPrefix(call, "assertJson")
+}
+
 // llmAnswer is the JSON shape we ask the model to emit.
 type llmAnswer struct {
 	Found      bool   `json:"found"`
@@ -59,6 +90,15 @@ func resolveCallsWithModel(ctx context.Context, cl claude.Client, dataDir string
 			PR: arg.PR, CallerID: arg.CallerID, CallKey: call,
 			Status: callresolve.StatusNotfound, Model: shortModel,
 			HadCandidates: len(cands) > 0,
+		}
+
+		// A known vendor/framework builtin with zero static candidates can
+		// never resolve — skip the model call entirely (saves the Haiku
+		// spend too, and never shows the "Zoeken…" affordance for something
+		// that will never find anything).
+		if len(cands) == 0 && isVendorBuiltin(call) {
+			out = append(out, entry)
+			continue
 		}
 
 		req := claude.RunRequest{

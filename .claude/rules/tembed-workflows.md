@@ -790,6 +790,19 @@ fallback.
   Sonnet-call; `TestResolveCallNoEscalationWithoutCandidates`/
   `TestResolveCallEscalatesToSonnet` (`resolve_call_test.go`) pinnen beide
   kanten van die gate.
+  **Een curated denylist (`vendorBuiltinNames`/`isVendorBuiltin`,
+  `resolve_call.go`) slaat zelfs de Haiku-call over** voor een handjevol
+  extreem veelvoorkomende vendor/framework-methodenamen (PHPUnit/Laravel
+  HTTP-test-DSL: `assertStatus`, `postJson`/`getJson`/`putJson`/`patchJson`/
+  `deleteJson`, `assertDatabaseHas`, elke `assertJson*`; Schema-Blueprint:
+  `nullable`, `unique`, `dropColumn`, `dropIndex`, `softDeletes`, `table`; PHP-
+  taal-builtin: `cases`) — maar **uitsluitend** wanneer de Go-index ook
+  `len(candidates)==0` had, dus nooit een echte, gelijknamige app-methode
+  onderdrukt (`TestResolveCallVendorBuiltinDoesNotSuppressRealCandidate`
+  bewijst dat expliciet met een app-class die zelf een `table()`-methode
+  definieert). Bespaart naast de Sonnet-kost ook de goedkopere Haiku-call, en
+  voorkomt de zinloze "Zoeken…"-chip voor code die per definitie nooit een
+  reviewbare app-definitie heeft (`TestResolveCallVendorBuiltinSkipsLLM`).
 - **Endpoints:** `POST /api/workflows/resolve_call` (start; body `{pr, callerId,
   callerFile, callerClass, callerName, calls}`) en read-only
   `GET /api/callresolve?pr=N`. De `buildRelations`-Activity schrijft de Go-rijen
