@@ -743,8 +743,10 @@ rechts — zie de layout-alinea hierboven):
   **Drill-hint-chips (streepje naar rechts, recursieve mini-boom die naar
   RECHTS groeit):** elk kind waarvan het blok **zélf** nog gewijzigde
   onderliggende code heeft, toont rechts van zijn kaart een kort
-  **gestippeld streepje** naar een smalle chip-kolom (`data-testid=
-  related-nested`, `w-36`): per gewijzigd (achter)kleinkind één chip
+  **gestippeld streepje** naar een chip-kolom (`data-testid=
+  related-nested`, `w-72` — verdubbeld van de oorspronkelijke `w-36` zodat
+  langere `class::method`-labels beter passen): per gewijzigd
+  (achter)kleinkind één chip
   (`data-testid=related-nested-chip`) met het **volledige `class::method`-
   label** — **wrapt, wordt nooit afgekapt** (`whitespace-normal break-words`,
   géén `truncate`; kale naam als er geen class is — de gedeelde `blockLabel`-
@@ -768,7 +770,7 @@ rechts — zie de layout-alinea hierboven):
   "+N meer"** (`data-testid=related-nested-more`, nooit met het toetsenbord
   bereikbaar — zie hieronder), cycle-safe via een gedeelde `seen`-set (het
   `nestedPrBlocks`-patroon). Omdat elke rij nu breder kan zijn dan zijn eigen
-  `w-36`-kolom (kaart-brede rij bevat kolom-per-diepte), scrollt de kaart z'n
+  `w-72`-kolom (kaart-brede rij bevat kolom-per-diepte), scrollt de kaart z'n
   bestaande `overflow-auto`-body ook **horizontaal** zodra dat nodig is — geen
   aparte CSS-wijziging, alleen een gevolg van de rechts-groeiende layout. De
   data komt uit `nestedChangedKids(prBlock, parentId, seen, depth)` in

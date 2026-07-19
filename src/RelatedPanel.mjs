@@ -1617,7 +1617,7 @@ function nestedChip(ancestors, k, drill, path, cardIdx) {
     <button
       type="button"
       class="${() =>
-        'w-36 shrink-0 rounded-md border bg-slate-50/60 dark:bg-zinc-800/40 px-1.5 py-1 text-left hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
+        'w-72 shrink-0 rounded-md border bg-slate-50/60 dark:bg-zinc-800/40 px-1.5 py-1 text-left hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
         (focused()
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-200 dark:border-zinc-800')}"
@@ -1669,7 +1669,7 @@ function nestedChipColumn(ancestors, kids, drill, path, cardIdx) {
   return html`
     <div class="flex shrink-0 items-start">
       <div class="mt-5 h-px w-3 shrink-0 border-t border-dashed border-slate-300 dark:border-zinc-700"></div>
-      <div class="flex w-36 shrink-0 flex-col gap-1" data-testid="related-nested">
+      <div class="flex w-72 shrink-0 flex-col gap-1" data-testid="related-nested">
         ${capped.map((k, idx) => nestedChip(ancestors, k, drill, [...path, idx], cardIdx).key('nested:' + keyPrefix + '>' + k.id))}
         ${() =>
           more > 0
