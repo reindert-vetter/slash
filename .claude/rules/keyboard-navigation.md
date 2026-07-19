@@ -26,7 +26,7 @@ keten van **stops**, van links naar rechts over de hele layout:
    rechtse stop van deze keten; er is geen `→`/`←`-stop erna.
 
 **Comments en Taken zijn geen stops meer in deze keten.** Ze vormen samen een
-losstaande, **`g`-getoggelde** vaste sidebar (`CommentsSidebar`, zie
+losstaande, **Cmd+→-getoggelde** vaste sidebar (`CommentsSidebar`, zie
 "Comments/taken-sidebar" in `.claude/rules/detail-layout.md`) die je vanuit
 **elke** positie in de app kunt openen/sluiten, ongeacht welke stop van de
 keten hierboven op dat moment de keyboard heeft. Binnen die sidebar lopen
@@ -87,7 +87,7 @@ vereiste t.o.v. het oudere per-mechanisme gedrag:
   `exitRelated()`. `→` vanuit `'code'` doet niets meer — dat sprong vroeger
   door naar de comments-kolom (`gotoRow(1)`), maar die is geen stop meer in
   deze keten (zie hierboven en "Comments/taken-sidebar" in
-  `.claude/rules/detail-layout.md`); comments/taken zijn alleen nog via `g`
+  `.claude/rules/detail-layout.md`); comments/taken zijn alleen nog via Cmd+→
   bereikbaar, vanaf elke stop.
 - `state.showDescription`/`cs.taskSel`/`cs.sidebarOpen` leven bewust **buiten**
   de URL (net als `menu`/`ui.task` elders) — efemere cursor-state, geen
@@ -484,7 +484,7 @@ laatste), **`↑`** het **vorige** blokje — vanaf het **eerste** blokje gaat
 blokje terug naar de diff (`exitRelated`). Deze kaart heeft geen `→` meer die
 'm verlaat — dat sprong vroeger naar de comments-kolom, maar comments/taken
 zitten niet meer in deze keten (zie hierboven en "Comments/taken-sidebar" in
-`.claude/rules/detail-layout.md`); die zijn alleen nog via `g` bereikbaar.
+`.claude/rules/detail-layout.md`); die zijn alleen nog via Cmd+→ bereikbaar.
 Deze paneel-cursor
 (`cs.focus`/`codeSel`/`sel`/`threadPos`) leeft in de **URL** onder de eigen
 `rel`-namespace (`rel.foc`/`rel.code`/`rel.csel`/`rel.thr`, via

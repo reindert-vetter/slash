@@ -73,7 +73,7 @@ test.describe('PR-wide comment block (C2)', () => {
     // The anchored (block-scoped) comment shows in the block-scoped sidebar
     // instead — never here.
     await page.keyboard.press('ArrowRight') // close the description
-    await page.keyboard.press('g') // open the comments/taken sidebar
+    await page.keyboard.press('Meta+ArrowRight') // open the comments/taken sidebar
     const sidebar = page.getByTestId('comments-sidebar')
     await expect(sidebar).toBeVisible()
     await expect(sidebar.getByTestId('comment-item')).toHaveCount(1)

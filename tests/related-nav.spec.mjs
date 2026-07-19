@@ -3,8 +3,8 @@ import { test, expect } from './_fixtures.mjs'
 // Keyboard navigation into the inline Onderliggende-code card and the fixed
 // comments/taken sidebar. From the diff, → selects the related-code block
 // (stop 5 of the left→right nav chain, unaffected by the sidebar). The
-// comments/taken sidebar is a separate, `g`-toggled overlay (see
-// detail-layout.md): `g` opens it on the composer; ↓/↑ cross between the
+// comments/taken sidebar is a separate, Cmd+ArrowRight-toggled overlay (see
+// detail-layout.md): Cmd+ArrowRight opens it on the composer; ↓/↑ cross between the
 // comments list and the taken list (stacked vertically); → on a comment opens
 // its thread with the reply field focused; ↑ walks up through the old
 // messages; ← from *anywhere* in the sidebar exits straight back to the diff
@@ -26,31 +26,31 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     await page.keyboard.press('ArrowRight') // diff → related-code
   }
 
-  test('g opens the comments sidebar on the "+ Comment op deze regel" row without auto-focusing the composer; Enter opens it; g still toggles the sidebar shut straight away', async ({
+  test('Cmd+ArrowRight opens the comments sidebar on the "+ Comment op deze regel" row without auto-focusing the composer; Enter opens it; Cmd+ArrowRight still toggles the sidebar shut straight away', async ({
     page,
   }) => {
     await stepIntoRelated(page)
 
-    // `g` opens the comments/taken sidebar and highlights the "+ Comment op
+    // Cmd+ArrowRight opens the comments/taken sidebar and highlights the "+ Comment op
     // deze regel" row — a deterministic anchor, regardless of where the
     // keyboard was (the diff, or this related-code card) — but does NOT drop
-    // keyboard focus into the composer, so a second `g` can close the sidebar
+    // keyboard focus into the composer, so a second Cmd+ArrowRight can close the sidebar
     // right away instead of typing a literal "g" into an already-focused field.
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     const sidebar = page.getByTestId('comments-sidebar')
     await expect(sidebar).toBeVisible()
     await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
     await expect(page.getByTestId('comment-compose')).toHaveCount(0)
 
-    // `g` again immediately toggles the sidebar shut — nothing ever stole the
+    // Cmd+ArrowRight again immediately toggles the sidebar shut — nothing ever stole the
     // keyboard focus, so the keypress reaches toggleSidebar unhindered.
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     await expect(sidebar).toHaveCount(0)
     await expect(page.getByTestId('sidebar-collapsed')).toBeVisible()
 
     // Re-open, then Enter on the highlighted row opens the composer and
     // focuses it.
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('comment-compose')).toBeFocused()
 
@@ -59,14 +59,14 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     await expect(page.getByTestId('new-comment')).not.toHaveClass(/ring-indigo-300/)
     await expect(sidebar).toBeVisible()
 
-    // `g` again — the sidebar is open but the keyboard sits elsewhere (the
+    // Cmd+ArrowRight again — the sidebar is open but the keyboard sits elsewhere (the
     // diff) — re-highlights the row without auto-focusing the composer.
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
     await expect(page.getByTestId('comment-compose')).toHaveCount(0)
 
-    // `g` once more closes it straight away.
-    await page.keyboard.press('g')
+    // Cmd+ArrowRight once more closes it straight away.
+    await page.keyboard.press('Meta+ArrowRight')
     await expect(sidebar).toHaveCount(0)
     await expect(page.getByTestId('sidebar-collapsed')).toBeVisible()
   })
@@ -113,7 +113,7 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     // not yet focused into the composer); ↓ steps down into the comment index
     // (the seeded comment). Landing on the comment shows its history and
     // focuses the reply field, so the reviewer can type a reply straight away.
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('comment-item').first()).toHaveClass(/bg-indigo-50/)
     await expect(page.getByTestId('reaction-compose')).toBeFocused()

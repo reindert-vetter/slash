@@ -1,18 +1,18 @@
 import { test, expect } from './_fixtures.mjs'
 
-// The comments/taken sidebar is a fixed overlay toggled with `g` (see
+// The comments/taken sidebar is a fixed overlay toggled with Cmd+ArrowRight (see
 // detail-layout.md), collapsed by default — open it before touching anything
 // inside it, but only if it isn't already open (a 2nd place() in the same
 // test would otherwise toggle it shut instead of leaving it be).
 async function ensureSidebarOpen(page) {
   if ((await page.getByTestId('comments-sidebar').count()) === 0) {
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
   }
 }
 
 async function place(page, body) {
   await ensureSidebarOpen(page)
-  // `g` (inside ensureSidebarOpen, on a fresh open) already lands on the
+  // Cmd+ArrowRight (inside ensureSidebarOpen, on a fresh open) already lands on the
   // empty, focused composer — only click new-comment if it isn't open yet
   // (e.g. a previous place() in the same test closed it again after sending).
   if ((await page.getByTestId('comment-compose').count()) === 0) {

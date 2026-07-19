@@ -53,7 +53,7 @@ async function drillIntoAddress(page) {
 
 async function ensureSidebarOpen(page) {
   if ((await page.getByTestId('comments-sidebar').count()) === 0) {
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
   }
 }
 

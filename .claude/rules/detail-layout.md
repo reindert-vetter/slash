@@ -151,7 +151,7 @@ ongewijzigd inline in `<main>`'s horizontaal scrollende kolom-flow (zie
 "Onderliggende code" verderop). Comments en Taken zitten **niet** meer in deze
 kolom-flow — zie de sectie "Comments/taken-sidebar" hieronder.
 
-## Comments/taken-sidebar (vast, getoggeld met `g`)
+## Comments/taken-sidebar (vast, getoggeld met Cmd+→)
 
 Comments en Taken vormen samen een **eigen `position:fixed` paneel aan de
 rechterkant van het scherm** (`RelatedPanel.mjs`'s `CommentsSidebar`-export,
@@ -170,7 +170,8 @@ als eigen top-level component naast `PrInfoPanel`/`BlockList`/`DetailPanel` in
 verticaal gestapeld, comments krijgt de meeste ruimte en scrollt intern zodra
 hij groeit, taken houdt een kleinere, eigen-scrollende hoogte eronder.
 
-**Getoggeld met `g`** (`toggleSidebar`, geëxporteerd uit `RelatedPanel.mjs`,
+**Getoggeld met Cmd+→** (`e.metaKey && e.key === 'ArrowRight'`, `toggleSidebar`,
+geëxporteerd uit `RelatedPanel.mjs`,
 aangeroepen vanuit `home.mjs`'s `onKeydown` — globaal, in zowel `'list'`- als
 `'diff'`-mode, ongeacht of de diff, de Onderliggende-code-kaart of de sidebar
 zelf op dat moment de keyboard heeft): dicht → open + **herstel de laatste
@@ -183,9 +184,9 @@ keyboard zit al in de sidebar (composer/comment-rij/thread/taak) → sluiten,
 keyboard terug naar de diff. **`enterComments` opent bewust nog niet de
 composer/focust nog geen textarea** (anders dan `toNew`, dat
 `startComment`/arrow-navigatie naar rij 0/de restore-flow nog wél gebruiken) —
-alleen highlighten, zodat een **tweede `g`** de sidebar meteen weer
-dichtklapt i.p.v. dat de toets als een letterlijke "g" in het al-gefocuste
-tekstveld belandt (de `isEditableFocused`-guard zou 'm anders opeten). Pas
+alleen highlighten, zodat een **tweede Cmd+→** de sidebar meteen weer
+dichtklapt i.p.v. dat de toets in het al-gefocuste tekstveld belandt (de
+`isEditableFocused`-guard zou 'm anders opeten). Pas
 **`Enter`** op die gehighlighte rij (`isNewFocused()` + `openComposer()` in
 `home.mjs`, mirror van de `isCommentFocused`/`isCodeFocused`/
 `isTaskFocused`-Enter-branches) opent de composer echt en focust de textarea.
@@ -193,20 +194,20 @@ Zichtbaarheid leeft in een eigen, **efemere** vlag `cs.sidebarOpen` (niet in de
 URL — net als `state.showDescription` — een refresh start altijd
 dichtgeklapt), losgekoppeld van `cs.focus`: de sidebar kan open blijven staan
 terwijl de diff de keyboard heeft (na `←`, zie hieronder). Een klik op de
-collapsed hint-rail (zie hieronder) volgt dezelfde open+focus-logica als `g`
-(`openSidebar`).
+collapsed hint-rail (zie hieronder) volgt dezelfde open+focus-logica als
+Cmd+→ (`openSidebar`).
 
-**`g`-uit → `g`-terug herstelt binnen dezelfde sessie de laatste
+**Cmd+→-uit → Cmd+→-terug herstelt binnen dezelfde sessie de laatste
 comment-/thread-rij** (niet enkel "open op rij 0"). Elke keer dat de sidebar de
 keyboard verlaat via `exitRelated` (`←` vanuit de sidebar, of de sluitende
-`g`-tak hierboven) en `cs.focus` op dat moment `'new'`/`'comment'`/`'thread'`
+Cmd+→-tak hierboven) en `cs.focus` op dat moment `'new'`/`'comment'`/`'thread'`
 was, snapshot't `exitRelated` dat in de module-`let` `lastSidebarFocus`
 (`{focus, sel, threadPos}` — bewust **niet** `'code'` of `'task'`, en bewust
 **niet** op `cs`/in de URL: dit is een puur binnen-sessie geheugen, geen
 navigatiepositie-restore — die bestaat al apart voor `cs.focus`/`sel`/
 `threadPos` via de `rel`-URL-namespace, en `cs.sidebarOpen` zelf blijft
 gewoon buiten de URL, dus een refresh start nog altijd dichtgeklapt). Een
-volgende `openSidebar` (`g`, of een klik op de hint-rail) roept
+volgende `openSidebar` (Cmd+→, of een klik op de hint-rail) roept
 `restoreLastSidebarFocus` aan: was de laatste plek een comment-rij of een
 thread, dan landt de keyboard daar weer (rij-index geklemd op de actueel
 zichtbare comment-lijst, `threadPos` geklemd op de thread-lengte — mirror van
@@ -219,12 +220,12 @@ bewust nooit het reply-/reactie-tekstveld** (`toComment(false)`/
 `focusThread(false)` — de `focusInput`-parameter, default `true` voor elke
 andere aanroeper zoals een klik of een pijltjestoets-stap): alleen de rij/
 thread opnieuw highlighten, exact dezelfde "highlight-only"-filosofie als
-`enterComments()` zelf. Zonder dit landde een `g`-heropening — als de
+`enterComments()` zelf. Zonder dit landde een Cmd+→-heropening — als de
 reviewer de sidebar eerder vanuit een comment-rij of thread verliet — recht
-in een gefocust tekstveld, waarna een **tweede `g`** (bedoeld om de sidebar
-weer dicht te klappen) als een letterlijke "g" in dat veld belandde i.p.v. de
-sidebar te sluiten (de globale `g`-handler in `home.mjs` negeert `g` expliciet
-zolang `isEditableFocused()` waar is). Mirrort het `preTaskFocus`-patroon.
+in een gefocust tekstveld, waarna een **tweede Cmd+→** (bedoeld om de sidebar
+weer dicht te klappen) in dat veld belandde i.p.v. de sidebar te sluiten (de
+globale Cmd+→-handler in `home.mjs` negeert de toets expliciet zolang
+`isEditableFocused()` waar is). Mirrort het `preTaskFocus`-patroon.
 Test: `tests/sidebar-focus-restore.spec.mjs`.
 
 **Dichtgeklapt** (`!cs.sidebarOpen`) rendert de sidebar als een smalle
@@ -351,7 +352,7 @@ overeen); de gefocuste rij krijgt een indigo ring (`data-active=true` op
 vandaan kwam (`preTaskFocus` in `RelatedPanel.mjs`: de composer, een
 comment-rij, of dezelfde thread) — terug naar de **composer** highlight't dat
 alleen de "+ Comment op deze regel"-rij (`enterComments`, net als een vers
-`g`-open), zonder 'm meteen te openen/focussen; pas een expliciete `Enter`
+Cmd+→-open), zonder 'm meteen te openen/focussen; pas een expliciete `Enter`
 (`isNewFocused`+`openComposer`, `home.mjs`) opent 'm. Terug naar een
 **comment-rij**/**thread** focust nog steeds meteen het reply-veld, zoals de
 gewone rij-navigatie binnen comments dat altijd al doet. `←` sluit de
@@ -690,7 +691,7 @@ rechts — zie de layout-alinea hierboven):
   de diff), `←` stapt vanaf elk blokje terug naar de diff (zie
   `.claude/rules/keyboard-navigation.md`). Deze lijst is volledig **losstaand**
   van de comments/taken-sidebar (zie hierboven) — er is geen `→`/`↓` meer die
-  hiervandaan naar comments/taken springt; dat gaat alleen nog via `g`. Het
+  hiervandaan naar comments/taken springt; dat gaat alleen nog via Cmd+→. Het
   geselecteerde blokje krijgt een indigo ring (`data-active=true`). Alle
   blokjes staan **verticaal onder elkaar** op volle breedte (geen
   pijltjes-hint meer — die is verwijderd); de kaart klapt niet meer in om

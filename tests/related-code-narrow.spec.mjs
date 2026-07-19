@@ -27,10 +27,10 @@ test.describe('PR Review Tree — Onderliggende code collapses on a laptop viewp
     await expect(page.getByTestId('related-code')).toBeVisible()
     await expect(page.getByTestId('related-collapsed')).toHaveCount(0)
 
-    // `g` opens the sidebar and moves the keyboard off the related-code card
+    // Cmd+ArrowRight opens the sidebar and moves the keyboard off the related-code card
     // (onto the sidebar's "+ Comment op deze regel" row) — cs.focus is no
     // longer 'code', so on this narrow viewport the card now collapses.
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     await expect(page.getByTestId('comments-sidebar')).toBeVisible()
     await expect(page.getByTestId('related-collapsed')).toBeVisible()
     await expect(page.getByTestId('related-code')).toHaveCount(0)
@@ -59,7 +59,7 @@ test.describe('PR Review Tree — Onderliggende code collapses on a laptop viewp
 
     // Sidebar closed so far — open it (moves the keyboard onto the sidebar,
     // collapsing the card, per test 1 above).
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     await expect(page.getByTestId('comments-sidebar')).toBeVisible()
     await expect(page.getByTestId('related-collapsed')).toBeVisible()
 
@@ -87,7 +87,7 @@ test.describe('PR Review Tree — Onderliggende code collapses on a laptop viewp
     await page.setViewportSize({ width: 1920, height: 1080 }) // ≥ 1536 (2xl)
     await stepIntoRelated(page)
 
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     await expect(page.getByTestId('comments-sidebar')).toBeVisible()
     await expect(page.getByTestId('related-code')).toBeVisible()
     await expect(page.getByTestId('related-collapsed')).toHaveCount(0)

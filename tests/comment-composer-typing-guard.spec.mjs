@@ -7,10 +7,10 @@ import { test, expect } from './_fixtures.mjs'
 // input-focus-guard" section in .claude/rules/keyboard-navigation.md.
 //
 // This test deliberately reproduces the exact state the bug needs: open the
-// comments sidebar (`g`, cs.focus becomes 'new'), then step back out to the diff
+// comments sidebar (Cmd+ArrowRight, cs.focus becomes 'new'), then step back out to the diff
 // with ← (cs.focus drops to null again while the sidebar stays open, mirroring
 // nav-chain.spec.mjs) — and only THEN click the "+ Comment op deze regel" button
-// directly (not via `g`/Enter). Before the fix this button flipped
+// directly (not via Cmd+ArrowRight/Enter). Before the fix this button flipped
 // cs.composing directly without touching cs.focus, so relatedActive() stayed
 // false and every global shortcut kept firing while the textarea had focus.
 test.describe('PR Review Tree — composer typing guard', () => {
@@ -30,7 +30,7 @@ test.describe('PR Review Tree — composer typing guard', () => {
 
     // Reach the exact repro state: open the sidebar, then step back out to the
     // diff so cs.focus drops to null again while the sidebar stays open.
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     const sidebar = page.getByTestId('comments-sidebar')
     await expect(sidebar).toBeVisible()
     await page.keyboard.press('ArrowLeft')
@@ -38,7 +38,7 @@ test.describe('PR Review Tree — composer typing guard', () => {
     await expect(sidebar).toBeVisible() // the sidebar itself stays open
     const granBeforeOpen = granOf()
 
-    // Click the button directly — not via `g`/Enter — to exercise the fixed
+    // Click the button directly — not via Cmd+ArrowRight/Enter — to exercise the fixed
     // click handler (openComposer() instead of a bare cs.composing toggle).
     const composer = page.getByTestId('comment-compose')
     await page.getByTestId('new-comment').click()

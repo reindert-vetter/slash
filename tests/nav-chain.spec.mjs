@@ -3,7 +3,7 @@ import { test, expect } from './_fixtures.mjs'
 // The left→right navigation chain (see keyboard-navigation.md, "De links→rechts
 // navigatieketen"): PR-description → block-index → diff → onderliggende code.
 // → advances one stop, ← steps one stop back. Comments/taken are no longer a
-// stop in this chain — they live in a separate, `g`-toggled fixed sidebar (see
+// stop in this chain — they live in a separate, Cmd+ArrowRight-toggled fixed sidebar (see
 // detail-layout.md): ↓/↑ cross between comments and taken, and ← from
 // anywhere inside the sidebar exits straight back to the diff in one step
 // (the sidebar stays open). This exercises the description toggle (stop 1)
@@ -92,7 +92,7 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await expect(page.getByTestId('inbox')).toBeVisible()
   })
 
-  test('g opens the comments sidebar; ← exits straight to the diff (sidebar stays open); ↓ with nothing deeper reaches Taken; Enter opens the task', async ({
+  test('Cmd+ArrowRight opens the comments sidebar; ← exits straight to the diff (sidebar stays open); ↓ with nothing deeper reaches Taken; Enter opens the task', async ({
     page,
     request,
   }) => {
@@ -145,14 +145,14 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await page.keyboard.press('ArrowRight') // diff → related panel (code)
     await expect.poll(relFoc).toBe('code')
 
-    // `g` opens the comments/taken sidebar (independent of the code stop —
+    // Cmd+ArrowRight opens the comments/taken sidebar (independent of the code stop —
     // it's a separate, fixed overlay, not the next stop in the chain) and
     // highlights the "+ Comment op deze regel" row — but does NOT auto-focus
-    // the composer (see enterComments in RelatedPanel.mjs: a fresh `g`-open
-    // only highlights the row, so a 2nd `g` can toggle the sidebar shut right
+    // the composer (see enterComments in RelatedPanel.mjs: a fresh Cmd+ArrowRight-open
+    // only highlights the row, so a 2nd Cmd+ArrowRight can toggle the sidebar shut right
     // away instead of typing a literal "g" into an already-focused textarea).
     const sidebar = page.getByTestId('comments-sidebar')
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     await expect(sidebar).toBeVisible()
     await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
     await expect(page.getByTestId('comment-compose')).toHaveCount(0)
@@ -170,11 +170,11 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await expect(sidebar).toBeVisible()
     await expect(page.getByTestId('new-comment')).not.toHaveClass(/ring-indigo-300/)
 
-    // `g` again — the sidebar is open but the keyboard sits on the diff —
+    // Cmd+ArrowRight again — the sidebar is open but the keyboard sits on the diff —
     // re-highlights the row without auto-focusing the composer. Nothing
     // deeper to go from there — ↓ advances straight to Taken. Exactly one row
     // should carry the keyboard highlight.
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
     await expect(page.getByTestId('comment-compose')).toHaveCount(0)
     await page.keyboard.press('ArrowDown')
@@ -182,7 +182,7 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await expect(active).toHaveCount(1)
 
     // ↑ from the first Taken row climbs back to the composer substop — but,
-    // like the `g`-open above, only highlights the "+ Comment op deze regel"
+    // like the Cmd+ArrowRight-open above, only highlights the "+ Comment op deze regel"
     // row. It must NOT auto-open/focus the composer (see enterComments in
     // RelatedPanel.mjs's handleRelatedKey ArrowUp branch).
     await page.keyboard.press('ArrowUp')

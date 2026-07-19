@@ -19,10 +19,10 @@ test('Enter on a filled composer defaults to "Plaats comment" (public) and refre
   await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
   await page.keyboard.press('ArrowRight') // list -> diff
 
-  // `g` opens the sidebar and highlights "+ Comment op deze regel" (no
+  // Cmd+ArrowRight opens the sidebar and highlights "+ Comment op deze regel" (no
   // auto-focus, see enterComments in RelatedPanel.mjs); Enter opens+focuses
   // the composer.
-  await page.keyboard.press('g')
+  await page.keyboard.press('Meta+ArrowRight')
   await expect(page.getByTestId('comments-sidebar')).toBeVisible()
   await page.keyboard.press('Enter')
   const composer = page.getByTestId('comment-compose')

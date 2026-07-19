@@ -23,10 +23,10 @@ test('delayed code load + seeded comments: arrow orphan + list update', async ({
     await page.keyboard.press('ArrowRight')
     await page.waitForTimeout(1200) // code arrives late -> re-render
     // now place a comment live — the comments/taken sidebar is a fixed
-    // overlay toggled with `g` (see detail-layout.md), collapsed by default.
-    // `g` highlights the "+ Comment op deze regel" row; Enter then opens/
-    // focuses the composer (a fresh `g`-open no longer auto-focuses it).
-    await page.keyboard.press('g').catch(() => {})
+    // overlay toggled with Cmd+ArrowRight (see detail-layout.md), collapsed by default.
+    // Cmd+ArrowRight highlights the "+ Comment op deze regel" row; Enter then opens/
+    // focuses the composer (a fresh Cmd+ArrowRight-open no longer auto-focuses it).
+    await page.keyboard.press('Meta+ArrowRight').catch(() => {})
     await page.keyboard.press('Enter').catch(() => {})
     const body = 'late ' + i
     await page.getByTestId('comment-compose').fill(body).catch(() => {})

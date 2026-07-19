@@ -3881,15 +3881,18 @@ function onKeydown(e) {
     return
   }
 
-  // `g` toggles the comments/taken sidebar (CommentsSidebar, see
+  // Cmd+ArrowRight toggles the comments/taken sidebar (CommentsSidebar, see
   // detail-layout.md) — globally, in both list and diff mode, and regardless
   // of whether the diff, the inline Onderliggende-code card, or the sidebar
   // itself currently owns the keyboard (toggleSidebar branches on that).
   // Handled before the relatedActive() branch below (which would otherwise eat
   // any key that isn't an arrow/Enter while the sidebar owns the keyboard) so
-  // it also closes the sidebar from inside it. Same isEditableFocused guard as
-  // `a`: a literal "g" typed in the composer/reply field must not toggle.
-  if (e.key === 'g' && !isEditableFocused()) {
+  // it also closes the sidebar from inside it, and before the plain ArrowRight
+  // handling further down so a bare → is untouched (metaKey distinguishes the
+  // two). Same isEditableFocused guard as `a`: typing in the composer/reply
+  // field must not toggle it, and preventDefault suppresses the browser/OS
+  // default (history-forward / cursor-to-end) for Cmd+→.
+  if (e.metaKey && e.key === 'ArrowRight' && !isEditableFocused()) {
     e.preventDefault()
     toggleSidebar()
     return

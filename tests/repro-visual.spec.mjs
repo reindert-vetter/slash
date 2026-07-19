@@ -1,14 +1,14 @@
 import { test, expect } from './_fixtures.mjs'
 
-// The comments/taken sidebar is a fixed overlay toggled with `g` (see
+// The comments/taken sidebar is a fixed overlay toggled with Cmd+ArrowRight (see
 // detail-layout.md), collapsed by default — open it before touching anything
 // inside it.
 async function placeVia(page, body) {
-  // `g` opens the sidebar, highlighting the "+ Comment op deze regel" row
+  // Cmd+ArrowRight opens the sidebar, highlighting the "+ Comment op deze regel" row
   // (enterComments); Enter then opens the composer and focuses it
-  // (openComposer) — a fresh `g`-open no longer auto-focuses the composer, so
-  // a 2nd `g` can toggle the sidebar shut instead of typing into it.
-  await page.keyboard.press('g')
+  // (openComposer) — a fresh Cmd+ArrowRight-open no longer auto-focuses the composer, so
+  // a 2nd Cmd+ArrowRight can toggle the sidebar shut instead of typing into it.
+  await page.keyboard.press('Meta+ArrowRight')
   await page.keyboard.press('Enter')
   await page.getByTestId('comment-compose').fill(body)
   await page.getByTestId('comment-send').click()

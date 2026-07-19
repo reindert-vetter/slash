@@ -3,7 +3,7 @@ import { test, expect } from './_fixtures.mjs'
 // The "Taken" (workflow runs) column's per-row description + timestamp
 // (workflowNote/relTime in RelatedPanel.mjs). Taken now lives in the fixed
 // comments/taken sidebar (RelatedPanel's CommentsSidebar export, toggled with
-// `g` — see detail-layout.md), not the default export. Like
+// Cmd+ArrowRight — see detail-layout.md), not the default export. Like
 // blockstats.spec.mjs, we mount CommentsSidebar directly with synthetic state
 // on a live page (needed for the Tailwind/Prism CSS from index.html) rather
 // than driving a real build_relations Execution end-to-end: build_relations
@@ -89,7 +89,7 @@ test.describe('PR Review Tree — Taken panel: waiting note + relative update ti
 
     await page.goto('/pr/12903')
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
-    await page.keyboard.press('g') // open the comments/taken sidebar (collapsed by default)
+    await page.keyboard.press('Meta+ArrowRight') // open the comments/taken sidebar (collapsed by default)
     const row = page.locator(`[data-testid=workflow-row][data-run-id="${runId}"]`)
     await expect(row).toBeVisible()
     await expect(row.getByTestId('workflow-updated')).toHaveText(/net nu|\d+ min geleden/)

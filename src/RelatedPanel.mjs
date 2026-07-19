@@ -69,7 +69,7 @@ const cs = reactive({
   taskSel: 0,
   // sidebarOpen — whether the comments/taken sidebar (see CommentsSidebar
   // below) is expanded (comments-on-top-of-taken, w-[36rem]) or collapsed to a
-  // narrow hint rail on the right edge. Toggled with `g` (home.mjs' onKeydown).
+  // narrow hint rail on the right edge. Toggled with Cmd+→ (home.mjs' onKeydown).
   // Deliberately NOT bound to the URL — ephemeral UI state, like
   // showDescription/`menu` elsewhere: a refresh always starts collapsed.
   // Distinct from cs.focus on purpose: the sidebar can stay open while the
@@ -245,7 +245,7 @@ export function relatedActive() {
 }
 
 // sidebarOpen reports whether the comments/taken sidebar (CommentsSidebar,
-// toggled with `g`) is expanded or collapsed to its hint rail. home.mjs reads
+// toggled with Cmd+→) is expanded or collapsed to its hint rail. home.mjs reads
 // this to keep <main>'s right-hand margin clear of whichever one is showing
 // (see the DetailPanel comment in home.mjs and detail-layout.md).
 export function sidebarOpen() {
@@ -404,8 +404,8 @@ export function enterRelated() {
 
 // lastSidebarFocus remembers the comments-sidebar substop (only 'new'/
 // 'comment'/'thread' — never 'code' or 'task') the keyboard sat on the last
-// time it left the sidebar this session (← or a closing `g`, both go through
-// exitRelated below), so a later `g`-reopen (openSidebar) can land back there
+// time it left the sidebar this session (← or a closing Cmd+ArrowRight, both go through
+// exitRelated below), so a later Cmd+ArrowRight-reopen (openSidebar) can land back there
 // instead of always resetting to the composer row. Deliberately a plain
 // module `let`, not on `cs`/the URL: this is a within-session memory only —
 // the reviewer asked for "g out, g back → same spot", not a refresh-restore
@@ -454,19 +454,19 @@ function toNew() {
 // enterComments hands the keyboard to the comments/taken sidebar, always
 // landing on the "+ Comment op deze regel" row (row 0) — a deterministic
 // anchor, mirroring enterRelated always landing on the first child /
-// toTask defaulting to row 0. Called by toggleSidebar (`g`, home.mjs) and by
+// toTask defaulting to row 0. Called by toggleSidebar (Cmd+→, home.mjs) and by
 // a click on the collapsed hint rail — both "open the sidebar and highlight
 // comments" paths. Deliberately does NOT open the composer / focus its
-// textarea (unlike toNew): a fresh `g`-open must leave the keyboard free so a
-// 2nd `g` can toggle the sidebar shut right away instead of typing a literal
-// "g" into an already-focused field (isEditableFocused would swallow it).
+// textarea (unlike toNew): a fresh Cmd+→-open must leave the keyboard free so a
+// 2nd Cmd+→ can toggle the sidebar shut right away instead of typing into an
+// already-focused field (isEditableFocused would swallow it).
 // Enter (home.mjs, via openComposer) is what actually opens the composer.
 function enterComments() {
   cs.composing = false
   cs.focus = 'new'
 }
 
-// toggleSidebar drives `g` (home.mjs' onKeydown), globally (list or diff mode):
+// toggleSidebar drives Cmd+→ (home.mjs' onKeydown), globally (list or diff mode):
 // closed → open + focus comments; open but the keyboard sits elsewhere (diff,
 // or the inline Onderliggende-code card) → focus comments, stays open; open
 // and already focused inside it (composer/comment/thread/task) → close and
@@ -542,10 +542,10 @@ export function taskRuns(state) {
 // `focusInput` defaults to true for every existing caller (a click or an
 // explicit arrow-key step onto a comment row) — landing already opens the
 // reply pane and drops the caret in it, per this file's own long-standing
-// convention. `restoreLastSidebarFocus` (a `g`-reopen restoring where the
+// convention. `restoreLastSidebarFocus` (a Cmd+ArrowRight-reopen restoring where the
 // reviewer left off) is the one exception: passing `false` there re-selects
 // the row/scrolls it into view WITHOUT stealing the keyboard into the reply
-// textarea — mirroring how a fresh `g`-open (enterComments) only highlights
+// textarea — mirroring how a fresh Cmd+ArrowRight-open (enterComments) only highlights
 // the "+ Comment op deze regel" row rather than opening it.
 function toComment(focusInput = true) {
   cs.composing = false
@@ -625,7 +625,7 @@ function scrollReactionIntoView() {
 // (threadPos 0, ready to type) or, once the reviewer walks up into the history,
 // blurs it and scrolls the selected older message into view. `focusInput`
 // (default true, see toComment's own comment on the same pattern) is only
-// passed false by restoreLastSidebarFocus — a `g`-reopen restoring a
+// passed false by restoreLastSidebarFocus — a Cmd+ArrowRight-reopen restoring a
 // remembered thread position should re-highlight it, not immediately drop
 // the keyboard into the reply field.
 function focusThread(focusInput = true) {
@@ -724,7 +724,7 @@ function gotoRow(n) {
 //  - the inline Onderliggende-code card ('code', reached by → from the diff,
 //    see enterRelated) — unchanged: ↓/↑ walk its children, ← exits to the diff.
 //  - the comments/taken sidebar ('new'/'comment'/'thread'/'task', reached by
-//    `g` — see toggleSidebar) — comments is a flat row walk (gotoRow), thread
+//    Cmd+→ — see toggleSidebar) — comments is a flat row walk (gotoRow), thread
 //    is the one region where ↑/↓ mean something else (walk the message
 //    history), and task is its own row walk. ↓/↑ cross between the comments
 //    list and the taken list (the sidebar stacks them vertically, comments on
@@ -758,9 +758,9 @@ export function handleRelatedKey(key, taskCount = 0) {
           toComment()
         } else {
           // preTaskFocus is 'new' — climb back to the composer substop the
-          // same way a fresh `g`-open lands on it (enterComments): highlight
+          // same way a fresh Cmd+ArrowRight-open lands on it (enterComments): highlight
           // the "+ Comment op deze regel" row only, don't auto-open/focus the
-          // composer. Mirrors the `g` rationale (don't hijack the keyboard
+          // composer. Mirrors the Cmd+ArrowRight rationale (don't hijack the keyboard
           // into a textarea the reviewer didn't explicitly ask to type into) —
           // an explicit Enter (isNewFocused + openComposer, home.mjs) opens it.
           enterComments()
@@ -909,7 +909,7 @@ export function composeHasText() {
 
 // isNewFocused reports whether the "+ Comment op deze regel" row currently
 // owns the keyboard (highlighted, but — since enterComments no longer
-// auto-opens the composer on a fresh `g` — not necessarily composing yet).
+// auto-opens the composer on a fresh Cmd+ArrowRight — not necessarily composing yet).
 // home.mjs's Enter handler uses this to know when Enter should open the
 // composer (see openComposer below).
 export function isNewFocused() {
@@ -919,7 +919,7 @@ export function isNewFocused() {
 // openComposer actually opens the composer (composing=true) and focuses its
 // textarea — the same landing toNew() has always done. Exported so home.mjs's
 // Enter handler can trigger it once the reviewer has highlighted the "+
-// Comment op deze regel" row (cs.focus === 'new') via `g` — a fresh `g`-open
+// Comment op deze regel" row (cs.focus === 'new') via Cmd+ArrowRight — a fresh Cmd+ArrowRight-open
 // only highlights that row (enterComments), it deliberately doesn't call this.
 export function openComposer() {
   toNew()
@@ -2488,15 +2488,15 @@ export function PrWideComments(state) {
   `
 }
 
-// ── Comments/taken sidebar (fixed, toggled with `g`) ──────────────────────────
+// ── Comments/taken sidebar (fixed, toggled with Cmd+→) ────────────────────────
 // A fixed right-hand overlay (mirrors PrInfoPanel's fixed left-hand column,
 // see detail-layout.md), independent of <main>'s horizontal-scrolling column
-// flow: comments on top, taken stacked below. Toggled globally with `g`
+// flow: comments on top, taken stacked below. Toggled globally with Cmd+→
 // (toggleSidebar, home.mjs' onKeydown) rather than reached by stepping →
 // through the nav chain — see keyboard-navigation.md. Collapsed
 // (!cs.sidebarOpen) it renders as a narrow hint rail showing the comment count
 // + the running/waiting task count; a click on the rail opens it the same way
-// `g` does.
+// Cmd+→ does.
 
 // runningTaskCount is the number of active (running/waiting) runs — the second
 // number on the collapsed hint rail.
@@ -2524,12 +2524,12 @@ function openSidebar() {
 // shrunk-but-non-empty list clamps to the last comment instead of bouncing to
 // the default, mirroring applyRelRestore's clamping.
 // Highlight only, like enterComments — does NOT drop the keyboard into the
-// reply/reaction textarea (toComment(false)/focusThread(false)): a `g`
+// reply/reaction textarea (toComment(false)/focusThread(false)): a Cmd+ArrowRight
 // re-open must behave the same way a fresh open does (see enterComments'
 // own comment on why) — landing straight in an editable field would swallow
 // the reviewer's very next keystroke (e.g. a literal "g" meant to toggle the
 // sidebar shut again) as typed text instead. An explicit Enter still opens
-// it (isCommentFocused/openComposer in home.mjs), same as a fresh `g`-open.
+// it (isCommentFocused/openComposer in home.mjs), same as a fresh Cmd+ArrowRight-open.
 function restoreLastSidebarFocus() {
   const want = lastSidebarFocus
   if (!want || want.focus === 'new') {

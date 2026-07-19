@@ -33,7 +33,7 @@ test.describe('PR Review Tree — <main> clears the sidebar/rail on the right', 
 
   test('<main> sits left of the open sidebar', async ({ page }) => {
     await stepIntoRelated(page)
-    await page.keyboard.press('g')
+    await page.keyboard.press('Meta+ArrowRight')
     const sidebar = page.getByTestId('comments-sidebar')
     await expect(sidebar).toBeVisible()
 

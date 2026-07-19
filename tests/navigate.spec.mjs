@@ -182,7 +182,7 @@ test.describe('PR Review Tree — change navigation', () => {
   // path (POST /api/workflows/task_code_comment). A "+ Comment op deze regel"
   // button leads the list; clicking a comment opens its thread. See RelatedPanel
   // (commentsSection). The comments/taken sidebar is a fixed overlay toggled
-  // with `g` (see detail-layout.md), so it must be opened first. The server
+  // with Cmd+ArrowRight (see detail-layout.md), so it must be opened first. The server
   // runs with SLASH_GITHUB=off so seeding never touches a real repo.
   test('the new-comment button leads the list; clicking a comment opens its thread', async ({
     page,
@@ -213,7 +213,7 @@ test.describe('PR Review Tree — change navigation', () => {
 
     await page.goto('/pr/' + pr)
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
-    await page.keyboard.press('g') // open the comments/taken sidebar
+    await page.keyboard.press('Meta+ArrowRight') // open the comments/taken sidebar
     const panel = page.getByTestId('comments-sidebar')
     const items = panel.getByTestId('comment-item')
     const active = /bg-indigo-50/

@@ -32,7 +32,7 @@ test('comment row, reply bubble, and PR-wide item all show author + avatar', asy
 
   await page.goto('/pr/' + pr)
   await page.keyboard.press('Escape')
-  await page.keyboard.press('g')
+  await page.keyboard.press('Meta+ArrowRight')
 
   const item = page.getByTestId('comment-item').first()
   await expect(item).toBeVisible()
