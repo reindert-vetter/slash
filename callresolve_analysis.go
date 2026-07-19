@@ -37,9 +37,19 @@ type symbolIndex struct {
 	modelTables map[string]string
 }
 
+// idxSkipDirs is deliberately narrow: "tests" is NOT skipped, because a
+// custom test-base class (tests/TestCase.php, tests/HttpTestCase.php) or a
+// shared trait under tests/Concerns/ is real app code a test caller can
+// legitimately call ($this->actingAs(...) overridden on the app's own
+// TestCase) — skipping it forced every such call to escalate all the way to
+// the agentic Sonnet pass (which finds it via Grep) instead of resolving for
+// free right here. Indexing it is purely additive: it can only ever add
+// candidates, never remove one, so a call that resolved uniquely before
+// still does (a rare same-name collision just falls back to the existing
+// "ambiguous → unresolved" path, same as any other ambiguity).
 var idxSkipDirs = map[string]bool{
 	"vendor": true, "node_modules": true, ".git": true,
-	"storage": true, "public": true, "tests": true,
+	"storage": true, "public": true,
 }
 
 // buildSymbolIndex walks the head worktree once and indexes every class method.

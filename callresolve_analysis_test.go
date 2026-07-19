@@ -119,6 +119,58 @@ func TestResolveCallsStatic(t *testing.T) {
 	}
 }
 
+// TestResolveCallsTestHelperClassIndexed: a custom test-base class (tests/
+// TestCase.php) is real app code, not vendor — buildSymbolIndex must index
+// tests/ so a call to an inherited test helper (unresolvable via the $this->
+// own-class rule, since the caller test class doesn't define it directly)
+// still resolves uniquely via the generic ->m() candidate rule, instead of
+// forcing an unnecessary LLM escalation. Regression guard for the idxSkipDirs
+// fix (tests/ used to be skipped entirely).
+func TestResolveCallsTestHelperClassIndexed(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 8
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"tests/Feature/OrderTest.php": `<?php
+namespace Tests\Feature;
+class OrderTest {
+    public function it_works() {
+        $this->actingAsUser();
+    }
+}
+`,
+		"tests/TestCase.php": `<?php
+namespace Tests;
+class TestCase {
+    public function actingAsUser() {}
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "tests/Feature/OrderTest.php", Class: "OrderTest", Name: "it_works", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "actingAsUser")
+	if !ok {
+		t.Fatalf("no entry for call %q", "actingAsUser")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Fatalf("actingAsUser: status = %q, want %q (tests/ must be indexed)", e.Status, callresolve.StatusResolved)
+	}
+	if got := e.ChildClass + "::" + e.ChildMethod; got != "TestCase::actingAsUser" {
+		t.Fatalf("actingAsUser: child = %q, want %q", got, "TestCase::actingAsUser")
+	}
+}
+
 // TestResolveCallsChangedLinesOnly: when a base worktree exists, only calls on
 // lines the PR changed produce entries — a call on an untouched line must not
 // surface as underlying code (that was the unrelated-children bug).

@@ -593,7 +593,17 @@ fallback.
   leest de head-worktree): `resolveCalls(dataDir, pr, blocks)` bouwt via
   `buildSymbolIndex` één worktree-brede index (class→methods, method→blocks,
   Eloquent scope-alias `scopeX→x`, enums) en scant elk gewijzigd new-side blok
-  met regexes (patroon van `dispatchedEvents`). **Alleen de gewijzigde regels**
+  met regexes (patroon van `dispatchedEvents`). **`idxSkipDirs` slaat alleen
+  echt vendored/gegenereerde mappen over** (`vendor`, `node_modules`, `.git`,
+  `storage`, `public`) — bewust **niet** `tests/`: een custom test-basisklasse
+  (`tests/TestCase.php`, `tests/HttpTestCase.php`) of een gedeelde trait is
+  net zo goed app-code, en stond eerder onterecht buiten de index. Zonder die
+  kandidaat kon de Go-resolver een aanroep van zo'n geërfde test-helper nooit
+  zelf pinnen (rule 1's `$this->m()`-check zoekt alleen op de eigen class, niet
+  door overerving heen) en escaleerde elke zo'n call onnodig helemaal naar de
+  dure agentische Sonnet-pass, die 'm via `Grep` alsnog vond. Puur additief:
+  een uniek match kan nooit méér ambigu worden dan voorheen. Zie
+  `TestResolveCallsTestHelperClassIndexed`. **Alleen de gewijzigde regels**
   van het blok worden gescand: `changedNewLines` dieft base↔head per bestand
   (`git diff --no-index --unified=0`, geparsed met de ingest-`parseUnifiedDiff`,
   new-side sets ge-union'd omdat `--no-index` twee absolute paden oplevert;
