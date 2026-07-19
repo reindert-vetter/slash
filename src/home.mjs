@@ -41,6 +41,7 @@ import RelatedPanel, {
   setCommentScope,
   setRelated,
   focusedRelatedChild,
+  focusedChipChain,
   selectComment,
   isTaskFocused,
   focusedTaskRun,
@@ -3944,10 +3945,20 @@ function onKeydown(e) {
     // cursor is sitting on as its own diff column (see drillIntoChild) — recursing
     // into its Onderliggende code. Unresolved calls no longer need a manual Enter:
     // the LLM search runs automatically (see the setRelated watch / startCallSearch).
+    // If the cursor instead sits on a drill-hint chip (cs.chipPath, → descended
+    // into it — see RelatedPanel's handleRelatedKey), Enter drills through the
+    // WHOLE chain (the card, then every intermediate chip, then the focused
+    // chip) in one go — exactly what a click on that chip already does (see
+    // nestedChip's own @click), just via the keyboard.
     if (e.key === 'Enter' && isCodeFocused()) {
       e.preventDefault()
-      const child = focusedRelatedChild()
-      if (child) drillIntoChild(child)
+      const chain = focusedChipChain()
+      if (chain) {
+        for (const target of chain) drillIntoChild(target)
+      } else {
+        const child = focusedRelatedChild()
+        if (child) drillIntoChild(child)
+      }
     }
     // Enter on the Taken stop (comments/taken sidebar) opens the focused run the
     // same way clicking it does (openTask) — only meaningful for a

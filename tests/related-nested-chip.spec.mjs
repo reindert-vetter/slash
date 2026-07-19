@@ -4,13 +4,21 @@ import { test, expect } from './_fixtures.mjs'
 // whose block itself has changed underlying code (nestedChangedKids in
 // home.mjs) shows a dashed connector to a narrow recursive chip column on its
 // right (data-testid=related-nested) — one chip per changed (grand)child with
-// its FULL class::method label, its own +A −B diff-stat and its approval
+// its FULL class::method label (wrapped, never truncated — no more
+// "ProductGroupStoreReq…"), its own +A −B diff-stat and its approval
 // done/total (a precomputed string — regression for the `i=>je(n,i)` template
 // leak) — while a child without changed underlying code shows no chips at
 // all. Chips nest recursively (depth-capped): a grandchild's own changed
-// child renders as an indented sub-chip. Clicking a chip at depth d drills
-// d+1 levels in one go. The collapsed column rails show the same full
-// class::method label (blockLabel).
+// child renders as its OWN further chip column to the RIGHT (nestedChipColumn,
+// the one recursive building block at every depth — there is no more
+// indented-underneath "sub" variant). Clicking a chip at depth d — or
+// pressing Enter on it once focused via →/↓/←, see below — drills d+1 levels
+// in one go. The collapsed column rails show the same full class::method
+// label (blockLabel). →/↓/↑/←/Enter navigate and drill the chip tree via
+// cs.chipPath (RelatedPanel.mjs' handleRelatedKey), spatially mirroring the
+// rightward chip layout: → descends into the focused item's own nested
+// chips, ← climbs one level back (only leaving the panel once chipPath is
+// already empty), ↓/↑ walk siblings at the current chip depth.
 //
 // Uses PR 12903 with routed relations (the drill-collapse.spec.mjs pattern):
 // execute → findOrCreateCustomer → ProcessCartAction::handle →
@@ -73,8 +81,11 @@ test.describe('drill-hint chips next to Onderliggende-code cards', () => {
     // (handle) — carries the chip column as its flex-row sibling.
     const childCard = page.getByTestId('related-item').filter({ hasText: 'findOrCreateCustomer' })
     await expect(childCard).toBeVisible()
-    const nested = childCard.locator('xpath=..').getByTestId('related-nested')
-    await expect(nested).toHaveCount(1)
+    // .first(): the card's own top-level chip column, in document order —
+    // handle's chip carries its OWN further column (billingAddress) nested
+    // inside it, so this same testid also matches one level deeper.
+    const nested = childCard.locator('xpath=..').getByTestId('related-nested').first()
+    await expect(nested.locator('> div > [data-testid="related-nested-chip"]')).toHaveCount(1)
 
     // Top-level chip: FULL class::method label, +2 −1 diffstat, approval
     // string 0/4 — and no file line anywhere in the chip.
@@ -89,13 +100,92 @@ test.describe('drill-hint chips next to Onderliggende-code cards', () => {
     // renders a stringified function.
     await expect(nested).not.toContainText('=>')
 
-    // Recursion: the handle chip carries an indented sub-chip for its own
+    // The label wraps rather than truncates (point 1 of the "chips" task):
+    // no `truncate` class on the label span.
+    await expect(chip.locator('> span').first()).not.toHaveClass(/truncate/)
+
+    // Recursion: the handle chip carries its OWN further chip column to the
+    // right (nestedChipColumn again, not a separate "sub" shape) for its
     // changed child (Address::billingAddress), full label again.
-    const sub = nested.getByTestId('related-nested-sub')
-    await expect(sub).toHaveCount(1)
-    const subChip = sub.getByTestId('related-nested-chip')
+    const subColumn = chip.locator('xpath=..').getByTestId('related-nested')
+    await expect(subColumn).toHaveCount(1)
+    const subChip = subColumn.getByTestId('related-nested-chip')
     await expect(subChip).toHaveCount(1)
     await expect(subChip.locator('> span').first()).toHaveText('Address::billingAddress')
+  })
+
+  test('→/↓/↑/←/Enter navigate and drill the chip tree', async ({ page }) => {
+    await page.goto('/pr/12903')
+
+    const rows = page.getByTestId('block-row')
+    await rows.filter({ hasText: 'CreatePaymentAction::execute' }).click()
+    const panel = page.getByTestId('detail-panel')
+    await expect(panel.locator('code.language-php').first()).toBeVisible()
+    // Two presses: the click only selected the block (still 'list' mode, with
+    // its own diff preview) — the first ArrowRight is the list→diff step, the
+    // second is the actual enterRelated() into this panel (see the nav-chain
+    // "stops" in keyboard-navigation.md).
+    await page.keyboard.press('ArrowRight')
+    await page.waitForTimeout(200)
+    await page.keyboard.press('ArrowRight')
+    await page.waitForTimeout(200)
+
+    const childCard = page.getByTestId('related-item').filter({ hasText: 'findOrCreateCustomer' })
+    await expect(childCard).toBeVisible()
+    await expect(childCard).toHaveAttribute('data-active', 'true')
+
+    // → from the card descends into its first (only) top-level chip (handle).
+    await page.keyboard.press('ArrowRight')
+    const handleChip = page.getByTestId('related-nested-chip').filter({ hasText: 'ProcessCartAction::handle' })
+    await expect(handleChip).toHaveAttribute('data-active', 'true')
+    // The card itself is no longer the active related-item once a chip owns
+    // the cursor.
+    await expect(childCard).toHaveAttribute('data-active', 'false')
+
+    // → again descends one level further into handle's own sub-chip
+    // (billingAddress) — spatially to the right, per the new layout.
+    await page.keyboard.press('ArrowRight')
+    const billingChip = page.getByTestId('related-nested-chip').filter({ hasText: 'Address::billingAddress' })
+    await expect(billingChip).toHaveAttribute('data-active', 'true')
+    await expect(handleChip).toHaveAttribute('data-active', 'false')
+
+    // ← climbs back up one level (to the handle chip), not straight out of
+    // the panel.
+    await page.keyboard.press('ArrowLeft')
+    await expect(handleChip).toHaveAttribute('data-active', 'true')
+    await expect(panel).toBeVisible() // the panel itself never closed
+
+    // A second ← climbs back to the card (chipPath now empty).
+    await page.keyboard.press('ArrowLeft')
+    await expect(childCard).toHaveAttribute('data-active', 'true')
+    await expect(handleChip).toHaveAttribute('data-active', 'false')
+
+    // A third ← — chipPath is empty now — falls through to the existing
+    // "leave the panel" behaviour: the keyboard returns to the diff.
+    await page.keyboard.press('ArrowLeft')
+    await expect(childCard).toHaveAttribute('data-active', 'false')
+
+    // → re-enters the panel from the diff (enterRelated, unchanged), landing
+    // back on the card itself (chipPath resets to []); → twice more descends
+    // to the handle chip, then its billingAddress sub-chip; Enter then drills
+    // through the WHOLE chain (findOrCreateCustomer → handle →
+    // billingAddress) in one go, same as a click on the sub-chip.
+    await page.keyboard.press('ArrowRight')
+    await expect(childCard).toHaveAttribute('data-active', 'true')
+    await page.keyboard.press('ArrowRight')
+    await expect(handleChip).toHaveAttribute('data-active', 'true')
+    await page.keyboard.press('ArrowRight')
+    await expect(billingChip).toHaveAttribute('data-active', 'true')
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(300)
+
+    const drillColumn = page.getByTestId('drill-column')
+    await expect(drillColumn).toHaveCount(1)
+    await expect(drillColumn).toContainText('Address::billingAddress')
+    const rail0 = page.locator('[data-testid="drill-collapsed"][data-drill-idx="0"]')
+    const rail1 = page.locator('[data-testid="drill-collapsed"][data-drill-idx="1"]')
+    await expect(rail0).toBeVisible()
+    await expect(rail1).toBeVisible()
   })
 
   test('clicking a depth-2 sub-chip drills three levels deep in one go; rails show class::method', async ({
@@ -112,9 +202,11 @@ test.describe('drill-hint chips next to Onderliggende-code cards', () => {
     await page.waitForTimeout(200)
 
     // Click the nested sub-chip (Address::billingAddress, depth 2 under the
-    // findOrCreateCustomer card): one click drills three levels —
-    // findOrCreateCustomer, then handle, then billingAddress.
-    const subChip = page.getByTestId('related-nested-sub').getByTestId('related-nested-chip')
+    // findOrCreateCustomer card, now rendered as its own further chip column
+    // to the RIGHT of the handle chip rather than an indented block
+    // underneath it): one click drills three levels — findOrCreateCustomer,
+    // then handle, then billingAddress.
+    const subChip = page.getByTestId('related-nested-chip').filter({ hasText: 'Address::billingAddress' })
     await expect(subChip).toBeVisible()
     await subChip.click()
     await page.waitForTimeout(300)
@@ -191,11 +283,17 @@ test.describe('drill-hint chips next to Onderliggende-code cards', () => {
 
     const childCard = page.getByTestId('related-item').filter({ hasText: 'findOrCreateCustomer' })
     await expect(childCard).toBeVisible()
-    const nested = childCard.locator('xpath=..').getByTestId('related-nested')
-    // Direct children only — a chip's OWN recursive sub-chips (e.g. handle's
-    // billingAddress sub-chip) live nested inside its button too, and
-    // getByTestId matches the whole subtree, not just this level's siblings.
-    const chips = nested.locator('> [data-testid="related-nested-chip"]')
+    // .first(): the card's own top-level chip column — handle's chip carries
+    // its OWN further column (billingAddress) nested inside it, matching the
+    // same testid one level deeper.
+    const nested = childCard.locator('xpath=..').getByTestId('related-nested').first()
+    // `> div > [...]`: each top-level chip is now a row (`<div><button
+    // data-testid=related-nested-chip/>${optional further column}</div>`), so
+    // its OWN recursive chip column (e.g. handle's billingAddress sub-chip)
+    // lives nested a few levels deeper as a SIBLING of the button within that
+    // row — this selector reaches only the immediate row's own chip, not
+    // anything recursed further to the right.
+    const chips = nested.locator('> div > [data-testid="related-nested-chip"]')
     await expect(chips).toHaveCount(2)
 
     // Neither sibling chip ever renders the stringified arrow.js template

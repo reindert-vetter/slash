@@ -47,6 +47,19 @@ const cs = reactive({
   scope: null,
   scopeSig: '',
   codeSel: 0,
+  // chipPath indexes the drill-hint chip tree next to the child card at
+  // codeSel (see nestedChip/nestedChipColumn below): [] means the keyboard
+  // sits on the card itself, [i] the i-th top-level chip, [i,j] its j-th
+  // sub-chip, etc. — one index per depth, mirroring the chip data's own
+  // recursive `nested` shape (home.mjs' nestedChangedKids). → descends into
+  // whatever's focused own nested list, ← climbs one level back out (only
+  // falling through to exitRelated once chipPath is already empty), ↓/↑ walk
+  // siblings at the current depth (see handleRelatedKey/chipListAt). Reset to
+  // [] whenever codeSel changes — a chip path only makes sense relative to
+  // the card it hangs off. Deliberately NOT bound to the URL (unlike codeSel
+  // above): a sub-cursor one level deeper than anything else in this panel
+  // has ever restored, ephemeral like taskSel below.
+  chipPath: [],
   // taskSel indexes the flat active+done workflow-run list while
   // cs.focus === 'task' (the Taken stop of the comments/taken sidebar).
   // Deliberately NOT bound to the URL (unlike codeSel/sel/threadPos below) —
@@ -116,6 +129,12 @@ export function setRelated(children, unresolved, warning) {
   // A block switch (or a shrinking list) must not leave the child cursor on a
   // stale index; snap it back to the first block.
   if (cs.codeSel >= rc.children.length) cs.codeSel = 0
+  // A fresh push rebuilds the whole descriptor tree — any chip-depth cursor
+  // from before almost certainly no longer points at the same node (the tree
+  // shape can shift under a re-render, e.g. after a code load or an approval
+  // change), so drop back to the card itself rather than risk pointing at a
+  // stale/out-of-range chip.
+  cs.chipPath = []
   // Children just arrived — a pending refresh-restore that wanted the code card
   // (or a codeSel) can now land. One-shot; see applyRelRestore.
   applyRelRestore()
@@ -315,12 +334,71 @@ export function focusedRelatedChild() {
   return cs.focus === 'code' ? rc.children[cs.codeSel] || null : null
 }
 
+// chipListAt walks `path` (an array of chip indices, chip.nested-deep) down
+// from the card at codeSel's own top-level chips (r.nested) and returns the
+// chips array reached there — capped at NESTED_CHIP_CAP, mirroring exactly
+// what's actually rendered (the "+N meer" remainder is deliberately never
+// keyboard-reachable, same as the mouse). `path` = [] returns the card's own
+// top-level chips; `handleRelatedKey` calls this both for the sibling list at
+// the CURRENT chip depth (path = chipPath.slice(0,-1)) and to check whether
+// the FOCUSED chip has anything to descend into (path = chipPath).
+function chipListAt(path) {
+  const r = rc.children[cs.codeSel]
+  let kids = r && Array.isArray(r.nested) ? r.nested.slice(0, NESTED_CHIP_CAP) : []
+  for (const idx of path) {
+    const k = kids[idx]
+    if (!k) return []
+    kids = Array.isArray(k.nested) ? k.nested.slice(0, NESTED_CHIP_CAP) : []
+  }
+  return kids
+}
+
+// chipPathEquals compares two chip-path arrays for the focus-ring binding
+// (nestedChip) — plain value equality, no reference identity involved since
+// cs.chipPath is reassigned wholesale on every step (see handleRelatedKey).
+function chipPathEquals(a, b) {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
+// scrollChipIntoView keeps the focused chip in view while walking the chip
+// tree with the arrows, mirroring scrollCodeIntoView.
+function scrollChipIntoView() {
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid=related-nested-chip][data-active=true]')
+    if (el) el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  })
+}
+
+// focusedChipChain returns the ordered chain of drill targets a focused chip
+// represents — every ancestor (the card itself, then each intermediate chip,
+// each converted via chipDrillTarget) followed by the focused chip itself —
+// or null when the code-focus cursor sits on the card (chipPath === []).
+// home.mjs's Enter handler drills through this chain exactly like a click on
+// the chip does (see nestedChip's own @click), just without the mouse.
+export function focusedChipChain() {
+  if (cs.focus !== 'code' || cs.chipPath.length === 0) return null
+  const r = rc.children[cs.codeSel]
+  if (!r) return null
+  const chain = [r]
+  let kids = Array.isArray(r.nested) ? r.nested : []
+  for (const idx of cs.chipPath) {
+    const k = kids[idx]
+    if (!k) return null
+    chain.push(chipDrillTarget(k))
+    kids = Array.isArray(k.nested) ? k.nested : []
+  }
+  return chain
+}
+
 // enterRelated hands the keyboard to the panel, starting on the first
 // underlying-code child. Called by home.mjs on → from the diff.
 export function enterRelated() {
   cs.composing = false
   cs.focus = 'code'
   cs.codeSel = 0
+  cs.chipPath = []
   scrollCodeIntoView()
 }
 
@@ -461,11 +539,19 @@ export function taskRuns(state) {
   return active.concat(done)
 }
 
-function toComment() {
+// `focusInput` defaults to true for every existing caller (a click or an
+// explicit arrow-key step onto a comment row) — landing already opens the
+// reply pane and drops the caret in it, per this file's own long-standing
+// convention. `restoreLastSidebarFocus` (a `g`-reopen restoring where the
+// reviewer left off) is the one exception: passing `false` there re-selects
+// the row/scrolls it into view WITHOUT stealing the keyboard into the reply
+// textarea — mirroring how a fresh `g`-open (enterComments) only highlights
+// the "+ Comment op deze regel" row rather than opening it.
+function toComment(focusInput = true) {
   cs.composing = false
   cs.focus = 'comment'
   scrollCommentIntoView()
-  focusEl('[data-testid=reaction-compose]')
+  if (focusInput) focusEl('[data-testid=reaction-compose]')
 }
 
 // selectComment focuses the panel on the comment whose id matches `id` (a
@@ -537,12 +623,16 @@ function scrollReactionIntoView() {
 
 // focusThread puts the caret in the reply field at the bottom of the thread
 // (threadPos 0, ready to type) or, once the reviewer walks up into the history,
-// blurs it and scrolls the selected older message into view.
-function focusThread() {
+// blurs it and scrolls the selected older message into view. `focusInput`
+// (default true, see toComment's own comment on the same pattern) is only
+// passed false by restoreLastSidebarFocus — a `g`-reopen restoring a
+// remembered thread position should re-highlight it, not immediately drop
+// the keyboard into the reply field.
+function focusThread(focusInput = true) {
   requestAnimationFrame(() => {
     const input = document.querySelector('[data-testid=reaction-compose]')
     if (cs.threadPos === 0) {
-      if (input) input.focus()
+      if (input && focusInput) input.focus()
     } else {
       if (input && document.activeElement === input) input.blur()
       scrollReactionIntoView()
@@ -706,25 +796,62 @@ export function handleRelatedKey(key, taskCount = 0) {
   if (cs.focus === 'code') {
     // The code card is a flat vertical list of underlying-code children —
     // unrelated to the comments/taken sidebar (see the function comment
-    // above). ↓/↑ walk it (↑ from the first child exits to the diff); ← always
-    // returns to the diff. → has nowhere left to go — comments/taken is only
-    // reached via `g` now, not by stepping right out of this card.
+    // above). Each child can additionally carry its own drill-hint chip tree
+    // to the right (nestedChip/nestedChipColumn) — cs.chipPath is a second,
+    // nested cursor into THAT tree, off of whichever card sits at codeSel.
+    // Empty chipPath ⇒ the keyboard is on the card itself: ↓/↑ walk the flat
+    // card list as before (↑ from the first card exits to the diff), and →
+    // descends into the card's own top-level chips (chipListAt(chipPath)
+    // resolves to the same list whether chipPath is empty or not). Once
+    // chipPath is non-empty, ↓/↑ instead walk *siblings at that same chip
+    // depth* (chipListAt(chipPath.slice(0,-1))), → descends one level further
+    // (into the focused chip's own nested chips, if any — a no-op otherwise),
+    // and ← climbs one level back up; only once chipPath is already empty
+    // does ← fall through to the existing "leave the panel" behaviour. This
+    // mirrors the app's left→right "stop" navigation elsewhere (→ = deeper, ←
+    // = one level back) — spatially consistent with the chips fanning out to
+    // the right (see nestedChipColumn/detail-layout.md).
     const n = rc.children.length
     if (key === 'ArrowDown') {
-      if (cs.codeSel < n - 1) {
+      if (cs.chipPath.length) {
+        const last = cs.chipPath.length - 1
+        const siblings = chipListAt(cs.chipPath.slice(0, last))
+        if (cs.chipPath[last] < siblings.length - 1) {
+          cs.chipPath = [...cs.chipPath.slice(0, last), cs.chipPath[last] + 1]
+          scrollChipIntoView()
+        }
+      } else if (cs.codeSel < n - 1) {
         cs.codeSel += 1
         scrollCodeIntoView()
       }
     } else if (key === 'ArrowUp') {
-      if (cs.codeSel === 0) {
+      if (cs.chipPath.length) {
+        const last = cs.chipPath.length - 1
+        if (cs.chipPath[last] > 0) {
+          cs.chipPath = [...cs.chipPath.slice(0, last), cs.chipPath[last] - 1]
+          scrollChipIntoView()
+        }
+      } else if (cs.codeSel === 0) {
+        exitRelated()
+        return 'exit'
+      } else {
+        cs.codeSel -= 1
+        scrollCodeIntoView()
+      }
+    } else if (key === 'ArrowRight') {
+      const deeper = chipListAt(cs.chipPath)
+      if (deeper.length) {
+        cs.chipPath = [...cs.chipPath, 0]
+        scrollChipIntoView()
+      }
+    } else if (key === 'ArrowLeft') {
+      if (cs.chipPath.length) {
+        cs.chipPath = cs.chipPath.slice(0, -1)
+        scrollChipIntoView()
+      } else {
         exitRelated()
         return 'exit'
       }
-      cs.codeSel -= 1
-      scrollCodeIntoView()
-    } else if (key === 'ArrowLeft') {
-      exitRelated()
-      return 'exit'
     }
     return true
   }
@@ -1438,15 +1565,32 @@ function nestedDiffStat(k) {
 }
 
 // nestedChip renders one drill-hint chip: a narrow block naming a changed
-// (grand)child (full class::method label, its own diff-stat, its approval
-// done/total — no file line, that only lives in `title`) of the card/chip it
-// sits next to — the "there is more underneath" cue. `ancestors` is the
-// ordered chain of drill targets (the parent card's own descriptor `r`, then
-// every ancestor chip in between) to drill through before finally drilling
-// into `k` itself — one click at depth d drills d+1 levels in one go
-// (drillIntoChild resolves each via blockId; every chip target is a PR block
-// by construction, see home.mjs' nestedChangedKids). stopPropagation keeps
-// the click from ALSO triggering the card's own one-level drill.
+// (grand)child (FULL class::method label — wrapped, never truncated, so a
+// long name like ProductGroupStoreRequest::authorize always reads in full —
+// its own diff-stat, its approval done/total — no file line, that only lives
+// in `title`) of the card/chip it sits next to — the "there is more
+// underneath" cue. `ancestors` is the ordered chain of drill targets (the
+// parent card's own descriptor `r`, then every ancestor chip in between) to
+// drill through before finally drilling into `k` itself — one click (or
+// Enter while focused, see home.mjs' focusedChipChain) at depth d drills d+1
+// levels in one go (drillIntoChild resolves each via blockId; every chip
+// target is a PR block by construction, see home.mjs' nestedChangedKids).
+// stopPropagation keeps the click from ALSO triggering the card's own
+// one-level drill. `path` is this chip's own index path into cs.chipPath
+// (RelatedPanel's keyboard cursor into the chip tree, see handleRelatedKey) —
+// used only to compute the focus ring, never for drilling itself.
+//
+// This chip is a flex ROW — button, then (if k.nested.length) its own further
+// chips recursively to the RIGHT via nestedChipColumn — rather than a column
+// with the recursion indented underneath: the reviewer asked for "onderliggende
+// van de onderliggende" to fan out rightward, matching → descending deeper in
+// the keyboard nav (see handleRelatedKey) and mirroring how a card's own
+// top-level chip column already sits to ITS right (relatedCard). Every depth
+// therefore shares the exact same shape (row: chip + optional right column),
+// so nestedChipColumn is now the ONE recursive building block at every level —
+// unlike before, there is no longer a second, differently-shaped
+// "nestedSubChips" variant (see nestedChipColumn's own comment for why that
+// used to be necessary and no longer is).
 //
 // Two of this chip's slots deliberately use DIFFERENT fix patterns for the
 // same underlying arrow.js pitfall (a static `${cond ? html`…` : ''}`
@@ -1457,16 +1601,28 @@ function nestedDiffStat(k) {
 //    `k.approveCls` are plain strings precomputed on the descriptor
 //    (home.mjs' nestedChangedKids) — an always-present element, `hidden`
 //    when there's nothing to approve, so the slot's shape never toggles;
-//  - the diff-stat and the recursive sub-chip list genuinely swap between
+//  - the diff-stat and the recursive sub-chip column genuinely swap between
 //    two different templates (loading vs. loaded; present vs. absent), so
 //    those go through a `${() => …}`-function binding (fix-vorm 2) instead.
-function nestedChip(ancestors, k, drill) {
+function nestedChip(ancestors, k, drill, path, cardIdx) {
   const st = statusInfo(k.status)
+  // `path` alone isn't enough to identify this chip — every card's chip tree
+  // starts fresh at path [0], [0,0], etc., so two DIFFERENT cards' chips at
+  // the same tree position would otherwise both light up. cardIdx (the
+  // card's own index in rc.children, i.e. what cs.codeSel indexes) scopes
+  // the match to the card this chip actually belongs to.
+  const focused = () => cs.focus === 'code' && cardIdx === cs.codeSel && chipPathEquals(cs.chipPath, path)
   return html`
+    <div class="flex items-start">
     <button
       type="button"
-      class="w-full rounded-md border border-slate-200 dark:border-zinc-800 bg-slate-50/60 dark:bg-zinc-800/40 px-1.5 py-1 text-left hover:border-indigo-200 dark:hover:border-indigo-500/40"
+      class="${() =>
+        'w-36 shrink-0 rounded-md border bg-slate-50/60 dark:bg-zinc-800/40 px-1.5 py-1 text-left hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
+        (focused()
+          ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+          : 'border-slate-200 dark:border-zinc-800')}"
       data-testid="related-nested-chip"
+      data-active="${() => (focused() ? 'true' : 'false')}"
       title="${blockLabel(k) + ' · ' + k.file}"
       @click="${(e) => {
         e.stopPropagation()
@@ -1475,7 +1631,7 @@ function nestedChip(ancestors, k, drill) {
         drill(chipDrillTarget(k))
       }}"
     >
-      <span class="block truncate font-mono text-[10px] font-semibold text-slate-700 dark:text-zinc-300">${blockLabel(k)}</span>
+      <span class="block whitespace-normal break-words font-mono text-[10px] font-semibold text-slate-700 dark:text-zinc-300">${blockLabel(k)}</span>
       <span class="mt-0.5 flex items-center gap-1">
         <span class="${'truncate text-[9px] font-medium uppercase tracking-wide ' + st.cls}" data-testid="related-nested-status"
           >${k.status}</span
@@ -1483,23 +1639,38 @@ function nestedChip(ancestors, k, drill) {
         ${() => nestedDiffStat(k)}
         <span class="${k.approveCls}" data-testid="related-nested-approval" title="Goedgekeurde regels">${k.approveText}</span>
       </span>
-      ${() =>
-        k.nested && k.nested.length ? nestedSubChips([...ancestors, chipDrillTarget(k)], k.nested, drill) : ''}
     </button>
+    ${() =>
+      k.nested && k.nested.length
+        ? nestedChipColumn([...ancestors, chipDrillTarget(k)], k.nested, drill, path, cardIdx)
+        : ''}
+    </div>
   `
 }
 
-// nestedChipColumn renders the connector dash + the stacked top-level chips to
-// the right of a child card, for its changed grandchildren (r.nested, capped
-// at NESTED_CHIP_CAP + a "+N meer" remainder line).
-function nestedChipColumn(r, drill) {
-  const kids = r.nested.slice(0, NESTED_CHIP_CAP)
-  const more = r.nested.length - kids.length
+// nestedChipColumn renders the connector dash + the stacked chips to the
+// right of a child card OR another chip — the ONE recursive building block
+// for the whole drill-hint tree (home.mjs' nestedChangedKids/NESTED_DEPTH):
+// `ancestors` is the chain of drill targets to walk through before `kids`'
+// own chips (the card `r` at the top, then chipDrillTarget(k) for every chip
+// in between — see nestedChip's own doc comment), `path` is the index-path
+// prefix cs.chipPath uses for everything already ABOVE `kids` (so each
+// child's own path is `[...path, idx]`). Capped at NESTED_CHIP_CAP + a "+N
+// meer" remainder line at every depth, same as before — only the remainder
+// is never keyboard-reachable (chipListAt in handleRelatedKey caps the same
+// way, so ↓/↑/→ never land past what's actually rendered here). `cardIdx` is
+// the top-level card's own index in rc.children (see nestedChip's own doc
+// comment on why it's needed for the focus ring) — threaded through unchanged
+// at every depth.
+function nestedChipColumn(ancestors, kids, drill, path, cardIdx) {
+  const capped = kids.slice(0, NESTED_CHIP_CAP)
+  const more = kids.length - capped.length
+  const keyPrefix = ancestors.map((a) => a.id).join('>')
   return html`
     <div class="flex shrink-0 items-start">
       <div class="mt-5 h-px w-3 shrink-0 border-t border-dashed border-slate-300 dark:border-zinc-700"></div>
       <div class="flex w-36 shrink-0 flex-col gap-1" data-testid="related-nested">
-        ${kids.map((k) => nestedChip([r], k, drill).key('nested:' + k.id))}
+        ${capped.map((k, idx) => nestedChip(ancestors, k, drill, [...path, idx], cardIdx).key('nested:' + keyPrefix + '>' + k.id))}
         ${() =>
           more > 0
             ? html`<span class="px-1 text-[9px] text-slate-400 dark:text-zinc-500" data-testid="related-nested-more"
@@ -1507,34 +1678,6 @@ function nestedChipColumn(r, drill) {
               >`
             : ''}
       </div>
-    </div>
-  `
-}
-
-// nestedSubChips renders the indented, recursive sub-chip list under a chip
-// whose own block has further changed grandchildren (depth-capped at
-// NESTED_DEPTH by home.mjs' nestedChangedKids). Deliberately its OWN
-// `html`…`` literal — not nestedChipColumn reused with a "connector on/off"
-// flag — because sharing one call site whose rendered shape (dashed
-// connector + w-36 vs. plain indented block) differed per invocation would
-// reintroduce the exact same static-shape-cache pitfall this component
-// exists to avoid, just one level up (at the container instead of the chip).
-function nestedSubChips(ancestors, kids, drill) {
-  const capped = kids.slice(0, NESTED_CHIP_CAP)
-  const more = kids.length - capped.length
-  const path = ancestors.map((a) => a.id).join('>')
-  return html`
-    <div
-      class="mt-1 flex flex-col gap-1 border-l border-dashed border-slate-300 dark:border-zinc-700 pl-2"
-      data-testid="related-nested-sub"
-    >
-      ${capped.map((k) => nestedChip(ancestors, k, drill).key(path + '>' + k.id))}
-      ${() =>
-        more > 0
-          ? html`<span class="px-1 text-[9px] text-slate-400 dark:text-zinc-500" data-testid="related-nested-more"
-              >+${more} meer</span
-            >`
-          : ''}
     </div>
   `
 }
@@ -1550,7 +1693,10 @@ function nestedSubChips(ancestors, kids, drill) {
 // the call-arrow overlay (callArrows.mjs, which targets the card's LEFT edge)
 // is unaffected by the chips on the right.
 function relatedCard(r, i, drill) {
-  const selected = () => cs.focus === 'code' && i === cs.codeSel
+  // The card's own highlight steps aside once the cursor descends into one of
+  // its drill-hint chips (cs.chipPath, see nestedChip/handleRelatedKey) — only
+  // one thing in the code panel is ever visually "active" at a time.
+  const selected = () => cs.focus === 'code' && i === cs.codeSel && cs.chipPath.length === 0
   // An unchanged call/covered-method target (into a file this PR doesn't touch)
   // has no diff to review, so its selection highlight is grey rather than indigo.
   const unchanged = DIFFSTAT_KINDS.has(r.kind) && !r.diff
@@ -1607,7 +1753,7 @@ function relatedCard(r, i, drill) {
                 geen code gevonden
               </p>`}
     </div>
-    ${() => (nested.length ? nestedChipColumn(r, drill) : '')}
+    ${() => (nested.length ? nestedChipColumn([r], nested, drill, [], i) : '')}
     </div>
   `
 }
@@ -1624,7 +1770,10 @@ function relatedCard(r, i, drill) {
 // every toggle rebuilds the keyed node (the key encodes open/closed, see
 // fullCard), so nothing here needs its own reactive binding.
 function testsBar(r, i, drill) {
-  const selected = () => cs.focus === 'code' && i === cs.codeSel
+  // The card's own highlight steps aside once the cursor descends into one of
+  // its drill-hint chips (cs.chipPath, see nestedChip/handleRelatedKey) — only
+  // one thing in the code panel is ever visually "active" at a time.
+  const selected = () => cs.focus === 'code' && i === cs.codeSel && cs.chipPath.length === 0
   return html`
     <div
       class="${() =>
@@ -2374,6 +2523,13 @@ function openSidebar() {
 // whose comment scope is now empty). A remembered index past the end of a
 // shrunk-but-non-empty list clamps to the last comment instead of bouncing to
 // the default, mirroring applyRelRestore's clamping.
+// Highlight only, like enterComments — does NOT drop the keyboard into the
+// reply/reaction textarea (toComment(false)/focusThread(false)): a `g`
+// re-open must behave the same way a fresh open does (see enterComments'
+// own comment on why) — landing straight in an editable field would swallow
+// the reviewer's very next keystroke (e.g. a literal "g" meant to toggle the
+// sidebar shut again) as typed text instead. An explicit Enter still opens
+// it (isCommentFocused/openComposer in home.mjs), same as a fresh `g`-open.
 function restoreLastSidebarFocus() {
   const want = lastSidebarFocus
   if (!want || want.focus === 'new') {
@@ -2389,9 +2545,9 @@ function restoreLastSidebarFocus() {
   if (want.focus === 'thread') {
     cs.focus = 'thread'
     cs.threadPos = Math.min(want.threadPos, reactionCount())
-    focusThread()
+    focusThread(false)
   } else {
-    toComment()
+    toComment(false)
   }
 }
 

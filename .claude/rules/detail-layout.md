@@ -212,8 +212,18 @@ zichtbare comment-lijst, `threadPos` geklemd op de thread-lengte — mirror van
 bestaat er nog geen herinnering, of is de onthouden comment/thread niet meer
 zichtbaar (verwijderd, of de reviewer zit inmiddels op een ander block/unit
 waarvan de comment-scope leeg is), dan valt het terug op de bestaande
-`enterComments()`-landing (rij 0, alleen highlighten). Mirrort het
-`preTaskFocus`-patroon. Test: `tests/sidebar-focus-restore.spec.mjs`.
+`enterComments()`-landing (rij 0, alleen highlighten). **Dit herstel focust
+bewust nooit het reply-/reactie-tekstveld** (`toComment(false)`/
+`focusThread(false)` — de `focusInput`-parameter, default `true` voor elke
+andere aanroeper zoals een klik of een pijltjestoets-stap): alleen de rij/
+thread opnieuw highlighten, exact dezelfde "highlight-only"-filosofie als
+`enterComments()` zelf. Zonder dit landde een `g`-heropening — als de
+reviewer de sidebar eerder vanuit een comment-rij of thread verliet — recht
+in een gefocust tekstveld, waarna een **tweede `g`** (bedoeld om de sidebar
+weer dicht te klappen) als een letterlijke "g" in dat veld belandde i.p.v. de
+sidebar te sluiten (de globale `g`-handler in `home.mjs` negeert `g` expliciet
+zolang `isEditableFocused()` waar is). Mirrort het `preTaskFocus`-patroon.
+Test: `tests/sidebar-focus-restore.spec.mjs`.
 
 **Dichtgeklapt** (`!cs.sidebarOpen`) rendert de sidebar als een smalle
 hint-rail op de rechterrand (`data-testid=sidebar-collapsed`, `right-0 w-12`,
@@ -723,55 +733,93 @@ rechts — zie de layout-alinea hierboven):
   `relatedChildren`/`resolvedCallChildren` in `home.mjs` via `blockApproveCount`);
   dezelfde rollup zit als combinatie-pill op de sidebar-rij — zie de
   gecombineerde-goedkeuring-uitleg in `.claude/rules/blocks-and-ingest.md`.
-  **Drill-hint-chips (streepje naar rechts, recursieve mini-boom):** elk kind
-  waarvan het blok **zélf** nog gewijzigde onderliggende code heeft, toont
-  rechts van zijn kaart een kort **gestippeld streepje** naar een smalle
-  chip-kolom (`data-testid=related-nested`, `w-36`): per gewijzigd
-  (achter)kleinkind één chip (`data-testid=related-nested-chip`) met het
-  **volledige `class::method`-label** (kale naam als er geen class is — de
-  gedeelde `blockLabel`-helper in `Block.mjs`, "class::method overal"), een
-  eigen **diffstat `+A −B`** (groen/rood, `data-testid=related-nested-diffstat`,
-  `diffStat` over de lazy-ge-`ensureCode`de kid; een grijze **`…`**-placeholder
-  zolang die code nog laadt — nooit "Ongewijzigd", elk chip-target is per
-  definitie een gewijzigd PR-blok) en de **approval `done/total`**
-  (`data-testid=related-nested-approval`, `blockApproveCount` van het blok
-  zelf — bewust niet subtree; ✓-prefix bij volledig; verborgen bij `total 0`).
-  Géén file-regel in de chip (het volledige `label · file` zit in `title`).
-  **Recursief**: elke chip toont ingesprongen (`data-testid=
-  related-nested-sub`) zijn eigen gewijzigde kinderen, tot een **diepte-cap
-  van 2 chip-niveaus** onder de kaart (`NESTED_DEPTH`, `home.mjs` — de kolom
-  is smal, elk niveau multipliceert `ensureCode`-fetches, en dieper kijken is
-  waar drillen voor is); per niveau gecapt op **3 chips + "+N meer"**
-  (`data-testid=related-nested-more`), cycle-safe via een gedeelde `seen`-set
-  (het `nestedPrBlocks`-patroon). De data komt uit
-  `nestedChangedKids(prBlock, parentId, seen, depth)` in `home.mjs` (platte
-  descriptors op `r.nested` + een recursieve key-signatuur `r.nestedSig` via
-  `nestedSigOf`, gebouwd in dezelfde descriptor-builders/`setRelated`-watch
-  als de rest — nooit in een render-binding, dus geen `b.code`-race):
-  `directChildBlocks` levert per definitie alleen **PR-blokken**, dus een
-  `Ongewijzigd`/synthetisch call-target krijgt nooit een chip (een call-child
-  zonder `prBlock` krijgt expliciet `nested: []`). Chips liften mee op de
-  descriptor, dus ze verschijnen op elke granulariteit waar het kind zelf
-  zichtbaar is (ook `line`/`call`). Een **klik op een chip op diepte d drilt
-  d+1 niveaus in één keer** (het kaart-kind, dan elke ancestor-chip, dan de
-  chip zelf — sequentiële `drillIntoChild`-stappen via dezelfde
-  `drill`-callback, met `stopPropagation` zodat de kaart-klik er niet óók
-  één-niveau overheen drilt); `Enter` op de kaart blijft de gewone
-  één-niveau-drill. arrow.js-details: de kaart-root van `relatedCard` is een
-  flex-rij (kaart `min-w-0 flex-1`); de approval-teller is een **vooraf
-  berekende string** (`approveText`) in een altijd-aanwezig element, en elke
-  conditionele sub-template (chip-kolom, diffstat, sub-lijst) loopt via een
-  **`${() => …}`-functie-binding** — nooit een statische template↔string-
-  ternary, die lekte arrow's template-functie (`i=>je(n,i)`) als tekst bij
-  chunk-hergebruik, zie de "statische template↔string slot"-valkuil in
-  `.claude/rules/conventions.md`. De kaart-`.key` in `fullCard` draagt
-  `r.nestedSig` zodat elke boom-wijziging (set/approval/diff-geladen) een
-  verse node bouwt; chip-keys zijn het **id-pad** (zelfde id kan onder twee
-  parents hangen). `data-child-id` blijft op de binnenste kaart, dus de
-  call-pijl-overlay (die op de **linker**rand van de kaart mikt) heeft geen
-  last van de chips rechts. Het `tests_group`-balkje (zie hieronder) krijgt
-  géén chips. De ingeklapte kolom-rails (`collapsedColumnHTML`, `home.mjs`)
-  tonen sinds deze change óók het volledige `class::method`-label via dezelfde
+  **Drill-hint-chips (streepje naar rechts, recursieve mini-boom die naar
+  RECHTS groeit):** elk kind waarvan het blok **zélf** nog gewijzigde
+  onderliggende code heeft, toont rechts van zijn kaart een kort
+  **gestippeld streepje** naar een smalle chip-kolom (`data-testid=
+  related-nested`, `w-36`): per gewijzigd (achter)kleinkind één chip
+  (`data-testid=related-nested-chip`) met het **volledige `class::method`-
+  label** — **wrapt, wordt nooit afgekapt** (`whitespace-normal break-words`,
+  géén `truncate`; kale naam als er geen class is — de gedeelde `blockLabel`-
+  helper in `Block.mjs`, "class::method overal"), een eigen **diffstat
+  `+A −B`** (groen/rood, `data-testid=related-nested-diffstat`, `diffStat`
+  over de lazy-ge-`ensureCode`de kid; een grijze **`…`**-placeholder zolang
+  die code nog laadt — nooit "Ongewijzigd", elk chip-target is per definitie
+  een gewijzigd PR-blok) en de **approval `done/total`** (`data-testid=
+  related-nested-approval`, `blockApproveCount` van het blok zelf — bewust
+  niet subtree; ✓-prefix bij volledig; verborgen bij `total 0`). Géén
+  file-regel in de chip (het volledige `label · file` zit in `title`).
+  **Recursief, en naar RECHTS (niet ingesprongen eronder):** elke chip is een
+  flex-rij (`nestedChip`, `RelatedPanel.mjs`) — de chip-knop zelf, gevolgd
+  door, als het kind zélf weer gewijzigde kinderen heeft, diens **eigen**
+  chip-kolom ernaast via `nestedChipColumn` — dezelfde functie die de
+  top-level kolom naast de kaart rendert, nu het **enige** recursieve
+  bouwblok op elke diepte (er is geen apart "ingesprongen-eronder"-`nestedSubChips`
+  meer). Diepte-cap van **2 chip-niveaus** onder de kaart blijft
+  (`NESTED_DEPTH`, `home.mjs` — elk niveau multipliceert `ensureCode`-fetches,
+  en dieper kijken is waar drillen voor is); per niveau gecapt op **3 chips +
+  "+N meer"** (`data-testid=related-nested-more`, nooit met het toetsenbord
+  bereikbaar — zie hieronder), cycle-safe via een gedeelde `seen`-set (het
+  `nestedPrBlocks`-patroon). Omdat elke rij nu breder kan zijn dan zijn eigen
+  `w-36`-kolom (kaart-brede rij bevat kolom-per-diepte), scrollt de kaart z'n
+  bestaande `overflow-auto`-body ook **horizontaal** zodra dat nodig is — geen
+  aparte CSS-wijziging, alleen een gevolg van de rechts-groeiende layout. De
+  data komt uit `nestedChangedKids(prBlock, parentId, seen, depth)` in
+  `home.mjs` (platte descriptors op `r.nested` + een recursieve
+  key-signatuur `r.nestedSig` via `nestedSigOf`, gebouwd in dezelfde
+  descriptor-builders/`setRelated`-watch als de rest — nooit in een
+  render-binding, dus geen `b.code`-race): `directChildBlocks` levert per
+  definitie alleen **PR-blokken**, dus een `Ongewijzigd`/synthetisch
+  call-target krijgt nooit een chip (een call-child zonder `prBlock` krijgt
+  expliciet `nested: []`). Chips liften mee op de descriptor, dus ze
+  verschijnen op elke granulariteit waar het kind zelf zichtbaar is (ook
+  `line`/`call`). Een **klik op een chip op diepte d drilt d+1 niveaus in één
+  keer** (het kaart-kind, dan elke ancestor-chip, dan de chip zelf —
+  sequentiële `drillIntoChild`-stappen via dezelfde `drill`-callback, met
+  `stopPropagation` zodat de kaart-klik er niet óók één-niveau overheen
+  drilt); `Enter` op de kaart blijft de gewone één-niveau-drill.
+
+  **Toetsenbord door de chip-boom (`cs.chipPath`, `RelatedPanel.mjs`):** een
+  tweede, geneste cursor naast `cs.codeSel` — leeg (`[]`) betekent de
+  keyboard staat op de kaart zelf, `[i]` de i-de top-level chip, `[i,j]` diens
+  j-de subchip, enzovoort (één index per diepte, spiegelt de recursieve
+  `nested`-vorm van de data). Alleen zinvol binnen `cs.focus==='code'`
+  (`handleRelatedKey`), spatieel consistent met de rechts-groeiende chips:
+  **`→`** descendeert in wat op dat moment gefocust is (kaart of chip) naar
+  diens eigen eerste nested chip (no-op zonder nested); **`←`** klimt één
+  niveau terug (pas bij een lege `chipPath` valt het door naar het bestaande
+  "verlaat het paneel"-gedrag — dit is een **bewuste gedragswijziging**: `←`
+  sloot voorheen áltijd het paneel, ongeacht chip-focus); **`↓`/`↑`** lopen
+  door de **siblings op de huidige diepte** (`chipListAt`, geklemd op
+  begin/eind — geen doorstroom naar een ander niveau) zolang `chipPath`
+  niet leeg is, anders het bestaande `cs.codeSel`-gedrag over de kaarten;
+  **`Enter`** drilt de hele keten via `focusedChipChain()` (ancestors +
+  gefocuste chip, mirror van de klik-handler). `chipPath` reset naar `[]`
+  zodra `codeSel` verandert én bij elke `setRelated`-push (de boom kan
+  herbouwen, dus een oude diepte-index is niet betrouwbaar). De focus-ring
+  (`data-active` op de chip) is **ook** gescoped op `cs.codeSel` — niet alleen
+  op `chipPath` — omdat twee verschillende kaarten toevallig dezelfde
+  chip-boomvorm (en dus hetzelfde pad) kunnen hebben; zonder die extra check
+  licht de "gefocuste" chip op **elke** kaart met die vorm op tegelijk
+  (regressietest: de laatste test in `tests/related-nested-chip.spec.mjs`
+  drilt drie niveaus diep en verifieert per stap dat alleen de kaart bij
+  `codeSel` een actieve ring toont).
+
+  arrow.js-details: de kaart-root van `relatedCard` is een flex-rij (kaart
+  `min-w-0 flex-1`); de approval-teller is een **vooraf berekende string**
+  (`approveText`) in een altijd-aanwezig element, en elke conditionele
+  sub-template (chip-kolom, diffstat) loopt via een **`${() => …}`-functie-
+  binding** — nooit een statische template↔string-ternary, die lekte arrow's
+  template-functie (`i=>je(n,i)`) als tekst bij chunk-hergebruik, zie de
+  "statische template↔string slot"-valkuil in `.claude/rules/conventions.md`.
+  De kaart-`.key` in `fullCard` draagt `r.nestedSig` zodat elke boom-wijziging
+  (set/approval/diff-geladen) een verse node bouwt; chip-keys zijn het
+  **id-pad** (zelfde id kan onder twee parents hangen). `data-child-id` blijft
+  op de binnenste kaart, dus de call-pijl-overlay (die op de **linker**rand
+  van de kaart mikt) heeft geen last van de chips rechts. Het
+  `tests_group`-balkje (zie hieronder) krijgt géén chips. De ingeklapte
+  kolom-rails (`collapsedColumnHTML`, `home.mjs`) tonen sinds deze change óók
+  het volledige `class::method`-label via dezelfde
   `blockLabel`-helper. Zie `tests/related-nested-chip.spec.mjs`.
   Náást de listener-children toont dezelfde kaart ook de **methode-aanroepen** die
   het block doet, gekoppeld aan hun **definitie** — ook uit ongewijzigde bestanden
