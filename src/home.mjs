@@ -4360,7 +4360,7 @@ function menuRegion() {
     return document.querySelector('[data-testid="pr-index"]')
   }
   // Stop 1: the palette takes the description column's full left+width
-  // (26rem) — mirror of how the index menu takes the whole sidebar.
+  // (39rem) — mirror of how the index menu takes the whole sidebar.
   if (isDescriptionMenu()) {
     return document.querySelector('[data-testid="pr-info-column"]')
   }
@@ -4650,15 +4650,17 @@ function prInfoCard(state) {
 // BlockList.mjs) is itself position:fixed and outside <main>'s flex flow, so
 // this panel has to live at that same level to sit flush left of it (at the
 // pr-index's usual left-6 spot) while BlockList slides itself right
-// (translate-x-[27.5rem]) to make room. See the "verplaats pr description naar
+// (translate-x-[40.5rem]) to make room. See the "verplaats pr description naar
 // links" note in detail-layout.md for the full rationale/measurements.
+// Width is 1.5x the original 26rem (w-[39rem]) — the reviewer wanted more
+// room to read the PR title/summary/description/Jira box without truncation.
 function PrInfoPanel(state) {
   return html`
     <div>
       ${() =>
         state.showDescription
           ? html`<div
-              class="fixed bottom-6 left-6 top-6 z-10 flex min-h-0 w-[26rem] flex-col gap-3"
+              class="fixed bottom-6 left-6 top-6 z-10 flex min-h-0 w-[39rem] flex-col gap-3"
               data-testid="pr-info-column"
             >
               ${prInfoCard(state)}
@@ -4690,16 +4692,16 @@ function DetailPanel(state) {
         // 3rem hint rail flush against the edge (right-0, w-12); open it's
         // right-6 (1.5rem) + w-[36rem], so its left edge sits 37.5rem in. Both
         // get the same 1.5rem breathing-room gap used elsewhere for this kind
-        // of panel-to-panel spacing (see left-[56.5rem] below).
+        // of panel-to-panel spacing (see left-[69.5rem] below).
         (sidebarOpen() ? 'right-[39rem] ' : 'right-[4.5rem] ') +
         (state.mode === 'diff'
           ? 'left-6'
           : // showDescription (list-mode only) pushes PrInfoPanel to left-6 and
-            // slides the pr-index right by one column-width (27.5rem, see
+            // slides the pr-index right by one column-width (40.5rem, see
             // BlockList.mjs) — <main> needs to clear both, so it shifts the same
-            // 27.5rem past its usual left-[29rem].
+            // 40.5rem past its usual left-[29rem].
             state.showDescription
-            ? 'left-[56.5rem]'
+            ? 'left-[69.5rem]'
             : 'left-[29rem]')}"
       data-testid="detail-panel"
     >

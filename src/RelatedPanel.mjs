@@ -1235,7 +1235,7 @@ function commentRow(c, i) {
           ${() => sourceBadge(c)}
         </span>
         <span
-          class="truncate text-xs font-medium text-slate-800 dark:text-zinc-200"
+          class="truncate [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200"
           .innerHTML="${commentBody(c)}"
         ></span>
         <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
@@ -1278,7 +1278,7 @@ function reactionBubble(r, i, total) {
         class="${() => {
           const sel = cs.focus === 'thread' && cs.threadPos === total - i
           return (
-            'max-w-[85%] rounded-2xl px-3 py-1.5 text-xs leading-relaxed ' +
+            'max-w-[85%] rounded-2xl px-3 py-1.5 text-xs leading-relaxed [overflow-wrap:anywhere] ' +
             (mine ? 'bg-indigo-500 text-white' : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300') +
             (sel ? ' ring-2 ring-indigo-400' : '')
           )
@@ -2394,7 +2394,7 @@ function prWideItem(c, i) {
             <span class="text-[10px] text-slate-400 dark:text-zinc-500">${relTime(c.createdAt)}</span>
           </span>
           <span
-            class="line-clamp-2 text-xs text-slate-700 dark:text-zinc-300"
+            class="line-clamp-2 [overflow-wrap:anywhere] text-xs text-slate-700 dark:text-zinc-300"
             .innerHTML="${commentBody(c)}"
           ></span>
         </span>

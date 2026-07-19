@@ -66,11 +66,12 @@ export default function BlockList(state) {
           : // showDescription (stop 1, list-mode only) slides this pr-index one
             // column-width right so the PR-description panel can take its usual
             // left-6 spot instead of appearing after it — see PrInfoPanel/
-            // detail-layout.md. 27.5rem = the description panel's own width
-            // (26rem) plus the 1.5rem gap it leaves before the pr-index, so the
-            // two sit flush next to each other exactly like pr-index/<main> do.
+            // detail-layout.md. 40.5rem = the description panel's own width
+            // (39rem, 1.5x the original 26rem) plus the 1.5rem gap it leaves
+            // before the pr-index, so the two sit flush next to each other
+            // exactly like pr-index/<main> do.
             state.showDescription
-            ? 'translate-x-[27.5rem] opacity-100'
+            ? 'translate-x-[40.5rem] opacity-100'
             : 'translate-x-0 opacity-100')}"
     >
       <header class="shrink-0 border-b border-slate-200 dark:border-zinc-800 px-4 py-3">

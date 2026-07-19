@@ -310,6 +310,15 @@
   weinig toevoegt en een halfafgekapte `**`/code-fence lelijker oogt dan kale
   tekst — de thread-header-titel (`selComment().body`) en `workflowNote`'s
   Taken-snippet blijven daarom platte tekst.
+  **Lange woorden/URL's breken binnen het woord af (`[overflow-wrap:anywhere]`):**
+  elk van de drie `.innerHTML="${commentBody(...)}"`-containers
+  (`commentRow`'s preview-span, `reactionBubble`'s bubble-`<div>`, `prWideItem`'s
+  body-span) draagt deze arbitrary-value Tailwind-class naast zijn bestaande
+  `truncate`/`line-clamp`/geen-wrap-class. Zonder deze class breekt tekst alleen
+  op woordgrenzen (`break-words`/browser-default), zodat een lange, spatieloze
+  token (URL, hash, aaneengeschreven pad) buiten de kaart/bubble kan uitsteken;
+  `overflow-wrap:anywhere` breekt zo'n woord alleen bij overloop, midden in het
+  woord, zonder normale tekst anders te wrappen.
 - **Gedeelde avatar-helper (`src/avatar.mjs`), auteur+avatar bij elke
   comment/reply.** `avatarHTML(name, avatarUrl, sizeCls, extraCls)` is
   geëxtraheerd uit `overview.mjs`'s `reviewerAvatar` (de reviewer-avatars in
