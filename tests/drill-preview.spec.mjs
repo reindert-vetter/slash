@@ -1,11 +1,14 @@
 import { test, expect } from './_fixtures.mjs'
 
-// Verifies the look-ahead preview of the NEXT Onderliggende-code sibling next
-// to a focused drilled column (drillPreviewColumns/state.drillPreviewChild in
-// home.mjs) — mirrors the top-level block-column's own look-ahead preview of
-// the next sidebar block (see "Kolom-navigatie" in detail-layout.md): the
-// reviewer should see what ↓ would drill into (drillNextChange →
-// drillToSibling) BEFORE actually stepping there, not just after.
+// Verifies the look-ahead preview of the NEXT Onderliggende-code sibling,
+// stacked VERTICALLY BELOW the focused drilled column's own card
+// (drillPreviewColumns/state.drillPreviewChild in home.mjs) — mirrors the
+// top-level block-column's own look-ahead preview of the next sidebar block
+// (see "Kolom-navigatie" in detail-layout.md): the reviewer should see what ↓
+// would drill into (drillNextChange → drillToSibling) BEFORE actually
+// stepping there, not just after, and it must sit UNDER the focused column
+// (not beside it — a horizontally side-by-side preview was tried first and
+// rejected: it read as a second column rather than a look-ahead).
 //
 // Same fixture as drill-sibling-walk.spec.mjs (proven deterministic): parent
 // CreatePaymentAction::execute with two sibling children —
@@ -58,13 +61,18 @@ test('drilling shows a dimmed preview of the next sibling before navigating to i
 
   const drillColumn = page.getByTestId('drill-column')
   const previewColumn = page.getByTestId('drill-preview-column')
-  const previewConnector = page.getByTestId('drill-preview-connector')
+  // The preview reuses the existing vertical connector() (same dashed-line
+  // component the top-level block-column uses between stacked cards, see
+  // detail-layout.md) — data-testid="file-connector", not a separate
+  // drilled-only testid — scoped to inside the drilled column so it can't
+  // match anything else on the page.
+  const previewConnector = drillColumn.getByTestId('file-connector')
   await expect(drillColumn).toHaveCount(1)
   await page.waitForTimeout(300)
   await expect(drillColumn).toContainText('findOrCreateCustomer')
 
   // Before pressing ↓ at all: the sibling ↓ would eventually flow into
-  // (Order::address) is already visible, dimmed, next to the real column.
+  // (Order::address) is already visible, dimmed, UNDER the real column.
   await expect(previewColumn).toHaveCount(1)
   await expect(previewConnector).toHaveCount(1)
   await expect(previewColumn).toContainText('address')
@@ -72,6 +80,15 @@ test('drilling shows a dimmed preview of the next sibling before navigating to i
   // Block's own preview styling) — spot-check it doesn't render as an active,
   // fully-opaque card by asserting it never claims the diff keyboard.
   await expect(previewColumn.locator('[data-testid="drill-left-hint"]')).toHaveCount(0)
+
+  // Positioned BELOW the focused column's own card, not beside it: the
+  // preview's bounding box starts further down the page than the drilled
+  // column's, and stays within the same horizontal band (stacked, not a
+  // second column to the right).
+  const drillBox = await drillColumn.boundingBox()
+  const previewBox = await previewColumn.boundingBox()
+  expect(previewBox.y).toBeGreaterThan(drillBox.y)
+  expect(Math.abs(previewBox.x - drillBox.x)).toBeLessThan(20)
 
   // ↓ overflows immediately (findOrCreateCustomer has zero change groups) and
   // promotes the previewed sibling into the real, focused column.

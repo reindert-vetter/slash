@@ -538,37 +538,41 @@ bestaande `foc`/`unfoc`-component, dus hij verschijnt/verdwijnt met een verse
 kaart i.p.v. een hergebruikte node.
 
 **Look-ahead-preview van de volgende sibling (`drillPreviewColumns`,
-`data-testid=drill-preview-column` + `drill-preview-connector`):** naast de
-gefocuste (altijd meest-rechtse) gedrilde kolom toont een gedimde
+`data-testid=drill-preview-column`):** **onder** de kaart van de gefocuste
+(altijd meest-rechtse) gedrilde kolom — niet ernaast — toont een gedimde
 preview-kaart van de sibling waar `↓` aan het eind naartoe zou stappen
-(`drillNextChange`→`drillToSibling`) — vóórdat de reviewer er echt heen
-navigeert, mirror van de top-level look-ahead-preview van het volgende
-sidebar-blok. Alleen de **volgende** sibling (nooit de vorige), altijd
-zichtbaar zodra er een is (niet pas op de laatste change-unit) — ook dat een
-mirror van de top-level `pair`. Een gestippelde horizontale connector
-(`connectorH()`, het horizontale zusje van `connector()` — gedrilde kolommen
-staan naast elkaar in `<main>`'s `flex-row`, niet gestapeld als de top-level
-`flex-col`) verbindt de twee. `resolveChildBlock` (uit `drillIntoChild`
-geëxtraheerd) lost de sibling-descriptor op tot hetzelfde blok-achtige object
-dat een echte drill zou pushen, zodat de preview-kaart bij promotie (via `↓`)
-identieke, al-geladen code toont.
-**Load-bearing isolatie tegen over-subscriptie:** de sibling-lookup
-(`drillSiblingContext`/`relatedChildren`) leest veel bredere reactieve state
-dan de gedrilde-kolommen-closure zelf wil (`b.approvedRows`/`approvedCalls`,
-`state.callResolve`/`testCovers`/`testsExpanded`/`relations`) — rechtstreeks
-aanroepen daar zou een ongerelateerde goedkeuring/callresolve-poll elke open
-`Block()`-kaart laten herbouwen (de valkuil in `conventions.md`). De
-berekening zit daarom in de bestaande `setRelated`-watch (die toch al
-`relatedChildren()` draait voor het Onderliggende-code-paneel), en schrijft
-**identity-guarded** (alleen bij een echt andere volgende-sibling-id) naar het
-platte veld `state.drillPreviewChild`; de render-kant leest alleen dát veld en
-pusht `drillPreviewColumns()`'s twee keyed items in de al-bestaande
-`state.drill.map(...)`-array (geen aparte, constant-gekeyde slot — die bleek in
-de praktijk NIET betrouwbaar te herrenderen bij een wisselende sibling-target,
-want een constante key op een item wiens *inhoud* elke keer verschilt is
-precies de "arrow.js hergebruikt een keyed node zonder de bindings te
-herdraaien"-valkuil, alleen dan zonder dat de key zelf botst met een ANDERE
-rol — hier botste hij met een EERDERE render van zichzelf). Test:
+(`drillNextChange`→`drillToSibling`), vóórdat de reviewer er echt heen
+navigeert. Mirror van de top-level look-ahead-preview van het volgende
+sidebar-blok: alleen de **volgende** sibling (nooit de vorige), altijd
+zichtbaar zodra er een is (niet pas op de laatste change-unit), verbonden met
+dezelfde verticale gestippelde `connector()` als die top-level preview
+gebruikt (geen aparte horizontale variant — gedrilde kolommen stapelen hun
+preview verticaal, precies als het top-level `block-column` z'n volgende-blok-
+kaart). `resolveChildBlock` (uit `drillIntoChild` geëxtraheerd) lost de
+sibling-descriptor op tot hetzelfde blok-achtige object dat een echte drill
+zou pushen, zodat de preview-kaart bij promotie (via `↓`) identieke,
+al-geladen code toont.
+`drillPreviewColumns()` wordt aangeroepen vanuit een **geneste**,
+array-retournerende `${() => drillPreviewColumns()}`-slot ín de gefocuste
+kolom z'n eigen per-item template (naast de echte `Block(b, …)`-kaart, in
+dezelfde `flex-col`-wrapper) — niet als los top-level item in
+`state.drill.map(...)`'s array. Die isolatie is dubbel load-bearing: (1)
+`drillPreviewColumns()` leest alleen het goedkope, **identity-guarded** veld
+`state.drillPreviewChild` — nooit rechtstreeks `drillSiblingContext`/
+`relatedChildren` (die lezen veel bredere state, `b.approvedRows`/
+`state.callResolve`/`testCovers`/`relations`, en zouden bij rechtstreeks
+aanroepen in de kolommen-closure elke open `Block()`-kaart laten herbouwen op
+een ongerelateerde goedkeuring/poll — de valkuil in `conventions.md`); die
+berekening zit in de bestaande `setRelated`-watch (die toch al
+`relatedChildren()` draait), en schrijft alleen bij een echt andere
+volgende-sibling-id naar het veld. (2) Doordat de slot genest is i.p.v. een
+top-level array-item, forceert een preview-wissel nooit een rebuild van de
+buitenste `state.drill.map(...)`-closure (en dus nooit van de echte
+`Block(b)`-kaart erboven) — een eerdere versie pushte de preview-items wél als
+top-level array-items met een **constante** key, wat bij een wisselende
+sibling-target niet betrouwbaar herrenderde (dezelfde "arrow.js hergebruikt
+een keyed node zonder de bindings te herdraaien"-valkuil, maar dan botsend met
+een eerdere render van zichzelf i.p.v. een andere rol). Test:
 `tests/drill-preview.spec.mjs`.
 
 **Niet-gefocuste kolommen klappen in tot een smalle rail** — zodra

@@ -4143,20 +4143,6 @@ function connector() {
   `
 }
 
-// connectorH — the horizontal twin of connector() for the drilled-column
-// look-ahead preview (see drillPreviewColumns below): drilled columns sit side by
-// side in <main>'s flex-row (unlike the top-level block-column's vertical
-// flex-col stack that connector() bridges), so the dashed line runs
-// top-to-bottom of the gap between the focused column and its preview instead
-// of left-to-right of a vertical gap.
-function connectorH() {
-  return html`
-    <div class="flex w-6 shrink-0 flex-col justify-center self-stretch" data-testid="drill-preview-connector">
-      <div class="border-t-2 border-dashed border-slate-300 dark:border-zinc-700"></div>
-    </div>
-  `
-}
-
 // canStep reports whether ↓ (delta 1) / ↑ (delta -1) would flow out of the
 // selected block into its same-file neighbour: we're in diff mode, on the last
 // (resp. first) change of the block, and that neighbour exists. This is the cue
@@ -4227,10 +4213,10 @@ function stepChevronSlot(delta, dir) {
   return html`<div class="contents">${() => (canStep(delta) ? stepChevron(dir) : '')}</div>`
 }
 
-// drillPreviewColumns builds the (0 or 2) keyed array items for a look-ahead
-// preview of the NEXT Onderliggende-code sibling, appended right after the
-// currently focused drilled column (always the rightmost — state.focusLevel
-// === state.drill.length whenever drill.length > 0, see expandColumn/
+// drillPreviewColumns builds the (0 or 2) keyed items for a look-ahead preview
+// of the NEXT Onderliggende-code sibling, stacked BELOW the currently focused
+// drilled column's own card (always the rightmost — state.focusLevel ===
+// state.drill.length whenever drill.length > 0, see expandColumn/
 // drillIntoChild) — mirroring the top-level block-column's own look-ahead
 // preview of the next sidebar block (the `pair`/connector() logic above): the
 // reviewer sees what ↓ would drill into once the current column's own changes
@@ -4239,23 +4225,25 @@ function stepChevronSlot(delta, dir) {
 // as the top-level preview — and it's shown unconditionally whenever a next
 // sibling exists, not just once the reviewer reaches the last change unit
 // (again mirroring the top-level `pair`, which always renders regardless of
-// state.change's position within the selected block).
+// state.change's position within the selected block). Reuses the existing
+// vertical connector() — drilled columns stack the preview vertically under
+// the focused card, exactly like the top-level block-column does for its own
+// next-block preview, not side by side.
 //
-// Called from the drilled-columns closure below, which already re-runs on
-// every state.drill change (needed anyway, since a sibling-walk swaps which
-// block that column shows) — so pushing keyed items here, exactly like the
-// real drilled columns / the top-level pair do, gets a correctly-reconciled
-// swap for free (proven pattern in this file) whenever the preview's own key
-// changes. This function itself reads only the cheap, identity-guarded
-// state.drillPreviewChild field — NOT relatedChildren()/drillSiblingContext()
-// directly. Those are computed once in the setRelated watch (which already
-// needs the identical inputs for the real Onderliggende-code panel) and only
-// reassign this field when the actual next-sibling id changes; reading the
-// field here (rather than calling relatedChildren() in this render path)
-// means an unrelated approve-toggle or callresolve poll elsewhere — which
-// recomputes relatedChildren() but rarely changes WHICH sibling is next —
-// leaves this field's reference untouched, so it doesn't force a rebuild of
-// the real drilled Block() cards. See the field's own comment and
+// Called from a nested `${() => drillPreviewColumns()}` slot INSIDE the
+// focused drilled column's own per-item template (see the drilled-columns
+// closure below) — a small, independently-reactive array-returning binding,
+// not a dependency of the outer state.drill.map() closure. That isolation is
+// load-bearing on two fronts: this function reads only the cheap,
+// identity-guarded state.drillPreviewChild field — NOT relatedChildren()/
+// drillSiblingContext() directly (those are computed once in the setRelated
+// watch, which already needs the identical inputs for the real
+// Onderliggende-code panel, and only reassign this field when the actual
+// next-sibling id changes) — and because the slot is nested rather than a
+// top-level sibling in the outer closure's returned array, a preview change
+// re-renders only THIS small nested slot, never re-invoking the outer
+// closure (so the Block(b) card above it is never rebuilt just because the
+// preview changed). See the field's own comment and
 // .claude/rules/conventions.md.
 function drillPreviewColumns() {
   const next = state.drillPreviewChild
@@ -4269,7 +4257,7 @@ function drillPreviewColumns() {
   const codeState =
     previewBlock.code && !previewBlock.code.error ? 'code' : previewBlock.code && previewBlock.code.error ? 'err' : 'load'
   return [
-    connectorH().key('drill-preview-connector'),
+    connector().key('drill-preview-connector'),
     html`
       <div class="relative flex min-h-0 shrink-0 flex-col gap-3" data-testid="drill-preview-column">
         ${Block(previewBlock, {
@@ -4868,12 +4856,7 @@ function DetailPanel(state) {
         // card, exactly like state.change/state.gran for the top-level card.
         void state.codeVersion
         void state.focusLevel
-        // Cheap read (see drillPreviewChild's own comment + drillPreviewColumns):
-        // an identity-guarded field, not a relatedChildren() call, so this
-        // closure only re-runs for the preview's sake when the sibling target
-        // actually changes — not on every unrelated approve-toggle/poll.
-        void state.drillPreviewChild
-        const cols = state.drill.map((b, i) => {
+        return state.drill.map((b, i) => {
           ensureCode(b)
           const level = i + 1
           const focusedHere = state.focusLevel === level
@@ -4891,44 +4874,59 @@ function DetailPanel(state) {
             )
           }
           return html`
-            <div class="relative flex min-h-0 shrink-0 flex-col gap-3" data-testid="drill-column" data-drill-idx="${i}">
-              ${focusedHere
-                ? html`
-                    <div
-                      class="pointer-events-none absolute -left-3 top-1/2 z-10 -translate-y-1/2"
-                      data-testid="drill-left-hint"
-                    >
-                      <span
-                        class="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 dark:bg-zinc-700 text-slate-500 dark:text-zinc-500 shadow-sm ring-1 ring-black/5"
+            <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="drill-column" data-drill-idx="${i}">
+              <div class="relative flex min-h-0 flex-col">
+                ${focusedHere
+                  ? html`
+                      <div
+                        class="pointer-events-none absolute -left-3 top-1/2 z-10 -translate-y-1/2"
+                        data-testid="drill-left-hint"
                       >
-                        <svg
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="3"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          class="h-3 w-3"
-                        ><path d="M15 18l-6-6 6-6"/></svg>
-                      </span>
-                    </div>
-                  `
-                : ''}
-              ${Block(b, {
-                preview: !focusedHere,
-                activeGroup: () => {
-                  if (state.focusLevel !== level) return null
-                  const cur = state.drillCursor[i] || { change: 0, gran: 'group' }
-                  return unitsFor(blockRows(b), cur.gran)[cur.change] || null
-                },
-                hintsEnabled: () => state.focusLevel === level,
-                diffActive: () => state.focusLevel === level && !relatedActive(),
-                approvedRows: () => approvedRowSet(b),
-                approvedCalls: () => approvedCallSet(b),
-                onApprove: (blk) => persistApproval(blk),
-                commentedRows: () => commentRowSet(b),
-                viewMode: () => state.diffViewMode,
-              })}
+                        <span
+                          class="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 dark:bg-zinc-700 text-slate-500 dark:text-zinc-500 shadow-sm ring-1 ring-black/5"
+                        >
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="h-3 w-3"
+                          ><path d="M15 18l-6-6 6-6"/></svg>
+                        </span>
+                      </div>
+                    `
+                  : ''}
+                ${Block(b, {
+                  preview: !focusedHere,
+                  activeGroup: () => {
+                    if (state.focusLevel !== level) return null
+                    const cur = state.drillCursor[i] || { change: 0, gran: 'group' }
+                    return unitsFor(blockRows(b), cur.gran)[cur.change] || null
+                  },
+                  hintsEnabled: () => state.focusLevel === level,
+                  diffActive: () => state.focusLevel === level && !relatedActive(),
+                  approvedRows: () => approvedRowSet(b),
+                  approvedCalls: () => approvedCallSet(b),
+                  onApprove: (blk) => persistApproval(blk),
+                  commentedRows: () => commentRowSet(b),
+                  viewMode: () => state.diffViewMode,
+                })}
+              </div>
+              ${
+                // The look-ahead preview of the next Onderliggende-code sibling,
+                // stacked BELOW this card (mirrors the top-level block-column's
+                // own next-block preview) — a nested, independently-reactive
+                // array-returning slot (see drillPreviewColumns' own comment):
+                // it reads only the cheap, identity-guarded
+                // state.drillPreviewChild field, so it reacts to a sibling-walk
+                // on its own without requiring THIS per-item template (and thus
+                // the Block(b) card above) to rebuild. Only ever rendered for
+                // the focused (rightmost) column — we're already inside the
+                // focusedHere branch here, never for a collapsed-rail sibling.
+                () => drillPreviewColumns()
+              }
             </div>
           `.key(
             'drill:' +
@@ -4945,11 +4943,6 @@ function DetailPanel(state) {
               b.id,
           )
         })
-        // Look-ahead preview of the next Onderliggende-code sibling, appended
-        // right after the focused (rightmost) drilled column — see
-        // drillPreviewColumns' own comment for why this only reads the cheap
-        // state.drillPreviewChild field rather than recomputing it here.
-        return cols.concat(drillPreviewColumns())
       }}
       ${() =>
         RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
