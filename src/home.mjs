@@ -3549,7 +3549,9 @@ const PR_COMMANDS = [
     id: 'pr-overview',
     label: 'Naar PR-overzicht',
     hint: 'overzicht',
-    run: () => window.location.assign('/pr-overview'),
+    // `?pr=` lets /pr-overview auto-select this PR (see trySelectPendingPr in
+    // overview.mjs) — same destination + param as the ← nav-chain exit above.
+    run: () => window.location.assign('/pr-overview?pr=' + state.pr),
   },
   {
     id: 'pr-github',
@@ -4114,10 +4116,12 @@ function onKeydown(e) {
   // (isPrWideFocused() false) — ↓ hands it the keyboard instead (entering its
   // first entry) when it has any PR-wide comments; a no-op otherwise. Any
   // other key is a no-op and doesn't move the block selection underneath it.
+  // The `?pr=` param lets /pr-overview auto-select the PR we just came from
+  // (see the trySelectPendingPr()/pendingSelectPr logic in overview.mjs).
   if (state.showDescription) {
     e.preventDefault()
     if (e.key === 'ArrowRight') state.showDescription = false
-    else if (e.key === 'ArrowLeft') location.href = '/pr-overview'
+    else if (e.key === 'ArrowLeft') location.href = '/pr-overview?pr=' + state.pr
     else if (e.key === 'ArrowDown') handlePrWideKey('ArrowDown')
     return
   }

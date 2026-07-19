@@ -136,6 +136,46 @@ popover "Open review-boom" naar `/pr/12903`. Faalt de eerste fetch (geen
 fixture, geen snapshot) → `/api/inbox` `{ok:false}` → client valt terug op
 `GET /data/inbox.json` (label "cached").
 
+### `?pr=<id>` auto-selecteert de rij waar je vandaan komt
+
+Vanuit `/pr/<id>` linken zowel de **`←`-nav-chain-exit** (stop 1,
+`state.showDescription`, zie `.claude/rules/keyboard-navigation.md`) als het
+**`/`-menu-item "Naar PR-overzicht"** (`PR_COMMANDS` in `home.mjs`) naar
+`/pr-overview?pr=<state.pr>` — niet naar de kale `/pr-overview`. `overview.mjs`
+leest die param **eenmalig** bij module-load
+(`new URLSearchParams(location.search).get('pr')` → `pendingSelectPr`, mirror
+van `home.mjs`'s `prFromPath()` — geen `bindUrlState`, dit is een
+eenrichtings-consume-bij-load, geen navigatiepositie die teruggeschreven moet
+worden) en past 'm toe zodra de data er is, via **`trySelectPendingPr()`**,
+aangeroepen aan het eind van zowel `applyLive` als `applyCached` (mirror van
+`applyRelRestore`/`applyBlockRefRestore`'s restore-dan-clear-patroon):
+
+- Staat de PR in `state.sections` (de hoofd-lijst) → zet de module-level
+  `selKey` op `'row:' + pr` (dezelfde identiteit als `paintSelection`/
+  `reanchorSelection` al gebruiken, zie hierboven) en `pendingSelectPr = null`.
+  De bestaande `sections.length`-watch triggert vanzelf de eerstvolgende
+  `scheduleRepaint()`, die de ring zet + scrollt.
+- Staat de PR daar **niet** in, dan wordt de "Recent gegenereerd"-lade
+  gecheckt: `ensureRecentPrs()` (dezelfde `GET /api/prs`-fetch als
+  `toggleRecent()` — nu een gedeelde helper, met dezelfde
+  `recentLoading`-guard) haalt de lijst op; staat de PR daarin, dan
+  `state.recentOpen = true` (de lade klapt vanzelf open) + `selKey =
+  'recent:' + pr`. Ook hier trekt de bestaande `recentOpen`/`recentPrs.length`-
+  watch de repaint.
+- Staat de PR **nergens** (gemerged/uit de inbox-query gevallen, of nooit
+  geïngest) → stille no-op, net als een niet-gevonden `sel`-restore op
+  `/pr/<id>`. `pendingSelectPr` wordt **hoe dan ook** eenmalig gecleared na de
+  recent-check, ongeacht de uitkomst — een latere achtergrond-reload
+  (`reloadSnapshot`, elke 60s) mag de selectie niet opnieuw forceren.
+- `hoverEnabled = false` wordt meegezet (zoals `move`/`moveTo` al doen) zodat
+  een toevallige muis-hover de auto-selectie niet meteen overschrijft.
+- De `?pr=`-param wordt bewust **niet** opgeschoond (geen
+  `history.replaceState`) — harmless bij een refresh, die selecteert dan
+  gewoon dezelfde PR opnieuw.
+
+Test: `tests/overview-pr-select.spec.mjs` (in-sections, alleen-in-de-lade, en
+de stille no-op).
+
 ### Client (`src/overview.mjs`, arrow.js, dark-zinc, Nederlands)
 
 Twee-fasen render via een reactieve `state.statuses` (skeleton → pills, geen

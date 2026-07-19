@@ -878,20 +878,7 @@ function mainContent() {
 
 async function toggleRecent() {
   state.recentOpen = !state.recentOpen
-  if (state.recentOpen && state.recentPrs.length === 0 && !state.recentLoading) {
-    state.recentLoading = true
-    try {
-      const res = await fetch('/api/prs')
-      if (res.ok) {
-        const body = await res.json()
-        state.recentPrs = Array.isArray(body) ? body : []
-      }
-    } catch (e) {
-      // keep the drawer usable even if this fetch fails
-    } finally {
-      state.recentLoading = false
-    }
-  }
+  if (state.recentOpen) await ensureRecentPrs()
 }
 
 function recentItem(r) {
@@ -1022,6 +1009,7 @@ function applyLive(body) {
   // GitHub call. On load we ask that workflow to re-check GitHub now and start
   // heartbeating so it keeps its fast poll cadence while this tab is active.
   startLiveSync()
+  trySelectPendingPr()
 }
 
 function applyCached(body) {
@@ -1031,6 +1019,61 @@ function applyCached(body) {
   const prs = Array.isArray(body.prs) ? body.prs : []
   state.sections = prs.length ? [{ title: 'Needs your review', prs }] : []
   state.loading = false
+  trySelectPendingPr()
+}
+
+// ── auto-select a PR coming back from /pr/<id> ──────────────────────────────
+// The ← nav-chain exit and the "Naar PR-overzicht" command (both in home.mjs)
+// link here with `?pr=<id>` so the reviewer lands back on the row they just
+// came from, instead of an unselected list. Read once at load; applied (and
+// cleared) the first time the target PR turns up in either the main sections
+// or the lazily-loaded "Recent gegenereerd" drawer — mirrors the
+// restore-then-clear pattern of applyRelRestore/applyBlockRefRestore. A PR
+// that never turns up anywhere (merged/dropped out of the inbox query, no
+// longer ingested) is a silent no-op, same as an unresolved `sel` restore.
+let pendingSelectPr = (() => {
+  const raw = new URLSearchParams(location.search).get('pr')
+  const n = raw ? Number(raw) : NaN
+  return Number.isFinite(n) ? n : null
+})()
+
+// Shared by toggleRecent (manual click) and trySelectPendingPr (auto-select):
+// fetches /api/prs once and caches it on state.recentPrs.
+async function ensureRecentPrs() {
+  if (state.recentPrs.length === 0 && !state.recentLoading) {
+    state.recentLoading = true
+    try {
+      const res = await fetch('/api/prs')
+      if (res.ok) {
+        const body = await res.json()
+        state.recentPrs = Array.isArray(body) ? body : []
+      }
+    } catch (e) {
+      // keep the drawer usable even if this fetch fails
+    } finally {
+      state.recentLoading = false
+    }
+  }
+  return state.recentPrs
+}
+
+async function trySelectPendingPr() {
+  if (pendingSelectPr == null) return
+  const pr = pendingSelectPr
+  const inSections = state.sections.some((sec) => sec.prs.some((row) => row.number === pr))
+  if (inSections) {
+    selKey = 'row:' + pr
+    hoverEnabled = false
+    pendingSelectPr = null
+    return
+  }
+  const recent = await ensureRecentPrs()
+  pendingSelectPr = null // one-shot regardless of outcome — never re-applied on a later reload
+  if (recent.some((r) => r.pr === pr)) {
+    state.recentOpen = true
+    selKey = 'recent:' + pr
+    hoverEnabled = false
+  }
 }
 
 async function kickOffStatuses(gen) {
