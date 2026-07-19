@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -30,8 +31,16 @@ const (
 type RunRequest struct {
 	Model   string   // full model id (ModelHaiku / ModelSonnet)
 	Prompt  string   // the user prompt; the caller instructs the model to answer as JSON
-	WorkDir string   // cwd for agentic runs (a checked-out worktree); "" inherits
+	WorkDir string   // cwd for agentic runs (a checked-out worktree); "" falls back to Module.scratchDir
 	Tools   []string // allowed read-only tools for agentic runs (e.g. Read, Grep, Glob); empty = no tools
+	// SystemPrompt is static, call-independent instruction text appended via
+	// `claude`'s --append-system-prompt (e.g. the embedded modules/claude/prompts/*.md
+	// files). Keeping it out of Prompt lets it stay byte-identical across many
+	// calls of the same action within a PR, which is what makes it eligible for
+	// the CLI's own prompt caching; the varying, call-specific content (caller
+	// body, candidates, selected code, PR metadata) stays in Prompt. "" appends
+	// nothing.
+	SystemPrompt string
 }
 
 // Client is the module's behaviour, so workflows and tests can depend on an
@@ -44,14 +53,40 @@ type Client interface {
 }
 
 // Module is the production Client: it shells out to the `claude` CLI.
-type Module struct{}
+type Module struct {
+	// scratchDir is the cwd used for a non-agentic run (RunRequest.WorkDir ==
+	// "" — a context-only completion with no tools, e.g. resolve_call's Haiku
+	// pass, explain_code, pr_status's summary). It deliberately holds no
+	// CLAUDE.md/.claude/ tree, so `claude`'s automatic project-memory
+	// discovery finds nothing to load there — see "Context-only Haiku calls
+	// run from a neutral scratch cwd" in .claude/rules/tembed-workflows.md.
+	// Left "" it falls back to the previous behaviour (inherit the caller's
+	// own cwd), which is what tests that don't care about this use.
+	// Agentic runs are never affected: a non-empty RunRequest.WorkDir (a
+	// checked-out PR worktree) always wins over scratchDir.
+	scratchDir string
+}
 
-// New returns a production Module.
-func New() *Module { return &Module{} }
+// New returns a production Module. scratchDir is reserved purely as a cwd for
+// context-only runs; it is created if missing (best-effort — a failure here
+// just means Run falls back to inheriting the caller's cwd, same as passing
+// ""). It must never sit inside a directory tree that carries a
+// CLAUDE.md/.claude/rules anywhere in its ancestor chain — `claude` walks
+// *up* from its cwd looking for one (like git looks for .git), so even an
+// otherwise-empty subdirectory of a repo still finds and loads that repo's
+// CLAUDE.md. The caller (tasks_api.go) anchors this under os.TempDir(), not
+// under this project's own data directory, for exactly that reason.
+func New(scratchDir string) *Module {
+	if scratchDir != "" {
+		_ = os.MkdirAll(scratchDir, 0o755)
+	}
+	return &Module{scratchDir: scratchDir}
+}
 
 // Run invokes `claude -p <prompt> --model <model>` (plus, for agentic runs, a
-// working directory and a read-only tool allowlist). Output is captured in text
-// mode; the caller's prompt is responsible for constraining it to JSON.
+// working directory and a read-only tool allowlist, and — for any run whose
+// caller supplied one — a static --append-system-prompt). Output is captured
+// in text mode; the caller's prompt is responsible for constraining it to JSON.
 func (m *Module) Run(ctx context.Context, req RunRequest) (string, error) {
 	args := []string{"-p", req.Prompt, "--model", req.Model}
 	if len(req.Tools) > 0 {
@@ -63,9 +98,20 @@ func (m *Module) Run(ctx context.Context, req RunRequest) (string, error) {
 		// No tools: a pure context-only completion.
 		args = append(args, "--allowedTools", "")
 	}
+	if req.SystemPrompt != "" {
+		args = append(args, "--append-system-prompt", req.SystemPrompt)
+	}
 	cmd := exec.CommandContext(ctx, "claude", args...)
-	if req.WorkDir != "" {
+	switch {
+	case req.WorkDir != "":
+		// Agentic run: the caller needs real file access (Read/Grep/Glob) inside
+		// a specific checked-out worktree — keep it, even though that worktree
+		// may carry its own CLAUDE.md/.claude/rules (a separate, larger cost
+		// driver tracked outside this fix, see tembed-workflows.md).
 		cmd.Dir = req.WorkDir
+	case m.scratchDir != "":
+		// Context-only run: no tools, so no reason to sit inside any repo.
+		cmd.Dir = m.scratchDir
 	}
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout

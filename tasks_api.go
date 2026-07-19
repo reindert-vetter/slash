@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -135,8 +136,16 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		gh = &github.Fake{}
 	}
 	// Under SLASH_CLAUDE=off the LLM resolver never shells out — an empty Fake
-	// resolves nothing (offline/tests). Otherwise use the real claude CLI.
-	var cl claude.Client = claude.New()
+	// resolves nothing (offline/tests). Otherwise use the real claude CLI, with
+	// a scratch cwd reserved for its context-only runs — see modules/claude's
+	// Module.scratchDir doc. Deliberately anchored under os.TempDir(), NOT
+	// under dataDir: `claude` walks *up* the directory tree from its cwd
+	// looking for a CLAUDE.md (like git looks for .git), so anything nested
+	// inside this repo (dataDir is normally "data/" under the repo root)
+	// would still find and load this project's own CLAUDE.md/.claude/rules —
+	// confirmed empirically, see the resolve_call section of
+	// .claude/rules/tembed-workflows.md.
+	var cl claude.Client = claude.New(filepath.Join(os.TempDir(), "slash-llm-cwd"))
 	if os.Getenv("SLASH_CLAUDE") == "off" {
 		cl = claude.NewFake()
 	}

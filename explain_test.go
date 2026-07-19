@@ -63,9 +63,18 @@ func TestExplainCodeGeneratesDescription(t *testing.T) {
 	if n := fake.CallCount(); n != 1 {
 		t.Fatalf("claude called %d times, want 1", n)
 	}
-	prompt := fake.Calls[0].Prompt
-	if !strings.Contains(prompt, "if ($value > 0) {") || !strings.Contains(prompt, "Nederlands") {
-		t.Fatalf("prompt misses code or Dutch instruction:\n%s", prompt)
+	call := fake.Calls[0]
+	if !strings.Contains(call.Prompt, "if ($value > 0) {") {
+		t.Fatalf("prompt misses code:\n%s", call.Prompt)
+	}
+	// The call-independent Dutch task framing travels separately via
+	// SystemPrompt (--append-system-prompt), not inline in Prompt — see
+	// modules/claude/prompts.go.
+	if !strings.Contains(call.SystemPrompt, "Nederlands") {
+		t.Fatalf("system prompt misses Dutch instruction:\n%s", call.SystemPrompt)
+	}
+	if call.SystemPrompt != claude.ExplainCodeSystemPrompt {
+		t.Fatalf("system prompt = %q, want the embedded claude.ExplainCodeSystemPrompt", call.SystemPrompt)
 	}
 	if fake.Calls[0].WorkDir != "" || len(fake.Calls[0].Tools) != 0 {
 		t.Fatalf("explain run must be context-only, got %+v", fake.Calls[0])

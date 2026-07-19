@@ -22,15 +22,15 @@ func explainRunID(in ExplainCodeInput) string {
 	return "expl-" + hex.EncodeToString(sum[:12])
 }
 
-// explainPrompt builds the context-only Haiku prompt: explain, in Dutch and in
-// 1-2 sentences, what the if-condition in the selected lines checks and when
-// its branch runs. The unit code plus the surrounding block source travel in
-// the prompt — no tools, no worktree access.
+// explainPrompt builds the call-specific part of the context-only Haiku
+// prompt: the unit code plus the surrounding block source — no tools, no
+// worktree access. The call-independent task framing (explain, in Dutch, in
+// 1-2 sentences, what the if-condition checks and when its branch runs) is
+// static across every call of this action, so it travels separately as
+// claude.ExplainCodeSystemPrompt (--append-system-prompt) — see the
+// generateExplanation Activity in workflows.go and modules/claude/prompts.go.
 func explainPrompt(in ExplainCodeInput) string {
 	var b strings.Builder
-	b.WriteString("Je helpt een code-reviewer. De geselecteerde regel(s) hieronder bevatten een if-statement.\n")
-	b.WriteString("Leg in het Nederlands, in 1-2 korte zinnen, uit wat de conditie controleert en wanneer de tak loopt.\n")
-	b.WriteString("Antwoord met alleen die zinnen — geen opsomming, geen markdown, geen aanhalingstekens.\n\n")
 	fmt.Fprintf(&b, "Bestand: %s\n", in.File)
 	if in.Label != "" {
 		fmt.Fprintf(&b, "Functie: %s\n", in.Label)

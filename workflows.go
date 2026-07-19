@@ -734,7 +734,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.claude == nil {
 			return json.Marshal(map[string]string{"text": ""})
 		}
-		text, err := m.claude.Run(ctx, claude.RunRequest{Prompt: explainPrompt(arg), Model: claude.ModelHaiku})
+		text, err := m.claude.Run(ctx, claude.RunRequest{
+			Prompt:       explainPrompt(arg),
+			Model:        claude.ModelHaiku,
+			SystemPrompt: claude.ExplainCodeSystemPrompt,
+		})
 		if err != nil {
 			m.logf("explain_code: generate pr=%d %s/%s skipped: %v", arg.PR, arg.BlockID, arg.UnitKey, err)
 			text = ""
@@ -811,7 +815,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		files, _ := changedFilesFor(m.db, arg.PR)
 		prompt := prSummaryPrompt(meta, files)
-		summary, err := m.claude.Run(ctx, claude.RunRequest{Prompt: prompt, Model: claude.ModelHaiku})
+		summary, err := m.claude.Run(ctx, claude.RunRequest{
+			Prompt:       prompt,
+			Model:        claude.ModelHaiku,
+			SystemPrompt: claude.PRSummarySystemPrompt,
+		})
 		if err != nil {
 			m.logf("pr_status: summary pr=%d skipped: %v", arg.PR, err)
 			return nil, nil
@@ -1325,11 +1333,14 @@ func changedFilesFor(db *sql.DB, pr int) ([]string, error) {
 	return files, rows.Err()
 }
 
-// prSummaryPrompt builds the Haiku prompt for the PR-summary stage: title, body,
-// changed files, and (when linked) the Jira issue's title + description.
+// prSummaryPrompt builds the call-specific Haiku prompt for the PR-summary
+// stage: title, body, changed files, and (when linked) the Jira issue's title
+// + description. The call-independent task framing ("Vat in 2-4 zinnen
+// samen...") is static across every PR, so it travels separately as
+// claude.PRSummarySystemPrompt (--append-system-prompt) — see the
+// generatePRSummary Activity above and modules/claude/prompts.go.
 func prSummaryPrompt(meta prmeta.Meta, files []string) string {
 	var b strings.Builder
-	b.WriteString("Vat in 2-4 zinnen samen wat deze PR doet, voor een reviewer.\n\n")
 	fmt.Fprintf(&b, "Titel: %s\n", meta.Title)
 	if meta.Body != "" {
 		fmt.Fprintf(&b, "Omschrijving:\n%s\n", meta.Body)

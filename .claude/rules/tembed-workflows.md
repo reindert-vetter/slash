@@ -700,6 +700,59 @@ fallback.
   krijgt `cwd`=head-worktree + read-only tools (`Read,Grep,Glob`). Model-ID's:
   `claude-haiku-4-5`, `claude-sonnet-5`. **`SLASH_CLAUDE=off`** → `claude.Fake`
   (geen netwerk; leeg = resolvt niets), voor offline/tests.
+  - **Context-only Haiku-calls draaien vanuit een neutrale scratch-cwd, niet de
+    slash-repo.** `claude` laadt bij elke `-p`-aanroep automatisch de volledige
+    project-`CLAUDE.md` + `.claude/rules` van zijn cwd als systeemcontext —
+    voor een context-only call (geen tools, `RunRequest.WorkDir == ""`: de
+    Haiku-pass van `resolve_call`, `explain_code`, `pr_status`'s samenvatting)
+    is dat **pure overhead**, want die prompts gaan over PHP-code in de PR, niet
+    over hoe dit project gebouwd wordt. Gemeten: ~110k `cache_creation`-tokens
+    (~$0,22 op een triviale test-call) met cwd = slash-repo, tegen ~7k
+    (~$0,016) met een lege cwd buiten elke repo — een daling van ~94%. `Module`
+    (`claude.go`) draagt daarom een `scratchDir`-veld: `Run` zet `cmd.Dir` op
+    `req.WorkDir` als die gezet is (agentisch, ongewijzigd — Sonnet blijft in de
+    checked-out PR-worktree draaien voor `Read`/`Grep`/`Glob`), anders op
+    `m.scratchDir`. `tasks_api.go` geeft `claude.New(...)` daarvoor een pad
+    **onder `os.TempDir()`** mee (`slash-llm-cwd`), expliciet **niet** onder
+    `dataDir`: `claude` zoekt een `CLAUDE.md` door **omhoog** de directory-boom
+    te lopen (zoals git naar `.git` zoekt), dus een lege submap van de
+    slash-repo (bv. `data/llm-cwd`) laadt via die ouder-keten alsnog de
+    repo-`CLAUDE.md` — empirisch bevestigd (bleef ~112k tokens) vóórdat de
+    locatie naar `os.TempDir()` verplaatst werd. Voor de agentische
+    Sonnet-escalatie verandert er niets: die worktree draagt **plug-and-pay's
+    eigen** `CLAUDE.md`/`.claude/rules` (~150k+ tokens overhead, groter dan
+    slash's eigen ~110k) en dat is een apart, groter vraagstuk (alleen `--bare`
+    + een losse `ANTHROPIC_API_KEY` i.p.v. de huidige OAuth/abonnement-auth zet
+    die auto-discovery echt uit — een auth/billing-besluit, hier bewust
+    ongemoeid gelaten).
+  - **De statische instructietekst per actie staat los van de wisselende
+    call-inhoud, via `--append-system-prompt`.** `RunRequest.SystemPrompt`
+    draagt het call-onafhankelijke deel van elke prompt (taakomschrijving +
+    JSON-contract voor `resolve_call`, de Nederlandse if-uitleg-instructie voor
+    `explain_code`, de "Vat samen…"-instructie voor `pr_status`'s
+    samenvatting) — **byte-voor-byte** dezelfde tekst die voorheen inline in de
+    `-p`-prompt stond, nu verplaatst naar `modules/claude/prompts/
+    {resolve_call,explain_code,pr_summary}.md` en met `//go:embed` ingebed
+    (stdlib, geen dependency, geen build-stap) als `claude.ResolveCallSystemPrompt`/
+    `ExplainCodeSystemPrompt`/`PRSummarySystemPrompt`. Bewust **niet** onder
+    `.claude/` (dat zou zelf weer auto-discovery-gevoelig zijn in een
+    interactieve `claude`-sessie in déze repo) maar onder `modules/claude/
+    prompts/` — prompt-inhoud voor een subprocess-aanroep, geen documentatie
+    voor dit project. `resolvePrompt`/`explainPrompt`/`prSummaryPrompt` bouwen
+    nog altijd de wisselende inhoud (call-naam, caller-body, kandidatenlijst,
+    geselecteerde code, PR-metadata) — alleen het altijd-gelijke stuk is eruit
+    getild. Puur een verplaatsing: de uiteindelijke instructietekst die het
+    model ziet is ongewijzigd (geverifieerd met een byte-gelijkheids-test tegen
+    de embedded content), dus resolutie-kwaliteit verandert niet. Bijkomend
+    voordeel: omdat dit systeemprompt-deel nu identiek is over herhaalde calls
+    van dezelfde actie binnen één PR (bv. 32× `resolve_call`), kan `claude`'s
+    eigen prompt-cache het hergebruiken — dat kon niet toen het inline in de
+    steeds wisselende `-p`-string stond.
+  - **Determinisme:** beide wijzigingen zitten volledig binnen `Module.Run`
+    (cwd-keuze) en de `RunRequest`-payload (`SystemPrompt`) — het aantal/de
+    volgorde van `cl.Run`-aanroepen per workflow-body is ongewijzigd, dus dit
+    raakt de replay-determinisme-eis (`.claude/rules/workflow-determinism.md`)
+    niet.
 - **Workflow `resolve_call`** (`workflows.go` + `resolve_call.go`): één Execution
   per zoekactie. Body (deterministisch — escalatie op basis van de **opgeslagen**
   Haiku-uitkomst, niet live output): `markCallsSearching` → `resolveWithModel`

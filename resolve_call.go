@@ -60,8 +60,9 @@ func resolveCallsWithModel(ctx context.Context, cl claude.Client, dataDir string
 		}
 
 		req := claude.RunRequest{
-			Model:  arg.Model,
-			Prompt: resolvePrompt(arg, call, idx.candidates(call), callerSrc.Text, agentic),
+			Model:        arg.Model,
+			Prompt:       resolvePrompt(arg, call, idx.candidates(call), callerSrc.Text, agentic),
+			SystemPrompt: claude.ResolveCallSystemPrompt,
 		}
 		if agentic {
 			req.WorkDir = headDir
@@ -88,12 +89,15 @@ func resolveCallsWithModel(ctx context.Context, cl claude.Client, dataDir string
 	return out
 }
 
-// resolvePrompt builds the model prompt: the call to resolve, the caller body
-// for context, the Go candidate shortlist, and a strict JSON contract. For the
-// agentic (Sonnet) variant it invites the model to search the checked-out repo.
+// resolvePrompt builds the call-specific part of the model prompt: the call to
+// resolve, the caller body for context, and the Go candidate shortlist. For
+// the agentic (Sonnet) variant it invites the model to search the checked-out
+// repo. The call-independent task framing and JSON contract are static across
+// every call of this action, so they travel separately as
+// claude.ResolveCallSystemPrompt (--append-system-prompt) instead of being
+// rebuilt here — see resolveCallsWithModel and modules/claude/prompts.go.
 func resolvePrompt(arg resolveArg, call string, cands []Block, callerBody string, agentic bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are resolving a PHP method call to the method definition it refers to.\n\n")
 	fmt.Fprintf(&b, "Call to resolve: `%s(...)` made inside %s::%s (file %s).\n\n",
 		call, arg.CallerClass, arg.CallerName, arg.CallerFile)
 	if callerBody != "" {
@@ -112,9 +116,6 @@ func resolvePrompt(arg resolveArg, call string, cands []Block, callerBody string
 	} else if len(cands) == 0 {
 		b.WriteString("No static candidates were found. If you cannot determine the definition from the caller body alone, answer found=false.\n\n")
 	}
-	b.WriteString("Respond with ONLY a JSON object, no prose, no markdown fences:\n")
-	b.WriteString(`{"found": true|false, "file": "<repo-relative path>", "class": "<class>", "method": "<method>", "confidence": "high"|"low"}` + "\n")
-	b.WriteString("Set found=false (and confidence=\"low\") if you are not sure. Only answer found=true with confidence=\"high\" when you are confident the file/class/method exists and is the real target.\n")
 	return b.String()
 }
 
