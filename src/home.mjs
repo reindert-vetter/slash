@@ -156,6 +156,19 @@ const state = reactive({
   // diff→list transition. focusedBlock() follows this, not always the deepest
   // entry, so the Onderliggende-code panel + tasks slide along with the focus.
   focusLevel: 0,
+  // drillPreviewChild — the Onderliggende-code descriptor of the NEXT sibling
+  // after the currently focused drilled column (or null), used to render a
+  // look-ahead preview column next to it (see drillPreviewColumns/DetailPanel) —
+  // mirrors the top-level block-column's own look-ahead preview of the next
+  // sidebar block. Populated by the setRelated watch (which already computes
+  // relatedChildren() for the Onderliggende-code panel and can derive the
+  // sibling-after-current from the same data) — identity-guarded there (only
+  // reassigned when the actual next-sibling target changes) so reading this
+  // field from the drilled-columns render closure stays cheap and doesn't
+  // rebuild the real drilled Block() cards on an unrelated relatedChildren()
+  // recompute (an approve-toggle elsewhere, a callresolve poll, …) — see
+  // .claude/rules/conventions.md.
+  drillPreviewChild: null,
   // testsExpanded — whether the Onderliggende-code panel's grouped covering
   // tests (the horizontal "tests bar", see groupTestChildren) are expanded
   // into ordinary child cards below the bar. Ephemeral (never in the URL,
@@ -2521,15 +2534,64 @@ function collapsedColumnHTML(b, level, testid, drillIdx = null) {
   `
 }
 
+// resolveChildBlock turns an Onderliggende-code child descriptor into the
+// block-like object drillIntoChild pushes onto state.drill — extracted so the
+// look-ahead preview (see drillPreviewColumns below) can resolve the SAME
+// object for a sibling it only wants to render, without touching state.drill/
+// drillCursor/focusLevel/codeVersion at all (a preview must never mutate
+// navigation state). If the child is itself a real PR block (already in
+// state.allBlocks) this returns that exact object: its relations/callResolve/
+// approvedRows already work, so its own Onderliggende-code panel falls out for
+// free (relatedChildren/resolvedCallChildren/callRows are generic over any
+// block id). Otherwise (a resolved call into an unchanged file, with no PR
+// block of its own) it builds a minimal, non-interactive synthetic frame with
+// its code assembled inline (the call row already carries the called
+// definition's source text) — the same frame shape drillIntoChild used to
+// build in place. Returns null for the tests_group toggle-bar (not a real
+// block, caller must handle that case itself — only drillIntoChild does).
+function resolveChildBlock(child) {
+  if (!child || child.kind === 'tests_group') return null
+  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  // A method-call child's own `id` is caller-scoped (b.id + '::' + callKey), so it
+  // never matches a real block; its `blockId` points at the definition's PR block
+  // when that definition is itself changed here. Relation children carry their real
+  // block id directly in `id`. Try both, preferring the explicit target block id.
+  const existing = byId.get(child.blockId) || byId.get(child.id)
+  if (existing) return existing
+  const hasClass = !!(child.label && child.label.includes('::'))
+  // The call-row already carries the called definition's source text
+  // (r.childCode → child.code). The file is unchanged by this PR, so /api/code
+  // has no stored block for it (the fetch would never yield a diff and the card
+  // would hang on "loading"). Build the code inline instead: old === new (nothing
+  // changed here), so alignRows renders all-equal rows — the plain source, no
+  // diff highlight. Only fall back to a fetch if we somehow have no text.
+  const src = child.code || ''
+  const start = child.line || 1
+  return {
+    id: child.id,
+    label: child.label,
+    file: child.file,
+    class: hasClass ? child.label.split('::')[0] : '',
+    name: hasClass ? child.label.split('::')[1] : child.label,
+    line: child.line,
+    // The PR doesn't touch this file (that's why there's no stored block), so
+    // old === new below and the diff is all-equal — the frame is 'unchanged',
+    // not 'modified' (which would show a misleading amber badge, see Block.mjs).
+    status: 'unchanged',
+    // Ready synchronously; if the row somehow carried no code, mark it as such
+    // rather than hang on "loading" (there's no stored block to fetch).
+    code: src
+      ? { file: child.file, old: { start, text: src }, new: { start, text: src } }
+      : { error: 'geen broncode beschikbaar' },
+    synthetic: true,
+  }
+}
+
 // drillIntoChild opens a child from the Onderliggende-code panel as its own diff
 // column, appended to the right of the current drill stack (Enter on a resolved
-// child in the panel — see the Enter handling in onKeydown). If the child is
-// itself a real PR block (already in state.allBlocks) we push that exact object:
-// its relations/callResolve/approvedRows already work, so its own
-// Onderliggende-code panel falls out for free (relatedChildren/resolvedCallChildren/
-// callRows are generic over any block id). Otherwise (a resolved call into an
-// unchanged file, with no PR block of its own) we build a minimal, non-interactive
-// synthetic frame and lazily fetch its code the same way a real block does.
+// child in the panel — see the Enter handling in onKeydown). Resolves the child
+// via resolveChildBlock (real PR block reused as-is, or a synthetic frame for a
+// resolved call into an unchanged file) and pushes it.
 function drillIntoChild(child) {
   if (!child) return
   // The tests-group bar (the grouped covering tests, see groupTestChildren) is
@@ -2541,47 +2603,14 @@ function drillIntoChild(child) {
     state.testsExpanded = !state.testsExpanded
     return
   }
-  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
-  // A method-call child's own `id` is caller-scoped (b.id + '::' + callKey), so it
-  // never matches a real block; its `blockId` points at the definition's PR block
-  // when that definition is itself changed here. Relation children carry their real
-  // block id directly in `id`. Try both, preferring the explicit target block id.
-  const existing = byId.get(child.blockId) || byId.get(child.id)
-  if (existing) {
-    state.drill = [...state.drill, existing]
+  const resolved = resolveChildBlock(child)
+  state.drill = [...state.drill, resolved]
+  if (!resolved.synthetic) {
     // A relation-child gets its code lazily loaded elsewhere (relatedChildren);
     // a method-call child's PR-block definition might not have its own diff
     // fetched yet (its row only carries the plain code text) — ensure it here.
-    ensureCode(existing)
+    ensureCode(resolved)
   } else {
-    const hasClass = !!(child.label && child.label.includes('::'))
-    // The call-row already carries the called definition's source text
-    // (r.childCode → child.code). The file is unchanged by this PR, so /api/code
-    // has no stored block for it (the fetch would never yield a diff and the card
-    // would hang on "loading"). Build the code inline instead: old === new (nothing
-    // changed here), so alignRows renders all-equal rows — the plain source, no
-    // diff highlight. Only fall back to a fetch if we somehow have no text.
-    const src = child.code || ''
-    const start = child.line || 1
-    const frame = {
-      id: child.id,
-      label: child.label,
-      file: child.file,
-      class: hasClass ? child.label.split('::')[0] : '',
-      name: hasClass ? child.label.split('::')[1] : child.label,
-      line: child.line,
-      // The PR doesn't touch this file (that's why there's no stored block), so
-      // old === new below and the diff is all-equal — the frame is 'unchanged',
-      // not 'modified' (which would show a misleading amber badge, see Block.mjs).
-      status: 'unchanged',
-      // Ready synchronously; if the row somehow carried no code, mark it as such
-      // rather than hang on "loading" (there's no stored block to fetch).
-      code: src
-        ? { file: child.file, old: { start, text: src }, new: { start, text: src } }
-        : { error: 'geen broncode beschikbaar' },
-      synthetic: true,
-    }
-    state.drill = [...state.drill, frame]
     // Bump codeVersion so the DetailPanel rebuilds its keyed card on the loaded
     // state (see ensureCode's own bump); ensureCode itself no-ops for synthetic
     // frames, so this is the only "code arrived" signal it gets.
@@ -2859,6 +2888,22 @@ watch(
     // test+class, so this is cheap on every panel re-fire).
     startCallSearch(b)
     startTestCoverSearch(b)
+    // state.drillPreviewChild — the look-ahead preview target for the drilled
+    // column's sibling-walk (see the field's own comment + drillPreviewColumns).
+    // drillSiblingContext() needs the identical inputs relatedChildren(b) just
+    // used above (just applied to the PARENT one level up instead of b
+    // itself), so this piggybacks on the same watch rather than a second,
+    // separately-triggered one. Identity-guarded: only reassign when the
+    // actual next-sibling id changes, so a relatedChildren() recompute that
+    // doesn't move the sibling pointer (most of them — an approve-toggle,
+    // a callresolve poll landing new but same-order data, …) leaves this
+    // field's reference untouched, and the drilled-columns render closure
+    // (a cheap reader of this field) doesn't rebuild the real Block() cards.
+    const ctx = drillSiblingContext()
+    const next = ctx ? ctx.siblings[ctx.idx + 1] || null : null
+    const nextId = next ? next.blockId || next.id : null
+    const prevId = state.drillPreviewChild ? state.drillPreviewChild.blockId || state.drillPreviewChild.id : null
+    if (nextId !== prevId) state.drillPreviewChild = next
   },
 )
 
@@ -4087,6 +4132,20 @@ function connector() {
   `
 }
 
+// connectorH — the horizontal twin of connector() for the drilled-column
+// look-ahead preview (see drillPreviewColumns below): drilled columns sit side by
+// side in <main>'s flex-row (unlike the top-level block-column's vertical
+// flex-col stack that connector() bridges), so the dashed line runs
+// top-to-bottom of the gap between the focused column and its preview instead
+// of left-to-right of a vertical gap.
+function connectorH() {
+  return html`
+    <div class="flex w-6 shrink-0 flex-col justify-center self-stretch" data-testid="drill-preview-connector">
+      <div class="border-t-2 border-dashed border-slate-300 dark:border-zinc-700"></div>
+    </div>
+  `
+}
+
 // canStep reports whether ↓ (delta 1) / ↑ (delta -1) would flow out of the
 // selected block into its same-file neighbour: we're in diff mode, on the last
 // (resp. first) change of the block, and that neighbour exists. This is the cue
@@ -4155,6 +4214,69 @@ function stepChevron(dir) {
 // pitfall in .claude/rules/conventions.md.
 function stepChevronSlot(delta, dir) {
   return html`<div class="contents">${() => (canStep(delta) ? stepChevron(dir) : '')}</div>`
+}
+
+// drillPreviewColumns builds the (0 or 2) keyed array items for a look-ahead
+// preview of the NEXT Onderliggende-code sibling, appended right after the
+// currently focused drilled column (always the rightmost — state.focusLevel
+// === state.drill.length whenever drill.length > 0, see expandColumn/
+// drillIntoChild) — mirroring the top-level block-column's own look-ahead
+// preview of the next sidebar block (the `pair`/connector() logic above): the
+// reviewer sees what ↓ would drill into once the current column's own changes
+// are exhausted (drillNextChange → drillToSibling), before actually stepping
+// there. Only the NEXT sibling is previewed (never the previous one) — same
+// as the top-level preview — and it's shown unconditionally whenever a next
+// sibling exists, not just once the reviewer reaches the last change unit
+// (again mirroring the top-level `pair`, which always renders regardless of
+// state.change's position within the selected block).
+//
+// Called from the drilled-columns closure below, which already re-runs on
+// every state.drill change (needed anyway, since a sibling-walk swaps which
+// block that column shows) — so pushing keyed items here, exactly like the
+// real drilled columns / the top-level pair do, gets a correctly-reconciled
+// swap for free (proven pattern in this file) whenever the preview's own key
+// changes. This function itself reads only the cheap, identity-guarded
+// state.drillPreviewChild field — NOT relatedChildren()/drillSiblingContext()
+// directly. Those are computed once in the setRelated watch (which already
+// needs the identical inputs for the real Onderliggende-code panel) and only
+// reassign this field when the actual next-sibling id changes; reading the
+// field here (rather than calling relatedChildren() in this render path)
+// means an unrelated approve-toggle or callresolve poll elsewhere — which
+// recomputes relatedChildren() but rarely changes WHICH sibling is next —
+// leaves this field's reference untouched, so it doesn't force a rebuild of
+// the real drilled Block() cards. See the field's own comment and
+// .claude/rules/conventions.md.
+function drillPreviewColumns() {
+  const next = state.drillPreviewChild
+  if (!next) return []
+  const previewBlock = resolveChildBlock(next)
+  if (!previewBlock) return []
+  // Lazily fetch the preview's code the same way the real drilled columns and
+  // the top-level look-ahead preview do — visible before the reviewer ever
+  // steps onto it.
+  ensureCode(previewBlock)
+  const codeState =
+    previewBlock.code && !previewBlock.code.error ? 'code' : previewBlock.code && previewBlock.code.error ? 'err' : 'load'
+  return [
+    connectorH().key('drill-preview-connector'),
+    html`
+      <div class="relative flex min-h-0 shrink-0 flex-col gap-3" data-testid="drill-preview-column">
+        ${Block(previewBlock, {
+          // Dimmed like the top-level look-ahead preview; never owns the
+          // keyboard, never highlights a change group.
+          preview: true,
+          activeGroup: () => null,
+          hintsEnabled: () => false,
+          diffActive: () => false,
+          approvedRows: () => approvedRowSet(previewBlock),
+          approvedCalls: () => approvedCallSet(previewBlock),
+          onApprove: (blk) => persistApproval(blk),
+          commentedRows: () => commentRowSet(previewBlock),
+          viewMode: () => state.diffViewMode,
+        })}
+      </div>
+    `.key('drill-preview:' + previewBlock.id + ':' + codeState),
+  ]
 }
 
 // menuAnchor returns the element the command palette floats *beneath* (its
@@ -4735,7 +4857,12 @@ function DetailPanel(state) {
         // card, exactly like state.change/state.gran for the top-level card.
         void state.codeVersion
         void state.focusLevel
-        return state.drill.map((b, i) => {
+        // Cheap read (see drillPreviewChild's own comment + drillPreviewColumns):
+        // an identity-guarded field, not a relatedChildren() call, so this
+        // closure only re-runs for the preview's sake when the sibling target
+        // actually changes — not on every unrelated approve-toggle/poll.
+        void state.drillPreviewChild
+        const cols = state.drill.map((b, i) => {
           ensureCode(b)
           const level = i + 1
           const focusedHere = state.focusLevel === level
@@ -4807,6 +4934,11 @@ function DetailPanel(state) {
               b.id,
           )
         })
+        // Look-ahead preview of the next Onderliggende-code sibling, appended
+        // right after the focused (rightmost) drilled column — see
+        // drillPreviewColumns' own comment for why this only reads the cheap
+        // state.drillPreviewChild field rather than recomputing it here.
+        return cols.concat(drillPreviewColumns())
       }}
       ${() =>
         RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
