@@ -264,6 +264,27 @@
   `chunk.u`) met zekerheid te herleiden i.p.v. op minified tekst te gokken —
   zie het `LOCAL PATCH 2`-commentaarblok in `vendor/arrow.js` voor het volledige
   mechanisme en de exacte herstelinstructie bij een arrow.js-upgrade.
+- **`Element.scrollIntoView({block: 'nearest'|'center'})` beweegt ook de
+  horizontale as als je `inline` weglaat — dat is de DOM-default, geen
+  arrow.js-eigenaardigheid, maar hij beet hier omdat een verticale "houd deze
+  rij in beeld"-scroll (Onderliggende-code-kaart, chips, Taken, comment-
+  reacties) toevallig binnen `<main>`'s horizontaal scrollende kolom-flow
+  hangt: elke stap ↓/↑/→ in zo'n lijst kon zo ongewild `<main>`'s eigen
+  `scrollLeft` verschuiven en de kaart die de keyboard-focus draagt (links van
+  het paneel) buiten beeld duwen — precies de klacht "na → en dan ← staat de
+  selectie niet meer volledig in beeld". **Oplossing:** `scrollIntoViewVertical`
+  (`RelatedPanel.mjs`, geëxporteerd) loopt vanaf het element omhoog naar de
+  eerste voorouder die daadwerkelijk verticaal scrolt
+  (`scrollHeight > clientHeight` — een horizontaal scrollende `<main>` matcht
+  dat nooit, dus de walk stopt er vanzelf één niveau vóór) en zet alleen diens
+  `scrollTop` — nooit `scrollIntoView()` zelf aanroepen voor een
+  "blijf-in-beeld-tijdens-lijst-navigeren"-scroll. Gebruikt door
+  `scrollCodeIntoView`/`scrollChipIntoView`/`scrollTaskIntoView`/
+  `scrollReactionIntoView` (`RelatedPanel.mjs`) en de `scrollChangeIntoView`-
+  fallback (`home.mjs`). `scrollFocusIntoView` (dat de gefocuste kolom bij een
+  `←`/`→`-focuswissel bewust wél links uitlijnt met `inline:'start'`) blijft
+  ongewijzigd — dat is de ene plek waar een horizontale scroll juist gewenst
+  is. Zie `tests/scroll-focus-vertical-only.spec.mjs`.
 - **Syntax-highlighting:** Prism 1.29.0 staat gevendord als één ES-module in
   `src/vendor/prism.js` (core + markup + clike + markup-templating + php, met
   `window.Prism={manual:true}` zodat het niet de hele pagina auto-highlightt). De

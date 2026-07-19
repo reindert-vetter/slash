@@ -51,6 +51,7 @@ import RelatedPanel, {
   PrWideComments,
   handlePrWideKey,
   isPrWideFocused,
+  scrollIntoViewVertical,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows } from './callArrows.mjs'
@@ -2042,7 +2043,13 @@ function scrollChangeIntoView(animate = true, tries = 10) {
     }
     const container = el.closest('[data-scrollsync]')
     if (!container) {
-      el.scrollIntoView({ block: 'center' })
+      // No scrollsync pane found (defensive fallback) — scroll only the
+      // nearest vertical container, never <main>'s horizontal scroll (see
+      // scrollIntoViewVertical in RelatedPanel.mjs for why a bare
+      // el.scrollIntoView({block:'center'}) is unsafe here: its omitted
+      // `inline` defaults to 'nearest' and would nudge <main> sideways,
+      // pushing the keyboard-focused diff column out of view).
+      scrollIntoViewVertical(el)
       return
     }
     const cRect = container.getBoundingClientRect()

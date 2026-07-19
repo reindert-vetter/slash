@@ -362,12 +362,41 @@ function chipPathEquals(a, b) {
   return true
 }
 
+// scrollIntoViewVertical brings `el` into view within the first ancestor that
+// actually scrolls *vertically* (scrollHeight > clientHeight) — and no
+// further. Element.scrollIntoView() bubbles through EVERY scrollable
+// ancestor on BOTH axes; every "keep this row in view while walking with the
+// arrows" caller below only ever specifies `block`, so the omitted `inline`
+// defaults to 'nearest' — and since the Onderliggende-code card (and the
+// chips fanning out of it) live inside <main>'s horizontally-scrolling column
+// flow (see detail-layout.md), that implicit horizontal 'nearest' silently
+// drags <main>'s scrollLeft along too, pushing the keyboard-focused diff
+// column out of view. Walking a related-item/chip/task list must only ever
+// move THIS panel's own vertical scroll, never <main>'s horizontal one — so
+// walk up from `el`'s parent to the first genuinely vertically-scrollable
+// ancestor and adjust only its scrollTop (a plain vertical <main> — no
+// vertical overflow, only horizontal — never matches this check, so the walk
+// naturally stops one level before it).
+export function scrollIntoViewVertical(el) {
+  let node = el.parentElement
+  while (node && node !== document.documentElement) {
+    if (node.scrollHeight > node.clientHeight) {
+      const cRect = node.getBoundingClientRect()
+      const eRect = el.getBoundingClientRect()
+      if (eRect.top < cRect.top) node.scrollTop -= cRect.top - eRect.top
+      else if (eRect.bottom > cRect.bottom) node.scrollTop += eRect.bottom - cRect.bottom
+      return
+    }
+    node = node.parentElement
+  }
+}
+
 // scrollChipIntoView keeps the focused chip in view while walking the chip
 // tree with the arrows, mirroring scrollCodeIntoView.
 function scrollChipIntoView() {
   requestAnimationFrame(() => {
     const el = document.querySelector('[data-testid=related-nested-chip][data-active=true]')
-    if (el) el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    if (el) scrollIntoViewVertical(el)
   })
 }
 
@@ -508,7 +537,7 @@ function toTask(i = 0) {
 function scrollTaskIntoView() {
   requestAnimationFrame(() => {
     const el = document.querySelectorAll('[data-testid=workflow-row]')[cs.taskSel]
-    if (el) el.scrollIntoView({ block: 'nearest' })
+    if (el) scrollIntoViewVertical(el)
   })
 }
 
@@ -607,7 +636,7 @@ function scrollCodeIntoView() {
     const el = document.querySelector(
       '[data-testid=related-item][data-active=true], [data-testid=related-tests-bar][data-active=true]',
     )
-    if (el) el.scrollIntoView({ block: 'nearest' })
+    if (el) scrollIntoViewVertical(el)
   })
 }
 
@@ -617,7 +646,7 @@ function scrollReactionIntoView() {
     // reactions.length - threadPos.
     const j = reactionCount() - cs.threadPos
     const el = document.querySelectorAll('[data-testid=reaction-bubble]')[j]
-    if (el) el.scrollIntoView({ block: 'nearest' })
+    if (el) scrollIntoViewVertical(el)
   })
 }
 
