@@ -144,9 +144,13 @@ ruimte op te vullen) met de kaart van het geselecteerde block plus de
 look-ahead-preview van het volgende block (dashed connector als ze uit hetzelfde
 bestand komen). **Direct náást** die kolom (niet aan de rechterrand van het
 scherm) de kaart **Onderliggende code** (`RelatedPanel.mjs`'s default export,
-`data-testid=related-code`, `w-[34rem] 2xl:w-[41rem] shrink-0` — op `2xl` net zo
-breed als één pane van de side-by-side diff, de helft van diens
-`2xl:w-[82rem]`) — stop 5 van de nav-keten,
+`data-testid=related-code`, `w-[42rem] 2xl:w-[49.2rem] shrink-0` — dezelfde
+vaste breedte als een eenzijdig/`a`-genarrowd block (zie hierboven), zodat
+"Onderliggende code" **altijd** even breed is als de kolom ernaast i.p.v. smaller
+(was `w-[34rem] 2xl:w-[41rem]`, bewust de helft van één pane van de side-by-side
+diff — dat gaf op een eenzijdig/genarrowd block twee zichtbaar ongelijke
+kolombreedtes naast elkaar, zie de screenshot-issue die tot deze wijziging
+leidde)) — stop 5 van de nav-keten,
 ongewijzigd inline in `<main>`'s horizontaal scrollende kolom-flow (zie
 "Onderliggende code" verderop). Comments en Taken zitten **niet** meer in deze
 kolom-flow — zie de sectie "Comments/taken-sidebar" hieronder.
@@ -719,7 +723,7 @@ rechts — zie de layout-alinea hierboven):
   weer in. Een klik op de rail roept `enterRelated()` rechtstreeks aan — de
   kaart klapt zo meteen weer uit en pakt de keyboard, net als een verse `→`
   vanuit de diff. Op een `2xl`+-scherm, of zolang de sidebar dicht is, blijft
-  de kaart altijd de volledige `w-[34rem] 2xl:w-[41rem]`-kaart; `viewport.wide` (een
+  de kaart altijd de volledige `w-[42rem] 2xl:w-[49.2rem]`-kaart; `viewport.wide` (een
   `matchMedia('(min-width: 1536px)')`-listener, mirror van `theme.mjs`'s
   systeem-preference-listener) houdt dat reactief bij, ook op een resize. De
   toggle tussen rail en volledige kaart zit — conform de "kale toggelende
