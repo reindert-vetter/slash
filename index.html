@@ -83,14 +83,15 @@
       .language-php .token.prolog,
       .language-php .token.doctype,
       .language-php .token.cdata {
-        color: #6a737d; /* gray — recedes */
+        color: #57606a; /* gray — recedes, darkened for AA contrast on the
+                            light green/rose diff-row tints (Block.mjs) */
         font-style: italic;
       }
       .language-php .token.punctuation {
         color: #24292e; /* near-black, not washed-out gray */
       }
       .language-php .token.namespace {
-        opacity: 0.7;
+        opacity: 0.85;
       }
       /* object properties / accessors & variables — their own steady orange, no
          longer the same magenta as numbers, so `->id`/`$order` read as one kind */
@@ -100,12 +101,12 @@
       .language-php .token.tag,
       .language-php .token.symbol,
       .language-php .token.deleted {
-        color: #e36209; /* orange */
+        color: #bc4c00; /* orange, darkened for contrast */
       }
       .language-php .token.boolean,
       .language-php .token.number,
       .language-php .token.constant {
-        color: #005cc5; /* blue */
+        color: #0550ae; /* blue, darkened for contrast */
       }
       .language-php .token.selector,
       .language-php .token.attr-name,
@@ -113,7 +114,8 @@
       .language-php .token.char,
       .language-php .token.builtin,
       .language-php .token.inserted {
-        color: #22863a; /* green */
+        color: #116329; /* green, darkened so strings stay legible on the
+                            light green "added"-line background (Block.mjs) */
       }
       .language-php .token.operator,
       .language-php .token.entity,
@@ -121,11 +123,11 @@
       .language-php .token.atrule,
       .language-php .token.attr-value,
       .language-php .token.keyword {
-        color: #d73a49; /* red — keywords & operators */
+        color: #cf222e; /* red — keywords & operators, darkened for contrast */
       }
       .language-php .token.function,
       .language-php .token.class-name {
-        color: #6f42c1; /* purple — calls & types */
+        color: #6639ba; /* purple — calls & types, darkened for contrast */
       }
       .language-php .token.important,
       .language-php .token.bold {
