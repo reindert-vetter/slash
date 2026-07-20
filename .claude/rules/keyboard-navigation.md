@@ -606,6 +606,23 @@ onderstreept op de oude kant, zodat je erop kunt landen als een lege rechter-reg
 die markeert wat weg is. (`'group'` blijft een hele run inclusief verwijderde
 regels, zodat het instappen en de connector-flow onveranderd blijven.)
 
+**Een volledig lege (na `trim()`) toegevoegde/verwijderde regel is géén eigen
+landbare eenheid op `'line'`/`'call'`, en telt niet mee in de approve-teller.**
+Zo'n regel is `rowChanged` (draagt een del/ins-mark — bv. een lege regel
+tussen twee statements binnen een volledig toegevoegd blok) maar heeft niks
+voor de reviewer om te lezen of te beoordelen; vóór de `rowHasContent`-check
+(`Block.mjs`, zie ook `.claude/rules/blocks-and-ingest.md`) kon je zo'n regel
+tóch selecteren (een zichtbaar-lege `changeLines`/`changeCalls`-eenheid — "ik
+kan het selecteren, maar er is daar niks") en zelfs goedkeuren, wat de
+approve-teller (`changedRows`, en de backend-`total` in `blockstats.go`) liet
+oplopen boven het aantal echte code-regels. `changedRows`/`changeLines`/
+`changeCalls` filteren nu aanvullend op `rowHasContent(r)` (de displaykant —
+`right` bij `ins`, anders `left` — niet leeg na `trim()`). **`changeGroups`
+zelf blijft ongewijzigd:** zo'n lege regel rijdt gewoon mee binnen de group-run
+waar hij in valt (net als een haakjes-only-regel, zie `hasLetter` hierboven),
+dus de highlighted range van een groep springt er niet omheen — alleen de
+eigen telbaarheid/landbaarheid van de lege regel wordt onderdrukt.
+
 Alle diff-navigatie loopt via `unitsFor(rows, gran)` (nu geëxporteerd uit
 `Block.mjs`, gedeeld met de footer) → `unitsOf(b)`; `state.change`
 indexeert de units van het **huidige** niveau. Bij een niveauwissel her-ankert

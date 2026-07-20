@@ -53,6 +53,22 @@ func TestChangedRowCount(t *testing.T) {
 			want: 3,
 		},
 		{
+			// A blank line inside a wholly added function is diff noise (no
+			// visible content to review) — it must NOT be counted as a 5th
+			// changed row on top of the 4 real (non-blank) lines.
+			name: "added_block_with_blank_line",
+			old:  "",
+			new:  "function g() {\n    $a = 1;\n\n    return $a;\n}",
+			want: 4,
+		},
+		{
+			// Same for a blank line inside a wholly removed function.
+			name: "removed_block_with_blank_line",
+			old:  "function g() {\n    $a = 1;\n\n    return $a;\n}",
+			new:  "",
+			want: 4,
+		},
+		{
 			name: "removed_block",
 			old:  "function g() {\n    return 42;\n}",
 			new:  "",

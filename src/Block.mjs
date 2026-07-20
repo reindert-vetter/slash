@@ -892,11 +892,36 @@ export function unitsFor(rows, gran) {
 // simply "are all changed rows approved?". The array is always reassigned (never
 // mutated in place) so arrow.js re-renders the checkbox and the pane bars.
 
-// changedRows returns the indices of every navigable (changed, non-ws-only) row —
-// the full set a reviewer must approve for the block to count as approved.
+// rowHasContent reports whether a changed row actually carries visible text on
+// its *display* side — the new (right) side for an `ins` row (including a
+// paired modification, whose display side is always the new one), the old
+// (left) side for a del-only row with no replacement. A row can be
+// `rowChanged` (it carries a del/ins mark) yet be a blank/whitespace-only
+// line that's purely part of the diff — e.g. a blank line inside a wholly
+// *added* function (status: 'added', so the entire body is emitted as
+// one-sided `ins` rows including its blank lines) or a blank *removed* line.
+// That's diff noise, not reviewable content: nothing to read or judge. Used
+// to additionally filter changedRows/changeLines/changeCalls (see below) so
+// such a row never counts toward the approve total and is never its own
+// landable line/call unit ("ik kan het selecteren zonder dat ik het zie").
+// Deliberately NOT applied to changeGroups/rowChanged themselves: a blank row
+// still rides along inside whichever group run it falls in (same as a
+// bracket-only row, see hasLetter) so a group's highlighted range never jumps
+// around it — only its own count/selectability is suppressed.
+//
+// Go port: blockstats.go's rowHasContent — keep both in lockstep.
+function rowHasContent(r) {
+  const text = r.rightMark === 'ins' ? r.right : r.left
+  return !!(text && text.trim() !== '')
+}
+
+// changedRows returns the indices of every navigable (changed, non-ws-only,
+// non-blank) row — the full set a reviewer must approve for the block to
+// count as approved.
 export function changedRows(rows) {
   const out = []
-  for (let i = 0; i < rows.length; i++) if (rowChanged(rows[i])) out.push(i)
+  for (let i = 0; i < rows.length; i++)
+    if (rowChanged(rows[i]) && rowHasContent(rows[i])) out.push(i)
   return out
 }
 
@@ -1019,7 +1044,10 @@ export function changeGroups(rows) {
 export function changeLines(rows) {
   const units = []
   for (let i = 0; i < rows.length; i++) {
-    if (rowChanged(rows[i]) && rows[i].rightMark === 'ins') units.push({ start: i, end: i })
+    const r = rows[i]
+    // A blank ins-only row (see rowHasContent) is skipped: it's diff noise
+    // with nothing to land on, not its own line-granularity unit.
+    if (rowChanged(r) && r.rightMark === 'ins' && rowHasContent(r)) units.push({ start: i, end: i })
   }
   return units
 }
@@ -1044,6 +1072,9 @@ export function changeCalls(rows) {
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]
     if (!rowChanged(r)) continue
+    // A blank row (see rowHasContent) is diff noise: skip it entirely, on
+    // both branches below — it never becomes its own call-segment unit.
+    if (!rowHasContent(r)) continue
     if (r.rightMark === 'ins' && r.right != null) {
       for (const s of rowCallSegments(rows, i))
         units.push({

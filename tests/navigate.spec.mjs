@@ -360,6 +360,71 @@ test.describe('PR Review Tree — change navigation', () => {
     expect(byRow(2)[0].left).toBeGreaterThan(0)
   })
 
+  // A blank line that's purely part of the diff (e.g. inside a wholly added
+  // function) is diff noise, not reviewable content — see rowHasContent in
+  // Block.mjs. It must not inflate changedRows()/the approve total, and must
+  // not be its own landable unit on the finer granularities (changeLines /
+  // changeCalls) — that's what made it feel like "there's an approvable spot
+  // here but I can't see anything". It still rides along inside whichever
+  // changeGroups() run it falls in, so the group's highlighted range doesn't
+  // jump around it.
+  test('a blank added/removed row is diff noise: not counted, not its own line/call unit', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+    const out = await page.evaluate(async () => {
+      const { changeGroups, changeLines, changeCalls, changedRows } = await import(
+        '/src/Block.mjs'
+      )
+      // Row 0: real added line. Row 1: a blank added line (e.g. spacing inside
+      // a wholly added function). Row 2: real added line again — same run.
+      const rows = [
+        { left: null, right: '$a = 1;', leftMark: null, rightMark: 'ins' },
+        { left: null, right: '', leftMark: null, rightMark: 'ins' },
+        { left: null, right: 'return $a;', leftMark: null, rightMark: 'ins' },
+      ]
+      return {
+        groups: changeGroups(rows),
+        lines: changeLines(rows),
+        calls: changeCalls(rows).map((u) => u.start),
+        changed: changedRows(rows),
+      }
+    })
+    // The blank row still rides along inside the one group run — no break.
+    expect(out.groups).toEqual([{ start: 0, end: 2 }])
+    // But it's never its own line unit, and never counted toward the total.
+    expect(out.lines).toEqual([
+      { start: 0, end: 0 },
+      { start: 2, end: 2 },
+    ])
+    expect(out.calls).not.toContain(1)
+    expect(out.changed).toEqual([0, 2])
+  })
+
+  // Same blank-row exclusion for a pure deletion (old side blank, no
+  // replacement) — the display side there is the old (left) text.
+  test('a blank pure-deletion row is diff noise too', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+    const out = await page.evaluate(async () => {
+      const { changeLines, changeCalls, changedRows } = await import('/src/Block.mjs')
+      const rows = [
+        { left: '$a = 1;', right: null, leftMark: 'del', rightMark: null },
+        { left: '', right: null, leftMark: 'del', rightMark: null },
+        { left: 'return $a;', right: null, leftMark: 'del', rightMark: null },
+      ]
+      return {
+        lines: changeLines(rows), // pure deletions are never line-granular anyway
+        calls: changeCalls(rows).map((u) => u.start),
+        changed: changedRows(rows),
+      }
+    })
+    expect(out.lines).toEqual([])
+    expect(out.calls).not.toContain(1)
+    expect(out.changed).toEqual([0, 2])
+  })
+
   // A `??` (and its siblings `&&`/`||`/comparisons) joins two independent call
   // chains, so segmentCalls must break there — otherwise the operator gets
   // swallowed into one caller's segment and the two callers can't be separated.

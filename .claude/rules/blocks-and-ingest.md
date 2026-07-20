@@ -85,14 +85,42 @@ navigeerbare lijst tonen.
   Go-port** van de frontend-`changedRows(blockRows(b))` (`Block.mjs`): het leest de
   oud/nieuw-broncode uit de base/head-worktrees (zoals `/api/code`), past dezelfde
   `dedent4` + LCS-line-alignment (`alignRows`/`diffLines`, whitespace-ongevoelig)
-  toe en telt de gewijzigde, niet-ws-only rijen (een pure verwijdering telt als 1
-  filler-rij; een ws-only re-indent telt niet). `GET /api/blockstats?pr=N` geeft
+  toe en telt de gewijzigde, niet-ws-only, niet-lege rijen (een pure
+  verwijdering telt als 1 filler-rij; een ws-only re-indent telt niet; een
+  lege regel telt niet — zie `rowHasContent` hieronder). `GET
+  /api/blockstats?pr=N` geeft
   `{pr, totals}` (block-id → count) en is **read-only** — het leest alleen
   worktree-bestanden, dus vrij vanuit een read-handler (write-boundary). De
   parity met de JS wordt door `TestChangedRowCount` (`blockstats_test.go`) op
-  gedeelde fixtures bewezen (incl. pure deletion + ws-only). Frontend:
+  gedeelde fixtures bewezen (incl. pure deletion + ws-only + een lege regel in
+  een toegevoegd/verwijderd blok). Frontend:
   `home.mjs` (`loadBlockStats` → `state.blockTotals`); `blockApproveCount` prefereert
   dit backend-`total`.
+- **`rowHasContent` — een lege toegevoegde/verwijderde regel is diff-ruis, geen
+  telbare/landbare eenheid (`Block.mjs` + de Go-port in `blockstats.go`, exact
+  in lockstep).** Een rij kan `rowChanged` zijn (draagt een del/ins-mark) maar
+  toch een volledig lege (na `trim()`) regel bevatten — bv. een lege regel
+  tussen twee statements binnen een **volledig toegevoegd** blok
+  (`status:'added'`, dus de hele body komt als louter `ins`-rijen uit
+  `newText.split('\n')`, inclusief zijn lege regels), of een lege verwijderde
+  regel. Zo'n rij heeft niks voor de reviewer om te lezen of te beoordelen,
+  maar telde vóór deze fix gewoon mee in `changedRows()` (dus in de
+  approve-teller/`blockApproved`/de backend-`total`) én kreeg een eigen,
+  zichtbaar-lege navigatie-eenheid op `gran==='line'`/`'call'`
+  (`changeLines`/`changeCalls`) — je kon 'm selecteren en zelfs goedkeuren
+  zonder dat er iets stond ("er is daar niks, maar ik kan het wel
+  selecteren/goedkeuren", en de approve-teller liep voor op het aantal
+  zichtbare code-regels). `rowHasContent(r)` checkt of de **displaykant** van
+  de rij (de nieuwe/`right`-kant bij een `ins`-rij, anders de oude/`left`-kant
+  bij een pure verwijdering) na `trim()` niet leeg is; `changedRows`/
+  `changeLines`/`changeCalls` (en de Go-`changedRowCount`) filteren daar
+  aanvullend op. **Bewust NIET toegepast op `changeGroups`/`rowChanged`
+  zelf:** een lege regel blijft gewoon meelopen binnen de group-run waar hij
+  in valt (net als een haakjes-only-regel via `hasLetter`) — alleen zijn
+  eigen telbaarheid/landbaarheid wordt onderdrukt, niet zijn plek in een
+  bredere groep-highlight (geen visuele sprong in de diff-highlighting van
+  een groep). Zie ook `changeLines`/`changeCalls` in
+  `.claude/rules/keyboard-navigation.md`.
 - **Sorteervolgorde van de linkerlijst (`categoryRank` in `recomputeLeftList`,
   `home.mjs`):** de linkerlijst is niet zomaar ingest-/bronvolgorde — hij
   sorteert op categorie-prioriteit: **ROUTE** eerst (de wortel van de

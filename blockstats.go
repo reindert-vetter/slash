@@ -28,14 +28,14 @@ func blockChangedRowCount(baseDir, headDir string, b Block) int {
 }
 
 // changedRowCount is the exact port of the frontend changedRows(blockRows(b)):
-// dedent4 → alignRows → count rows that carry a del/ins mark and aren't a
-// whitespace-only re-alignment.
+// dedent4 → alignRows → count rows that carry a del/ins mark, aren't a
+// whitespace-only re-alignment, and aren't a blank line (rowHasContent).
 func changedRowCount(oldText, newText string) int {
 	oldText, newText = dedent4(oldText, newText)
 	rows := alignRows(oldText, newText)
 	n := 0
 	for _, r := range rows {
-		if rowChanged(r) {
+		if rowChanged(r) && rowHasContent(r) {
 			n++
 		}
 	}
@@ -229,4 +229,18 @@ func wsOnly(r alignRow) bool {
 // mark and isn't a whitespace-only re-alignment.
 func rowChanged(r alignRow) bool {
 	return (r.leftMark != "" || r.rightMark != "") && !wsOnly(r)
+}
+
+// rowHasContent is the Go port of Block.mjs rowHasContent: whether a changed
+// row's display side (the new/right side for an ins row, else the old/left
+// side) actually carries non-blank text, so a blank line that's purely part
+// of the diff (e.g. inside a wholly added function) doesn't count toward the
+// approve total. Keep in lockstep with Block.mjs — see its comment for the
+// full rationale.
+func rowHasContent(r alignRow) bool {
+	text := r.left
+	if r.rightMark == "ins" {
+		text = r.right
+	}
+	return text != nil && strings.TrimSpace(*text) != ""
 }
