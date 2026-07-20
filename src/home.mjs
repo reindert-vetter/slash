@@ -321,6 +321,25 @@ function isEditableFocused() {
   return !!el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')
 }
 
+// editableCaretCanMoveLeft reports whether a focused text field's caret sits
+// strictly past the very start (there's a character — or a selection — to its
+// left), meaning a plain/Option ArrowLeft has somewhere to go *within* the
+// field. Used to decide whether ArrowLeft should move/word-jump the caret
+// (leave it to the browser) or fall through to the existing "exit the
+// field/panel" shortcuts below (isPrWideFocused/relatedActive's ArrowLeft
+// branches) — a caret already at position 0 (e.g. a freshly opened, still
+// empty composer/reply field) has nothing to move left into, so ArrowLeft
+// there keeps its long-standing "step back out" meaning instead.
+function editableCaretCanMoveLeft() {
+  const el = document.activeElement
+  if (!el || (el.tagName !== 'TEXTAREA' && el.tagName !== 'INPUT')) return false
+  try {
+    return el.selectionStart > 0 || el.selectionEnd > 0
+  } catch {
+    return false
+  }
+}
+
 // Persist the navigation position in the URL so a refresh (or a shared link)
 // reopens the same selected block, mode and change. The PR itself lives in the
 // path (/pr/<id>), not the query string. Bare params are the main navigation;
@@ -3986,7 +4005,13 @@ function onKeydown(e) {
   // only the navigation keys below are claimed here.
   if (state.showDescription && isPrWideFocused()) {
     if (
-      ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'Escape'].includes(e.key) ||
+      (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'Escape'].includes(e.key) &&
+        // ArrowLeft with the caret mid-text in the reply textarea
+        // (pw.focus==='thread') must move/word-jump the caret, not pop the
+        // thread focus back — only hijack it when the caret has nowhere left
+        // to go (empty/at the start), matching editableCaretCanMoveLeft's own
+        // "nothing to move into" carve-out.
+        !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft())) ||
       (e.key === 'Enter' && !e.shiftKey)
     ) {
       e.preventDefault()
@@ -4031,7 +4056,16 @@ function onKeydown(e) {
   // characters (letters, Enter) are left alone so they flow into the focused
   // reply field, like the menu.
   if (relatedActive()) {
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key)) {
+    if (
+      ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key) &&
+      // ArrowLeft with the caret mid-text in the composer/reply textarea
+      // (cs.focus one of 'new'/'comment'/'thread') must move/word-jump the
+      // caret, not exit the sidebar — only hijack it when the caret has
+      // nowhere left to go (empty/at the start, e.g. a freshly opened composer
+      // — that keeps its long-standing "step back out" meaning). Mirrors the
+      // isPrWideFocused() guard above.
+      !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft())
+    ) {
       e.preventDefault()
       // taskRuns(state).length clamps cs.taskSel while the Taken stop owns
       // the keyboard — see handleRelatedKey/taskRuns in RelatedPanel.mjs.

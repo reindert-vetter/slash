@@ -807,6 +807,27 @@ zijn eigen, nog directere manier: `@focus`/`@blur` zetten `state.searchActive`
 rechtstreeks op echte DOM-focus (geen los toggle-pad), dus die hoeft niet op
 deze fallback te leunen.
 
+**ArrowLeft binnen een gefocust comment-veld beweegt de caret, verlaat het veld
+niet — tenzij de caret al helemaal aan het begin staat.** Zowel de
+`isPrWideFocused()`-branch (PR-brede reply-thread, stop 1) als de
+`relatedActive()`-branch (`cs.focus` `'new'`/`'comment'`/`'thread'`, de
+comments-sidebar) claimden `ArrowLeft` voorheen onvoorwaardelijk — óók terwijl
+de reply-/composer-`<textarea>` daadwerkelijk DOM-focus had en de reviewer
+mid-tekst zat, wat een gewone `←` of een Option/Alt+`←` (macOS-woordsprong)
+liet exit'en (thread-focus terugpoppen, of `exitRelated()`) i.p.v. de caret te
+bewegen. `editableCaretCanMoveLeft()` (`home.mjs`, naast `isEditableFocused()`)
+checkt of het gefocuste TEXTAREA/INPUT een `selectionStart`/`selectionEnd` > 0
+heeft — er dus tekst/selectie links van de caret staat — en beide branches
+onderdrukken hun `ArrowLeft`-afhandeling zolang dat zo is: de toets valt dan
+gewoon door naar het veld, dat 'm native afhandelt (caret-stap of
+woordsprong). Staat de caret al op positie 0 (een vers geopende, nog lege
+composer/reply-veld — het bestaande, geteste geval in `nav-chain.spec.mjs`:
+"← from the composer exits straight back to the diff"), dan blijft `←` zijn
+langbestaande "stap terug uit"-betekenis houden — er is dan toch niets om de
+caret naar links in te bewegen. `Escape` blijft ongewijzigd de expliciete
+"haal me eruit"-toets, ongeacht caret-positie. Zie
+`tests/comment-arrowleft-caret.spec.mjs`.
+
 ## Footer: inline preview van de geselecteerde regel + AI-omschrijving bij een if
 
 Onder de panels zit een vaste footer (`src/Footer.mjs`, `data-testid=footer`).
