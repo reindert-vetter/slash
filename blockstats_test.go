@@ -81,6 +81,20 @@ func TestChangedRowCount(t *testing.T) {
 			new:  "    function h() {\n        return 2;\n    }",
 			want: 1,
 		},
+		{
+			// Regression for a reported sidebar/header mismatch (PR 12896,
+			// ProductFillRepository::update): a standalone blank-line insertion
+			// (noise, must not count) elsewhere in the SAME block as a real
+			// 1-old-line-replaced-by-several-new-lines edit (an unequal
+			// del/ins pairing, all of which must count). Before the
+			// rowHasContent fix (blank added/removed rows are noise), the
+			// blank row inflated the total by one — this pins the combined
+			// shape at the correct, lower count.
+			name: "blank_line_plus_unequal_replace",
+			old:  "function f() {\n    step1();\n    step2();\n    if (a()) {\n        b();\n    }\n}",
+			new:  "function f() {\n    step1();\n\n    step2();\n    if (c()) {\n        d();\n        e();\n        f2();\n    } elseif (a()) {\n        b();\n    }\n}",
+			want: 5,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
