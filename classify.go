@@ -1,6 +1,7 @@
 package main
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -108,16 +109,77 @@ func (fd *fileDiff) intersects(set lineSet, start, end int) bool {
 	return false
 }
 
+// reBareTestAttribute matches a source line that, once surrounding whitespace
+// is trimmed, consists of nothing but a bare PHPUnit `#[Test]` attribute — no
+// arguments, no other attribute sharing the line.
+var reBareTestAttribute = regexp.MustCompile(`^#\[\s*Test\s*\]$`)
+
+// isBareTestAttributeOnlyChange reports whether every changed line
+// intersecting old block ob / new block nb is a bare `#[Test]` attribute line
+// within that block's leading-attribute prefix (see phpscan.go's
+// pendingAttrLine / .claude/rules/blocks-and-ingest.md) — i.e. the block only
+// picked up "modified" because a `#[Test]` was added, removed, or otherwise
+// touched, with nothing else in the method changed.
+//
+// This is deliberately narrow: a DIFFERENT leading attribute (e.g.
+// `#[DataProvider(...)]`) still counts as a real, reviewable change and must
+// keep classifying as modified — see TestAttributeOnlyChangeClassifiesAsModified.
+func isBareTestAttributeOnlyChange(fd *fileDiff, oldLines, newLines []string, ob, nb Block) bool {
+	if fd == nil {
+		return false
+	}
+	return onlyBareTestAttributeLinesChanged(fd.changedNew, newLines, nb) &&
+		onlyBareTestAttributeLinesChanged(fd.changedOld, oldLines, ob)
+}
+
+// onlyBareTestAttributeLinesChanged reports whether every line of `set` that
+// falls within b's span is both inside its leading-attribute prefix (up to,
+// not including, its actual `function` keyword line — funcDeclLine, shared
+// with testcovers_analysis.go) and is itself nothing but a bare `#[Test]`.
+// A block with no leading attribute at all (funcDeclLine == b.Line) trivially
+// fails this for any changed line, since the prefix is then empty.
+func onlyBareTestAttributeLinesChanged(set lineSet, lines []string, b Block) bool {
+	attrEnd := funcDeclLine(lines, b) - 1
+	for ln := b.Line; ln <= b.EndLine; ln++ {
+		if !set[ln] {
+			continue
+		}
+		if ln > attrEnd || !reBareTestAttribute.MatchString(strings.TrimSpace(sourceLine(lines, ln))) {
+			return false
+		}
+	}
+	return true
+}
+
+// sourceLine returns lines[ln-1] (1-indexed), or "" if out of range.
+func sourceLine(lines []string, ln int) string {
+	if ln < 1 || ln > len(lines) {
+		return ""
+	}
+	return lines[ln-1]
+}
+
 // classifyFile determines the status of each block in one file, given the old
 // and new blocks and the diff. It returns added/removed/modified blocks;
 // unchanged blocks are dropped.
 //
 // fileAdded/fileDeleted force all new resp. old blocks to be included.
-func classifyFile(pr int, path string, oldBlocks, newBlocks []Block, fd *fileDiff, fileAdded, fileDeleted bool) []Block {
+// oldSrc/newSrc are the two versions' full source text — needed (only) to
+// tell a bare `#[Test]`-only change apart from a real one, see
+// isBareTestAttributeOnlyChange.
+func classifyFile(pr int, path string, oldBlocks, newBlocks []Block, fd *fileDiff, fileAdded, fileDeleted bool, oldSrc, newSrc string) []Block {
 	category := categoryFor(path)
 
 	oldBySym := indexBySymbol(oldBlocks)
 	newBySym := indexBySymbol(newBlocks)
+
+	// Split once, not per block — only needed for the bare-#[Test]-only check
+	// below, so skip the work entirely when there is no diff to check against.
+	var oldLines, newLines []string
+	if fd != nil {
+		oldLines = strings.Split(oldSrc, "\n")
+		newLines = strings.Split(newSrc, "\n")
+	}
 
 	var out []Block
 
@@ -140,6 +202,14 @@ func classifyFile(pr int, path string, oldBlocks, newBlocks []Block, fd *fileDif
 				fd.intersects(fd.changedOld, ob.Line, ob.EndLine) {
 				modified = true
 			}
+		}
+		if modified && isBareTestAttributeOnlyChange(fd, oldLines, newLines, ob, nb) {
+			// The only lines that changed are a bare `#[Test]` attribute line —
+			// no argument, no other attribute sharing it, nothing else in the
+			// method touched. That carries no reviewable meaning, so drop the
+			// block entirely instead of surfacing the whole, otherwise-
+			// untouched method as "modified".
+			modified = false
 		}
 		if modified {
 			nb.Status = StatusModified

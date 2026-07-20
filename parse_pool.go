@@ -102,6 +102,6 @@ func parseOneFile(pr int, path, baseDir, headDir string, fd *fileDiff) (res file
 		newBlocks = ScanBlocks(newSrc, path)
 	}
 
-	res.blocks = classifyFile(pr, path, oldBlocks, newBlocks, fd, fileAdded, fileDeleted)
+	res.blocks = classifyFile(pr, path, oldBlocks, newBlocks, fd, fileAdded, fileDeleted, string(oldSrc), string(newSrc))
 	return res
 }

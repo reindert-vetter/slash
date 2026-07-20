@@ -230,7 +230,7 @@ class PermissionTest {
 	// the new attribute — and nothing removed.
 	fd := &fileDiff{changedOld: lineSet{}, changedNew: lineSet{3: true}}
 
-	out := classifyFile(1, file, oldBlocks, newBlocks, fd, false, false)
+	out := classifyFile(1, file, oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
 
 	var found *Block
 	for i := range out {
@@ -240,6 +240,90 @@ class PermissionTest {
 	}
 	if found == nil {
 		t.Fatalf("attribute-only change did not classify the method as changed at all; got %v", symbols(out))
+	}
+	if found.Status != StatusModified {
+		t.Errorf("expected status=%q, got %q", StatusModified, found.Status)
+	}
+}
+
+// TestBareTestAttributeOnlyChangeIsIgnored is the narrow carve-out on top of
+// TestAttributeOnlyChangeClassifiesAsModified above: a bare `#[Test]` (no
+// arguments) added above an otherwise completely untouched method carries no
+// reviewable meaning, so the block must NOT be surfaced as "modified" at all
+// — unlike a #[DataProvider(...)]-only change, which still must be (see the
+// test above; that behavior is unchanged).
+func TestBareTestAttributeOnlyChangeIsIgnored(t *testing.T) {
+	oldSrc := `<?php
+class PermissionTest {
+    public function testPermissionAccess($perm) {
+        return true;
+    }
+}
+`
+	newSrc := `<?php
+class PermissionTest {
+    #[Test]
+    public function testPermissionAccess($perm) {
+        return true;
+    }
+}
+`
+	file := "tests/Feature/PermissionTest.php"
+	oldBlocks := ScanBlocks([]byte(oldSrc), file)
+	newBlocks := ScanBlocks([]byte(newSrc), file)
+
+	// A real unified diff for this change would show exactly one added line —
+	// the new `#[Test]` attribute — and nothing removed.
+	fd := &fileDiff{changedOld: lineSet{}, changedNew: lineSet{3: true}}
+
+	out := classifyFile(1, file, oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
+
+	for _, b := range out {
+		if b.symbol() == "PermissionTest::testPermissionAccess" {
+			t.Fatalf("expected a bare #[Test]-only change to be ignored, got %v", b)
+		}
+	}
+}
+
+// TestBareTestAttributeChangeStillModifiedWithRealEdit proves the carve-out
+// above only applies when the bare `#[Test]` is the SOLE change: add it
+// together with a real body edit, and the method must still classify as
+// modified — a normal test-block edit must never be silently dropped.
+func TestBareTestAttributeChangeStillModifiedWithRealEdit(t *testing.T) {
+	oldSrc := `<?php
+class PermissionTest {
+    public function testPermissionAccess($perm) {
+        return true;
+    }
+}
+`
+	newSrc := `<?php
+class PermissionTest {
+    #[Test]
+    public function testPermissionAccess($perm) {
+        return false;
+    }
+}
+`
+	file := "tests/Feature/PermissionTest.php"
+	oldBlocks := ScanBlocks([]byte(oldSrc), file)
+	newBlocks := ScanBlocks([]byte(newSrc), file)
+
+	// New line 3 is the added `#[Test]` attribute, new line 5 is the changed
+	// body (`return true;` -> `return false;`); old line 4 (`return true;`) is
+	// the corresponding removed line.
+	fd := &fileDiff{changedOld: lineSet{4: true}, changedNew: lineSet{3: true, 5: true}}
+
+	out := classifyFile(1, file, oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
+
+	var found *Block
+	for i := range out {
+		if out[i].symbol() == "PermissionTest::testPermissionAccess" {
+			found = &out[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected the method with a real body edit to still classify as changed, got %v", symbols(out))
 	}
 	if found.Status != StatusModified {
 		t.Errorf("expected status=%q, got %q", StatusModified, found.Status)

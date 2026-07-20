@@ -169,6 +169,24 @@ navigeerbare lijst tonen.
   `TestStackedAttributesUseFirstLine`,
   `TestPropertyAttributeNotLeakedToNextMethod`), `classify_test.go`
   (`TestAttributeOnlyChangeClassifiesAsModified`).
+- **Uitzondering: een kale `#[Test]`-only wijziging telt bewust NIET als
+  "modified" (`classify.go`).** Een toegevoegd/verwijderd/aangepast `#[Test]`
+  (PHPUnit's argumentloze test-marker) heeft geen reviewbare betekenis — anders
+  dan `#[DataProvider(...)]` hierboven, dat wél als een echte wijziging moet
+  blijven tellen. `classifyFile` roept daarom, ná de bestaande
+  `intersects`-check, `isBareTestAttributeOnlyChange(fd, oldLines, newLines,
+  ob, nb)` aan: die is alleen waar als **elke** gewijzigde regel binnen het
+  blok (a) in de leidende-attributen-prefix ligt (vóór de echte
+  `function`-regel, via hetzelfde `funcDeclLine` dat `testcovers_analysis.go`
+  al gebruikt) én (b) getrimd letterlijk `#[Test]` is — geen argumenten, geen
+  andere attributen op diezelfde regel. Is dat zo, dan wordt `modified` weer
+  op `false` gezet en verschijnt het blok helemaal niet (net als een echt
+  ongewijzigd blok) i.p.v. de hele, verder onaangeroerde testmethode te tonen.
+  Een `#[Test]`-toevoeging **samen met** een echte body-wijziging blijft
+  gewoon "modified" — de carve-out geldt alleen als `#[Test]` de énige reden
+  is. Tests: `classify_test.go`
+  (`TestBareTestAttributeOnlyChangeIsIgnored`,
+  `TestBareTestAttributeChangeStillModifiedWithRealEdit`).
 - **Echt verwijderd bestand (`file_deleted`):** "alle blocks van dit bestand zijn
   `removed`" is géén betrouwbaar bestand-verwijderd-signaal (de blocks-tabel bevat
   alleen *getroffen* blocks — een bestand met één verwijderde methode blijft
