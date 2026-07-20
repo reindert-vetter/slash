@@ -43,8 +43,17 @@ CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, seq);
 type SQLiteStore struct{ db *sql.DB }
 
 // NewSQLiteStore opens (or creates) the DB at path and applies the schema.
+//
+// The DSN sets busy_timeout so a writer that finds the DB locked (another
+// connection in database/sql's pool mid-write) waits and retries instead of
+// failing immediately with SQLITE_BUSY — otherwise a poll-driven signal that
+// races another writer panics the whole engine (see record/safeRecord).
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite", path)
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	db, err := sql.Open("sqlite", path+sep+"_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("tembed: open sqlite: %w", err)
 	}
