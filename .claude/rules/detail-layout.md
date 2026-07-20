@@ -248,6 +248,21 @@ globale Cmd+→-handler in `home.mjs` negeert de toets expliciet zolang
 `isEditableFocused()` waar is). Mirrort het `preTaskFocus`-patroon.
 Test: `tests/sidebar-focus-restore.spec.mjs`.
 
+**Een geplaatste comment geeft de keyboard meteen terug aan de code waar hij op
+staat.** `placeComment` (`RelatedPanel.mjs`) — aangeroepen door beide
+`COMPOSE_COMMANDS`-items in `home.mjs` ("Plaats comment" en "Alleen voor
+mijzelf") — roept ná een geslaagde `createComment` niet langer alleen
+`cs.composing = false` maar `exitRelated()`: dat is functioneel dezelfde stap
+als een `←` vanuit de sidebar (zie hierboven) — de keyboard-focus gaat terug
+naar de diff van het block/de kolom waar de comment aan hing (`commentTarget()`
+volgt `focusedBlock()`, dus ook een gedrilde kolom), de sidebar zelf blijft
+gewoon open. `home.mjs`'s `compose-post`/`compose-self`-`run`-functies roepen
+daarna `scrollFocusIntoView()` aan om `<main>` op die kolom te her-uitlijnen —
+dezelfde aanroep die `onKeydown`'s `relatedActive()`-tak al doet na een `←`-exit.
+Zo kan de reviewer na "typ, Enter, Enter" meteen met `↑`/`↓`/`f`/`d`/`s` verder
+door de diff, zonder zelf terug te navigeren. Test:
+`tests/place-comment-return-focus.spec.mjs`.
+
 **Dichtgeklapt** (`!cs.sidebarOpen`) rendert de sidebar als een smalle
 hint-rail op de rechterrand (`data-testid=sidebar-collapsed`, `right-0 w-12`,
 klikbaar): twee getallen, een spraakbel-icoon met het **aantal comments**

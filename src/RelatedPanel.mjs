@@ -1172,7 +1172,11 @@ export async function placeComment(state, commentTarget, opts = {}) {
     segment: t ? t.segment : '',
   })
   el.value = ''
-  cs.composing = false
+  // The reviewer placed a comment tied to a piece of code — hand the keyboard
+  // back to that code's diff (same as ← from the sidebar) instead of leaving
+  // it sitting on the composer row. The sidebar itself stays open (exitRelated
+  // never touches cs.sidebarOpen), only the keyboard focus moves.
+  exitRelated()
 }
 
 // GRAN_LABEL — how each navigation granularity is described in the composer's

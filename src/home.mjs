@@ -2305,6 +2305,11 @@ const COMPOSE_COMMANDS = [
     run: async () => {
       await placeComment(state, commentTarget)
       pollWorkflows()
+      // placeComment (RelatedPanel.mjs) already handed the keyboard back to
+      // the diff (exitRelated) — re-align <main> on it, mirroring the same
+      // scrollFocusIntoView() call onKeydown makes right after an ← exit out
+      // of the sidebar (see the relatedActive() branch above).
+      scrollFocusIntoView()
     },
   },
   {
@@ -2329,6 +2334,7 @@ const COMPOSE_COMMANDS = [
     run: async () => {
       await placeComment(state, commentTarget, { local: true })
       pollWorkflows()
+      scrollFocusIntoView()
     },
   },
   {
