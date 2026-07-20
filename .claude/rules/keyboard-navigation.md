@@ -255,9 +255,23 @@ als de actie goedkeuring **toevoegde** (`toggleApprove`/`toggleCallApprove`
 detecteren dat via `allIn`/`keys.has(key)` **vóór** de mutatie — intrekken van een
 goedkeuring opent dit menu nooit) én er daadwerkelijk nog iets openstaat
 (`afterApproveAction` → `findNextUnapproved()`; niets meer open → het menu blijft
-gewoon dicht, zoals altijd). "Volgende" volgt de review-**boom**, niet enkel de
-platte sidebar-lijst, depth-first (`findNextUnapproved` in `home.mjs`, vier
-stappen op elke aanroep):
+gewoon dicht, zoals altijd).
+
+**Uitzondering: blijft de volgende unit in hetzelfde block, dan slaat
+`afterApproveAction` dit vervolgmenu over en navigeert meteen door** — vragen
+"ga door of niet" is pure wrijving als er toch niets anders te kiezen valt dan
+doorgaan in het block waar de reviewer al naar kijkt. Dit is precies stap 1
+hieronder (`findNextUnapproved`'s "verder binnen de kolom die de keyboard nu
+bezit"-tak): het plan heeft dan een **lege `path`** en `root === state.selected`
+(geen drill, geen kind-blok, geen ander top-level block). `afterApproveAction`
+checkt die twee velden (plus `!keepList`, zodat een goedkeuring vanuit de
+blokken-index — die toch niets meer overlaat in datzelfde block — dit pad
+nooit raakt) en roept in dat geval direct `applyNextUnapproved(target)` aan
+i.p.v. `openMenu('postApprove')`. Elke andere uitkomst (omlaag een kind-subtree
+in, omhoog naar een sibling, of verder naar een ander top-level block — stappen
+2-4 hieronder) blijft gewoon het vervolgmenu tonen. "Volgende" volgt de
+review-**boom**, niet enkel de platte sidebar-lijst, depth-first
+(`findNextUnapproved` in `home.mjs`, vier stappen op elke aanroep):
 
 1. **Verder binnen de kolom die de keyboard nu bezit** — het top-level block
    (`state.gran`/`state.change`), of — als er gedrild is (zie "Drillen"/

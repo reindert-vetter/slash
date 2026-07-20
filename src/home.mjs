@@ -3565,11 +3565,29 @@ let postApproveTarget = null
 // gap — so it reflects the mode the reviewer was actually in when they ran the
 // approve action, not whatever state.mode happens to be once the promise
 // resolves.
+// EXCEPTION — next unit stays in the SAME block, no menu: when the plan's
+// `path` is empty and its `root` is still the current top-level block, this is
+// exactly findNextUnapproved's step-1 branch ("forward within whichever
+// column currently owns the keyboard") — no drill, no block change, just the
+// next unapproved line/call/group in the block the reviewer is already
+// looking at. Asking "ga door of niet" there is pure friction, so this jumps
+// straight there via applyNextUnapproved instead of opening the postApprove
+// menu. Any other outcome (down into a child's subtree, up to a sibling, or
+// across to a different top-level block) still opens the menu, unchanged.
+// `!keepList` guards this from ever firing off a list-mode block-approve
+// (approving a whole block from the index leaves nothing else inside it to
+// jump to in that same block anyway, but this keeps the two paths cleanly
+// separated).
 function afterApproveAction(approving) {
   if (!approving) return
   const keepList = state.mode !== 'diff'
   findNextUnapproved().then((target) => {
     if (!target) return
+    const sameBlock = !keepList && target.path.length === 0 && target.root === state.selected
+    if (sameBlock) {
+      applyNextUnapproved(target)
+      return
+    }
     postApproveTarget = { ...target, keepList }
     openMenu('postApprove')
   })
