@@ -2,8 +2,24 @@
 
 Rechts van de sidebar staat de `DetailPanel` (`home.mjs`): een `<main>` als
 **flex-row** die zijn kolommen **vanaf links inpakt** (`justify-start`, geen
-uitrekken) en horizontaal scrolt (`overflow-x-auto`) zodra ze samen breder zijn
-dan het scherm.
+uitrekken) en horizontaal scrolt (`overflow-x-auto no-scrollbar`) zodra ze samen
+breder zijn dan het scherm — de `no-scrollbar`-utility (`index.html`) verbergt
+de scrollbar-chrome, het scrollen zelf blijft werken (zowel programmatisch als
+via trackpad/muis). **De rustpositie is altijd flush-left:** een
+`resetMainScroll()`-helper (`home.mjs`, naast `scrollFocusIntoView`) zet
+`<main>.scrollLeft` hard terug naar `0` op elke overgang náár de rustpositie —
+`enterDiff`/`openTask` (lijst → diff, `focusLevel===0 && drill.length===0`),
+`applyNextUnapproved` bij een leeg `path` (geen drill), en de twee `←`-paden in
+`onKeydown` die respectievelijk **volledig** uit een gedrilde kolom terugpoppen
+naar `focusLevel===0` en die de hele diff-sessie verlaten (`state.mode='list'`).
+Dit dekt een stray handmatige horizontale scroll (trackpad/scrollbalk-sleep)
+die anders bleef hangen tot de volgende drill-focus-wissel. **Dit vecht bewust
+niet terug tijdens/na het drillen zelf** — zolang `focusLevel > 0` blijft
+(gedrild, ook na een gedeeltelijke `←`-pop) is de bestaande, intentionele
+scroll-naar-rechts van `scrollFocusIntoView` leidend (zie "Niet-gefocuste
+kolommen klappen in tot een smalle rail" verderop): die laat eerdere kolommen
+bewust links buiten beeld verdwijnen, met de ‹-chevron-hint. Regressietest:
+`tests/main-scroll-rest-left.spec.mjs`.
 
 **PR-info-kolom, stop 1 van de nav-keten, standaard verborgen, fysiek links van
 de pr-index** (`data-testid=pr-info-column`, `w-[39rem]` — 1.5x de oorspronkelijke

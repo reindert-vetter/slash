@@ -2088,6 +2088,7 @@ function enterDiff() {
   state.drill = []
   state.drillCursor = []
   state.focusLevel = 0
+  resetMainScroll()
   scrollChangeIntoView()
 }
 
@@ -2110,6 +2111,7 @@ async function openTask(run) {
   state.drill = []
   state.drillCursor = []
   state.focusLevel = 0
+  resetMainScroll()
   const b = state.blocks[idx]
   await ensureCode(b)
   const rows = blockRows(b)
@@ -2484,6 +2486,26 @@ function scrollFocusIntoView(level = state.focusLevel) {
     // edge) so the columns it was drilled from stay hinted-at via the
     // left-edge chevron below instead of scrolling fully out of reach.
     if (el) el.scrollIntoView({ inline: 'start', block: 'nearest' })
+  })
+}
+
+// resetMainScroll snaps <main>'s horizontal scroll hard back to 0. Called only
+// at the "rest position" transitions — entering list-mode, or popping all the
+// way back out of every drilled column (focusLevel===0 && drill.length===0) —
+// never while a drilled column is focused/being entered: that's
+// scrollFocusIntoView's territory, and it deliberately leaves earlier columns
+// scrolled off the left edge (with a chevron hint) while drilling, see its own
+// comment above. Without this, a stray manual horizontal scroll (trackpad/
+// scrollbar drag) on <main> would otherwise persist across a transition back
+// to the rest position, since scrollFocusIntoView's `inline:'start'` only
+// re-aligns relative to the block-column element — usually equivalent to 0
+// once it's the sole/leftmost child, but this makes the rest position exactly
+// 0 unconditionally rather than relying on that alignment. Deferred a frame
+// like the other scroll helpers so it runs after the fresh render.
+function resetMainScroll() {
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid="detail-panel"]')
+    if (el) el.scrollLeft = 0
   })
 }
 
@@ -3475,6 +3497,11 @@ function applyNextUnapproved(target) {
   } else {
     state.gran = target.gran
     state.change = target.change
+    // No drilling happened (empty path) — this lands squarely on the rest
+    // position (top-level block, no drilled column), so snap <main> back to
+    // flush-left rather than leaving it wherever a prior drilled column (or a
+    // stray manual scroll) left it.
+    resetMainScroll()
   }
   scrollChangeIntoView()
 }
@@ -4106,6 +4133,13 @@ function onKeydown(e) {
         state.drillCursor = state.drillCursor.slice(0, state.focusLevel - 1)
         state.focusLevel -= 1
         scrollFocusIntoView()
+        // Popping all the way back out to the top-level block (no drilled
+        // column left) reaches the rest position — snap <main> hard back to
+        // its flush-left start rather than leaning on scrollFocusIntoView's
+        // alignment. A partial pop (focusLevel still > 0) stays untouched:
+        // that's still "inside" the drill, where earlier columns are meant to
+        // stay scrolled off the left edge (see scrollFocusIntoView's comment).
+        if (state.focusLevel === 0) resetMainScroll()
         // The parent column's card gets a fresh key on this foc/unfoc flip
         // (see the block-card .key(...) rekey comment above), so its fresh
         // [data-scrollsync] pane starts at scrollTop 0 — without this, a long
@@ -4120,6 +4154,7 @@ function onKeydown(e) {
         state.mode = 'list'
         state.drill = []
         state.drillCursor = []
+        resetMainScroll()
         scrollSelectedIntoView()
         refreshHints() // stepping back to the list hides the hints
       }
@@ -4732,7 +4767,7 @@ function DetailPanel(state) {
   return html`
     <main
       class="${() =>
-        'fixed top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto transition-all duration-200 ease-out ' +
+        'fixed top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto no-scrollbar transition-all duration-200 ease-out ' +
         // Reserve a bottom strip matching the footer's own visibility/height
         // (state.footerVisible/state.footerExplain, see Footer.mjs): none when
         // the footer has nothing to show, 90px for just the inline diff, 140px
