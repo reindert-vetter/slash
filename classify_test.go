@@ -198,6 +198,54 @@ func TestFileDeletedMigration(t *testing.T) {
 	}
 }
 
+// TestAttributeOnlyChangeClassifiesAsModified proves the latent classify.go
+// gap that leading-attribute inclusion (phpscan.go, see
+// .claude/rules/blocks-and-ingest.md) fixes: before that scanner change, a
+// method's Block.Line started at the `function` keyword, so a diff that only
+// touches the line(s) above it (a newly added #[DataProvider(...)]) never
+// intersected the block's [Line, EndLine] span and the method silently never
+// showed up as "modified" at all. With the attribute folded into the block's
+// own span, the same attribute-only diff now does intersect.
+func TestAttributeOnlyChangeClassifiesAsModified(t *testing.T) {
+	oldSrc := `<?php
+class PermissionTest {
+    public function testPermissionAccess($perm) {
+        return true;
+    }
+}
+`
+	newSrc := `<?php
+class PermissionTest {
+    #[DataProvider('permissionAccessDataProvider')]
+    public function testPermissionAccess($perm) {
+        return true;
+    }
+}
+`
+	file := "tests/Feature/PermissionTest.php"
+	oldBlocks := ScanBlocks([]byte(oldSrc), file)
+	newBlocks := ScanBlocks([]byte(newSrc), file)
+
+	// A real unified diff for this change would show exactly one added line —
+	// the new attribute — and nothing removed.
+	fd := &fileDiff{changedOld: lineSet{}, changedNew: lineSet{3: true}}
+
+	out := classifyFile(1, file, oldBlocks, newBlocks, fd, false, false)
+
+	var found *Block
+	for i := range out {
+		if out[i].symbol() == "PermissionTest::testPermissionAccess" {
+			found = &out[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("attribute-only change did not classify the method as changed at all; got %v", symbols(out))
+	}
+	if found.Status != StatusModified {
+		t.Errorf("expected status=%q, got %q", StatusModified, found.Status)
+	}
+}
+
 func writeFileT(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

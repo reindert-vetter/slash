@@ -53,7 +53,37 @@ var (
 	// the "class zone" (file-wide annotations: @coversDefaultClass, or a
 	// class-wide #[CoversClass]/"@covers Class") and everything below it.
 	reClassKeyword = regexp.MustCompile(`(?m)^\s*(?:abstract\s+|final\s+)?class\s+[A-Za-z_]`)
+	// reFunctionKeyword finds the actual `function` keyword within a block's own
+	// span — see funcDeclLine. Attribute lines never contain the bare word
+	// "function" in practice, so the first match is reliably the declaration.
+	reFunctionKeyword = regexp.MustCompile(`\bfunction\b`)
 )
+
+// funcDeclLine returns the absolute source line, within block b's own span,
+// where its `function` keyword actually sits. Usually that is simply b.Line —
+// but since phpscan.go pulls a block's Line back to its first leading
+// `#[...]` attribute (see .claude/rules/blocks-and-ingest.md), a block with
+// one or more attributes now starts a line or more before its `function`
+// keyword. methodZone needs the real declaration line (not the attribute
+// line) as the upper bound of the "zone above the method" it scans for
+// docblock-style annotations — attribute-style annotations living between
+// b.Line and this line are, since that scanner change, already part of b's
+// own span and thus already visible to a caller scanning b's source
+// (methodZone folds them back in below). Falls back to b.Line if, somehow, no
+// `function` keyword is found in the span (defensive; should not happen for a
+// real function block).
+func funcDeclLine(lines []string, b Block) int {
+	limit := b.EndLine
+	if limit > len(lines) {
+		limit = len(lines)
+	}
+	for ln := b.Line; ln <= limit; ln++ {
+		if reFunctionKeyword.MatchString(lines[ln-1]) {
+			return ln
+		}
+	}
+	return b.Line
+}
 
 // classZoneFromLine is the absolute file line classZone's returned text
 // always starts at — line 1, since classZone slices from the top of the file.
@@ -134,13 +164,16 @@ func classZone(src string) string {
 	return src[:loc[0]]
 }
 
-// methodZone returns the raw source text immediately above block b's
-// declaration line — its attributes + docblock — bounded by the previous
-// same-file block's end line (or a 40-line cap for the first method in a
-// class, when no clean boundary is nearby), the absolute file line that text
-// starts at (from — the anchor coverTargets converts a match offset into via
-// matchLine), and whether a #[Test] attribute or "@test" docblock tag sits in
-// that zone.
+// methodZone returns the raw source text immediately above block b's actual
+// `function` keyword — its docblock, plus (since phpscan.go now folds a
+// method's leading `#[...]` attribute(s) into its own Block.Line/EndLine span,
+// see .claude/rules/blocks-and-ingest.md) any attributes that are technically
+// already part of b's own span, from b.Line up to that keyword. Bounded by the
+// previous same-file block's end line (or a 40-line cap for the first method
+// in a class, when no clean boundary is nearby), the absolute file line that
+// text starts at (from — the anchor coverTargets converts a match offset into
+// via matchLine), and whether a #[Test] attribute or "@test" docblock tag sits
+// in that zone.
 func methodZone(lines []string, fileBlocks []Block, b Block) (zone string, from int, hasTestAttr bool) {
 	prevEnd := 0
 	for _, fb := range fileBlocks {
@@ -151,14 +184,15 @@ func methodZone(lines []string, fileBlocks []Block, b Block) (zone string, from 
 			prevEnd = fb.EndLine
 		}
 	}
+	declLine := funcDeclLine(lines, b)
 	from = prevEnd + 1
-	if b.Line-from > 40 {
-		from = b.Line - 40
+	if declLine-from > 40 {
+		from = declLine - 40
 	}
 	if from < 1 {
 		from = 1
 	}
-	to := b.Line - 1
+	to := declLine - 1
 	if to < from || to > len(lines) {
 		return "", 0, false
 	}

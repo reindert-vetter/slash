@@ -102,6 +102,122 @@ class C {
 	}
 }
 
+// blockByName returns the block whose symbol matches sym, for Line/EndLine
+// assertions (hasSymbol only checks presence).
+func blockByName(bs []Block, sym string) (Block, bool) {
+	for _, b := range bs {
+		if b.symbol() == sym {
+			return b, true
+		}
+	}
+	return Block{}, false
+}
+
+// TestLeadingAttributeIncludedInBlock: a method's leading #[...] attribute is
+// part of its block — Block.Line starts at the attribute line, not the
+// `function` keyword's own line (see .claude/rules/blocks-and-ingest.md,
+// "Leidende attributen").
+func TestLeadingAttributeIncludedInBlock(t *testing.T) {
+	src := `<?php
+class C {
+    #[Route('/x')]
+    public function handle() {
+        return 1;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Http/Controllers/C.php")
+	b, ok := blockByName(got, "C::handle")
+	if !ok {
+		t.Fatalf("expected C::handle, got %v", symbols(got))
+	}
+	if b.Line != 3 {
+		t.Fatalf("expected Block.Line=3 (the attribute line), got %d", b.Line)
+	}
+}
+
+// TestMultilineLeadingAttributeIncludedInBlock: an attribute whose arguments
+// span several lines (e.g. #[DataProvider('name')] wrapped) still pulls the
+// block's Line back to its OPENING line, and the body span is unaffected.
+func TestMultilineLeadingAttributeIncludedInBlock(t *testing.T) {
+	src := `<?php
+class PermissionTest {
+    #[DataProvider(
+        'permissionAccessDataProvider'
+    )]
+    public function testPermissionAccess($perm) {
+        return true;
+    }
+
+    public function permissionAccessDataProvider(): array {
+        return [];
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "tests/Feature/PermissionTest.php")
+	b, ok := blockByName(got, "PermissionTest::testPermissionAccess")
+	if !ok {
+		t.Fatalf("expected testPermissionAccess, got %v", symbols(got))
+	}
+	if b.Line != 3 {
+		t.Fatalf("expected Block.Line=3 (the attribute's opening line), got %d", b.Line)
+	}
+	if b.EndLine <= b.Line {
+		t.Fatalf("body span looks wrong: line=%d end=%d", b.Line, b.EndLine)
+	}
+	if !hasSymbol(got, "PermissionTest::permissionAccessDataProvider") {
+		t.Fatalf("expected the provider method as its own block too, got %v", symbols(got))
+	}
+}
+
+// TestStackedAttributesUseFirstLine: several attributes stacked above one
+// method (a common PHPUnit combination, #[Test] + #[DataProvider(...)]) pull
+// the block's Line back to the FIRST attribute, not the last.
+func TestStackedAttributesUseFirstLine(t *testing.T) {
+	src := `<?php
+class PermissionTest {
+    #[Test]
+    #[DataProvider('permissionAccessDataProvider')]
+    public function testPermissionAccess($perm) {
+        return true;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "tests/Feature/PermissionTest.php")
+	b, ok := blockByName(got, "PermissionTest::testPermissionAccess")
+	if !ok {
+		t.Fatalf("expected testPermissionAccess, got %v", symbols(got))
+	}
+	if b.Line != 3 {
+		t.Fatalf("expected Block.Line=3 (the FIRST attribute's line), got %d", b.Line)
+	}
+}
+
+// TestPropertyAttributeNotLeakedToNextMethod: an attribute on a preceding
+// property must not leak into the following, unrelated method's Line — the
+// property's own type-hint/variable tokens between the attribute and the `;`
+// reset the pending-attribute tracking (see scanPHP's pendingAttrLine).
+func TestPropertyAttributeNotLeakedToNextMethod(t *testing.T) {
+	src := `<?php
+class Svc {
+    #[Deprecated]
+    private string $legacy;
+
+    public function run() {
+        return 1;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Services/Svc.php")
+	b, ok := blockByName(got, "Svc::run")
+	if !ok {
+		t.Fatalf("expected Svc::run, got %v", symbols(got))
+	}
+	if b.Line != 6 {
+		t.Fatalf("expected Block.Line=6 (own declaration, not the property's attribute), got %d", b.Line)
+	}
+}
+
 func TestAbstractAndInterfaceMethods(t *testing.T) {
 	src := `<?php
 interface Repo {

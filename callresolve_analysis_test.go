@@ -1079,3 +1079,106 @@ class Contract extends Model {
 		t.Errorf("got %d total entries, want exactly 1 (contracts only)", len(entries))
 	}
 }
+
+// TestResolveDataProviders: a PHPUnit test method's #[DataProvider('name')]
+// attribute or legacy "@dataProvider name" docblock resolves to the provider
+// method — even though the provider is NOT itself changed by this PR in the
+// usual case (this fixture marks every method as changed for simplicity, but
+// resolveDataProviders never requires that: it only reads the CALLER's own
+// zone). A name that doesn't match any method on the test's own class (a
+// typo, or an external provider) silently produces no entry — never an
+// "unresolved" row, since there is no ambiguity to hand to an LLM.
+func TestResolveDataProviders(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 70
+	_, headDir := worktreeDirs(dataDir, pr)
+	relFile := "tests/Feature/PermissionTest.php"
+	src := `<?php
+namespace Tests\Feature;
+
+use PHPUnit\Framework\TestCase;
+
+class PermissionTest extends TestCase
+{
+    #[DataProvider('permissionAccessDataProvider')]
+    public function testPermissionAccessAttribute($perm)
+    {
+        $this->assertTrue(true);
+    }
+
+    /**
+     * @dataProvider oldStyleProvider
+     */
+    public function testPermissionAccessDocblock($perm)
+    {
+        $this->assertTrue(true);
+    }
+
+    #[DataProvider('doesNotExist')]
+    public function testPermissionAccessTypo($perm)
+    {
+        $this->assertTrue(true);
+    }
+
+    public function permissionAccessDataProvider(): array
+    {
+        return [[true]];
+    }
+
+    public function oldStyleProvider(): array
+    {
+        return [[false]];
+    }
+}
+`
+	p := filepath.Join(headDir, relFile)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	blocks := testCoversBlocks(t, dataDir, pr, relFile)
+	entries := resolveDataProviders(dataDir, pr, blocks)
+
+	attrCaller, ok := blockByName(blocks, "PermissionTest::testPermissionAccessAttribute")
+	if !ok {
+		t.Fatalf("fixture scan did not find testPermissionAccessAttribute, got %v", symbols(blocks))
+	}
+	e, ok := findCallresolveEntry(entries, attrCaller.ID(), "data_provider:permissionAccessDataProvider")
+	if !ok {
+		t.Fatalf("no data_provider entry for the #[DataProvider(...)] attribute, got %+v", entries)
+	}
+	if e.Status != callresolve.StatusResolved || e.Kind != callresolve.KindDataProvider {
+		t.Errorf("got status=%q kind=%q, want resolved/%q", e.Status, e.Kind, callresolve.KindDataProvider)
+	}
+	if e.ChildClass != "PermissionTest" || e.ChildMethod != "permissionAccessDataProvider" {
+		t.Errorf("child=%q::%q, want PermissionTest::permissionAccessDataProvider", e.ChildClass, e.ChildMethod)
+	}
+	if !strings.Contains(e.ChildCode, "function permissionAccessDataProvider") {
+		t.Errorf("expected the provider method's own source, got %q", e.ChildCode)
+	}
+
+	docCaller, ok := blockByName(blocks, "PermissionTest::testPermissionAccessDocblock")
+	if !ok {
+		t.Fatalf("fixture scan did not find testPermissionAccessDocblock, got %v", symbols(blocks))
+	}
+	e2, ok := findCallresolveEntry(entries, docCaller.ID(), "data_provider:oldStyleProvider")
+	if !ok {
+		t.Fatalf("no data_provider entry for the legacy @dataProvider docblock, got %+v", entries)
+	}
+	if e2.ChildMethod != "oldStyleProvider" {
+		t.Errorf("child method=%q, want oldStyleProvider", e2.ChildMethod)
+	}
+
+	typoCaller, ok := blockByName(blocks, "PermissionTest::testPermissionAccessTypo")
+	if !ok {
+		t.Fatalf("fixture scan did not find testPermissionAccessTypo, got %v", symbols(blocks))
+	}
+	for _, en := range entries {
+		if en.CallerID == typoCaller.ID() {
+			t.Errorf("expected silence for an unresolvable provider name, got %+v", en)
+		}
+	}
+}

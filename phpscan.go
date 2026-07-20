@@ -62,6 +62,16 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 	line := 1
 	depth := 0
 	var classes []classFrame
+	// pendingAttrLine is the line of the first `#[...]` attribute in an
+	// uninterrupted run of attributes/modifier-keywords directly above the next
+	// `function` declaration (0 = none pending). It lets a function's Block.Line
+	// start at its leading attribute(s) instead of at the `function` keyword —
+	// see the "function" case below and .claude/rules/blocks-and-ingest.md.
+	// Reset to 0 whenever a token appears that is neither an attribute, a
+	// modifier keyword, nor `function` itself (so it never leaks onto an
+	// unrelated declaration, e.g. a property that happens to carry its own
+	// attribute).
+	pendingAttrLine := 0
 
 	n := len(s)
 
@@ -104,7 +114,21 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 		// --- line comment: // or # (but #[ is an attribute, not a comment) ---
 		case c == '/' && i+1 < n && s[i+1] == '/':
 			i = skipToEOL(s, i)
-		case c == '#' && !(i+1 < n && s[i+1] == '['):
+		case c == '#' && i+1 < n && s[i+1] == '[':
+			// PHP attribute #[...] — may span multiple lines and nest brackets/
+			// parens/strings (e.g. #[DataProvider('name')] or
+			// #[Attr(['a', 'b'])]). Remember where the first one in a run
+			// started so a following `function` can adopt it as its Block.Line.
+			if pendingAttrLine == 0 {
+				pendingAttrLine = line
+			}
+			j, nl, closed := skipAttribute(s, i)
+			if !closed {
+				return nil, false
+			}
+			line += nl
+			i = j
+		case c == '#':
 			i = skipToEOL(s, i)
 
 		// --- block comment ---
@@ -141,6 +165,13 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 			line += nl
 			i = j
 
+		// --- statement end: drop any pending attribute that never reached a
+		// function (e.g. `#[Attr] private $x;`) so it can't leak onto the next,
+		// unrelated declaration's leading attribute. ---
+		case c == ';':
+			pendingAttrLine = 0
+			i++
+
 		// --- braces (only in code) ---
 		case c == '{':
 			depth++
@@ -161,6 +192,9 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 			word, end := readWord(s, i)
 			switch word {
 			case "class", "trait", "interface", "enum":
+				// A class/trait/interface/enum keyword ends any pending attribute
+				// run — it was meant for a method, not the type declaration.
+				pendingAttrLine = 0
 				// Find a class name (may be absent: anonymous class).
 				name, bodyAt := classHeaderName(s, end)
 				if bodyAt >= 0 {
@@ -176,8 +210,22 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 					})
 				}
 				i = end
+			case "public", "protected", "private", "static", "abstract", "final", "readonly", "var":
+				// A visibility/modifier keyword sits between a leading attribute
+				// and `function` (e.g. `#[DataProvider('x')]\npublic function
+				// test()`) — keep pendingAttrLine intact across it.
+				i = end
 			case "function":
+				// declLine is where this function's Block.Line starts: normally the
+				// `function` keyword's own line, but a directly-preceding, still-
+				// pending `#[...]` attribute run (see the `#[` case above) pulls it
+				// back to its first line — the attribute is conceptually part of
+				// this method's block (.claude/rules/blocks-and-ingest.md).
 				declLine := line
+				if pendingAttrLine > 0 {
+					declLine = pendingAttrLine
+				}
+				pendingAttrLine = 0
 				var headerFrame *classFrame
 				if len(classes) > 0 {
 					top := &classes[len(classes)-1]
@@ -185,7 +233,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 						headerFrame = top
 					}
 				}
-				b, next, isDecl := scanFunction(s, end, &line, filename, currentClass())
+				b, next, isDecl := scanFunction(s, end, &line, filename, currentClass(), declLine)
 				if isDecl {
 					blocks = append(blocks, b)
 					if headerFrame != nil {
@@ -203,6 +251,10 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 				}
 				i = next
 			default:
+				// Any other identifier (a type-hint, a variable name after `$`, a
+				// property name, ...) means whatever pending attribute run there
+				// was was not directly above a function — drop it.
+				pendingAttrLine = 0
 				i = end
 			}
 
@@ -220,9 +272,12 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 // scanFunction handles everything after the `function` keyword. It returns the
 // block and the index where the caller continues. isDecl=false means: anonymous
 // closure (no name) — then it is not a separate block, but its body braces are
-// still counted by the main loop.
-func scanFunction(s string, from int, line *int, filename, class string) (Block, int, bool) {
-	declLine := *line
+// still counted by the main loop. declLine is the line the resulting Block's
+// Line should start at — normally the `function` keyword's own line, but the
+// caller passes back the line of a directly-preceding `#[...]` attribute run
+// instead, so the attribute is treated as part of this function's block (see
+// scanPHP's pendingAttrLine and .claude/rules/blocks-and-ingest.md).
+func scanFunction(s string, from int, line *int, filename, class string, declLine int) (Block, int, bool) {
 	i := skipSpacesNL(s, from, line)
 	// reference-return: `function &name`
 	if i < len(s) && s[i] == '&' {
@@ -341,6 +396,52 @@ func skipToEOL(s string, i int) int {
 		i++
 	}
 	return i
+}
+
+// skipAttribute scans a PHP attribute `#[...]` (i points at the '#') to its
+// matching ']', respecting nested brackets (an argument can itself contain an
+// array literal, e.g. `#[Attr(['a', 'b'])]`) and string literals (so a `]`
+// inside a quoted argument doesn't end it early). closed=false means
+// unterminated → the caller falls back to the whole-file block, same as an
+// unbalanced brace.
+func skipAttribute(s string, i int) (next, newlines int, closed bool) {
+	i += 2 // "#["
+	depth := 1
+	n := len(s)
+	for i < n {
+		c := s[i]
+		switch {
+		case c == '\n':
+			newlines++
+			i++
+		case c == '\'':
+			j, nl, ok := skipSingleQuote(s, i)
+			if !ok {
+				return n, newlines, false
+			}
+			newlines += nl
+			i = j
+		case c == '"':
+			j, nl, ok := skipDoubleQuote(s, i)
+			if !ok {
+				return n, newlines, false
+			}
+			newlines += nl
+			i = j
+		case c == '[':
+			depth++
+			i++
+		case c == ']':
+			depth--
+			i++
+			if depth == 0 {
+				return i, newlines, true
+			}
+		default:
+			i++
+		}
+	}
+	return n, newlines, false
 }
 
 func skipBlockComment(s string, i int) (next, newlines int, closed bool) {

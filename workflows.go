@@ -586,9 +586,14 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// Also resolve method calls statically (resolved/unresolved) into the
 		// callresolve read-model. UpsertGo preserves LLM-owned rows. A changed
 		// migration's Schema::create/table → model mapping (resolveMigrationModels)
-		// rides the same read-model/keep-set (see .claude/rules/tembed-workflows.md,
-		// "migration → model") so its rows are never pruned as stale.
-		calls := append(resolveCalls(m.dataDir, input.PR, blocks), resolveMigrationModels(m.dataDir, input.PR, blocks)...)
+		// and a test's #[DataProvider(...)]/@dataProvider annotation
+		// (resolveDataProviders, see .claude/rules/tembed-workflows.md, "PHPUnit
+		// data providers") ride the same read-model/keep-set (see
+		// .claude/rules/tembed-workflows.md, "migration → model") so their rows
+		// are never pruned as stale.
+		calls := resolveCalls(m.dataDir, input.PR, blocks)
+		calls = append(calls, resolveMigrationModels(m.dataDir, input.PR, blocks)...)
+		calls = append(calls, resolveDataProviders(m.dataDir, input.PR, blocks)...)
 		if m.callresolve != nil {
 			if err := m.callresolve.UpsertGo(ctx, calls); err != nil {
 				return nil, fmt.Errorf("build_relations: save calls: %w", err)

@@ -851,18 +851,22 @@ fallback.
   `modules/callresolve`), dus geen van de bestaande call-emittende regels (1
   t/m 6) hoefde aangepast — alleen `emitKind` (de nieuwe onderliggende
   implementatie van `emit`, met een expliciete `kind`-parameter) wordt door
-  rule 2c (`KindModelUsage`) en `resolveMigrationModels` (`KindMigrationModel`,
-  zie hieronder) aangeroepen. Een bestaande `callresolve.db` migreert via een
-  lichte `ALTER TABLE … ADD COLUMN` (dubbele-kolom-fout genegeerd — het
-  standaardpatroon uit `relations`/`comments`). Frontend: `resolvedCallChildren`
+  rule 2c (`KindModelUsage`), `resolveMigrationModels` (`KindMigrationModel`,
+  zie hieronder) en `resolveDataProviders` (`KindDataProvider`, zie "PHPUnit
+  data providers" hieronder) aangeroepen. Een bestaande `callresolve.db`
+  migreert via een lichte `ALTER TABLE … ADD COLUMN` (dubbele-kolom-fout
+  genegeerd — het standaardpatroon uit `relations`/`comments`). Frontend:
+  `resolvedCallChildren`
   (`home.mjs`) neemt `r.kind` **over** i.p.v. altijd `'method_call'` te
   hardcoden, en het **label** vertakt op `r.childMethod` (leeg → kale
   `r.childClass`, gevuld → het bestaande `Class::method`-template) — dit gold al
   vóór deze kolom bestond voor rule 2c's model-usage-children (die toonden
   ooit een `"ProductGroup::"` met een lege, lelijke `::`-staart) en geldt nu
-  ook voor `migration_model`. `KIND_LABEL` (`RelatedPanel.mjs`) koppelt zowel
-  `model_usage` als `migration_model` aan het badge-woord **"model"**; de
-  `diffStatBadge`/`unchanged`-helpers herkennen beide kinds naast
+  ook voor `migration_model`/`data_provider` (beide hebben altijd een gevulde
+  `childMethod`, dus die renderen als een gewone `Class::method`-child).
+  `KIND_LABEL` (`RelatedPanel.mjs`) koppelt `model_usage`/`migration_model` aan
+  het badge-woord **"model"** en `data_provider` aan **"provider"**; de
+  `diffStatBadge`/`unchanged`-helpers herkennen alle drie naast
   `method_call`/`covers` (gedeelde `DIFFSTAT_KINDS`-set) zodat ze óók een
   `+A −R`/`Ongewijzigd`-badge en grijze "ongewijzigd"-ringstijl krijgen, exact
   als een gewone call-child.
@@ -909,6 +913,43 @@ fallback.
   Playwright: `tests/migration-model.spec.mjs` (PR 101, `migrationmodel-*.json`
   — bewijst dat zowel een `model_usage`- als een `migration_model`-child een
   kale modelnaam + "model"-badge tonen, nooit de `Class::`-vorm).
+- **PHPUnit data providers (`resolveDataProviders`, `callresolve_analysis.go`):**
+  een testmethode met `#[DataProvider('providerMethod')]` (of de legacy
+  `@dataProvider providerMethod`-docblock-tag) wil de reviewer de
+  provider-methode zelf zien als Onderliggende code — meestal een **al
+  bestaande, ongewijzigde** provider die een nieuwe/aangepaste test hergebruikt.
+  Zelfde motivatie/architectuur als "Migratie → model" hierboven: een
+  **callresolve**-regel (mag naar een ongewijzigd bestand wijzen), geen
+  `relations`-detector, en **zonder LLM-fallback** — PHPUnit's kale
+  `#[DataProvider(...)]`/`@dataProvider` noemt altijd een methode **op de
+  class van de test zelf** (geen `Class::method`-vorm zoals
+  `#[DataProviderExternal(...)]`, bewust buiten scope), dus er is geen
+  ambiguïteit om aan een LLM voor te leggen; een naam die niet matcht (typo,
+  of een externe provider) levert **stil niets** op, nooit een
+  `unresolved`-rij.
+  Scope: elk gewijzigd `Category == "TEST"`-blok (dezelfde scoping als
+  `scanTestCovers`). Voor elk zo'n blok hergebruikt `resolveDataProviders`
+  **`methodZone`** (`testcovers_analysis.go`, ongewijzigde functie — zie de
+  scanner-noot in `.claude/rules/blocks-and-ingest.md` over hoe die inmiddels
+  óók de in-block gevouwen leidende attributen meetelt via `funcDeclLine`) om
+  de attribuut/docblock-tekst van de testmethode te lezen, matcht daarin
+  `reDataProviderAttr`/`reDataProviderDocblock` (gededupt per naam), en
+  resolvt elke naam via `methodOnClass(idx, b.Class, name)` — altijd dezelfde
+  class als de test, nooit een andere. Child = `KindDataProvider`, `CallKey =
+  "data_provider:" + naam` (bevat `:`, dus — net als `migration_model:` —
+  nooit te matchen als een echte call-site in de frontend's
+  `findCallSites`/`callScopeMethods`, waardoor deze child op `line`/`call`-
+  granulariteit wegvalt maar op `group`/list-niveau gewoon zichtbaar blijft,
+  identiek aan hoe een blok-niveau-relatie zich gedraagt). De entries worden in
+  de `build_relations`-Activity (`workflows.go`) **samengevoegd** met
+  `resolveCalls`/`resolveMigrationModels`'s entries vóór de ene
+  `UpsertGo`/`Prune`-aanroep — dezelfde keep-set, dus geen aparte prune-scope
+  nodig; de headless `slash relations <pr>`-twin (`main.go`) roept 'm ook aan.
+  Tests: `TestResolveDataProviders` (`callresolve_analysis_test.go`: de
+  attribuut-vorm, de legacy docblock-vorm, en een niet-resolvbare naam die
+  stil niets oplevert — hergebruikt `testCoversBlocks` uit
+  `testcovers_analysis_test.go` zodat de scan echte, scanner-geproduceerde
+  regelnummers gebruikt, wat `methodZone`/`funcDeclLine` vereisen).
 
 ## Testdekking koppelen (`resolve_test_covers` + `modules/testcovers`)
 

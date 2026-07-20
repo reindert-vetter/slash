@@ -382,6 +382,14 @@ var (
 	// reSchemaTable matches a migration's `Schema::create('table', ...)` or
 	// `Schema::table('table', ...)` call — see resolveMigrationModels.
 	reSchemaTable = regexp.MustCompile(`Schema::(?:create|table)\(\s*['"]([a-zA-Z0-9_]+)['"]`)
+	// reDataProviderAttr matches the modern PHPUnit #[DataProvider('method')]
+	// attribute — see resolveDataProviders. Only the plain, single-argument form
+	// is matched (the provider is always a method on the test's OWN class);
+	// #[DataProviderExternal(Class::class, 'method')] is out of scope.
+	reDataProviderAttr = regexp.MustCompile(`#\[\s*DataProvider\s*\(\s*['"]([A-Za-z0-9_]+)['"]\s*\)\s*\]`)
+	// reDataProviderDocblock matches the legacy "@dataProvider method" docblock
+	// tag — see resolveDataProviders.
+	reDataProviderDocblock = regexp.MustCompile(`@dataProvider\s+([A-Za-z0-9_]+)`)
 )
 
 // resolveCalls scans every changed new-side block for method calls and resolves
@@ -673,6 +681,84 @@ func resolveMigrationModels(dataDir string, pr int, blocks []Block) []callresolv
 				Status: callresolve.StatusResolved, Kind: callresolve.KindMigrationModel,
 				ChildFile: def.File, ChildClass: def.Class, ChildMethod: "",
 				ChildLine: def.Line, ChildCode: blockSource(headDir, def).Text,
+			})
+		}
+	}
+	return out
+}
+
+// resolveDataProviders links a changed PHPUnit test method to the data
+// provider method its #[DataProvider('name')] attribute (or the legacy
+// "@dataProvider name" docblock tag) names — so the provider shows up as
+// "Onderliggende code" even when it is NOT itself changed by this PR (the
+// common case: an existing provider feeding a newly added/changed test). This
+// is deliberately a callresolve rule, not a both-changed relations detector
+// (mirrors resolveMigrationModels) — see .claude/rules/tembed-workflows.md,
+// "PHPUnit data providers". Fully deterministic, no LLM fallback: PHPUnit's
+// plain #[DataProvider(...)]/@dataProvider always names a method on the
+// test's OWN class (no ambiguity to resolve), so a name that doesn't match a
+// method there just produces no child (silent), never an "unresolved" row.
+//
+// It reuses methodZone (testcovers_analysis.go) to read the attribute/
+// docblock text directly above (and, since phpscan.go folds a leading
+// #[...] attribute into its own block, now partly INSIDE) the test method's
+// own span — see funcDeclLine/methodZone's doc comments and
+// .claude/rules/blocks-and-ingest.md.
+func resolveDataProviders(dataDir string, pr int, blocks []Block) []callresolve.Entry {
+	_, headDir := worktreeDirs(dataDir, pr)
+	idx := buildSymbolIndex(headDir)
+
+	type fileInfo struct {
+		lines      []string
+		fileBlocks []Block
+	}
+	cache := map[string]*fileInfo{}
+
+	var out []callresolve.Entry
+	for _, b := range blocks {
+		if b.Side == SideOld || b.Category != "TEST" {
+			continue
+		}
+		fi, cached := cache[b.File]
+		if !cached {
+			src, err := os.ReadFile(filepath.Join(headDir, b.File))
+			if err != nil {
+				cache[b.File] = nil
+				continue
+			}
+			fi = &fileInfo{lines: strings.Split(string(src), "\n"), fileBlocks: ScanBlocks(src, b.File)}
+			cache[b.File] = fi
+		}
+		if fi == nil {
+			continue
+		}
+		zone, _, _ := methodZone(fi.lines, fi.fileBlocks, b)
+		if zone == "" {
+			continue
+		}
+
+		callerID := b.ID()
+		seen := map[string]bool{}
+		matches := append(reDataProviderAttr.FindAllStringSubmatch(zone, -1),
+			reDataProviderDocblock.FindAllStringSubmatch(zone, -1)...)
+		for _, m := range matches {
+			name := m[1]
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			def := methodOnClass(idx, b.Class, name)
+			if def == nil {
+				continue // typo'd or external provider — stay silent, no LLM
+			}
+			if def.File == b.File && def.symbol() == b.symbol() {
+				continue // no self-edge
+			}
+			out = append(out, callresolve.Entry{
+				PR: pr, CallerID: callerID, CallKey: "data_provider:" + name,
+				Status: callresolve.StatusResolved, Kind: callresolve.KindDataProvider,
+				ChildFile: def.File, ChildClass: def.Class, ChildMethod: def.Name,
+				ChildLine: def.Line, ChildCode: blockSource(headDir, *def).Text,
 			})
 		}
 	}

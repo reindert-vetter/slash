@@ -82,6 +82,7 @@ const (
 	KindMethodCall     = "method_call"     // a call site resolved to a defining method (default)
 	KindModelUsage     = "model_usage"     // a changed line uses an Eloquent model (new/static) → the model as a whole
 	KindMigrationModel = "migration_model" // a changed migration's Schema::create/table → its Eloquent model
+	KindDataProvider   = "data_provider"   // a test's #[DataProvider('m')]/@dataProvider m → the provider method
 )
 
 // Entry is one call-site → definition resolution.

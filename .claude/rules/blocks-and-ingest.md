@@ -127,6 +127,48 @@ navigeerbare lijst tonen.
   twee detached worktrees onder `data/worktrees/pr-<pr>-{base,head}` (**absolute
   paden**!) → `git diff --unified=0` → PHP-scanner (`phpscan.go`, brace-lexer, geen
   externe parser) → classificeren (`classify.go`) → opslaan. Zie skill `ingest-pr`.
+- **Leidende attributen (`#[...]`) horen bij het blok van de functie eronder
+  (`phpscan.go`).** Een PHP-attribuut vlak boven een method/functie —
+  `#[DataProvider('providerMethod')]`, `#[Route('/x')]`, stacked attributen, of
+  een attribuut waarvan de argumenten over meerdere regels lopen — telt als
+  onderdeel van **dát blok**, niet als losstaande tekst ertussenin:
+  `Block.Line` begint bij de **eerste** attribuut-regel in een aaneengesloten
+  run, i.p.v. bij de `function`-regel zelf. `scanPHP` houdt daarvoor een
+  `pendingAttrLine` bij: elke `#[` (nu via een expliciete `skipAttribute`-lexer
+  gescand — respecteert nested `[`/strings, dus een attribuut-argument als
+  `#[Attr(['a', 'b'])]` of een quote met een `]` erin breekt de scan niet
+  voortijdig af) zet 'm, als hij nog leeg is; modifier-keywords
+  (`public`/`protected`/`private`/`static`/`abstract`/`final`/`readonly`/`var`)
+  laten 'm intact zolang ze tussen het attribuut en `function` in staan; **elk
+  ander token** (een type-hint, een variabelenaam, `;`, een
+  `class`/`trait`/`interface`/`enum`-keyword) reset 'm naar 0 — zodat een
+  attribuut op een property (`#[Deprecated] private string $x;`) nooit lekt
+  naar een verderop volgende, ongerelateerde methode. De class-header-sentinel
+  (`classHeaderSentinel`) en de body-scan zelf blijven ongewijzigd: alleen het
+  moment waarop `Block.Line` wordt vastgelegd verschuift (`scanFunction` kreeg
+  daarvoor een `declLineOverride`-parameter). **Gevolg voor `classify.go`:**
+  omdat `classifyFile`'s "is dit blok gewijzigd?"-check simpelweg
+  `intersects(nb.Line, nb.EndLine)` op de gewijzigde regels doet, telt een
+  wijziging die **uitsluitend** de attribuut-regel raakt (bv. een nieuw
+  toegevoegd `#[DataProvider(...)]` boven een verder ongewijzigde testmethode)
+  nu ook als "modified" — vóór deze wijziging viel zo'n attribuut-only diff
+  buiten elk blok en het blok verscheen dus helemaal niet in de reviewboom.
+  **Gevolg voor consumers die "de tekst boven de declaratie" scannen** (zoals
+  `testcovers_analysis.go`'s `methodZone`, dat annotaties als `#[CoversMethod]`/
+  `#[Test]`/`@covers` leest): een deel van die tekst zit nu, voor een blok mét
+  leidende attributen, al **binnen** het blok zelf i.p.v. erboven.
+  `testcovers_analysis.go`'s `funcDeclLine` (zoekt het echte `function`-keyword
+  binnen het blok, want annotatie-attributen bevatten dat woord nooit) lost dit
+  op: `methodZone` gebruikt die regel — niet langer `b.Line` — als bovengrens
+  van de gescande zone, zodat de al-gefolde attributen gewoon meetellen. Elke
+  nieuwe detector die "de zone boven een method" leest (zie bv. `data_provider`
+  in `tembed-workflows.md`) moet dezelfde `methodZone`/`funcDeclLine`-aanpak
+  hergebruiken, niet zelf op `b.Line` varen. Tests: `phpscan_test.go`
+  (`TestLeadingAttributeIncludedInBlock`,
+  `TestMultilineLeadingAttributeIncludedInBlock`,
+  `TestStackedAttributesUseFirstLine`,
+  `TestPropertyAttributeNotLeakedToNextMethod`), `classify_test.go`
+  (`TestAttributeOnlyChangeClassifiesAsModified`).
 - **Echt verwijderd bestand (`file_deleted`):** "alle blocks van dit bestand zijn
   `removed`" is géén betrouwbaar bestand-verwijderd-signaal (de blocks-tabel bevat
   alleen *getroffen* blocks — een bestand met één verwijderde methode blijft
