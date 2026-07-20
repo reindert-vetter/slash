@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -129,4 +130,139 @@ func onlyTestCoverEntry(t *testing.T, tc *testcovers.Module, pr int) testcovers.
 		t.Fatalf("testcovers has %d rows, want 1: %+v", len(list), list)
 	}
 	return list[0]
+}
+
+// testBlockID builds a block-id-shaped test_id ("<pr>:<file>:<class>::<name>")
+// — the same "<pr>:<file>:" prefix reuseSiblingCovers scopes reuse to.
+func testBlockID(pr int, file, class, name string) string {
+	return fmt.Sprintf("%d:%s:%s::%s", pr, file, class, name)
+}
+
+// findTestCoverEntry returns the single testcovers row for testID, failing if
+// it's missing (unlike onlyTestCoverEntry, which requires the whole PR to
+// have exactly one row — these sibling-reuse tests deliberately seed more
+// than one).
+func findTestCoverEntry(t *testing.T, tc *testcovers.Module, pr int, testID string) testcovers.Entry {
+	t.Helper()
+	list, err := tc.List(context.Background(), pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range list {
+		if e.TestID == testID {
+			return e
+		}
+	}
+	t.Fatalf("no testcovers row for test_id %q in %+v", testID, list)
+	return testcovers.Entry{}
+}
+
+// (a) A sibling test in the SAME file that already resolved a class-level-
+// only annotation (status found, from an earlier LLM run) is reused verbatim
+// for another test naming the same class — no Haiku call at all.
+func TestResolveTestCoversReusesFoundSibling(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 35
+	writeTestCoversFixtureRepo(t, dataDir, pr)
+	fake := claude.NewFake() // no programmed output — a call would degrade to notfound
+	m, tc := resolveTestCoversManager(t, dataDir, fake)
+
+	file := "tests/Feature/OrderCoverageTest.php"
+	siblingID := testBlockID(pr, file, "OrderCoverageTest", "testSibling")
+	if err := tc.Save(context.Background(), testcovers.Entry{
+		PR: pr, TestID: siblingID, TargetKey: "class:Order",
+		Status: testcovers.StatusFound, Annotation: "CoversClass",
+		CoveredClass: "Order", CoveredMethod: "billingAddress", CoveredFile: "app/Models/Order.php",
+		CoveredCode: "public function billingAddress() {}",
+		Model:       testcovers.ModelHaiku, Confidence: "high",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	in := testCoverInput(pr, "Order")
+	in.TestFile = file
+	in.TestID = testBlockID(pr, file, "OrderCoverageTest", "testCoversClassOnly")
+	if _, err := m.StartResolveTestCovers(in); err != nil {
+		t.Fatal(err)
+	}
+
+	e := findTestCoverEntry(t, tc, pr, in.TestID)
+	if e.Status != testcovers.StatusFound || e.CoveredMethod != "billingAddress" || e.Model != testcovers.ModelHaiku {
+		t.Fatalf("entry = %+v, want reused found sibling", e)
+	}
+	if n := fake.CallCount(); n != 0 {
+		t.Fatalf("claude called %d times, want 0 (reused sibling)", n)
+	}
+}
+
+// (b) A sibling with the same status/class but in a DIFFERENT test file must
+// NOT be reused — Haiku still runs and its own answer wins.
+func TestResolveTestCoversNoReuseAcrossFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 36
+	writeTestCoversFixtureRepo(t, dataDir, pr)
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelHaiku, `{"found":true,"method":"billingAddress","confidence":"high"}`)
+	m, tc := resolveTestCoversManager(t, dataDir, fake)
+
+	otherFile := "tests/Feature/OtherCoverageTest.php"
+	siblingID := testBlockID(pr, otherFile, "OtherCoverageTest", "testSibling")
+	if err := tc.Save(context.Background(), testcovers.Entry{
+		PR: pr, TestID: siblingID, TargetKey: "class:Order",
+		Status: testcovers.StatusFound, Annotation: "CoversClass",
+		CoveredClass: "Order", CoveredMethod: "shippingAddress",
+		Model: testcovers.ModelHaiku, Confidence: "high",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	in := testCoverInput(pr, "Order")
+	in.TestID = testBlockID(pr, in.TestFile, in.TestClass, "testCoversClassOnly")
+	if _, err := m.StartResolveTestCovers(in); err != nil {
+		t.Fatal(err)
+	}
+
+	e := findTestCoverEntry(t, tc, pr, in.TestID)
+	if e.Status != testcovers.StatusFound || e.CoveredMethod != "billingAddress" {
+		t.Fatalf("entry = %+v, want haiku's own answer (billingAddress), not the other-file sibling", e)
+	}
+	if n := fake.CallCount(); n != 1 {
+		t.Fatalf("claude called %d times, want 1 (a sibling in a different file must not be reused)", n)
+	}
+}
+
+// (c) A sibling with status "resolved" (a method-level annotation, verified
+// statically — no LLM involved) is reused just like a "found" sibling.
+func TestResolveTestCoversReusesResolvedSibling(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 37
+	writeTestCoversFixtureRepo(t, dataDir, pr)
+	fake := claude.NewFake() // no programmed output — a call would degrade to notfound
+	m, tc := resolveTestCoversManager(t, dataDir, fake)
+
+	file := "tests/Feature/OrderCoverageTest.php"
+	siblingID := testBlockID(pr, file, "OrderCoverageTest", "testExplicitCovers")
+	if err := tc.Save(context.Background(), testcovers.Entry{
+		PR: pr, TestID: siblingID, TargetKey: "method:Order::billingAddress",
+		Status: testcovers.StatusResolved, Annotation: "@covers",
+		CoveredClass: "Order", CoveredMethod: "billingAddress", CoveredFile: "app/Models/Order.php",
+		CoveredCode: "public function billingAddress() {}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	in := testCoverInput(pr, "Order")
+	in.TestFile = file
+	in.TestID = testBlockID(pr, file, "OrderCoverageTest", "testCoversClassOnly")
+	if _, err := m.StartResolveTestCovers(in); err != nil {
+		t.Fatal(err)
+	}
+
+	e := findTestCoverEntry(t, tc, pr, in.TestID)
+	if e.Status != testcovers.StatusResolved || e.CoveredMethod != "billingAddress" {
+		t.Fatalf("entry = %+v, want reused resolved sibling", e)
+	}
+	if n := fake.CallCount(); n != 0 {
+		t.Fatalf("claude called %d times, want 0 (reused resolved sibling)", n)
+	}
 }

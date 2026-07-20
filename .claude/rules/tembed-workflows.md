@@ -995,6 +995,36 @@ call-resolve: een Go-detector eerst, een **beperkte** AI-fallback alleen voor
   class** (`methodOnClass`) — strenger dan `verifyDefinition` omdat de class al
   vastligt door de annotatie, alleen de methode is onzeker. Resultaat `found`
   (met `model`/`confidence`, `model` is nu altijd `haiku`) of `notfound`.
+- **Sibling-hergebruik binnen dezelfde testclass (`reuseSiblingCovers`,
+  `resolve_test_covers.go`):** meerdere testmethodes in **hetzelfde
+  testbestand** dekken vaak dezelfde class — vóórdat `resolveTestCoversWorkflow`
+  Haiku vraagt, checkt hij per class-level-only annotatie of een **sibling-test**
+  (zelfde PR + zelfde testbestand, dus hetzelfde `<pr>:<file>:`-block-id-
+  voorvoegsel, een ándere `test_id`) diezelfde class al oploste. Matcht via
+  **`CoveredClass`**, niet de rauwe `target_key`-string: een `resolved`-rij
+  (methode-niveau-annotatie) draagt `target_key = "method:Class::Method"`,
+  een `found`/`unresolved`-rij (class-niveau-only) `target_key =
+  "class:Class"` — `CoveredClass` is het veld dat "dezelfde geteste class" op
+  beide vormen consistent identificeert. Alleen **`resolved`** (statisch
+  geverifieerde methode-niveau-annotatie op een andere testmethode — het
+  meest gezaghebbend) en **`found`** (een eerder LLM-antwoord voor exact
+  dezelfde class-level-only target) worden hergebruikt; `notfound`/
+  `searching`/`unresolved`/`unannotated` nooit — een eerdere miss zegt niets
+  bruikbaars voor een andere test. Bestaan beide voor dezelfde class, dan wint
+  `resolved`; binnen dezelfde status wint de eerste match in `List`'s eigen
+  stabiele `ORDER BY test_id, target_key`. Een hergebruikte rij is een
+  **letterlijke kopie** van de sibling-rij (status/`model`/`confidence`/
+  covered-* velden ongewijzigd, alleen `test_id`/`target_key` herschreven naar
+  de eigen test) — geen aparte "hergebruikt"-marker, dus het bestaande
+  per-status badge (`bron: haiku` bij `found`, geen badge bij `resolved`)
+  verschijnt gewoon vanzelf. **Determinisme:** de opzoeking is zijn **eigen
+  Activity** (`reuseTestCoverSiblings`, de enige plek die `testcovers.List`
+  leest — de matching zelf, `reuseSiblingCovers`, is een pure functie van die
+  snapshot); het **aantal** `resolveTestCoversWithModel`-aanroepen (nul zodra
+  elke genoemde class is hergebruikt) is dus een functie van dat
+  Activity-resultaat uit de history, hetzelfde replay-patroon als
+  callresolve's `HadCandidates`-gate. Dit bespaart uitsluitend Haiku-calls —
+  het introduceert geen Sonnet-escalatie opnieuw (die blijft uit, zie hierboven).
 - **Endpoints:** `POST /api/workflows/resolve_test_covers` (start; body `{pr,
   testId, testFile, testClass, testName, classes}`) en read-only
   `GET /api/testcovers?pr=N`.
@@ -1038,7 +1068,12 @@ call-resolve: een Go-detector eerst, een **beperkte** AI-fallback alleen voor
   bevestigt dat de Activity ook `testcovers.db` vult), `resolve_test_covers_test.go`
   (mirror van `resolve_call_test.go`: Haiku-confident → found, nooit escalatie
   naar Sonnet ook niet bij een onzeker Haiku-antwoord, notfound, verificatie
-  weigert een methode die niet op de genoemde class bestaat),
+  weigert een methode die niet op de genoemde class bestaat, plus drie tests
+  voor het sibling-hergebruik: een geseede `found`-sibling in hetzelfde
+  testbestand wordt letterlijk gekopieerd zonder dat Haiku wordt aangeroepen
+  (`fake.CallCount() == 0`), dezelfde sibling in een ánder testbestand wordt
+  **niet** hergebruikt (Haiku draait alsnog), en een geseede `resolved`-sibling
+  (methode-niveau-annotatie) wordt net zo hergebruikt als een `found`-sibling),
   `modules/testcovers/testcovers_test.go` (round-trip,
   `UpsertGo` beschermt een `found`-rij, `Prune` ruimt weesrijen op).
   Playwright: `tests/testcovers.spec.mjs` (beide richtingen + drill-recursie,

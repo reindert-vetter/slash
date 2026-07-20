@@ -674,6 +674,26 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.testcovers.SaveSearching(ctx, arg.PR, arg.TestID, keys)
 	})
 
+	// Activity: look for a sibling test (same PR + same test file, different
+	// test_id) that already resolved the same covered class, so the workflow
+	// can skip Haiku for that class entirely. Reads the testcovers read-model
+	// (a side effect, hence an Activity) and delegates the actual matching to
+	// the pure reuseSiblingCovers.
+	engine.RegisterActivity("reuseTestCoverSiblings", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg testCoverReuseArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.testcovers == nil {
+			return json.Marshal(testCoverReuseResult{Remaining: arg.Classes})
+		}
+		entries, err := m.testcovers.List(ctx, arg.PR)
+		if err != nil {
+			return nil, fmt.Errorf("resolve_test_covers: list siblings: %w", err)
+		}
+		return json.Marshal(reuseSiblingCovers(entries, arg))
+	})
+
 	// Activity: resolve which method of each named class a test covers, with
 	// one LLM model (Haiku = context-only shortlist, Sonnet = agentic worktree
 	// search). Reads the head worktree + shells out to the claude CLI — a side
@@ -1157,6 +1177,13 @@ func (m *TaskManager) StartExplainCode(in ExplainCodeInput) (string, error) {
 // escalation. The generic Sonnet/agentic machinery in resolve_test_covers.go
 // still exists but this workflow never invokes it; see the "alleen Haiku"
 // decision in .claude/rules/tembed-workflows.md.
+//
+// Before asking Haiku, it checks whether a sibling test (same PR + same test
+// file) already resolved the same covered class — see reuseSiblingCovers.
+// That check is its own Activity (reuseTestCoverSiblings), so the number of
+// subsequent resolveTestCoversWithModel calls (zero when every class was
+// reused) is a pure function of that Activity's persisted result, replaying
+// deterministically like callresolve's HadCandidates gate.
 func resolveTestCoversWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in ResolveTestCoversInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -1169,17 +1196,30 @@ func resolveTestCoversWorkflow(w *tembed.Workflow, input []byte) ([]byte, error)
 		return nil, fmt.Errorf("mark searching: %w", err)
 	}
 
-	// Haiku only (context-only shortlist) — no Sonnet escalation.
+	var reuse testCoverReuseResult
+	if err := w.ExecuteActivity("reuseTestCoverSiblings", testCoverReuseArg{
+		PR: in.PR, TestID: in.TestID, TestFile: in.TestFile, Classes: in.Classes,
+	}, &reuse); err != nil {
+		return nil, fmt.Errorf("reuse siblings: %w", err)
+	}
+
+	// Haiku only (context-only shortlist) — no Sonnet escalation — and only
+	// for the classes no sibling already resolved.
 	var haiku []testcovers.Entry
-	if err := w.ExecuteActivity("resolveTestCoversWithModel", testCoverArg{
-		PR: in.PR, TestID: in.TestID, TestFile: in.TestFile,
-		TestClass: in.TestClass, TestName: in.TestName,
-		Classes: in.Classes, Model: claude.ModelHaiku,
-	}, &haiku); err != nil {
-		return nil, fmt.Errorf("resolve haiku: %w", err)
+	if len(reuse.Remaining) > 0 {
+		if err := w.ExecuteActivity("resolveTestCoversWithModel", testCoverArg{
+			PR: in.PR, TestID: in.TestID, TestFile: in.TestFile,
+			TestClass: in.TestClass, TestName: in.TestName,
+			Classes: reuse.Remaining, Model: claude.ModelHaiku,
+		}, &haiku); err != nil {
+			return nil, fmt.Errorf("resolve haiku: %w", err)
+		}
 	}
 
 	byClass := map[string]testcovers.Entry{}
+	for _, e := range reuse.Reused {
+		byClass[e.CoveredClass] = e
+	}
 	for _, e := range haiku {
 		byClass[e.CoveredClass] = e
 	}

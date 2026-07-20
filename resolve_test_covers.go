@@ -34,6 +34,88 @@ type testCoverArg struct {
 	Model     string   `json:"model"` // claude.ModelHaiku | claude.ModelSonnet
 }
 
+// testCoverReuseArg is the payload of the reuseTestCoverSiblings Activity:
+// look for an already-resolved sibling (another test method in the SAME test
+// file) covering the same class, for each class this test's class-level-only
+// annotation(s) named.
+type testCoverReuseArg struct {
+	PR       int      `json:"pr"`
+	TestID   string   `json:"testId"`
+	TestFile string   `json:"testFile"`
+	Classes  []string `json:"classes"`
+}
+
+// testCoverReuseResult is the reuseTestCoverSiblings Activity's result:
+// Reused are verbatim sibling copies (rewritten to this test's TestID/
+// TargetKey, ready to hand straight to saveTestCoverResolutions); Remaining
+// are the classes that found no reusable sibling and still need Haiku.
+type testCoverReuseResult struct {
+	Reused    []testcovers.Entry `json:"reused"`
+	Remaining []string           `json:"remaining"`
+}
+
+// reuseSiblingCovers looks, per requested class, for an already-resolved
+// sibling row: same PR + same test FILE (the "<pr>:<file>:" prefix shared by
+// every block-id from that file, including arg.TestID/TestFile), a DIFFERENT
+// test_id, and a matching CoveredClass. Multiple testmethods in the same
+// PHP test class often exercise the same target (the motivation for this
+// reuse), so a resolution one sibling already produced can be copied to
+// another sibling instead of asking Haiku again.
+//
+// CoveredClass — not the raw target_key string — is the match key: a
+// "resolved" row's target_key is "method:Class::Method" (a method-level
+// annotation), while a "found"/"unresolved" row's is "class:Class" (a
+// class-level-only annotation); CoveredClass is populated consistently on
+// both and is what actually identifies "the same target class" across the
+// two shapes.
+//
+// Only "resolved" (a method-level annotation, verified statically — more
+// authoritative) and "found" (an earlier LLM answer for the exact same
+// class-level target) are reused; "notfound"/"searching"/"unresolved"/
+// "unannotated" never are — an earlier miss or a bare unannotated test tells
+// us nothing useful for a different test. When both a "resolved" and a
+// "found" sibling exist for the same class, "resolved" wins; ties within a
+// status resolve via `entries`' incoming order (testcovers.Module.List's
+// stable "ORDER BY test_id, target_key").
+//
+// This is a pure function of `entries` — a snapshot handed in by the
+// reuseTestCoverSiblings Activity, not a live read from inside the workflow
+// body — so its result replays deterministically from history exactly like
+// callresolve's HadCandidates gate (see .claude/rules/workflow-determinism.md).
+func reuseSiblingCovers(entries []testcovers.Entry, arg testCoverReuseArg) testCoverReuseResult {
+	prefix := fmt.Sprintf("%d:%s:", arg.PR, arg.TestFile)
+	var out testCoverReuseResult
+	for _, class := range arg.Classes {
+		short := shortName(class)
+		var best *testcovers.Entry
+		for i := range entries {
+			e := &entries[i]
+			if e.TestID == arg.TestID || !strings.HasPrefix(e.TestID, prefix) {
+				continue
+			}
+			if shortName(e.CoveredClass) != short {
+				continue
+			}
+			if e.Status == testcovers.StatusResolved {
+				best = e
+				break
+			}
+			if e.Status == testcovers.StatusFound && best == nil {
+				best = e
+			}
+		}
+		if best == nil {
+			out.Remaining = append(out.Remaining, class)
+			continue
+		}
+		reused := *best
+		reused.TestID = arg.TestID
+		reused.TargetKey = "class:" + short
+		out.Reused = append(out.Reused, reused)
+	}
+	return out
+}
+
 // testCoverAnswer is the JSON shape we ask the model to emit.
 type testCoverAnswer struct {
 	Found      bool   `json:"found"`
