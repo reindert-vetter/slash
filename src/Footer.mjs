@@ -44,9 +44,12 @@ function line(mark, text, underline) {
 
 // WIDE_AT is the char-count past which a diff line no longer comfortably fits in
 // the centred max-w-5xl column (~1024px at the 11px mono font, minus the +/-
-// gutter). Above it we drop the max-width so the footer uses the full width and
-// you can read (or scroll) more of the line before it clips.
-const WIDE_AT = 150
+// gutter). Above it we drop the max-width so the footer uses the full width,
+// AND — for the new/right (ins) line specifically — switch it from
+// whitespace-pre to a wrap so the entire new line is visible without an
+// invisible (no-scrollbar) horizontal scroll. One shared threshold for both,
+// so they can't drift apart.
+const WIDE_AT = 110
 
 // wrapClass picks the inner column width: centred (max-w-5xl) for short lines so
 // it stays aligned with the panels above, full width once the active line is long.
@@ -111,8 +114,13 @@ export default function Footer(state) {
               let s = ''
               if (r.left !== null && r.left !== undefined)
                 s += `<div class="block whitespace-pre bg-rose-100 dark:bg-rose-500/20">${line('del', r.left, ulLeft)}</div>`
-              if (r.right !== null && r.right !== undefined)
-                s += `<div class="block whitespace-pre bg-emerald-100 dark:bg-emerald-500/20">${line('ins', r.right, ulRight)}</div>`
+              if (r.right !== null && r.right !== undefined) {
+                // A long new/right line wraps in full (rather than requiring an
+                // invisible no-scrollbar horizontal scroll) so the reviewer sees
+                // the entire new code — see the WIDE_AT comment above.
+                const rightWrap = r.right.length > WIDE_AT ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
+                s += `<div class="block ${rightWrap} bg-emerald-100 dark:bg-emerald-500/20">${line('ins', r.right, ulRight)}</div>`
+              }
               return s
             }}"
           ></code>

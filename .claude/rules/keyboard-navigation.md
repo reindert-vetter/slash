@@ -873,8 +873,13 @@ gedrilde kolom (zie "Kolom-navigatie" in `.claude/rules/detail-layout.md`) —
 via dezelfde `unitsFor(rows, gran)` als de navigatie: omdat een `'line'`- of
 `'call'`-unit altijd één rij is,
 verschijnt de inline diff dus altijd zodra je met `f` tot één regel (of één
-edit) verfijnt. Lange regels (>`WIDE_AT`
-tekens) laten de `max-w` los zodat de footer de volle breedte gebruikt. Op
+edit) verfijnt. Lange regels (>`WIDE_AT`, 110 tekens) laten de `max-w` los
+zodat de footer de volle breedte gebruikt; is specifiek de **nieuwe/rechter**
+(`ins`) regel langer dan `WIDE_AT`, dan wrapt die regel bovendien volledig
+(`whitespace-pre-wrap break-words` i.p.v. `whitespace-pre`) zodat de hele
+nieuwe code zichtbaar is zonder een onzichtbare (`no-scrollbar`) horizontale
+scroll — de oude/linker (`del`) regel wrapt niet mee, die blijft ongewijzigd.
+Op
 `'call'`-niveau onderstreept de footer het **actieve segment** in dezelfde
 indigo als de panes via het geëxporteerde `markChars` +
 `UNDERLINE_CLS` (uit `Block.mjs`) — precies die tekens onderstreept (op
