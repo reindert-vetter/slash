@@ -1457,12 +1457,17 @@ function resolvedCallChildren(b) {
 // callArrowPairs computes the arrow start/end pairs for the call-arrow overlay
 // (src/callArrows.mjs): one flowing arrow per *changed* method_call child (its
 // definition is itself a PR block — an unchanged "Ongewijzigd" target never
-// gets one) whose call site sits inside the ACTIVE navigation unit. Scope
-// mirrors the panel's own scoping exactly (callScopeMethods): at gran 'call'
-// the one segment under the cursor, at 'line'/'group' any site on a row within
-// the unit's range — so an arrow only ever points at a child card the panel is
-// actually showing (at 'group' those are the groupTier-0 children sorted to
-// the top). One pair per child (the first in-scope site), diff mode only, and
+// gets one). Scope mirrors the panel's own VISIBILITY exactly
+// (resolvedCallChildren's hideOutOfScope), not callScopeMethods' raw unit-range
+// check for every granularity: at 'call'/'line' the panel HIDES an
+// out-of-active-unit child outright, so the arrow only draws for the one
+// segment/row under the cursor. At 'group' the panel does NOT hide anything —
+// every changed-target call stays visible, just reordered (groupTier) — so an
+// arrow must reach every one of them, not only the ones inside the active
+// group: prefer a site inside the active unit (keeps the arrow anchored near
+// the cursor when possible), falling back to the child's first known call
+// site anywhere in the block so an out-of-group (groupTier-1) card that the
+// panel still shows gets an arrow too. One pair per child, diff mode only, and
 // only for the top-level cursor: a drilled column has no cursor-scoped panel
 // (see callScopeMethods), so arrows stay off while drilled. Called from the
 // setRelated watch CALLBACK (untracked) — never from a render binding, so it
@@ -1482,7 +1487,9 @@ function callArrowPairs(b) {
     const site =
       state.gran === 'call'
         ? sites.find((s) => s.row === unit.start && s.segStart === unit.segStart)
-        : sites.find((s) => s.row >= unit.start && s.row <= unit.end)
+        : state.gran === 'group'
+          ? sites.find((s) => s.row >= unit.start && s.row <= unit.end) || sites[0]
+          : sites.find((s) => s.row >= unit.start && s.row <= unit.end)
     if (!site) continue
     // childId matches relatedCard's data-child-id (the caller-scoped panel
     // descriptor id, see resolvedCallChildren).

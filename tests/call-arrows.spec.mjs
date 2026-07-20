@@ -10,10 +10,12 @@ import { test, expect } from './_fixtures.mjs'
 //
 // PR 100 (tests/fixtures/arrow-blocks.json + arrow-callresolve.json,
 // data/worktrees/pr-100-{base,head} materialized by _setup.mjs): the caller
-// ArrowCallerAction::execute has two adjacent changed lines — one calls
-// arrowHelper (resolves to the also-changed ArrowHelperService::arrowHelper
-// block → arrow), the other calls arrowPlain (resolves to a file the PR
-// doesn't touch → no arrow).
+// ArrowCallerAction::execute has TWO changed groups — an unrelated one first
+// (a changed $flag/$note pair, no call site at all — this is the DEFAULT
+// active unit on entering the diff) and, after an unchanged blank line, a
+// second group with two adjacent call lines: one calls arrowHelper (resolves
+// to the also-changed ArrowHelperService::arrowHelper block → arrow), the
+// other calls arrowPlain (resolves to a file the PR doesn't touch → no arrow).
 test.describe('PR Review Tree — call-arrow overlay', () => {
   test('pijl verschijnt voor een gewijzigde call naar een gewijzigd kind, niet voor een ongewijzigd kind', async ({
     page,
@@ -30,15 +32,23 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
     // List mode: no active diff unit → no arrows.
     await expect(arrows).toHaveCount(0)
 
-    // Enter the diff (group granularity): the group spans both changed call
-    // lines. arrowHelper's target is a changed PR block → exactly one arrow;
-    // arrowPlain's unchanged target gets none.
+    // Enter the diff (group granularity): the DEFAULT active group is the
+    // unrelated $flag/$note pair — it doesn't cover either call site. At
+    // 'group' the panel does NOT hide an out-of-active-unit call child (only
+    // reorders it, see relatedChildren/resolvedCallChildren), so the
+    // arrowHelper child card is still shown here — and the arrow must reach
+    // it too (this is the reported bug: card visible, no arrow).
     await page.keyboard.press('Escape') // leave the auto-focused search box
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await expect(
       page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]'),
     ).toBeVisible()
+    await expect(arrows).toHaveCount(1)
+
+    // Step down to the second group (the actual call lines): still one arrow,
+    // now anchored on the in-scope call site.
+    await page.keyboard.press('ArrowDown')
     await expect(arrows).toHaveCount(1)
 
     // Refine to line granularity: lands on the first changed line (the

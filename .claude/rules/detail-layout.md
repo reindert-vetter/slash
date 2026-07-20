@@ -937,13 +937,23 @@ rechts — zie de layout-alinea hierboven):
   navigatie-unit** (rechterrand van de new-pane, op de hoogte van de
   call-site-rij) naar de bijbehorende **gewijzigde** kind-kaart in deze kaart —
   uitsluitend voor een `method_call`-child wiens definitie zélf een PR-blok is
-  (een `Ongewijzigd`-target krijgt nooit een pijl), één pijl per matchend kind
-  (de eerste in-scope call-site), alleen in diff-mode en alleen op de top-level
-  cursor (`focusLevel === 0`, niet gedrild — een gedrilde kolom heeft geen
-  cursor-gescoped paneel, zie `callScopeMethods`). De scope spiegelt de
-  paneel-scoping exact: op `call` het ene actieve segment, op `line`/`group`
-  elke site binnen de unit-range — een pijl wijst dus altijd naar een kaart
-  die het paneel toont. **Bewust een imperatieve teken-laag**, geen reactieve
+  (een `Ongewijzigd`-target krijgt nooit een pijl), één pijl per matchend kind,
+  alleen in diff-mode en alleen op de top-level cursor (`focusLevel === 0`,
+  niet gedrild — een gedrilde kolom heeft geen cursor-gescoped paneel, zie
+  `callScopeMethods`). De scope spiegelt de paneel-**zichtbaarheid** exact
+  (`resolvedCallChildren`'s `hideOutOfScope`), niet zomaar `callScopeMethods`'
+  kale unit-range-check op elke granulariteit: op `call`/`line` verbergt het
+  paneel een kind buiten de actieve unit **echt** (zie hieronder), dus daar
+  wijst de pijl ook alleen naar de ene actieve segment/rij. Op **`group`
+  verbergt het paneel niets** — elk changed-target call-kind blijft zichtbaar,
+  alleen geherordend (`groupTier`) — dus daar wijst `callArrowPairs` naar
+  **elk** zo'n kind, niet enkel naar de kinderen wiens call-site toevallig in
+  de actieve group valt: eerst een site binnen de actieve unit (houdt de pijl
+  dicht bij de cursor als dat kan), anders de eerste bekende call-site van dat
+  kind ergens in het blok, zodat ook een groupTier-1-kaart (buiten de actieve
+  group, maar door het paneel gewoon getoond) een pijl krijgt. Zonder deze
+  fallback bleef een zichtbare kaart soms zonder pijl staan zodra de actieve
+  group de call-site niet bevatte. **Bewust een imperatieve teken-laag**, geen reactieve
   template (het `updateHints`/`positionMenu`-model): `callArrowPairs` in
   `home.mjs` berekent de paren in de **callback** van de bestaande
   `setRelated`-watch (untracked — geen nieuwe reactieve `b.code`-lezer, dus
