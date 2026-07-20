@@ -1048,10 +1048,12 @@ func approveWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 }
 
 // resolveCallWorkflow resolves a caller's Go-unresolved method calls with the
-// LLM. It is deterministic: the LLM/worktree work is in Activities, and the
-// escalation decision reads the recorded Haiku result (history), not live model
-// output. It runs Haiku first, escalates the still-unfound calls to Sonnet
-// automatically (no signal), then persists the merged result and completes.
+// LLM. It is deterministic: the LLM/worktree work is in a single Activity, run
+// once per call to completion. It uses ONLY Haiku (context-only) — no automatic
+// Sonnet escalation. The generic Sonnet/agentic machinery in resolve_call.go
+// still exists (resolveArg.Model, the agentic prompt branch) but this workflow
+// never invokes it; see the "alleen Haiku" decision in
+// .claude/rules/tembed-workflows.md.
 func resolveCallWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in ResolveCallInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -1064,7 +1066,7 @@ func resolveCallWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("mark searching: %w", err)
 	}
 
-	// Haiku first (context-only shortlist).
+	// Haiku only (context-only shortlist) — no Sonnet escalation.
 	var haiku []callresolve.Entry
 	if err := w.ExecuteActivity("resolveWithModel", resolveArg{
 		PR: in.PR, CallerID: in.CallerID, CallerFile: in.CallerFile,
@@ -1074,35 +1076,9 @@ func resolveCallWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("resolve haiku: %w", err)
 	}
 
-	// Escalate to Sonnet (agentic) only the calls Haiku did not find AND for
-	// which the Go index had at least one static candidate. A call with zero
-	// candidates is near-always a vendor/framework method (Eloquent/Blueprint/
-	// PHPUnit builtins, PHP language builtins) whose source simply isn't in
-	// the worktree — Sonnet's agentic Grep can't invent a definition that
-	// isn't there either, so escalating it only pays the ~4.5x Sonnet cost
-	// for a result that was already determined. Deterministic: HadCandidates
-	// is part of the recorded Haiku Activity result (history), not a live
-	// re-derivation, so replay makes the same escalation decision every time.
 	byKey := map[string]callresolve.Entry{}
-	var escalate []string
 	for _, e := range haiku {
 		byKey[e.CallKey] = e
-		if e.Status != callresolve.StatusFound && e.HadCandidates {
-			escalate = append(escalate, e.CallKey)
-		}
-	}
-	if len(escalate) > 0 {
-		var sonnet []callresolve.Entry
-		if err := w.ExecuteActivity("resolveWithModel", resolveArg{
-			PR: in.PR, CallerID: in.CallerID, CallerFile: in.CallerFile,
-			CallerClass: in.CallerClass, CallerName: in.CallerName,
-			Calls: escalate, Model: claude.ModelSonnet,
-		}, &sonnet); err != nil {
-			return nil, fmt.Errorf("resolve sonnet: %w", err)
-		}
-		for _, e := range sonnet {
-			byKey[e.CallKey] = e // the Sonnet result wins over Haiku
-		}
 	}
 
 	// Persist the merged result in the deterministic order of in.Calls.
@@ -1176,10 +1152,11 @@ func (m *TaskManager) StartExplainCode(in ExplainCodeInput) (string, error) {
 // resolveTestCoversWorkflow resolves a test's class-level-only coverage
 // annotations (#[CoversClass]/bare "@covers Class") with the LLM — never for a
 // test with no annotation at all (that never reaches this workflow). It is
-// deterministic: the LLM/worktree work is in Activities, and the escalation
-// decision reads the recorded Haiku result (history), not live model output.
-// It runs Haiku first, escalates the still-unfound classes to Sonnet
-// automatically (no signal), then persists the merged result and completes.
+// deterministic: the LLM/worktree work is in a single Activity, run once per
+// class to completion. It uses ONLY Haiku (context-only) — no automatic Sonnet
+// escalation. The generic Sonnet/agentic machinery in resolve_test_covers.go
+// still exists but this workflow never invokes it; see the "alleen Haiku"
+// decision in .claude/rules/tembed-workflows.md.
 func resolveTestCoversWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in ResolveTestCoversInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -1192,7 +1169,7 @@ func resolveTestCoversWorkflow(w *tembed.Workflow, input []byte) ([]byte, error)
 		return nil, fmt.Errorf("mark searching: %w", err)
 	}
 
-	// Haiku first (context-only shortlist).
+	// Haiku only (context-only shortlist) — no Sonnet escalation.
 	var haiku []testcovers.Entry
 	if err := w.ExecuteActivity("resolveTestCoversWithModel", testCoverArg{
 		PR: in.PR, TestID: in.TestID, TestFile: in.TestFile,
@@ -1202,27 +1179,9 @@ func resolveTestCoversWorkflow(w *tembed.Workflow, input []byte) ([]byte, error)
 		return nil, fmt.Errorf("resolve haiku: %w", err)
 	}
 
-	// Escalate the classes Haiku did not confidently resolve to Sonnet (agentic).
 	byClass := map[string]testcovers.Entry{}
-	var escalate []string
 	for _, e := range haiku {
 		byClass[e.CoveredClass] = e
-		if e.Status != testcovers.StatusFound {
-			escalate = append(escalate, e.CoveredClass)
-		}
-	}
-	if len(escalate) > 0 {
-		var sonnet []testcovers.Entry
-		if err := w.ExecuteActivity("resolveTestCoversWithModel", testCoverArg{
-			PR: in.PR, TestID: in.TestID, TestFile: in.TestFile,
-			TestClass: in.TestClass, TestName: in.TestName,
-			Classes: escalate, Model: claude.ModelSonnet,
-		}, &sonnet); err != nil {
-			return nil, fmt.Errorf("resolve sonnet: %w", err)
-		}
-		for _, e := range sonnet {
-			byClass[e.CoveredClass] = e // the Sonnet result wins over Haiku
-		}
 	}
 
 	// Persist the merged result in the deterministic order of in.Classes.

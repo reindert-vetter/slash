@@ -764,32 +764,27 @@ fallback.
     raakt de replay-determinisme-eis (`.claude/rules/workflow-determinism.md`)
     niet.
 - **Workflow `resolve_call`** (`workflows.go` + `resolve_call.go`): één Execution
-  per zoekactie. Body (deterministisch — escalatie op basis van de **opgeslagen**
-  Haiku-uitkomst, niet live output): `markCallsSearching` → `resolveWithModel`
-  (Haiku, context-only shortlist uit de Go-index) → voor de calls die Haiku niet
-  zeker vond **automatisch** `resolveWithModel` (Sonnet, agentisch) → merge →
-  `saveResolutions`. **Puur automatisch, géén signal.** Elke LLM-claim wordt
-  tegen de worktree geverifieerd (`verifyDefinition` + path-containment) vóór hij
-  `found` wordt.
-  **Escalatie is gegateerd op `HadCandidates`, niet op blote `Status !=
-  Found`:** `callresolve.Entry.HadCandidates` (niet gepersisteerd — geen
-  kolom, reist alleen mee in het JSON-resultaat van de `resolveWithModel`-
-  Activity zodat de escalatiebeslissing 'm deterministisch uit de history
-  leest bij replay) registreert of de Go-index bij resolutietijd **überhaupt
-  één statische kandidaat** had voor die call. Een call met **nul** kandidaten
-  is vrijwel altijd een vendor/framework-methode (Eloquent/Schema-
-  Blueprint/PHPUnit-builtins, PHP-taal-builtins als `::cases()`) waarvan de
-  bron domweg niet in de worktree zit — Sonnet's agentische Grep kan dan
-  evenmin iets vinden, dus escaleren betaalt alleen de ~4,5x Sonnet-kost voor
-  een uitkomst die al vaststaat. Een token-onderzoek van PR 12895 bevestigde
-  dit hard: van 146 escalaties naar Sonnet kwamen er 144 (~99%) ook bij
-  Sonnet als `notfound` terug, en 118 van de 151 Haiku-calls kwamen uit
-  `tests/*`/`database/migrations/*` — precies de bestandssoorten die vrijwel
-  uitsluitend framework-DSL aanroepen (`assertStatus`, `postJson`,
-  `dropColumn`, …). Alleen `Status != Found && HadCandidates` triggert nog een
-  Sonnet-call; `TestResolveCallNoEscalationWithoutCandidates`/
-  `TestResolveCallEscalatesToSonnet` (`resolve_call_test.go`) pinnen beide
-  kanten van die gate.
+  per zoekactie. Body (deterministisch): `markCallsSearching` → `resolveWithModel`
+  (Haiku, context-only shortlist uit de Go-index) → `saveResolutions`. **Puur
+  automatisch, géén signal.** Elke LLM-claim wordt tegen de worktree
+  geverifieerd (`verifyDefinition` + path-containment) vóór hij `found` wordt.
+  **Uitsluitend Haiku — géén automatische escalatie naar Sonnet.** Dat was
+  eerder anders: een call die Haiku niet zeker vond (en waarvoor de Go-index
+  minstens één statisch kandidaat had, `HadCandidates`) escaleerde automatisch
+  naar een agentische Sonnet-pass (`Read`/`Grep`/`Glob` in de worktree). Op
+  expliciet verzoek is die escalatie-stap uit `resolveCallWorkflow` verwijderd:
+  een onzekere/niet-gevonden Haiku-uitkomst blijft nu gewoon `notfound`, er
+  wordt nooit meer een tweede, duurdere model-call gedaan. De generieke
+  Sonnet/agentische machinery in `resolve_call.go` (`resolveArg.Model`, de
+  `agentic`-prompt-tak, `claude.ModelSonnet`) bestaat nog steeds — die wordt
+  simpelweg nooit meer vanuit deze workflow aangeroepen (bewust minimale
+  ingreep: alleen de aanroep is geschrapt, niet de onderliggende
+  resolver-code). `callresolve.Entry.HadCandidates` reist nog mee in het
+  Activity-resultaat maar stuurt geen beslissing meer aan.
+  `TestResolveCallHaikuConfident`/`TestResolveCallNeverEscalatesToSonnet`/
+  `TestResolveCallNoEscalationWithoutCandidates` (`resolve_call_test.go`)
+  pinnen dat er nooit een Sonnet-call plaatsvindt, ook niet als Haiku
+  `found:false` antwoordt en een Sonnet-output geprogrammeerd staat.
   **Een curated denylist (`vendorBuiltinNames`/`isVendorBuiltin`,
   `resolve_call.go`) slaat zelfs de Haiku-call over** voor een handjevol
   extreem veelvoorkomende vendor/framework-methodenamen (PHPUnit/Laravel
@@ -800,9 +795,9 @@ fallback.
   `len(candidates)==0` had, dus nooit een echte, gelijknamige app-methode
   onderdrukt (`TestResolveCallVendorBuiltinDoesNotSuppressRealCandidate`
   bewijst dat expliciet met een app-class die zelf een `table()`-methode
-  definieert). Bespaart naast de Sonnet-kost ook de goedkopere Haiku-call, en
-  voorkomt de zinloze "Zoeken…"-chip voor code die per definitie nooit een
-  reviewbare app-definitie heeft (`TestResolveCallVendorBuiltinSkipsLLM`).
+  definieert). Bespaart de Haiku-spend, en voorkomt de zinloze
+  "Zoeken…"-chip voor code die per definitie nooit een reviewbare
+  app-definitie heeft (`TestResolveCallVendorBuiltinSkipsLLM`).
 - **Endpoints:** `POST /api/workflows/resolve_call` (start; body `{pr, callerId,
   callerFile, callerClass, callerName, calls}`) en read-only
   `GET /api/callresolve?pr=N`. De `buildRelations`-Activity schrijft de Go-rijen
@@ -826,8 +821,9 @@ fallback.
   binnen `[unit.start, unit.end]`), en alleen in list-mode toont hij alle calls van
   het block, geordend (gewijzigd child-blok → call op gewijzigde regel → rest). De lijst wordt in een `watch` berekend en via
   `setRelated` het paneel in geduwd (niet in de render-binding — dat racet met de
-  diff over `b.code`). Een LLM-gevonden child toont een **`bron: haiku/sonnet`**-badge
-  (de `source` uit de rij; Go-resolved toont geen bron). Zie
+  diff over `b.code`). Een LLM-gevonden child toont een **`bron: haiku`**-badge
+  (de `source` uit de rij — sinds de Sonnet-escalatie is geschrapt is dit in de
+  praktijk altijd `haiku`; Go-resolved toont geen bron). Zie
   `.claude/rules/detail-layout.md`.
 - Tests: `callresolve_analysis_test.go` (resolver op fixture-PHP, incl. een
   macro-call → `Builder::joinAddress`, de gewijzigde-regels-restrictie met een
@@ -838,8 +834,9 @@ fallback.
   (`new Model()`/`Model::…` → één gededupte whole-class model-child, nooit de
   constructor ondanks dat die soms bestaat, `fill`/`save` blijven `unresolved`,
   een resource-resolutie op dezelfde regel blijft ongemoeid)),
-  `resolve_call_test.go` (Haiku-confident → found; escalatie naar Sonnet;
-  notfound; verificatie weigert een verzonnen definitie), en
+  `resolve_call_test.go` (Haiku-confident → found; nooit escalatie naar
+  Sonnet, ook niet bij een onzeker/ontbrekend Haiku-antwoord; notfound;
+  verificatie weigert een verzonnen definitie), en
   `modules/callresolve/callresolve_test.go` (round-trip + UpsertGo bewaart LLM +
   `Prune` ruimt wees-callers én stale call-keys op).
   De frontend-kant heeft een **seed-pad**: `slash seed … -callresolve
@@ -987,19 +984,26 @@ call-resolve: een Go-detector eerst, een **beperkte** AI-fallback alleen voor
   `unannotated`. Haiku krijgt als context de **kandidaat-methoden van de
   genoemde class** (`idx.byClass[class]`, dezelfde beperkte, goed te verifiëren
   scope als de coordinator vroeg) + de testmethode-body, en kiest **welke
-  methode** de test uitoefent; bij lage confidence escaleert automatisch naar
-  Sonnet (agentisch, `Read/Grep/Glob` in de worktree). Elke claim wordt
-  geverifieerd: de methode moet **echt bestaan op de genoemde class**
-  (`methodOnClass`) — strenger dan `verifyDefinition` omdat de class al vastligt
-  door de annotatie, alleen de methode is onzeker. Resultaat `found`
-  (met `model`/`confidence`) of `notfound`.
+  methode** de test uitoefent. **Uitsluitend Haiku — géén automatische
+  escalatie naar Sonnet meer** (was eerder: bij lage confidence escaleerde de
+  workflow automatisch naar Sonnet, agentisch `Read`/`Grep`/`Glob` in de
+  worktree; die stap is uit `resolveTestCoversWorkflow` verwijderd, op
+  expliciet verzoek). De generieke Sonnet/agentische machinery in
+  `resolve_test_covers.go` (`testCoverArg.Model`, de `agentic`-prompt-tak)
+  bestaat nog steeds, wordt alleen niet meer vanuit deze workflow aangeroepen.
+  Elke claim wordt geverifieerd: de methode moet **echt bestaan op de genoemde
+  class** (`methodOnClass`) — strenger dan `verifyDefinition` omdat de class al
+  vastligt door de annotatie, alleen de methode is onzeker. Resultaat `found`
+  (met `model`/`confidence`, `model` is nu altijd `haiku`) of `notfound`.
 - **Endpoints:** `POST /api/workflows/resolve_test_covers` (start; body `{pr,
   testId, testFile, testClass, testName, classes}`) en read-only
   `GET /api/testcovers?pr=N`.
 - **Frontend** (`home.mjs`): `state.testCovers` (`loadTestCovers`).
   **Richting 1** (test → geteste methode): `resolvedTestCoverChildren(b)` voor
   een TEST-blok `b` — kind `covers`, dezelfde diffstat/`Ongewijzigd`-badge en
-  `bron: haiku/sonnet`-badge als een `method_call`-child. **Richting 2**
+  `bron: haiku`-badge als een `method_call`-child (sinds de Sonnet-escalatie is
+  geschrapt is `model` hier altijd `haiku`; het badge-mechanisme zelf toont nog
+  gewoon wat er in de rij staat). **Richting 2**
   (geteste productiemethode → dekkende test): `coveredByChildren(b)` — kind
   `covered_by`, hergebruikt het bestaande test-PR-blok (geen los codesnapshot
   nodig). Beide zijn **block-level** (zoals `event_listener`): ze vallen weg op
@@ -1032,12 +1036,14 @@ call-resolve: een Go-detector eerst, een **beperkte** AI-fallback alleen voor
   `unresolved`, een onverifieerbare claim → effectief `unannotated`, een
   niet-TEST-blok wordt geskipt, en een `build_relations`-end-to-end-test die
   bevestigt dat de Activity ook `testcovers.db` vult), `resolve_test_covers_test.go`
-  (mirror van `resolve_call_test.go`: Haiku-confident → found, escalatie naar
-  Sonnet, notfound, verificatie weigert een methode die niet op de genoemde
-  class bestaat), `modules/testcovers/testcovers_test.go` (round-trip,
+  (mirror van `resolve_call_test.go`: Haiku-confident → found, nooit escalatie
+  naar Sonnet ook niet bij een onzeker Haiku-antwoord, notfound, verificatie
+  weigert een methode die niet op de genoemde class bestaat),
+  `modules/testcovers/testcovers_test.go` (round-trip,
   `UpsertGo` beschermt een `found`-rij, `Prune` ruimt weesrijen op).
   Playwright: `tests/testcovers.spec.mjs` (beide richtingen + drill-recursie,
-  beide warning-varianten, het `bron: sonnet`-badge), geseed via
+  beide warning-varianten, het `bron: sonnet`-badge — een geseede fixture-waarde,
+  toont alleen dat het badge-mechanisme zelf model-onafhankelijk is), geseed via
   `slash seed … -testcovers <testcovers.json>` (mirror van `-callresolve`,
   `tests/fixtures/testcovers.json` + `testcovers-blocks.json`, PR 92/93/94).
 

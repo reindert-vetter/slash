@@ -33,7 +33,7 @@ func testCoverInput(pr int, classes ...string) ResolveTestCoversInput {
 	}
 }
 
-// Haiku is confident → found on the first model, no Sonnet escalation.
+// Haiku is confident → found, using only Haiku.
 func TestResolveTestCoversHaikuConfident(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 31
@@ -54,12 +54,14 @@ func TestResolveTestCoversHaikuConfident(t *testing.T) {
 		t.Fatalf("found entry has empty covered code")
 	}
 	if n := fake.CallCount(); n != 1 {
-		t.Fatalf("claude called %d times, want 1 (no Sonnet escalation)", n)
+		t.Fatalf("claude called %d times, want 1", n)
 	}
 }
 
-// Haiku is not confident → automatic escalation to Sonnet, which finds it.
-func TestResolveTestCoversEscalatesToSonnet(t *testing.T) {
+// Haiku is not confident → the workflow never escalates to Sonnet: it uses
+// ONLY Haiku, so an unconfident Haiku answer stays notfound even though a
+// programmed Sonnet output would have found it.
+func TestResolveTestCoversNeverEscalatesToSonnet(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 32
 	writeTestCoversFixtureRepo(t, dataDir, pr)
@@ -73,11 +75,11 @@ func TestResolveTestCoversEscalatesToSonnet(t *testing.T) {
 	}
 
 	e := onlyTestCoverEntry(t, tc, pr)
-	if e.Status != testcovers.StatusFound || e.Model != testcovers.ModelSonnet {
-		t.Fatalf("entry = %+v, want found by sonnet", e)
+	if e.Status != testcovers.StatusNotfound {
+		t.Fatalf("entry = %+v, want notfound (no Sonnet escalation)", e)
 	}
-	if n := fake.CallCount(); n != 2 {
-		t.Fatalf("claude called %d times, want 2 (haiku then sonnet)", n)
+	if n := fake.CallCount(); n != 1 {
+		t.Fatalf("claude called %d times, want 1 (Haiku only, no Sonnet call at all)", n)
 	}
 }
 
@@ -107,7 +109,6 @@ func TestResolveTestCoversVerificationRejectsBogus(t *testing.T) {
 	writeTestCoversFixtureRepo(t, dataDir, pr)
 	fake := claude.NewFake()
 	fake.SetOutput(claude.ModelHaiku, `{"found":true,"method":"ghostMethod","confidence":"high"}`)
-	fake.SetOutput(claude.ModelSonnet, `{"found":true,"method":"ghostMethod","confidence":"high"}`)
 	m, tc := resolveTestCoversManager(t, dataDir, fake)
 
 	if _, err := m.StartResolveTestCovers(testCoverInput(pr, "Order")); err != nil {

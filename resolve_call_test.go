@@ -33,7 +33,7 @@ func callInput(pr int, calls ...string) ResolveCallInput {
 	}
 }
 
-// Haiku is confident → found on the first model, no Sonnet escalation.
+// Haiku is confident → found, using only Haiku.
 func TestResolveCallHaikuConfident(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 21
@@ -54,12 +54,14 @@ func TestResolveCallHaikuConfident(t *testing.T) {
 		t.Fatalf("found entry has empty child code")
 	}
 	if n := fake.CallCount(); n != 1 {
-		t.Fatalf("claude called %d times, want 1 (no Sonnet escalation)", n)
+		t.Fatalf("claude called %d times, want 1", n)
 	}
 }
 
-// Haiku is not confident → automatic escalation to Sonnet, which finds it.
-func TestResolveCallEscalatesToSonnet(t *testing.T) {
+// Haiku is not confident → the workflow never escalates to Sonnet: it uses
+// ONLY Haiku, so an unconfident Haiku answer stays notfound even though a
+// programmed Sonnet output would have found it.
+func TestResolveCallNeverEscalatesToSonnet(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 22
 	writeCallFixtureRepo(t, dataDir, pr)
@@ -73,24 +75,17 @@ func TestResolveCallEscalatesToSonnet(t *testing.T) {
 	}
 
 	e := onlyEntry(t, cr, pr)
-	if e.Status != callresolve.StatusFound || e.Model != callresolve.ModelSonnet {
-		t.Fatalf("entry = %+v, want found by sonnet", e)
+	if e.Status != callresolve.StatusNotfound {
+		t.Fatalf("entry = %+v, want notfound (no Sonnet escalation)", e)
 	}
-	if n := fake.CallCount(); n != 2 {
-		t.Fatalf("claude called %d times, want 2 (haiku then sonnet)", n)
+	if n := fake.CallCount(); n != 1 {
+		t.Fatalf("claude called %d times, want 1 (Haiku only, no Sonnet call at all)", n)
 	}
 }
 
 // A call with zero static candidates (nothing in the fixture worktree defines
-// "someUnknownHelper") never escalates to Sonnet, even though Haiku answers
-// found=false: Sonnet's agentic search can't invent a definition that isn't in
-// the worktree either, so escalating would only pay the Sonnet cost for a
-// result that is already determined. Deliberately not a denylisted name (see
-// TestResolveCallVendorBuiltinSkipsLLM below), so this isolates the
-// HadCandidates gate itself — Haiku is still called once, it just doesn't
-// escalate. Pairs with TestResolveCallEscalatesToSonnet above, which pins the
-// other side of the gate: "fetch" has candidates (RepoA/RepoB both define it,
-// so it's ambiguous rather than unresolvable) and does still escalate.
+// "someUnknownHelper") behaves the same as any other unconfident Haiku answer
+// now that there is no escalation path at all.
 func TestResolveCallNoEscalationWithoutCandidates(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 25
@@ -205,7 +200,6 @@ func TestResolveCallVerificationRejectsBogus(t *testing.T) {
 	writeCallFixtureRepo(t, dataDir, pr)
 	fake := claude.NewFake()
 	fake.SetOutput(claude.ModelHaiku, `{"found":true,"file":"app/Models/Ghost.php","class":"Ghost","method":"boo","confidence":"high"}`)
-	fake.SetOutput(claude.ModelSonnet, `{"found":true,"file":"app/Models/Ghost.php","class":"Ghost","method":"boo","confidence":"high"}`)
 	m, cr := resolveCallManager(t, dataDir, fake)
 
 	if _, err := m.StartResolveCall(callInput(pr, "joinAddress")); err != nil {
