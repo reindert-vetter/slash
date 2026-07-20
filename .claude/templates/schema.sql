@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS blocks (
                                            -- (afwezig in de head-worktree, git's "+++ /dev/null")
   side       TEXT NOT NULL DEFAULT 'new',-- new|old: welke worktree line/end_line duiden
   pr         INTEGER NOT NULL DEFAULT 0, -- PR-nummer waar dit block bij hoort
-  approved   INTEGER NOT NULL DEFAULT 0  -- 0/1: door de reviewer goedgekeurd?
+  approved   INTEGER NOT NULL DEFAULT 0, -- 0/1: door de reviewer goedgekeurd?
+  description TEXT NOT NULL DEFAULT ''   -- vrije tekst uit een PHPDoc /** ... */ direct boven de
+                                          -- declaratie (@tags gestript); deterministisch, geen AI
 );
 
 -- Een aanroep: caller -> callee.

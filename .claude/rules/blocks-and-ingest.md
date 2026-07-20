@@ -169,6 +169,47 @@ navigeerbare lijst tonen.
   `TestStackedAttributesUseFirstLine`,
   `TestPropertyAttributeNotLeakedToNextMethod`), `classify_test.go`
   (`TestAttributeOnlyChangeClassifiesAsModified`).
+- **PHPDoc-omschrijving als block-description (`phpscan.go`, deterministisch,
+  géén AI).** Staat er direct boven een method/functie een `/** ... */`-PHPDoc
+  (twee sterretjes bij open — een kaal `/* ... */` telt niet mee), dan
+  extraheert `scanPHP` de **vrije-tekstregels** (elke regel die, na het strippen
+  van de omkadering en een leidende `*`, niet met `@` begint — dus geen
+  `@param`/`@return`/`@var`/etc.) en zet ze, samengevoegd tot één paragraaf
+  (spatie-gescheiden), in het nieuwe veld **`Block.Description`**
+  (`model.go`). Puur tekstuele extractie uit de brontekst — geen LLM-call, dus
+  geen kosten/latency en volledig deterministisch bij re-ingest.
+  Mechanisme, analoog aan `pendingAttrLine` hierboven maar losstaand ervan:
+  `scanPHP` houdt een eigen `pendingDocText` bij, gezet zodra een
+  `/**`-commentaar wordt gescand (`phpDocDescription`, alleen overschreven door
+  een latere niet-lege PHPDoc — "laatste vóór de declaratie wint"), en
+  overleeft — anders dan `pendingAttrLine` — de aanwezigheid van tussenliggende
+  attributen/modifiers: een PHPDoc kan namelijk gewoon **boven** een leidend
+  `#[...]`-attribuut staan (`/** ... */` dan `#[Test]` dan `function`), en moet
+  dan nog steeds aan die method toegekend worden ook al pakt het attribuut zelf
+  `Block.Line` naar zich toe (zie hierboven) — de PHPDoc beïnvloedt `Block.Line`/
+  `EndLine` zelf **niet**. `pendingDocText` reset naar `""` op precies dezelfde
+  triggers als `pendingAttrLine` (een `;`, een
+  `class`/`trait`/`interface`/`enum`-keyword, of elk ander, niet-gerelateerd
+  identifier) zodat een PHPDoc boven een property (`/** ... */ private
+  $legacy;`) nooit lekt naar een verderop volgende, ongerelateerde methode.
+  Class-level PHPDoc (boven `class X {` zelf) en de synthetische blocks
+  (class-header-sentinel, enums/models/macros/commands in
+  `callresolve_analysis.go`) krijgen bewust **geen** description — alleen een
+  echte `function`-declaratie in `scanPHP` doet dat.
+  **Opslag:** kolom `description` (TEXT, default `''`) op `blocks` (lichte
+  migrate in `openDB`: `ALTER TABLE … ADD COLUMN`, dubbele-kolom-fout genegeerd —
+  zelfde patroon als `file_deleted`; `schemaDDL` + `schema.sql` in sync),
+  meegeschreven door zowel `replacePRBlocks` als `upsertPRFileBlocks` en
+  gelezen door `blocksByPR` → automatisch in `/api/blocks` via het gewone
+  struct-tag (`json:"description"`, geen `MarshalJSON`-special-case nodig).
+  **Weergave:** geen nieuwe UI nodig — `src/Block.mjs` had al een "**Doel:**"-
+  sectie op de block-kaart die `b.description` toont (met een cursieve
+  "nog geen omschrijving"-fallback wanneer leeg); die stond er al vóór deze
+  wijziging, alleen werd het veld nooit gevuld. Test: `phpscan_test.go`
+  (`TestPHPDocDescriptionCapturedForMethod`,
+  `TestPHPDocDescriptionSurvivesLeadingAttribute`,
+  `TestPHPDocDescriptionNotLeakedAcrossProperty`,
+  `TestPlainBlockCommentIsNotADescription`, `TestNoPHPDocMeansNoDescription`).
 - **Uitzondering: een kale `#[Test]`-only wijziging telt bewust NIET als
   "modified" (`classify.go`).** Een toegevoegd/verwijderd/aangepast `#[Test]`
   (PHPUnit's argumentloze test-marker) heeft geen reviewbare betekenis — anders

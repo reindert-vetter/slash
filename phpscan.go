@@ -72,6 +72,16 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 	// unrelated declaration, e.g. a property that happens to carry its own
 	// attribute).
 	pendingAttrLine := 0
+	// pendingDocText is the extracted description from the most recent `/**
+	// ... */` PHPDoc comment (see phpDocDescription), pending adoption by the
+	// next `function` declaration — independent of, but reset on the exact
+	// same triggers as, pendingAttrLine above: a PHPDoc may sit above a
+	// leading attribute run (`/** ... */` then `#[...]` then `function`), so
+	// it must survive the attribute/modifier tokens that sit between it and
+	// `function`, without being adopted by them. Unlike pendingAttrLine this
+	// never influences Block.Line/EndLine — it only fills the new
+	// Block.Description field (see .claude/rules/blocks-and-ingest.md).
+	pendingDocText := ""
 
 	n := len(s)
 
@@ -133,9 +143,23 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 
 		// --- block comment ---
 		case c == '/' && i+1 < n && s[i+1] == '*':
+			// A PHPDoc comment (`/**`, two asterisks at open — as opposed to a
+			// plain `/* ... */`) may carry a free-text description destined
+			// for the next function/method declaration; capture it before
+			// skipping past the comment. A doc with only `@tag` lines (or no
+			// content at all) yields "" and leaves any earlier pending text
+			// alone — but a later, non-empty PHPDoc still overwrites it (last
+			// one before the declaration wins).
+			isDoc := i+2 < n && s[i+2] == '*'
+			start := i
 			j, nl, closed := skipBlockComment(s, i)
 			if !closed {
 				return nil, false
+			}
+			if isDoc {
+				if text := phpDocDescription(s[start:j]); text != "" {
+					pendingDocText = text
+				}
 			}
 			line += nl
 			i = j
@@ -165,11 +189,12 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 			line += nl
 			i = j
 
-		// --- statement end: drop any pending attribute that never reached a
-		// function (e.g. `#[Attr] private $x;`) so it can't leak onto the next,
-		// unrelated declaration's leading attribute. ---
+		// --- statement end: drop any pending attribute/PHPDoc that never
+		// reached a function (e.g. `#[Attr] private $x;`, or a PHPDoc above a
+		// property) so it can't leak onto the next, unrelated declaration. ---
 		case c == ';':
 			pendingAttrLine = 0
+			pendingDocText = ""
 			i++
 
 		// --- braces (only in code) ---
@@ -193,8 +218,12 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 			switch word {
 			case "class", "trait", "interface", "enum":
 				// A class/trait/interface/enum keyword ends any pending attribute
-				// run — it was meant for a method, not the type declaration.
+				// run — it was meant for a method, not the type declaration. Same
+				// for a pending PHPDoc: a class-level doc comment is not (yet)
+				// captured as a block description (out of scope — only
+				// function/method blocks get one, see blocks-and-ingest.md).
 				pendingAttrLine = 0
+				pendingDocText = ""
 				// Find a class name (may be absent: anonymous class).
 				name, bodyAt := classHeaderName(s, end)
 				if bodyAt >= 0 {
@@ -226,6 +255,8 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 					declLine = pendingAttrLine
 				}
 				pendingAttrLine = 0
+				doc := pendingDocText
+				pendingDocText = ""
 				var headerFrame *classFrame
 				if len(classes) > 0 {
 					top := &classes[len(classes)-1]
@@ -235,6 +266,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 				}
 				b, next, isDecl := scanFunction(s, end, &line, filename, currentClass(), declLine)
 				if isDecl {
+					b.Description = doc
 					blocks = append(blocks, b)
 					if headerFrame != nil {
 						headerFrame.headerClosed = true
@@ -252,9 +284,10 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 				i = next
 			default:
 				// Any other identifier (a type-hint, a variable name after `$`, a
-				// property name, ...) means whatever pending attribute run there
-				// was was not directly above a function — drop it.
+				// property name, ...) means whatever pending attribute/PHPDoc run
+				// there was was not directly above a function — drop it.
 				pendingAttrLine = 0
+				pendingDocText = ""
 				i = end
 			}
 
@@ -387,6 +420,28 @@ func skipBody(s string, open int, line *int) (endLine, next int) {
 		}
 	}
 	return *line, n
+}
+
+// phpDocDescription extracts the free-text description from a PHPDoc
+// comment's raw source text (raw = the full `/** ... */`, delimiters
+// included). Every line has its leading `*`/whitespace stripped; a line that
+// is empty or starts with `@` (a tag: `@param`, `@return`, `@var`, ...) is
+// dropped. The remaining lines are joined with a single space into one
+// paragraph. Returns "" for a tags-only or empty doc. Deterministic, plain
+// text extraction — no AI (.claude/rules/blocks-and-ingest.md).
+func phpDocDescription(raw string) string {
+	body := strings.TrimSuffix(strings.TrimPrefix(raw, "/**"), "*/")
+	var parts []string
+	for _, ln := range strings.Split(body, "\n") {
+		ln = strings.TrimSpace(ln)
+		ln = strings.TrimPrefix(ln, "*")
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "@") {
+			continue
+		}
+		parts = append(parts, ln)
+	}
+	return strings.Join(parts, " ")
 }
 
 // --- lexer primitives ------------------------------------------------------

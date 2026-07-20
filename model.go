@@ -36,6 +36,12 @@ type Block struct {
 	Side        string `json:"side"`     // new|old
 	Approved    bool   `json:"approved"` // approved by the reviewer?
 	Label    string `json:"label"`    // "Class::method" or "name" — for the frontend
+	// Description is the free-text summary extracted from a PHPDoc comment
+	// (`/** ... */`, tag lines like @param/@return stripped) directly above
+	// the function/method declaration — deterministic, no AI. "" if there was
+	// no such PHPDoc. See phpscan.go's phpDocDescription and
+	// .claude/rules/blocks-and-ingest.md.
+	Description string `json:"description"`
 }
 
 // ID is stable per (pr, file, symbol) so re-ingest is idempotent.

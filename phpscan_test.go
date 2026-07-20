@@ -436,3 +436,128 @@ class S {
 		t.Fatalf("keywords/braces inside strings must be ignored; got %v", symbols(got))
 	}
 }
+
+// TestPHPDocDescriptionCapturedForMethod: a PHPDoc directly above a method is
+// extracted as Block.Description, with @tag lines stripped and the prose
+// lines joined into one paragraph.
+func TestPHPDocDescriptionCapturedForMethod(t *testing.T) {
+	src := `<?php
+class OrderService {
+    /**
+     * Creates an order for the given customer.
+     *
+     * @param string $customerId
+     * @return Order
+     */
+    public function create($customerId) {
+        return new Order();
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Services/OrderService.php")
+	b, ok := blockByName(got, "OrderService::create")
+	if !ok {
+		t.Fatalf("expected OrderService::create, got %v", symbols(got))
+	}
+	want := "Creates an order for the given customer."
+	if b.Description != want {
+		t.Fatalf("Description = %q, want %q", b.Description, want)
+	}
+}
+
+// TestPHPDocDescriptionSurvivesLeadingAttribute: a PHPDoc above a leading
+// #[...] attribute run must still be adopted by the function — the attribute
+// pulls Block.Line back to its own line (see TestLeadingAttributeIncludedInBlock)
+// but must not swallow or reset the doc's pending description.
+func TestPHPDocDescriptionSurvivesLeadingAttribute(t *testing.T) {
+	src := `<?php
+class PermissionTest {
+    /**
+     * Verifies a user without the permission is rejected.
+     */
+    #[Test]
+    public function testPermissionDenied() {
+        return true;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "tests/Feature/PermissionTest.php")
+	b, ok := blockByName(got, "PermissionTest::testPermissionDenied")
+	if !ok {
+		t.Fatalf("expected testPermissionDenied, got %v", symbols(got))
+	}
+	want := "Verifies a user without the permission is rejected."
+	if b.Description != want {
+		t.Fatalf("Description = %q, want %q", b.Description, want)
+	}
+	if b.Line != 6 {
+		t.Fatalf("expected Block.Line=6 (the attribute line, unaffected by the doc), got %d", b.Line)
+	}
+}
+
+// TestPHPDocDescriptionNotLeakedAcrossProperty: a PHPDoc above a property
+// declaration (terminated by `;`) must not leak into a later, unrelated
+// method's description.
+func TestPHPDocDescriptionNotLeakedAcrossProperty(t *testing.T) {
+	src := `<?php
+class Svc {
+    /**
+     * The legacy client, kept for backwards compatibility.
+     */
+    private $legacy;
+
+    public function run() {
+        return 1;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Services/Svc.php")
+	b, ok := blockByName(got, "Svc::run")
+	if !ok {
+		t.Fatalf("expected Svc::run, got %v", symbols(got))
+	}
+	if b.Description != "" {
+		t.Fatalf("expected no description (property's doc must not leak), got %q", b.Description)
+	}
+}
+
+// TestPlainBlockCommentIsNotADescription: a plain /* ... */ comment (a single
+// asterisk at open, not PHPDoc's `/**`) must never be used as a description.
+func TestPlainBlockCommentIsNotADescription(t *testing.T) {
+	src := `<?php
+class Svc {
+    /* just a regular comment, not a doc block */
+    public function run() {
+        return 1;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Services/Svc.php")
+	b, ok := blockByName(got, "Svc::run")
+	if !ok {
+		t.Fatalf("expected Svc::run, got %v", symbols(got))
+	}
+	if b.Description != "" {
+		t.Fatalf("expected no description from a plain block comment, got %q", b.Description)
+	}
+}
+
+// TestNoPHPDocMeansNoDescription: a method with no preceding comment at all
+// gets an empty Description.
+func TestNoPHPDocMeansNoDescription(t *testing.T) {
+	src := `<?php
+class Svc {
+    public function run() {
+        return 1;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Services/Svc.php")
+	b, ok := blockByName(got, "Svc::run")
+	if !ok {
+		t.Fatalf("expected Svc::run, got %v", symbols(got))
+	}
+	if b.Description != "" {
+		t.Fatalf("expected empty description, got %q", b.Description)
+	}
+}
