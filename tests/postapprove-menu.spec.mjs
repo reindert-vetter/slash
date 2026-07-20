@@ -143,6 +143,9 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
 
     // Approve execute's only group via the palette, straight from the index.
     await page.keyboard.press('Enter')
+    const anchor = page.getByTestId('command-anchor')
+    await expect(anchor).toHaveCSS('visibility', 'visible')
+    const firstMenuBox = await anchor.boundingBox()
     await page.getByTestId('command-input').fill('keur')
     await page.getByTestId('command-row').first().click()
 
@@ -152,6 +155,17 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     const rows = page.getByTestId('command-row')
     await expect(rows.nth(0)).toContainText('Ga door naar het volgende niet-goedgekeurde block')
     await expect(rows.nth(1)).toContainText('Sluit menu')
+
+    // Regression: approving this block fully-approves it, which auto-hides its
+    // row from the sidebar (state.showApproved, see BlockList.mjs) — the exact
+    // row this follow-up menu needs to anchor on. It must reuse the first
+    // menu's cached position (lastIndexRowRect in home.mjs) instead of falling
+    // back to the whole `pr-index` aside, which used to throw it to the top of
+    // the viewport.
+    await expect(anchor).toHaveCSS('visibility', 'visible')
+    const postApproveBox = await anchor.boundingBox()
+    expect(postApproveBox.y).toBeCloseTo(firstMenuBox.y, 0)
+    expect(postApproveBox.x).toBeCloseTo(firstMenuBox.x, 0)
 
     await rows.filter({ hasText: 'Ga door' }).click()
     await expect(menu).not.toBeVisible()

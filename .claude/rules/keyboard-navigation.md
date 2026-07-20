@@ -326,6 +326,29 @@ gezet is — dezelfde veilige, niet-reactieve timing als het `approve`-label): "
 door naar het volgende niet-goedgekeurde **block**" bij `keepList`, anders de
 bestaande "... **code**"-tekst.
 
+**Het postApprove-vervolgmenu opent op DEZELFDE plek als het menu waarmee je
+goedkeurde, ook als de goedgekeurde rij intussen uit de index verdween.**
+`isIndexMenu()` rekent `ms.mode === 'postApprove'` al mee, dus `menuAnchor()`
+probeert voor beide menu's hetzelfde: `[data-idx="${state.selected}"]`. Maar
+keurde de reviewer een block **volledig** goed, dan verdwijnt die rij meteen uit
+de sidebar (auto-hide van volledig goedgekeurde blocks, zie
+`blocks-and-ingest.md`) — en dat gebeurt vóór het vervolgmenu opent
+(`afterApproveAction`'s `findNextUnapproved().then(...)` draait ná de
+approve-mutatie). Zonder tegenmaatregel viel `menuAnchor()` dan terug op de
+**hele** `[data-testid="pr-index"]`-aside: die bounding rect is veel hoger dan
+één rij, en `positionMenu()`'s flip-boven-rekensom (`top = a.top - gap - mh`,
+geklemd op `Math.max(gap, …)`) gooide het vervolgmenu daardoor helemaal boven
+in beeld i.p.v. op de plek van het eerste menu. `lastIndexRowRect` (`home.mjs`,
+module-`let` naast `isIndexMenu`) cachet de rij z'n `getBoundingClientRect()`
+zolang hij nog echt bestaat; verdwijnt de rij, dan hergebruikt `menuAnchor()`
+die gecachte rect (als klein duck-typed object met alleen
+`getBoundingClientRect()` — `positionMenu()` roept nooit iets anders op de
+anchor aan) i.p.v. de volle aside. `openMenu(mode)` reset de cache bij elke
+**niet**-`postApprove`-open, zodat hij nooit een oude positie uit een eerdere,
+ongerelateerde sessie lekt — elke normale open herbouwt 'm meteen weer zodra
+zijn eigen ankerrij zichtbaar is. Test:
+`tests/postapprove-menu.spec.mjs` ("blokken-index stays there").
+
 Hetzelfde menu-mechanisme bedient ook een **comment-scoped** variant: staat de
 keyboard op een geplaatste comment-rij in `RelatedPanel` (`cs.focus === 'comment'`,
 vóór het instappen in de thread) én is het reply-veld nog **leeg**, dan opent

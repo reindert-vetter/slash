@@ -3758,6 +3758,12 @@ window.addEventListener('scroll', repositionMenu, true) // capture: catch inner 
 // snapshotCommands — see those for why that must happen from ordinary code and
 // never from inside CommandMenu's own render/filter path.
 function openMenu(mode = 'block') {
+  // Reset the cached index-row anchor on every fresh open except the
+  // postApprove follow-up itself, which relies on it (see lastIndexRowRect) —
+  // this keeps the cache from ever leaking a stale position into an unrelated
+  // later session; a 'block'/'pr'/etc. open re-populates it immediately via
+  // positionMenu() below as long as its own anchor row is visible.
+  if (mode !== 'postApprove') lastIndexRowRect = null
   ms = reactive({ query: '', sel: 0, sub: null, mode, commands: snapshotCommands(rootCommandsFor(mode)) })
   menu.open = true
   requestAnimationFrame(() => {
@@ -4321,6 +4327,18 @@ function isIndexMenu() {
   return state.mode === 'list' && (ms.mode === 'block' || ms.mode === 'postApprove')
 }
 
+// lastIndexRowRect caches the selected sidebar row's bounding rect while it's
+// still visible — see the isIndexMenu() branch of menuAnchor() below. The
+// postApprove follow-up menu opens right after an approve action that can
+// fully-approve (and thus auto-hide, see blocks-and-ingest.md) the very row it
+// wants to anchor on; without this cache menuAnchor() falls through to the
+// whole `pr-index` aside, whose much taller bounding rect throws
+// positionMenu()'s flip-above math to the top of the viewport instead of
+// keeping the follow-up menu where the first menu sat. Reset whenever a menu
+// opens fresh (see openMenu) so it never carries a stale position into an
+// unrelated later session.
+let lastIndexRowRect = null
+
 // isDescriptionMenu — the PR-wide menu ('pr' mode, opened with Enter or `/`)
 // while stop 1 (the PR-description column, state.showDescription) owns the
 // keyboard: anchor it on the description card itself instead of the diff
@@ -4349,10 +4367,16 @@ function menuAnchor() {
   // itself, not the list-mode diff preview beneath it (see
   // .claude/rules/keyboard-navigation.md).
   if (isIndexMenu()) {
-    return (
-      document.querySelector(`[data-idx="${state.selected}"]`) ||
-      document.querySelector('[data-testid="pr-index"]')
-    )
+    const row = document.querySelector(`[data-idx="${state.selected}"]`)
+    if (row) {
+      lastIndexRowRect = row.getBoundingClientRect()
+      return row
+    }
+    // The row just got hidden (e.g. the approve action that opened this
+    // postApprove follow-up menu fully approved it) — reuse its last known
+    // position instead of the whole `pr-index` aside (see lastIndexRowRect).
+    if (lastIndexRowRect) return { getBoundingClientRect: () => lastIndexRowRect }
+    return document.querySelector('[data-testid="pr-index"]')
   }
   // The PR-wide menu on stop 1 anchors on the description card (the card is
   // tall, so positionMenu usually flips the palette above/clamps it near the
