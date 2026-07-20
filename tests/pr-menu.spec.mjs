@@ -98,8 +98,11 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await page.keyboard.press('/')
     await page.getByTestId('command-row').first().click() // "Naar PR-overzicht"
     // Carries `?pr=12903` so /pr-overview can auto-select the row we came
-    // from — see trySelectPendingPr in overview.mjs.
-    await page.waitForURL('**/pr-overview?pr=12903')
+    // from (see trySelectPendingPr in overview.mjs), plus `&sel=<blockRef>` so
+    // it can hand the same block back on return (see overviewExitUrl in
+    // home.mjs, treeUrl in overview.mjs, and the "?sel= reist mee…" section in
+    // .claude/rules/pages-and-routing.md).
+    await page.waitForURL('**/pr-overview?pr=12903&sel=*')
   })
 
   // Enter on stop 1 (the PR-description column, state.showDescription) has no

@@ -468,7 +468,7 @@ async function generatePage(pr, { redirect = true } = {}) {
       throw new Error((body && body.error) || 'Genereren mislukt (' + res.status + ')')
     }
     if (redirect) {
-      location.href = '/pr/' + pr.number
+      location.href = treeUrl(pr)
     } else {
       ui.ingesting = null
     }
@@ -533,7 +533,7 @@ function ingestedActions(pr) {
       type="button"
       data-testid="open-tree"
       class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
-      @click="${() => (location.href = '/pr/' + pr.number)}"
+      @click="${() => (location.href = treeUrl(pr))}"
     >
       ${icon('sparkles', 'h-3.5 w-3.5')} Open review-boom
     </button>
@@ -1037,6 +1037,30 @@ let pendingSelectPr = (() => {
   return Number.isFinite(n) ? n : null
 })()
 
+// originPr/originSel — the same `?pr=`/`?sel=` pair as pendingSelectPr above,
+// but read into their own, never-nulled module lets: pendingSelectPr is
+// deliberately one-shot (cleared within milliseconds of load, once the row is
+// found/not-found), while these two need to survive until the reviewer
+// eventually clicks back into the tree — seconds or minutes later. Kept
+// separate rather than reusing pendingSelectPr for that reason. treeUrl(pr)
+// below appends `sel` only when pr.number matches originPr, so navigating to
+// a *different* PR than the one we came from never carries a stale sel along.
+const originPr = pendingSelectPr
+const originSel = new URLSearchParams(location.search).get('sel') || null
+
+// treeUrl(pr) — the URL to navigate into pr's review tree (/pr/<n>), used by
+// every place that opens/redirects into the tree (generatePage's redirect,
+// "Open review-boom", and the → forward-nav in openOrGenerate). Hands back
+// the block reference we left from (originSel) so the reviewer lands on the
+// same block instead of the default first one — see the ← nav-chain exit /
+// overviewExitUrl in home.mjs, and the "?pr=<id> auto-selecteert…" section in
+// .claude/rules/pages-and-routing.md.
+function treeUrl(pr) {
+  let url = '/pr/' + pr.number
+  if (pr.number === originPr && originSel) url += '?sel=' + encodeURIComponent(originSel)
+  return url
+}
+
 // Shared by toggleRecent (manual click) and trySelectPendingPr (auto-select):
 // fetches /api/prs once and caches it on state.recentPrs.
 async function ensureRecentPrs() {
@@ -1348,7 +1372,7 @@ function findPrByNumber(number) {
 // same inline error a mouse-driven attempt would show.
 function openOrGenerate(pr) {
   if (pr.hasGraph) {
-    location.href = '/pr/' + pr.number
+    location.href = treeUrl(pr)
     return
   }
   togglePopover(pr.number)

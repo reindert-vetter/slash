@@ -398,6 +398,20 @@ function applyBlockRefRestore() {
   if (idx >= 0) state.selected = idx
 }
 
+// overviewExitUrl — shared by both nav-chain exits to /pr-overview (the ←
+// handler in onKeydown and the "Naar PR-overzicht" PR_COMMANDS item below).
+// Carries `sel` alongside `pr` so /pr-overview can hand the same block
+// reference back when the reviewer returns to this PR (see the
+// originPr/originSel round-trip in overview.mjs, and the "?pr=<id> auto-
+// selecteert…" section in .claude/rules/pages-and-routing.md). Only appended
+// when there's a current selection to remember — a block-less PR (still
+// loading) shouldn't force an empty `sel=` onto the URL.
+function overviewExitUrl() {
+  let url = '/pr-overview?pr=' + state.pr
+  if (state.blockRef) url += '&sel=' + encodeURIComponent(state.blockRef)
+  return url
+}
+
 // groupsFor returns the group-granularity change runs of a block (empty until its
 // code has loaded). Used for the list-mode preview, which always previews the
 // first *group* regardless of the diff-mode granularity.
@@ -3707,9 +3721,10 @@ const PR_COMMANDS = [
     id: 'pr-overview',
     label: 'Naar PR-overzicht',
     hint: 'overzicht',
-    // `?pr=` lets /pr-overview auto-select this PR (see trySelectPendingPr in
-    // overview.mjs) — same destination + param as the ← nav-chain exit above.
-    run: () => window.location.assign('/pr-overview?pr=' + state.pr),
+    // `?pr=`/`?sel=` let /pr-overview auto-select this PR — and hand back the
+    // same block reference when we return (see overviewExitUrl above) — same
+    // destination + params as the ← nav-chain exit below.
+    run: () => window.location.assign(overviewExitUrl()),
   },
   {
     id: 'pr-github',
@@ -4330,12 +4345,14 @@ function onKeydown(e) {
   // (isPrWideFocused() false) — ↓ hands it the keyboard instead (entering its
   // first entry) when it has any PR-wide comments; a no-op otherwise. Any
   // other key is a no-op and doesn't move the block selection underneath it.
-  // The `?pr=` param lets /pr-overview auto-select the PR we just came from
-  // (see the trySelectPendingPr()/pendingSelectPr logic in overview.mjs).
+  // The `?pr=`/`?sel=` params let /pr-overview auto-select the PR — and hand
+  // back the same block reference on return — we just came from (see
+  // overviewExitUrl above, and trySelectPendingPr()/originPr/originSel in
+  // overview.mjs).
   if (state.showDescription) {
     e.preventDefault()
     if (e.key === 'ArrowRight') state.showDescription = false
-    else if (e.key === 'ArrowLeft') location.href = '/pr-overview?pr=' + state.pr
+    else if (e.key === 'ArrowLeft') location.href = overviewExitUrl()
     else if (e.key === 'ArrowDown') handlePrWideKey('ArrowDown')
     return
   }

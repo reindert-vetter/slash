@@ -102,7 +102,11 @@ keer op naar een index zodra `loadBlocks` de blocks heeft gevuld; niet gevonden
 (verlopen/gedeelde link) → de bestaande index-clamp (naar 0) blijft staan. Anders
 dan `gran`/`mode`/`chg` heeft `sel` geen "default" die uit de URL verdwijnt zodra
 er een block geladen is: elk block (ook het eerste) heeft een echte `file:line`,
-dus `sel` staat structureel in de URL zodra de PR geladen is.
+dus `sel` staat structureel in de URL zodra de PR geladen is. Diezelfde `sel`
+reist ook mee in de `/pr-overview`-round-trip (`←`/"Naar PR-overzicht" →
+"Open review-boom"/`→`), zodat je bij terugkeer op hetzelfde block landt — zie
+"`?sel=` reist mee in dezelfde round-trip" in
+`.claude/rules/pages-and-routing.md`.
 Elk **extra venster/paneel** krijgt een eigen `ns` zodat zijn params náást de
 hoofd-navigatie in dezelfde URL staan zonder te botsen. Het `RelatedPanel` gebruikt
 dit echt: `bindUrlState(cs, …, { ns: 'rel' })` bindt de **paneel-cursor**

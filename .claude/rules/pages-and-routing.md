@@ -176,6 +176,41 @@ aangeroepen aan het eind van zowel `applyLive` als `applyCached` (mirror van
 Test: `tests/overview-pr-select.spec.mjs` (in-sections, alleen-in-de-lade, en
 de stille no-op).
 
+### `?sel=` reist mee in dezelfde round-trip: dezelfde block blijft geselecteerd
+
+Naast `?pr=` (welke **rij** in de overview selecteren) draagt dezelfde
+round-trip ook `?sel=<file:line>` mee — welk **block** je moet terugkrijgen
+zodra je vanuit de overview weer de review-boom instapt. Dit is een pure
+extensie van het bestaande `sel`-mechanisme (`bindUrlState`/`state.blockRef`/
+`applyBlockRefRestore`, zie de URL-state-sectie in `CLAUDE.md`) — geen nieuw
+opslagmechanisme, geen localStorage: `sel` was al de canonieke, deelbare
+navigatiepositie voor een refresh/gedeelde link, dit hergebruikt 'm simpelweg
+over de heen-en-terug-reis via `/pr-overview`.
+
+- **Uitgaand (`home.mjs`):** `overviewExitUrl()` bouwt de bestemming voor
+  **beide** exits naar `/pr-overview` (de `←`-nav-chain-exit op stop 1, en het
+  `/`-menu-item "Naar PR-overzicht") — `/pr-overview?pr=<state.pr>`, plus
+  `&sel=<encodeURIComponent(state.blockRef)>` zodra er een selectie is
+  (`state.blockRef` leeg → geen `sel`-param, bv. vlak na laden).
+- **Ingaand (`overview.mjs`):** twee **niet-genulde** module-`let`s,
+  `originPr`/`originSel`, lezen `pr`/`sel` **eenmalig** bij load — bewust
+  **los** van het bestaande, one-shot `pendingSelectPr` (die wordt binnen
+  milliseconden na load al gecleard zodra de rij gevonden/niet-gevonden is;
+  `originPr`/`originSel` moeten daarentegen blijven leven tot de reviewer
+  minuten later daadwerkelijk terug de boom in klikt). `treeUrl(pr)` — gebruikt
+  door **alle drie** de navigatiepunten naar `/pr/<n>` (`generatePage`'s
+  redirect na een geslaagde (re)ingest, "Open review-boom", en de
+  `→`-forward-nav in `openOrGenerate`) — voegt `?sel=<originSel>` alleen toe
+  als `pr.number === originPr`: klik je in de overview op een **andere** PR dan
+  waar je vandaan kwam, dan krijgt die nooit een sel van een niet-gerelateerde
+  PR mee.
+- **Block niet meer gevonden** (verwijderd, of inmiddels volledig goedgekeurd
+  en dus verborgen) leunt op de **bestaande** `applyBlockRefRestore`-fallback
+  (clamp naar de gewone default) — geen nieuwe edge-case-code nodig, exact
+  hetzelfde gedrag als een verlopen/gedeelde `?sel=`-link.
+
+Test: `tests/overview-pr-select-block.spec.mjs`.
+
 ### Client (`src/overview.mjs`, arrow.js, dark-zinc, Nederlands)
 
 Twee-fasen render via een reactieve `state.statuses` (skeleton → pills, geen
