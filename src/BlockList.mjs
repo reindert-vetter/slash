@@ -144,12 +144,23 @@ function renderList(state) {
 }
 
 // toggleRow is the bottom button that hides/shows the fully-approved blocks.
+// It's also the extra, final ↓ stop of the sidebar's keyboard cursor (see
+// stepListSelection in home.mjs): state.toggleFocused gives it the same
+// indigo highlight as a selected row (data-idx rows above) while the keyboard
+// sits on it, rather than on any block.
 function toggleRow(state, count) {
   return html`
     <button
       data-testid="toggle-approved"
-      class="w-full border-t border-slate-100 dark:border-zinc-800/60 px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60"
-      @click="${() => (state.showApproved = !state.showApproved)}"
+      class="${() =>
+        'w-full border-t border-slate-100 dark:border-zinc-800/60 px-3 py-2 text-left text-xs font-medium ' +
+        (state.toggleFocused
+          ? 'bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/40 text-indigo-700 dark:text-indigo-300'
+          : 'text-slate-500 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
+      @click="${() => {
+        state.showApproved = !state.showApproved
+        state.toggleFocused = true
+      }}"
     >
       ${() =>
         state.showApproved
@@ -192,14 +203,19 @@ function row(state, b, i) {
       data-testid="block-row"
       class="${() =>
         'flex cursor-default items-center gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2 text-sm ' +
-        (i === state.selected
+        (i === state.selected && !state.toggleFocused
           ? 'bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/40'
           : 'hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
-      @click="${() => (state.selected = i)}"
+      @click="${() => {
+        state.selected = i
+        state.toggleFocused = false
+      }}"
     >
       <span
         class="${() =>
-          i === state.selected ? 'text-indigo-500 dark:text-indigo-400' : 'text-transparent'}"
+          i === state.selected && !state.toggleFocused
+            ? 'text-indigo-500 dark:text-indigo-400'
+            : 'text-transparent'}"
         >›</span
       >
       <span

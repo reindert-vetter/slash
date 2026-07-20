@@ -460,6 +460,28 @@ dan vallen de links terug op de kale PR-URL resp. de Jira-base.
     `stepVisibleSelected`; de zoekfilter zelf hoeft geen aparte check — een
     weggefilterd blok zit überhaupt niet meer in `state.blocks`).
   Beide gebruiken exact hetzelfde `isFullyApproved`-criterium als `renderList`.
+  **↓ voorbij het laatste zichtbare block landt op de "Toon/Verberg N
+  goedgekeurde blocks"-knop zelf** (`state.toggleFocused`, `stepListSelection`
+  in `home.mjs` — vervangt de kale `stepVisibleSelected`-aanroep in beide
+  ArrowDown/ArrowUp-takken hierboven): de knop was voorheen alleen met de muis
+  te bereiken. `stepListSelection(1)` valt terug op `stepVisibleSelected` en
+  zet, alleen als die niets verder vindt (`next === state.selected`) én de
+  knop daadwerkelijk bestaat (`toggleRowVisible()` — er is minstens één
+  goedgekeurd top-level blok, ongeacht `showApproved`), `state.toggleFocused =
+  true`; `state.selected` blijft ongewijzigd, de knop is dus een extra,
+  laatste stop bovenop de blocks, geen vervanging. `BlockList.mjs`'s
+  `toggleRow` toont daarop dezelfde indigo bg/ring als een geselecteerde rij
+  (en dimt de rij-highlight van het onderliggende `state.selected`-blok, zodat
+  er nooit twee indigo highlights tegelijk zichtbaar zijn). **`↑`** vanaf de
+  knop (`stepListSelection(-1)`) zet `toggleFocused` gewoon terug op `false` —
+  het laatste block was en blijft `state.selected`, dus dit is puur een
+  focus-stap, geen her-navigatie. **`Enter`/`→`** togglen daar `state.showApproved`
+  (mirror van een klik op de knop) i.p.v. het commando-menu te openen resp. de
+  diff in te stappen; **`f`/`d`/`s`/`a`** zijn no-ops zolang de knop de
+  keyboard heeft (er is geen block/diff-context om op te acteren). Een klik op
+  een gewone rij, of typen in de zoekbox (`setSearch`), resetten
+  `toggleFocused` altijd naar `false` — een nieuwe navigatie-context laat de
+  knop nooit stilzwijgend gefocust achter.
   Volgorde is load-bearing: op het load-pad draait de reveal pas **ná**
   `applyBlockRefRestore` (een herstelde `?sel=` naar een zichtbaar blok is een
   no-op) én nadat `loadBlocks` `loadApprovals`/`loadBlockStats` ge-await

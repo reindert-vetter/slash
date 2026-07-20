@@ -235,6 +235,12 @@ const state = reactive({
   // from the starting-points list, revealed by the "Toon N goedgekeurde blokken"
   // button at the bottom. Ephemeral UI state, not bound to the URL.
   showApproved: false,
+  // toggleFocused — true once ↓ has walked the list-mode keyboard cursor past
+  // the last visible block onto the toggle-approved button itself (see
+  // stepListSelection). Not a block, so `state.selected` stays put underneath
+  // it — this is purely an extra, final stop in the ↑/↓ chain. Ephemeral, not
+  // bound to the URL, like showApproved above.
+  toggleFocused: false,
   ingesting: false,
   error: '',
   onIngest: ingest,
@@ -779,6 +785,39 @@ function stepVisibleSelected(dir) {
   }
 }
 
+// toggleRowVisible mirrors BlockList's renderList: the toggle-approved button
+// only exists once at least one top-level block is fully approved — regardless
+// of whether state.showApproved currently reveals or folds it away.
+function toggleRowVisible() {
+  return state.blocks.some((b) => isFullyApproved(state, b))
+}
+
+// stepListSelection is the list-mode ↑/↓ step (dir=+1 down, -1 up), extending
+// stepVisibleSelected with one extra, final stop: the toggle-approved button
+// at the very bottom of the sidebar. Stepping ↓ past the last visible block
+// used to just stay put (stepVisibleSelected's "nothing further" behaviour) —
+// now, if the button is actually rendered, the keyboard cursor moves onto it
+// instead (state.toggleFocused), which BlockList highlights with the same
+// indigo ring as a selected row. ↑ from there simply drops the flag and lands
+// back on the (unchanged) last block — state.selected never moved.
+function stepListSelection(dir) {
+  if (dir > 0) {
+    if (state.toggleFocused) return // already the bottom-most stop
+    const next = stepVisibleSelected(1)
+    if (next === state.selected && toggleRowVisible()) {
+      state.toggleFocused = true
+      return
+    }
+    state.selected = next
+    return
+  }
+  if (state.toggleFocused) {
+    state.toggleFocused = false
+    return
+  }
+  state.selected = stepVisibleSelected(-1)
+}
+
 // revealSelectedIfHidden unfolds the approved section (state.showApproved =
 // true) when state.selected points at a block BlockList's renderList doesn't
 // render (fully approved while state.showApproved is false — the exact same
@@ -826,6 +865,9 @@ function setSearch(q) {
   state.search = q
   recomputeLeftList()
   state.selected = 0
+  // Typing is a fresh navigation reset — never leave the keyboard cursor
+  // parked on the toggle-approved row from a previous, now-irrelevant walk.
+  state.toggleFocused = false
   // The top match can be a hidden (fully-approved) block — land on the first
   // visible one instead so a row always highlights (see clampSelectedToVisible;
   // deliberately a clamp, not a reveal — see the comments above).
@@ -1996,7 +2038,9 @@ window.addEventListener('resize', refreshHints)
 // has the new highlight class before we measure.
 function scrollSelectedIntoView() {
   requestAnimationFrame(() => {
-    const el = document.querySelector(`[data-idx="${state.selected}"]`)
+    const el = document.querySelector(
+      state.toggleFocused ? '[data-testid="toggle-approved"]' : `[data-idx="${state.selected}"]`
+    )
     if (el) el.scrollIntoView({ block: 'nearest' })
   })
 }
@@ -3888,19 +3932,24 @@ function onKeydown(e) {
     if (e.key === 'ArrowLeft') {
       e.preventDefault()
       exitSearch()
+      state.toggleFocused = false
       state.showDescription = true
       return
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      state.selected = stepVisibleSelected(1)
+      stepListSelection(1)
       scrollSelectedIntoView()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      state.selected = stepVisibleSelected(-1)
+      stepListSelection(-1)
       scrollSelectedIntoView()
     } else if (e.key === 'ArrowRight' || e.key === 'Enter') {
       e.preventDefault()
+      if (state.toggleFocused) {
+        state.showApproved = !state.showApproved
+        return
+      }
       exitSearch()
       enterDiff()
     } else if (e.key === 'Escape') {
@@ -4062,6 +4111,17 @@ function onKeydown(e) {
     return
   }
 
+  // The toggle-approved row (see stepListSelection) is the extra, final ↓ stop
+  // at the bottom of the sidebar — it's not a block, so there's no command
+  // palette to open there. Enter just flips state.showApproved, mirroring a
+  // click on the button; handled first so it wins over the generic
+  // Enter-opens-menu branch right below.
+  if (e.key === 'Enter' && state.toggleFocused) {
+    e.preventDefault()
+    state.showApproved = !state.showApproved
+    return
+  }
+
   // Enter opens the palette at the next-block slot. Handled before the empty-blocks
   // guard so it works even while a PR is still loading. On stop 1 (the
   // PR-description column, state.showDescription) there's no block context, so
@@ -4075,6 +4135,17 @@ function onKeydown(e) {
   }
 
   if (state.blocks.length === 0) return
+
+  // Same trailing-row special case as Enter above: none of these diff-only
+  // shortcuts (zoom, view-toggle, step into the diff) mean anything while the
+  // toggle-approved row owns the keyboard — state.selected still points at
+  // whatever block it did before ↓ walked onto the button, and letting them
+  // silently act on it would read as broken ("I'm on the toggle button but
+  // ArrowRight opened a diff").
+  if (state.toggleFocused && ['f', 'd', 's', 'a', 'ArrowRight'].includes(e.key)) {
+    e.preventDefault()
+    return
+  }
 
   // f / d / s drive the zoom-based selection: f zooms in (and steps to the next
   // call on the finest level), d goes back, s zooms out. f from the list steps
@@ -4185,12 +4256,12 @@ function onKeydown(e) {
 
   if (e.key === 'ArrowDown') {
     e.preventDefault()
-    state.selected = stepVisibleSelected(1)
+    stepListSelection(1)
     scrollSelectedIntoView()
     scrollChangeIntoView(false)
   } else if (e.key === 'ArrowUp') {
     e.preventDefault()
-    state.selected = stepVisibleSelected(-1)
+    stepListSelection(-1)
     scrollSelectedIntoView()
     scrollChangeIntoView(false)
   } else if (e.key === 'ArrowRight') {
@@ -4198,6 +4269,7 @@ function onKeydown(e) {
     enterDiff()
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault()
+    state.toggleFocused = false
     state.showDescription = true // step left out of the list into stop 1 (the description)
   }
 }
