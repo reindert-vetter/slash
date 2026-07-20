@@ -110,7 +110,9 @@ dit echt: `bindUrlState(cs, …, { ns: 'rel' })` bindt de **paneel-cursor**
 zodat een refresh je terugzet op hetzelfde Onderliggende-code-kind / dezelfde
 comment-thread. Herstelde waarden die door async-load buiten bereik vallen worden
 geclamped (`loadBlocks` clamp't `selected`, `ensureCode` clamp't `change` en valt
-terug naar `mode:'list'` bij een block zonder wijzigingen; de paneel-cursor wordt
+terug naar `mode:'list'` bij een block zonder wijzigingen — maar alleen vanuit de
+rustpositie (`focusLevel === 0`, geen open `state.drill`), nooit terwijl een
+gedrilde kolom open staat, zie `.claude/rules/detail-layout.md`; de paneel-cursor wordt
 ná de data-push één keer opnieuw toegepast, zie `RelatedPanel.applyRelRestore`).
 Zie skill `url-state`.
 

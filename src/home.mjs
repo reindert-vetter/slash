@@ -1996,7 +1996,21 @@ async function ensureCode(b) {
       }
       // Likewise a restored 'diff' mode is meaningless for a block with no
       // navigable changes; fall back to the list instead of a dead diff view.
-      if (state.mode === 'diff' && groups.length === 0) state.mode = 'list'
+      // Only from the rest position (no drilled column open): after a postApprove
+      // "Ga door" that selects a NEW root and drills into its child, the root's
+      // own (deduped, still in-flight) code fetch can land HERE with 0 own groups
+      // — its only reviewable content is that drilled child — and flipping to
+      // 'list' then strands the drill stack: the ← peel branch (diff-mode only)
+      // becomes unreachable and ← "jumps to the blocks index" instead of
+      // expanding the collapsed parent column. See tests/drill-mode-flip.spec.mjs.
+      if (
+        state.mode === 'diff' &&
+        groups.length === 0 &&
+        state.focusLevel === 0 &&
+        state.drill.length === 0
+      ) {
+        state.mode = 'list'
+      }
       scrollChangeIntoView(state.mode === 'diff')
     } else if (state.drill[state.focusLevel - 1] === b) {
       // A focused drilled column's code just arrived (a real PR block whose

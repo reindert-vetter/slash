@@ -504,6 +504,16 @@ gerapporteerde "ik kan niks in onderliggende code goedkeuren"). Zie de
   diff-sessie** — de bestaande diff→list-overgang (`state.mode='list'`) — en dán
   worden `state.drill`/`state.drillCursor` ook leeggemaakt: gedrilde kolommen
   hebben alleen betekenis binnen déze diff-sessie.
+- **Niets anders mag `state.mode` naar `'list'` flippen zolang er gedrild is.**
+  `ensureCode`'s "block zonder navigeerbare wijzigingen → terug naar
+  list"-fallback (bedoeld voor een herstelde `?mode=diff`-URL) is daarom
+  gegate op de rustpositie (`state.focusLevel === 0 && state.drill.length ===
+  0`): na een postApprove-"Ga door" die een **nieuwe root** selecteert en in
+  diens kind drilt, kan de (gededupte, nog in-flight) code-fetch van die root
+  pas ná het drillen landen — heeft die root 0 eigen groups (alleen z'n
+  onderliggende code is reviewbaar), dan flipte de ongegate fallback naar
+  list-mode terwijl de drill-stack nog stond, waardoor `←` de peel-tak miste
+  ("← gaat naar de blokken-index"). Test: `tests/drill-mode-flip.spec.mjs`.
 - **`→` opent nog steeds het Onderliggende-code-paneel** van de kolom die op dat
   moment de focus heeft (`enterRelated()`, ongewijzigd) — dat is nog altijd de
   enige weg om **dieper** te drillen (Enter/klik op een kind daarin).
