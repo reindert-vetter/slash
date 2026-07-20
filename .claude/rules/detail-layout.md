@@ -970,6 +970,16 @@ rechts — zie de layout-alinea hierboven):
   heen. Hertekenen: rAF-gecoalesced op de watch zelf, `resize`, capture-
   `scroll` (ook inner scrollers — het `repositionMenu`-precedent) en een
   250ms-settle na elke push (de 200ms breedte-transities, à la `openMenu`).
+  **De `a`-toggle (`state.diffViewMode`, zie hieronder) is zo'n breedte-
+  transitie maar raakt geen van de `setRelated`-watch's dependencies
+  (`state.selected`/`mode`/`gran`/`change`/…) — de watch vuurt dus niet en
+  `setCallArrows` wordt niet opnieuw aangeroepen, terwijl elke kaart wél naar
+  60% breedte krimpt.** Zonder tegenmaatregel bleef de pijl op de
+  pre-toggle (brede) coördinaten getekend staan, los van de nu smallere
+  pane-rand. `toggleDiffView` (`home.mjs`) roept daarom expliciet
+  `resettleCallArrows()` (`callArrows.mjs`) aan: dezelfde onmiddellijke +
+  250ms-settle hertekenschema als `setCallArrows`, maar zonder de paren zelf
+  te wijzigen (die blijven identiek — alleen de geometrie verandert).
   Een call-site-rij die uit de diff-viewport is gescrold verliest zijn pijl
   (dezelfde zichtbaarheidsregel als `updateHints`); een kind-kaart die intern
   is weggescrold houdt een op de paneelrand **geclampte** pijl. Test:

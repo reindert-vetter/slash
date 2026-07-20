@@ -68,6 +68,31 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
     await page.keyboard.press('ArrowUp')
     await expect(arrows).toHaveCount(1)
 
+    // `a` narrows every visible card to 60% width (state.diffViewMode) without
+    // touching state.selected/mode/gran/change — the setRelated watch that
+    // normally redraws the overlay never fires for this toggle (see
+    // resettleCallArrows in callArrows.mjs). The arrow must still re-anchor to
+    // the narrower pane's right edge instead of staying on its pre-toggle
+    // (wide) coordinates.
+    const arrowStartX = async () => {
+      const d = await arrows.first().getAttribute('d')
+      return parseFloat(d.match(/M\s*(-?[\d.]+)/)[1])
+    }
+    // Let any residual redraw from the preceding navigation steps fully settle
+    // first — otherwise a coincidental late redraw (from the *previous* step's
+    // own 250ms settle-timer) can paint the post-toggle geometry regardless of
+    // whether the `a` toggle itself triggers one, masking the very bug this
+    // asserts against.
+    await page.waitForTimeout(500)
+    const beforeX = await arrowStartX()
+    await page.keyboard.press('a')
+    // The 200ms width transition plus the overlay's own 250ms settle redraw.
+    await page.waitForTimeout(500)
+    await expect(arrows).toHaveCount(1)
+    const afterX = await arrowStartX()
+    expect(afterX).toBeLessThan(beforeX - 20) // moved noticeably left with the narrowed pane
+    await page.keyboard.press('a') // back to split view
+
     // Leave the diff: overlay cleared and hidden.
     await page.keyboard.press('s') // line → group
     await page.keyboard.press('ArrowLeft') // diff → list

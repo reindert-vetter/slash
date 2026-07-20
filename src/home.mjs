@@ -54,7 +54,7 @@ import RelatedPanel, {
   scrollIntoViewVertical,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
-import { CallArrowsHost, setCallArrows } from './callArrows.mjs'
+import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
@@ -307,9 +307,16 @@ const state = reactive({
 // to the top of the function instead of staying on the active change. Not a
 // navigation step, so no glide (mirrors ensureCode's `false` for a cached/
 // already-loaded re-render, see detail-layout.md).
+// This resizes every visible card to 60% width (narrowed(), Block.mjs) without
+// touching state.selected/mode/gran/change, so the setRelated watch that
+// normally drives the call-arrow overlay never fires — resettleCallArrows
+// redraws the existing pairs at the new (narrower) geometry, with the same
+// immediate + 250ms-settle schedule callArrowPairs pushes use for the 200ms
+// width transition (see detail-layout.md's "Call-pijl-overlay").
 function toggleDiffView() {
   state.diffViewMode = state.diffViewMode === 'new' ? 'split' : 'new'
   scrollChangeIntoView(false)
+  resettleCallArrows()
 }
 
 // isEditableFocused reports whether DOM focus currently sits on a text input —

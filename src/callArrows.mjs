@@ -42,6 +42,19 @@ export function setCallArrows(next) {
   setTimeout(scheduleArrowDraw, 250)
 }
 
+// resettleCallArrows redraws the CURRENT pairs (unchanged) after a layout
+// shift that doesn't change which calls are in scope — the `a` diff-view-mode
+// toggle (state.diffViewMode, see home.mjs' toggleDiffView) resizes every pane
+// to 60% width without touching state.selected/mode/gran/change, so the
+// setRelated watch never fires and setCallArrows is never called; without this
+// the arrow stayed drawn at the pre-toggle (wide) coordinates. Same immediate +
+// 250ms-settle schedule as setCallArrows (mirrors the 200ms width transition),
+// just without reassigning `pairs`.
+export function resettleCallArrows() {
+  scheduleArrowDraw()
+  setTimeout(scheduleArrowDraw, 250)
+}
+
 // scheduleArrowDraw coalesces any number of triggers (watch fire, scroll,
 // resize) into one requestAnimationFrame — measuring after the current
 // reactive flush has reached the DOM.
