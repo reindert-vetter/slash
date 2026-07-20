@@ -513,6 +513,36 @@ arrow.js-bindings (ze worden pas aangeroepen ván binnen `Block`'s eigen
 herbouwen — precies zoals `state.change`/`state.gran` dat al deden voor de
 top-level kaart.
 
+**Kleine openingsanimatie bij een echte "open" van een kolom, nooit bij
+navigatie erbinnen (`drillOpenMarker` in `home.mjs` + `.drill-enter` in
+`index.html`):** een verse `drillIntoChild`-call (echt drillen, of
+`drillToSibling`'s sibling-vervanging) zet een module-level, **niet-reactieve**
+marker `drillOpenMarker = { level, id }`. De `state.drill.map(...)`-render leest
+'m eenmalig per kolom en **consumeert** 'm meteen (`if (justOpened)
+drillOpenMarker = null`) — vóórdat de class-string voor die kolom wordt gebouwd
+(een gewone, niet-reactieve string-interpolatie, géén `${() => …}`-binding: er
+is hier niets om reactief bij te houden, dus de "hele-waarde-in-één-binding"-
+regel is niet van toepassing). Alleen bij een match krijgt de kolom-wrapper de
+class `drill-enter` (een korte fade+slide-`@keyframes` in `index.html`, met een
+`prefers-reduced-motion`-guard). Dit **mag nooit** een reactieve/permanente
+class-binding worden: de kolom-`.key(...)` (zie hierboven, `foc`/`unfoc` +
+`codeState`) klapt ook om bij een loutere focus-wissel (`←`/rail-klik) of
+zodra code alsnog binnenkomt — geen van beide is een "open", dus die mogen de
+animatie niet laten replayen. Het consume-eenmalig-patroon lost dit op:
+- Blijft de `.key(...)` van een kolom gelijk over een navigatiestap
+  (`f`/`d`/`s`/`↑`/`↓` binnen dezelfde kolom, die alleen `drillCursor` raakt,
+  niet de key) — dan hergebruikt/patcht arrow.js de bestaande DOM-node. De
+  class-string is een statische waarde die alleen bij node-**creatie** gezet
+  wordt, dus die node krijgt nooit een nieuwe animatie-trigger, ongeacht of
+  `drill-enter` toevallig nog in zijn classList staat (een CSS-animatie
+  herhaalt niet vanzelf zonder `iteration-count:infinite`).
+- Klapt de key wél om (code arriveert, foc/unfoc) — dan is de marker na de
+  eerste render al geconsumeerd (`null`), dus die verse node krijgt géén
+  `drill-enter`-class, en dus geen replay.
+Test: `tests/drill-open-animation.spec.mjs` (de class staat er direct na
+drillen; een `ArrowDown`-navigatiestap erna bewijst via een ad-hoc
+marker-attribuut dat de DOM-node **niet** opnieuw gemount wordt).
+
 `focusedBlock()` (het Onderliggende-code-paneel + taken/chat) volgt nu
 `state.focusLevel` in plaats van altijd het diepste niveau: `state.focusLevel ===
 0 ? curBlock() : state.drill[state.focusLevel - 1]`. Stap je met `←` een kolom

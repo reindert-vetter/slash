@@ -43,6 +43,30 @@
         display: none;
       }
 
+      /* A small, subtle one-shot entrance animation for a newly-opened drilled
+         Onderliggende-code column (see the drillOpenMarker comment in
+         home.mjs) — a short fade + slight slide-in, never a repeating/looping
+         animation, so it can't nag on its own. home.mjs only ever adds this
+         class to a column's very first render right after a real "open"
+         (drillIntoChild); a later rebuild of the same column (code arriving,
+         a focus flip) never re-adds it, so this never replays on plain
+         navigation. Respects prefers-reduced-motion. */
+      @media (prefers-reduced-motion: no-preference) {
+        @keyframes drillIn {
+          from {
+            opacity: 0;
+            transform: translateX(6px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+        .drill-enter {
+          animation: drillIn 180ms ease-out;
+        }
+      }
+
       /* Prism token colours only — scoped to every Prism code excerpt via the
          `.language-php` class it always carries (the diff panes in Block.mjs, the
          Onderliggende-code cards + comment hint in RelatedPanel.mjs, the footer),

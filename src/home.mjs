@@ -2595,6 +2595,16 @@ function resolveChildBlock(child) {
   }
 }
 
+// Set right when drillIntoChild opens/replaces a drilled column — {level, id}
+// identifying which fresh column just got created. The drill-column render
+// pass below reads it once (to add a one-shot CSS entrance animation) and
+// clears it immediately, so the animation plays exactly on a real "open" and
+// never replays on a later, unrelated rebuild of the same column (code
+// arriving, a foc/unfoc focus flip — see the drill-column .key(...) comment).
+// Deliberately a plain module-level variable, not reactive state — mirrors
+// other one-shot bookkeeping like searchRequested/lastSidebarFocus.
+let drillOpenMarker = null
+
 // drillIntoChild opens a child from the Onderliggende-code panel as its own diff
 // column, appended to the right of the current drill stack (Enter on a resolved
 // child in the panel — see the Enter handling in onKeydown). Resolves the child
@@ -2613,6 +2623,12 @@ function drillIntoChild(child) {
   }
   const resolved = resolveChildBlock(child)
   state.drill = [...state.drill, resolved]
+  // Mark this as a genuine "open" for the small entrance animation — see
+  // drillOpenMarker's own comment above. drillToSibling (the sideways walk at
+  // the edge of a drilled column's units) pops the current entry and calls
+  // back into drillIntoChild, so a sibling swap correctly re-triggers this too
+  // (it's a real column replacement, not a mere navigation step).
+  drillOpenMarker = { level: state.drill.length, id: resolved.id }
   if (!resolved.synthetic) {
     // A relation-child gets its code lazily loaded elsewhere (relatedChildren);
     // a method-call child's PR-block definition might not have its own diff
@@ -4889,8 +4905,20 @@ function DetailPanel(state) {
               'drill-collapsed:' + i + ':' + b.file + ':' + b.label + ':' + b.id,
             )
           }
+          // A one-shot entrance animation for a genuine "open" of this column
+          // (see drillOpenMarker's own comment) — a plain, non-reactive string
+          // baked once per this map() iteration, not a `${() => ...}` binding,
+          // so this doesn't fight the "reactive attribute must be the whole
+          // value" rule (there's no reactivity here at all). Consuming
+          // (clearing) the marker the moment it matches means a later rebuild
+          // of this same column — code arriving, a foc/unfoc flip, both of
+          // which change this .key(...) and mount a fresh node — never
+          // replays it: drillOpenMarker will already be null by then.
+          const justOpened = !!(drillOpenMarker && drillOpenMarker.level === level && drillOpenMarker.id === b.id)
+          if (justOpened) drillOpenMarker = null
+          const drillColumnCls = 'flex min-h-0 shrink-0 flex-col gap-3' + (justOpened ? ' drill-enter' : '')
           return html`
-            <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="drill-column" data-drill-idx="${i}">
+            <div class="${drillColumnCls}" data-testid="drill-column" data-drill-idx="${i}">
               <div class="relative flex min-h-0 flex-col">
                 ${focusedHere
                   ? html`
