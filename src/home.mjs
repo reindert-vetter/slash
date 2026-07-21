@@ -5418,7 +5418,17 @@ function DetailPanel(state) {
           // replays it: drillOpenMarker will already be null by then.
           const justOpened = !!(drillOpenMarker && drillOpenMarker.level === level && drillOpenMarker.id === b.id)
           if (justOpened) drillOpenMarker = null
-          const drillColumnCls = 'flex min-h-0 shrink-0 flex-col gap-3' + (justOpened ? ' drill-enter' : '')
+          // scroll-ml-4 reserves 16px of left scroll-margin on this column so
+          // that scrollFocusIntoView's native scrollIntoView({inline:'start'})
+          // leaves room for the drill-left-hint chevron rendered just outside
+          // this box's own left edge (absolute -left-3, i.e. 12px) — without
+          // it, aligning this box flush with <main>'s left edge clips the
+          // chevron off-screen (scroll-margin is honored by scrollIntoView per
+          // the CSSOM View spec). This div only ever renders while focused
+          // (the unfocused branch above returns a collapsed rail instead), so
+          // the margin is unconditional, not gated on focusedHere.
+          const drillColumnCls =
+            'flex min-h-0 shrink-0 flex-col gap-3 scroll-ml-4' + (justOpened ? ' drill-enter' : '')
           return html`
             <div class="${drillColumnCls}" data-testid="drill-column" data-drill-idx="${i}">
               <div class="relative flex min-h-0 flex-col">

@@ -615,6 +615,30 @@ terugstappen). De chevron zit in de kolom-`.key` verdisconteerd via de
 bestaande `foc`/`unfoc`-component, dus hij verschijnt/verdwijnt met een verse
 kaart i.p.v. een hergebruikte node.
 
+**De chevron zelf zit buiten de `drill-column`-box (`absolute -left-3`), dus
+`scrollFocusIntoView`'s `scrollIntoView({inline:'start'})` zou 'm zonder
+tegenmaatregel grotendeels achter `<main>`'s eigen linkerrand afknippen** — die
+lijnt namelijk de **eigen doos** van de gefocuste `drill-column`-div flush
+tegen `<main>`'s binnenkant uit, 12px vóórbij die doos valt dan buiten de
+zichtbare (`overflow-x-auto`-geclipte) scrollport. `drillColumnCls` draagt
+daarom een statische `scroll-ml-4` (1rem/16px links scroll-margin) — een
+CSS-eigenschap die `Element.scrollIntoView()` respecteert (CSSOM View spec),
+dus geen wijziging aan `scrollFocusIntoView` zelf nodig. De marge is
+onvoorwaardelijk op deze class (geen `${() => …}`-binding nodig): deze div met
+testid `drill-column` rendert toch al **alleen** wanneer de kolom gefocust is
+(de niet-gefocuste tak retourneert vroeg een `drill-collapsed`-rail), dus de
+scroll-margin is altijd relevant zodra dit element bestaat — geen
+arrow.js-valkuil, `drillColumnCls` was al een plain, niet-reactieve string per
+`.map()`-iteratie (zelfde precedent als de `drill-enter`-animatieclass
+hierboven). Test: `tests/drill-left-hint-visible.spec.mjs` — let op: een kale
+`getBoundingClientRect().left >= 0`-check op de chevron zou dit **niet**
+vangen, want die coördinaat is relatief aan de hele browser-viewport en
+`<main>` zelf staat al op een positieve linker-offset (de list/diff-mode
+`left-6`/`left-[29rem]`-padding), dus `rect.left` blijft positief ook als de
+chevron volledig achter `<main>`'s eigen clip-rand verdwijnt; de test gebruikt
+daarom een `IntersectionObserver`-ratio (die ancestor-`overflow`-clipping wél
+meerekent).
+
 **Look-ahead-preview van de volgende sibling (`drillPreviewColumns`,
 `data-testid=drill-preview-column`):** **onder** de kaart van de gefocuste
 (altijd meest-rechtse) gedrilde kolom — niet ernaast — toont een gedimde
