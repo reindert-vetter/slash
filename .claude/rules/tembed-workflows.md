@@ -1268,3 +1268,46 @@ synchroon tot completion omdat er geen `WaitSignal` in zit).
   end-to-end: `set`-Signal → read-model, `EnsureApprovals`-idempotentie, en een
   viewed-request die `setFileViewed`/`github.Client.MarkFileViewed` drijft i.p.v.
   het approvals-read-model aan te raken).
+
+## Een PR daadwerkelijk goed-/afkeuren op GitHub (`submit_review` + `github.Client.SubmitReview`)
+
+Een zevende Workflow Type, **`submit_review`**, dient een **echte GitHub
+PR-level review** in (approve of request-changes) — bedoeld voor het menu dat
+na het goedkeuren van alle/laatste blokken verschijnt. Signal-loos, één
+Execution per submit-verzoek, mirrort exact `ingest`'s synchrone patroon (geen
+lange-levende tracker, geen Signal-lus).
+
+- **`modules/github`:** `Client.SubmitReview(ctx, pr, event, body) error` —
+  `event` is `"APPROVE"` of `"REQUEST_CHANGES"`. `Module.SubmitReview` valideert
+  `event` tegen een vaste allowlist (`allowedReviewEvents`) vóór de `gh api
+  --method POST repos/<repo>/pulls/<pr>/reviews`-call (`-f event=<event>` +
+  `-f body=<body>` alleen als niet leeg) — conform de eis om input te
+  valideren vóór `exec.CommandContext`. `github.Fake` registreert `event`/
+  `body` onvoorwaardelijk (`LastReviewEvent`/`LastReviewBody`/
+  `ReviewSubmittedCount`, voor tests) — de allowlist-validatie zit alleen in de
+  **echte** `Module`, niet in de Fake.
+- **Body-verplicht bij afkeuren:** GitHub weigert een bodyless
+  `REQUEST_CHANGES`-review; een `APPROVE` mag bodyless. Bewuste keuze: **hard
+  afwijzen** (400), geen auto-gegenereerde body — de reviewer moet zijn
+  afkeuring motiveren, en de frontend kan dat afdwingen met een verplicht
+  tekstveld. Gevalideerd door de pure, los testbare functie
+  `validateSubmitReview` (`tasks_api.go`) — vóór de workflow ooit start:
+  `pr <= 0`, een onbekend `event`, of een leeg/whitespace-only `body` bij
+  `REQUEST_CHANGES` geven allemaal een 400 zonder dat `gh` wordt aangeraakt.
+- **Workflow** (`workflows.go`): `submitReviewWorkflow` draait één
+  `ExecuteActivity("submitGithubReview", in, nil)` en completet — geen
+  best-effort-swallow zoals `postGithubComment`: een mislukte submit moet als
+  echte fout bij de reviewer aankomen, dus `Activity`-fouten propageren.
+  `TaskManager.StartSubmitReview(in)` mirrort `StartIngest`: `StartWorkflow`
+  (draait synchroon door tot completion, geen Signal) + een `Status`-check die
+  een `StatusFailed`-run als error teruggeeft.
+- **Endpoint:** `POST /api/workflows/submit_review` — body
+  `{"pr": N, "event": "APPROVE"|"REQUEST_CHANGES", "body": "…"}`, 200
+  `{"runId": "…"}`, 400 bij een ongeldig verzoek (vóór elke GitHub-call), 502
+  `{"error": "…"}` als de `gh`-submit zelf faalt.
+- Tests: `submit_review_test.go` (`TestValidateSubmitReview`, tabel-test op de
+  validatiefunctie incl. de body-verplicht-bij-afkeuren-regel;
+  `TestSubmitReviewWorkflowPassesEventAndBody`, workflow-niveau met
+  `github.Fake` — bewijst dat `event`/`body` ongewijzigd doorgegeven worden
+  voor zowel APPROVE als REQUEST_CHANGES; `TestGithubModuleRejectsUnknownReviewEvent`,
+  de echte `Module`'s allowlist als defense-in-depth).

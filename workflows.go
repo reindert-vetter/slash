@@ -84,6 +84,11 @@ const (
 	// explainRunID) so a repeated selection never triggers a second LLM call; it
 	// completes when done (no signals). Haiku, context-only — no escalation.
 	WorkflowExplainCode = "explain_code"
+	// WorkflowSubmitReview is the Workflow Type that submits a real GitHub
+	// PR-level review (approve or request changes): one Execution per submit
+	// request. It runs its one Activity (the gh api call) synchronously and
+	// completes — no signal, mirrors WorkflowIngest.
+	WorkflowSubmitReview = "submit_review"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -290,6 +295,17 @@ type ExplainCodeInput struct {
 // IngestInput starts an ingest Workflow Execution for one PR.
 type IngestInput struct {
 	PR int `json:"pr"`
+}
+
+// SubmitReviewInput starts a submit_review Workflow Execution: submitting a
+// real GitHub PR-level review. Event must be "APPROVE" or "REQUEST_CHANGES"
+// (validated by validateSubmitReview before the workflow ever starts). Body
+// may be empty for an APPROVE; GitHub itself rejects a bodyless
+// REQUEST_CHANGES, which validateSubmitReview also rejects up front.
+type SubmitReviewInput struct {
+	PR    int    `json:"pr"`
+	Event string `json:"event"`
+	Body  string `json:"body"`
 }
 
 // inboxRefreshResult is the small summary the refreshInbox Activity returns — the
@@ -927,6 +943,21 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.gh.MarkFileViewed(ctx, arg.PR, arg.File, arg.Viewed)
 	})
 
+	// Activity: submit a real GitHub PR-level review (write, workflow-driven —
+	// the only place that talks to GitHub for this). Not best-effort: a failed
+	// submission must surface as a real error, so the reviewer knows their
+	// approve/request-changes did not land.
+	engine.RegisterActivity("submitGithubReview", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg SubmitReviewInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.gh == nil {
+			return nil, fmt.Errorf("submit review: no github client")
+		}
+		return nil, m.gh.SubmitReview(ctx, arg.PR, arg.Event, arg.Body)
+	})
+
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
@@ -936,6 +967,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowResolveTestCovers, resolveTestCoversWorkflow)
 	engine.RegisterWorkflow(WorkflowExplainCode, explainCodeWorkflow)
 	engine.RegisterWorkflow(WorkflowApprove, approveWorkflow)
+	engine.RegisterWorkflow(WorkflowSubmitReview, submitReviewWorkflow)
 	return m
 }
 
@@ -1034,6 +1066,43 @@ func (m *TaskManager) StartIngest(ctx context.Context, pr int) (*ingestResult, e
 		return nil, err
 	}
 	return &res, nil
+}
+
+// submitReviewWorkflow submits one GitHub PR-level review (approve or request
+// changes). It is deterministic: the only side effect (gh api
+// pulls/{pr}/reviews) is its one Activity, run once, in a fixed order — no
+// signals, one Execution per submit request, mirrors ingestWorkflow.
+func submitReviewWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in SubmitReviewInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	if err := w.ExecuteActivity("submitGithubReview", in, nil); err != nil {
+		return nil, fmt.Errorf("submit review: %w", err)
+	}
+	return json.Marshal(map[string]any{"pr": in.PR, "event": in.Event})
+}
+
+// StartSubmitReview runs the submit_review Workflow Execution for in to
+// completion (StartWorkflow drives a signal-less workflow synchronously) and
+// returns its Run ID. Starting an Execution is the sanctioned write path —
+// this is the only way a real GitHub PR-level review gets submitted. Unlike
+// resolve_call/explain_code (best-effort LLM lookups that never fail the
+// caller), a failed GitHub submission must reach the caller as an error —
+// mirrors StartIngest's status check.
+func (m *TaskManager) StartSubmitReview(in SubmitReviewInput) (string, error) {
+	runID, err := m.engine.StartWorkflow(WorkflowSubmitReview, in)
+	if err != nil {
+		return "", err
+	}
+	status, err := m.engine.Status(runID)
+	if err != nil {
+		return runID, err
+	}
+	if status == tembed.StatusFailed {
+		return runID, fmt.Errorf("submit review failed (run %s)", runID)
+	}
+	return runID, nil
 }
 
 // approveWorkflow persists reviewer approval for a PR. It is deterministic: the

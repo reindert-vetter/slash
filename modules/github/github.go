@@ -97,6 +97,12 @@ type Client interface {
 	// MarkFileViewed sets (viewed=true) or clears (viewed=false) the "Viewed"
 	// checkbox for path in the Files-changed tab of pr.
 	MarkFileViewed(ctx context.Context, pr int, path string, viewed bool) error
+	// SubmitReview submits a PR-level review — event must be "APPROVE" or
+	// "REQUEST_CHANGES". body may be empty for an APPROVE (GitHub allows a
+	// bodyless approval); whether an empty body is acceptable for
+	// REQUEST_CHANGES is enforced by the caller (GitHub itself rejects a
+	// bodyless request-changes review), not by this method.
+	SubmitReview(ctx context.Context, pr int, event, body string) error
 }
 
 // Module is the production Client: it shells out to `gh api` against repo.
@@ -388,6 +394,31 @@ func (m *Module) MarkFileViewed(ctx context.Context, pr int, path string, viewed
 		return fmt.Errorf("gh api graphql %s: %w (%s)", mutation, err, out)
 	}
 	return nil
+}
+
+// allowedReviewEvents is the set of GitHub review-submission events this app
+// supports. Checked before shelling out, per the project rule to validate
+// input before it reaches exec.CommandContext.
+var allowedReviewEvents = map[string]bool{
+	"APPROVE":         true,
+	"REQUEST_CHANGES": true,
+}
+
+// SubmitReview submits a PR-level review. See the Client interface doc for the
+// event/body rules.
+func (m *Module) SubmitReview(ctx context.Context, pr int, event, body string) error {
+	if !allowedReviewEvents[event] {
+		return fmt.Errorf("invalid review event %q", event)
+	}
+	args := []string{"-f", "event=" + event}
+	if body != "" {
+		args = append(args, "-f", "body="+body)
+	}
+	_, err := m.api(ctx, "POST",
+		fmt.Sprintf("repos/%s/pulls/%d/reviews", m.repo, pr),
+		args...,
+	)
+	return err
 }
 
 // prNodeID fetches the GraphQL global node ID of a pull request.

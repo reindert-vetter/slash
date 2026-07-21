@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -372,6 +373,9 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// POST /api/workflows/approve {pr} → ensure the per-PR approval tracker; the
 	// UI then signals approvals to its Run ID via .../signals/set.
 	mux.HandleFunc("/api/workflows/approve", s.handleApproveStart)
+	// POST /api/workflows/submit_review {pr,event,body?} → submit a real GitHub
+	// PR-level review (approve or request changes). One Execution per submit.
+	mux.HandleFunc("/api/workflows/submit_review", s.handleSubmitReview)
 	// GET /api/approvals?pr=N → read-only approval read-model (per block: the
 	// approved changed rows + call segments) for refresh-restore.
 	mux.HandleFunc("/api/approvals", s.handleApprovals)
@@ -458,7 +462,7 @@ func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" {
 		http.NotFound(w, r)
 		return
 	}
@@ -893,4 +897,52 @@ func (s *server) handlePR(w http.ResponseWriter, r *http.Request) {
 		"reviewDecision": meta.ReviewDecision, "checksTotal": meta.ChecksTotal, "checksPassed": meta.ChecksPassed,
 		"reviewers": meta.Reviewers,
 	})
+}
+
+// validateSubmitReview checks a submit_review request before it ever reaches
+// the workflow/gh: pr must be a positive int, event must be one of GitHub's
+// two review-submission actions this app exposes, and — because GitHub
+// itself rejects a bodyless REQUEST_CHANGES review — a request-changes
+// review must carry a non-empty body (an APPROVE may be bodyless). Trims and
+// upper-cases in.Event, and trims in.Body, in place, so a caller that passes
+// validation always has a clean value to send on.
+func validateSubmitReview(in *SubmitReviewInput) error {
+	if in.PR <= 0 {
+		return fmt.Errorf("invalid pr")
+	}
+	in.Event = strings.ToUpper(strings.TrimSpace(in.Event))
+	if in.Event != "APPROVE" && in.Event != "REQUEST_CHANGES" {
+		return fmt.Errorf("invalid event %q", in.Event)
+	}
+	in.Body = strings.TrimSpace(in.Body)
+	if in.Event == "REQUEST_CHANGES" && in.Body == "" {
+		return fmt.Errorf("request-changes review requires a non-empty body")
+	}
+	return nil
+}
+
+// handleSubmitReview starts a submit_review Workflow Execution (POST) — the
+// sanctioned write path for submitting a real GitHub PR-level review (approve
+// or request changes). validateSubmitReview rejects an invalid request (bad
+// pr/event, or a bodyless request-changes) before the workflow ever starts.
+func (s *server) handleSubmitReview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in SubmitReviewInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if err := validateSubmitReview(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.StartSubmitReview(in)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
 }

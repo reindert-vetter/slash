@@ -24,6 +24,10 @@ type Fake struct {
 	lastStartLine int
 	lastEndLine   int
 	lastSide      string
+
+	lastReviewEvent string
+	lastReviewBody  string
+	reviewSubmitted int
 }
 
 func (f *Fake) PostReviewComment(_ context.Context, pr int, file string, startLine, endLine int, side, body string) (int64, error) {
@@ -208,6 +212,36 @@ func (f *Fake) MarkFileViewed(_ context.Context, pr int, path string, viewed boo
 		delete(f.viewed, viewedKey(pr, path))
 	}
 	return nil
+}
+
+func (f *Fake) SubmitReview(_ context.Context, pr int, event, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastReviewEvent = event
+	f.lastReviewBody = body
+	f.reviewSubmitted++
+	return nil
+}
+
+// LastReviewEvent returns the event of the most recently submitted review.
+func (f *Fake) LastReviewEvent() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastReviewEvent
+}
+
+// LastReviewBody returns the body of the most recently submitted review.
+func (f *Fake) LastReviewBody() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastReviewBody
+}
+
+// ReviewSubmittedCount returns how many reviews have been submitted.
+func (f *Fake) ReviewSubmittedCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reviewSubmitted
 }
 
 // IsViewed reports whether MarkFileViewed(pr, path, true) is the last call
