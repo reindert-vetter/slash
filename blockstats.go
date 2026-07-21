@@ -24,6 +24,14 @@ import (
 func blockChangedRowCount(baseDir, headDir string, b Block) int {
 	oldText := extractBlockSource(filepath.Join(baseDir, b.File), b.File, b.Class, b.Name).Text
 	newText := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name).Text
+	// Fold a leading PHPDoc's @return/@param types into the signature and drop
+	// the doc lines — the exact same transform /api/code applies for display
+	// (codesig.go, code.go's enrichedCodeSide) — so the approve total counts
+	// the same rows the reviewer actually sees, never the (now-hidden) doc
+	// lines. enrichSignatureWithDocTypes is a no-op when there's no leading
+	// doc/types to fold, so an untouched block's count is unaffected.
+	oldText, _ = enrichSignatureWithDocTypes(oldText)
+	newText, _ = enrichSignatureWithDocTypes(newText)
 	return changedRowCount(oldText, newText)
 }
 

@@ -222,7 +222,6 @@ export default function Block(b, opts = {}) {
       </div>
 
       <p class="border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-sm leading-relaxed">
-        <span class="font-semibold text-slate-500 dark:text-zinc-500">Doel:</span>
         <span class="${() => (b.description ? 'text-slate-600 dark:text-zinc-400' : 'italic text-slate-400 dark:text-zinc-500')}"
           >${() => b.description || 'nog geen omschrijving'}</span
         >

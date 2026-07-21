@@ -257,10 +257,13 @@ navigeerbare lijst tonen.
   meegeschreven door zowel `replacePRBlocks` als `upsertPRFileBlocks` en
   gelezen door `blocksByPR` → automatisch in `/api/blocks` via het gewone
   struct-tag (`json:"description"`, geen `MarshalJSON`-special-case nodig).
-  **Weergave:** geen nieuwe UI nodig — `src/Block.mjs` had al een "**Doel:**"-
-  sectie op de block-kaart die `b.description` toont (met een cursieve
-  "nog geen omschrijving"-fallback wanneer leeg); die stond er al vóór deze
-  wijziging, alleen werd het veld nooit gevuld. Test: `phpscan_test.go`
+  **Weergave:** geen nieuwe UI nodig — `src/Block.mjs` had al een sectie op de
+  block-kaart die `b.description` toont (met een cursieve "nog geen
+  omschrijving"-fallback wanneer leeg, en verder **geen** label ervoor — zie
+  de sectie "PHPDoc-types in de signatuur vouwen, `description` staat er al
+  los van" hieronder voor waarom een los "Doel:"-label niet meer nodig is);
+  die sectie stond er al vóór deze wijziging, alleen werd het veld nooit
+  gevuld. Test: `phpscan_test.go`
   (`TestPHPDocDescriptionCapturedForMethod`,
   `TestPHPDocDescriptionSurvivesLeadingAttribute`,
   `TestPHPDocDescriptionNotLeakedAcrossProperty`,
@@ -269,6 +272,75 @@ navigeerbare lijst tonen.
   `TestPHPDocAndAttributeBothPullBlockLine`); `classify_test.go`
   (`TestPHPDocOnlyChangeClassifiesAsModified`, de PHPDoc-mirror van
   `TestAttributeOnlyChangeClassifiesAsModified` hieronder).
+- **PHPDoc-types in de signatuur vouwen, `description` staat er al los van
+  (`codesig.go`).** De vrije-tekst van een PHPDoc leeft al op
+  `Block.Description` (zie hierboven) — maar de PHPDoc-*regels zelf* bleven na
+  49fd34c (die `Block.Line` optrok tot de doc, zie hierboven) gewoon zichtbaar
+  in de diff, want `extractBlockSource`/`blockSource` slicen letterlijk
+  `[Block.Line, Block.EndLine]` uit de worktree en die range omvat nu de doc.
+  `codesig.go`'s `enrichSignatureWithDocTypes(text)` vouwt daarom een leidende
+  PHPDoc's `@return`/`@param`-types **in de zichtbare functiesignatuur** —
+  alsof PHP strict-typed is, mét de docblock-syntax letterlijk overgenomen
+  (bv. `array<string, mixed>|null`, ook al is dat geen geldige native
+  PHP-syntax — puur cosmetisch, Prism highlight't zo'n token dan kaler) — en
+  verwijdert de doc-regels zelf uit de tekst. `?array` als bestaand native
+  return-type wordt **vervangen** door het docblock-type; ontbreekt een native
+  return-type helemaal, dan wordt `: <type>` **toegevoegd** vóór de `{`/`;`.
+  Een `@param TYPE $naam`-tag vervangt alleen het type-gedeelte van die ene
+  parameter (modifiers als `public readonly`, een leidend `#[...]`-attribuut,
+  en de `&`/`...`-markers blijven intact) — een parameter zonder matchende
+  `@param`-naam blijft onaangeroerd.
+  **Bewust "all-or-nothing" per blok:** kan de signatuur niet met zekerheid
+  gevonden/herschreven worden (zie de twee scope-grenzen hieronder, of gewoon
+  een niet te ontleden randgeval), dan blijft de hele tekst — inclusief de
+  PHPDoc — **ongewijzigd**, precies zoals vóór deze wijziging. Er is geen
+  tussenvorm waarin de doc gedeeltelijk verdwenen is zonder dat zijn type
+  volledig gevouwen werd.
+  **Twee bewuste scope-grenzen (v1):**
+  - De PHPDoc moet het **allereerste** zijn in de gesliceerde bloktekst — een
+    attribuut vóór de doc (`#[Foo]` dan `/** */` dan `function`) wordt **niet**
+    ondersteund; zo'n blok blijft ongewijzigd (doc blijft zichtbaar). Een
+    attribuut **na** de doc (`/** */` dan `#[Foo]` dan `function`) werkt wel
+    gewoon — dat blijft gewoon letterlijk staan tussen de verwijderde doc en de
+    herschreven signatuur.
+  - **Multi-line signaturen worden wél ondersteund** (een parameterlijst of
+    return-type die over meerdere regels loopt, bv. constructor-property-
+    promotion) — het parsen werkt op byte-offsets, niet op regels, en scant
+    dus gewoon door regeleindes heen (`matchBracket`/`splitTopLevel` tracken
+    bracket-diepte + quote-escaping, ongeacht newlines).
+  **`Start`-correctie is load-bearing:** `code.go`'s `enrichedCodeSide` bumpt
+  `codeSide.Start` met exact het aantal verwijderde regels zodra de doc
+  verdwijnt — zonder die correctie zou `unitLineRange`/`commentTarget`/
+  `githubFileLine` (`home.mjs`, tellen absolute regelnummers af vanaf
+  `c.new.start`/`c.old.start`) een GitHub-comment-anchor of de "Open
+  GitHub"-deep-link exact zoveel regels laten verschuiven als er doc-regels
+  verwijderd zijn.
+  **Waar dit wél/niet toegepast wordt:** alléén op de twee call-sites die
+  "weergave/telling" zijn — `api.go`'s `handleCode` (voedt `/api/code`, dus
+  `Block.mjs`'s diff — zowel het top-level block als elke gedrilde kolom die
+  een echt PR-blok is, want die lopen allemaal via dezelfde `ensureCode`) en
+  `blockstats.go`'s `blockChangedRowCount` (de approve-teller/`total` —
+  dezelfde functie voedt beide, dus diff-weergave en approve-teller blijven
+  automatisch in lockstep, het bestaande `changedRowCount`-Go/JS-parity-
+  patroon). **`extractBlockSource`/`blockSource` zelf blijven ongewijzigd** —
+  `relations.go`/`callresolve_analysis.go`/`testcovers_analysis.go` lezen
+  nog steeds de rauwe, regel-accurate tekst (hun `matchLine`/`funcDeclLine`/
+  `methodZone` rekenen op die 1-op-1 regel↔`Block.Line`-correspondentie).
+  **Bewust buiten scope (v1):** een `method_call`/`covers`-child wiens code
+  **embedded** in zijn callresolve-/testcovers-rij zit (een ongewijzigd
+  bestand, code rechtstreeks via `blockSource` vastgelegd op analyse-tijd —
+  zie "Aangeroepen … methodes resolven"/"Testdekking koppelen" in
+  `.claude/rules/tembed-workflows.md`) gaat **niet** door deze transformatie —
+  die heeft geen diff/approve-concept, alleen een code-peek. Een gedrilde
+  kolom die een écht PR-blok is (dus via `/api/code`) krijgt de transformatie
+  gewoon gratis mee, net als elk ander blok.
+  Test: `codesig_test.go` (single-line en multi-line signaturen, constructor-
+  property-promotion, ontbrekend native return-type, een kale/tag-loze doc die
+  ongewijzigd blijft, geen-doc, attribuut-vóór-doc die ongewijzigd blijft,
+  attribuut-ná-doc die intact blijft staan, een stale `@param`-naam die alleen
+  de matchende parameter raakt, en de `&`-by-ref- vs. intersection-type-
+  disambiguatie); plus een parity-test die aantoont dat
+  `blockChangedRowCount`'s uitkomst daalt zodra alleen de doc gevouwen wordt.
 - **Uitzondering: een kale `#[Test]`-only wijziging telt bewust NIET als
   "modified" (`classify.go`).** Een toegevoegd/verwijderd/aangepast `#[Test]`
   (PHPUnit's argumentloze test-marker) heeft geen reviewbare betekenis — anders

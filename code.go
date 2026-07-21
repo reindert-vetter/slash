@@ -77,6 +77,27 @@ func blockSource(root string, def Block) codeSide {
 	return sliceLines(src, def.Line, def.EndLine)
 }
 
+// enrichedCodeSide wraps a codeSide for DISPLAY (not for the raw-source
+// consumers relations.go/callresolve_analysis.go/testcovers_analysis.go, which
+// must keep getting the untouched, line-accurate text — see codesig.go's own
+// header comment). If cs.Text opens with a leading PHPDoc carrying @return/
+// @param types, those get folded into the visible function signature and the
+// doc lines are dropped from Text; Start is bumped by the same number of
+// removed lines so line-based consumers (unitLineRange/GitHub anchors in
+// home.mjs, both of which count off codeSide.Start) stay accurate against the
+// now-shorter Text. A block without such a doc — or one enrichSignature
+// couldn't confidently rewrite — passes through unchanged.
+func enrichedCodeSide(cs codeSide) codeSide {
+	if cs.Text == "" {
+		return cs
+	}
+	text, removed := enrichSignatureWithDocTypes(cs.Text)
+	if removed == 0 {
+		return cs
+	}
+	return codeSide{Start: cs.Start + removed, End: cs.End, Text: text}
+}
+
 // sliceLines returns lines [start,end] (1-based, inclusive) of src, clamped to
 // the file bounds.
 func sliceLines(src []byte, start, end int) codeSide {

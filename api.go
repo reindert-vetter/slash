@@ -162,8 +162,8 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"file": file,
-		"old":  extractBlockSource(filepath.Join(baseDir, file), file, class, name),
-		"new":  extractBlockSource(filepath.Join(headDir, file), file, class, name),
+		"old":  enrichedCodeSide(extractBlockSource(filepath.Join(baseDir, file), file, class, name)),
+		"new":  enrichedCodeSide(extractBlockSource(filepath.Join(headDir, file), file, class, name)),
 	})
 }
 
