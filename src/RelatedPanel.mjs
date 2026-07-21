@@ -1266,6 +1266,7 @@ function commentRow(c, i) {
             >${c.author || 'onbekend'}</span
           >
           ${() => sourceBadge(c)}
+          ${() => aiWarningBadge(c)}
         </span>
         <span
           class="truncate [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200"
@@ -1289,6 +1290,37 @@ function sourceBadge(c) {
     class="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500 dark:bg-zinc-800 dark:text-zinc-400"
     data-testid="comment-source"
     >bron: github</span
+  >`
+}
+
+// aiWarningBadge marks an automated risk finding from the code_warning
+// workflow (source === 'ai') — the same warning-triangle SVG as the coverage
+// warning (related-covers-warning above), but as a small inline pill so a
+// reviewer can tell an AI-authored finding apart from a human comment at a
+// glance, in the comment list, the thread header and the PR-wide list. Returns
+// '' for anything else (mirrors sourceBadge's shape; also handles c == null,
+// since callers pass selComment(), which can be undefined).
+function aiWarningBadge(c) {
+  if (!c || c.source !== 'ai') return ''
+  return html`<span
+    class="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
+    data-testid="comment-ai-warning"
+  >
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="h-2.5 w-2.5"
+    >
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path>
+      <line x1="12" y1="9" x2="12" y2="13"></line>
+      <line x1="12" y1="17" x2="12.01" y2="17"></line>
+    </svg>
+    AI-risicowaarschuwing</span
   >`
 }
 
@@ -1402,6 +1434,7 @@ function commentsSection(state, commentTarget, openCompose) {
                     // "Comments" headings side by side read as a duplicate.
                     'Thread'}
           </h2>
+          ${() => aiWarningBadge(selComment())}
           <p class="text-[11px] text-slate-400 dark:text-zinc-500">
             ${() => (cs.composing ? 'start een task op deze regel' : 'reacties hooken hier op de comment in')}
           </p>
@@ -1863,6 +1896,7 @@ const WORKFLOW_LABELS = {
   explain_code: 'AI-omschrijving',
   approve: 'Goedkeuring',
   pr_inbox: 'Inbox',
+  code_warning: 'Risicocontrole',
 }
 
 // STATUS_BADGES maps a run status to its Dutch label + badge colour classes.
@@ -1891,6 +1925,7 @@ const WORKFLOW_STATUS_NOTE = {
   'pr_inbox:running': 'houdt de PR-inbox bij',
   'pr_inbox:waiting': 'houdt de PR-inbox bij',
   'pr_inbox:completed': 'houdt de PR-inbox bij',
+  'code_warning:running': 'doorzoekt de PR op risico’s…',
 }
 
 // buildRelationsSummary describes what build_relations actually produced for
@@ -1950,6 +1985,17 @@ function workflowNote(run, state) {
   if (run.workflow === 'build_relations' && run.status === 'waiting') {
     const summary = buildRelationsSummary(state)
     if (summary) return summary + ' — wacht op wijzigingen'
+  }
+  // code_warning's own "waiting/actively working" note never suggests
+  // active work while there's nothing left to say — a completed run reports
+  // exactly how many findings it produced (from run.warningsFound, see
+  // RunsForPR's Result read), including the "none found" case, instead of
+  // falling through to a generic "completed" status word.
+  if (run.workflow === 'code_warning' && run.status === 'completed') {
+    const n = run.warningsFound
+    if (n === 0) return "geen risico's gevonden"
+    if (n === 1) return '1 risico gevonden'
+    if (typeof n === 'number') return n + " risico's gevonden"
   }
   return WORKFLOW_STATUS_NOTE[run.workflow + ':' + run.status] || run.status
 }
@@ -2371,7 +2417,11 @@ export function handlePrWideKey(key) {
 
 // PW_KIND_LABEL names the kind badge on a PR-wide entry — issue/review
 // comments read the same ("PR-comment"); a review summary gets its own label.
-const PW_KIND_LABEL = { issue: 'PR-comment', review: 'PR-comment', review_summary: 'Review' }
+// "ai_warning" is a code_warning finding that couldn't be pinned to a block
+// (see anchoredWarning in code_warning.go) — the aiWarningBadge next to this
+// label already carries the warning-triangle icon, so this stays a plain
+// text label rather than duplicating it.
+const PW_KIND_LABEL = { issue: 'PR-comment', review: 'PR-comment', review_summary: 'Review', ai_warning: 'AI-risico' }
 
 // commentBody is the single place a comment's body text is rendered — kept
 // tiny and reusable (block-scoped commentRow/reactionBubble and the PR-wide
@@ -2427,6 +2477,7 @@ function prWideItem(c, i) {
               >${PW_KIND_LABEL[c.kind] || c.kind}</span
             >
             ${() => sourceBadge(c)}
+            ${() => aiWarningBadge(c)}
             <span class="text-[10px] text-slate-400 dark:text-zinc-500">${relTime(c.createdAt)}</span>
           </span>
           <span

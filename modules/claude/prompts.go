@@ -25,3 +25,13 @@ var ExplainCodeSystemPrompt string
 
 //go:embed prompts/pr_summary.md
 var PRSummarySystemPrompt string
+
+// CodeWarningSystemPrompt is the static instruction block for the
+// code_warning workflow's one agentic Sonnet call: unlike the three above,
+// this is NOT a context-only completion — Sonnet is given Read/Grep/Glob and
+// explores the checked-out repo itself, so the call-specific part of the
+// prompt (built by warningPrompt in code_warning.go) only needs to name the
+// changed files in scope + the finding cap, not any pre-gathered context.
+//
+//go:embed prompts/code_warning.md
+var CodeWarningSystemPrompt string

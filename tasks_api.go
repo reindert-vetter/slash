@@ -275,6 +275,12 @@ type WorkflowRunView struct {
 	CreatedAt time.Time   `json:"createdAt"`
 	UpdatedAt time.Time   `json:"updatedAt"`
 	Comment   *CommentRef `json:"comment,omitempty"`
+	// WarningsFound is the number of findings a completed code_warning run
+	// produced (from its own recorded Result — see codeWarningWorkflow), so
+	// the "Taken" column can say "geen risico's gevonden" instead of a
+	// generic status word. nil for every other run, and for a code_warning
+	// run that hasn't completed yet.
+	WarningsFound *int `json:"warningsFound,omitempty"`
 }
 
 // CommentRef is the nested code-comment reference on a task_code_comment run's
@@ -340,6 +346,15 @@ func (m *TaskManager) RunsForPR(pr int) []WorkflowRunView {
 				}
 			}
 		}
+		if r.Workflow == WorkflowCodeWarning && r.Status == tembed.StatusCompleted {
+			var res struct {
+				Found int `json:"found"`
+			}
+			if m.engine.Result(r.ID, &res) == nil {
+				n := res.Found
+				view.WarningsFound = &n
+			}
+		}
 		out = append(out, view)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
@@ -376,6 +391,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// POST /api/workflows/submit_review {pr,event,body?} → submit a real GitHub
 	// PR-level review (approve or request changes). One Execution per submit.
 	mux.HandleFunc("/api/workflows/submit_review", s.handleSubmitReview)
+	// POST /api/workflows/code_warning {pr} → start an agentic Sonnet review of
+	// the whole PR for risks (the "/" menu's "Controleer de hele PR op
+	// risico's"). One Execution per manual run.
+	mux.HandleFunc("/api/workflows/code_warning", s.handleCodeWarning)
 	// GET /api/approvals?pr=N → read-only approval read-model (per block: the
 	// approved changed rows + call segments) for refresh-restore.
 	mux.HandleFunc("/api/approvals", s.handleApprovals)
@@ -462,7 +481,7 @@ func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "code_warning" {
 		http.NotFound(w, r)
 		return
 	}
@@ -940,6 +959,29 @@ func (s *server) handleSubmitReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runID, err := s.tasks.manager.StartSubmitReview(in)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleCodeWarning starts a code_warning Workflow Execution (POST) — an
+// agentic Sonnet review of a PR's changed files for risks. The only current
+// caller is the "/" menu's "Controleer de hele PR op risico's" (see
+// StartCodeWarning); Files is always omitted from the request today (a full
+// baseline run) — the field exists for a future incremental fast-follow.
+func (s *server) handleCodeWarning(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in CodeWarningInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.StartCodeWarning(in)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return

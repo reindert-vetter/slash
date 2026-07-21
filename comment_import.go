@@ -145,7 +145,7 @@ func rowForLine(baseDir, headDir string, b Block, line int, side string) (int, b
 // be pinned to a block. These live in the PR-info column's comment block, not the
 // block-scoped sidebar, and their replies mirror to GitHub as new issue comments.
 func isPRWide(kind string) bool {
-	return kind == "issue" || kind == "review_summary" || kind == "review"
+	return kind == "issue" || kind == "review_summary" || kind == "review" || kind == "ai_warning"
 }
 
 // importedRunID is the deterministic Run ID an imported GitHub comment's thread

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,6 +90,17 @@ const (
 	// request. It runs its one Activity (the gh api call) synchronously and
 	// completes — no signal, mirrors WorkflowIngest.
 	WorkflowSubmitReview = "submit_review"
+	// WorkflowCodeWarning is the Workflow Type that agentically reviews a PR's
+	// changed files for risks (correctness/security/style, and consistency
+	// with the connected code the changes touch — callers, callees, tests,
+	// listeners) using Sonnet with Read/Grep/Glob in the head worktree. One
+	// Execution per manual "Controleer de hele PR op risico's" run (see the
+	// "/" PR_COMMANDS menu); it re-checks the whole PR each time and
+	// supersedes (deletes, via the existing delete Signal) the AI warnings of
+	// every file in scope before creating fresh ones. No signal — it runs its
+	// Activities sequentially and completes. See
+	// .claude/rules/tembed-workflows.md ("AI-risicocontrole").
+	WorkflowCodeWarning = "code_warning"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -162,13 +174,20 @@ type CodeCommentInput struct {
 	// records posted.RootID = ImportedRootID, so the reply poller runs and UI
 	// replies mirror to the real thread — unlike Local, which disables all that.
 	ImportedRootID int64 `json:"importedRootId"`
-	// Source is "ui" (placed in this app, default) or "github" (imported). Stored
-	// on the comment; the frontend badges github-sourced comments.
+	// Source is "ui" (placed in this app, default), "github" (imported), or
+	// "ai" (an automated finding from the code_warning workflow — always
+	// paired with Local: true, since an AI finding never posts to GitHub).
+	// Stored on the comment; the frontend badges github- and ai-sourced
+	// comments differently (a warning-triangle icon for "ai").
 	Source string `json:"source"`
 	// Kind classifies the comment's anchor: "" (a normal line/block comment) or
-	// "issue"/"review_summary"/"review" for a PR-wide comment with no file:line
-	// anchor (shown in the PR-info column, not the block-scoped index). "review"
-	// is a review comment that couldn't be pinned to any block.
+	// "issue"/"review_summary"/"review"/"ai_warning" for a PR-wide comment
+	// with no file:line anchor (shown in the PR-info column, not the
+	// block-scoped index). "review" is a review comment that couldn't be
+	// pinned to any block; "ai_warning" is a code_warning finding whose
+	// file+line couldn't be pinned to any block either (see anchoredWarning
+	// in code_warning.go) — an anchorable finding instead gets Kind "" like
+	// any other line comment.
 	Kind string `json:"kind"`
 	// CreatedAt carries an imported comment's original GitHub timestamp so the
 	// thread shows when it was really written (saveComment defaults it to now when
@@ -306,6 +325,26 @@ type SubmitReviewInput struct {
 	PR    int    `json:"pr"`
 	Event string `json:"event"`
 	Body  string `json:"body"`
+}
+
+// CodeWarningInput starts a code_warning Execution: an agentic Sonnet review
+// of a PR for risks. Files is reserved for a future incremental fast-follow
+// (re-checking only the files a new commit touched, piggybacking on
+// pr_status's ingest-refresh delta) — it is always empty today: the only
+// caller (the "/" menu's "Controleer de hele PR op risico's") starts a full
+// baseline run, and resolveWarningScope derives the scope itself from the
+// PR's current blocks whenever Files is empty.
+type CodeWarningInput struct {
+	PR    int      `json:"pr"`
+	Files []string `json:"files,omitempty"`
+}
+
+// warningScope is resolveWarningScope's Activity result: the files being
+// (re-)checked this run and how many blocks they contain — the latter bounds
+// how many findings the model may report (see codeWarningWorkflow).
+type warningScope struct {
+	Files      []string `json:"files"`
+	BlockCount int      `json:"blockCount"`
 }
 
 // inboxRefreshResult is the small summary the refreshInbox Activity returns — the
@@ -958,6 +997,121 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.gh.SubmitReview(ctx, arg.PR, arg.Event, arg.Body)
 	})
 
+	// Activity: resolve the code_warning scope — read (write-free) — reads the
+	// PR's current blocks from the DB. Files empty in the input means "the
+	// whole PR": derive the changed-file scope from the blocks themselves;
+	// Files non-empty (the reserved incremental path, unused today) is passed
+	// through unchanged. BlockCount is the number of blocks across the scope
+	// files, which bounds how many findings the model may report (see
+	// codeWarningWorkflow: warningsPerBlock findings on average).
+	engine.RegisterActivity("resolveWarningScope", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg CodeWarningInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.db == nil {
+			return json.Marshal(warningScope{})
+		}
+		blocks, err := blocksByPR(m.db, arg.PR)
+		if err != nil {
+			return nil, fmt.Errorf("code_warning: load blocks: %w", err)
+		}
+		files := arg.Files
+		if len(files) == 0 {
+			files = distinctSortedFiles(blocks)
+		}
+		fileSet := make(map[string]bool, len(files))
+		for _, f := range files {
+			fileSet[f] = true
+		}
+		count := 0
+		for _, b := range blocks {
+			if fileSet[b.File] {
+				count++
+			}
+		}
+		return json.Marshal(warningScope{Files: files, BlockCount: count})
+	})
+
+	// Activity: supersede — delete, via the existing delete Signal — every
+	// AI-sourced warning comment (Source "ai") anchored to a file in scope,
+	// before the fresh review creates new ones for those same files. Reads
+	// the comments read-model (a side effect, hence an Activity) and signals
+	// each stale run's own task_code_comment Execution; best-effort per
+	// comment (a run that already resolved/closed itself can't be signalled
+	// again — that must not sink the rest of the supersede).
+	engine.RegisterActivity("supersedeFileWarnings", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR    int      `json:"pr"`
+			Files []string `json:"files"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		fileSet := make(map[string]bool, len(arg.Files))
+		for _, f := range arg.Files {
+			fileSet[f] = true
+		}
+		list, err := cs.List(ctx, arg.PR)
+		if err != nil {
+			return nil, fmt.Errorf("code_warning: list comments: %w", err)
+		}
+		removed := 0
+		for _, c := range list {
+			if c.Source != "ai" || !fileSet[c.File] {
+				continue
+			}
+			if err := m.Signal(c.RunID, ReactionSignal{
+				ID: "sys-" + newUIReactionID(), Source: "ai", Action: "delete",
+			}); err != nil {
+				m.logf("code_warning: supersede delete skipped for %s: %v", c.RunID, err)
+				continue
+			}
+			removed++
+		}
+		return json.Marshal(map[string]int{"removed": removed})
+	})
+
+	// Activity: the one agentic Sonnet call — reads the head worktree +
+	// shells out to the claude CLI (a side effect, hence an Activity) — and
+	// maps every accepted finding onto the existing comment-anchoring model
+	// (anchoredWarning, code_warning.go), ready to hand to createWarningComment.
+	engine.RegisterActivity("runAgenticReview", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg warningReviewArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		findings := runCodeWarningReview(ctx, m.claude, m.dataDir, arg)
+		if len(findings) == 0 {
+			return json.Marshal([]CodeCommentInput{})
+		}
+		blocks, err := blocksByPR(m.db, arg.PR)
+		if err != nil {
+			return nil, fmt.Errorf("code_warning: load blocks: %w", err)
+		}
+		out := make([]CodeCommentInput, 0, len(findings))
+		for _, f := range findings {
+			out = append(out, anchoredWarning(m.dataDir, arg.PR, blocks, f))
+		}
+		return json.Marshal(out)
+	})
+
+	// Activity: create one AI-authored warning comment (write, workflow-driven)
+	// by starting a normal task_code_comment Execution — Source "ai" + Local
+	// true (never posted to GitHub) — reusing the exact same sanctioned write
+	// path a UI-placed comment uses.
+	engine.RegisterActivity("createWarningComment", func(ctx context.Context, in []byte) ([]byte, error) {
+		var cc CodeCommentInput
+		if err := json.Unmarshal(in, &cc); err != nil {
+			return nil, err
+		}
+		runID, err := m.StartCodeComment(ctx, cc)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"runId": runID})
+	})
+
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
@@ -968,7 +1122,23 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowExplainCode, explainCodeWorkflow)
 	engine.RegisterWorkflow(WorkflowApprove, approveWorkflow)
 	engine.RegisterWorkflow(WorkflowSubmitReview, submitReviewWorkflow)
+	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
 	return m
+}
+
+// distinctSortedFiles returns the distinct File values across blocks, sorted —
+// resolveWarningScope's "whole PR" fallback when CodeWarningInput.Files is empty.
+func distinctSortedFiles(blocks []Block) []string {
+	seen := map[string]bool{}
+	var files []string
+	for _, b := range blocks {
+		if !seen[b.File] {
+			seen[b.File] = true
+			files = append(files, b.File)
+		}
+	}
+	sort.Strings(files)
+	return files
 }
 
 // SetRuntime records the server-lifetime context and whether background
@@ -1103,6 +1273,72 @@ func (m *TaskManager) StartSubmitReview(in SubmitReviewInput) (string, error) {
 		return runID, fmt.Errorf("submit review failed (run %s)", runID)
 	}
 	return runID, nil
+}
+
+// warningsPerBlock bounds codeWarningWorkflow's finding cap: on average about
+// this many findings per block in scope (never a fixed count), per the "per
+// blok gemiddeld maximaal ~2 warnings" decision — quality over quantity. The
+// model is also told this bound in the prompt (warningPrompt), but the cap is
+// re-enforced in Go (runCodeWarningReview trims the sorted list), so a model
+// that ignores the instruction can never blow past it.
+const warningsPerBlock = 2
+
+// codeWarningWorkflow agentically reviews a PR's changed files for risks. It
+// is deterministic: every side effect (the DB reads, the Sonnet call, the
+// comment reads/deletes/creates) is an Activity, run in a fixed order, and the
+// number of createWarningComment calls is exactly len(findings) — a function
+// of runAgenticReview's own (already-recorded) result, so it replays safely.
+// No signal — it runs straight through and completes, mirroring
+// submitReviewWorkflow/ingestWorkflow.
+func codeWarningWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in CodeWarningInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+
+	var scope warningScope
+	if err := w.ExecuteActivity("resolveWarningScope", in, &scope); err != nil {
+		return nil, fmt.Errorf("resolve warning scope: %w", err)
+	}
+	if len(scope.Files) == 0 {
+		return json.Marshal(map[string]int{"found": 0})
+	}
+
+	if err := w.ExecuteActivity("supersedeFileWarnings", map[string]any{
+		"pr": in.PR, "files": scope.Files,
+	}, nil); err != nil {
+		return nil, fmt.Errorf("supersede file warnings: %w", err)
+	}
+
+	maxFindings := scope.BlockCount * warningsPerBlock
+	if maxFindings < warningsPerBlock {
+		maxFindings = warningsPerBlock
+	}
+	var toCreate []CodeCommentInput
+	if err := w.ExecuteActivity("runAgenticReview", warningReviewArg{
+		PR: in.PR, Files: scope.Files, BlockCount: scope.BlockCount, MaxFindings: maxFindings,
+	}, &toCreate); err != nil {
+		return nil, fmt.Errorf("run agentic review: %w", err)
+	}
+
+	for _, cc := range toCreate {
+		if err := w.ExecuteActivity("createWarningComment", cc, nil); err != nil {
+			return nil, fmt.Errorf("create warning comment: %w", err)
+		}
+	}
+	return json.Marshal(map[string]int{"found": len(toCreate)})
+}
+
+// StartCodeWarning launches a code_warning Execution and runs it to
+// completion (StartWorkflow drives a signal-less workflow synchronously),
+// returning its Run ID. Starting an Execution is the sanctioned write path.
+// Unlike explain_code's content-keyed idempotent start, this is a plain
+// StartWorkflow: each manual "Controleer de hele PR op risico's" click is a
+// deliberate, repeatable refresh — supersedeFileWarnings already replaces the
+// previous run's findings for the files in scope, so re-running is "refresh
+// the risk check", not "duplicate it".
+func (m *TaskManager) StartCodeWarning(in CodeWarningInput) (string, error) {
+	return m.engine.StartWorkflow(WorkflowCodeWarning, in)
 }
 
 // approveWorkflow persists reviewer approval for a PR. It is deterministic: the

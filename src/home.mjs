@@ -2501,6 +2501,34 @@ async function submitReview(event, body = '') {
   }
 }
 
+// checkPRWarnings starts a code_warning Execution: an agentic Sonnet review
+// of every changed file in the whole PR for risks (security/style/
+// consistency with connected code — callers, callees, tests, listeners),
+// creating one AI-authored comment per finding (block-scoped when it anchors
+// to a line, PR-wide otherwise — see .claude/rules/tembed-workflows.md).
+// POST /api/workflows/code_warning is the sanctioned write path (starting an
+// Execution); this is only the call site. Files is omitted — a full baseline
+// run. Same minimal error handling as submitReview (no toast convention in
+// this app, see conventions.md); on success it's itself a fresh workflow run,
+// so pollWorkflows() refreshes the Taken column sooner than the next tick.
+async function checkPRWarnings() {
+  try {
+    const res = await fetch('/api/workflows/code_warning', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr: state.pr }),
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      console.error('code_warning failed:', res.status, text)
+      return
+    }
+    pollWorkflows()
+  } catch (err) {
+    console.error('code_warning network error:', err)
+  }
+}
+
 // REVIEW_APPROVE_COMMANDS — shown right after a palette approve action leaves
 // the WHOLE PR fully approved (state.approvalTotal.done === total, over every
 // top-level block plus its nested/drilled PR-block children — see
@@ -3981,6 +4009,15 @@ const PR_COMMANDS = [
         run: () => {},
       },
     ],
+  },
+  {
+    id: 'pr-check-warnings',
+    label: "Controleer de hele PR op risico's",
+    hint: 'risicocontrole',
+    // Starts an agentic Sonnet review of the whole PR (code_warning); see
+    // checkPRWarnings above. Re-running supersedes the previous run's
+    // findings, so this is a plain, repeatable "refresh the risk check".
+    run: () => checkPRWarnings(),
   },
   {
     id: 'pr-toggle-description',

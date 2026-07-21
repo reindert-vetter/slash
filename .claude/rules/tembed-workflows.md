@@ -1322,3 +1322,119 @@ lange-levende tracker, geen Signal-lus).
   `github.Fake` — bewijst dat `event`/`body` ongewijzigd doorgegeven worden
   voor zowel APPROVE als REQUEST_CHANGES; `TestGithubModuleRejectsUnknownReviewEvent`,
   de echte `Module`'s allowlist als defense-in-depth).
+
+## AI-risicocontrole van de hele PR (`code_warning` + `code_warning.go`)
+
+Een achtste Workflow Type, **`code_warning`**, doet een **PR-brede, agentische**
+risicocontrole: geen per-regel check, maar één run die de **hele PR** doorzoekt
+op risico's — correctheid, security én stijl/kwaliteit, mét een blik op de
+code waarmee een wijziging **verbonden** is (aanroepers, aangeroepen code,
+tests, listeners) die de PR zelf niet aanraakt. Dit is bewust **uitsluitend
+agentisch Sonnet** (`claude.ModelSonnet`, met `Read`/`Grep`/`Glob` in de
+head-worktree) — géén Haiku-context-only-pas zoals `explain_code`, en géén
+Haiku-eerst-dan-Sonnet-escalatie zoals `resolve_call` ooit deed: het punt is
+juist dat het model zelf de worktree moet verkennen om iets te vinden dat
+buiten de door ons vooraf aangeleverde context ligt (een aanroeper die een
+gewijzigde signature niet meer klopt, een test die nog de oude vorm checkt,
+een event-listener die een nieuw payload-veld niet verwerkt). Eén Execution
+per handmatige run, **geen Signal** — de workflow draait zijn Activities
+sequentieel en completet, mirrort `submit_review`/`ingest`.
+
+- **Trigger: handmatig, PR-breed** (niet per group/line/call) — een nieuw item
+  **"Controleer de hele PR op risico's"** in het `/`-menu (`PR_COMMANDS`,
+  `home.mjs`), dat `POST /api/workflows/code_warning {pr}` aanroept
+  (`checkPRWarnings`). Bewust géén automatische trigger (zoals
+  `explain_code`'s debounce of `resolve_call`'s auto-search): een PR-brede
+  agentische Sonnet-pass met een oordelend (niet enkel zoekend) doel is te
+  duur/te ruisgevoelig om stilzwijgend op elke navigatiestap te draaien.
+  **Herhaald draaien is een bewuste, herhaalbare "refresh" van de check** —
+  geen idempotente Run-ID-dedup zoals `explain_code` (`StartCodeWarning` is
+  een kale `StartWorkflow`): elke run supersedet (zie onder) de vorige
+  bevindingen van de bestanden in scope, dus opnieuw draaien vervangt in
+  plaats van te stapelen.
+  **Incrementeel bij een nieuwe commit is bewust NOG NIET gebouwd** — een
+  fast-follow zou dit laten meeliften op `pr_status`'s ingest-refresh-delta
+  (`refreshIngestDelta`'s al-berekende gewijzigde-bestandenlijst), maar raakt
+  dan `pr_status`'s workflow-body en het `ingestResult`-schema, wat bewust
+  buiten deze taak is gehouden.
+- **Scope + cap (`resolveWarningScope`-Activity):** leest de PR's huidige
+  blokken (`blocksByPR`) en leidt daaruit de te controleren bestanden af
+  (`CodeWarningInput.Files` leeg → alle huidige gewijzigde bestanden van de
+  PR; gevuld → ongewijzigd doorgegeven, gereserveerd voor de incrementele
+  fast-follow, vandaag altijd leeg vanuit de enige aanroeper). Levert ook het
+  aantal blokken in scope, dat de vondsten-cap bepaalt: **`warningsPerBlock`
+  (2) × blokken-in-scope**, met een vloer van 2 — "per blok gemiddeld
+  maximaal ~2 warnings", niet een vast getal. Het model krijgt die cap +
+  instructie ("kwaliteit boven kwantiteit") ook in de prompt
+  (`warningPrompt`), maar de cap wordt **hard afgedwongen in Go**
+  (`runCodeWarningReview` sorteert op `file, line` en knipt af op
+  `MaxFindings`) — een model dat de instructie negeert kan 'm dus nooit
+  overschrijden.
+- **Findings terug als een lijst met eigen anker, gemapt op het bestaande
+  comment-ankermodel:** het model antwoordt met een JSON-array
+  `[{"file","line","text"}]` (`claude.CodeWarningSystemPrompt`,
+  `modules/claude/prompts/code_warning.md`) — er is geen vooraf-geselecteerde
+  unit meer, dus de agentische call moet zelf de locaties teruggeven.
+  **Hallucinatie-bescherming:** een finding wordt alleen vertrouwd als zijn
+  `file` letterlijk een van de bestanden is die de prompt aan het model gaf
+  (`runCodeWarningReview`'s `allowed`-set) — een compleet verzonnen pad wordt
+  stil verworpen, nooit getoond. `anchoredWarning` (`code_warning.go`)
+  hergebruikt vervolgens **letterlijk** `blockForLine`/`rowForLine` — hetzelfde
+  mechanisme waarmee een geïmporteerde GitHub review-comment ankert (zie
+  "Bestaande GitHub-comments importeren" hierboven): valt de `file`+`line`
+  binnen een blok van deze PR, dan wordt het een **normale, block-gescopete**
+  warning (`Kind ""`, `Gran "line"`, geanchored op zijn rij — precies zoals
+  elke andere regel-comment); valt hij **niet** binnen een blok (een
+  onveranderde/context-regel, of een `line` die het model net mis heeft), dan
+  wordt het — in plaats van stil weggegooid — een **PR-brede** warning
+  (`Kind "ai_warning"`, toegevoegd aan `isPRWide` in `comment_import.go`),
+  zichtbaar in de PR-brede-comments-kaart onder de PR-info-kolom (zie
+  "PR-brede comments" in `.claude/rules/detail-layout.md`) — `File` blijft
+  wel gezet, als hint waar de bevinding over gaat, ook zonder precieze rij.
+- **Auto-supersede, gescoped per bestand** (`supersedeFileWarnings`-Activity,
+  draait **vóór** de agentische call): voor elk bestand in scope wordt elke
+  bestaande `Source:"ai"`-comment op dat bestand verwijderd via het
+  **bestaande delete-Signal** (`ReactionSignal{Action:"delete"}` op de
+  comment's eigen `task_code_comment`-Execution — hetzelfde mechanisme als de
+  UI's "Verwijder comment", zie de sectie hierboven) — best-effort per
+  comment (een run die al gesloten is kan niet nogmaals gesignald worden, dat
+  mag de rest van de supersede niet blokkeren). Een bestand **buiten** deze
+  run se scope houdt zijn oude AI-warnings gewoon.
+- **Elke warning is een gewone `task_code_comment`-Execution** — géén nieuwe
+  comment-machinery: `createWarningComment`-Activity roept simpelweg
+  `TaskManager.StartCodeComment` aan (dezelfde sanctioned write-weg als een
+  UI-geplaatste comment) met `Source:"ai"` (nieuwe waarde naast `"ui"`/
+  `"github"`) + `Local:true` (nooit naar GitHub — dezelfde vlag als een
+  privé-notitie), `Author:"AI-controle"`. Doordat het een volwaardige
+  Execution is, kan de reviewer 'm net als elke andere comment resolven of
+  verwijderen (het bestaande delete-Signal, zie boven) — geen apart
+  read-model, geen aparte UI-laag.
+- **Determinisme/write-boundary:** de workflow-body (`codeWarningWorkflow`)
+  doet zelf geen IO — alleen `ExecuteActivity`-calls in vaste volgorde
+  (scope-resolutie → supersede → de ene Sonnet-call → per finding één
+  `createWarningComment`); het aantal `createWarningComment`-calls is exact
+  `len(toCreate)`, een functie van `runAgenticReview`'s **opgeslagen**
+  resultaat, dus replay-safe. Alle non-determinisme/IO (DB-reads, de
+  Sonnet-call, comments-reads/deletes/creates) zit in Activities; de enige
+  schrijvers zijn de bestaande sanctioned paden (`TaskManager.Signal`/
+  `StartCodeComment`) — geen nieuwe directe module-writes.
+- **Frontend:** de warning krijgt een eigen badge — dezelfde
+  waarschuwings-driehoek-SVG als `related-covers-warning` (zie "Testdekking
+  koppelen" hierboven), nu als kleine pil (`aiWarningBadge`,
+  `data-testid=comment-ai-warning`, `RelatedPanel.mjs`) in de comment-rij, de
+  thread-header, én de PR-brede-comments-rij (`PW_KIND_LABEL.ai_warning` =
+  "AI-risico"). De "Taken"-kolom toont de run als **"Risicocontrole"**
+  (`WORKFLOW_LABELS.code_warning`); een lopende run toont "doorzoekt de PR op
+  risico's…", een afgeronde run toont het **exacte aantal** bevindingen —
+  inclusief "geen risico's gevonden" — via een nieuw `WorkflowRunView.
+  WarningsFound`-veld (`tasks_api.go`'s `RunsForPR`, gelezen uit de run's
+  eigen opgeslagen `Result` met `engine.Result`, mirrort hoe `Comment` uit de
+  run's `Input` wordt geparsed).
+- **Endpoint:** `POST /api/workflows/code_warning {pr}` (`handleCodeWarning`).
+  `GET /api/workflows?pr=N` (bestaand) toont de run zoals elke andere.
+- Tests: `code_warning_test.go` (Fake-Sonnet levert een findings-array →
+  ankerbaar wordt block-gescopet met `Source:"ai"`/`Local:true`,
+  niet-ankerbaar wordt PR-wide `Kind:"ai_warning"`, een finding buiten scope
+  wordt stil verworpen, een tweede run supersedet de eerste in plaats van te
+  stapelen, en de `warningsPerBlock`-cap wordt hard afgedwongen ondanks een
+  model dat 'm negeert).
