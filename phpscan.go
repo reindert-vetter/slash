@@ -72,15 +72,27 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 	// unrelated declaration, e.g. a property that happens to carry its own
 	// attribute).
 	pendingAttrLine := 0
+	// pendingDocLine is the line of the most recent `/** ... */` PHPDoc
+	// comment directly above the next `function` declaration (0 = none
+	// pending) — set for EVERY real PHPDoc, regardless of whether it yields
+	// any extractable free-text (see pendingDocText below), mirroring how
+	// pendingAttrLine is set for every `#[...]` attribute regardless of its
+	// contents. Reset on the exact same triggers as pendingAttrLine. A PHPDoc
+	// may sit above a leading attribute run in either order (`/** */` then
+	// `#[...]` then `function`, or `#[...]` then `/** */` then `function`),
+	// so the "function" case below adopts the EARLIEST of pendingAttrLine/
+	// pendingDocLine as the block's Line — a PHPDoc belongs to the function's
+	// block just like a leading attribute does (see
+	// .claude/rules/blocks-and-ingest.md).
+	pendingDocLine := 0
 	// pendingDocText is the extracted description from the most recent `/**
 	// ... */` PHPDoc comment (see phpDocDescription), pending adoption by the
 	// next `function` declaration — independent of, but reset on the exact
-	// same triggers as, pendingAttrLine above: a PHPDoc may sit above a
-	// leading attribute run (`/** ... */` then `#[...]` then `function`), so
-	// it must survive the attribute/modifier tokens that sit between it and
-	// `function`, without being adopted by them. Unlike pendingAttrLine this
-	// never influences Block.Line/EndLine — it only fills the new
-	// Block.Description field (see .claude/rules/blocks-and-ingest.md).
+	// same triggers as, pendingAttrLine/pendingDocLine above: a PHPDoc may sit
+	// above a leading attribute run, so it must survive the attribute/
+	// modifier tokens that sit between it and `function`, without being
+	// adopted by them. It only fills the Block.Description field; the block's
+	// Line/EndLine adoption is driven by pendingDocLine instead.
 	pendingDocText := ""
 
 	n := len(s)
@@ -144,19 +156,25 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 		// --- block comment ---
 		case c == '/' && i+1 < n && s[i+1] == '*':
 			// A PHPDoc comment (`/**`, two asterisks at open — as opposed to a
-			// plain `/* ... */`) may carry a free-text description destined
-			// for the next function/method declaration; capture it before
-			// skipping past the comment. A doc with only `@tag` lines (or no
-			// content at all) yields "" and leaves any earlier pending text
-			// alone — but a later, non-empty PHPDoc still overwrites it (last
-			// one before the declaration wins).
+			// plain `/* ... */`, out of scope entirely) always pulls the next
+			// function/method declaration's Block.Line back to its own opening
+			// line (pendingDocLine) — even a doc with only @tag lines or no
+			// content at all. It may ALSO carry a free-text description
+			// (pendingDocText); that part still yields "" and leaves earlier
+			// pending text alone for a content-less doc, but a later, non-empty
+			// PHPDoc overwrites it (last one before the declaration wins for the
+			// description — pendingDocLine instead remembers the FIRST one).
 			isDoc := i+2 < n && s[i+2] == '*'
 			start := i
+			startLine := line
 			j, nl, closed := skipBlockComment(s, i)
 			if !closed {
 				return nil, false
 			}
 			if isDoc {
+				if pendingDocLine == 0 {
+					pendingDocLine = startLine
+				}
 				if text := phpDocDescription(s[start:j]); text != "" {
 					pendingDocText = text
 				}
@@ -194,6 +212,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 		// property) so it can't leak onto the next, unrelated declaration. ---
 		case c == ';':
 			pendingAttrLine = 0
+			pendingDocLine = 0
 			pendingDocText = ""
 			i++
 
@@ -220,9 +239,11 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 				// A class/trait/interface/enum keyword ends any pending attribute
 				// run — it was meant for a method, not the type declaration. Same
 				// for a pending PHPDoc: a class-level doc comment is not (yet)
-				// captured as a block description (out of scope — only
-				// function/method blocks get one, see blocks-and-ingest.md).
+				// captured as a block description or adopted into a block's Line
+				// (out of scope — only function/method blocks get either, see
+				// blocks-and-ingest.md).
 				pendingAttrLine = 0
+				pendingDocLine = 0
 				pendingDocText = ""
 				// Find a class name (may be absent: anonymous class).
 				name, bodyAt := classHeaderName(s, end)
@@ -247,14 +268,24 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 			case "function":
 				// declLine is where this function's Block.Line starts: normally the
 				// `function` keyword's own line, but a directly-preceding, still-
-				// pending `#[...]` attribute run (see the `#[` case above) pulls it
-				// back to its first line — the attribute is conceptually part of
-				// this method's block (.claude/rules/blocks-and-ingest.md).
+				// pending `#[...]` attribute run and/or `/** ... */` PHPDoc (see the
+				// `#[`/block-comment cases above) pulls it back to the EARLIEST of
+				// the two — either can sit above the other, and both are
+				// conceptually part of this method's block
+				// (.claude/rules/blocks-and-ingest.md).
 				declLine := line
+				earliestPending := 0
 				if pendingAttrLine > 0 {
-					declLine = pendingAttrLine
+					earliestPending = pendingAttrLine
+				}
+				if pendingDocLine > 0 && (earliestPending == 0 || pendingDocLine < earliestPending) {
+					earliestPending = pendingDocLine
+				}
+				if earliestPending > 0 {
+					declLine = earliestPending
 				}
 				pendingAttrLine = 0
+				pendingDocLine = 0
 				doc := pendingDocText
 				pendingDocText = ""
 				var headerFrame *classFrame
@@ -287,6 +318,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 				// property name, ...) means whatever pending attribute/PHPDoc run
 				// there was was not directly above a function — drop it.
 				pendingAttrLine = 0
+				pendingDocLine = 0
 				pendingDocText = ""
 				i = end
 			}

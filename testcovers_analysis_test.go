@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/reindert-vetter/tembed"
@@ -294,6 +295,37 @@ func TestScanTestCoversSkipsNonTestBlocks(t *testing.T) {
 	entries := scanTestCovers(dataDir, pr, blocks)
 	if len(entries) != 0 {
 		t.Fatalf("expected no entries for a non-TEST block, got %+v", entries)
+	}
+}
+
+// TestFuncDeclLineIgnoresFunctionWordInDocProse proves that funcDeclLine
+// still finds the REAL `function` keyword line even when the method's own
+// PHPDoc — now folded into its Block.Line/EndLine span, see
+// .claude/rules/blocks-and-ingest.md — contains the bare word "function" in
+// its prose. A naive `\bfunction\b` search (the pre-hardening regex) would
+// false-match the docblock line instead of the actual declaration below it.
+func TestFuncDeclLineIgnoresFunctionWordInDocProse(t *testing.T) {
+	src := `<?php
+class OrderService {
+    /**
+     * This function creates an order for the given customer.
+     */
+    public function create($customerId) {
+        return new Order();
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Services/OrderService.php")
+	b, ok := blockByName(got, "OrderService::create")
+	if !ok {
+		t.Fatalf("expected OrderService::create, got %v", symbols(got))
+	}
+	if b.Line != 3 {
+		t.Fatalf("expected Block.Line=3 (the PHPDoc's opening line), got %d", b.Line)
+	}
+	lines := strings.Split(src, "\n")
+	if got := funcDeclLine(lines, b); got != 6 {
+		t.Fatalf("expected funcDeclLine=6 (the real `function` line), got %d — the doc prose's \"function\" mention was false-matched", got)
 	}
 }
 

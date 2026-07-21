@@ -55,23 +55,32 @@ var (
 	reClassKeyword = regexp.MustCompile(`(?m)^\s*(?:abstract\s+|final\s+)?class\s+[A-Za-z_]`)
 	// reFunctionKeyword finds the actual `function` keyword within a block's own
 	// span — see funcDeclLine. Attribute lines never contain the bare word
-	// "function" in practice, so the first match is reliably the declaration.
-	reFunctionKeyword = regexp.MustCompile(`\bfunction\b`)
+	// "function" in practice, but since phpscan.go also folds a leading
+	// `/** ... */` PHPDoc into a block's own span (see
+	// .claude/rules/blocks-and-ingest.md), a docblock's free-text prose CAN
+	// plausibly mention the word "function" (e.g. "This function creates an
+	// order."). A bare `\bfunction\b` would then false-match that prose line
+	// instead of the real declaration below it. Requiring an opening `(` to
+	// follow shortly after (allowing an optional `&` for a reference-return
+	// and an optional name for a closure) keeps the match scoped to something
+	// that actually looks like a declaration/call, which ordinary doc prose
+	// essentially never does.
+	reFunctionKeyword = regexp.MustCompile(`\bfunction\b\s*&?\s*\w*\s*\(`)
 )
 
 // funcDeclLine returns the absolute source line, within block b's own span,
 // where its `function` keyword actually sits. Usually that is simply b.Line —
 // but since phpscan.go pulls a block's Line back to its first leading
-// `#[...]` attribute (see .claude/rules/blocks-and-ingest.md), a block with
-// one or more attributes now starts a line or more before its `function`
-// keyword. methodZone needs the real declaration line (not the attribute
-// line) as the upper bound of the "zone above the method" it scans for
-// docblock-style annotations — attribute-style annotations living between
-// b.Line and this line are, since that scanner change, already part of b's
-// own span and thus already visible to a caller scanning b's source
-// (methodZone folds them back in below). Falls back to b.Line if, somehow, no
-// `function` keyword is found in the span (defensive; should not happen for a
-// real function block).
+// `#[...]` attribute and/or `/** ... */` PHPDoc (see
+// .claude/rules/blocks-and-ingest.md), a block with one or both now starts one
+// or more lines before its `function` keyword. methodZone needs the real
+// declaration line (not the attribute/doc line) as the upper bound of the
+// "zone above the method" it scans for docblock-style annotations —
+// attribute-style annotations living between b.Line and this line are, since
+// that scanner change, already part of b's own span and thus already visible
+// to a caller scanning b's source (methodZone folds them back in below).
+// Falls back to b.Line if, somehow, no `function` keyword is found in the
+// span (defensive; should not happen for a real function block).
 func funcDeclLine(lines []string, b Block) int {
 	limit := b.EndLine
 	if limit > len(lines) {

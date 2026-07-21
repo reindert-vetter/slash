@@ -246,6 +246,58 @@ class PermissionTest {
 	}
 }
 
+// TestPHPDocOnlyChangeClassifiesAsModified is the PHPDoc mirror of
+// TestAttributeOnlyChangeClassifiesAsModified above: since phpscan.go now
+// folds a leading `/** ... */` PHPDoc into the block's own [Line, EndLine]
+// span (just like a leading attribute), a diff that only touches the doc's
+// prose (no attribute, no body edit) intersects the block's span and the
+// method correctly shows up as "modified" — before that change it silently
+// never showed up at all.
+func TestPHPDocOnlyChangeClassifiesAsModified(t *testing.T) {
+	oldSrc := `<?php
+class OrderService {
+    /**
+     * Creates an order for the given customer.
+     */
+    public function create($customerId) {
+        return new Order();
+    }
+}
+`
+	newSrc := `<?php
+class OrderService {
+    /**
+     * Creates and persists an order for the given customer.
+     */
+    public function create($customerId) {
+        return new Order();
+    }
+}
+`
+	file := "app/Services/OrderService.php"
+	oldBlocks := ScanBlocks([]byte(oldSrc), file)
+	newBlocks := ScanBlocks([]byte(newSrc), file)
+
+	// A real unified diff for this change would show exactly the one changed
+	// docblock line, on both sides.
+	fd := &fileDiff{changedOld: lineSet{4: true}, changedNew: lineSet{4: true}}
+
+	out := classifyFile(1, file, oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
+
+	var found *Block
+	for i := range out {
+		if out[i].symbol() == "OrderService::create" {
+			found = &out[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("PHPDoc-only change did not classify the method as changed at all; got %v", symbols(out))
+	}
+	if found.Status != StatusModified {
+		t.Errorf("expected status=%q, got %q", StatusModified, found.Status)
+	}
+}
+
 // TestBareTestAttributeOnlyChangeIsIgnored is the narrow carve-out on top of
 // TestAttributeOnlyChangeClassifiesAsModified above: a bare `#[Test]` (no
 // arguments) added above an otherwise completely untouched method carries no

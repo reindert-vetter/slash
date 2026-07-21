@@ -218,6 +218,83 @@ class Svc {
 	}
 }
 
+// TestPHPDocPullsBlockLineLikeAttribute: a PHPDoc directly above a method —
+// even one with no extractable free-text description, just @param/@return
+// tags — pulls Block.Line back to its own opening line, mirroring how a
+// leading #[...] attribute already does (see TestLeadingAttributeIncludedInBlock).
+func TestPHPDocPullsBlockLineLikeAttribute(t *testing.T) {
+	src := `<?php
+class OrderService {
+    /**
+     * @param string $customerId
+     * @return Order
+     */
+    public function create($customerId) {
+        return new Order();
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Services/OrderService.php")
+	b, ok := blockByName(got, "OrderService::create")
+	if !ok {
+		t.Fatalf("expected OrderService::create, got %v", symbols(got))
+	}
+	if b.Description != "" {
+		t.Fatalf("expected no description (only @tag lines), got %q", b.Description)
+	}
+	if b.Line != 3 {
+		t.Fatalf("expected Block.Line=3 (the PHPDoc's opening line), got %d", b.Line)
+	}
+}
+
+// TestPHPDocAndAttributeBothPullBlockLine: when a PHPDoc AND a leading
+// attribute both sit above a method, Block.Line adopts whichever of the two
+// starts EARLIEST — regardless of which order they appear in (PHPDoc above
+// the attribute here; TestPHPDocDescriptionSurvivesLeadingAttribute covers
+// the same order with a real description, this one covers attribute-above-
+// doc too).
+func TestPHPDocAndAttributeBothPullBlockLine(t *testing.T) {
+	docAboveAttr := `<?php
+class PermissionTest {
+    /**
+     * @return void
+     */
+    #[Test]
+    public function testDenied() {
+        return true;
+    }
+}
+`
+	got := ScanBlocks([]byte(docAboveAttr), "tests/Feature/PermissionTest.php")
+	b, ok := blockByName(got, "PermissionTest::testDenied")
+	if !ok {
+		t.Fatalf("expected testDenied, got %v", symbols(got))
+	}
+	if b.Line != 3 {
+		t.Fatalf("doc-above-attribute: expected Block.Line=3 (the doc's line), got %d", b.Line)
+	}
+
+	attrAboveDoc := `<?php
+class PermissionTest {
+    #[Test]
+    /**
+     * @return void
+     */
+    public function testDenied() {
+        return true;
+    }
+}
+`
+	got = ScanBlocks([]byte(attrAboveDoc), "tests/Feature/PermissionTest.php")
+	b, ok = blockByName(got, "PermissionTest::testDenied")
+	if !ok {
+		t.Fatalf("expected testDenied, got %v", symbols(got))
+	}
+	if b.Line != 3 {
+		t.Fatalf("attribute-above-doc: expected Block.Line=3 (the attribute's line), got %d", b.Line)
+	}
+}
+
 func TestAbstractAndInterfaceMethods(t *testing.T) {
 	src := `<?php
 interface Repo {
@@ -466,9 +543,10 @@ class OrderService {
 }
 
 // TestPHPDocDescriptionSurvivesLeadingAttribute: a PHPDoc above a leading
-// #[...] attribute run must still be adopted by the function — the attribute
-// pulls Block.Line back to its own line (see TestLeadingAttributeIncludedInBlock)
-// but must not swallow or reset the doc's pending description.
+// #[...] attribute run must still be adopted by the function — the doc's own
+// line wins as Block.Line (it sits above the attribute here, and both are now
+// folded into the block's own span — see TestPHPDocPullsBlockLineLikeAttribute)
+// and the attribute must not swallow or reset the doc's pending description.
 func TestPHPDocDescriptionSurvivesLeadingAttribute(t *testing.T) {
 	src := `<?php
 class PermissionTest {
@@ -490,8 +568,8 @@ class PermissionTest {
 	if b.Description != want {
 		t.Fatalf("Description = %q, want %q", b.Description, want)
 	}
-	if b.Line != 6 {
-		t.Fatalf("expected Block.Line=6 (the attribute line, unaffected by the doc), got %d", b.Line)
+	if b.Line != 3 {
+		t.Fatalf("expected Block.Line=3 (the PHPDoc's own opening line, now pulled in like a leading attribute), got %d", b.Line)
 	}
 }
 

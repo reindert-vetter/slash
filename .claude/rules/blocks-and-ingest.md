@@ -214,16 +214,43 @@ navigeerbare lijst tonen.
   attributen/modifiers: een PHPDoc kan namelijk gewoon **boven** een leidend
   `#[...]`-attribuut staan (`/** ... */` dan `#[Test]` dan `function`), en moet
   dan nog steeds aan die method toegekend worden ook al pakt het attribuut zelf
-  `Block.Line` naar zich toe (zie hierboven) — de PHPDoc beïnvloedt `Block.Line`/
-  `EndLine` zelf **niet**. `pendingDocText` reset naar `""` op precies dezelfde
-  triggers als `pendingAttrLine` (een `;`, een
+  `Block.Line` naar zich toe (zie hierboven).
+  **Sinds kort trekt een PHPDoc `Block.Line` óók naar zich toe, net als een
+  leidend attribuut** (eerder was dit bewust omgekeerd: de PHPDoc beïnvloedde
+  `Block.Line`/`EndLine` expliciet niet — dat gaf een gat: een wijziging die
+  **uitsluitend** de PHPDoc-tekst raakte (typo-fix, een aangepaste
+  `@param`/`@return`) viel buiten `[Block.Line, EndLine]` en `classifyFile`'s
+  `intersects`-check zag 'm dus nooit; het blok verscheen dan helemaal niet in
+  de review-boom). `scanPHP` houdt daarvoor een eigen `pendingDocLine` bij
+  (analoog aan `pendingAttrLine`, maar los getrackt): gezet op de openingsregel
+  van **elke** echte `/**`-PHPDoc, ook een met alleen `@tag`-regels en geen
+  extraheerbare vrije tekst (symmetrisch met hoe een leeg `#[...]`-attribuut
+  ook telt) — een kaal `/* ... */`-commentaar blijft buiten scope, dat triggert
+  `pendingDocLine` nooit. In de `"function"`-tak wordt `declLine` de
+  **vroegste** (bovenste) niet-nul waarde van `pendingAttrLine`/
+  `pendingDocLine` — een PHPDoc kan zowel boven als onder een leidend
+  attribuut staan, en in beide volgordes wint de bovenste regel. `EndLine`
+  blijft ongewijzigd (de docblock/attributen zitten per definitie vóór de
+  functie, nooit erna). `pendingDocText`/`pendingDocLine` resetten naar
+  `""`/`0` op precies dezelfde triggers als `pendingAttrLine` (een `;`, een
   `class`/`trait`/`interface`/`enum`-keyword, of elk ander, niet-gerelateerd
   identifier) zodat een PHPDoc boven een property (`/** ... */ private
   $legacy;`) nooit lekt naar een verderop volgende, ongerelateerde methode.
   Class-level PHPDoc (boven `class X {` zelf) en de synthetische blocks
   (class-header-sentinel, enums/models/macros/commands in
-  `callresolve_analysis.go`) krijgen bewust **geen** description — alleen een
-  echte `function`-declaratie in `scanPHP` doet dat.
+  `callresolve_analysis.go`) krijgen bewust **geen** description **en** worden
+  niet in een `Block.Line` opgenomen — alleen een echte `function`-declaratie
+  in `scanPHP` doet dat.
+  **Gevolg voor `testcovers_analysis.go`'s `funcDeclLine`:** omdat een PHPDoc's
+  vrije-tekstproza plausibel het woord "function" kan bevatten (bv. "This
+  function creates an order."), is `reFunctionKeyword` verstevigd van een kale
+  `\bfunction\b` naar `\bfunction\b\s*&?\s*\w*\s*\(` (vereist een `(` kort
+  erna, zoals een echte declaratie/closure) — anders zou `funcDeclLine` zo'n
+  docblock-regel vals matchen i.p.v. de echte `function`-regel eronder, en
+  daarmee `methodZone`/`onlyBareTestAttributeLinesChanged`/de
+  data-provider-resolutie corrumperen. Test:
+  `TestFuncDeclLineIgnoresFunctionWordInDocProse`
+  (`testcovers_analysis_test.go`).
   **Opslag:** kolom `description` (TEXT, default `''`) op `blocks` (lichte
   migrate in `openDB`: `ALTER TABLE … ADD COLUMN`, dubbele-kolom-fout genegeerd —
   zelfde patroon als `file_deleted`; `schemaDDL` + `schema.sql` in sync),
@@ -237,7 +264,11 @@ navigeerbare lijst tonen.
   (`TestPHPDocDescriptionCapturedForMethod`,
   `TestPHPDocDescriptionSurvivesLeadingAttribute`,
   `TestPHPDocDescriptionNotLeakedAcrossProperty`,
-  `TestPlainBlockCommentIsNotADescription`, `TestNoPHPDocMeansNoDescription`).
+  `TestPlainBlockCommentIsNotADescription`, `TestNoPHPDocMeansNoDescription`,
+  `TestPHPDocPullsBlockLineLikeAttribute`,
+  `TestPHPDocAndAttributeBothPullBlockLine`); `classify_test.go`
+  (`TestPHPDocOnlyChangeClassifiesAsModified`, de PHPDoc-mirror van
+  `TestAttributeOnlyChangeClassifiesAsModified` hieronder).
 - **Uitzondering: een kale `#[Test]`-only wijziging telt bewust NIET als
   "modified" (`classify.go`).** Een toegevoegd/verwijderd/aangepast `#[Test]`
   (PHPUnit's argumentloze test-marker) heeft geen reviewbare betekenis — anders
