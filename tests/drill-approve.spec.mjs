@@ -47,6 +47,17 @@ test.describe('PR Review Tree — approving inside a drilled Onderliggende-code 
     // top-level noun.
     await expect(page.getByTestId('command-row').first()).toContainText('Keur deze regels goed')
     await page.getByTestId('command-row').first().click()
+
+    // This leaves nothing ahead for findNextUnapproved from the drilled
+    // child's own position (its own subtree is done, and the parent has no
+    // OTHER children to try next — see afterApproveAction/findNextUnapproved
+    // in home.mjs), even though the PARENT's own line is still un-approved —
+    // so the PR overall isn't fully approved yet: this opens the
+    // 'reviewChoice' follow-up (Keur de PR goed / Wijs de PR af / Sluit
+    // menu), not a plain close. Dismiss it before checking the approvals API.
+    await expect(menu).toBeVisible()
+    await expect(page.getByTestId('command-row')).toHaveCount(3)
+    await page.getByTestId('command-row').filter({ hasText: 'Sluit menu' }).click()
     await expect(menu).not.toBeVisible()
 
     // The approval must land on the CHILD's block id — never the parent's.

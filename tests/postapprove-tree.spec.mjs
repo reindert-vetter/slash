@@ -49,13 +49,22 @@ test.describe('PR Review Tree — postApprove follow-up menu walks the tree', ()
     await expect(drill).toContainText('TreeChildAction::run')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
-    // The child's own diff now owns the keyboard — approving its group closes
-    // the menu normally (nothing left anywhere in the tree).
+    // The child's own diff now owns the keyboard — approving its group leaves
+    // NOTHING left anywhere in the tree, and (parent + child both fully
+    // approved) the whole PR is now fully approved too: this opens the
+    // 'reviewApprove' follow-up ("Keur de PR goed"/"Sluit menu"), not the
+    // plain "Ga door"/"Sluit menu" postApprove pair — see afterApproveAction/
+    // REVIEW_APPROVE_COMMANDS in home.mjs, and
+    // tests/review-submit-menu.spec.mjs for the actual submit_review call.
     await page.keyboard.press('Enter')
     await page.getByTestId('command-input').fill('keur')
     await page.getByTestId('command-row').first().click()
-    await expect(menu).not.toBeVisible()
-    await page.waitForTimeout(300)
+    await expect(menu).toBeVisible()
+    const rows = page.getByTestId('command-row')
+    await expect(rows).toHaveCount(2)
+    await expect(rows.nth(0)).toContainText('Keur de PR goed')
+    await expect(rows.nth(1)).toContainText('Sluit menu')
+    await rows.filter({ hasText: 'Sluit menu' }).click()
     await expect(menu).not.toBeVisible()
   })
 })

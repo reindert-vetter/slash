@@ -30,9 +30,33 @@ import { test, expect } from './_fixtures.mjs'
 // moment the approve command runs.
 const BLOCK1_SEL = 'app/Actions/CreatePaymentAction.php:26' // CreatePaymentAction::execute
 const BLOCK6_SEL = 'app/Models/Order.php:88' // Order::address
+const BLOCK1_ID = '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute'
 
 function selParam(page) {
   return new URL(page.url()).searchParams.get('sel')
+}
+
+// clearBlockApproval resets one block's durable approval through the
+// sanctioned write path (the approve workflow's `set` signal — an empty set
+// removes the row), same helper as selected-reveal-hidden.spec.mjs's
+// clearBlock1Approval. Used only by the "not fully approved" test below,
+// which specifically depends on block 1 still being un-approved (several
+// other specs — sidebar-skip-approved.spec.mjs, selected-reveal-hidden.spec.mjs
+// — durably approve it on this same PR/worker DB) — makes that one test
+// idempotent regardless of run order.
+async function clearBlockApproval(page, blockId) {
+  const start = await page.request.post('/api/workflows/approve', { data: { pr: 12903 } })
+  const { runId } = await start.json()
+  await page.request.post(`/api/workflows/${runId}/signals/set`, {
+    data: { blockId, rows: [], calls: [] },
+  })
+  await expect
+    .poll(async () => {
+      const res = await page.request.get('/api/approvals?pr=12903')
+      const rows = await res.json()
+      return Array.isArray(rows) && rows.every((r) => r.blockId !== blockId)
+    })
+    .toBe(true)
 }
 test.describe('PR Review Tree — postApprove follow-up menu', () => {
   test('approving opens the follow-up; "Sluit menu" just closes it (no navigation)', async ({
@@ -180,16 +204,26 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     await expect(page.getByTestId('pr-index')).not.toHaveClass(/-translate-x-\[28rem\]/)
   })
 
-  test('nothing left ahead: approving the last not-yet-approved unit closes normally', async ({
+  // "Nothing left ahead" no longer just closes the palette — it now opens one
+  // of the two review-submit follow-ups (reviewApprove/reviewChoice, see
+  // afterApproveAction/REVIEW_APPROVE_COMMANDS/REVIEW_CHOICE_COMMANDS in
+  // home.mjs). This case (block 1 — CreatePaymentAction::execute — left
+  // un-approved) exercises the NOT-fully-done branch; the fully-done branch
+  // and the actual submit_review network calls are covered in
+  // tests/review-submit-menu.spec.mjs.
+  test('nothing left ahead, PR not fully approved: opens the goedkeuren/afwijzen choice', async ({
     page,
   }) => {
+    await clearBlockApproval(page, BLOCK1_ID)
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
     await page.keyboard.press('Escape')
 
     // Select block 6 (Order::address) directly and step into its diff — it's
     // the last block in the fixture with any changed rows at all (7 and 8 have
-    // none), so approving it leaves nothing ahead to jump to.
+    // none), so approving it leaves nothing ahead to jump to. Block 1
+    // (CreatePaymentAction::execute) is left un-approved, so the PR overall
+    // isn't fully approved yet.
     await page.locator('[data-idx="6"]').click()
     await expect(page.locator('[data-idx="6"]')).toHaveClass(/bg-indigo-50/)
     await page.keyboard.press('ArrowRight')
@@ -200,10 +234,14 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     await page.getByTestId('command-row').first().click()
 
     const menu = page.getByTestId('command-menu')
-    await expect(menu).not.toBeVisible()
-    // findNextUnapproved awaits a fetch per candidate block before giving up —
-    // give that a moment to settle and confirm it really stays closed.
-    await page.waitForTimeout(300)
+    await expect(menu).toBeVisible()
+    const rows = page.getByTestId('command-row')
+    await expect(rows).toHaveCount(3)
+    await expect(rows.nth(0)).toContainText('Keur de PR goed')
+    await expect(rows.nth(1)).toContainText('Wijs de PR af')
+    await expect(rows.nth(2)).toContainText('Sluit menu')
+
+    await rows.filter({ hasText: 'Sluit menu' }).click()
     await expect(menu).not.toBeVisible()
   })
 })

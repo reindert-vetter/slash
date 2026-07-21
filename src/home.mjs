@@ -2281,9 +2281,14 @@ async function openTask(run) {
 // default, the block palette opened by Enter), 'comment' (opened by Enter on a
 // focused, not-yet-replied-to comment row — see COMMENT_COMMANDS), 'pr' (the
 // general PR-wide tree menu opened by `/` — see PR_COMMANDS), 'compose' (the
-// comment-kind menu opened on a filled composer — see COMPOSE_COMMANDS), or
+// comment-kind menu opened on a filled composer — see COMPOSE_COMMANDS),
 // 'postApprove' (opened right after a palette approve action that still leaves
-// a not-yet-approved unit ahead — see afterApproveAction/POSTAPPROVE_COMMANDS).
+// a not-yet-approved unit ahead — see afterApproveAction/POSTAPPROVE_COMMANDS),
+// or one of the three review-submit follow-ups opened when that action
+// instead leaves NOTHING ahead (afterApproveAction again): 'reviewApprove'
+// (the whole PR is fully approved — see REVIEW_APPROVE_COMMANDS),
+// 'reviewChoice' (it isn't — see REVIEW_CHOICE_COMMANDS) or 'reviewReject'
+// (the free-text rejection-reason step "Wijs de PR af" opens).
 const menu = reactive({ open: false })
 let ms = reactive({ query: '', sel: 0, sub: null, mode: 'block', commands: [] })
 
@@ -2397,6 +2402,89 @@ const POSTAPPROVE_COMMANDS = [
     run: () => {
       postApproveTarget = null
     },
+  },
+]
+
+// submitReview posts a real GitHub PR-level review via the submit_review
+// Workflow (POST /api/workflows/submit_review — the sanctioned write path,
+// see .claude/rules/workflows-write-boundary.md; the backend itself is out
+// of frontend scope, this is only the call site). `event` is 'APPROVE' or
+// 'REQUEST_CHANGES'; `body` is required non-empty for REQUEST_CHANGES —
+// GitHub (and the backend's own validateSubmitReview, returning 400) reject
+// a bodyless one, so callers must never invoke this with an empty body for
+// that event (see the 'reviewReject' menu mode below, which only ever offers
+// its run once the typed reason is non-blank).
+// Error handling is deliberately minimal: this app has no toast/error-surface
+// convention anywhere yet (see conventions.md — even createComment doesn't
+// check res.ok), so a 400/502 or network failure just logs — the reviewer can
+// see nothing landed (no new "Review" run in Taken) and retry via `/`.
+// On success this is itself a fresh workflow run, so pollWorkflows() refreshes
+// the Taken column sooner than the next WORKFLOWS_POLL_MS tick — the same
+// courtesy call compose-post/compose-self already make after placing a comment.
+async function submitReview(event, body = '') {
+  try {
+    const res = await fetch('/api/workflows/submit_review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr: state.pr, event, body }),
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      console.error('submit_review failed:', res.status, text)
+      return
+    }
+    pollWorkflows()
+  } catch (err) {
+    console.error('submit_review network error:', err)
+  }
+}
+
+// REVIEW_APPROVE_COMMANDS — shown right after a palette approve action leaves
+// the WHOLE PR fully approved (state.approvalTotal.done === total, over every
+// top-level block plus its nested/drilled PR-block children — see
+// afterApproveAction): there's nothing left to review anywhere, so offer to
+// submit a real "approve" GitHub review, or just close.
+const REVIEW_APPROVE_COMMANDS = [
+  {
+    id: 'review-approve-pr',
+    label: 'Keur de PR goed',
+    hint: 'approve',
+    run: () => submitReview('APPROVE'),
+  },
+  {
+    id: 'review-approve-close',
+    label: 'Sluit menu',
+    hint: 'sluit',
+    run: () => {},
+  },
+]
+
+// REVIEW_CHOICE_COMMANDS — shown right after a palette approve action leaves
+// nothing ahead to navigate to (findNextUnapproved()===null — the reviewer
+// just approved the last unit reachable from here) while the PR is NOT yet
+// fully approved overall (something else — earlier, or elsewhere in the tree
+// — is still open). Offers the same "Keur de PR goed" as above, or "Wijs de
+// PR af": that doesn't submit straight away (a REQUEST_CHANGES review needs a
+// non-empty reason, see submitReview) but opens the dedicated free-text
+// follow-up step instead (menu mode 'reviewReject' below).
+const REVIEW_CHOICE_COMMANDS = [
+  {
+    id: 'review-choice-approve',
+    label: 'Keur de PR goed',
+    hint: 'approve',
+    run: () => submitReview('APPROVE'),
+  },
+  {
+    id: 'review-choice-reject',
+    label: 'Wijs de PR af',
+    hint: 'reject',
+    run: () => openMenu('reviewReject'),
+  },
+  {
+    id: 'review-choice-close',
+    label: 'Sluit menu',
+    hint: 'sluit',
+    run: () => {},
   },
 ]
 
@@ -3626,12 +3714,22 @@ let postApproveTarget = null
 // afterApproveAction runs once a palette approve command has just ADDED
 // approval (`approving`, see toggleApprove/toggleCallApprove — un-approving
 // never reaches here). If there's a next not-yet-approved unit ahead, stash it
-// and open the postApprove follow-up menu (continue / close); if nothing's
-// left ahead, leave the menu closed as usual (see runCommand). `keepList` is
-// captured synchronously, right here — before the async findNextUnapproved
-// gap — so it reflects the mode the reviewer was actually in when they ran the
-// approve action, not whatever state.mode happens to be once the promise
-// resolves.
+// and open the postApprove follow-up menu (continue / close). If NOTHING is
+// left ahead — findNextUnapproved searches forward-only from the current
+// position, see its own doc comment — that either means the whole PR is done
+// (state.approvalTotal, the PR-wide combined-approval count over every
+// top-level block plus its nested/drilled children, is fully done) or that
+// something else remains open elsewhere (behind the current position, or a
+// spot the forward walk never reached) — the reviewer just approved the last
+// unit reachable from here, but "alles" isn't done yet. Either way, offer to
+// submit a real GitHub PR-level review (see submitReview/REVIEW_APPROVE_
+// COMMANDS/REVIEW_CHOICE_COMMANDS): fully done → just "Keur de PR goed"; not
+// yet fully done → the extra choice "Wijs de PR af" (which itself needs a
+// non-empty reason, see the 'reviewReject' menu mode).
+// `keepList` is captured synchronously, right here — before the async
+// findNextUnapproved gap — so it reflects the mode the reviewer was actually
+// in when they ran the approve action, not whatever state.mode happens to be
+// once the promise resolves.
 // EXCEPTION — next unit stays in the SAME block, no menu: when the plan's
 // `path` is empty and its `root` is still the current top-level block, this is
 // exactly findNextUnapproved's step-1 branch ("forward within whichever
@@ -3648,8 +3746,20 @@ let postApproveTarget = null
 function afterApproveAction(approving) {
   if (!approving) return
   const keepList = state.mode !== 'diff'
-  findNextUnapproved().then((target) => {
-    if (!target) return
+  findNextUnapproved().then(async (target) => {
+    if (!target) {
+      // b.approvedRows/approvedCalls were just reassigned synchronously above
+      // (toggleApprove/toggleCallApprove), but state.approvalTotal is filled
+      // by a DECOUPLED watch (see its comment near state.approvalSummaries)
+      // whose callback runs as a microtask, not synchronously — give it a
+      // couple of turns to flush before reading it, same as loadBlocks'
+      // identical wait for the same watch.
+      await Promise.resolve()
+      await Promise.resolve()
+      const allDone = state.approvalTotal.total > 0 && state.approvalTotal.done === state.approvalTotal.total
+      openMenu(allDone ? 'reviewApprove' : 'reviewChoice')
+      return
+    }
     const sameBlock = !keepList && target.path.length === 0 && target.root === state.selected
     if (sameBlock) {
       applyNextUnapproved(target)
@@ -3842,6 +3952,11 @@ async function openGithubLine() {
 function rootCommandsFor(mode) {
   if (mode === 'comment') return COMMENT_COMMANDS
   if (mode === 'postApprove') return POSTAPPROVE_COMMANDS
+  if (mode === 'reviewApprove') return REVIEW_APPROVE_COMMANDS
+  if (mode === 'reviewChoice') return REVIEW_CHOICE_COMMANDS
+  // reviewReject has no static list — resolveCommands builds its one command
+  // straight from the typed reason (see there); nothing to snapshot up front.
+  if (mode === 'reviewReject') return []
   if (mode === 'pr') return PR_COMMANDS
   if (mode === 'compose') return COMPOSE_COMMANDS
   return COMMANDS
@@ -3862,6 +3977,32 @@ function resolveCommands(query) {
   // next not-yet-approved unit ahead): just its two choices, no submenu, no
   // make-a-comment fallback.
   if (ms.mode === 'postApprove') return filterCommands(ms.commands, query)
+  // The two review-submit follow-ups (opened right after an approve action
+  // finds NOTHING left ahead — see afterApproveAction): same shape as
+  // postApprove, a plain list, no submenu, no make-a-comment fallback.
+  if (ms.mode === 'reviewApprove') return filterCommands(ms.commands, query)
+  if (ms.mode === 'reviewChoice') return filterCommands(ms.commands, query)
+  // reviewReject — the free-text rejection-reason step opened by "Wijs de PR
+  // af" above. GitHub (and the backend) reject an empty REQUEST_CHANGES body,
+  // so this mode has no static command list: build ONE command straight from
+  // the typed query, and only once it's non-blank. An empty query resolves to
+  // an empty list, which — via onKeydown's `if (list[ms.sel]) runCommand(...)`
+  // guard — makes Enter a no-op instead of silently closing the menu with
+  // nothing submitted; CommandMenu's own "Geen commando's." empty state plus
+  // this mode's placeholder (see CommandMenu.mjs) double as the "type a
+  // reason" hint.
+  if (ms.mode === 'reviewReject') {
+    const reason = (query || '').trim()
+    if (!reason) return []
+    return [
+      {
+        id: 'review-reject-submit',
+        label: 'Wijs de PR af met deze reden',
+        hint: 'verstuur',
+        run: () => submitReview('REQUEST_CHANGES', reason),
+      },
+    ]
+  }
   // In a submenu we only show (and filter) that parent's already-snapshotted
   // children — no make-a-comment fallback, since the submenu is a plain
   // choice list.
@@ -3908,19 +4049,21 @@ window.addEventListener('scroll', repositionMenu, true) // capture: catch inner 
 // openMenu opens the palette, then a frame later (once it's rendered and its size
 // is known) focuses the input and positions it just beneath the current selection.
 // `mode` picks the command list (see resolveCommands): 'block' (default),
-// 'comment', 'pr', 'compose' or 'postApprove'. It installs a FRESH `ms` reactive so the previous
+// 'comment', 'pr', 'compose', 'postApprove', 'reviewApprove', 'reviewChoice' or
+// 'reviewReject'. It installs a FRESH `ms` reactive so the previous
 // open's (undisposed) CommandMenu bindings can't fire when this menu mutates its
 // state — see the note on the menu/ms split. `commands` is filled here, in this
 // plain (non-reactive) function, by resolving rootCommandsFor(mode) through
 // snapshotCommands — see those for why that must happen from ordinary code and
 // never from inside CommandMenu's own render/filter path.
 function openMenu(mode = 'block') {
-  // Reset the cached index-row anchor on every fresh open except the
-  // postApprove follow-up itself, which relies on it (see lastIndexRowRect) —
-  // this keeps the cache from ever leaking a stale position into an unrelated
-  // later session; a 'block'/'pr'/etc. open re-populates it immediately via
-  // positionMenu() below as long as its own anchor row is visible.
-  if (mode !== 'postApprove') lastIndexRowRect = null
+  // Reset the cached index-row anchor on every fresh open except a follow-up
+  // menu itself (isReviewFollowup — postApprove, or one of the review-submit
+  // modes, see lastIndexRowRect) — this keeps the cache from ever leaking a
+  // stale position into an unrelated later session; a 'block'/'pr'/etc. open
+  // re-populates it immediately via positionMenu() below as long as its own
+  // anchor row is visible.
+  if (!isReviewFollowup(mode)) lastIndexRowRect = null
   ms = reactive({ query: '', sel: 0, sub: null, mode, commands: snapshotCommands(rootCommandsFor(mode)) })
   menu.open = true
   requestAnimationFrame(() => {
@@ -4524,29 +4667,41 @@ function drillPreviewColumns() {
   ]
 }
 
+// isReviewFollowup — true for any of the follow-up menu modes opened right
+// after a palette approve action (see afterApproveAction): the existing
+// postApprove ("Ga door"/"Sluit menu") plus the three new review-submit
+// modes (reviewApprove/reviewChoice/reviewReject). They all share the same
+// anchoring quirk handled below — see isIndexMenu/lastIndexRowRect.
+function isReviewFollowup(mode) {
+  return mode === 'postApprove' || mode === 'reviewApprove' || mode === 'reviewChoice' || mode === 'reviewReject'
+}
+
 // menuAnchor returns the element the command palette floats *beneath* (its
 // vertical anchor): in 'comment' mode, the focused comment row; in
-// blokken-index mode (state.mode==='list', for the 'block'/'postApprove'
-// palettes reached via Enter from the sidebar — see the isIndexMenu() guard
-// below) the selected sidebar row, so the menu opens right there instead of
-// over the list-mode diff preview; otherwise the active change row (present
-// in diff mode) if there is one, else the selected block's card, else the
-// sidebar row. Always something on-screen so the menu opens under whatever is
-// selected.
+// blokken-index mode (state.mode==='list', for the 'block' palette reached
+// via Enter from the sidebar, or one of the approve-follow-up modes —
+// see the isIndexMenu() guard below) the selected sidebar row, so the menu
+// opens right there instead of over the list-mode diff preview; otherwise the
+// active change row (present in diff mode) if there is one, else the selected
+// block's card, else the sidebar row. Always something on-screen so the menu
+// opens under whatever is selected.
 function isIndexMenu() {
-  return state.mode === 'list' && (ms.mode === 'block' || ms.mode === 'postApprove')
+  return state.mode === 'list' && (ms.mode === 'block' || isReviewFollowup(ms.mode))
 }
 
 // lastIndexRowRect caches the selected sidebar row's bounding rect while it's
-// still visible — see the isIndexMenu() branch of menuAnchor() below. The
-// postApprove follow-up menu opens right after an approve action that can
-// fully-approve (and thus auto-hide, see blocks-and-ingest.md) the very row it
-// wants to anchor on; without this cache menuAnchor() falls through to the
-// whole `pr-index` aside, whose much taller bounding rect throws
-// positionMenu()'s flip-above math to the top of the viewport instead of
-// keeping the follow-up menu where the first menu sat. Reset whenever a menu
-// opens fresh (see openMenu) so it never carries a stale position into an
-// unrelated later session.
+// still visible — see the isIndexMenu() branch of menuAnchor() below. A
+// follow-up menu (postApprove, or one of the review-submit modes) opens right
+// after an approve action that can fully-approve (and thus auto-hide, see
+// blocks-and-ingest.md) the very row it wants to anchor on; without this cache
+// menuAnchor() falls through to the whole `pr-index` aside, whose much taller
+// bounding rect throws positionMenu()'s flip-above math to the top of the
+// viewport instead of keeping the follow-up menu where the first menu sat.
+// Reset whenever a menu opens fresh (see openMenu) so it never carries a
+// stale position into an unrelated later session — except for a follow-up
+// mode itself (isReviewFollowup), which relies on it, and 'reviewReject',
+// which is opened FROM 'reviewChoice' (itself a follow-up) and must keep
+// reusing the same cached position through that chain.
 let lastIndexRowRect = null
 
 // isDescriptionMenu — the PR-wide menu ('pr' mode, opened with Enter or `/`)

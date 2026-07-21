@@ -358,10 +358,69 @@ zolang hij nog echt bestaat; verdwijnt de rij, dan hergebruikt `menuAnchor()`
 die gecachte rect (als klein duck-typed object met alleen
 `getBoundingClientRect()` — `positionMenu()` roept nooit iets anders op de
 anchor aan) i.p.v. de volle aside. `openMenu(mode)` reset de cache bij elke
-**niet**-`postApprove`-open, zodat hij nooit een oude positie uit een eerdere,
-ongerelateerde sessie lekt — elke normale open herbouwt 'm meteen weer zodra
-zijn eigen ankerrij zichtbaar is. Test:
-`tests/postapprove-menu.spec.mjs` ("blokken-index stays there").
+open die **geen** approve-vervolgmenu is (`isReviewFollowup(mode)` — zie
+hieronder, dekt zowel `postApprove` als de drie review-submit-modes), zodat
+hij nooit een oude positie uit een eerdere, ongerelateerde sessie lekt — elke
+normale open herbouwt 'm meteen weer zodra zijn eigen ankerrij zichtbaar is.
+Test: `tests/postapprove-menu.spec.mjs` ("blokken-index stays there").
+
+**Geen "volgende" meer: het review-submit-vervolgmenu (`reviewApprove`/
+`reviewChoice`/`reviewReject`) — een echte GitHub PR-review indienen.**
+`findNextUnapproved()` zoekt **uitsluitend voorwaarts** vanaf de huidige
+positie (zie zijn eigen doc-comment in `home.mjs`) — een `null`-resultaat
+betekent dus "niets meer *voor me*", niet per se "alles in de PR is klaar"
+(een eerder overgeslagen of nooit-bezocht blok kan nog openstaan). Waar
+`afterApproveAction` dit geval voorheen stil negeerde (het menu bleef dicht),
+opent het nu een van twee follow-ups, op basis van `state.approvalTotal` (de
+PR-brede combined-approval-teller over elk top-level block plus zijn
+genestelde/gedrilde PR-block-children — zie "Gecombineerde goedkeuring per
+boom" in `blocks-and-ingest.md`), gelezen na een paar `await
+Promise.resolve()`-microtask-ticks (dezelfde `loadBlocks`-precedent-wachttijd
+— de `approvalSummaries`/`approvalTotal`-watch is ontkoppeld en vult pas als
+microtask, niet synchroon met de zojuist gereassignde `b.approvedRows`):
+- **Alles goedgekeurd** (`approvalTotal.done === total`, `total > 0`) →
+  `menu.mode = 'reviewApprove'` (`REVIEW_APPROVE_COMMANDS`): alleen **"Keur de
+  PR goed"** / **"Sluit menu"** — er valt niets meer af te wijzen, alles is al
+  beoordeeld.
+- **Nog niet alles** (er staat iets open, ergens buiten het bereik van de
+  voorwaartse zoektocht — bv. een eerder blok dat de reviewer nog niet
+  bereikte) → `menu.mode = 'reviewChoice'` (`REVIEW_CHOICE_COMMANDS`): **"Keur
+  de PR goed"** / **"Wijs de PR af"** / **"Sluit menu"** — de reviewer besluit
+  hier expliciet of hij de PR al indient ondanks het openstaande restant, of
+  eerst wijzigingen vraagt.
+Beide "Keur de PR goed"-items roepen **`submitReview('APPROVE')`** aan — een
+echte GitHub PR-level review, via `POST /api/workflows/submit_review {pr,
+event, body}` (de sanctioned write-weg, zie `workflows-write-boundary.md`; de
+workflow/Activity/het endpoint zelf staan niet in `home.mjs`, alleen deze
+call-site). **"Wijs de PR af" post niet meteen** — GitHub (en de backend's
+`validateSubmitReview`, 400) weigeren een lege `REQUEST_CHANGES`-body, dus die
+opent in plaats daarvan **`menu.mode = 'reviewReject'`**: een **vrije-tekst**
+stap die de bestaande palette-textarea (`ms.query`) hergebruikt als
+reden-invoerveld i.p.v. een nieuwe composer te bouwen. `rootCommandsFor`
+geeft voor deze mode geen statische lijst; `resolveCommands` bouwt in plaats
+daarvan **één** commando rechtstreeks uit de getypte tekst, en **alleen**
+zodra die niet leeg is — een lege query levert `[]` op, wat via `onKeydown`'s
+bestaande `if (list[ms.sel]) runCommand(...)`-guard `Enter` een no-op maakt
+(niet een stil sluiten zonder iets te versturen). `CommandMenu.mjs`'s
+placeholder verandert voor deze mode mee ("Typ de reden voor afwijzing
+(verplicht)…", zelfde per-mode-ternary als de bestaande `compose`-tak) als de
+enige instructie — er is geen apart label ervoor. Zodra er tekst staat toont
+de lijst precies één rij ("Wijs de PR af met deze reden"); die roept
+`submitReview('REQUEST_CHANGES', reason)` aan met de getypte tekst als body.
+Foutafhandeling is bewust minimaal (`console.error` op een niet-200 of
+netwerkfout) — deze app heeft nergens een toast/error-surface-conventie (zelfs
+`createComment` checkt `res.ok` niet, zie `conventions.md`); een geslaagde
+submit is zelf een verse workflow-run, dus `submitReview` roept `pollWorkflows()`
+aan zodat hij eerder dan de volgende `WORKFLOWS_POLL_MS`-tick in "Taken"
+verschijnt (dezelfde bestaande hoffelijkheid als `compose-post`/`compose-self`).
+Alle drie de nieuwe modes delen `isIndexMenu()`/`lastIndexRowRect`'s
+anker-cache-uitzondering met `postApprove` (via `isReviewFollowup(mode)`,
+`home.mjs`): net als het bestaande `postApprove`-vervolgmenu kunnen ze openen
+nadat de net-goedgekeurde rij al uit de sidebar verdween. Test:
+`tests/review-submit-menu.spec.mjs` (beide follow-ups + de reject-reason-flow,
+incl. de exacte `POST /api/workflows/submit_review`-payload) en de bijgewerkte
+laatste test in `tests/postapprove-menu.spec.mjs`
+("nothing left ahead, PR not fully approved").
 
 Hetzelfde menu-mechanisme bedient ook een **comment-scoped** variant: staat de
 keyboard op een geplaatste comment-rij in `RelatedPanel` (`cs.focus === 'comment'`,
