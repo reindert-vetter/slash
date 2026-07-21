@@ -180,6 +180,15 @@ function seed(db) {
     ['seed', '-db', db, '-from', 'tests/fixtures/filedeleted-blocks.json'],
     { stdio: 'ignore' },
   )
+  // Shift+arrow range-select fixture (PR 102, range-select.spec.mjs): two
+  // same-file blocks — `execute` changes four contiguous lines (worktree
+  // materialized in _setup.mjs, materializeRangeSelectWorktrees) so a
+  // Shift+ArrowDown/ArrowUp multi-line selection has something real to
+  // select/approve, and `other` is its same-file neighbour, used to prove the
+  // range clamps at the block boundary instead of flowing into it.
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/rangeselect-blocks.json'], {
+    stdio: 'ignore',
+  })
 }
 
 function canConnect(port) {

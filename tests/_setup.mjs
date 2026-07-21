@@ -13,6 +13,7 @@ export default function globalSetup() {
   materializeExplainWorktrees()
   materializeTestsGroupWorktrees()
   materializeArrowWorktrees()
+  materializeRangeSelectWorktrees()
 }
 
 // materializeTreeWorktrees writes the (gitignored, normally real-git-derived)
@@ -193,4 +194,46 @@ ${body}
     'app/Actions/ExplainNoIfAction.php',
     file('ExplainNoIfAction', 'execute', 'value', '        $value = 2;\n        $extra = 3;'),
   )
+}
+
+// materializeRangeSelectWorktrees writes the synthetic PR 102 fixture worktree
+// for range-select.spec.mjs (same rationale as materializeTreeWorktrees
+// above): ONE file with two methods, so they're linked as same-file
+// neighbours (the dashed connector) — needed to prove a Shift+ArrowDown range
+// selection clamps at the block boundary instead of flowing into the next
+// block like a plain ArrowDown does. `execute` changes FOUR contiguous lines
+// (four separate gran==='line' units in a row, none split by MAX_GROUP since
+// 4 <= 5) so a Shift+ArrowDown range can span more than one but fewer than
+// all of them; `other` changes just one line, only used to prove the flow
+// boundary.
+function materializeRangeSelectWorktrees() {
+  const contents = (a, b, c, d, x) => `<?php
+
+namespace App\\Actions;
+
+class RangeSelectAction
+{
+    public function execute()
+    {
+        $a = ${a};
+        $b = ${b};
+        $c = ${c};
+        $d = ${d};
+        return $a + $b + $c + $d;
+    }
+
+    public function other()
+    {
+        $x = ${x};
+        return $x;
+    }
+}
+`
+  const write = (side, contents_) => {
+    const full = `data/worktrees/pr-102-${side}/app/Actions/RangeSelectAction.php`
+    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
+    writeFileSync(full, contents_)
+  }
+  write('base', contents(0, 0, 0, 0, 8))
+  write('head', contents(1, 2, 3, 4, 9))
 }

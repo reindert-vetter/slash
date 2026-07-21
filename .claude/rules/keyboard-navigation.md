@@ -775,6 +775,55 @@ de regel-achtergrond (rood/groen) markeert een echte wijziging nu alleen nog op
 regelniveau. Een lege toegevoegde regel heeft geen tekens en dus geen underline
 (correct: niets te markeren).
 
+## Shift+↑/↓ — meerdere regels tegelijk selecteren (`state.rangeAnchor`)
+
+Op **`gran==='line'`** breidt **Shift+ArrowDown**/**Shift+ArrowUp**
+(`extendRange`/`drillExtendRange`, `home.mjs`) de selectie uit tot een
+aaneengesloten reeks regels, in plaats van de cursor één regel te verplaatsen.
+Het anker (de unit-index waar de shift-selectie begon) leeft naast de
+bestaande `{change, gran}`-cursor: top-level in `state.rangeAnchor`, voor een
+gedrilde kolom als `rangeAnchor` op zijn eigen `state.drillCursor[level-1]`-
+entry (mirror van de rest van die cursor-vorm, zie "Kolom-navigatie" in
+`.claude/rules/detail-layout.md`). `rangeUnit(units, change, anchor)` voegt de
+huidige unit en de anker-unit samen tot één `{start, end}`-rijbereik (min/max
+van hun rijindices) — verder overal in de codebase behandeld als een gewone
+(grotere) unit, dus de highlighting (`activeGroup`), de approve-scope
+(`approveTargetRows`/`approveContext`) en de comment-anchoring
+(`commentTarget`) hoefden niet dieper aangepast te worden dan "gebruik de
+samengevoegde unit i.p.v. de ene huidige".
+
+- **Alleen bij `gran==='line'`.** Op `'group'` is een aaneengesloten reeks
+  regels al de eenheid zelf (`changeGroups`); op `'call'` gaat het om
+  segmenten binnen één regel, geen verticale reeks. Shift+↑/↓ op een andere
+  granulariteit is een no-op (`extendRange`/`drillExtendRange` returnen vroeg).
+- **Klemt op de blokgrens.** Anders dan een gewone `↓`/`↑` (die op de
+  laatste/eerste unit doorstroomt naar het volgende same-file block resp. de
+  volgende/vorige Onderliggende-code-sibling — zie hierboven en
+  "Kolom-navigatie") stroomt een actieve range nooit een block/kolom uit: hij
+  klemt op de eerste/laatste `'line'`-unit van het huidige block. Approve en
+  comment werken per block, dus een range die twee blocks zou overspannen zou
+  geen zinvolle betekenis hebben.
+- **Approve keurt de hele range in één keer goed/in** — `approveTargetRows`
+  filtert `changedRows` nu op het samengevoegde bereik i.p.v. de ene unit, dus
+  `toggleApprove`/de command-palette-"approve"-actie (`Enter`) keurt exact de
+  geselecteerde regels goed (of trekt ze in). Het label past mee:
+  `approveNoun` toont **"Keur deze N regels goed"** zodra de range meer dan
+  één regel beslaat, anders ongewijzigd "deze regel".
+- **Comment gebruikt de range als multi-line-anker** — `commentTarget()`
+  bouwt zijn code-fragment/`startLine`/`endLine` nu ook uit het samengevoegde
+  bereik; `unitLineRange` ondersteunde al een meerregelig bereik (voor een
+  `'group'`-unit), dus "Plaats comment" op een actieve Shift-range post een
+  echte multi-line GitHub-review-comment zonder verdere aanpassing.
+- **Het anker wist** bij elke actie die de selectie zou overschrijven:
+  `clearRangeAnchor()` — een gewone (niet-shift) pijltoets
+  (`nextChange`/`prevChange`/`stepBlock`/`drillNextChange`/
+  `drillPrevChange`/`setDrillChange`), een `f`/`d`/`s`-zoom
+  (`setGran`/`setDrillGran`, die sowieso al een verse cursor zonder
+  `rangeAnchor` opbouwen), een blokwissel (`stepBlock`, `enterDiff`,
+  `openTask`), en `←`/`→` (het uitstappen naar de lijst, het instappen in het
+  Onderliggende-code-paneel). Dit is bewust hetzelfde "een gewone stap laat de
+  selectie los" gedrag als in een tekst-editor.
+
 ## `a` — diff-weergave toggelen (side-by-side ↔ alleen nieuw, 60% breed)
 
 **`a`** toggelt globaal, voor **elke zichtbare diff-kaart tegelijk** — de
