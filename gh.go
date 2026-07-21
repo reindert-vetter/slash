@@ -133,9 +133,17 @@ func diffBetweenSHAs(ctx context.Context, baseSHA, headSHA string, files []strin
 // changedFileNames returns the file paths that differ between two commits (no
 // path filter) — cheaper than a full unified diff when only the file list is
 // needed. Used by the ingest-refresh path to discover exactly which files
-// changed since the previously ingested head SHA.
+// changed since the previously ingested head SHA. Rename detection is
+// explicitly disabled (--no-renames): with it on (the default for `git diff`
+// on modern git), a renamed file's --name-only output collapses to just the
+// new path, dropping the old one from the delta entirely. refreshIngestDelta
+// scopes its DELETE to exactly this file list (upsertPRFileBlocks), so a
+// dropped old path leaves that file's stale blocks behind forever — orphaned
+// rows for a file that no longer exists on the PR's head. Listing both the
+// old (deleted) and new (added) path lets that DELETE clean up the old rows
+// like any other real removal.
 func changedFileNames(ctx context.Context, oldSHA, newSHA string) ([]string, error) {
-	out, err := runGit(ctx, "diff", "--name-only", oldSHA, newSHA)
+	out, err := runGit(ctx, "diff", "--no-renames", "--name-only", oldSHA, newSHA)
 	if err != nil {
 		return nil, err
 	}

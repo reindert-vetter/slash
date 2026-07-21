@@ -263,7 +263,7 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   - **`refreshIngestDelta`-Activity** (`ingest.go`): diff't de **eerder
     opgeslagen** head-SHA (uit de nieuwe `pr_ingest`-tabel, `db.go`) tegen de
     **nieuw waargenomen** head-SHA (`changedFileNames`, een `git diff
-    --name-only` — geen volledige unified diff nodig om alleen de
+    --no-renames --name-only` — geen volledige unified diff nodig om alleen de
     bestandsnamen te weten) om **precies** te bepalen welke bestanden sinds de
     vorige ingest wijzigden. Alleen die bestanden worden herscand
     (`diffBetweenSHAs` + `parseFiles`, gescoped) en via **`upsertPRFileBlocks`**
@@ -271,7 +271,18 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
     bestanden raakt (`DELETE FROM blocks WHERE pr=? AND file IN (...)`) —
     ieder ander bestand z'n eigen blocks (en dus alles wat aan hun block-id hangt:
     comments/approvals/callresolve, in aparte SQLite-bestanden zonder FK)
-    blijft volledig ongemoeid. De head-worktree wordt **in place** bijgewerkt
+    blijft volledig ongemoeid. **`--no-renames` is load-bearing:** moderne git
+    detecteert renames standaard voor `git diff`, en met rename-detectie aan
+    laat `--name-only` voor een hernoemd bestand **alleen het nieuwe pad**
+    zien — het oude pad valt dan volledig uit de delta, en `upsertPRFileBlocks`
+    kan zijn `DELETE … WHERE file IN (...)` nooit op dat oude pad toepassen.
+    Zonder `--no-renames` blijven de blocks van het oude pad dus permanent als
+    weesrijen in de DB staan (gezien in de praktijk: een SDK die halverwege
+    een PR van `Snapshots` naar `Resources` werd hernoemd liet de oude
+    `Snapshot*`-blocks nooit verdwijnen). Met `--no-renames` levert
+    `--name-only` voor een rename **beide** paden op (oud als verwijderd,
+    nieuw als toegevoegd), dus de DELETE ruimt het oude pad netjes op — precies
+    zoals elke andere echte verwijdering. De head-worktree wordt **in place** bijgewerkt
     (`updateWorktree`: `git checkout --detach <sha>` binnen de bestaande
     worktree-map, valt terug op de bestaande hard-rebuild `ensureWorktree` als
     dat faalt) i.p.v. de vorige remove+recreate — die was prima voor een
