@@ -86,7 +86,10 @@ func blockSource(root string, def Block) codeSide {
 //     are dropped from Text; Start is bumped by the same number of removed
 //     lines so line-based consumers (unitLineRange/GitHub anchors in
 //     home.mjs, both of which count off codeSide.Start) stay accurate
-//     against the now-shorter Text.
+//     against the now-shorter Text. If the fold leaves the text untouched
+//     (a free-text-only leading doc with no @return/@param, or a signature it
+//     couldn't confidently rewrite), stripLeadingPhpDoc removes the leading
+//     doc outright — Start is bumped by its removed-line count the same way.
 //   - If cs.Text ends on a single wholly-blank line (trimTrailingBlankLine —
 //     see its own doc comment), that line is dropped and End is decremented
 //     by the same amount. Nothing reads codeSide.End for line-anchoring
@@ -102,6 +105,14 @@ func enrichedCodeSide(cs codeSide) codeSide {
 		return cs
 	}
 	text, removed := enrichSignatureWithDocTypes(cs.Text)
+	if removed == 0 {
+		// The fold left the text untouched — a free-text-only leading doc (no
+		// @return/@param to splice), or a signature it couldn't confidently
+		// rewrite. Drop the leading doc outright so no raw docblock survives
+		// into the diff/excerpt (Route B: everywhere in "Onderliggende code",
+		// not just the preview). Start is still bumped by removed below.
+		text, removed = stripLeadingPhpDoc(text)
+	}
 	text, removedTail := trimTrailingBlankLine(text)
 	if removed == 0 && removedTail == 0 {
 		return cs

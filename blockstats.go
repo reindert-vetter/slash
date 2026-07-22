@@ -30,8 +30,19 @@ func blockChangedRowCount(baseDir, headDir string, b Block) int {
 	// the same rows the reviewer actually sees, never the (now-hidden) doc
 	// lines. enrichSignatureWithDocTypes is a no-op when there's no leading
 	// doc/types to fold, so an untouched block's count is unaffected.
-	oldText, _ = enrichSignatureWithDocTypes(oldText)
-	newText, _ = enrichSignatureWithDocTypes(newText)
+	oldText, oldFolded := enrichSignatureWithDocTypes(oldText)
+	newText, newFolded := enrichSignatureWithDocTypes(newText)
+	// When the fold left the text untouched (a free-text-only leading doc, or an
+	// unrewritable signature), the leading doc is dropped outright — the exact
+	// same Route B fallback /api/code applies via enrichedCodeSide. Keeps the
+	// approve total counting the same rows the reviewer sees, never the
+	// (now-hidden) doc lines.
+	if oldFolded == 0 {
+		oldText, _ = stripLeadingPhpDoc(oldText)
+	}
+	if newFolded == 0 {
+		newText, _ = stripLeadingPhpDoc(newText)
+	}
 	// Also drop a single wholly-blank trailing line (trimTrailingBlankLine,
 	// codesig.go) — the same tail-trim /api/code applies for display, kept
 	// here for Go/Go parity between the two call sites. In practice a no-op

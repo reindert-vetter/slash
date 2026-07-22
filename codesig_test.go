@@ -388,3 +388,138 @@ func TestEnrichedCodeSideCombinesLeadingFoldAndTrailingTrim(t *testing.T) {
 		t.Fatalf("End = %d, want 16", got.End)
 	}
 }
+
+func TestStripLeadingPhpDocFreeTextDoc(t *testing.T) {
+	in := "    /**\n" +
+		"     * Just a plain description, no tags at all.\n" +
+		"     */\n" +
+		"    public function configure(): void\n" +
+		"    {\n" +
+		"        return;\n" +
+		"    }"
+	want := "    public function configure(): void\n" +
+		"    {\n" +
+		"        return;\n" +
+		"    }"
+	out, removed := stripLeadingPhpDoc(in)
+	if out != want {
+		t.Fatalf("out =\n%q\nwant\n%q", out, want)
+	}
+	if removed != 3 {
+		t.Fatalf("removed = %d, want 3", removed)
+	}
+}
+
+func TestStripLeadingPhpDocRemovesDocLinesOnly(t *testing.T) {
+	// Parity with enrichSignatureWithDocTypes: exactly the doc's own lines are
+	// removed (the "*/" line's terminating newline included), and Start is
+	// bumped by that count. A blank separator line after the doc is preserved
+	// verbatim — the fold does the same, keeping Start/Text in lockstep.
+	in := "/**\n * text\n */\n\nfunction f() {}"
+	out, removed := stripLeadingPhpDoc(in)
+	if out != "\nfunction f() {}" {
+		t.Fatalf("out = %q, want %q", out, "\nfunction f() {}")
+	}
+	if removed != 3 {
+		t.Fatalf("removed = %d, want 3", removed)
+	}
+}
+
+func TestStripLeadingPhpDocNoopWithoutDoc(t *testing.T) {
+	in := "private function getResource(): ?array\n{\n    return null;\n}"
+	out, removed := stripLeadingPhpDoc(in)
+	if out != in || removed != 0 {
+		t.Fatalf("expected no-doc block untouched, got out=%q removed=%d", out, removed)
+	}
+}
+
+func TestStripLeadingPhpDocIgnoresPlainBlockComment(t *testing.T) {
+	// A single-star /* ... */ is not a PHPDoc — left untouched, mirroring
+	// enrichSignatureWithDocTypes / phpDocDescription.
+	in := "/* not a phpdoc */\nfunction f() {}"
+	out, removed := stripLeadingPhpDoc(in)
+	if out != in || removed != 0 {
+		t.Fatalf("expected plain block comment untouched, got out=%q removed=%d", out, removed)
+	}
+}
+
+func TestEnrichedCodeSideStripsFreeTextOnlyDoc(t *testing.T) {
+	// Route B: a leading free-text-only PHPDoc (nothing for the fold to splice)
+	// is dropped outright, and Start is bumped by the removed-line count.
+	cs := codeSide{
+		Start: 10,
+		End:   16,
+		Text: "/**\n" +
+			" * Just a plain description, no tags at all.\n" +
+			" */\n" +
+			"private function getResource(): ?array\n" +
+			"{\n" +
+			"    return null;\n" +
+			"}",
+	}
+	got := enrichedCodeSide(cs)
+	wantText := "private function getResource(): ?array\n" +
+		"{\n" +
+		"    return null;\n" +
+		"}"
+	want := codeSide{Start: 13, End: 16, Text: wantText}
+	if got != want {
+		t.Fatalf("enrichedCodeSide = %+v, want %+v", got, want)
+	}
+}
+
+func TestEnrichedCodeSideFoldStillWinsOverBareStrip(t *testing.T) {
+	// A foldable doc must still go through enrichSignatureWithDocTypes (types
+	// spliced into the signature), not the bare stripLeadingPhpDoc fallback.
+	cs := codeSide{
+		Start: 10,
+		End:   14,
+		Text: "/**\n" +
+			" * @return array<string, mixed>|null\n" +
+			" */\n" +
+			"private function getResource(): ?array\n" +
+			"{\n" +
+			"    return $this->resource;\n" +
+			"}",
+	}
+	got := enrichedCodeSide(cs)
+	wantText := "private function getResource(): array<string, mixed>|null\n" +
+		"{\n" +
+		"    return $this->resource;\n" +
+		"}"
+	if got.Text != wantText {
+		t.Fatalf("Text =\n%q\nwant\n%q", got.Text, wantText)
+	}
+	if got.Start != 13 {
+		t.Fatalf("Start = %d, want 13", got.Start)
+	}
+}
+
+func TestChangedRowCountAfterFreeTextDocStrip(t *testing.T) {
+	// blockstats parity: a new version that adds a free-text-only leading doc
+	// (unfoldable) must not inflate the approve total — the fallback strip drops
+	// the doc lines just like enrichedCodeSide does for the diff.
+	old := "private function getResource(): ?array\n{\n    return null;\n}"
+	newT := "/**\n" +
+		" * Just a plain description, no tags at all.\n" +
+		" */\n" +
+		"private function getResource(): ?array\n" +
+		"{\n" +
+		"    return null;\n" +
+		"}"
+	// Mirror blockChangedRowCount's fold-then-strip fallback.
+	strip := func(s string) string {
+		s, folded := enrichSignatureWithDocTypes(s)
+		if folded == 0 {
+			s, _ = stripLeadingPhpDoc(s)
+		}
+		return s
+	}
+	if got := changedRowCount(strip(old), strip(newT)); got != 0 {
+		t.Fatalf("changedRowCount after doc strip = %d, want 0 (old==new once doc dropped)", got)
+	}
+	// Without the strip, the same pair counts the whole added doc block.
+	if raw := changedRowCount(old, newT); raw == 0 {
+		t.Fatalf("expected the raw (unstripped) count to be > 0, got 0")
+	}
+}

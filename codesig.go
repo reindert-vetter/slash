@@ -140,6 +140,40 @@ func enrichSignatureWithDocTypes(text string) (out string, removedLines int) {
 	return out, removedLines
 }
 
+// stripLeadingPhpDoc removes a leading `/** ... */` PHPDoc block from text and
+// reports how many lines were removed. It is the unconditional fallback for the
+// case enrichSignatureWithDocTypes deliberately leaves untouched: a leading doc
+// with no @return/@param to fold into the signature (a free-text-only doc), or
+// one whose signature couldn't be confidently rewritten. In both cases the
+// whole doc otherwise stayed visible in the reviewer's diff/excerpt — this drops
+// it so "Onderliggende code" never shows a raw docblock.
+//
+// Same leading-only scope as enrichSignatureWithDocTypes and trimTrailingBlankLine:
+// the `/**` must be the very first non-whitespace token (an `#[Attr]` before the
+// doc is left in place, per the codesig v1 scope). A plain `/* ... */` (single
+// star) is not a PHPDoc and is left untouched. removedLines counts the doc lines
+// plus a single blank line immediately after it (the stylistic separator between
+// doc and declaration), so the caller can bump Start in lockstep.
+func stripLeadingPhpDoc(text string) (out string, removedLines int) {
+	trimmed := strings.TrimLeft(text, " \t")
+	if !strings.HasPrefix(trimmed, "/**") {
+		return text, 0
+	}
+	docStart := len(text) - len(trimmed)
+	closeRel := strings.Index(text[docStart+3:], "*/")
+	if closeRel < 0 {
+		return text, 0
+	}
+	docEnd := docStart + 3 + closeRel + 2 // just past the closing "*/"
+	removedLines = strings.Count(text[:docEnd], "\n")
+	out = text[docEnd:]
+	if strings.HasPrefix(out, "\n") {
+		out = out[1:]
+		removedLines++
+	}
+	return out, removedLines
+}
+
 // trimTrailingBlankLine drops a single, wholly-blank trailing line from text,
 // if there is one, and reports how many lines were removed (0 or 1).
 //

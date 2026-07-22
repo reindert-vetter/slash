@@ -290,12 +290,32 @@ navigeerbare lijst tonen.
   parameter (modifiers als `public readonly`, een leidend `#[...]`-attribuut,
   en de `&`/`...`-markers blijven intact) — een parameter zonder matchende
   `@param`-naam blijft onaangeroerd.
-  **Bewust "all-or-nothing" per blok:** kan de signatuur niet met zekerheid
-  gevonden/herschreven worden (zie de twee scope-grenzen hieronder, of gewoon
-  een niet te ontleden randgeval), dan blijft de hele tekst — inclusief de
-  PHPDoc — **ongewijzigd**, precies zoals vóór deze wijziging. Er is geen
-  tussenvorm waarin de doc gedeeltelijk verdwenen is zonder dat zijn type
-  volledig gevouwen werd.
+  **Type-vouwen is "all-or-nothing" per blok:** kan de signatuur niet met
+  zekerheid gevonden/herschreven worden (zie de twee scope-grenzen hieronder,
+  of gewoon een niet te ontleden randgeval), dan wordt er **geen enkel type
+  gevouwen** — er is geen tussenvorm waarin de doc gedeeltelijk verdwenen is
+  zonder dat zijn type volledig gevouwen werd.
+  **Maar de leidende PHPDoc verdwijnt hoe dan ook** (`code.go`'s
+  `enrichedCodeSide` → `stripLeadingPhpDoc` in `codesig.go`): vouwt
+  `enrichSignatureWithDocTypes` niets (`removed == 0` — een **doc met alleen
+  vrije tekst** zonder `@param`/`@return`, of een niet-herschrijfbare
+  signatuur), dan wordt de leidende `/** … */` alsnog **onvoorwaardelijk
+  weggeknipt**, met dezelfde `Start += verwijderde-regels`-correctie als het
+  vouwen. Zo blijft er nooit een rauw docblock in de getoonde "Onderliggende
+  code" staan — de vrije-tekst-omschrijving leeft toch al los op
+  `Block.Description` (zie hierboven). Bij een vrije-tekst-doc gaat er geen
+  type verloren (die waren er niet, dat is juist waarom het vouwen niets deed);
+  bij een niet-herschrijfbare-signatuur-doc mét `@param`/`@return`-types
+  verdwijnen die types wél uit beeld — een bewust geaccepteerde uitruil (v1),
+  het punt is dat een halve/rauwe docblock lelijker is dan een enkel gemist
+  type. Dezelfde `stripLeadingPhpDoc`-fallback is gespiegeld in
+  `blockstats.go`'s `blockChangedRowCount` (na zijn directe
+  `enrichSignatureWithDocTypes`-call, alleen wanneer die niets vouwde) zodat de
+  approve-teller-`total` nooit weggeknipte doc-regels meetelt — het bestaande
+  Go/JS-parity-patroon. **Leading-only scope**, net als het vouwen en
+  `trimTrailingBlankLine`: alleen een `/**` als eerste niet-witruimte-token
+  wordt gepakt (een `#[Attr]` vóór de doc blijft staan); een kaal `/* … */`
+  (één ster) is geen PHPDoc en blijft ongemoeid.
   **Twee bewuste scope-grenzen (v1):**
   - De PHPDoc moet het **allereerste** zijn in de gesliceerde bloktekst — een
     attribuut vóór de doc (`#[Foo]` dan `/** */` dan `function`) wordt **niet**
