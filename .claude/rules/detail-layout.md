@@ -105,13 +105,15 @@ interne scroll), **onder** `prInfoCard` in dezelfde
 kolom zelf gemount wordt.
 **Hoogte-verdeling volgt wie van de twee kaarten de keyboard bezit
 (`isPrWideFocused()`, leest `pw.focus`):** staat de keyboard op de
-omschrijving (`pw.focus === null`) dan krijgt `prInfoCard` `flex-[3]` (3/5) en
-deze kaart `flex-[2]` (2/5); navigeer je in dit blok (`pw.focus !== null`) dan
-draait het nog sterker om — deze kaart krijgt `flex-[5]` (5/6), `prInfoCard`
-zakt naar `flex-1` (1/6). Het aandeel van deze kaart is in **beide** staten
-groter dan voorheen (was 1/3 resp. 3/4) — de comments zijn vaak te kort
-afgekapt om prettig te lezen, dus ze krijgen structureel meer ruimte, niet
-alleen zodra ze de focus hebben; een `min-h-[14rem]` op de kaart zelf
+omschrijving (`pw.focus === null`) dan krijgt deze kaart `flex-[4]` (4/5) en
+`prInfoCard` de kleine share `flex-1` (1/5); navigeer je in dit blok
+(`pw.focus !== null`) dan krijgt deze kaart `flex-[5]` (5/6) en `prInfoCard`
+nog steeds `flex-1` (1/6) — `prInfoCard` staat dus in beide staten vast op
+`flex-1`, alleen deze kaart wisselt tussen `flex-[4]`/`flex-[5]`. Het aandeel
+van deze kaart in de omschrijving-gefocuste staat werd op verzoek verdubbeld
+(was 2/5) — de comments zijn vaak te kort afgekapt om prettig te lezen, dus ze
+krijgen structureel meer ruimte, niet alleen zodra ze de focus hebben; een
+`min-h-[20rem]` op de kaart zelf
 garandeert bovendien een leesbare vloer, ongeacht hoe smal de kolom in de
 praktijk uitvalt. Beide class-bindingen zijn reactieve hele-waarde-functies
 (`${() => ...}`, conform de arrow.js-class-binding-conventie) die dezelfde

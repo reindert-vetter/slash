@@ -143,6 +143,32 @@ func TestImportPRCommentsIntoReadModel(t *testing.T) {
 	}
 }
 
+// A kilo-review bot summary (body carries BOTH markers) is never imported — no
+// Execution is started, so it stays out of the read-model — while a normal
+// PR-wide comment alongside it imports as usual.
+func TestImportSkipsKiloReviewComment(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+
+	gh.SetGeneralComments([]github.GeneralComment{
+		{ID: 200, Author: "boss", Body: "please add a test", Kind: "issue"},
+		{ID: 400, Author: "kilo-code-bot[bot]", Kind: "issue",
+			Body: "<!-- kilo-review -->\nCode Review Summary\nStatus: 2 Issues Found"},
+	})
+
+	m.importPRComments(ctx, pr)
+
+	list, _ := cs.List(ctx, pr)
+	if len(list) != 1 {
+		t.Fatalf("imported %d comments, want 1 (kilo-review skipped): %+v", len(list), list)
+	}
+	if list[0].ID != "gh-200" {
+		t.Fatalf("imported %q, want gh-200 (the non-kilo comment)", list[0].ID)
+	}
+}
+
 // An imported review-diff thread is a live thread: the workflow records the known
 // GitHub root without re-posting, mirrors a UI reply to GitHub, and does NOT echo
 // a GitHub-sourced reply back.

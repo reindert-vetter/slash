@@ -2331,6 +2331,11 @@ func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
 		if known[in.ImportedRootID] {
 			continue
 		}
+		// Never import a kilo-review bot summary (see isKiloReview) — skip
+		// before starting any Execution, so it stays out of the read-model.
+		if isKiloReview(in.Body) {
+			continue
+		}
 		runID := importedRunID(in.ImportedRootID)
 		if _, err := m.engine.StartWorkflowID(runID, WorkflowTaskCodeComment, in); err != nil {
 			m.logf("import comments: start run=%s pr=%d: %v", runID, pr, err)

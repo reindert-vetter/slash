@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"slash/modules/github"
 )
@@ -146,6 +147,15 @@ func rowForLine(baseDir, headDir string, b Block, line int, side string) (int, b
 // block-scoped sidebar, and their replies mirror to GitHub as new issue comments.
 func isPRWide(kind string) bool {
 	return kind == "issue" || kind == "review_summary" || kind == "review" || kind == "ai_warning"
+}
+
+// isKiloReview reports whether a comment body is a kilo-review bot summary we
+// deliberately never import — matched on BOTH markers (AND) to avoid false
+// positives. Mirrors the frontend isKiloReview in RelatedPanel.mjs; the
+// import-skip here keeps new ones out of the read-model entirely (no Execution
+// started, so within the write-boundary — we simply don't start a workflow).
+func isKiloReview(body string) bool {
+	return strings.Contains(body, "<!-- kilo-review -->") && strings.Contains(body, "Code Review Summary")
 }
 
 // importedRunID is the deterministic Run ID an imported GitHub comment's thread

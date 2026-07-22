@@ -5281,15 +5281,14 @@ function prInfoCard(state) {
     <div
       class="${() =>
         'flex min-h-0 flex-col gap-3 overflow-auto rounded-2xl border bg-white dark:bg-zinc-900 p-5 shadow-sm ' +
-        // Height is proportional to which of the two pr-info-column cards owns
-        // the keyboard: a modest 3/5 share while this description card is
-        // selected (isPrWideFocused false, pw.focus === null), shrinking to
-        // 1/6 while navigating the PR-wide comment block below it (the
-        // complement of its own 2/5/5/6, see PrWideComments in
-        // RelatedPanel.mjs) — the comment block reads better with more room
-        // in both states, so its share grew in both. Both use flex-grow with
-        // a 0 basis (like flex-1), so the ratio is purely the two numbers.
-        (isPrWideFocused() ? 'flex-1 ' : 'flex-[3] ') +
+        // Height: this description card now always takes the small share so
+        // the PR-wide comment block below it renders roughly twice as tall as
+        // it used to in the normal (description-selected) state — a flat 1/5
+        // there (complement of PrWideComments' flex-[4]) and 1/6 while
+        // navigating the comment block (complement of flex-[5]); see
+        // PrWideComments in RelatedPanel.mjs. flex-grow with a 0 basis (like
+        // flex-1), so the ratio is purely the two numbers.
+        'flex-1 ' +
         // Light-blue border while the keyboard drives stop 1 (this panel is only
         // ever mounted while showDescription is true, but read it here anyway so
         // the binding stays reactive) — mirrors diffActive on the block-diff card.

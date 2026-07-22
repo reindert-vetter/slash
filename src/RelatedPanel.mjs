@@ -2329,10 +2329,18 @@ export default function RelatedPanel(state, commentTarget, search) {
 // rendered.
 const pw = reactive({ focus: null, sel: 0, threadPos: 0, busy: false })
 
+// isKiloReview reports whether a comment body is a kilo-review bot summary we
+// deliberately hide — matched on BOTH markers (AND) to avoid false positives.
+// Mirrors the Go-side isKiloReview in comment_import.go (the import-skip); this
+// frontend filter additionally hides any such comment already in the DB.
+function isKiloReview(body) {
+  return !!body && body.includes('<!-- kilo-review -->') && body.includes('Code Review Summary')
+}
+
 // prWideList is the PR-wide subset of cs.list, in the same (created_at) order
-// cs.list already carries.
+// cs.list already carries — minus kilo-review bot summaries (see isKiloReview).
 function prWideList() {
-  return cs.list.filter((c) => c.kind)
+  return cs.list.filter((c) => c.kind && !isKiloReview(c.body))
 }
 
 // pwSelI clamps pw.sel onto the current PR-wide list, like selI() does for
@@ -2616,7 +2624,7 @@ function prWideItem(c, i) {
 
 // PrWideComments — the card mounted below prInfoCard in PrInfoPanel
 // (home.mjs), inside the same state.showDescription-gated container, so it
-// needs no visibility check of its own. `min-h-[14rem]` gives it a decent
+// needs no visibility check of its own. `min-h-[20rem]` gives it a decent
 // floor so the comments stay readable even at the smaller (unfocused) share,
 // scrolling internally for overflow, mirroring how workflowsSection sits
 // under commentsSection in CommentsSidebar (see detail-layout.md).
@@ -2625,16 +2633,16 @@ export function PrWideComments(state) {
   return html`
     <section
       class="${() =>
-        'flex min-h-[14rem] flex-col overflow-hidden rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm ' +
+        'flex min-h-[20rem] flex-col overflow-hidden rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm ' +
         // Height is proportional to which of the two pr-info-column cards owns
         // the keyboard: 5/6 while navigating this block (isPrWideFocused, i.e.
-        // pw.focus !== null), 2/5 while the description above it is selected —
-        // the complement of prInfoCard's own 1/6 / 3/5 (home.mjs). Both shares
-        // grew versus before (was 3/4 / 1/3): the comments read better with
-        // more vertical room in either state. Both use flex-grow with a 0
-        // basis (like flex-1), so the ratio is purely the two numbers. See
-        // detail-layout.md.
-        (isPrWideFocused() ? 'flex-[5]' : 'flex-[2]')}"
+        // pw.focus !== null), 4/5 while the description above it is selected —
+        // the complement of prInfoCard's flat flex-1 (home.mjs). The
+        // description-selected share was bumped from 2/5 to 4/5 (roughly twice
+        // as tall) on request; the comments read better with the extra room.
+        // Both use flex-grow with a 0 basis (like flex-1), so the ratio is
+        // purely the two numbers. See detail-layout.md.
+        (isPrWideFocused() ? 'flex-[5]' : 'flex-[4]')}"
       data-testid="pr-wide-comments"
     >
       <div class="border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
