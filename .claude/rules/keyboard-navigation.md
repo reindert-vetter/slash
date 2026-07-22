@@ -516,7 +516,21 @@ model** via `GET /api/pr?pr=N`, gevuld door het `pr_status`-workflow (zie
 dan vallen de links terug op de kale PR-URL resp. de Jira-base.
 
 - **`'list'`** (start): `↑`/`↓` kiezen een block in de sidebar, `→` stapt de diff
-  van het geselecteerde block in. Volledig goedgekeurde top-level blokken zijn
+  van het geselecteerde block in — ook als dat block **0 eigen change-groups**
+  heeft (een echt PR-blok waarvan de eigen body niets wijzigt en dat alleen als
+  parent van Onderliggende-code-kinderen bestaat, bv.
+  `CreatePaymentAction::findOrCreateCustomer`): `→` stapt dan alsnog naar
+  `state.mode==='diff'` en toont het (ongehighlighte) blokcode, zodat een
+  volgende `→` verder naar Onderliggende code kan — precies zoals `→` in de
+  PR-samenvatting-kaart (stop 1) altijd onvoorwaardelijk naar de bloklijst
+  stapt. `enterDiff()` (`home.mjs`) had hiervoor een `groupsFor(b).length ===
+  0`-guard die stil niets deed; die is verwijderd (alleen een ontbrekend
+  block zelf is nog een no-op). `ensureCode`'s losse "diff zonder eigen groups
+  → terug naar list"-fallback is om dezelfde reden verwijderd: die combinatie
+  is nu een bewust bereikbare, niet-dode staat, ook buiten een gedrilde kolom
+  (`focusLevel===0`) — was al uitgezonderd zodra er gedrild was, zie
+  `tests/drill-mode-flip.spec.mjs`. Zie `tests/enter-diff-zero-groups.spec.mjs`.
+  Volledig goedgekeurde top-level blokken zijn
   standaard **verborgen** uit deze lijst (knop onderin klapt ze uit); de "Start"-kop
   toont een PR-brede goedkeurings-teller. Zie de sectie "Verbergen van goedgekeurde
   blokken" + "Server-side `total`" in `.claude/rules/blocks-and-ingest.md`.

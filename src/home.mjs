@@ -2238,23 +2238,18 @@ async function ensureCode(b) {
         // (stale/shared link) — clamp it back into range.
         state.change = Math.max(0, groups.length - 1)
       }
-      // Likewise a restored 'diff' mode is meaningless for a block with no
-      // navigable changes; fall back to the list instead of a dead diff view.
-      // Only from the rest position (no drilled column open): after a postApprove
-      // "Ga door" that selects a NEW root and drills into its child, the root's
-      // own (deduped, still in-flight) code fetch can land HERE with 0 own groups
-      // — its only reviewable content is that drilled child — and flipping to
-      // 'list' then strands the drill stack: the ← peel branch (diff-mode only)
-      // becomes unreachable and ← "jumps to the blocks index" instead of
-      // expanding the collapsed parent column. See tests/drill-mode-flip.spec.mjs.
-      if (
-        state.mode === 'diff' &&
-        groups.length === 0 &&
-        state.focusLevel === 0 &&
-        state.drill.length === 0
-      ) {
-        state.mode = 'list'
-      }
+      // A block with 0 own groups no longer flips diff mode back to the list —
+      // enterDiff() now deliberately allows stepping into such a block's diff
+      // (its only reviewable content is its Onderliggende code, see enterDiff's
+      // own comment): the reviewer sees its plain, unhighlighted code and can
+      // still → into the Onderliggende-code panel from there. This used to
+      // bounce back to 'list' at the rest position (no drilled column open),
+      // which — now that entering diff this way is an intentional, keyboard-
+      // reachable state (a plain ArrowRight in the list) rather than only a
+      // stale ?mode=diff URL restore or a postApprove drill-in-flight race —
+      // would immediately undo the reviewer's own → keypress. See
+      // tests/drill-mode-flip.spec.mjs for the drilled case (focusLevel > 0),
+      // which was already exempt from this and is unaffected.
       scrollChangeIntoView(state.mode === 'diff')
     } else if (state.drill[state.focusLevel - 1] === b) {
       // A restored ?dgran=/?dchg= cursor (see applyDrillCursorRestore) can
@@ -2397,11 +2392,21 @@ function scrollChangeIntoView(animate = true, tries = 10) {
 }
 
 // enterDiff steps from the sidebar into the selected block's diff, selecting its
-// first change (added, removed or modified line). Does nothing for a block with
-// no navigable changes.
+// first change (added, removed or modified line). → should always progress
+// forward — exactly like → in the PR-summary card (stop 1) always steps to
+// the block index (stop 2), unconditionally — so this no longer bails out for
+// a block with 0 own navigable change groups (a real PR block whose own body
+// is unchanged and only serves as the parent of Onderliggende-code children,
+// e.g. CreatePaymentAction::findOrCreateCustomer in the PR 12903 fixture): it
+// still enters diff mode, showing the block's (unhighlighted) plain code, and
+// the reviewer can → from there into Onderliggende code. Block/setGran/
+// unitAtRow/scrollChangeIntoView all already tolerate an empty units list
+// (activeGroup falls back to null, no crash) — this combination was already a
+// supported state via drilling (see tests/drill-mode-flip.spec.mjs), just not
+// yet reachable by a plain list-mode →. See tests/enter-diff-zero-groups.spec.mjs.
 function enterDiff() {
   const b = state.blocks[state.selected]
-  if (groupsFor(b).length === 0) return
+  if (!b) return
   state.mode = 'diff'
   // Stepping in from the list always starts at the coarsest granularity (a whole
   // change run); the reviewer refines from there with f.
