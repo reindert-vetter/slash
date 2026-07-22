@@ -44,9 +44,10 @@ test.describe('PR Review Tree — approving inside a drilled Onderliggende-code 
     await expect(menu).toBeVisible()
     // The label names the unit this action covers — "deze regels" (the
     // drilled child's own single-line group), never "dit block"/a stale
-    // top-level noun.
-    await expect(page.getByTestId('command-row').first()).toContainText('Keur deze regels goed')
-    await page.getByTestId('command-row').first().click()
+    // top-level noun. It's the default (2nd) item, right after the pinned
+    // "Sluit menu".
+    await expect(page.getByTestId('command-row').nth(1)).toContainText('Keur deze regels goed')
+    await page.getByTestId('command-row').nth(1).click()
 
     // This leaves nothing ahead for findNextUnapproved from the drilled
     // child's own position (its own subtree is done, and the parent has no

@@ -7,9 +7,10 @@ import { test, expect } from './_fixtures.mjs'
 // something ahead" case). Two variants, both driven by state.approvalTotal
 // (the PR-wide combined-approval count):
 //   - fully approved (REVIEW_APPROVE_COMMANDS, menu mode 'reviewApprove'):
-//     just "Keur de PR goed" / "Sluit menu".
+//     "Sluit menu" (pinned first) / "Keur de PR goed" (the default, 2nd item).
 //   - not yet fully approved (REVIEW_CHOICE_COMMANDS, menu mode
-//     'reviewChoice'): "Keur de PR goed" / "Wijs de PR af" / "Sluit menu" —
+//     'reviewChoice'): "Sluit menu" (pinned first) / "Keur de PR goed"
+//     (default, 2nd item) / "Wijs de PR af" —
 //     the not-fully-approved half of this is also covered by
 //     postapprove-menu.spec.mjs's own "nothing left ahead" test; this file
 //     focuses on what actually gets POSTed to /api/workflows/submit_review.
@@ -100,8 +101,8 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de PR goed / Wij
     await expect(menu).toBeVisible()
     const rows = page.getByTestId('command-row')
     await expect(rows).toHaveCount(2)
-    await expect(rows.nth(0)).toContainText('Keur de PR goed')
-    await expect(rows.nth(1)).toContainText('Sluit menu')
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Keur de PR goed')
 
     const [request] = await Promise.all([
       page.waitForRequest('**/api/workflows/submit_review'),
@@ -133,7 +134,9 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de PR goed / Wij
     await expect(menu).toBeVisible()
     const rows = page.getByTestId('command-row')
     await expect(rows).toHaveCount(3)
-    await expect(rows.nth(1)).toContainText('Wijs de PR af')
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Keur de PR goed')
+    await expect(rows.nth(2)).toContainText('Wijs de PR af')
     await rows.filter({ hasText: 'Wijs de PR af' }).click()
 
     // The rejection-reason step: an empty textarea offers no command at all

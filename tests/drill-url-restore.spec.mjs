@@ -129,7 +129,9 @@ test.describe('PR Review Tree — drilled column URL state', () => {
     // drilled column back out, so it's the only reachable way to leave while
     // still drilled (see the round-trip note in pages-and-routing.md).
     await page.keyboard.press('/')
-    await page.getByTestId('command-row').first().click()
+    // "Naar PR-overzicht" is the default item — the 2nd row, right after the
+    // pinned "Sluit menu".
+    await page.getByTestId('command-row').nth(1).click()
     await expect(page).toHaveURL(/\/pr-overview/)
     expect(page.url()).toContain('drill=')
     expect(page.url()).toContain('Order.php')

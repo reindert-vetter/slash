@@ -75,13 +75,15 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     await page.getByTestId('command-input').fill('keur')
     await page.getByTestId('command-row').first().click()
 
-    // The follow-up opens automatically with exactly the two choices.
+    // The follow-up opens automatically with exactly the two choices: "Sluit
+    // menu" pinned first, then the default "Ga door…" (where the selection
+    // opens).
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     const rows = page.getByTestId('command-row')
     await expect(rows).toHaveCount(2)
-    await expect(rows.nth(0)).toContainText('Ga door naar de volgende niet-goedgekeurde code')
-    await expect(rows.nth(1)).toContainText('Sluit menu')
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Ga door naar de volgende niet-goedgekeurde code')
 
     // Choosing "Sluit menu" just closes it — no navigation.
     await rows.filter({ hasText: 'Sluit menu' }).click()
@@ -177,8 +179,8 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     const rows = page.getByTestId('command-row')
-    await expect(rows.nth(0)).toContainText('Ga door naar het volgende niet-goedgekeurde block')
-    await expect(rows.nth(1)).toContainText('Sluit menu')
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Ga door naar het volgende niet-goedgekeurde block')
 
     // Regression: approving this block fully-approves it, which auto-hides its
     // row from the sidebar (state.showApproved, see BlockList.mjs) — the exact
@@ -237,9 +239,9 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     await expect(menu).toBeVisible()
     const rows = page.getByTestId('command-row')
     await expect(rows).toHaveCount(3)
-    await expect(rows.nth(0)).toContainText('Keur de PR goed')
-    await expect(rows.nth(1)).toContainText('Wijs de PR af')
-    await expect(rows.nth(2)).toContainText('Sluit menu')
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Keur de PR goed')
+    await expect(rows.nth(2)).toContainText('Wijs de PR af')
 
     await rows.filter({ hasText: 'Sluit menu' }).click()
     await expect(menu).not.toBeVisible()

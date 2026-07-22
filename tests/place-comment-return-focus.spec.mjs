@@ -39,7 +39,7 @@ test('placing a comment returns the keyboard to the diff, sidebar stays open', a
 
   await page.keyboard.press('Enter') // opens the compose-kind menu
   await expect(page.getByTestId('command-menu')).toBeVisible()
-  await page.keyboard.press('Enter') // "Plaats comment" (default, first item)
+  await page.keyboard.press('Enter') // "Plaats comment" (default, 2nd item — after the pinned "Sluit menu")
   await expect(page.getByTestId('command-menu')).not.toBeVisible()
 
   // The sidebar stays open (comment placed, visible) ...

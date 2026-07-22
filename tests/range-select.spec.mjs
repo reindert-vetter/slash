@@ -34,8 +34,9 @@ test.describe('PR Review Tree — Shift+arrow line-range selection', () => {
     await page.keyboard.press('Enter')
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
-    await expect(page.getByTestId('command-row').first()).toContainText('Keur deze 3 regels goed')
-    await page.getByTestId('command-row').first().click()
+    // The default item is the 2nd row, right after the pinned "Sluit menu".
+    await expect(page.getByTestId('command-row').nth(1)).toContainText('Keur deze 3 regels goed')
+    await page.getByTestId('command-row').nth(1).click()
     await expect(menu).not.toBeVisible()
 
     await expect

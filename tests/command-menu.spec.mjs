@@ -299,9 +299,12 @@ test.describe('PR Review Tree — command palette', () => {
     await page.keyboard.press('Enter')
 
     await expect(page.getByTestId('command-menu')).toBeVisible()
-    await expect(rows).toHaveCount(2)
-    await expect(rows.nth(0)).toContainText('Regel in Files changed')
-    await expect(rows.nth(1)).toContainText('PR-pagina')
+    // The submenu has its own pinned "Sluit menu" first (withClose), same as
+    // the root list.
+    await expect(rows).toHaveCount(3)
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Regel in Files changed')
+    await expect(rows.nth(2)).toContainText('PR-pagina')
     // The submenu clears the query and re-focuses the input.
     await expect(page.getByTestId('command-input')).toHaveValue('')
     await expect(page.getByTestId('command-input')).toBeFocused()

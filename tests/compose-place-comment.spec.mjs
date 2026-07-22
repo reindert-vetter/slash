@@ -4,11 +4,12 @@ import { test, expect } from './_fixtures.mjs'
 // 'compose', COMPOSE_COMMANDS in home.mjs) used to offer no way to place a
 // normal, public comment — only placeholders plus "Alleen voor mijzelf" (a
 // private note that never reaches GitHub). That left the reviewer with no
-// keyboard/click path to actually post a comment. "Plaats comment" is now the
-// first/default item (the menu opens with ms.sel reset to 0), so "type, Enter,
-// Enter" places a normal comment again. Both this item and "Alleen voor
-// mijzelf" also refresh the Taken column (pollWorkflows) right after placing,
-// instead of waiting for the next WORKFLOWS_POLL_MS (2.5s) tick — see
+// keyboard/click path to actually post a comment. "Plaats comment" is the
+// default item — the 2nd row, right after the pinned "Sluit menu" (withClose)
+// — and the menu opens selected there (defaultSel), so "type, Enter, Enter"
+// places a normal comment again. Both this item and "Alleen voor mijzelf"
+// also refresh the Taken column (pollWorkflows) right after placing, instead
+// of waiting for the next WORKFLOWS_POLL_MS (2.5s) tick — see
 // detail-layout.md / keyboard-navigation.md.
 
 test('Enter on a filled composer defaults to "Plaats comment" (public) and refreshes Taken immediately', async ({
@@ -34,11 +35,13 @@ test('Enter on a filled composer defaults to "Plaats comment" (public) and refre
   await expect(menu).toBeVisible()
   const rows = page.getByTestId('command-row')
 
-  // "Plaats comment" is the first row and starts selected (ms.sel resets to 0
-  // on open) — the same ring-highlight CommandMenu gives any selected row.
-  const firstRow = rows.first()
-  await expect(firstRow).toHaveText(/Plaats comment/)
-  await expect(firstRow).toHaveClass(/ring-indigo-200/)
+  // "Sluit menu" is the pinned first row; "Plaats comment" is the 2nd row and
+  // starts selected (defaultSel) — the same ring-highlight CommandMenu gives
+  // any selected row.
+  await expect(rows.first()).toHaveText(/Sluit menu/)
+  const defaultRow = rows.nth(1)
+  await expect(defaultRow).toHaveText(/Plaats comment/)
+  await expect(defaultRow).toHaveClass(/ring-indigo-200/)
   // The other choices are still there, just no longer the only real action.
   await expect(rows.filter({ hasText: 'Alleen voor mijzelf' })).toHaveCount(1)
 

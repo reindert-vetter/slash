@@ -1,10 +1,12 @@
 import { test, expect } from './_fixtures.mjs'
 
 // The `/` key opens a general, PR-wide tree menu (distinct from Enter's
-// block palette): "Naar PR-overzicht", "GitHub" and "Jira" (the latter two
-// with their own submenus), the code_warning risk check, and the description
-// toggle. It reuses the same floating CommandMenu overlay (menu mode 'pr' —
-// see home.mjs PR_COMMANDS + onKeydown, resolveCommands).
+// block palette): a pinned "Sluit menu" first (withClose, home.mjs), then
+// "Naar PR-overzicht" (the default item, where the selection opens —
+// defaultSel), "GitHub" and "Jira" (the latter two with their own submenus,
+// each with its own pinned "Sluit menu"), the code_warning risk check, and
+// the description toggle. It reuses the same floating CommandMenu overlay
+// (menu mode 'pr' — see home.mjs PR_COMMANDS + onKeydown, resolveCommands).
 test.describe('PR Review Tree — `/` PR menu', () => {
   test('`/` opens the PR-wide tree with overview / GitHub / Jira', async ({ page }) => {
     await page.goto('/pr/12903')
@@ -25,14 +27,16 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(page.getByTestId('command-input')).toHaveValue('')
 
     const rows = page.getByTestId('command-row')
-    // 5 root items since the code_warning PR-wide risk check was added (see
-    // PR_COMMANDS in home.mjs); it sits before the description toggle.
-    await expect(rows).toHaveCount(5)
-    await expect(rows.nth(0)).toContainText('Naar PR-overzicht')
-    await expect(rows.nth(1)).toContainText('GitHub')
-    await expect(rows.nth(2)).toContainText('Jira')
-    await expect(rows.nth(3)).toContainText("Controleer de hele PR op risico's")
-    await expect(rows.nth(4)).toContainText('Toon volledige omschrijving')
+    // 6 root items: a pinned "Sluit menu" (withClose, always first) plus the
+    // 5 real ones — the code_warning PR-wide risk check sits before the
+    // description toggle (see PR_COMMANDS in home.mjs).
+    await expect(rows).toHaveCount(6)
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Naar PR-overzicht')
+    await expect(rows.nth(2)).toContainText('GitHub')
+    await expect(rows.nth(3)).toContainText('Jira')
+    await expect(rows.nth(4)).toContainText("Controleer de hele PR op risico's")
+    await expect(rows.nth(5)).toContainText('Toon volledige omschrijving')
 
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()
@@ -50,25 +54,28 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await page.keyboard.press('/')
     const rows = page.getByTestId('command-row')
 
-    // GitHub → its two children.
+    // GitHub → its two children, plus its own pinned "Sluit menu" first.
     await page.getByTestId('command-input').fill('github')
     await expect(rows).toHaveCount(1)
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).toBeVisible()
-    await expect(rows).toHaveCount(2)
-    await expect(rows.nth(0)).toContainText('Open op GitHub')
-    await expect(rows.nth(1)).toContainText('Comment plaatsen')
+    await expect(rows).toHaveCount(3)
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Open op GitHub')
+    await expect(rows.nth(2)).toContainText('Comment plaatsen')
 
-    // Esc backs out to the root, then Jira → its three children.
+    // Esc backs out to the root, then Jira → its three children (plus its own
+    // pinned "Sluit menu" first).
     await page.keyboard.press('Escape')
-    await expect(rows).toHaveCount(5) // root: overview/GitHub/Jira/risk-check/description
+    await expect(rows).toHaveCount(6) // root: Sluit menu/overview/GitHub/Jira/risk-check/description
     await page.getByTestId('command-input').fill('jira')
     await expect(rows).toHaveCount(1)
     await page.keyboard.press('Enter')
-    await expect(rows).toHaveCount(3)
-    await expect(rows.nth(0)).toContainText('Openen in nieuw tab')
-    await expect(rows.nth(1)).toContainText('Comment plaatsen')
-    await expect(rows.nth(2)).toContainText('Subtask maken')
+    await expect(rows).toHaveCount(4)
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Openen in nieuw tab')
+    await expect(rows.nth(2)).toContainText('Comment plaatsen')
+    await expect(rows.nth(3)).toContainText('Subtask maken')
   })
 
   test('GitHub → Comment plaatsen opens the line-comment composer', async ({ page }) => {
@@ -84,7 +91,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await page.getByTestId('command-input').fill('github')
     await page.keyboard.press('Enter') // into the GitHub submenu
     const rows = page.getByTestId('command-row')
-    await rows.nth(1).click() // "Comment plaatsen"
+    await rows.nth(2).click() // "Comment plaatsen" (after the pinned "Sluit menu" and "Open op GitHub")
 
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await expect(page.getByTestId('comment-compose')).toBeVisible()
@@ -100,7 +107,9 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     await page.keyboard.press('/')
-    await page.getByTestId('command-row').first().click() // "Naar PR-overzicht"
+    // "Naar PR-overzicht" is the default item — the 2nd row, right after the
+    // pinned "Sluit menu".
+    await page.getByTestId('command-row').nth(1).click() // "Naar PR-overzicht"
     // Carries `?pr=12903` so /pr-overview can auto-select the row we came
     // from (see trySelectPendingPr in overview.mjs), plus `&sel=<blockRef>` so
     // it can hand the same block back on return (see overviewExitUrl in
@@ -142,11 +151,12 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
     await page.keyboard.press('Enter')
     await expect(menu).toBeVisible()
-    await expect(rows).toHaveCount(5)
-    await expect(rows.nth(0)).toContainText('Naar PR-overzicht')
-    await expect(rows.nth(1)).toContainText('GitHub')
-    await expect(rows.nth(2)).toContainText('Jira')
-    await expect(rows.nth(3)).toContainText("Controleer de hele PR op risico's")
-    await expect(rows.nth(4)).toContainText('Toon volledige omschrijving')
+    await expect(rows).toHaveCount(6)
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Naar PR-overzicht')
+    await expect(rows.nth(2)).toContainText('GitHub')
+    await expect(rows.nth(3)).toContainText('Jira')
+    await expect(rows.nth(4)).toContainText("Controleer de hele PR op risico's")
+    await expect(rows.nth(5)).toContainText('Toon volledige omschrijving')
   })
 })

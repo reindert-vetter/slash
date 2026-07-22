@@ -2537,13 +2537,38 @@ async function openTask(run) {
 const menu = reactive({ open: false })
 let ms = reactive({ query: '', sel: 0, sub: null, mode: 'block', commands: [] })
 
+// withClose prepends a "Sluit menu" item to any command list — every root
+// list (COMMANDS, PR_COMMANDS, ...) and every submenu's `children` alike, so
+// every small menu offers an explicit, always-first way out. `onClose` lets a
+// mode run its own cleanup on close (postApprove clears postApproveTarget);
+// every other caller gets a no-op. This runs over the raw (function-labelled)
+// lists, so snapshotCommands/resolveLabel still processes it like any other
+// command — no special-casing needed elsewhere. Deliberately NOT applied to
+// the reviewReject mode's dynamic 0/1-item list or the "no match" make-a-
+// comment fallback in resolveCommands — both are single, dynamically built
+// actions where a pinned close item (plus defaultSel below skipping to a
+// non-existent 2nd item) would break "type, Enter" straight through.
+function withClose(list, onClose) {
+  return [{ id: 'close-menu', label: 'Sluit menu', hint: 'sluit', run: onClose || (() => {}) }, ...list]
+}
+
+// defaultSel picks the initial selection for a freshly opened menu/submenu:
+// the 2nd item (index 1), so the pinned "Sluit menu" is never itself the
+// default Enter action — but never past the end, so a list with 0 or 1 real
+// item still gets a valid index instead of pointing at nothing.
+function defaultSel(list) {
+  return Math.min(1, Math.max(0, list.length - 1))
+}
+
 // COMMENT_COMMANDS — shown when Enter is pressed on a focused comment row
 // (not mid-reply): resolving or deleting it. Kept separate from COMMANDS
 // (block actions) since a comment isn't tied to the selected block/diff.
 // "Resolve comment" also resolves the conversation on GitHub (for a review-diff
 // thread) — see resolveFocusedComment (RelatedPanel.mjs) and the reply-loop's
-// resolveGithubThread Activity (workflows.go).
-const COMMENT_COMMANDS = [
+// resolveGithubThread Activity (workflows.go). "Sluit menu" is pinned first
+// (withClose); the menu opens on the 2nd item (defaultSel), so "Resolve
+// comment" stays the default Enter action.
+const COMMENT_COMMANDS = withClose([
   {
     id: 'resolve-comment',
     label: 'Resolve comment',
@@ -2556,21 +2581,22 @@ const COMMENT_COMMANDS = [
     hint: 'delete',
     run: () => deleteFocusedComment(),
   },
-]
+])
 
 // COMPOSE_COMMANDS — shown when Enter (or the composer button) is pressed on a
 // filled new-comment composer (menu mode 'compose'): choose what to do with the
-// typed text. "Plaats comment" (the default, first item — the menu opens with
-// ms.sel reset to 0, see openMenu) posts a normal, public comment (the same
-// placeComment path as ever, without opts.local) so the plain "type, Enter,
-// Enter" flow still places a real comment. "Alleen voor mijzelf" places a
-// private note instead (createComment with local:true → the workflow skips the
-// GitHub post). The Claude/Git/Jira items are placeholders (like the Jira items
-// in PR_COMMANDS). Both real-placing items refresh the Taken column right after
-// (pollWorkflows) — task_code_comment starts a new workflow run per comment,
-// and this is more immediate than waiting for the next WORKFLOWS_POLL_MS tick.
-// The Git label names the current selection unit (groep/regel/call) via granNoun.
-const COMPOSE_COMMANDS = [
+// typed text. "Sluit menu" is pinned first (withClose); the menu opens on the
+// 2nd item (defaultSel), where "Plaats comment" (the default action) posts a
+// normal, public comment (the same placeComment path as ever, without
+// opts.local) so the plain "type, Enter, Enter" flow still places a real
+// comment. "Alleen voor mijzelf" places a private note instead (createComment
+// with local:true → the workflow skips the GitHub post). The Claude/Git/Jira
+// items are placeholders (like the Jira items in PR_COMMANDS). Both real-
+// placing items refresh the Taken column right after (pollWorkflows) —
+// task_code_comment starts a new workflow run per comment, and this is more
+// immediate than waiting for the next WORKFLOWS_POLL_MS tick. The Git label
+// names the current selection unit (groep/regel/call) via granNoun.
+const COMPOSE_COMMANDS = withClose([
   {
     id: 'compose-post',
     label: 'Plaats comment',
@@ -2615,49 +2641,50 @@ const COMPOSE_COMMANDS = [
     label: 'Jira',
     hint: 'jira',
     // A submenu (see runCommand). All three are placeholders — no Jira write yet.
-    children: [
+    children: withClose([
       { id: 'compose-jira-comment', label: 'Comment op ticket', hint: 'todo', run: () => {} },
       { id: 'compose-jira-subtask', label: 'Subtaak aanmaken', hint: 'todo', run: () => {} },
       { id: 'compose-jira-task', label: 'Nieuwe taak aanmaken', hint: 'todo', run: () => {} },
-    ],
+    ]),
   },
-]
+])
 
 // POSTAPPROVE_COMMANDS — shown right after a palette approve action (menu mode
 // 'postApprove', see afterApproveAction) when there's a next not-yet-approved
 // unit still ahead: continue straight to it, or just close. Only reached from
 // the command-palette approve action — the top checkbox in Block.mjs stays a
-// direct toggle and never opens this menu.
-const POSTAPPROVE_COMMANDS = [
-  {
-    id: 'postapprove-next',
-    // A function label so it can name what "next" actually means: the next
-    // *block* when the triggering approve ran from the blokken-index
-    // (postApproveTarget.keepList, see applyNextUnapproved), else the usual
-    // next changed code. Resolved once, at snapshot time (openMenu →
-    // snapshotCommands), right after afterApproveAction sets postApproveTarget
-    // — same safe, non-reactive read as the 'approve' command's own label.
-    label: () =>
-      postApproveTarget && postApproveTarget.keepList
-        ? 'Ga door naar het volgende niet-goedgekeurde block'
-        : 'Ga door naar de volgende niet-goedgekeurde code',
-    hint: 'volgende',
-    run: () => {
-      if (postApproveTarget) applyNextUnapproved(postApproveTarget)
-      postApproveTarget = null
+// direct toggle and never opens this menu. "Sluit menu" is pinned first
+// (withClose, with its own onClose so closing also drops the stashed
+// postApproveTarget — mirrors the old dedicated close item's cleanup); the
+// menu opens on the 2nd item (defaultSel), so "Ga door…" stays the default
+// Enter action.
+const POSTAPPROVE_COMMANDS = withClose(
+  [
+    {
+      id: 'postapprove-next',
+      // A function label so it can name what "next" actually means: the next
+      // *block* when the triggering approve ran from the blokken-index
+      // (postApproveTarget.keepList, see applyNextUnapproved), else the usual
+      // next changed code. Resolved once, at snapshot time (openMenu →
+      // snapshotCommands), right after afterApproveAction sets postApproveTarget
+      // — same safe, non-reactive read as the 'approve' command's own label.
+      label: () =>
+        postApproveTarget && postApproveTarget.keepList
+          ? 'Ga door naar het volgende niet-goedgekeurde block'
+          : 'Ga door naar de volgende niet-goedgekeurde code',
+      hint: 'volgende',
+      run: () => {
+        if (postApproveTarget) applyNextUnapproved(postApproveTarget)
+        postApproveTarget = null
+      },
     },
-  },
-  {
-    id: 'postapprove-close',
-    label: 'Sluit menu',
-    hint: 'sluit',
-    // Nothing to do — runCommand already closed the palette. Just drop the
-    // stashed target so a later unrelated navigation can't reuse it.
-    run: () => {
-      postApproveTarget = null
-    },
-  },
-]
+  ],
+  // Nothing else to do on close — runCommand already closed the palette. Just
+  // drop the stashed target so a later unrelated navigation can't reuse it.
+  () => {
+    postApproveTarget = null
+  }
+)
 
 // submitReview posts a real GitHub PR-level review via the submit_review
 // Workflow (POST /api/workflows/submit_review — the sanctioned write path,
@@ -2725,21 +2752,17 @@ async function checkPRWarnings() {
 // the WHOLE PR fully approved (state.approvalTotal.done === total, over every
 // top-level block plus its nested/drilled PR-block children — see
 // afterApproveAction): there's nothing left to review anywhere, so offer to
-// submit a real "approve" GitHub review, or just close.
-const REVIEW_APPROVE_COMMANDS = [
+// submit a real "approve" GitHub review, or just close. "Sluit menu" is
+// pinned first (withClose); the menu opens on the 2nd item (defaultSel), so
+// "Keur de PR goed" stays the default Enter action.
+const REVIEW_APPROVE_COMMANDS = withClose([
   {
     id: 'review-approve-pr',
     label: 'Keur de PR goed',
     hint: 'approve',
     run: () => submitReview('APPROVE'),
   },
-  {
-    id: 'review-approve-close',
-    label: 'Sluit menu',
-    hint: 'sluit',
-    run: () => {},
-  },
-]
+])
 
 // REVIEW_CHOICE_COMMANDS — shown right after a palette approve action leaves
 // nothing ahead to navigate to (findNextUnapproved()===null — the reviewer
@@ -2748,8 +2771,10 @@ const REVIEW_APPROVE_COMMANDS = [
 // — is still open). Offers the same "Keur de PR goed" as above, or "Wijs de
 // PR af": that doesn't submit straight away (a REQUEST_CHANGES review needs a
 // non-empty reason, see submitReview) but opens the dedicated free-text
-// follow-up step instead (menu mode 'reviewReject' below).
-const REVIEW_CHOICE_COMMANDS = [
+// follow-up step instead (menu mode 'reviewReject' below). "Sluit menu" is
+// pinned first (withClose); the menu opens on the 2nd item (defaultSel), so
+// "Keur de PR goed" stays the default Enter action.
+const REVIEW_CHOICE_COMMANDS = withClose([
   {
     id: 'review-choice-approve',
     label: 'Keur de PR goed',
@@ -2762,13 +2787,7 @@ const REVIEW_CHOICE_COMMANDS = [
     hint: 'reject',
     run: () => openMenu('reviewReject'),
   },
-  {
-    id: 'review-choice-close',
-    label: 'Sluit menu',
-    hint: 'sluit',
-    run: () => {},
-  },
-]
+])
 
 // resolveLabel/snapshotCommands materialize a command list's labels into plain
 // strings, calling any function label RIGHT NOW instead of leaving it as a live
@@ -4153,7 +4172,9 @@ function afterApproveAction(approving) {
   })
 }
 
-const COMMANDS = [
+// "Sluit menu" is pinned first (withClose); the menu opens on the 2nd item
+// (defaultSel), so "Keur ... goed" stays the default Enter action.
+const COMMANDS = withClose([
   {
     id: 'approve',
     label: () => {
@@ -4185,8 +4206,9 @@ const COMMANDS = [
     label: 'Open GitHub',
     hint: 'github',
     // A parent command: choosing it opens a submenu of the two targets rather
-    // than acting directly (see runCommand).
-    children: [
+    // than acting directly (see runCommand). "Sluit menu" is pinned first
+    // there too (withClose), same as every other submenu.
+    children: withClose([
       {
         id: 'github-line',
         label: 'Regel in Files changed',
@@ -4199,9 +4221,9 @@ const COMMANDS = [
         hint: 'github',
         run: () => window.open(state.prUrl || GITHUB_PR, '_blank'),
       },
-    ],
+    ]),
   },
-]
+])
 
 // PR_COMMANDS — the general, PR-wide tree menu opened with `/` (menu mode 'pr').
 // Unlike COMMANDS (which acts on the selected block/diff), these are actions on
@@ -4209,7 +4231,9 @@ const COMMANDS = [
 // The Jira comment + subtask items are placeholders for now (no Jira write
 // integration yet). GitHub "comment plaatsen" reuses the line-comment composer
 // (startComment), same as the block menu. See the `/` handler in onKeydown.
-const PR_COMMANDS = [
+// "Sluit menu" is pinned first (withClose); the menu opens on the 2nd item
+// (defaultSel), so "Naar PR-overzicht" stays the default Enter action.
+const PR_COMMANDS = withClose([
   {
     id: 'pr-overview',
     label: 'Naar PR-overzicht',
@@ -4223,7 +4247,7 @@ const PR_COMMANDS = [
     id: 'pr-github',
     label: 'GitHub',
     hint: 'github',
-    children: [
+    children: withClose([
       {
         id: 'pr-github-open',
         label: 'Open op GitHub',
@@ -4236,13 +4260,13 @@ const PR_COMMANDS = [
         hint: 'comment',
         run: () => startComment(),
       },
-    ],
+    ]),
   },
   {
     id: 'pr-jira',
     label: 'Jira',
     hint: 'jira',
-    children: [
+    children: withClose([
       {
         id: 'pr-jira-open',
         // Label names the ticket once we know it (title carried a KEY-123).
@@ -4264,7 +4288,7 @@ const PR_COMMANDS = [
         // Placeholder — no Jira subtask creation yet.
         run: () => {},
       },
-    ],
+    ]),
   },
   {
     id: 'pr-check-warnings',
@@ -4286,7 +4310,7 @@ const PR_COMMANDS = [
       state.descriptionExpanded = !state.descriptionExpanded
     },
   },
-]
+])
 
 // githubFileLine describes the exact file line the active change sits on, so we
 // can deep-link into GitHub's Files-changed diff. It prefers the new (head) side
@@ -4456,7 +4480,12 @@ function openMenu(mode = 'block') {
   // re-populates it immediately via positionMenu() below as long as its own
   // anchor row is visible.
   if (!isReviewFollowup(mode)) lastIndexRowRect = null
-  ms = reactive({ query: '', sel: 0, sub: null, mode, commands: snapshotCommands(rootCommandsFor(mode)) })
+  const commands = snapshotCommands(rootCommandsFor(mode))
+  // defaultSel starts the selection on the 2nd item — the pinned "Sluit
+  // menu" (withClose) is never itself the default Enter action — falling
+  // back to 0 for a mode with 0-1 real items (reviewReject's dynamic list,
+  // which never gets a close item, see withClose's doc comment).
+  ms = reactive({ query: '', sel: defaultSel(commands), sub: null, mode, commands })
   menu.open = true
   requestAnimationFrame(() => {
     // Position first — the palette starts visibility:hidden, and a hidden element
@@ -4483,7 +4512,9 @@ function closeMenu() {
 function enterSubmenu(children) {
   ms.sub = children
   ms.query = ''
-  ms.sel = 0
+  // Same "open on the 2nd item" convention as openMenu — every submenu gets
+  // its own pinned "Sluit menu" first (withClose), so start past it.
+  ms.sel = defaultSel(children)
   requestAnimationFrame(() => {
     positionMenu()
     const el = document.querySelector('[data-testid="command-input"]')
@@ -4521,7 +4552,7 @@ function onKeydown(e) {
       if (ms.sub) {
         ms.sub = null
         ms.query = ''
-        ms.sel = 0
+        ms.sel = defaultSel(ms.commands)
       } else {
         closeMenu()
       }

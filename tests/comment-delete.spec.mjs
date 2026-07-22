@@ -52,10 +52,12 @@ test.describe('PR Review Tree — delete a comment', () => {
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     const rows = page.getByTestId('command-row')
-    // Two items: "Resolve comment" (default, first) and "Verwijder comment".
-    await expect(rows).toHaveCount(2)
-    await expect(rows.first()).toContainText('Resolve comment')
-    await expect(rows.nth(1)).toContainText('Verwijder comment')
+    // Three items: "Sluit menu" (pinned first), "Resolve comment" (default,
+    // 2nd — where the selection opens) and "Verwijder comment".
+    await expect(rows).toHaveCount(3)
+    await expect(rows.first()).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Resolve comment')
+    await expect(rows.nth(2)).toContainText('Verwijder comment')
 
     // Move to the delete row before running it (resolve is the default).
     await page.keyboard.press('ArrowDown')
@@ -121,8 +123,9 @@ test.describe('PR Review Tree — delete a comment', () => {
     await page.keyboard.press('Enter')
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
-    // "Resolve comment" is the default (first) item — a plain Enter runs it.
-    await expect(page.getByTestId('command-row').first()).toContainText('Resolve comment')
+    // "Resolve comment" is the default item (2nd row, after the pinned "Sluit
+    // menu") — a plain Enter runs it.
+    await expect(page.getByTestId('command-row').nth(1)).toContainText('Resolve comment')
     await page.keyboard.press('Enter')
     await expect(menu).not.toBeVisible()
 

@@ -25,12 +25,14 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
     await expect(menu).toBeVisible()
     await expect(page.getByTestId('command-input')).toBeFocused()
     const rows = page.getByTestId('command-row')
-    // 5 root items since the code_warning PR-wide risk check was added to
-    // PR_COMMANDS (home.mjs), before the description toggle.
-    await expect(rows).toHaveCount(5)
-    await expect(rows.nth(0)).toContainText('Naar PR-overzicht')
-    await expect(rows.nth(1)).toContainText('GitHub')
-    await expect(rows.nth(2)).toContainText('Jira')
+    // 6 root items: a pinned "Sluit menu" (withClose, always first) plus the
+    // 5 real ones — the code_warning PR-wide risk check sits before the
+    // description toggle (see PR_COMMANDS in home.mjs).
+    await expect(rows).toHaveCount(6)
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Naar PR-overzicht')
+    await expect(rows.nth(2)).toContainText('GitHub')
+    await expect(rows.nth(3)).toContainText('Jira')
 
     // Positioning: the palette takes the description column's left + width
     // (26rem) — so it floats over/near the description, not at the diff

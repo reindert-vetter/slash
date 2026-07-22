@@ -245,12 +245,36 @@ menu-render én de keyboard-handler zodat beide dezelfde lijst zien. `CommandMen
 zelf is puur presentatie: het krijgt `menu`, een `resolve(query)`-functie en `onRun`,
 en bevat geen filter- of navigatielogica.
 
+**Elk (klein) menu opent met een gepinde `"Sluit menu"` vooraan, en start
+gefocust op het 2e item.** `withClose(list, onClose)` (`home.mjs`) prependt dat
+item aan zowel elke root-lijst (`COMMANDS`, `PR_COMMANDS`, `COMPOSE_COMMANDS`,
+`COMMENT_COMMANDS`, `POSTAPPROVE_COMMANDS`, `REVIEW_APPROVE_COMMANDS`,
+`REVIEW_CHOICE_COMMANDS`) als elk submenu (`children`, incl. "Open GitHub" en de
+PR-brede/compose-Jira-submenu's) — kiezen ervan sluit in **elk** geval het hele
+palette, ook vanuit een submenu (`Esc` blijft daarnaast gewoon één stap terug
+naar de root doen, ongewijzigd). `postApprove`'s eigen `onClose` ruimt daarbij
+ook `postApproveTarget` op — mirror van de oude, losse close-items die het nu
+vervangt (die stonden voorheen als láátste item; nu is er nog maar één
+gedeelde definitie, altijd vooraan). Om te voorkomen dat die vaste eerste rij
+de default Enter-actie wordt, opent elk vers menu/submenu **op het 2e item**
+(`defaultSel(list)` = `Math.min(1, Math.max(0, list.length-1))`, gebruikt in
+`openMenu`/`enterSubmenu`/de Esc-terug-naar-root-tak in `onKeydown`) — valt
+terug op index 0 zodra een lijst 0 of 1 echt item telt. Dit geldt bewust
+**niet** voor de `reviewReject`-stap (de vrije-tekst afwijzingsreden, verderop
+— een dynamische 0/1-item-lijst) en de "geen match"-`make-comment`-fallback
+hierboven: beide zijn losse, dynamisch opgebouwde acties waar een gepinde
+close + start-op-2e-item "typ, Enter" zou breken. De per-toetsaanslag
+`sel`-reset (`CommandMenu.mjs`'s `@input`-handler) blijft op `0` — dat wijst
+simpelweg naar de bovenste rij van het op dat moment gefilterde resultaat, niet
+naar "het 2e item van de volledige lijst".
+
 **Na het goedkeuren via de palette** (niet via de top-checkbox op de block-kaart —
 die blijft een direct togglende klik zonder vervolg) opent, als er nog een
 volgende niet-goedgekeurde unit bestaat, meteen een **vervolgmenu**
-(`menu.mode = 'postApprove'`, `POSTAPPROVE_COMMANDS` in `home.mjs`): **"Ga door
-naar de volgende niet-goedgekeurde code"** (default, eerste item — navigeert
-alleen, keurt niets automatisch goed) of **"Sluit menu"**. Dit triggert alleen
+(`menu.mode = 'postApprove'`, `POSTAPPROVE_COMMANDS` in `home.mjs`): **"Sluit
+menu"** (gepind vooraan) of **"Ga door naar de volgende niet-goedgekeurde
+code"** (default, het 2e item waar de selectie opent — navigeert alleen, keurt
+niets automatisch goed). Dit triggert alleen
 als de actie goedkeuring **toevoegde** (`toggleApprove`/`toggleCallApprove`
 detecteren dat via `allIn`/`keys.has(key)` **vóór** de mutatie — intrekken van een
 goedkeuring opent dit menu nooit) én er daadwerkelijk nog iets openstaat
@@ -333,7 +357,8 @@ waar, dan verzet 'm **alleen** `state.selected` (naar `target.root`) +
 door een Onderliggende-code-kind zou lopen blijft "Ga door" vanuit de index bij
 de platte lijst-stap staan — drillen heeft alleen betekenis eenmaal in de
 diff. Onwaar, dan het bestaande pad (drilt zo nodig naar `target.path` en
-springt de diff van de nieuwe unit in). Het `POSTAPPROVE_COMMANDS[0]`-label
+springt de diff van de nieuwe unit in). Het `postapprove-next`-label (het 2e
+item van `POSTAPPROVE_COMMANDS`, na de gepinde "Sluit menu" — zie hierboven)
 is om die reden ook een **functie** (i.p.v. de vorige kale string), gelezen op
 snapshot-tijd (`openMenu` → `snapshotCommands`, vlak nadat `postApproveTarget`
 gezet is — dezelfde veilige, niet-reactieve timing als het `approve`-label): "Ga
@@ -379,15 +404,15 @@ Promise.resolve()`-microtask-ticks (dezelfde `loadBlocks`-precedent-wachttijd
 — de `approvalSummaries`/`approvalTotal`-watch is ontkoppeld en vult pas als
 microtask, niet synchroon met de zojuist gereassignde `b.approvedRows`):
 - **Alles goedgekeurd** (`approvalTotal.done === total`, `total > 0`) →
-  `menu.mode = 'reviewApprove'` (`REVIEW_APPROVE_COMMANDS`): alleen **"Keur de
-  PR goed"** / **"Sluit menu"** — er valt niets meer af te wijzen, alles is al
-  beoordeeld.
+  `menu.mode = 'reviewApprove'` (`REVIEW_APPROVE_COMMANDS`): **"Sluit menu"**
+  (gepind vooraan) / **"Keur de PR goed"** (default, het 2e item) — er valt
+  niets meer af te wijzen, alles is al beoordeeld.
 - **Nog niet alles** (er staat iets open, ergens buiten het bereik van de
   voorwaartse zoektocht — bv. een eerder blok dat de reviewer nog niet
-  bereikte) → `menu.mode = 'reviewChoice'` (`REVIEW_CHOICE_COMMANDS`): **"Keur
-  de PR goed"** / **"Wijs de PR af"** / **"Sluit menu"** — de reviewer besluit
-  hier expliciet of hij de PR al indient ondanks het openstaande restant, of
-  eerst wijzigingen vraagt.
+  bereikte) → `menu.mode = 'reviewChoice'` (`REVIEW_CHOICE_COMMANDS`): **"Sluit
+  menu"** (gepind vooraan) / **"Keur de PR goed"** (default, het 2e item) /
+  **"Wijs de PR af"** — de reviewer besluit hier expliciet of hij de PR al
+  indient ondanks het openstaande restant, of eerst wijzigingen vraagt.
 Beide "Keur de PR goed"-items roepen **`submitReview('APPROVE')`** aan — een
 echte GitHub PR-level review, via `POST /api/workflows/submit_review {pr,
 event, body}` (de sanctioned write-weg, zie `workflows-write-boundary.md`; de
@@ -425,8 +450,9 @@ laatste test in `tests/postapprove-menu.spec.mjs`
 Hetzelfde menu-mechanisme bedient ook een **comment-scoped** variant: staat de
 keyboard op een geplaatste comment-rij in `RelatedPanel` (`cs.focus === 'comment'`,
 vóór het instappen in de thread) én is het reply-veld nog **leeg**, dan opent
-`Enter` niet de block-palette maar een menu met twee keuzes — **"Resolve
-comment"** (het default/eerste item) en **"Verwijder comment"**
+`Enter` niet de block-palette maar een menu met drie rijen — **"Sluit menu"**
+(gepind vooraan), **"Resolve comment"** (default, het 2e item, waar de
+selectie opent) en **"Verwijder comment"**
 (`menu.mode = 'comment'`, `COMMENT_COMMANDS` in `home.mjs`; `resolveCommands`
 schakelt op `menu.mode` om, `openMenu(mode)` zet 'm, `closeMenu` reset 'm terug
 naar `'block'`). Een **niet-leeg** reply-veld laat `Enter` met rust — dan wint het
@@ -463,10 +489,11 @@ Datzelfde `CommandMenu`-mechanisme bedient ook een **comment-soort-menu**
 (`menu.mode = 'compose'`, `COMPOSE_COMMANDS` in `home.mjs`): staat de composer
 open én is er tekst getypt, dan opent **`Enter`** (en de composer-knop
 **"Plaats…"**, via de `openCompose`-prop van `RelatedPanel`) niet meteen de
-comment, maar een menu met vijf keuzes wat ermee moet gebeuren: **"Plaats
-comment"** (het **default/eerste** item — het menu opent met `ms.sel` op 0,
-dus "typ, Enter, Enter" plaatst 'm nog steeds net zo direct als voorheen),
-*Claude commando* (placeholder), *Laat Claude dit implementeren
+comment, maar een menu met zes rijen wat ermee moet gebeuren: **"Sluit menu"**
+(gepind vooraan), **"Plaats comment"** (het **default** item, het 2e in de
+lijst, waar de selectie opent — dus "typ, Enter, Enter" plaatst 'm nog steeds
+net zo direct als voorheen), *Claude commando* (placeholder), *Laat Claude dit
+implementeren
 (groep/regel/call)* — placeholder, label benoemt de huidige unit via
 `granNoun()` uit `commentTarget()` —, *Alleen voor mijzelf* en *Jira* (een
 submenu met *Comment op ticket* / *Subtaak aanmaken* / *Nieuwe taak aanmaken*,
@@ -493,9 +520,13 @@ verse-`ms`-state-split, zie `.claude/rules/conventions.md`.
 
 **`/`** opent een **algemeen, PR-breed tree-menu** (`menu.mode = 'pr'`,
 `PR_COMMANDS` in `home.mjs`) — hetzelfde `CommandMenu`-overlay als `Enter`, maar
-i.p.v. block-acties zijn dit acties op de **hele PR**. Vier root-items: **"Naar
-PR-overzicht"** (navigeert naar `/pr-overview`), **"GitHub"** en **"Jira"** (de
-middelste twee als **submenu** via het bestaande `children`-mechanisme), en
+i.p.v. block-acties zijn dit acties op de **hele PR**. Zes root-items: **"Sluit
+menu"** (gepind vooraan, waar de selectie sinds kort altijd op het item erná
+opent), **"Naar PR-overzicht"** (navigeert naar `/pr-overview`, en dus het
+default item waar de selectie opent), **"GitHub"** en **"Jira"** (als
+**submenu** via het bestaande `children`-mechanisme — elk submenu krijgt zelf
+ook zo'n gepinde "Sluit menu"), **"Controleer de hele PR op risico's"** (start
+`code_warning`, zie `checkPRWarnings`/`.claude/rules/tembed-workflows.md`), en
 **"Toon volledige omschrijving" / "Omschrijving inklappen"** (het laatste item,
 een label-functie die `state.descriptionExpanded` toggelt — dezelfde efemere vlag
 als de in-card "meer…"-affordance in de PR-info-kolom, zie
