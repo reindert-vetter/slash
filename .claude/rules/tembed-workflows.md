@@ -506,8 +506,8 @@ deze PR gewijzigd is** (beide kanten moeten wijzigen om te koppelen).
   dubbele-kolom-fout genegeerd — hetzelfde patroon als de comments-module).
 - **Analyse-service `relations.go`** (package main, géén module — leest de
   head-worktree = side-effect): `buildRelations(dataDir, pr, blocks)` draait een
-  lijst **detectors** (nu `eventListenerDetector` + de vijf Laravel-detectors
-  hieronder). De event→listener-map komt
+  lijst **detectors** (nu `eventListenerDetector` + `providerListenerDetector` +
+  de vijf Laravel-detectors hieronder). De event→listener-map komt
   robuust uit drie bronnen (union): de `handle(EventType $e)`-type-hint, het
   `$listen`-array in een `*ServiceProvider.php`, en `Event::listen(...)`-calls;
   dispatch-sites worden per blok-body gescand (`event(new X`, `X::dispatch(`, …).
@@ -522,6 +522,25 @@ deze PR gewijzigd is** (beide kanten moeten wijzigen om te koppelen).
   extra regel-anker vastgelegd; `TestBuildRelationsLaravelChainCapturesLine`
   (`relations_test.go`) verifieert 'm tegen een onafhankelijke scan van de
   fixture-broncode.
+  **`providerListenerDetector` is het spiegelbeeld van `eventListenerDetector`:**
+  die laatste vindt de parent uitsluitend via een **dispatch-site** in een
+  gewijzigd blok (`event(new X`, `X::dispatch(`, …) — een `*ServiceProvider`
+  die alleen registreert (nooit zelf dispatcht) leverde dus nooit een parent
+  op, ook niet als zijn eigen `$listen`-registratie voor een gewijzigde
+  listener in de PR wijzigde (bv. een nieuwe `OrderCreated::class =>
+  [SyncOrderFlow::class]`-regel). `providerListenerDetector` dekt precies dat
+  geval: voor elk gewijzigd `<class-header>`-blok (`classHeaderSentinel`,
+  zie `blocks-and-ingest.md`) van een `*ServiceProvider.php`-bestand scant hij
+  **zijn eigen** blok-tekst (niet de repo-brede `providerEventMap`-file-scan)
+  met dezelfde `reListenBlock`/`reListenEntry`-regexes, en voor elke
+  `Listener::class`-entry die zelf een gewijzigd `handle()`-blok is
+  (`changedListenerHandles`, geëxtraheerd uit `eventListenerDetector` zodat
+  beide detectors 'm delen), wordt de **ServiceProvider zelf** de parent
+  (`relations.KindEventListener` — geen nieuw kind, de child ís nog steeds
+  "de listener", ongeacht of de parent 'm dispatcht of registreert). Nog
+  steeds both-changed: geen edge als de listener niet zelf een gewijzigd blok
+  is. Tests: `TestBuildRelationsProviderListener`/
+  `TestBuildRelationsProviderListenerBothSidesRequired` (`relations_test.go`).
 - **Laravel request-keten** — vijf extra **`kind`s**, allemaal **both-changed**
   (net als `event_listener`: een edge verschijnt alléén als beide blokken in deze
   PR wijzigen; ongewijzigde bestanden worden nooit als node geïnjecteerd, en het

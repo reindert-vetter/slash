@@ -24,6 +24,7 @@ type relationDetector func(headDir string, pr int, blocks []Block) []relations.R
 
 var relationDetectors = []relationDetector{
 	eventListenerDetector,
+	providerListenerDetector,
 	routeControllerDetector,
 	controllerRequestDetector,
 	controllerResourceDetector,
@@ -52,14 +53,9 @@ func buildRelations(dataDir string, pr int, blocks []Block) []relations.Relation
 func eventListenerDetector(headDir string, pr int, blocks []Block) []relations.Relation {
 	// Index the changed listener handle-blocks: by class short name (to combine
 	// with the provider map) and by the event they handle (their type-hint).
-	handleByClass := map[string]Block{}
+	handleByClass := changedListenerHandles(blocks)
 	listenerByEvent := map[string][]Block{}
-	for _, b := range blocks {
-		if b.Side == SideOld || b.Name != "handle" || b.Class == "" || !isListenerBlock(b) {
-			continue
-		}
-		short := shortName(b.Class)
-		handleByClass[short] = b
+	for _, b := range handleByClass {
 		if ev := handleEventType(headDir, b); ev != "" {
 			listenerByEvent[ev] = appendBlock(listenerByEvent[ev], b)
 		}
@@ -112,6 +108,62 @@ func isListenerBlock(b Block) bool {
 		strings.Contains(b.File, "Listeners") ||
 		strings.HasSuffix(b.Class, "Listener") ||
 		strings.HasSuffix(b.Class, "Subscriber")
+}
+
+// changedListenerHandles indexes the PR's changed (new-side) Listener::handle
+// blocks by class short name — shared by eventListenerDetector (dispatch-site
+// matching) and providerListenerDetector (provider-registration matching)
+// below, since both need "is this listener class a changed block?".
+func changedListenerHandles(blocks []Block) map[string]Block {
+	out := map[string]Block{}
+	for _, b := range blocks {
+		if b.Side == SideOld || b.Name != "handle" || b.Class == "" || !isListenerBlock(b) {
+			continue
+		}
+		out[shortName(b.Class)] = b
+	}
+	return out
+}
+
+// providerListenerDetector links a changed *ServiceProvider's own $listen
+// registration to the changed Listener::handle it names. This is the mirror
+// case of eventListenerDetector: there the parent dispatches the event
+// somewhere in its body; here the ServiceProvider never dispatches anything —
+// it only registers which listener reacts to which event — so the parent is
+// the ServiceProvider block itself, scoped to its own <class-header> body
+// (which is where $listen lives, see classHeaderSentinel). Both sides must
+// still be changed blocks of this PR: the provider's <class-header> (it
+// registered a listener there) and the listener's handle().
+func providerListenerDetector(headDir string, pr int, blocks []Block) []relations.Relation {
+	handleByClass := changedListenerHandles(blocks)
+	if len(handleByClass) == 0 {
+		return nil
+	}
+
+	var out []relations.Relation
+	emit := edgeEmitter(&out, pr, relations.KindEventListener)
+	for _, b := range blocks {
+		if b.Side == SideOld || b.Name != classHeaderSentinel || !strings.HasSuffix(b.File, "ServiceProvider.php") {
+			continue
+		}
+		src := blockText(headDir, b)
+		text := src.Text
+		if text == "" {
+			continue
+		}
+		lm := reListenBlock.FindStringSubmatch(text)
+		if lm == nil {
+			continue
+		}
+		for _, entry := range reListenEntry.FindAllStringSubmatch(lm[1], -1) {
+			for _, c := range reClassRef.FindAllStringSubmatch(entry[2], -1) {
+				if listener, ok := handleByClass[shortName(c[1])]; ok {
+					emit(b, listener, matchLine(text, c[0], src.Start))
+				}
+			}
+		}
+	}
+	return out
 }
 
 var (

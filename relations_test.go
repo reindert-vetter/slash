@@ -126,6 +126,79 @@ func TestBuildRelationsBothSidesRequired(t *testing.T) {
 	}
 }
 
+// writeProviderListenerFixtureRepo lays out a head worktree for pr with a
+// ServiceProvider that only registers listeners (never dispatches anything
+// itself) and one listener whose handle it names — the mirror case of
+// writeFixtureRepo's dispatch-site matching.
+func writeProviderListenerFixtureRepo(t *testing.T, dataDir string, pr int) {
+	t.Helper()
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Providers/EventServiceProvider.php": `<?php
+namespace App\Providers;
+class EventServiceProvider
+{
+    protected $listen = [
+        OrderCreated::class => [
+            SyncOrderFlow::class,
+        ],
+    ];
+}
+`,
+		"app/Listeners/SyncOrderFlow.php": `<?php
+namespace App\Listeners;
+class SyncOrderFlow {
+    public function handle($event) {
+        // sync
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// providerListenerFixtureBlocks are the changed blocks matching
+// writeProviderListenerFixtureRepo.
+func providerListenerFixtureBlocks(pr int) (provider, listener Block) {
+	provider = Block{PR: pr, File: "app/Providers/EventServiceProvider.php", Class: "EventServiceProvider", Name: classHeaderSentinel, Category: "OTHER", Side: SideNew, Status: StatusModified}
+	listener = Block{PR: pr, File: "app/Listeners/SyncOrderFlow.php", Class: "SyncOrderFlow", Name: "handle", Category: "LISTENER", Side: SideNew, Status: StatusAdded}
+	return
+}
+
+func TestBuildRelationsProviderListener(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 44
+	writeProviderListenerFixtureRepo(t, dataDir, pr)
+	provider, listener := providerListenerFixtureBlocks(pr)
+
+	rels := buildRelations(dataDir, pr, []Block{provider, listener})
+	if len(rels) != 1 || !hasEdge(rels, provider, listener) {
+		t.Fatalf("want exactly the provider→SyncOrderFlow edge, got %+v", rels)
+	}
+}
+
+func TestBuildRelationsProviderListenerBothSidesRequired(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 45
+	writeProviderListenerFixtureRepo(t, dataDir, pr)
+	provider, _ := providerListenerFixtureBlocks(pr)
+
+	// The listener's handle is NOT a changed block → the $listen registration
+	// alone must not produce an edge, even though the ServiceProvider changed.
+	rels := buildRelations(dataDir, pr, []Block{provider})
+	if len(rels) != 0 {
+		t.Fatalf("want 0 relations without a changed listener, got %+v", rels)
+	}
+}
+
 func TestRelationsModuleRoundTrip(t *testing.T) {
 	m, err := relations.Open(filepath.Join(t.TempDir(), "relations.db"))
 	if err != nil {
