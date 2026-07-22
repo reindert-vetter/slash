@@ -1417,19 +1417,22 @@ function findCallSites(rows, name) {
 // list of calls.
 function callScopeMethods(b, rows) {
   if (state.mode !== 'diff') return null
-  // Cursor-based scoping (state.change/gran) only makes sense for the block the
-  // reviewer is actually stepping through with the keyboard — the top-level
-  // selected block. A drilled-into child has no navigable cursor of its own (only
-  // its Onderliggende-code panel is interactive), so it always shows its full call
-  // list, like list mode.
-  if (state.drill.length && b !== curBlock()) return null
-  const unit = unitsFor(rows, state.gran)[state.change]
+  // Cursor-based scoping only makes sense for whichever column the reviewer is
+  // actually stepping through with the keyboard right now — the top-level
+  // selected block OR the focused drilled column, using ITS OWN
+  // state.drillCursor[level-1] cursor (focusedGranCursor), not always
+  // state.gran/state.change. A block that isn't focused (top-level while
+  // drilled, or an unfocused drilled column) has no active cursor to scope
+  // by, so it always shows its full call list, like list mode.
+  if (b !== focusedBlock()) return null
+  const cur = focusedGranCursor()
+  const unit = unitsFor(rows, cur.gran)[cur.change]
   if (!unit) return null
   const methods = new Set()
   for (const r of callRows(b)) {
     const sites = findCallSites(rows, r.callKey)
     const inScope =
-      state.gran === 'call'
+      cur.gran === 'call'
         ? sites.some((s) => s.row === unit.start && s.segStart === unit.segStart)
         : sites.some((s) => s.row >= unit.start && s.row <= unit.end)
     if (inScope) methods.add(r.callKey)
@@ -1439,19 +1442,23 @@ function callScopeMethods(b, rows) {
 
 // groupLineRange returns the absolute new-side source line range the
 // reviewer's currently selected *group* unit covers, or null when group-level
-// reordering doesn't apply (not diff mode, not gran 'group', a drilled
-// non-focused block, or the unit/code isn't available yet — mirrors
-// callScopeMethods' own guards). relatedChildren uses this to decide whether a
-// relation/testcovers row's recorded site line (see childrenOf/
+// reordering doesn't apply (not diff mode, the focused cursor isn't on gran
+// 'group', a non-focused block, or the unit/code isn't available yet —
+// mirrors callScopeMethods' own guards, incl. using focusedGranCursor so a
+// focused DRILLED column's own gran/change is what's checked, not always the
+// top-level state.gran/state.change). relatedChildren uses this to decide
+// whether a relation/testcovers row's recorded site line (see childrenOf/
 // resolvedTestCoverChildren) sits "inside" the reviewer's current selection —
 // unlike callScopeMethods (row-index based, for method-call children), a
 // relation/testcovers row only carries an absolute *source* line
 // (relations.Relation.Line / testcovers.Entry.Line), so this reuses
 // unitLineRange's row→line mapping instead.
 function groupLineRange(b, rows) {
-  if (state.mode !== 'diff' || state.gran !== 'group') return null
-  if (state.drill.length && b !== curBlock()) return null
-  const unit = unitsFor(rows, 'group')[state.change]
+  if (state.mode !== 'diff') return null
+  if (b !== focusedBlock()) return null
+  const cur = focusedGranCursor()
+  if (cur.gran !== 'group') return null
+  const unit = unitsFor(rows, 'group')[cur.change]
   if (!unit) return null
   const { startLine, endLine, side } = unitLineRange(b, rows, unit)
   if (side !== 'RIGHT' || !startLine) return null
@@ -1494,12 +1501,15 @@ function codeSize(code) {
 
 function relatedChildren(b) {
   // Both the hide (line/call) and the reorder (group) scoping only apply to
-  // the top-level selected block's own cursor — a drilled-into child has no
-  // independent gran/change cursor (see callScopeMethods/groupLineRange).
-  const isTopCursor = b === curBlock() && !state.drill.length
-  const scoped = isTopCursor && state.mode === 'diff' && (state.gran === 'call' || state.gran === 'line')
+  // whichever column currently owns the keyboard — the top-level selected
+  // block OR the focused drilled column, using ITS OWN drillCursor entry
+  // (focusedGranCursor) — never a block that isn't focused right now (see
+  // callScopeMethods/groupLineRange, which resolve the same cursor).
+  const isFocusedCursor = b === focusedBlock()
+  const scoped =
+    isFocusedCursor && state.mode === 'diff' && (focusedGranCursor().gran === 'call' || focusedGranCursor().gran === 'line')
   const rows = blockRows(b)
-  const range = isTopCursor ? groupLineRange(b, rows) : null
+  const range = isFocusedCursor ? groupLineRange(b, rows) : null
   const inRange = (line) => range != null && line != null && line >= range.startLine && line <= range.endLine
   const evt = scoped
     ? []
@@ -1614,8 +1624,12 @@ function resolvedCallChildren(b) {
   const scope = callScopeMethods(b, rows)
   // callScopeMethods scopes at every diff granularity (group/line/call) — only
   // hide outright at line/call; at group, keep everything and let groupTier
-  // (below) reorder instead.
-  const hideOutOfScope = state.mode === 'diff' && state.gran !== 'group'
+  // (below) reorder instead. Reads the FOCUSED cursor's own gran (top-level or
+  // a drilled column's drillCursor entry, see focusedGranCursor) rather than
+  // always state.gran — scope is only ever non-null when b === focusedBlock()
+  // anyway (callScopeMethods' own guard), so this only matters in exactly the
+  // case where it needs to.
+  const hideOutOfScope = state.mode === 'diff' && focusedGranCursor().gran !== 'group'
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
   const changed = new Set(changedRows(rows))
   return resolved
@@ -2800,6 +2814,20 @@ function focusedBlock() {
   return state.focusLevel === 0 ? curBlock() : state.drill[state.focusLevel - 1]
 }
 
+// focusedGranCursor resolves the {gran, change} of whichever column currently
+// owns the keyboard — the top-level state.gran/state.change (focusLevel 0), or
+// the focused drilled column's own state.drillCursor[level-1] entry
+// (focusLevel > 0). Mirrors callArrowPairs' inline `cur` resolution and
+// approveContext's level-branch; callScopeMethods/groupLineRange/
+// relatedChildren/resolvedCallChildren use it so the Onderliggende-code panel
+// scopes/reorders on whichever column is actually focused, not always the
+// top-level block (see .claude/rules/detail-layout.md, "Kolom-navigatie").
+function focusedGranCursor() {
+  const level = state.focusLevel
+  if (level > 0) return state.drillCursor[level - 1] || { change: 0, gran: 'group' }
+  return { change: state.change, gran: state.gran }
+}
+
 // drillSiblingContext locates, for the drilled column at `level` (1-based,
 // matching state.drill's indexing), its PARENT block plus its own position in
 // that parent's Onderliggende-code list — the sibling list drillNextChange/
@@ -3422,10 +3450,12 @@ watch(
     state.blockTotals,
     state.drill,
     // focusLevel + drillCursor so a step (f/d/s/↑/↓) WITHIN an already-drilled
-    // column re-fires this watch too — callArrowPairs now reads the focused
-    // column's own drillCursor entry (see its comment), so without these the
-    // overlay would only redraw on a top-level cursor move or a drill/undrill,
-    // never on a granularity/change step taken while already drilled.
+    // column re-fires this watch too — callArrowPairs AND relatedChildren
+    // (via callScopeMethods/groupLineRange/resolvedCallChildren, all reading
+    // focusedGranCursor) now read the focused column's own drillCursor entry,
+    // so without these the overlay/panel would only redraw on a top-level
+    // cursor move or a drill/undrill, never on a granularity/change step
+    // taken while already drilled.
     state.focusLevel,
     state.drillCursor,
     // testsExpanded so toggling the grouped covering-tests bar (see
