@@ -32,6 +32,13 @@ func blockChangedRowCount(baseDir, headDir string, b Block) int {
 	// doc/types to fold, so an untouched block's count is unaffected.
 	oldText, _ = enrichSignatureWithDocTypes(oldText)
 	newText, _ = enrichSignatureWithDocTypes(newText)
+	// Also drop a single wholly-blank trailing line (trimTrailingBlankLine,
+	// codesig.go) — the same tail-trim /api/code applies for display, kept
+	// here for Go/Go parity between the two call sites. In practice a no-op
+	// on the returned count: such a row is already excluded by rowHasContent
+	// below, since it's blank either way.
+	oldText, _ = trimTrailingBlankLine(oldText)
+	newText, _ = trimTrailingBlankLine(newText)
 	return changedRowCount(oldText, newText)
 }
 

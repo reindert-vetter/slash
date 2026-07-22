@@ -13,6 +13,12 @@ import (
 // @return/@param types are spliced into the signature there is nothing left in
 // the doc worth showing as its own diff-able code.
 //
+// A second, independent transform in this file, trimTrailingBlankLine, drops
+// a single wholly-blank trailing line — see its own doc comment below for why
+// (classHeaderSentinel's inferred block boundary). It is orthogonal to the
+// doc-fold: it fires regardless of whether enrichSignatureWithDocTypes did
+// anything, and it adjusts the tail (End) rather than the head (Start).
+//
 // This is display-only: it does NOT touch extractBlockSource/blockSource
 // themselves (relations.go / callresolve_analysis.go / testcovers_analysis.go
 // still read the raw, line-accurate source for their own regex/offset work —
@@ -132,6 +138,40 @@ func enrichSignatureWithDocTypes(text string) (out string, removedLines int) {
 		removedLines++
 	}
 	return out, removedLines
+}
+
+// trimTrailingBlankLine drops a single, wholly-blank trailing line from text,
+// if there is one, and reports how many lines were removed (0 or 1).
+//
+// This exists for the classHeaderSentinel synthetic block (phpscan.go):
+// unlike a real function/method — whose EndLine is always its own closing
+// `}` — the header block's end is INFERRED (the line right before the next
+// class member's declaration, itself possibly pulled back to a leading
+// PHPDoc/attribute — see phpscan.go's declLine, or right before the closing
+// `}` if the class never gets a method), so a stylistic blank-line separator
+// between the header's last real line and whatever follows ends up attached
+// to the tail of the header's own slice. That's a slicing artifact, not
+// reviewable content — dropping it is display-only, exactly like
+// enrichSignatureWithDocTypes: it does NOT touch phpscan.go's
+// Block.Line/EndLine themselves, so classify.go's "is this block touched by
+// the diff" decision, and everything that keys off the block's stored line
+// range, is unaffected.
+//
+// Safe to apply unconditionally to every block, not just class-headers: a
+// real function/method's text always ends on its own closing `}` (never
+// blank), so this is a no-op for the overwhelming majority of blocks.
+func trimTrailingBlankLine(text string) (out string, removedTrailing int) {
+	if text == "" {
+		return text, 0
+	}
+	nl := strings.LastIndexByte(text, '\n')
+	if nl < 0 {
+		return text, 0 // single line, nothing to trim
+	}
+	if strings.TrimSpace(text[nl+1:]) != "" {
+		return text, 0 // last line has real content
+	}
+	return text[:nl], 1
 }
 
 // docEdit is one splice into `rest` (the block text after the removed doc):

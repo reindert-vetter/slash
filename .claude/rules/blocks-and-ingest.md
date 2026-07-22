@@ -363,6 +363,56 @@ navigeerbare lijst tonen.
   een gevouwen `ChildCode`/`CoveredCode` zonder `/**` en een verschoven
   `ChildLine`/`CoveredLine` op) en `resolve_call_test.go`/
   `resolve_test_covers_test.go` (hetzelfde voor het LLM-`found`-pad).
+- **Een lege staart-regel wegtrimmen (`trimTrailingBlankLine`, `codesig.go`),
+  onafhankelijk van de PHPDoc-fold hierboven.** `classHeaderSentinel`
+  (`phpscan.go`, zie de doc-comment daar) heeft geen eigen sluitende `}` —
+  zijn `EndLine` is **afgeleid** als `declLine - 1` (de regel vlak vóór de
+  eerstvolgende method-declaratie, zelf mogelijk teruggetrokken tot een
+  leidende PHPDoc/attribuut door de "PHPDoc pulls Block.Line"-wijziging
+  hierboven) resp. als de regel vlak vóór de class' sluitende `}` als de class
+  nooit een method krijgt. Staat er — heel gewoon PHP-stijl — een lege regel
+  tussen de laatste header-inhoud (een `case`, property, constant) en wat
+  daarna komt, dan wordt die lege regel letterlijk mee-geslicet als de
+  **laatste regel** van de header-blok-tekst: een zichtbaar lege, gehighlighte
+  rij onderaan de diff-kaart, zonder enige betekenis (de rij is sowieso al
+  niet telbaar/navigeerbaar — `rowHasContent` sluit 'm al uit van
+  `changedRows`/de approve-`total`, dit is zuiver een render-artefact).
+  `trimTrailingBlankLine(text)` knipt precies **één** wholly-blank laatste
+  regel van `text` (regex-vrij: laatste `\n` opzoeken, `TrimSpace` op wat
+  erna komt) en meldt hoeveel regels dat waren (0 of 1) — bewust geen lus
+  (multi-blank-lijnen-trim), dit dekt het geobserveerde geval (één stijl-lege
+  scheidingsregel) zonder verder te gokken. **Volledig orthogonaal aan de
+  PHPDoc-fold:** het vuurt ongeacht of `enrichSignatureWithDocTypes` iets
+  deed, en het corrigeert de **staart** (`End`) in plaats van het **begin**
+  (`Start`) — de twee correcties leven dus onafhankelijk naast elkaar in
+  `enrichedCodeSide` en in `blockstats.go`'s `blockChangedRowCount` (exact
+  dezelfde twee call-sites als de PHPDoc-fold, voor dezelfde Go/Go-
+  parity-reden; in `blockstats.go` numeriek een no-op omdat de rij toch al
+  door `rowHasContent` werd uitgesloten, maar toegepast om de twee
+  transform-pijplijnen niet uiteen te laten lopen). **Raakt bewust NIET**
+  `phpscan.go`'s `Block.Line`/`EndLine` of `classify.go`'s "is dit blok
+  geraakt door de diff"-beslissing — puur display, exact zoals de PHPDoc-fold
+  zelf: een blok dat alleen via deze lege staart-regel als `modified`
+  classificeert (zoals een enum-`<class-header>` waar verder niets in de
+  cases wijzigde, alleen een nieuwe method + de scheidingsregel eronder werd
+  toegevoegd) blijft dus gewoon zichtbaar in de review-boom — alleen de lege
+  rij zelf verdwijnt uit wat de reviewer ziet. (Een alternatief dat wél
+  `phpscan.go`'s `EndLine`-berekening had aangepast, is bewust afgewezen: dat
+  zou dit specifieke blok — waarvan verder niets veranderde — juist volledig
+  buiten de diff laten vallen en dus uit de reviewboom laten verdwijnen, een
+  veel grotere gedragswijziging dan "verwijder de lege rij uit de weergave".)
+  Safe-by-construction voor elk ander blok: een echte functie/method's
+  `EndLine` is altijd zijn eigen sluitende `}` (nooit blanco), dus deze trim
+  is een no-op voor de overgrote meerderheid van blokken — inclusief elke
+  embedded Onderliggende-code-child (dezelfde `enrichedCodeSide`-wrapper,
+  zie hierboven), zonder aparte wiring.
+  Test: `codesig_test.go` (`trimTrailingBlankLine` zelf: blanco laatste regel
+  via een trailing `\n`, een whitespace-only laatste regel, een no-op op
+  echte inhoud/single-line/lege string, en dat twee opeenvolgende lege regels
+  bewust maar één keer trimmen; `enrichedCodeSide` met alleen de staart-trim,
+  zonder enige transform, en met de PHPDoc-fold + staart-trim gecombineerd in
+  één aanroep om te bewijzen dat `Start`-bump en `End`-verlaging onafhankelijk
+  correct blijven).
 - **Uitzondering: een kale `#[Test]`-only wijziging telt bewust NIET als
   "modified" (`classify.go`).** Een toegevoegd/verwijderd/aangepast `#[Test]`
   (PHPUnit's argumentloze test-marker) heeft geen reviewbare betekenis — anders
