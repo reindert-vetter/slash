@@ -37,6 +37,7 @@ import RelatedPanel, {
   commentReplyEmpty,
   commentSelIndex,
   deleteFocusedComment,
+  resolveFocusedComment,
   commentRowSet,
   setCommentScope,
   setRelated,
@@ -149,6 +150,28 @@ const state = reactive({
   // single self-contained diff). Populated in drillIntoChild (gran defaults to
   // 'group'), walked by drillNextChange/drillPrevChange/setDrillGran.
   drillCursor: [],
+  // drillRef — the URL-facing identity of the whole drill path: each entry's
+  // stable `.id` (a real block id, or a synthetic call-frame's caller-scoped
+  // id — see resolveChildBlock), joined by `>` (never appears inside an id).
+  // Mirrors state.drill the same way blockRef mirrors state.selected — an
+  // array index would be meaningless across a reload, the id path survives
+  // it. Mirrored to `?drill=` (see bindUrlState below) by a watch, and walked
+  // back into real drilled columns once loadBlocks' data has landed (see the
+  // drillRefPending/applyDrillRefRestore note further down).
+  drillRef: '',
+  // drillGran / drillChange — the URL-facing mirror of the DEEPEST (focused)
+  // drilled column's own {gran, change} cursor — state.drillCursor's last
+  // entry — analogous to state.gran/state.change for the top-level cursor.
+  // Only the deepest level is worth restoring: every ancestor (non-focused)
+  // drilled column collapses to a narrow rail anyway (see "Niet-gefocuste
+  // kolommen klappen in tot een smalle rail" in detail-layout.md), so its own
+  // exact change/gran is never visible. Mirrored to `?dgran=`/`?dchg=` by a
+  // watch below; restored via drillCursorPending/applyDrillCursorRestore,
+  // mirroring how gran/change themselves need no restore-time resolution
+  // (they're already the raw cursor) but a drilled column's cursor only
+  // exists once the drill path itself has been walked back in.
+  drillGran: 'group',
+  drillChange: 0,
   // focusLevel — which column currently owns the diff keyboard (↑/↓ walk its
   // changes, → opens its Onderliggende-code panel): 0 is the top-level selected
   // block (state.change/state.gran), 1..drill.length indexes drill[level-1] /
@@ -367,6 +390,9 @@ bindUrlState(state, [
   { key: 'mode', param: 'mode', default: 'list' },
   { key: 'change', param: 'chg', parse: num(0), default: 0 },
   { key: 'gran', param: 'gran', default: 'group' },
+  { key: 'drillRef', param: 'drill', default: '' },
+  { key: 'drillGran', param: 'dgran', default: 'group' },
+  { key: 'drillChange', param: 'dchg', parse: num(0), default: 0 },
 ])
 
 // restoredBlockRef snapshots whatever bindUrlState just restored into
@@ -380,6 +406,26 @@ bindUrlState(state, [
 // later navigation.
 let blockRefPending = state.blockRef || null
 
+// drillRefPending mirrors blockRefPending for the drill path restored from
+// `?drill=id1>id2>...` — snapshotted before the state.drill mirror watch below
+// (which also runs once immediately against the still-empty state.drill) can
+// recompute it back to ''. Split on load into an array of target ids, walked
+// back into real drilled columns by applyDrillRefRestore once loadBlocks' data
+// (blocks + relations + callresolve + testcovers) has landed.
+let drillRefPending = state.drillRef ? state.drillRef.split('>') : null
+
+// drillCursorPending mirrors the same restore-before-clobber idea for the
+// deepest drilled column's own {gran, change} cursor (`?dgran=`/`?dchg=`) — see
+// state.drillGran/drillChange's own comment above. Applied once the deepest
+// resolved column's rows are actually known (a synthetic frame's code is ready
+// synchronously; a real PR block's code may still be an in-flight /api/code
+// fetch — see applyDrillCursorRestore, called from both applyDrillRefRestore
+// and ensureCode's "drilled column's code arrived" branch).
+let drillCursorPending =
+  state.drillGran !== 'group' || state.drillChange !== 0
+    ? { gran: state.drillGran, change: state.drillChange }
+    : null
+
 // Keep blockRef mirroring the selected block (by file:line, not index) so a
 // refresh/shared link restores the same block regardless of how the left
 // list has since been filtered/reordered. Reads state.blocks/selected inline
@@ -390,6 +436,21 @@ watch(
   () => {
     const b = state.blocks[state.selected]
     state.blockRef = b ? `${b.file}:${b.line}` : ''
+  },
+)
+
+// Keep drillRef/drillGran/drillChange mirroring state.drill/drillCursor — see
+// their own comments on `state` above. Only state.drillCursor's LAST entry
+// (the focused, deepest column — always drillCursor[drillCursor.length - 1],
+// since focusLevel always equals drill.length whenever drilling is active)
+// feeds drillGran/drillChange; every entry's id feeds the drillRef path.
+watch(
+  () => [state.drill, state.drillCursor],
+  () => {
+    state.drillRef = state.drill.map((b) => b.id).join('>')
+    const last = state.drillCursor[state.drillCursor.length - 1]
+    state.drillGran = last ? last.gran : 'group'
+    state.drillChange = last ? last.change : 0
   },
 )
 
@@ -407,6 +468,62 @@ function applyBlockRefRestore() {
   if (idx >= 0) state.selected = idx
 }
 
+// applyDrillRefRestore resolves the `?drill=id1>id2>...` path restored at load
+// time into real drilled columns, once state.selected (applyBlockRefRestore)
+// AND the call-resolve/test-covers read-models have landed (relatedChildren's
+// own dependencies — see loadBlocks, which only awaits those before calling
+// this when a drill restore is actually pending). Walks the path exactly like
+// a live Enter/click drill would — relatedChildren(parent) → match by id →
+// drillIntoChild — reusing drillIntoChild itself so every side effect
+// (ensureCode, focusLevel, scroll-into-view, the entrance animation marker) is
+// identical to a real drill. Stops at the first id that no longer resolves (a
+// removed relation, a resolver rerun, a stale/shared link) — mirrors
+// applyBlockRefRestore's own not-found fallback: whatever was drilled so far
+// stays, the rest of the path is silently dropped. Requires an actual diff
+// session (mode==='diff') — drilling only has meaning inside one, see
+// detail-layout.md.
+function applyDrillRefRestore() {
+  if (!drillRefPending) return
+  const path = drillRefPending
+  drillRefPending = null
+  if (state.mode !== 'diff') {
+    drillCursorPending = null
+    return
+  }
+  let parent = curBlock()
+  for (const targetId of path) {
+    if (!parent) break
+    const match = relatedChildren(parent).find((c) => (c.blockId || c.id) === targetId)
+    if (!match) break
+    drillIntoChild(match)
+    parent = state.drill[state.drill.length - 1]
+  }
+  if (state.drill.length) applyDrillCursorRestore(state.drill[state.drill.length - 1])
+  else drillCursorPending = null
+}
+
+// applyDrillCursorRestore re-applies the URL-restored {gran, change} cursor
+// (drillCursorPending) onto the deepest drilled column `b` — one-shot, and a
+// no-op once already applied (drillCursorPending is nulled on success) or
+// while `b`'s rows aren't known yet: a synthetic call-frame's code is ready
+// synchronously (drillIntoChild builds it inline), but a real PR block's code
+// may still be an in-flight /api/code fetch — in that case this simply no-ops
+// here and is called again from ensureCode's own "drilled column's code
+// arrived" branch once b.code lands. Clamps `change` into the restored gran's
+// actual unit count, mirroring ensureCode's own top-level change/gran clamp.
+function applyDrillCursorRestore(b) {
+  if (!drillCursorPending || !b) return
+  if (!b.synthetic && !b.code) return
+  const { gran, change } = drillCursorPending
+  drillCursorPending = null
+  const level = state.focusLevel
+  if (level < 1 || state.drill[level - 1] !== b) return
+  const units = unitsFor(blockRows(b), gran)
+  state.drillCursor = state.drillCursor.map((c, i) =>
+    i === level - 1 ? { ...c, gran, change: units.length ? Math.min(Math.max(change, 0), units.length - 1) : 0 } : c,
+  )
+}
+
 // overviewExitUrl — shared by both nav-chain exits to /pr-overview (the ←
 // handler in onKeydown and the "Naar PR-overzicht" PR_COMMANDS item below).
 // Carries `sel` alongside `pr` so /pr-overview can hand the same block
@@ -414,10 +531,24 @@ function applyBlockRefRestore() {
 // originPr/originSel round-trip in overview.mjs, and the "?pr=<id> auto-
 // selecteert…" section in .claude/rules/pages-and-routing.md). Only appended
 // when there's a current selection to remember — a block-less PR (still
-// loading) shouldn't force an empty `sel=` onto the URL.
+// loading) shouldn't force an empty `sel=` onto the URL. `drill`/`dgran`/`dchg`
+// piggyback on the same round-trip, only when there's an actual drilled
+// column to remember — see treeUrl's origin* counterpart in overview.mjs.
+// Also carries `mode=diff` in that case: a drill path only has meaning inside
+// a diff session (applyDrillRefRestore requires it), and without it the
+// returned-to page would restore in list mode and the app's own URL-mirror
+// watch would immediately strip drill/dgran/dchg back out again.
 function overviewExitUrl() {
   let url = '/pr-overview?pr=' + state.pr
-  if (state.blockRef) url += '&sel=' + encodeURIComponent(state.blockRef)
+  if (state.blockRef) {
+    url += '&sel=' + encodeURIComponent(state.blockRef)
+    if (state.drillRef) {
+      url += '&mode=diff'
+      url += '&drill=' + encodeURIComponent(state.drillRef)
+      url += '&dgran=' + encodeURIComponent(state.drillGran)
+      url += '&dchg=' + encodeURIComponent(String(state.drillChange))
+    }
+  }
   return url
 }
 
@@ -664,8 +795,8 @@ async function loadBlocks() {
   state.relations = rels
   recomputeLeftList()
   applyBlockRefRestore()
-  loadCallResolve()
-  loadTestCovers()
+  const callResolvePromise = loadCallResolve()
+  const testCoversPromise = loadTestCovers()
   loadExplanations()
   // Hidden-ness (a fully-approved block while state.showApproved is false) only
   // becomes knowable once BOTH the approvals and the server-side totals are in
@@ -681,6 +812,15 @@ async function loadBlocks() {
   await Promise.resolve()
   await Promise.resolve()
   revealSelectedIfHidden()
+  // A pending ?drill= restore needs relatedChildren's own dependencies —
+  // callresolve/testcovers — to have landed first (a method_call/covers child
+  // wouldn't otherwise be findable yet); both are already in flight above
+  // (fire-and-forget for the common no-restore case), so only await them here,
+  // gated on there actually being something to restore.
+  if (drillRefPending) {
+    await Promise.all([callResolvePromise, testCoversPromise])
+    applyDrillRefRestore()
+  }
 }
 
 // loadBlockStats fetches the server-computed per-block approval totals (the number
@@ -2101,6 +2241,11 @@ async function ensureCode(b) {
       }
       scrollChangeIntoView(state.mode === 'diff')
     } else if (state.drill[state.focusLevel - 1] === b) {
+      // A restored ?dgran=/?dchg= cursor (see applyDrillCursorRestore) can
+      // only be applied once this column's rows are actually known — do that
+      // first so the scroll below centres the RESTORED unit, not the default
+      // first one.
+      applyDrillCursorRestore(b)
       // A focused drilled column's code just arrived (a real PR block whose
       // source wasn't fetched yet — see drillIntoChild) — jump straight to its
       // first change group now that the rows/anchor can be rendered, mirroring
@@ -2355,9 +2500,18 @@ const menu = reactive({ open: false })
 let ms = reactive({ query: '', sel: 0, sub: null, mode: 'block', commands: [] })
 
 // COMMENT_COMMANDS — shown when Enter is pressed on a focused comment row
-// (not mid-reply): currently just deleting it. Kept separate from COMMANDS
+// (not mid-reply): resolving or deleting it. Kept separate from COMMANDS
 // (block actions) since a comment isn't tied to the selected block/diff.
+// "Resolve comment" also resolves the conversation on GitHub (for a review-diff
+// thread) — see resolveFocusedComment (RelatedPanel.mjs) and the reply-loop's
+// resolveGithubThread Activity (workflows.go).
 const COMMENT_COMMANDS = [
+  {
+    id: 'resolve-comment',
+    label: 'Resolve comment',
+    hint: 'resolve',
+    run: () => resolveFocusedComment(),
+  },
   {
     id: 'delete-comment',
     label: 'Verwijder comment',

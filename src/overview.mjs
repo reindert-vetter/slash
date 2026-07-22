@@ -1047,6 +1047,13 @@ let pendingSelectPr = (() => {
 // a *different* PR than the one we came from never carries a stale sel along.
 const originPr = pendingSelectPr
 const originSel = new URLSearchParams(location.search).get('sel') || null
+// originDrill/originDrillGran/originDrillChange — the same round-trip as
+// originSel, for a drilled Onderliggende-code column left open on the way out
+// (home.mjs' overviewExitUrl only appends these alongside sel, so a present
+// originDrill implies a present originSel too).
+const originDrill = new URLSearchParams(location.search).get('drill') || null
+const originDrillGran = new URLSearchParams(location.search).get('dgran') || null
+const originDrillChange = new URLSearchParams(location.search).get('dchg') || null
 
 // treeUrl(pr) — the URL to navigate into pr's review tree (/pr/<n>), used by
 // every place that opens/redirects into the tree (generatePage's redirect,
@@ -1054,10 +1061,24 @@ const originSel = new URLSearchParams(location.search).get('sel') || null
 // the block reference we left from (originSel) so the reviewer lands on the
 // same block instead of the default first one — see the ← nav-chain exit /
 // overviewExitUrl in home.mjs, and the "?pr=<id> auto-selecteert…" section in
-// .claude/rules/pages-and-routing.md.
+// .claude/rules/pages-and-routing.md. Also hands back a drilled column
+// (originDrill/originDrillGran/originDrillChange), so leaving a drilled
+// Onderliggende-code column open and returning via "Open review-boom" lands
+// back in that same column instead of just the top-level block — this also
+// needs `mode=diff` (a drill path only has meaning inside a diff session, see
+// applyDrillRefRestore in home.mjs), which overviewExitUrl only added to the
+// URL we left from when there actually was a drilled column.
 function treeUrl(pr) {
   let url = '/pr/' + pr.number
-  if (pr.number === originPr && originSel) url += '?sel=' + encodeURIComponent(originSel)
+  if (pr.number === originPr && originSel) {
+    url += '?sel=' + encodeURIComponent(originSel)
+    if (originDrill) {
+      url += '&mode=diff'
+      url += '&drill=' + encodeURIComponent(originDrill)
+      if (originDrillGran) url += '&dgran=' + encodeURIComponent(originDrillGran)
+      if (originDrillChange) url += '&dchg=' + encodeURIComponent(originDrillChange)
+    }
+  }
   return url
 }
 

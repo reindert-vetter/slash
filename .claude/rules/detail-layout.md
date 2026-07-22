@@ -435,6 +435,39 @@ Een drill-entry is **één van twee vormen**:
   — geen eigen Onderliggende-code-kaart (geen caller-scan ooit gedraaid voor een
   synthetisch frame).
 
+**Een gedrilde kolom overleeft een refresh** — `state.drill`/`drillCursor` leven zelf
+niet in de URL (te groot/niet direct serialiseerbaar, dezelfde reden als
+`state.blocks`), maar `home.mjs` mirrort ze in drie kale URL-facing velden, precies
+zoals `blockRef` `state.selected` mirrort (zie de URL-state-sectie in `CLAUDE.md`):
+`state.drillRef` (elke entry's stabiele `.id` — een echt block-id, of een
+synthetisch call-frame's caller-scoped `b.id + '::' + callKey` — samengevoegd met
+`>`, dat in geen enkel id voorkomt) → `?drill=`, en `state.drillGran`/`drillChange`
+(alleen van de **diepste, gefocuste** kolom — `state.drillCursor`'s laatste entry;
+elke voorouder-kolom klapt toch in tot een rail, dus zijn eigen cursor is nooit
+zichtbaar) → `?dgran=`/`?dchg=`. Restore volgt hetzelfde
+snapshot-vóór-de-klobberende-watch-patroon als `blockRefPending`: `drillRefPending`
+(het pad, gesplitst op `>`) en `drillCursorPending` (`{gran, change}`) worden
+meteen na `bindUrlState` vastgelegd, en pas toegepast door **`applyDrillRefRestore`**
+zodra `loadBlocks` de blocks/relations **én** callresolve/testcovers heeft geladen
+(die laatste twee zijn normaal fire-and-forget — alleen als er een `drillRef` te
+herstellen valt awaiten we ze alsnog, zodat een method-call/covers-kind al
+vindbaar is via `relatedChildren`). De walk loopt het pad af vanaf `curBlock()`,
+zoekt op elk niveau het kind in `relatedChildren(parent)` waarvan `(c.blockId ||
+c.id)` matcht, en hergebruikt **`drillIntoChild`** zelf (dus elke side effect —
+`ensureCode`, `focusLevel`, scroll, de entrance-animatie — identiek aan een echte
+Enter/klik-drill). Niet gevonden (verwijderde relatie, resolver-rerun, verlopen
+link) → stopt stil, net als `applyBlockRefRestore`'s eigen not-found-fallback:
+wat tot dan toe gedrild is blijft staan. De diepste cursor wordt pas toegepast
+zodra zijn rijen echt bekend zijn (`applyDrillCursorRestore`, met een
+`b.synthetic || b.code`-guard) — voor een synthetisch frame is dat synchroon, voor
+een echt PR-blok pas zodra `ensureCode` z'n `/api/code`-fetch afrondt (dezelfde
+"drilled column's code arrived"-tak die al bestond, zie hieronder). Vereist een
+actieve diff-sessie (`state.mode==='diff'`) — buiten diff-mode heeft drillen geen
+betekenis. Dezelfde drie velden reizen ook mee in de `/pr-overview`-round-trip
+(`overviewExitUrl()`/`treeUrl()`, zie "`?sel=` reist mee…" in
+`.claude/rules/pages-and-routing.md`), zodat `←` naar de PR-inbox en terug via
+"Open review-boom" ook weer in dezelfde gedrilde kolom landt.
+
 ## Kolom-navigatie: `state.focusLevel` (elke gedrilde kolom is een volwaardige diff)
 
 Anders dan het "altijd het diepste niveau"-model van eerder is **elke** kolom —

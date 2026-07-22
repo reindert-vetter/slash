@@ -208,6 +208,18 @@ over de heen-en-terug-reis via `/pr-overview`.
   en dus verborgen) leunt op de **bestaande** `applyBlockRefRestore`-fallback
   (clamp naar de gewone default) — geen nieuwe edge-case-code nodig, exact
   hetzelfde gedrag als een verlopen/gedeelde `?sel=`-link.
+- **`?drill=`/`?dgran=`/`?dchg=` reizen mee naast `?sel=`** — een open gedrilde
+  Onderliggende-code-kolom (zie "Drillen" in `.claude/rules/detail-layout.md`)
+  is óók een navigatiepositie, dus `overviewExitUrl()` hangt ze aan zodra
+  `state.drillRef` niet leeg is (alleen samen met `sel`, nooit los — drillen
+  heeft geen betekenis zonder een geselecteerd block). `overview.mjs` leest ze
+  in dezelfde stap als `originSel` (`originDrill`/`originDrillGran`/
+  `originDrillChange`, drie extra never-nulled module-`let`s) en `treeUrl(pr)`
+  voegt ze alleen toe wanneer ook `sel` wordt toegevoegd (`pr.number ===
+  originPr`). Terug in `/pr/<n>` lost `applyDrillRefRestore`/
+  `applyDrillCursorRestore` (`home.mjs`) ze op naar echte gedrilde kolommen —
+  zie `.claude/rules/detail-layout.md`. Niet gevonden (relatie weg, resolver
+  opnieuw gedraaid) → dezelfde stille not-found-fallback als `sel` zelf.
 
 Test: `tests/overview-pr-select-block.spec.mjs`.
 

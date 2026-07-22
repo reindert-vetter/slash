@@ -86,10 +86,12 @@ fields, { ns })`: het herstelt bij load de opgegeven keys uit de URL naar de
 reactive `state` en schrijft daarna elke wijziging terug via
 `history.replaceState` (een arrow.js `watch`, dus geen history-spam). `home.mjs`
 bindt de hoofd-navigatie (`blockRef`→`sel`, `mode`, `change`→`chg`,
-`gran`→`gran`); de **PR zit in het pad** (`/pr/<id>`, zie
+`gran`→`gran`, `drillRef`→`drill`, `drillGran`→`dgran`, `drillChange`→`dchg`);
+de **PR zit in het pad** (`/pr/<id>`, zie
 `.claude/rules/pages-and-routing.md`), niet in de query. Een `default`-waarde
 wordt uit de URL weggelaten zodat die kort/canoniek blijft (dus `gran` verschijnt
-alleen bij `line`/`call`, niet bij de default `group`).
+alleen bij `line`/`call`, niet bij de default `group`; `drill`/`dgran`/`dchg`
+alleen zolang er daadwerkelijk gedrild is).
 `sel` codeert de **block-referentie** `${file}:${line}` — niet de rauwe index in
 `state.blocks` — omdat die index verschuift zodra de linkerlijst herschikt
 (zoeken, of een block dat via een relatie/call-resolve-reload naar "Onderliggende
@@ -107,6 +109,18 @@ reist ook mee in de `/pr-overview`-round-trip (`←`/"Naar PR-overzicht" →
 "Open review-boom"/`→`), zodat je bij terugkeer op hetzelfde block landt — zie
 "`?sel=` reist mee in dezelfde round-trip" in
 `.claude/rules/pages-and-routing.md`.
+Een open **gedrilde Onderliggende-code-kolom** (`state.drill`/`drillCursor`, zie
+"Drillen" in `.claude/rules/detail-layout.md`) overleeft een refresh op
+dezelfde manier: `drillRef` mirrort elke entry's stabiele `.id` (samengevoegd
+met `>`), `drillGran`/`drillChange` mirroren alleen het cursor
+(`{gran, change}`) van de diepste (gefocuste) kolom — elke voorouder-kolom
+klapt toch in tot een rail, dus diens eigen cursor is nooit zichtbaar.
+`drillRefPending`/`drillCursorPending` snapshotten de restore vóór hun eigen
+mirror-`watch` 'm zou overschrijven (zelfde patroon als `blockRefPending`), en
+`applyDrillRefRestore`/`applyDrillCursorRestore` lossen ze op — pas nadat
+`loadBlocks` niet alleen de blocks maar ook callresolve/testcovers heeft
+geladen (nodig omdat de walk `relatedChildren` hergebruikt om elk pad-segment
+terug te vinden). Ook dit pad reist mee in de `/pr-overview`-round-trip.
 Elk **extra venster/paneel** krijgt een eigen `ns` zodat zijn params náást de
 hoofd-navigatie in dezelfde URL staan zonder te botsen. Het `RelatedPanel` gebruikt
 dit echt: `bindUrlState(cs, …, { ns: 'rel' })` bindt de **paneel-cursor**
