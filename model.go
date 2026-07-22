@@ -26,21 +26,21 @@ type Block struct {
 	Class    string `json:"class"` // "" for free functions / whole-file fallback
 	Name     string `json:"name"`  // symbol (method/function) or file name for the fallback
 	Category string `json:"category"`
-	Line     int    `json:"line"`     // declaration line
-	EndLine  int    `json:"endLine"`  // line of the closing brace
-	Status   string `json:"status"` // added|removed|modified
+	Line     int    `json:"line"`    // declaration line
+	EndLine  int    `json:"endLine"` // line of the closing brace
+	Status   string `json:"status"`  // added|removed|modified
 	// FileDeleted marks a block whose whole file was deleted by the PR (the
 	// file is absent from the head worktree — git's `+++ /dev/null` case), as
 	// opposed to a single removed method in a file that still exists.
-	FileDeleted bool   `json:"fileDeleted"`
+	FileDeleted bool `json:"fileDeleted"`
 	// OldFile is the pre-rename path of this block's file when the PR moved it
 	// (a git-detected rename, `git diff --find-renames`), "" otherwise. File
 	// stays the NEW path (so the block id/diff key live on the head path); the
 	// old source is read from OldFile in the base worktree (/api/code,
 	// blockstats). See .claude/rules/blocks-and-ingest.md.
-	OldFile     string `json:"oldFile"`
-	Side        string `json:"side"`     // new|old
-	Approved    bool   `json:"approved"` // approved by the reviewer?
+	OldFile  string `json:"oldFile"`
+	Side     string `json:"side"`     // new|old
+	Approved bool   `json:"approved"` // approved by the reviewer?
 	Label    string `json:"label"`    // "Class::method" or "name" — for the frontend
 	// Description is the free-text summary extracted from a PHPDoc comment
 	// (`/** ... */`, tag lines like @param/@return stripped) directly above
