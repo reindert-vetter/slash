@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 103,
+    "callerId": "103:app/Actions/GrowLongAction.php:GrowLongAction::run",
+    "callKey": "longTarget",
+    "status": "resolved",
+    "childFile": "app/Services/GrowLongService.php",
+    "childClass": "GrowLongTarget",
+    "childMethod": "longTarget",
+    "childLine": 7,
+    "childCode": "public function longTarget(int $orderId, string $customerReference, array $lineItemIdentifiers, bool $shouldRecalculateShippingAndTaxTotalsImmediately = false): OrderTotalsRecalculationResultSummary\n{\n    return $this->recalculate($orderId, $customerReference, $lineItemIdentifiers, $shouldRecalculateShippingAndTaxTotalsImmediately);\n}"
+  },
+  {
+    "pr": 103,
+    "callerId": "103:app/Actions/GrowCommentAction.php:GrowCommentAction::run",
+    "callKey": "commentTarget",
+    "status": "resolved",
+    "childFile": "app/Services/GrowCommentService.php",
+    "childClass": "GrowCommentTarget",
+    "childMethod": "commentTarget",
+    "childLine": 12,
+    "childCode": "/**\n * A serialized, point-in-time description of what this method does, repeated at length purely to make this single PHPDoc comment line extremely long for the test.\n *\n * @return int\n */\npublic function commentTarget(): int\n{\n    return 1;\n}"
+  }
+]

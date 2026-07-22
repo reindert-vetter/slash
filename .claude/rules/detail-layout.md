@@ -160,16 +160,23 @@ ruimte op te vullen) met de kaart van het geselecteerde block plus de
 look-ahead-preview van het volgende block (dashed connector als ze uit hetzelfde
 bestand komen). **Direct náást** die kolom (niet aan de rechterrand van het
 scherm) de kaart **Onderliggende code** (`RelatedPanel.mjs`'s default export,
-`data-testid=related-code`, `w-[42rem] 2xl:w-[49.2rem] shrink-0` — dezelfde
-vaste breedte als een eenzijdig/`a`-genarrowd block (zie hierboven), zodat
-"Onderliggende code" **altijd** even breed is als de kolom ernaast i.p.v. smaller
-(was `w-[34rem] 2xl:w-[41rem]`, bewust de helft van één pane van de side-by-side
-diff — dat gaf op een eenzijdig/genarrowd block twee zichtbaar ongelijke
-kolombreedtes naast elkaar, zie de screenshot-issue die tot deze wijziging
-leidde)) — stop 5 van de nav-keten,
-ongewijzigd inline in `<main>`'s horizontaal scrollende kolom-flow (zie
-"Onderliggende code" verderop). Comments en Taken zitten **niet** meer in deze
-kolom-flow — zie de sectie "Comments/taken-sidebar" hieronder.
+`data-testid=related-code`, `shrink-0` met een **reactieve, dynamisch
+meegroeiende** breedte (`relatedColumnWidthCls`, zie de sectie "Onderliggende
+code" verderop) — de **default/vloer** is nog steeds `w-[42rem] 2xl:w-[49.2rem]`,
+dezelfde vaste breedte als een eenzijdig/`a`-genarrowd block (zie hierboven),
+zodat "Onderliggende code" bij korte code-excerpts **altijd** even breed is als
+de kolom ernaast i.p.v. smaller (was `w-[34rem] 2xl:w-[41rem]`, bewust de helft
+van één pane van de side-by-side diff — dat gaf op een eenzijdig/genarrowd
+block twee zichtbaar ongelijke kolombreedtes naast elkaar, zie de
+screenshot-issue die tot deze wijziging leidde); een lang, niet-wrappend
+code-excerpt in een van de zichtbare kinderen laat de kolom er sindsdien
+**voorbij** die vloer meegroeien, met een ceiling gelijk aan de volle
+block-kolom (`w-[70rem] 2xl:w-[82rem]`) — die symmetrie met de buurkolom is
+dus bewust **niet langer gegarandeerd** zodra er iets breeds in staat) —
+stop 5 van de nav-keten, ongewijzigd inline in `<main>`'s horizontaal
+scrollende kolom-flow (zie "Onderliggende code" verderop). Comments en Taken
+zitten **niet** meer in deze kolom-flow — zie de sectie
+"Comments/taken-sidebar" hieronder.
 
 ## Comments/taken-sidebar (vast, getoggeld met Cmd+→)
 
@@ -896,7 +903,8 @@ rechts — zie de layout-alinea hierboven):
   weer in. Een klik op de rail roept `enterRelated()` rechtstreeks aan — de
   kaart klapt zo meteen weer uit en pakt de keyboard, net als een verse `→`
   vanuit de diff. Op een `2xl`+-scherm, of zolang de sidebar dicht is, blijft
-  de kaart altijd de volledige `w-[42rem] 2xl:w-[49.2rem]`-kaart; `viewport.wide` (een
+  de kaart altijd de volledige (default of gegroeide, zie hieronder) kaart;
+  `viewport.wide` (een
   `matchMedia('(min-width: 1536px)')`-listener, mirror van `theme.mjs`'s
   systeem-preference-listener) houdt dat reactief bij, ook op een resize. De
   toggle tussen rail en volledige kaart zit — conform de "kale toggelende
@@ -906,7 +914,34 @@ rechts — zie de layout-alinea hierboven):
   De kaart heeft **geen vaste hoogte-cap**: hij groeit met zijn inhoud mee tot
   de volle beschikbare hoogte van de block-kolom en scrollt dan intern
   (`min-h-0`, body `flex-1 overflow-auto`). De code-excerpts **wrappen** (geen
-  horizontale scroll: `whitespace-pre-wrap break-words`).
+  horizontale scroll: `whitespace-pre-wrap break-words`) — maar de **kolom**
+  zelf groeit sindsdien mee als dat wrappen anders lelijk zou uitpakken op een
+  echt lange code-regel: `relatedColumnWidthCls` (`RelatedPanel.mjs`) maakt de
+  breedte van de **hele** Onderliggende-code-kolom (niet per kaart) een
+  reactieve `${() => …}`-class-binding op de `<section data-testid=
+  related-code>` i.p.v. de statische `w-[42rem] 2xl:w-[49.2rem]`-string van
+  voorheen: hij neemt de langste **niet-comment**-coderegel over alle op dat
+  moment getoonde hoofdkaarten (`rc.children`, exclusief de `tests_group`-
+  balk — genestelde chips en de drill-preview-kolom blijven ongemoeid op hun
+  eigen, vaste `w-72`) en zet dat aantal tekens om in een CSS `clamp(min,
+  calc(Nch + 2rem), max)`-breedte: de `ch`-eenheid is de exacte
+  glyph-breedte van een monospace-teken, dus dit is **puur een berekening op
+  het reeds bekende teken-aantal** — geen live DOM-meting (`scrollWidth`/
+  `getBoundingClientRect`) die zou kunnen racen met een render/layout-pass.
+  `min` is de bestaande default-vloer (`42rem`/`49.2rem`), `max` de ceiling
+  (`70rem`/`82rem`, gelijk aan de volle block-kolom) — `clamp()` vangt zowel
+  "geen code" als "alles is korter dan de vloer" gratis op (de `calc()`-uitkomst
+  valt dan gewoon onder de vloer). **Comment-regels tellen bewust niet mee**
+  (`codeGrowthChars`, een regex/state-machine-scan die een leidende PHPDoc-
+  blok, `//`/`#`-regels en tussenliggende `*`-vervolgregels overslaat) — een
+  lange, proza-achtige commentaarregel wrapt keurig en mag de kolom niet
+  oprekken, alleen echte code-regels (lange method-chains, brede
+  return-types, …) doen dat. Reageert alleen op `rc.children` — dezelfde
+  platte snapshot die `kids()` al leest — dus dit introduceert geen nieuwe
+  co-subscriptie op het geselecteerde block's eigen `b.code` (zie de
+  stuck-on-loading-valkuil in `conventions.md`). De symmetrie met de
+  buurkolom (zie hierboven) geldt dus alleen nog als **default**, niet als
+  garantie. Test: `tests/related-code-grow.spec.mjs`.
   Elke child die zelf een PR-block is (relatie-child of een method-call wiens
   definitie in de PR wijzigt) draagt een **goedkeurings-badge**
   (`data-testid=related-approval`, `done/total`, groen + ✓ bij volledig

@@ -1773,6 +1773,67 @@ function nestedChipColumn(ancestors, kids, drill, path, cardIdx) {
   `
 }
 
+// codeGrowthChars — the length (trailing whitespace stripped) of the longest
+// line in `code` that is NOT part of a comment. Comment lines (a leading
+// PHPDoc block, `//`/`#` line comments) are free-form prose and must never
+// make the "Onderliggende code" column grow — only real PHP code lines may
+// (see the width discussion in detail-layout.md). Deterministic, regex/
+// state-machine based (no parser, matching the rest of this codebase's
+// PHP-adjacent heuristics, e.g. phpscan.go's PHPDoc detection) and — load-
+// bearing — no live DOM measurement: it only counts characters in the raw
+// source string, so it can run inside a reactive binding without racing any
+// render/layout pass.
+function codeGrowthChars(code) {
+  if (!code) return 0
+  let inBlockComment = false
+  let max = 0
+  for (const raw of code.split('\n')) {
+    const line = raw.replace(/\s+$/, '')
+    const trimmed = line.trim()
+    if (inBlockComment) {
+      if (trimmed.endsWith('*/')) inBlockComment = false
+      continue
+    }
+    if (trimmed === '') continue
+    if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('*')) continue
+    if (trimmed.startsWith('/*')) {
+      if (!trimmed.endsWith('*/')) inBlockComment = true
+      continue
+    }
+    if (line.length > max) max = line.length
+  }
+  return max
+}
+
+// relatedColumnWidthCls — the reactive width of the WHOLE Onderliggende-code
+// column (not per-card): it grows with the longest non-comment code line
+// across every currently listed main card (rc.children, excluding the
+// tests_group toggle bar — nested chips/the preview column are untouched,
+// see detail-layout.md), clamped between the narrow default
+// (w-[42rem] 2xl:w-[49.2rem], same as a one-sided/`a`-narrowed block) and the
+// full diff-block-column width (w-[70rem] 2xl:w-[82rem]) as a ceiling. Uses
+// the CSS `ch` unit (the exact advance width of a monospace glyph) rather
+// than a hand-picked px-per-char ratio — still zero live measurement, `ch` is
+// resolved by the browser's layout engine from the char count we already
+// computed, not from reading back a rendered node's size. `clamp()` handles
+// the "no code yet / all comment" case for free (calc() then evaluates below
+// the floor). Reads only rc.children — a plain snapshot pushed by setRelated,
+// never the selected block's own `b.code` — so this cannot co-subscribe with
+// the diff render (see the stuck-on-loading pitfall in conventions.md); it is
+// exactly the same kind of read `kids()` below already does.
+function relatedColumnWidthCls() {
+  let chars = 0
+  for (const r of rc.children) {
+    if (r.kind === 'tests_group' || !r.code) continue
+    const c = codeGrowthChars(r.code)
+    if (c > chars) chars = c
+  }
+  return (
+    `w-[clamp(42rem,calc(${chars}ch_+_2rem),70rem)] ` +
+    `2xl:w-[clamp(49.2rem,calc(${chars}ch_+_2rem),82rem)]`
+  )
+}
+
 // relatedCard renders one child block: a header (label + file:line + relation
 // kind) and a short, non-interactive code excerpt highlighted like the panes.
 // The card sits in a flex row with, when the child itself has changed
@@ -2188,7 +2249,10 @@ export default function RelatedPanel(state, commentTarget, search) {
   // outer .key('related-panel') (home.mjs) pointed at a permanent element
   // while only the inner slot swaps.
   const fullCard = () => html`
-    <section class="relative flex w-[42rem] 2xl:w-[49.2rem] shrink-0 max-h-full min-h-0 flex-col overflow-hidden" data-testid="related-code">
+    <section
+      class="${() => 'relative flex shrink-0 max-h-full min-h-0 flex-col overflow-hidden ' + relatedColumnWidthCls()}"
+      data-testid="related-code"
+    >
       ${() =>
         searching() || pending() > 0
           ? html`<span

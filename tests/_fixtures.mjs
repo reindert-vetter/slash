@@ -189,6 +189,25 @@ function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/rangeselect-blocks.json'], {
     stdio: 'ignore',
   })
+  // Onderliggende-code column-width fixture (PR 103, related-code-grow.spec.mjs):
+  // one caller whose resolved child has a single very long CODE line (must grow
+  // the column beyond its narrow default), and one caller whose child has an
+  // equally long PHPDoc COMMENT line but only short code (must NOT grow it —
+  // comment lines are excluded from the width calculation, see
+  // codeGrowthChars/relatedColumnWidthCls in RelatedPanel.mjs).
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/growcode-blocks.json',
+      '-callresolve',
+      'tests/fixtures/growcode-callresolve.json',
+    ],
+    { stdio: 'ignore' },
+  )
 }
 
 function canConnect(port) {
