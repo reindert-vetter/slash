@@ -1005,6 +1005,17 @@ function onSearchKeydown(e) {
     // manually clicks/Tabs away, which reads as "arrow keys do nothing".
     e.target.blur()
   }
+  if (e.key === 'ArrowDown') {
+    // Symmetric with focusSearch()'s ArrowUp-past-the-first-row jump into
+    // this box: without this, landing here (by a click, by backspacing the
+    // query to empty, or via that ArrowUp jump) was a one-way trap — every
+    // later ArrowDown kept hitting kbHandler's `typing` guard (this is still
+    // an INPUT) with no way back down to the row list. Drop focus and land
+    // on the first visible row, mirroring the Escape branch above.
+    e.preventDefault()
+    e.target.blur()
+    moveTo(0)
+  }
 }
 
 function searchBox() {

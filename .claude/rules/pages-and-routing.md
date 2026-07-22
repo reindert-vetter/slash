@@ -414,6 +414,19 @@ de repo (`/api/prs/search`), dus vanaf de lijst omhoog naar het zoeken is één
 toetsaanslag. `focusSearch` focust het veld en laat de rij-selectie los
 (`selKey = null`, geen ring). Test: `tests/overview-ignore.spec.mjs`.
 
+**En de symmetrische weg terug: `↓` in de zoekbox springt weer naar de
+rijenlijst** (`onSearchKeydown`'s `ArrowDown`-tak, naast de bestaande
+`Escape`-tak in diezelfde functie). Zonder dit was landen in de zoekbox — via
+een klik, via de query terugbackspacen tot leeg (geen `Escape`, dus de
+bestaande blur-op-Escape-fix triggert niet), of via de `↑`-sprong hierboven
+(die al bij `selIndex <= 0` vuurt, dus ook meteen na page-load) — een
+**one-way trap**: elke volgende `↓` bleef `kbHandler`'s `typing`-guard raken
+en deed niets, wat als "pijltjes-omlaag doet het niet" oogde zonder dat de
+reviewer besefte dat de focus stiekem in het zoekveld zat. `onSearchKeydown`
+blurt het veld en roept `moveTo(0)` aan — landt op de eerste zichtbare rij
+(van welke `currentView()` dan ook actief is), of is een veilige no-op bij nul
+rijen (bestaande guard in `moveTo`). Test: `tests/overview-search-arrowdown.spec.mjs`.
+
 **Zodra een popover open is, bezit hij het toetsenbord — de lijst-navigatie
 hierboven is opgeschort.** `togglePopover` focust bij het openen (via
 `requestAnimationFrame`, na de arrow.js-paint) het **eerste** item in de menu
