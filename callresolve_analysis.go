@@ -35,6 +35,9 @@ type symbolIndex struct {
 	// source (see resolveMigrationModels); the Eloquent naming convention
 	// (singularize + Studly) is only its fallback.
 	modelTables map[string]string
+	// modelCasts maps a model short name → its `$casts` array (field name →
+	// cast target class short name) — see resolveCalls rule 5b.
+	modelCasts map[string]map[string]string
 }
 
 // idxSkipDirs is deliberately narrow: "tests" is NOT skipped, because a
@@ -63,6 +66,7 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		facades:     map[string]string{},
 		models:      map[string]Block{},
 		modelTables: map[string]string{},
+		modelCasts:  map[string]map[string]string{},
 	}
 	_ = filepath.WalkDir(headDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -133,8 +137,17 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		// `new Model()`/`Model::` usage can point at the model itself rather than a
 		// single method — see scanModels.
 		if hasSeg(rel, "app/Models/") {
+			// A model's `protected $casts = [...]` array (legacy form) maps a field
+			// name to a cast target class (an enum, or another class) — read once
+			// per file and attached to every model class it declares (a model file
+			// almost always declares exactly one).
+			casts := scanModelCasts(src)
 			for _, b := range scanModels(src, rel) {
-				idx.models[shortName(b.Class)] = b
+				short := shortName(b.Class)
+				idx.models[short] = b
+				if casts != nil {
+					idx.modelCasts[short] = casts
+				}
 			}
 			// An explicit `protected $table = 'name'` overrides the Eloquent naming
 			// convention — record it so resolveMigrationModels's Schema::create/table
@@ -170,6 +183,28 @@ func scanModels(src []byte, filename string) []Block {
 		bodyLine := 1 + strings.Count(s[:i], "\n")
 		endLine, _ := skipBody(s, i, &bodyLine)
 		out = append(out, Block{File: filename, Class: name, Line: startLine, EndLine: endLine})
+	}
+	return out
+}
+
+// scanModelCasts extracts an Eloquent model's `protected $casts = [...]` array
+// (field name → cast target class short name) — used by resolveCalls rule 5b
+// to resolve a magic property backed by an attribute cast ($payment->processor
+// cast to an enum, or another class) rather than a relationship (rule 5a/5).
+// Only the legacy array-literal form is scanned; a cast to a plain string
+// ('date' => 'datetime', no ::class suffix) is deliberately not matched —
+// there is no class to point at. The modern Laravel 11 `casts(): array
+// { return [...]; }` method form is left for a later pass. Returns nil if the
+// file has no $casts array at all (distinct from an empty one, though both are
+// treated the same by the caller).
+func scanModelCasts(src []byte) map[string]string {
+	m := reModelCastsBlock.FindStringSubmatch(string(src))
+	if m == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, e := range reModelCastEntry.FindAllStringSubmatch(m[1], -1) {
+		out[e[1]] = shortName(e[2])
 	}
 	return out
 }
@@ -379,6 +414,13 @@ var (
 	// reModelTable matches an Eloquent model's explicit table override
 	// (`protected $table = 'product_groups';`) — see resolveMigrationModels.
 	reModelTable = regexp.MustCompile(`\$table\s*=\s*['"]([a-zA-Z0-9_]+)['"]`)
+	// reModelCastsBlock matches an Eloquent model's `protected $casts = [...]`
+	// array (legacy Laravel <11 form) — see scanModelCasts. Lazy match on the
+	// body so a later, unrelated `];` in the same file doesn't get swallowed.
+	reModelCastsBlock = regexp.MustCompile(`(?s)\$casts\s*=\s*\[(.*?)\]\s*;`)
+	// reModelCastEntry matches one `'field' => Target::class` entry inside a
+	// $casts array body — see scanModelCasts.
+	reModelCastEntry = regexp.MustCompile(`['"](\w+)['"]\s*=>\s*([\\A-Za-z0-9_]+)::class`)
 	// reSchemaTable matches a migration's `Schema::create('table', ...)` or
 	// `Schema::table('table', ...)` call — see resolveMigrationModels.
 	reSchemaTable = regexp.MustCompile(`Schema::(?:create|table)\(\s*['"]([a-zA-Z0-9_]+)['"]`)
@@ -500,6 +542,25 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 				emitKind(shortName(m[1]), &def, callresolve.KindModelUsage)
 			}
 		}
+		// 2d. A type-hinted parameter naming an Eloquent model (`Payment $payment`
+		// in the signature) surfaces that model as underlying code even when no
+		// *line* referencing it changed — a parameter's type is a structural
+		// property of the whole (changed) function, not of one particular line
+		// (the common case: only the function's body changed, its signature
+		// didn't). Deliberately scans the WHOLE block body (src.Text), not
+		// scan/changed lines — a narrow, explicit exception to this function's
+		// "only changed lines" rule (see the doc comment above), mirroring
+		// relations.go's controllerModelDetector (which scans a controller's
+		// whole body for the same `Foo $var` pattern) and how
+		// resolveMigrationModels/resolveDataProviders below also point at
+		// unchanged code. Reuses relations.go's reTypedParam; gated on
+		// idx.models so an unrelated parameter type (Request, Collection, ...)
+		// never matches — false positives are effectively impossible.
+		for _, m := range reTypedParam.FindAllStringSubmatch(src.Text, -1) {
+			if def, ok := idx.models[shortName(m[1])]; ok {
+				emitKind(shortName(m[1]), &def, callresolve.KindModelUsage)
+			}
+		}
 		// 3. Foo::m( → static method on Foo (skip self/static/parent handled
 		// above). An unknown class/method (typically a framework call — vendor is
 		// not indexed) becomes unresolved, so the panel still offers the LLM
@@ -582,6 +643,45 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			}
 			if def := methodOnClass(idx, ucfirst(recv), key); def != nil && isRelationship(headDir, *def) {
 				emit(key, def)
+			}
+		}
+		// 5b. $var->key (no parens) where the receiver's inferred model has a
+		// $casts entry for key ($payment->processor, with $payment naming
+		// Payment and Payment's $casts mapping 'processor' => Driver::class) →
+		// the cast's target class as a whole (an enum, or another model) —
+		// Eloquent's *attribute-casting* magic property, distinct from 5a's
+		// *relationship* magic property, so no isRelationship check applies
+		// here. Runs on the same $var->key matches as 5a (both use scan, not
+		// src.Text — the call-site itself sits on a changed line here, unlike
+		// rule 2d above, so no changed-lines exception is needed). A cast
+		// target named by several same-named enums (e.g. this app has three
+		// unrelated "Driver" enums in different modules) is ambiguous and
+		// left unresolved — the automatic LLM search then picks the right one
+		// using the model's own `use` imports as context.
+		for _, loc := range reVarProp.FindAllStringSubmatchIndex(scan, -1) {
+			rest := scan[loc[1]:]
+			if strings.HasPrefix(strings.TrimLeft(rest, " \t"), "(") {
+				continue // a method call, handled by rules 1-4
+			}
+			recv, key := scan[loc[2]:loc[3]], scan[loc[4]:loc[5]]
+			if seen[key] {
+				continue
+			}
+			class, ok := idx.modelCasts[ucfirst(recv)][key]
+			if !ok {
+				continue // no cast entry for this field — not this rule's territory
+			}
+			switch enums := idx.enums[class]; {
+			case len(enums) == 1:
+				emit(key, &enums[0])
+			case len(enums) > 1:
+				emit(key, nil) // several same-named enums — ambiguous → unresolved
+			default:
+				if def, ok := idx.models[class]; ok {
+					emitKind(key, &def, callresolve.KindModelUsage)
+				} else {
+					emit(key, nil) // a cast to something we don't index (e.g. a plain Value Object/Castable) — still surfaced, not silent
+				}
 			}
 		}
 		// 5. ->name (no parens) → an Eloquent magic property. Laravel resolves

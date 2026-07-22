@@ -747,6 +747,50 @@ fallback.
   basis van of `ChildFile` in de PR wijzigt). Andere resoluties op dezelfde regel
   (bv. `ProductGroupResource::make($productGroup)` → de resource-class) blijven
   ongemoeid — dit is een aanvullende child, geen vervanging.
+  **Type-hinted model-parameter (regel 2d):** een method-**signatuur** die een
+  Eloquent-model type-hint (`fromModel(Payment $payment)`) wil het model óók
+  tonen als de signatuur zélf niet is gewijzigd — alleen de body (het
+  gebruikelijke geval: een bestaande static-constructor krijgt er één veld
+  bij). Regel 2d scant daarom **niet** `scan` (de gewijzigde-regels-tekst,
+  zoals elke andere regel in `resolveCalls`) maar de **volledige** blokbody
+  (`src.Text`) met dezelfde `Foo $var`-regex als `relations.go`'s
+  `reTypedParam` (hergebruikt, niet gedupliceerd — beide bestanden zijn
+  `package main`), gefilterd op `idx.models`. Dit is een **bewuste, expliciet
+  gedocumenteerde uitzondering** op `resolveCalls`'s "alleen gewijzigde
+  regels"-uitgangspunt (zie diens doc-comment) — een parameter-type is een
+  structurele eigenschap van de hele (wél gewijzigde) functie, geen los te
+  reviewen regel — en mirrort hoe `controllerModelDetector` (`relations.go`)
+  ook al de hele body scant, en hoe `resolveMigrationModels`/
+  `resolveDataProviders` sowieso al naar ongewijzigde code wijzen. Zelfde
+  `emitKind(shortName, &def, KindModelUsage)`-pad als regel 2c, dus zelfde
+  badge/weergave; het false-positive-risico is verwaarloosbaar omdat alleen
+  een type dat toevallig in `idx.models` zit (dus een echt `app/Models/`-bestand)
+  matcht.
+  **Eloquent-attribute-cast-property (regel 5b, `$var->key` zonder haakjes,
+  eventueel gevolgd door `?->…`):** regel 5a/5 herkennen alleen een **relatie**-
+  achtige magic property (`isRelationship`/`reRelationCall` op de methode-body);
+  een veld dat via Eloquent's `$casts`-array naar een **enum of andere class**
+  wordt gecast (`protected $casts = ['processor' => Driver::class]`, dus géén
+  relatie-methode, gewoon een cast op een ruwe kolom) matcht geen van beide en
+  leverde voorheen **stilzwijgend niets** op — zelfs geen `unresolved`. Nieuwe
+  index `idx.modelCasts[ModelShort][veld] = ClassShort`
+  (`scanModelCasts`, geparsed uit `protected $casts = [...]` — alleen de
+  legacy array-vorm; de Laravel 11 `casts(): array`-methode-vorm is bewust
+  buiten scope voor v1) gevuld tijdens dezelfde `scanModels`-worktree-walk.
+  Regel 5b scant — net als 5a — `scan` (de call-site zelf zit hier wél op een
+  gewijzigde regel, dus geen changed-lines-uitzondering nodig): voor
+  `$var->key` waar `ucfirst(var)` een model met een cast-entry voor `key` is,
+  wordt het cast-target opgezocht in `idx.enums` dan `idx.models`: **exact één**
+  gelijknamige enum → resolved whole-enum-child (`method_call`-kind, net als
+  regel 6, `ChildMethod` leeg — het gaat om de hele enum, niet één case);
+  **meerdere** gelijknamige enums (deze app heeft bijvoorbeeld drie losse
+  `Driver`-enums in verschillende modules) → `unresolved` (Go kan de
+  namespace-ambiguïteit niet oplossen zonder `use`-import-parsing, dus de
+  automatische LLM-search krijgt 'm — die ziet het model's eigen `use`-imports
+  wél als context); target is zelf weer een model → resolved whole-model-child
+  (`KindModelUsage`, zelfde pad als regel 2c/2d); target helemaal niet
+  geïndexeerd (bv. een los Value Object/Castable) → ook `unresolved`, nooit
+  stil niets, want de call-site staat op een gewijzigde regel.
 - **`modules/claude`** (`modules/claude/claude.go`): de CLI-bridge naar `claude`
   (`Client`-interface + `Fake`, patroon van `modules/github`). `Run` shelt uit
   naar `claude -p <prompt> --model <id>` met context-timeout; agentisch (Sonnet)
@@ -876,7 +920,16 @@ fallback.
   en `TestResolveCallsModelUsage`/`TestResolveCallsModelWithoutConstructor`
   (`new Model()`/`Model::…` → één gededupte whole-class model-child, nooit de
   constructor ondanks dat die soms bestaat, `fill`/`save` blijven `unresolved`,
-  een resource-resolutie op dezelfde regel blijft ongemoeid)),
+  een resource-resolutie op dezelfde regel blijft ongemoeid),
+  `TestResolveCallsTypedParamModel`/`TestResolveCallsTypedParamNonModelIgnored`
+  (regel 2d: een ongewijzigde signatuur met een `Payment $payment`-param
+  resolvt alsnog via de whole-body-scan; een param-type buiten `app/Models/`
+  produceert nooit een entry), en
+  `TestResolveCallsCastPropertyEnum`/`TestResolveCallsCastPropertyAmbiguousEnum`/
+  `TestResolveCallsCastPropertyUnknownTargetUnresolved` (regel 5b:
+  `$payment->processor?->value` resolvt via `$casts` naar de enum-declaratie;
+  meerdere gelijknamige enums → `unresolved`; een niet-geïndexeerd cast-target
+  → ook `unresolved`, nooit stil niets)),
   `resolve_call_test.go` (Haiku-confident → found; nooit escalatie naar
   Sonnet, ook niet bij een onzeker/ontbrekend Haiku-antwoord; notfound;
   verificatie weigert een verzonnen definitie), en

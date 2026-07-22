@@ -1304,3 +1304,320 @@ func TestResolveDataProvidersFoldsLeadingPHPDocInChildCode(t *testing.T) {
 		t.Errorf("ChildLine = %d, want 17 (the doc's 3 removed lines shift the def from line 14 to line 17)", e.ChildLine)
 	}
 }
+
+// TestResolveCallsTypedParamModel covers rule 2d: a type-hinted parameter
+// naming an Eloquent model (`Payment $payment`) surfaces the model as
+// underlying code even though the signature line itself did NOT change in
+// this PR — only a body line did (the common real-world case: an existing
+// static-constructor method gains one more mapped field). This proves the
+// deliberate whole-body-scan exception (see resolveCalls rule 2d's doc
+// comment) actually reaches an unchanged signature.
+func TestResolveCallsTypedParamModel(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 70
+	baseDir, headDir := worktreeDirs(dataDir, pr)
+	entityBase := `<?php
+namespace App\Entity;
+use App\Models\Payment;
+class PaymentEntity {
+    public static function fromModel(Payment $payment): self
+    {
+        return new self(
+            id: $payment->id,
+        );
+    }
+}
+`
+	// Only the body gains a line; the "Payment $payment" signature is byte-for-
+	// byte identical between base and head.
+	entityHead := `<?php
+namespace App\Entity;
+use App\Models\Payment;
+class PaymentEntity {
+    public static function fromModel(Payment $payment): self
+    {
+        return new self(
+            id: $payment->id,
+            processor: $payment->processor,
+        );
+    }
+}
+`
+	for dir, body := range map[string]string{baseDir: entityBase, headDir: entityHead} {
+		p := filepath.Join(dir, "app/Entity/PaymentEntity.php")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	modelSrc := `<?php
+namespace App\Models;
+class Payment extends Model {
+    protected $fillable = ['id'];
+}
+`
+	p := filepath.Join(headDir, "app/Models/Payment.php")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(modelSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	caller := Block{PR: pr, File: "app/Entity/PaymentEntity.php", Class: "PaymentEntity", Name: "fromModel", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "Payment")
+	if !ok {
+		t.Fatalf("no entry for type-hinted model param 'Payment', got %+v", entries)
+	}
+	if e.Status != callresolve.StatusResolved || e.ChildClass != "Payment" || e.ChildMethod != "" {
+		t.Errorf("Payment: got %+v, want resolved Payment::<empty>", e)
+	}
+	if e.Kind != callresolve.KindModelUsage {
+		t.Errorf("Payment: kind=%q, want %q", e.Kind, callresolve.KindModelUsage)
+	}
+}
+
+// TestResolveCallsTypedParamNonModelIgnored covers rule 2d's false-positive
+// gate: a type-hinted parameter whose type is NOT an indexed Eloquent model
+// (a plain request/DTO class living outside app/Models/) must never produce a
+// callresolve entry, even though the same `Foo $var` shape matches.
+func TestResolveCallsTypedParamNonModelIgnored(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 71
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Services/PaymentImporter.php": `<?php
+namespace App\Services;
+use App\Http\Requests\ImportRequest;
+class PaymentImporter {
+    public function import(ImportRequest $request): void
+    {
+        $request->validated();
+    }
+}
+`,
+		"app/Http/Requests/ImportRequest.php": `<?php
+namespace App\Http\Requests;
+class ImportRequest {
+    public function validated() {}
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Services/PaymentImporter.php", Class: "PaymentImporter", Name: "import", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	if _, ok := findEntry(entries, "ImportRequest"); ok {
+		t.Errorf("ImportRequest is not an app/Models/ class and must not produce a rule 2d entry, got %+v", entries)
+	}
+}
+
+// TestResolveCallsCastPropertyEnum covers rule 5b: $var->key resolves via the
+// receiver's inferred model's $casts array (not a relationship) to the cast's
+// target class — an enum here — even though there is no method named `key` on
+// the model at all (this is exactly PaymentEntity::fromModel's
+// $payment->processor?->value case).
+func TestResolveCallsCastPropertyEnum(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 72
+	baseDir, headDir := worktreeDirs(dataDir, pr)
+	entityBase := `<?php
+namespace App\Entity;
+class PaymentEntity {
+    public static function fromModel(Payment $payment): self
+    {
+        return new self(id: $payment->id);
+    }
+}
+`
+	entityHead := `<?php
+namespace App\Entity;
+class PaymentEntity {
+    public static function fromModel(Payment $payment): self
+    {
+        return new self(
+            id: $payment->id,
+            processor: $payment->processor?->value,
+        );
+    }
+}
+`
+	for dir, body := range map[string]string{baseDir: entityBase, headDir: entityHead} {
+		p := filepath.Join(dir, "app/Entity/PaymentEntity.php")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	modelSrc := `<?php
+namespace App\Models;
+use Modules\Payments\Enums\Driver;
+class Payment extends Model {
+    protected $casts = [
+        'processor' => Driver::class,
+    ];
+}
+`
+	enumSrc := `<?php
+namespace Modules\Payments\Enums;
+enum Driver: string
+{
+    case Adyen = 'adyen';
+    case Mollie = 'mollie';
+}
+`
+	for rel, body := range map[string]string{
+		"app/Models/Payment.php":            modelSrc,
+		"modules/Payments/Enums/Driver.php": enumSrc,
+	} {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Entity/PaymentEntity.php", Class: "PaymentEntity", Name: "fromModel", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "processor")
+	if !ok {
+		t.Fatalf("no entry for cast property 'processor', got %+v", entries)
+	}
+	if e.Status != callresolve.StatusResolved || e.ChildClass != "Driver" || e.ChildMethod != "" {
+		t.Errorf("processor: got %+v, want resolved Driver::<empty>", e)
+	}
+	if e.Kind != callresolve.KindMethodCall {
+		t.Errorf("processor: kind=%q, want %q (an enum target, not a model)", e.Kind, callresolve.KindMethodCall)
+	}
+}
+
+// TestResolveCallsCastPropertyAmbiguousEnum covers rule 5b's ambiguity
+// handling: this app has several unrelated enums that happen to share a short
+// name (a real situation found in the target repo — three distinct "Driver"
+// enums live in different modules). A cast pointing at that name can't be
+// disambiguated by Go alone, so it must fall back to unresolved (which
+// automatically triggers the LLM search, which DOES have enough context —
+// the model's own `use` imports — to pick the right one).
+func TestResolveCallsCastPropertyAmbiguousEnum(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 73
+	_, headDir := worktreeDirs(dataDir, pr)
+	entitySrc := `<?php
+namespace App\Entity;
+class PaymentEntity {
+    public static function fromModel(Payment $payment): self
+    {
+        return new self(processor: $payment->processor?->value);
+    }
+}
+`
+	modelSrc := `<?php
+namespace App\Models;
+class Payment extends Model {
+    protected $casts = [
+        'processor' => Driver::class,
+    ];
+}
+`
+	driverA := `<?php
+namespace Modules\Payments\Enums;
+enum Driver: string { case Adyen = 'adyen'; }
+`
+	driverB := `<?php
+namespace Modules\Memberships\Enums;
+enum Driver: string { case Stripe = 'stripe'; }
+`
+	for rel, body := range map[string]string{
+		"app/Entity/PaymentEntity.php":         entitySrc,
+		"app/Models/Payment.php":               modelSrc,
+		"modules/Payments/Enums/Driver.php":    driverA,
+		"modules/Memberships/Enums/Driver.php": driverB,
+	} {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Entity/PaymentEntity.php", Class: "PaymentEntity", Name: "fromModel", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "processor")
+	if !ok {
+		t.Fatalf("no entry for cast property 'processor', got %+v", entries)
+	}
+	if e.Status != callresolve.StatusUnresolved {
+		t.Errorf("processor: status=%q, want unresolved (ambiguous same-named enum)", e.Status)
+	}
+}
+
+// TestResolveCallsCastPropertyUnknownTargetUnresolved covers rule 5b's third
+// branch: a cast to a class that is neither an indexed enum nor an indexed
+// model (e.g. a plain Value Object/Castable) must still surface as an
+// unresolved entry — never silently nothing — because the call-site itself
+// sits on a changed line.
+func TestResolveCallsCastPropertyUnknownTargetUnresolved(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 74
+	_, headDir := worktreeDirs(dataDir, pr)
+	entitySrc := `<?php
+namespace App\Entity;
+class PaymentEntity {
+    public static function fromModel(Payment $payment): self
+    {
+        return new self(meta: $payment->meta);
+    }
+}
+`
+	modelSrc := `<?php
+namespace App\Models;
+class Payment extends Model {
+    protected $casts = [
+        'meta' => SomeUnindexedValueObject::class,
+    ];
+}
+`
+	for rel, body := range map[string]string{
+		"app/Entity/PaymentEntity.php": entitySrc,
+		"app/Models/Payment.php":       modelSrc,
+	} {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Entity/PaymentEntity.php", Class: "PaymentEntity", Name: "fromModel", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "meta")
+	if !ok {
+		t.Fatalf("no entry for cast property 'meta', got %+v", entries)
+	}
+	if e.Status != callresolve.StatusUnresolved {
+		t.Errorf("meta: status=%q, want unresolved (cast target not indexed anywhere)", e.Status)
+	}
+}
