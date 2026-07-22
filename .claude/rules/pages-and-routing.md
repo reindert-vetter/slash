@@ -227,12 +227,43 @@ Test: `tests/overview-pr-select-block.spec.mjs`.
 
 Twee-fasen render via een reactieve `state.statuses` (skeleton → pills, geen
 layout-shift). Features: gesecteerde lijst, debounced zoeken (aparte
-resultaten-regio, sequence-guard), **stacks** (PR wiens `baseRefName` = een
-in-view PR's `headRefName` → ingesprongen groep bovenaan), reviewer-avatars,
+resultaten-regio, sequence-guard), **stacks** (elke PR wiens `baseRefName` =
+een in-view PR's `headRefName` → ingesprongen groep bovenaan), reviewer-avatars,
 review/CI-chips, "recent gegenereerd"-lade (lazy `GET /api/prs`), en
 toetsenbord-nav (↑/↓/Home/End/Enter/`/`/→, met de hover-vs-keyboard-flag zodat
 `scrollIntoView` de selectie niet kaapt). UI-proza is Nederlands; de
 GitHub-sectietitels blijven Engels.
+
+**Stacks zijn een BOOM, geen lineaire keten (`computeStacks`,
+`src/overview.mjs`, geëxporteerd puur voor testbaarheid).** Eén PR kan de
+directe basis zijn voor **meerdere** zuster-PR's tegelijk — b.v. vijf losse
+feature-branches die allemaal rechtstreeks op dezelfde, nog niet gemergede
+branch zijn getakt (een "fan-out"), niet elk op de vorige. Dat is een net zo
+geldige stack-relatie als een lineaire keten (elke zuster-PR's `baseRefName`
+wijst tenslotte naar een in-view PR's `headRefName`), maar een eerdere versie
+modelleerde dit als een strikte lijst (`childOf: Map<parentNum, PR>`, met een
+guard die alleen de eerst-verwerkte kandidaat-child per parent onthield) —
+waardoor bij zo'n fan-out alleen de eerste zuster werd gelift en de rest
+onopgemerkt in zijn normale sectie bleef staan. `computeStacks` bouwt nu
+`childrenOf: Map<parentNum, PR[]>` (alle matches, niet enkel de eerste,
+gesorteerd op PR-nummer oplopend) en vlakt elke boom via een depth-first-walk
+af tot `[{pr, depth}, …]`: de root op `depth 0`, en **alle zuster-PR's die op
+dezelfde parent stapelen delen dezelfde `depth`** (in plaats van elk een
+stap dieper dan de vorige, zoals een lineaire keten dat zou suggereren) — pas
+een *echte* keten (A→B→C, elke stap één nieuwe branch dieper) levert nog
+oplopende dieptes op. `stackGroup`/`listBox`/`connectorMark` (ongewijzigd
+generiek op `opts.depth`) renderen zusters op dezelfde diepte dus gewoon
+achter elkaar, met identieke inspringing/connector. Alleen bomen met ≥ 2
+knopen tellen als een stack. Test: `tests/overview-stack-fanout.spec.mjs`
+(fixture `tests/fixtures/inbox-fanout.json`, een letterlijke reproductie van
+een echte fan-out — 1 basis-PR + 5 zuster-PR's die er allemaal rechtstreeks
+op takken — gevoed als synthetische data rechtstreeks in `computeStacks`,
+niet via `SLASH_INBOX`: de `/api/inbox`-snapshot is één gedeeld, worker-breed
+read-model waar meerdere andere overview-tests exacte rij-tellingen tegen
+aanhouden, dus een tweede inbox-fixture kan daar niet naast bestaan; mirrort
+het "importeer een al-geladen paginamodule, roep zijn geëxporteerde pure
+functie aan met synthetische data"-patroon van `navigate.spec.mjs`'s
+`changeGroups`-test).
 
 **De hover-vs-keyboard-flag (`hoverEnabled`) gate't op een échte
 cursor-positieverandering, niet op het `mousemove`-event zelf.** Elke

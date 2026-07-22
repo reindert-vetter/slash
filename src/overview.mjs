@@ -646,11 +646,21 @@ function listBox(items) {
 
 // ── stacks ───────────────────────────────────────────────────────────────
 
-// computeStacks detects chains of stacked PRs (a PR whose baseRefName equals
-// another in-view PR's headRefName). Returns chains ordered bottom (base,
-// merges first) → top; only chains of length >= 2 are stacks worth calling
-// out. `all` PR objects are read-only here — never mutated.
-function computeStacks(all) {
+// computeStacks detects TREES of stacked PRs (a PR whose baseRefName equals
+// another in-view PR's headRefName) — not just linear chains. A single PR
+// can be the direct base for several sibling PRs at once (a "fan-out": e.g.
+// five independent feature branches all taken off the same not-yet-merged
+// branch); those siblings share the same depth under their common parent,
+// they are not stacked on each other. Returns an array of trees, each
+// flattened via a depth-first walk into `[{pr, depth}, …]` ordered root
+// (depth 0, merges first) → leaves; siblings at the same depth are sorted by
+// PR number ascending. Only trees with >= 2 nodes are stacks worth calling
+// out. `all` PR objects are read-only here — never mutated. Exported purely
+// for testability (tests/overview-stack-fanout.spec.mjs) — the module has no
+// other exports since it's a page bootstrap script (see navigate.spec.mjs's
+// `changeGroups` import for the same "import an already-loaded page module,
+// call its exported pure function with synthetic data" pattern).
+export function computeStacks(all) {
   const byHead = new Map()
   all.forEach((p) => {
     if (p.headRefName) byHead.set(p.headRefName, p)
@@ -660,49 +670,51 @@ function computeStacks(all) {
     const parent = p.baseRefName ? byHead.get(p.baseRefName) : null
     if (parent && parent.number !== p.number) parentOf.set(p.number, parent)
   })
-  const childOf = new Map() // parent.number -> the pr stacked on it
+  const childrenOf = new Map() // parent.number -> PR[] stacked directly on it
   parentOf.forEach((parent, num) => {
-    if (!childOf.has(parent.number)) {
-      const child = all.find((p) => p.number === num)
-      if (child) childOf.set(parent.number, child)
-    }
+    const child = all.find((p) => p.number === num)
+    if (!child) return
+    if (!childrenOf.has(parent.number)) childrenOf.set(parent.number, [])
+    childrenOf.get(parent.number).push(child)
   })
-  const chains = []
+  childrenOf.forEach((kids) => kids.sort((a, b) => a.number - b.number))
+
+  const trees = []
   const consumed = new Set()
   all.forEach((p) => {
-    if (consumed.has(p.number) || parentOf.has(p.number) || !childOf.has(p.number)) return
-    const chain = [p]
-    consumed.add(p.number)
-    let cur = p
-    while (childOf.has(cur.number)) {
-      const child = childOf.get(cur.number)
-      if (consumed.has(child.number)) break
-      chain.push(child)
-      consumed.add(child.number)
-      cur = child
+    if (consumed.has(p.number) || parentOf.has(p.number) || !childrenOf.has(p.number)) return
+    const nodes = []
+    const visit = (pr, depth) => {
+      if (consumed.has(pr.number)) return
+      consumed.add(pr.number)
+      nodes.push({ pr, depth })
+      ;(childrenOf.get(pr.number) || []).forEach((kid) => visit(kid, depth + 1))
     }
-    if (chain.length >= 2) chains.push(chain)
+    visit(p, 0)
+    if (nodes.length >= 2) trees.push(nodes)
   })
-  return chains
+  return trees
 }
 
-// stackGroup renders one chain as its own top-level group, above all section
+// stackGroup renders one tree as its own top-level group, above all section
 // blocks: a header (icon + "Gestapelde PR's" + count + caption) followed by
-// the framed list, each level indented with a └ connector.
-function stackGroup(chain, sectionOf) {
-  const root = chain[0]
+// the framed list, each node indented by its own depth with a └ connector —
+// several sibling PRs sharing the same parent render at the same depth, one
+// after another, rather than each one step deeper than the last.
+function stackGroup(nodes, sectionOf) {
+  const root = nodes[0].pr
   return html`
     <div data-testid="stack">
       <div class="mb-2 mt-10 flex items-center gap-2 first:mt-0">
         <span class="text-slate-500 dark:text-zinc-500">${icon('git-pull-request', 'h-3.5 w-3.5')}</span>
         <h2 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">Gestapelde PR's</h2>
-        <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2 py-0.5 text-[11px] text-slate-500 dark:text-zinc-400">${chain.length}</span>
+        <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2 py-0.5 text-[11px] text-slate-500 dark:text-zinc-400">${nodes.length}</span>
         <span class="truncate text-[11.5px] text-slate-500 dark:text-zinc-500"
           >bouwt op <span class="font-mono text-slate-500 dark:text-zinc-400">${root.baseRefName || '?'}</span> — merge van onder naar
           boven</span
         >
       </div>
-      ${listBox(chain.map((pr, i) => ({ pr, opts: { depth: i, badge: sectionOf.get(pr.number) } })))}
+      ${listBox(nodes.map(({ pr, depth }) => ({ pr, opts: { depth, badge: sectionOf.get(pr.number) } })))}
     </div>
   `.key('stack:' + root.number)
 }
@@ -848,7 +860,7 @@ function mainContent() {
 
         const chains = computeStacks(all)
         const stacked = new Set()
-        chains.forEach((c) => c.forEach((pr) => stacked.add(pr.number)))
+        chains.forEach((nodes) => nodes.forEach(({ pr }) => stacked.add(pr.number)))
 
         const out = []
         if (state.cached) {

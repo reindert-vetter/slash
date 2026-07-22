@@ -1,0 +1,101 @@
+{
+  "repo": "plug-and-pay/plug-and-pay",
+  "generatedFor": "reindert-vetter",
+  "sections": [
+    {
+      "title": "Your drafts",
+      "prs": [
+        {
+          "number": 13044,
+          "title": "INTEG-621: Tenant snapshot body in webhook v2",
+          "author": "reindert-vetter",
+          "updatedAt": "2026-07-22T09:24:41Z",
+          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/13044",
+          "isDraft": true,
+          "baseRefName": "feature/INTEG-616-webhook-v2-snapshot-orders",
+          "headRefName": "feature/INTEG-621-webhook-v2-snapshot-tenant",
+          "additions": 172,
+          "deletions": 3,
+          "changedFiles": 5,
+          "comments": 0,
+          "hasGraph": false
+        },
+        {
+          "number": 13043,
+          "title": "INTEG-620: Plugin snapshot body in webhook v2",
+          "author": "reindert-vetter",
+          "updatedAt": "2026-07-22T09:24:39Z",
+          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/13043",
+          "isDraft": true,
+          "baseRefName": "feature/INTEG-616-webhook-v2-snapshot-orders",
+          "headRefName": "feature/INTEG-620-webhook-v2-snapshot-plugin",
+          "additions": 96,
+          "deletions": 2,
+          "changedFiles": 4,
+          "comments": 0,
+          "hasGraph": false
+        },
+        {
+          "number": 13042,
+          "title": "INTEG-619: Affiliate snapshot body in webhook v2",
+          "author": "reindert-vetter",
+          "updatedAt": "2026-07-22T09:24:37Z",
+          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/13042",
+          "isDraft": true,
+          "baseRefName": "feature/INTEG-616-webhook-v2-snapshot-orders",
+          "headRefName": "feature/INTEG-619-webhook-v2-snapshot-affiliate",
+          "additions": 108,
+          "deletions": 3,
+          "changedFiles": 4,
+          "comments": 0,
+          "hasGraph": false
+        },
+        {
+          "number": 13041,
+          "title": "INTEG-618: Form submission snapshot body in webhook v2",
+          "author": "reindert-vetter",
+          "updatedAt": "2026-07-22T09:24:34Z",
+          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/13041",
+          "isDraft": true,
+          "baseRefName": "feature/INTEG-616-webhook-v2-snapshot-orders",
+          "headRefName": "feature/INTEG-618-webhook-v2-snapshot-form",
+          "additions": 104,
+          "deletions": 2,
+          "changedFiles": 4,
+          "comments": 0,
+          "hasGraph": false
+        },
+        {
+          "number": 13040,
+          "title": "INTEG-617: Subscription snapshot body in webhook v2",
+          "author": "reindert-vetter",
+          "updatedAt": "2026-07-22T09:24:32Z",
+          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/13040",
+          "isDraft": true,
+          "baseRefName": "feature/INTEG-616-webhook-v2-snapshot-orders",
+          "headRefName": "feature/INTEG-617-webhook-v2-snapshot-subscription",
+          "additions": 101,
+          "deletions": 3,
+          "changedFiles": 4,
+          "comments": 0,
+          "hasGraph": false
+        },
+        {
+          "number": 13030,
+          "title": "INTEG-616: Order resource payload in webhook v2",
+          "author": "reindert-vetter",
+          "updatedAt": "2026-07-22T09:01:00Z",
+          "url": "https://github.com/plug-and-pay/plug-and-pay/pull/13030",
+          "isDraft": true,
+          "baseRefName": "develop",
+          "headRefName": "feature/INTEG-616-webhook-v2-snapshot-orders",
+          "additions": 375,
+          "deletions": 17,
+          "changedFiles": 26,
+          "comments": 0,
+          "hasGraph": true
+        }
+      ]
+    }
+  ]
+}
