@@ -665,11 +665,13 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(page).toHaveURL(/gran=line/)
   })
 
-  // The footer shows the selected change as an inline diff, but only when the
-  // active unit spans a single row. Refining with f down to a line (or call
-  // segment) always yields a single-row unit, so the footer always surfaces it, and
-  // on a 'call' unit it mirrors the pane's indigo segment underline. See Footer.mjs
-  // (activeUnit via unitsFor, line() with the underline set).
+  // The footer shows the selected change as an inline diff for every
+  // granularity, one row per changed line the active unit spans (a
+  // multi-row 'group' shows several; 'line'/'call' are always single-row).
+  // Refining with f down to a line (or call segment) always yields a
+  // single-row unit, and on a 'call' unit it mirrors the pane's indigo
+  // segment underline. See Footer.mjs (activeUnit via unitsFor, line() with
+  // the underline set).
   test('the footer surfaces the selected change and underlines the active call segment', async ({
     page,
   }) => {
@@ -700,12 +702,12 @@ test.describe('PR Review Tree — change navigation', () => {
 
   // The footer bar's own visibility is state.footerVisible
   // (!!(footerUnit || footerExplain), see Footer.mjs/home.mjs), not simply
-  // state.mode==='diff' — a multi-row 'group' unit with no if-statement hides
-  // the bar entirely (see footer-explanation.spec.mjs). This block's first
-  // group happens to contain an if, so footerExplain keeps the bar visible
-  // here even though the group is multi-row and shows no inline diff content;
-  // it still hides in list mode (no diff open at all → footerUnitInfo is
-  // null).
+  // state.mode==='diff'. A multi-row 'group' unit now always populates
+  // footerUnit too (one row per changed line — see
+  // footer-explanation.spec.mjs's "per-line inline diff" test), so this
+  // block's first group shows the bar both for that inline diff AND because
+  // it happens to contain an if (footerExplain); it still hides in list mode
+  // (no diff open at all → footerUnitInfo is null).
   test('the footer bar is hidden in list mode and visible for any diff granularity', async ({
     page,
   }) => {

@@ -952,19 +952,19 @@ caret naar links in te bewegen. `Escape` blijft ongewijzigd de expliciete
 ## Footer: inline preview van de geselecteerde regel + AI-omschrijving bij een if
 
 Onder de panels zit een vaste footer (`src/Footer.mjs`, `data-testid=footer`).
-Anders dan voorheen is de footer **niet** zichtbaar zodra er een diff open
-staat — hij is alleen zichtbaar zodra er **daadwerkelijk iets te tonen is**:
-`state.footerVisible` (afgeleid in `home.mjs`'s `updateFooter()` als
-`!!(state.footerUnit || state.footerExplain)`, zie hieronder voor wat die twee
-snapshots zijn). Een meerregelige groep zónder if-statement (geen
-`footerUnit`, geen `footerExplain`) laat de footer-balk dus **volledig**
-verdwijnen (`hidden` i.p.v. `flex` op de stabiele `<footer>`-root — de
-class-string blijft één reactieve `class="${() => …}"`-functie-binding, dus
-geen keyed-node-valkuil, zie `.claude/rules/conventions.md`) in plaats van een
-lege balk te tonen zoals voorheen. `footerUnitInfo` (`home.mjs`) blijft buiten
-`state.mode==='diff'` `null` retourneren, dus `footerVisible` is in list-mode
-altijd `false` — dat gedrag is dus ongewijzigd, alleen strenger binnen
-diff-mode zelf.
+Anders dan de allereerste versie is de footer **niet** zichtbaar zodra er een
+diff open staat — hij is alleen zichtbaar zodra er **daadwerkelijk iets te
+tonen is**: `state.footerVisible` (afgeleid in `home.mjs`'s `updateFooter()`
+als `!!(state.footerUnit || state.footerExplain)`, zie hieronder voor wat die
+twee snapshots zijn). Sinds elke navigeerbare `group`/`line`/`call`-eenheid
+altijd minstens één rij oplevert (zie hieronder), is dit in de praktijk
+**vrijwel elke** diff-mode-selectie — de balk verdwijnt alleen nog echt bij
+`state.mode !== 'diff'` (list-mode) of wanneer er geen gefocust block/geen
+navigeerbare eenheid is (`hidden` i.p.v. `flex` op de stabiele
+`<footer>`-root — de class-string blijft één reactieve `class="${() => …}"`-
+functie-binding, dus geen keyed-node-valkuil, zie `.claude/rules/conventions.md`).
+`footerUnitInfo` (`home.mjs`) blijft buiten `state.mode==='diff'` `null`
+retourneren, dus `footerVisible` is in list-mode altijd `false`.
 
 **Ruimte-reservering volgt dezelfde vlag, 3-weg in plaats van de oude vaste
 90/140px-vloer:** `DetailPanel`/`<main>` (`home.mjs`) en de comments/taken-
@@ -984,34 +984,44 @@ PR-samenvatting; de oudere `ThemeToggleCorner` — een altijd-zichtbaar fixed
 element linksonder — bestaat niet meer).
 
 **Los van de zichtbaarheid van de balk zelf** toont de footer een inline diff
-(`- oud` / `+ nieuw`, Prism-highlighted) alleen als de **geselecteerde unit
-precies één regel** beslaat — een meerregelige groep mét een if-statement toont
-dus wél de balk (voor de AI-omschrijving) maar geen inline-diff-inhoud.
+(`- oud` / `+ nieuw`, Prism-highlighted) van **elke** navigeerbare eenheid,
+`group`/`line`/`call` — dus ook wanneer je een heel **blok wijzigingen**
+(een `group`-eenheid, een aaneengesloten reeks gewijzigde regels) selecteert,
+niet alleen bij een 1-regelige `line`/`call`-eenheid zoals voorheen. Een
+`group` van meerdere regels toont daarbij **per regel** wat er is aangepast:
+één del/ins-regelpaar per aligned rij die de group beslaat (tot `MAX_GROUP`,
+5 regels — `Block.mjs`), onder elkaar, in de bestaande scrollbare
+`footer-diff`-kolom (`no-scrollbar overflow-auto`) — de vaste 90/140px-hoogte
+van de balk zelf blijft ongewijzigd, een lange group scrollt intern i.p.v. de
+balk te laten groeien.
 Deze inline-diff-inhoud volgt de **gefocuste kolom en diens huidige
 granulariteit/cursor** — het top-level block (`state.gran`/`state.change`) op
 `focusLevel 0`, of de eigen `state.drillCursor[focusLevel-1]`-cursor van een
 gedrilde kolom (zie "Kolom-navigatie" in `.claude/rules/detail-layout.md`) —
-via dezelfde `unitsFor(rows, gran)` als de navigatie: omdat een `'line'`- of
-`'call'`-unit altijd één rij is,
-verschijnt de inline diff dus altijd zodra je met `f` tot één regel (of één
-edit) verfijnt. Lange regels (>`WIDE_AT`, 110 tekens) laten de `max-w` los
-zodat de footer de volle breedte gebruikt; is specifiek de **nieuwe/rechter**
-(`ins`) regel langer dan `WIDE_AT`, dan wrapt die regel bovendien volledig
-(`whitespace-pre-wrap break-words` i.p.v. `whitespace-pre`) zodat de hele
-nieuwe code zichtbaar is zonder een onzichtbare (`no-scrollbar`) horizontale
-scroll — de oude/linker (`del`) regel wrapt niet mee, die blijft ongewijzigd.
-Op
+via dezelfde `unitsFor(rows, gran)` als de navigatie: de rijen `[unit.start,
+unit.end]` van de actieve eenheid worden stuk voor stuk uitgelezen (`'line'`/
+`'call'` zijn altijd één rij, dus voor die niveaus is dit ongewijzigd één
+regelpaar). Lange regels (>`WIDE_AT`, 110 tekens, over **alle** rijen van de
+eenheid) laten de `max-w` los zodat de footer de volle breedte gebruikt; is
+specifiek de **nieuwe/rechter** (`ins`) regel van een rij langer dan
+`WIDE_AT`, dan wrapt die regel bovendien volledig (`whitespace-pre-wrap
+break-words` i.p.v. `whitespace-pre`) zodat de hele nieuwe code zichtbaar is
+zonder een onzichtbare (`no-scrollbar`) horizontale scroll — de oude/linker
+(`del`) regel wrapt niet mee, die blijft ongewijzigd. Op
 `'call'`-niveau onderstreept de footer het **actieve segment** in dezelfde
 indigo als de panes via het geëxporteerde `markChars` +
 `UNDERLINE_CLS` (uit `Block.mjs`) — precies die tekens onderstreept (op
-`'group'`/`'line'` hebben de units geen set → geen underline).
+`'group'`/`'line'` hebben de units geen set → geen underline, op elke rij).
 
 **De footer leest zelf géén `blockRows`/`b.code` meer.** `home.mjs` heeft een
 eigen, ontkoppelde footer-`watch` (het `setRelated`/`setCommentScope`-patroon,
 inline deps incl. `state.drillCursor` en `focusedBlock().code`) die twee platte
-snapshots pusht: `state.footerUnit` (de ene aligned rij + underline-arrays van
-de actieve unit, `null` bij meerregelig) en `state.footerExplain` (zie
-hieronder), en daarna in dezelfde `updateFooter()` de afgeleide
+snapshots pusht: `state.footerUnit` (de aligned rijen + underline-arrays van
+de actieve eenheid — één rij bij `line`/`call`, meerdere bij een meerregelige
+`group` — `null` bij géén eenheid, expliciet nooit een lege array, zodat
+zowel de `!!(...)`-check in `updateFooter` als de single↔array-slot-valkuil
+in `Footer.mjs` correct blijven, zie `conventions.md`) en `state.footerExplain`
+(zie hieronder), en daarna in dezelfde `updateFooter()` de afgeleide
 `state.footerVisible` zet. Zo wordt de footer nooit een co-subscriber op de
 code van het gefocuste block (de "stuck on loading"-race, zie
 `conventions.md`) én volgt hij gratis de gedrilde-kolom-cursor.

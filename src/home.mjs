@@ -317,11 +317,15 @@ const state = reactive({
   // co-subscriber on the focused block's code and re-trigger the diff
   // "stuck on loading" race — and it follows the *focused* column (a drilled
   // column's own cursor included), which plain state.selected/gran/change
-  // reads could not. footerUnit is the single aligned row of the active unit
-  // (null for multi-row units); footerExplain is the AI description of the
-  // unit's if-statement ({ status: 'searching'|'done', text }, null when the
-  // unit has no if / the generation failed / not in diff mode). Both are
-  // ephemeral (never in the URL).
+  // reads could not. footerUnit is the array of aligned rows spanned by the
+  // active unit — one row for line/call (always single-row), one row per
+  // changed line for a multi-row group — or null when the unit has no rows
+  // (kept explicitly null rather than an empty array, both to keep the
+  // truthiness check in updateFooter correct and to avoid the arrow.js
+  // single↔array slot pitfall in Footer.mjs, see conventions.md).
+  // footerExplain is the AI description of the unit's if-statement
+  // ({ status: 'searching'|'done', text }, null when the unit has no if / the
+  // generation failed / not in diff mode). Both are ephemeral (never in the URL).
   footerUnit: null,
   footerExplain: null,
   // footerVisible — derived by updateFooter(): true once footerUnit or
@@ -3506,11 +3510,14 @@ function explainContext(b) {
 }
 
 // footerUnitInfo computes everything the footer needs about the focused unit:
-// the single aligned row for the inline diff (multi-row units → null, we only
-// preview one-liners), and — for a line/group unit whose text contains an
-// if-statement — the explain-request descriptor (blockId + unitKey in the
-// commentPath codeRef shape + code/context + hash). Follows focusedBlock() and
-// the focused column's own cursor, so a drilled column previews its own unit.
+// the aligned rows spanned by the unit for the inline diff — one row for a
+// line/call unit (always single-row), one row per changed line for a
+// multi-row group, so the footer can show a per-line breakdown of "what
+// changed" for the whole selected block/group, not just a one-liner — and,
+// for a line/group unit whose text contains an if-statement, the
+// explain-request descriptor (blockId + unitKey in the commentPath codeRef
+// shape + code/context + hash). Follows focusedBlock() and the focused
+// column's own cursor, so a drilled column previews its own unit.
 function footerUnitInfo() {
   if (state.mode !== 'diff') return null
   const b = focusedBlock()
@@ -3523,18 +3530,24 @@ function footerUnitInfo() {
   const rows = blockRows(b)
   const unit = unitsFor(rows, cur.gran)[cur.change]
   if (!unit) return null
-  const single = unit.start === unit.end ? rows[unit.start] : null
+  // unit.left/right (the char-underline Sets) only exist for a 'call' unit,
+  // which is always single-row — so reading them inside this loop naturally
+  // stays null for every row of a multi-row group without a separate check.
+  const unitRows = []
+  for (let i = unit.start; i <= unit.end; i++) {
+    const r = rows[i]
+    if (!r) continue
+    unitRows.push({
+      left: r.left,
+      right: r.right,
+      // Sets don't survive a reactive proxy reliably — carry plain arrays,
+      // Footer.mjs rebuilds the Sets it feeds to markChars.
+      ulLeft: unit.left ? [...unit.left] : null,
+      ulRight: unit.right ? [...unit.right] : null,
+    })
+  }
   const info = {
-    unitRow: single
-      ? {
-          left: single.left,
-          right: single.right,
-          // Sets don't survive a reactive proxy reliably — carry plain arrays,
-          // Footer.mjs rebuilds the Sets it feeds to markChars.
-          ulLeft: unit.left ? [...unit.left] : null,
-          ulRight: unit.right ? [...unit.right] : null,
-        }
-      : null,
+    unitRows,
     explain: null,
   }
   // Only line/group units get an AI description ('call' and list mode don't).
@@ -3619,8 +3632,8 @@ async function requestExplain(req) {
 // source of truth Footer.mjs and every bottom-reservation binding read (see
 // the "Footer" section in keyboard-navigation.md): the footer bar + its
 // reserved space disappear entirely once neither snapshot has anything to
-// show (a multi-row group with no if), rather than staying visible-but-empty
-// for the whole diff-mode session as before.
+// show (no unit at all — e.g. list mode, or a unit with zero rows), rather
+// than staying visible-but-empty for the whole diff-mode session as before.
 function updateFooter() {
   computeFooterSnapshots()
   state.footerVisible = !!(state.footerUnit || state.footerExplain)
@@ -3628,7 +3641,10 @@ function updateFooter() {
 
 function computeFooterSnapshots() {
   const info = footerUnitInfo()
-  state.footerUnit = info ? info.unitRow : null
+  // Kept explicitly null (not an empty array) when there's nothing to show —
+  // both for the updateFooter() truthiness check above and to dodge the
+  // arrow.js single↔array slot pitfall in Footer.mjs (see conventions.md).
+  state.footerUnit = info && info.unitRows.length ? info.unitRows : null
   const req = info && info.explain
   if (!req) {
     state.footerExplain = null

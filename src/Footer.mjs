@@ -3,13 +3,18 @@
 // (derived in home.mjs's updateFooter() as
 // `!!(state.footerUnit || state.footerExplain)`) — the AI-generated Dutch
 // description of the focused unit's if-statement, or the inline diff of the
-// active line (- removed / + added, when the active unit is a single row).
-// A multi-row group with neither (no if, not a single row) hides the bar
+// active unit's rows (- removed / + added per changed line: one row for a
+// line/call unit, one row per changed line for a multi-row group — so
+// selecting a whole change-group/"block" shows a per-line breakdown of what
+// changed, not just a one-liner). A unit with neither (no if, and — in
+// practice never, every navigable unit has at least one row) hides the bar
 // entirely, rather than showing an empty balk for the whole diff-mode
 // session as before. The panels above reserve 0/90/140px to match (0 when
 // !footerVisible, 90 with just the inline diff, 140 while a description also
 // shows — the reactive bottom-[…] bindings in home.mjs/RelatedPanel.mjs), so
-// nothing is reserved when the footer itself is gone.
+// nothing is reserved when the footer itself is gone. A multi-row group's
+// rows scroll inside the existing no-scrollbar/overflow-auto code area below
+// (see data-testid=footer-diff) rather than growing the fixed 90/140px bar.
 //
 // The theme toggle (system/light/dark) used to live in this footer's top-right
 // corner, then in its own always-visible fixed corner element — it now lives
@@ -52,10 +57,12 @@ function line(mark, text, underline) {
 const WIDE_AT = 110
 
 // wrapClass picks the inner column width: centred (max-w-5xl) for short lines so
-// it stays aligned with the panels above, full width once the active line is long.
+// it stays aligned with the panels above, full width once any row of the active
+// unit is long (a multi-row group takes the longest line across all its rows).
 function wrapClass(state) {
-  const r = state.footerUnit
-  const len = r ? Math.max((r.left || '').length, (r.right || '').length) : 0
+  const rows = state.footerUnit
+  let len = 0
+  if (rows) for (const r of rows) len = Math.max(len, (r.left || '').length, (r.right || '').length)
   const width = len > WIDE_AT ? 'max-w-none' : 'max-w-5xl'
   return `flex w-full ${width} flex-col gap-1.5`
 }
@@ -105,21 +112,26 @@ export default function Footer(state) {
             class="language-php m-0 block font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
             data-testid="code-diff"
             .innerHTML="${() => {
-              const r = state.footerUnit
-              if (!r) return ''
-              // Rebuild the underline Sets from the plain arrays the snapshot
-              // carries (see footerUnitInfo in home.mjs).
-              const ulLeft = r.ulLeft ? new Set(r.ulLeft) : null
-              const ulRight = r.ulRight ? new Set(r.ulRight) : null
+              const rows = state.footerUnit
+              if (!rows) return ''
+              // One row for a line/call unit (always single-row), one row per
+              // changed line for a multi-row group — same per-row del/ins markup
+              // as before, just looped over every row the active unit spans.
               let s = ''
-              if (r.left !== null && r.left !== undefined)
-                s += `<div class="block whitespace-pre bg-rose-100 dark:bg-rose-500/20">${line('del', r.left, ulLeft)}</div>`
-              if (r.right !== null && r.right !== undefined) {
-                // A long new/right line wraps in full (rather than requiring an
-                // invisible no-scrollbar horizontal scroll) so the reviewer sees
-                // the entire new code — see the WIDE_AT comment above.
-                const rightWrap = r.right.length > WIDE_AT ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
-                s += `<div class="block ${rightWrap} bg-emerald-100 dark:bg-emerald-500/20">${line('ins', r.right, ulRight)}</div>`
+              for (const r of rows) {
+                // Rebuild the underline Sets from the plain arrays the snapshot
+                // carries (see footerUnitInfo in home.mjs).
+                const ulLeft = r.ulLeft ? new Set(r.ulLeft) : null
+                const ulRight = r.ulRight ? new Set(r.ulRight) : null
+                if (r.left !== null && r.left !== undefined)
+                  s += `<div class="block whitespace-pre bg-rose-100 dark:bg-rose-500/20">${line('del', r.left, ulLeft)}</div>`
+                if (r.right !== null && r.right !== undefined) {
+                  // A long new/right line wraps in full (rather than requiring an
+                  // invisible no-scrollbar horizontal scroll) so the reviewer sees
+                  // the entire new code — see the WIDE_AT comment above.
+                  const rightWrap = r.right.length > WIDE_AT ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
+                  s += `<div class="block ${rightWrap} bg-emerald-100 dark:bg-emerald-500/20">${line('ins', r.right, ulRight)}</div>`
+                }
               }
               return s
             }}"

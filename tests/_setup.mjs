@@ -203,12 +203,14 @@ ${body}
     file('ExplainChildAction', 'handle', 'amount', '        if ($amount > 10) {\n            $amount = 20;\n        }'),
   )
   // ExplainNoIfAction — a third block whose change is a plain, MULTI-LINE
-  // reassignment with no if-statement at all: neither footerUnit (the group
-  // spans 2 rows, not 1) nor footerExplain (no "if"/"elseif" in the text) has
-  // anything to show, so state.footerVisible stays false for its one change
-  // group. Used by the "footer disappears entirely, no reserved space" test
-  // in footer-explanation.spec.mjs — distinct from ExplainAction/
-  // ExplainChildAction above, which both deliberately DO introduce an if.
+  // reassignment with no if-statement at all: its one change group spans 2
+  // rows (a paired "$value = 1;" → "$value = 2;" modification, plus a lone
+  // "$extra = 3;" insert row) — footerExplain has nothing to show (no
+  // "if"/"elseif" in the text), but footerUnit now DOES (the per-line inline
+  // diff of the whole group). Used by the "footer shows a per-line diff for
+  // a multi-row group" test in footer-explanation.spec.mjs — distinct from
+  // ExplainAction/ExplainChildAction above, which both deliberately DO
+  // introduce an if.
   write('base', 'app/Actions/ExplainNoIfAction.php', file('ExplainNoIfAction', 'execute', 'value', '        $value = 1;'))
   write(
     'head',
