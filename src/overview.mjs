@@ -905,7 +905,8 @@ function recentItem(r) {
     >
       <span class="shrink-0 text-emerald-600 dark:text-emerald-400">${icon('sparkles', 'h-4 w-4')}</span>
       <div class="min-w-0 flex-1">
-        <span class="text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white"
+        <h3 class="truncate text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">${r.title || '#' + r.pr}</h3>
+        <span class="block truncate text-[12px] text-slate-500 dark:text-zinc-500"
           >#${r.pr} · ${r.blocks} ${r.blocks === 1 ? 'blok' : 'blokken'} · ${r.files} ${r.files === 1 ? 'bestand' : 'bestanden'}</span
         >
       </div>

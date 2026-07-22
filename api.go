@@ -71,6 +71,17 @@ func (s *server) handlePRs(w http.ResponseWriter, r *http.Request) {
 	if prs == nil {
 		prs = []PRSummary{}
 	}
+	// Enrich each row with its PR title from the prmeta read-model (read-only,
+	// within the write-boundary). Titles land when the pr_status tracker has run
+	// (on first /pr/<id> visit); a PR without a stored title keeps an empty
+	// Title and the UI falls back to showing just #number.
+	if s.tasks != nil && s.tasks.prmeta != nil {
+		for i := range prs {
+			if meta, ok, err := s.tasks.prmeta.Get(r.Context(), prs[i].PR); err == nil && ok {
+				prs[i].Title = meta.Title
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, prs)
 }
 

@@ -214,9 +214,10 @@ func blockFileExists(db *sql.DB, pr int, file string) (bool, error) {
 
 // PRSummary is one row of the PR overview: a PR and how many blocks it holds.
 type PRSummary struct {
-	PR     int `json:"pr"`
-	Blocks int `json:"blocks"`
-	Files  int `json:"files"`
+	PR     int    `json:"pr"`
+	Blocks int    `json:"blocks"`
+	Files  int    `json:"files"`
+	Title  string `json:"title"` // filled by handlePRs from the prmeta read-model (empty when unknown)
 }
 
 // listPRs returns every ingested PR with its block/file counts, newest PR first.
