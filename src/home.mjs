@@ -2985,6 +2985,7 @@ function expandColumn(level) {
   state.drill = state.drill.slice(0, level)
   state.drillCursor = state.drillCursor.slice(0, level)
   state.focusLevel = level
+  markDrillReturn(level)
   scrollFocusIntoView()
   // Same rekey-resets-scrollTop issue as the ← handler in onKeydown (a rail
   // click is the same focus-transition, just triggered by mouse) — re-centre
@@ -3090,6 +3091,27 @@ function resolveChildBlock(child) {
 // Deliberately a plain module-level variable, not reactive state — mirrors
 // other one-shot bookkeeping like searchRequested/lastSidebarFocus.
 let drillOpenMarker = null
+
+// drillReturnMarker mirrors drillOpenMarker but for the REVERSE transition:
+// stepping back out of a drilled column so an earlier column regains the
+// keyboard focus — ← peeling back one level (onKeydown), a collapsed-rail
+// click jumping back several levels at once (expandColumn), or
+// applyNextUnapproved trimming state.drill back onto an already-open
+// ancestor with nothing further left to drill. {level, id} identifies which
+// column just regained focus: level 0 is the top-level block (curBlock()),
+// 1..drill.length is state.drill[level-1]. Consumed once by the same two
+// render passes that consume drillOpenMarker (the top-level block-column
+// closure and the drilled-columns map below), so it never replays on an
+// unrelated rebuild of that column (code arriving, another focus flip).
+let drillReturnMarker = null
+
+// markDrillReturn stamps drillReturnMarker for the column about to regain
+// focus at `level` — call this right after state.focusLevel is reassigned to
+// its new (lower) value, at each of the three call sites listed above.
+function markDrillReturn(level) {
+  const id = level === 0 ? curBlock().id : state.drill[level - 1].id
+  drillReturnMarker = { level, id }
+}
 
 // drillIntoChild opens a child from the Onderliggende-code panel as its own diff
 // column, appended to the right of the current drill stack (Enter on a resolved
@@ -3944,7 +3966,8 @@ function applyNextUnapproved(target) {
     scrollSelectedIntoView()
     return
   }
-  if (target.root !== state.selected) {
+  const sameRoot = target.root === state.selected
+  if (!sameRoot) {
     state.selected = target.root
     state.drill = []
     state.drillCursor = []
@@ -3961,6 +3984,12 @@ function applyNextUnapproved(target) {
   state.drill = state.drill.slice(0, common)
   state.drillCursor = state.drillCursor.slice(0, common)
   state.focusLevel = common
+  // Landing directly back on an already-open ancestor — nothing left to
+  // drill further — is a genuine "return" transition (mirrors ← and
+  // expandColumn above): mark it for the short entrance-from-the-left
+  // animation. Only when staying on the same root: jumping to a brand-new
+  // top-level block isn't "returning" to anything, it's a fresh selection.
+  if (sameRoot && common === target.path.length) markDrillReturn(common)
   for (let i = common; i < target.path.length; i++) {
     const kid = target.path[i]
     drillIntoChild({ blockId: kid.id, id: kid.id, label: kid.label, file: kid.file, code: '', line: kid.line })
@@ -4743,6 +4772,7 @@ function onKeydown(e) {
         state.drill = state.drill.slice(0, state.focusLevel - 1)
         state.drillCursor = state.drillCursor.slice(0, state.focusLevel - 1)
         state.focusLevel -= 1
+        markDrillReturn(state.focusLevel)
         scrollFocusIntoView()
         // Popping all the way back out to the top-level block (no drilled
         // column left) reaches the rest position — snap <main> hard back to
@@ -5474,7 +5504,7 @@ function DetailPanel(state) {
             out.push(stepChevronSlot(1, 'down').key('step-down'))
             out.push(connector().key('conn:' + b.file + ':' + i))
           }
-          const card = Block(b, {
+          const inner = Block(b, {
             // Dimmed like the look-ahead preview whenever it isn't the selected
             // card, OR the keyboard focus has stepped off it onto a drilled
             // column (state.focusLevel > 0).
@@ -5540,7 +5570,27 @@ function DetailPanel(state) {
             // Rekeying on all three forces a fresh card (fresh bindings) the
             // moment any changes. b.code persists on the block, so the rebuild
             // shows the code immediately — no reload flash.
-          }).key(
+          })
+          // One-shot "return" animation when this card regains the keyboard
+          // focus after popping back out of a drilled column (← ,a
+          // collapsed-rail click, or applyNextUnapproved landing back on an
+          // ancestor — see drillReturnMarker/markDrillReturn). Only the
+          // selected card can ever be the level-0 return target, hence the
+          // `i === sel` guard — the look-ahead preview card never consumes
+          // this marker. `inner` (the Block() card) is wrapped in a stable
+          // `contents` root purely so there's a non-reactive place to bake
+          // this one-shot class string, exactly like drillColumnCls does for
+          // a drilled column — see the "stable element root" pitfall in
+          // conventions.md. The .key(...) moves from `inner` onto this
+          // wrapper: it's the outermost pushed item, so it's the one that
+          // must carry the key for the keyed-list reconcile.
+          const justReturned =
+            i === sel &&
+            focusedHere &&
+            !!(drillReturnMarker && drillReturnMarker.level === 0 && drillReturnMarker.id === b.id)
+          if (justReturned) drillReturnMarker = null
+          const cardCls = 'contents' + (justReturned ? ' drill-return' : '')
+          const card = html`<div class="${cardCls}" data-testid="detail-card">${inner}</div>`.key(
             'detail:' +
               (i === sel ? 'sel' : 'prev') +
               ':' +
@@ -5609,6 +5659,16 @@ function DetailPanel(state) {
           // replays it: drillOpenMarker will already be null by then.
           const justOpened = !!(drillOpenMarker && drillOpenMarker.level === level && drillOpenMarker.id === b.id)
           if (justOpened) drillOpenMarker = null
+          // Mirrors justOpened above but for the REVERSE transition — this
+          // column just regained focus after popping back out of a deeper
+          // drilled column (see drillReturnMarker's own comment). Guarded on
+          // !justOpened purely for clarity: the two markers are set by
+          // disjoint actions (forward drilling vs. stepping back) and are
+          // never both set for the same level+id at once.
+          const justReturned =
+            !justOpened &&
+            !!(drillReturnMarker && drillReturnMarker.level === level && drillReturnMarker.id === b.id)
+          if (justReturned) drillReturnMarker = null
           // scroll-ml-4 reserves 16px of left scroll-margin on this column so
           // that scrollFocusIntoView's native scrollIntoView({inline:'start'})
           // leaves room for the drill-left-hint chevron rendered just outside
@@ -5619,7 +5679,8 @@ function DetailPanel(state) {
           // (the unfocused branch above returns a collapsed rail instead), so
           // the margin is unconditional, not gated on focusedHere.
           const drillColumnCls =
-            'flex min-h-0 shrink-0 flex-col gap-3 scroll-ml-4' + (justOpened ? ' drill-enter' : '')
+            'flex min-h-0 shrink-0 flex-col gap-3 scroll-ml-4' +
+            (justOpened ? ' drill-enter' : justReturned ? ' drill-return' : '')
           return html`
             <div class="${drillColumnCls}" data-testid="drill-column" data-drill-idx="${i}">
               <div class="relative flex min-h-0 flex-col">

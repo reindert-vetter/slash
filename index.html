@@ -65,6 +65,30 @@
         .drill-enter {
           animation: drillIn 180ms ease-out;
         }
+
+        /* Mirror of .drill-enter for the REVERSE transition — stepping back
+           out of a drilled column so an earlier column (a parent drilled
+           column, or the top-level block card) regains the keyboard focus
+           (← , a collapsed-rail click, or the postApprove "Ga door" landing
+           back on an already-open ancestor — see drillReturnMarker in
+           home.mjs). Slides in from the LEFT (opposite translateX sign) so
+           forward vs. backward drilling feel visually distinct. Same
+           one-shot, non-repeating rule applies: home.mjs only adds this class
+           on the render right after a genuine "return", never on a later
+           rebuild of the same column. */
+        @keyframes drillReturn {
+          from {
+            opacity: 0;
+            transform: translateX(-6px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+        .drill-return {
+          animation: drillReturn 180ms ease-out;
+        }
       }
 
       /* Prism token colours only — scoped to every Prism code excerpt via the

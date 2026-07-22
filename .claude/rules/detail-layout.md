@@ -601,8 +601,10 @@ class `drill-enter` (een korte fade+slide-`@keyframes` in `index.html`, met een
 `prefers-reduced-motion`-guard). Dit **mag nooit** een reactieve/permanente
 class-binding worden: de kolom-`.key(...)` (zie hierboven, `foc`/`unfoc` +
 `codeState`) klapt ook om bij een loutere focus-wissel (`←`/rail-klik) of
-zodra code alsnog binnenkomt — geen van beide is een "open", dus die mogen de
-animatie niet laten replayen. Het consume-eenmalig-patroon lost dit op:
+zodra code alsnog binnenkomt — geen van beide is een "open" in de zin van
+`drill-enter`, dus die mogen déze animatie niet laten replayen (zie hieronder
+voor de eigen, gespiegelde animatie die een focus-wissel wél krijgt). Het
+consume-eenmalig-patroon lost dit op:
 - Blijft de `.key(...)` van een kolom gelijk over een navigatiestap
   (`f`/`d`/`s`/`↑`/`↓` binnen dezelfde kolom, die alleen `drillCursor` raakt,
   niet de key) — dan hergebruikt/patcht arrow.js de bestaande DOM-node. De
@@ -616,6 +618,49 @@ animatie niet laten replayen. Het consume-eenmalig-patroon lost dit op:
 Test: `tests/drill-open-animation.spec.mjs` (de class staat er direct na
 drillen; een `ArrowDown`-navigatiestap erna bewijst via een ad-hoc
 marker-attribuut dat de DOM-node **niet** opnieuw gemount wordt).
+
+**Gespiegelde terug-animatie bij het verlaten van een gedrilde kolom
+(`drillReturnMarker`/`markDrillReturn` in `home.mjs` + `.drill-return` in
+`index.html`):** het exacte spiegelbeeld van de openingsanimatie hierboven,
+voor de omgekeerde richting — de kolom die de keyboard-focus **terugkrijgt**
+zodra een gedrilde kolom sluit. Drie call-sites zetten de marker, telkens
+meteen na het verlagen van `state.focusLevel`:
+- `onKeydown`'s `←`-tak (één niveau terugpellen),
+- `expandColumn` (een klik op een ingeklapte rail, kan meerdere niveaus in
+  één klap terugspringen),
+- `applyNextUnapproved`, maar **alleen** wanneer het gemeenschappelijke
+  voorvoegsel-trimmen (`common`) al het volledige doel is
+  (`common === target.path.length`, dus er volgt geen verdere
+  `drillIntoChild`-call meer) — én alleen zolang de root niet wisselt
+  (`sameRoot`): landen op een gloednieuw top-level block is een verse
+  selectie, geen "terugkeer" naar iets dat al openstond.
+`markDrillReturn(level)` bepaalt zelf welke kolom dat is (`{level, id}`,
+`level 0` = het top-level block via `curBlock()`, anders
+`state.drill[level - 1]`) en zet `drillReturnMarker`. Twee render-passes
+consumeren 'm eenmalig, exact het `justOpened`-patroon van hierboven:
+- De gedrilde-kolommenlijst (`state.drill.map(...)`): naast de bestaande
+  `justOpened`-check een `justReturned`-check op dezelfde `{level, id}`-vorm;
+  `drillColumnCls` krijgt `drill-enter` óf `drill-return` (nooit beide — de
+  twee markers worden door disjuncte acties gezet).
+- De top-level block-kolom-closure: hier bestond nog geen stabiele
+  wrapper-root om een niet-reactieve, eenmalige class op te hangen (`Block(b,
+  {...})` werd direct gepusht). `inner = Block(b, {...})` wordt daarom in een
+  `<div class="contents ..." data-testid="detail-card">`-wrapper gezet — een
+  statische, niet-reactieve class-string per `.map()`-iteratie, exact het
+  patroon van `drillColumnCls`/de "stabiele element-root"-valkuil in
+  `conventions.md` (`display:contents` haalt de wrapper uit de layout, dus
+  geen `flex`-gap-artefact) — en de bestaande `.key(...)` verhuist van
+  `Block(...)` naar deze wrapper (de key hoort op het buitenste gepushte
+  item). `justReturned` wordt alleen gecheckt voor `i === sel` (alleen de
+  geselecteerde kaart kan ooit het level-0-terugkeerdoel zijn, nooit de
+  look-ahead-previewkaart).
+`.drill-return` (`index.html`) is het spiegelbeeld van `.drill-enter`: dezelfde
+fade + 180ms ease-out, maar `translateX(-6px)→0` (van links inschuiven) i.p.v.
+van rechts — zo voelen open/terug visueel verschillend, binnen dezelfde
+`prefers-reduced-motion`-guard. Test: `tests/drill-return-animation.spec.mjs`
+(`←` pelt terug en animeert de top-level kaart; een rail-klik via
+`expandColumn` idem; een `ArrowDown`-navigatiestap erna bewijst via hetzelfde
+node-marker-attribuut dat de kaart niet opnieuw gemount wordt).
 
 `focusedBlock()` (het Onderliggende-code-paneel + taken/chat) volgt nu
 `state.focusLevel` in plaats van altijd het diepste niveau: `state.focusLevel ===
