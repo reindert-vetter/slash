@@ -308,10 +308,10 @@ func coverEntriesForTest(idx *symbolIndex, headDir string, pr int, b Block, zone
 		}
 		seen[key] = true
 		resolvedClasses[shortName(t.class)] = true
-		code := blockSource(headDir, *def)
+		code := enrichedCodeSide(blockSource(headDir, *def))
 		rows = append(rows, testcovers.Entry{
 			PR: pr, TestID: b.ID(), TargetKey: key, Status: testcovers.StatusResolved, Annotation: t.annotation, Line: t.line,
-			CoveredFile: def.File, CoveredClass: def.Class, CoveredMethod: def.Name, CoveredLine: def.Line, CoveredCode: code.Text,
+			CoveredFile: def.File, CoveredClass: def.Class, CoveredMethod: def.Name, CoveredLine: code.Start, CoveredCode: code.Text,
 		})
 	}
 	for _, t := range targets {

@@ -377,3 +377,72 @@ func TestBuildRelationsWorkflowFillsTestCovers(t *testing.T) {
 		t.Fatalf("testcovers rows = %+v, want a resolved method:Order::billingAddress row", got)
 	}
 }
+
+// TestScanTestCoversFoldsLeadingPHPDocInCoveredCode: a resolved covers-child
+// (the tested method) whose definition carries a leading PHPDoc gets the same
+// @return/@param signature fold applied to its embedded CoveredCode that an
+// active (changed) block's diff gets via /api/code — see
+// codesig.go/enrichedCodeSide and .claude/rules/blocks-and-ingest.md
+// ("PHPDoc-types in de signatuur vouwen"). CoveredLine must shift by the same
+// removed-line count as the doc.
+func TestScanTestCoversFoldsLeadingPHPDocInCoveredCode(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 15
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Models/Order.php": "<?php\n" +
+			"namespace App\\Models;\n" +
+			"class Order {\n" +
+			"    /**\n" +
+			"     * @param string $type\n" +
+			"     * @return array\n" +
+			"     */\n" +
+			"    public function billingAddress($type)\n" +
+			"    {\n" +
+			"        return [];\n" +
+			"    }\n" +
+			"}\n",
+		"tests/Feature/OrderCoverageTest.php": `<?php
+namespace Tests\Feature;
+
+use App\Models\Order;
+use PHPUnit\Framework\TestCase;
+
+class OrderCoverageTest extends TestCase
+{
+    #[CoversMethod(Order::class, 'billingAddress')]
+    public function testBillingAddress(): void
+    {
+        $this->assertTrue(true);
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	blocks := testCoversBlocks(t, dataDir, pr, "tests/Feature/OrderCoverageTest.php")
+	entries := scanTestCovers(dataDir, pr, blocks)
+
+	testID := blocks[0].ID()
+	e, ok := findCoverEntry(entries, testID, "method:Order::billingAddress")
+	if !ok || e.Status != testcovers.StatusResolved {
+		t.Fatalf("CoversMethod entry = %+v, ok=%v", e, ok)
+	}
+	if strings.Contains(e.CoveredCode, "/**") || strings.Contains(e.CoveredCode, "@param") {
+		t.Errorf("CoveredCode still carries the PHPDoc, got %q", e.CoveredCode)
+	}
+	if !strings.Contains(e.CoveredCode, "function billingAddress(string $type): array") {
+		t.Errorf("CoveredCode signature not folded, got %q", e.CoveredCode)
+	}
+	if e.CoveredLine != 8 {
+		t.Errorf("CoveredLine = %d, want 8 (the doc's 4 removed lines shift the def from line 4 to line 8)", e.CoveredLine)
+	}
+}

@@ -443,12 +443,12 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			if def.File == b.File && def.symbol() == b.symbol() {
 				return // no self-edge
 			}
-			code := blockSource(headDir, *def)
+			code := enrichedCodeSide(blockSource(headDir, *def))
 			out = append(out, callresolve.Entry{
 				PR: pr, CallerID: callerID, CallKey: key, Status: callresolve.StatusResolved,
 				Kind:      kind,
 				ChildFile: def.File, ChildClass: def.Class, ChildMethod: def.Name,
-				ChildLine: def.Line, ChildCode: code.Text,
+				ChildLine: code.Start, ChildCode: code.Text,
 			})
 		}
 		emit := func(key string, def *Block) {
@@ -625,10 +625,11 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			case len(enums) == 1:
 				e := enums[0]
 				seen[key] = true
+				code := enrichedCodeSide(blockSource(headDir, e))
 				out = append(out, callresolve.Entry{
 					PR: pr, CallerID: callerID, CallKey: key, Status: callresolve.StatusResolved,
 					ChildFile: e.File, ChildClass: e.Class, ChildMethod: key,
-					ChildLine: e.Line, ChildCode: blockSource(headDir, e).Text,
+					ChildLine: code.Start, ChildCode: code.Text,
 				})
 			case len(enums) > 1:
 				emit(key, nil) // same case on several enums → unresolved
@@ -676,11 +677,12 @@ func resolveMigrationModels(dataDir string, pr int, blocks []Block) []callresolv
 			if !ok {
 				continue // no known model for this table — stay silent, no LLM
 			}
+			code := enrichedCodeSide(blockSource(headDir, def))
 			out = append(out, callresolve.Entry{
 				PR: pr, CallerID: callerID, CallKey: "migration_model:" + table,
 				Status: callresolve.StatusResolved, Kind: callresolve.KindMigrationModel,
 				ChildFile: def.File, ChildClass: def.Class, ChildMethod: "",
-				ChildLine: def.Line, ChildCode: blockSource(headDir, def).Text,
+				ChildLine: code.Start, ChildCode: code.Text,
 			})
 		}
 	}
@@ -754,11 +756,12 @@ func resolveDataProviders(dataDir string, pr int, blocks []Block) []callresolve.
 			if def.File == b.File && def.symbol() == b.symbol() {
 				continue // no self-edge
 			}
+			code := enrichedCodeSide(blockSource(headDir, *def))
 			out = append(out, callresolve.Entry{
 				PR: pr, CallerID: callerID, CallKey: "data_provider:" + name,
 				Status: callresolve.StatusResolved, Kind: callresolve.KindDataProvider,
 				ChildFile: def.File, ChildClass: def.Class, ChildMethod: def.Name,
-				ChildLine: def.Line, ChildCode: blockSource(headDir, *def).Text,
+				ChildLine: code.Start, ChildCode: code.Text,
 			})
 		}
 	}

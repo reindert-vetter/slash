@@ -185,7 +185,7 @@ func verifyDefinition(headDir string, ans llmAnswer) (code, class, method string
 	if !ok {
 		return "", "", "", 0, false
 	}
-	src := extractBlockSource(full, rel, ans.Class, ans.Method)
+	src := enrichedCodeSide(extractBlockSource(full, rel, ans.Class, ans.Method))
 	if src.Text == "" {
 		return "", "", "", 0, false
 	}

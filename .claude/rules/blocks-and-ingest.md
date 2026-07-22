@@ -326,14 +326,30 @@ navigeerbare lijst tonen.
   `relations.go`/`callresolve_analysis.go`/`testcovers_analysis.go` lezen
   nog steeds de rauwe, regel-accurate tekst (hun `matchLine`/`funcDeclLine`/
   `methodZone` rekenen op die 1-op-1 regel↔`Block.Line`-correspondentie).
-  **Bewust buiten scope (v1):** een `method_call`/`covers`-child wiens code
-  **embedded** in zijn callresolve-/testcovers-rij zit (een ongewijzigd
-  bestand, code rechtstreeks via `blockSource` vastgelegd op analyse-tijd —
-  zie "Aangeroepen … methodes resolven"/"Testdekking koppelen" in
-  `.claude/rules/tembed-workflows.md`) gaat **niet** door deze transformatie —
-  die heeft geen diff/approve-concept, alleen een code-peek. Een gedrilde
-  kolom die een écht PR-blok is (dus via `/api/code`) krijgt de transformatie
-  gewoon gratis mee, net als elk ander blok.
+  **Ook toegepast op embedded "Onderliggende code"-children** (een
+  `method_call`/`covers`-child wiens code **embedded** in zijn callresolve-/
+  testcovers-rij zit — een ongewijzigd bestand, code rechtstreeks via
+  `blockSource` vastgelegd op analyse-tijd, zie "Aangeroepen … methodes
+  resolven"/"Testdekking koppelen" in `.claude/rules/tembed-workflows.md`):
+  `ChildCode`/`CoveredCode` gaan door dezelfde `enrichedCodeSide(blockSource(…))`
+  vóórdat ze in de `callresolve`/`testcovers`-rij belanden, in
+  `callresolve_analysis.go` (de `method_call`-rules 1-5b/2c via `emitKind`, de
+  enum-case-rule 6, `resolveMigrationModels`, `resolveDataProviders`),
+  `testcovers_analysis.go` (`coverEntriesForTest`, de method-niveau Go-
+  resolutie) en de twee LLM-`found`-paden (`resolve_call.go`'s
+  `verifyDefinition`, `resolve_test_covers.go`'s `resolveTestCoversWithModel`).
+  `ChildLine`/`CoveredLine` schuiven mee (`code.Start` i.p.v. `def.Line`/
+  `e.Line`) — die velden worden vandaag door geen enkele frontend-consument
+  gelezen, maar blijven zo in lockstep met `Code` mocht dat ooit veranderen.
+  Een enum-case/migratie-model-child (een synthetisch whole-class/whole-enum-
+  blok, zie `scanEnums`/`scanModels`) draagt per constructie geen leidende
+  PHPDoc in zijn `Block.Line`, dus daar is dit in de praktijk een no-op — de
+  wrapper zit er toch, voor uniformiteit en om niets special-cased te laten
+  bij een latere scanner-wijziging. Een sibling-hergebruikte testcovers-rij
+  (`reuseSiblingCovers`, `resolve_test_covers.go`) kopieert een reeds
+  ge-enriched `CoveredCode` letterlijk mee, dus die heeft geen eigen
+  aanpassing nodig. Een gedrilde kolom die een écht PR-blok is (dus via
+  `/api/code`) kreeg de transformatie al gratis mee, net als elk ander blok.
   Test: `codesig_test.go` (single-line en multi-line signaturen, constructor-
   property-promotion, ontbrekend native return-type, een kale/tag-loze doc die
   ongewijzigd blijft, geen-doc, attribuut-vóór-doc die ongewijzigd blijft,
@@ -341,6 +357,12 @@ navigeerbare lijst tonen.
   de matchende parameter raakt, en de `&`-by-ref- vs. intersection-type-
   disambiguatie); plus een parity-test die aantoont dat
   `blockChangedRowCount`'s uitkomst daalt zodra alleen de doc gevouwen wordt.
+  De embedded-child-transformatie zelf is getest in
+  `callresolve_analysis_test.go`/`testcovers_analysis_test.go` (een resolved
+  `method_call`/`data_provider`/`covers`-target met een leidende PHPDoc levert
+  een gevouwen `ChildCode`/`CoveredCode` zonder `/**` en een verschoven
+  `ChildLine`/`CoveredLine` op) en `resolve_call_test.go`/
+  `resolve_test_covers_test.go` (hetzelfde voor het LLM-`found`-pad).
 - **Uitzondering: een kale `#[Test]`-only wijziging telt bewust NIET als
   "modified" (`classify.go`).** Een toegevoegd/verwijderd/aangepast `#[Test]`
   (PHPUnit's argumentloze test-marker) heeft geen reviewbare betekenis — anders

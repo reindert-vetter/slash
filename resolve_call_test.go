@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/reindert-vetter/tembed"
@@ -55,6 +56,70 @@ func TestResolveCallHaikuConfident(t *testing.T) {
 	}
 	if n := fake.CallCount(); n != 1 {
 		t.Fatalf("claude called %d times, want 1", n)
+	}
+}
+
+// TestResolveCallHaikuFoundFoldsLeadingPHPDoc: an LLM-found child whose
+// definition carries a leading PHPDoc gets the same @return/@param signature
+// fold applied to its embedded ChildCode (via verifyDefinition ->
+// enrichedCodeSide) that an active (changed) block's diff gets via /api/code
+// — see codesig.go and .claude/rules/blocks-and-ingest.md ("PHPDoc-types in
+// de signatuur vouwen"). ChildLine must shift by the same removed-line count.
+func TestResolveCallHaikuFoundFoldsLeadingPHPDoc(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 29
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Services/OrderService.php": `<?php
+namespace App\Services;
+class OrderService {
+    public function build() {
+        Helper::compute($this->items);
+    }
+}
+`,
+		"app/Support/Helper.php": "<?php\n" +
+			"namespace App\\Support;\n" +
+			"class Helper {\n" +
+			"    /**\n" +
+			"     * @param array $items\n" +
+			"     * @return array\n" +
+			"     */\n" +
+			"    public static function compute($items)\n" +
+			"    {\n" +
+			"        return $items;\n" +
+			"    }\n" +
+			"}\n",
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelHaiku, `{"found":true,"file":"app/Support/Helper.php","class":"Helper","method":"compute","confidence":"high"}`)
+	m, cr := resolveCallManager(t, dataDir, fake)
+
+	if _, err := m.StartResolveCall(callInput(pr, "compute")); err != nil {
+		t.Fatal(err)
+	}
+
+	e := onlyEntry(t, cr, pr)
+	if e.Status != callresolve.StatusFound {
+		t.Fatalf("entry = %+v, want found", e)
+	}
+	if strings.Contains(e.ChildCode, "/**") || strings.Contains(e.ChildCode, "@param") {
+		t.Errorf("ChildCode still carries the PHPDoc, got %q", e.ChildCode)
+	}
+	if !strings.Contains(e.ChildCode, "function compute(array $items): array") {
+		t.Errorf("ChildCode signature not folded, got %q", e.ChildCode)
+	}
+	if e.ChildLine != 8 {
+		t.Errorf("ChildLine = %d, want 8 (the doc's 4 removed lines shift the def from line 4 to line 8)", e.ChildLine)
 	}
 }
 

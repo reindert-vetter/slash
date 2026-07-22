@@ -161,13 +161,13 @@ func resolveTestCoversWithModel(ctx context.Context, cl claude.Client, dataDir s
 			if raw, err := cl.Run(ctx, req); err == nil {
 				if ans, ok := parseTestCoverAnswer(raw); ok && ans.Found {
 					if def := methodOnClass(idx, short, ans.Method); def != nil {
-						code := blockSource(headDir, *def)
+						code := enrichedCodeSide(blockSource(headDir, *def))
 						entry.Status = testcovers.StatusFound
 						entry.Confidence = ans.Confidence
 						entry.CoveredFile = def.File
 						entry.CoveredClass = def.Class
 						entry.CoveredMethod = def.Name
-						entry.CoveredLine = def.Line
+						entry.CoveredLine = code.Start
 						entry.CoveredCode = code.Text
 					}
 				}

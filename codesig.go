@@ -13,14 +13,24 @@ import (
 // @return/@param types are spliced into the signature there is nothing left in
 // the doc worth showing as its own diff-able code.
 //
-// This is display/stats-only: it does NOT touch extractBlockSource/blockSource
+// This is display-only: it does NOT touch extractBlockSource/blockSource
 // themselves (relations.go / callresolve_analysis.go / testcovers_analysis.go
-// rely on those returning the raw, line-accurate source — see
-// .claude/rules/blocks-and-ingest.md). It's applied by two callers instead:
-// api.go's handleCode (what /api/code returns, i.e. what Block.mjs renders) and
-// blockstats.go's blockChangedRowCount (the approve-teller total) — the exact
-// same function feeding both keeps the diff and the approve count in lockstep,
-// mirroring the existing changedRowCount Go/JS-parity pattern.
+// still read the raw, line-accurate source for their own regex/offset work —
+// see .claude/rules/blocks-and-ingest.md). It's applied, via code.go's
+// enrichedCodeSide wrapper, at every place a block's source becomes something
+// a reviewer actually reads:
+//   - api.go's handleCode (what /api/code returns, i.e. what Block.mjs renders)
+//   - blockstats.go's blockChangedRowCount (the approve-teller total) — the
+//     exact same function feeding both keeps the diff and the approve count
+//     in lockstep, mirroring the existing changedRowCount Go/JS-parity pattern
+//   - the embedded "Onderliggende code" child snapshots taken at analysis
+//     time for an UNCHANGED target (callresolve_analysis.go's method_call/
+//     enum-case/migration_model/data_provider rules, testcovers_analysis.go's
+//     method-level covers, and the LLM-found paths in resolve_call.go/
+//     resolve_test_covers.go) — ChildCode/CoveredCode get the same signature
+//     fold as a changed block's diff, and ChildLine/CoveredLine are bumped by
+//     enrichedCodeSide's Start the same way, so they'd stay in lockstep with
+//     Code if a future consumer ever reads those line fields.
 //
 // Deliberately "all or nothing" per block: either the whole signature is
 // confidently located and rewritten (and the doc fully removed), or nothing at

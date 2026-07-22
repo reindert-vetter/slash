@@ -1182,3 +1182,125 @@ class PermissionTest extends TestCase
 		}
 	}
 }
+
+// TestResolveCallsFoldsLeadingPHPDocInChildCode: a resolved method_call child
+// whose definition carries a leading PHPDoc gets the same @return/@param
+// signature fold applied to its embedded ChildCode that an active (changed)
+// block's diff gets via /api/code — see codesig.go/enrichedCodeSide and
+// .claude/rules/blocks-and-ingest.md ("PHPDoc-types in de signatuur vouwen").
+// ChildLine must shift by the same removed-line count as the doc.
+func TestResolveCallsFoldsLeadingPHPDocInChildCode(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 71
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Services/OrderService.php": `<?php
+namespace App\Services;
+class OrderService {
+    public function build() {
+        Helper::compute($this->items);
+    }
+}
+`,
+		"app/Support/Helper.php": "<?php\n" +
+			"namespace App\\Support;\n" +
+			"class Helper {\n" +
+			"    /**\n" +
+			"     * @param array $items\n" +
+			"     * @return array\n" +
+			"     */\n" +
+			"    public static function compute($items)\n" +
+			"    {\n" +
+			"        return $items;\n" +
+			"    }\n" +
+			"}\n",
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Services/OrderService.php", Class: "OrderService", Name: "build", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+	e, ok := findEntry(entries, "compute")
+	if !ok {
+		t.Fatalf("no entry for call %q, got %+v", "compute", entries)
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Fatalf("status = %q, want resolved", e.Status)
+	}
+	if strings.Contains(e.ChildCode, "/**") || strings.Contains(e.ChildCode, "@param") {
+		t.Errorf("ChildCode still carries the PHPDoc, got %q", e.ChildCode)
+	}
+	if !strings.Contains(e.ChildCode, "function compute(array $items): array") {
+		t.Errorf("ChildCode signature not folded, got %q", e.ChildCode)
+	}
+	if e.ChildLine != 8 {
+		t.Errorf("ChildLine = %d, want 8 (the doc's 4 removed lines shift the def from line 4 to line 8)", e.ChildLine)
+	}
+}
+
+// TestResolveDataProvidersFoldsLeadingPHPDocInChildCode mirrors
+// TestResolveCallsFoldsLeadingPHPDocInChildCode for the data_provider rule
+// (resolveDataProviders), which writes its own ChildCode/ChildLine separately
+// from emitKind.
+func TestResolveDataProvidersFoldsLeadingPHPDocInChildCode(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 72
+	_, headDir := worktreeDirs(dataDir, pr)
+	relFile := "tests/Feature/PermissionTest.php"
+	src := "<?php\n" +
+		"namespace Tests\\Feature;\n" +
+		"\n" +
+		"use PHPUnit\\Framework\\TestCase;\n" +
+		"\n" +
+		"class PermissionTest extends TestCase\n" +
+		"{\n" +
+		"    #[DataProvider('permissionAccessDataProvider')]\n" +
+		"    public function testPermissionAccessAttribute($perm)\n" +
+		"    {\n" +
+		"        $this->assertTrue(true);\n" +
+		"    }\n" +
+		"\n" +
+		"    /**\n" +
+		"     * @return array\n" +
+		"     */\n" +
+		"    public function permissionAccessDataProvider()\n" +
+		"    {\n" +
+		"        return [[true]];\n" +
+		"    }\n" +
+		"}\n"
+	p := filepath.Join(headDir, relFile)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	blocks := testCoversBlocks(t, dataDir, pr, relFile)
+	entries := resolveDataProviders(dataDir, pr, blocks)
+
+	caller, ok := blockByName(blocks, "PermissionTest::testPermissionAccessAttribute")
+	if !ok {
+		t.Fatalf("fixture scan did not find testPermissionAccessAttribute, got %v", symbols(blocks))
+	}
+	e, ok := findCallresolveEntry(entries, caller.ID(), "data_provider:permissionAccessDataProvider")
+	if !ok {
+		t.Fatalf("no data_provider entry for permissionAccessDataProvider, got %+v", entries)
+	}
+	if strings.Contains(e.ChildCode, "/**") || strings.Contains(e.ChildCode, "@return") {
+		t.Errorf("ChildCode still carries the PHPDoc, got %q", e.ChildCode)
+	}
+	if !strings.Contains(e.ChildCode, "function permissionAccessDataProvider(): array") {
+		t.Errorf("ChildCode signature not folded, got %q", e.ChildCode)
+	}
+	if e.ChildLine != 17 {
+		t.Errorf("ChildLine = %d, want 17 (the doc's 3 removed lines shift the def from line 14 to line 17)", e.ChildLine)
+	}
+}
