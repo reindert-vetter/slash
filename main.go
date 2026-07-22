@@ -17,6 +17,7 @@ import (
 )
 
 func main() {
+	loadDotEnv(envFile)
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "ingest":
@@ -53,6 +54,7 @@ func runServe(args []string) {
 	staticDir := fs.String("static", ".", "directory served statically")
 	_ = fs.Parse(args)
 
+	ensureEnvSetup()
 	if err := os.MkdirAll("data", 0o755); err != nil {
 		log.Fatalf("mkdir data: %v", err)
 	}
@@ -93,6 +95,7 @@ func runIngestCmd(args []string) {
 		log.Fatalf("invalid pr: %q", rest[0])
 	}
 
+	ensureEnvSetup()
 	if err := os.MkdirAll("data", 0o755); err != nil {
 		log.Fatalf("mkdir data: %v", err)
 	}
@@ -142,6 +145,7 @@ func runRelationsCmd(args []string) {
 		log.Fatalf("invalid pr: %q", rest[0])
 	}
 
+	ensureEnvSetup()
 	resolvedDB := dbPath(*dbFlag)
 	dataDir := filepath.Dir(resolvedDB)
 	db, err := openDB(resolvedDB)

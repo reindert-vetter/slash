@@ -94,6 +94,13 @@ curl -X POST http://localhost:8765/api/ingest -d '{"pr":12903}'
 Then open <http://localhost:8765/pr-overview> for the inbox, or
 <http://localhost:8765/pr/12903> for a specific PR.
 
+**Configuration (`.env`):** slash reads a gitignored `.env` from the working
+directory at startup (real environment variables always take precedence). On the
+first interactive run — when no `.env` exists and `SLASH_REPO_DIR` isn't set —
+it asks for the path to your local clone of the target repo and writes it to
+`.env` for you. You can also copy `.env.example` to `.env` and edit it by hand.
+Non-interactive runs (CI, tests) skip the prompt and fall back to the defaults.
+
 **Flags & env:**
 
 - `-db <path>` / `SLASH_DB` — SQLite DB path (default `data/graph.db`).
