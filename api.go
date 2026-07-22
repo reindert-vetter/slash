@@ -157,6 +157,13 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid block", http.StatusBadRequest)
 		return
 	}
+	// oldFile is the pre-rename path for a moved block: the OLD side is read
+	// from there in the base worktree (the file was elsewhere before the
+	// rename). Defaults to file (non-renamed block); same `..` guard as file.
+	oldFile := q.Get("oldFile")
+	if oldFile == "" || strings.Contains(oldFile, "..") {
+		oldFile = file
+	}
 
 	ok, err := blockFileExists(s.db, pr, file)
 	if err != nil {
@@ -173,7 +180,7 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"file": file,
-		"old":  enrichedCodeSide(extractBlockSource(filepath.Join(baseDir, file), file, class, name)),
+		"old":  enrichedCodeSide(extractBlockSource(filepath.Join(baseDir, oldFile), oldFile, class, name)),
 		"new":  enrichedCodeSide(extractBlockSource(filepath.Join(headDir, file), file, class, name)),
 	})
 }

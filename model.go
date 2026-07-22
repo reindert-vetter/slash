@@ -33,6 +33,12 @@ type Block struct {
 	// file is absent from the head worktree — git's `+++ /dev/null` case), as
 	// opposed to a single removed method in a file that still exists.
 	FileDeleted bool   `json:"fileDeleted"`
+	// OldFile is the pre-rename path of this block's file when the PR moved it
+	// (a git-detected rename, `git diff --find-renames`), "" otherwise. File
+	// stays the NEW path (so the block id/diff key live on the head path); the
+	// old source is read from OldFile in the base worktree (/api/code,
+	// blockstats). See .claude/rules/blocks-and-ingest.md.
+	OldFile     string `json:"oldFile"`
 	Side        string `json:"side"`     // new|old
 	Approved    bool   `json:"approved"` // approved by the reviewer?
 	Label    string `json:"label"`    // "Class::method" or "name" — for the frontend
@@ -57,6 +63,17 @@ func (b Block) MarshalJSON() ([]byte, error) {
 		alias
 		ID string `json:"id"`
 	}{alias(b), b.ID()})
+}
+
+// oldPath is the base-worktree path to read this block's OLD source from: its
+// pre-rename path when the PR moved the file, else its current File. Used by
+// /api/code and blockstats so the old diff side is read from where the file
+// actually was before the rename.
+func (b Block) oldPath() string {
+	if b.OldFile != "" {
+		return b.OldFile
+	}
+	return b.File
 }
 
 // symbol is the key old and new blocks are matched on.

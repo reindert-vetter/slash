@@ -478,6 +478,45 @@ navigeerbare lijst tonen.
   blijven werken). Tests: `classify_test.go` (detectie, DB-round-trip via beide
   write-paden, migrate) en `tests/removed-file.spec.mjs` (PR 98-fixture
   `tests/fixtures/filedeleted-blocks.json`).
+- **Verplaatst/hernoemd bestand als 1 blok (`OldFile`/`old_file`):** een bestand
+  dat de PR **verplaatste** (een git-gedetecteerde rename) wordt als **één
+  logisch bestand** gescand i.p.v. removed@oudpad + added@nieuwpad. `detectRenames`
+  (`gh.go`, `git diff --find-renames --name-status` → `map[nieuwpad]oudpad`) levert
+  de rename-map; de **full ingest** (`scanAndStoreIngestBlocksLocked`, `ingest.go`)
+  gebruikt 'm om (a) de oude paden mee in de diff-pathspec te zetten zodat git de
+  rename-hunk onder het nieuwe pad paart (`diffBetweenSHAs` draait met
+  `--find-renames`; een pathspec met alléén het nieuwe pad onderdrukt de
+  rename-detectie), en (b) `parseOneFile` de **oude** broncode uit
+  `baseDir/oudpad` te laten lezen (nieuwe uit `headDir/nieuwpad`). Beide
+  block-sets worden onder het **nieuwe** pad gescand, dus de bestaande
+  `classifyFile`-symbol-matching (`Class::method`) paart ze **gratis**: een
+  methode in beide versies → één `modified` blok (met echte oud↔nieuw-diff),
+  alleen-nieuw → `added`, alleen-oud → `removed`. `File` blijft altijd het
+  **nieuwe** pad (stabiele block-id op de head-kant); het pre-rename-pad staat op
+  `Block.OldFile` (`model.go`), gepersisteerd als kolom `old_file` (lichte
+  `ALTER TABLE … ADD COLUMN`-migrate, zelfde patroon als `file_deleted`/
+  `description`; `schemaDDL` + `schema.sql` in sync), meegeschreven door beide
+  write-paden en gelezen door `blocksByPR` → `oldFile` in `/api/blocks`.
+  **Go/JS-parity op de oude kant:** zowel `/api/code` (`handleCode`, via een
+  `oldFile`-query-param die `ensureCode` meestuurt) als `blockstats.go`
+  (`blockChangedRowCount`, via `Block.oldPath()`) lezen de **oude** diff-kant uit
+  `baseDir/<oldFile>` i.p.v. `baseDir/<file>` — anders zou een verplaatst blok
+  tegen een leeg base-pad diffen en volledig als `added` tellen. **Weergave**
+  (`Block.mjs`): bij `b.oldFile && b.oldFile !== b.file` toont de kaart het
+  **oude pad (doorgestreept) boven** de nieuwe `file:line`-regel, in een stabiele
+  `flex-col`-root (de toggelende `${() => …}`-slot zit binnen die root — de "kale
+  toggelende expressie"-valkuil, `conventions.md`); `data-testid=block-old-path`.
+  **Bewuste grens ("als dat even kan"):** een move die git op de default
+  `-M`-drempel (~50% similarity) **niet** als rename herkent (te veel
+  inhoudswijziging) staat niet in de rename-map en blijft gewoon removed+added —
+  geen crash, exact het oude gedrag. **Scope:** alleen de **full ingest**; de
+  delta-refresh (`refreshIngestDelta`, `parseFiles(… nil …)`) houdt zijn bewuste
+  `--no-renames`-split (`changedFileNames`) — een rename die mid-refresh verschijnt
+  blijft removed+added tot een volledige re-ingest. Tests: `classify_test.go`
+  (`TestRenamePairsBlocks` — pairing + `OldFile`-stamping), `blockstats_test.go`
+  (`TestBlockChangedRowCountReadsRenamedOldPath` — oude kant uit het oude pad),
+  `tests/rename-file.spec.mjs` (PR 104-fixture `tests/fixtures/rename-blocks.json`,
+  oud-boven-nieuw-weergave).
 - **Draait als de `ingest`-workflow (write-boundary):** de blocks-tabel-write +
   de git-worktree-mutaties gebeuren niet meer rechtstreeks vanuit een
   HTTP-handler of de CLI, maar binnen een tembed **Workflow Execution** (Workflow

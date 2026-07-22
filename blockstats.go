@@ -22,7 +22,11 @@ import (
 // blockChangedRowCount returns the number of changed, non-ws-only aligned rows
 // for a block, read from the base/head worktrees. Mirrors changedRows(blockRows).
 func blockChangedRowCount(baseDir, headDir string, b Block) int {
-	oldText := extractBlockSource(filepath.Join(baseDir, b.File), b.File, b.Class, b.Name).Text
+	// The old side is read from the block's pre-rename path (b.oldPath()) so a
+	// moved file's approve total counts against where its source actually was
+	// in the base worktree; b.oldPath() == b.File for a non-renamed block.
+	oldRel := b.oldPath()
+	oldText := extractBlockSource(filepath.Join(baseDir, oldRel), oldRel, b.Class, b.Name).Text
 	newText := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name).Text
 	// Fold a leading PHPDoc's @return/@param types into the signature and drop
 	// the doc lines — the exact same transform /api/code applies for display

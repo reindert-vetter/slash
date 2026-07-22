@@ -150,14 +150,46 @@ func updateWorktree(ctx context.Context, dir, sha string) error {
 }
 
 // diffBetweenSHAs returns the unified diff between two commits, limited to files.
+// Rename detection is on (--find-renames, git's default -M ~50% threshold): a
+// moved file is emitted as one rename entry keyed on the new path, so a
+// renamed-and-edited file's changed old/new line numbers pair up under that
+// new path in parseUnifiedDiff. For this to fire the caller must include BOTH
+// the new and the old path in files (a pathspec limited to only the new path
+// would filter out the deletion of the old path before git can pair them).
 func diffBetweenSHAs(ctx context.Context, baseSHA, headSHA string, files []string) (string, error) {
-	args := []string{"diff", "--no-color", "--unified=0", baseSHA, headSHA, "--"}
+	args := []string{"diff", "--no-color", "--find-renames", "--unified=0", baseSHA, headSHA, "--"}
 	args = append(args, files...)
 	out, err := runGit(ctx, args...)
 	if err != nil {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// detectRenames returns a map of new-path -> old-path for every file the PR
+// moved that git detects as a rename (default -M ~50% similarity threshold),
+// via `git diff --find-renames --name-status`. A move git does NOT recognize
+// as a rename (too much content changed) is absent here and stays a plain
+// delete+add — the accepted "als dat even kan" boundary
+// (.claude/rules/blocks-and-ingest.md). Best-effort caller: on error the full
+// ingest just proceeds with no rename pairing.
+func detectRenames(ctx context.Context, baseSHA, headSHA string) (map[string]string, error) {
+	out, err := runGit(ctx, "diff", "--find-renames", "--name-status", baseSHA, headSHA)
+	if err != nil {
+		return nil, err
+	}
+	renames := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		// A rename row is "R<score>\t<old>\t<new>" (tab-separated).
+		if len(line) == 0 || line[0] != 'R' {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) >= 3 && fields[1] != "" && fields[2] != "" {
+			renames[fields[2]] = fields[1] // new -> old
+		}
+	}
+	return renames, nil
 }
 
 // changedFileNames returns the file paths that differ between two commits (no

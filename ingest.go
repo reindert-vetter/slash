@@ -113,21 +113,50 @@ func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir str
 	res := &ingestResult{PR: pr, ByStatus: map[string]int{}}
 
 	baseDir, headDir := worktreeDirs(dataDir, pr)
-	paths := shas.Paths
 
-	rawDiff, err := diffBetweenSHAs(ctx, shas.BaseSHA, shas.HeadSHA, paths)
+	// Detect git renames (default -M threshold) so a moved file is scanned as
+	// one logical file (old blocks from the pre-rename path in the base
+	// worktree, new blocks from the head path) instead of a removed+added pair.
+	// Best-effort: a failure just means no rename pairing.
+	renames, rerr := detectRenames(ctx, shas.BaseSHA, shas.HeadSHA)
+	if rerr != nil {
+		log.Printf("ingest pr %d: rename detection failed (continuing without): %v", pr, rerr)
+		renames = nil
+	}
+	oldSet := make(map[string]bool, len(renames))
+	for _, old := range renames {
+		oldSet[old] = true
+	}
+
+	// scanPaths are the new (head) paths to parse; drop any that are a rename
+	// source (defensive — gh normally lists only the new path for a rename).
+	scanPaths := make([]string, 0, len(shas.Paths))
+	for _, p := range shas.Paths {
+		if !oldSet[p] {
+			scanPaths = append(scanPaths, p)
+		}
+	}
+	// The diff must also see the old paths so git can pair each rename hunk
+	// under its new path (a pathspec limited to only the new path suppresses
+	// rename detection — see diffBetweenSHAs).
+	diffPaths := append([]string{}, scanPaths...)
+	for _, old := range renames {
+		diffPaths = append(diffPaths, old)
+	}
+
+	rawDiff, err := diffBetweenSHAs(ctx, shas.BaseSHA, shas.HeadSHA, diffPaths)
 	if err != nil {
 		return nil, fmt.Errorf("diff: %w", err)
 	}
 	diffs := parseUnifiedDiff(rawDiff)
 
-	blocks, perr := parseFiles(pr, paths, baseDir, headDir, diffs)
+	blocks, perr := parseFiles(pr, scanPaths, renames, baseDir, headDir, diffs)
 	for _, e := range perr {
 		res.Warnings = append(res.Warnings, e.Error())
 		log.Printf("ingest pr %d: parse warning: %v", pr, e)
 	}
-	if len(blocks) == 0 && len(paths) > 0 {
-		return nil, fmt.Errorf("pr %d: parsed zero blocks from %d files", pr, len(paths))
+	if len(blocks) == 0 && len(scanPaths) > 0 {
+		return nil, fmt.Errorf("pr %d: parsed zero blocks from %d files", pr, len(scanPaths))
 	}
 
 	if err := replacePRBlocks(db, pr, blocks); err != nil {
@@ -217,7 +246,9 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 	}
 	diffs := parseUnifiedDiff(rawDiff)
 
-	blocks, perr := parseFiles(pr, deltaFiles, baseDir, headDir, diffs)
+	// Delta-refresh keeps the deliberate --no-renames split (see changedFileNames):
+	// a rename appearing mid-refresh stays removed+added until a full re-ingest.
+	blocks, perr := parseFiles(pr, deltaFiles, nil, baseDir, headDir, diffs)
 	for _, e := range perr {
 		log.Printf("ingest refresh pr %d: parse warning: %v", pr, e)
 	}

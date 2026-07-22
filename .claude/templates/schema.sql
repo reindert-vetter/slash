@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS blocks (
   status     TEXT NOT NULL DEFAULT '',  -- added|removed|modified
   file_deleted INTEGER NOT NULL DEFAULT 0, -- 0/1: het HELE bestand is door de PR verwijderd
                                            -- (afwezig in de head-worktree, git's "+++ /dev/null")
+  old_file   TEXT NOT NULL DEFAULT '',   -- pre-rename-pad als de PR dit block's bestand verplaatste
+                                          -- (git-gedetecteerde rename); '' anders. file blijft het NIEUWE pad
   side       TEXT NOT NULL DEFAULT 'new',-- new|old: welke worktree line/end_line duiden
   pr         INTEGER NOT NULL DEFAULT 0, -- PR-nummer waar dit block bij hoort
   approved   INTEGER NOT NULL DEFAULT 0, -- 0/1: door de reviewer goedgekeurd?

@@ -2221,6 +2221,9 @@ async function ensureCode(b) {
   try {
     const params = new URLSearchParams({ pr: state.pr, file: b.file, name: b.name })
     if (b.class) params.set('class', b.class)
+    // A renamed file's OLD source lives at its pre-rename path in the base
+    // worktree — tell the server so the old diff side is read from there.
+    if (b.oldFile && b.oldFile !== b.file) params.set('oldFile', b.oldFile)
     const res = await fetch(`/api/code?${params}`)
     if (!res.ok) {
       b.code = { error: `code load failed: ${res.status}` }

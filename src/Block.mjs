@@ -188,9 +188,23 @@ export default function Block(b, opts = {}) {
       </div>
 
       <div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2">
-        <span class="font-mono text-xs text-slate-500 dark:text-zinc-500"
-          >${() => b.file + ':' + b.line}</span
-        >
+        <span class="flex flex-col gap-0.5 font-mono text-xs">
+          ${() =>
+            // Renamed file: show the OLD path above the NEW one. The nested
+            // toggling slot lives inside this stable flex-col root (never a
+            // bare keyed toggling expression) — see the "kale toggelende
+            // expressie" pitfall in .claude/rules/conventions.md.
+            b.oldFile && b.oldFile !== b.file
+              ? html`<span
+                  data-testid="block-old-path"
+                  class="text-slate-400 line-through dark:text-zinc-600"
+                  >${b.oldFile}</span
+                >`
+              : ''}
+          <span class="text-slate-500 dark:text-zinc-500"
+            >${() => b.file + ':' + b.line}</span
+          >
+        </span>
         <span class="flex-1"></span>
         ${() =>
           b.tests === false

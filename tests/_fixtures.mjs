@@ -208,6 +208,14 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Renamed-file fixture (PR 104, rename-file.spec.mjs): two blocks of a file
+  // the PR moved (git-detected rename), each carrying oldFile (the pre-rename
+  // path) alongside file (the new path) — drives the old-above-new stacked
+  // path display in the block card. No worktrees needed (the path badge reads
+  // b.oldFile/b.file directly).
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/rename-blocks.json'], {
+    stdio: 'ignore',
+  })
 }
 
 function canConnect(port) {

@@ -65,7 +65,7 @@ func TestFileDeletedFlag(t *testing.T) {
 	// deleted is intentionally absent from headDir.
 	writeFileT(t, filepath.Join(headDir, kept), keptFileNewPHP)
 
-	blocks, errs := parseFiles(7, []string{deleted, kept}, baseDir, headDir, map[string]*fileDiff{})
+	blocks, errs := parseFiles(7, []string{deleted, kept}, nil, baseDir, headDir, map[string]*fileDiff{})
 	if len(errs) != 0 {
 		t.Fatalf("parseFiles errors: %v", errs)
 	}
@@ -230,7 +230,7 @@ class PermissionTest {
 	// the new attribute — and nothing removed.
 	fd := &fileDiff{changedOld: lineSet{}, changedNew: lineSet{3: true}}
 
-	out := classifyFile(1, file, oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
+	out := classifyFile(1, file, "", oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
 
 	var found *Block
 	for i := range out {
@@ -243,6 +243,92 @@ class PermissionTest {
 	}
 	if found.Status != StatusModified {
 		t.Errorf("expected status=%q, got %q", StatusModified, found.Status)
+	}
+}
+
+// TestRenamePairsBlocks proves the rename-as-one-block path: when the PR moved
+// a file (git-detected rename), parseOneFile scans the OLD source from the
+// pre-rename path and the NEW source from the head path but keys both block
+// sets on the NEW file, so classifyFile pairs them on symbol() exactly as it
+// would for an in-place edit. A method present in both versions becomes a
+// single MODIFIED block (not the removed@old + added@new pair the user saw
+// before); a method only in the new version is added, only in the old is
+// removed; and every emitted block carries oldFile (the pre-rename path) so
+// the card can show old-above-new and /api/code reads the old side from there.
+func TestRenamePairsBlocks(t *testing.T) {
+	// The OLD (base-worktree) content of the file, before it moved.
+	oldSrc := `<?php
+class Foo {
+    public function bar() {
+        return 1;
+    }
+    public function baz() {
+        return 2;
+    }
+    public function gone() {
+        return 3;
+    }
+}
+`
+	// The NEW (head-worktree) content, after the move + edits: bar changed,
+	// baz untouched, gone removed, fresh added.
+	newSrc := `<?php
+class Foo {
+    public function bar() {
+        return 100;
+    }
+    public function baz() {
+        return 2;
+    }
+    public function fresh() {
+        return 4;
+    }
+}
+`
+	newPath := "app/New/Foo.php"
+	oldPath := "app/Old/Foo.php"
+	// parseOneFile scans both sides under the NEW path (only the source text
+	// differs — old from the base worktree, new from head).
+	oldBlocks := ScanBlocks([]byte(oldSrc), newPath)
+	newBlocks := ScanBlocks([]byte(newSrc), newPath)
+
+	// The rename+edit diff, keyed on the new path by parseUnifiedDiff: bar's
+	// body line plus the removed `gone` / added `fresh` line runs.
+	fd := &fileDiff{
+		changedOld: lineSet{4: true, 9: true, 10: true, 11: true},
+		changedNew: lineSet{4: true, 9: true, 10: true, 11: true},
+	}
+
+	out := classifyFile(1, newPath, oldPath, oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
+
+	byStatus := map[string]*Block{}
+	for i := range out {
+		byStatus[out[i].symbol()] = &out[i]
+	}
+	want := map[string]string{
+		"Foo::bar":   StatusModified,
+		"Foo::gone":  StatusRemoved,
+		"Foo::fresh": StatusAdded,
+	}
+	for sym, status := range want {
+		b := byStatus[sym]
+		if b == nil {
+			t.Fatalf("%s missing from classify output; got %v", sym, symbols(out))
+		}
+		if b.Status != status {
+			t.Errorf("%s: status=%q, want %q", sym, b.Status, status)
+		}
+		if b.File != newPath {
+			t.Errorf("%s: file=%q, want new path %q", sym, b.File, newPath)
+		}
+		if b.OldFile != oldPath {
+			t.Errorf("%s: oldFile=%q, want %q", sym, b.OldFile, oldPath)
+		}
+	}
+	// The unchanged method must NOT appear as a removed+added pair — it's just
+	// dropped, exactly like an unchanged method in an in-place edit.
+	if _, ok := byStatus["Foo::baz"]; ok {
+		t.Errorf("unchanged Foo::baz should be dropped, not surfaced; got %v", symbols(out))
 	}
 }
 
@@ -282,7 +368,7 @@ class OrderService {
 	// docblock line, on both sides.
 	fd := &fileDiff{changedOld: lineSet{4: true}, changedNew: lineSet{4: true}}
 
-	out := classifyFile(1, file, oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
+	out := classifyFile(1, file, "", oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
 
 	var found *Block
 	for i := range out {
@@ -328,7 +414,7 @@ class PermissionTest {
 	// the new `#[Test]` attribute — and nothing removed.
 	fd := &fileDiff{changedOld: lineSet{}, changedNew: lineSet{3: true}}
 
-	out := classifyFile(1, file, oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
+	out := classifyFile(1, file, "", oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
 
 	for _, b := range out {
 		if b.symbol() == "PermissionTest::testPermissionAccess" {
@@ -366,7 +452,7 @@ class PermissionTest {
 	// the corresponding removed line.
 	fd := &fileDiff{changedOld: lineSet{4: true}, changedNew: lineSet{3: true, 5: true}}
 
-	out := classifyFile(1, file, oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
+	out := classifyFile(1, file, "", oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
 
 	var found *Block
 	for i := range out {

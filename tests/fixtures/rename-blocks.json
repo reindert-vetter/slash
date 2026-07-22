@@ -1,0 +1,26 @@
+[
+  {
+    "pr": 104,
+    "file": "app/Services/New/InvoiceService.php",
+    "oldFile": "app/Services/Legacy/InvoiceService.php",
+    "class": "InvoiceService",
+    "name": "total",
+    "category": "SERVICE",
+    "line": 12,
+    "endLine": 18,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 104,
+    "file": "app/Services/New/InvoiceService.php",
+    "oldFile": "app/Services/Legacy/InvoiceService.php",
+    "class": "InvoiceService",
+    "name": "format",
+    "category": "SERVICE",
+    "line": 20,
+    "endLine": 24,
+    "status": "modified",
+    "side": "new"
+  }
+]

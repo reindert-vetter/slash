@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS blocks (
   end_line   INTEGER NOT NULL DEFAULT 0,
   status     TEXT NOT NULL DEFAULT '',
   file_deleted INTEGER NOT NULL DEFAULT 0,
+  old_file   TEXT NOT NULL DEFAULT '',   -- pre-rename path when the PR moved this
+                                          -- block's file (git-detected rename); '' otherwise
   side       TEXT NOT NULL DEFAULT 'new',
   pr         INTEGER NOT NULL DEFAULT 0,
   approved   INTEGER NOT NULL DEFAULT 0,
@@ -78,6 +80,12 @@ func openDB(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate blocks.description: %w", err)
 	}
+	// Same pattern for the rename old_file column.
+	if _, err := db.Exec(`ALTER TABLE blocks ADD COLUMN old_file TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, fmt.Errorf("migrate blocks.old_file: %w", err)
+	}
 	return db, nil
 }
 
@@ -95,8 +103,8 @@ func replacePRBlocks(db *sql.DB, pr int, blocks []Block) error {
 	}
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO blocks (id, name, class, file, category, line, end_line, status, file_deleted, side, pr, approved, description)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		INSERT INTO blocks (id, name, class, file, category, line, end_line, status, file_deleted, old_file, side, pr, approved, description)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -112,7 +120,7 @@ func replacePRBlocks(db *sql.DB, pr int, blocks []Block) error {
 			fileDeleted = 1
 		}
 		if _, err := stmt.Exec(b.ID(), b.Name, b.Class, b.File, b.Category,
-			b.Line, b.EndLine, b.Status, fileDeleted, b.Side, b.PR, approved, b.Description); err != nil {
+			b.Line, b.EndLine, b.Status, fileDeleted, b.OldFile, b.Side, b.PR, approved, b.Description); err != nil {
 			return fmt.Errorf("insert block %s: %w", b.ID(), err)
 		}
 	}
@@ -150,8 +158,8 @@ func upsertPRFileBlocks(db *sql.DB, pr int, files []string, blocks []Block) erro
 	}
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO blocks (id, name, class, file, category, line, end_line, status, file_deleted, side, pr, approved, description)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		INSERT INTO blocks (id, name, class, file, category, line, end_line, status, file_deleted, old_file, side, pr, approved, description)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -167,7 +175,7 @@ func upsertPRFileBlocks(db *sql.DB, pr int, files []string, blocks []Block) erro
 			fileDeleted = 1
 		}
 		if _, err := stmt.Exec(b.ID(), b.Name, b.Class, b.File, b.Category,
-			b.Line, b.EndLine, b.Status, fileDeleted, b.Side, b.PR, approved, b.Description); err != nil {
+			b.Line, b.EndLine, b.Status, fileDeleted, b.OldFile, b.Side, b.PR, approved, b.Description); err != nil {
 			return fmt.Errorf("insert block %s: %w", b.ID(), err)
 		}
 	}
@@ -247,7 +255,7 @@ func listPRs(db *sql.DB) ([]PRSummary, error) {
 // blocksByPR reads all blocks of one PR, stably sorted by (file, line).
 func blocksByPR(db *sql.DB, pr int) ([]Block, error) {
 	rows, err := db.Query(`
-		SELECT name, class, file, category, line, end_line, status, file_deleted, side, pr, approved, description
+		SELECT name, class, file, category, line, end_line, status, file_deleted, old_file, side, pr, approved, description
 		FROM blocks WHERE pr = ?
 		ORDER BY file, line`, pr)
 	if err != nil {
@@ -260,7 +268,7 @@ func blocksByPR(db *sql.DB, pr int) ([]Block, error) {
 		var b Block
 		var approved, fileDeleted int
 		if err := rows.Scan(&b.Name, &b.Class, &b.File, &b.Category,
-			&b.Line, &b.EndLine, &b.Status, &fileDeleted, &b.Side, &b.PR, &approved, &b.Description); err != nil {
+			&b.Line, &b.EndLine, &b.Status, &fileDeleted, &b.OldFile, &b.Side, &b.PR, &approved, &b.Description); err != nil {
 			return nil, err
 		}
 		b.Approved = approved == 1

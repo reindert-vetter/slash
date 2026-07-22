@@ -167,7 +167,14 @@ func sourceLine(lines []string, ln int) string {
 // oldSrc/newSrc are the two versions' full source text — needed (only) to
 // tell a bare `#[Test]`-only change apart from a real one, see
 // isBareTestAttributeOnlyChange.
-func classifyFile(pr int, path string, oldBlocks, newBlocks []Block, fd *fileDiff, fileAdded, fileDeleted bool, oldSrc, newSrc string) []Block {
+//
+// oldFile is the file's pre-rename path when the PR moved it (else ""); it is
+// stamped on every emitted block so the frontend can show old-above-new path
+// and /api/code/blockstats read the old side from there. The old and new
+// blocks are matched on symbol() as usual, so a method present in both a
+// renamed file's old and new version pairs up as one modified block instead of
+// a removed+added pair.
+func classifyFile(pr int, path, oldFile string, oldBlocks, newBlocks []Block, fd *fileDiff, fileAdded, fileDeleted bool, oldSrc, newSrc string) []Block {
 	category := categoryFor(path)
 
 	oldBySym := indexBySymbol(oldBlocks)
@@ -188,6 +195,7 @@ func classifyFile(pr int, path string, oldBlocks, newBlocks []Block, fd *fileDif
 		nb.PR = pr
 		nb.Category = category
 		nb.Side = SideNew
+		nb.OldFile = oldFile
 		sym := nb.symbol()
 		if _, inOld := oldBySym[sym]; !inOld || fileAdded {
 			nb.Status = StatusAdded
@@ -222,6 +230,7 @@ func classifyFile(pr int, path string, oldBlocks, newBlocks []Block, fd *fileDif
 		ob.PR = pr
 		ob.Category = category
 		ob.Side = SideOld
+		ob.OldFile = oldFile
 		sym := ob.symbol()
 		if _, inNew := newBySym[sym]; !inNew || fileDeleted {
 			ob.Status = StatusRemoved
