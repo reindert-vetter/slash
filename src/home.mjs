@@ -1688,16 +1688,28 @@ function resolvedCallChildren(b) {
 // group: prefer a site inside the active unit (keeps the arrow anchored near
 // the cursor when possible), falling back to the child's first known call
 // site anywhere in the block so an out-of-group (groupTier-1) card that the
-// panel still shows gets an arrow too. One pair per child, diff mode only, and
-// only for the top-level cursor: a drilled column has no cursor-scoped panel
-// (see callScopeMethods), so arrows stay off while drilled. Called from the
-// setRelated watch CALLBACK (untracked) — never from a render binding, so it
-// can't co-subscribe on b.code with the diff render (conventions.md).
+// panel still shows gets an arrow too. One pair per child, diff mode only,
+// for whichever column currently owns the keyboard — the top-level selected
+// block (focusLevel 0) OR the focused drilled column (focusLevel > 0, using
+// ITS OWN state.drillCursor[level-1] cursor, not the top-level state.gran/
+// change) — mirroring approveContext()'s own top-level/drilled split. Every
+// drilled column is a full navigable diff with its own cursor (see
+// "Kolom-navigatie" in detail-layout.md), so there's no reason for the arrow
+// to go dark just because the reviewer drilled in; callArrows.mjs' DOM lookup
+// (main.querySelector('[data-pane="new"]')/panel.querySelector('[data-child-
+// id]')) already resolves to whichever column is focused — a non-focused
+// column (top-level or drilled) always collapses to a railless rail with no
+// [data-pane] — so no change is needed there. Called from the setRelated
+// watch CALLBACK (untracked) — never from a render binding, so it can't
+// co-subscribe on b.code with the diff render (conventions.md); b is always
+// focusedBlock() (the watch's own `b`), so the guard below is a defensive
+// self-check, not a new dependency.
 function callArrowPairs(b) {
-  if (!b || state.mode !== 'diff' || state.focusLevel !== 0 || state.drill.length) return []
-  if (b !== curBlock()) return []
+  if (!b || state.mode !== 'diff' || b !== focusedBlock()) return []
+  const level = state.focusLevel
+  const cur = level > 0 ? state.drillCursor[level - 1] || { change: 0, gran: 'group' } : { gran: state.gran, change: state.change }
   const rows = blockRows(b)
-  const unit = unitsFor(rows, state.gran)[state.change]
+  const unit = unitsFor(rows, cur.gran)[cur.change]
   if (!unit) return []
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
   const pairs = []
@@ -1706,9 +1718,9 @@ function callArrowPairs(b) {
     if (!byId.has(callChildId(r))) continue // only a changed target (a real PR block)
     const sites = findCallSites(rows, r.callKey)
     const site =
-      state.gran === 'call'
+      cur.gran === 'call'
         ? sites.find((s) => s.row === unit.start && s.segStart === unit.segStart)
-        : state.gran === 'group'
+        : cur.gran === 'group'
           ? sites.find((s) => s.row >= unit.start && s.row <= unit.end) || sites[0]
           : sites.find((s) => s.row >= unit.start && s.row <= unit.end)
     if (!site) continue
@@ -3400,6 +3412,13 @@ watch(
     state.approvalSummaries,
     state.blockTotals,
     state.drill,
+    // focusLevel + drillCursor so a step (f/d/s/↑/↓) WITHIN an already-drilled
+    // column re-fires this watch too — callArrowPairs now reads the focused
+    // column's own drillCursor entry (see its comment), so without these the
+    // overlay would only redraw on a top-level cursor move or a drill/undrill,
+    // never on a granularity/change step taken while already drilled.
+    state.focusLevel,
+    state.drillCursor,
     // testsExpanded so toggling the grouped covering-tests bar (see
     // groupTestChildren/drillIntoChild) re-pushes the children list with the
     // test cards inserted/removed.

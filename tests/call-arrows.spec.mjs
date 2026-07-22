@@ -99,4 +99,73 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
     await expect(arrows).toHaveCount(0)
     await expect(page.getByTestId('call-arrows')).toBeHidden()
   })
+
+  // Regression: the overlay used to hard-disable itself the moment
+  // state.focusLevel left 0 (see callArrowPairs' old
+  // `state.focusLevel !== 0 || state.drill.length` guard), even for the
+  // FOCUSED drilled column itself — even though every drilled column is a
+  // full navigable diff with its own state.drillCursor entry (see
+  // "Kolom-navigatie" in detail-layout.md). ArrowHelperService::arrowHelper
+  // itself calls ArrowNestedService::arrowNested on a changed line, so
+  // drilling into arrowHelper from the caller's Onderliggende-code panel must
+  // draw an arrow anchored inside THAT drilled column, scoped to its own
+  // cursor — not silently stay dark just because the reviewer drilled in.
+  test('pijl verschijnt ook in een gefocuste gedrilde kolom, niet alleen op de top-level cursor', async ({
+    page,
+  }) => {
+    await page.goto('/pr/100')
+    await expect(page.getByTestId('block-row')).toHaveCount(1)
+    await expect(page.getByTestId('block-row').first()).toContainText('ArrowCallerAction::execute')
+    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await page.keyboard.press('ArrowRight') // caller's diff
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await page.keyboard.press('ArrowRight') // → Onderliggende code
+
+    const arrows = page.locator('[data-testid=call-arrow]')
+    const helperChild = page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]')
+    await expect(helperChild).toBeVisible()
+    await helperChild.click() // drill in — focus moves to the drilled column's diff
+
+    // Confirm this really is a drilled column (focusLevel > 0), not the
+    // top-level cursor — the caller card collapses to a rail behind it.
+    await expect(page.getByTestId('block-collapsed')).toHaveCount(1)
+    const drill = page.getByTestId('drill-column')
+    await expect(drill).toHaveCount(1)
+    await expect(drill).toContainText('ArrowHelperService::arrowHelper')
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+
+    // The drilled column's own Onderliggende-code panel shows the changed
+    // arrowNested child (its definition is itself a PR block) — and the
+    // arrow must reach it.
+    await expect(
+      page.locator('[data-testid=related-item][data-child-id*="arrowNested"]'),
+    ).toBeVisible()
+    // The drill-enter animation + the overlay's own 250ms settle-redraw (see
+    // callArrows.mjs' setCallArrows) need to land before the fresh column's
+    // geometry is stable enough to measure.
+    await page.waitForTimeout(500)
+    await expect(arrows).toHaveCount(1)
+
+    // Refine the DRILLED column's own cursor (f: group → line) — the arrow
+    // must keep following that column's own drillCursor, not a stale
+    // top-level state.gran/change. Line granularity re-anchors onto the
+    // FIRST line of the previous group ($value = 2;), which doesn't carry
+    // the arrowNested call site — so the arrow briefly disappears here, just
+    // like the top-level arrowPlain line does above (no call site in scope
+    // → no arrow). Stepping ↓ once onto the next line ($nested = ...) brings
+    // it back — proof the arrow really tracks the drilled column's OWN
+    // cursor step by step, not just its resting state right after drilling.
+    await page.keyboard.press('f')
+    await expect(arrows).toHaveCount(0)
+    await page.keyboard.press('ArrowDown')
+    await expect(arrows).toHaveCount(1)
+
+    // Step ← back out of the drilled column onto the caller's diff: the
+    // overlay now belongs to the caller again, no longer to arrowHelper.
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('drill-column')).toHaveCount(0)
+    await expect(
+      page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]'),
+    ).toBeVisible()
+  })
 })

@@ -17,7 +17,18 @@
     "name": "arrowHelper",
     "category": "ACTION",
     "line": 7,
-    "endLine": 11,
+    "endLine": 12,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 100,
+    "file": "app/Services/ArrowNestedService.php",
+    "class": "ArrowNestedService",
+    "name": "arrowNested",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 10,
     "status": "modified",
     "side": "new"
   }

@@ -107,6 +107,12 @@ class ${name}
 // ArrowHelperService::arrowHelper, itself a changed PR 100 block (so the
 // call-arrow overlay draws an arrow to its child card), while `arrowPlain`
 // resolves to a file the PR doesn't touch (an "Ongewijzigd" child — no arrow).
+// A THIRD layer proves the overlay follows a drilled column, not just the
+// top-level cursor: ArrowHelperService::arrowHelper itself calls
+// ArrowNestedService::arrowNested on a changed line, so drilling into
+// arrowHelper from the caller's Onderliggende-code panel (see
+// call-arrows.spec.mjs) must show an arrow anchored inside THAT drilled
+// column's own diff, scoped to its own drillCursor — not the top-level one.
 // Seeded via tests/fixtures/arrow-blocks.json + arrow-callresolve.json.
 function materializeArrowWorktrees() {
   const caller = (flag, note, h, p) => `<?php
@@ -126,7 +132,7 @@ class ArrowCallerAction
     }
 }
 `
-  const helper = (value) => `<?php
+  const helper = (value, n) => `<?php
 
 namespace App\\Services;
 
@@ -135,7 +141,20 @@ class ArrowHelperService
     public function arrowHelper()
     {
         $value = ${value};
-        return $value;
+        $nested = $this->service->arrowNested(${n});
+        return $value + $nested;
+    }
+}
+`
+  const nested = (mult) => `<?php
+
+namespace App\\Services;
+
+class ArrowNestedService
+{
+    public function arrowNested($x)
+    {
+        return $x * ${mult};
     }
 }
 `
@@ -146,8 +165,10 @@ class ArrowHelperService
   }
   write('base', 'app/Actions/ArrowCallerAction.php', caller('false', 'old', 1, 1))
   write('head', 'app/Actions/ArrowCallerAction.php', caller('true', 'context', 2, 3))
-  write('base', 'app/Services/ArrowHelperService.php', helper(1))
-  write('head', 'app/Services/ArrowHelperService.php', helper(2))
+  write('base', 'app/Services/ArrowHelperService.php', helper(1, 1))
+  write('head', 'app/Services/ArrowHelperService.php', helper(2, 2))
+  write('base', 'app/Services/ArrowNestedService.php', nested(2))
+  write('head', 'app/Services/ArrowNestedService.php', nested(3))
 }
 
 function materializeExplainWorktrees() {

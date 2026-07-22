@@ -1090,9 +1090,21 @@ rechts — zie de layout-alinea hierboven):
   call-site-rij) naar de bijbehorende **gewijzigde** kind-kaart in deze kaart —
   uitsluitend voor een `method_call`-child wiens definitie zélf een PR-blok is
   (een `Ongewijzigd`-target krijgt nooit een pijl), één pijl per matchend kind,
-  alleen in diff-mode en alleen op de top-level cursor (`focusLevel === 0`,
-  niet gedrild — een gedrilde kolom heeft geen cursor-gescoped paneel, zie
-  `callScopeMethods`). De scope spiegelt de paneel-**zichtbaarheid** exact
+  alleen in diff-mode en voor **de kolom die op dat moment de keyboard bezit**
+  — het top-level geselecteerde block (`focusLevel === 0`, `state.gran`/
+  `state.change`) **of** de gefocuste gedrilde kolom (`focusLevel > 0`, zijn
+  **eigen** `state.drillCursor[focusLevel-1]`-cursor) — exact het
+  `approveContext()`-idioom (`callArrowPairs(b)` guardt op `b ===
+  focusedBlock()` i.p.v. altijd `curBlock()`/`focusLevel === 0` te eisen).
+  Elke gedrilde kolom is immers een volwaardige, navigeerbare diff met zijn
+  eigen change-group-cursor (zie "Kolom-navigatie" hierboven) — er is dus geen
+  reden voor de pijl om uit te gaan zodra de reviewer drilt. De DOM-kant
+  (`callArrows.mjs`'s `main.querySelector('[data-pane="new"]')`/
+  `panel.querySelector('[data-child-id]')`) hoefde **niet** aangepast: een
+  niet-gefocuste kolom (top-level of gedrild) klapt altijd in tot een rail
+  zonder `[data-pane]`, dus die query vindt vanzelf het enige overgebleven
+  `[data-pane]`-blok — dat van de kolom die de keyboard bezit, op elke diepte.
+  De scope spiegelt de paneel-**zichtbaarheid** exact
   (`resolvedCallChildren`'s `hideOutOfScope`), niet zomaar `callScopeMethods`'
   kale unit-range-check op elke granulariteit: op `call`/`line` verbergt het
   paneel een kind buiten de actieve unit **echt** (zie hieronder), dus daar

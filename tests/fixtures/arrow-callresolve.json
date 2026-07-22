@@ -20,5 +20,16 @@
     "childMethod": "arrowPlain",
     "childLine": 7,
     "childCode": "public function arrowPlain()\n{\n    return 3;\n}"
+  },
+  {
+    "pr": 100,
+    "callerId": "100:app/Services/ArrowHelperService.php:ArrowHelperService::arrowHelper",
+    "callKey": "arrowNested",
+    "status": "resolved",
+    "childFile": "app/Services/ArrowNestedService.php",
+    "childClass": "ArrowNestedService",
+    "childMethod": "arrowNested",
+    "childLine": 7,
+    "childCode": "public function arrowNested($x)\n{\n    return $x * 3;\n}"
   }
 ]
