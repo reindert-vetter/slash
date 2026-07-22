@@ -70,7 +70,7 @@ func warningManager(t *testing.T, dataDir string, fake *claude.Fake) (*TaskManag
 	t.Cleanup(func() { db.Close() })
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
 	return m, cs, gh
 }
 

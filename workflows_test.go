@@ -87,7 +87,7 @@ func newTestManager(t *testing.T) (*TaskManager, *github.Fake, *comments.Module)
 	t.Cleanup(func() { cs.Close() })
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 	m.interval = 3 * time.Millisecond // fast poll for the test
 	m.idle = 3 * time.Millisecond     // idle cadence too, so tests never wait 10m
 	return m, gh, cs
@@ -509,7 +509,7 @@ func TestPRInboxRefreshPopulatesReadModel(t *testing.T) {
 
 	ib := testInbox(t)
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, db, "", repoSlug)
+	m := NewTaskManager(engine, &github.Fake{}, nil, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, db, "", repoSlug)
 
 	runID, err := engine.StartWorkflow(WorkflowPRInbox, PRInboxInput{Repo: repoSlug})
 	if err != nil {
@@ -555,7 +555,7 @@ func TestTaskSurvivesRestart(t *testing.T) {
 
 	ib := testInbox(t)
 	e1 := tembed.New(store)
-	NewTaskManager(e1, gh, cs, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	NewTaskManager(e1, gh, cs, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 	runID, err := e1.StartWorkflow(WorkflowTaskCodeComment, CodeCommentInput{PR: 1, File: "a.php", Line: 1, Body: "q"})
 	if err != nil {
 		t.Fatal(err)
@@ -566,7 +566,7 @@ func TestTaskSurvivesRestart(t *testing.T) {
 
 	// Restart: a new engine over the same store must not re-post the comment.
 	e2 := tembed.New(store)
-	NewTaskManager(e2, gh, cs, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	NewTaskManager(e2, gh, cs, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 	if err := e2.Recover(); err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +596,7 @@ func TestPRStatusFetchesMeta(t *testing.T) {
 	gh := &github.Fake{}
 	gh.SetPRMeta(github.Meta{Title: "PS-123 fix the thing", URL: "https://github.com/x/y/pull/7"})
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	if _, err := m.EnsurePRStatus(7); err != nil {
 		t.Fatal(err)
@@ -640,7 +640,7 @@ func TestPRStatusThreeStages(t *testing.T) {
 	cl.SetOutput(claude.ModelHaiku, "This PR fixes the thing.")
 
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, cl, jr, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, nil, cl, jr, nil, "", "test/repo")
 
 	if _, err := m.EnsurePRStatus(7); err != nil {
 		t.Fatal(err)
@@ -728,7 +728,7 @@ func TestRunsForPR(t *testing.T) {
 	t.Cleanup(func() { cs.Close() })
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	if _, err := m.EnsurePRStatus(101); err != nil {
 		t.Fatal(err)

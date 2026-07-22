@@ -44,7 +44,7 @@ func TestValidateSubmitReview(t *testing.T) {
 func TestSubmitReviewWorkflowPassesEventAndBody(t *testing.T) {
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	runID, err := m.StartSubmitReview(SubmitReviewInput{PR: 42, Event: "APPROVE"})
 	if err != nil {

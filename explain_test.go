@@ -22,7 +22,7 @@ func explainManager(t *testing.T, fake *claude.Fake) (*TaskManager, *explanation
 	}
 	t.Cleanup(func() { ex.Close() })
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, ex, fake, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, ex, nil, fake, nil, nil, "", "test/repo")
 	return m, ex
 }
 

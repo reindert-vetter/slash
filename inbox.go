@@ -251,6 +251,22 @@ func ghGraphQL(ctx context.Context, query string, vars ...string) (json.RawMessa
 
 // searchPRs runs one GitHub search and maps the nodes to rows.
 func searchPRs(ctx context.Context, expr string, light bool) ([]inboxRow, error) {
+	return runPRSearch(ctx, expr+" sort:updated-desc", light)
+}
+
+// searchPRsExpr runs a search whose expr already carries its own sort: (and any
+// draft:/state: qualifiers) — used by the preset filters (handleFilter), where
+// the caller must control the ordering, unlike searchPRs which always appends
+// sort:updated-desc. repo:<slug> is still prepended here (never trust the caller
+// with the repo scope).
+func searchPRsExpr(ctx context.Context, expr string, light bool) ([]inboxRow, error) {
+	return runPRSearch(ctx, expr, light)
+}
+
+// runPRSearch is the shared gh-search core: it prepends repo:<slug> and runs the
+// GraphQL search, mapping nodes to rows. The caller owns everything after the
+// repo scope (including sort:).
+func runPRSearch(ctx context.Context, expr string, light bool) ([]inboxRow, error) {
 	fields := lightFields
 	if !light {
 		fields = lightFields + heavyFields
@@ -260,7 +276,7 @@ func searchPRs(ctx context.Context, expr string, light bool) ([]inboxRow, error)
 			nodes { ... on PullRequest { %s } }
 		}
 	}`, fields)
-	full := "repo:" + repoSlug + " " + expr + " sort:updated-desc"
+	full := "repo:" + repoSlug + " " + expr
 	data, err := ghGraphQL(ctx, query, "-f", "q="+full, "-F", "n="+strconv.Itoa(inboxLimit))
 	if err != nil {
 		return nil, err

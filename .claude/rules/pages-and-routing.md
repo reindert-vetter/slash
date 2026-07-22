@@ -69,12 +69,72 @@ verschilt op `pr.hasGraph`:
   mislukte regeneratie toont de foutmelding onder de knop, binnen dezelfde
   popover (`data-testid=regenerate-error`).
 
-Onder beide takken staan ongewijzigd *Open op GitHub* / *Open Jira-ticket*.
+Onder beide takken staan ongewijzigd *Open op GitHub* / *Open Jira-ticket*,
+gevolgd door **"Kopieer GitHub URL"** (`data-testid=copy-url`,
+`navigator.clipboard.writeText(pr.url)` met korte "Gekopieerd!"-feedback via de
+efemere `ui.copiedFor`) en de **ignore-sectie** (zie hieronder).
 Omdat er nu nooit meer een `<a href="/pr/<id>">` in de rij zit — de navigatie
 naar de tree loopt altijd via de menu-keuze "Open review-boom" — is er ook geen
 losse hover-only regenerate-knop (`regenerateButton`) of aparte `data-row`-
 wrapper meer nodig; die zijn vervallen (was eerder nodig om een interactief
 element niet in een `<a>` te nesten, wat nu niet meer speelt).
+
+### Filter-drawer (voor-ingestelde filters, live gh-search)
+
+Naast "Recent gegenereerd" staat een tweede uitklapknop **"Filters"**
+(`filterDrawer`, `data-testid=filter-drawer`, mal van `recentDrawer` —
+`state.filterOpen` toggelt, keyed-array-slot met eigen key per tak
+`filter:closed`/`filter:open`, conform de single↔array-valkuil in
+`conventions.md`). Uitgeklapt toont hij een menu met **vier preset-filters** +
+**"Toon alle verborgen pull requests"** (`data-testid=show-hidden`). Elke preset
+draait een **live gh-search** via `GET /api/prs/filter?preset=<key>`
+(`runPreset` → `state.presetResults`/`state.activePreset`, sequence-guard zoals
+`runSearch`); de resultaten **vervangen tijdelijk de hoofdsecties**
+(`currentView` in `overview.mjs` routeert: query > verborgen > preset > inbox),
+met een "← Terug naar inbox"-balk (`data-testid=back-to-inbox`, `clearPresetView`).
+
+De queries zijn **server-side allow-listed** (`filterPresets` in `inbox_api.go`)
+— de UI stuurt alleen een vaste `key`, nooit rauwe zoektekst naar gh
+(`exec`-input-validatie). De vier keys: `updated-oud`
+(`sort:created-asc`, oud eerst), `alle-open`, `alle-draft`, en **`ouder-3-dagen`**
+— die laatste laat `handleFilter` de datumgrens **dynamisch** berekenen
+(`created:<{vandaag−3d}`, `YYYY-MM-DD`; een read-handler, dus `time.Now()` is hier
+toegestaan — de determinisme-regel geldt alleen in workflow-bodies).
+`searchPRsExpr`/`runPRSearch` (`inbox.go`) prependen `repo:<slug>` maar
+respecteren de eigen `sort:`/`draft:` van de preset (anders dan `searchPRs`, dat
+altijd `sort:updated-desc` appendt). De `ouder-3-dagen`-resultaten worden
+frontend-side **gegroepeerd per auteur** (`authorGroups`/`authorGroupBlock`,
+`data-testid=author-group`); de andere drie zijn een platte lijst. Offline
+(`SLASH_GITHUB=off`) honoreert `handleFilter` alleen de `draft:`-qualifier van de
+fixture-rijen. Test: `tests/overview-filter-presets.spec.mjs`.
+
+### Ignore / verbergen uit de inbox
+
+Een PR kun je vanuit de per-rij popover **negeren** ("Negeer PR", een divider met
+één knop per termijn: **Altijd / Morgen 08:00 / Volgende week maandag 08:00 /
+7 dagen / 14 dagen**, `data-testid=ignore-<kind>`). `ignoreUntil(kind)` rekent de
+**absolute vervaltimestamp** uit in browser-lokale tijd ("altijd" = `0`) en
+`ignorePr` stuurt 'm als `IgnoreSignal{pr, until}` naar de per-repo
+`ignore`-tracker (`POST /api/workflows/<ignoreRunId>/signals/ignore`, de sanctioned
+write-weg — zie `.claude/rules/tembed-workflows.md`). De UI update `state.ignores`
+**optimistisch** (wholesale-reassign, dus de rij verdwijnt meteen) en verzoent op
+de volgende `reloadIgnores`. Een reeds-genegeerde PR toont in plaats van de
+termijnen één **"Niet meer negeren"**-knop (`unignorePr` → `clear:true` → de
+workflow doet `Set(..., -1)`, een DELETE).
+
+Verbergen is **client-side op leestijd** (`isIgnored(n)` = `until === 0 ||
+until > Date.now()`): `mainContent` (secties + stacks) filtert genegeerde PR's
+weg; presets/zoekresultaten blijven bewust ongefilterd (expliciete views). Het
+menu-item **"Toon alle verborgen pull requests"** opent de `hiddenBlock`-view
+(`data-testid=hidden-view`): één rij per geldige (niet-verlopen) ignore met de
+titel uit de al-geladen inbox-data (of een minimale `#nummer`-rij voor een PR die
+uit de inbox-query viel), een **"genegeerd tot \<datum\>"**-noot
+(`formatIgnoreUntil`, `until 0` → "altijd") en een un-ignore-knop
+(`data-testid=hidden-unignore`). `state.ignores` wordt bij load gevuld door
+`loadIgnore` (`POST /api/workflows/ignore` → `runId`, dan `GET /api/ignore`);
+`state.ignoreRunId`/`state.ignores`/`state.filterOpen`/`state.activePreset`/
+`state.showHidden` leven **buiten** de URL (efemer, mirror van
+`ui.openPopover`/`recentOpen`). Test: `tests/overview-ignore.spec.mjs`.
 
 ### GitHub-toegang loopt via een workflow (niet rechtstreeks)
 
@@ -123,6 +183,9 @@ queries draaien parallel en worden deterministisch hersamengesteld.
 | `POST /api/workflows/{runID}/signals/refresh` | Refresh-Signal (UI bij laden). Start alleen de fetch-Activity. |
 | `POST /api/workflows/{runID}/heartbeat` | Operationele ping (poll-cadans), geen state-write. |
 | `GET /api/prs/search?q=…` | **Nog wél een directe** live gh-`search` (`inbox_api.go`) — een ephemere, geparametriseerde read, geen persistente lijst. Kaal getal → `<n> in:title`. |
+| `GET /api/prs/filter?preset=<key>` | Live gh-`search` voor een **vaste, allow-listed** preset-query (`filterPresets` in `inbox_api.go`) — nooit rauwe UI-tekst naar gh (`exec`-input-validatie). Zie "Filter-drawer" hieronder. |
+| `POST /api/workflows/ignore` | Ensure de per-repo `ignore`-tracker → `{runId}` (de UI signalt ignore/un-ignore daaraan). Zie `.claude/rules/tembed-workflows.md`. |
+| `GET /api/ignore` | Read-only ignore-read-model → `{ok,ignores:[{pr,until}]}`. Verval-check gebeurt client-side op leestijd. |
 | `GET /api/prs` | (bestaand) geïngeste PR's + counts, voor de recent-lade. |
 
 ### Offline / test-modus
@@ -343,6 +406,13 @@ Ook: **`Escape` in de zoekbox blurt het veld** (naast het wissen van
 staan en at `kbHandler`'s `typing`-guard (`active.tagName === 'INPUT'`) élke
 volgende pijltjestoets op, wat aanvoelde als "de pijltjes doen niks meer" tot
 de reviewer handmatig wegklikte/tabte.
+
+En andersom: **`↑` voorbij de eerste rij springt naar de zoekbalk bovenin**
+(`kbHandler`'s ArrowUp-tak: bij `selIndex <= 0` roept 'ie `focusSearch()` aan
+i.p.v. op rij 0 te klemmen) — die zoekbalk zoekt al over **alle** open PR's van
+de repo (`/api/prs/search`), dus vanaf de lijst omhoog naar het zoeken is één
+toetsaanslag. `focusSearch` focust het veld en laat de rij-selectie los
+(`selKey = null`, geen ring). Test: `tests/overview-ignore.spec.mjs`.
 
 **Zodra een popover open is, bezit hij het toetsenbord — de lijst-navigatie
 hierboven is opgeschort.** `togglePopover` focust bij het openen (via

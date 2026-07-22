@@ -32,6 +32,20 @@ const state = reactive({
   recentOpen: false,
   recentLoading: false,
   recentPrs: [], // [{ pr, blocks, files }]
+  // Preset-filter drawer (a second expandable button like "Recent gegenereerd").
+  // filterOpen: the drawer menu is expanded. activePreset: the key of the preset
+  // whose live gh-search results currently replace the main sections (null =
+  // none). showHidden: the "Toon alle verborgen pull requests" view is active.
+  filterOpen: false,
+  activePreset: null,
+  presetLoading: false,
+  presetResults: [],
+  showHidden: false,
+  // Ignore state: the per-repo ignore tracker's Run ID (to signal to) and a
+  // pr.number -> until (Unix-ms, 0 = forever) map from GET /api/ignore. A PR is
+  // hidden from the main inbox while its ignore is valid (until 0 or > now).
+  ignoreRunId: '',
+  ignores: {},
 })
 
 // ui is separate from state so opening/closing a popover doesn't touch the
@@ -45,7 +59,7 @@ const state = reactive({
 // ingestErrorFor lets the standalone regenerate button on an already-ingested
 // row show the error under the right row even though ui.ingesting itself has
 // already reset to null by the time the catch runs.
-const ui = reactive({ openPopover: null, ingesting: null, ingestStage: '', ingestError: null, ingestErrorFor: null })
+const ui = reactive({ openPopover: null, ingesting: null, ingestStage: '', ingestError: null, ingestErrorFor: null, copiedFor: null })
 
 // INGEST_STAGE_LABELS — Dutch labels for the busy button while /api/ingest is
 // in flight, backed by the real (ephemeral, in-memory) server-side progress
@@ -555,6 +569,148 @@ function ingestedActions(pr) {
   `
 }
 
+// ── ignore (hide a PR from the inbox, via the ignore workflow) ─────────────
+
+// isIgnored reports whether a PR is currently hidden: it has an ignore entry
+// whose expiry is either "forever" (0) or still in the future. The expiry check
+// is a read-time concern (per .claude/rules), so it lives here client-side.
+function isIgnored(number) {
+  const until = state.ignores[number]
+  if (until == null) return false
+  return until === 0 || until > Date.now()
+}
+
+// ignoreUntil turns a termijn choice into an absolute Unix-ms expiry, computed
+// in the browser's local time (so the workflow body needs no clock — see
+// .claude/rules/workflow-determinism.md). "altijd" = 0 (forever).
+function ignoreUntil(kind) {
+  const now = new Date()
+  if (kind === 'altijd') return 0
+  if (kind === '7d') return Date.now() + 7 * 86400000
+  if (kind === '14d') return Date.now() + 14 * 86400000
+  if (kind === 'morgen') {
+    const d = new Date(now)
+    d.setDate(d.getDate() + 1)
+    d.setHours(8, 0, 0, 0)
+    return d.getTime()
+  }
+  if (kind === 'maandag') {
+    // The next Monday after today at 08:00; if today is Monday, +7 days.
+    const d = new Date(now)
+    const day = d.getDay() // 0=Sun … 1=Mon
+    let add = (1 - day + 7) % 7
+    if (add === 0) add = 7
+    d.setDate(d.getDate() + add)
+    d.setHours(8, 0, 0, 0)
+    return d.getTime()
+  }
+  return 0
+}
+
+// formatIgnoreUntil renders an ignore expiry for the "verborgen" list.
+function formatIgnoreUntil(until) {
+  if (!until) return 'altijd'
+  try {
+    return new Date(until).toLocaleString('nl-NL', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch (e) {
+    return new Date(until).toISOString()
+  }
+}
+
+const IGNORE_CHOICES = [
+  ['altijd', 'Altijd'],
+  ['morgen', 'Morgen 08:00'],
+  ['maandag', 'Volgende week maandag 08:00'],
+  ['7d', '7 dagen'],
+  ['14d', '14 dagen'],
+]
+
+// postIgnore is the sole ignore write path: it signals the per-repo ignore
+// tracker (a Workflow Execution) — never a direct module write (see
+// .claude/rules/workflows-write-boundary.md).
+async function postIgnore(body) {
+  if (!state.ignoreRunId) return
+  try {
+    await fetch('/api/workflows/' + state.ignoreRunId + '/signals/ignore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch (e) {
+    // best-effort — a transient failure just leaves the PR visible
+  }
+}
+
+// ignorePr hides a PR until the chosen termijn, optimistically updating the
+// local map so the row disappears immediately (reconciled by the next
+// reloadIgnores). The map is reassigned wholesale so arrow.js re-renders.
+async function ignorePr(pr, kind) {
+  const until = ignoreUntil(kind)
+  state.ignores = { ...state.ignores, [pr.number]: until }
+  closePopover()
+  await postIgnore({ pr: pr.number, until })
+}
+
+async function unignorePr(number) {
+  const next = { ...state.ignores }
+  delete next[number]
+  state.ignores = next
+  await postIgnore({ pr: number, clear: true })
+}
+
+// copyGithubUrl copies a PR's GitHub URL to the clipboard and flashes brief
+// feedback in the popover. Best-effort — clipboard access can be denied.
+async function copyGithubUrl(pr) {
+  try {
+    await navigator.clipboard.writeText(pr.url || '')
+    ui.copiedFor = pr.number
+    setTimeout(() => {
+      if (ui.copiedFor === pr.number) ui.copiedFor = null
+    }, 1500)
+  } catch (e) {
+    // ignore — no clipboard permission
+  }
+}
+
+// ── preset filters (live gh-search for a fixed, allow-listed query) ─────────
+
+let presetSeq = 0
+
+async function runPreset(key) {
+  const seq = ++presetSeq
+  state.activePreset = key
+  state.showHidden = false
+  state.filterOpen = false
+  state.presetLoading = true
+  try {
+    const res = await fetch('/api/prs/filter?preset=' + encodeURIComponent(key))
+    if (!res.ok) {
+      if (seq === presetSeq) state.presetResults = []
+      return
+    }
+    const body = await res.json()
+    if (seq !== presetSeq) return
+    state.presetResults = body && body.ok && Array.isArray(body.prs) ? body.prs : []
+  } catch (e) {
+    if (seq === presetSeq) state.presetResults = []
+  } finally {
+    if (seq === presetSeq) state.presetLoading = false
+  }
+}
+
+// clearPresetView returns from a preset / hidden view back to the main inbox.
+function clearPresetView() {
+  state.activePreset = null
+  state.showHidden = false
+  state.presetResults = []
+}
+
 // popover — every row (ingested or not) opens this same menu on a click: the
 // ingest-related action(s) first (which action depends on pr.hasGraph, see
 // generateAction/ingestedActions above), then a plain link to GitHub, plus a
@@ -580,6 +736,14 @@ function popover(pr) {
       >
         ${icon('external-link', 'h-3.5 w-3.5')} Open op GitHub
       </a>
+      <button
+        type="button"
+        data-testid="copy-url"
+        class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
+        @click="${() => copyGithubUrl(pr)}"
+      >
+        ${icon('external-link', 'h-3.5 w-3.5')} ${() => (ui.copiedFor === pr.number ? 'Gekopieerd!' : 'Kopieer GitHub URL')}
+      </button>
       ${() =>
         m
           ? html`<a
@@ -591,8 +755,53 @@ function popover(pr) {
               ${icon('external-link', 'h-3.5 w-3.5')} Open Jira-ticket
             </a>`
           : ''}
+      ${ignoreSection(pr)}
     </div>
   `
+}
+
+// ignoreSection is the "Negeer PR" part of the popover: for a not-yet-ignored
+// PR a small divider label followed by one button per termijn (each computes an
+// absolute expiry client-side, see ignoreUntil); for an already-ignored PR a
+// single "Niet meer negeren" button. All are plain <button>s so handlePopoverKey
+// cycles them like every other item. Returned as a keyed array-of-one per branch
+// (stable slot shape) to avoid the arrow.js single↔array pitfall.
+function ignoreSection(pr) {
+  return html`<div class="mt-1 border-t border-slate-100 dark:border-zinc-700 pt-1" data-testid="ignore-section">
+    ${() => {
+      if (isIgnored(pr.number)) {
+        return [
+          html`<button
+            type="button"
+            data-testid="unignore"
+            class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
+            @click="${() => {
+              unignorePr(pr.number)
+              closePopover()
+            }}"
+          >
+            ${icon('git-pull-request', 'h-3.5 w-3.5')} Niet meer negeren
+          </button>`.key('unignore'),
+        ]
+      }
+      return [
+        html`<div>
+          <p class="px-2.5 py-1 text-[10.5px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500">Negeer PR</p>
+          ${IGNORE_CHOICES.map(
+            ([kind, label]) =>
+              html`<button
+                type="button"
+                data-testid="${'ignore-' + kind}"
+                class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
+                @click="${() => ignorePr(pr, kind)}"
+              >
+                ${icon('clock', 'h-3.5 w-3.5')} ${label}
+              </button>`.key('ig:' + kind),
+          )}
+        </div>`.key('ignore-choices'),
+      ]
+    }}
+  </div>`
 }
 
 const ROW_CLASS =
@@ -838,6 +1047,179 @@ function searchResultsBlock() {
   `
 }
 
+const PRESET_LABELS = {
+  'updated-oud': 'Gesorteerd op aanmaakdatum (oud eerst)',
+  'alle-open': "Alle open PR's",
+  'alle-draft': "Alle draft PR's",
+  'ouder-3-dagen': "PR's ouder dan 3 dagen (per auteur)",
+}
+
+// backToInboxBar — the "← Terug naar inbox" affordance shown atop a preset /
+// hidden view so the reviewer can return to the main sections.
+function backToInboxBar(label) {
+  return html`
+    <div class="mb-4 flex items-center gap-3">
+      <button
+        type="button"
+        data-testid="back-to-inbox"
+        class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800"
+        @click="${clearPresetView}"
+      >
+        ← Terug naar inbox
+      </button>
+      <h2 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${label}</h2>
+    </div>
+  `
+}
+
+// authorGroups groups rows by pr.author, returning [{ author, prs }] ordered by
+// author name — used by the "ouder dan 3 dagen" preset (grouped per auteur).
+function authorGroups(rows) {
+  const by = new Map()
+  rows.forEach((pr) => {
+    const a = pr.author || '?'
+    if (!by.has(a)) by.set(a, [])
+    by.get(a).push(pr)
+  })
+  return [...by.keys()].sort().map((author) => ({ author, prs: by.get(author) }))
+}
+
+function authorGroupBlock(group) {
+  return html`
+    <div class="mb-6" data-testid="author-group" data-author="${group.author}">
+      <div class="mb-2 flex items-center gap-2">
+        ${avatarHTML(group.author, '', 'h-5 w-5')}
+        <h3 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${group.author}</h3>
+        <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2 py-0.5 text-[11px] text-slate-500 dark:text-zinc-400">${group.prs.length}</span>
+      </div>
+      ${listBox(group.prs.map((pr) => ({ pr })))}
+    </div>
+  `.key('authgroup:' + group.author)
+}
+
+// presetResultsBlock renders the active preset's live gh-search results. The
+// "ouder-3-dagen" preset groups them per author; the others are a flat list.
+function presetResultsBlock() {
+  return html`
+    <div data-testid="preset-results">
+      ${backToInboxBar(PRESET_LABELS[state.activePreset] || 'Filter')}
+      ${() => {
+        if (state.presetLoading) return loadingSkeletonList()
+        const results = state.presetResults || []
+        if (!results.length)
+          return html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">Geen PR's voor dit filter.</p>`
+        if (state.activePreset === 'ouder-3-dagen') {
+          return html`<div>${authorGroups(results).map((g) => authorGroupBlock(g))}</div>`
+        }
+        return listBox(results.map((pr) => ({ pr })))
+      }}
+    </div>
+  `
+}
+
+// hiddenRow renders one ignored PR in the "verborgen" view: its title (from the
+// loaded inbox data, or a minimal "#nummer" for one that dropped out of the
+// inbox query), the "genegeerd tot <datum>" note, and an un-ignore button.
+function hiddenRow(number, pr) {
+  return html`
+    <div class="${'relative ' + ROW_CLASS}" data-testid="hidden-row" data-hidden-pr="${number}">
+      <span class="mt-0.5 shrink-0 text-slate-400 dark:text-zinc-500">${icon('git-pull-request', 'h-4 w-4')}</span>
+      <div class="min-w-0 flex-1">
+        <h3 class="truncate text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100">${pr ? pr.title : '#' + number}</h3>
+        <span class="block truncate text-[12px] text-slate-500 dark:text-zinc-500"
+          >#${number} · genegeerd tot ${() => formatIgnoreUntil(state.ignores[number])}</span
+        >
+      </div>
+      <button
+        type="button"
+        data-testid="hidden-unignore"
+        class="shrink-0 rounded-md border border-slate-200 dark:border-zinc-700 px-2.5 py-1 text-xs text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800"
+        @click="${() => unignorePr(number)}"
+      >
+        Niet meer negeren
+      </button>
+    </div>
+  `.key('hidden:' + number)
+}
+
+// hiddenBlock lists every currently-ignored PR (valid, non-expired). Titles come
+// from the already-loaded inbox data; a PR that dropped out of the inbox query
+// renders as a minimal "#nummer" row.
+function hiddenBlock() {
+  const present = new Map()
+  state.sections.forEach((sec) => sec.prs.forEach((pr) => present.set(pr.number, pr)))
+  const numbers = Object.keys(state.ignores)
+    .map((k) => Number(k))
+    .filter((n) => isIgnored(n))
+    .sort((a, b) => a - b)
+  return html`
+    <div data-testid="hidden-view">
+      ${backToInboxBar('Verborgen pull requests')}
+      ${() =>
+        numbers.length
+          ? html`<div class="rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
+              ${numbers.map((n) => hiddenRow(n, present.get(n)))}
+            </div>`
+          : html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">Geen verborgen pull requests.</p>`}
+    </div>
+  `
+}
+
+// filterDrawer — a second expandable button (mal of recentDrawer): its menu is a
+// list of preset filters (each a live gh-search) plus "Toon alle verborgen pull
+// requests". Every branch returns a keyed array-of-one so the slot shape stays a
+// stable keyed array (arrow.js single↔array pitfall, see conventions.md).
+function filterMenuButton(key, label) {
+  return html`<button
+    type="button"
+    data-testid="${'preset-' + key}"
+    class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[13px] text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800/40"
+    @click="${() => runPreset(key)}"
+  >
+    ${icon('git-pull-request', 'h-4 w-4 text-slate-500 dark:text-zinc-500')} ${label}
+  </button>`
+}
+
+function filterDrawer() {
+  return html`
+    <div class="mt-4">
+      <button
+        data-testid="filter-drawer"
+        class="group flex w-full cursor-pointer items-center gap-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-3 text-left transition-colors hover:bg-slate-100 dark:hover:bg-zinc-800/40"
+        @click="${() => (state.filterOpen = !state.filterOpen)}"
+      >
+        <span class="${() => 'inline-flex shrink-0 transition-transform ' + (state.filterOpen ? 'rotate-90' : '')}"
+          >${chevronFilled('h-4 w-4 text-slate-500 dark:text-zinc-500')}</span
+        >
+        <span class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">Filters</span>
+      </button>
+      ${() => {
+        if (!state.filterOpen) return [html`<span class="hidden"></span>`.key('filter:closed')]
+        return [
+          html`<div class="mt-2 overflow-hidden rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
+            ${filterMenuButton('updated-oud', PRESET_LABELS['updated-oud'])}
+            ${filterMenuButton('alle-open', PRESET_LABELS['alle-open'])}
+            ${filterMenuButton('alle-draft', PRESET_LABELS['alle-draft'])}
+            ${filterMenuButton('ouder-3-dagen', PRESET_LABELS['ouder-3-dagen'])}
+            <button
+              type="button"
+              data-testid="show-hidden"
+              class="flex w-full items-center gap-2 border-t border-slate-100 dark:border-zinc-800 px-4 py-2.5 text-left text-[13px] text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800/40"
+              @click="${() => {
+                state.showHidden = true
+                state.activePreset = null
+                state.filterOpen = false
+              }}"
+            >
+              ${icon('external-link', 'h-4 w-4 text-slate-500 dark:text-zinc-500')} Toon alle verborgen pull requests
+            </button>
+          </div>`.key('filter:open'),
+        ]
+      }}
+    </div>
+  `
+}
+
 function mainContent() {
   return html`
     <div data-testid="inbox-sections">
@@ -853,6 +1235,7 @@ function mainContent() {
         const sectionOf = new Map()
         state.sections.forEach((sec) => {
           sec.prs.forEach((pr) => {
+            if (isIgnored(pr.number)) return // hidden from the main inbox
             all.push(pr)
             if (!sectionOf.has(pr.number)) sectionOf.set(pr.number, sec.title)
           })
@@ -873,7 +1256,7 @@ function mainContent() {
         // Stacks render as their own group, above every section.
         chains.forEach((chain) => out.push(stackGroup(chain, sectionOf)))
         state.sections.forEach((sec) => {
-          const filtered = sec.prs.filter((pr) => !stacked.has(pr.number))
+          const filtered = sec.prs.filter((pr) => !stacked.has(pr.number) && !isIgnored(pr.number))
           const block = sectionBlock(sec, filtered)
           if (block) out.push(block)
         })
@@ -958,9 +1341,19 @@ function App() {
   return html`
     <div class="mx-auto max-w-7xl px-6 py-8" data-testid="inbox">
       ${headerBlock()} ${searchBox()}
-      ${() => (state.query.trim() ? searchResultsBlock() : mainContent())} ${recentDrawer()}
+      ${() => currentView()} ${filterDrawer()} ${recentDrawer()}
     </div>
   `
+}
+
+// currentView routes the content region. A non-empty search query always wins
+// (the search box stays responsive); then the "verborgen" view, then an active
+// preset filter, else the main inbox sections.
+function currentView() {
+  if (state.query.trim()) return searchResultsBlock()
+  if (state.showHidden) return hiddenBlock()
+  if (state.activePreset) return presetResultsBlock()
+  return mainContent()
 }
 
 // ── data loading ─────────────────────────────────────────────────────────
@@ -1359,6 +1752,17 @@ function moveTo(idx) {
   paintSelection()
 }
 
+// focusSearch hands the keyboard to the top search box and releases the row
+// selection — the ArrowUp-past-the-first-row target (the search box searches
+// all open PRs, not just the inbox).
+function focusSearch() {
+  const el = document.querySelector('[data-testid="search"]')
+  if (el) el.focus()
+  selKey = null
+  selIndex = -1
+  paintSelection()
+}
+
 function activateSelected() {
   const rows = currentRows()
   const el = rows[selIndex]
@@ -1458,6 +1862,12 @@ function setupKeyboard() {
         break
       case 'ArrowUp':
         e.preventDefault()
+        // At (or above) the first row, ArrowUp jumps up to the search box —
+        // which searches all open PRs — instead of clamping on row 0.
+        if (selIndex <= 0) {
+          focusSearch()
+          break
+        }
         move(-1)
         break
       case 'Home':
@@ -1521,6 +1931,12 @@ watch(
       state.recentOpen,
       state.recentLoading,
       state.recentPrs.length,
+      state.filterOpen,
+      state.activePreset,
+      state.presetLoading,
+      state.presetResults.length,
+      state.showHidden,
+      Object.keys(state.ignores).length,
     ]),
   () => scheduleRepaint(),
 )
@@ -1610,6 +2026,43 @@ function startLiveSync() {
   document.addEventListener('visibilitychange', sendHeartbeat)
 }
 
+// ── ignore read-model sync ─────────────────────────────────────────────────
+// Ensure the per-repo ignore tracker exists (so we have a Run ID to signal to)
+// and pull its read-model. Starting the Execution is the sanctioned write path;
+// the GET is read-only. A poll on the same cadence as the snapshot reload keeps
+// the local map fresh across tabs.
+
+async function reloadIgnores() {
+  try {
+    const res = await fetch('/api/ignore')
+    if (!res.ok) return
+    const body = await res.json()
+    if (body && body.ok && Array.isArray(body.ignores)) {
+      const map = {}
+      body.ignores.forEach((ig) => {
+        map[ig.pr] = ig.until
+      })
+      state.ignores = map
+    }
+  } catch (e) {
+    // keep the current map on a transient failure
+  }
+}
+
+async function loadIgnore() {
+  try {
+    const res = await fetch('/api/workflows/ignore', { method: 'POST' })
+    if (res.ok) {
+      const body = await res.json()
+      state.ignoreRunId = body.runId || ''
+    }
+  } catch (e) {
+    // best-effort — without a Run ID, ignore actions are no-ops
+  }
+  await reloadIgnores()
+}
+
 App()(document.getElementById('app'))
 loadInbox()
+loadIgnore()
 scheduleRepaint()

@@ -20,6 +20,7 @@ import (
 	"slash/modules/comments"
 	"slash/modules/explanations"
 	"slash/modules/github"
+	"slash/modules/ignore"
 	"slash/modules/inbox"
 	"slash/modules/jira"
 	"slash/modules/prmeta"
@@ -40,6 +41,7 @@ type tasks struct {
 	testcovers  *testcovers.Module
 	approvals   *approvals.Module
 	explain     *explanations.Module
+	ignore      *ignore.Module
 }
 
 // newTasks builds the tembed engine (SQLite + JSONL, so comments live in the
@@ -129,6 +131,19 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ap.Close()
 		return nil, nil, err
 	}
+	ig, err := ignore.Open(dataDir + "/ignore.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -156,7 +171,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	if os.Getenv("SLASH_JIRA") == "off" {
 		jr = &jira.Fake{}
 	}
-	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, tc, ap, ex, cl, jr, db, dataDir, repo)
+	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, tc, ap, ex, ig, cl, jr, db, dataDir, repo)
 	// Record the server-lifetime context + whether background pollers may run,
 	// so ensurePRStatus's fresh-poller spawn uses a context that outlives the
 	// HTTP request that triggered it (see TaskManager.baseCtx).
@@ -173,6 +188,11 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		// Own the PR inbox via the workflow: fetch an initial snapshot into the
 		// read-model and start the refresh poller (the UI reads only the read-model).
 		mgr.EnsureInbox(ctx)
+		// Own the per-repo ignore tracker so the UI has a Run ID to signal
+		// ignore/un-ignore to (no poller — it only reacts to UI signals).
+		if _, err := mgr.EnsureIgnore(); err != nil {
+			mgr.logf("ignore: ensure: %v", err)
+		}
 	}
 
 	closeFn := func() error {
@@ -184,9 +204,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = tc.Close()
 		_ = ap.Close()
 		_ = ex.Close()
+		_ = ig.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, ignore: ig}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -398,6 +419,15 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/approvals?pr=N → read-only approval read-model (per block: the
 	// approved changed rows + call segments) for refresh-restore.
 	mux.HandleFunc("/api/approvals", s.handleApprovals)
+	// POST /api/workflows/ignore {repo?} → ensure the per-repo ignore tracker;
+	// the UI then signals ignore/un-ignore to its Run ID via .../signals/ignore.
+	mux.HandleFunc("/api/workflows/ignore", s.handleIgnoreStart)
+	// GET /api/ignore → read-only ignore read-model (which PRs are hidden, and
+	// until when). The UI filters expired entries at read time.
+	mux.HandleFunc("/api/ignore", s.handleIgnore)
+	// GET /api/prs/filter?preset=<key> → live gh-search for a fixed, allow-listed
+	// preset query (never raw UI text — see handleFilter).
+	mux.HandleFunc("/api/prs/filter", s.handleFilter)
 	// GET /api/pr?pr=N → read-only PR metadata (title + URL) from the prmeta
 	// read-model — for the `/` command menu's Jira/GitHub deep-links.
 	mux.HandleFunc("/api/pr", s.handlePR)
@@ -481,7 +511,7 @@ func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "code_warning" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "code_warning" || rest == "ignore" {
 		http.NotFound(w, r)
 		return
 	}
@@ -555,6 +585,21 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
+			return
+		}
+		// The ignore signal carries one PR + an absolute expiry (or clear) to the
+		// per-repo ignore tracker — the UI write path for hiding/un-hiding a PR.
+		if parts[2] == SignalIgnore {
+			var body IgnoreSignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PR <= 0 {
+				http.Error(w, "invalid ignore", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalIgnore, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
 			return
 		}
 		// The delete signal carries no comment body — it just asks the workflow
@@ -881,6 +926,104 @@ func (s *server) handleApprovals(w http.ResponseWriter, r *http.Request) {
 		list = []approvals.Approval{}
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// handleIgnoreStart starts (or reuses) the per-repo ignore tracker and returns
+// its Run ID. Starting an Execution is the sanctioned UI write path; the UI then
+// signals ignore/un-ignore to this Run ID via .../signals/ignore.
+func (s *server) handleIgnoreStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	runID, err := s.tasks.manager.EnsureIgnore()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleIgnore serves GET /api/ignore — the read-only ignore read-model (which
+// PRs are hidden, and until when). It does not filter expired entries: the UI
+// compares Until against Date.now() at read time.
+func (s *server) handleIgnore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	list, err := s.tasks.ignore.List(r.Context(), repoSlug)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []ignore.Ignore{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignores": list})
+}
+
+// filterPresets maps an allow-listed preset key to its fixed GitHub search
+// expression (the qualifier set AFTER "repo:<slug>", including its own sort:).
+// Only these fixed expressions ever reach gh — raw UI text is never passed to
+// the subprocess (per the exec-input-validation convention). An unknown key is
+// a 400. The "ouder-dan-3-dagen" preset's date bound is filled in dynamically by
+// handleFilter (a read handler — a real clock is fine here, the determinism rule
+// only governs workflow bodies).
+var filterPresets = map[string]string{
+	"updated-oud": "is:pr is:open draft:false sort:created-asc",
+	"alle-open":   "is:pr state:open draft:false sort:updated-desc",
+	"alle-draft":  "is:pr state:open draft:true sort:updated-desc",
+	// %s is replaced with a YYYY-MM-DD bound (today − 3 days).
+	"ouder-3-dagen": "is:pr is:open draft:false created:<%s sort:created-asc",
+}
+
+// handleFilter serves GET /api/prs/filter?preset=<key> — a live gh-search for a
+// fixed, allow-listed preset expression (full rows, like /api/prs/search). The
+// expression is chosen from filterPresets by key, never built from raw UI input.
+func (s *server) handleFilter(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	key := r.URL.Query().Get("preset")
+	expr, ok := filterPresets[key]
+	if !ok {
+		http.Error(w, "unknown preset", http.StatusBadRequest)
+		return
+	}
+	if key == "ouder-3-dagen" {
+		bound := time.Now().AddDate(0, 0, -3).Format("2006-01-02")
+		expr = fmt.Sprintf(expr, bound)
+	}
+
+	if ghDisabled() {
+		rows := []inboxRow{}
+		if f, ok := loadFixture(); ok {
+			wantDraft := strings.Contains(expr, "draft:true")
+			for _, row := range fixtureRows(f) {
+				// Offline: honour only the draft: qualifier of the preset (the
+				// fixture carries no created-date to filter on); everything else
+				// passes through so tests see the full fixture set.
+				if wantDraft != row.IsDraft {
+					continue
+				}
+				rows = append(rows, row)
+			}
+		}
+		overlayGraph(s.db, rows)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "prs": rows})
+		return
+	}
+
+	// searchPRsExpr prepends repo:<slug> and trusts the preset's own sort:.
+	rows, err := searchPRsExpr(r.Context(), expr, false)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false})
+		return
+	}
+	overlayGraph(s.db, rows)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "prs": rows})
 }
 
 // handlePR serves GET /api/pr?pr=N — the read-only PR metadata from the prmeta

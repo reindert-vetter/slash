@@ -1451,3 +1451,39 @@ sequentieel en completet, mirrort `submit_review`/`ingest`.
   wordt stil verworpen, een tweede run supersedet de eerste in plaats van te
   stapelen, en de `warningsPerBlock`-cap wordt hard afgedwongen ondanks een
   model dat 'm negeert).
+
+## PR's verbergen uit de inbox (`ignore` + `modules/ignore`)
+
+Een negende Workflow Type, **`ignore`** (één Execution per **repo**, mal van
+`approve`/`pr_inbox`), maakt reviewer-keuzes om een PR uit de `/pr-overview`-inbox
+te verbergen **durable**. Puur lokaal — het raakt nooit het netwerk (geen
+GitHub/Claude), dus geen `SLASH_*=off`-gating nodig.
+
+- **`modules/ignore`** (`data/ignore.db`, mal van `modules/approvals`): het
+  read-model `ignores(repo, pr, until)`, PK `(repo, pr)`. `until` is een
+  **absolute Unix-ms-vervaldatum** (`0` = altijd, nooit verlopen). Write
+  `Set(repo, pr, until)` (workflow-only): upsert, of — bij **`until < 0`** — een
+  DELETE van de rij (un-ignore). Read `List(repo)`. `List` filtert **niet** op
+  verval: de "is deze ignore nog geldig?"-check gebeurt op **leestijd** in de UI
+  (`until === 0 || until > Date.now()`), niet server-side.
+- **Workflow** (`workflows.go`): `ignoreWorkflow` is een lus op een
+  **`SignalIgnore = "ignore"`**-Signal (`IgnoreSignal{PR, Until, Clear}`); elke
+  signal draait één `saveIgnore`-Activity (`Clear` → `Set(..., -1)`, anders
+  `Set(..., Until)`). **Deterministisch zonder klok:** de UI berekent de absolute
+  `Until` (browser-lokale tijd) en stuurt 'm mee, dus de workflow-body leest nooit
+  `w.Now()` — het aantal Activities is exact het aantal signals in de history.
+  Nooit-completend, één lange-levende per-repo tracker. `EnsureIgnore()`
+  (spiegelt `EnsureInbox`, veld `ignoreRun` + `findIgnoreRunLocked`) start/
+  hergebruikt de Execution, ook na herstart (`engine.Recover` her-blokkeert 'm op
+  het signal); aangeroepen bij server-startup naast `EnsureInbox`.
+- **Endpoints** (`tasks_api.go`): `POST /api/workflows/ignore` → `EnsureIgnore`,
+  geeft `runId` (de UI signalt daar ignore/un-ignore aan); de generieke
+  `POST /api/workflows/{runID}/signals/ignore {pr, until|clear}` levert het
+  Signal (nieuwe decode-branch, `PR>0` gevalideerd); read-only
+  `GET /api/ignore` → `{ok, ignores:[{pr, until}]}`.
+- **Frontend:** zie de sectie "Ignore / verbergen uit de inbox" in
+  `.claude/rules/pages-and-routing.md` (de per-rij popover-actie "Negeer PR" met
+  termijnkeuze, de client-side verberging + "verborgen"-view).
+- Tests: `modules/ignore/ignore_test.go` (round-trip, upsert-overschrijft,
+  `until<0` wist); `ignore_test.go` (package main: `EnsureIgnore`-idempotentie +
+  `ignore`-Signal → read-model + un-ignore via `Clear`).

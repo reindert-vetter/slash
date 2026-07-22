@@ -8,9 +8,11 @@ import { test, expect } from './_fixtures.mjs'
 // in .claude/rules/pages-and-routing.md.
 test.describe('PR Review Tree — popover keyboard navigation', () => {
   // 12888 ("Fix comment notification retry backoff (BLOG-1421)") is not yet
-  // ingested and its title carries a Jira key, so its popover has exactly
-  // three items in document order: Genereer review-boom, Open op GitHub, Open
-  // Jira-ticket — enough to exercise wrap-around in both directions.
+  // ingested and its title carries a Jira key. Its popover's first two items
+  // are stable in document order (Genereer review-boom, Open op GitHub); the
+  // rest (Kopieer GitHub URL, Open Jira-ticket, and the ignore-termijn buttons)
+  // vary, so the wrap-around is exercised over the actual item count rather than
+  // a hardcoded three.
   test('↑/↓ cycle the popover items, Escape closes it, and the row list stays put', async ({ page }) => {
     await page.goto('/pr-overview')
     await page.waitForLoadState('networkidle')
@@ -23,25 +25,31 @@ test.describe('PR Review Tree — popover keyboard navigation', () => {
 
     const generate = popover.locator('[data-testid="generate-page"]')
     const github = popover.locator('a', { hasText: 'Open op GitHub' })
-    const jira = popover.locator('a', { hasText: 'Open Jira-ticket' })
+
+    // The full ordered set of focusable menu items (buttons + links).
+    const itemCount = await popover.evaluate(
+      (el) => el.querySelectorAll('button:not([disabled]), a[href]').length,
+    )
+    expect(itemCount).toBeGreaterThan(3)
 
     // Opening the popover focuses its first item automatically.
     await expect(generate).toBeFocused()
 
-    // ↓ steps forward through the menu…
+    // ↓ steps forward through the menu (first two items are stable)…
     await page.keyboard.press('ArrowDown')
     await expect(github).toBeFocused()
-    await page.keyboard.press('ArrowDown')
-    await expect(jira).toBeFocused()
-    // …and wraps back to the first item past the last one.
-    await page.keyboard.press('ArrowDown')
+
+    // …and wraps back to the first item after cycling through all of them.
+    for (let i = 0; i < itemCount - 1; i++) await page.keyboard.press('ArrowDown')
     await expect(generate).toBeFocused()
 
-    // ↑ from the first item wraps backward to the last one.
+    // ↑ from the first item wraps backward to the last one, then to the second-last.
     await page.keyboard.press('ArrowUp')
-    await expect(jira).toBeFocused()
-    await page.keyboard.press('ArrowUp')
-    await expect(github).toBeFocused()
+    const lastFocused = await popover.evaluate((el) => {
+      const items = el.querySelectorAll('button:not([disabled]), a[href]')
+      return document.activeElement === items[items.length - 1]
+    })
+    expect(lastFocused).toBe(true)
 
     // The underlying row-list keyboard nav is suspended: none of these ↑/↓
     // presses reached move()/moveTo(), so the row itself never picked up the

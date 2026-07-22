@@ -20,6 +20,7 @@ import (
 	"slash/modules/comments"
 	"slash/modules/explanations"
 	"slash/modules/github"
+	"slash/modules/ignore"
 	"slash/modules/inbox"
 	"slash/modules/jira"
 	"slash/modules/prmeta"
@@ -101,6 +102,12 @@ const (
 	// Activities sequentially and completes. See
 	// .claude/rules/tembed-workflows.md ("AI-risicocontrole").
 	WorkflowCodeWarning = "code_warning"
+	// WorkflowIgnore is the Workflow Type that persists which PRs the reviewer
+	// chose to hide from the inbox: one Execution per repo. Each "ignore" Signal
+	// carries one PR + an absolute expiry (computed by the UI, so the body needs
+	// no clock), which one Activity writes into the ignore read-model. It never
+	// completes — a long-lived per-repo tracker.
+	WorkflowIgnore = "ignore"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -115,6 +122,10 @@ const (
 	// SignalSet delivers a block's full approved state to the approve workflow
 	// (from the UI, on every approve/un-approve toggle).
 	SignalSet = "set"
+	// SignalIgnore delivers one PR's ignore state to the ignore workflow (from
+	// the UI, on "Negeer PR" / un-ignore). It carries an absolute expiry
+	// timestamp the UI computed, so the workflow body needs no clock.
+	SignalIgnore = "ignore"
 	// SignalDelete is the URL-level signal name the UI posts to delete a
 	// comment. It is delivered to the workflow as a ReactionSignal (Action:
 	// "delete") under SignalReply — see ReactionSignal's doc comment.
@@ -267,6 +278,21 @@ type ApprovalSignal struct {
 	Viewed  *bool    `json:"viewed"`
 }
 
+// IgnoreInput starts an ignore Execution — one tracker per repo.
+type IgnoreInput struct {
+	Repo string `json:"repo"`
+}
+
+// IgnoreSignal carries one PR's ignore state into the ignore tracker (delivered
+// under SignalIgnore). Until is an absolute Unix-ms expiry the UI computed (0 =
+// forever); Clear = true un-ignores the PR (Until is ignored then). Both ride
+// the same Signal because a workflow can only WaitSignal on one name at a time.
+type IgnoreSignal struct {
+	PR    int   `json:"pr"`
+	Until int64 `json:"until"`
+	Clear bool  `json:"clear"`
+}
+
 // ResolveCallInput starts a resolve_call Execution: it asks the LLM to resolve
 // the given (Go-unresolved) call keys made by one caller block.
 type ResolveCallInput struct {
@@ -368,6 +394,7 @@ type TaskManager struct {
 	testcovers  *testcovers.Module
 	approvals   *approvals.Module
 	explain     *explanations.Module
+	ignore      *ignore.Module
 	claude      claude.Client
 	jira        jira.Client
 	db          *sql.DB
@@ -385,19 +412,20 @@ type TaskManager struct {
 	baseCtx      context.Context
 	runtimeReady bool
 
-	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + inboxRun + importPolled
+	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + inboxRun + ignoreRun + importPolled
 	lastBeat     map[string]time.Time // code-comment/inbox Run ID → last heartbeat
 	prRuns       map[int]string       // PR → pr_status Run ID
 	relRuns      map[int]string       // PR → build_relations Run ID
 	apprRuns     map[int]string       // PR → approve Run ID
 	inboxRun     string               // pr_inbox Run ID (one per repo/process)
+	ignoreRun    string               // ignore Run ID (one per repo/process)
 	importPolled map[string]bool      // imported-thread Run ID → poller running (dedup, operational)
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
-func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, tc *testcovers.Module, ap *approvals.Module, ex *explanations.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
+func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, tc *testcovers.Module, ap *approvals.Module, ex *explanations.Module, ig *ignore.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
 	m := &TaskManager{
-		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
+		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, ignore: ig, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
 		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{},
 		importPolled: map[string]bool{},
@@ -986,6 +1014,25 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.approvals.Replace(ctx, arg.PR, arg.BlockID, arg.Rows, arg.Calls)
 	})
 
+	// Activity: persist one PR's ignore state (write, workflow-driven). The
+	// ignore module is the only writer of the ignore read-model. Until < 0
+	// (Clear) deletes the row (un-ignore); the workflow computes that from the
+	// signal so this Activity input stays a plain absolute value.
+	engine.RegisterActivity("saveIgnore", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			Repo  string `json:"repo"`
+			PR    int    `json:"pr"`
+			Until int64  `json:"until"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.ignore == nil {
+			return nil, nil
+		}
+		return nil, m.ignore.Set(ctx, arg.Repo, arg.PR, arg.Until)
+	})
+
 	// Activity: mark/unmark a file's GitHub "Viewed" checkbox (write,
 	// workflow-driven — the only place that talks to GitHub for this).
 	engine.RegisterActivity("setFileViewed", func(ctx context.Context, in []byte) ([]byte, error) {
@@ -1144,6 +1191,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowApprove, approveWorkflow)
 	engine.RegisterWorkflow(WorkflowSubmitReview, submitReviewWorkflow)
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
+	engine.RegisterWorkflow(WorkflowIgnore, ignoreWorkflow)
 	return m
 }
 
@@ -1394,6 +1442,35 @@ func approveWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}{PR: in.PR, BlockID: sig.BlockID, Rows: sig.Rows, Calls: sig.Calls}
 		if err := w.ExecuteActivity("saveApproval", arg, nil); err != nil {
 			return nil, fmt.Errorf("save approval: %w", err)
+		}
+	}
+}
+
+// ignoreWorkflow persists which PRs are ignored (hidden from the inbox) for a
+// repo. It is deterministic: the only side effect (the read-model write) is an
+// Activity, the number of Activities is exactly the number of "ignore" Signals
+// in the history, and the expiry is an absolute value carried in the signal (the
+// UI computed it) — the body never reads a clock. It never completes: a
+// long-lived per-repo tracker recording each ignore/un-ignore as it happens.
+func ignoreWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in IgnoreInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	for {
+		var sig IgnoreSignal
+		w.WaitSignal(SignalIgnore, &sig)
+		until := sig.Until
+		if sig.Clear {
+			until = -1 // Set(...) deletes the row on a negative expiry
+		}
+		arg := struct {
+			Repo  string `json:"repo"`
+			PR    int    `json:"pr"`
+			Until int64  `json:"until"`
+		}{Repo: in.Repo, PR: sig.PR, Until: until}
+		if err := w.ExecuteActivity("saveIgnore", arg, nil); err != nil {
+			return nil, fmt.Errorf("save ignore: %w", err)
 		}
 	}
 }
@@ -2049,6 +2126,56 @@ func (m *TaskManager) EnsureApprovals(pr int) (string, error) {
 	}
 	m.apprRuns[pr] = id
 	return id, nil
+}
+
+// EnsureIgnore ensures the single ignore tracker for the repo exists (starting
+// one if none is live) and returns its Run ID. The UI calls this on the overview
+// load so it has a Run ID to signal ignores to; the tracker is reused across
+// restarts (its waiting Execution is re-driven by engine.Recover). Starting/
+// reusing an Execution is the sanctioned UI write path. Per-repo, mirrors
+// EnsureInbox.
+func (m *TaskManager) EnsureIgnore() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ignoreRun != "" {
+		return m.ignoreRun, nil
+	}
+	if id := m.findIgnoreRunLocked(); id != "" {
+		m.ignoreRun = id
+		return id, nil
+	}
+	id, err := m.engine.StartWorkflow(WorkflowIgnore, IgnoreInput{Repo: m.repo})
+	if err != nil {
+		return "", err
+	}
+	m.ignoreRun = id
+	return id, nil
+}
+
+// findIgnoreRunLocked scans for a running/waiting ignore Execution for m.repo.
+// It reads only the engine, so it is safe to call while holding m.mu.
+func (m *TaskManager) findIgnoreRunLocked() string {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowIgnore {
+			continue
+		}
+		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var pin IgnoreInput
+		if json.Unmarshal(in, &pin) == nil && pin.Repo == m.repo {
+			return r.ID
+		}
+	}
+	return ""
 }
 
 // findApproveLocked scans for a running/waiting approve tracker for pr. It reads
