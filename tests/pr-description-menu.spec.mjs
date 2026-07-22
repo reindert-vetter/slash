@@ -25,7 +25,9 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
     await expect(menu).toBeVisible()
     await expect(page.getByTestId('command-input')).toBeFocused()
     const rows = page.getByTestId('command-row')
-    await expect(rows).toHaveCount(4)
+    // 5 root items since the code_warning PR-wide risk check was added to
+    // PR_COMMANDS (home.mjs), before the description toggle.
+    await expect(rows).toHaveCount(5)
     await expect(rows.nth(0)).toContainText('Naar PR-overzicht')
     await expect(rows.nth(1)).toContainText('GitHub')
     await expect(rows.nth(2)).toContainText('Jira')

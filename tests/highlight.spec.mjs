@@ -44,10 +44,10 @@ test.describe('PR Review Tree — code highlighting', () => {
     await expect(host.locator('span.token').first()).toBeVisible()
     expect(await host.locator('span.token').count()).toBeGreaterThan(10)
 
-    // The scoped theme colours the PHP keyword (#d73a49 → rgb(215,58,73), the
-    // GitHub-light keyword red set in index.html).
+    // The scoped theme colours the PHP keyword (#cf222e → rgb(207,34,46), the
+    // GitHub-light keyword red set in index.html — darkened for diff contrast).
     const keyword = host.locator('.token.keyword').first()
     await expect(keyword).toHaveText('public')
-    await expect(keyword).toHaveCSS('color', 'rgb(215, 58, 73)')
+    await expect(keyword).toHaveCSS('color', 'rgb(207, 34, 46)')
   })
 })

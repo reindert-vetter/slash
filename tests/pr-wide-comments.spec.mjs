@@ -136,7 +136,9 @@ test.describe('PR-wide comment block (C2)', () => {
     expect(replyBody.done).toBe(true)
   })
 
-  test('the description/comment-block height ratio flips with focus (3/5 vs 5/6)', async ({ page }) => {
+  test('the comment block dominates the description column, more so when focused (4/5 -> 5/6)', async ({
+    page,
+  }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toBeVisible()
@@ -146,23 +148,28 @@ test.describe('PR-wide comment block (C2)', () => {
     const wide = page.getByTestId('pr-wide-comments')
     await expect(wide).toBeVisible()
 
-    // Description selected: prInfoCard flex-[3] vs pr-wide-comments flex-[2].
-    // The real ratio lands a bit above the "pure" 1.5:1 (prInfoCard's p-5
-    // border adds a small fixed floor to its share, see the flex-grow note in
-    // detail-layout.md) — assert generously below that (1.4) so this stays
-    // robust to sub-pixel/font-metric variance across machines.
+    // The pr-wide comments card was enlarged (e9ff66b): prInfoCard is now a flat
+    // flex-1 (the small share) in BOTH states, while pr-wide-comments takes
+    // flex-[4] while the description is selected and flex-[5] while it owns the
+    // keyboard (see PrWideComments in RelatedPanel.mjs + prInfoCard in home.mjs).
+    // So the comments dominate the column already when the description is
+    // selected (~4/5 vs 1/5), and dominate even more strongly once focused
+    // (~5/6 vs 1/6) — the ratio tilts further rather than flipping. Assert
+    // generously below the "pure" numbers (prInfoCard's p-5 padding gives its
+    // share a small fixed floor) so this stays robust to sub-pixel/font-metric
+    // variance across machines.
     let cardH, wideH
     await expect
       .poll(async () => {
         cardH = (await card.boundingBox()).height
         wideH = (await wide.boundingBox()).height
-        return cardH / wideH
+        return wideH / cardH
       })
-      .toBeGreaterThan(1.4)
-    const [cardH1, wideH1] = [cardH, wideH]
+      .toBeGreaterThan(2.0)
+    const [cardH1, wideH1, ratio1] = [cardH, wideH, wideH / cardH]
 
     // ↓ hands the keyboard to the PR-wide block: flex-[5] vs flex-1 -> the
-    // ratio flips, and pr-wide-comments now dominates much more strongly.
+    // comments dominate more strongly still.
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('pr-wide-item').first()).toHaveAttribute('data-active', 'true')
 
@@ -174,11 +181,12 @@ test.describe('PR-wide comment block (C2)', () => {
       })
       .toBeGreaterThan(3.0)
 
-    // The description's share shrank substantially (~3/5 -> ~1/6 of the
-    // column) and the comment block's share grew substantially (~2/5 -> ~5/6)
-    // — the two states are clearly distinct, not just noise.
-    expect(cardH).toBeLessThan(cardH1 * 0.6)
-    expect(wideH).toBeGreaterThan(wideH1 * 1.8)
+    // Focusing tilts the column further toward the comments: the description's
+    // share shrank (~1/5 -> ~1/6) and the comment block's grew (~4/5 -> ~5/6),
+    // so the ratio strictly increased — the two states are distinct, not noise.
+    expect(wideH / cardH).toBeGreaterThan(ratio1)
+    expect(cardH).toBeLessThan(cardH1 * 0.98)
+    expect(wideH).toBeGreaterThan(wideH1)
   })
 
   test('← from within the block returns to the description without leaving the PR', async ({ page }) => {

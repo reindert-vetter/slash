@@ -1,9 +1,10 @@
 import { test, expect } from './_fixtures.mjs'
 
 // The `/` key opens a general, PR-wide tree menu (distinct from Enter's
-// block palette): "Naar PR-overzicht", "GitHub" and "Jira", the latter two
-// with their own submenus. It reuses the same floating CommandMenu overlay
-// (menu mode 'pr' — see home.mjs PR_COMMANDS + onKeydown, resolveCommands).
+// block palette): "Naar PR-overzicht", "GitHub" and "Jira" (the latter two
+// with their own submenus), the code_warning risk check, and the description
+// toggle. It reuses the same floating CommandMenu overlay (menu mode 'pr' —
+// see home.mjs PR_COMMANDS + onKeydown, resolveCommands).
 test.describe('PR Review Tree — `/` PR menu', () => {
   test('`/` opens the PR-wide tree with overview / GitHub / Jira', async ({ page }) => {
     await page.goto('/pr/12903')
@@ -24,11 +25,14 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(page.getByTestId('command-input')).toHaveValue('')
 
     const rows = page.getByTestId('command-row')
-    await expect(rows).toHaveCount(4)
+    // 5 root items since the code_warning PR-wide risk check was added (see
+    // PR_COMMANDS in home.mjs); it sits before the description toggle.
+    await expect(rows).toHaveCount(5)
     await expect(rows.nth(0)).toContainText('Naar PR-overzicht')
     await expect(rows.nth(1)).toContainText('GitHub')
     await expect(rows.nth(2)).toContainText('Jira')
-    await expect(rows.nth(3)).toContainText('Toon volledige omschrijving')
+    await expect(rows.nth(3)).toContainText("Controleer de hele PR op risico's")
+    await expect(rows.nth(4)).toContainText('Toon volledige omschrijving')
 
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()
@@ -57,7 +61,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
     // Esc backs out to the root, then Jira → its three children.
     await page.keyboard.press('Escape')
-    await expect(rows).toHaveCount(4)
+    await expect(rows).toHaveCount(5) // root: overview/GitHub/Jira/risk-check/description
     await page.getByTestId('command-input').fill('jira')
     await expect(rows).toHaveCount(1)
     await page.keyboard.press('Enter')
@@ -138,10 +142,11 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
     await page.keyboard.press('Enter')
     await expect(menu).toBeVisible()
-    await expect(rows).toHaveCount(4)
+    await expect(rows).toHaveCount(5)
     await expect(rows.nth(0)).toContainText('Naar PR-overzicht')
     await expect(rows.nth(1)).toContainText('GitHub')
     await expect(rows.nth(2)).toContainText('Jira')
-    await expect(rows.nth(3)).toContainText('Toon volledige omschrijving')
+    await expect(rows.nth(3)).toContainText("Controleer de hele PR op risico's")
+    await expect(rows.nth(4)).toContainText('Toon volledige omschrijving')
   })
 })
