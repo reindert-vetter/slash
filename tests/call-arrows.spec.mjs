@@ -41,10 +41,14 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
     await page.keyboard.press('Escape') // leave the auto-focused search box
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
-    await expect(
-      page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]'),
-    ).toBeVisible()
+    const arrowHelperItem = page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]')
+    await expect(arrowHelperItem).toBeVisible()
     await expect(arrows).toHaveCount(1)
+
+    // A changed call target carries its own PR-block category (ACTION, see
+    // arrow-blocks.json) as a badge LEFT of the title, mirroring the
+    // top-level block card's left-hand type badge.
+    await expect(arrowHelperItem).toContainText('ACTION')
 
     // Step down to the second group (the actual call lines): still one arrow,
     // now anchored on the in-scope call site.
@@ -59,10 +63,16 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
     // Next line: the arrowPlain call. Its child is shown (Ongewijzigd) but its
     // definition isn't changed by the PR → no arrow.
     await page.keyboard.press('ArrowDown')
-    await expect(
-      page.locator('[data-testid=related-item][data-child-id*="arrowPlain"]'),
-    ).toBeVisible()
+    const arrowPlainItem = page.locator('[data-testid=related-item][data-child-id*="arrowPlain"]')
+    await expect(arrowPlainItem).toBeVisible()
     await expect(arrows).toHaveCount(0)
+
+    // arrowPlain has no PR block of its own (unchanged file) → the category
+    // badge falls back to "OTHER", and its "Ongewijzigd" status now renders
+    // on the LEFT, next to that badge, instead of trailing the title on the
+    // right.
+    await expect(arrowPlainItem).toContainText('OTHER')
+    await expect(arrowPlainItem.getByTestId('related-diffstat')).toHaveText('Ongewijzigd')
 
     // Back up a line: the arrow returns with the cursor.
     await page.keyboard.press('ArrowUp')

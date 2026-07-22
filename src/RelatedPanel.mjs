@@ -7,7 +7,7 @@
 import { html } from './vendor/arrow.js'
 import { reactive } from './vendor/arrow.js'
 import { highlight, blockLabel } from './Block.mjs'
-import { statusInfo } from './BlockList.mjs'
+import { statusInfo, categoryClass } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { avatarHTML } from './avatar.mjs'
@@ -1565,24 +1565,15 @@ const KIND_LABEL = {
 }
 
 // diffStatBadge shows, for a called method (or a test's covered method), how
-// many lines its definition adds/removes ("+A −R", green/red) instead of a
-// word label. A call/covered method into an unchanged file has no diff
-// (r.diff == null) → a grey "Ongewijzigd" badge. Also covers the class-level
+// many lines its definition adds/removes ("+A −R", green/red). Only rendered
+// when there IS a diff — a call/covered method into an unchanged file has no
+// diff (r.diff == null) and shows its "Ongewijzigd" status on the LEFT
+// instead (leftStatusBadge, below), not here. Also covers the class-level
 // callresolve kinds (model_usage/migration_model/data_provider) — they carry a
 // diff just like a method_call child.
 const DIFFSTAT_KINDS = new Set(['method_call', 'covers', 'model_usage', 'migration_model', 'data_provider'])
 function diffStatBadge(r) {
-  if (!DIFFSTAT_KINDS.has(r.kind)) return ''
-  if (!r.diff) {
-    return html`
-      <span
-        class="shrink-0 rounded-full bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500"
-        data-testid="related-diffstat"
-        title="Aangeroepen definitie is niet gewijzigd in deze PR"
-        >Ongewijzigd</span
-      >
-    `
-  }
+  if (!DIFFSTAT_KINDS.has(r.kind) || !r.diff) return ''
   return html`
     <span
       class="shrink-0 rounded-full bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums"
@@ -1592,6 +1583,41 @@ function diffStatBadge(r) {
       <span class="text-emerald-600 dark:text-emerald-400">+${() => r.diff.add}</span>
       <span class="text-rose-500 dark:text-rose-400">&#8722;${() => r.diff.del}</span>
     </span>
+  `
+}
+
+// leftStatusBadge renders the "Ongewijzigd" status LEFT of the child's title
+// (next to categoryBadge, see below) — moved here, on explicit request, from
+// the right-hand diffStatBadge slot it used to share: a call/covered method
+// into a file this PR doesn't touch has nothing to show on the right (no
+// +A −R diff), so its status now leads the header instead, next to the type
+// badge, rather than trailing after the other right-hand badges. A child that
+// DID change shows its diffStatBadge on the right instead (mutually
+// exclusive with this); a kind without a diff concept at all (a relation
+// child, e.g. event_listener) renders nothing here either.
+function leftStatusBadge(r) {
+  if (!DIFFSTAT_KINDS.has(r.kind) || r.diff) return ''
+  return html`
+    <span
+      class="shrink-0 rounded-full bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500"
+      data-testid="related-diffstat"
+      title="Aangeroepen definitie is niet gewijzigd in deze PR"
+      >Ongewijzigd</span
+    >
+  `
+}
+
+// categoryBadge renders the child's type/category badge (ACTION/CONTROLLER/…,
+// same style + colors as the top-level block card's left-hand badge, see
+// Block.mjs) LEFT of the child's title, mirroring the top-level card. Falls
+// back to "OTHER" — the same fallback categoryClass already applies to an
+// unrecognized category — for a child with no PR-block of its own (an
+// unchanged/synthetic call target was never scanned into a block, so it has
+// no real category).
+function categoryBadge(r) {
+  const cat = r.category || 'OTHER'
+  return html`
+    <span class="${'shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold tracking-wide ' + categoryClass(cat)}">${cat}</span>
   `
 }
 
@@ -1892,6 +1918,8 @@ function relatedCard(r, i, drill) {
     >
       <div class="border-b border-slate-100 dark:border-zinc-800/60 px-3 py-1.5">
         <div class="flex items-baseline gap-2">
+          ${() => categoryBadge(r)}
+          ${() => leftStatusBadge(r)}
           <span class="min-w-0 flex-1 truncate font-mono text-xs font-semibold text-slate-700 dark:text-zinc-300">${r.label}</span>
           ${() =>
             KIND_LABEL[r.kind]

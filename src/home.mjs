@@ -1530,6 +1530,11 @@ function relatedChildren(b) {
           file: kid.file,
           line: kid.line,
           kind,
+          // The child's own PR-block category (ACTION/CONTROLLER/…, see
+          // classify.go) — always available here since a relation child is by
+          // definition a real, both-changed PR block. Empty falls back to
+          // "OTHER" in the panel, mirroring the top-level block card.
+          category: kid.category || '',
           code,
           // True only while the lazy /api/code fetch is still in flight
           // (ensureCode sets kid.code to an object — even { error } — once it
@@ -1663,6 +1668,11 @@ function resolvedCallChildren(b) {
         file: r.childFile,
         line: r.childLine,
         kind: r.kind || 'method_call',
+        // Only a call whose definition is itself a PR block (prBlock) carries
+        // a real category — an unchanged/synthetic call target was never
+        // scanned into a block at all, so there's nothing to read. Empty
+        // falls back to "OTHER" in the panel, like the top-level block card.
+        category: prBlock ? prBlock.category || '' : '',
         code: r.childCode || '',
         // The code rides embedded in the callresolve row (no lazy fetch), so an
         // empty childCode is a final state — "geen code gevonden", never loading.
@@ -1810,6 +1820,9 @@ function resolvedTestCoverChildren(b, range) {
       file: r.coveredFile,
       line: r.coveredLine,
       kind: 'covers',
+      // Same rule as resolvedCallChildren: only present when the covered
+      // method is itself a PR block; empty otherwise → "OTHER" fallback.
+      category: prBlock ? prBlock.category || '' : '',
       code: r.coveredCode || '',
       // Embedded in the testcovers row (no lazy fetch) — empty means final,
       // mirroring resolvedCallChildren.
@@ -1864,6 +1877,9 @@ function coveredByChildren(b, range) {
       file: test.file,
       line: test.line,
       kind: 'covered_by',
+      // The covering test is always a real PR block (a test_covers row only
+      // exists for a test this PR changed), so its category is always known.
+      category: test.category || '',
       code,
       // Lazy PR-block code, same rule as the relation children above: loading
       // only while ensureCode's fetch is still in flight.
@@ -2016,6 +2032,11 @@ function nestedChangedKids(prBlock, parentId, seen = new Set(), depth = 0) {
       file: kid.file,
       line: kid.line,
       status: kid.status,
+      // A chip target is always a real PR block (directChildBlocks only
+      // returns those), so its category is always known — carried along for
+      // parity with the other descriptor builders, even though the chip's
+      // own compact layout (RelatedPanel.mjs' nestedChip) doesn't render it.
+      category: kid.category || '',
       approve,
       // Precomputed strings, not a conditional template — always the same
       // rendered shape, hidden via class rather than omitted.
