@@ -111,10 +111,13 @@ dat tevens de comment-id is), die **Activities** draait en op **Signals** reagee
   - `modules/github` — de GitHub-communicatie (`gh api`): `PostReviewComment`
     (regel-range + side, zie hieronder), `Reply`, `FetchReplies`, `PRState`
     (`open`/`merged`/`closed`), `PRMeta` (titel/URL/body/author/diff-stats/head-ref),
-    `DeleteComment`, `MarkFileViewed` (het Files-changed-"Viewed"-vinkje, via
+    `DeleteComment`, `ResolveReviewThread` (resolvet een review-diff-thread op
+    GitHub, via `gh api graphql` — thread-node-ID opgezocht op de
+    root-comment-`databaseId`, dan de `resolveReviewThread`-mutatie),
+    `MarkFileViewed` (het Files-changed-"Viewed"-vinkje, via
     `gh api graphql`). Interface `github.Client` + `github.Fake` (met `SetPRState`,
     `IsViewed`/`ViewedFiles`, `LastStartLine`/`LastEndLine`/`LastSide`/
-    `LastPostedBody`) voor tests.
+    `LastPostedBody`, `ResolvedThreadCount`/`LastResolvedThread`) voor tests.
   - `modules/jira` — de Jira-communicatie via de lokale `acli`-CLI (zelfde
     bridge-patroon als `modules/github`/`modules/claude`, geen nieuwe
     dependency): `Issue(key)` draait `acli jira workitem view <key> --fields
@@ -408,9 +411,19 @@ replies worden binnengepolld), i.p.v. read-only kopieën.
   `review`):** echo-preventie ongewijzigd (alleen `Source == "ui"` mirror't naar
   GitHub, `github`-sourced replies niet), maar het **mirror-pad** hangt af van de
   thread:
-  - **Review-diff thread** (`Kind ""`): een reply (en een `/resolve`) mirror't als
-    **review-reply** (`replyGithub` → `pulls/{pr}/comments/{rootId}/replies`),
-    ongewijzigd.
+  - **Review-diff thread** (`Kind ""`): een **echte** reply-body mirror't als
+    **review-reply** (`replyGithub` → `pulls/{pr}/comments/{rootId}/replies`). Een
+    **resolve** (`Done`) resolvet de conversatie **op GitHub** (Activity
+    `resolveGithubThread` → `github.Client.ResolveReviewThread`, dat via
+    `gh api graphql` het review-thread-node-ID opzoekt op basis van de
+    root-comment-`databaseId` en de `resolveReviewThread`-mutatie draait). De
+    **`"/resolve"`-sentinel-body** (gestuurd door een kale resolve, zie
+    `resolveFocusedComment`/`sendReaction` in `RelatedPanel.mjs` en het
+    `COMMENT_COMMANDS`-"Resolve comment"-item) wordt **nooit** als tekst gepost —
+    de reply-lus post alleen een niet-lege, niet-sentinel body
+    (`body != "" && body != "/resolve"`), en resolvet daarna (als `Done`) de
+    thread. Determinisme blijft intact: het aantal `ExecuteActivity`-calls hangt
+    puur van de Signal-input (`r.Body`/`r.Done`) af.
   - **PR-brede thread** (`isPRWide`): PR-brede comments (issue-comments/review-
     summary's) hebben op GitHub **geen reply-thread** — een reply wordt daarom
     gemirror'd als een **nieuwe issue-comment** op de platte PR-conversatie

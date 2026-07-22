@@ -9,17 +9,18 @@ import (
 // Fake is an in-memory Client for tests and local (no-gh) runs. It records
 // posted comments/replies and returns whatever replies the test enqueues.
 type Fake struct {
-	mu             sync.Mutex
-	nextID         int64
-	Posted         []string // review comment/reply bodies posted, in order
-	IssuePosted    []string // issue-comment bodies posted (PR-wide replies), in order
-	Deleted        []int64  // comment IDs deleted, in order
-	replies        []Reply
-	reviewComments []ReviewComment
-	general        []GeneralComment
-	prState        string          // "" reads as "open"
-	prMeta         Meta            // returned by PRMeta (SetPRMeta overrides)
-	viewed         map[string]bool // "pr|path" -> viewed
+	mu              sync.Mutex
+	nextID          int64
+	Posted          []string // review comment/reply bodies posted, in order
+	IssuePosted     []string // issue-comment bodies posted (PR-wide replies), in order
+	Deleted         []int64  // comment IDs deleted, in order
+	ResolvedThreads []int64  // root comment IDs whose thread was resolved, in order
+	replies         []Reply
+	reviewComments  []ReviewComment
+	general         []GeneralComment
+	prState         string          // "" reads as "open"
+	prMeta          Meta            // returned by PRMeta (SetPRMeta overrides)
+	viewed          map[string]bool // "pr|path" -> viewed
 
 	lastStartLine int
 	lastEndLine   int
@@ -194,6 +195,31 @@ func (f *Fake) DeletedCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.Deleted)
+}
+
+func (f *Fake) ResolveReviewThread(_ context.Context, pr int, commentID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ResolvedThreads = append(f.ResolvedThreads, commentID)
+	return nil
+}
+
+// ResolvedThreadCount returns how many review threads have been resolved.
+func (f *Fake) ResolvedThreadCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.ResolvedThreads)
+}
+
+// LastResolvedThread returns the root comment ID of the most recently resolved
+// thread (0 if none).
+func (f *Fake) LastResolvedThread() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.ResolvedThreads) == 0 {
+		return 0
+	}
+	return f.ResolvedThreads[len(f.ResolvedThreads)-1]
 }
 
 func viewedKey(pr int, path string) string {

@@ -997,6 +997,28 @@ export async function deleteFocusedComment() {
   }
 }
 
+// resolveFocusedComment resolves the focused comment's thread. It reuses the
+// same "reply" Signal as a thread reply (done:true, an empty "/resolve" body):
+// the workflow flips the read-model status to "resolved" and, for a review-diff
+// thread, resolves the conversation on GitHub too (the "/resolve" sentinel body
+// is never posted as text). PR-wide threads have no GitHub resolve, so it stays
+// local-only there.
+export async function resolveFocusedComment() {
+  const c = selComment()
+  if (!c || !c.runId) return
+  cs.busy = true
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ author: 'reviewer', body: '/resolve', done: true }),
+    })
+    await loadComments(cs.pr)
+  } finally {
+    cs.busy = false
+  }
+}
+
 async function loadComments(pr) {
   if (pr == null) return
   try {

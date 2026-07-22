@@ -539,6 +539,27 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, nil
 	})
 
+	// Activity: resolve ("Resolve conversation") the GitHub review-diff thread of
+	// a comment when the reviewer resolves it in the app (best-effort). A PR-wide
+	// thread has no GitHub resolve concept, so this is only called for review-diff
+	// threads.
+	engine.RegisterActivity("resolveGithubThread", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR     int   `json:"pr"`
+			RootID int64 `json:"rootId"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if arg.RootID == 0 {
+			return nil, nil
+		}
+		if err := gh.ResolveReviewThread(ctx, arg.PR, arg.RootID); err != nil {
+			m.logf("task_code_comment: github resolve thread skipped: %v", err)
+		}
+		return nil, nil
+	})
+
 	// Activity: post a reply to a PR-wide (issue/review-summary) thread as a NEW
 	// issue comment on the PR's flat conversation (best-effort). PR-wide comments
 	// have no reply thread on GitHub, so this is how a reply is mirrored. Returns
@@ -1810,8 +1831,11 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		//     the flat PR conversation (there is no reply thread on GitHub); a
 		//     resolve (Done) is local-only — GitHub has no resolve for these, so
 		//     it never touches GitHub.
-		//   - Review-diff thread: a reply (and a "/resolve") mirrors as a review
-		//     reply, unchanged.
+		//   - Review-diff thread: a real reply body mirrors as a review reply; a
+		//     resolve (Done) resolves the conversation on GitHub via the GraphQL
+		//     mutation. The "/resolve" sentinel body (sent by a bare resolve, see
+		//     sendReaction/resolveFocusedComment in RelatedPanel.mjs) is not posted
+		//     as text — it only carries the intent to resolve.
 		if r.Source == "ui" {
 			if isPRWide(in.Kind) {
 				if !r.Done {
@@ -1820,9 +1844,16 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 					}, nil)
 				}
 			} else {
-				_ = w.ExecuteActivity("replyGithub", map[string]any{
-					"pr": in.PR, "rootId": posted.RootID, "body": r.Body,
-				}, nil)
+				if body := strings.TrimSpace(r.Body); body != "" && body != "/resolve" {
+					_ = w.ExecuteActivity("replyGithub", map[string]any{
+						"pr": in.PR, "rootId": posted.RootID, "body": r.Body,
+					}, nil)
+				}
+				if r.Done {
+					_ = w.ExecuteActivity("resolveGithubThread", map[string]any{
+						"pr": in.PR, "rootId": posted.RootID,
+					}, nil)
+				}
 			}
 		}
 		if r.Done {

@@ -152,6 +152,51 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 	}
 }
 
+// A UI resolve of a review-diff thread resolves the conversation on GitHub via
+// ResolveReviewThread, flips the read-model status to resolved, and never posts
+// the "/resolve" sentinel as a reply comment.
+func TestTaskCodeCommentUIResolveResolvesGithubThread(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reindert",
+		Body: "Check this.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The initial comment posts one review comment (root id 1).
+	if gh.PostedCount() != 1 {
+		t.Fatalf("github posted %d, want 1", gh.PostedCount())
+	}
+
+	// A UI resolve: done, body is the "/resolve" sentinel.
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-r", Source: "ui", Author: "reindert", Body: "/resolve", Done: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		s, _ := m.engine.Status(runID)
+		return s == tembed.StatusCompleted
+	})
+
+	// The GitHub conversation was resolved for the root comment id (1)...
+	if gh.ResolvedThreadCount() != 1 || gh.LastResolvedThread() != 1 {
+		t.Fatalf("resolved threads = %d (last %d), want 1 (1)", gh.ResolvedThreadCount(), gh.LastResolvedThread())
+	}
+	// ...and the "/resolve" sentinel was NOT posted as a reply.
+	if gh.PostedCount() != 1 {
+		t.Fatalf("github posted %d, want 1 (no /resolve text)", gh.PostedCount())
+	}
+	l, _ := cs.List(ctx, 42)
+	if len(l) != 1 || l[0].Status != "resolved" {
+		t.Fatalf("comments = %+v, want one resolved", l)
+	}
+}
+
 // A group comment posts as a multi-line range on the RIGHT side.
 func TestTaskCodeCommentGroupRange(t *testing.T) {
 	m, gh, _ := newTestManager(t)

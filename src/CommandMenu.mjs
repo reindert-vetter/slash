@@ -78,7 +78,7 @@ export default function CommandMenu(menu, resolve, onRun) {
       <div class="flex items-start gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2">
         <span class="mt-1.5 font-mono text-sm font-bold text-indigo-400">/</span>
         <textarea
-          class="min-h-[1.8rem] flex-1 resize-none bg-transparent py-1 text-sm leading-relaxed text-slate-800 dark:text-zinc-200 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
+          class="no-scrollbar min-h-[1.8rem] flex-1 resize-none bg-transparent py-1 text-sm leading-relaxed text-slate-800 dark:text-zinc-200 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
           rows="1"
           placeholder="${() =>
             // The compose-kind menu anchors on the (narrow) comment pane, where

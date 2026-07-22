@@ -425,7 +425,8 @@ laatste test in `tests/postapprove-menu.spec.mjs`
 Hetzelfde menu-mechanisme bedient ook een **comment-scoped** variant: staat de
 keyboard op een geplaatste comment-rij in `RelatedPanel` (`cs.focus === 'comment'`,
 vóór het instappen in de thread) én is het reply-veld nog **leeg**, dan opent
-`Enter` niet de block-palette maar een menu met alleen **"Verwijder comment"**
+`Enter` niet de block-palette maar een menu met twee keuzes — **"Resolve
+comment"** (het default/eerste item) en **"Verwijder comment"**
 (`menu.mode = 'comment'`, `COMMENT_COMMANDS` in `home.mjs`; `resolveCommands`
 schakelt op `menu.mode` om, `openMenu(mode)` zet 'm, `closeMenu` reset 'm terug
 naar `'block'`). Een **niet-leeg** reply-veld laat `Enter` met rust — dan wint het
@@ -445,6 +446,18 @@ en rondt de Execution af. Een `delete`-verzoek rijdt mee op hetzelfde
 verwijderen) — een workflow kan namelijk maar op één Signal-naam tegelijk
 `WaitSignal`-en, dus dit moet als een te onderscheiden variant van de bestaande
 reacties-lus binnenkomen, niet als een eigen Signal-naam.
+Kiezen van **"Resolve comment"** roept `resolveFocusedComment` aan: die stuurt —
+net als een thread-reply — een **`reply`-Signal** met `done:true` en de
+sentinel-body `"/resolve"`. De workflow zet de read-model-status op `resolved`
+(via `saveReaction`'s `Resolves`-vlag) én, voor een **review-diff-thread**,
+resolvet de conversatie **ook op GitHub** (Activity `resolveGithubThread` →
+`github.Client.ResolveReviewThread`, dat via `gh api graphql` het
+review-thread-node-ID opzoekt op basis van de root-comment-`databaseId` en de
+`resolveReviewThread`-mutatie draait). De `"/resolve"`-sentinel-body wordt
+**nooit** als tekst-reply geplaatst — de reply-lus post alleen een echte,
+niet-sentinel body. Een **PR-brede** thread (issue/review-summary) heeft geen
+GitHub-resolve-concept, dus daar blijft resolve local-only (zie
+`.claude/rules/tembed-workflows.md`).
 
 Datzelfde `CommandMenu`-mechanisme bedient ook een **comment-soort-menu**
 (`menu.mode = 'compose'`, `COMPOSE_COMMANDS` in `home.mjs`): staat de composer

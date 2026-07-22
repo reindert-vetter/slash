@@ -94,6 +94,11 @@ type Client interface {
 	PRMeta(ctx context.Context, pr int) (Meta, error)
 	// DeleteComment removes a review comment (the root of a thread) from the PR.
 	DeleteComment(ctx context.Context, pr int, commentID int64) error
+	// ResolveReviewThread resolves ("Resolve conversation") the review-diff
+	// thread whose root comment has REST id commentID. It is a no-op if no such
+	// thread is found. GitHub only supports resolving review-diff threads, not
+	// PR-wide issue comments.
+	ResolveReviewThread(ctx context.Context, pr int, commentID int64) error
 	// MarkFileViewed sets (viewed=true) or clears (viewed=false) the "Viewed"
 	// checkbox for path in the Files-changed tab of pr.
 	MarkFileViewed(ctx context.Context, pr int, path string, viewed bool) error
@@ -363,6 +368,79 @@ func (m *Module) DeleteComment(ctx context.Context, pr int, commentID int64) err
 	_, err := m.api(ctx, "DELETE",
 		fmt.Sprintf("repos/%s/pulls/comments/%d", m.repo, commentID))
 	return err
+}
+
+// ResolveReviewThread resolves the review thread whose root comment has REST id
+// commentID. GitHub's REST API has no such endpoint, so this goes through the
+// GraphQL API: first find the review thread's global node ID by matching the
+// commentID against each thread's root comment databaseId, then run the
+// resolveReviewThread mutation. No-op if the comment/thread cannot be found.
+func (m *Module) ResolveReviewThread(ctx context.Context, pr int, commentID int64) error {
+	owner, name, ok := strings.Cut(m.repo, "/")
+	if !ok {
+		return fmt.Errorf("invalid repo slug %q", m.repo)
+	}
+	threadID, err := m.reviewThreadID(ctx, owner, name, pr, commentID)
+	if err != nil {
+		return err
+	}
+	if threadID == "" {
+		return nil // no matching thread on GitHub — nothing to resolve
+	}
+	const mutation = `mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}`
+	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
+		"-f", "query="+mutation,
+		"-F", "id="+threadID,
+	)
+	if out, err := cmd.Output(); err != nil {
+		return fmt.Errorf("gh api graphql resolveReviewThread: %w (%s)", err, out)
+	}
+	return nil
+}
+
+// reviewThreadID returns the GraphQL node ID of the review thread whose root
+// comment has REST id commentID, or "" if none matches.
+func (m *Module) reviewThreadID(ctx context.Context, owner, name string, pr int, commentID int64) (string, error) {
+	const query = `query($o:String!,$n:String!,$pr:Int!){repository(owner:$o,name:$n){pullRequest(number:$pr){reviewThreads(first:100){nodes{id comments(first:1){nodes{databaseId}}}}}}}`
+	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
+		"-f", "query="+query,
+		"-F", "o="+owner,
+		"-F", "n="+name,
+		"-F", "pr="+strconv.Itoa(pr),
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("gh api graphql review threads: %w", err)
+	}
+	var res struct {
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					ReviewThreads struct {
+						Nodes []struct {
+							ID       string `json:"id"`
+							Comments struct {
+								Nodes []struct {
+									DatabaseID int64 `json:"databaseId"`
+								} `json:"nodes"`
+							} `json:"comments"`
+						} `json:"nodes"`
+					} `json:"reviewThreads"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		return "", fmt.Errorf("parse review threads: %w", err)
+	}
+	for _, t := range res.Data.Repository.PullRequest.ReviewThreads.Nodes {
+		for _, c := range t.Comments.Nodes {
+			if c.DatabaseID == commentID {
+				return t.ID, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // MarkFileViewed sets or clears the "Viewed" checkbox for path in the PR's

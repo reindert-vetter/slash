@@ -52,9 +52,13 @@ test.describe('PR Review Tree — delete a comment', () => {
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     const rows = page.getByTestId('command-row')
-    await expect(rows).toHaveCount(1)
-    await expect(rows.first()).toContainText('Verwijder comment')
+    // Two items: "Resolve comment" (default, first) and "Verwijder comment".
+    await expect(rows).toHaveCount(2)
+    await expect(rows.first()).toContainText('Resolve comment')
+    await expect(rows.nth(1)).toContainText('Verwijder comment')
 
+    // Move to the delete row before running it (resolve is the default).
+    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('Enter')
     await expect(menu).not.toBeVisible()
 
@@ -98,5 +102,36 @@ test.describe('PR Review Tree — delete a comment', () => {
         return c && c.reactionCount
       })
       .toBe(1)
+  })
+
+  test('choosing "Resolve comment" resolves the comment (status resolved)', async ({ page }) => {
+    const body = 'resolve-mij ' + Math.random().toString(36).slice(2)
+    const runId = await seedComment(page, body)
+
+    await page.goto('/pr/' + PR)
+    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await page.keyboard.press('Meta+ArrowRight')
+    const row = page.getByTestId('comment-item').filter({ hasText: body })
+    await expect(row).toBeVisible()
+    await row.click()
+
+    await expect(page.getByTestId('reaction-compose')).toBeFocused()
+    await expect(page.getByTestId('reaction-compose')).toHaveValue('')
+
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    // "Resolve comment" is the default (first) item — a plain Enter runs it.
+    await expect(page.getByTestId('command-row').first()).toContainText('Resolve comment')
+    await page.keyboard.press('Enter')
+    await expect(menu).not.toBeVisible()
+
+    await expect
+      .poll(async () => {
+        const list = await (await page.request.get('/api/comments?pr=' + PR)).json()
+        const c = list.find((x) => x.id === runId)
+        return c && c.status
+      })
+      .toBe('resolved')
   })
 })
