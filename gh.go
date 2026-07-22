@@ -10,11 +10,41 @@ import (
 	"strings"
 )
 
-// repoDir is the local clone of plug-and-pay/plug-and-pay.
-const repoDir = "/Users/reindert/dev/plug-and-pay"
-
 // repoSlug for gh --repo.
 const repoSlug = "plug-and-pay/plug-and-pay"
+
+// defaultRepoDir is the fallback local clone of plug-and-pay/plug-and-pay when
+// SLASH_REPO_DIR is not set. Tilde-expanded via os.UserHomeDir() so it works
+// for any user, not just a hardcoded home path.
+const defaultRepoDir = "~/dev/plug-and-pay"
+
+// repoDir resolves the local clone path: SLASH_REPO_DIR (env) overrides,
+// otherwise defaultRepoDir. A leading "~" is expanded to the user's home dir
+// (Go's exec/os do not expand "~" themselves), so SLASH_REPO_DIR=~/dev/foo
+// works too.
+func repoDir() string {
+	dir := os.Getenv("SLASH_REPO_DIR")
+	if dir == "" {
+		dir = defaultRepoDir
+	}
+	return expandTilde(dir)
+}
+
+// expandTilde replaces a leading "~" (bare or "~/…") with the user's home dir.
+// On failure to resolve the home dir it returns the path unchanged.
+func expandTilde(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return home + path[1:]
+}
 
 // prFile is one changed file from `gh pr view`.
 type prFile struct {
@@ -33,7 +63,7 @@ type prMeta struct {
 
 // runGit runs a git command in repoDir with separate args + context timeout.
 func runGit(ctx context.Context, args ...string) ([]byte, error) {
-	full := append([]string{"-C", repoDir}, args...)
+	full := append([]string{"-C", repoDir()}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

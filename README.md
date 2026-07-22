@@ -98,6 +98,9 @@ Then open <http://localhost:8765/pr-overview> for the inbox, or
 
 - `-db <path>` / `SLASH_DB` — SQLite DB path (default `data/graph.db`).
 - `-addr host:port` — listen address (default `127.0.0.1:8765`).
+- `SLASH_REPO_DIR` — local clone of the target repo used for git/worktree
+  operations (default `~/dev/plug-and-pay`; a leading `~` is expanded to your
+  home dir).
 - `SLASH_GITHUB=off` — serve inbox data from a fixture instead of hitting GitHub.
 - `SLASH_CLAUDE=off` — disable the LLM call-resolution fallback.
 

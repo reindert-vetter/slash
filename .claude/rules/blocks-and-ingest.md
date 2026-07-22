@@ -497,7 +497,11 @@ navigeerbare lijst tonen.
   `tasks_api.go`) en meteen daarna `EnsureRelations`, net als de HTTP-flow. De
   server-kant is `POST /api/ingest {"pr":N}` (`handleIngest` → `StartIngest` →
   `EnsureRelations`). Server: `go run . [-db path] [-addr host:port]
-  [-static dir]`. DB-pad ook via `SLASH_DB`. Serve: `GET /api/blocks?pr=N`
+  [-static dir]`. DB-pad ook via `SLASH_DB`. **De lokale clone** waarin alle
+  git/worktree-operaties draaien (`repoDir()` in `gh.go`) komt uit
+  **`SLASH_REPO_DIR`** (env), met als default `~/dev/plug-and-pay` — een
+  leidende `~` wordt via `os.UserHomeDir()` geëxpandeerd, dus `SLASH_REPO_DIR=
+  ~/dev/...` werkt ook. Serve: `GET /api/blocks?pr=N`
   (delta) en `GET /api/code?pr=N&file=..&class=..&name=..` (de oude + nieuwe
   source van één block, uit de base/head worktrees — voor de side-by-side diff
   onder de block-info; `file` moet een opgeslagen block van die PR zijn). De
