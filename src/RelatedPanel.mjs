@@ -217,8 +217,11 @@ function selComment() {
 }
 
 // commentRowSet returns the aligned-diff rows of block b that carry a comment, so
-// Block can mark them with a 💬 (presence only — the count doesn't matter). Reads
-// cs.list, so it re-runs as comments load. Comments with an unknown anchor
+// Block can mark them with a 💬 (presence only — the count doesn't matter, and
+// only an *open* comment counts: a resolved one is done, so it no longer marks
+// its row — only if every comment on that row is resolved does the icon
+// actually disappear, a row with a mix keeps it). Reads cs.list, so it re-runs
+// as comments load/change (e.g. a resolve). Comments with an unknown anchor
 // (rowStart < 0) sit on no row, so they're skipped here (they still show in the
 // index). Exported for home.mjs → Block(commentedRows).
 export function commentRowSet(b) {
@@ -226,6 +229,7 @@ export function commentRowSet(b) {
   if (!b) return set
   for (const c of cs.list) {
     if (c.file !== b.file || c.label !== b.label) continue
+    if (c.status === 'resolved') continue
     if (c.rowStart == null || c.rowStart < 0) continue
     for (let i = c.rowStart; i <= c.rowEnd; i++) set.add(i)
   }

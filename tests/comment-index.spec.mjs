@@ -80,4 +80,41 @@ test.describe('PR Review Tree — comment index scoping', () => {
     await expect(item).toHaveCount(1)
     await expect(page.getByTestId('block-column').locator('[data-comment]').first()).toBeVisible()
   })
+
+  test('resolving a comment removes its 💬 marker', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await ready(page)
+    const first = await ident(page)
+
+    const created = await page.request.post('/api/workflows/task_code_comment', {
+      data: {
+        pr: 12903,
+        file: first.file,
+        line: 1,
+        author: 'reviewer',
+        body: 'resolve me',
+        label: first.label,
+        gran: 'group',
+        rowStart: 0,
+        rowEnd: 0,
+      },
+    })
+    expect(created.ok()).toBeTruthy()
+    const { runId } = await created.json()
+    expect(runId).toBeTruthy()
+
+    await page.goto('/pr/12903?sel=' + encodeURIComponent(first.fileLine))
+    await waitBlock(page, first.label)
+
+    const marker = page.getByTestId('block-column').locator('[data-comment]').first()
+    await expect(marker).toBeVisible()
+
+    const resolved = await page.request.post(`/api/workflows/${runId}/signals/reply`, {
+      data: { author: 'reviewer', body: 'klaar', done: true },
+    })
+    expect(resolved.ok()).toBeTruthy()
+
+    // syncComments polls cs.list; the marker disappears reactively once it refetches.
+    await expect(marker).toBeHidden({ timeout: 15000 })
+  })
 })
