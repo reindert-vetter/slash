@@ -170,11 +170,15 @@ zodat "Onderliggende code" bij korte code-excerpts **altijd** even breed is als
 de kolom ernaast i.p.v. smaller (was `w-[34rem] 2xl:w-[41rem]`, bewust de helft
 van één pane van de side-by-side diff — dat gaf op een eenzijdig/genarrowd
 block twee zichtbaar ongelijke kolombreedtes naast elkaar, zie de
-screenshot-issue die tot deze wijziging leidde); een lang, niet-wrappend
-code-excerpt in een van de zichtbare kinderen laat de kolom er sindsdien
-**voorbij** die vloer meegroeien, met een ceiling gelijk aan de volle
-block-kolom (`w-[70rem] 2xl:w-[82rem]`) — die symmetrie met de buurkolom is
-dus bewust **niet langer gegarandeerd** zodra er iets breeds in staat) —
+screenshot-issue die tot deze wijziging leidde); een genuinely brede,
+niet-wrappende code-body in een van de zichtbare kinderen laat de kolom er
+sindsdien **voorbij** die vloer meegroeien, met een ceiling die bewust
+**onder** de volle block-kolom blijft (`w-[56rem] 2xl:w-[65rem]`, i.p.v. de
+`w-[70rem] 2xl:w-[82rem]` van de block-kolom zelf — een eerdere, even hoge
+ceiling liet deze kaart bij één toevallige lange regel de halve
+schermbreedte innemen, wat als bug werd gemeld) — die symmetrie met de
+buurkolom is dus bewust **niet langer gegarandeerd** zodra er iets breeds in
+staat) —
 stop 5 van de nav-keten, ongewijzigd inline in `<main>`'s horizontaal
 scrollende kolom-flow (zie "Onderliggende code" verderop). Comments en Taken
 zitten **niet** meer in deze kolom-flow — zie de sectie
@@ -918,25 +922,37 @@ rechts — zie de layout-alinea hierboven):
   (`min-h-0`, body `flex-1 overflow-auto`). De code-excerpts **wrappen** (geen
   horizontale scroll: `whitespace-pre-wrap break-words`) — maar de **kolom**
   zelf groeit sindsdien mee als dat wrappen anders lelijk zou uitpakken op een
-  echt lange code-regel: `relatedColumnWidthCls` (`RelatedPanel.mjs`) maakt de
-  breedte van de **hele** Onderliggende-code-kolom (niet per kaart) een
+  genuinely brede code-body: `relatedColumnWidthCls` (`RelatedPanel.mjs`) maakt
+  de breedte van de **hele** Onderliggende-code-kolom (niet per kaart) een
   reactieve `${() => …}`-class-binding op de `<section data-testid=
   related-code>` i.p.v. de statische `w-[42rem] 2xl:w-[49.2rem]`-string van
-  voorheen: hij neemt de langste **niet-comment**-coderegel over alle op dat
-  moment getoonde hoofdkaarten (`rc.children`, exclusief de `tests_group`-
-  balk — genestelde chips en de drill-preview-kolom blijven ongemoeid op hun
-  eigen, vaste `w-72`) en zet dat aantal tekens om in een CSS `clamp(min,
-  calc(Nch + 2rem), max)`-breedte: de `ch`-eenheid is de exacte
+  voorheen: hij neemt een **representatieve niet-comment**-coderegel over alle
+  op dat moment getoonde hoofdkaarten (`rc.children`, exclusief de
+  `tests_group`-balk — genestelde chips en de drill-preview-kolom blijven
+  ongemoeid op hun eigen, vaste `w-72`) en zet dat aantal tekens om in een CSS
+  `clamp(min, calc(Nch + 2rem), max)`-breedte: de `ch`-eenheid is de exacte
   glyph-breedte van een monospace-teken, dus dit is **puur een berekening op
   het reeds bekende teken-aantal** — geen live DOM-meting (`scrollWidth`/
   `getBoundingClientRect`) die zou kunnen racen met een render/layout-pass.
-  `min` is de bestaande default-vloer (`42rem`/`49.2rem`), `max` de ceiling
-  (`70rem`/`82rem`, gelijk aan de volle block-kolom) — `clamp()` vangt zowel
+  `min` is de bestaande default-vloer (`42rem`/`49.2rem`), `max` een ceiling
+  die bewust **onder** de volle block-kolom blijft (`56rem`/`65rem`, i.p.v.
+  diens `70rem`/`82rem` — een lang enkel woord/regel gaf anders "de halve
+  schermbreedte"-uitpakken, wat als bug werd gemeld) — `clamp()` vangt zowel
   "geen code" als "alles is korter dan de vloer" gratis op (de `calc()`-uitkomst
   valt dan gewoon onder de vloer). **Comment-regels tellen bewust niet mee**
   (`codeGrowthChars`, een regex/state-machine-scan die een leidende PHPDoc-
-  blok, `//`/`#`-regels en tussenliggende `*`-vervolgregels overslaat) — een
-  lange, proza-achtige commentaarregel wrapt keurig en mag de kolom niet
+  blok, `//`/`#`-regels en tussenliggende `*`-vervolgregels overslaat), en
+  **niet de langste regel telt, maar het 75e percentiel** van de overgebleven
+  regellengtes (nearest-rank): een enkele extreem lange uitschieter-regel
+  (bv. één lange `Cache::remember(...)`-call in een verder normale methode)
+  mag de kolom niet in z'n eentje naar de ceiling duwen — die regel wrapt dan
+  gewoon (`whitespace-pre-wrap break-words`, zie hierboven). De kale mediaan
+  bleek in de praktijk te agressief de andere kant op: bij een methode van
+  maar 3-4 echte inhoudsregels trekken de losse `{`/`}`-regels de mediaan naar
+  bijna 0, ook als de methode zelf best breed is. Het 75e percentiel is het
+  midden: het weerspiegelt nog steeds de bredere helft van een methode's
+  echte inhoud, zonder gegijzeld te worden door de ene langste regel. Een
+  lange, proza-achtige commentaarregel wrapt keurig en mag de kolom nooit
   oprekken, alleen echte code-regels (lange method-chains, brede
   return-types, …) doen dat. Reageert alleen op `rc.children` — dezelfde
   platte snapshot die `kids()` al leest — dus dit introduceert geen nieuwe

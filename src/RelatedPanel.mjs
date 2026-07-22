@@ -1777,20 +1777,31 @@ function nestedChipColumn(ancestors, kids, drill, path, cardIdx) {
   `
 }
 
-// codeGrowthChars — the length (trailing whitespace stripped) of the longest
-// line in `code` that is NOT part of a comment. Comment lines (a leading
-// PHPDoc block, `//`/`#` line comments) are free-form prose and must never
-// make the "Onderliggende code" column grow — only real PHP code lines may
-// (see the width discussion in detail-layout.md). Deterministic, regex/
-// state-machine based (no parser, matching the rest of this codebase's
-// PHP-adjacent heuristics, e.g. phpscan.go's PHPDoc detection) and — load-
-// bearing — no live DOM measurement: it only counts characters in the raw
-// source string, so it can run inside a reactive binding without racing any
-// render/layout pass.
+// codeGrowthChars — a REPRESENTATIVE non-comment line length in `code`, not
+// the single longest line. Comment lines (a leading PHPDoc block, `//`/`#`
+// line comments) are free-form prose and must never make the "Onderliggende
+// code" column grow — only real PHP code lines may (see the width discussion
+// in detail-layout.md). Deterministic, regex/state-machine based (no parser,
+// matching the rest of this codebase's PHP-adjacent heuristics, e.g.
+// phpscan.go's PHPDoc detection) and — load-bearing — no live DOM
+// measurement: it only counts characters in the raw source string, so it can
+// run inside a reactive binding without racing any render/layout pass.
+//
+// A single outlier line (one exceptionally long call, e.g. a
+// `Cache::remember(...)` one-liner buried in an otherwise normal-width
+// method) must not alone dictate the column width — that stretched a whole
+// card to the ceiling for one wrapping-worthy line while the rest of the
+// method was perfectly narrow. The plain median turned out too aggressive
+// the other way: a method's brace-only lines (`{`/`}`) drag the middle value
+// down to almost nothing even for a genuinely wide method (with as few as
+// 3-4 real content lines, the median lands on one of those single-char
+// lines). The 75th percentile (nearest-rank) is the middle ground: it still
+// reflects the wider half of a method's real content lines without being
+// hostage to its single longest line.
 function codeGrowthChars(code) {
   if (!code) return 0
   let inBlockComment = false
-  let max = 0
+  const lens = []
   for (const raw of code.split('\n')) {
     const line = raw.replace(/\s+$/, '')
     const trimmed = line.trim()
@@ -1804,27 +1815,34 @@ function codeGrowthChars(code) {
       if (!trimmed.endsWith('*/')) inBlockComment = true
       continue
     }
-    if (line.length > max) max = line.length
+    lens.push(line.length)
   }
-  return max
+  if (lens.length === 0) return 0
+  lens.sort((a, b) => a - b)
+  const idx = Math.min(lens.length - 1, Math.max(0, Math.ceil(0.75 * lens.length) - 1))
+  return lens[idx]
 }
 
 // relatedColumnWidthCls — the reactive width of the WHOLE Onderliggende-code
-// column (not per-card): it grows with the longest non-comment code line
+// column (not per-card): it grows with a representative non-comment code
+// line (codeGrowthChars — the 75th percentile, not the single longest line)
 // across every currently listed main card (rc.children, excluding the
 // tests_group toggle bar — nested chips/the preview column are untouched,
 // see detail-layout.md), clamped between the narrow default
-// (w-[42rem] 2xl:w-[49.2rem], same as a one-sided/`a`-narrowed block) and the
-// full diff-block-column width (w-[70rem] 2xl:w-[82rem]) as a ceiling. Uses
-// the CSS `ch` unit (the exact advance width of a monospace glyph) rather
-// than a hand-picked px-per-char ratio — still zero live measurement, `ch` is
-// resolved by the browser's layout engine from the char count we already
-// computed, not from reading back a rendered node's size. `clamp()` handles
-// the "no code yet / all comment" case for free (calc() then evaluates below
-// the floor). Reads only rc.children — a plain snapshot pushed by setRelated,
-// never the selected block's own `b.code` — so this cannot co-subscribe with
-// the diff render (see the stuck-on-loading pitfall in conventions.md); it is
-// exactly the same kind of read `kids()` below already does.
+// (w-[42rem] 2xl:w-[49.2rem], same as a one-sided/`a`-narrowed block) and a
+// ceiling well short of the full diff-block-column width
+// (w-[56rem] 2xl:w-[65rem] — a lower ceiling than the block column itself, so
+// this card never eats up "half the screen" the way a single very wide
+// method's card could before). Uses the CSS `ch` unit (the exact advance
+// width of a monospace glyph) rather than a hand-picked px-per-char ratio —
+// still zero live measurement, `ch` is resolved by the browser's layout
+// engine from the char count we already computed, not from reading back a
+// rendered node's size. `clamp()` handles the "no code yet / all comment"
+// case for free (calc() then evaluates below the floor). Reads only
+// rc.children — a plain snapshot pushed by setRelated, never the selected
+// block's own `b.code` — so this cannot co-subscribe with the diff render
+// (see the stuck-on-loading pitfall in conventions.md); it is exactly the
+// same kind of read `kids()` below already does.
 function relatedColumnWidthCls() {
   let chars = 0
   for (const r of rc.children) {
@@ -1833,8 +1851,8 @@ function relatedColumnWidthCls() {
     if (c > chars) chars = c
   }
   return (
-    `w-[clamp(42rem,calc(${chars}ch_+_2rem),70rem)] ` +
-    `2xl:w-[clamp(49.2rem,calc(${chars}ch_+_2rem),82rem)]`
+    `w-[clamp(42rem,calc(${chars}ch_+_2rem),56rem)] ` +
+    `2xl:w-[clamp(49.2rem,calc(${chars}ch_+_2rem),65rem)]`
   )
 }
 
