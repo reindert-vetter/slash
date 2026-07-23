@@ -18,6 +18,7 @@ import Block, {
   unitsFor,
   updateHints,
   blockLabel,
+  singleSide,
 } from './Block.mjs'
 import RelatedPanel, {
   CommentsSidebar,
@@ -5101,6 +5102,11 @@ function drillPreviewColumns() {
   ensureCode(previewBlock)
   const codeState =
     previewBlock.code && !previewBlock.code.error ? 'code' : previewBlock.code && previewBlock.code.error ? 'err' : 'load'
+  // Whether the currently-focused drilled column's own card — the one this
+  // preview is stacked directly under — is one-sided (added/removed). Task 29:
+  // mirrors the top-level look-ahead preview's activeSingleSided check, one
+  // directional only (never forces a one-sided preview to widen).
+  const activeSingleSided = !!singleSide(focusedBlock() || {})
   return [
     connector().key('drill-preview-connector'),
     html`
@@ -5116,7 +5122,7 @@ function drillPreviewColumns() {
           approvedCalls: () => approvedCallSet(previewBlock),
           onApprove: (blk) => persistApproval(blk),
           commentedRows: () => commentRowSet(previewBlock),
-          viewMode: () => state.diffViewMode,
+          viewMode: () => (activeSingleSided ? 'new' : state.diffViewMode),
         })}
       </div>
     `.key('drill-preview:' + previewBlock.id + ':' + codeState),
@@ -5608,6 +5614,17 @@ function DetailPanel(state) {
           .map((b, i) => ({ b, i }))
           .filter(({ i }) => i === sel || i === sel + 1)
         const out = []
+        // Whether the ACTIVE (selected) card is one-sided (added/removed) — see
+        // singleSide() in Block.mjs. Task 29: a look-ahead preview must never be
+        // wider or show more (e.g. an old pane) than the active card next to it.
+        // A one-sided active card is already narrow + single-pane on its own, so
+        // forcing the preview's viewMode to 'new' below matches it in width
+        // (narrowed()) and pane selection (forcedNewOnly()) — the same knob the
+        // `a` toggle already uses, just conditioned per-render instead of only
+        // on the global state.diffViewMode. One-directional only: a two-sided
+        // active card never forces a one-sided preview to widen. See
+        // detail-layout.md.
+        const activeSingleSided = !!singleSide(state.blocks[sel] || {})
         // A step-up cue sits *above* the selected card when ↑ would flow into the
         // previous same-file block (which isn't rendered here — it's up the list).
         // canStep reads state.change/mode/focusLevel — calling it directly here
@@ -5673,8 +5690,11 @@ function DetailPanel(state) {
             commentedRows: () => commentRowSet(b),
             // Global diff-pane preference (see state.diffViewMode / the `a` key) —
             // read inside Block's own per-card slot, so toggling re-renders this
-            // card's diff structure without touching this outer closure.
-            viewMode: () => state.diffViewMode,
+            // card's diff structure without touching this outer closure. The
+            // preview card (i !== sel) additionally forces 'new' whenever the
+            // active card is one-sided (activeSingleSided, see above) — Task 29,
+            // never applied to the selected card itself.
+            viewMode: () => (i !== sel && activeSingleSided ? 'new' : state.diffViewMode),
             // The key encodes (a) whether this card is the *selected* one or the
             // look-ahead *preview*, (b) whether its code has loaded yet, and (c)
             // whether the keyboard is actually focused on it (vs. a drilled

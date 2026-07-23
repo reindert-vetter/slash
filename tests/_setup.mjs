@@ -14,6 +14,7 @@ export default function globalSetup() {
   materializeTestsGroupWorktrees()
   materializeArrowWorktrees()
   materializeRangeSelectWorktrees()
+  materializePreviewWidthWorktrees()
 }
 
 // materializeTreeWorktrees writes the (gitignored, normally real-git-derived)
@@ -259,4 +260,39 @@ class RangeSelectAction
   }
   write('base', contents(0, 0, 0, 0, 8))
   write('head', contents(1, 2, 3, 4, 9))
+}
+
+// materializePreviewWidthWorktrees writes the synthetic PR 105 fixture
+// worktrees for preview-matches-active-width.spec.mjs (Task 29, same
+// rationale as materializeTreeWorktrees above): a one-sided `added` block
+// (selected — a whole new file, only written to the head worktree, never the
+// base one) followed in the blocks list by a two-sided `modified` block (the
+// look-ahead preview) — so the preview's own diff is genuinely two-sided
+// (has real old+new text) and the test can prove home.mjs's
+// activeSingleSided override actually collapses it to narrow + new-only
+// instead of showing its natural, wider, both-panes diff.
+function materializePreviewWidthWorktrees() {
+  const file = (name, method, value) => `<?php
+
+namespace App\\Actions;
+
+class ${name}
+{
+    public function ${method}()
+    {
+        $value = ${value};
+        return $value;
+    }
+}
+`
+  const write = (side, relPath, contents) => {
+    const full = `data/worktrees/pr-105-${side}/${relPath}`
+    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
+    writeFileSync(full, contents)
+  }
+  // Added block: head-only, no base file at all (fileAdded-equivalent).
+  write('head', 'app/Actions/PreviewWidthAddedAction.php', file('PreviewWidthAddedAction', 'execute', 1))
+  // Modified block: real old+new text, so its diff is genuinely two-sided.
+  write('base', 'app/Actions/PreviewWidthModAction.php', file('PreviewWidthModAction', 'execute', 1))
+  write('head', 'app/Actions/PreviewWidthModAction.php', file('PreviewWidthModAction', 'execute', 2))
 }

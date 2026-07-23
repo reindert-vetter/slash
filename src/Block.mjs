@@ -69,8 +69,11 @@ const REMOVED_BADGE_CLS =
 // has no old source (show only 'right'/new), a removed block has no new source
 // (show only 'left'/old). Modified blocks keep both panes (null). This lets the
 // card drop the empty pane and render narrower. Driven by status so the width is
-// stable even before b.code loads.
-function singleSide(b) {
+// stable even before b.code loads. Exported so home.mjs can check whether the
+// ACTIVE/selected block is one-sided, to make a look-ahead preview card match
+// its shape (see the "preview never wider/richer than active" note below and
+// detail-layout.md).
+export function singleSide(b) {
   if (b.status === 'added') return 'right'
   if (b.status === 'removed') return 'left'
   return null

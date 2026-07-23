@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 105,
+    "file": "app/Actions/PreviewWidthAddedAction.php",
+    "class": "PreviewWidthAddedAction",
+    "name": "execute",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 11,
+    "status": "added",
+    "side": "new"
+  },
+  {
+    "pr": 105,
+    "file": "app/Actions/PreviewWidthModAction.php",
+    "class": "PreviewWidthModAction",
+    "name": "execute",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  }
+]

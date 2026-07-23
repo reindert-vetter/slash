@@ -1287,3 +1287,36 @@ maar één kant); de nieuwe, simpelere `narrowed(viewMode)` (enkel
 zichtbare kaart (top-level geselecteerd/preview én elke gedrilde kolom), want
 ze delen allemaal dezelfde `Block()`-component en dezelfde `viewMode`-opt
 (`() => state.diffViewMode`).
+
+**Een look-ahead-preview mag nooit breder/rijker zijn dan het active blok
+ernaast (`activeSingleSided`, beide preview-plekken).** Zonder tegenmaatregel
+bepaalt elke kaart zijn breedte/pane-keuze puur uit zijn **eigen** `status`
+(`singleSide(b)`, nu geëxporteerd uit `Block.mjs`) plus de **globale**
+`state.diffViewMode` — dus een eenzijdig (`added`/`removed`, smal +
+één pane) active blok kon naast een **tweezijdig** (`modified`) preview-blok
+staan dat, zonder de `a`-toggle, gewoon zijn volle breedte + beide panes
+(dus ook de oude code) toonde: breder én rijker dan wat de reviewer net aan
+het reviewen is. Beide look-ahead-preview-plekken — de top-level
+`pair.forEach` in `DetailPanel` (`home.mjs`) én `drillPreviewColumns()` —
+berekenen daarom `const activeSingleSided = !!singleSide(<het active blok>)`
+(top-level: `state.blocks[sel]`; gedrilde-kolom-sibling: `focusedBlock()`, het
+blok van de kaart waar deze preview direct onder hangt) en geven **alleen de
+preview-kaart** een override-`viewMode`:
+`() => (i !== sel && activeSingleSided) ? 'new' : state.diffViewMode` resp.
+`() => (activeSingleSided ? 'new' : state.diffViewMode)`. Omdat `narrowed`/
+`forcedNewOnly` toch al puur op `viewMode()==='new'` reageren (zie hierboven),
+volstaat deze ene override om de preview zowel smal (`narrowed`) als
+alleen-nieuw (`forcedNewOnly`, verbergt de oude pane) te maken — precies
+dezelfde knop als de `a`-toggle, alleen per-render conditioneel toegepast
+i.p.v. uitsluitend op de globale state. **Eenrichtingsregel, bewust:** dit
+verbreedt/verrijkt een eenzijdige preview nooit terug naar tweezijdig als het
+active blok zelf tweezijdig is — de preview mag dan gewoon smaller blijven dan
+active, dat is geen schending. Twee edge-cases blijven bewust ongemoeid: een
+reeds-eenzijdige preview (zijn eigen `singleSide(b)` wint in `codeDiff`'s
+`effectiveOnly = only || (forcedNewOnly ? 'right' : null)`) toont gewoon zijn
+eigen kant, ongeacht de override (er is dan sowieso maar één kant om te
+tonen); en een eenzijdige preview naast een tweezijdig active blok blijft
+gewoon smaller (geen forced-verbreding). De active kaart zelf krijgt nooit
+deze override — alleen zijn eigen `singleSide(b)` + de globale
+`state.diffViewMode` bepalen zijn eigen weergave, ongewijzigd. Test:
+`tests/preview-matches-active-width.spec.mjs`.

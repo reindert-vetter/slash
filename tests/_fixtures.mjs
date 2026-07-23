@@ -216,6 +216,15 @@ function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/rename-blocks.json'], {
     stdio: 'ignore',
   })
+  // Look-ahead-preview-width fixture (PR 105,
+  // preview-matches-active-width.spec.mjs, Task 29): a one-sided `added`
+  // block (selected, index 0) followed by a two-sided `modified` block (the
+  // look-ahead preview, index 1) — worktrees materialized in _setup.mjs
+  // (materializePreviewWidthWorktrees) so the preview's diff genuinely has
+  // both an old and a new side to (correctly) hide.
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/previewwidth-blocks.json'], {
+    stdio: 'ignore',
+  })
 }
 
 function canConnect(port) {
