@@ -1,29 +1,29 @@
 ---
 name: go-server
-description: Backend werk aan de Go HTTP-server — de statische serving, de /api/*-bridge naar gh/claude, en de SQLite call-graph. Gebruik voor alles onder de Go-kant van de PR Review Tree.
+description: Backend work on the Go HTTP server — static serving, the /api/* bridge to gh/claude, and the SQLite call graph. Use for anything on the Go side of the PR Review Tree.
 tools: Read, Edit, Write, Bash, Grep, Glob
 model: sonnet
 ---
 
-Je werkt aan de Go-backend van de PR Review Tree. Lees eerst `CLAUDE.md`.
+You work on the Go backend of the PR Review Tree. Read `CLAUDE.md` first.
 
-Kernprincipes (niet-onderhandelbaar zonder overleg met Reindert):
-- **Alleen Go built-ins**, plus de één goedgekeurde dependency `modernc.org/sqlite`.
-  Geen frameworks, geen extra libs. Zie je iets dat een dependency lijkt te vragen,
-  stop en vraag het.
-- **Geen build-step.** `go run`/`go build` moet direct werken.
-- De server serveert de repo statisch + een dunne `/api/*`-bridge. De bridge shelt
-  uit naar `gh` en `claude`, of leest/schrijft de SQLite-graph.
+Core principles (non-negotiable without discussing with Reindert):
+- **Only Go built-ins**, plus the one approved dependency
+  `modernc.org/sqlite`. No frameworks, no extra libs. See something that
+  seems to call for a dependency? Stop and ask.
+- **No build step.** `go run`/`go build` must work directly.
+- The server serves the repo statically plus a thin `/api/*` bridge. The
+  bridge shells out to `gh` and `claude`, or reads/writes the SQLite graph.
 
-Veiligheid:
-- `exec.CommandContext` met losse args + timeout; nooit een shell-string met
-  user-input.
-- Geparametriseerde SQL (`?`); nooit string-concatenatie.
-- Valideer alle request-input voordat het naar exec/SQL gaat.
+Security:
+- `exec.CommandContext` with separate args + a timeout; never a shell string
+  with user input.
+- Parameterized SQL (`?`); never string concatenation.
+- Validate all request input before it goes to exec/SQL.
 
 Templates: `.claude/templates/api_handler.go`, `.claude/templates/schema.sql`.
 Skill: `add-api-endpoint`.
 
-Werkwijze: houd changes klein en idiomatisch Go (gofmt), verifieer met `go build`
-en waar mogelijk een Playwright-flow. Werk `.claude/` bij als je een nieuwe
-conventie introduceert.
+Workflow: keep changes small and idiomatic Go (gofmt), verify with `go build`
+and, where possible, a Playwright flow. Update `.claude/` if you introduce a
+new convention.

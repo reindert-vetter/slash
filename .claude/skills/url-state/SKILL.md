@@ -5,39 +5,40 @@ description: Persist reactive frontend navigation state in the URL query string 
 
 # URL-state persistence
 
-Navigatie-positie hoort in de **URL-query-string** te staan, zodat een refresh (of
-een gedeelde link) precies terugkomt waar je was. De helper zit in
-`src/urlState.mjs`; de hoofd-navigatie bindt 'm in `home.mjs`.
+Navigation position belongs in the **URL query string**, so a refresh (or a
+shared link) returns exactly to where you were. The helper lives in
+`src/urlState.mjs`; the main navigation binds it in `home.mjs`.
 
-## Waarom query params (en niet localStorage/hash)
+## Why query params (and not localStorage/hash)
 
-- **Deelbaar & bookmarkbaar** — de hele open workspace zit in de URL.
-- **Meerdere vensters naast elkaar.** Elk extra venster/paneel krijgt een eigen
-  **namespace** (`ns`) zodat zijn params in dezelfde query-string leven zonder te
-  botsen: hoofd-navigatie schrijft kale params (`?pr=..&sel=..`), een tweede
-  venster b.v. `?pr=..&sel=..&diff.file=..`. Eén URL beschrijft alles.
+- **Shareable & bookmarkable** — the whole open workspace sits in the URL.
+- **Multiple windows side by side.** Every extra window/panel gets its own
+  **namespace** (`ns`) so its params live in the same query string without
+  colliding: the main navigation writes bare params (`?pr=..&sel=..`), a
+  second window e.g. `?pr=..&sel=..&diff.file=..`. One URL describes
+  everything.
 
 ## API — `bindUrlState(state, fields, { ns } = {})`
 
-Roep het **één keer aan, direct na `reactive(...)` en vóór de eerste render**, zodat
-herstelde waarden al in `state` staan. Twee dingen gebeuren:
+Call it **once, right after `reactive(...)` and before the first render**, so
+restored values are already in `state`. Two things happen:
 
-1. **Restore** — leest alleen de params die in de URL staan (rest houdt zijn eigen
-   default in `state`).
-2. **Persist** — een arrow.js `watch` schrijft bij elke wijziging terug met
-   `history.replaceState` (geen history-spam, Back verlaat de app netjes).
+1. **Restore** — reads only the params present in the URL (the rest keeps
+   its own default in `state`).
+2. **Persist** — an arrow.js `watch` writes back on every change with
+   `history.replaceState` (no history spam, Back leaves the app cleanly).
 
-Elk `field` mapt één state-key op één param:
+Each `field` maps one state key to one param:
 
-| veld      | betekenis |
-|-----------|-----------|
-| `key`     | property op het reactive-state object |
-| `param`   | param-naam zonder namespace-prefix (default: `key`) |
-| `parse`   | `string → value` bij restore (default: identity). Gebruik `num(fallback)` voor getallen |
-| `format`  | `value → string` bij schrijven (default: `String`); `null` = param weglaten |
-| `default` | waarde die als "leeg" telt → param wordt weggelaten (korte, canonieke URL) |
+| field     | meaning |
+|-----------|---------|
+| `key`     | property on the reactive-state object |
+| `param`   | param name without the namespace prefix (default: `key`) |
+| `parse`   | `string → value` on restore (default: identity). Use `num(fallback)` for numbers |
+| `format`  | `value → string` on write (default: `String`); `null` = omit the param |
+| `default` | value that counts as "empty" → the param is omitted (short, canonical URL) |
 
-Voorbeeld (de hoofd-navigatie in `home.mjs`):
+Example (the main navigation in `home.mjs`):
 
 ```js
 import { bindUrlState, num } from './urlState.mjs'
@@ -50,43 +51,46 @@ bindUrlState(state, [
 ])
 ```
 
-## Een extra venster/paneel toevoegen
+## Adding an extra window/panel
 
-1. Maak zijn eigen `reactive(...)`-state.
-2. `bindUrlState(panelState, [...], { ns: 'rel' })` — kies een korte, unieke `ns`.
-3. Klaar: zijn params (`rel.<param>`) staan naast de hoofd-navigatie en overleven
-   een refresh onafhankelijk.
+1. Create its own `reactive(...)` state.
+2. `bindUrlState(panelState, [...], { ns: 'rel' })` — pick a short, unique `ns`.
+3. Done: its params (`rel.<param>`) sit alongside the main navigation and
+   survive a refresh independently.
 
-Het `RelatedPanel` doet dit echt (`src/RelatedPanel.mjs`): het bindt zijn eigen
-`cs`-cursor onder `ns:'rel'` (`focus`→`rel.foc`, `codeSel`→`rel.code`,
-`sel`→`rel.csel`, `threadPos`→`rel.thr`) zodat een refresh je terugzet op hetzelfde
-Onderliggende-code-kind / dezelfde comment-thread. Kijk daar voor een compleet
-voorbeeld inclusief de async-clobber-oplossing hieronder.
+`RelatedPanel` really does this (`src/RelatedPanel.mjs`): it binds its own
+`cs` cursor under `ns:'rel'` (`focus`→`rel.foc`, `codeSel`→`rel.code`,
+`sel`→`rel.csel`, `threadPos`→`rel.thr`) so a refresh puts you back on the
+same Underlying-code child / the same comment thread. See there for a
+complete example including the async-clobber solution below.
 
-## Valkuilen (uit de praktijk)
+## Pitfalls (from practice)
 
-- **Bind vóór de eerste render.** Doe je 't erna, dan heeft de render al de default
-  gelezen en flikkert het.
-- **Async data laadt later.** Een herstelde `selected`/`change` kan buiten bereik
-  vallen tot de blocks/code geladen zijn. Clamp na het laden — zie `loadBlocks`
-  (clamp `selected`) en `ensureCode` in `home.mjs` (clamp `change`, en val terug
-  naar `mode:'list'` als het herstelde block geen navigeerbare wijzigingen heeft).
-- **De mirror-`watch` wist herstelde params tijdens het laden.** Wordt je state ná
-  de restore nog door een async data-push overschreven (b.v. een clamp-naar-0 zolang
-  de data leeg is), dan spiegelt de `watch` die reset meteen naar de URL en ben je de
-  herstelde waarde kwijt vóór je 'm kon gebruiken. Oplossing (zie
-  `RelatedPanel.applyRelRestore`): **snapshot** de herstelde waarden ná `bindUrlState`
-  in een losse `restorePending`, en pas ze **één keer, geclampt** opnieuw toe zodra de
-  data binnen is (aan het eind van de load-functies). Herstel een positie alleen als
-  z'n doel echt bestaat, en clear de snapshot daarna zodat latere navigatie niet
-  gekaapt wordt.
-- **Kale keys reageren niet als attribuut-waarde** — dit is state-sync, niet arrow's
-  attribuut-binding; de gewone arrow.js-regels gelden verder in de templates.
-- **`watch` trackt alleen wat je leest.** De `fields.map(f => state[f.key])` in de
-  helper is precies wat de dependencies registreert — zet elk veld in de lijst.
+- **Bind before the first render.** Do it after, and the render has already
+  read the default, causing a flicker.
+- **Async data loads later.** A restored `selected`/`change` can fall out of
+  range until the blocks/code are loaded. Clamp after loading — see
+  `loadBlocks` (clamps `selected`) and `ensureCode` in `home.mjs` (clamps
+  `change`, and falls back to `mode:'list'` if the restored block has no
+  navigable changes).
+- **The mirror `watch` wipes restored params while loading.** If your state
+  gets overwritten by an async data push after the restore (e.g. a
+  clamp-to-0 while the data is still empty), the `watch` immediately mirrors
+  that reset to the URL and you lose the restored value before you could use
+  it. Solution (see `RelatedPanel.applyRelRestore`): **snapshot** the
+  restored values after `bindUrlState` into a separate `restorePending`, and
+  reapply them **once, clamped**, once the data is in (at the end of the
+  load functions). Only restore a position if its target really exists, and
+  clear the snapshot afterward so later navigation isn't hijacked.
+- **Bare keys don't react as attribute values** — this is state sync, not
+  arrow's attribute binding; arrow.js's regular rules still apply elsewhere
+  in the templates.
+- **`watch` only tracks what you read.** The `fields.map(f => state[f.key])`
+  in the helper is exactly what registers the dependencies — put every field
+  in the list.
 
 ## Test
 
-`tests/urlstate.spec.mjs` rijdt de echte app: toetsaanslagen → assert query-string
-→ `page.reload()` → assert dat de positie terugkomt (en dat defaults de param weer
-opschonen). Kopieer dat patroon voor een nieuw venster.
+`tests/urlstate.spec.mjs` drives the real app: keystrokes → assert query
+string → `page.reload()` → assert that the position comes back (and that
+defaults clean the param up again). Copy this pattern for a new window.

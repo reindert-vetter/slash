@@ -3,48 +3,49 @@ name: add-workflow
 description: Add a new durable task as a tembed Workflow (a Workflow Type) with its Activities and Signals, plus its POST /api/workflows/<type> endpoint. Use when adding a new long-lived, signal-driven task to slash (like task_code_comment). Enforces the workflows-only-write and determinism rules.
 ---
 
-# Nieuwe workflow (Workflow Type) toevoegen
+# Adding a new workflow (Workflow Type)
 
-Een slash-**task** is een tembed **Workflow**. Terminologie volgt Temporal:
-**Workflow Type** (de naam), **Workflow Execution** (een lopende instantie, met
-**Run ID**), **Activity** (side-effect-werk), **Signal** (externe input).
+A slash **task** is a tembed **Workflow**. Terminology follows Temporal:
+**Workflow Type** (the name), **Workflow Execution** (a running instance, with
+a **Run ID**), **Activity** (side-effect work), **Signal** (external input).
 
-**Lees eerst** `.claude/rules/workflow-determinism.md` en
-`.claude/rules/workflows-write-boundary.md` — die zijn bindend.
+**Read first** `.claude/rules/workflow-determinism.md` and
+`.claude/rules/workflows-write-boundary.md` — those are binding.
 
-## Stappen
+## Steps
 
-1. **Kopieer** `.claude/templates/workflow.go` als startpunt (nieuw bestand of in
-   `workflows.go`). Kies een snake_case **Workflow Type**, dat is meteen het
-   endpoint-segment: `POST /api/workflows/<type>`.
-2. **Definieer input/Signal-payloads** als kleine JSON-structs.
-3. **Registreer Activities** op de engine (`engine.RegisterActivity("naam", fn)`).
-   Een Activity is de **enige** plek waar een module mag schrijven of naar buiten
-   praat. Best-effort side effects (b.v. `gh`) mogen falen zonder de workflow te
-   laten sneuvelen — vang de error en geef een sentinel terug.
-4. **Schrijf de Workflow-functie** (`func(w *tembed.Workflow, in []byte)
-   ([]byte, error)`): deterministisch, alle side effects via `w.ExecuteActivity`,
-   externe input via `w.WaitSignal`, tijd via `w.Now`/`w.Sleep`.
-5. **Registreer** de workflow (`engine.RegisterWorkflow(type, fn)`), meestal in een
-   `NewXxxManager(engine, modules...)` die ook de Activities bedraadt.
-6. **Endpoints** (`tasks_api.go`, zie skill `add-api-endpoint` voor de
-   server-conventies):
+1. **Copy** `.claude/templates/workflow.go` as a starting point (new file or
+   into `workflows.go`). Pick a snake_case **Workflow Type**, which is
+   immediately the endpoint segment: `POST /api/workflows/<type>`.
+2. **Define input/Signal payloads** as small JSON structs.
+3. **Register Activities** on the engine (`engine.RegisterActivity("name", fn)`).
+   An Activity is the **only** place a module may write or talk to the
+   outside world. Best-effort side effects (e.g. `gh`) may fail without
+   killing the workflow — catch the error and return a sentinel.
+4. **Write the Workflow function** (`func(w *tembed.Workflow, in []byte)
+   ([]byte, error)`): deterministic, all side effects via `w.ExecuteActivity`,
+   external input via `w.WaitSignal`, time via `w.Now`/`w.Sleep`.
+5. **Register** the workflow (`engine.RegisterWorkflow(type, fn)`), usually in
+   a `NewXxxManager(engine, modules...)` that also wires the Activities.
+6. **Endpoints** (`tasks_api.go`, see skill `add-api-endpoint` for the server
+   conventions):
    - `POST /api/workflows/<type>` → `StartWorkflow` → `{ "runId": ... }`.
-   - `POST /api/workflows/{runID}/signals/<signal>` → `SignalWorkflow` (UI-write).
-   - `GET /api/workflows/{runID}` en read-models zijn read-only.
-7. **Bootstrap & recovery**: bouw de engine in `newTasks(...)`, roep
-   `engine.Recover()` bij startup, en hervat per-Execution achtergrondwerk
+   - `POST /api/workflows/{runID}/signals/<signal>` → `SignalWorkflow` (UI write).
+   - `GET /api/workflows/{runID}` and read-models are read-only.
+7. **Bootstrap & recovery**: build the engine in `newTasks(...)`, call
+   `engine.Recover()` at startup, and resume per-Execution background work
    (pollers) via `Runs()` + `Input()`.
-8. **Poller/heartbeat** (optioneel): wil je periodiek iets checken (b.v. GitHub
-   elke minuut), doe dat **buiten** de workflow in een goroutine die nieuwe feiten
-   als **Signal** binnenbrengt — niet met een bezige loop ín de workflow.
-9. **Test** (`*_test.go`): gebruik `tembed.NewMemoryStore()` + een module-fake,
-   verklein poll-intervallen, en dek minstens één replay/herstart-pad
-   (`engine.Recover()` mag een Activity nooit opnieuw draaien).
+8. **Poller/heartbeat** (optional): to periodically check something (e.g.
+   GitHub every minute), do that **outside** the workflow in a goroutine that
+   feeds new facts in as a **Signal** — not with a busy loop **inside** the
+   workflow.
+9. **Test** (`*_test.go`): use `tembed.NewMemoryStore()` + a module fake,
+   shrink poll intervals, and cover at least one replay/restart path
+   (`engine.Recover()` must never re-run an Activity).
 
-## Harde regels
+## Hard rules
 
-- Workflow-body deterministisch (zie `workflow-determinism.md`).
-- Alleen workflows/Activities schrijven (zie `workflows-write-boundary.md`).
-- Geen nieuwe dependency zonder overleg; SQLite = `modernc.org/sqlite`.
-- Herstart de server na een backend-wijziging (Go heeft geen hot-reload).
+- Workflow body deterministic (see `workflow-determinism.md`).
+- Only workflows/Activities write (see `workflows-write-boundary.md`).
+- No new dependency without discussion; SQLite = `modernc.org/sqlite`.
+- Restart the server after a backend change (Go has no hot reload).

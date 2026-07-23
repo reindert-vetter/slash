@@ -1,63 +1,65 @@
-# Regel: alleen workflows muteren state
+# Rule: only workflows mutate state
 
-**Workflows zijn de enige schrijvers.** Elke state-verandering loopt via een
-tembed **Workflow Execution**. Alles daarbuiten is **read-only van buitenaf**.
+**Workflows are the only writers.** Every state change goes through a
+tembed **Workflow Execution**. Everything else is **read-only from the
+outside**.
 
-Dit is een harde architectuur-regel voor slash, geen suggestie.
+This is a hard architecture rule for slash, not a suggestion.
 
-## Wat mag wél schrijven
+## What is allowed to write
 
-- **Workflow-definities** (`workflows.go`, Workflow Type `task_code_comment`, …).
-- **Activities** die door zo'n workflow gedreven worden — dít is de enige plek
-  waar een **module** zijn schrijf-methodes uitvoert.
+- **Workflow definitions** (`workflows.go`, Workflow Type `task_code_comment`, …).
+- **Activities** driven by such a workflow — this is the **only** place where
+  a **module** executes its write methods.
 
-## Wat is read-only
+## What is read-only
 
-- **Modules** (`modules/*`): hun write-methodes (`Save`, `AddReaction`,
-  `PostLineComment`, …) worden **uitsluitend** vanuit een workflow-Activity
-  aangeroepen — nooit rechtstreeks vanuit een HTTP-handler, CLI of de UI. Hun
-  **read**-methodes (`List`, …) mogen overal.
-- **HTTP-API**: schrijven kan alléén via workflow-endpoints — een Execution
-  **starten** (`POST /api/workflows/<type>`) of een **Signal** sturen
-  (`POST /api/workflows/{runID}/signals/<signal>`). Elk ander endpoint is `GET`
-  en read-only.
-- **UI**: leest read-models (`GET /api/comments`, `GET /api/workflows/...`) en kan
-  state alleen veranderen door een workflow te starten of te signalen. De UI
-  schrijft nooit direct naar een tabel of module.
+- **Modules** (`modules/*`): their write methods (`Save`, `AddReaction`,
+  `PostLineComment`, …) are called **exclusively** from a workflow Activity —
+  never directly from an HTTP handler, CLI, or the UI. Their **read**
+  methods (`List`, …) may be called from anywhere.
+- **HTTP API**: writing is only possible via workflow endpoints — **starting**
+  an Execution (`POST /api/workflows/<type>`) or sending a **Signal**
+  (`POST /api/workflows/{runID}/signals/<signal>`). Every other endpoint is
+  `GET` and read-only.
+- **UI**: reads read-models (`GET /api/comments`, `GET /api/workflows/...`)
+  and can only change state by starting or signaling a workflow. The UI never
+  writes directly to a table or module.
 
-## Uitzondering: operationele pings zonder state
+## Exception: operational pings without state
 
-Een endpoint dat **géén state muteert** valt buiten deze regel, ook al is het een
-`POST`. Concreet: `POST /api/workflows/{runID}/heartbeat` zet alléén een
-in-memory tijdstip in de `TaskManager` (poll-cadans), schrijft niets naar de
-event-history, een module of een tabel, en overleeft een herstart niet (het is
-puur operationeel). Zo'n ping mag dus rechtstreeks vanuit de UI. **Twijfel je?**
-Raakt het iets durabels (history/read-model/DB) → dan moet het via een
-workflow (start/signal); raakt het niks → dan mag het.
+An endpoint that mutates **no state** falls outside this rule, even if it's a
+`POST`. Concretely: `POST /api/workflows/{runID}/heartbeat` only sets an
+in-memory timestamp in the `TaskManager` (poll cadence), writes nothing to the
+event history, a module, or a table, and doesn't survive a restart (it's
+purely operational). Such a ping may therefore come directly from the UI.
+**Not sure?** Does it touch anything durable (history/read-model/DB) → then
+it must go through a workflow (start/signal); doesn't touch anything → then
+it's allowed.
 
-Tweede voorbeeld: `GET /api/ingest/progress?pr=N` (`ingest_progress.go`) leest
-een puur in-memory `map[int]string` (pr → huidige ingest-stage: `worktrees`/
-`scan`/`relations`) die de `prepareWorktrees`/`scanAndStoreBlocks`/
-`buildRelations`-Activities (`workflows.go`) bijwerken terwijl ze draaien. Geen
-module, geen read-model, geen workflow-history-write — puur cosmetische
-voortgang voor de "Genereer review-boom"/"Opnieuw genereren"-knop
-(`src/overview.mjs`, gepollt terwijl `POST /api/ingest` in flight is) en gaat
-verloren bij een herstart, net als de heartbeat-timing.
+Second example: `GET /api/ingest/progress?pr=N` (`ingest_progress.go`) reads a
+purely in-memory `map[int]string` (pr → current ingest stage: `worktrees`/
+`scan`/`relations`) that the `prepareWorktrees`/`scanAndStoreBlocks`/
+`buildRelations` Activities (`workflows.go`) update while they run. No
+module, no read-model, no workflow-history write — purely cosmetic progress
+for the "Generate review tree"/"Regenerate" button (`src/overview.mjs`,
+polled while `POST /api/ingest` is in flight) and is lost on a restart, just
+like the heartbeat timing.
 
-## Waarom
+## Why
 
-De workflow-event-history is de **bron van waarheid**: durable, herspeelbaar,
-overleeft een herstart, en legt de volgorde van beslissingen vast. Een
-module-tabel (b.v. `comments.db`) is een **afgeleid read-model** dat een Activity
-bijwerkt. Door schrijven te bundelen in workflows houd je één auditbare bron en
-kun je gedrag deterministisch herspelen.
+The workflow event history is the **source of truth**: durable, replayable,
+survives a restart, and records the order of decisions. A module table
+(e.g. `comments.db`) is a **derived read-model** that an Activity updates. By
+bundling writes into workflows you keep a single auditable source and can
+replay behavior deterministically.
 
-## Checklist bij review
+## Review checklist
 
-- Roept een HTTP-handler een module-write aan? → **fout**, laat het via een
-  workflow (start/signal) lopen.
-- Schrijft de UI/JS ergens direct naartoe (anders dan een start/signal-POST, of
-  een state-loze operationele ping zoals `heartbeat`)? → **fout**.
-- Zit er nieuwe mutatie-logica buiten een workflow/Activity? → verplaats 'm.
+- Does an HTTP handler call a module write? → **wrong**, route it through a
+  workflow (start/signal) instead.
+- Does the UI/JS write directly anywhere (other than a start/signal POST, or
+  a stateless operational ping like `heartbeat`)? → **wrong**.
+- Is there new mutation logic outside a workflow/Activity? → move it.
 
-Zie ook `workflow-determinism.md`.
+See also `workflow-determinism.md`.

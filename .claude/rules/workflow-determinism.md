@@ -1,33 +1,33 @@
-# Regel: workflow-code moet deterministisch zijn
+# Rule: workflow code must be deterministic
 
-tembed draait een Workflow-functie bij elke stap **opnieuw vanaf het begin** tegen
-de opgeslagen event-history (replay). Dat werkt alléén als de functie bij dezelfde
-history dezelfde beslissingen neemt. Behandel een workflow-body als een pure
-functie van (input + history).
+tembed re-runs a Workflow function **from the beginning** at every step against
+the stored event history (replay). That only works if the function makes the
+same decisions given the same history. Treat a workflow body as a pure
+function of (input + history).
 
-## Doen
+## Do
 
-- Alle **side effects** via een **Activity** (`w.ExecuteActivity`) — netwerk, DB,
-  `gh`, bestandsIO, willekeur met gevolgen.
-- **Tijd** via `w.Now()`, **wachten** via `w.Sleep(d)` (durable timer).
-- **Externe input** via `w.WaitSignal(name, &out)`.
-- Niet-deterministische waarden (random, uuid, klok) via `w.SideEffect(&out, fn)`
-  zodat de waarde één keer wordt vastgelegd en bij replay wordt hergebruikt.
+- All **side effects** via an **Activity** (`w.ExecuteActivity`) — network, DB,
+  `gh`, file IO, randomness with consequences.
+- **Time** via `w.Now()`, **waiting** via `w.Sleep(d)` (durable timer).
+- **External input** via `w.WaitSignal(name, &out)`.
+- Non-deterministic values (random, uuid, clock) via `w.SideEffect(&out, fn)`
+  so the value is recorded once and reused on replay.
 
-## Niet doen (breekt replay)
+## Don't (breaks replay)
 
-- Directe `time.Now()`, `rand`, `uuid.New()` in de workflow-body.
-- Rechtstreeks netwerk/DB/`os/exec` of een module-write buiten een Activity.
-- Iteratie over een `map` waarvan de volgorde de control-flow stuurt.
-- Goroutines/`select`/kanalen in de workflow-body.
-- De volgorde of het aantal `ExecuteActivity`/`WaitSignal`-calls laten afhangen van
-  iets dat niet uit input of history komt.
+- Direct `time.Now()`, `rand`, `uuid.New()` in the workflow body.
+- Direct network/DB/`os/exec` or a module write outside an Activity.
+- Iterating over a `map` whose order drives control flow.
+- Goroutines/`select`/channels in the workflow body.
+- Letting the order or number of `ExecuteActivity`/`WaitSignal` calls depend
+  on something that doesn't come from input or history.
 
-## Waarom het misgaat
+## Why it breaks
 
-Verander je de volgorde van Activities tussen twee replays, dan matcht de
-positionele history niet meer en krijg je een verkeerd of vastgelopen resultaat.
-De determinisme-eis is precies wat durable replay (en dus herstart-overleving)
-mogelijk maakt.
+If you change the order of Activities between two replays, the positional
+history no longer matches and you get a wrong or stuck result. The
+determinism requirement is exactly what makes durable replay (and thus
+restart survival) possible.
 
-Zie ook `workflows-write-boundary.md` en de skill `add-workflow`.
+See also `workflows-write-boundary.md` and the skill `add-workflow`.

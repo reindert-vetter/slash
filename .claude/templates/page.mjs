@@ -1,16 +1,17 @@
-// Template: een lowercase page-module (bv. home.mjs). Een pagina haalt data van
-// de /api/*-bridge, maakt reactive() state, mount een component en bezit globale
-// interactie (bv. keyboard-navigatie). Kopieer, hernoem en verwijder wat je niet
-// nodig hebt.
+// Template: a lowercase page module (e.g. home.mjs). A page fetches data from
+// the /api/*-bridge, creates reactive() state, mounts a component, and owns
+// global interaction (e.g. keyboard navigation). Copy, rename, and remove
+// what you don't need.
 //
-// LET OP (arrow.js valkuilen, uit de praktijk):
-// - Zet GEEN HTML-comments (`<!-- ... -->`) in een html`` template: arrow.js gooit
-//   dan "Invalid HTML position". Gebruik JS-comments buiten de template.
-// - Een reactieve attribuut-waarde moet de HELE waarde zijn:
-//   `class="${() => ...}"`, niet `class="static ${() => ...}"`. Bouw de volledige
-//   string in de arrow-functie.
-// - Reactieve waarden staan altijd in `${() => ...}`; events als `@click="${...}"`;
-//   lijsten met `.map(...).key(id)`.
+// NOTE (arrow.js pitfalls, from practice):
+// - Do NOT put HTML comments (`<!-- ... -->`) inside an html`` template:
+//   arrow.js throws "Invalid HTML position" then. Use JS comments outside
+//   the template.
+// - A reactive attribute value must be the WHOLE value:
+//   `class="${() => ...}"`, not `class="static ${() => ...}"`. Build the
+//   full string inside the arrow function.
+// - Reactive values always sit in `${() => ...}`; events as
+//   `@click="${...}"`; lists with `.map(...).key(id)`.
 
 import { reactive } from './vendor/arrow.js'
 import Component from './Component.mjs'
@@ -39,7 +40,7 @@ function onKeydown(e) {
 
 window.addEventListener('keydown', onKeydown)
 
-// Mount: roep de template aan met een mount-target.
+// Mount: call the template with a mount target.
 Component(state)(document.getElementById('app'))
 
 load()

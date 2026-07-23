@@ -1,32 +1,32 @@
--- Template: SQLite-schema voor de call-graph van de PR Review Tree.
--- Toegepast via database/sql + modernc.org/sqlite. Houd het klein en genormaliseerd
--- zodat een update van één functie of één edge een enkele row-mutatie is.
+-- Template: SQLite schema for the PR Review Tree's call graph.
+-- Applied via database/sql + modernc.org/sqlite. Keep it small and normalized
+-- so an update to a single function or a single edge is one row mutation.
 
-PRAGMA journal_mode = WAL;   -- betere concurrency voor lees-tijdens-schrijf
+PRAGMA journal_mode = WAL;   -- better concurrency for read-while-write
 PRAGMA foreign_keys = ON;
 
--- Eén functie/method in de graph = één "block" uit een PR-diff.
+-- One function/method in the graph = one "block" from a PR diff.
 CREATE TABLE IF NOT EXISTS blocks (
   id         TEXT PRIMARY KEY,          -- "<pr>:<file>:<Class::method>"
-  name       TEXT NOT NULL,             -- symbool (method/functie) of bestandsnaam bij fallback
-  class      TEXT NOT NULL DEFAULT '',  -- '' voor vrije functies / whole-file fallback
+  name       TEXT NOT NULL,             -- symbol (method/function) or file name as fallback
+  class      TEXT NOT NULL DEFAULT '',  -- '' for free functions / whole-file fallback
   file       TEXT NOT NULL,
   category   TEXT NOT NULL DEFAULT '',  -- ACTION|CONTROLLER|MODEL|MIGRATION|TEST|...
-  line       INTEGER NOT NULL,          -- declaratieregel
-  end_line   INTEGER NOT NULL DEFAULT 0,-- regel van de sluitende brace
+  line       INTEGER NOT NULL,          -- declaration line
+  end_line   INTEGER NOT NULL DEFAULT 0,-- line of the closing brace
   status     TEXT NOT NULL DEFAULT '',  -- added|removed|modified
-  file_deleted INTEGER NOT NULL DEFAULT 0, -- 0/1: het HELE bestand is door de PR verwijderd
-                                           -- (afwezig in de head-worktree, git's "+++ /dev/null")
-  old_file   TEXT NOT NULL DEFAULT '',   -- pre-rename-pad als de PR dit block's bestand verplaatste
-                                          -- (git-gedetecteerde rename); '' anders. file blijft het NIEUWE pad
-  side       TEXT NOT NULL DEFAULT 'new',-- new|old: welke worktree line/end_line duiden
-  pr         INTEGER NOT NULL DEFAULT 0, -- PR-nummer waar dit block bij hoort
-  approved   INTEGER NOT NULL DEFAULT 0, -- 0/1: door de reviewer goedgekeurd?
-  description TEXT NOT NULL DEFAULT ''   -- vrije tekst uit een PHPDoc /** ... */ direct boven de
-                                          -- declaratie (@tags gestript); deterministisch, geen AI
+  file_deleted INTEGER NOT NULL DEFAULT 0, -- 0/1: the WHOLE file was removed by the PR
+                                           -- (absent in the head worktree, git's "+++ /dev/null")
+  old_file   TEXT NOT NULL DEFAULT '',   -- pre-rename path if the PR moved this block's file
+                                          -- (git-detected rename); '' otherwise. file stays the NEW path
+  side       TEXT NOT NULL DEFAULT 'new',-- new|old: which worktree line/end_line refer to
+  pr         INTEGER NOT NULL DEFAULT 0, -- PR number this block belongs to
+  approved   INTEGER NOT NULL DEFAULT 0, -- 0/1: approved by the reviewer?
+  description TEXT NOT NULL DEFAULT ''   -- free text from a PHPDoc /** ... */ directly above the
+                                          -- declaration (@tags stripped); deterministic, no AI
 );
 
--- Een aanroep: caller -> callee.
+-- A call: caller -> callee.
 CREATE TABLE IF NOT EXISTS edges (
   caller_id  TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
   callee_id  TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
@@ -38,11 +38,11 @@ CREATE INDEX IF NOT EXISTS idx_blocks_approved ON blocks(approved);
 CREATE INDEX IF NOT EXISTS idx_blocks_pr ON blocks(pr);
 CREATE INDEX IF NOT EXISTS idx_blocks_pr_status ON blocks(pr, status);
 
--- pr_ingest onthoudt de base/head-SHA waar de blocks-tabel van een PR het
--- laatst mee is gevuld. De ingest-refresh (pr_status's SignalPRState-tak, zie
--- refreshIngestDelta) diff't de eerder opgeslagen head-SHA tegen een nieuw
--- waargenomen SHA om precies te bepalen welke bestanden sindsdien wijzigden,
--- i.p.v. de hele PR opnieuw te scannen bij elke refresh.
+-- pr_ingest remembers the base/head SHA that a PR's blocks table was last
+-- filled from. The ingest refresh (pr_status's SignalPRState branch, see
+-- refreshIngestDelta) diffs the previously stored head SHA against a newly
+-- observed SHA to determine exactly which files changed since then, instead
+-- of re-scanning the whole PR on every refresh.
 CREATE TABLE IF NOT EXISTS pr_ingest (
   pr       INTEGER PRIMARY KEY,
   base_sha TEXT NOT NULL,

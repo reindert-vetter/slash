@@ -1,10 +1,10 @@
-// Template: een /api/*-bridge handler. Alleen Go built-ins.
+// Template: an /api/*-bridge handler. Go built-ins only.
 //
-// De bridge shelt uit naar lokale CLI's (gh, claude). Regels:
-//   - Valideer/whitelist ALLE input voordat het naar os/exec gaat — geef nooit
-//     rauwe user-input door als shell-string; gebruik exec.Command met losse args.
-//   - Zet een context-timeout op elk subproces.
-//   - Antwoord met JSON; zet Content-Type expliciet.
+// The bridge shells out to local CLIs (gh, claude). Rules:
+//   - Validate/whitelist ALL input before it goes to os/exec — never pass raw
+//     user input as a shell string; use exec.Command with separate args.
+//   - Set a context timeout on every subprocess.
+//   - Respond with JSON; set Content-Type explicitly.
 
 package main
 
@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// handleExample bridget een /api/<feature>-request naar een lokale CLI.
+// handleExample bridges an /api/<feature> request to a local CLI.
 func handleExample(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -30,12 +30,12 @@ func handleExample(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	// TODO: valideer req (bv. PR > 0) vóór gebruik in een subproces.
+	// TODO: validate req (e.g. PR > 0) before using it in a subprocess.
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	// Losse args — geen string-interpolatie in een shell.
+	// Separate args — no string interpolation in a shell.
 	cmd := exec.CommandContext(ctx, "gh", "pr", "view", itoa(req.PR), "--json", "title,body")
 	out, err := cmd.Output()
 	if err != nil {

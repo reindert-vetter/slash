@@ -1,547 +1,566 @@
-# Conventies (ingevuld door dit scaffold — corrigeer waar nodig)
+# Conventions (filled in by this scaffold — correct where needed)
 
-- Frontend-modules zijn `.mjs`, één component per bestand, PascalCase voor
-  component-bestanden (`Block.mjs`), lowercase voor pagina-modules (`home.mjs`).
-- Vendored libs (arrow.js, Prism) leven in `src/vendor/` en worden met een relatief
-  pad geïmporteerd, niet via een CDN-module. Tailwind is de uitzondering (Play CDN).
-  arrow.js staat gevendord in `src/vendor/arrow.js`.
-- **Lokale patch op arrow.js (`src/vendor/arrow.js`)** — er staat één bewuste
-  wijziging in de gevendorde arrow.js, gemarkeerd met een `LOCAL PATCH`-comment in
-  de header: de template-expressie-evaluator `rt` skipt een **vrijgegeven slot**
-  (`typeof W[t]=="function"`-guard) i.p.v. 'm aan te roepen. Zonder die guard crasht
-  een reactief effect dat ná het opruimen van zijn keyed-node nog in de
-  microtask-flush vuurt met `W[t] is not a function` (use-after-free) — o.a. bij het
-  **drillen** (een Onderliggende-code-kind als eigen kolom openen re-scope't het
-  paneel en breekt kaarten af midden in de flush). Bij een arrow.js-upgrade moet
-  deze patch **opnieuw** worden aangebracht (zie het comment voor de originele
-  regel).
-- **arrow.js-valkuilen** (uit de praktijk): géén HTML-comments (`<!-- -->`) in een
-  `html`` `` template (gooit "Invalid HTML position"); een reactieve attribuut-waarde
-  moet de **hele** waarde zijn (`class="${() => ...}"`, niet `class="x ${...}"`).
-  Ruwe HTML injecteer je via de `.innerHTML`-binding
-  (`.innerHTML="${() => htmlString}"`) — arrow.js zet dan de property i.p.v. te
-  escapen. Zorg dat de string veilig is (bv. Prism.highlight, dat zelf escapet).
-- **arrow.js `watch(getter, cb)` — som je reactieve deps _inline_ in de getter op.**
-  Verstop je alle reads in een geroepen functie met early-returns/conditionele
-  paden (b.v. `watch(() => buildStuff(), …)`), dan varieert de dependency-set per
-  run en kan de uitgekristalliseerde run een key laten vallen waar hij eerder wél
-  op abonneerde — de watch her-abonneert niet en stopt met vuren. Lijst daarom de
-  state die het moet volgen letterlijk op (`() => [state.a, state.b, obj && obj.x]`)
-  en doe het echte werk in de _callback_. Zo doen de `setCommentScope`- en
-  `setRelated`-watches in `home.mjs` het; een eerdere `setRelated`-watch die dat
-  níét deed liet het gerelateerd-paneel op het bij load geselecteerde block
-  bevriezen (zie `.claude/rules/detail-layout.md`).
-- **arrow.js — een `${() => …}`-slot dat wisselt tussen een enkel element en een
-  keyed array (`.map()`) bevriest na een lege render.** Waargenomen in de
-  comment-lijst van `RelatedPanel.mjs`: de slot gaf óf `visibleComments().map(...)`
-  (keyed rijen) óf een enkel `<p>Nog geen comments</p>`. Navigeer je naar een block
-  zónder comments (de slot rendert het enkele `<p>`) en dan terug naar een block
-  mét een comment, dan draaide de slot-binding wel opnieuw en gaf een niet-lege
-  array terug, maar arrow.js rende de rijen niet meer — de lijst bleef leeg terwijl
-  `cs.view` wél gevuld was (de comment stond nog wel in de thread-header, die een
-  string teruggeeft). **Oplossing:** geef **altijd hetzelfde soort** uit die slot —
-  wikkel de lege-staat in een **array van één** (`[html\`<p …>…</p>\`.key('no-comments')]`)
-  zodat de slot-vorm stabiel een keyed array blijft. Re-keyen van het paneel of een
-  scalar-versieteller hielpen niet; alleen de stabiele array-vorm.
-- **arrow.js — key nooit een template waarvan de hele body één toggelende
-  expressie is (`` html`${() => cond ? sub() : ''}` ``).** Verwant aan de
-  single↔array-valkuil hierboven, maar erger: arrow.js zet de DOM-grenzen van
-  een chunk (`ref.f`/`ref.l`) alleen bij **hydration**; wisselt de geneste
-  reconciler die inhoud later om (template ↔ `''`), dan vervangt hij de DOM
-  **zonder** de `ref` van de eigenaar-chunk bij te werken. Bij een template
-  waarvan de expressie de héle body is, ís die expressie de chunk-grens — de
-  `ref` wijst na één toggle dus naar verwijderde nodes. Staat zo'n template
-  als **keyed item in een lijst**, dan ontspoort de keyed reconcile daarna
-  stap voor stap: `patchKeyedList` bailt op de stale ref (parent `null`), het
-  generieke fallback-pad verliest de chunk (tekst-placeholder i.p.v. de
-  chunk), en een volgende run gebruikt de stale ref als **anchor** — nieuw
-  gemounte items belanden in een detached fragment en verdwijnen uit beeld,
-  waarna twee reconciler-administraties om dezelfde chunks vechten (oneindige
-  microtask-loop, tab bevriest). Zo verdween de look-ahead-preview-kaart bij
-  herhaald ↓/↑ door same-file blocks: `stepChevronSlot` (`home.mjs`) was zo'n
-  kale wrapper, gekeyed als `step-up`/`step-down` in de block-kolom.
-  (Ongepatchte upstream 1.0.6 crasht op hetzelfde scenario al eerder met
-  `expressionPool[effect] is not a function` — LOCAL PATCH 1 maskeert die
-  crash tot stille render-corruptie.) **Oplossing:** geef zo'n slot een
-  **stabiele element-root** en toggle bínnen die root, bv.
-  `` html`<div class="contents">${() => cond ? sub() : ''}</div>` `` — de
-  `ref` wijst dan permanent naar het element. De **statische**
-  `contents`-class is dubbel bewust: `display:contents` haalt de wrapper-box
-  uit de layout (inhoud toont → die is zelf het flex-item; leeg → géén
-  flex-item, dus ook geen `gap`-artefact), én een statische class vermijdt een
-  reactieve attribuut-binding die bij elke navigatiestap opnieuw zou zetten
-  (de flicker-test in `navigate.spec.mjs` eist nul attribuut-mutaties per
-  stap). Regressietest: `tests/step-preview-stability.spec.mjs`.
-  **Neveneffect, apart bevestigd:** dezelfde ontsporing corrumpeerde ook een
-  héél andere geneste `${() => componentAanroep(...)}`-embedding in dezelfde
-  block-kolomlijst — `Block.mjs`'s `${() => codeDiff(...)}` — met een
-  zichtbaar, stil symptoom: na een same-file ↓/↑-cyclus toonde de
-  geselecteerde kaart de **juiste titel** (`class::method`, een gewone
-  reactieve tekst-binding, dus zelf niet aangetast) maar de **code van het
-  vórige geselecteerde block** — geen crash, gewoon foutieve inhoud, tenzij je
-  toevallig ook de eerder beschreven `Cannot read properties of null (reading
-  'after')`-crash raakte. Bevestigd door de exacte fix-commit te bracketen met
-  een git-worktree-vergelijking (vóór/na) tegen dezelfde echte PR-data: vóór de
-  `stepChevronSlot`-fix reproduceerde de mismatch + crash betrouwbaar, erna
-  niet meer — dus **geen aparte fix nodig**, dezelfde stabiele-element-root
-  loste 'm mee op. Regressietest: `tests/diff-code-vs-title.spec.mjs` (dezelfde
-  ↓/↑-cyclus als `step-preview-stability.spec.mjs`, maar verifieert i.p.v. de
-  preview-kaart-aanwezigheid dat de gerenderde diff-tekst van de geselecteerde
-  kaart altijd bij dát block's eigen `/api/code`-bron hoort — nooit bij een
-  buurblock).
-- **arrow.js — een STATISCH geïnterpoleerde waarde die per instantie template
-  óf string is (`` ${cond ? html`…` : ''} `` zonder `() =>`) lekt bij
-  chunk-hergebruik de template-functie als tekst.** Waargenomen in de
-  drill-hint-chips van `RelatedPanel.mjs`: op de plek van de approval-teller
-  verscheen letterlijk **`i=>je(n,i)`** — dat is (in de gevendorde,
-  geminificeerde build) de template-functie zelf: `html`` ` retourneert
-  `const n=(i=>je(n,i)); n.isT=!0` (`bt` in `vendor/arrow.js`). Mechanisme:
-  hydrateert een chunk zo'n statisch slot met de **string**-tak (`''`), dan
-  registreert `Ve` een **Text-node-binding** voor dat slot en blijft het chunk
-  herbruikbaar (`r` blijft true); arrow cachet chunks per template-shape (`g`)
-  en hergebruikt zo'n gecacht chunk voor een latere instantie met dezelfde
-  shape (`U`→`pe`). Het statische patch-pad `pe` kent maar drie gevallen —
-  attribuut, functie-binding, of **`textNode.data = waarde`** — dus is de
-  nieuwe waarde een **template**, dan wordt de template-functie naar
-  `Text.data` geschreven en gestringificeerd. (Hydrateert de template-tak
-  eerst, dan zet die juist `r=false` — vandaar dat de bug intermitterend is en
-  een verse eerste render 'm niet toont.) **Oplossing, twee toegestane
-  vormen:** (1) maak het slot **altijd een string** — bereken de tekst vooraf
-  als platte string op de descriptor (bv. `approveText` in
-  `nestedChangedKids`, `home.mjs`) en rendeer in een altijd-aanwezig element
-  (verbergen kan met een vooraf berekende hele-waarde class); of (2) maak er
-  een **`${() => …}`-functie-binding** van — arrow's reactieve pad (`re`)
-  handelt template↔`''`-wissels wél correct af, en een closure die alleen een
-  plat (niet-reactief) descriptor-object leest registreert geen deps en kan
-  dus niets co-subscriben. Statisch een template interpoleren mag alléén als
-  dat slot in élke instantie van die shape een template is (zoals `testsBar`'s
-  altijd-gevulde chip-`.map()`). Regressietest: de `=>`-assert in
+- Frontend modules are `.mjs`, one component per file, PascalCase for
+  component files (`Block.mjs`), lowercase for page modules (`home.mjs`).
+- Vendored libs (arrow.js, Prism) live in `src/vendor/` and are imported with a
+  relative path, not via a CDN module. Tailwind is the exception (Play CDN).
+  arrow.js is vendored in `src/vendor/arrow.js`.
+- **Local patch to arrow.js (`src/vendor/arrow.js`)** — there is one deliberate
+  change in the vendored arrow.js, marked with a `LOCAL PATCH` comment in the
+  header: the template-expression evaluator `rt` skips a **released slot**
+  (`typeof W[t]=="function"` guard) instead of calling it. Without that guard,
+  a reactive effect that still fires in the microtask flush after its keyed
+  node has been cleaned up crashes with `W[t] is not a function`
+  (use-after-free) — among other places, during **drilling** (opening an
+  Underlying-code child as its own column re-scopes the panel and tears down
+  cards mid-flush). On an arrow.js upgrade this patch must be **reapplied**
+  (see the comment for the original line).
+- **arrow.js pitfalls** (from practice): no HTML comments (`<!-- -->`) in an
+  `html`` `` template (throws "Invalid HTML position"); a reactive attribute
+  value must be the **entire** value (`class="${() => ...}"`, not
+  `class="x ${...}"`). You inject raw HTML via the `.innerHTML` binding
+  (`.innerHTML="${() => htmlString}"`) — arrow.js then sets the property
+  instead of escaping. Make sure the string is safe (e.g. Prism.highlight,
+  which escapes itself).
+- **arrow.js `watch(getter, cb)` — enumerate your reactive deps _inline_ in the
+  getter.** If you hide all reads inside a called function with early
+  returns/conditional paths (e.g. `watch(() => buildStuff(), …)`), the
+  dependency set varies per run and the crystallized run can drop a key it
+  previously subscribed to — the watch stops re-subscribing and stops firing.
+  So list the state it must track literally
+  (`() => [state.a, state.b, obj && obj.x]`) and do the actual work in the
+  _callback_. That's how the `setCommentScope` and `setRelated` watches in
+  `home.mjs` do it; an earlier `setRelated` watch that did **not** do this let
+  the related panel freeze on the block that was selected at load time (see
+  `.claude/rules/detail-layout.md`).
+- **arrow.js — a `${() => …}` slot that switches between a single element and a
+  keyed array (`.map()`) freezes after an empty render.** Observed in the
+  comment list of `RelatedPanel.mjs`: the slot returned either
+  `visibleComments().map(...)` (keyed rows) or a single
+  `<p>No comments yet</p>`. Navigate to a block **without** comments (the slot
+  renders the single `<p>`) and then back to a block **with** a comment, and
+  the slot binding did re-run and returned a non-empty array, but arrow.js no
+  longer rendered the rows — the list stayed empty while `cs.view` **was**
+  populated (the comment still showed in the thread header, which returns a
+  string). **Solution:** always emit **the same kind** from that slot — wrap
+  the empty state in an **array of one**
+  (`[html\`<p …>…</p>\`.key('no-comments')]`) so the slot's shape stably stays
+  a keyed array. Re-keying the panel or a scalar version counter didn't help;
+  only the stable array shape did.
+- **arrow.js — never key a template whose entire body is one toggling
+  expression (`` html`${() => cond ? sub() : ''}` ``).** Related to the
+  single↔array pitfall above, but worse: arrow.js sets a chunk's DOM
+  boundaries (`ref.f`/`ref.l`) only at **hydration**; if the nested reconciler
+  later swaps that content (template ↔ `''`), it replaces the DOM **without**
+  updating the owner chunk's `ref`. For a template whose expression is the
+  entire body, that expression **is** the chunk boundary — the `ref` therefore
+  points to removed nodes after one toggle. If such a template sits as a
+  **keyed item in a list**, the keyed reconcile then derails step by step:
+  `patchKeyedList` bails on the stale ref (parent `null`), the generic
+  fallback path loses the chunk (a text placeholder instead of the chunk), and
+  a subsequent run uses the stale ref as an **anchor** — newly mounted items
+  end up in a detached fragment and disappear from view, after which two
+  reconciler administrations fight over the same chunks (infinite microtask
+  loop, tab freezes). That's how the look-ahead preview card disappeared
+  under repeated ↓/↑ through same-file blocks: `stepChevronSlot` (`home.mjs`)
+  was such a bare wrapper, keyed as `step-up`/`step-down` in the block column.
+  (Unpatched upstream 1.0.6 already crashes on the same scenario earlier with
+  `expressionPool[effect] is not a function` — LOCAL PATCH 1 masks that crash
+  down to silent render corruption.) **Solution:** give such a slot a
+  **stable element root** and toggle **inside** that root, e.g.
+  `` html`<div class="contents">${() => cond ? sub() : ''}</div>` `` — the
+  `ref` then points permanently to the element. The **static** `contents`
+  class is doubly deliberate: `display:contents` removes the wrapper box from
+  layout (content shows → it becomes the flex item itself; empty → **no**
+  flex item, so no `gap` artifact either), and a static class avoids a
+  reactive attribute binding that would be set again on every navigation step
+  (the flicker test in `navigate.spec.mjs` requires zero attribute mutations
+  per step). Regression test: `tests/step-preview-stability.spec.mjs`.
+  **Side effect, separately confirmed:** the same derailment also corrupted a
+  completely different, nested `${() => componentCall(...)}` embedding in the
+  same block-column list — `Block.mjs`'s `${() => codeDiff(...)}` — with a
+  visible, silent symptom: after a same-file ↓/↑ cycle the selected card
+  showed the **correct title** (`class::method`, an ordinary reactive text
+  binding, hence not affected itself) but the **code of the previously
+  selected block** — no crash, just wrong content, unless you happened to also
+  hit the previously described `Cannot read properties of null (reading
+  'after')` crash. Confirmed by bracketing the exact fix commit with a
+  git-worktree comparison (before/after) against the same real PR data:
+  before the `stepChevronSlot` fix the mismatch + crash reproduced reliably,
+  after it didn't — so **no separate fix needed**, the same stable-element
+  root fixed it too. Regression test: `tests/diff-code-vs-title.spec.mjs`
+  (the same ↓/↑ cycle as `step-preview-stability.spec.mjs`, but instead of
+  checking for the preview card's presence, verifies that the rendered diff
+  text of the selected card always belongs to that block's own `/api/code`
+  source — never a neighboring block).
+- **arrow.js — a STATICALLY interpolated value that per instance is either a
+  template or a string (`` ${cond ? html`…` : ''} `` without `() =>`) leaks
+  the template function as text on chunk reuse.** Observed in the drill-hint
+  chips of `RelatedPanel.mjs`: literally **`i=>je(n,i)`** appeared where the
+  approval counter should be — that (in the vendored, minified build) is the
+  template function itself: `html`` ` returns
+  `const n=(i=>je(n,i)); n.isT=!0` (`bt` in `vendor/arrow.js`). Mechanism: if
+  a chunk hydrates such a static slot with the **string** branch (`''`), `Ve`
+  registers a **text-node binding** for that slot and the chunk stays
+  reusable (`r` stays true); arrow caches chunks per template shape (`g`) and
+  reuses such a cached chunk for a later instance with the same shape
+  (`U`→`pe`). The static patch path `pe` knows only three cases —
+  attribute, function binding, or **`textNode.data = value`** — so if the new
+  value is a **template**, the template function gets written to `Text.data`
+  and stringified. (If the template branch hydrates first, it sets `r=false`
+  instead — which is why the bug is intermittent and a fresh first render
+  doesn't show it.) **Solution, two allowed forms:** (1) make the slot
+  **always a string** — precompute the text as a plain string on the
+  descriptor (e.g. `approveText` in `nestedChangedKids`, `home.mjs`) and
+  render it in an always-present element (hiding can use a precomputed
+  whole-value class); or (2) turn it into a **`${() => …}` function binding**
+  — arrow's reactive path (`re`) handles template↔`''` swaps correctly, and a
+  closure that only reads a plain (non-reactive) descriptor object registers
+  no deps and therefore can't co-subscribe to anything. Statically
+  interpolating a template is only allowed if that slot is a template in
+  **every** instance of that shape (like `testsBar`'s always-populated chip
+  `.map()`). Regression test: the `=>` assertion in
   `tests/related-nested-chip.spec.mjs`.
-- **arrow.js hergebruikt een keyed node zonder z'n function-bindings te
-  herdraaien — en verliest soms een `.innerHTML`/attribuut-update bij
-  co-subscribers.** Twee samenhangende valkuilen, beide waargenomen in de
-  block-kaarten van `DetailPanel` (`home.mjs`):
-  1. Wisselt een keyed node van rol maar blijft z'n `.key(...)` gelijk (b.v. een
-     block dat van *preview* naar *geselecteerd* gaat bij ↓/↑), dan **verplaatst
-     + patcht** arrow.js de bestaande node i.p.v. 'm opnieuw op te bouwen: de
-     `${() => …}`-function-bindings binnenin draaien niet opnieuw en een bevroren
-     binding (b.v. de `activeGroup`-highlight) vuurt nooit voor de nieuwe staat.
-  2. Abonneren **meerdere** reactieve consumers op dezelfde property (b.v. de
-     diff-render leest `b.code` én een `watch`-getter leest `curBlock().code`),
-     dan laat arrow.js de `null→geladen`-update van de diff-binding er
-     **intermitterend** uitvallen — de diff blijft op "loading" hangen terwijl de
-     code er al is.
-  Oplossing (beide): laat niet-navigatie-transities een **verse** node forceren
-  via de key, en herbouw de kaart van buitenaf i.p.v. te vertrouwen op de fragiele
-  `b.code`-binding. Concreet in `home.mjs`: de block-kaart-key codeert rol
-  (`sel`/`prev`) **én** code-status (`load`/`code`/`err`). De DetailPanel-binding
-  abonneert op `state.codeVersion` (gebumpt door `ensureCode` zodra code arriveert)
-  — een teller náást `b.code` — zodat hij betrouwbaar herdraait en de key
-  omklapt, wat een **verse** diff-binding oplevert die de geladen code leest. De
-  `setCommentScope`/`setRelated`-watches blijven wél `curBlock().code` lezen (dat
-  moeten ze, om de cursor te volgen); dat maakt ze co-subscribers en is exact
-  waarom de diff-binding zélf de update kan missen — vandaar de herbouw-via-key
-  i.p.v. wéér een `b.code`-lezer toe te voegen. Zie
-  `.claude/rules/detail-layout.md`.
-- **Een `state.x`-lezing die je synchroon binnen een outer array-bouwende
-  `${() => {...}}`-closure aanroept (i.p.v. in een eigen geneste reactieve slot),
-  maakt de HELE closure afhankelijk van `state.x`** — ook als de uitkomst zelf
-  slechts één klein element betreft. Gezien in `home.mjs`'s `DetailPanel`: de
-  block-kolom-closure die alle `Block(...)`-kaarten bouwt riep `canStep(-1)`/
-  `canStep(1)` (voor het grijze step-chevron) **direct** aan; `canStep` leest
-  `state.change`/`mode`/`focusLevel`. Daardoor draaide de hele closure — en dus
-  elke `Block()`-aanroep met **verse** `activeGroup`/`hintsEnabled`/`diffActive`/
-  etc.-closures — opnieuw bij **elke** ↑/↓-stap. De `.key(...)` voorkwam een
-  volledige DOM-node-vervanging (arrow matcht 'm en hergebruikt de node via
-  `move+patch`), maar elke functie-gebonden attribute-slot (`class`, checkbox
-  `.indeterminate`, category-badge, enz.) werd daarbij toch **opnieuw gezet**
-  (`setAttribute` vergelijkt niet met de oude waarde) — een meetbare
-  `MutationObserver`-cascade over de HELE kaart bij iedere stap, wat als
-  zichtbare flikkering oogde (niet alleen de highlight verschoof, de hele kaart
-  "ademde" mee). **Oplossing:** verplaats de `state.change`-lezing naar een eigen
-  geneste `${() => canStep(...) ? … : ''}`-binding (dezelfde vorm als de bestaande
-  `${() => menu.open ? menuOverlay() : ''}`-toggle) zodat alléén dat kleine slot
-  op de navigatie-state reageert; de outer closure blijft beperkt tot de deps die
-  hij expliciet noemt (`selected`/`codeVersion`/`focusLevel`). Zie
-  `stepChevronSlot` in `home.mjs` en `.claude/rules/detail-layout.md`.
-- **arrow.js ruimt een weggevallen (conditioneel gerenderde) subtree niet volledig
-  op — z'n reactieve expressions blijven geabonneerd (use-after-free).** Gezien bij
-  het **command-menu** (`home.mjs` + `CommandMenu.mjs`): het overlay hangt aan een
-  `${() => menu.open ? menuOverlay() : ''}`-binding. Bij sluiten geeft die `''`
-  terug en verdwijnt de overlay uit de DOM, **maar** de list/row-bindings van die
-  `CommandMenu`-instantie blijven geabonneerd op het state-object waartegen ze
-  gebouwd zijn. Muteert een **latere** open dat object (een andere `mode`, of het
-  betreden van een submenu dat `sub` zet), dan vuren die **wees-bindings** tegen
-  inmiddels vrijgegeven expression-slots → arrow gooit `W[t] is not a function`
-  (een teller-index in arrow's slot-pool wijst naar een gerecyclede slot). Same-mode
-  heropenen crasht niet (geen dep verandert), cross-mode of submenu wél. Het is een
-  **latente** bug: de oude flow opende nooit een tweede menu (Enter/`/` werden
-  opgeslokt zolang de composer open was), dus hij werd pas zichtbaar toen de
-  comment-soort-`compose`-mode een menu **over** de composer opende.
-  **Oplossing:** splits de menu-state in een **stabiele** `menu` (alleen `open`,
-  waar de top-level binding aan hangt) en een **wegwerp** `let ms = reactive({query,
-  sel, sub, mode})` die `openMenu` bij **elke** open **vervangt** door een vers
-  object. Wees-bindings van een vorige open wijzen dan naar het **oude** `ms` dat we
-  nooit meer aanraken, dus ze vuren nooit; alleen de live-bindings (tegen de huidige
-  `ms`) draaien. `closeMenu` zet enkel `menu.open=false` — het laat `ms` bewust met
-  rust. (Altijd-gemount-met-CSS-verbergen werkt níét: dan rendert `CommandMenu` al
-  bij page-load — vóór er een block geselecteerd is — en gooien de label-functies
-  die `curBlock()` lezen alsnog, wat de slot-pool corrumpeert.) Zie
-  `.claude/rules/keyboard-navigation.md`.
-- **Dezelfde disposal-gap is ook een geheugenlek, niet alleen een crash-risico —
-  en de `ms`-swap hierboven verhelpt alleen de crash.** De `ms`-swap voorkomt dat
-  een wees-binding **crasht** (hij hangt aan een object dat nooit meer verandert,
-  dus vuurt nooit meer), maar arrow.js's `Ft`-teardown (het opruimen van een
-  weggevallen keyed node) ruimt **alleen** de expression-slots op die de node
-  **zelf direct** bezit — hij cascadeert nooit naar een genest stuk template dat
-  via `${() => componentAanroep(...)}` is ingebed (zoals `${CommandMenu(ms, ...)}`
-  in `menuOverlay()`, of `${() => codeDiff(...)}` in `Block.mjs`). Zo'n geneste
-  reconciler-boom (elke rij, elke `.innerHTML`-binding erin) blijft dus **voor
-  altijd** een levend, DOM-loos (detached) stuk template — precies "Detached
-  `<span>`/`<div>`/Text"-groei in een heap-snapshot. Dat is op zich al een
-  (langzaam groeiend, per-open) lek, maar wordt een **actief, steeds sneller
-  groeiend** probleem zodra een wees-binding **niet** alleen van de weggeworpen
-  `ms` afhangt maar ook van **globale, blijvend veranderende** state: zo'n
-  binding blijft na sluiten geregistreerd tegen die globale property en
-  her-evalueert dus bij **elke** latere, ongerelateerde wijziging — voor élke
-  ooit-geopende menu-instantie. Concreet gevonden: `COMMANDS[0]`'s "Keur … goed"-
-  label (leest `curBlock()`/`state.mode`/`state.gran`/`state.change`/
-  `b.approvedRows`/`b.approvedCalls`), plus vergelijkbare labels in
-  `COMPOSE_COMMANDS`/`PR_COMMANDS` — precies de **standaard, meest-gebruikte**
-  Enter-palette, en de automatische postApprove-vervolgmenu na élke
-  groeps-goedkeuring (`afterApproveAction`). Elke open+close-cyclus liet zo een
-  steeds duurdere geest achter die bij iedere navigatie-/approve-stap opnieuw
-  meerekende — een met Playwright gemeten, reproduceerbare ~3.6× vertraging van
-  60 `f`/`s`-toetsaanslagen na 200 open/close-cycli op de ongepatchte code
-  (0.9–1.0× — vlak, geen groei — na de fix), wat zich in de praktijk uitte als
-  "de tab loopt op een gegeven moment vast" na genoeg goedkeur+navigeer-cycli.
-  **Fix (toegepast, laag risico):** laat nooit een `label`-**functie** de
-  geneste, nooit-opgeruimde `CommandMenu`-boom bereiken. `resolveLabel`/
-  `snapshotCommands` (`home.mjs`) roepen zo'n functie **eenmalig** aan vanuit
-  gewone, niet-reactieve code (`openMenu`, dus buiten elke arrow.js-`Te()/Ae()`-
-  tracking-bracket) en zetten het resultaat vast als platte string op
-  `ms.commands`/`ms.sub` — CommandMenu's eigen `${() => labelOf(c)}`-binding ziet
-  dan nooit meer iets dan een string, registreert dus geen dependency op iets
-  buiten `ms`, en een wees-binding die daaruit voortkomt vuurt (net als de
-  bestaande `ms`-only bindings) nooit meer.
-- **Root-cause fix: `Ft` cascadeert nu genest-gemonteerde reconciler-subtrees
-  op (`LOCAL PATCH 2` in `src/vendor/arrow.js`).** De `CommandMenu`-fix
-  hierboven is een gerichte, app-niveau band-aid (nooit een `label`-functie de
-  boom laten bereiken); hetzelfde disposal-gap-patroon zat **ook** onder de
-  kaart-hertekening in `DetailPanel`/`Block.mjs` (elke keer dat een block-kaart
-  een **nieuwe key** krijgt — preview→selected, code net geladen,
-  focus-niveau-wissel, zie `.claude/rules/detail-layout.md` — werd de oude
-  `<article>` afgebroken, maar zijn geneste `${() => codeDiff(...)}`-subtree,
-  met zijn `b.approvedRows`/`state.diffViewMode`-lezende `.innerHTML`-bindings,
-  bleef op dezelfde manier hangen). Dat gebeurde al bij **gewoon navigeren**
-  (niet alleen bij goedkeuren) en was de grootste losse bijdrage aan
-  onbegrensde geheugengroei tijdens een reviewsessie (met Playwright/CDP
-  heap-snapshots gemeten: +4600 detached DOM-nodes per 60 kaart-hertekeningen
-  vóór de patch, tegen ±30 — ruis — erna; een tweede, timing-gebaseerde proef
-  liet een ~7-8× vertraging zien van een begrensde `b.approvedRows`-mutatie na
-  60 hertekeningen vóór de patch, tegen ~0.85-0.93× — vlak — erna). In plaats
-  van dit per component te blijven pleisteren (elke nieuwe geneste
-  `${() => componentAanroep(...)}`-embedding zou hetzelfde lek weer
-  introduceren) is de daadwerkelijke oorzaak in arrow.js zelf gepatcht: `re(t)`
-  (upstream `createRenderFn`, de reconciler-factory die `Ve`/upstream
-  `createNodeBinding` gebruikt voor élke geneste component/array/template-
-  waarde — `CommandMenu`'s rijen, `Block.mjs`'s `${() => codeDiff(...)}`,
-  `RelatedPanel`'s `.map()`-lijsten, …) registreert nu, via zijn eerste
-  parameter (upstream de SSR-`capture`-vlag, in deze build dood — esbuild
-  tree-shaked elke `if(capture)`-tak weg, bevestigd door de hele functie-body op
-  een losstaand `t`-token te grepen vóórdat 'm werd hergebruikt), één cleanup
-  op de **eigenaar**-node: zodra die eigenaar via `Ft` wordt afgebroken, ruimt
-  deze cleanup ook op wat de reconciler op dat moment gemonteerd houdt, via
-  **dezelfde** bestaande dispatch (`qt`/upstream `removeUnmounted` — cache-voor-
-  hergebruik vs. volledig vernietigen, chunk-of-array) die top-level content
-  altijd al kreeg. Puur additief (3 kleine inserties, geen bestaande regel
-  gewijzigd) en **recursief vanzelf correct**: een geneste reconciler die zelf
-  weer iets nest, registreert zijn eigen cleanup op zijn eigen eigenaar op
-  dezelfde manier. Geverifieerd tegen de echte, niet-geminificeerde upstream-
-  bron (`@arrow-js/core@1.0.6`, `dist/index.mjs` + `dist/chunks/internal-*.mjs`
-  via jsDelivr) om de minified namen (`re`=`createRenderFn`, `Ve`=
-  `createNodeBinding`, `Ft`=`destroyChunk`, `qt`=`removeUnmounted`, `n.u`=
-  `chunk.u`) met zekerheid te herleiden i.p.v. op minified tekst te gokken —
-  zie het `LOCAL PATCH 2`-commentaarblok in `vendor/arrow.js` voor het volledige
-  mechanisme en de exacte herstelinstructie bij een arrow.js-upgrade.
-- **`Element.scrollIntoView({block: 'nearest'|'center'})` beweegt ook de
-  horizontale as als je `inline` weglaat — dat is de DOM-default, geen
-  arrow.js-eigenaardigheid, maar hij beet hier omdat een verticale "houd deze
-  rij in beeld"-scroll (Onderliggende-code-kaart, chips, Taken, comment-
-  reacties) toevallig binnen `<main>`'s horizontaal scrollende kolom-flow
-  hangt: elke stap ↓/↑/→ in zo'n lijst kon zo ongewild `<main>`'s eigen
-  `scrollLeft` verschuiven en de kaart die de keyboard-focus draagt (links van
-  het paneel) buiten beeld duwen — precies de klacht "na → en dan ← staat de
-  selectie niet meer volledig in beeld". **Oplossing:** `scrollIntoViewVertical`
-  (`RelatedPanel.mjs`, geëxporteerd) loopt vanaf het element omhoog naar de
-  eerste voorouder die daadwerkelijk verticaal scrolt
-  (`scrollHeight > clientHeight` — een horizontaal scrollende `<main>` matcht
-  dat nooit, dus de walk stopt er vanzelf één niveau vóór) en zet alleen diens
-  `scrollTop` — nooit `scrollIntoView()` zelf aanroepen voor een
-  "blijf-in-beeld-tijdens-lijst-navigeren"-scroll. Gebruikt door
+- **arrow.js reuses a keyed node without re-running its function bindings —
+  and sometimes drops an `.innerHTML`/attribute update for co-subscribers.**
+  Two related pitfalls, both observed in the block cards of `DetailPanel`
+  (`home.mjs`):
+  1. If a keyed node switches role but its `.key(...)` stays the same (e.g. a
+     block going from *preview* to *selected* on ↓/↑), arrow.js **moves +
+     patches** the existing node instead of rebuilding it: the
+     `${() => …}` function bindings inside don't re-run and a frozen binding
+     (e.g. the `activeGroup` highlight) never fires for the new state.
+  2. If **multiple** reactive consumers subscribe to the same property (e.g.
+     the diff render reads `b.code` and a `watch` getter reads
+     `curBlock().code`), arrow.js **intermittently** drops the
+     `null→loaded` update of the diff binding — the diff stays stuck on
+     "loading" while the code is already there.
+  Solution (both): let non-navigation transitions force a **fresh** node via
+  the key, and rebuild the card from the outside instead of relying on the
+  fragile `b.code` binding. Concretely in `home.mjs`: the block-card key
+  encodes role (`sel`/`prev`) **and** code status (`load`/`code`/`err`). The
+  DetailPanel binding subscribes to `state.codeVersion` (bumped by
+  `ensureCode` as soon as code arrives) — a counter alongside `b.code` — so
+  it reliably re-runs and flips the key, which produces a **fresh** diff
+  binding that reads the loaded code. The `setCommentScope`/`setRelated`
+  watches still read `curBlock().code` (they have to, to follow the cursor);
+  that makes them co-subscribers and is exactly why the diff binding itself
+  can miss the update — hence rebuilding via the key instead of adding yet
+  another `b.code` reader. See `.claude/rules/detail-layout.md`.
+- **A `state.x` read that you call synchronously inside an outer array-building
+  `${() => {...}}` closure (instead of in its own nested reactive slot) makes
+  the ENTIRE closure depend on `state.x`** — even if the outcome itself only
+  concerns one small element. Seen in `home.mjs`'s `DetailPanel`: the
+  block-column closure that builds all `Block(...)` cards called
+  `canStep(-1)`/`canStep(1)` (for the gray step chevron) **directly**;
+  `canStep` reads `state.change`/`mode`/`focusLevel`. As a result, the entire
+  closure — and thus every `Block()` call with **fresh**
+  `activeGroup`/`hintsEnabled`/`diffActive`/etc. closures — re-ran on
+  **every** ↑/↓ step. The `.key(...)` prevented a full DOM-node replacement
+  (arrow matches it and reuses the node via `move+patch`), but every
+  function-bound attribute slot (`class`, checkbox `.indeterminate`,
+  category badge, etc.) still got **re-set** (`setAttribute` doesn't compare
+  against the old value) — a measurable `MutationObserver` cascade over the
+  ENTIRE card on every step, which read as visible flickering (not just the
+  highlight shifting, the whole card "breathed" along). **Solution:** move
+  the `state.change` read to its own nested
+  `${() => canStep(...) ? … : ''}` binding (the same shape as the existing
+  `${() => menu.open ? menuOverlay() : ''}` toggle) so only that small slot
+  reacts to navigation state; the outer closure stays limited to the deps it
+  explicitly names (`selected`/`codeVersion`/`focusLevel`). See
+  `stepChevronSlot` in `home.mjs` and `.claude/rules/detail-layout.md`.
+- **arrow.js doesn't fully clean up a dropped (conditionally rendered)
+  subtree — its reactive expressions stay subscribed (use-after-free).** Seen
+  in the **command menu** (`home.mjs` + `CommandMenu.mjs`): the overlay hangs
+  off a `${() => menu.open ? menuOverlay() : ''}` binding. On close that
+  returns `''` and the overlay disappears from the DOM, **but** the list/row
+  bindings of that `CommandMenu` instance stay subscribed to the state object
+  they were built against. If a **later** open mutates that object (a
+  different `mode`, or entering a submenu that sets `sub`), those **orphan
+  bindings** fire against expression slots that have since been released →
+  arrow throws `W[t] is not a function` (a counter index in arrow's slot pool
+  points to a recycled slot). Reopening in the same mode doesn't crash (no
+  dep changes), cross-mode or a submenu does. It's a **latent** bug: the old
+  flow never opened a second menu (Enter/`/` were swallowed while the
+  composer was open), so it only became visible once the comment-kind
+  `compose` mode opened a menu **over** the composer.
+  **Solution:** split the menu state into a **stable** `menu` (only `open`,
+  which the top-level binding hangs off) and a **disposable**
+  `let ms = reactive({query, sel, sub, mode})` that `openMenu` **replaces**
+  with a fresh object on **every** open. Orphan bindings from a previous open
+  then point to the **old** `ms`, which we never touch again, so they never
+  fire; only the live bindings (against the current `ms`) run. `closeMenu`
+  only sets `menu.open=false` — it deliberately leaves `ms` alone.
+  (Always-mounted-with-CSS-hiding does **not** work: then `CommandMenu` would
+  already render at page load — before a block is selected — and the label
+  functions that read `curBlock()` would throw anyway, corrupting the slot
+  pool.) See `.claude/rules/keyboard-navigation.md`.
+- **This same disposal gap is also a memory leak, not just a crash risk — and
+  the `ms` swap above only fixes the crash.** The `ms` swap prevents an
+  orphan binding from **crashing** (it hangs off an object that never
+  changes again, so it never fires again), but arrow.js's `Ft` teardown
+  (cleaning up a dropped keyed node) only cleans up the expression slots the
+  node **itself directly** owns — it never cascades into a nested piece of
+  template embedded via `${() => componentCall(...)}` (such as
+  `${CommandMenu(ms, ...)}` in `menuOverlay()`, or `${() => codeDiff(...)}` in
+  `Block.mjs`). Such a nested reconciler tree (every row, every `.innerHTML`
+  binding in it) therefore stays a live, DOM-less (detached) piece of
+  template **forever** — exactly "Detached `<span>`/`<div>`/Text" growth in a
+  heap snapshot. That's already a (slowly growing, per-open) leak on its own,
+  but it becomes an **active, ever-faster growing** problem as soon as an
+  orphan binding depends **not only** on the discarded `ms` but **also** on
+  **global, continuously changing** state: such a binding stays registered
+  against that global property after closing and therefore re-evaluates on
+  **every** subsequent, unrelated change — for **every** menu instance ever
+  opened. Concretely found: `COMMANDS[0]`'s "Approve …" label (reads
+  `curBlock()`/`state.mode`/`state.gran`/`state.change`/`b.approvedRows`/
+  `b.approvedCalls`), plus similar labels in `COMPOSE_COMMANDS`/`PR_COMMANDS`
+  — exactly the **standard, most-used** Enter palette, and the automatic
+  postApprove follow-up menu after **every** group approval
+  (`afterApproveAction`). Every open+close cycle left behind an ever more
+  expensive ghost that recalculated on every subsequent
+  navigation/approve step — a Playwright-measured, reproducible ~3.6×
+  slowdown of 60 `f`/`s` keystrokes after 200 open/close cycles on the
+  unpatched code (0.9–1.0× — flat, no growth — after the fix), which in
+  practice manifested as "the tab eventually freezes" after enough
+  approve+navigate cycles.
+  **Fix (applied, low risk):** never let a `label` **function** reach the
+  nested, never-cleaned-up `CommandMenu` tree. `resolveLabel`/
+  `snapshotCommands` (`home.mjs`) call such a function **once** from
+  ordinary, non-reactive code (`openMenu`, i.e. outside any arrow.js
+  `Te()/Ae()` tracking bracket) and fix the result as a plain string on
+  `ms.commands`/`ms.sub` — CommandMenu's own `${() => labelOf(c)}` binding
+  then never sees anything but a string, so it registers no dependency on
+  anything outside `ms`, and an orphan binding stemming from that never fires
+  again (just like the existing `ms`-only bindings).
+- **Root-cause fix: `Ft` now cascades into nested-mounted reconciler subtrees
+  (`LOCAL PATCH 2` in `src/vendor/arrow.js`).** The `CommandMenu` fix above is
+  a targeted, app-level band-aid (never let a `label` function reach the
+  tree); the same disposal-gap pattern also sat **under** the card re-render
+  in `DetailPanel`/`Block.mjs` (every time a block card got a **new key** —
+  preview→selected, code just loaded, focus-level switch, see
+  `.claude/rules/detail-layout.md` — the old `<article>` was torn down, but
+  its nested `${() => codeDiff(...)}` subtree, with its
+  `b.approvedRows`/`state.diffViewMode`-reading `.innerHTML` bindings,
+  hung around in the same way). That already happened on **plain
+  navigation** (not just approving) and was the single biggest contributor
+  to unbounded memory growth during a review session (measured with
+  Playwright/CDP heap snapshots: +4600 detached DOM nodes per 60 card
+  re-renders before the patch, vs. ±30 — noise — after; a second,
+  timing-based experiment showed a ~7-8× slowdown of a bounded
+  `b.approvedRows` mutation after 60 re-renders before the patch, vs.
+  ~0.85-0.93× — flat — after). Instead of continuing to patch this per
+  component (every new nested `${() => componentCall(...)}` embedding would
+  reintroduce the same leak), the actual root cause was patched in arrow.js
+  itself: `re(t)` (upstream `createRenderFn`, the reconciler factory that
+  `Ve`/upstream `createNodeBinding` uses for **every** nested
+  component/array/template value — `CommandMenu`'s rows, `Block.mjs`'s
+  `${() => codeDiff(...)}`, `RelatedPanel`'s `.map()` lists, …) now
+  registers, via its first parameter (upstream the SSR `capture` flag, dead
+  in this build — esbuild tree-shook every `if(capture)` branch away,
+  confirmed by grepping the whole function body for a standalone `t` token
+  before it was reused), one cleanup on the **owner** node: as soon as that
+  owner is torn down via `Ft`, this cleanup also cleans up whatever the
+  reconciler is currently keeping mounted, via the **same** existing dispatch
+  (`qt`/upstream `removeUnmounted` — cache-for-reuse vs. fully destroy,
+  chunk-or-array) that top-level content already got. Purely additive (3
+  small insertions, no existing line changed) and **automatically recursive:
+  correct**: a nested reconciler that itself nests something else registers
+  its own cleanup on its own owner the same way. Verified against the real,
+  non-minified upstream source (`@arrow-js/core@1.0.6`,
+  `dist/index.mjs` + `dist/chunks/internal-*.mjs` via jsDelivr) to trace the
+  minified names (`re`=`createRenderFn`, `Ve`=`createNodeBinding`,
+  `Ft`=`destroyChunk`, `qt`=`removeUnmounted`, `n.u`=`chunk.u`) with certainty
+  rather than guessing from minified text — see the `LOCAL PATCH 2` comment
+  block in `vendor/arrow.js` for the full mechanism and the exact restore
+  instructions on an arrow.js upgrade.
+- **`Element.scrollIntoView({block: 'nearest'|'center'})` also moves the
+  horizontal axis if you omit `inline`** — that's the DOM default, not an
+  arrow.js quirk, but it bit here because a vertical "keep this row in view"
+  scroll (Underlying-code card, chips, Tasks, comment reactions) happens to
+  sit inside `<main>`'s horizontally scrolling column flow: every ↓/↑/→ step
+  in such a list could unintentionally shift `<main>`'s own `scrollLeft` and
+  push the card holding keyboard focus (to the left of the panel) out of
+  view — exactly the complaint "after → and then ← the selection is no
+  longer fully in view". **Solution:** `scrollIntoViewVertical`
+  (`RelatedPanel.mjs`, exported) walks up from the element to the first
+  ancestor that actually scrolls vertically
+  (`scrollHeight > clientHeight` — a horizontally scrolling `<main>` never
+  matches that, so the walk naturally stops one level before it) and sets
+  only its `scrollTop` — never call `scrollIntoView()` itself for a
+  "stay-in-view-while-navigating-a-list" scroll. Used by
   `scrollCodeIntoView`/`scrollChipIntoView`/`scrollTaskIntoView`/
-  `scrollReactionIntoView` (`RelatedPanel.mjs`) en de `scrollChangeIntoView`-
-  fallback (`home.mjs`). `scrollFocusIntoView` (dat de gefocuste kolom bij een
-  `←`/`→`-focuswissel bewust wél links uitlijnt met `inline:'start'`) blijft
-  ongewijzigd — dat is de ene plek waar een horizontale scroll juist gewenst
-  is. Zie `tests/scroll-focus-vertical-only.spec.mjs`.
-- **Syntax-highlighting:** Prism 1.29.0 staat gevendord als één ES-module in
-  `src/vendor/prism.js` (core + markup + clike + markup-templating + php, met
-  `window.Prism={manual:true}` zodat het niet de hele pagina auto-highlightt). De
-  code-panes in `Block.mjs` highlighten PHP met `Prism.highlight(...)` en tonen het
-  resultaat via de `.innerHTML`-binding. Prism's eigen container-CSS is bewust
-  weggelaten; alleen de token-kleuren staan in de `<style>` van `index.html`,
-  **gescoped op de `.language-php`-class** die elk code-fragment draagt — dus niet
-  alleen de diff-panes maar ook de Onderliggende-code-kaarten + de comment-hint
-  (`RelatedPanel.mjs`) en de footer krijgen dezelfde kleuren. (Was eerder gescoped
-  op `[data-testid=code-diff]`, waardoor alles buiten de diff-panes kleurloos bleef.)
-- **Markdown-rendering:** `snarkdown` (v2.0.0, MIT, ~1kb) staat gevendord als
-  ES-module in `src/vendor/snarkdown.js` (verbatim upstream-algoritme, alleen een
-  vendoring-headercomment toegevoegd) — gebruikt precies zoals het uit de doos
-  komt: koppen, lijsten, bold/italic/strike, blockquotes, inline code, links,
-  afbeeldingen, `---`. `src/markdown.mjs` is een dunne wrapper
-  (`renderMarkdown(text) -> safeHtmlString`) die er twee dingen omheen legt: (1)
-  fenced code blocks worden er **vóór** alles uitgehaald en met dezelfde Prism
-  `highlight()` als de diff-panes (`Block.mjs`) gerenderd i.p.v. snarkdown's eigen
-  kale `<pre><code>` — vandaar ook de `.language-php`-class op elk code-fragment
-  (dezelfde CSS-scope hierboven); (2) een XSS-veiligheidslaag: de **hele** ruwe
-  Markdown-tekst wordt eerst volledig HTML-ge-escaped (`escapeHtml`, `&<>"`) vóórdat
-  hij naar snarkdown gaat — snarkdown zelf escapet **geen** losse HTML in de
-  brontekst, alleen de attribuut-waarden die het zelf opbouwt (link/image-URL's) —
-  en link/image-URL's gaan daarna nog door `sanitizeUrls`, dat een
-  `javascript:`/`vbscript:`/`data:text/html`-schema neutraliseert als extra laag
-  (snarkdown's eigen `encodeAttr` escapet al de quote in een URL, dus een
-  `<img src>` kan sowieso geen los `onerror=`-attribuut injecteren). Gebruikt in
-  `prInfoCard` (`home.mjs`) voor de PR-samenvatting/-omschrijving/Jira-omschrijving
-  via de `.innerHTML`-binding; een klein `.markdown-body`-stijlblok in
-  `index.html` (koppen/lijsten/links/blockquote/code/afbeeldingen) is de
-  hand-geschreven typography-laag — Tailwind Play CDN heeft geen
-  typography-plugin zonder build-stap. **Geen** GFM-tabellen of
-  taak-checklists (`- [ ]`) — bewust buiten scope gehouden, snarkdown ondersteunt
-  ze niet en er is geen extensie voor gebouwd.
-  **Ook comment-bodies renderen als Markdown** (`RelatedPanel.mjs`): `commentBody(c)`
-  is de **enige** plek die een comment-body rendert (`() => renderMarkdown(c.body)`,
-  `.innerHTML`-binding) — hergebruikt door `commentRow` (de comment-rij-preview),
-  `reactionBubble` (elke thread-bubble, zowel het block-scoped comment-paneel als
-  het PR-brede `prWideItem`) en dus automatisch ook een toekomstig vierde render-punt.
-  De input (composer-`<textarea>`/`<input>`) is een kaal tekstveld zonder
-  restrictie — "markdown-input ondersteunen" was dus al gratis, alleen de
-  weergave miste `renderMarkdown`. **Bewust buiten `commentBody` gehouden:** de
-  eenregelige, `truncate`/`line-clamp`-titel-contexten waar opgemaakte structuur
-  weinig toevoegt en een halfafgekapte `**`/code-fence lelijker oogt dan kale
-  tekst — de thread-header-titel (`selComment().body`) en `workflowNote`'s
-  Taken-snippet blijven daarom platte tekst.
-  **Lange woorden/URL's breken binnen het woord af (`[overflow-wrap:anywhere]`):**
-  elk van de drie `.innerHTML="${commentBody(...)}"`-containers
-  (`commentRow`'s preview-span, `reactionBubble`'s bubble-`<div>`, `prWideItem`'s
-  body-span) draagt deze arbitrary-value Tailwind-class naast zijn bestaande
-  `truncate`/`line-clamp`/geen-wrap-class. Zonder deze class breekt tekst alleen
-  op woordgrenzen (`break-words`/browser-default), zodat een lange, spatieloze
-  token (URL, hash, aaneengeschreven pad) buiten de kaart/bubble kan uitsteken;
-  `overflow-wrap:anywhere` breekt zo'n woord alleen bij overloop, midden in het
-  woord, zonder normale tekst anders te wrappen.
-- **Gedeelde avatar-helper (`src/avatar.mjs`), auteur+avatar bij elke
+  `scrollReactionIntoView` (`RelatedPanel.mjs`) and the `scrollChangeIntoView`
+  fallback (`home.mjs`). `scrollFocusIntoView` (which deliberately **does**
+  align the focused column left with `inline:'start'` on a `←`/`→` focus
+  switch) stays unchanged — that's the one place where a horizontal scroll
+  is actually wanted. See `tests/scroll-focus-vertical-only.spec.mjs`.
+- **Syntax highlighting:** Prism 1.29.0 is vendored as a single ES module in
+  `src/vendor/prism.js` (core + markup + clike + markup-templating + php,
+  with `window.Prism={manual:true}` so it doesn't auto-highlight the whole
+  page). The code panes in `Block.mjs` highlight PHP with
+  `Prism.highlight(...)` and show the result via the `.innerHTML` binding.
+  Prism's own container CSS is deliberately omitted; only the token colors
+  live in the `<style>` of `index.html`, **scoped to the `.language-php`
+  class** that every code fragment carries — so not just the diff panes but
+  also the Underlying-code cards + the comment hint (`RelatedPanel.mjs`) and
+  the footer get the same colors. (Was previously scoped to
+  `[data-testid=code-diff]`, which left everything outside the diff panes
+  colorless.)
+- **Markdown rendering:** `snarkdown` (v2.0.0, MIT, ~1kb) is vendored as an ES
+  module in `src/vendor/snarkdown.js` (verbatim upstream algorithm, only a
+  vendoring header comment added) — used exactly as it comes out of the box:
+  headings, lists, bold/italic/strike, blockquotes, inline code, links,
+  images, `---`. `src/markdown.mjs` is a thin wrapper
+  (`renderMarkdown(text) -> safeHtmlString`) that adds two things around it:
+  (1) fenced code blocks are extracted **before** anything else and rendered
+  with the same Prism `highlight()` as the diff panes (`Block.mjs`) instead
+  of snarkdown's own bare `<pre><code>` — hence also the `.language-php`
+  class on every code fragment (same CSS scope as above); (2) an XSS safety
+  layer: the **entire** raw Markdown text is first fully HTML-escaped
+  (`escapeHtml`, `&<>"`) before it goes to snarkdown — snarkdown itself does
+  **not** escape loose HTML in the source text, only the attribute values it
+  builds itself (link/image URLs) — and link/image URLs then also pass
+  through `sanitizeUrls`, which neutralizes a `javascript:`/`vbscript:`/
+  `data:text/html` scheme as an extra layer (snarkdown's own `encodeAttr`
+  already escapes the quote in a URL, so an `<img src>` can't inject a loose
+  `onerror=` attribute anyway). Used in `prInfoCard` (`home.mjs`) for the PR
+  summary/description/Jira description via the `.innerHTML` binding; a small
+  `.markdown-body` style block in `index.html`
+  (headings/lists/links/blockquote/code/images) is the hand-written
+  typography layer — Tailwind Play CDN has no typography plugin without a
+  build step. **No** GFM tables or task checklists (`- [ ]`) — deliberately
+  kept out of scope, snarkdown doesn't support them and no extension has been
+  built for them.
+  **Comment bodies also render as Markdown** (`RelatedPanel.mjs`):
+  `commentBody(c)` is the **only** place that renders a comment body
+  (`() => renderMarkdown(c.body)`, `.innerHTML` binding) — reused by
+  `commentRow` (the comment-row preview), `reactionBubble` (every thread
+  bubble, both the block-scoped comment panel and the PR-wide `prWideItem`),
+  and therefore automatically also a future fourth render point. The input
+  (composer `<textarea>`/`<input>`) is a bare text field with no
+  restriction — "supporting markdown input" was thus already free, only the
+  display was missing `renderMarkdown`. **Deliberately kept outside
+  `commentBody`:** the single-line, `truncate`/`line-clamp` title contexts
+  where formatted structure adds little and a half-cut-off `**`/code fence
+  looks uglier than plain text — the thread-header title
+  (`selComment().body`) and `workflowNote`'s Tasks snippet therefore stay
+  plain text.
+  **Long words/URLs break within the word (`[overflow-wrap:anywhere]`):**
+  each of the three `.innerHTML="${commentBody(...)}"` containers
+  (`commentRow`'s preview span, `reactionBubble`'s bubble `<div>`,
+  `prWideItem`'s body span) carries this arbitrary-value Tailwind class next
+  to its existing `truncate`/`line-clamp`/no-wrap class. Without this class,
+  text only breaks at word boundaries (`break-words`/browser default), so a
+  long, spaceless token (URL, hash, concatenated path) can stick out of the
+  card/bubble; `overflow-wrap:anywhere` only breaks such a word on overflow,
+  mid-word, without wrapping normal text any differently.
+- **Shared avatar helper (`src/avatar.mjs`), author+avatar on every
   comment/reply.** `avatarHTML(name, avatarUrl, sizeCls, extraCls)` is
-  geëxtraheerd uit `overview.mjs`'s `reviewerAvatar` (de reviewer-avatars in
-  de PR-lijst): een `<img>` als er een `avatarUrl` is, anders een
-  initialen-cirkel (eerste twee letters, uppercase) — exact dezelfde kleuren/
-  vorm als de PR-lijst. `reviewerAvatar` roept 'm nu zelf aan voor zijn eigen
-  cirkel (de goedgekeurd/wijzigingen-gevraagd-badge eromheen blijft lokaal in
-  `overview.mjs`). Een `<img>` valt bij een laad-fout terug op dezelfde
-  initialen-cirkel via een statische `onerror`-attribuut-string (geen
-  reactieve binding nodig — dat is geen arrow.js-valkuil, `onerror` wordt hier
-  nooit door arrow.js zelf gezet) zodat een onbereikbare/offline afbeelding
-  (bv. `SLASH_GITHUB=off`-tests) nooit een broken-image-icoon achterlaat.
-  `RelatedPanel.mjs` gebruikt 'm in `commentRow` (comment-rij, `h-4 w-4`),
-  `reactionBubble` (elke thread-bubble — de synthetische opening én elke
-  reactie, beide dragen al een `author`, zie `threadMessages`) en `prWideItem`
-  (de PR-brede comments): auteur-naam + avatar op een eigen regel boven de
-  body/kind-badge (`data-testid=comment-author`/`reaction-author`/
-  `pr-wide-author`, plus de bijbehorende `*-author-line`-wrapper). **Datamodel-
-  kanttekening:** comments/reacties (`modules/comments`) dragen wél een
-  `author`-login (`Comment.Author`/`Reaction.Author`, ook gevuld voor
-  GitHub-geïmporteerde comments/replies, zie `comment_import.go`), maar
-  **geen avatar-URL** — de GitHub-fetch (`modules/github`) threadt alleen
-  `user.login` door, nooit `user.avatar_url`. Elke comment-/reply-avatar
-  rendert dus vandaag altijd als initialen-cirkel; een latere backend-
-  uitbreiding (avatar-URL meenemen in `ghComment`/`Reply`/`ReviewComment`/
-  `GeneralComment` + een nieuwe kolom in `comments.db`) zou de echte
-  GitHub-profielfoto laten verschijnen zonder de frontend te hoeven wijzigen
-  (`avatarHTML` ondersteunt het al). Zie `tests/comment-author-avatar.spec.mjs`.
-- **Thema: systeem/licht/donker, met een handmatige rondloop-knop
-  (`src/theme.mjs`).** Het thema volgde ooit **uitsluitend** de
-  systeeminstelling (`prefers-color-scheme`, Tailwind `darkMode:'media'`,
-  geen eigen toggle); die keuze is teruggedraaid — een reviewer wil soms
-  bewust licht/donker forceren, los van de OS-instelling. `src/theme.mjs` is
-  de gedeelde (geen component, pure utility, zoals `urlState.mjs`) module voor
-  beide pagina's:
-  - **Drie staten**, geen binaire aan/uit: `theme.pref` ∈
-    `'system'|'light'|'dark'` (default `'system'`). Een binaire toggle zou een
-    reviewer die op "licht" klikte terwijl de OS op dark staat geen weg terug
-    naar "volg systeem" geven zonder de OS-instelling zelf te wijzigen.
-  - **Tailwind draait op `darkMode: 'selector'`** (niet meer `'media'`, in
-    hetzelfde `tailwind.config`-`<script>` vóór de CDN-styles) — elke
-    bestaande `dark:`-utility blijft ongewijzigd werken, alleen de trigger
-    verandert van de media-query naar de **aanwezigheid van een `.dark`-class**
-    op `<html>`.
-  - `theme.mjs`'s `applyTheme(pref)` zet die `.dark`-class **plus** een
-    `data-theme="light"|"dark"` attribuut op `<html>` (voor de losse CSS
-    hieronder, die geen class kan lezen), berekend als `pref==='system' ?
-    matchMedia(...).matches : pref==='dark'`. `initTheme()` (aangeroepen als
-    module-side-effect vanuit zowel `home.mjs` als `overview.mjs`) past 'm
-    initieel toe, abonneert een `watch(() => theme.pref, applyTheme)` (de
-    toggle) én een `matchMedia('(prefers-color-scheme: dark)')`
-    `'change'`-listener die alleen ingrijpt zolang `pref === 'system'` — zo
-    blijft "systeem" ook **live** volgen als de OS-instelling wijzigt terwijl
-    de pagina open staat.
-  - **Anti-flash:** vóór de Tailwind-CDN-`<script>` staat in beide shells
-    (`index.html`/`overview.html`) een **inline** `<script>` dat dezelfde
-    localStorage-lees + class/attribuut-zet-logica dupliceert (niet
-    importeert — ES-modules laden async, en dit moet vóór de eerste paint
-    draaien). `theme.mjs`'s `initTheme()` neemt het daarna gewoon reactief
-    over; geen zichtbare flits van het verkeerde thema bij page-load.
-  - **De knop** (`themeToggleButton(cls)`, `data-testid=theme-toggle`, één
-    gedeelde component-functie die beide pagina's importeren): een klik cyclet
-    `system → light → dark → system` (`cycleTheme()`, persisteert meteen naar
-    `localStorage`) en toont een monitor/zon/maan-icoon voor de huidige staat.
-    Plek op `/pr/<id>`: een **smalle rij in `prInfoCard`** (`home.mjs`,
-    `data-testid=pr-info-theme-row`), direct vóór de PR-samenvatting
-    (`data-testid=pr-info-summary`) — **niet** meer een eigen, altijd-
-    zichtbaar `position:fixed`-hoekelement (de oudere `ThemeToggleCorner`,
-    `bottom-6 left-6 z-30`, is verwijderd) en ook niet in `Footer.mjs` (die
-    footer toont zich sinds kort alleen nog als er daadwerkelijk iets te
-    previewen is, `state.footerVisible`, zie "Footer" in
-    `.claude/rules/keyboard-navigation.md` — geen betrouwbare plek voor een
-    permanent bereikbare knop). Bewuste consequentie: `prInfoCard` bestaat
-    alleen terwijl `state.showDescription` waar is (stop 1 van de
-    links→rechts-navigatieketen, zie `detail-layout.md`), dus de knop is
-    **niet** meer standaard zichtbaar — dat is hier expliciet akkoord
-    bevonden, anders dan de eerdere `ThemeToggleCorner`-oplossing die juist
-    was ingevoerd om de knop *wél* altijd bereikbaar te maken (de knop zat
-    daarvóór in de rechterbovenhoek van de footer-strip en was daardoor
-    onbereikbaar in list-mode — zie `tests/theme.spec.mjs`, dat nu andersom
-    eerst `←` naar stop 1 drukt vóór het de knop verwacht). Op `/pr-overview`
-    (geen footer, geen `state.mode`) staat de knop ongewijzigd in de
-    **overview-header** (`overview.mjs`'s `headerBlock`, naast de bestaande
-    PR-teller-pill) — die pagina heeft geen `showDescription`-gating.
-  - **Persistentie:** `localStorage.getItem/setItem('theme', ...)` —
-    bewust **buiten** `bindUrlState`/de query-string (geen navigatiepositie,
-    hoort niet in een deelbare link) maar ook niet efemeer zoals
-    `state.showApproved` (een thema-keuze wil je onthouden over een refresh).
-  `overview.html` had ooit een **geforceerde** dark-modus (`<html
-  class="dark">` + `darkMode:'class'`, en `overview.mjs` gebruikte kale
-  `zinc-*`-klassen zonder enige `dark:`-variant); dat is verwijderd —
-  `overview.mjs` kreeg een lichte basis-klasse vóór elke voorheen-kale
-  dark-klasse (die laatste kreeg een `dark:`-prefix), symmetrisch met hoe
-  `index.html`/`home.mjs`/`Block.mjs`/`BlockList.mjs`/`RelatedPanel.mjs`/
-  `CommandMenu.mjs`/`Footer.mjs` (voorheen licht-only) een `dark:`-variant
-  achter elke bestaande kleur-klasse kregen.
-  **Kleurenpalet:** neutrals mappen 1-op-1 tussen de twee families die al in de
-  codebase bestonden — licht `slate-*` (`bg-white`/`bg-slate-50/100/200`,
-  `text-slate-900..400`, `border-slate-100/200/300`) ↔ donker `zinc-*`
-  (`bg-zinc-900/950/800/700`, `text-zinc-100..500`,
-  `border-zinc-800/700`, meestal met een `/NN`-opacity-suffix voor een
-  subtielere kaart-tint dan de solide `overview.mjs`-dark-tinten). Semantische
-  accentkleuren (emerald/rose/amber/sky/red/de category-badge-hues in
-  `BlockList.mjs`'s `CATEGORY_STYLE`) behouden hun hue maar krijgen een
-  contrast-passende schakering per modus: een lichte kaart-tint
-  (`bg-emerald-50`/`text-emerald-700`) wordt `dark:bg-emerald-500/15
-  dark:text-emerald-300`, en omgekeerd (`overview.mjs`'s
-  `text-emerald-300`-op-donker wordt licht `text-emerald-700`). Solide,
-  verzadigde accent-knoppen/badges (`bg-indigo-500`, `bg-emerald-600` met
-  `text-white`) en laag-opaciteit rings (`ring-emerald-500/30` e.d.) werken in
-  beide modi zonder wijziging en zijn bewust ongemoeid gelaten — alleen
-  achtergrond/tekst-vlakken die *op de pagina- of kaart-achtergrond* rusten
-  hebben een aparte licht/donker-schakering nodig.
-  **Wat geen Tailwind-`dark:`-variant kan gebruiken** (losse CSS, geen
-  utility-klasse): de Prism-tokenkleuren en de `.markdown-body`-typography in
-  `index.html`'s `<style>`-blok. Die staan in **twee** gelijke blokken: het
-  bestaande `@media (prefers-color-scheme: dark) { … }`-blok (fallback voor
-  het moment vóór `theme.mjs` heeft gedraaid) én een **`:root[data-theme=
-  "dark"] …`-mirror** ernaast (elke selector letterlijk gedupliceerd met dat
-  attribuut-prefix — bewust géén CSS-nesting, voor maximale
-  browser-compatibiliteit) die daadwerkelijk wint zodra de handmatige toggle
-  de OS-instelling overridet. Beide delen hetzelfde palet: een
-  GitHub-dark-geïnspireerd Prism-palet + de zinc/indigo-kleuren van de rest
-  van de dark-modus.
-  **Diff-rij-achtergronden** (`Block.mjs`, `paneHTML`) zijn arbitrary-value
-  hex-klassen (`bg-[#fed7dc]` etc., "20% richting wit" gemixt met de
-  Tailwind-rose/emerald-shade — zie `blocks-and-ingest.md`); die kregen een
-  `dark:bg-{kleur}-500/{opacity}`-tegenhanger (bv. `dark:bg-rose-500/25` voor
-  de actieve del-rij, `dark:bg-rose-500/10` voor de filler-tint) in plaats van
-  een tweede hardcoded hex — eenvoudiger en consistent met de rest van het
-  donkere palet.
-  **arrow.js-conform:** waar een class-string via een reactieve
-  `class="${() => ...}"`-functie-binding loopt, zit de `dark:`-klasse gewoon
-  **in dezelfde template-string** als de rest van die waarde (geen aparte
-  losse binding) — dus geen nieuwe valkuil bovenop de bestaande
-  "hele-waarde-in-één-binding"-regel verderop in dit bestand.
-- Go: `net/http` `ServeMux`, handlers per feature. De `/api/`-bridge shelt uit naar
-  `gh`/`claude` via `os/exec` — valideer altijd input voordat je het aan een
-  subproces geeft.
-- **Code (Go + JS) is Engels** — comments, log-berichten en identifiers. De docs in
-  `.claude/` en `CLAUDE.md` blijven Nederlands.
-- **Git worktrees mogen** — Claude/agents mogen gerust een git-worktree opzetten om
-  geïsoleerd of parallel aan een taak te werken (b.v. de Agent-tool met
-  `isolation: worktree`). Een eerdere afspraak verbood dit; die is hierbij
-  ingetrokken. (Niet te verwarren met de **app-eigen** base/head-worktrees onder
-  `data/worktrees/` uit de ingest-pipeline — die blijven zoals beschreven in
-  `.claude/rules/blocks-and-ingest.md`.)
+  extracted from `overview.mjs`'s `reviewerAvatar` (the reviewer avatars in
+  the PR list): an `<img>` if there's an `avatarUrl`, otherwise an initials
+  circle (first two letters, uppercase) — exactly the same colors/shape as
+  the PR list. `reviewerAvatar` now calls it itself for its own circle (the
+  approved/changes-requested badge around it stays local to `overview.mjs`).
+  An `<img>` falls back to the same initials circle on a load error via a
+  static `onerror` attribute string (no reactive binding needed — that's not
+  an arrow.js pitfall, `onerror` is never set by arrow.js itself here) so
+  that an unreachable/offline image (e.g. `SLASH_GITHUB=off` tests) never
+  leaves a broken-image icon behind. `RelatedPanel.mjs` uses it in
+  `commentRow` (comment row, `h-4 w-4`), `reactionBubble` (every thread
+  bubble — the synthetic opening and every reaction, both already carry an
+  `author`, see `threadMessages`) and `prWideItem` (the PR-wide comments):
+  author name + avatar on their own line above the body/kind badge
+  (`data-testid=comment-author`/`reaction-author`/`pr-wide-author`, plus the
+  corresponding `*-author-line` wrapper). **Data-model note:**
+  comments/reactions (`modules/comments`) do carry an `author` login
+  (`Comment.Author`/`Reaction.Author`, also filled for GitHub-imported
+  comments/replies, see `comment_import.go`), but **no avatar URL** — the
+  GitHub fetch (`modules/github`) only threads `user.login` through, never
+  `user.avatar_url`. Every comment/reply avatar therefore always renders as
+  an initials circle today; a later backend extension (carrying an avatar
+  URL through `ghComment`/`Reply`/`ReviewComment`/`GeneralComment` + a new
+  column in `comments.db`) would make the real GitHub profile picture appear
+  without needing to change the frontend (`avatarHTML` already supports it).
+  See `tests/comment-author-avatar.spec.mjs`.
+- **Theme: system/light/dark, with a manual cycle button
+  (`src/theme.mjs`).** The theme once followed **exclusively** the system
+  setting (`prefers-color-scheme`, Tailwind `darkMode:'media'`, no own
+  toggle); that choice has been reverted — a reviewer sometimes wants to
+  deliberately force light/dark, independent of the OS setting.
+  `src/theme.mjs` is the shared (not a component, a pure utility, like
+  `urlState.mjs`) module for both pages:
+  - **Three states**, not a binary on/off: `theme.pref` ∈
+    `'system'|'light'|'dark'` (default `'system'`). A binary toggle would
+    give a reviewer who clicked "light" while the OS is on dark no way back
+    to "follow system" without changing the OS setting itself.
+  - **Tailwind runs on `darkMode: 'selector'`** (no longer `'media'`, in the
+    same `tailwind.config` `<script>` before the CDN styles) — every
+    existing `dark:` utility keeps working unchanged, only the trigger
+    changes from the media query to the **presence of a `.dark` class** on
+    `<html>`.
+  - `theme.mjs`'s `applyTheme(pref)` sets that `.dark` class **plus** a
+    `data-theme="light"|"dark"` attribute on `<html>` (for the separate CSS
+    below, which can't read a class), computed as
+    `pref==='system' ? matchMedia(...).matches : pref==='dark'`.
+    `initTheme()` (called as a module side effect from both `home.mjs` and
+    `overview.mjs`) applies it initially, subscribes a
+    `watch(() => theme.pref, applyTheme)` (the toggle) and a
+    `matchMedia('(prefers-color-scheme: dark)')` `'change'` listener that
+    only intervenes as long as `pref === 'system'` — so "system" also keeps
+    following **live** if the OS setting changes while the page is open.
+  - **Anti-flash:** before the Tailwind CDN `<script>`, both shells
+    (`index.html`/`overview.html`) have an **inline** `<script>` that
+    duplicates the same localStorage-read + class/attribute-set logic (not
+    imported — ES modules load async, and this has to run before the first
+    paint). `theme.mjs`'s `initTheme()` then simply takes over reactively;
+    no visible flash of the wrong theme at page load.
+  - **The button** (`themeToggleButton(cls)`, `data-testid=theme-toggle`, one
+    shared component function that both pages import): a click cycles
+    `system → light → dark → system` (`cycleTheme()`, persists immediately to
+    `localStorage`) and shows a monitor/sun/moon icon for the current state.
+    Location on `/pr/<id>`: a **narrow row in `prInfoCard`** (`home.mjs`,
+    `data-testid=pr-info-theme-row`), directly before the PR summary
+    (`data-testid=pr-info-summary`) — **no longer** its own, always-visible
+    `position:fixed` corner element (the older `ThemeToggleCorner`,
+    `bottom-6 left-6 z-30`, has been removed) and also not in `Footer.mjs`
+    (that footer has recently only shown itself when there's actually
+    something to preview, `state.footerVisible`, see "Footer" in
+    `.claude/rules/keyboard-navigation.md` — no reliable place for a
+    permanently reachable button). Deliberate consequence: `prInfoCard` only
+    exists while `state.showDescription` is true (stop 1 of the
+    left→right navigation chain, see `detail-layout.md`), so the button is
+    **no longer** visible by default — that has been explicitly agreed here,
+    unlike the earlier `ThemeToggleCorner` solution, which was introduced
+    precisely to make the button *always* reachable (the button used to sit
+    in the top-right corner of the footer strip and was therefore
+    unreachable in list mode — see `tests/theme.spec.mjs`, which now
+    conversely presses `←` to stop 1 first before expecting the button). On
+    `/pr-overview` (no footer, no `state.mode`) the button stays unchanged in
+    the **overview header** (`overview.mjs`'s `headerBlock`, next to the
+    existing PR-count pill) — that page has no `showDescription` gating.
+  - **Persistence:** `localStorage.getItem/setItem('theme', ...)` —
+    deliberately **outside** `bindUrlState`/the query string (not a
+    navigation position, doesn't belong in a shareable link) but also not
+    ephemeral like `state.showApproved` (a theme choice is something you want
+    remembered across a refresh).
+  `overview.html` once had a **forced** dark mode (`<html class="dark">` +
+  `darkMode:'class'`, and `overview.mjs` used bare `zinc-*` classes without
+  any `dark:` variant); that has been removed — `overview.mjs` got a light
+  base class before every previously bare dark class (the latter got a
+  `dark:` prefix), symmetric with how `index.html`/`home.mjs`/`Block.mjs`/
+  `BlockList.mjs`/`RelatedPanel.mjs`/`CommandMenu.mjs`/`Footer.mjs`
+  (previously light-only) got a `dark:` variant behind every existing color
+  class.
+  **Color palette:** neutrals map 1-to-1 between the two families that
+  already existed in the codebase — light `slate-*`
+  (`bg-white`/`bg-slate-50/100/200`, `text-slate-900..400`,
+  `border-slate-100/200/300`) ↔ dark `zinc-*`
+  (`bg-zinc-900/950/800/700`, `text-zinc-100..500`, `border-zinc-800/700`,
+  usually with a `/NN` opacity suffix for a subtler card tint than the solid
+  `overview.mjs` dark tints). Semantic accent colors (emerald/rose/amber/sky/
+  red/the category-badge hues in `BlockList.mjs`'s `CATEGORY_STYLE`) keep
+  their hue but get a contrast-appropriate shade per mode: a light card tint
+  (`bg-emerald-50`/`text-emerald-700`) becomes
+  `dark:bg-emerald-500/15 dark:text-emerald-300`, and vice versa
+  (`overview.mjs`'s `text-emerald-300`-on-dark becomes light
+  `text-emerald-700`). Solid, saturated accent buttons/badges (`bg-indigo-500`,
+  `bg-emerald-600` with `text-white`) and low-opacity rings
+  (`ring-emerald-500/30` etc.) work in both modes without change and are
+  deliberately left untouched — only backgrounds/text areas that sit *on the
+  page or card background* need a separate light/dark shading.
+  **What can't use a Tailwind `dark:` variant** (separate CSS, not a utility
+  class): the Prism token colors and the `.markdown-body` typography in
+  `index.html`'s `<style>` block. Those live in **two** matching blocks: the
+  existing `@media (prefers-color-scheme: dark) { … }` block (fallback for
+  the moment before `theme.mjs` has run) and a
+  **`:root[data-theme="dark"] …` mirror** next to it (every selector
+  literally duplicated with that attribute prefix — deliberately **no** CSS
+  nesting, for maximum browser compatibility) that actually wins once the
+  manual toggle overrides the OS setting. Both share the same palette: a
+  GitHub-dark-inspired Prism palette + the zinc/indigo colors of the rest of
+  dark mode.
+  **Diff-row backgrounds** (`Block.mjs`, `paneHTML`) are arbitrary-value hex
+  classes (`bg-[#fed7dc]` etc., "20% toward white" mixed with the
+  Tailwind rose/emerald shade — see `blocks-and-ingest.md`); those got a
+  `dark:bg-{color}-500/{opacity}` counterpart (e.g. `dark:bg-rose-500/25` for
+  the active del row, `dark:bg-rose-500/10` for the filler tint) instead of a
+  second hardcoded hex — simpler and consistent with the rest of the dark
+  palette.
+  **arrow.js-compliant:** wherever a class string runs through a reactive
+  `class="${() => ...}"` function binding, the `dark:` class simply sits **in
+  the same template string** as the rest of that value (no separate loose
+  binding) — so no new pitfall on top of the existing
+  "whole-value-in-one-binding" rule further down this file.
+- Go: `net/http` `ServeMux`, handlers per feature. The `/api/` bridge shells
+  out to `gh`/`claude` via `os/exec` — always validate input before handing
+  it to a subprocess.
+- **Code (Go + JS) is English** — comments, log messages, and identifiers. The
+  docs in `.claude/` and `CLAUDE.md` are also English.
+- **Git worktrees are allowed** — Claude/agents are welcome to set up a git
+  worktree to work isolated or in parallel on a task (e.g. the Agent tool
+  with `isolation: worktree`). An earlier agreement forbade this; that is
+  hereby withdrawn. (Not to be confused with the **app's own** base/head
+  worktrees under `data/worktrees/` from the ingest pipeline — those stay as
+  described in `.claude/rules/blocks-and-ingest.md`.)
 
-## Playwright-test-infra (per-worker geïsoleerde server)
+## Playwright test infra (per-worker isolated server)
 
-- De Go-binary wordt **één keer** gebouwd in `globalSetup` (`tests/_setup.mjs` →
-  `go build -o tests/.tmp/slash .`), nooit per test.
-- Er is **geen gedeelde `webServer`** meer. Elke Playwright-worker krijgt via de
-  worker-scoped fixture in **`tests/_fixtures.mjs`** zijn **eigen** geseede
-  SQLite-DB én **eigen** server op **poort `4200 + workerIndex`**. Omdat `newTasks`
-  álle module-DB's (comments/workflows/relations/callresolve/inbox/prmeta) **naast**
-  het `-db`-pad zet (`filepath.Dir`), isoleert één `-db tests/.tmp/w<n>/test.db`
-  meteen **alle write-state** per worker. De read-only base/head-worktrees onder
-  `data/` blijven gedeeld (server-`dataDir` is hardcoded `"data"`). Dit haalt de
-  cross-worker **write-races** weg (comment/workflow-SQLite-contention gaf eerder
-  een lege `runId`) én de page-load-contentie die de suite flaky maakte.
-- **Spec-imports:** elke spec importeert `{ test, expect }` uit **`./_fixtures.mjs`**
-  (niet `@playwright/test`), zodat `page.goto('/pr/…')` de eigen worker-server raakt
-  (de fixture overschrijft `baseURL`).
-- **Workers = 4** op deze 8-core-box: elke worker draait een Go-server **plus** een
-  Chromium, dus hoger (6+) verzadigt de machine en gaf flaky assertion-timeouts.
-  `expect`-timeout staat op **15s** (ruimte voor een trage render tijdens een
-  startup-piek; geslaagde tests blijven <1s) en `retries: 1` vangt de resterende
-  cold-start **mount-race** op (een paar specs mounten een component via een
-  dynamische `import()` in `page.evaluate()` tegen de live app-pagina — nodig voor
-  de Tailwind/Prism-CSS van `index.html` — en de `history.replaceState`-burst van de
-  app tijdens load kan die mount kort verstoren). Een echte fout faalt beide pogingen.
-- **Data-kanttekening:** de diff-inhoud (`/api/code`) komt uit de **gitignored**
-  `data/worktrees/pr-<n>-{base,head}` — géén gecommitte fixture. Zijn die lokaal naar
-  een andere commit gedreven (b.v. base+head op twee náást elkaar liggende commits
-  i.p.v. base=merge-base), dan tonen de meeste blokken **geen** wijzigingen en falen
-  diff-inhoud-afhankelijke tests. Anker diff-navigatie-tests daarom op een blok dat
-  betrouwbaar een wijziging draagt (blok 0 van PR 12903).
-- **Een nieuwe fixture-PR die écht diff-inhoud nodig heeft** (niet alleen
-  child-listing/drill-mechaniek zoals PR 90/91/92/93/94, die bewust géén
-  worktree op disk hebben) kan zijn eigen kleine `data/worktrees/pr-<n>-
-  {base,head}` **programmatisch materialiseren in `globalSetup`**
-  (`tests/_setup.mjs`) i.p.v. op een echte, lokaal-aanwezige `gh`/`git`-ingest
-  te leunen (die niet reproduceerbaar is op een andere machine/CI) — zie
-  `materializeTreeWorktrees` (PR 95, `tests/postapprove-tree.spec.mjs`): een
-  paar hand-geschreven PHP-bestandjes met één echt gewijzigde regel, geschreven
-  vóór elke worker start (shared, read-only, net als de bestaande worktrees),
-  met de bijbehorende `blocks.json`/`relations.json` toegevoegd aan `seed()`
-  in `tests/_fixtures.mjs`.
-- **De harness forceert offline altijd, ongeacht de shell-omgeving:** de
-  worker-fixture (`tests/_fixtures.mjs`) start elke server met **zowel
-  `SLASH_GITHUB=off` als `SLASH_CLAUDE=off`** hardcoded in de `spawn`-`env`
-  (`{ ...process.env, SLASH_GITHUB:'off', SLASH_CLAUDE:'off', … }`) — het spreidt
-  wel de rest van `process.env`, maar deze twee liggen vast. Zonder de
-  hardcoded `SLASH_CLAUDE=off` shelde een worker die vanuit een shell zónder die
-  var werd gestart, echt uit naar de `claude`-CLI voor de automatische
-  call-resolution-search (`resolve_call`); dat stalt/timeout't en liet
-  comment-flow-specs (b.v. `repro-live-comment.spec.mjs`) niet-deterministisch
-  falen, afhankelijk van hoe de suite toevallig werd aangeroepen. Geen enkele
-  spec verwacht een echte (niet-Fake) `claude`-client — de LLM-resolved paden
-  worden via seed-fixtures getest (`tests/fixtures/callresolve.json`) — dus de
-  Fake overal forceren is veilig. **Draai de suite dus nooit met losse
-  `SLASH_GITHUB`/`SLASH_CLAUDE`-env-vars om 'm offline te krijgen** — dat doet de
-  harness al; die vars zijn alleen nog relevant voor `go run .`/`slash`
-  buiten Playwright om.
+- The Go binary is built **once** in `globalSetup` (`tests/_setup.mjs` →
+  `go build -o tests/.tmp/slash .`), never per test.
+- There is **no shared `webServer`** anymore. Each Playwright worker gets its
+  **own** seeded SQLite DB and its **own** server on
+  **port `4200 + workerIndex`** via the worker-scoped fixture in
+  **`tests/_fixtures.mjs`**. Because `newTasks` places **all** module DBs
+  (comments/workflows/relations/callresolve/inbox/prmeta) **next to** the
+  `-db` path (`filepath.Dir`), one `-db tests/.tmp/w<n>/test.db` immediately
+  isolates **all write state** per worker. The read-only base/head worktrees
+  under `data/` stay shared (server `dataDir` is hardcoded `"data"`). This
+  removes both the cross-worker **write races** (comment/workflow SQLite
+  contention previously gave an empty `runId`) and the page-load contention
+  that made the suite flaky.
+- **Spec imports:** every spec imports `{ test, expect }` from
+  **`./_fixtures.mjs`** (not `@playwright/test`), so `page.goto('/pr/…')` hits
+  its own worker server (the fixture overrides `baseURL`).
+- **Workers = 4** on this 8-core box: each worker runs a Go server **plus** a
+  Chromium, so higher (6+) saturates the machine and gave flaky assertion
+  timeouts. The `expect` timeout is set to **15s** (room for a slow render
+  during a startup spike; passing tests stay under 1s) and `retries: 1`
+  catches the remaining cold-start **mount race** (a few specs mount a
+  component via a dynamic `import()` inside `page.evaluate()` against the
+  live app page — needed for `index.html`'s Tailwind/Prism CSS — and the
+  app's `history.replaceState` burst during load can briefly disturb that
+  mount). A real failure fails both attempts.
+- **Data note:** the diff content (`/api/code`) comes from the **gitignored**
+  `data/worktrees/pr-<n>-{base,head}` — not a committed fixture. If those
+  have locally drifted to a different commit (e.g. base+head on two adjacent
+  commits instead of base=merge-base), most blocks show **no** changes and
+  diff-content-dependent tests fail. So anchor diff-navigation tests on a
+  block that reliably carries a change (block 0 of PR 12903).
+- **A new fixture PR that really needs diff content** (not just
+  child-listing/drill mechanics like PR 90/91/92/93/94, which deliberately
+  have **no** worktree on disk) can **materialize its own small
+  `data/worktrees/pr-<n>-{base,head}` programmatically in `globalSetup`**
+  (`tests/_setup.mjs`) instead of relying on a real, locally present
+  `gh`/`git` ingest (which isn't reproducible on another machine/CI) — see
+  `materializeTreeWorktrees` (PR 95, `tests/postapprove-tree.spec.mjs`): a
+  few hand-written PHP files with one genuinely changed line, written before
+  each worker starts (shared, read-only, just like the existing worktrees),
+  with the corresponding `blocks.json`/`relations.json` added to `seed()` in
+  `tests/_fixtures.mjs`.
+- **The harness always forces offline, regardless of the shell environment:**
+  the worker fixture (`tests/_fixtures.mjs`) starts every server with
+  **both `SLASH_GITHUB=off` and `SLASH_CLAUDE=off`** hardcoded in the
+  `spawn` `env` (`{ ...process.env, SLASH_GITHUB:'off', SLASH_CLAUDE:'off', … }`)
+  — it does spread the rest of `process.env`, but these two are fixed.
+  Without the hardcoded `SLASH_CLAUDE=off`, a worker started from a shell
+  without that var would really shell out to the `claude` CLI for the
+  automatic call-resolution search (`resolve_call`); that stalls/times out
+  and made comment-flow specs (e.g. `repro-live-comment.spec.mjs`)
+  non-deterministically fail, depending on how the suite happened to be
+  invoked. No spec expects a real (non-Fake) `claude` client — the
+  LLM-resolved paths are tested via seed fixtures
+  (`tests/fixtures/callresolve.json`) — so forcing the Fake everywhere is
+  safe. **So never run the suite with loose `SLASH_GITHUB`/`SLASH_CLAUDE` env
+  vars to get it offline** — the harness already does that; those vars are
+  only still relevant for `go run .`/`slash` outside Playwright.

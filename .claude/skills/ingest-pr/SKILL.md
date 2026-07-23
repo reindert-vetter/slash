@@ -3,57 +3,64 @@ name: ingest-pr
 description: Ingest a GitHub PR into blocks — fetch the PR, set up base/head worktrees, parse the changed PHP files into functions/methods, classify them as added/removed/modified, and store them in the SQLite blocks table. Use when adding to or debugging the PR→blocks pipeline (ingest.go, phpscan.go, classify.go, gh.go, parse_pool.go).
 ---
 
-# PR ingesten tot blocks
+# Ingesting a PR into blocks
 
-De ingest-pipeline maakt van een PR een lijst **blocks** (een block = één
-PHP-functie/method, of het hele bestand als parsen faalt). De data landt in de
-`blocks`-tabel van de SQLite-DB en wordt als delta geserveerd via
+The ingest pipeline turns a PR into a list of **blocks** (a block = one PHP
+function/method, or the whole file if parsing fails). The data lands in the
+`blocks` table of the SQLite DB and is served as a delta via
 `GET /api/blocks?pr=N`.
 
-## Pipeline (zie `ingestPR` in `ingest.go`)
+## Pipeline (see `ingestPR` in `ingest.go`)
 
 1. **Meta** — `fetchPRMeta` (`gh pr view <pr> --repo plug-and-pay/plug-and-pay
-   --json files,baseRefOid,headRefOid,baseRefName`). De SHAs uit de meta zijn de
-   bron van waarheid; base én head worden hieruit genomen zodat diff en worktrees
-   consistent zijn (geen head-drift).
-2. **Commits ophalen** — `ensureCommits`: `git fetch origin refs/pull/<pr>/head`,
-   `git fetch origin develop`, en als fallback `git fetch origin <sha>`
-   (GitHub staat fetch-by-sha toe). Hard-fail als een SHA onvindbaar blijft.
-3. **Worktrees** — `ensureWorktree` maakt (idempotent: eerst `worktree remove
-   --force`) twee detached worktrees onder `data/worktrees/pr-<pr>-{base,head}`.
-   **Absolute paden** zijn verplicht: `git -C <repo> worktree add <dir>` rekent een
-   relatief `<dir>` af t.o.v. de repo-dir, niet t.o.v. onze CWD.
-4. **Diff** — `diffBetweenSHAs` draait `git diff --unified=0 <base> <head> -- <files>`.
-   `--unified=0` geeft precies de gewijzigde regels.
-5. **Parsen (concurrent)** — `parseFiles` (worker-pool `min(NumCPU,8)`): per file
-   oude versie uit de base-worktree, nieuwe uit de head-worktree, beide door
-   `ScanBlocks`. Een scanner-panic wordt opgevangen → whole-file fallback.
-6. **Classificeren** — `classifyFile`: match blocks op `Class::method`. Alleen in
-   nieuw = `added`; alleen in oud = `removed` (`side='old'`); in beide en de span
-   raakt een gewijzigde regel = `modified`; anders overslaan. Category-tag komt uit
-   het pad (`categoryFor`).
-7. **Opslaan** — `replacePRBlocks`: één transactie, `DELETE FROM blocks WHERE pr=?`
-   gevolgd door bulk-INSERT (idempotente re-ingest).
+   --json files,baseRefOid,headRefOid,baseRefName`). The SHAs from the meta
+   are the source of truth; both base and head are taken from this so the
+   diff and worktrees stay consistent (no head drift).
+2. **Fetching commits** — `ensureCommits`: `git fetch origin refs/pull/<pr>/head`,
+   `git fetch origin develop`, and as a fallback `git fetch origin <sha>`
+   (GitHub allows fetch-by-sha). Hard-fails if a SHA remains unfindable.
+3. **Worktrees** — `ensureWorktree` creates (idempotently: first `worktree
+   remove --force`) two detached worktrees under
+   `data/worktrees/pr-<pr>-{base,head}`. **Absolute paths** are mandatory:
+   `git -C <repo> worktree add <dir>` resolves a relative `<dir>` against the
+   repo dir, not against our CWD.
+4. **Diff** — `diffBetweenSHAs` runs
+   `git diff --unified=0 <base> <head> -- <files>`. `--unified=0` gives
+   exactly the changed lines.
+5. **Parsing (concurrent)** — `parseFiles` (worker pool `min(NumCPU,8)`): per
+   file, the old version comes from the base worktree, the new one from the
+   head worktree, both through `ScanBlocks`. A scanner panic is caught →
+   whole-file fallback.
+6. **Classifying** — `classifyFile`: match blocks on `Class::method`. Only in
+   new = `added`; only in old = `removed` (`side='old'`); in both and the span
+   touches a changed line = `modified`; otherwise skip. The category tag
+   comes from the path (`categoryFor`).
+7. **Storing** — `replacePRBlocks`: one transaction,
+   `DELETE FROM blocks WHERE pr=?` followed by a bulk INSERT (idempotent
+   re-ingest).
 
-## Aanroepen
+## Invoking
 
-- Headless: `go run . ingest <pr> [-db data/graph.db]` (of het gebouwde binary).
-- Via de bridge: `POST /api/ingest` met body `{"pr": 12903}`.
+- Headless: `go run . ingest <pr> [-db data/graph.db]` (or the built binary).
+- Via the bridge: `POST /api/ingest` with body `{"pr": 12903}`.
 
-## Harde regels
+## Hard rules
 
-- Alleen Go built-ins + `modernc.org/sqlite`. Geen extra dependency zonder overleg.
-- `exec.CommandContext` met **losse args** + context-timeout (`ingestTimeout`);
-  nooit een shell-string met user-input. Zie `runGit`/`fetchPRMeta` in `gh.go`.
-- Geparametriseerde SQL (`?`); nooit string-concatenatie.
-- Serveer deltas (`WHERE pr=?`), nooit de hele tabel.
+- Only Go built-ins + `modernc.org/sqlite`. No extra dependency without
+  discussion.
+- `exec.CommandContext` with **separate args** + a context timeout
+  (`ingestTimeout`); never a shell string with user input. See `runGit`/
+  `fetchPRMeta` in `gh.go`.
+- Parameterized SQL (`?`); never string concatenation.
+- Serve deltas (`WHERE pr=?`), never the whole table.
 
-## De PHP-scanner (`phpscan.go`)
+## The PHP scanner (`phpscan.go`)
 
-Single-pass lexer met contexten (code/comment/string/heredoc). Braces tellen
-alleen in code-context. Edge-cases die gedekt zijn (en `phpscan_test.go` bewaakt):
-anonieme closures (`function(){}` — tellen mee voor depth, geen eigen block),
-arrow-functies (`fn() =>`), heredoc/nowdoc, `#[Attributes]` vs `#`-comment,
-abstracte/interface-methods (`function foo();`), en anonieme migration-classes
-(`return new class extends Migration`). Bij brace-onbalans of niet-PHP → whole-file
-fallback. Breid je de scanner uit? Voeg een test toe in `phpscan_test.go`.
+Single-pass lexer with contexts (code/comment/string/heredoc). Braces are
+only counted in code context. Edge cases that are covered (and that
+`phpscan_test.go` guards): anonymous closures (`function(){}` — count toward
+depth, no block of their own), arrow functions (`fn() =>`), heredoc/nowdoc,
+`#[Attributes]` vs. `#` comment, abstract/interface methods
+(`function foo();`), and anonymous migration classes
+(`return new class extends Migration`). On brace imbalance or non-PHP →
+whole-file fallback. Extending the scanner? Add a test in `phpscan_test.go`.
