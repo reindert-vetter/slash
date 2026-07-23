@@ -1,41 +1,41 @@
-# Toetsenbord-navigatie (twee modes)
+# Keyboard navigation (two modes)
 
-De keyboard-flow zit in `home.mjs` (`onKeydown`) en heeft twee modes via
+The keyboard flow lives in `home.mjs` (`onKeydown`) and has two modes via
 `state.mode`.
 
-## De links→rechts navigatieketen (`←`/`→` door de hele layout)
+## The left→right navigation chain (`←`/`→` through the whole layout)
 
-Los van de losse mechanismen hieronder vormen `←`/`→` samen één doorlopende
-keten van **stops**, van links naar rechts over de hele layout:
+Separate from the individual mechanisms below, `←`/`→` together form one
+continuous chain of **stops**, from left to right across the whole layout:
 
-1. **Omschrijving** (`prInfoCard`/`state.showDescription`) — de PR-titel/
-   samenvatting/beschrijving. **Standaard verborgen** (neemt dan geen breedte
-   in — de kolom valt volledig weg, geen rail zoals de comments/taken-sidebar's
-   inklap) en de meest-linkse stop. `←` hier verlaat de hele keten naar
-   `/pr-overview` (zie
-   onder) — er is niets links van stop 1.
-2. **PR-blok-index** (`data-testid=pr-index`, de sidebar, `state.mode==='list'`)
-   — schuift fysiek naar rechts zodra stop 1 open is, zodat de omschrijving er
-   echt links van staat i.p.v. erna (zie `.claude/rules/detail-layout.md`).
-3. **Blok met diff** (`state.mode==='diff'`, `state.focusLevel===0`).
-4. **Gedrilde kolommen** (`state.drill`/`focusLevel>0`) — een **zijtak**, geen
-   strikte stop: alleen bereikbaar via Enter/klik op een Onderliggende-code-kind
-   (zie "Drillen" in `.claude/rules/detail-layout.md`), niet via `→`. `←` pelt
-   ze wel één voor één terug af, net als de andere stops.
-5. **Onderliggende code** (`RelatedPanel`, `cs.focus==='code'`) — de meest-
-   rechtse stop van deze keten; er is geen `→`/`←`-stop erna.
+1. **Description** (`prInfoCard`/`state.showDescription`) — the PR title/
+   summary/description. **Hidden by default** (takes up no width then — the
+   column disappears entirely, no rail like the comments/tasks sidebar's
+   collapse) and the leftmost stop. `←` here leaves the whole chain to
+   `/pr-overview` (see
+   below) — there is nothing to the left of stop 1.
+2. **PR block index** (`data-testid=pr-index`, the sidebar, `state.mode==='list'`)
+   — physically shifts right as soon as stop 1 is open, so the description
+   really sits to its left instead of after it (see `.claude/rules/detail-layout.md`).
+3. **Block with diff** (`state.mode==='diff'`, `state.focusLevel===0`).
+4. **Drilled columns** (`state.drill`/`focusLevel>0`) — a **side branch**, not
+   a strict stop: only reachable via Enter/click on an Underlying-code child
+   (see "Drilling" in `.claude/rules/detail-layout.md`), not via `→`. `←` does
+   peel them back one by one, just like the other stops.
+5. **Underlying code** (`RelatedPanel`, `cs.focus==='code'`) — the rightmost
+   stop of this chain; there is no `→`/`←` stop after it.
 
-**Comments en Taken zijn geen stops meer in deze keten.** Ze vormen samen een
-losstaande, **Cmd+→-getoggelde** vaste sidebar (`CommentsSidebar`, zie
-"Comments/taken-sidebar" in `.claude/rules/detail-layout.md`) die je vanuit
-**elke** positie in de app kunt openen/sluiten, ongeacht welke stop van de
-keten hierboven op dat moment de keyboard heeft. Binnen die sidebar lopen
-`↓`/`↑` tussen comments (boven) en taken (eronder, gestapeld); `←` sluit vanaf
-elke plek in de sidebar in één klap terug naar de diff (de sidebar zelf blijft
-open — alleen de keyboard-focus verlaat 'm). Zie die sectie voor het volledige
-mechanisme (`toggleSidebar`/`cs.sidebarOpen`/de hint-rail).
+**Comments and Tasks are no longer stops in this chain.** Together they form
+a standalone, **Cmd+→-toggled** fixed sidebar (`CommentsSidebar`, see
+"Comments/tasks sidebar" in `.claude/rules/detail-layout.md`) that you can
+open/close from **any** position in the app, regardless of which stop of the
+chain above currently owns the keyboard. Within that sidebar, `↓`/`↑` move
+between comments (top) and tasks (below, stacked); `←` closes from anywhere
+in the sidebar in a single move back to the diff (the sidebar itself stays
+open — only the keyboard focus leaves it). See that section for the full
+mechanism (`toggleSidebar`/`cs.sidebarOpen`/the hint rail).
 
-**Focus-highlight per stop:** stops 1-3 show the *same* on/off indigo
+**Focus highlight per stop:** stops 1-3 show the *same* on/off indigo
 focus border (`border-indigo-300 ring-1 ring-indigo-200`, otherwise the
 neutral grey border) exactly while that stop owns the keyboard, mirroring the
 `diffActive` pattern of the block-diff card (`Block.mjs`): the description card
@@ -47,1051 +47,1195 @@ column, stop 4) while it owns `focusLevel`. Both `prInfoCard` and the pr-index
 function binding (not a keyed list item), so it just re-evaluates reactively on
 `state.showDescription`/`state.mode` — no arrow.js keyed-node pitfall applies
 here (that pitfall only bites keyed array items like the `Block()` cards, see
-`.claude/rules/conventions.md`). Stop 5 (Onderliggende code) deliberately has
-**no** outer focus border — that was removed on purpose (see the "Onderliggende
+`.claude/rules/conventions.md`). Stop 5 (Underlying code) deliberately has
+**no** outer focus border — that was removed on purpose (see the "Underlying
 code" section in `.claude/rules/detail-layout.md`), so the chain isn't
 uniformly bordered end-to-end, only stops 1-4.
 
-`→` schuift één stop naar rechts, `←` één stop naar links — dit is
-**bovenop**, niet in plaats van, de bestaande per-stop `↑`/`↓`-navigatie
-(die blijft binnen een stop lopen: block-selectie in de index, wijzigingsgroep
-in de diff, kind in Onderliggende code). Concreet, met de aanpassingen die dit
-vereiste t.o.v. het oudere per-mechanisme gedrag:
+`→` moves one stop to the right, `←` one stop to the left — this is
+**on top of**, not instead of, the existing per-stop `↑`/`↓` navigation
+(which still moves within a stop: block selection in the index, change group
+in the diff, child in Underlying code). Concretely, with the adjustments this
+required relative to the older per-mechanism behavior:
 
-- **Stop 1 ↔ 2:** `←` in `'list'`-mode (buiten de zoekbox) opende vroeger de
-  zoekbox (`activateSearch()`); dat is nu **de omschrijving openen**
-  (`state.showDescription = true`). `→` vanuit de omschrijving sluit 'm weer
-  (`state.showDescription = false`) en geeft de blok-index de keyboard terug.
-  Terwijl de omschrijving open is doet `↑` niets; `↓` geeft — als er PR-brede
-  comments zijn — de keyboard aan het **PR-brede-comments-blok** onder de kaart
-  (zie de aparte sectie "PR-brede comments, stop 1" verderop); zonder zulke
-  comments is `↓` ook een no-op (geen interne cursor om te lopen anders) — dat
-  voorkomt dat ze de block-selectie eronder verschuiven.
-  **De zoekbox is geen eigen stop** — hij hoort bij stop 2 en is niet meer via
-  `←` bereikbaar (dat was zijn enige toetsenbord-ingang); hij blijft gewoon
-  bereikbaar via een muisklik (en native Tab), en typen filtert zoals altijd
-  zodra hij focus heeft. Was de zoekbox al met een klik gefocust
-  (`state.searchActive`), dan doet `←` daar nu hetzelfde (naar stop 1, met
-  `exitSearch()` om de DOM-focus netjes los te laten) i.p.v. de oude no-op
+- **Stop 1 ↔ 2:** `←` in `'list'` mode (outside the search box) used to open
+  the search box (`activateSearch()`); it now **opens the description**
+  (`state.showDescription = true`). `→` from the description closes it again
+  (`state.showDescription = false`) and gives the block index the keyboard
+  back. While the description is open, `↑` does nothing; `↓` gives — if there
+  are PR-wide comments — the keyboard to the **PR-wide comments block** below
+  the card (see the separate section "PR-wide comments, stop 1" further on);
+  without such comments `↓` is also a no-op (there's no internal cursor to
+  move otherwise) — that prevents them from shifting the block selection
+  below.
+  **The search box is not its own stop** — it belongs to stop 2 and is no
+  longer reachable via `←` (that was its only keyboard entry); it remains
+  reachable via a mouse click (and native Tab), and typing filters as always
+  once it has focus. If the search box was already focused via a click
+  (`state.searchActive`), `←` now does the same thing there (to stop 1, with
+  `exitSearch()` to cleanly release DOM focus) instead of the old no-op
   ("already the leftmost stop").
-- **Vóór stop 1 (einde van de keten):** `←` terwijl `state.showDescription` open
-  is (er is geen stop 0) navigeert weg uit de PR naar de **PR-inbox**
-  (`location.href = '/pr-overview'`, zie `.claude/rules/pages-and-routing.md`).
-  Kies je daar een PR, dan land je op `/pr/<id>` zonder `sel`-param in de URL,
-  dus `state.selected` staat op zijn default (`0`) — het **eerste blok** is
-  meteen geselecteerd, niet wat eerder op die PR geselecteerd stond.
-- **Stop 2 ↔ 3 / stop 3 ↔ 4:** ongewijzigd — zie de `'list'`/`'diff'`-secties
-  hieronder resp. "Kolom-navigatie" in `.claude/rules/detail-layout.md`.
-- **Stop 3/4 ↔ 5:** ongewijzigd — `→` vanuit de diff is `enterRelated()`, `←`
-  vanuit `cs.focus==='code'` (op het eerste kind, of via `↑` daar) is
-  `exitRelated()`. `→` vanuit `'code'` doet niets meer — dat sprong vroeger
-  door naar de comments-kolom (`gotoRow(1)`), maar die is geen stop meer in
-  deze keten (zie hierboven en "Comments/taken-sidebar" in
-  `.claude/rules/detail-layout.md`); comments/taken zijn alleen nog via Cmd+→
-  bereikbaar, vanaf elke stop.
-- `state.showDescription`/`cs.taskSel`/`cs.sidebarOpen` leven bewust **buiten**
-  de URL (net als `menu`/`ui.task` elders) — efemere cursor-state, geen
-  navigatiepositie die een refresh moet terugzetten.
+- **Before stop 1 (end of the chain):** `←` while `state.showDescription` is
+  open (there is no stop 0) navigates away from the PR to the **PR inbox**
+  (`location.href = '/pr-overview'`, see `.claude/rules/pages-and-routing.md`).
+  Choosing a PR there lands you on `/pr/<id>` without a `sel` param in the
+  URL, so `state.selected` sits at its default (`0`) — the **first block** is
+  immediately selected, not whatever was selected earlier on that PR.
+- **Stop 2 ↔ 3 / stop 3 ↔ 4:** unchanged — see the `'list'`/`'diff'` sections
+  below resp. "Column navigation" in `.claude/rules/detail-layout.md`.
+- **Stop 3/4 ↔ 5:** unchanged — `→` from the diff is `enterRelated()`, `←`
+  from `cs.focus==='code'` (on the first child, or via `↑` there) is
+  `exitRelated()`. `→` from `'code'` no longer does anything — it used to
+  jump to the comments column (`gotoRow(1)`), but that is no longer a stop in
+  this chain (see above and "Comments/tasks sidebar" in
+  `.claude/rules/detail-layout.md`); comments/tasks are only reachable via
+  Cmd+→, from any stop.
+- `state.showDescription`/`cs.taskSel`/`cs.sidebarOpen` deliberately live
+  **outside** the URL (like `menu`/`ui.task` elsewhere) — ephemeral cursor
+  state, not a navigation position a refresh needs to restore.
 
-### PR-brede comments, stop 1 (`PrWideComments`, `handlePrWideKey`)
+### PR-wide comments, stop 1 (`PrWideComments`, `handlePrWideKey`)
 
-Onder de PR-omschrijving-kaart (stop 1) zit een tweede kaart
-(`data-testid=pr-wide-comments`, zie "PR-brede comments" in
-`.claude/rules/detail-layout.md`) met de PR-brede comments (`kind !== ''` —
-GitHub-issue-/review-comments zonder regel-anker). Die heeft een **eigen**
-cursor `pw` (`RelatedPanel.mjs`, los van `cs.focus`/`cs.sel` van het
-blok-gescopeerde comments/taken-paneel en los van `state.showDescription`
-zelf) en een eigen keyboard-handler, `handlePrWideKey(key)`, aangeroepen
-vanuit `home.mjs`'s `onKeydown` **zolang `state.showDescription` waar is** —
-vóór alle generieke shortcuts (`Enter`-opent-menu, `/`, `f`/`d`/`s`), zodat die
-niet per ongeluk een toetsaanslag inpikken terwijl dit blok de keyboard heeft
-(zelfde volgorde-precedent als `relatedActive()` verderop in `onKeydown`).
-`isPrWideFocused()` (`pw.focus !== null`) bepaalt of dit blok momenteel de
-keyboard bezit:
+Below the PR description card (stop 1) sits a second card
+(`data-testid=pr-wide-comments`, see "PR-wide comments" in
+`.claude/rules/detail-layout.md`) with the PR-wide comments (`kind !== ''` —
+GitHub issue/review comments without a line anchor). That has its **own**
+cursor `pw` (`RelatedPanel.mjs`, separate from `cs.focus`/`cs.sel` of the
+block-scoped comments/tasks panel and separate from `state.showDescription`
+itself) and its own keyboard handler, `handlePrWideKey(key)`, invoked from
+`home.mjs`'s `onKeydown` **as long as `state.showDescription` is true** —
+before all generic shortcuts (`Enter` opens menu, `/`, `f`/`d`/`s`), so those
+don't accidentally steal a keystroke while this block owns the keyboard
+(same ordering precedent as `relatedActive()` further down in `onKeydown`).
+`isPrWideFocused()` (`pw.focus !== null`) determines whether this block
+currently owns the keyboard:
 
-- **`↓` vanuit de omschrijving** (stop 1 zelf, `pw.focus === null`) geeft de
-  keyboard aan dit blok — landt op de **eerste** entry (`pw.focus = 'item'`,
-  `pw.sel = 0`) — mits er PR-brede comments zijn; anders een no-op (de
-  omschrijving houdt de keyboard).
-- **`↓`/`↑`** lopen, terwijl `pw.focus === 'item'`, de platte entry-lijst
-  (`pw.sel`, geklemd op begin/eind); `↑` op de **eerste** entry geeft de
-  keyboard terug aan de omschrijving (`pw.focus = null`) — mirror van hoe `↑`
-  op de eerste regel van de blok-gescopeerde index terug naar de diff stapt.
-- **`Enter`** op een entry (`pw.focus === 'item'`) opent zijn thread
-  (`pw.focus = 'thread'`, `pw.threadPos = 0`, reply-veld gefocust) —
-  functioneel een klik op de rij. Binnen de thread lopen `↑`/`↓` de
-  berichtgeschiedenis (`pw.threadPos`, mirror van `cs.threadPos`); `↓` op de
-  onderkant (`pw.threadPos === 0`, het reply-veld) stapt door naar de
-  **volgende** entry (`pw.focus` terug naar `'item'`), als die bestaat.
-  **`Enter` binnen de thread** is de ontdekbare resolve-snelkoppeling: een
-  **leeg** reply-veld + `Enter` **resolvet** de comment (`done:true`, dezelfde
-  `POST /signals/reply` als de resolve-knop); een **niet-leeg** veld + `Enter`
-  wordt afgehandeld door het veld z'n eigen `@keydown` (verstuurt de reply,
-  `done:false`) — de globale `handlePrWideKey('Enter')`-tak doet in dat geval
-  bewust niets (de `pwComposeEmpty()`-guard), dus geen dubbele send. Shift+Enter
-  blijft een newline (de globale handler negeert `Enter` met `e.shiftKey`).
-- **`←`** stapt, van waar dan ook binnen dit blok (`pw.focus !== null`), één
-  niveau terug: uit een thread naar de rij-focus (`pw.focus = 'item'`), en
-  vanaf de rij-focus terug naar de omschrijving (`pw.focus = null`) — de
-  omschrijving blijft daarbij gewoon open (dit is geen stop-overgang, alleen
-  een interne terugstap). **Pas** wanneer dit blok géén focus heeft
-  (`pw.focus === null`, dus terug op de omschrijving zelf) valt `←` door naar
-  de bestaande stop-1-`←`-afhandeling in `onKeydown` (weg naar `/pr-overview`,
-  zie "Vóór stop 1" hierboven) — `handlePrWideKey('ArrowLeft')` geeft dan
-  `false` terug en de aanroeper (`onKeydown`) doet zelf de navigatie.
-- **`Escape`** sluit dit blok's focus in één klap (`pw.focus = null`), net als
-  `←` vanuit de rij-focus, maar in één stap ongeacht hoe diep je zat (thread of
-  rij).
-- **`Enter` op stop 1 zelf** (de omschrijving-kaart, `pw.focus === null`) blijft
-  ongewijzigd het **PR-brede** command-menu openen (zie hieronder) — dit blok
-  claimt `Enter` alleen zolang het zelf de focus heeft.
+- **`↓` from the description** (stop 1 itself, `pw.focus === null`) gives
+  the keyboard to this block — lands on the **first** entry (`pw.focus = 'item'`,
+  `pw.sel = 0`) — provided there are PR-wide comments; otherwise a no-op (the
+  description keeps the keyboard).
+- **`↓`/`↑`** move, while `pw.focus === 'item'`, through the flat entry list
+  (`pw.sel`, clamped at start/end); `↑` on the **first** entry gives the
+  keyboard back to the description (`pw.focus = null`) — mirroring how `↑`
+  on the first row of the block-scoped index steps back to the diff.
+- **`Enter`** on an entry (`pw.focus === 'item'`) opens its thread
+  (`pw.focus = 'thread'`, `pw.threadPos = 0`, reply field focused) —
+  functionally a click on the row. Within the thread `↑`/`↓` walk the
+  message history (`pw.threadPos`, mirroring `cs.threadPos`); `↓` at the
+  bottom (`pw.threadPos === 0`, the reply field) steps to the **next**
+  entry (`pw.focus` back to `'item'`), if one exists.
+  **`Enter` within the thread** is the discoverable resolve shortcut: an
+  **empty** reply field + `Enter` **resolves** the comment (`done:true`, the
+  same `POST /signals/reply` as the resolve button); a **non-empty** field +
+  `Enter` is handled by the field's own `@keydown` (sends the reply,
+  `done:false`) — the global `handlePrWideKey('Enter')` branch deliberately
+  does nothing in that case (the `pwComposeEmpty()` guard), so there's no
+  double send. Shift+Enter remains a newline (the global handler ignores
+  `Enter` with `e.shiftKey`).
+- **`←`** steps, from anywhere within this block (`pw.focus !== null`), back
+  one level: out of a thread to row focus (`pw.focus = 'item'`), and from
+  row focus back to the description (`pw.focus = null`) — the description
+  simply stays open in the process (this is not a stop transition, just an
+  internal step back). **Only** once this block has no focus at all
+  (`pw.focus === null`, i.e. back on the description itself) does `←` fall
+  through to the existing stop-1 `←` handling in `onKeydown` (away to
+  `/pr-overview`, see "Before stop 1" above) — `handlePrWideKey('ArrowLeft')`
+  then returns `false` and the caller (`onKeydown`) does the navigation
+  itself.
+- **`Escape`** closes this block's focus in one move (`pw.focus = null`), just
+  like `←` from row focus, but in one step regardless of how deep you were
+  (thread or row).
+- **`Enter` on stop 1 itself** (the description card, `pw.focus === null`)
+  remains, unchanged, opening the **PR-wide** command menu (see below) — this
+  block only claims `Enter` while it itself has the focus.
 
-Reply/resolve gaan via **hetzelfde** `POST /api/workflows/{runId}/signals/reply`-
-Signal als het blok-gescopeerde comments-paneel — zie "Reviewer-goedkeuring
-persisteren"/"De eerste slash-task" in `.claude/rules/tembed-workflows.md` voor
-het onderliggende `task_code_comment`-mechanisme; er is hier geen aparte
-write-weg nodig (de backend behandelt een PR-brede reply/resolve al correct).
+Reply/resolve go via the **same** `POST /api/workflows/{runId}/signals/reply`
+Signal as the block-scoped comments panel — see "Persisting reviewer
+approval"/"The first slash task" in `.claude/rules/tembed-workflows.md` for
+the underlying `task_code_comment` mechanism; no separate write path is
+needed here (the backend already handles a PR-wide reply/resolve correctly).
 
-**`Enter`** opent een **command-palette** (`src/CommandMenu.mjs`,
-`data-testid=command-menu`): een doorzoekbaar commando-menu dat als **drijvende
-popover net onder de huidige selectie** verschijnt, over de rest van de pagina heen
-— overal in de tree, in welk block dan ook. Op **stop 1** (de PR-omschrijving-
-kolom, `state.showDescription`, zie "De links→rechts navigatieketen" hierboven) is er geen
-block-context om op te acteren, dus opent `Enter` daar hetzelfde **PR-brede**
-menu als `/` (`openMenu(state.showDescription ? 'pr' : 'block')` in `onKeydown`)
-i.p.v. de block-scoped palette — blok 0 in de lijst is een andere stop
-(`showDescription` is daar `false`) en houdt gewoon de block-palette. `home.mjs`
-(`menuOverlay`) rendert het
-één keer op `<main>`-niveau als `position:fixed` element (`data-testid=
-command-anchor`) met een full-screen catch-laag (`data-testid=command-overlay`) die
-bij een klik buiten het menu sluit. `positionMenu` ankert het net **onder** de
-selectie én geeft het de **breedte van de rechter (NEW) pane** — dus **halve
-breedte, over de rechterkant** (de nieuwe code die je reviewt). De verticale positie
-komt van `menuAnchor()` (de actieve wijzigings-rij `[data-change-active]`, aanwezig
-in zowel list-preview als diff-mode; anders de block-kaart, anders de sidebar-rij);
-de breedte + linkerrand van `menuRegion()` (de `[data-pane="new"]`-pane van het
-geselecteerde block; fallback `[data-pane="old"]` voor een verwijderd block, dan de
-hele block-kolom — de `data-pane`-hook zit op `codePane` in `Block.mjs`). **Vanuit
-de blokken-index** (`state.mode==='list'`, voor de `'block'`- en
-`'postApprove'`-palettes — `isIndexMenu()` in `home.mjs`) ankert het menu i.p.v.
-daarop juist op de **geselecteerde sidebar-rij** (`[data-idx="${state.selected}"]`)
-en neemt het de **volle sidebar-breedte** (`[data-testid="pr-index"]`) — niet de
-list-mode diff-preview in `<main>`, die weliswaar ook een `[data-change-active]`
-draagt maar niet is waar de reviewer net op drukte. Zo opent `Enter` vanuit de
-index het menu **bij die rij**, niet ergens anders op het scherm. **Op stop 1**
-(het PR-brede `'pr'`-menu terwijl `state.showDescription` waar is —
-`isDescriptionMenu()` in `home.mjs`, geldt voor zowel `Enter` als `/` daar)
-ankert het menu op de **omschrijving-kaart** (`[data-testid="pr-info-card"]`)
-en neemt het de **volle breedte van de omschrijving-kolom**
-(`[data-testid="pr-info-column"]`, 26rem) — mirror van de blokken-index-
-uitzondering; omdat de kaart hoog is klapt het menu daar meestal boven/over de
-kolom (de bestaande flip+clamp), maar altijd bíj de omschrijving i.p.v. bij de
-diff-regio rechts. Buiten stop 1 houdt het `'pr'`-menu (`/`) gewoon de
-default-diff-positionering. Test: `tests/pr-description-menu.spec.mjs`. **Past het
-niet onder het scherm, dan klapt het erboven** (en wordt sowieso in de viewport
-geklemd). Het start `visibility:hidden` tot `positionMenu` het geplaatst heeft (geen
-flits linksboven), en herpositioneert bij resize, scroll (capture, ook
-inner-scrollers), na elke toets (de filter-lijst verandert de hoogte) en 220ms na
-openen (de panel-breedte animeert 200ms bij het instappen in de diff). Het menu
-leeft in een losse `reactive({ open, query, sel })` in `home.mjs` (bewust **niet**
-in de URL — efemeer, dus buiten `bindUrlState`). Terwijl het open is **bezit het menu het
-toetsenbord**: `onKeydown` handelt `↑`/`↓` (selectie), `Enter` (uitvoeren via
-`runCommand`, dat eerst sluit en dan de actie draait), `Esc` (sluiten) af en de
-block-navigatie is opgeschort; getypte tekens vloeien in de gefocuste input
-(`data-testid=command-input`, two-way met `menu.query`). Filteren gaat via een
-**subsequence-fuzzy-match** (`filterCommands`, geëxporteerd uit `CommandMenu.mjs`
-zodat de keyboard-handler exact dezelfde gefilterde lijst als de render doorloopt —
-`menu.sel` en de zichtbare rijen blijven in sync). De `COMMANDS`-lijst leeft in
-`home.mjs` en bevat **block-acties**: approve togglen en comment op deze regel (via
-`startComment` uit `RelatedPanel.mjs`) en **Open GitHub**. De approve-actie is
-**gescoped op de huidige navigatie-unit** (`toggleApprove`/`approveTargetRows`): in
-list-mode het hele block, in diff-mode de geselecteerde groep/regel/call — hij
-keurt exact de rijen van die unit goed (of trekt ze in als ze al goedgekeurd zijn).
-**`focusLevel`/`drillCursor`-bewust:** een gedrilde Onderliggende-code-kolom
-(`state.focusLevel > 0`, zie "Drillen"/"Kolom-navigatie" in
-`.claude/rules/detail-layout.md`) heeft zijn eigen block + eigen
-`change`/`gran`-cursor (`state.drillCursor[focusLevel-1]`) — de approve-actie
-moet dáár op werken, niet op het top-level block. `approveContext()` (`home.mjs`)
-resolvt dat ene keer (`{ block, mode, gran, change }`, mirror van
-`findNextUnapproved`/`fKey`/`dKey`/`setDrillGran`'s eigen `focusLevel`-branch);
-`approveNoun`/`approveTargetRows`/`toggleApprove`/`toggleCallApprove` en het
-`COMMANDS`-label nemen die context aan i.p.v. rechtstreeks `curBlock()`/
-`state.gran`/`state.change` te lezen. Zonder dit keurde `Enter` → "Keur …
-goed" terwijl een gedrilde kolom de keyboard had onzichtbaar het TOP-LEVEL
-block goed/af in plaats van de gedrilde child — zie
+**`Enter`** opens a **command palette** (`src/CommandMenu.mjs`,
+`data-testid=command-menu`): a searchable command menu that appears as a
+**floating popover just below the current selection**, over the rest of the
+page — anywhere in the tree, in whichever block. At **stop 1** (the PR
+description column, `state.showDescription`, see "The left→right navigation
+chain" above) there is no block context to act on, so `Enter` there opens the
+same **PR-wide** menu as `/` (`openMenu(state.showDescription ? 'pr' : 'block')`
+in `onKeydown`) instead of the block-scoped palette — block 0 in the list is a
+different stop (`showDescription` is `false` there) and simply keeps the
+block palette. `home.mjs` (`menuOverlay`) renders it once at `<main>`
+level as a `position:fixed` element (`data-testid=
+command-anchor`) with a full-screen catch layer (`data-testid=command-overlay`)
+that closes on a click outside the menu. `positionMenu` anchors it just
+**below** the selection and gives it the **width of the right (NEW) pane** —
+so **half width, over the right side** (the new code you're reviewing). The
+vertical position comes from `menuAnchor()` (the active change row
+`[data-change-active]`, present in both list preview and diff mode; otherwise
+the block card, otherwise the sidebar row); the width + left edge come from
+`menuRegion()` (the `[data-pane="new"]` pane of the selected block; falls
+back to `[data-pane="old"]` for a removed block, then the whole block column
+— the `data-pane` hook sits on `codePane` in `Block.mjs`). **From the block
+index** (`state.mode==='list'`, for the `'block'` and
+`'postApprove'` palettes — `isIndexMenu()` in `home.mjs`) the menu instead
+anchors on the **selected sidebar row** (`[data-idx="${state.selected}"]`)
+and takes the **full sidebar width** (`[data-testid="pr-index"]`) — not the
+list-mode diff preview in `<main>`, which does also carry a
+`[data-change-active]` but is not where the reviewer just pressed. So `Enter`
+from the index opens the menu **at that row**, not somewhere else on the
+screen. **At stop 1** (the PR-wide `'pr'` menu while `state.showDescription`
+is true — `isDescriptionMenu()` in `home.mjs`, applies to both `Enter` and
+`/` there) the menu anchors on the **description card**
+(`[data-testid="pr-info-card"]`) and takes the **full width of the
+description column** (`[data-testid="pr-info-column"]`, 26rem) — mirroring
+the block-index exception; because the card is tall, the menu there usually
+flips above/over the column (the existing flip+clamp), but it always sits
+next to the description instead of in the diff region to the right. Outside
+stop 1 the `'pr'` menu (`/`) keeps the default diff positioning. Test:
+`tests/pr-description-menu.spec.mjs`. **If it doesn't fit below the screen,
+it flips above** (and is clamped within the viewport regardless). It starts
+`visibility:hidden` until `positionMenu` has placed it (no flash top-left),
+and repositions on resize, scroll (capture, also inner scrollers), after
+every keystroke (the filter list changes height) and 220ms after opening
+(the panel width animates 200ms when stepping into the diff). The menu lives
+in a separate `reactive({ open, query, sel })` in `home.mjs` (deliberately
+**not** in the URL — ephemeral, so outside `bindUrlState`). While it is open,
+the menu **owns the keyboard**: `onKeydown` handles `↑`/`↓` (selection),
+`Enter` (execute via `runCommand`, which closes first and then runs the
+action), `Esc` (close), and block navigation is suspended; typed characters
+flow into the focused input (`data-testid=command-input`, two-way bound to
+`menu.query`). Filtering uses a **subsequence fuzzy match**
+(`filterCommands`, exported from `CommandMenu.mjs` so the keyboard handler
+walks exactly the same filtered list as the render — `menu.sel` and the
+visible rows stay in sync). The `COMMANDS` list lives in `home.mjs` and
+contains **block actions**: toggling approve and commenting on this line
+(via `startComment` from `RelatedPanel.mjs`) and **Open GitHub**. The approve
+action is **scoped to the current navigation unit** (`toggleApprove`/
+`approveTargetRows`): in list mode the whole block, in diff mode the
+selected group/line/call — it approves exactly the rows of that unit (or
+retracts them if they are already approved).
+**`focusLevel`/`drillCursor`-aware:** a drilled Underlying-code column
+(`state.focusLevel > 0`, see "Drilling"/"Column navigation" in
+`.claude/rules/detail-layout.md`) has its own block plus its own
+`change`/`gran` cursor (`state.drillCursor[focusLevel-1]`) — the approve
+action must operate on that, not on the top-level block. `approveContext()`
+(`home.mjs`) resolves that once (`{ block, mode, gran, change }`, mirroring
+`findNextUnapproved`/`fKey`/`dKey`/`setDrillGran`'s own `focusLevel` branch);
+`approveNoun`/`approveTargetRows`/`toggleApprove`/`toggleCallApprove` and the
+`COMMANDS` label take that context instead of reading `curBlock()`/
+`state.gran`/`state.change` directly. Without this, `Enter` → "Approve …"
+would invisibly approve/retract the TOP-LEVEL block instead of the drilled
+child while a drilled column owned the keyboard — see
 `tests/drill-approve.spec.mjs`.
-Het label is een functie zodat het live meebeweegt én de unit benoemt
-(`approveNoun`): "Keur dit block goed" (list), "Keur deze regels goed" (group),
-"Keur deze regel goed" (line), "Keur deze call goed" (call), en "Trek goedkeuring
-van … in" wanneer die unit al goedgekeurd is. Zie de granulaire-goedkeuring-uitleg
-in `.claude/rules/blocks-and-ingest.md`. Bewust **géén** navigatie-items (stap in diff / volgende /
-vorige) — die doe je met de pijltjes/`f`/`d`/`s`, niet via het menu. Een commando
-mag **`children`** hebben: kiezen opent dan geen actie maar een **submenu** met die
-kinderen i.p.v. de menu te sluiten (`runCommand` → `enterSubmenu`, die query/selectie
-reset en herpositioneert). `Esc` stapt eerst terug naar de root en sluit pas daarna
-het menu; `menu.sub` (in de efemere `menu`-reactive) houdt de open kinderlijst vast,
-`resolveCommands` filtert die i.p.v. `COMMANDS` (zonder de comment-fallback). Zo hangt
-**Open GitHub** twee targets onder zich: *Regel in Files changed* — deep-linkt naar de
-actieve regel in de Files-changed-diff (`openGithubLine`: het GitHub-anker
-`#diff-<sha256(pad)><R|L><regel>`, waarbij de regel de `start` van de code-side plus de
-offset van de actieve unit is; nieuwe kant = `R`, verwijderd block = `L`) — en
-*PR-pagina* (de PR-overzichtspagina, zoals voorheen). Levert het
-filter **niets** op voor een niet-lege query, dan valt het menu terug op één item
-**"Maak hiermee een comment"** dat de gettypte tekst rechtstreeks als comment-task
-op de geselecteerde regel start (`createComment` uit `RelatedPanel.mjs` → `POST
-/api/workflows/task_code_comment`, dus binnen de write-boundary). De filter +
-fallback zitten in `resolveCommands(query)` in `home.mjs`, gedeeld door de
-menu-render én de keyboard-handler zodat beide dezelfde lijst zien. `CommandMenu`
-zelf is puur presentatie: het krijgt `menu`, een `resolve(query)`-functie en `onRun`,
-en bevat geen filter- of navigatielogica.
+The label is a function so it moves live and names the unit
+(`approveNoun`): "Approve this block" (list), "Approve these lines" (group),
+"Approve this line" (line), "Approve this call" (call), and "Retract approval
+of …" when that unit is already approved. See the granular-approval
+explanation in `.claude/rules/blocks-and-ingest.md`. Deliberately **no**
+navigation items (step in diff / next / previous) — you do that with the
+arrows/`f`/`d`/`s`, not via the menu. A command may have **`children`**:
+choosing it then doesn't open an action but a **submenu** with those
+children instead of closing the menu (`runCommand` → `enterSubmenu`, which
+resets the query/selection and repositions). `Esc` first steps back to the
+root and only then closes the menu; `menu.sub` (in the ephemeral `menu`
+reactive) holds the open child list, `resolveCommands` filters that instead
+of `COMMANDS` (without the comment fallback). So **Open GitHub** has two
+targets underneath it: *Line in Files changed* — deep-links to the active
+line in the Files-changed diff (`openGithubLine`: the GitHub anchor
+`#diff-<sha256(path)><R|L><line>`, where the line is the `start` of the code
+side plus the offset of the active unit; new side = `R`, removed block =
+`L`) — and *PR page* (the PR overview page, as before). If filtering
+yields **nothing** for a non-empty query, the menu falls back to one item,
+**"Create a comment with this"**, which starts the typed text directly as a
+comment task on the selected line (`createComment` from `RelatedPanel.mjs` →
+`POST /api/workflows/task_code_comment`, so within the write boundary). The
+filter + fallback live in `resolveCommands(query)` in `home.mjs`, shared by
+the menu render and the keyboard handler so both see the same list.
+`CommandMenu` itself is pure presentation: it receives `menu`, a
+`resolve(query)` function and `onRun`, and contains no filter or navigation
+logic.
 
-**Elk (klein) menu opent met een gepinde `"Sluit menu"` vooraan, en start
-gefocust op het 2e item.** `withClose(list, onClose)` (`home.mjs`) prependt dat
-item aan zowel elke root-lijst (`COMMANDS`, `PR_COMMANDS`, `COMPOSE_COMMANDS`,
-`COMMENT_COMMANDS`, `POSTAPPROVE_COMMANDS`, `REVIEW_APPROVE_COMMANDS`,
-`REVIEW_CHOICE_COMMANDS`) als elk submenu (`children`, incl. "Open GitHub" en de
-PR-brede/compose-Jira-submenu's) — kiezen ervan sluit in **elk** geval het hele
-palette, ook vanuit een submenu (`Esc` blijft daarnaast gewoon één stap terug
-naar de root doen, ongewijzigd). `postApprove`'s eigen `onClose` ruimt daarbij
-ook `postApproveTarget` op — mirror van de oude, losse close-items die het nu
-vervangt (die stonden voorheen als láátste item; nu is er nog maar één
-gedeelde definitie, altijd vooraan). Om te voorkomen dat die vaste eerste rij
-de default Enter-actie wordt, opent elk vers menu/submenu **op het 2e item**
-(`defaultSel(list)` = `Math.min(1, Math.max(0, list.length-1))`, gebruikt in
-`openMenu`/`enterSubmenu`/de Esc-terug-naar-root-tak in `onKeydown`) — valt
-terug op index 0 zodra een lijst 0 of 1 echt item telt. Dit geldt bewust
-**niet** voor de `reviewReject`-stap (de vrije-tekst afwijzingsreden, verderop
-— een dynamische 0/1-item-lijst) en de "geen match"-`make-comment`-fallback
-hierboven: beide zijn losse, dynamisch opgebouwde acties waar een gepinde
-close + start-op-2e-item "typ, Enter" zou breken. De per-toetsaanslag
-`sel`-reset (`CommandMenu.mjs`'s `@input`-handler) blijft op `0` — dat wijst
-simpelweg naar de bovenste rij van het op dat moment gefilterde resultaat, niet
-naar "het 2e item van de volledige lijst".
+**Every (small) menu opens with a pinned `"Close menu"` at the top, and
+starts focused on the 2nd item.** `withClose(list, onClose)` (`home.mjs`)
+prepends that item to every root list (`COMMANDS`, `PR_COMMANDS`,
+`COMPOSE_COMMANDS`, `COMMENT_COMMANDS`, `POSTAPPROVE_COMMANDS`,
+`REVIEW_APPROVE_COMMANDS`, `REVIEW_CHOICE_COMMANDS`) as well as every submenu
+(`children`, incl. "Open GitHub" and the PR-wide/compose Jira submenus) —
+choosing it in **any** case closes the entire palette, even from a submenu
+(`Esc` still just goes one step back to the root, unchanged). `postApprove`'s
+own `onClose` also clears `postApproveTarget` while at it — mirroring the
+old, separate close items it now replaces (those previously sat as the
+**last** item; now there is only one shared definition, always at the top).
+To prevent that fixed first row from becoming the default Enter action,
+every fresh menu/submenu opens **on the 2nd item** (`defaultSel(list)` =
+`Math.min(1, Math.max(0, list.length-1))`, used in `openMenu`/`enterSubmenu`/
+the Esc-back-to-root branch in `onKeydown`) — falls back to index 0 as soon
+as a list has 0 or 1 real items. This deliberately does **not** apply to the
+`reviewReject` step (the free-text rejection reason, further on — a dynamic
+0/1-item list) and the "no match" `make-comment` fallback above: both are
+separate, dynamically built actions where a pinned close + start-on-2nd-item
+"type, Enter" would break. The per-keystroke `sel` reset
+(`CommandMenu.mjs`'s `@input` handler) stays at `0` — that simply points to
+the top row of the currently filtered result, not "the 2nd item of the full
+list".
 
-**Na het goedkeuren via de palette** (niet via de top-checkbox op de block-kaart —
-die blijft een direct togglende klik zonder vervolg) opent, als er nog een
-volgende niet-goedgekeurde unit bestaat, meteen een **vervolgmenu**
-(`menu.mode = 'postApprove'`, `POSTAPPROVE_COMMANDS` in `home.mjs`): **"Sluit
-menu"** (gepind vooraan) of **"Ga door naar de volgende niet-goedgekeurde
-code"** (default, het 2e item waar de selectie opent — navigeert alleen, keurt
-niets automatisch goed). Dit triggert alleen
-als de actie goedkeuring **toevoegde** (`toggleApprove`/`toggleCallApprove`
-detecteren dat via `allIn`/`keys.has(key)` **vóór** de mutatie — intrekken van een
-goedkeuring opent dit menu nooit) én er daadwerkelijk nog iets openstaat
-(`afterApproveAction` → `findNextUnapproved()`; niets meer open → het menu blijft
-gewoon dicht, zoals altijd).
+**After approving via the palette** (not via the top checkbox on the block
+card — that remains a directly toggling click with no follow-up), if there
+is still a next unapproved unit, a **follow-up menu** opens immediately
+(`menu.mode = 'postApprove'`, `POSTAPPROVE_COMMANDS` in `home.mjs`): **"Close
+menu"** (pinned at the top) or **"Continue to the next unapproved
+code"** (default, the 2nd item where the selection opens — only navigates,
+does not auto-approve anything). This only triggers
+if the action **added** approval (`toggleApprove`/`toggleCallApprove`
+detect that via `allIn`/`keys.has(key)` **before** the mutation — retracting
+an approval never opens this menu) and there is actually still something
+open (`afterApproveAction` → `findNextUnapproved()`; nothing left open → the
+menu simply stays closed, as always).
 
-**Uitzondering: blijft de volgende unit in hetzelfde block, dan slaat
-`afterApproveAction` dit vervolgmenu over en navigeert meteen door** — vragen
-"ga door of niet" is pure wrijving als er toch niets anders te kiezen valt dan
-doorgaan in het block waar de reviewer al naar kijkt. Dit is precies stap 1
-hieronder (`findNextUnapproved`'s "verder binnen de kolom die de keyboard nu
-bezit"-tak): het plan heeft dan een **lege `path`** en `root === state.selected`
-(geen drill, geen kind-blok, geen ander top-level block). `afterApproveAction`
-checkt die twee velden (plus `!keepList`, zodat een goedkeuring vanuit de
-blokken-index — die toch niets meer overlaat in datzelfde block — dit pad
-nooit raakt) en roept in dat geval direct `applyNextUnapproved(target)` aan
-i.p.v. `openMenu('postApprove')`. Elke andere uitkomst (omlaag een kind-subtree
-in, omhoog naar een sibling, of verder naar een ander top-level block — stappen
-2-4 hieronder) blijft gewoon het vervolgmenu tonen. "Volgende" volgt de
-review-**boom**, niet enkel de platte sidebar-lijst, depth-first
-(`findNextUnapproved` in `home.mjs`, vier stappen op elke aanroep):
+**Exception: if the next unit stays within the same block,
+`afterApproveAction` skips this follow-up menu and navigates right away** —
+asking "continue or not" is pure friction when there's nothing else to
+choose besides continuing within the block the reviewer is already looking
+at. This is exactly step 1 below (`findNextUnapproved`'s "further within the
+column that currently owns the keyboard" branch): the plan then has an
+**empty `path`** and `root === state.selected` (no drill, no child block, no
+other top-level block). `afterApproveAction` checks those two fields (plus
+`!keepList`, so that an approval from the block index — which leaves
+nothing else in that same block anyway — never hits this path) and in that
+case calls `applyNextUnapproved(target)` directly instead of
+`openMenu('postApprove')`. Any other outcome (down into a child subtree, up
+to a sibling, or on to another top-level block — steps 2-4 below) still
+shows the follow-up menu. "Next" follows the review **tree**, not just the
+flat sidebar list, depth-first
+(`findNextUnapproved` in `home.mjs`, four steps on each call):
 
-1. **Verder binnen de kolom die de keyboard nu bezit** — het top-level block
-   (`state.gran`/`state.change`), of — als er gedrild is (zie "Drillen"/
-   "Kolom-navigatie" in `.claude/rules/detail-layout.md`) — de gedrilde kolom
-   op `state.focusLevel`, met zíjn eigen `state.drillCursor`-cursor
-   (`firstUnapprovedOwnUnit`, ongewijzigd voorwaarts-zoekend op de huidige
-   granulariteit, nu ook toegepast op een gedrilde kolom in plaats van alleen
-   het top-level block).
-2. **Is die kolom klaar, dan omlaag** in zijn **Onderliggende-code**-kinderen
-   (`orderedChildBlocks` — dezelfde volgorde als het paneel toont,
-   `relatedChildren`'s groupTier/prio/grootte-sort, exclusief `covered_by` om
-   de method↔test-cyclus te vermijden — zie `directChildBlocks`/
+1. **Further within the column that currently owns the keyboard** — the
+   top-level block (`state.gran`/`state.change`), or — if there is a drill
+   (see "Drilling"/"Column navigation" in `.claude/rules/detail-layout.md`) —
+   the drilled column at `state.focusLevel`, with **its own**
+   `state.drillCursor` cursor (`firstUnapprovedOwnUnit`, unchanged,
+   forward-searching at the current granularity, now also applied to a
+   drilled column instead of only the top-level block).
+2. **If that column is done, then down** into its **Underlying-code**
+   children (`orderedChildBlocks` — the same order the panel shows,
+   `relatedChildren`'s groupTier/prio/size sort, excluding `covered_by` to
+   avoid the method↔test cycle — see `directChildBlocks`/
    `nestedPrBlocks` in `.claude/rules/blocks-and-ingest.md`), depth-first per
-   kind (`firstUnapprovedInSubtree`, cyclus-veilig via een `seen`-set, mirror
-   van `nestedPrBlocks`): eerst het kind zelf vanaf zijn eerste `'group'`-unit,
-   anders zijn eigen kinderen, enzovoort.
-3. **Is de hele subtree van de gefocuste kolom leeg, dan omhoog**: terug naar
-   de ouder in de huidige drill-stack (een eerdere gedrilde kolom, of het
-   top-level block) en diens **volgende, nog niet geprobeerde** sibling-kind
-   proberen (weer depth-first via `firstUnapprovedInSubtree`) — herhaald
-   omhoog door de hele drill-stack.
-4. **Is ook de hele subtree van het huidige top-level block leeg** (of stond
-   de reviewer niet eens in zijn diff), dan **verder door `state.blocks`** in
-   sidebar-volgorde — nu ook **subtree-bewust** (`firstUnapprovedInSubtree`
-   per kandidaat i.p.v. alleen zijn eigen `'group'`-rijen): een top-level block
-   waarvan alleen een Onderliggende-code-kind nog openstaat wordt niet meer
-   overgeslagen.
+   child (`firstUnapprovedInSubtree`, cycle-safe via a `seen` set, mirroring
+   `nestedPrBlocks`): first the child itself starting from its first
+   `'group'` unit, otherwise its own children, and so on.
+3. **If the entire subtree of the focused column is empty, then up**: back
+   to the parent in the current drill stack (an earlier drilled column, or
+   the top-level block) and try its **next, not-yet-tried** sibling child
+   (again depth-first via `firstUnapprovedInSubtree`) — repeated upward
+   through the whole drill stack.
+4. **If the entire subtree of the current top-level block is also empty**
+   (or the reviewer wasn't even in its diff), then **continue through
+   `state.blocks`** in sidebar order — now also **subtree-aware**
+   (`firstUnapprovedInSubtree` per candidate instead of just its own
+   `'group'` rows): a top-level block that only has an Underlying-code
+   child still open is no longer skipped.
 
-Met lazy `ensureCode`-fetches voor elk bezocht block, net als de
-look-ahead-preview. Alleen **voorwaarts**, geen wrap en geen terugzoeken naar
-eerder overgeslagen units. `findNextUnapproved` retourneert een plan
-`{ root, path, gran, change }` (`root` = top-level index, `path` = de keten
-PR-blokken om doorheen te drillen, leeg = het top-level block zelf) en stasht
-het in `postApproveTarget`; "Ga door" past 'm toe via `applyNextUnapproved`,
-dat de huidige `state.drill` naar het gemeenschappelijke voorvoegsel met
-`path` trimt (mirror van `expandColumn`'s trim) en dan alleen het resterende
-stuk drilt (`drillIntoChild`) — zonder de hele stack onnodig af te breken bij
-een naaste sibling-stap. Bij een andere `root` (een ander top-level block)
-reset hij zoals voorheen (`openTask`'s block-wissel-reset: `state.drill`/
-`drillCursor`/`focusLevel` leeg). Dit alles zonder te herberekenen — de
-palette bezit de keyboard zolang hij open is, dus de navigatie-state kan
-intussen niet verschoven zijn. Dit is een eenmalige stap: na het navigeren
-opent er **geen** nieuw vervolgmenu vanzelf — de reviewer keurt de nieuwe unit
-zelf weer goed met `Enter`.
+With lazy `ensureCode` fetches for every visited block, just like the
+look-ahead preview. Only **forward**, no wrap and no searching back to
+previously skipped units. `findNextUnapproved` returns a plan
+`{ root, path, gran, change }` (`root` = top-level index, `path` = the chain
+of PR blocks to drill through, empty = the top-level block itself) and
+stashes it in `postApproveTarget`; "Continue" applies it via
+`applyNextUnapproved`, which trims the current `state.drill` to the common
+prefix with `path` (mirroring `expandColumn`'s trim) and then drills only
+the remaining part (`drillIntoChild`) — without unnecessarily tearing down
+the whole stack for a nearby sibling step. On a different `root` (a
+different top-level block) it resets as before (`openTask`'s block-switch
+reset: `state.drill`/`drillCursor`/`focusLevel` cleared). All of this
+without recomputing — the palette owns the keyboard while it's open, so the
+navigation state can't have shifted in the meantime. This is a one-off step:
+after navigating, **no** new follow-up menu opens automatically — the
+reviewer approves the new unit themselves again with `Enter`.
 
-**Vanuit de blokken-index blijft "Ga door" in de index.** Drukte de reviewer
-`Enter` terwijl `state.mode==='list'` was (zie hierboven: het menu ankert dan al
-op de sidebar-rij, niet de diff-preview), dan zou het oude "Ga door" alsnog de
-diff instappen — dat voelt als een sprong weg uit de index terwijl je daar net
-zat. `afterApproveAction` capture't daarom **synchroon**, vóór de async
-`findNextUnapproved()`-gap, `keepList = state.mode !== 'diff'` en stasht die mee
-in `postApproveTarget` (`{ ...target, keepList }`) — synchroon omdat
-`state.mode` tegen de tijd dat de promise resolvet al kan zijn veranderd, maar
-op het moment van de approve-actie zelf nog exact de context is waar de
-reviewer 'm vandaan drukte. `applyNextUnapproved` vertakt op `target.keepList`:
-waar, dan verzet 'm **alleen** `state.selected` (naar `target.root`) +
-`scrollSelectedIntoView()` — `target.path` wordt genegeerd (géén `state.mode`/
-`gran`/`change`, geen diff-instap, geen drill), dus zelfs als het gevonden plan
-door een Onderliggende-code-kind zou lopen blijft "Ga door" vanuit de index bij
-de platte lijst-stap staan — drillen heeft alleen betekenis eenmaal in de
-diff. Onwaar, dan het bestaande pad (drilt zo nodig naar `target.path` en
-springt de diff van de nieuwe unit in). Het `postapprove-next`-label (het 2e
-item van `POSTAPPROVE_COMMANDS`, na de gepinde "Sluit menu" — zie hierboven)
-is om die reden ook een **functie** (i.p.v. de vorige kale string), gelezen op
-snapshot-tijd (`openMenu` → `snapshotCommands`, vlak nadat `postApproveTarget`
-gezet is — dezelfde veilige, niet-reactieve timing als het `approve`-label): "Ga
-door naar het volgende niet-goedgekeurde **block**" bij `keepList`, anders de
-bestaande "... **code**"-tekst.
+**From the block index, "Continue" stays in the index.** If the reviewer
+pressed `Enter` while `state.mode==='list'` was true (see above: the menu
+then already anchors on the sidebar row, not the diff preview), the old
+"Continue" would still step into the diff — that feels like a jump away from
+the index while you were just there. `afterApproveAction` therefore captures
+**synchronously**, before the async `findNextUnapproved()` gap,
+`keepList = state.mode !== 'diff'` and stashes it along
+in `postApproveTarget` (`{ ...target, keepList }`) — synchronously because
+`state.mode` may have already changed by the time the promise resolves, but
+at the moment of the approve action itself it's exactly the context the
+reviewer pressed it from. `applyNextUnapproved` branches on `target.keepList`:
+if true, it moves **only** `state.selected` (to `target.root`) +
+`scrollSelectedIntoView()` — `target.path` is ignored (no `state.mode`/
+`gran`/`change`, no diff entry, no drill), so even if the found plan would
+run through an Underlying-code child, "Continue" from the index stays at the
+plain list step — drilling only makes sense once you're in the diff. If
+false, the existing path (drills to `target.path` if needed and jumps into
+the diff of the new unit). The `postapprove-next` label (the 2nd item of
+`POSTAPPROVE_COMMANDS`, after the pinned "Close menu" — see above)
+is for that reason also a **function** (instead of the previous bare
+string), read at snapshot time (`openMenu` → `snapshotCommands`, right after
+`postApproveTarget` is set — the same safe, non-reactive timing as the
+`approve` label): "Continue to the next unapproved **block**" when
+`keepList`, otherwise the existing "... **code**" text.
 
-**Het postApprove-vervolgmenu opent op DEZELFDE plek als het menu waarmee je
-goedkeurde, ook als de goedgekeurde rij intussen uit de index verdween.**
-`isIndexMenu()` rekent `ms.mode === 'postApprove'` al mee, dus `menuAnchor()`
-probeert voor beide menu's hetzelfde: `[data-idx="${state.selected}"]`. Maar
-keurde de reviewer een block **volledig** goed, dan verdwijnt die rij meteen uit
-de sidebar (auto-hide van volledig goedgekeurde blocks, zie
-`blocks-and-ingest.md`) — en dat gebeurt vóór het vervolgmenu opent
-(`afterApproveAction`'s `findNextUnapproved().then(...)` draait ná de
-approve-mutatie). Zonder tegenmaatregel viel `menuAnchor()` dan terug op de
-**hele** `[data-testid="pr-index"]`-aside: die bounding rect is veel hoger dan
-één rij, en `positionMenu()`'s flip-boven-rekensom (`top = a.top - gap - mh`,
-geklemd op `Math.max(gap, …)`) gooide het vervolgmenu daardoor helemaal boven
-in beeld i.p.v. op de plek van het eerste menu. `lastIndexRowRect` (`home.mjs`,
-module-`let` naast `isIndexMenu`) cachet de rij z'n `getBoundingClientRect()`
-zolang hij nog echt bestaat; verdwijnt de rij, dan hergebruikt `menuAnchor()`
-die gecachte rect (als klein duck-typed object met alleen
-`getBoundingClientRect()` — `positionMenu()` roept nooit iets anders op de
-anchor aan) i.p.v. de volle aside. `openMenu(mode)` reset de cache bij elke
-open die **geen** approve-vervolgmenu is (`isReviewFollowup(mode)` — zie
-hieronder, dekt zowel `postApprove` als de drie review-submit-modes), zodat
-hij nooit een oude positie uit een eerdere, ongerelateerde sessie lekt — elke
-normale open herbouwt 'm meteen weer zodra zijn eigen ankerrij zichtbaar is.
+**The postApprove follow-up menu opens at the SAME spot as the menu you
+approved with, even if the approved row has meanwhile disappeared from the
+index.** `isIndexMenu()` already counts `ms.mode === 'postApprove'`, so
+`menuAnchor()` tries the same thing for both menus:
+`[data-idx="${state.selected}"]`. But if the reviewer fully approved a
+block, that row disappears from the sidebar right away (auto-hide of fully
+approved blocks, see
+`blocks-and-ingest.md`) — and that happens before the follow-up menu opens
+(`afterApproveAction`'s `findNextUnapproved().then(...)` runs after the
+approve mutation). Without a countermeasure, `menuAnchor()` would then fall
+back to the **whole** `[data-testid="pr-index"]` aside: that bounding rect
+is much taller than one row, and `positionMenu()`'s flip-above calculation
+(`top = a.top - gap - mh`, clamped to `Math.max(gap, …)`) would throw the
+follow-up menu all the way to the top of view instead of at the spot of the
+first menu. `lastIndexRowRect` (`home.mjs`,
+module-level `let` next to `isIndexMenu`) caches the row's
+`getBoundingClientRect()` as long as it still really exists; if the row
+disappears, `menuAnchor()` reuses that cached rect (as a small
+duck-typed object with only `getBoundingClientRect()` — `positionMenu()`
+never calls anything else on the anchor) instead of the full aside.
+`openMenu(mode)` resets the cache on every open that is **not** an approve
+follow-up (`isReviewFollowup(mode)` — see
+below, covers both `postApprove` and the three review-submit modes), so it
+never leaks an old position from an earlier, unrelated session — every
+normal open rebuilds it right away once its own anchor row is visible.
 Test: `tests/postapprove-menu.spec.mjs` ("blokken-index stays there").
 
-**Geen "volgende" meer: het review-submit-vervolgmenu (`reviewApprove`/
-`reviewChoice`/`reviewReject`) — een echte GitHub PR-review indienen.**
-`findNextUnapproved()` zoekt **uitsluitend voorwaarts** vanaf de huidige
-positie (zie zijn eigen doc-comment in `home.mjs`) — een `null`-resultaat
-betekent dus "niets meer *voor me*", niet per se "alles in de PR is klaar"
-(een eerder overgeslagen of nooit-bezocht blok kan nog openstaan). Waar
-`afterApproveAction` dit geval voorheen stil negeerde (het menu bleef dicht),
-opent het nu een van twee follow-ups, op basis van `state.approvalTotal` (de
-PR-brede combined-approval-teller over elk top-level block plus zijn
-genestelde/gedrilde PR-block-children — zie "Gecombineerde goedkeuring per
-boom" in `blocks-and-ingest.md`), gelezen na een paar `await
-Promise.resolve()`-microtask-ticks (dezelfde `loadBlocks`-precedent-wachttijd
-— de `approvalSummaries`/`approvalTotal`-watch is ontkoppeld en vult pas als
-microtask, niet synchroon met de zojuist gereassignde `b.approvedRows`):
-- **Alles goedgekeurd** (`approvalTotal.done === total`, `total > 0`) →
-  `menu.mode = 'reviewApprove'` (`REVIEW_APPROVE_COMMANDS`): **"Sluit menu"**
-  (gepind vooraan) / **"Keur de PR goed"** (default, het 2e item) — er valt
-  niets meer af te wijzen, alles is al beoordeeld.
-- **Nog niet alles** (er staat iets open, ergens buiten het bereik van de
-  voorwaartse zoektocht — bv. een eerder blok dat de reviewer nog niet
-  bereikte) → `menu.mode = 'reviewChoice'` (`REVIEW_CHOICE_COMMANDS`): **"Sluit
-  menu"** (gepind vooraan) / **"Keur de PR goed"** (default, het 2e item) /
-  **"Wijs de PR af"** — de reviewer besluit hier expliciet of hij de PR al
-  indient ondanks het openstaande restant, of eerst wijzigingen vraagt.
-Beide "Keur de PR goed"-items roepen **`submitReview('APPROVE')`** aan — een
-echte GitHub PR-level review, via `POST /api/workflows/submit_review {pr,
-event, body}` (de sanctioned write-weg, zie `workflows-write-boundary.md`; de
-workflow/Activity/het endpoint zelf staan niet in `home.mjs`, alleen deze
-call-site). **"Wijs de PR af" post niet meteen** — GitHub (en de backend's
-`validateSubmitReview`, 400) weigeren een lege `REQUEST_CHANGES`-body, dus die
-opent in plaats daarvan **`menu.mode = 'reviewReject'`**: een **vrije-tekst**
-stap die de bestaande palette-textarea (`ms.query`) hergebruikt als
-reden-invoerveld i.p.v. een nieuwe composer te bouwen. `rootCommandsFor`
-geeft voor deze mode geen statische lijst; `resolveCommands` bouwt in plaats
-daarvan **één** commando rechtstreeks uit de getypte tekst, en **alleen**
-zodra die niet leeg is — een lege query levert `[]` op, wat via `onKeydown`'s
-bestaande `if (list[ms.sel]) runCommand(...)`-guard `Enter` een no-op maakt
-(niet een stil sluiten zonder iets te versturen). `CommandMenu.mjs`'s
-placeholder verandert voor deze mode mee ("Typ de reden voor afwijzing
-(verplicht)…", zelfde per-mode-ternary als de bestaande `compose`-tak) als de
-enige instructie — er is geen apart label ervoor. Zodra er tekst staat toont
-de lijst precies één rij ("Wijs de PR af met deze reden"); die roept
-`submitReview('REQUEST_CHANGES', reason)` aan met de getypte tekst als body.
-Foutafhandeling is bewust minimaal (`console.error` op een niet-200 of
-netwerkfout) — deze app heeft nergens een toast/error-surface-conventie (zelfs
-`createComment` checkt `res.ok` niet, zie `conventions.md`); een geslaagde
-submit is zelf een verse workflow-run, dus `submitReview` roept `pollWorkflows()`
-aan zodat hij eerder dan de volgende `WORKFLOWS_POLL_MS`-tick in "Taken"
-verschijnt (dezelfde bestaande hoffelijkheid als `compose-post`/`compose-self`).
-Alle drie de nieuwe modes delen `isIndexMenu()`/`lastIndexRowRect`'s
-anker-cache-uitzondering met `postApprove` (via `isReviewFollowup(mode)`,
-`home.mjs`): net als het bestaande `postApprove`-vervolgmenu kunnen ze openen
-nadat de net-goedgekeurde rij al uit de sidebar verdween. Test:
-`tests/review-submit-menu.spec.mjs` (beide follow-ups + de reject-reason-flow,
-incl. de exacte `POST /api/workflows/submit_review`-payload) en de bijgewerkte
-laatste test in `tests/postapprove-menu.spec.mjs`
+**No more "next": the review-submit follow-up menu (`reviewApprove`/
+`reviewChoice`/`reviewReject`) — submitting a real GitHub PR review.**
+`findNextUnapproved()` searches **only forward** from the current
+position (see its own doc comment in `home.mjs`) — a `null` result thus
+means "nothing left *ahead of me*", not necessarily "everything in the PR
+is done" (an earlier skipped or never-visited block may still be open).
+Where `afterApproveAction` previously silently ignored this case (the menu
+stayed closed), it now opens one of two follow-ups, based on
+`state.approvalTotal` (the PR-wide combined approval counter across every
+top-level block plus its nested/drilled PR-block children — see "Combined
+approval per tree" in `blocks-and-ingest.md`), read after a few `await
+Promise.resolve()` microtask ticks (the same `loadBlocks` precedent wait —
+the `approvalSummaries`/`approvalTotal` watch is decoupled and only fills as
+a microtask, not synchronously with the just-reassigned `b.approvedRows`):
+- **Everything approved** (`approvalTotal.done === total`, `total > 0`) →
+  `menu.mode = 'reviewApprove'` (`REVIEW_APPROVE_COMMANDS`): **"Close menu"**
+  (pinned at the top) / **"Approve the PR"** (default, the 2nd item) — there
+  is nothing left to reject, everything has already been reviewed.
+- **Not everything yet** (something is still open, somewhere outside the
+  scope of the forward search — e.g. an earlier block the reviewer hasn't
+  reached yet) → `menu.mode = 'reviewChoice'` (`REVIEW_CHOICE_COMMANDS`):
+  **"Close menu"** (pinned at the top) / **"Approve the PR"** (default, the
+  2nd item) / **"Reject the PR"** — the reviewer explicitly decides here
+  whether to submit the PR despite the remaining open items, or request
+  changes first.
+Both "Approve the PR" items call **`submitReview('APPROVE')`** — a real
+GitHub PR-level review, via `POST /api/workflows/submit_review {pr,
+event, body}` (the sanctioned write path, see `workflows-write-boundary.md`;
+the workflow/Activity/the endpoint itself do not live in `home.mjs`, only
+this call site). **"Reject the PR" doesn't post right away** — GitHub (and
+the backend's `validateSubmitReview`, 400) reject an empty
+`REQUEST_CHANGES` body, so it instead opens **`menu.mode = 'reviewReject'`**:
+a **free-text** step that reuses the existing palette textarea (`ms.query`)
+as a reason input field instead of building a new composer. `rootCommandsFor`
+returns no static list for this mode; `resolveCommands` instead builds
+**one** command directly from the typed text, and **only**
+once it's not empty — an empty query yields `[]`, which via `onKeydown`'s
+existing `if (list[ms.sel]) runCommand(...)` guard makes `Enter` a no-op
+(not a silent close without sending anything). `CommandMenu.mjs`'s
+placeholder changes for this mode too ("Type the reason for rejection
+(required)…", the same per-mode ternary as the existing `compose` branch) as
+the only instruction — there is no separate label for it. As soon as there
+is text, the list shows exactly one row ("Reject the PR with this reason");
+that calls `submitReview('REQUEST_CHANGES', reason)` with the typed text as
+the body. Error handling is deliberately minimal (`console.error` on a
+non-200 or network error) — this app has no toast/error-surface convention
+anywhere (even `createComment` doesn't check `res.ok`, see
+`conventions.md`); a successful submit is itself a fresh workflow run, so
+`submitReview` calls `pollWorkflows()` so it shows up in "Tasks" before the
+next `WORKFLOWS_POLL_MS` tick (the same existing courtesy as
+`compose-post`/`compose-self`).
+All three new modes share `isIndexMenu()`/`lastIndexRowRect`'s
+anchor-cache exception with `postApprove` (via `isReviewFollowup(mode)`,
+`home.mjs`): just like the existing `postApprove` follow-up menu, they can
+open after the just-approved row has already disappeared from the sidebar.
+Test: `tests/review-submit-menu.spec.mjs` (both follow-ups + the
+reject-reason flow, incl. the exact `POST /api/workflows/submit_review`
+payload) and the updated last test in `tests/postapprove-menu.spec.mjs`
 ("nothing left ahead, PR not fully approved").
 
-Hetzelfde menu-mechanisme bedient ook een **comment-scoped** variant: staat de
-keyboard op een geplaatste comment-rij in `RelatedPanel` (`cs.focus === 'comment'`,
-vóór het instappen in de thread) én is het reply-veld nog **leeg**, dan opent
-`Enter` niet de block-palette maar een menu met drie rijen — **"Sluit menu"**
-(gepind vooraan), **"Resolve comment"** (default, het 2e item, waar de
-selectie opent) en **"Verwijder comment"**
+The same menu mechanism also serves a **comment-scoped** variant: if the
+keyboard is on a placed comment row in `RelatedPanel` (`cs.focus === 'comment'`,
+before stepping into the thread) and the reply field is still **empty**,
+`Enter` opens not the block palette but a menu with three rows — **"Close
+menu"** (pinned at the top), **"Resolve comment"** (default, the 2nd item,
+where the selection opens) and **"Delete comment"**
 (`menu.mode = 'comment'`, `COMMENT_COMMANDS` in `home.mjs`; `resolveCommands`
-schakelt op `menu.mode` om, `openMenu(mode)` zet 'm, `closeMenu` reset 'm terug
-naar `'block'`). Een **niet-leeg** reply-veld laat `Enter` met rust — dan wint het
-eigen `keydown` van het reply-veld (`sendReaction`), zodat "typ een snelle reactie,
-druk Enter" blijft werken (`isCommentFocused`/`commentReplyEmpty` in
-`RelatedPanel.mjs` bewaken dat onderscheid). `menuAnchor`/`menuRegion` ankeren in
-die mode op de gefocuste comment-rij resp. de thread-pane i.p.v. de diff. Kiezen
-van **"Verwijder comment"** roept `deleteFocusedComment` aan: die stuurt een
-**`delete`-Signal** (`POST /api/workflows/{runID}/signals/delete`) naar de
-comment's Workflow Execution — de enige schrijf-weg, binnen de write-boundary.
-De workflow (`taskCodeCommentWorkflow` in `workflows.go`) zet de comment eerst op
-status **`deleting`** (Activity `markCommentDeleting`), verwijdert 'm dan van
-GitHub (Activity `deleteGithubComment`, best-effort, net als het posten) en tot
-slot uit het eigen read-model (Activity `deleteComment`, cascadeert de reacties),
-en rondt de Execution af. Een `delete`-verzoek rijdt mee op hetzelfde
-`reply`-Signal als een reactie (`ReactionSignal.Action`, "" = reactie, "delete" =
-verwijderen) — een workflow kan namelijk maar op één Signal-naam tegelijk
-`WaitSignal`-en, dus dit moet als een te onderscheiden variant van de bestaande
-reacties-lus binnenkomen, niet als een eigen Signal-naam.
-Kiezen van **"Resolve comment"** roept `resolveFocusedComment` aan: die stuurt —
-net als een thread-reply — een **`reply`-Signal** met `done:true` en de
-sentinel-body `"/resolve"`. De workflow zet de read-model-status op `resolved`
-(via `saveReaction`'s `Resolves`-vlag) én, voor een **review-diff-thread**,
-resolvet de conversatie **ook op GitHub** (Activity `resolveGithubThread` →
-`github.Client.ResolveReviewThread`, dat via `gh api graphql` het
-review-thread-node-ID opzoekt op basis van de root-comment-`databaseId` en de
-`resolveReviewThread`-mutatie draait). De `"/resolve"`-sentinel-body wordt
-**nooit** als tekst-reply geplaatst — de reply-lus post alleen een echte,
-niet-sentinel body. Een **PR-brede** thread (issue/review-summary) heeft geen
-GitHub-resolve-concept, dus daar blijft resolve local-only (zie
+switches on `menu.mode`, `openMenu(mode)` sets it, `closeMenu` resets it back
+to `'block'`). A **non-empty** reply field leaves `Enter` alone — then the
+reply field's own `keydown` wins (`sendReaction`), so "type a quick reply,
+press Enter" keeps working (`isCommentFocused`/`commentReplyEmpty` in
+`RelatedPanel.mjs` guard that distinction). `menuAnchor`/`menuRegion` anchor
+in that mode on the focused comment row resp. the thread pane instead of the
+diff. Choosing **"Delete comment"** calls `deleteFocusedComment`: that sends
+a **`delete` Signal** (`POST /api/workflows/{runID}/signals/delete`) to the
+comment's Workflow Execution — the only write path, within the write
+boundary. The workflow (`taskCodeCommentWorkflow` in `workflows.go`) first
+sets the comment to status **`deleting`** (Activity `markCommentDeleting`),
+then removes it from GitHub (Activity `deleteGithubComment`, best-effort,
+same as posting) and finally from its own read model (Activity
+`deleteComment`, cascades the reactions), and completes the Execution. A
+`delete` request rides along on the same `reply` Signal as a reaction
+(`ReactionSignal.Action`, "" = reaction, "delete" = deletion) — a workflow
+can only `WaitSignal` on one Signal name at a time, so this has to come in
+as a distinguishable variant of the existing reactions loop, not as its own
+Signal name.
+Choosing **"Resolve comment"** calls `resolveFocusedComment`: that sends —
+just like a thread reply — a **`reply` Signal** with `done:true` and the
+sentinel body `"/resolve"`. The workflow sets the read-model status to
+`resolved` (via `saveReaction`'s `Resolves` flag) and, for a
+**review-diff thread**, also resolves the conversation **on GitHub**
+(Activity `resolveGithubThread` → `github.Client.ResolveReviewThread`,
+which via `gh api graphql` looks up the review-thread node ID based on the
+root comment's `databaseId` and runs the `resolveReviewThread` mutation).
+The `"/resolve"` sentinel body is **never** posted as a text reply — the
+reply loop only ever posts a real, non-sentinel body. A **PR-wide** thread
+(issue/review-summary) has no GitHub resolve concept, so resolve stays
+local-only there (see
 `.claude/rules/tembed-workflows.md`).
 
-Datzelfde `CommandMenu`-mechanisme bedient ook een **comment-soort-menu**
-(`menu.mode = 'compose'`, `COMPOSE_COMMANDS` in `home.mjs`): staat de composer
-open én is er tekst getypt, dan opent **`Enter`** (en de composer-knop
-**"Plaats…"**, via de `openCompose`-prop van `RelatedPanel`) niet meteen de
-comment, maar een menu met zes rijen wat ermee moet gebeuren: **"Sluit menu"**
-(gepind vooraan), **"Plaats comment"** (het **default** item, het 2e in de
-lijst, waar de selectie opent — dus "typ, Enter, Enter" plaatst 'm nog steeds
-net zo direct als voorheen), *Claude commando* (placeholder), *Laat Claude dit
-implementeren
-(groep/regel/call)* — placeholder, label benoemt de huidige unit via
-`granNoun()` uit `commentTarget()` —, *Alleen voor mijzelf* en *Jira* (een
-submenu met *Comment op ticket* / *Subtaak aanmaken* / *Nieuwe taak aanmaken*,
-alle drie placeholder). **"Plaats comment"** en **"Alleen voor mijzelf"**
-plaatsen allebei écht: `placeComment(state, commentTarget)` resp.
-`placeComment(state, commentTarget, { local: true })` — het eerste post een
-**normale, publieke** comment (dezelfde bestaande `createComment`-weg, gewoon
-zonder `opts.local`), het tweede een **privé-notitie** die wél als comment
-wordt opgeslagen maar niet naar GitHub gaat (zie de `local`-vlag in
-`.claude/rules/tembed-workflows.md`). Beide `run`-functies zijn `async` en
-roepen na een geslaagde `placeComment` meteen `pollWorkflows()` aan — zonder
-dat verschijnt de net gestarte `task_code_comment`-run pas op de eerstvolgende
-`WORKFLOWS_POLL_MS`-tick (2.5s) in de Taken-kolom (`workflows-panel`, zie
-`.claude/rules/detail-layout.md`) i.p.v. meteen. De Claude/Git/Jira-items
-blijven placeholders (geen `pollWorkflows`-aanroep, ze schrijven niets). De
-Enter-tak zit in `onKeydown` **vóór** de `relatedActive()`-tak
-(`isComposeOpen()` + `composeHasText()`, beide uit `RelatedPanel.mjs`), zodat
-hij werkt of de composer nu via toetsenbord (`cs.focus==='new'`) of via de
-knop geopend is; **Shift+Enter**
-valt erbuiten en blijft dus een newline in de composer. Belangrijk: dit was de
-eerste flow die een menu **over** de open composer opent — daardoor kwam een
-latente arrow.js-wees-binding-bug boven (menu-heropen-crash), opgelost met de
-verse-`ms`-state-split, zie `.claude/rules/conventions.md`.
+That same `CommandMenu` mechanism also serves a **comment-type menu**
+(`menu.mode = 'compose'`, `COMPOSE_COMMANDS` in `home.mjs`): if the composer
+is open and text has been typed, **`Enter`** (and the composer button
+**"Place…"**, via `RelatedPanel`'s `openCompose` prop) doesn't immediately
+place the comment, but opens a menu with six rows for what to do with it:
+**"Close menu"**
+(pinned at the top), **"Place comment"** (the **default** item, the 2nd in
+the list, where the selection opens — so "type, Enter, Enter" still places
+it just as directly as before), *Claude command* (placeholder), *Let Claude
+implement this
+(group/line/call)* — placeholder, label names the current unit via
+`granNoun()` from `commentTarget()` —, *Only for myself* and *Jira* (a
+submenu with *Comment on ticket* / *Create subtask* / *Create new task*,
+all three placeholders). **"Place comment"** and **"Only for myself"**
+both actually place it: `placeComment(state, commentTarget)` resp.
+`placeComment(state, commentTarget, { local: true })` — the first posts a
+**normal, public** comment (the same existing `createComment` path, just
+without `opts.local`), the second a **private note** which is stored as a
+comment but does not go to GitHub (see the `local` flag in
+`.claude/rules/tembed-workflows.md`). Both `run` functions are `async` and
+call `pollWorkflows()` right after a successful `placeComment` — without
+that, the just-started `task_code_comment` run would only show up in the
+Tasks column (`workflows-panel`, see
+`.claude/rules/detail-layout.md`) at the next `WORKFLOWS_POLL_MS` tick
+(2.5s) instead of immediately. The Claude/Git/Jira items remain placeholders
+(no `pollWorkflows` call, they write nothing). The Enter branch sits in
+`onKeydown` **before** the `relatedActive()` branch
+(`isComposeOpen()` + `composeHasText()`, both from `RelatedPanel.mjs`), so
+it works whether the composer was opened via keyboard (`cs.focus==='new'`)
+or via the button; **Shift+Enter**
+falls outside that and thus remains a newline in the composer. Important:
+this was the first flow to open a menu **over** the open composer — which
+surfaced a latent arrow.js orphan-binding bug (menu-reopen crash), fixed
+with the fresh-`ms` state split, see `.claude/rules/conventions.md`.
 
-**`/`** opent een **algemeen, PR-breed tree-menu** (`menu.mode = 'pr'`,
-`PR_COMMANDS` in `home.mjs`) — hetzelfde `CommandMenu`-overlay als `Enter`, maar
-i.p.v. block-acties zijn dit acties op de **hele PR**. Zes root-items: **"Sluit
-menu"** (gepind vooraan, waar de selectie sinds kort altijd op het item erná
-opent), **"Naar PR-overzicht"** (navigeert naar `/pr-overview`, en dus het
-default item waar de selectie opent), **"GitHub"** en **"Jira"** (als
-**submenu** via het bestaande `children`-mechanisme — elk submenu krijgt zelf
-ook zo'n gepinde "Sluit menu"), **"Controleer de hele PR op risico's"** (start
-`code_warning`, zie `checkPRWarnings`/`.claude/rules/tembed-workflows.md`), en
-**"Toon volledige omschrijving" / "Omschrijving inklappen"** (het laatste item,
-een label-functie die `state.descriptionExpanded` toggelt — dezelfde efemere vlag
-als de in-card "meer…"-affordance in de PR-info-kolom, zie
-`.claude/rules/detail-layout.md`; het label wordt op open-tijd één keer
-gesnapshot door `snapshotCommands`, dus geen reactieve binding lekt de
-`CommandMenu`-boom in). Onder
-GitHub: *Open op GitHub* (opent de PR-pagina) en *Comment plaatsen* (hergebruikt
-de regel-comment-composer `startComment`, net als de block-palette). Onder Jira:
-*Openen in nieuw tab* (deep-link naar het ticket), *Comment plaatsen* en *Subtask
-maken* — die laatste twee zijn **placeholders** (nog geen Jira-write-integratie).
-Een getypt `/` in een gefocust invoerveld (comment-composer/reply) bereikt deze
-handler niet — de `relatedActive()`-tak vangt 'm eerder af, dus het teken vloeit
-gewoon in het veld. De Jira/GitHub-links leunen op **PR-metadata** (titel + URL,
-en de daaruit afgeleide `KEY-123`-ticket-key): die komt uit het **`prmeta`-read-
-model** via `GET /api/pr?pr=N`, gevuld door het `pr_status`-workflow (zie
-`.claude/rules/tembed-workflows.md`). `home.mjs` (`loadPRMeta`) zorgt bij het laden dat de tracker draait
-(`POST /api/workflows/pr_status`) en leest daarna de metadata; ontbreekt die (nog),
-dan vallen de links terug op de kale PR-URL resp. de Jira-base.
+**`/`** opens a **general, PR-wide tree menu** (`menu.mode = 'pr'`,
+`PR_COMMANDS` in `home.mjs`) — the same `CommandMenu` overlay as `Enter`, but
+instead of block actions these are actions on the **whole PR**. Six root
+items: **"Close
+menu"** (pinned at the top, where the selection has recently always opened
+on the item after it), **"To PR overview"** (navigates to
+`/pr-overview`, and thus the default item where the selection opens),
+**"GitHub"** and **"Jira"** (as a **submenu** via the existing `children`
+mechanism — each submenu itself also gets such a pinned "Close menu"),
+**"Check the whole PR for risks"** (starts
+`code_warning`, see `checkPRWarnings`/`.claude/rules/tembed-workflows.md`), and
+**"Show full description" / "Collapse description"** (the last item,
+a label function that toggles `state.descriptionExpanded` — the same
+ephemeral flag as the in-card "more…" affordance in the PR info column, see
+`.claude/rules/detail-layout.md`; the label is snapshotted once at open time
+by `snapshotCommands`, so no reactive binding leaks into the
+`CommandMenu` tree). Under
+GitHub: *Open on GitHub* (opens the PR page) and *Place comment* (reuses
+the line-comment composer `startComment`, same as the block palette). Under
+Jira: *Open in new tab* (deep link to the ticket), *Place comment* and
+*Create subtask* — the latter two are **placeholders** (no Jira write
+integration yet). A typed `/` in a focused input field (comment
+composer/reply) never reaches this handler — the `relatedActive()` branch
+catches it earlier, so the character just flows into the field. The
+Jira/GitHub links rely on **PR metadata** (title + URL, and the
+`KEY-123` ticket key derived from it): that comes from the **`prmeta` read
+model** via `GET /api/pr?pr=N`, filled by the `pr_status` workflow (see
+`.claude/rules/tembed-workflows.md`). `home.mjs` (`loadPRMeta`) ensures on
+load that the tracker is running
+(`POST /api/workflows/pr_status`) and then reads the metadata; if that's
+missing (yet),
+the links fall back to the bare PR URL resp. the Jira base.
 
-- **`'list'`** (start): `↑`/`↓` kiezen een block in de sidebar, `→` stapt de diff
-  van het geselecteerde block in — ook als dat block **0 eigen change-groups**
-  heeft (een echt PR-blok waarvan de eigen body niets wijzigt en dat alleen als
-  parent van Onderliggende-code-kinderen bestaat, bv.
-  `CreatePaymentAction::findOrCreateCustomer`): `→` stapt dan alsnog naar
-  `state.mode==='diff'` en toont het (ongehighlighte) blokcode, zodat een
-  volgende `→` verder naar Onderliggende code kan — precies zoals `→` in de
-  PR-samenvatting-kaart (stop 1) altijd onvoorwaardelijk naar de bloklijst
-  stapt. `enterDiff()` (`home.mjs`) had hiervoor een `groupsFor(b).length ===
-  0`-guard die stil niets deed; die is verwijderd (alleen een ontbrekend
-  block zelf is nog een no-op). `ensureCode`'s losse "diff zonder eigen groups
-  → terug naar list"-fallback is om dezelfde reden verwijderd: die combinatie
-  is nu een bewust bereikbare, niet-dode staat, ook buiten een gedrilde kolom
-  (`focusLevel===0`) — was al uitgezonderd zodra er gedrild was, zie
-  `tests/drill-mode-flip.spec.mjs`. Zie `tests/enter-diff-zero-groups.spec.mjs`.
-  Volledig goedgekeurde top-level blokken zijn
-  standaard **verborgen** uit deze lijst (knop onderin klapt ze uit); de "Start"-kop
-  toont een PR-brede goedkeurings-teller. Zie de sectie "Verbergen van goedgekeurde
-  blokken" + "Server-side `total`" in `.claude/rules/blocks-and-ingest.md`.
-  **`↑`/`↓` slaan een verborgen (goedgekeurd) blok over** (`stepVisibleSelected`
-  in `home.mjs`, gebruikt door zowel de gewone als de zoekbox-actieve
-  ArrowDown/ArrowUp-tak): `state.selected` is een raw index in `state.blocks`,
-  maar `BlockList.mjs`'s `renderList` rendert géén rij voor een verborgen
-  (goedgekeurd) blok. Zonder deze stap landde `state.selected` soms op zo'n
-  onzichtbare index — geen rij in de sidebar toonde de indigo-highlight,
-  wat aanvoelde als "dit blok is niet meer selecteerbaar", vooral na veel
-  ↓/↑ diep in een reviewsessie met meerdere al-goedgekeurde blokken. Is er in
-  die richting geen zichtbaar blok meer, dan blijft de selectie op de huidige
-  (al zichtbare) positie staan i.p.v. op de verborgen staart te landen.
-  **Hetzelfde gat bestond op de load-/zoek-paden, en die lossen het elk anders
-  op** (`revealSelectedIfHidden`/`clampSelectedToVisible` in `home.mjs`):
-  - **Load/refresh-restore → onthullen.** Een refresh herstelt `?sel=file:line`
-    óók naar een verborgen blok (`applyBlockRefRestore`) — dat is de **eigen**
-    positie van de reviewer, dus i.p.v. de selectie weg te verplaatsen klapt
-    `revealSelectedIfHidden` de goedgekeurde sectie open
-    (`state.showApproved = true` + `scrollSelectedIntoView`): het blok wordt
-    zichtbaar en blijft geselecteerd/gehighlight. Al zichtbaar → no-op.
-  - **Zoeken → clampen.** `setSearch` reset naar index 0 — een synthetische
-    landing, niet de eigen positie van de reviewer. Typen mag nooit ineens
-    alle goedgekeurde blokken PR-breed onthullen (en typt niet terug dicht),
-    dus daar verplaatst `clampSelectedToVisible` de selectie naar de **eerste
-    zichtbare** match (geen zichtbaar blok → selectie blijft staan, mirror van
-    `stepVisibleSelected`; de zoekfilter zelf hoeft geen aparte check — een
-    weggefilterd blok zit überhaupt niet meer in `state.blocks`).
-  Beide gebruiken exact hetzelfde `isFullyApproved`-criterium als `renderList`.
-  **↓ voorbij het laatste zichtbare block landt op de "Toon/Verberg N
-  goedgekeurde blocks"-knop zelf** (`state.toggleFocused`, `stepListSelection`
-  in `home.mjs` — vervangt de kale `stepVisibleSelected`-aanroep in beide
-  ArrowDown/ArrowUp-takken hierboven): de knop was voorheen alleen met de muis
-  te bereiken. `stepListSelection(1)` valt terug op `stepVisibleSelected` en
-  zet, alleen als die niets verder vindt (`next === state.selected`) én de
-  knop daadwerkelijk bestaat (`toggleRowVisible()` — er is minstens één
-  goedgekeurd top-level blok, ongeacht `showApproved`), `state.toggleFocused =
-  true`; `state.selected` blijft ongewijzigd, de knop is dus een extra,
-  laatste stop bovenop de blocks, geen vervanging. `BlockList.mjs`'s
-  `toggleRow` toont daarop dezelfde indigo bg/ring als een geselecteerde rij
-  (en dimt de rij-highlight van het onderliggende `state.selected`-blok, zodat
-  er nooit twee indigo highlights tegelijk zichtbaar zijn). **`↑`** vanaf de
-  knop (`stepListSelection(-1)`) zet `toggleFocused` gewoon terug op `false` —
-  het laatste block was en blijft `state.selected`, dus dit is puur een
-  focus-stap, geen her-navigatie. **`Enter`/`→`** togglen daar `state.showApproved`
-  (mirror van een klik op de knop) i.p.v. het commando-menu te openen resp. de
-  diff in te stappen; **`f`/`d`/`s`/`a`** zijn no-ops zolang de knop de
-  keyboard heeft (er is geen block/diff-context om op te acteren). Een klik op
-  een gewone rij, of typen in de zoekbox (`setSearch`), resetten
-  `toggleFocused` altijd naar `false` — een nieuwe navigatie-context laat de
-  knop nooit stilzwijgend gefocust achter.
-  Volgorde is load-bearing: op het load-pad draait de reveal pas **ná**
-  `applyBlockRefRestore` (een herstelde `?sel=` naar een zichtbaar blok is een
-  no-op) én nadat `loadBlocks` `loadApprovals`/`loadBlockStats` ge-await
-  heeft plus een paar microtask-ticks zodat de `approvalSummaries`-watch
-  geflusht is (het `openTask`-precedent) — eerder is "verborgen" nog niet
-  kenbaar en zou de reveal een no-op zijn. De **live** approve-flow blijft
-  bewust ongemoeid: een blok goedkeuren terwijl je erop staat houdt het
-  geselecteerd (er hangt géén reveal/clamp aan de `approvalSummaries`-watch
-  zelf). Regressietest: `tests/selected-reveal-hidden.spec.mjs`.
-- **`'diff'`**: `↑`/`↓` lopen door de **wijzigingen** van dat block, `←` stapt
-  terug naar de lijst. Loop je voorbij de **laatste** wijziging (`↓`) of de
-  **eerste** (`↑`) — je kunt niet verder binnen dit block — dan stap je door
-  naar het **volgende** resp. **vorige** block, **mits dat block uit hetzelfde
-  bestand komt** (dezelfde blokken die met het gestippelde connector-lijntje aan
-  elkaar hangen); land je op een bestandsgrens dan stopt de navigatie daar. Bij
-  het overstappen land je op de eerste resp. laatste wijziging (`stepBlock`, dat
-  via `sameFileNeighbour(delta)` de bestands-check doet), zodat je zonder terug
-  te gaan naar de lijst door alle diffs van één bestand loopt. Als het buurblock
-  zijn code nog laadt onthoudt `pendingLast` dat je op de laatste wijziging wilt
-  landen; `ensureCode` lost dat op zodra de rijen bekend zijn. Sta je op de
-  **laatste** (resp. **eerste**) wijziging én is er een volgend (resp. vorig)
-  **same-file** block, dan verschijnt een **grijs step-chevron _buiten_ de
-  block-kaart** — onder de kaart (bij `↓`) net boven het gestippelde
-  connector-lijntje, of erboven (bij `↑`) — als hint dat de pijl je naar het
-  buurblock brengt (`stepChevron`/`canStep(delta)` in `home.mjs`, in de
-  block-kolom náást de kaarten gerenderd). Het slot dat dit chevron toggelt
-  (`stepChevronSlot`) heeft bewust een **stabiele element-root** (een statische
-  `display:contents`-wrapper) — een kale keyed `${…}`-wrapper liet hier de
-  chunk-`ref` stale gaan en corrumpeerde de keyed reconcile van de
-  block-kolom (verdwijnende preview-kaart + tab-hang bij herhaald ↓/↑ door
-  same-file blocks); zie de "kale toggelende expressie"-valkuil in
-  `.claude/rules/conventions.md`. Dit staat los van het **groene
-  scroll-chevron _binnen_ de kaart** (`scrollHint`/`updateHints` in `Block.mjs`),
-  dat enkel nog "er zijn wijzigingen buiten beeld — scroll verder in dít block"
-  betekent. Grijs + buiten = je verlaat het block; groen + binnen = blijf scrollen.
-  Op een bestandsgrens (geen same-file buur) blijft het grijze step-chevron uit.
+- **`'list'`** (start): `↑`/`↓` choose a block in the sidebar, `→` steps into
+  the diff of the selected block — even if that block has **0 change groups
+  of its own** (a real PR block whose own body changes nothing and which
+  only exists as a parent of Underlying-code children, e.g.
+  `CreatePaymentAction::findOrCreateCustomer`): `→` then still steps into
+  `state.mode==='diff'` and shows the (unhighlighted) block code, so a
+  subsequent `→` can continue on into Underlying code — exactly like `→` in
+  the PR summary card (stop 1) always unconditionally steps to the block
+  list. `enterDiff()` (`home.mjs`) previously had a `groupsFor(b).length ===
+  0` guard here that silently did nothing; that has been removed (only a
+  missing block itself is still a no-op). `ensureCode`'s separate "diff
+  without own groups → back to list" fallback was removed for the same
+  reason: that combination is now a deliberately reachable, non-dead state,
+  even outside a drilled column (`focusLevel===0`) — it was already excluded
+  as soon as there was a drill, see
+  `tests/drill-mode-flip.spec.mjs`. See `tests/enter-diff-zero-groups.spec.mjs`.
+  Fully approved top-level blocks are
+  **hidden** by default from this list (a button at the bottom expands them);
+  the "Start" heading shows a PR-wide approval counter. See the section
+  "Hiding approved blocks" + "Server-side `total`" in
+  `.claude/rules/blocks-and-ingest.md`.
+  **`↑`/`↓` skip a hidden (approved) block** (`stepVisibleSelected`
+  in `home.mjs`, used by both the normal and the search-box-active
+  ArrowDown/ArrowUp branch): `state.selected` is a raw index in
+  `state.blocks`, but `BlockList.mjs`'s `renderList` renders no row for a
+  hidden (approved) block. Without this step, `state.selected` would
+  sometimes land on such an invisible index — no row in the sidebar would
+  show the indigo highlight, which felt like "this block is no longer
+  selectable", especially after a lot of ↓/↑ deep into a review session with
+  several already-approved blocks. If there's no visible block left in that
+  direction, the selection just stays at the current (already visible)
+  position instead of landing on the hidden tail.
+  **The same gap existed on the load/search paths, and each resolves it
+  differently** (`revealSelectedIfHidden`/`clampSelectedToVisible` in
+  `home.mjs`):
+  - **Load/refresh-restore → reveal.** A refresh restores `?sel=file:line`
+    even to a hidden block (`applyBlockRefRestore`) — that's the reviewer's
+    **own** position, so instead of moving the selection away,
+    `revealSelectedIfHidden` opens up the approved section
+    (`state.showApproved = true` + `scrollSelectedIntoView`): the block
+    becomes visible and stays selected/highlighted. Already visible → no-op.
+  - **Search → clamp.** `setSearch` resets to index 0 — a synthetic
+    landing, not the reviewer's own position. Typing should never suddenly
+    reveal all approved blocks PR-wide (and doesn't type back closed), so
+    there `clampSelectedToVisible` moves the selection to the **first
+    visible** match (no visible block → selection stays put, mirroring
+    `stepVisibleSelected`; the search filter itself needs no separate check
+    — a filtered-out block simply isn't in `state.blocks` anymore).
+  Both use exactly the same `isFullyApproved` criterion as `renderList`.
+  **↓ past the last visible block lands on the "Show/Hide N
+  approved blocks" button itself** (`state.toggleFocused`, `stepListSelection`
+  in `home.mjs` — replaces the bare `stepVisibleSelected` call in both
+  ArrowDown/ArrowUp branches above): the button was previously only reachable
+  with the mouse. `stepListSelection(1)` falls back to `stepVisibleSelected`
+  and, only if that finds nothing further (`next === state.selected`) and
+  the button actually exists (`toggleRowVisible()` — there's at least one
+  approved top-level block, regardless of `showApproved`), sets
+  `state.toggleFocused = true`; `state.selected` stays unchanged, so the
+  button is an extra, final stop on top of the blocks, not a replacement.
+  `BlockList.mjs`'s `toggleRow` then shows the same indigo bg/ring as a
+  selected row (and dims the row highlight of the underlying
+  `state.selected` block, so there are never two indigo highlights visible
+  at once). **`↑`** from the
+  button (`stepListSelection(-1)`) simply sets `toggleFocused` back to
+  `false` — the last block was and remains `state.selected`, so this is
+  purely a focus step, not re-navigation. **`Enter`/`→`** there toggle
+  `state.showApproved` (mirroring a click on the button) instead of opening
+  the command menu resp. stepping into the diff; **`f`/`d`/`s`/`a`** are
+  no-ops while the button owns the keyboard (there's no block/diff context
+  to act on). A click on a regular row, or typing in the search box
+  (`setSearch`), always resets
+  `toggleFocused` to `false` — a new navigation context never silently
+  leaves the button focused.
+  Order is load-bearing: on the load path the reveal only runs **after**
+  `applyBlockRefRestore` (a restored `?sel=` to a visible block is a
+  no-op) and after `loadBlocks` has awaited `loadApprovals`/`loadBlockStats`
+  plus a couple of microtask ticks so the `approvalSummaries` watch has
+  flushed (the `openTask` precedent) — before that, "hidden" isn't yet
+  knowable and the reveal would be a no-op. The **live** approve flow stays
+  deliberately untouched: approving a block while standing on it keeps it
+  selected (there is **no** reveal/clamp attached to the `approvalSummaries`
+  watch itself). Regression test: `tests/selected-reveal-hidden.spec.mjs`.
+- **`'diff'`**: `↑`/`↓` walk through the **changes** of that block, `←` steps
+  back to the list. Walking past the **last** change (`↓`) or the
+  **first** (`↑`) — you can't go further within this block — steps you on to
+  the **next** resp. **previous** block, **provided that block comes from the
+  same file** (the same blocks that hang together via the dotted connector
+  line); if you land on a file boundary, navigation stops there. When
+  stepping across, you land on the first resp. last change (`stepBlock`,
+  which does the file check via `sameFileNeighbour(delta)`), so you can
+  walk through all the diffs of one file without going back to the list. If
+  the neighbor block's code is still loading, `pendingLast` remembers that
+  you want to land on the last change; `ensureCode` resolves that once the
+  rows are known. If you're on the **last** (resp. **first**) change and
+  there's a next (resp. previous) **same-file** block, a **grey step-chevron
+  _outside_ the
+  block card** appears — below the card (for `↓`) just above the dotted
+  connector line, or above it (for `↑`) — as a hint that the arrow will take
+  you to the neighboring block (`stepChevron`/`canStep(delta)` in `home.mjs`,
+  rendered in the block column next to the cards). The slot that toggles
+  this chevron (`stepChevronSlot`) deliberately has a **stable element
+  root** (a static `display:contents` wrapper) — a bare keyed `${…}` wrapper
+  made the chunk `ref` go stale here and corrupted the keyed reconcile of
+  the block column (the disappearing preview card + tab hang under repeated
+  ↓/↑ through same-file blocks); see the "bare toggling expression"
+  pitfall in `.claude/rules/conventions.md`. This is separate from the
+  **green scroll chevron _inside_ the card** (`scrollHint`/`updateHints` in
+  `Block.mjs`), which now only means "there are changes off-screen —
+  keep scrolling within THIS block". Grey + outside = you're leaving the
+  block; green + inside = keep scrolling.
+  At a file boundary (no same-file neighbor), the grey step chevron stays
+  hidden.
 
-In `'diff'`-mode stapt **`→`** de **Onderliggende-code-kaart** in
-(`enterRelated` in `RelatedPanel.mjs`, `cs.focus === 'code'`) en landt op het
-**eerste** child-blokje (`cs.codeSel = 0`). Alle blokjes staan verticaal onder
-elkaar op volle breedte (geen zij-aan-zij-hint meer) en de kaart is een **pure
-lijst-navigatie**: **`↓`** selecteert het **volgende** blokje (blijft op het
-laatste), **`↑`** het **vorige** blokje — vanaf het **eerste** blokje gaat
-**`↑`** i.p.v. verder terug naar de diff (`exitRelated`). **`←`** gaat vanaf elk
-blokje terug naar de diff (`exitRelated`). Deze kaart heeft geen `→` meer die
-'m verlaat — dat sprong vroeger naar de comments-kolom, maar comments/taken
-zitten niet meer in deze keten (zie hierboven en "Comments/taken-sidebar" in
-`.claude/rules/detail-layout.md`); die zijn alleen nog via Cmd+→ bereikbaar.
-Deze paneel-cursor
-(`cs.focus`/`codeSel`/`sel`/`threadPos`) leeft in de **URL** onder de eigen
-`rel`-namespace (`rel.foc`/`rel.code`/`rel.csel`/`rel.thr`, via
-`bindUrlState(cs, …, { ns:'rel' })` in `RelatedPanel.mjs`), zodat een refresh je
-terugzet op precies dit blokje / deze comment-thread; `applyRelRestore` past de
-herstelde cursor één keer geclampt opnieuw toe zodra de kinderen/comments geladen
-zijn (zie `.claude/rules/detail-layout.md` en skill `url-state`). **`Enter`** op de
-kaart **drilt** in het kind
-waar de cursor op staat (`focusedRelatedChild()`) — en een **muisklik** op een
-Onderliggende-code-item (`data-testid=related-item`) drilt in dát kind, langs
-dezelfde weg: het kind opent als een eigen
-diff-kolom rechts naast de bestaande, tussen die kolommen en `RelatedPanel` in
-(`drillIntoChild`, zie de sectie "Drillen" in `.claude/rules/detail-layout.md`),
-en het Onderliggende-code-paneel + de taken/chat eronder springen mee naar dát
-niveau (`focusedBlock()`). Dit geldt **altijd voor het gefocuste kind**; is er
-geen kind gefocust (lege lijst) dan doet `Enter` niets — onopgeloste calls
-worden **automatisch** door de LLM-search opgepakt zonder toets of knop (zie
-`startCallSearch` + de `setRelated`-watch in `home.mjs`). Meteen na het
-drillen staat de keyboard-focus op de **diff** van de nieuwe kolom, niet op zijn
-Onderliggende-code-paneel (`drillIntoChild` roept `leaveRelated()` — de
-geëxporteerde `exitRelated` — i.p.v. `enterRelated()`); vandaar loop je met
-`↑`/`↓` door de wijzigingsgroepen van díe kolom, en **sluit** `←` de gefocuste
-gedrilde kolom, waarna de focus terugvalt op de diff van de parent-kolom (het
-gesloten kind verschijnt weer in diens Onderliggende-code-lijst) — herhaald `←`
-pelt zo niveau voor niveau terug tot het oorspronkelijke top-level block, waar
-nóg een `←` pas de hele diff-sessie verlaat (en dan ook de resterende
-gedrilde-kolom-state opruimt). Elke kolom die daarbij niet de focus heeft klapt
-in tot een smalle rail (icoon + afgekapt label); een **muisklik op zo'n rail**
-is een snelkoppeling die functioneel hetzelfde doet als herhaald `←` — het
-springt direct naar dat niveau (`expandColumn`) en gooit alles wat verder
-gedrild was weg. Zie de sectie
-"Kolom-navigatie" in `.claude/rules/detail-layout.md` voor het volledige
-`state.focusLevel`-mechanisme + de rail. `←`/`Escape` vanaf de eerste positie van het
-Onderliggende-code-paneel (`cs.codeSel === 0`) geeft de keyboard-focus terug aan
-de diff van **diezelfde** kolom (`handleRelatedKey`'s `exitRelated()`) — dat is
-geen aparte "pop"-stap meer, de kolom-voor-kolom-navigatie hierboven volgt pas
-zodra `relatedActive()` weer `false` is. Deze code-tak (`cs.focus === 'code'`)
-is volledig losstaand van de comments/taken-sidebar in `handleRelatedKey` —
-zie "Comments/taken-sidebar" in `.claude/rules/detail-layout.md` voor die
-navigatie. Visueel: alle blokjes staan verticaal onder elkaar op volle
-breedte (geen pijltjes-hint meer); het geselecteerde blokje krijgt een indigo ring
-(`data-active=true`). Zie `.claude/rules/detail-layout.md`.
+In `'diff'` mode, **`→`** steps into the **Underlying-code card**
+(`enterRelated` in `RelatedPanel.mjs`, `cs.focus === 'code'`) and lands on
+the **first** child block (`cs.codeSel = 0`). All the child blocks stack
+vertically at full width (no side-by-side hint anymore) and the card is a
+**pure list navigation**: **`↓`** selects the **next** child block (stays on
+the last), **`↑`** the **previous** child block — from the **first** child
+block, **`↑`** goes back to the diff instead (`exitRelated`). **`←`** goes
+from any child block back to the diff (`exitRelated`). This card no longer
+has a `→` that leaves it — that used to jump to the comments column, but
+comments/tasks are no longer part of this chain (see above and "Comments/tasks
+sidebar" in `.claude/rules/detail-layout.md`); those are only reachable via
+Cmd+→ now.
+This panel cursor
+(`cs.focus`/`codeSel`/`sel`/`threadPos`) lives in the **URL** under its own
+`rel` namespace (`rel.foc`/`rel.code`/`rel.csel`/`rel.thr`, via
+`bindUrlState(cs, …, { ns:'rel' })` in `RelatedPanel.mjs`), so a refresh
+puts you back exactly on this child block / this comment thread;
+`applyRelRestore` reapplies the restored cursor once, clamped, once the
+children/comments have loaded
+(see `.claude/rules/detail-layout.md` and skill `url-state`). **`Enter`** on
+the card **drills** into the child
+the cursor is on (`focusedRelatedChild()`) — and a **mouse click** on an
+Underlying-code item (`data-testid=related-item`) drills into that child,
+along
+the same path: the child opens as its own
+diff column to the right of the existing ones, between those columns and
+`RelatedPanel`
+(`drillIntoChild`, see the "Drilling" section in `.claude/rules/detail-layout.md`),
+and the Underlying-code panel + the tasks/chat below it jump along to that
+level (`focusedBlock()`). This applies **always to the focused child**; if
+no child is focused (empty list) then `Enter` does nothing — unresolved
+calls are **automatically** picked up by the LLM search without a key or
+button (see
+`startCallSearch` + the `setRelated` watch in `home.mjs`). Right after
+drilling, keyboard focus sits on the **diff** of the new column, not on its
+Underlying-code panel (`drillIntoChild` calls `leaveRelated()` — the
+exported `exitRelated` — instead of `enterRelated()`); from there you walk
+with `↑`/`↓` through the change groups of that column, and **`←`** closes the
+focused drilled column, after which focus falls back to the diff of the
+parent column (the closed child reappears in that parent's Underlying-code
+list) — repeated `←` peels back level by level to the original top-level
+block, where yet another `←` finally exits the whole diff session (and then
+also clears the remaining drilled-column state). Every column that doesn't
+currently have focus collapses into a narrow rail (icon + truncated
+label); a **mouse click on such a rail**
+is a shortcut that functionally does the same as repeated `←` — it
+jumps directly to that level (`expandColumn`) and discards everything
+drilled further. See the section
+"Column navigation" in `.claude/rules/detail-layout.md` for the full
+`state.focusLevel` mechanism + the rail. `←`/`Escape` from the first
+position of the
+Underlying-code panel (`cs.codeSel === 0`) gives keyboard focus back to
+the diff of **that same** column (`handleRelatedKey`'s `exitRelated()`) —
+that is no longer a separate "pop" step, the column-by-column navigation
+above only follows once
+`relatedActive()` is `false` again. This code branch (`cs.focus === 'code'`)
+is entirely separate from the comments/tasks sidebar in `handleRelatedKey` —
+see "Comments/tasks sidebar" in `.claude/rules/detail-layout.md` for that
+navigation. Visually: all child blocks stack vertically at full
+width (no arrow hint anymore); the selected child block gets an indigo ring
+(`data-active=true`). See `.claude/rules/detail-layout.md`.
 
-Bij het instappen (`→`) springt de selectie naar de **eerste gewijzigde regel**
-(toegevoegd, verwijderd of gewijzigd) — `state.change` is de index. De
-navigatie-eenheden komen uit `changeGroups(rows)` in `Block.mjs`: opeenvolgende
-gewijzigde rijen (del/ins) tellen als **één** groep, maar een run langer dan 5
-rijen wordt in stukken van 5 opgeknipt (`MAX_GROUP`). Die knip gebeurt alleen op
-een rij die een **letter (A-z)** bevat: een gewijzigde rij die enkel uit
-haakjes/leestekens bestaat (bv. `}` of `{`) wordt bij de huidige groep
-getrokken i.p.v. een nieuwe te starten (`hasLetter`), zodat een groep nooit
-vlak vóór — of op — een kale haakjes-regel eindigt. `blockRows(b)` levert exact
-dezelfde aligned rijen als de render, zodat navigatie en highlight nooit
-uiteenlopen. Het geselecteerde block krijgt de actieve groep als een reactieve
-`activeGroup`-functie mee (leest `state.mode/selected/change`), zodat de pane
-her-highlight zonder dat de hele `DetailPanel` opnieuw rendert. De actieve rijen
-krijgen een fellere tint + een inset-linkerbalk (`shadow-[inset_3px_0_0_…]`, geen
-layout-shift) en de eerste rij een `data-change-active`-anchor; `home.mjs`
-scrollt die met `scrollIntoView({block:'center'})` naar het midden van de
-diff-viewport.
+When stepping in (`→`), selection jumps to the **first changed line**
+(added, removed, or modified) — `state.change` is the index. The
+navigation units come from `changeGroups(rows)` in `Block.mjs`: consecutive
+changed rows (del/ins) count as **one** group, but a run longer than 5
+rows gets cut into chunks of 5 (`MAX_GROUP`). That cut only happens on
+a row that contains a **letter (A-z)**: a changed row consisting purely of
+brackets/punctuation (e.g. `}` or `{`) gets pulled into the current group
+instead of starting a new one (`hasLetter`), so a group never ends
+right before — or on — a bare-bracket line. `blockRows(b)` produces exactly
+the same aligned rows as the render, so navigation and highlight never
+diverge. The selected block gets the active group passed in as a reactive
+`activeGroup` function (reads `state.mode/selected/change`), so the pane
+re-highlights without the whole `DetailPanel` re-rendering. The active rows
+get a stronger tint + an inset left bar (`shadow-[inset_3px_0_0_…]`, no
+layout shift) and the first row a `data-change-active` anchor; `home.mjs`
+scrolls that with `scrollIntoView({block:'center'})` to the middle of the
+diff viewport.
 
-## Selectie-granulariteit (`f` inzoomen / `s` uitzoomen / `d` terug)
+## Selection granularity (`f` zoom in / `s` zoom out / `d` back)
 
-Binnen een block zoom je met **`f`** (inzoomen) en **`s`** (uitzoomen) langs drie
-niveaus (`home.mjs`, `GRANS`). **`d`** is de "terug"-toets die op het fijnste
-niveau als vorige-call fungeert (zie onder):
+Within a block you zoom with **`f`** (zoom in) and **`s`** (zoom out) through
+three levels (`home.mjs`, `GRANS`). **`d`** is the "back" key which acts as
+previous-call at the finest level (see below):
 
-- **`'group'`** (start bij instappen): een hele run gewijzigde regels
-  (`changeGroups`) — meerdere regels tegelijk.
-- **`'line'`**: één gewijzigde regel per keer (`changeLines`).
-- **`'call'`**: één **aanroep-segment binnen** die regel (`changeCalls`). Anders
-  dan de grovere niveaus knipt dit niet op *wat* er gewijzigd is maar op de
-  **structuur** — de aanroepen die de regel doet — zodat je later elk segment aan
-  de functie die het aanroept kunt koppelen (een edge in de call-graph). Een regel
-  wordt gesplitst op `->`, `.`, `;` en de **binaire scheiders** `??`, `&&`, `||`
-  en de vergelijkers (`==`/`===`/`!=`/`!==`/`<=`/`>=`) (`segmentCalls`; de `;`
-  blijft aan zijn aanroep vast, de scheiders leiden — net als `->`/`.` — het
-  volgende segment in): `$order->customer()->name();` wordt `$order` /
-  `->customer()` / `->name();`, en `$a->x ?? $b->y` wordt `$a` / `->x ` / `?? $b` /
-  `->y` zodat de twee callers rond de `??` gescheiden blijven. **Géén** scheider
-  (zou echte chains kapotknippen): `=>` (array `key => value` blijft één segment),
-  `::` (static call, hoort bij de chain), de ternary `?`/`:` (botsen met `?->` en
-  `::`) en een kale `<`/`>` (botst met `->`/`=>`). De `.`-grens is er vooral voor
-  Vue/JS property-access (`order.customer.name`), naast PHP-concatenatie. De gekozen
-  segment-tekens krijgen een **smalle underline** in dezelfde indigo (`#6366f1`,
-  `UNDERLINE_CLS`) als de inset-linkerbalk van de actieve rij.
+- **`'group'`** (starting point when stepping in): a whole run of changed
+  lines (`changeGroups`) — multiple lines at once.
+- **`'line'`**: one changed line at a time (`changeLines`).
+- **`'call'`**: one **call segment within** that line (`changeCalls`). Unlike
+  the coarser levels, this doesn't split on *what* changed but on the
+  **structure** — the calls the line makes — so you can later link each
+  segment to the function it calls (an edge in the call graph). A line
+  is split on `->`, `.`, `;` and the **binary separators** `??`, `&&`, `||`
+  and the comparison operators (`==`/`===`/`!=`/`!==`/`<=`/`>=`)
+  (`segmentCalls`; the `;` stays attached to its call, the separators lead
+  — just like `->`/`.` — the next segment): `$order->customer()->name();`
+  becomes `$order` /
+  `->customer()` / `->name();`, and `$a->x ?? $b->y` becomes `$a` / `->x ` /
+  `?? $b` /
+  `->y` so the two callers around the `??` stay separated. **No** separator
+  (would break real chains): `=>` (array `key => value` stays one segment),
+  `::` (static call, belongs to the chain), the ternary `?`/`:` (clashes
+  with `?->` and
+  `::`) and a bare `<`/`>` (clashes with `->`/`=>`). The `.` boundary is
+  mostly there for Vue/JS property access (`order.customer.name`), alongside
+  PHP concatenation. The chosen
+  segment characters get a **narrow underline** in the same indigo
+  (`#6366f1`,
+  `UNDERLINE_CLS`) as the inset left bar of the active row.
 
-**Alleen nieuwe/aangepaste regels zijn selecteerbaar op de fijnere niveaus, maar
-op `'call'` loop je door de héle regel.** `'line'` navigeert enkel langs de
-**nieuwe kant** (het rechter/`ins`-paneel) en slaat een pure verwijdering over.
-`'call'` splitst de **hele** nieuwe regel in segmenten — **élk** segment is
-landbaar, gewijzigd of niet (later hangt daar een relatie aan), niet alleen het
-diff-stuk. Eén uitzondering: een **verwijderde** regel zonder vervanging blijft
-óók landbaar — als één leeg nieuw-segment (niets rechts) met de hele oude regel
-onderstreept op de oude kant, zodat je erop kunt landen als een lege rechter-regel
-die markeert wat weg is. (`'group'` blijft een hele run inclusief verwijderde
-regels, zodat het instappen en de connector-flow onveranderd blijven.)
+**Only new/adjusted lines are selectable at the finer levels, but on
+`'call'` you walk through the whole line.** `'line'` navigates only along
+the **new side** (the right/`ins` pane) and skips a pure deletion.
+`'call'` splits the **whole** new line into segments — **every** segment is
+landable, changed or not (later a relation will hang off it there), not
+just the diff part. One exception: a **removed** line with no replacement
+remains
+landable too — as one empty new segment (nothing on the right) with the
+whole old line underlined on the old side, so you can land on it as an
+empty right-side row marking what's gone. (`'group'` remains a whole run
+including removed
+lines, so stepping in and the connector flow stay unchanged.)
 
-**Een volledig lege (na `trim()`) toegevoegde/verwijderde regel is géén eigen
-landbare eenheid op `'line'`/`'call'`, en telt niet mee in de approve-teller.**
-Zo'n regel is `rowChanged` (draagt een del/ins-mark — bv. een lege regel
-tussen twee statements binnen een volledig toegevoegd blok) maar heeft niks
-voor de reviewer om te lezen of te beoordelen; vóór de `rowHasContent`-check
-(`Block.mjs`, zie ook `.claude/rules/blocks-and-ingest.md`) kon je zo'n regel
-tóch selecteren (een zichtbaar-lege `changeLines`/`changeCalls`-eenheid — "ik
-kan het selecteren, maar er is daar niks") en zelfs goedkeuren, wat de
-approve-teller (`changedRows`, en de backend-`total` in `blockstats.go`) liet
-oplopen boven het aantal echte code-regels. `changedRows`/`changeLines`/
-`changeCalls` filteren nu aanvullend op `rowHasContent(r)` (de displaykant —
-`right` bij `ins`, anders `left` — niet leeg na `trim()`). **`changeGroups`
-zelf blijft ongewijzigd:** zo'n lege regel rijdt gewoon mee binnen de group-run
-waar hij in valt (net als een haakjes-only-regel, zie `hasLetter` hierboven),
-dus de highlighted range van een groep springt er niet omheen — alleen de
-eigen telbaarheid/landbaarheid van de lege regel wordt onderdrukt.
+**A completely empty (after `trim()`) added/removed line is not its own
+landable unit at `'line'`/`'call'`, and doesn't count toward the approve
+counter.**
+Such a line is `rowChanged` (carries a del/ins mark — e.g. an empty line
+between two statements within a fully added block) but has nothing
+for the reviewer to read or judge; before the `rowHasContent` check
+(`Block.mjs`, see also `.claude/rules/blocks-and-ingest.md`) you could
+still select such a line (a visibly-empty `changeLines`/`changeCalls`
+unit — "I can select it, but there's nothing there") and even approve
+it, which let the approve counter (`changedRows`, and the backend `total`
+in `blockstats.go`) run ahead of the number of actual code lines.
+`changedRows`/`changeLines`/
+`changeCalls` now additionally filter on `rowHasContent(r)` (the display
+side —
+`right` for `ins`, otherwise `left` — not empty after `trim()`).
+**`changeGroups`
+itself remains unchanged:** such an empty line just rides along within the
+group run
+it falls in (like a brackets-only line, see `hasLetter` above),
+so the highlighted range of a group doesn't jump around it — only the
+line's own countability/landability is suppressed.
 
-Alle diff-navigatie loopt via `unitsFor(rows, gran)` (nu geëxporteerd uit
-`Block.mjs`, gedeeld met de footer) → `unitsOf(b)`; `state.change`
-indexeert de units van het **huidige** niveau. Bij een niveauwissel her-ankert
-`setGran` de selectie op de unit die de huidige rij dekt (`unitAtRow`): `f` vanaf
-een groep landt op zijn eerste regel, `f` vanaf een regel op zijn eerste
-call-segment, en `s`/`d` lopen langs dezelfde rijen terug omhoog.
+All diff navigation goes through `unitsFor(rows, gran)` (now exported from
+`Block.mjs`, shared with the footer) → `unitsOf(b)`; `state.change`
+indexes the units of the **current** level. On a level switch,
+`setGran` re-anchors the selection on the unit covering the current row
+(`unitAtRow`): `f` from a group lands on its first line, `f` from a line on
+its first
+call segment, and `s`/`d` walk back up along the same rows.
 
-De drie navigatietoetsen (`fKey`/`dKey`/`sKey` in `home.mjs`):
+The three navigation keys (`fKey`/`dKey`/`sKey` in `home.mjs`):
 
-- **`f`** — inzoomen. Vanuit `'list'` stapt hij eerst de diff in (`enterDiff`, dat
-  `gran` naar `'group'` reset). In de diff verfijnt hij één niveau
-  (`group → line → call`); staat hij al op **`'call'`**, dan stapt hij i.p.v.
-  verder in te zoomen naar de **volgende call** (`nextChange` — dezelfde flow als
-  `↓`, dus doorstromend naar de eerste call van het volgende **same-file** block).
-- **`d`** — terug. Op **`'call'`** stapt hij naar de **vorige call** (`prevChange`,
-  doorstromend naar het vorige same-file block, net als `↑`); sta je op de
-  **allereerste** call zónder vorige om naartoe te stromen, dan zoomt hij terug uit
-  naar `'line'`. Op de grovere niveaus zoomt `d` gewoon één stap uit.
-- **`s`** — altijd één niveau uitzoomen (`call → line → group`), geklemd op
-  `'group'`. Anders dan `d` gaat `s` op `'call'` nooit langs vorige calls maar
-  direct terug naar `'line'`, zodat je betrouwbaar uit de call-selectie ontsnapt.
+- **`f`** — zoom in. From `'list'` it first steps into the diff
+  (`enterDiff`, which resets `gran` to `'group'`). In the diff it refines one
+  level
+  (`group → line → call`); if it's already at **`'call'`**, it instead steps
+  to the **next call** (`nextChange` — the same flow as
+  `↓`, so flowing on to the first call of the next **same-file** block).
+- **`d`** — back. At **`'call'`** it steps to the **previous call**
+  (`prevChange`,
+  flowing on to the previous same-file block, just like `↑`); if you're at
+  the
+  **very first** call with no previous one to flow to, it zooms back out
+  to `'line'`. At the coarser levels `d` simply zooms out one step.
+- **`s`** — always zoom out one level (`call → line → group`), clamped at
+  `'group'`. Unlike `d`, `s` at `'call'` never walks along previous calls but
+  goes directly back to `'line'`, so you reliably escape the call
+  selection.
 
-`d`/`s` doen niets in `'list'`-mode (er is dan niets om uit te zoomen); alleen `f`
-stapt van daaruit in. `nextChange`/`prevChange` worden gedeeld met `↑`/`↓`, zodat
-pijlen en `f`/`d` de diff identiek doorlopen.
+`d`/`s` do nothing in `'list'` mode (there's nothing to zoom out of); only
+`f`
+steps in from there. `nextChange`/`prevChange` are shared with `↑`/`↓`, so
+the arrows and `f`/`d` traverse the diff identically.
 
-**`f`/`d`/`s` werken ook binnen een gedrilde kolom** (`state.focusLevel > 0`,
-zie "Drillen"/"Kolom-navigatie" in `.claude/rules/detail-layout.md`) — exact
-dezelfde group→line→call-zoom, maar op de eigen `{change, gran}`-cursor van die
-kolom in `state.drillCursor[focusLevel-1]` (`setDrillGran`/`drillNextChange`/
-`drillPrevChange` in `home.mjs`, spiegelbeeld van `setGran`/`nextChange`/
-`prevChange`). Een gedrilde kolom is een op zichzelf staande diff, dus er
-bestaat geen same-file buurblock om op `'call'` aan de eerste/laatste call
-doorheen te stromen — maar wél een **sibling**: loopt `f`/`↓` (of `d`/`↑`)
-voorbij de laatste (resp. eerste) call van de kolom, dan stapt de kolom
-zijwaarts naar de volgende/vorige child in de Onderliggende-code-lijst van de
-**parent**-kolom (op elk niveau, elke granulariteit — niet alleen `'call'`), en
-**vervangt** zichzelf daarmee op dezelfde diepte, i.p.v. terug te zoomen naar
-`'line'` zoals voorheen. Alleen als er géén sibling meer is (of nooit was — een
-enige child) zoomt `f`/`d` alsnog terug naar `'line'`, zoals vanouds. Zie de
-"Kolom-navigatie"-sectie in `.claude/rules/detail-layout.md`
-(`drillSiblingContext`/`drillToSibling`) voor het volledige mechanisme,
-inclusief de ↑-symmetrie (landt op de vorige sibling's láátste unit, mirror van
-`stepBlock`) en de aangepaste `dKey`-guard. Verfijn je een groep die precies
-**één regel** beslaat (`cur.end === cur.start`), dan slaat `f` het `'line'`-niveau
-over en springt direct naar `'call'` (er is dan geen zinvolle line-stap: de regel
-ís de groep); `s`/`d` lopen wél stap-voor-stap terug (`call → line → group`). De
-call-underline
-rijdt mee op `markChars` (per-teken class-functie): `paneHTML` geeft de
-underline-set van het actieve segment door aan `highlightChanges`, dat 'm via
-`markChars` in de Prism-highlighted HTML rendert. Gewijzigde tekens krijgen
-sinds kort **geen** eigen achtergrond meer (die achtergrond-markering is
-verwijderd — zie de sectie "Char-diff" in `.claude/rules/blocks-and-ingest.md`);
-de regel-achtergrond (rood/groen) markeert een echte wijziging nu alleen nog op
-regelniveau. Een lege toegevoegde regel heeft geen tekens en dus geen underline
-(correct: niets te markeren).
+**`f`/`d`/`s` also work within a drilled column** (`state.focusLevel > 0`,
+see "Drilling"/"Column navigation" in `.claude/rules/detail-layout.md`) —
+exactly
+the same group→line→call zoom, but on that column's own `{change, gran}`
+cursor in
+`state.drillCursor[focusLevel-1]` (`setDrillGran`/`drillNextChange`/
+`drillPrevChange` in `home.mjs`, mirroring `setGran`/`nextChange`/
+`prevChange`). A drilled column is a standalone diff, so there's no
+same-file neighbor block to flow through at the first/last call at `'call'`
+— but there **is** a sibling: if `f`/`↓` (or `d`/`↑`) walks past the last
+(resp. first) call of the column, the column steps
+sideways to the next/previous child in the Underlying-code list of the
+**parent** column (at any level, any granularity — not just `'call'`), and
+**replaces** itself with it at the same depth, instead of zooming back to
+`'line'` as before. Only if there is no sibling left (or never was — an
+only child) does `f`/`d` still zoom back to `'line'`, as before. See the
+"Column navigation" section in `.claude/rules/detail-layout.md`
+(`drillSiblingContext`/`drillToSibling`) for the full mechanism,
+including the ↑ symmetry (lands on the previous sibling's **last** unit,
+mirroring
+`stepBlock`) and the adjusted `dKey` guard. If you refine a group that spans
+exactly
+**one line** (`cur.end === cur.start`), `f` skips the `'line'` level
+and jumps straight to `'call'` (there's no meaningful line step then: the
+line
+*is* the group); `s`/`d` do still step back one at a time (`call → line →
+group`). The
+call underline
+rides on `markChars` (a per-character class function): `paneHTML` passes
+the
+underline set of the active segment to `highlightChanges`, which renders it
+via
+`markChars` into the Prism-highlighted HTML. Changed characters recently
+no longer get their own background
+(that background marking has been removed — see the "Char diff" section
+in `.claude/rules/blocks-and-ingest.md`);
+the line background (red/green) now only marks a real change at the
+line level. An empty added line has no characters and thus no underline
+(correct: nothing to mark).
 
-## Shift+↑/↓ — meerdere regels tegelijk selecteren (`state.rangeAnchor`)
+## Shift+↑/↓ — selecting multiple lines at once (`state.rangeAnchor`)
 
-Op **`gran==='line'`** breidt **Shift+ArrowDown**/**Shift+ArrowUp**
-(`extendRange`/`drillExtendRange`, `home.mjs`) de selectie uit tot een
-aaneengesloten reeks regels, in plaats van de cursor één regel te verplaatsen.
-Het anker (de unit-index waar de shift-selectie begon) leeft naast de
-bestaande `{change, gran}`-cursor: top-level in `state.rangeAnchor`, voor een
-gedrilde kolom als `rangeAnchor` op zijn eigen `state.drillCursor[level-1]`-
-entry (mirror van de rest van die cursor-vorm, zie "Kolom-navigatie" in
-`.claude/rules/detail-layout.md`). `rangeUnit(units, change, anchor)` voegt de
-huidige unit en de anker-unit samen tot één `{start, end}`-rijbereik (min/max
-van hun rijindices) — verder overal in de codebase behandeld als een gewone
-(grotere) unit, dus de highlighting (`activeGroup`), de approve-scope
-(`approveTargetRows`/`approveContext`) en de comment-anchoring
-(`commentTarget`) hoefden niet dieper aangepast te worden dan "gebruik de
-samengevoegde unit i.p.v. de ene huidige".
+At **`gran==='line'`**, **Shift+ArrowDown**/**Shift+ArrowUp**
+(`extendRange`/`drillExtendRange`, `home.mjs`) extend the selection into a
+contiguous range of lines, instead of moving the cursor one line at a time.
+The anchor (the unit index where the shift selection started) lives
+alongside the existing `{change, gran}` cursor: top-level in
+`state.rangeAnchor`, for a
+drilled column as `rangeAnchor` on its own `state.drillCursor[level-1]`
+entry (mirroring the rest of that cursor shape, see "Column navigation" in
+`.claude/rules/detail-layout.md`). `rangeUnit(units, change, anchor)` merges
+the
+current unit and the anchor unit into one `{start, end}` row range (min/max
+of their row indices) — treated everywhere else in the codebase as an
+ordinary
+(larger) unit, so the highlighting (`activeGroup`), the approve scope
+(`approveTargetRows`/`approveContext`) and the comment anchoring
+(`commentTarget`) didn't need deeper changes than "use the
+merged unit instead of the single current one".
 
-- **Alleen bij `gran==='line'`.** Op `'group'` is een aaneengesloten reeks
-  regels al de eenheid zelf (`changeGroups`); op `'call'` gaat het om
-  segmenten binnen één regel, geen verticale reeks. Shift+↑/↓ op een andere
-  granulariteit is een no-op (`extendRange`/`drillExtendRange` returnen vroeg).
-- **Klemt op de blokgrens.** Anders dan een gewone `↓`/`↑` (die op de
-  laatste/eerste unit doorstroomt naar het volgende same-file block resp. de
-  volgende/vorige Onderliggende-code-sibling — zie hierboven en
-  "Kolom-navigatie") stroomt een actieve range nooit een block/kolom uit: hij
-  klemt op de eerste/laatste `'line'`-unit van het huidige block. Approve en
-  comment werken per block, dus een range die twee blocks zou overspannen zou
-  geen zinvolle betekenis hebben.
-- **Approve keurt de hele range in één keer goed/in** — `approveTargetRows`
-  filtert `changedRows` nu op het samengevoegde bereik i.p.v. de ene unit, dus
-  `toggleApprove`/de command-palette-"approve"-actie (`Enter`) keurt exact de
-  geselecteerde regels goed (of trekt ze in). Het label past mee:
-  `approveNoun` toont **"Keur deze N regels goed"** zodra de range meer dan
-  één regel beslaat, anders ongewijzigd "deze regel".
-- **Comment gebruikt de range als multi-line-anker** — `commentTarget()`
-  bouwt zijn code-fragment/`startLine`/`endLine` nu ook uit het samengevoegde
-  bereik; `unitLineRange` ondersteunde al een meerregelig bereik (voor een
-  `'group'`-unit), dus "Plaats comment" op een actieve Shift-range post een
-  echte multi-line GitHub-review-comment zonder verdere aanpassing.
-- **Het anker wist** bij elke actie die de selectie zou overschrijven:
-  `clearRangeAnchor()` — een gewone (niet-shift) pijltoets
+- **Only at `gran==='line'`.** At `'group'` a contiguous run of
+  lines is already the unit itself (`changeGroups`); at `'call'` it's about
+  segments within one line, not a vertical run. Shift+↑/↓ at any other
+  granularity is a no-op (`extendRange`/`drillExtendRange` return early).
+- **Clamps at the block boundary.** Unlike a normal `↓`/`↑` (which flows on
+  past the last/first unit to the next same-file block resp. the
+  next/previous Underlying-code sibling — see above and
+  "Column navigation") an active range never flows out of a block/column: it
+  clamps at the first/last `'line'` unit of the current block. Approve and
+  comment operate per block, so a range spanning two blocks would have
+  no meaningful sense.
+- **Approve approves the whole range at once** — `approveTargetRows`
+  now filters `changedRows` on the merged range instead of the single unit,
+  so
+  `toggleApprove`/the command-palette "approve" action (`Enter`) approves
+  exactly
+  the selected lines (or retracts them). The label follows suit:
+  `approveNoun` shows **"Approve these N lines"** once the range spans more
+  than
+  one line, otherwise unchanged "this line".
+- **Comment uses the range as a multi-line anchor** — `commentTarget()`
+  now also builds its code fragment/`startLine`/`endLine` from the merged
+  range; `unitLineRange` already supported a multi-line range (for a
+  `'group'` unit), so "Place comment" on an active Shift range posts a
+  real multi-line GitHub review comment with no further changes needed.
+- **The anchor clears** on any action that would overwrite the selection:
+  `clearRangeAnchor()` — an ordinary (non-shift) arrow key
   (`nextChange`/`prevChange`/`stepBlock`/`drillNextChange`/
-  `drillPrevChange`/`setDrillChange`), een `f`/`d`/`s`-zoom
-  (`setGran`/`setDrillGran`, die sowieso al een verse cursor zonder
-  `rangeAnchor` opbouwen), een blokwissel (`stepBlock`, `enterDiff`,
-  `openTask`), en `←`/`→` (het uitstappen naar de lijst, het instappen in het
-  Onderliggende-code-paneel). Dit is bewust hetzelfde "een gewone stap laat de
-  selectie los" gedrag als in een tekst-editor.
+  `drillPrevChange`/`setDrillChange`), an `f`/`d`/`s` zoom
+  (`setGran`/`setDrillGran`, which already builds a fresh cursor without
+  `rangeAnchor` anyway), a block switch (`stepBlock`, `enterDiff`,
+  `openTask`), and `←`/`→` (stepping out to the list, stepping into the
+  Underlying-code panel). This is deliberately the same "an ordinary step
+  releases the selection" behavior as in a text editor.
 
-## `a` — diff-weergave toggelen (side-by-side ↔ alleen nieuw, 60% breed)
+## `a` — toggling the diff view (side-by-side ↔ new only, 60% wide)
 
-**`a`** toggelt globaal, voor **elke zichtbare diff-kaart tegelijk** — de
-geselecteerde/preview-kaart én elke open gedrilde kolom (`state.drill`) — tussen
-de bestaande side-by-side weergave (oud+nieuw, default) en een **alleen-nieuw**-
-weergave (enkel de rechter/nieuwe pane). Staat naast `f`/`d`/`s` in `onKeydown`
-(`home.mjs`), dus met dezelfde eerdere guards (command-palette/zoekbox/
-related-panel actief) ervoor — werkt zowel in `'list'`- als `'diff'`-mode.
-**Extra guard, los van die bestaande guards:** `relatedActive()` (`cs.focus !==
-null`) dekt niet elk pad waarop een tekstveld de DOM-focus heeft — `startComment()`
-(o.a. het command-palette-fallback "Maak hiermee een comment") zet alleen
-`cs.composing`, niet `cs.focus`, dus `relatedActive()` blijft daar `false` terwijl
-de composer wél focus heeft. Een letterlijke "a" die je daar typt zou anders door
-deze shortcut worden opgegeten. Vandaar checkt de `a`-handler ook rechtstreeks
-`document.activeElement` (`isEditableFocused()` in `home.mjs`: TEXTAREA/INPUT →
-shortcut doet niets, toets vloeit gewoon het veld in) — een generieke,
-toekomstvaste guard die niet afhangt van welke navigatie-state een veld toevallig
-wel/niet bijhoudt.
+**`a`** toggles globally, for **every visible diff card at once** — the
+selected/preview card and every open drilled column (`state.drill`) —
+between
+the existing side-by-side view (old+new, default) and a **new-only**
+view (only the right/new pane). Sits next to `f`/`d`/`s` in `onKeydown`
+(`home.mjs`), so with the same earlier guards (command palette/search
+box/
+related panel active) in front — works in both `'list'` and `'diff'` mode.
+**Extra guard, separate from those existing guards:** `relatedActive()`
+(`cs.focus !==
+null`) doesn't cover every path where a text field has DOM focus —
+`startComment()`
+(among others the command-palette fallback "Create a comment with this")
+only sets
+`cs.composing`, not `cs.focus`, so `relatedActive()` stays `false` there
+while
+the composer does have focus. A literal "a" typed there would otherwise be
+swallowed by
+this shortcut. Hence the `a` handler also checks
+`document.activeElement` directly (`isEditableFocused()` in `home.mjs`:
+TEXTAREA/INPUT →
+shortcut does nothing, key just flows into the field) — a generic,
+future-proof guard that doesn't depend on which navigation state a
+field happens to track or not.
 
-De state (`state.diffViewMode`, `'split'`/`'new'`) is efemeer, geen URL-binding
-(net als `showDescription`/`showApproved`). Een al one-sided block
-(`added`/`removed`) heeft geen andere kant om te verbergen/tonen — de toggle
-heeft daar geen effect op de **pane-keuze**, `singleSide(b)` blijft leidend
-(`effectiveOnly` in `Block.mjs`'s `codeDiff`). Een **echt tweezijdig**
-(`modified`) block klapt in `viewMode==='new'` wél in tot zijn nieuwe pane
-(`forcedNewOnly(b, viewMode)` in `Block.mjs` blijft de voorwaarde hiervoor).
+The state (`state.diffViewMode`, `'split'`/`'new'`) is ephemeral, no URL
+binding
+(like `showDescription`/`showApproved`). An already one-sided block
+(`added`/`removed`) has no other side to hide/show — the toggle
+has no effect there on the **pane choice**, `singleSide(b)` stays in
+charge
+(`effectiveOnly` in `Block.mjs`'s `codeDiff`). A **truly two-sided**
+(`modified`) block does collapse in `viewMode==='new'` to its new pane
+(`forcedNewOnly(b, viewMode)` in `Block.mjs` remains the condition for
+this).
 
-**Maar de kaart-breedte volgt alleen nog `viewMode()`, niet `singleSide`:**
-zodra `viewMode()==='new'` krimpt **elke** zichtbare kaart naar **60% breedte**
-(`w-[42rem] 2xl:w-[49.2rem]` i.p.v. `w-[70rem] 2xl:w-[82rem]`) —
-`modified`/`added`/`removed` allemaal gelijk, plus elke preview/look-ahead-
-kaart en elke gedrilde kolom (ze delen allemaal dezelfde `Block()`-component +
-dezelfde `viewMode`-opt). Dit was eerder beperkt tot het tweezijdige geval
-(een eenzijdig block hield bewust zijn volle breedte, zie de
-breedte-stabiliteitsregel in `.claude/rules/detail-layout.md`); de reviewer
-wil nu dat `a` **alles** even smal maakt zolang hij aanstaat, ongeacht
-block-type. De simpele `narrowed(viewMode)` in `Block.mjs` (enkel
-`viewMode()==='new'`, geen `singleSide`-check) is de voorwaarde achter de
-breedte-ternary; `forcedNewOnly` blijft losstaand de voorwaarde voor de
-pane-keuze — de twee kunnen dus uiteenlopen (een eenzijdig block: `narrowed`
-waar, `forcedNewOnly` onwaar) en dat is bewust zo.
+**But the card width now only follows `viewMode()`, not `singleSide`:**
+as soon as `viewMode()==='new'`, **every** visible card shrinks to **60%
+width**
+(`w-[42rem] 2xl:w-[49.2rem]` instead of `w-[70rem] 2xl:w-[82rem]`) —
+`modified`/`added`/`removed` all alike, plus every preview/look-ahead
+card and every drilled column (they all share the same `Block()`
+component +
+the same `viewMode` option). This was previously limited to the
+two-sided case
+(a one-sided block deliberately kept its full width, see the
+width-stability rule in `.claude/rules/detail-layout.md`); the reviewer
+now wants `a` to make **everything** narrow as long as it's on, regardless
+of
+block type. The simple `narrowed(viewMode)` in `Block.mjs` (only
+`viewMode()==='new'`, no `singleSide` check) is the condition behind the
+width ternary; `forcedNewOnly` remains the separate condition for the
+pane choice — the two can therefore diverge (a one-sided block:
+`narrowed`
+true, `forcedNewOnly` false) and that is deliberate.
 
-Gelezen als `viewMode()` binnen `Block()`'s eigen per-kaart `${() =>
-codeDiff(...)}`-slot (niet in de outer per-kolom closure van `home.mjs`) —
-mirrort hoe die slot al op `b.code` leest, dus een toggle her-rendert alleen de
-diff-structuur (via `forcedNewOnly`) en de breedte (via `narrowed`) van elke
-zichtbare kaart, niet de kaart-bouwende closures zelf. De breedte-ternary zit
-in dezelfde kaart-brede `${() => ...}`-`class`-binding als `diffActive()`/
-`preview` (al reactief, de hele waarde in één keer — geen
-deel-string-interpolatie, zie de arrow.js-class-binding-valkuil in
+Read as `viewMode()` within `Block()`'s own per-card `${() =>
+codeDiff(...)}` slot (not in the outer per-column closure of `home.mjs`) —
+mirroring how that slot already reads `b.code`, so a toggle only
+re-renders the
+diff structure (via `forcedNewOnly`) and the width (via `narrowed`) of
+each
+visible card, not the card-building closures themselves. The width ternary
+sits
+in the same card-wide `${() => ...}` `class` binding as `diffActive()`/
+`preview` (already reactive, the whole value at once — no
+partial string interpolation, see the arrow.js class-binding pitfall in
 `conventions.md`).
 
-## Generieke input-focus-guard (typen in een veld mag nooit door een shortcut worden opgegeten)
+## Generic input-focus guard (typing in a field must never be swallowed by a shortcut)
 
-`relatedActive()` (`cs.focus !== null`) is de bestaande "vangnet"-branch die
-onbedoelde shortcuts al onderdrukt zolang een tekstveld (composer/reply) via de
-juiste weg is geopend — dat blok eindigt onvoorwaardelijk in een `return`, dus
-elke toets die er niet expliciet in gematcht wordt (letters, `/`, ongematchte
-Enter-varianten) vloeit gewoon door naar het gefocuste veld. Maar dat vangnet
-werkt alleen als `cs.focus` daadwerkelijk in lockstep staat met de echte
-DOM-focus. Eén concrete plek waar dat niet zo was: de "+ Comment op deze
-regel"-knop (`data-testid=new-comment`, `RelatedPanel.mjs`) opende de composer
-ooit met een kale `cs.composing = !cs.composing`-toggle, zonder `cs.focus` te
-zetten — een klik erop terwijl `cs.focus` toevallig niet al `'new'` was, opende
-dus een gefocust tekstveld terwijl `relatedActive()` `false` bleef. `onKeydown`
-had dan geen enkel signaal dat er een editable veld met DOM-focus was, en
-`s`/`d`/`f`/pijltjes/`/` werden als globale shortcuts afgevangen in plaats van
-in het veld te belanden (de reviewer kon niet meer typen). Gefixt door de knop
-via `openComposer()` (`toNew()`) te laten openen — precies dezelfde route als
-elk ander pad naar deze composer (`toNew`/`startComment`), die `cs.focus` en
-`cs.composing` altijd samen zet.
+`relatedActive()` (`cs.focus !== null`) is the existing "safety net" branch
+that
+already suppresses unintended shortcuts as long as a text field
+(composer/reply) is opened via the
+correct path — that block unconditionally ends in a `return`, so
+any key not explicitly matched there (letters, `/`, unmatched
+Enter variants) simply flows through to the focused field. But that safety
+net
+only works if `cs.focus` is actually kept in lockstep with the real
+DOM focus. One concrete spot where that wasn't the case: the "+ Comment on
+this
+line" button (`data-testid=new-comment`, `RelatedPanel.mjs`) used to open
+the composer with a bare
+`cs.composing = !cs.composing` toggle, without setting `cs.focus` —
+clicking it while `cs.focus` didn't already happen to be `'new'` would
+then open
+a focused text field while `relatedActive()` stayed `false`. `onKeydown`
+then had no signal at all that an editable field had DOM focus, and
+`s`/`d`/`f`/arrows/`/` were caught as global shortcuts instead of
+landing in the field (the reviewer could no longer type). Fixed by having
+the button
+open via `openComposer()` (`toNew()`) — exactly the same route as
+every other path to this composer (`toNew`/`startComment`), which
+always sets `cs.focus` and
+`cs.composing` together.
 
-Als **extra, toekomstvaste laag** (voor elk ander/toekomstig invoerveld waarvan
-de eigen app-state-focus-vlag ooit niet in sync blijkt met de echte DOM-focus —
-zoals hierboven) checkt `onKeydown` na de `relatedActive()`-branch, vóór `/`,
-nog één keer rechtstreeks `document.activeElement`
-(`isEditableFocused()` — dezelfde helper als de `a`-guard hierboven): staat de
-DOM-focus op een TEXTAREA/INPUT en heeft geen eerdere branch de toets al
-geclaimd, dan doet geen enkele resterende globale shortcut (`/`, `f`/`d`/`s`,
-`a`, pijltjes, de block-palette-Enter) iets — de toets vloeit gewoon het veld
-in. **`Escape`** is binnen deze fallback de expliciete "haal me eruit"-toets
-(roept `leaveRelated()` aan — blur + `cs.focus = null` + `cs.composing =
-false`, mirror van `handleRelatedKey`'s Escape-afhandeling in de
-`relatedActive()`-branch). **`Tab`** krijgt bewust geen eigen afhandeling: de
-browser verplaatst de DOM-focus native naar het volgende focusbare element,
-waarna de eerstvolgende toetsaanslag deze tak sowieso niet meer raakt (`isEditableFocused()`
-is dan `false`). De zoekbox (`BlockList.mjs`) heeft dit patroon al langer op
-zijn eigen, nog directere manier: `@focus`/`@blur` zetten `state.searchActive`
-rechtstreeks op echte DOM-focus (geen los toggle-pad), dus die hoeft niet op
-deze fallback te leunen.
+As an **extra, future-proof layer** (for any other/future input field
+whose
+own app-state focus flag ever turns out not to be in sync with the real
+DOM focus —
+as above), `onKeydown` checks, after the `relatedActive()` branch, before
+`/`,
+once more directly `document.activeElement`
+(`isEditableFocused()` — the same helper as the `a` guard above): if
+DOM focus sits on a TEXTAREA/INPUT and no earlier branch has already
+claimed the key, then no remaining global shortcut (`/`, `f`/`d`/`s`,
+`a`, arrows, the block-palette Enter) does anything — the key just flows
+into the field
+. **`Escape`** within this fallback is the explicit "get me out of
+here" key
+(calls `leaveRelated()` — blur + `cs.focus = null` + `cs.composing =
+false`, mirroring `handleRelatedKey`'s Escape handling in the
+`relatedActive()` branch). **`Tab`** deliberately gets no handling of its
+own: the
+browser natively moves DOM focus to the next focusable element,
+after which the next keystroke doesn't hit this branch anyway
+(`isEditableFocused()`
+is then `false`). The search box (`BlockList.mjs`) has had this pattern
+for a while in
+its own, even more direct way: `@focus`/`@blur` set `state.searchActive`
+directly based on real DOM focus (no separate toggle path), so it doesn't
+need
+this fallback.
 
-**ArrowLeft binnen een gefocust comment-veld beweegt de caret, verlaat het veld
-niet — tenzij de caret al helemaal aan het begin staat.** Zowel de
-`isPrWideFocused()`-branch (PR-brede reply-thread, stop 1) als de
-`relatedActive()`-branch (`cs.focus` `'new'`/`'comment'`/`'thread'`, de
-comments-sidebar) claimden `ArrowLeft` voorheen onvoorwaardelijk — óók terwijl
-de reply-/composer-`<textarea>` daadwerkelijk DOM-focus had en de reviewer
-mid-tekst zat, wat een gewone `←` of een Option/Alt+`←` (macOS-woordsprong)
-liet exit'en (thread-focus terugpoppen, of `exitRelated()`) i.p.v. de caret te
-bewegen. `editableCaretCanMoveLeft()` (`home.mjs`, naast `isEditableFocused()`)
-checkt of het gefocuste TEXTAREA/INPUT een `selectionStart`/`selectionEnd` > 0
-heeft — er dus tekst/selectie links van de caret staat — en beide branches
-onderdrukken hun `ArrowLeft`-afhandeling zolang dat zo is: de toets valt dan
-gewoon door naar het veld, dat 'm native afhandelt (caret-stap of
-woordsprong). Staat de caret al op positie 0 (een vers geopende, nog lege
-composer/reply-veld — het bestaande, geteste geval in `nav-chain.spec.mjs`:
-"← from the composer exits straight back to the diff"), dan blijft `←` zijn
-langbestaande "stap terug uit"-betekenis houden — er is dan toch niets om de
-caret naar links in te bewegen. `Escape` blijft ongewijzigd de expliciete
-"haal me eruit"-toets, ongeacht caret-positie. Zie
+**ArrowLeft within a focused comment field moves the caret, doesn't leave
+the field
+— unless the caret is already right at the start.** Both the
+`isPrWideFocused()` branch (PR-wide reply thread, stop 1) and the
+`relatedActive()` branch (`cs.focus` `'new'`/`'comment'`/`'thread'`, the
+comments sidebar) used to claim `ArrowLeft` unconditionally — even while
+the reply/composer `<textarea>` actually had DOM focus and the reviewer
+was mid-text, which made a plain `←` or an Option/Alt+`←` (macOS word
+jump)
+exit (popping thread focus back, or `exitRelated()`) instead of moving the
+caret. `editableCaretCanMoveLeft()` (`home.mjs`, next to
+`isEditableFocused()`)
+checks whether the focused TEXTAREA/INPUT has a `selectionStart`/
+`selectionEnd` > 0
+— i.e. there's text/selection to the left of the caret — and both branches
+suppress their `ArrowLeft` handling as long as that's the case: the key
+then falls
+straight through to the field, which handles it natively (caret step or
+word jump). If the caret is already at position 0 (a freshly opened, still
+empty
+composer/reply field — the existing, tested case in `nav-chain.spec.mjs`:
+"← from the composer exits straight back to the diff"), `←` keeps its
+long-standing "step back out" meaning — there's nothing to move the
+caret left into anyway. `Escape` remains unchanged as the explicit
+"get me out of here" key, regardless of caret position. See
 `tests/comment-arrowleft-caret.spec.mjs`.
 
-## Footer: inline preview van de geselecteerde regel + AI-omschrijving bij een if
+## Footer: inline preview of the selected line + AI description for an if
 
-Onder de panels zit een vaste footer (`src/Footer.mjs`, `data-testid=footer`).
-Anders dan de allereerste versie is de footer **niet** zichtbaar zodra er een
-diff open staat — hij is alleen zichtbaar zodra er **daadwerkelijk iets te
-tonen is**: `state.footerVisible` (afgeleid in `home.mjs`'s `updateFooter()`
-als `!!(state.footerUnit || state.footerExplain)`, zie hieronder voor wat die
-twee snapshots zijn). Sinds elke navigeerbare `group`/`line`/`call`-eenheid
-altijd minstens één rij oplevert (zie hieronder), is dit in de praktijk
-**vrijwel elke** diff-mode-selectie — de balk verdwijnt alleen nog echt bij
-`state.mode !== 'diff'` (list-mode) of wanneer er geen gefocust block/geen
-navigeerbare eenheid is (`hidden` i.p.v. `flex` op de stabiele
-`<footer>`-root — de class-string blijft één reactieve `class="${() => …}"`-
-functie-binding, dus geen keyed-node-valkuil, zie `.claude/rules/conventions.md`).
-`footerUnitInfo` (`home.mjs`) blijft buiten `state.mode==='diff'` `null`
-retourneren, dus `footerVisible` is in list-mode altijd `false`.
+Below the panels sits a fixed footer (`src/Footer.mjs`, `data-testid=footer`).
+Unlike the very first version, the footer is **not** visible just because a
+diff is open — it's only visible once there's **actually something to
+show**: `state.footerVisible` (derived in `home.mjs`'s `updateFooter()`
+as `!!(state.footerUnit || state.footerExplain)`, see below for what those
+two snapshots are). Since every navigable `group`/`line`/`call` unit now
+always yields at least one row (see below), this is in practice **almost
+every** diff-mode selection — the bar only really disappears at
+`state.mode !== 'diff'` (list mode) or when there's no focused block/no
+navigable unit (`hidden` instead of `flex` on the stable
+`<footer>` root — the class string remains one reactive
+`class="${() => …}"`
+function binding, so no keyed-node pitfall, see
+`.claude/rules/conventions.md`).
+`footerUnitInfo` (`home.mjs`) still returns `null` outside
+`state.mode==='diff'`,
+so `footerVisible` is always `false` in list mode.
 
-**Ruimte-reservering volgt dezelfde vlag, 3-weg in plaats van de oude vaste
-90/140px-vloer:** `DetailPanel`/`<main>` (`home.mjs`) en de comments/taken-
-sidebar + collapsed hint-rail (`RelatedPanel.mjs`) reserveren `bottom-6` (geen
-reservering) zodra `!state.footerVisible`, `bottom-[90px]` zodra alleen de
-inline diff toont, en `bottom-[140px]` zodra ook de AI-omschrijving toont — nu
-verdwijnt de gereserveerde ruimte dus mee met de balk zelf, in plaats van
-altijd minstens 90px leeg te laten staan. De pr-index (`BlockList.mjs`) en de
-PR-info-kolom (`PrInfoPanel`, `home.mjs`) reserveren sinds deze wijziging
-helemaal niets meer voor de footer (`bottom-6`, was een vaste, nooit-reactieve
-`bottom-[90px]`) — beide zijn alleen in list-mode zichtbaar, waar de footer
-sowieso nooit toont, dus die reservering was al dode ruimte.
+**Space reservation follows the same flag, 3-way instead of the old fixed
+90/140px floor:** `DetailPanel`/`<main>` (`home.mjs`) and the comments/tasks
+sidebar + collapsed hint rail (`RelatedPanel.mjs`) reserve `bottom-6` (no
+reservation) as soon as `!state.footerVisible`, `bottom-[90px]` as soon as
+just the inline diff shows, and `bottom-[140px]` as soon as the AI
+description also shows — the reserved space now disappears along with the
+bar itself, instead of always leaving at least 90px empty. The pr-index
+(`BlockList.mjs`) and the
+PR info column (`PrInfoPanel`, `home.mjs`) no longer reserve
+anything at all for the footer as of this change (`bottom-6`, was a fixed,
+never-reactive
+`bottom-[90px]`) — both are only visible in list mode, where the footer
+never shows anyway, so that reservation was already dead space.
 
-De theme-toggle zit niet in de footer — zie "Thema" in
-`.claude/rules/conventions.md` (een smalle rij in `prInfoCard`, boven de
-PR-samenvatting; de oudere `ThemeToggleCorner` — een altijd-zichtbaar fixed
-element linksonder — bestaat niet meer).
+The theme toggle is not in the footer — see "Theme" in
+`.claude/rules/conventions.md` (a narrow row in `prInfoCard`, above the
+PR summary; the older `ThemeToggleCorner` — an always-visible fixed
+element bottom-left — no longer exists).
 
-**Los van de zichtbaarheid van de balk zelf** toont de footer een inline diff
-(`- oud` / `+ nieuw`, Prism-highlighted) van **elke** navigeerbare eenheid,
-`group`/`line`/`call` — dus ook wanneer je een heel **blok wijzigingen**
-(een `group`-eenheid, een aaneengesloten reeks gewijzigde regels) selecteert,
-niet alleen bij een 1-regelige `line`/`call`-eenheid zoals voorheen. Een
-`group` van meerdere regels toont daarbij **per regel** wat er is aangepast:
-één del/ins-regelpaar per aligned rij die de group beslaat (tot `MAX_GROUP`,
-5 regels — `Block.mjs`), onder elkaar, in de bestaande scrollbare
-`footer-diff`-kolom (`no-scrollbar overflow-auto`) — de vaste 90/140px-hoogte
-van de balk zelf blijft ongewijzigd, een lange group scrollt intern i.p.v. de
-balk te laten groeien.
-Deze inline-diff-inhoud volgt de **gefocuste kolom en diens huidige
-granulariteit/cursor** — het top-level block (`state.gran`/`state.change`) op
-`focusLevel 0`, of de eigen `state.drillCursor[focusLevel-1]`-cursor van een
-gedrilde kolom (zie "Kolom-navigatie" in `.claude/rules/detail-layout.md`) —
-via dezelfde `unitsFor(rows, gran)` als de navigatie: de rijen `[unit.start,
-unit.end]` van de actieve eenheid worden stuk voor stuk uitgelezen (`'line'`/
-`'call'` zijn altijd één rij, dus voor die niveaus is dit ongewijzigd één
-regelpaar). Lange regels (>`WIDE_AT`, 110 tekens, over **alle** rijen van de
-eenheid) laten de `max-w` los zodat de footer de volle breedte gebruikt; is
-specifiek de **nieuwe/rechter** (`ins`) regel van een rij langer dan
-`WIDE_AT`, dan wrapt die regel bovendien volledig (`whitespace-pre-wrap
-break-words` i.p.v. `whitespace-pre`) zodat de hele nieuwe code zichtbaar is
-zonder een onzichtbare (`no-scrollbar`) horizontale scroll — de oude/linker
-(`del`) regel wrapt niet mee, die blijft ongewijzigd. Op
-`'call'`-niveau onderstreept de footer het **actieve segment** in dezelfde
-indigo als de panes via het geëxporteerde `markChars` +
-`UNDERLINE_CLS` (uit `Block.mjs`) — precies die tekens onderstreept (op
-`'group'`/`'line'` hebben de units geen set → geen underline, op elke rij).
+**Independent of the bar's own visibility**, the footer shows an inline
+diff
+(`- old` / `+ new`, Prism-highlighted) of **every** navigable unit,
+`group`/`line`/`call` — so also when you select a whole **block of
+changes**
+(a `group` unit, a contiguous run of changed lines), not only for a
+1-line `line`/`call` unit as before. A
+`group` of multiple lines shows **per line** what changed:
+one del/ins line pair per aligned row the group spans (up to
+`MAX_GROUP`,
+5 lines — `Block.mjs`), stacked, within the existing scrollable
+`footer-diff` column (`no-scrollbar overflow-auto`) — the fixed 90/140px
+height
+of the bar itself stays unchanged, a long group scrolls internally
+instead of the
+bar growing.
+This inline diff content follows the **focused column and its current
+granularity/cursor** — the top-level block (`state.gran`/`state.change`) at
+`focusLevel 0`, or a drilled column's own
+`state.drillCursor[focusLevel-1]` cursor (see "Column navigation" in
+`.claude/rules/detail-layout.md`) — via the same `unitsFor(rows, gran)` as
+navigation: the rows `[unit.start,
+unit.end]` of the active unit are read out one by one (`'line'`/
+`'call'` are always one row, so for those levels this is unchanged, one
+line pair). Long lines (>`WIDE_AT`, 110 characters, across **all** rows of
+the
+unit) release the `max-w` so the footer uses full width; if
+specifically the **new/right** (`ins`) line of a row is longer than
+`WIDE_AT`, that line additionally wraps fully (`whitespace-pre-wrap
+break-words` instead of `whitespace-pre`) so the entire new code is visible
+without an invisible (`no-scrollbar`) horizontal scroll — the old/left
+(`del`) line doesn't wrap along, that stays unchanged. At
+`'call'` level the footer underlines the **active segment** in the same
+indigo as the panes via the exported `markChars` +
+`UNDERLINE_CLS` (from `Block.mjs`) — underlining exactly those characters
+(at
+`'group'`/`'line'` the units have no set → no underline, on any row).
 
-**De footer leest zelf géén `blockRows`/`b.code` meer.** `home.mjs` heeft een
-eigen, ontkoppelde footer-`watch` (het `setRelated`/`setCommentScope`-patroon,
-inline deps incl. `state.drillCursor` en `focusedBlock().code`) die twee platte
-snapshots pusht: `state.footerUnit` (de aligned rijen + underline-arrays van
-de actieve eenheid — één rij bij `line`/`call`, meerdere bij een meerregelige
-`group` — `null` bij géén eenheid, expliciet nooit een lege array, zodat
-zowel de `!!(...)`-check in `updateFooter` als de single↔array-slot-valkuil
-in `Footer.mjs` correct blijven, zie `conventions.md`) en `state.footerExplain`
-(zie hieronder), en daarna in dezelfde `updateFooter()` de afgeleide
-`state.footerVisible` zet. Zo wordt de footer nooit een co-subscriber op de
-code van het gefocuste block (de "stuck on loading"-race, zie
-`conventions.md`) én volgt hij gratis de gedrilde-kolom-cursor.
+**The footer no longer reads `blockRows`/`b.code` itself.** `home.mjs` has
+its
+own, decoupled footer `watch` (the `setRelated`/`setCommentScope` pattern,
+inline deps incl. `state.drillCursor` and `focusedBlock().code`) that pushes
+two flat
+snapshots: `state.footerUnit` (the aligned rows + underline arrays of
+the active unit — one row for `line`/`call`, several for a multi-line
+`group` — `null` for no unit, explicitly never an empty array, so that
+both the `!!(...)` check in `updateFooter` and the single↔array-slot
+pitfall
+in `Footer.mjs` remain correct, see `conventions.md`) and
+`state.footerExplain`
+(see below), and then within that same `updateFooter()` sets the derived
+`state.footerVisible`. This way the footer never becomes a co-subscriber
+on the
+code of the focused block (the "stuck on loading" race, see
+`conventions.md`) and follows the drilled-column cursor for free.
 
-**AI-omschrijving bij een if-statement (`data-testid=footer-description`):**
-bevat de tekst van de gefocuste **`group`- of `line`-unit** (nooit `call`, en
-alleen in diff-mode) een `if`/`elseif`/`else if` (`reIfStatement` in
-`home.mjs` — een kale regex op de regeltekst, false-positives in
-strings/comments bewust geaccepteerd), dan toont de footer boven de inline
-diff een korte Nederlandse AI-uitleg van wat de conditie controleert en
-wanneer de tak loopt. Die komt uit het `explanations`-read-model
-(`GET /api/explanations?pr=N`), gegenereerd door het **`explain_code`**-workflow
-(Haiku, context-only — zie `.claude/rules/tembed-workflows.md`). De generatie
-start **automatisch** met een debounce (`EXPLAIN_DEBOUNCE_MS`, 600ms — doorheen
-pijlen vuurt niets) via `POST /api/workflows/explain_code`, client-side
-gededupt (`explainRequested`) én server-side idempotent (deterministische Run
-ID per unit+code-hash, `StartWorkflowID`). Zolang de run loopt toont de regel
-"AI-omschrijving genereren…" (pulserend); een `failed`-rij (offline,
-`SLASH_CLAUDE=off`) verbergt de regel weer. De rij-match gaat op
-`blockId|unitKey` (unitKey = `group-<start>-<end>`/`line-<row>`, dezelfde
-codeRef-vorm als `commentPath`) plus een **code-hash-check** (`fnv1a` over
-unit-code + context): een stale rij van vóór een nieuwe commit wordt genegeerd
-en opnieuw gegenereerd; een geseede rij met lege hash matcht altijd
-(test-fixtures). Terwijl de omschrijving toont groeit de footer van 90px naar
-**140px** en reserveren `<main>` (`home.mjs`) en de comments/taken-sidebar +
-hint-rail (`RelatedPanel.mjs`) reactief `bottom-[140px]` i.p.v.
-`bottom-[90px]`, zodat niets achter de footer schuift. Zie
-`tests/footer-explanation.spec.mjs` (incl. het gedrilde-kolom-geval).
+**AI description for an if statement (`data-testid=footer-description`):**
+if the text of the focused **`group`- or `line` unit** (never `call`, and
+only in diff mode) contains an
+`if`/`elseif`/`else if` (`reIfStatement` in
+`home.mjs` — a bare regex on the line text, false positives in
+strings/comments deliberately accepted), the footer shows above the inline
+diff a short English AI explanation of what the condition checks and
+when the branch runs. That comes from the `explanations` read model
+(`GET /api/explanations?pr=N`), generated by the **`explain_code`**
+workflow
+(Haiku, context-only — see `.claude/rules/tembed-workflows.md`).
+Generation
+starts **automatically** with a debounce (`EXPLAIN_DEBOUNCE_MS`, 600ms —
+navigating through with arrows doesn't trigger anything) via
+`POST /api/workflows/explain_code`, client-side
+deduped (`explainRequested`) and server-side idempotent (a deterministic
+Run
+ID per unit+code-hash, `StartWorkflowID`). While the run is in progress the
+line shows
+"Generating AI description…" (pulsing); a `failed` row (offline,
+`SLASH_CLAUDE=off`) hides the line again. The row match is based on
+`blockId|unitKey` (unitKey = `group-<start>-<end>`/`line-<row>`, the same
+codeRef shape as `commentPath`) plus a **code-hash check** (`fnv1a` over
+unit code + context): a stale row from before a new commit is ignored
+and regenerated; a seeded row with an empty hash always matches
+(test fixtures). While the description shows, the footer grows from 90px to
+**140px** and `<main>` (`home.mjs`) and the comments/tasks sidebar +
+hint rail (`RelatedPanel.mjs`) reactively reserve `bottom-[140px]` instead
+of
+`bottom-[90px]`, so nothing shifts behind the footer. See
+`tests/footer-explanation.spec.mjs` (incl. the drilled-column case).
