@@ -1,1561 +1,1652 @@
 # Tembed: durable workflows (`tembed/`)
 
-`tembed/` is een **embeddable durable-workflow engine** — "Temporal, maar een Go-
-package". Het staat als **git subtree** (prefix `tembed/`) in deze repo en is
-tegelijk zijn eigen module (`github.com/reindert-vetter/tembed`), zodat andere
-projecten het los kunnen inladen. **`tembed/` is bewust abstract** — het weet
-niets van PR's, blocks of gh; hou het zo.
+`tembed/` is an **embeddable durable-workflow engine** — "Temporal, but a Go
+package". It lives as a **git subtree** (prefix `tembed/`) in this repo and is
+at the same time its own module (`github.com/reindert-vetter/tembed`), so
+other projects can import it standalone. **`tembed/` is deliberately
+abstract** — it knows nothing about PRs, blocks, or gh; keep it that way.
 
-- **Subtree-flow:** binnenhalen met `git subtree add --prefix=tembed
-  https://github.com/reindert-vetter/tembed main --squash`; wijzigingen
-  terugduwen naar de tembed-repo met `git subtree push --prefix=tembed <url>
-  main`, updates ophalen met `git subtree pull`. slash importeert het via een
+- **Subtree flow:** pull it in with `git subtree add --prefix=tembed
+  https://github.com/reindert-vetter/tembed main --squash`; push changes
+  back to the tembed repo with `git subtree push --prefix=tembed <url>
+  main`, pull updates with `git subtree pull`. slash imports it via a
   `replace github.com/reindert-vetter/tembed => ./tembed` in `go.mod`.
-- **Kern (event-sourcing + replay):** elke run heeft een append-only
-  event-history; de engine draait de workflow-functie telkens **vanaf het begin**
-  opnieuw tegen die history. Een `ExecuteActivity` waarvan het resultaat al in de
-  history staat geeft de opgeslagen waarde terug (activity draait dus **één keer**),
-  anders draait de activity nú en wordt het resultaat weggeschreven. Een
-  `WaitSignal` die zijn signaal nog niet heeft **yield't** (interne panic-
-  sentinel), wordt als `waiting` gepersisteerd en opnieuw gedreven zodra het
-  signaal/timer binnenkomt. **Workflow-code moet deterministisch zijn** — alle
-  non-determinisme via het `*Workflow`-handle (`ExecuteActivity`, `WaitSignal`,
-  `Sleep`, `SideEffect`, `Now`).
-- **Signals** zijn gebufferd: een signaal dat vóór de `WaitSignal` aankomt wacht
-  tot de workflow erom vraagt. **Timers** (`Sleep`) zijn durable (absolute
-  fire-time in de history, herpland bij `Recover`).
-- **Deterministische, idempotente start (`StartWorkflowID`):** `StartWorkflow`
-  genereert een willekeurige Run ID; `StartWorkflowID(id, name, input)` neemt de
-  Run ID van de **caller** en is **idempotent** — bestaat er al een run met die
-  `id` (welke status dan ook), dan is het een **no-op reuse** die `id` teruggeeft
-  en de bestaande run (én zijn oorspronkelijke input) ongemoeid laat. De
-  existence-check + create staat onder de run-lock, dus twee gelijktijdige starts
-  van dezelfde `id` kunnen nooit allebei aanmaken. Zo kan een caller een
-  **deterministische** Run ID afleiden uit een externe sleutel (b.v.
-  `gh-<commentID>`) zodat een herhaalde start — dezelfde poll die twee keer
-  draait, of een herstart die dezelfde GitHub-comment opnieuw ziet — nooit een
-  tweede Execution maakt. De Run ID komt van de caller (glue), niet uit de
-  workflow-body, dus dit schendt de determinisme-eis van de body niet. Gebruikt
-  door de comment-import (zie "Bestaande GitHub-comments importeren").
-- **Opslag** via de `Store`-interface: `MemoryStore` (tests), `JSONLStore` (één
-  leesbaar bestand per run), `SQLiteStore` (pure-Go `modernc.org/sqlite`, geen
-  cgo) en `MultiStore` om te combineren (SQLite voor queries + JSONL als
-  audit-trail). Enige runtime-dependency is `modernc.org/sqlite`.
-- **Recovery:** `engine.Recover()` bij startup dry-vt elke `running`/`waiting`
-  run opnieuw (herplant timers, her-blokkeert op signals).
-- **Tests:** `tembed/*_test.go` (activity-replay, signals, buffered signal,
-  durable timer, activity-failure, SQLite+JSONL combinatie).
+- **Core (event sourcing + replay):** every run has an append-only
+  event history; the engine re-runs the workflow function **from the
+  beginning** each time against that history. An `ExecuteActivity` whose
+  result is already in the history returns the stored value (the activity
+  thus runs **once**); otherwise the activity runs now and the result is
+  written out. A `WaitSignal` whose signal hasn't arrived yet **yields**
+  (an internal panic sentinel), is persisted as `waiting`, and is driven
+  again once the signal/timer arrives. **Workflow code must be
+  deterministic** — all non-determinism goes through the `*Workflow`
+  handle (`ExecuteActivity`, `WaitSignal`, `Sleep`, `SideEffect`, `Now`).
+- **Signals** are buffered: a signal that arrives before the `WaitSignal`
+  waits until the workflow asks for it. **Timers** (`Sleep`) are durable
+  (absolute fire time in the history, rescheduled on `Recover`).
+- **Deterministic, idempotent start (`StartWorkflowID`):** `StartWorkflow`
+  generates a random Run ID; `StartWorkflowID(id, name, input)` takes the
+  Run ID from the **caller** and is **idempotent** — if a run with that
+  `id` already exists (whatever its status), it's a **no-op reuse** that
+  returns `id` and leaves the existing run (and its original input)
+  untouched. The existence check + create happens under the run lock, so
+  two concurrent starts of the same `id` can never both create one. This
+  lets a caller derive a **deterministic** Run ID from an external key
+  (e.g. `gh-<commentID>`) so that a repeated start — the same poll running
+  twice, or a restart that sees the same GitHub comment again — never
+  creates a second Execution. The Run ID comes from the caller (glue), not
+  from the workflow body, so this doesn't violate the body's determinism
+  requirement. Used by the comment import (see "Importing existing GitHub
+  comments").
+- **Storage** via the `Store` interface: `MemoryStore` (tests), `JSONLStore`
+  (one readable file per run), `SQLiteStore` (pure-Go `modernc.org/sqlite`,
+  no cgo), and `MultiStore` to combine them (SQLite for queries + JSONL as
+  an audit trail). The only runtime dependency is `modernc.org/sqlite`.
+- **Recovery:** `engine.Recover()` at startup dry-runs every `running`/
+  `waiting` run again (replants timers, re-blocks on signals).
+- **Tests:** `tembed/*_test.go` (activity replay, signals, buffered signal,
+  durable timer, activity failure, SQLite+JSONL combination).
 
-## Harde regel: alleen workflows muteren state
+## Hard rule: only workflows mutate state
 
-**Workflows zijn de enige schrijvers.** State verandert uitsluitend via een
-Workflow Execution; al het andere is **read-only van buitenaf**:
+**Workflows are the only writers.** State changes exclusively through a
+Workflow Execution; everything else is **read-only from the outside**:
 
-- **Modules** (`modules/*`, b.v. `comments`, `github`, `inbox`) zijn de dingen die "kunnen
-  gebeuren in een workflow" — ze worden **alleen** door workflow-Activities
-  aangeroepen. Hun schrijf-methodes (`Save`, `AddReaction`, `PostReviewComment`, …)
-  hoor je nergens anders aan te roepen; hun **read**-methodes (`List`, …) voeden
-  de UI.
-- De **HTTP-API** schrijft alleen via workflow-endpoints (een Execution starten
-  of een Signal sturen). Alle andere endpoints en de **UI zijn read-only**.
-- Waarom: de workflow-event-history is de bron van waarheid (durable, herspeelbaar,
-  overleeft herstart). Een module-tabel is een afgeleide read-model. Zie
-  `.claude/rules/workflows-write-boundary.md` en `.claude/rules/workflow-determinism.md`.
+- **Modules** (`modules/*`, e.g. `comments`, `github`, `inbox`) are the
+  things that "can happen inside a workflow" — they are called **only** by
+  workflow Activities. Their write methods (`Save`, `AddReaction`,
+  `PostReviewComment`, …) must not be called anywhere else; their **read**
+  methods (`List`, …) feed the UI.
+- The **HTTP API** only writes via workflow endpoints (starting an
+  Execution or sending a Signal). Every other endpoint, and the **UI, are
+  read-only**.
+- Why: the workflow event history is the source of truth (durable,
+  replayable, survives a restart). A module table is a derived read model.
+  See `.claude/rules/workflows-write-boundary.md` and
+  `.claude/rules/workflow-determinism.md`.
 
-## De eerste slash-task: `task_code_comment` (`workflows.go` + `modules/`)
+## The first slash task: `task_code_comment` (`workflows.go` + `modules/`)
 
-De eerste concrete taak draait op tembed: **een comment op een regel code
-plaatsen** en de thread levend houden. Termen volgen Temporal — een **Workflow
-Type** `task_code_comment`, gestart als **Workflow Execution** (met een **Run ID**,
-dat tevens de comment-id is), die **Activities** draait en op **Signals** reageert.
+The first concrete task runs on tembed: **placing a comment on a line of
+code** and keeping the thread alive. Terminology follows Temporal — a
+**Workflow Type** `task_code_comment`, started as a **Workflow Execution**
+(with a **Run ID** that also serves as the comment id), which runs
+**Activities** and reacts to **Signals**.
 
-- **Twee modules** die de workflow als Activity aandrijft:
-  - `modules/comments` — de comments-module met een **eigen SQLite read-model**
-    (`comments`/`reactions`, `data/comments.db`). "Doet zijn eigen ding": telt
-    reacties (`reaction_count`) en zet `status` op `resolved` bij `/resolve`.
-    Write (`Save`/`AddReaction`) = workflow-only; `List` = read voor de UI. Elke
-    comment bewaart ook het **codefragment** waarop hij hangt (`code`/`gran`/
-    `label`-kolommen, meegegeven in `CodeCommentInput`) — de exacte navigatie-unit
-    op het moment van plaatsen — zodat de thread later dezelfde code toont als de
-    composer. `RelatedPanel.mjs` deelt daarvoor één `composeTargetHint`-box (het
-    kader met granulariteit + `class::method` + Prism-highlighted fragment): de
-    composer voedt 'm uit `commentTarget()` (live navigatie), de geplaatste-comment-
-    thread uit de opgeslagen `code`/`gran`/`label`. Een comment zónder `code` (b.v.
-    oude of geseede) toont geen kader. Een lichte `migrate` voegt die kolommen toe
-    aan een bestaande DB (`ALTER TABLE … ADD COLUMN`, dubbele-kolom-fout genegeerd).
-    Naast het fragment bewaart een comment zijn **navigatie-anker** (`row_start`/
-    `row_end`/`seg`): de aligned-row-range binnen het block + (voor een `call`) de
-    segment-sleutel. Daarmee scope't `RelatedPanel` de comment-index op het
-    geselecteerde block én de selectie-unit (call ⊂ line ⊂ group ⊂ block;
-    `commentUnder`/`visibleComments`, `home.mjs` duwt de scope via een `watch`+
-    `setCommentScope`). Ook krijgt elke comment een **hiërarchisch pad** dat de
-    workflow deterministisch bouwt (`commentPath` in `workflows.go`, uit input +
-    Run ID) en dat geïndexeerd in de `path`-kolom staat:
-    `/pr-<pr>/<file>/<label>/<codeRef>/comment-<id>` (de `file` behoudt z'n
-    slashes, dus een directory-prefix matcht ook; `codeRef` = `group-5-9` /
-    `line-7` / `call-7-<seg>`). Zo vindt een **prefix-match** alle comments onder
-    een scope: `/pr-123` (hele PR), `/pr-123/app/Foo.php` (bestand),
+- **Two modules** that the workflow drives as Activities:
+  - `modules/comments` — the comments module with its **own SQLite read
+    model** (`comments`/`reactions`, `data/comments.db`). "Does its own
+    thing": counts reactions (`reaction_count`) and sets `status` to
+    `resolved` on `/resolve`. Write (`Save`/`AddReaction`) = workflow-only;
+    `List` = read for the UI. Each comment also stores the **code
+    fragment** it hangs on (`code`/`gran`/`label` columns, passed in via
+    `CodeCommentInput`) — the exact navigation unit at the moment of
+    placing — so the thread later shows the same code as the composer.
+    `RelatedPanel.mjs` shares one `composeTargetHint` box for this (the
+    frame with granularity + `class::method` + Prism-highlighted fragment):
+    the composer feeds it from `commentTarget()` (live navigation), the
+    placed-comment thread from the stored `code`/`gran`/`label`. A comment
+    without `code` (e.g. an old or seeded one) shows no frame. A light
+    `migrate` adds those columns to an existing DB (`ALTER TABLE … ADD
+    COLUMN`, duplicate-column error ignored).
+    Alongside the fragment, a comment also stores its **navigation anchor**
+    (`row_start`/`row_end`/`seg`): the aligned-row range within the block +
+    (for a `call`) the segment key. That lets `RelatedPanel` scope the
+    comment index to the selected block **and** the selection unit
+    (call ⊂ line ⊂ group ⊂ block; `commentUnder`/`visibleComments`,
+    `home.mjs` pushes the scope via a `watch` + `setCommentScope`). Every
+    comment also gets a **hierarchical path** that the workflow builds
+    deterministically (`commentPath` in `workflows.go`, from the input +
+    Run ID) and which is indexed in the `path` column:
+    `/pr-<pr>/<file>/<label>/<codeRef>/comment-<id>` (the `file` keeps its
+    slashes, so a directory prefix also matches; `codeRef` = `group-5-9` /
+    `line-7` / `call-7-<seg>`). A **prefix match** thus finds every comment
+    under a scope: `/pr-123` (whole PR), `/pr-123/app/Foo.php` (file),
     `…/Foo::bar` (block), `…/group-5-9` (unit) — via `comments.Search(prefix)`
-    (read-only) achter `GET /api/comments?path=<prefix>`. Schrijven van het pad
-    blijft workflow-only (`saveComment`-Activity). Los daarvan markeert de diff
-    elke regel met een comment met een **💬** (`commentRowSet` → `Block`
+    (read-only) behind `GET /api/comments?path=<prefix>`. Writing the path
+    remains workflow-only (`saveComment` Activity). Separately, the diff
+    marks every line with a comment with a **💬** (`commentRowSet` → `Block`
     `commentedRows` → `paneHTML`, presence-only).
-    De **thread** opent bovendien met de comment zélf als **eerste bericht**: de
-    body die de comment titelt verschijnt óók als eerste chat-bubble (aan de kant
-    van de reviewer), gevolgd door de reacties. `RelatedPanel.mjs` bouwt dat met
-    `threadMessages(c)` = de synthetische opening (`{source:'ui', body:c.body}`,
-    key `origin:<id>`) + `c.reactions`; de keyboard-nav (`reactionCount`/`threadPos`)
-    telt die opening mee, dus `↑` loopt door tot de opening bovenaan. Een **klik**
-    op een comment-rij landt er ook echt op (`toComment()` → highlight + thread
-    open + reply-veld gefocust), net als de toetsenbord-landing.
-  - `modules/github` — de GitHub-communicatie (`gh api`): `PostReviewComment`
-    (regel-range + side, zie hieronder), `Reply`, `FetchReplies`, `PRState`
-    (`open`/`merged`/`closed`), `PRMeta` (titel/URL/body/author/diff-stats/head-ref),
-    `DeleteComment`, `ResolveReviewThread` (resolvet een review-diff-thread op
-    GitHub, via `gh api graphql` — thread-node-ID opgezocht op de
-    root-comment-`databaseId`, dan de `resolveReviewThread`-mutatie),
-    `MarkFileViewed` (het Files-changed-"Viewed"-vinkje, via
-    `gh api graphql`). Interface `github.Client` + `github.Fake` (met `SetPRState`,
+    The **thread** also opens with the comment itself as the **first
+    message**: the body that titles the comment also appears as the first
+    chat bubble (on the reviewer's side), followed by the reactions.
+    `RelatedPanel.mjs` builds that with `threadMessages(c)` = the synthetic
+    opening (`{source:'ui', body:c.body}`, key `origin:<id>`) + `c.reactions`;
+    the keyboard nav (`reactionCount`/`threadPos`) counts that opening too,
+    so `↑` walks all the way up to the opening. A **click** on a comment
+    row also really lands on it (`toComment()` → highlight + thread open +
+    reply field focused), same as the keyboard landing.
+  - `modules/github` — the GitHub communication (`gh api`): `PostReviewComment`
+    (line range + side, see below), `Reply`, `FetchReplies`, `PRState`
+    (`open`/`merged`/`closed`), `PRMeta` (title/URL/body/author/diff-stats/head-ref),
+    `DeleteComment`, `ResolveReviewThread` (resolves a review-diff thread on
+    GitHub, via `gh api graphql` — the thread node ID is looked up from the
+    root comment's `databaseId`, then the `resolveReviewThread` mutation
+    runs), `MarkFileViewed` (the Files-changed "Viewed" checkbox, via
+    `gh api graphql`). Interface `github.Client` + `github.Fake` (with `SetPRState`,
     `IsViewed`/`ViewedFiles`, `LastStartLine`/`LastEndLine`/`LastSide`/
-    `LastPostedBody`, `ResolvedThreadCount`/`LastResolvedThread`) voor tests.
-  - `modules/jira` — de Jira-communicatie via de lokale `acli`-CLI (zelfde
-    bridge-patroon als `modules/github`/`modules/claude`, geen nieuwe
-    dependency): `Issue(key)` draait `acli jira workitem view <key> --fields
-    summary,description --json` (de `key` wordt eerst tegen
-    `^[A-Z][A-Z0-9]+-\d+$` gevalideerd — nooit ongevalideerde input naar
-    `exec.CommandContext`) en flatten't de ADF-`description` (Atlassian
-    Document Format, een `{type:"doc", content:[...]}`-boom) naar platte tekst
-    door de content-boom recursief te doorlopen en alle `text`-leaves te
-    concateneren (paragrafen gescheiden door `\n`). Interface `jira.Client` +
-    `jira.Fake` (`SetIssue`) voor tests; **`SLASH_JIRA=off`** → `jira.Fake{}`
-    (geen netwerk, mirrort `SLASH_GITHUB=off`/`SLASH_CLAUDE=off`), bedraad in
+    `LastPostedBody`, `ResolvedThreadCount`/`LastResolvedThread`) for tests.
+  - `modules/jira` — the Jira communication via the local `acli` CLI (same
+    bridge pattern as `modules/github`/`modules/claude`, no new
+    dependency): `Issue(key)` runs `acli jira workitem view <key> --fields
+    summary,description --json` (the `key` is first validated against
+    `^[A-Z][A-Z0-9]+-\d+$` — never unvalidated input into
+    `exec.CommandContext`) and flattens the ADF `description` (Atlassian
+    Document Format, a `{type:"doc", content:[...]}` tree) into plain text
+    by recursively walking the content tree and concatenating all `text`
+    leaves (paragraphs separated by `\n`). Interface `jira.Client` +
+    `jira.Fake` (`SetIssue`) for tests; **`SLASH_JIRA=off`** → `jira.Fake{}`
+    (no network, mirrors `SLASH_GITHUB=off`/`SLASH_CLAUDE=off`), wired up in
     `newTasks` (`tasks_api.go`).
 - **Flow:** `saveComment` (comments) + `postGithubComment` (github, best-effort),
-  dan een lus op `reply`-**Signals**. Een reactie komt binnen via de **UI**
-  (`POST /api/workflows/{runID}/signals/reply`) én via een **per-thread poller**;
-  beide worden als hetzelfde Signal geleverd. Elke reactie wordt opgeslagen
-  (comments) en een UI-reactie wordt gespiegeld naar GitHub; `Done`/`/resolve`
-  sluit de thread.
-- **Regel-range, side en call-context naar GitHub:** `CodeCommentInput` draagt
-  naast `Line` ook `StartLine`/`EndLine`/`Side`/`Segment`. `postGithubComment`
-  bouwt daaruit de `github.PostReviewComment(ctx, pr, file, start, end, side,
-  body)`-call: `Side` is `"RIGHT"` (nieuw/context, default bij leeg) of
-  `"LEFT"` (een verwijderde regel); is `StartLine < EndLine` dan post het een
-  **multi-line range** (`start_line`..`line`, GitHub-eis), anders single-line op
-  `EndLine` (valt terug op `Line` als beide 0 zijn — backward-compat met oudere
-  callers die alleen `Line` zetten). Voor `Gran == "call"` met een niet-lege
-  `Segment` prefixt de **naar-GitHub-geposte** body met het segment als
-  code-span (`` `segment`\n\n`` + body) — de **opgeslagen** comment (`saveComment`,
-  het read-model achter de thread) blijft de rauwe `Body`, ongewijzigd door
-  `Segment`. Puur input-gedreven, dus deterministisch onder replay.
-  **Frontend-kant:** `commentTarget()` (`home.mjs`) berekent deze vier velden uit
-  de huidige navigatie-unit i.p.v. altijd `b.line` (de blok-startregel) te sturen.
-  `unitLineRange(b, rows, unit)` telt de aligned rows van `blockRows(b)` af vanaf
-  `b.code.new.start`/`b.code.old.start` (de bron-startregel uit `GET /api/code`;
-  aligned rows dragen zelf geen regelnummers, een filler-rij op de andere kant telt
-  niet mee) om `startLine`/`endLine` + `side` te bepalen: `side` is `'RIGHT'` zodra
-  één rij in de unit een `right` heeft, anders (een pure verwijdering) `'LEFT'`; is
-  de code nog niet geladen dan valt het terug op `{startLine:0, endLine:0,
-  side:'RIGHT'}` (de backend valt op zijn beurt terug op `Line`). `unitSegment(rows,
-  unit)` levert voor een `'call'`-unit de onderstreepte segmenttekst (dezelfde
-  `unit.right`/`unit.left`-Sets als `segKey`/de indigo-underline in `Block.mjs`,
-  substring `min..max` inclusief); een group/line-unit heeft geen `char`-vlag en
-  geeft `''`. `placeComment` (`RelatedPanel.mjs`) geeft alle vier door aan
-  `createComment`, plus `line: t.startLine || b.line` (dezelfde backward-compat-
-  fallback als de Go-kant). Er is precies één plek die naar de workflow post
-  (`createComment`); elke composer-flow (toetsenbord, klik, de comment-soort-menu's
-  "Alleen voor mijzelf") loopt via `placeComment` en krijgt dus dezelfde anchoring.
-  **`commentTarget()` volgt `focusedBlock()`, niet altijd het top-level
-  `curBlock()`:** staat de keyboard op een gedrilde kolom (`state.focusLevel >
-  0`, zie "Drillen"/"Kolom-navigatie" in `.claude/rules/detail-layout.md`), dan
-  moet de referentiecode van een net-gestarte comment het block van díe kolom +
-  diens eigen `state.drillCursor[focusLevel-1].{gran,change}` zijn — niet het
-  top-level block. `placeComment` gebruikt daarom `t.file`/`t.startLine` (uit
-  `commentTarget()`) i.p.v. het top-level `b.file`/`b.line`, en `commentsSection`'s
-  "Nieuwe comment · `<file>:<line>`"-header idem. De `commentScope`-`watch`
-  in `home.mjs` (die `cs.view`, de zichtbare comment-lijst, scope't) moet
-  daarnaast ook `state.focusLevel`/`state.drill`/`state.drillCursor` **inline**
-  in zijn dependency-array opnemen — anders blijft de comment-index na het
-  drillen gescoped op het block van vóór de drill, ook al is de net geplaatste
-  comment zelf correct geanchored (zie de watch-inline-deps-regel in
-  `.claude/rules/conventions.md`). Getest in `tests/drill-comment-target.spec.mjs`.
-- **Privé-notitie (`local`-vlag):** `CodeCommentInput` draagt een
-  `Local bool`-vlag. Is die gezet — de UI stuurt 'm bij de keuze **"Alleen voor
-  mijzelf"** in het comment-soort-menu (zie `.claude/rules/keyboard-navigation.md`)
-  — dan **slaat de workflow `postGithubComment` over** (`if !in.Local`). De comment
-  wordt dus wél in het read-model opgeslagen maar nooit naar GitHub gepost. Dat is
-  replay-deterministisch: het aantal `ExecuteActivity`-calls hangt van de **input**
-  af, niet van live state. Verdere zorg is er niet: `posted` blijft de zero-value
-  (`RootID == 0`), dus `StartCodeComment` start geen poller en de bestaande
-  `RootID == 0`-guards maken `deleteGithubComment`/`replyGithub` no-op — reageren op
-  of verwijderen van een privé-notitie raakt GitHub dus nooit.
-- **Poller-cadans (heartbeat-gedreven):** de poller checkt GitHub **snel**
-  (`pollInterval = time.Minute`) zolang er in de laatste `heartbeatWindow`
-  (10 min) een **heartbeat** binnenkwam — de UI pingt
-  `POST /api/workflows/{runID}/heartbeat` voor de **taak die je op dat moment
-  bekijkt** (per-actieve-taak, geen state-mutatie: enkel in-memory poll-timing,
-  dus buiten de write-boundary). De UI pingt **alleen bij echte activiteit**:
-  tabblad zichtbaar **én** gefocust **én** input in de laatste `ACTIVITY_WINDOW`
-  (2 min) — een open-maar-verlaten tabblad stopt dus vanzelf met heartbeaten
-  (`tabActive`/`beat` in `RelatedPanel.mjs`). Zonder recente heartbeat valt hij terug op een
-  **trage** cadans (`idlePollInterval = 10 min`); **alleen** op die trage cadans
-  checkt hij ook of de PR gemerged/closed is en **stopt** hij dan. De poller
-  waakt op de snelle tick maar gate't de echte GitHub-calls op de gewenste cadans,
-  zodat een heartbeat mid-idle meteen naar snel schakelt.
-- **`pr_status`-workflow (per PR):** een tweede Workflow Type, één Execution per
-  PR, die `state`-**Signals** van de pollers ontvangt en **completet** zodra de PR
-  merged/closed is. Dat is de durabele bron-van-waarheid die pollers lezen om te
-  stoppen (schrijven blijft dus binnen een workflow). `ensurePRStatus(pr)` start/
-  hergebruikt één tracker per PR (ook na herstart, via `Runs()`+`Input()`).
-  **Bij start** (synchroon in `StartWorkflow`, vóór de signal-lus) draait hij
-  drie Activities **na elkaar**, elk gevolgd door zijn eigen read-model-write —
-  zodat de UI **progressief** kan tonen (eerst titel+omschrijving, dan de
-  samenvatting, dan de review/CI-status) i.p.v. te wachten tot alles binnen is:
-  1. **`fetchPRBasics`** — haalt titel/URL/body/author/diff-stats/head-ref op
-     via de github-module (`PRMeta`, best-effort — een gh-hiccup laat de rest
-     leeg), leidt een Jira-key af uit de titel (`\b([A-Z][A-Z0-9]+-\d+)\b`,
-     dezelfde regex als de frontend) en haalt bij een gevonden key het
-     Jira-ticket op (`jira.Issue`, best-effort — geen key of een Jira-hiccup
-     laat de jira-velden leeg), dan `prmeta.SaveBasics(...)`.
-  2. **`generatePRSummary`** — bouwt uit de zojuist opgeslagen basics (titel,
-     body, de distinct gewijzigde bestanden uit de `blocks`-tabel, en het
-     Jira-ticket) een prompt en vraagt Haiku (`claude.Client.Run`, context-only)
-     om in 2-4 zinnen samen te vatten wat de PR doet, dan
+  then a loop on `reply`-**Signals**. A reaction comes in via the **UI**
+  (`POST /api/workflows/{runID}/signals/reply`) and via a **per-thread poller**;
+  both are delivered as the same Signal. Every reaction is stored
+  (comments) and a UI reaction is mirrored to GitHub; `Done`/`/resolve`
+  closes the thread.
+- **Line range, side, and call context to GitHub:** `CodeCommentInput` carries
+  `StartLine`/`EndLine`/`Side`/`Segment` besides `Line`. `postGithubComment`
+  builds the `github.PostReviewComment(ctx, pr, file, start, end, side,
+  body)` call from those: `Side` is `"RIGHT"` (new/context, the default when
+  empty) or `"LEFT"` (a removed line); if `StartLine < EndLine` it posts a
+  **multi-line range** (`start_line`..`line`, GitHub requirement), otherwise
+  single-line at `EndLine` (falls back to `Line` when both are 0 —
+  backward-compat with older callers that only set `Line`). For `Gran ==
+  "call"` with a non-empty `Segment`, the body **posted to GitHub** is
+  prefixed with the segment as a code span (`` `segment`\n\n`` + body) — the
+  **stored** comment (`saveComment`, the read model behind the thread)
+  stays the raw `Body`, unaffected by `Segment`. Purely input-driven, so
+  deterministic under replay.
+  **Frontend side:** `commentTarget()` (`home.mjs`) computes these four
+  fields from the current navigation unit instead of always sending
+  `b.line` (the block's start line). `unitLineRange(b, rows, unit)` counts
+  the aligned rows of `blockRows(b)` from `b.code.new.start`/
+  `b.code.old.start` (the source start line from `GET /api/code`; aligned
+  rows themselves carry no line numbers, a filler row on the other side
+  doesn't count) to determine `startLine`/`endLine` + `side`: `side` is
+  `'RIGHT'` as soon as one row in the unit has a `right`, otherwise (a pure
+  removal) `'LEFT'`; if the code isn't loaded yet it falls back to
+  `{startLine:0, endLine:0, side:'RIGHT'}` (the backend in turn falls back
+  to `Line`). `unitSegment(rows, unit)` yields, for a `'call'` unit, the
+  underlined segment text (the same `unit.right`/`unit.left` Sets as
+  `segKey`/the indigo underline in `Block.mjs`, substring `min..max`
+  inclusive); a group/line unit has no `char` flag and returns `''`.
+  `placeComment` (`RelatedPanel.mjs`) passes all four to `createComment`,
+  plus `line: t.startLine || b.line` (the same backward-compat fallback as
+  the Go side). There is exactly one place that posts to the workflow
+  (`createComment`); every composer flow (keyboard, click, the comment-kind
+  menu's "For myself only") goes through `placeComment` and thus gets the
+  same anchoring.
+  **`commentTarget()` follows `focusedBlock()`, not always the top-level
+  `curBlock()`:** if the keyboard is on a drilled column (`state.focusLevel
+  > 0`, see "Drilling"/"Column navigation" in
+  `.claude/rules/detail-layout.md`), then the reference code of a freshly
+  started comment must be that column's block + its own
+  `state.drillCursor[focusLevel-1].{gran,change}` — not the top-level
+  block. `placeComment` therefore uses `t.file`/`t.startLine` (from
+  `commentTarget()`) instead of the top-level `b.file`/`b.line`, and
+  `commentsSection`'s "New comment · `<file>:<line>`" header likewise. The
+  `commentScope` `watch` in `home.mjs` (which scopes `cs.view`, the visible
+  comment list) must also include `state.focusLevel`/`state.drill`/
+  `state.drillCursor` **inline** in its dependency array — otherwise the
+  comment index stays scoped to the pre-drill block after drilling, even
+  though the newly placed comment itself is correctly anchored (see the
+  watch-inline-deps rule in `.claude/rules/conventions.md`). Tested in
+  `tests/drill-comment-target.spec.mjs`.
+- **Private note (`local` flag):** `CodeCommentInput` carries a `Local
+  bool` flag. If set — the UI sends it for the **"For myself only"**
+  choice in the comment-kind menu (see
+  `.claude/rules/keyboard-navigation.md`) — the workflow **skips
+  `postGithubComment`** (`if !in.Local`). The comment is thus stored in the
+  read model but never posted to GitHub. That's replay-deterministic: the
+  number of `ExecuteActivity` calls depends on the **input**, not on live
+  state. There's nothing further to worry about: `posted` stays the
+  zero-value (`RootID == 0`), so `StartCodeComment` doesn't start a poller
+  and the existing `RootID == 0` guards make `deleteGithubComment`/
+  `replyGithub` no-ops — reacting to or deleting a private note thus never
+  touches GitHub.
+- **Poller cadence (heartbeat-driven):** the poller checks GitHub
+  **quickly** (`pollInterval = time.Minute`) as long as a **heartbeat**
+  arrived within the last `heartbeatWindow` (10 min) — the UI pings
+  `POST /api/workflows/{runID}/heartbeat` for the **task you're currently
+  viewing** (per active task, no state mutation: just in-memory poll
+  timing, so outside the write boundary). The UI only pings on **real
+  activity**: tab visible **and** focused **and** input within the last
+  `ACTIVITY_WINDOW` (2 min) — an open-but-abandoned tab thus naturally
+  stops heartbeating (`tabActive`/`beat` in `RelatedPanel.mjs`). Without a
+  recent heartbeat it falls back to a **slow** cadence (`idlePollInterval =
+  10 min`); **only** on that slow cadence does it also check whether the PR
+  is merged/closed and **stop** if so. The poller wakes on the fast tick
+  but gates the actual GitHub calls on the desired cadence, so a heartbeat
+  mid-idle immediately switches back to fast.
+- **`pr_status` workflow (per PR):** a second Workflow Type, one Execution
+  per PR, that receives `state` **Signals** from the pollers and
+  **completes** once the PR is merged/closed. That's the durable source of
+  truth that pollers read to stop (writing thus stays within a workflow).
+  `ensurePRStatus(pr)` starts/reuses one tracker per PR (also after a
+  restart, via `Runs()`+`Input()`).
+  **On start** (synchronously in `StartWorkflow`, before the signal loop)
+  it runs three Activities **in sequence**, each followed by its own
+  read-model write — so the UI can show things **progressively** (title +
+  description first, then the summary, then the review/CI status) instead
+  of waiting until everything is in:
+  1. **`fetchPRBasics`** — fetches title/URL/body/author/diff-stats/head-ref
+     via the github module (`PRMeta`, best-effort — a gh hiccup leaves the
+     rest empty), derives a Jira key from the title (`\b([A-Z][A-Z0-9]+-\d+)\b`,
+     the same regex as the frontend) and, if a key is found, fetches the
+     Jira ticket (`jira.Issue`, best-effort — no key or a Jira hiccup
+     leaves the jira fields empty), then `prmeta.SaveBasics(...)`.
+  2. **`generatePRSummary`** — builds a prompt from the just-stored basics
+     (title, body, the distinct changed files from the `blocks` table, and
+     the Jira ticket) and asks Haiku (`claude.Client.Run`, context-only) to
+     summarize in 2-4 sentences what the PR does, then
      `prmeta.SaveSummary(pr, summary)`.
-  3. **`fetchPRStatuses`** — hergebruikt de bestaande heavy inbox-status-query
-     (`statusesFor` uit `inbox.go`: reviewDecision, checks, reviewers) voor
-     precies deze ene PR (respecteert `SLASH_GITHUB=off`), dan
-     `prmeta.SaveStatuses(...)`. Kanttekening: GitHub's rollup levert alleen een
-     **totaal** + een overall state, geen per-check pass-count; `checksPassed`
-     is dus `checksTotal` bij een `SUCCESS`-rollup, anders `0` — genoeg voor een
-     status-pill, geen exacte teller.
+  3. **`fetchPRStatuses`** — reuses the existing heavy inbox status query
+     (`statusesFor` from `inbox.go`: reviewDecision, checks, reviewers) for
+     precisely this one PR (respects `SLASH_GITHUB=off`), then
+     `prmeta.SaveStatuses(...)`. Note: GitHub's rollup only gives a
+     **total** + an overall state, no per-check pass count; `checksPassed`
+     is therefore `checksTotal` on a `SUCCESS` rollup, otherwise `0` —
+     enough for a status pill, not an exact count.
 
-  Elke stage schrijft via zijn **eigen, gerichte** `prmeta`-methode (zie
-  hieronder) zodat een latere stage nooit een eerdere overschrijft. De UI
-  (`/`-menu, zie `.claude/rules/keyboard-navigation.md`) leest dat via
-  `GET /api/pr?pr=N` voor de Jira/GitHub-deep-links; de titel levert de
-  `KEY-123`-ticket-key. `EnsurePRStatus` is de geëxporteerde ensure-wrapper die de
-  UI via `POST /api/workflows/pr_status {pr}` bij het laden aanroept (een Execution
-  starten = sanctioned write-weg) — de UI wacht **niet** op deze POST, maar
-  pollt `GET /api/pr` en rendert wat er al is (velden van een nog niet-gedraaide
-  stage zijn simpelweg leeg/0).
+  Every stage writes via its **own, targeted** `prmeta` method (see
+  below) so a later stage never overwrites an earlier one. The UI (the
+  `/` menu, see `.claude/rules/keyboard-navigation.md`) reads that via
+  `GET /api/pr?pr=N` for the Jira/GitHub deep links; the title yields the
+  `KEY-123` ticket key. `EnsurePRStatus` is the exported ensure wrapper
+  that the UI calls via `POST /api/workflows/pr_status {pr}` on load (an
+  Execution start = the sanctioned write path) — the UI does **not** wait
+  for this POST, but polls `GET /api/pr` and renders whatever is already
+  there (a field of a not-yet-run stage is simply empty/0).
 
-  **Ingest-refresh (nieuwe commits automatisch binnenhalen):** `pr_status`
-  dreef aanvankelijk alleen de merge/closed-detectie; sinds de ingest-refresh
-  gebruikt hij dezelfde `state`-Signal-lus ook om **nieuwe commits op de PR**
-  incrementeel te verwerken, zodat een reviewer niet handmatig
-  `POST /api/ingest` hoeft te draaien na elke push. `PRStateSignal` draagt
-  daarvoor naast `State` ook `BaseSHA`/`HeadSHA` (net als `ReactionSignal.Action`
-  / `ApprovalSignal.Viewed` rijden beide varianten op **hetzelfde** Signal —
-  een workflow kan maar op één Signal-naam tegelijk `WaitSignal`-en): `State`
-  gezet = een lifecycle-observatie (merged/closed, ongewijzigd gedrag);
-  `State` leeg + `HeadSHA` gezet = een ingest-refresh-verzoek.
-  - **`pollIngestRefresh`** (nieuwe, aparte poller-loop, los van elke
-    comment-thread — spiegelt `poll`/`pollInbox`, zelfde heartbeat-cadans:
-    snel `pollInterval` als binnen `heartbeatWindow` een heartbeat kwam, anders
-    traag `idlePollInterval`) checkt op zijn cadans `fetchPRMeta`'s live
-    `headRefOid` tegen het opgeslagen `pr_ingest`-record (zie hieronder). Is
-    die anders, dan signalt hij `PRStateSignal{BaseSHA, HeadSHA}` naar de
-    `pr_status`-tracker. **Belangrijk:** de per-comment-thread-heartbeat
-    (`RelatedPanel.mjs`) pingt alleen wanneer er een taak/thread open staat;
-    zonder open thread zou deze poller altijd op de trage cadans blijven
-    hangen. Daarom pingt `home.mjs` (`startPRStatusHeartbeat`) apart, elke 60s,
-    de `pr_status`-Run-ID zolang de PR-pagina zichtbaar+gefocust is — een
-    operationele ping zonder state-mutatie, dus buiten de write-boundary,
-    zoals de bestaande comment-/inbox-heartbeats.
-  - **`refreshIngestDelta`-Activity** (`ingest.go`): diff't de **eerder
-    opgeslagen** head-SHA (uit de nieuwe `pr_ingest`-tabel, `db.go`) tegen de
-    **nieuw waargenomen** head-SHA (`changedFileNames`, een `git diff
-    --no-renames --name-only` — geen volledige unified diff nodig om alleen de
-    bestandsnamen te weten) om **precies** te bepalen welke bestanden sinds de
-    vorige ingest wijzigden. Alleen die bestanden worden herscand
-    (`diffBetweenSHAs` + `parseFiles`, gescoped) en via **`upsertPRFileBlocks`**
-    weggeschreven: een DELETE+INSERT die **alleen** de blocks van die
-    bestanden raakt (`DELETE FROM blocks WHERE pr=? AND file IN (...)`) —
-    ieder ander bestand z'n eigen blocks (en dus alles wat aan hun block-id hangt:
-    comments/approvals/callresolve, in aparte SQLite-bestanden zonder FK)
-    blijft volledig ongemoeid. **`--no-renames` is load-bearing:** moderne git
-    detecteert renames standaard voor `git diff`, en met rename-detectie aan
-    laat `--name-only` voor een hernoemd bestand **alleen het nieuwe pad**
-    zien — het oude pad valt dan volledig uit de delta, en `upsertPRFileBlocks`
-    kan zijn `DELETE … WHERE file IN (...)` nooit op dat oude pad toepassen.
-    Zonder `--no-renames` blijven de blocks van het oude pad dus permanent als
-    weesrijen in de DB staan (gezien in de praktijk: een SDK die halverwege
-    een PR van `Snapshots` naar `Resources` werd hernoemd liet de oude
-    `Snapshot*`-blocks nooit verdwijnen). Met `--no-renames` levert
-    `--name-only` voor een rename **beide** paden op (oud als verwijderd,
-    nieuw als toegevoegd), dus de DELETE ruimt het oude pad netjes op — precies
-    zoals elke andere echte verwijdering. De head-worktree wordt **in place** bijgewerkt
-    (`updateWorktree`: `git checkout --detach <sha>` binnen de bestaande
-    worktree-map, valt terug op de bestaande hard-rebuild `ensureWorktree` als
-    dat faalt) i.p.v. de vorige remove+recreate — die was prima voor een
-    handmatige, incidentele ingest maar te zwaar voor een cadans die elke
-    minuut kan vuren.
-    **Base-SHA gewijzigd** (bv. een rebase op een nieuwere `develop`) maakt een
-    incrementele diff tegen de oude base onveilig; dan valt de Activity terug
-    op de **volledige** bestaande ingest-pipeline (`prepareIngestWorktrees` +
-    `scanAndStoreIngestBlocks`, exact dezelfde full-swap als een handmatige
-    `POST /api/ingest`) — `ingestResult.FullFallback` markeert dat in de
-    workflow-history.
-  - **`pr_ingest`-tabel** (`db.go`, `schemaDDL`): `pr → base_sha, head_sha`,
-    bijgewerkt door **zowel** een volledige ingest (`scanAndStoreIngestBlocks`)
-    als een delta-refresh, zodat de poller altijd weet waar de volgende
-    refresh vandaan moet diffen. Leeg (geen rij) betekent "nog nooit
-    geïngest" — de poller/Activity doen dan niets (een refresh vereist een
-    voorafgaande volledige ingest).
-  - **Relations/callresolve blijven "vol" herberekend, niet delta-scoped:**
-    ná een geslaagde (niet-`Skipped`) refresh roept `prStatusWorkflow` gewoon
-    de bestaande `buildRelations`-Activity aan (dezelfde Activity die
-    `build_relations` ook gebruikt) — over de PR's **volledige huidige**
-    blocklijst (`blocksByPR`, een DB-read, geen re-parse). Bewuste keuze: de
-    kosten van `buildRelations`/`resolveCalls` schalen al met de PR-grootte
-    (niet de repo), en `resolveCalls` bouwt sowieso een hele-worktree
-    symbol-index ongeacht hoeveel blocks je 'm voedt — delta-scopen van *welke*
-    blocks bespaart dus nauwelijks iets, terwijl een relatie tussen twee
-    losse, ongerelateerde bestanden (`event_listener`: dispatcher in bestand A,
-    listener-handle in bestand B) een partiële keep-set juist een risico op
-    stale/verdwenen relaties geeft. Met de **volledige** blocklijst als
-    keep-set kunnen `relations.Replace`/`callresolve.Prune`/`UpsertGo` nooit
-    een geldige rij van een ongewijzigd bestand wegpruunen, en `UpsertGo` raakt
-    sowieso nooit een `searching`/`found`-rij (LLM-owned) aan.
-- **`pr_inbox`-workflow (per repo):** een derde Workflow Type dat de PR-inbox
-  bezit — het is de **enige** die GitHub voor het overzicht leest. Een
-  `refresh`-Signal (van de UI bij laden én van `pollInbox` op de
-  heartbeat-cadans) drijft de `refreshInbox`-Activity, die de inbox fetcht en in
-  de **`inbox`-module** (read-model) schrijft. `EnsureInbox` start/hergebruikt één
-  Execution per repo en doet een synchrone eerste refresh bij startup. Zie
-  `.claude/rules/pages-and-routing.md` (sectie "PR-inbox").
-- **Opslag:** de tembed-engine gebruikt `MultiStore(SQLite data/workflows.db,
-  JSONL data/workflows/)` — comments leven dus zowel in de workflow-history als in
-  **jsonl-bestanden**. Daarnaast houdt de comments-module zijn eigen read-model.
+  **Ingest refresh (automatically pulling in new commits):** `pr_status`
+  originally only drove merge/closed detection; since the ingest refresh
+  it also uses the same `state`-Signal loop to incrementally process
+  **new commits on the PR**, so a reviewer doesn't have to manually run
+  `POST /api/ingest` after every push. `PRStateSignal` therefore carries,
+  besides `State`, also `BaseSHA`/`HeadSHA` (just like
+  `ReactionSignal.Action` / `ApprovalSignal.Viewed`, both variants ride on
+  **the same** Signal — a workflow can only `WaitSignal` on one Signal name
+  at a time): `State` set = a lifecycle observation (merged/closed,
+  unchanged behavior); `State` empty + `HeadSHA` set = an ingest-refresh
+  request.
+  - **`pollIngestRefresh`** (a new, separate poller loop, distinct from any
+    comment thread — mirrors `poll`/`pollInbox`, same heartbeat cadence:
+    fast `pollInterval` if a heartbeat came in within `heartbeatWindow`,
+    otherwise slow `idlePollInterval`) checks, on its cadence,
+    `fetchPRMeta`'s live `headRefOid` against the stored `pr_ingest` record
+    (see below). If it differs, it signals `PRStateSignal{BaseSHA,
+    HeadSHA}` to the `pr_status` tracker. **Important:** the per-
+    comment-thread heartbeat (`RelatedPanel.mjs`) only pings when a
+    task/thread is open; without an open thread this poller would always
+    stay on the slow cadence. That's why `home.mjs`
+    (`startPRStatusHeartbeat`) separately pings, every 60s, the
+    `pr_status` Run ID as long as the PR page is visible+focused — an
+    operational ping without state mutation, so outside the write
+    boundary, like the existing comment/inbox heartbeats.
+  - **`refreshIngestDelta` Activity** (`ingest.go`): diffs the **previously
+    stored** head SHA (from the new `pr_ingest` table, `db.go`) against the
+    **newly observed** head SHA (`changedFileNames`, a `git diff
+    --no-renames --name-only` — no full unified diff needed just to know
+    the file names) to determine **exactly** which files changed since the
+    previous ingest. Only those files get rescanned
+    (`diffBetweenSHAs` + `parseFiles`, scoped) and written via
+    **`upsertPRFileBlocks`**: a DELETE+INSERT that touches **only** the
+    blocks of those files (`DELETE FROM blocks WHERE pr=? AND file IN
+    (...)`) — every other file's own blocks (and thus everything hanging
+    off their block id: comments/approvals/callresolve, in separate SQLite
+    files with no FK) stay completely untouched. **`--no-renames` is
+    load-bearing:** modern git detects renames by default for `git diff`,
+    and with rename detection on, `--name-only` for a renamed file shows
+    **only the new path** — the old path then drops entirely out of the
+    delta, and `upsertPRFileBlocks` can never apply its `DELETE … WHERE
+    file IN (...)` to that old path. Without `--no-renames` the blocks of
+    the old path would thus stay permanently as orphan rows in the DB
+    (seen in practice: an SDK that got renamed halfway through a PR from
+    `Snapshots` to `Resources` never made the old `Snapshot*` blocks
+    disappear). With `--no-renames`, `--name-only` yields **both** paths
+    for a rename (old as removed, new as added), so the DELETE cleanly
+    cleans up the old path — exactly like any other real removal. The head
+    worktree is updated **in place** (`updateWorktree`: `git checkout
+    --detach <sha>` inside the existing worktree directory, falls back to
+    the existing hard-rebuild `ensureWorktree` if that fails) instead of
+    the previous remove+recreate — which was fine for a manual, occasional
+    ingest but too heavy for a cadence that can fire every minute.
+    **Base SHA changed** (e.g. a rebase onto a newer `develop`) makes an
+    incremental diff against the old base unsafe; then the Activity falls
+    back to the **full** existing ingest pipeline (`prepareIngestWorktrees`
+    + `scanAndStoreIngestBlocks`, exactly the same full swap as a manual
+    `POST /api/ingest`) — `ingestResult.FullFallback` marks that in the
+    workflow history.
+  - **`pr_ingest` table** (`db.go`, `schemaDDL`): `pr → base_sha, head_sha`,
+    updated by **both** a full ingest (`scanAndStoreIngestBlocks`) and a
+    delta refresh, so the poller always knows where the next refresh
+    should diff from. Empty (no row) means "never ingested" — the
+    poller/Activity then do nothing (a refresh requires a prior full
+    ingest).
+  - **Relations/callresolve keep being recomputed "in full", not delta-scoped:**
+    after a successful (non-`Skipped`) refresh, `prStatusWorkflow` simply
+    calls the existing `buildRelations` Activity (the same Activity that
+    `build_relations` also uses) — over the PR's **full current** block
+    list (`blocksByPR`, a DB read, no re-parse). Deliberate choice: the
+    cost of `buildRelations`/`resolveCalls` already scales with PR size
+    (not repo size), and `resolveCalls` builds a whole-worktree symbol
+    index anyway regardless of how many blocks you feed it — so
+    delta-scoping *which* blocks barely saves anything, while a relation
+    between two separate, unrelated files (`event_listener`: dispatcher in
+    file A, listener handle in file B) gives a partial keep-set an actual
+    risk of stale/vanished relations. With the **full** block list as the
+    keep-set, `relations.Replace`/`callresolve.Prune`/`UpsertGo` can never
+    prune a valid row of an unchanged file, and `UpsertGo` never touches a
+    `searching`/`found` row (LLM-owned) anyway.
+- **`pr_inbox` workflow (per repo):** a third Workflow Type that owns the PR
+  inbox — it's the **only one** that reads GitHub for the overview. A
+  `refresh` Signal (from the UI on load and from `pollInbox` on the
+  heartbeat cadence) drives the `refreshInbox` Activity, which fetches the
+  inbox and writes it into the **`inbox` module** (read model).
+  `EnsureInbox` starts/reuses one Execution per repo and does a synchronous
+  first refresh at startup. See `.claude/rules/pages-and-routing.md`
+  (section "PR inbox").
+- **Storage:** the tembed engine uses `MultiStore(SQLite data/workflows.db,
+  JSONL data/workflows/)` — comments thus live both in the workflow
+  history and in **jsonl files**. The comments module also keeps its own
+  read model on top of that.
 - **Endpoints** (`tasks_api.go`): `POST /api/workflows/task_code_comment` (start),
-  `GET` (lijst), `POST /api/workflows/{runID}/signals/reply` (UI-reactie),
-  `POST /api/workflows/{runID}/heartbeat` (UI-heartbeat, geen state-write),
-  `GET /api/workflows/{runID}` (status), en read-only `GET /api/comments?pr=N`
-  (of `?path=<prefix>` voor de hiërarchische prefix-zoek over de comment-paden).
-  Read-only `GET /api/workflows?pr=N` (let op: **zonder** trailing slash, dus een
-  ander pattern dan `/api/workflows/`) geeft `{ok,runs:[...]}` — élke workflow-run
-  van die PR (`RunsForPR` in `tasks_api.go` filtert `engine.Runs()` op het
-  `pr`-veld in elke run's opgeslagen input, dus `pr_inbox` — per-repo, geen
-  `pr`-veld — valt er vanzelf uit), nieuwste `updatedAt` eerst. Elke
-  `task_code_comment`-run draagt daarnaast een genest, optioneel `comment`-veld
-  (`WorkflowRunView.Comment`, een `*CommentRef`): `RunsForPR` parseert de run's
-  eigen (immutable) `Input` nogmaals als `CodeCommentInput` en vult
+  `GET` (list), `POST /api/workflows/{runID}/signals/reply` (UI reaction),
+  `POST /api/workflows/{runID}/heartbeat` (UI heartbeat, no state write),
+  `GET /api/workflows/{runID}` (status), and read-only `GET /api/comments?pr=N`
+  (or `?path=<prefix>` for the hierarchical prefix search over comment
+  paths). Read-only `GET /api/workflows?pr=N` (note: **without** a trailing
+  slash, so a different pattern than `/api/workflows/`) gives
+  `{ok,runs:[...]}` — **every** workflow run for that PR (`RunsForPR` in
+  `tasks_api.go` filters `engine.Runs()` on the `pr` field in each run's
+  stored input, so `pr_inbox` — per-repo, no `pr` field — naturally falls
+  out), newest `updatedAt` first. Every `task_code_comment` run also
+  carries a nested, optional `comment` field (`WorkflowRunView.Comment`, a
+  `*CommentRef`): `RunsForPR` parses the run's own (immutable) `Input`
+  again as `CodeCommentInput` and fills in
   `{file,label,gran,line,rowStart,rowEnd,snippet}` — `snippet` is `Body`
-  afgekapt op een woordgrens (`commentSnippet`, ~60 tekens + `…`). `RunID` (==
-  de comment's id, zie boven) staat al op de buitenste view. Voedt de
-  "Taken"-kolom (`workflows-panel`, onderdeel van `CommentsSidebar` in
-  `RelatedPanel.mjs`), zie `.claude/rules/detail-layout.md`: de omschrijving
-  per rij en de klik-door-naar-de-comment (`openTask` in `home.mjs`) leunen op
-  dit veld.
-  Voor de PR-metadata: `POST /api/workflows/pr_status {pr}` (ensure de tracker,
-  die synchroon de drie stages draait) + read-only `GET /api/pr?pr=N` (leest
-  het `prmeta`-read-model: `{ok,pr,title,url,updatedAt,body,author,additions,
-  deletions,changedFiles,headRef,summary,jiraKey,jiraTitle,jiraDesc,jiraUrl,
-  reviewDecision,checksTotal,checksPassed,reviewers}`; `{ok:false}` zolang nog
-  niets gefetcht is, en een veld van een nog niet-gedraaide stage staat gewoon
-  op zijn zero-value). Voor de inbox: `POST /api/workflows/{runID}/signals/refresh` +
-  read-only `GET /api/inbox` (leest het `inbox`-read-model).
-  Bootstrap + recovery + hervatten van pollers + `EnsureInbox`:
-  `newTasks(ctx, db, dataDir, repo)` in `tasks_api.go`, aangeroepen in `runServe`.
-- **Nieuwe workflow of module toevoegen:** skills `add-workflow` / `add-module`
+  truncated at a word boundary (`commentSnippet`, ~60 characters + `…`).
+  `RunID` (== the comment's id, see above) is already on the outer view.
+  Feeds the "Tasks" column (`workflows-panel`, part of `CommentsSidebar`
+  in `RelatedPanel.mjs`), see `.claude/rules/detail-layout.md`: the
+  per-row description and the click-through-to-the-comment (`openTask` in
+  `home.mjs`) rely on this field.
+  For PR metadata: `POST /api/workflows/pr_status {pr}` (ensure the
+  tracker, which synchronously runs the three stages) + read-only
+  `GET /api/pr?pr=N` (reads the `prmeta` read model: `{ok,pr,title,url,
+  updatedAt,body,author,additions,deletions,changedFiles,headRef,summary,
+  jiraKey,jiraTitle,jiraDesc,jiraUrl,reviewDecision,checksTotal,
+  checksPassed,reviewers}`; `{ok:false}` as long as nothing has been
+  fetched yet, and a field of a not-yet-run stage is simply at its
+  zero-value). For the inbox: `POST /api/workflows/{runID}/signals/refresh`
+  + read-only `GET /api/inbox` (reads the `inbox` read model).
+  Bootstrap + recovery + resuming pollers + `EnsureInbox`:
+  `newTasks(ctx, db, dataDir, repo)` in `tasks_api.go`, called from
+  `runServe`.
+- **Adding a new workflow or module:** skills `add-workflow` / `add-module`
   (+ templates `.claude/templates/workflow.go` / `module.go`).
-- Tests: `workflows_test.go` (UI-reactie + gh-poll→signal + resolve, een
-  restart-durability-test, `pr_status`-stop-bij-merge, heartbeat-houdt-snel,
-  `pr_status`-fetcht-PR-meta, plus `pr_inbox`-refresh-vult-read-model);
-  `tests/pr-menu.spec.mjs` (Playwright: het `/`-menu en zijn submenu's); modules
-  zijn puur en los testbaar.
+- Tests: `workflows_test.go` (UI reaction + gh-poll→signal + resolve, a
+  restart durability test, `pr_status`-stops-on-merge, heartbeat-keeps-fast,
+  `pr_status`-fetches-PR-meta, plus `pr_inbox`-refresh-fills-read-model);
+  `tests/pr-menu.spec.mjs` (Playwright: the `/` menu and its submenus);
+  modules are pure and independently testable.
 
-## Bestaande GitHub-comments importeren (levende threads)
+## Importing existing GitHub comments (living threads)
 
-Comments die **buiten de app** op de PR zijn geplaatst (of vóór ingest) staan
-niet vanzelf in het `comments`-read-model — de app kende alleen comments die het
-zélf via `task_code_comment` plaatste. De import haalt ze binnen en maakt er
-**volwaardige, levende threads** van (reageren spiegelt naar GitHub, GitHub-
-replies worden binnengepolld), i.p.v. read-only kopieën.
+Comments placed **outside the app** on the PR (or before ingest) don't
+automatically show up in the `comments` read model — the app only knew
+about comments it placed itself via `task_code_comment`. The import pulls
+them in and turns them into **full, living threads** (replying mirrors to
+GitHub, GitHub replies get polled in), instead of read-only copies.
 
-- **Fetch (`modules/github`):** `FetchReviewComments(pr)` geeft de **thread-roots**
-  van de diff-review-comments (`in_reply_to_id == 0`, gepagineerd via
-  `apiPaginate`); `FetchGeneralComments(pr)` geeft de **PR-brede** comments zonder
-  file:line — de issue-conversatie (`issues/{pr}/comments`) én de niet-lege
-  bodies van ingediende reviews (`pulls/{pr}/reviews`, `Kind` `issue` resp.
-  `review_summary`). Replies op een geïmporteerde root komen daarna via het
-  bestaande `FetchReplies`-pad binnen. `github.Fake` heeft
-  `SetReviewComments`/`SetGeneralComments` voor tests.
-- **Mapping (`comment_import.go`, package main — leest de head/base-worktree, dus
-  een read-only side-effect zoals `blockstats.go`/`/api/code`):**
-  `mapReviewComment(dataDir, pr, blocks, gc)` mapt een review-comment's
-  `file:line(+side)` naar een block + **aligned-row-anker** in **exact dezelfde**
-  index-ruimte als approvals/app-comments (`dedent4` → `alignRows` +
-  `rowForLine`, dat de source-regel op de gekozen kant naar zijn rij-index telt
-  vanaf de block-`Start`). Vindt hij het block + de rij → een gewone
-  block-gescopete regel-comment (`Kind ""`); vindt hij het block maar niet de
-  exacte rij → `RowStart -1` (overal binnen het block getoond, de bestaande
-  "onbekend anker"-conventie); vindt hij géén block → **PR-breed** (`Kind
-  "review"`, leeg `Label`). `mapGeneralComment` maakt altijd een ankerloze
-  PR-brede input (`Kind` `issue`/`review_summary`). Alle drie dragen
-  `ImportedRootID`/`Source "github"`/`Author`/`CreatedAt` (de originele
-  GitHub-timestamp) mee. LEFT-side (verwijderde regel) comments matchen het block
-  via zijn **oude** source-range (base-worktree), want de opgeslagen
-  `Line`/`EndLine` zijn head-coördinaten.
-- **Workflow-tak (`taskCodeCommentWorkflow`):** `CodeCommentInput` kreeg
-  `ImportedRootID`/`Source`/`Kind`/`CreatedAt`. De posting-keuze is input-gedreven
-  (dus replay-deterministisch) in drie gevallen: **geïmporteerd**
-  (`ImportedRootID != 0`) → **sla `postGithubComment` over** maar zet
-  `posted.RootID = in.ImportedRootID` (de comment bestáát al op GitHub — nooit
-  her-posten), zodat de reply-poller draait en UI-replies wél naar de echte
-  thread spiegelen; **local** (privé-notitie) → `RootID 0`, alle GitHub-calls
-  no-op; **normaal** → posten + `RootID` vastleggen. `saveComment` bewaart
-  `Source`/`Kind`/`CreatedAt`.
-- **Reply-lus per thread-soort (`isPRWide(kind)` = `issue`/`review_summary`/
-  `review`):** echo-preventie ongewijzigd (alleen `Source == "ui"` mirror't naar
-  GitHub, `github`-sourced replies niet), maar het **mirror-pad** hangt af van de
-  thread:
-  - **Review-diff thread** (`Kind ""`): een **echte** reply-body mirror't als
-    **review-reply** (`replyGithub` → `pulls/{pr}/comments/{rootId}/replies`). Een
-    **resolve** (`Done`) resolvet de conversatie **op GitHub** (Activity
-    `resolveGithubThread` → `github.Client.ResolveReviewThread`, dat via
-    `gh api graphql` het review-thread-node-ID opzoekt op basis van de
-    root-comment-`databaseId` en de `resolveReviewThread`-mutatie draait). De
-    **`"/resolve"`-sentinel-body** (gestuurd door een kale resolve, zie
-    `resolveFocusedComment`/`sendReaction` in `RelatedPanel.mjs` en het
-    `COMMENT_COMMANDS`-"Resolve comment"-item) wordt **nooit** als tekst gepost —
-    de reply-lus post alleen een niet-lege, niet-sentinel body
-    (`body != "" && body != "/resolve"`), en resolvet daarna (als `Done`) de
-    thread. Determinisme blijft intact: het aantal `ExecuteActivity`-calls hangt
-    puur van de Signal-input (`r.Body`/`r.Done`) af.
-  - **PR-brede thread** (`isPRWide`): PR-brede comments (issue-comments/review-
-    summary's) hebben op GitHub **geen reply-thread** — een reply wordt daarom
-    gemirror'd als een **nieuwe issue-comment** op de platte PR-conversatie
+- **Fetch (`modules/github`):** `FetchReviewComments(pr)` returns the
+  **thread roots** of the diff review comments (`in_reply_to_id == 0`,
+  paginated via `apiPaginate`); `FetchGeneralComments(pr)` returns the
+  **PR-wide** comments without a file:line — the issue conversation
+  (`issues/{pr}/comments`) and the non-empty bodies of submitted reviews
+  (`pulls/{pr}/reviews`, `Kind` `issue` resp. `review_summary`). Replies to
+  an imported root then come in via the existing `FetchReplies` path.
+  `github.Fake` has `SetReviewComments`/`SetGeneralComments` for tests.
+- **Mapping (`comment_import.go`, package main — reads the head/base
+  worktree, so a read-only side effect like `blockstats.go`/`/api/code`):**
+  `mapReviewComment(dataDir, pr, blocks, gc)` maps a review comment's
+  `file:line(+side)` to a block + **aligned-row anchor** in **exactly the
+  same** index space as approvals/app comments (`dedent4` → `alignRows` +
+  `rowForLine`, which counts the source line on the chosen side to its row
+  index from the block's `Start`). If it finds the block + the row → a
+  normal block-scoped line comment (`Kind ""`); if it finds the block but
+  not the exact row → `RowStart -1` (shown anywhere within the block, the
+  existing "unknown anchor" convention); if it finds **no** block →
+  **PR-wide** (`Kind "review"`, empty `Label`). `mapGeneralComment` always
+  produces an anchorless PR-wide input (`Kind` `issue`/`review_summary`).
+  All three carry `ImportedRootID`/`Source "github"`/`Author`/`CreatedAt`
+  (the original GitHub timestamp). LEFT-side (removed line) comments match
+  the block via its **old** source range (base worktree), since the stored
+  `Line`/`EndLine` are head coordinates.
+- **Workflow branch (`taskCodeCommentWorkflow`):** `CodeCommentInput` got
+  `ImportedRootID`/`Source`/`Kind`/`CreatedAt`. The posting choice is
+  input-driven (so replay-deterministic) in three cases: **imported**
+  (`ImportedRootID != 0`) → **skip `postGithubComment`** but set
+  `posted.RootID = in.ImportedRootID` (the comment already exists on
+  GitHub — never re-post), so the reply poller runs and UI replies do
+  mirror to the real thread; **local** (private note) → `RootID 0`, all
+  GitHub calls no-op; **normal** → post + record `RootID`. `saveComment`
+  stores `Source`/`Kind`/`CreatedAt`.
+- **Reply loop per thread kind (`isPRWide(kind)` = `issue`/`review_summary`/
+  `review`):** echo prevention unchanged (only `Source == "ui"` mirrors to
+  GitHub, `github`-sourced replies don't), but the **mirror path** depends
+  on the thread:
+  - **Review-diff thread** (`Kind ""`): a **real** reply body mirrors as a
+    **review reply** (`replyGithub` → `pulls/{pr}/comments/{rootId}/replies`). A
+    **resolve** (`Done`) resolves the conversation **on GitHub** (Activity
+    `resolveGithubThread` → `github.Client.ResolveReviewThread`, which uses
+    `gh api graphql` to look up the review thread node ID from the
+    root comment's `databaseId` and runs the `resolveReviewThread`
+    mutation). The **`"/resolve"` sentinel body** (sent by a bare resolve,
+    see `resolveFocusedComment`/`sendReaction` in `RelatedPanel.mjs` and
+    the `COMMENT_COMMANDS` "Resolve comment" item) is **never** posted as
+    text — the reply loop only posts a non-empty, non-sentinel body
+    (`body != "" && body != "/resolve"`), and then (if `Done`) resolves the
+    thread. Determinism stays intact: the number of `ExecuteActivity` calls
+    depends purely on the Signal input (`r.Body`/`r.Done`).
+  - **PR-wide thread** (`isPRWide`): PR-wide comments (issue comments/review
+    summaries) have **no reply thread** on GitHub — a reply is therefore
+    mirrored as a **new issue comment** on the flat PR conversation
     (`postGithubIssueComment` → `github.PostIssueComment` →
-    `issues/{pr}/comments`). Die Activity retourneert de nieuwe comment-id als
-    `postResult` zodat 'ie in de history staat (voor de dedup hieronder). Een
-    **resolve** (`Done`) op een PR-brede thread is **alleen lokaal**: GitHub heeft
-    er geen concept voor, dus de workflow raakt GitHub niet aan (`if !r.Done`) —
-    `saveReaction` zet enkel de read-model-status op `resolved`.
-- **Dedup tegen de app z'n eigen comments (`knownGithubIDs`):** `importPRComments`
-  haalt álle GitHub-comment-roots op — óók degene die de app zélf plaatste (een
-  app-review-comment, of een PR-brede reply die als issue-comment werd gepost).
-  Zonder dedup zou dat een duplicaat maken (de app-run heeft géén `gh-<id>` Run
-  ID, dus `StartWorkflowID`-idempotentie vangt 'm niet). `knownGithubIDs(pr)`
-  scant daarom alle `task_code_comment`-runs van de PR en verzamelt hun bekende
-  GitHub-id's — `input.ImportedRootID` + elke `postGithubComment`/
-  `postGithubIssueComment`-result uit de history — en `importPRComments` slaat een
-  comment met een bekend id over. Alles durable (history/input), dus
-  herstart-veilig. O(runs), zelfde schaal als `ResumePolling`.
-- **Importer-glue + poller (`workflows.go`, cadans meeliftend op `pr_status`):**
-  `importPRComments(ctx, pr)` leest de blocks (DB), fetcht review + general
-  comments (reads-in-glue, zoals `poll`/`pollInbox`), mapt ze, en start per
-  comment een Execution met `StartWorkflowID("gh-<id>", …)` — de **enige write**,
-  idempotent gemaakt door de deterministische Run ID. `pollImportComments(ctx,
-  prRunID, pr)` draait één import meteen en daarna op de heartbeat-cadans
-  (spiegel van `pollIngestRefresh`: snel binnen `heartbeatWindow`, anders traag),
-  en stopt zodra de `pr_status`-tracker klaar is (merged/closed). Gestart naast
-  `pollIngestRefresh` in `ensurePRStatus` (nieuwe tracker) en `ResumePRStatusPolling`
-  (na herstart). Voor elke geïmporteerde **review-diff** thread (niet PR-breed)
-  start het de per-thread reply-`poll`; een in-memory `importPolled`-set (dedup,
-  operationeel — reconstrueerd door `ResumePolling` na herstart) voorkomt een
-  tweede poller per run bij een volgende import-tick.
-- **Herstart (`ResumePolling`):** de root-ID van een geïmporteerde thread leeft in
-  de **input** (`ImportedRootID`), niet in een `postGithubComment`-history-event
-  (dat is er niet), dus `ResumePolling` leest 'm daaruit en markeert de run in
-  `importPolled`.
-- **Kanttekening — reply-dedup leunt op de DB, niet op de poller-`seen`-map:**
-  de per-poller `seen[replyID]`-map (in `poll`) is een snelheids-cache die bij
-  herstart leeg begint; dat is veilig omdat `comments.AddReaction`
-  **`INSERT OR IGNORE`** op de reactie-id (`gh-<id>`) doet en de count alleen bij
-  een echt nieuwe rij ophoogt ("already recorded — no double count"). Herstart
-  → poller her-signalt alle replies → geen dubbeltelling. Ditzelfde contract
-  maakt de `StartWorkflowID`-dedup en de `seen`-reset samen herstart-veilig; hou
-  het intact.
-- **Read-model & frontend:** `comments.Comment` kreeg `Source` (`ui`/`github`) +
-  `Kind` kolommen (lichte `migrate`, `ALTER TABLE … ADD COLUMN`). `GET
-  /api/comments?pr=N` serveert de geïmporteerde comments automatisch — geen nieuw
-  endpoint. De frontend badge't `source: github` en toont de PR-brede comments
-  (`Kind != ""`) in een eigen blok onder de PR-info-kolom (zie
-  `.claude/rules/detail-layout.md`), los van de block-gescopete comments-sidebar.
-- Tests: `comment_import_test.go` (mapping-anker + PR-wide-degradatie + general;
-  `importPRComments` vult read-model met `source github`, **her-post nooit**, en
-  is idempotent bij her-import; een geïmporteerde thread spiegelt een UI-reply en
-  echoot een GitHub-reply niet; herstart hervat de poller via de input-root-ID),
-  `modules/comments/comments_test.go` (`Source`/`Kind` round-trip),
-  `tembed/engine_test.go` (`StartWorkflowID`-idempotentie).
+    `issues/{pr}/comments`). That Activity returns the new comment id as
+    `postResult` so it ends up in the history (for the dedup below). A
+    **resolve** (`Done`) on a PR-wide thread is **local only**: GitHub has
+    no concept for it, so the workflow never touches GitHub (`if !r.Done`)
+    — `saveReaction` just sets the read-model status to `resolved`.
+- **Dedup against the app's own comments (`knownGithubIDs`):** `importPRComments`
+  fetches **all** GitHub comment roots — **including** the ones the app
+  itself placed (an app review comment, or a PR-wide reply that was posted
+  as an issue comment). Without dedup that would create a duplicate (the
+  app run has no `gh-<id>` Run ID, so `StartWorkflowID` idempotency doesn't
+  catch it). `knownGithubIDs(pr)` therefore scans all `task_code_comment`
+  runs of the PR and collects their known GitHub ids — `input.ImportedRootID`
+  + every `postGithubComment`/`postGithubIssueComment` result from the
+  history — and `importPRComments` skips a comment with a known id.
+  Everything durable (history/input), so restart-safe. O(runs), same scale
+  as `ResumePolling`.
+- **Importer glue + poller (`workflows.go`, cadence piggybacking on `pr_status`):**
+  `importPRComments(ctx, pr)` reads the blocks (DB), fetches review +
+  general comments (reads-in-glue, like `poll`/`pollInbox`), maps them, and
+  starts one Execution per comment with `StartWorkflowID("gh-<id>", …)` —
+  the **only write**, made idempotent by the deterministic Run ID.
+  `pollImportComments(ctx, prRunID, pr)` runs one import immediately and
+  then on the heartbeat cadence (mirror of `pollIngestRefresh`: fast
+  within `heartbeatWindow`, otherwise slow), and stops once the
+  `pr_status` tracker is done (merged/closed). Started alongside
+  `pollIngestRefresh` in `ensurePRStatus` (new tracker) and
+  `ResumePRStatusPolling` (after a restart). For each imported
+  **review-diff** thread (not PR-wide) it starts the per-thread reply
+  `poll`; an in-memory `importPolled` set (dedup, operational —
+  reconstructed by `ResumePolling` after a restart) prevents a second
+  poller per run on a subsequent import tick.
+- **Restart (`ResumePolling`):** the root ID of an imported thread lives in
+  the **input** (`ImportedRootID`), not in a `postGithubComment` history
+  event (there isn't one), so `ResumePolling` reads it from there and marks
+  the run in `importPolled`.
+- **Note — reply dedup relies on the DB, not on the poller's `seen` map:**
+  the per-poller `seen[replyID]` map (in `poll`) is a speed cache that
+  starts empty on restart; that's safe because `comments.AddReaction` does
+  an **`INSERT OR IGNORE`** on the reaction id (`gh-<id>`) and only bumps
+  the count for a genuinely new row ("already recorded — no double
+  count"). Restart → poller re-signals all replies → no double counting.
+  This same contract makes the `StartWorkflowID` dedup and the `seen`
+  reset together restart-safe; keep it intact.
+- **Read model & frontend:** `comments.Comment` got `Source` (`ui`/`github`)
+  + `Kind` columns (light `migrate`, `ALTER TABLE … ADD COLUMN`). `GET
+  /api/comments?pr=N` serves the imported comments automatically — no new
+  endpoint. The frontend badges `source: github` and shows the PR-wide
+  comments (`Kind != ""`) in their own block under the PR-info column (see
+  `.claude/rules/detail-layout.md`), separate from the block-scoped
+  comments sidebar.
+- Tests: `comment_import_test.go` (mapping anchor + PR-wide degradation +
+  general; `importPRComments` fills the read model with `source github`,
+  **never re-posts**, and is idempotent on re-import; an imported thread
+  mirrors a UI reply and doesn't echo a GitHub reply; a restart resumes the
+  poller via the input root ID), `modules/comments/comments_test.go`
+  (`Source`/`Kind` round-trip), `tembed/engine_test.go` (`StartWorkflowID`
+  idempotency).
 
-## Relaties tussen blokken (`build_relations` + `modules/relations`)
+## Relations between blocks (`build_relations` + `modules/relations`)
 
-Een vierde Workflow Type, **`build_relations`** (één Execution per PR), leidt
-**many-to-many relaties** tussen blokken af — de call-graph-edges, maar
-betekenis-gedreven i.p.v. tekstueel. De eerste relatie-`kind`:
-**`event_listener`** — een gewijzigd blok dat een event dispatcht wordt de
-**parent** van de `Listener::handle` voor dat event, **mits die handle óók in
-deze PR gewijzigd is** (beide kanten moeten wijzigen om te koppelen).
+A fourth Workflow Type, **`build_relations`** (one Execution per PR),
+derives **many-to-many relations** between blocks — the call-graph edges,
+but meaning-driven instead of textual. The first relation `kind`:
+**`event_listener`** — a changed block that dispatches an event becomes the
+**parent** of the `Listener::handle` for that event, **provided that handle
+is itself also changed** in this PR (both sides must change for a link).
 
-- **`modules/relations`** (`data/relations.db`): het read-model,
-  `relations(pr, parent_id, child_id, kind, line)` (block-id =
-  `<pr>:<file>:<symbol>`). `line` is de **absolute broncoderegel, binnen de
-  parent's eigen tekst**, waar de detector de trigger van deze relatie vond
-  (een dispatch-call, een route-actie, een type-hinted param, …) — de
-  frontend gebruikt 'm om het Onderliggende-code-paneel te herordenen op de
-  door de reviewer geselecteerde `group`-unit (zie `groupLineRange`/
-  `relatedChildren` in `home.mjs`, en de "Onderliggende code"-sectie in
-  `.claude/rules/detail-layout.md`); `0` voor een rij van vóór dit veld (een
-  oude rij die pas bij de volgende rebuild een echte waarde krijgt). Write
-  `Replace(pr, rels)` (workflow-only, full-swap per PR → replay-safe), read
-  `List(pr)`. `kind` houdt de tabel open voor latere relatietypes. Een lichte
-  `migrate` voegt `line` toe aan een bestaande DB (`ALTER TABLE … ADD COLUMN`,
-  dubbele-kolom-fout genegeerd — hetzelfde patroon als de comments-module).
-- **Analyse-service `relations.go`** (package main, géén module — leest de
-  head-worktree = side-effect): `buildRelations(dataDir, pr, blocks)` draait een
-  lijst **detectors** (nu `eventListenerDetector` + `providerListenerDetector` +
-  de vijf Laravel-detectors hieronder). De event→listener-map komt
-  robuust uit drie bronnen (union): de `handle(EventType $e)`-type-hint, het
-  `$listen`-array in een `*ServiceProvider.php`, en `Event::listen(...)`-calls;
-  dispatch-sites worden per blok-body gescand (`event(new X`, `X::dispatch(`, …).
-  Herbruikt `extractBlockSource` (code.go) om block-bodies te lezen.
-  `blockText(headDir, b)` geeft niet meer alleen tekst terug maar de volledige
-  `codeSide` (tekst + de absolute startregel `Start` van een **verse** scan —
-  niet b's eigen, mogelijk verouderde `Line`-veld): elke detector converteert
-  de byte-offset van zijn regex-match binnen die tekst naar een absolute
-  bestandsregel via **`matchLine(text, match, fromLine)`** (telt de `\n`'s tot
-  de eerste occurrence van de matched tekst) en geeft die mee aan `emit`/de
-  relation zelf. Puur additief — geen detector-gedrag gewijzigd, alleen een
-  extra regel-anker vastgelegd; `TestBuildRelationsLaravelChainCapturesLine`
-  (`relations_test.go`) verifieert 'm tegen een onafhankelijke scan van de
-  fixture-broncode.
-  **`providerListenerDetector` is het spiegelbeeld van `eventListenerDetector`:**
-  die laatste vindt de parent uitsluitend via een **dispatch-site** in een
-  gewijzigd blok (`event(new X`, `X::dispatch(`, …) — een `*ServiceProvider`
-  die alleen registreert (nooit zelf dispatcht) leverde dus nooit een parent
-  op, ook niet als zijn eigen `$listen`-registratie voor een gewijzigde
-  listener in de PR wijzigde (bv. een nieuwe `OrderCreated::class =>
-  [SyncOrderFlow::class]`-regel). `providerListenerDetector` dekt precies dat
-  geval: voor elk gewijzigd `<class-header>`-blok (`classHeaderSentinel`,
-  zie `blocks-and-ingest.md`) van een `*ServiceProvider.php`-bestand scant hij
-  **zijn eigen** blok-tekst (niet de repo-brede `providerEventMap`-file-scan)
-  met dezelfde `reListenBlock`/`reListenEntry`-regexes, en voor elke
-  `Listener::class`-entry die zelf een gewijzigd `handle()`-blok is
-  (`changedListenerHandles`, geëxtraheerd uit `eventListenerDetector` zodat
-  beide detectors 'm delen), wordt de **ServiceProvider zelf** de parent
-  (`relations.KindEventListener` — geen nieuw kind, de child ís nog steeds
-  "de listener", ongeacht of de parent 'm dispatcht of registreert). Nog
-  steeds both-changed: geen edge als de listener niet zelf een gewijzigd blok
-  is. Tests: `TestBuildRelationsProviderListener`/
+- **`modules/relations`** (`data/relations.db`): the read model,
+  `relations(pr, parent_id, child_id, kind, line)` (block id =
+  `<pr>:<file>:<symbol>`). `line` is the **absolute source line, within the
+  parent's own text**, where the detector found the trigger for this
+  relation (a dispatch call, a route action, a type-hinted param, …) — the
+  frontend uses it to reorder the Underlying Code panel around the
+  `group` unit the reviewer selected (see `groupLineRange`/
+  `relatedChildren` in `home.mjs`, and the "Underlying code" section in
+  `.claude/rules/detail-layout.md`); `0` for a row from before this field
+  existed (an old row that only gets a real value at the next rebuild).
+  Write `Replace(pr, rels)` (workflow-only, full swap per PR → replay-safe),
+  read `List(pr)`. `kind` keeps the table open for later relation types. A
+  light `migrate` adds `line` to an existing DB (`ALTER TABLE … ADD
+  COLUMN`, duplicate-column error ignored — the same pattern as the
+  comments module).
+- **Analysis service `relations.go`** (package main, not a module — reads
+  the head worktree = side effect): `buildRelations(dataDir, pr, blocks)`
+  runs a list of **detectors** (now `eventListenerDetector` +
+  `providerListenerDetector` + the five Laravel detectors below). The
+  event→listener map robustly comes from three sources (union): the
+  `handle(EventType $e)` type hint, the `$listen` array in a
+  `*ServiceProvider.php`, and `Event::listen(...)` calls; dispatch sites
+  are scanned per block body (`event(new X`, `X::dispatch(`, …). Reuses
+  `extractBlockSource` (code.go) to read block bodies. `blockText(headDir,
+  b)` no longer returns just text but the full `codeSide` (text + the
+  absolute start line `Start` of a **fresh** scan — not `b`'s own,
+  possibly stale `Line` field): each detector converts the byte offset of
+  its regex match within that text to an absolute file line via
+  **`matchLine(text, match, fromLine)`** (counts the `\n`'s up to the
+  first occurrence of the matched text) and passes that along to
+  `emit`/the relation itself. Purely additive — no detector behavior
+  changed, just an extra line anchor recorded;
+  `TestBuildRelationsLaravelChainCapturesLine` (`relations_test.go`)
+  verifies it against an independent scan of the fixture source.
+  **`providerListenerDetector` is the mirror image of `eventListenerDetector`:**
+  the latter only finds the parent via a **dispatch site** in a changed
+  block (`event(new X`, `X::dispatch(`, …) — a `*ServiceProvider` that only
+  registers (never dispatches itself) thus never produced a parent, even
+  if its own `$listen` registration for a changed listener in the PR
+  changed (e.g. a new `OrderCreated::class => [SyncOrderFlow::class]`
+  line). `providerListenerDetector` covers exactly that case: for each
+  changed `<class-header>` block (`classHeaderSentinel`, see
+  `blocks-and-ingest.md`) of a `*ServiceProvider.php` file, it scans **its
+  own** block text (not the repo-wide `providerEventMap` file scan) with
+  the same `reListenBlock`/`reListenEntry` regexes, and for every
+  `Listener::class` entry that is itself a changed `handle()` block
+  (`changedListenerHandles`, extracted from `eventListenerDetector` so
+  both detectors share it), the **ServiceProvider itself** becomes the
+  parent (`relations.KindEventListener` — not a new kind, the child is
+  still "the listener", regardless of whether the parent dispatches or
+  registers it). Still both-changed: no edge if the listener isn't itself
+  a changed block. Tests: `TestBuildRelationsProviderListener`/
   `TestBuildRelationsProviderListenerBothSidesRequired` (`relations_test.go`).
-- **Laravel request-keten** — vijf extra **`kind`s**, allemaal **both-changed**
-  (net als `event_listener`: een edge verschijnt alléén als beide blokken in deze
-  PR wijzigen; ongewijzigde bestanden worden nooit als node geïnjecteerd, en het
-  hoogste níveau dát wél wijzigt wordt vanzelf de tree-root omdat `recomputeLeftList`
-  elke child uit de linkerlijst haalt). De head-worktree mag wél vrij gelezen
-  worden voor de mapping (zoals `providerEventMap` ongewijzigde ServiceProviders
-  leest). Middleware is **bewust buiten scope**. De detectors delen `blockIndex`
-  (changed new-side blocks per short class name), `blockText` (leest een blok-body;
-  voor de whole-file `ROUTE`-fallback het hele bestand) en `edgeEmitter` (dedup):
-  - **`route_controller`** (`routeControllerDetector`) — een gewijzigd route-bestand
-    (whole-file `ROUTE`-blok) → de gewijzigde controller-methodes die het aanroept:
-    array-callable `[X::class, 'm']`, string-callable `'Ns\X@m'` (namespace-prefix
-    genegeerd via `shortName`), en resource-routes `Route::(api)resource('p',
-    X::class|'X')` (ook de oude string-controller-vorm) → élke gewijzigde
-    CONTROLLER-methode van die class.
-  - **`controller_request`** (`controllerRequestDetector`) — een gewijzigde
-    controller-methode → het gewijzigde `XRequest`-blok uit een type-hinted
-    parameter (`\w+Request \$`) → alle gewijzigde REQUEST-methodes van die class.
-  - **`controller_resource`** (`controllerResourceDetector`) — controller-methode →
-    de gewijzigde API-Resource die hij bouwt/teruggeeft: `new XResource(`,
-    `XResource::make|collection(`, of het return-type `): XResource`.
-  - **`controller_model`** (`controllerModelDetector`) — controller-methode → het
-    gewijzigde route-model-bound `Model`-blok uit een type-hinted parameter
-    (`ProductGroup $productGroup`), gefilterd op MODEL-categorie zodat
-    Request/Resource/interfaces afvallen → **alle** gewijzigde methodes van die
-    model-class (afgesproken granulariteit: een model-param noemt een class, geen
-    method).
-  - **`request_policy`** (`requestPolicyDetector`) — een gewijzigde
-    `FormRequest::authorize` → de gewijzigde Policy-methode die hij checkt:
-    `->can('ability', XPolicy::class)` (en de array-vorm `[XPolicy::class, …]`),
-    waarbij de **ability** de policy-methode is (`can('show', …)` → `XPolicy::show`).
-    Een `Model::class`-ref resolvt naar zijn Policy via de `$policies`-map in een
-    `*ServiceProvider` (`policiesMap`), met de `{Model}Policy`-conventie als
-    fallback. `POLICY` is een nieuwe categorie (`classify.go`, `app/Policies/`);
-    `isPolicyBlock` valt terug op pad/`Policy`-suffix zodat een nog niet
-    her-geïngest blok ook matcht.
-- **Workflow** (`workflows.go`): `buildRelationsWorkflow` draait de
-  `buildRelations`-Activity één keer bij start (synchroon in `StartWorkflow`) en
-  opnieuw op elk **`rebuild`**-Signal. `EnsureRelations(ctx, pr)` (spiegelt
-  `ensurePRStatus`) start/hergebruikt één Execution per PR; **na een geslaagde
-  ingest** roept `handleIngest` (`api.go`) 'm aan.
-- **Endpoints:** read-only `GET /api/relations?pr=N` (leest het read-model);
-  `POST /api/workflows/{runID}/signals/rebuild`. Block-JSON draagt nu een
-  computed **`id`** (`model.go` `MarshalJSON`) zodat de frontend `parentId`/
-  `childId` aan blokken matcht.
-- **Frontend:** `home.mjs` laadt de relaties in `loadBlocks`, splitst
-  `state.blocks` (top-level = `allBlocks` minus children) van `state.allBlocks`;
-  de sidebar + navigatie draaien op `state.blocks`, children renderen in de
-  **Onderliggende code**-kaart (zie `.claude/rules/detail-layout.md`). `childrenOf`
-  draagt de relatie-`kind` per child mee (`{ block, kind }`, niet meer hardcoded
-  `event_listener`) zodat `relatedChildren` 'm doorgeeft en `KIND_LABEL`
-  (`RelatedPanel.mjs`) het juiste badge toont — het badge benoemt de **rol van de
-  child** gezien vanaf zijn parent (`route_controller`→"controller",
-  `controller_request`→"request", `controller_resource`→"resource",
-  `controller_model`→"model", `request_policy`→"policy"). De keten nest gratis via
-  drill (een child die zelf een PR-blok is krijgt zijn eigen Onderliggende-code-
-  paneel): route → controller → request/resource/model, en request → policy.
-- Tests: `relations_test.go` (event: detector met beide mapping-bronnen, de
-  beide-kanten-eis, module round-trip, en de workflow-end-to-end; Laravel:
-  `TestBuildRelationsLaravelChain` (alle vijf edges + de array-/string-/resource-
-  route-vormen), `TestBuildRelationsLaravelBothSidesRequired` (geen policy-blok →
-  geen `request_policy`; geen route-blok → geen `route_controller`, maar de
-  controller-downstream-edges vuren wél), en `TestBuildRelationsLaravelWorkflow`);
-  `tests/relations.spec.mjs` (Playwright: child weg uit de lijst, wél in het
-  paneel — geseed via `slash seed -relations`).
+- **Laravel request chain** — five extra **`kind`s**, all **both-changed**
+  (like `event_listener`: an edge only appears if both blocks change in
+  this PR; unchanged files are never injected as a node, and the
+  highest level that **does** change automatically becomes the tree root
+  since `recomputeLeftList` pulls each child out of the left-hand list).
+  The head worktree may be read freely for the mapping (like
+  `providerEventMap` reads unchanged ServiceProviders). Middleware is
+  **deliberately out of scope**. The detectors share `blockIndex`
+  (changed new-side blocks per short class name), `blockText` (reads a
+  block body; for the whole-file `ROUTE` fallback, the whole file) and
+  `edgeEmitter` (dedup):
+  - **`route_controller`** (`routeControllerDetector`) — a changed route file
+    (whole-file `ROUTE` block) → the changed controller methods it calls:
+    array-callable `[X::class, 'm']`, string-callable `'Ns\X@m'` (namespace
+    prefix ignored via `shortName`), and resource routes
+    `Route::(api)resource('p', X::class|'X')` (including the old string
+    controller form) → **every** changed CONTROLLER method of that class.
+  - **`controller_request`** (`controllerRequestDetector`) — a changed
+    controller method → the changed `XRequest` block from a type-hinted
+    parameter (`\w+Request \$`) → all changed REQUEST methods of that class.
+  - **`controller_resource`** (`controllerResourceDetector`) — controller
+    method → the changed API Resource it builds/returns: `new XResource(`,
+    `XResource::make|collection(`, or the return type `): XResource`.
+  - **`controller_model`** (`controllerModelDetector`) — controller method →
+    the changed route-model-bound `Model` block from a type-hinted
+    parameter (`ProductGroup $productGroup`), filtered on the MODEL
+    category so Request/Resource/interfaces drop out → **all** changed
+    methods of that model class (agreed granularity: a model param names a
+    class, not a method).
+  - **`request_policy`** (`requestPolicyDetector`) — a changed
+    `FormRequest::authorize` → the changed Policy method it checks:
+    `->can('ability', XPolicy::class)` (and the array form `[XPolicy::class,
+    …]`), where the **ability** is the Policy method (`can('show', …)` →
+    `XPolicy::show`). A `Model::class` ref resolves to its Policy via the
+    `$policies` map in a `*ServiceProvider` (`policiesMap`), with the
+    `{Model}Policy` convention as fallback. `POLICY` is a new category
+    (`classify.go`, `app/Policies/`); `isPolicyBlock` falls back to
+    path/`Policy` suffix so a not-yet-re-ingested block also matches.
+- **Workflow** (`workflows.go`): `buildRelationsWorkflow` runs the
+  `buildRelations` Activity once at start (synchronously in `StartWorkflow`)
+  and again on every **`rebuild`** Signal. `EnsureRelations(ctx, pr)`
+  (mirrors `ensurePRStatus`) starts/reuses one Execution per PR; **after a
+  successful ingest** `handleIngest` (`api.go`) calls it.
+- **Endpoints:** read-only `GET /api/relations?pr=N` (reads the read
+  model); `POST /api/workflows/{runID}/signals/rebuild`. Block JSON now
+  carries a computed **`id`** (`model.go` `MarshalJSON`) so the frontend
+  can match `parentId`/`childId` to blocks.
+- **Frontend:** `home.mjs` loads the relations in `loadBlocks`, splits
+  `state.blocks` (top-level = `allBlocks` minus children) from
+  `state.allBlocks`; the sidebar + navigation run on `state.blocks`,
+  children render in the **Underlying code** card (see
+  `.claude/rules/detail-layout.md`). `childrenOf` carries the relation
+  `kind` per child (`{ block, kind }`, no longer hardcoded to
+  `event_listener`) so `relatedChildren` passes it through and
+  `KIND_LABEL` (`RelatedPanel.mjs`) shows the right badge — the badge
+  names the **role of the child** as seen from its parent
+  (`route_controller`→"controller", `controller_request`→"request",
+  `controller_resource`→"resource", `controller_model`→"model",
+  `request_policy`→"policy"). The chain nests for free via drill (a
+  child that is itself a PR block gets its own Underlying Code panel):
+  route → controller → request/resource/model, and request → policy.
+- Tests: `relations_test.go` (event: detector with both mapping sources,
+  the both-sides requirement, module round-trip, and the workflow
+  end-to-end; Laravel: `TestBuildRelationsLaravelChain` (all five edges +
+  the array/string/resource route forms), `TestBuildRelationsLaravelBothSidesRequired`
+  (no policy block → no `request_policy`; no route block → no
+  `route_controller`, but the controller-downstream edges still fire), and
+  `TestBuildRelationsLaravelWorkflow`); `tests/relations.spec.mjs`
+  (Playwright: child out of the list, but in the panel — seeded via
+  `slash seed -relations`).
 
-## Aangeroepen (ook ongewijzigde) methodes resolven (`resolve_call` + `modules/callresolve` + `modules/claude`)
+## Resolving (also unchanged) called methods (`resolve_call` + `modules/callresolve` + `modules/claude`)
 
-Naast de betekenis-relaties koppelt de **Onderliggende code**-kaart ook de
-**methode-aanroepen** die een gewijzigd blok doet aan hun **definitie** — ook als
-die methode in een bestand staat dat de PR **niet** wijzigde (bv. `joinAddress`
-uit `->joinAddress('contract')`). Twee lagen: een Go-resolver eerst, een LLM als
-fallback.
+Besides the meaning-relations, the **Underlying code** card also links the
+**method calls** a changed block makes to their **definition** — even if
+that method is in a file the PR did **not** change (e.g. `joinAddress`
+from `->joinAddress('contract')`). Two layers: a Go resolver first, an LLM
+as fallback.
 
-- **Waarom een apart read-model, niet de `relations`-tabel:** deze children
-  wijzen naar ongewijzigde bestanden (hun block-id is dus géén PR-blok dat de
-  frontend kent), én `relations.Replace` doet een full-swap per PR — een dure
-  LLM-resolutie zou bij een rebuild verdwijnen. Daarom een eigen module.
-- **`modules/callresolve`** (`data/callresolve.db`): het read-model
-  `call_resolutions(pr, caller_id, call_key, status, child_*, model, confidence,
-  updated_at)`, PK `(pr, caller_id, call_key)`. `status`: `resolved` (Go),
-  `unresolved` (Go faalde → automatische LLM-search), `searching`/`found`/`notfound` (LLM).
-  De rij draagt de **volledige child-descriptor + de codetekst** (`child_code`),
-  dus de frontend rendert zonder losse code-fetch. Writes (workflow-only):
-  `UpsertGo` (schrijft Go-rijen, maar **overschrijft geen** `searching`/`found`
-  rij → LLM wint van een rebuild), `SaveSearching`, `Save`, en `Prune(pr, keep)`
-  (verwijdert elke rij waarvan het `(caller_id, call_key)`-pair niet in de
-  huidige Go-scan zit — de caller is uit de PR gevallen óf de call-site staat
-  niet meer op een gewijzigde regel; dit ruimt óók LLM-rijen op, want de
-  call-site is weg). Read: `List(pr)`. De `buildRelations`-Activity roept na
-  `UpsertGo` `Prune` aan met de zojuist gescande entries als keep-set.
-- **Analyse-service `callresolve_analysis.go`** (package main, géén module —
-  leest de head-worktree): `resolveCalls(dataDir, pr, blocks)` bouwt via
-  `buildSymbolIndex` één worktree-brede index (class→methods, method→blocks,
-  Eloquent scope-alias `scopeX→x`, enums) en scant elk gewijzigd new-side blok
-  met regexes (patroon van `dispatchedEvents`). **`idxSkipDirs` slaat alleen
-  echt vendored/gegenereerde mappen over** (`vendor`, `node_modules`, `.git`,
-  `storage`, `public`) — bewust **niet** `tests/`: een custom test-basisklasse
-  (`tests/TestCase.php`, `tests/HttpTestCase.php`) of een gedeelde trait is
-  net zo goed app-code, en stond eerder onterecht buiten de index. Zonder die
-  kandidaat kon de Go-resolver een aanroep van zo'n geërfde test-helper nooit
-  zelf pinnen (rule 1's `$this->m()`-check zoekt alleen op de eigen class, niet
-  door overerving heen) en escaleerde elke zo'n call onnodig helemaal naar de
-  dure agentische Sonnet-pass, die 'm via `Grep` alsnog vond. Puur additief:
-  een uniek match kan nooit méér ambigu worden dan voorheen. Zie
-  `TestResolveCallsTestHelperClassIndexed`. **Alleen de gewijzigde regels**
-  van het blok worden gescand: `changedNewLines` dieft base↔head per bestand
-  (`git diff --no-index --unified=0`, geparsed met de ingest-`parseUnifiedDiff`,
-  new-side sets ge-union'd omdat `--no-index` twee absolute paden oplevert;
-  ontbrekende base-file → alles telt als gewijzigd). Een call op een ongewijzigde
-  regel levert dus nooit een child op — dat gaf ongerelateerde "Onderliggende
-  code", b.v. een builder-`->join(` op een oude regel die uniek naar een
-  toevallige app-method (`MerchantController::join`) matchte. Resolvt
-  `$this->`/`self::`/`static::` (eigen class), `Foo::m(`/`(new Foo)->m(` (class
-  in de call), **`$var->m(` via de receiver-variabelenaam** (regel 3b:
-  `$order->billingAddress()` → `Order::billingAddress`, ook als die method op
-  meerdere classes bestaat; incl. scope-vorm — dezelfde heuristiek die
-  `resolvePrompt` de LLM leert; kanttekening: de call-key is de kale
-  methodenaam, dus twee receivers die in één blok dezelfde method aanroepen
-  vallen samen op de eerste match), en `->m(` op een **unieke** globale- of
-  scope-match. Ambigu (>1 kandidaat) → `unresolved`; methodes die nergens in de app-worktree bestaan
-  (vendor is geskipt — framework-calls als `->where(`) worden **óók
-  `unresolved`**: ze staan per definitie op een gewijzigde regel, dus de
-  automatische LLM-search pikt ze op i.p.v. niks te tonen.
-  **Enum-cases** (regel 6, `reStaticRef`): een `Foo::NAAM` **zonder haakjes** —
-  `AddressType::BILLING` — resolvt naar de **enum-declaratie** als `Foo` een
-  geïndexeerde enum is die die case/const definieert (`scanEnums` maakt van elke
-  enum een synthetisch blok, à la macros; code via `blockSource`-line-slicing;
-  `child_method` = de case-naam, dus het label wordt `AddressType::BILLING`).
-  `Foo::class` en constanten op niet-enum-classes worden genegeerd; dezelfde
-  case op meerdere enums → `unresolved`. De frontend-`findCallSites` matcht
-  daarvoor naast `naam(` en `->naam` ook `::naam`.
-  **Eloquent magic properties** (regel 5, `reArrowProp`): een `->naam` **zonder
-  haakjes** — `$order->billingAddress` — is Laravel-syntax voor de
-  relatie-**methode** `billingAddress()`. We behandelen 'm als call als `naam` een
-  methode matcht wiens body een **relatie** is (`return $this->morphOne/hasMany/
-  belongsTo(...)`, `reRelationCall` + `relationshipCandidates`) — zodat kale
-  attribuut-toegang (`->id`, `->total`) genegeerd blijft: eerst probeert regel
-  5a de **receiver-variabelenaam** (`$order->billingAddress` →
-  `Order::billingAddress`, ook bij meerdere modellen met die relatie), daarna
-  regel 5 generiek: uniek → `resolved`, meerdere modellen → `unresolved` (LLM
-  kiest het juiste model). Draait ná regel 4, dus een echte `->naam()`-call wint
-  de key. De frontend koppelt zo'n property-
-  segment aan het child via `findCallSites`, dat naast `naam(` ook `->naam`
-  (property) matcht. De LLM-prompt (`resolvePrompt`) legt Haiku/Sonnet uit dat
-  `->naam` en `naam()` hetzelfde target zijn en dat de receiver-variabelenaam
-  (`$order` → `Order`) het juiste model verraadt.
-  **Laravel-macros** worden óók geïndexeerd (`scanMacros`, aangeroepen in
-  `buildSymbolIndex`): een `Receiver::macro('naam', function (…) {…})` — b.v.
-  `Builder::macro('joinAddress', …)` in een `*ServiceProvider` — is een anonieme
-  closure **binnen** een boot-method en dus onzichtbaar voor `ScanBlocks`
-  (`skipBody` slokt de hele method-body op, inclusief de macro-registratie). We
-  detecteren de registratie met een regex (`reMacroDef`) en maken er een
-  synthetisch block van (`Class` = de receiver, `Name` = de macro-naam), zodat een
-  `->joinAddress(`-call via regel 4 als een gewone unieke method resolvt. De code
-  van zo'n macro komt via `blockSource` (code.go): de symbool-lookup faalt (het
-  block is genest, niet top-level), dus die valt terug op line-slicing op de
-  opgeslagen `Line`/`EndLine`.
-  **Artisan-commando's** (regel 3c, `reCommandCall`): een geschedulede
-  `$schedule->command('accounting:import --provider=…')`-call resolvt naar de
-  **`handle`-method van de commando-class**. `buildSymbolIndex` bouwt daarvoor
-  een `commands`-map: `scanCommands` leest elke `protected $signature = 'naam …'`
-  (alleen `$signature`, commando-specifiek), neemt het **eerste token** als
-  commando-naam en koppelt die aan de `handle`-block van dezelfde file. De
-  **call-key is de commando-naam** (`accounting:import`), niet `command`, zodat
-  verschillende geschedulede commando's aparte children blijven; de generieke
-  `->command(`-arrow-call wordt onderdrukt (`seen["command"]`). Een commando
-  zonder app-class (framework, b.v. `queue:work`) wordt `unresolved`. De
-  frontend-`findCallSites` matcht een commando-key (bevat `:`/`-`, dus nooit een
-  method-identifier) via de **string-literal** `command('naam…')` i.p.v. de
-  identifier-vormen.
-  **Laravel-facades** (regel 3, fallback op `reStaticCall`): een facade forwardt
-  z'n static calls naar zijn accessor-class, dus `AccountingClient::providers()`
-  draait feitelijk op `AccountingDriver::providers()`. `buildSymbolIndex` bouwt
-  een `facades`-map (facade-shortname → accessor-shortname) met `scanFacades`: die
-  detecteert `class X extends …Facade` (`reFacadeClass`) plus de
-  `getFacadeAccessor() { return Y::class; }` (`reFacadeAccessor`) en koppelt X→Y
-  (positioneel gepaird — een facade-file bevat één facade + één accessor). In
-  regel 3 valt een `Foo::m(` die niet op `Foo` zélf resolvt terug op
-  `methodOnClass(accessor, m)` als `Foo` een geïndexeerde facade is. Een method
-  die óók op de accessor niet bestaat (b.v. de framework-`Manager::forgetDrivers()`
-  ná `providers()`, vendor is niet geïndexeerd) blijft `unresolved` → automatische LLM-search.
-  **Eloquent-model als geheel** (regel 2c, `new Model()`/`Model::…`): gebruikt een
-  controller/service een Eloquent-model (`new ProductGroup()`, `ProductGroup::query()`
-  — bv. gevolgd door `->fill()`/`->save()`), dan wil de reviewer **het model zelf**
-  als Onderliggende code zien, niet zijn constructor of een losse geërfde
-  Eloquent-methode (`fill`/`save`/`query` zijn nooit in de app gedefinieerd en
-  blijven dus gewoon `unresolved`, ongewijzigd). `buildSymbolIndex` indexeert elk
-  bestand onder `app/Models/` (`hasSeg(rel, "app/Models/")`) met `scanModels` —
-  een **whole-class synthetisch blok** per class-declaratie (`Class` = de
-  modelnaam, `Name` leeg, spant de hele class-body — mirror van `scanEnums`,
-  `blockSource` valt voor de lege `Name` terug op line-slicing) — in een aparte
-  `idx.models`-map (modelnaam → blok). Rule 2c scant `new Foo(`
-  (`reNewObj`) én `Foo::m(` (`reStaticCall`) op een receiver die in `idx.models`
-  zit en emit **één** child per model (call-key = modelnaam, `seen`-gededupt —
-  instantiatie + een latere statische call op hetzelfde model in één blok geven
-  dus nooit twee children), met `ChildClass` = de modelnaam en **`ChildMethod`
-  leeg** — de frontend-`blockLabel`-conventie toont dan de kale modelnaam
-  (`ProductGroup`), geen `::method`. Rule 2b (`new Foo()` → constructor) **sluit
-  een model-class expliciet uit** (`idx.models[class]`-check) — ook als het model
-  wél een expliciete `__construct` heeft, wijst dit nooit naar de constructor: de
-  reviewer wil het model, niet zijn constructor-body. Diffstat/`Ongewijzigd`-badge
-  komen gratis mee (hetzelfde mechanisme als elk ander `method_call`-child, op
-  basis van of `ChildFile` in de PR wijzigt). Andere resoluties op dezelfde regel
-  (bv. `ProductGroupResource::make($productGroup)` → de resource-class) blijven
-  ongemoeid — dit is een aanvullende child, geen vervanging.
-  **Type-hinted model-parameter (regel 2d):** een method-**signatuur** die een
-  Eloquent-model type-hint (`fromModel(Payment $payment)`) wil het model óók
-  tonen als de signatuur zélf niet is gewijzigd — alleen de body (het
-  gebruikelijke geval: een bestaande static-constructor krijgt er één veld
-  bij). Regel 2d scant daarom **niet** `scan` (de gewijzigde-regels-tekst,
-  zoals elke andere regel in `resolveCalls`) maar de **volledige** blokbody
-  (`src.Text`) met dezelfde `Foo $var`-regex als `relations.go`'s
-  `reTypedParam` (hergebruikt, niet gedupliceerd — beide bestanden zijn
-  `package main`), gefilterd op `idx.models`. Dit is een **bewuste, expliciet
-  gedocumenteerde uitzondering** op `resolveCalls`'s "alleen gewijzigde
-  regels"-uitgangspunt (zie diens doc-comment) — een parameter-type is een
-  structurele eigenschap van de hele (wél gewijzigde) functie, geen los te
-  reviewen regel — en mirrort hoe `controllerModelDetector` (`relations.go`)
-  ook al de hele body scant, en hoe `resolveMigrationModels`/
-  `resolveDataProviders` sowieso al naar ongewijzigde code wijzen. Zelfde
-  `emitKind(shortName, &def, KindModelUsage)`-pad als regel 2c, dus zelfde
-  badge/weergave; het false-positive-risico is verwaarloosbaar omdat alleen
-  een type dat toevallig in `idx.models` zit (dus een echt `app/Models/`-bestand)
-  matcht.
-  **Eloquent-attribute-cast-property (regel 5b, `$var->key` zonder haakjes,
-  eventueel gevolgd door `?->…`):** regel 5a/5 herkennen alleen een **relatie**-
-  achtige magic property (`isRelationship`/`reRelationCall` op de methode-body);
-  een veld dat via Eloquent's `$casts`-array naar een **enum of andere class**
-  wordt gecast (`protected $casts = ['processor' => Driver::class]`, dus géén
-  relatie-methode, gewoon een cast op een ruwe kolom) matcht geen van beide en
-  leverde voorheen **stilzwijgend niets** op — zelfs geen `unresolved`. Nieuwe
-  index `idx.modelCasts[ModelShort][veld] = ClassShort`
-  (`scanModelCasts`, geparsed uit `protected $casts = [...]` — alleen de
-  legacy array-vorm; de Laravel 11 `casts(): array`-methode-vorm is bewust
-  buiten scope voor v1) gevuld tijdens dezelfde `scanModels`-worktree-walk.
-  Regel 5b scant — net als 5a — `scan` (de call-site zelf zit hier wél op een
-  gewijzigde regel, dus geen changed-lines-uitzondering nodig): voor
-  `$var->key` waar `ucfirst(var)` een model met een cast-entry voor `key` is,
-  wordt het cast-target opgezocht in `idx.enums` dan `idx.models`: **exact één**
-  gelijknamige enum → resolved whole-enum-child (`method_call`-kind, net als
-  regel 6, `ChildMethod` leeg — het gaat om de hele enum, niet één case);
-  **meerdere** gelijknamige enums (deze app heeft bijvoorbeeld drie losse
-  `Driver`-enums in verschillende modules) → `unresolved` (Go kan de
-  namespace-ambiguïteit niet oplossen zonder `use`-import-parsing, dus de
-  automatische LLM-search krijgt 'm — die ziet het model's eigen `use`-imports
-  wél als context); target is zelf weer een model → resolved whole-model-child
-  (`KindModelUsage`, zelfde pad als regel 2c/2d); target helemaal niet
-  geïndexeerd (bv. een los Value Object/Castable) → ook `unresolved`, nooit
-  stil niets, want de call-site staat op een gewijzigde regel.
-- **`modules/claude`** (`modules/claude/claude.go`): de CLI-bridge naar `claude`
-  (`Client`-interface + `Fake`, patroon van `modules/github`). `Run` shelt uit
-  naar `claude -p <prompt> --model <id>` met context-timeout; agentisch (Sonnet)
-  krijgt `cwd`=head-worktree + read-only tools (`Read,Grep,Glob`). Model-ID's:
-  `claude-haiku-4-5`, `claude-sonnet-5`. **`SLASH_CLAUDE=off`** → `claude.Fake`
-  (geen netwerk; leeg = resolvt niets), voor offline/tests.
-  - **Context-only Haiku-calls draaien vanuit een neutrale scratch-cwd, niet de
-    slash-repo.** `claude` laadt bij elke `-p`-aanroep automatisch de volledige
-    project-`CLAUDE.md` + `.claude/rules` van zijn cwd als systeemcontext —
-    voor een context-only call (geen tools, `RunRequest.WorkDir == ""`: de
-    Haiku-pass van `resolve_call`, `explain_code`, `pr_status`'s samenvatting)
-    is dat **pure overhead**, want die prompts gaan over PHP-code in de PR, niet
-    over hoe dit project gebouwd wordt. Gemeten: ~110k `cache_creation`-tokens
-    (~$0,22 op een triviale test-call) met cwd = slash-repo, tegen ~7k
-    (~$0,016) met een lege cwd buiten elke repo — een daling van ~94%. `Module`
-    (`claude.go`) draagt daarom een `scratchDir`-veld: `Run` zet `cmd.Dir` op
-    `req.WorkDir` als die gezet is (agentisch, ongewijzigd — Sonnet blijft in de
-    checked-out PR-worktree draaien voor `Read`/`Grep`/`Glob`), anders op
-    `m.scratchDir`. `tasks_api.go` geeft `claude.New(...)` daarvoor een pad
-    **onder `os.TempDir()`** mee (`slash-llm-cwd`), expliciet **niet** onder
-    `dataDir`: `claude` zoekt een `CLAUDE.md` door **omhoog** de directory-boom
-    te lopen (zoals git naar `.git` zoekt), dus een lege submap van de
-    slash-repo (bv. `data/llm-cwd`) laadt via die ouder-keten alsnog de
-    repo-`CLAUDE.md` — empirisch bevestigd (bleef ~112k tokens) vóórdat de
-    locatie naar `os.TempDir()` verplaatst werd. Voor de agentische
-    Sonnet-escalatie verandert er niets: die worktree draagt **plug-and-pay's
-    eigen** `CLAUDE.md`/`.claude/rules` (~150k+ tokens overhead, groter dan
-    slash's eigen ~110k) en dat is een apart, groter vraagstuk (alleen `--bare`
-    + een losse `ANTHROPIC_API_KEY` i.p.v. de huidige OAuth/abonnement-auth zet
-    die auto-discovery echt uit — een auth/billing-besluit, hier bewust
-    ongemoeid gelaten).
-  - **De statische instructietekst per actie staat los van de wisselende
-    call-inhoud, via `--append-system-prompt`.** `RunRequest.SystemPrompt`
-    draagt het call-onafhankelijke deel van elke prompt (taakomschrijving +
-    JSON-contract voor `resolve_call`, de Nederlandse if-uitleg-instructie voor
-    `explain_code`, de "Vat samen…"-instructie voor `pr_status`'s
-    samenvatting) — **byte-voor-byte** dezelfde tekst die voorheen inline in de
-    `-p`-prompt stond, nu verplaatst naar `modules/claude/prompts/
-    {resolve_call,explain_code,pr_summary}.md` en met `//go:embed` ingebed
-    (stdlib, geen dependency, geen build-stap) als `claude.ResolveCallSystemPrompt`/
-    `ExplainCodeSystemPrompt`/`PRSummarySystemPrompt`. Bewust **niet** onder
-    `.claude/` (dat zou zelf weer auto-discovery-gevoelig zijn in een
-    interactieve `claude`-sessie in déze repo) maar onder `modules/claude/
-    prompts/` — prompt-inhoud voor een subprocess-aanroep, geen documentatie
-    voor dit project. `resolvePrompt`/`explainPrompt`/`prSummaryPrompt` bouwen
-    nog altijd de wisselende inhoud (call-naam, caller-body, kandidatenlijst,
-    geselecteerde code, PR-metadata) — alleen het altijd-gelijke stuk is eruit
-    getild. Puur een verplaatsing: de uiteindelijke instructietekst die het
-    model ziet is ongewijzigd (geverifieerd met een byte-gelijkheids-test tegen
-    de embedded content), dus resolutie-kwaliteit verandert niet. Bijkomend
-    voordeel: omdat dit systeemprompt-deel nu identiek is over herhaalde calls
-    van dezelfde actie binnen één PR (bv. 32× `resolve_call`), kan `claude`'s
-    eigen prompt-cache het hergebruiken — dat kon niet toen het inline in de
-    steeds wisselende `-p`-string stond.
-  - **Determinisme:** beide wijzigingen zitten volledig binnen `Module.Run`
-    (cwd-keuze) en de `RunRequest`-payload (`SystemPrompt`) — het aantal/de
-    volgorde van `cl.Run`-aanroepen per workflow-body is ongewijzigd, dus dit
-    raakt de replay-determinisme-eis (`.claude/rules/workflow-determinism.md`)
-    niet.
-- **Workflow `resolve_call`** (`workflows.go` + `resolve_call.go`): één Execution
-  per zoekactie. Body (deterministisch): `markCallsSearching` → `resolveWithModel`
-  (Haiku, context-only shortlist uit de Go-index) → `saveResolutions`. **Puur
-  automatisch, géén signal.** Elke LLM-claim wordt tegen de worktree
-  geverifieerd (`verifyDefinition` + path-containment) vóór hij `found` wordt.
-  **Uitsluitend Haiku — géén automatische escalatie naar Sonnet.** Dat was
-  eerder anders: een call die Haiku niet zeker vond (en waarvoor de Go-index
-  minstens één statisch kandidaat had, `HadCandidates`) escaleerde automatisch
-  naar een agentische Sonnet-pass (`Read`/`Grep`/`Glob` in de worktree). Op
-  expliciet verzoek is die escalatie-stap uit `resolveCallWorkflow` verwijderd:
-  een onzekere/niet-gevonden Haiku-uitkomst blijft nu gewoon `notfound`, er
-  wordt nooit meer een tweede, duurdere model-call gedaan. De generieke
-  Sonnet/agentische machinery in `resolve_call.go` (`resolveArg.Model`, de
-  `agentic`-prompt-tak, `claude.ModelSonnet`) bestaat nog steeds — die wordt
-  simpelweg nooit meer vanuit deze workflow aangeroepen (bewust minimale
-  ingreep: alleen de aanroep is geschrapt, niet de onderliggende
-  resolver-code). `callresolve.Entry.HadCandidates` reist nog mee in het
-  Activity-resultaat maar stuurt geen beslissing meer aan.
+- **Why a separate read model, not the `relations` table:** these children
+  point to unchanged files (so their block id is not a PR block the
+  frontend knows), and `relations.Replace` does a full swap per PR — an
+  expensive LLM resolution would disappear on a rebuild. Hence a dedicated
+  module.
+- **`modules/callresolve`** (`data/callresolve.db`): the read model
+  `call_resolutions(pr, caller_id, call_key, status, child_*, model,
+  confidence, updated_at)`, PK `(pr, caller_id, call_key)`. `status`:
+  `resolved` (Go), `unresolved` (Go failed → automatic LLM search),
+  `searching`/`found`/`notfound` (LLM). The row carries the **full child
+  descriptor + the code text** (`child_code`), so the frontend renders
+  without a separate code fetch. Writes (workflow-only): `UpsertGo`
+  (writes Go rows, but **never overwrites** a `searching`/`found` row → LLM
+  wins over a rebuild), `SaveSearching`, `Save`, and `Prune(pr, keep)`
+  (removes any row whose `(caller_id, call_key)` pair is not in the
+  current Go scan — the caller has fallen out of the PR or the call site
+  is no longer on a changed line; this also cleans up LLM rows, since the
+  call site is gone). Read: `List(pr)`. The `buildRelations` Activity calls
+  `Prune` after `UpsertGo` with the just-scanned entries as the keep set.
+- **Analysis service `callresolve_analysis.go`** (package main, not a
+  module — reads the head worktree): `resolveCalls(dataDir, pr, blocks)`
+  builds one worktree-wide index via `buildSymbolIndex` (class→methods,
+  method→blocks, Eloquent scope alias `scopeX→x`, enums) and scans each
+  changed new-side block with regexes (pattern from `dispatchedEvents`).
+  **`idxSkipDirs` only skips genuinely vendored/generated directories**
+  (`vendor`, `node_modules`, `.git`, `storage`, `public`) — deliberately
+  **not** `tests/`: a custom test base class (`tests/TestCase.php`,
+  `tests/HttpTestCase.php`) or a shared trait is just as much app code, and
+  was previously wrongly excluded from the index. Without that candidate
+  the Go resolver could never pin a call to such an inherited test helper
+  itself (rule 1's `$this->m()` check only looks at the own class, not
+  through inheritance) and needlessly escalated every such call all the
+  way to the expensive agentic Sonnet pass, which found it via `Grep`
+  anyway. Purely additive: a unique match can never become more ambiguous
+  than before. See `TestResolveCallsTestHelperClassIndexed`. **Only the
+  changed lines** of the block are scanned: `changedNewLines` diffs
+  base↔head per file (`git diff --no-index --unified=0`, parsed with the
+  ingest's `parseUnifiedDiff`, new-side sets unioned because `--no-index`
+  yields two absolute paths; a missing base file → everything counts as
+  changed). A call on an unchanged line thus never produces a child —
+  that gave unrelated "Underlying code", e.g. a builder's `->join(` on an
+  old line that uniquely matched a coincidental app method
+  (`MerchantController::join`). Resolves `$this->`/`self::`/`static::`
+  (own class), `Foo::m(`/`(new Foo)->m(` (class in the call),
+  **`$var->m(` via the receiver variable name** (rule 3b:
+  `$order->billingAddress()` → `Order::billingAddress`, even if that
+  method exists on multiple classes; including the scope form — the same
+  heuristic that `resolvePrompt` teaches the LLM; note: the call key is
+  the bare method name, so two receivers calling the same method within
+  one block collapse onto the first match), and `->m(` on a **unique**
+  global or scope match. Ambiguous (>1 candidate) → `unresolved`; methods
+  that don't exist anywhere in the app worktree (vendor is skipped —
+  framework calls like `->where(`) also become **`unresolved`**: by
+  definition they're on a changed line, so the automatic LLM search picks
+  them up instead of showing nothing.
+  **Enum cases** (rule 6, `reStaticRef`): a `Foo::NAME` **without
+  parentheses** — `AddressType::BILLING` — resolves to the **enum
+  declaration** if `Foo` is an indexed enum that defines that case/const
+  (`scanEnums` turns each enum into a synthetic block, à la macros; code
+  via `blockSource` line-slicing; `child_method` = the case name, so the
+  label becomes `AddressType::BILLING`). `Foo::class` and constants on
+  non-enum classes are ignored; the same case on multiple enums →
+  `unresolved`. The frontend's `findCallSites` therefore matches `::name`
+  in addition to `name(` and `->name`.
+  **Eloquent magic properties** (rule 5, `reArrowProp`): a `->name`
+  **without parentheses** — `$order->billingAddress` — is Laravel syntax
+  for the relation **method** `billingAddress()`. We treat it as a call if
+  `name` matches a method whose body is a **relation** (`return
+  $this->morphOne/hasMany/belongsTo(...)`, `reRelationCall` +
+  `relationshipCandidates`) — so bare attribute access (`->id`, `->total`)
+  stays ignored: first rule 5a tries the **receiver variable name**
+  (`$order->billingAddress` → `Order::billingAddress`, even with multiple
+  models having that relation), then rule 5 generically: unique →
+  `resolved`, multiple models → `unresolved` (LLM picks the right model).
+  Runs after rule 4, so a real `->name()` call wins the key. The frontend
+  links such a property segment to the child via `findCallSites`, which
+  besides `name(` also matches `->name` (property). The LLM prompt
+  (`resolvePrompt`) explains to Haiku/Sonnet that `->name` and `name()`
+  are the same target and that the receiver variable name (`$order` →
+  `Order`) reveals the right model.
+  **Laravel macros** are also indexed (`scanMacros`, called in
+  `buildSymbolIndex`): a `Receiver::macro('name', function (…) {…})` — e.g.
+  `Builder::macro('joinAddress', …)` in a `*ServiceProvider` — is an
+  anonymous closure **inside** a boot method and thus invisible to
+  `ScanBlocks` (`skipBody` swallows the whole method body, including the
+  macro registration). We detect the registration with a regex
+  (`reMacroDef`) and turn it into a synthetic block (`Class` = the
+  receiver, `Name` = the macro name), so a `->joinAddress(` call resolves
+  via rule 4 as a normal unique method. The code for such a macro comes
+  via `blockSource` (code.go): the symbol lookup fails (the block is
+  nested, not top-level), so it falls back to line-slicing on the stored
+  `Line`/`EndLine`.
+  **Artisan commands** (rule 3c, `reCommandCall`): a scheduled
+  `$schedule->command('accounting:import --provider=…')` call resolves to
+  the **`handle` method of the command class**. `buildSymbolIndex` builds
+  a `commands` map for this: `scanCommands` reads every `protected
+  $signature = 'name …'` (only `$signature`, command-specific), takes the
+  **first token** as the command name, and links it to the `handle` block
+  of the same file. The **call key is the command name**
+  (`accounting:import`), not `command`, so different scheduled commands
+  stay separate children; the generic `->command(` arrow call is
+  suppressed (`seen["command"]`). A command with no app class (framework,
+  e.g. `queue:work`) becomes `unresolved`. The frontend's `findCallSites`
+  matches a command key (contains `:`/`-`, so never a method identifier)
+  via the **string literal** `command('name…')` instead of the identifier
+  forms.
+  **Laravel facades** (rule 3, fallback on `reStaticCall`): a facade
+  forwards its static calls to its accessor class, so
+  `AccountingClient::providers()` actually runs on
+  `AccountingDriver::providers()`. `buildSymbolIndex` builds a `facades`
+  map (facade short name → accessor short name) with `scanFacades`: it
+  detects `class X extends …Facade` (`reFacadeClass`) plus
+  `getFacadeAccessor() { return Y::class; }` (`reFacadeAccessor`) and links
+  X→Y (positionally paired — a facade file contains one facade + one
+  accessor). In rule 3, a `Foo::m(` that doesn't resolve on `Foo` itself
+  falls back to `methodOnClass(accessor, m)` if `Foo` is an indexed
+  facade. A method that also doesn't exist on the accessor (e.g. the
+  framework's `Manager::forgetDrivers()` after `providers()`, vendor is
+  not indexed) stays `unresolved` → automatic LLM search.
+  **Eloquent model as a whole** (rule 2c, `new Model()`/`Model::…`): if a
+  controller/service uses an Eloquent model (`new ProductGroup()`,
+  `ProductGroup::query()` — e.g. followed by `->fill()`/`->save()`), the
+  reviewer wants to see **the model itself** as Underlying Code, not its
+  constructor or a stray inherited Eloquent method (`fill`/`save`/`query`
+  are never defined in the app and stay plain `unresolved`, unchanged).
+  `buildSymbolIndex` indexes every file under `app/Models/`
+  (`hasSeg(rel, "app/Models/")`) with `scanModels` — a **whole-class
+  synthetic block** per class declaration (`Class` = the model name,
+  `Name` empty, spans the whole class body — mirrors `scanEnums`,
+  `blockSource` falls back to line-slicing for the empty `Name`) — in a
+  separate `idx.models` map (model name → block). Rule 2c scans `new Foo(`
+  (`reNewObj`) and `Foo::m(` (`reStaticCall`) on a receiver that's in
+  `idx.models` and emits **one** child per model (call key = model name,
+  `seen`-deduped — instantiation + a later static call on the same model
+  in one block thus never give two children), with `ChildClass` = the
+  model name and **`ChildMethod` empty** — the frontend's `blockLabel`
+  convention then shows the bare model name (`ProductGroup`), no
+  `::method`. Rule 2b (`new Foo()` → constructor) **explicitly excludes**
+  a model class (`idx.models[class]` check) — even if the model does have
+  an explicit `__construct`, this never points to the constructor: the
+  reviewer wants the model, not its constructor body. Diffstat/
+  `Unchanged` badge come for free (the same mechanism as any other
+  `method_call` child, based on whether `ChildFile` changes in the PR).
+  Other resolutions on the same line (e.g.
+  `ProductGroupResource::make($productGroup)` → the resource class) stay
+  unaffected — this is an additional child, not a replacement.
+  **Type-hinted model parameter (rule 2d):** a method **signature** that
+  type-hints an Eloquent model (`fromModel(Payment $payment)`) wants the
+  model shown too even if the signature itself hasn't changed — only the
+  body (the common case: an existing static constructor gets one extra
+  field). Rule 2d therefore scans **not** `scan` (the changed-lines text,
+  like every other rule in `resolveCalls`) but the **whole** block body
+  (`src.Text`) with the same `Foo $var` regex as `relations.go`'s
+  `reTypedParam` (reused, not duplicated — both files are `package main`),
+  filtered on `idx.models`. This is a **deliberate, explicitly documented
+  exception** to `resolveCalls`'s "only changed lines" principle (see its
+  own doc comment) — a parameter type is a structural property of the
+  whole (changed) function, not a separate reviewable line — and mirrors
+  how `controllerModelDetector` (`relations.go`) already scans the whole
+  body too, and how `resolveMigrationModels`/`resolveDataProviders`
+  already point to unchanged code anyway. Same `emitKind(shortName, &def,
+  KindModelUsage)` path as rule 2c, so the same badge/display; the
+  false-positive risk is negligible since only a type that happens to be
+  in `idx.models` (thus a genuine `app/Models/` file) matches.
+  **Eloquent attribute cast property (rule 5b, `$var->key` without
+  parentheses, possibly followed by `?->…`):** rule 5a/5 only recognize a
+  **relation**-like magic property (`isRelationship`/`reRelationCall` on
+  the method body); a field that's cast via Eloquent's `$casts` array to
+  an **enum or other class** (`protected $casts = ['processor' =>
+  Driver::class]`, so not a relation method, just a cast on a raw column)
+  matches neither and previously produced **silently nothing** — not even
+  `unresolved`. New index `idx.modelCasts[ModelShort][field] = ClassShort`
+  (`scanModelCasts`, parsed from `protected $casts = [...]` — only the
+  legacy array form; the Laravel 11 `casts(): array` method form is
+  deliberately out of scope for v1) filled during the same `scanModels`
+  worktree walk. Rule 5b scans — like 5a — `scan` (the call site itself
+  is here on a changed line, so no changed-lines exception needed): for
+  `$var->key` where `ucfirst(var)` is a model with a cast entry for
+  `key`, the cast target is looked up in `idx.enums` then `idx.models`:
+  **exactly one** same-name enum → resolved whole-enum child
+  (`method_call` kind, like rule 6, `ChildMethod` empty — it's about the
+  whole enum, not one case); **multiple** same-name enums (this app has,
+  for instance, three separate `Driver` enums in different modules) →
+  `unresolved` (Go can't resolve the namespace ambiguity without
+  `use`-import parsing, so the automatic LLM search gets it — which does
+  see the model's own `use` imports as context); target is itself again a
+  model → resolved whole-model child (`KindModelUsage`, same path as rule
+  2c/2d); target not indexed at all (e.g. a lone Value Object/Castable) →
+  also `unresolved`, never silently nothing, since the call site is on a
+  changed line.
+- **`modules/claude`** (`modules/claude/claude.go`): the CLI bridge to
+  `claude` (`Client` interface + `Fake`, the pattern of `modules/github`).
+  `Run` shells out to `claude -p <prompt> --model <id>` with a context
+  timeout; agentic (Sonnet) gets `cwd`=head worktree + read-only tools
+  (`Read,Grep,Glob`). Model IDs: `claude-haiku-4-5`, `claude-sonnet-5`.
+  **`SLASH_CLAUDE=off`** → `claude.Fake` (no network; empty = resolves
+  nothing), for offline/tests.
+  - **Context-only Haiku calls run from a neutral scratch cwd, not the
+    slash repo.** `claude` automatically loads the full project's
+    `CLAUDE.md` + `.claude/rules` from its cwd as system context on every
+    `-p` call — for a context-only call (no tools, `RunRequest.WorkDir ==
+    ""`: the Haiku pass of `resolve_call`, `explain_code`, `pr_status`'s
+    summary) that's **pure overhead**, since those prompts are about PHP
+    code in the PR, not about how this project is built. Measured: ~110k
+    `cache_creation` tokens (~$0.22 on a trivial test call) with cwd =
+    slash repo, versus ~7k (~$0.016) with an empty cwd outside any repo —
+    a ~94% drop. `Module` (`claude.go`) therefore carries a `scratchDir`
+    field: `Run` sets `cmd.Dir` to `req.WorkDir` if it's set (agentic,
+    unchanged — Sonnet still runs in the checked-out PR worktree for
+    `Read`/`Grep`/`Glob`), otherwise to `m.scratchDir`. `tasks_api.go`
+    gives `claude.New(...)` a path for this **under `os.TempDir()`**
+    (`slash-llm-cwd`), explicitly **not** under `dataDir`: `claude` looks
+    for a `CLAUDE.md` by walking **up** the directory tree (like git looks
+    for `.git`), so an empty subfolder of the slash repo (e.g.
+    `data/llm-cwd`) would, via that parent chain, still load the repo's
+    `CLAUDE.md` — empirically confirmed (it still cost ~112k tokens)
+    before the location was moved to `os.TempDir()`. Nothing changes for
+    the agentic Sonnet escalation: that worktree carries plug-and-pay's
+    **own** `CLAUDE.md`/`.claude/rules` (~150k+ tokens overhead, bigger
+    than slash's own ~110k) and that's a separate, bigger question (only
+    `--bare` + a separate `ANTHROPIC_API_KEY` instead of the current
+    OAuth/subscription auth would actually turn off that auto-discovery —
+    an auth/billing decision, deliberately left untouched here).
+  - **The static instruction text per action is decoupled from the
+    varying call content, via `--append-system-prompt`.**
+    `RunRequest.SystemPrompt` carries the call-independent part of each
+    prompt (task description + JSON contract for `resolve_call`, the
+    Dutch if-explanation instruction for `explain_code`, the
+    "Summarize…" instruction for `pr_status`'s summary) — **byte-for-byte**
+    the same text that previously sat inline in the `-p` prompt, now moved
+    to `modules/claude/prompts/{resolve_call,explain_code,pr_summary}.md`
+    and embedded with `//go:embed` (stdlib, no dependency, no build step)
+    as `claude.ResolveCallSystemPrompt`/`ExplainCodeSystemPrompt`/
+    `PRSummarySystemPrompt`. Deliberately **not** under `.claude/` (that
+    would itself again be sensitive to auto-discovery in an interactive
+    `claude` session in this very repo) but under `modules/claude/
+    prompts/` — prompt content for a subprocess call, not documentation
+    for this project. `resolvePrompt`/`explainPrompt`/`prSummaryPrompt`
+    still build the varying content (call name, caller body, candidate
+    list, selected code, PR metadata) — only the always-identical piece
+    was lifted out. Purely a relocation: the final instruction text the
+    model sees is unchanged (verified with a byte-equality test against
+    the embedded content), so resolution quality doesn't change.
+    Side benefit: since this system-prompt piece is now identical across
+    repeated calls of the same action within one PR (e.g. 32× `resolve_call`),
+    `claude`'s own prompt cache can reuse it — that couldn't happen while
+    it sat inline in the ever-changing `-p` string.
+  - **Determinism:** both changes are entirely within `Module.Run`
+    (cwd choice) and the `RunRequest` payload (`SystemPrompt`) — the
+    number/order of `cl.Run` calls per workflow body is unchanged, so this
+    doesn't affect the replay-determinism requirement
+    (`.claude/rules/workflow-determinism.md`).
+- **Workflow `resolve_call`** (`workflows.go` + `resolve_call.go`): one
+  Execution per search action. Body (deterministic): `markCallsSearching`
+  → `resolveWithModel` (Haiku, context-only shortlist from the Go index) →
+  `saveResolutions`. **Purely automatic, no signal.** Every LLM claim is
+  verified against the worktree (`verifyDefinition` + path containment)
+  before it becomes `found`.
+  **Haiku only — no automatic escalation to Sonnet.** That used to be
+  different: a call that Haiku wasn't sure about (and for which the Go
+  index had at least one static candidate, `HadCandidates`) used to
+  automatically escalate to an agentic Sonnet pass (`Read`/`Grep`/`Glob`
+  in the worktree). On explicit request that escalation step has been
+  removed from `resolveCallWorkflow`: an uncertain/not-found Haiku outcome
+  now simply stays `notfound`, a second, more expensive model call is
+  never made anymore. The generic Sonnet/agentic machinery in
+  `resolve_call.go` (`resolveArg.Model`, the `agentic` prompt branch,
+  `claude.ModelSonnet`) still exists — it's simply never called anymore
+  from this workflow (deliberately a minimal change: only the call site
+  was removed, not the underlying resolver code).
+  `callresolve.Entry.HadCandidates` still travels along in the Activity
+  result but no longer drives any decision.
   `TestResolveCallHaikuConfident`/`TestResolveCallNeverEscalatesToSonnet`/
   `TestResolveCallNoEscalationWithoutCandidates` (`resolve_call_test.go`)
-  pinnen dat er nooit een Sonnet-call plaatsvindt, ook niet als Haiku
-  `found:false` antwoordt en een Sonnet-output geprogrammeerd staat.
-  **Een curated denylist (`vendorBuiltinNames`/`isVendorBuiltin`,
-  `resolve_call.go`) slaat zelfs de Haiku-call over** voor een handjevol
-  extreem veelvoorkomende vendor/framework-methodenamen (PHPUnit/Laravel
-  HTTP-test-DSL: `assertStatus`, `postJson`/`getJson`/`putJson`/`patchJson`/
-  `deleteJson`, `assertDatabaseHas`, elke `assertJson*`; Schema-Blueprint:
-  `nullable`, `unique`, `dropColumn`, `dropIndex`, `softDeletes`, `table`; PHP-
-  taal-builtin: `cases`) — maar **uitsluitend** wanneer de Go-index ook
-  `len(candidates)==0` had, dus nooit een echte, gelijknamige app-methode
-  onderdrukt (`TestResolveCallVendorBuiltinDoesNotSuppressRealCandidate`
-  bewijst dat expliciet met een app-class die zelf een `table()`-methode
-  definieert). Bespaart de Haiku-spend, en voorkomt de zinloze
-  "Zoeken…"-chip voor code die per definitie nooit een reviewbare
-  app-definitie heeft (`TestResolveCallVendorBuiltinSkipsLLM`).
-- **Endpoints:** `POST /api/workflows/resolve_call` (start; body `{pr, callerId,
-  callerFile, callerClass, callerName, calls}`) en read-only
-  `GET /api/callresolve?pr=N`. De `buildRelations`-Activity schrijft de Go-rijen
-  mee (naast de relaties). Voortgang: de UI herlaadt het read-model op een
-  interval (zoals `syncComments`), geen run-poll. De headless twin
-  **`slash relations <pr>`** (`main.go`) draait naast `buildRelations` óók
-  `resolveCalls` + `UpsertGo`/`Prune`, zodat een re-run zónder volledige
-  re-ingest het Onderliggende-code-read-model ververst (handig na een
-  resolver-wijziging).
-- **Frontend:** `home.mjs` laadt `state.callResolve` (`loadCallResolve`), voegt
-  `resolved`/`found`-rijen als `method_call`-children toe (`relatedChildren`), en
-  start de LLM-search voor `unresolved` calls **automatisch** — geen knop:
-  `startCallSearch(focusedBlock())` draait in de `setRelated`-watch zodra het
-  paneel een blok met onopgeloste calls toont (gededupt per caller+callKey in
-  `searchRequested`, lost de héle unresolved-set van het blok op i.p.v. gescoped
-  op de selectie). Het paneel toont alleen nog de "zoeken…"-indicator
-  (`related-searching`). De kaart
-  **volgt de cursor**: `findCallSites` mapt elke call-methode naar het diff-segment
-  waar hij staat, `callScopeMethods` scope't in diff-mode op de geselecteerde unit
-  (op `gran==='call'` de ene actieve call; op line/group de calls op de regels
-  binnen `[unit.start, unit.end]`), en alleen in list-mode toont hij alle calls van
-  het block, geordend (gewijzigd child-blok → call op gewijzigde regel → rest). De lijst wordt in een `watch` berekend en via
-  `setRelated` het paneel in geduwd (niet in de render-binding — dat racet met de
-  diff over `b.code`). Een LLM-gevonden child toont een **`bron: haiku`**-badge
-  (de `source` uit de rij — sinds de Sonnet-escalatie is geschrapt is dit in de
-  praktijk altijd `haiku`; Go-resolved toont geen bron). Zie
+  pin down that a Sonnet call never happens, even when Haiku answers
+  `found:false` and a Sonnet output is programmed in.
+  **A curated denylist (`vendorBuiltinNames`/`isVendorBuiltin`,
+  `resolve_call.go`) even skips the Haiku call** for a handful of
+  extremely common vendor/framework method names (PHPUnit/Laravel
+  HTTP test DSL: `assertStatus`, `postJson`/`getJson`/`putJson`/
+  `patchJson`/`deleteJson`, `assertDatabaseHas`, every `assertJson*`;
+  Schema Blueprint: `nullable`, `unique`, `dropColumn`, `dropIndex`,
+  `softDeletes`, `table`; PHP-language builtin: `cases`) — but
+  **exclusively** when the Go index also had `len(candidates)==0`, so it
+  never suppresses a real, same-named app method
+  (`TestResolveCallVendorBuiltinDoesNotSuppressRealCandidate` proves this
+  explicitly with an app class that itself defines a `table()` method).
+  Saves the Haiku spend, and prevents the pointless "Searching…" chip for
+  code that by definition never has a reviewable app definition
+  (`TestResolveCallVendorBuiltinSkipsLLM`).
+- **Endpoints:** `POST /api/workflows/resolve_call` (start; body `{pr,
+  callerId, callerFile, callerClass, callerName, calls}`) and read-only
+  `GET /api/callresolve?pr=N`. The `buildRelations` Activity writes the
+  Go rows along with it (next to the relations). Progress: the UI reloads
+  the read model on an interval (like `syncComments`), no run poll. The
+  headless twin **`slash relations <pr>`** (`main.go`) runs, next to
+  `buildRelations`, also `resolveCalls` + `UpsertGo`/`Prune`, so a re-run
+  without a full re-ingest refreshes the Underlying Code read model
+  (handy after a resolver change).
+- **Frontend:** `home.mjs` loads `state.callResolve` (`loadCallResolve`),
+  adds `resolved`/`found` rows as `method_call` children
+  (`relatedChildren`), and starts the LLM search for `unresolved` calls
+  **automatically** — no button: `startCallSearch(focusedBlock())` runs in
+  the `setRelated` watch as soon as the panel shows a block with
+  unresolved calls (deduped per caller+callKey in `searchRequested`,
+  resolves the block's **whole** unresolved set instead of scoped to the
+  selection). The panel now only shows the "searching…" indicator
+  (`related-searching`). The card **follows the cursor**: `findCallSites`
+  maps each call method to the diff segment it's on, `callScopeMethods`
+  scopes, in diff mode, to the selected unit (on `gran==='call'` the one
+  active call; on line/group the calls on the lines within
+  `[unit.start, unit.end]`), and only in list mode does it show all calls
+  of the block, ordered (changed child block → call on a changed line →
+  rest). The list is computed in a `watch` and pushed into the panel via
+  `setRelated` (not in the render binding — that races with the diff over
+  `b.code`). An LLM-found child shows a **`source: haiku`** badge (the
+  `source` from the row — since the Sonnet escalation was removed this is
+  in practice always `haiku`; Go-resolved shows no source badge). See
   `.claude/rules/detail-layout.md`.
-- Tests: `callresolve_analysis_test.go` (resolver op fixture-PHP, incl. een
-  macro-call → `Builder::joinAddress`, de gewijzigde-regels-restrictie met een
-  echte base+head-diff, een enum-case → `AddressType::BILLING`, een
-  geschedulede `->command('accounting:import …')` → `AccountingImport::handle`,
-  een facade-call `AccountingClient::providers()` → `AccountingDriver::providers`,
-  en `TestResolveCallsModelUsage`/`TestResolveCallsModelWithoutConstructor`
-  (`new Model()`/`Model::…` → één gededupte whole-class model-child, nooit de
-  constructor ondanks dat die soms bestaat, `fill`/`save` blijven `unresolved`,
-  een resource-resolutie op dezelfde regel blijft ongemoeid),
+- Tests: `callresolve_analysis_test.go` (resolver on fixture PHP, including
+  a macro call → `Builder::joinAddress`, the changed-lines restriction with
+  a real base+head diff, an enum case → `AddressType::BILLING`, a
+  scheduled `->command('accounting:import …')` → `AccountingImport::handle`,
+  a facade call `AccountingClient::providers()` → `AccountingDriver::providers`,
+  and `TestResolveCallsModelUsage`/`TestResolveCallsModelWithoutConstructor`
+  (`new Model()`/`Model::…` → one deduped whole-class model child, never
+  the constructor even though it sometimes exists, `fill`/`save` stay
+  `unresolved`, a resource resolution on the same line stays unaffected),
   `TestResolveCallsTypedParamModel`/`TestResolveCallsTypedParamNonModelIgnored`
-  (regel 2d: een ongewijzigde signatuur met een `Payment $payment`-param
-  resolvt alsnog via de whole-body-scan; een param-type buiten `app/Models/`
-  produceert nooit een entry), en
+  (rule 2d: an unchanged signature with a `Payment $payment` param still
+  resolves via the whole-body scan; a param type outside `app/Models/`
+  never produces an entry), and
   `TestResolveCallsCastPropertyEnum`/`TestResolveCallsCastPropertyAmbiguousEnum`/
-  `TestResolveCallsCastPropertyUnknownTargetUnresolved` (regel 5b:
-  `$payment->processor?->value` resolvt via `$casts` naar de enum-declaratie;
-  meerdere gelijknamige enums → `unresolved`; een niet-geïndexeerd cast-target
-  → ook `unresolved`, nooit stil niets)),
-  `resolve_call_test.go` (Haiku-confident → found; nooit escalatie naar
-  Sonnet, ook niet bij een onzeker/ontbrekend Haiku-antwoord; notfound;
-  verificatie weigert een verzonnen definitie), en
-  `modules/callresolve/callresolve_test.go` (round-trip + UpsertGo bewaart LLM +
-  `Prune` ruimt wees-callers én stale call-keys op).
-  De frontend-kant heeft een **seed-pad**: `slash seed … -callresolve
-  <callresolve.json>` (mirror van `-relations`) laadt resolved rijen in
-  `callresolve.db` zodat Playwright de `method_call`-children rendert zonder
-  resolver-run (`tests/fixtures/callresolve.json`, PR 91 in `relations.spec.mjs` —
-  bewijst o.a. dat het Onderliggende-code-paneel de blok-selectie volgt).
-- **`kind`-kolom (`call_resolutions.kind`, default `method_call`):** onderscheidt
-  een gewone call-resolutie van een **class-niveau** child (`ChildMethod` leeg —
-  het hele model, geen method). `Entry.Kind` in Go: leeg → genormaliseerd naar
-  `KindMethodCall` bij het schrijven (`UpsertGo`/`Save` in
-  `modules/callresolve`), dus geen van de bestaande call-emittende regels (1
-  t/m 6) hoefde aangepast — alleen `emitKind` (de nieuwe onderliggende
-  implementatie van `emit`, met een expliciete `kind`-parameter) wordt door
-  rule 2c (`KindModelUsage`), `resolveMigrationModels` (`KindMigrationModel`,
-  zie hieronder) en `resolveDataProviders` (`KindDataProvider`, zie "PHPUnit
-  data providers" hieronder) aangeroepen. Een bestaande `callresolve.db`
-  migreert via een lichte `ALTER TABLE … ADD COLUMN` (dubbele-kolom-fout
-  genegeerd — het standaardpatroon uit `relations`/`comments`). Frontend:
-  `resolvedCallChildren`
-  (`home.mjs`) neemt `r.kind` **over** i.p.v. altijd `'method_call'` te
-  hardcoden, en het **label** vertakt op `r.childMethod` (leeg → kale
-  `r.childClass`, gevuld → het bestaande `Class::method`-template) — dit gold al
-  vóór deze kolom bestond voor rule 2c's model-usage-children (die toonden
-  ooit een `"ProductGroup::"` met een lege, lelijke `::`-staart) en geldt nu
-  ook voor `migration_model`/`data_provider` (beide hebben altijd een gevulde
-  `childMethod`, dus die renderen als een gewone `Class::method`-child).
-  `KIND_LABEL` (`RelatedPanel.mjs`) koppelt `model_usage`/`migration_model` aan
-  het badge-woord **"model"** en `data_provider` aan **"provider"**; de
-  `diffStatBadge`/`unchanged`-helpers herkennen alle drie naast
-  `method_call`/`covers` (gedeelde `DIFFSTAT_KINDS`-set) zodat ze óók een
-  `+A −R`/`Ongewijzigd`-badge en grijze "ongewijzigd"-ringstijl krijgen, exact
-  als een gewone call-child.
-- **Migratie → model (`resolveMigrationModels`, `callresolve_analysis.go`):**
-  een gewijzigde migratie hoort meestal bij een **al bestaand, ongewijzigd**
-  model — het hoofdgeval is "kolom toevoegen aan een bestaande tabel", niet
-  "nieuw model + nieuwe migratie tegelijk". Dat maakt dit een **callresolve**-
-  regel (mag naar een ongewijzigd bestand wijzen), geen `relations`-detector
-  (die zijn allemaal both-changed, zie de Laravel-keten hierboven) — en zonder
-  LLM-fallback: de mapping is regelgebaseerd en deterministisch, dus een
-  migratie die niet te mappen valt levert **stil niets** op (geen
-  `unresolved`-rij, geen "Zoek"-knop). Scope: elk gewijzigd
-  `Category == "MIGRATION" && Name == "up"`-blok (een migratie is altijd de
-  anonieme `return new class extends Migration {...}`, dus `Class == ""` — zie
-  `classify.go`'s `database/migrations/`-regel en `phpscan.go`'s
-  anonieme-class-afhandeling; alleen `up` telt, `down` nooit). Per
-  `Schema::create('tabel', ...)`/`Schema::table('tabel', ...)`-match
-  (`reSchemaTable`, beide tellen — een kolom-migratie hoort net zo goed bij
-  zijn model als een create-migratie) in de `up`-body: tabel → model via (1)
-  een expliciete `protected $table = '...'`-override
-  (`idx.modelTables`, gevuld tijdens dezelfde `buildSymbolIndex`-worktree-walk
-  als `idx.models`/`scanModels` — geen tweede walk) of (2) de Eloquent-conventie
-  (`singularizeTable` — een bewust **pragmatische**, niet-volledige
-  inflector: `-ies`→`-y`, trailing `-s` weg — gevolgd door `studly`). Eén
-  gededupte child per distinct tabel (`seenTable` binnen de migratie — twee
-  `Schema::table`-calls op dezelfde tabel geven dus nooit twee children), child
-  = het `idx.models`-whole-class-blok (hetzelfde synthetische blok als rule
-  2c hierboven — `ChildMethod` leeg, kale modelnaam-label). `CallKey` =
-  `"migration_model:" + tabel` (nooit botsend met een echte method-call-key,
-  die bevat geen `:`). De entries van deze functie worden in de
-  `build_relations`-Activity (`workflows.go`) **samengevoegd** met
-  `resolveCalls`'s entries vóór de ene `UpsertGo`/`Prune`-aanroep — dus geen
-  aparte prune-scope nodig, migratie-rijen zitten vanzelf in de keep-set zolang
-  hun migratie in de PR blijft wijzigen.
+  `TestResolveCallsCastPropertyUnknownTargetUnresolved` (rule 5b:
+  `$payment->processor?->value` resolves via `$casts` to the enum
+  declaration; multiple same-name enums → `unresolved`; a non-indexed
+  cast target → also `unresolved`, never silently nothing)),
+  `resolve_call_test.go` (Haiku-confident → found; never escalates to
+  Sonnet, even on an uncertain/missing Haiku answer; notfound;
+  verification rejects a made-up definition), and
+  `modules/callresolve/callresolve_test.go` (round-trip + `UpsertGo`
+  preserves LLM rows + `Prune` cleans up orphan callers and stale call
+  keys).
+  The frontend side has a **seed path**: `slash seed … -callresolve
+  <callresolve.json>` (mirror of `-relations`) loads resolved rows into
+  `callresolve.db` so Playwright renders the `method_call` children
+  without a resolver run (`tests/fixtures/callresolve.json`, PR 91 in
+  `relations.spec.mjs` — proves, among other things, that the Underlying
+  Code panel follows block selection).
+- **`kind` column (`call_resolutions.kind`, default `method_call`):**
+  distinguishes a normal call resolution from a **class-level** child
+  (`ChildMethod` empty — the whole model, no method). `Entry.Kind` in Go:
+  empty → normalized to `KindMethodCall` on write (`UpsertGo`/`Save` in
+  `modules/callresolve`), so none of the existing call-emitting rules (1
+  through 6) needed changes — only `emitKind` (the new underlying
+  implementation of `emit`, with an explicit `kind` parameter) is called
+  by rule 2c (`KindModelUsage`), `resolveMigrationModels`
+  (`KindMigrationModel`, see below), and `resolveDataProviders`
+  (`KindDataProvider`, see "PHPUnit data providers" below). An existing
+  `callresolve.db` migrates via a light `ALTER TABLE … ADD COLUMN`
+  (duplicate-column error ignored — the standard pattern from
+  `relations`/`comments`). Frontend: `resolvedCallChildren` (`home.mjs`)
+  now **takes over** `r.kind` instead of always hardcoding
+  `'method_call'`, and the **label** branches on `r.childMethod` (empty →
+  bare `r.childClass`, filled → the existing `Class::method` template) —
+  this already applied before this column existed, for rule 2c's
+  model-usage children (which used to show a `"ProductGroup::"` with an
+  empty, ugly `::` tail) and now applies too for
+  `migration_model`/`data_provider` (both always have a filled
+  `childMethod`, so they render as a normal `Class::method` child).
+  `KIND_LABEL` (`RelatedPanel.mjs`) links `model_usage`/`migration_model`
+  to the badge word **"model"** and `data_provider` to **"provider"**; the
+  `diffStatBadge`/`unchanged` helpers recognize all three alongside
+  `method_call`/`covers` (shared `DIFFSTAT_KINDS` set) so they too get a
+  `+A −R`/`Unchanged` badge and the grey "unchanged" ring style, exactly
+  like a normal call child.
+- **Migration → model (`resolveMigrationModels`, `callresolve_analysis.go`):**
+  a changed migration usually belongs to an **already-existing, unchanged**
+  model — the main case is "add a column to an existing table", not
+  "new model + new migration at the same time". That makes this a
+  **callresolve** rule (may point to an unchanged file), not a
+  `relations` detector (those are all both-changed, see the Laravel chain
+  above) — and without an LLM fallback: the mapping is rule-based and
+  deterministic, so a migration that can't be mapped produces **silently
+  nothing** (no `unresolved` row, no "Search" button). Scope: every changed
+  `Category == "MIGRATION" && Name == "up"` block (a migration is always
+  the anonymous `return new class extends Migration {...}`, so `Class ==
+  ""` — see `classify.go`'s `database/migrations/` rule and `phpscan.go`'s
+  anonymous-class handling; only `up` counts, never `down`). Per
+  `Schema::create('table', ...)`/`Schema::table('table', ...)` match
+  (`reSchemaTable`, both count — a column migration belongs to its model
+  just as much as a create migration) in the `up` body: table → model via
+  (1) an explicit `protected $table = '...'` override (`idx.modelTables`,
+  filled during the same `buildSymbolIndex` worktree walk as
+  `idx.models`/`scanModels` — no second walk) or (2) the Eloquent
+  convention (`singularizeTable` — a deliberately **pragmatic**,
+  non-exhaustive inflector: `-ies`→`-y`, trailing `-s` dropped — followed
+  by `studly`). One deduped child per distinct table (`seenTable` within
+  the migration — two `Schema::table` calls on the same table thus never
+  give two children), child = the `idx.models` whole-class block (the
+  same synthetic block as rule 2c above — `ChildMethod` empty, bare model
+  name label). `CallKey` = `"migration_model:" + table` (never clashes
+  with a real method-call key, which contains no `:`). This function's
+  entries are **merged** in the `build_relations` Activity (`workflows.go`)
+  with `resolveCalls`'s entries before the one `UpsertGo`/`Prune` call —
+  so no separate prune scope needed, migration rows automatically stay
+  in the keep set as long as their migration keeps changing in the PR.
 - Tests: `TestResolveMigrationModelsConvention`/`ExplicitTable`/
-  `MultipleTablesDeduped` (`callresolve_analysis_test.go`, fixture-PHP: een
-  `Schema::create`-migratie die via de conventie naar zijn model resolvt, een
-  `$table`-override die de conventie overstemt, en een migratie met twee
-  `Schema::table`-calls op dezelfde tabel + een niet-mapbare tabel — gededupt
-  resp. stil overgeslagen); `TestKindRoundTrip`/`TestMigrateAddsKindColumn`
-  (`modules/callresolve/callresolve_test.go`: lege Kind normaliseert naar
-  `method_call` via zowel `UpsertGo` als `Save`, een expliciete Kind
-  round-trippt, en een DB zonder de kolom migreert bij `Open`).
+  `MultipleTablesDeduped` (`callresolve_analysis_test.go`, fixture PHP: a
+  `Schema::create` migration that resolves to its model via the
+  convention, a `$table` override that overrides the convention, and a
+  migration with two `Schema::table` calls on the same table + a
+  non-mappable table — deduped resp. silently skipped);
+  `TestKindRoundTrip`/`TestMigrateAddsKindColumn`
+  (`modules/callresolve/callresolve_test.go`: an empty Kind normalizes to
+  `method_call` via both `UpsertGo` and `Save`, an explicit Kind round-trips,
+  and a DB without the column migrates on `Open`).
   Playwright: `tests/migration-model.spec.mjs` (PR 101, `migrationmodel-*.json`
-  — bewijst dat zowel een `model_usage`- als een `migration_model`-child een
-  kale modelnaam + "model"-badge tonen, nooit de `Class::`-vorm).
+  — proves that both a `model_usage` and a `migration_model` child show a
+  bare model name + "model" badge, never the `Class::` form).
 - **PHPUnit data providers (`resolveDataProviders`, `callresolve_analysis.go`):**
-  een testmethode met `#[DataProvider('providerMethod')]` (of de legacy
-  `@dataProvider providerMethod`-docblock-tag) wil de reviewer de
-  provider-methode zelf zien als Onderliggende code — meestal een **al
-  bestaande, ongewijzigde** provider die een nieuwe/aangepaste test hergebruikt.
-  Zelfde motivatie/architectuur als "Migratie → model" hierboven: een
-  **callresolve**-regel (mag naar een ongewijzigd bestand wijzen), geen
-  `relations`-detector, en **zonder LLM-fallback** — PHPUnit's kale
-  `#[DataProvider(...)]`/`@dataProvider` noemt altijd een methode **op de
-  class van de test zelf** (geen `Class::method`-vorm zoals
-  `#[DataProviderExternal(...)]`, bewust buiten scope), dus er is geen
-  ambiguïteit om aan een LLM voor te leggen; een naam die niet matcht (typo,
-  of een externe provider) levert **stil niets** op, nooit een
-  `unresolved`-rij.
-  Scope: elk gewijzigd `Category == "TEST"`-blok (dezelfde scoping als
-  `scanTestCovers`). Voor elk zo'n blok hergebruikt `resolveDataProviders`
-  **`methodZone`** (`testcovers_analysis.go`, ongewijzigde functie — zie de
-  scanner-noot in `.claude/rules/blocks-and-ingest.md` over hoe die inmiddels
-  óók de in-block gevouwen leidende attributen meetelt via `funcDeclLine`) om
-  de attribuut/docblock-tekst van de testmethode te lezen, matcht daarin
-  `reDataProviderAttr`/`reDataProviderDocblock` (gededupt per naam), en
-  resolvt elke naam via `methodOnClass(idx, b.Class, name)` — altijd dezelfde
-  class als de test, nooit een andere. Child = `KindDataProvider`, `CallKey =
-  "data_provider:" + naam` (bevat `:`, dus — net als `migration_model:` —
-  nooit te matchen als een echte call-site in de frontend's
-  `findCallSites`/`callScopeMethods`, waardoor deze child op `line`/`call`-
-  granulariteit wegvalt maar op `group`/list-niveau gewoon zichtbaar blijft,
-  identiek aan hoe een blok-niveau-relatie zich gedraagt). De entries worden in
-  de `build_relations`-Activity (`workflows.go`) **samengevoegd** met
-  `resolveCalls`/`resolveMigrationModels`'s entries vóór de ene
-  `UpsertGo`/`Prune`-aanroep — dezelfde keep-set, dus geen aparte prune-scope
-  nodig; de headless `slash relations <pr>`-twin (`main.go`) roept 'm ook aan.
-  Tests: `TestResolveDataProviders` (`callresolve_analysis_test.go`: de
-  attribuut-vorm, de legacy docblock-vorm, en een niet-resolvbare naam die
-  stil niets oplevert — hergebruikt `testCoversBlocks` uit
-  `testcovers_analysis_test.go` zodat de scan echte, scanner-geproduceerde
-  regelnummers gebruikt, wat `methodZone`/`funcDeclLine` vereisen).
+  a test method with `#[DataProvider('providerMethod')]` (or the legacy
+  `@dataProvider providerMethod` docblock tag) wants the reviewer to see
+  the provider method itself as Underlying Code — usually an **already
+  existing, unchanged** provider that a new/changed test reuses. Same
+  motivation/architecture as "Migration → model" above: a **callresolve**
+  rule (may point to an unchanged file), not a `relations` detector, and
+  **without an LLM fallback** — PHPUnit's bare `#[DataProvider(...)]`/
+  `@dataProvider` always names a method **on the test's own class** (no
+  `Class::method` form like `#[DataProviderExternal(...)]`, deliberately
+  out of scope), so there's no ambiguity to put in front of an LLM; a name
+  that doesn't match (typo, or an external provider) produces **silently
+  nothing**, never an `unresolved` row.
+  Scope: every changed `Category == "TEST"` block (the same scoping as
+  `scanTestCovers`). For each such block, `resolveDataProviders` reuses
+  **`methodZone`** (`testcovers_analysis.go`, unchanged function — see
+  the scanner note in `.claude/rules/blocks-and-ingest.md` about how it
+  now also counts the leading attributes folded into the block via
+  `funcDeclLine`) to read the test method's attribute/docblock text,
+  matches `reDataProviderAttr`/`reDataProviderDocblock` in it (deduped per
+  name), and resolves each name via `methodOnClass(idx, b.Class, name)` —
+  always the same class as the test, never another one. Child =
+  `KindDataProvider`, `CallKey = "data_provider:" + name` (contains `:`,
+  so — like `migration_model:` — never matches as a real call site in the
+  frontend's `findCallSites`/`callScopeMethods`, meaning this child drops
+  out at `line`/`call` granularity but stays visible at `group`/list level,
+  identical to how a block-level relation behaves). The entries are
+  **merged** in the `build_relations` Activity (`workflows.go`) with
+  `resolveCalls`/`resolveMigrationModels`'s entries before the one
+  `UpsertGo`/`Prune` call — the same keep set, so no separate prune scope
+  needed; the headless `slash relations <pr>` twin (`main.go`) calls it
+  too.
+  Tests: `TestResolveDataProviders` (`callresolve_analysis_test.go`: the
+  attribute form, the legacy docblock form, and a non-resolvable name that
+  silently produces nothing — reuses `testCoversBlocks` from
+  `testcovers_analysis_test.go` so the scan uses real, scanner-produced
+  line numbers, which `methodZone`/`funcDeclLine` require).
 
-## Testdekking koppelen (`resolve_test_covers` + `modules/testcovers`)
+## Linking test coverage (`resolve_test_covers` + `modules/testcovers`)
 
-Een PHPUnit-testmethode koppelt aan de methode die hij test — in **beide
-richtingen** van de "Onderliggende code"-kaart: een test toont de geteste
-methode als kind, én een geteste productiemethode toont "gedekt door
-TestX::testY" als kind (mits de test zelf ook door de PR wijzigt, want alleen
-dán bestaat er een test-PR-blok om aan te hangen). Twee lagen, net als bij
-call-resolve: een Go-detector eerst, een **beperkte** AI-fallback alleen voor
-één specifiek geval.
+A PHPUnit test method links to the method it tests — in **both
+directions** of the "Underlying code" card: a test shows the tested method
+as a child, and a tested production method shows "covered by
+TestX::testY" as a child (provided the test itself also changes in the
+PR, since only then does a test PR block exist to hang it on). Two
+layers, like call-resolve: a Go detector first, a **limited** AI fallback
+only for one specific case.
 
-- **Waarom een eigen module, geen `relations`-rij:** de geteste methode kan in
-  een bestand staan dat de PR **niet** wijzigt (het normale geval — een
-  bestaande test op bestaande productiecode), dus is zijn block-id vaak geen
-  PR-blok dat de frontend kent. Net als `callresolve` draagt een rij daarom de
-  **volledige child-descriptor + codetekst**, niet alleen een block-id-paar.
-- **`modules/testcovers`** (`data/testcovers.db`): het read-model
-  `test_covers(pr, test_id, target_key, status, covered_*, annotation, model,
-  confidence, updated_at, line)`, PK `(pr, test_id, target_key)`. `target_key`
-  mirrort callresolve's `call_key`: `"method:Class::method"` voor een statisch
-  opgeloste annotatie, `"class:Class"` voor een class-niveau-annotatie
-  (AI-territorium), `"none"` voor "geen annotatie". `line` (distinct van
-  `covered_line`, de declaratieregel van de **geteste** methode) is de
-  absolute broncoderegel **binnen het testbestand zelf** waar de
-  coverage-annotatie staat — vastgelegd door de Go-scan (`coverTarget.line` in
-  `testcovers_analysis.go`, via dezelfde `matchLine`-aanpak als de
-  relations-detectors) en gebruikt door de frontend om het
-  Onderliggende-code-paneel te herordenen op de geselecteerde `group`-unit
-  (zie `groupLineRange`/`resolvedTestCoverChildren` in `home.mjs`, en de
-  "Onderliggende code"-sectie in `.claude/rules/detail-layout.md`). Alleen
-  gezet op een `resolved`/`unresolved` rij (de annotatie leeft in de tekst die
-  de Go-scan doorzoekt); een `found`-rij die van een `unresolved`
-  class-only-annotatie escaleerde (zie hieronder) draagt 'm bewust **niet**
-  door — te veel extra plumbing (API/workflow/Activity-payload) voor dit
-  smalle AI-pad, dus zo'n rij degradeert naar dezelfde "niet in de group"-tier
-  als `covered_by` (zie `detail-layout.md`). Zes statussen — de vijf van
-  `callresolve` plus één nieuwe terminale:
-  - **`resolved`** — een **method-niveau** annotatie (`#[CoversMethod(Class::class,
-    'method')]`, `@covers Class::method`, of `@coversDefaultClass` +
-    `@covers ::method`) noemt **altijd** zowel class als methode, dus dit
-    resolvt **statisch, zonder AI**, geverifieerd tegen de worktree.
-  - **`unannotated`** — geen enkele annotatie gevonden → **permanente warning,
-    nooit AI**.
-  - **`unresolved`** — een **class-niveau-only** annotatie (`#[CoversClass(Class::class)]`,
-    kale `@covers Class`) noemt alleen een class, geen methode → precies de
-    betekenis van callresolve's `unresolved`: "Go kon 'm niet pinnen, bied de
-    AI-zoektocht aan" — triggert automatisch `resolve_test_covers`.
-  - **`searching`/`found`/`notfound`** — LLM-owned, identiek aan callresolve.
-  - Write `UpsertGo` (schrijft `resolved`/`unannotated`/`unresolved`-rijen,
-    overschrijft nooit een `searching`/`found`/`notfound`-rij — een Go-rebuild
-    mag een dure AI-resolutie niet wegvegen) en `Prune` (ruimt weesrijen op wier
-    `(test_id, target_key)` niet meer in de huidige scan zit), `SaveSearching`/
-    `Save` voor de AI-tak, `List` read-only.
-- **Statische detector `testcovers_analysis.go`** (package main, leest de
-  head-worktree): `scanTestCovers(dataDir, pr, blocks)` scant, per **gewijzigd
-  testbestand** (TEST-categorie PR-blokken — geen whole-worktree-scan van
-  tests), de ruwe tekst rond elke testmethode (`methodZone`, begrensd door het
-  vorige blok in hetzelfde bestand) én rond de class-declaratie (`classZone`,
-  alles vóór het eerste `class`-keyword — voor een class-brede
-  `@coversDefaultClass`/`#[CoversClass]`/kale `@covers Class`) op de vier
-  annotatievormen, puur regex, geen parser. Een method-niveau-annotatie wint
-  altijd van een class-niveau-annotatie voor dezelfde class (geen dubbele
-  AI-zoektocht als de methode al precies bekend is). Een testmethode wordt
-  herkend via de `test`-naamprefix of een `#[Test]`/`@test`-marker
-  (`isTestMethod`) — zo blijven `setUp`/helper-methodes buiten beschouwing.
-  `buildTestCovers` wordt aangeroepen **in de bestaande `buildRelations`-Activity**
-  (naast de bestaande `resolveCalls`/`UpsertGo`/`Prune`-aanroep voor
-  callresolve) — geen apart Workflow Type voor dit statische deel, exact
-  hetzelfde precedent als callresolve's Go-rijen.
-- **AI-tak `resolve_test_covers.go` + workflow `resolveTestCoversWorkflow`**
-  (mirror van `resolve_call.go`/`resolveCallWorkflow`): draait **uitsluitend**
-  voor `unresolved`-targets (een class-niveau-only annotatie) — **nooit** voor
-  `unannotated`. Haiku krijgt als context de **kandidaat-methoden van de
-  genoemde class** (`idx.byClass[class]`, dezelfde beperkte, goed te verifiëren
-  scope als de coordinator vroeg) + de testmethode-body, en kiest **welke
-  methode** de test uitoefent. **Uitsluitend Haiku — géén automatische
-  escalatie naar Sonnet meer** (was eerder: bij lage confidence escaleerde de
-  workflow automatisch naar Sonnet, agentisch `Read`/`Grep`/`Glob` in de
-  worktree; die stap is uit `resolveTestCoversWorkflow` verwijderd, op
-  expliciet verzoek). De generieke Sonnet/agentische machinery in
-  `resolve_test_covers.go` (`testCoverArg.Model`, de `agentic`-prompt-tak)
-  bestaat nog steeds, wordt alleen niet meer vanuit deze workflow aangeroepen.
-  Elke claim wordt geverifieerd: de methode moet **echt bestaan op de genoemde
-  class** (`methodOnClass`) — strenger dan `verifyDefinition` omdat de class al
-  vastligt door de annotatie, alleen de methode is onzeker. Resultaat `found`
-  (met `model`/`confidence`, `model` is nu altijd `haiku`) of `notfound`.
-- **Sibling-hergebruik binnen dezelfde testclass (`reuseSiblingCovers`,
-  `resolve_test_covers.go`):** meerdere testmethodes in **hetzelfde
-  testbestand** dekken vaak dezelfde class — vóórdat `resolveTestCoversWorkflow`
-  Haiku vraagt, checkt hij per class-level-only annotatie of een **sibling-test**
-  (zelfde PR + zelfde testbestand, dus hetzelfde `<pr>:<file>:`-block-id-
-  voorvoegsel, een ándere `test_id`) diezelfde class al oploste. Matcht via
-  **`CoveredClass`**, niet de rauwe `target_key`-string: een `resolved`-rij
-  (methode-niveau-annotatie) draagt `target_key = "method:Class::Method"`,
-  een `found`/`unresolved`-rij (class-niveau-only) `target_key =
-  "class:Class"` — `CoveredClass` is het veld dat "dezelfde geteste class" op
-  beide vormen consistent identificeert. Alleen **`resolved`** (statisch
-  geverifieerde methode-niveau-annotatie op een andere testmethode — het
-  meest gezaghebbend) en **`found`** (een eerder LLM-antwoord voor exact
-  dezelfde class-level-only target) worden hergebruikt; `notfound`/
-  `searching`/`unresolved`/`unannotated` nooit — een eerdere miss zegt niets
-  bruikbaars voor een andere test. Bestaan beide voor dezelfde class, dan wint
-  `resolved`; binnen dezelfde status wint de eerste match in `List`'s eigen
-  stabiele `ORDER BY test_id, target_key`. Een hergebruikte rij is een
-  **letterlijke kopie** van de sibling-rij (status/`model`/`confidence`/
-  covered-* velden ongewijzigd, alleen `test_id`/`target_key` herschreven naar
-  de eigen test) — geen aparte "hergebruikt"-marker, dus het bestaande
-  per-status badge (`bron: haiku` bij `found`, geen badge bij `resolved`)
-  verschijnt gewoon vanzelf. **Determinisme:** de opzoeking is zijn **eigen
-  Activity** (`reuseTestCoverSiblings`, de enige plek die `testcovers.List`
-  leest — de matching zelf, `reuseSiblingCovers`, is een pure functie van die
-  snapshot); het **aantal** `resolveTestCoversWithModel`-aanroepen (nul zodra
-  elke genoemde class is hergebruikt) is dus een functie van dat
-  Activity-resultaat uit de history, hetzelfde replay-patroon als
-  callresolve's `HadCandidates`-gate. Dit bespaart uitsluitend Haiku-calls —
-  het introduceert geen Sonnet-escalatie opnieuw (die blijft uit, zie hierboven).
-- **Endpoints:** `POST /api/workflows/resolve_test_covers` (start; body `{pr,
-  testId, testFile, testClass, testName, classes}`) en read-only
+- **Why a dedicated module, not a `relations` row:** the tested method can
+  be in a file the PR does **not** change (the normal case — an existing
+  test on existing production code), so its block id is often not a PR
+  block the frontend knows about. Just like `callresolve`, a row therefore
+  carries the **full child descriptor + code text**, not just a block id
+  pair.
+- **`modules/testcovers`** (`data/testcovers.db`): the read model
+  `test_covers(pr, test_id, target_key, status, covered_*, annotation,
+  model, confidence, updated_at, line)`, PK `(pr, test_id, target_key)`.
+  `target_key` mirrors callresolve's `call_key`: `"method:Class::method"`
+  for a statically resolved annotation, `"class:Class"` for a class-level
+  annotation (AI territory), `"none"` for "no annotation". `line`
+  (distinct from `covered_line`, the declaration line of the **tested**
+  method) is the absolute source line **within the test file itself**
+  where the coverage annotation sits — recorded by the Go scan
+  (`coverTarget.line` in `testcovers_analysis.go`, via the same
+  `matchLine` approach as the relations detectors) and used by the
+  frontend to reorder the Underlying Code panel around the selected
+  `group` unit (see `groupLineRange`/`resolvedTestCoverChildren` in
+  `home.mjs`, and the "Underlying code" section in
+  `.claude/rules/detail-layout.md`). Only set on a `resolved`/`unresolved`
+  row (the annotation lives in the text the Go scan searches); a `found`
+  row that escalated from an `unresolved` class-only annotation (see
+  below) deliberately does **not** carry it — too much extra plumbing
+  (API/workflow/Activity payload) for this narrow AI path, so such a row
+  degrades to the same "not in the group" tier as `covered_by` (see
+  `detail-layout.md`). Six statuses — the five from `callresolve` plus one
+  new terminal one:
+  - **`resolved`** — a **method-level** annotation
+    (`#[CoversMethod(Class::class, 'method')]`, `@covers Class::method`,
+    or `@coversDefaultClass` + `@covers ::method`) **always** names both
+    class and method, so this resolves **statically, without AI**,
+    verified against the worktree.
+  - **`unannotated`** — no annotation found at all → **permanent warning,
+    never AI**.
+  - **`unresolved`** — a **class-level-only** annotation
+    (`#[CoversClass(Class::class)]`, bare `@covers Class`) names only a
+    class, no method → exactly the meaning of callresolve's `unresolved`:
+    "Go couldn't pin it, offer the AI search" — automatically triggers
+    `resolve_test_covers`.
+  - **`searching`/`found`/`notfound`** — LLM-owned, identical to
+    callresolve.
+  - Write `UpsertGo` (writes `resolved`/`unannotated`/`unresolved` rows,
+    never overwrites a `searching`/`found`/`notfound` row — a Go rebuild
+    must not wipe out an expensive AI resolution) and `Prune` (cleans up
+    orphan rows whose `(test_id, target_key)` is no longer in the current
+    scan), `SaveSearching`/`Save` for the AI branch, `List` read-only.
+- **Static detector `testcovers_analysis.go`** (package main, reads the
+  head worktree): `scanTestCovers(dataDir, pr, blocks)` scans, per
+  **changed test file** (TEST-category PR blocks — no whole-worktree scan
+  of tests), the raw text around each test method (`methodZone`, bounded
+  by the previous block in the same file) and around the class
+  declaration (`classZone`, everything before the first `class` keyword —
+  for a class-wide `@coversDefaultClass`/`#[CoversClass]`/bare
+  `@covers Class`) for the four annotation forms, pure regex, no parser. A
+  method-level annotation always wins over a class-level annotation for
+  the same class (no double AI search when the method is already
+  precisely known). A test method is recognized via the `test` name
+  prefix or a `#[Test]`/`@test` marker (`isTestMethod`) — so `setUp`/
+  helper methods stay out of consideration. `buildTestCovers` is called
+  **within the existing `buildRelations` Activity** (alongside the
+  existing `resolveCalls`/`UpsertGo`/`Prune` call for callresolve) — no
+  separate Workflow Type for this static part, exactly the same precedent
+  as callresolve's Go rows.
+- **AI branch `resolve_test_covers.go` + workflow `resolveTestCoversWorkflow`**
+  (mirror of `resolve_call.go`/`resolveCallWorkflow`): runs **only** for
+  `unresolved` targets (a class-level-only annotation) — **never** for
+  `unannotated`. Haiku gets, as context, the **candidate methods of the
+  named class** (`idx.byClass[class]`, the same limited, easy-to-verify
+  scope the coordinator asked for earlier) + the test method body, and
+  picks **which method** the test exercises. **Haiku only — no more
+  automatic escalation to Sonnet** (previously: on low confidence the
+  workflow automatically escalated to Sonnet, agentic `Read`/`Grep`/`Glob`
+  in the worktree; that step was removed from `resolveTestCoversWorkflow`,
+  on explicit request). The generic Sonnet/agentic machinery in
+  `resolve_test_covers.go` (`testCoverArg.Model`, the `agentic` prompt
+  branch) still exists, it's just no longer called from this workflow.
+  Every claim is verified: the method must **really exist on the named
+  class** (`methodOnClass`) — stricter than `verifyDefinition` because the
+  class is already fixed by the annotation, only the method is uncertain.
+  Result `found` (with `model`/`confidence`, `model` is now always
+  `haiku`) or `notfound`.
+- **Sibling reuse within the same test class (`reuseSiblingCovers`,
+  `resolve_test_covers.go`):** multiple test methods in **the same test
+  file** often cover the same class — before `resolveTestCoversWorkflow`
+  asks Haiku, it checks, per class-level-only annotation, whether a
+  **sibling test** (same PR + same test file, so the same
+  `<pr>:<file>:` block-id prefix, a *different* `test_id`) already
+  resolved that same class. Matches via **`CoveredClass`**, not the raw
+  `target_key` string: a `resolved` row (method-level annotation) carries
+  `target_key = "method:Class::Method"`, a `found`/`unresolved` row
+  (class-level-only) carries `target_key = "class:Class"` —
+  `CoveredClass` is the field that consistently identifies "the same
+  tested class" across both forms. Only **`resolved`** (a statically
+  verified method-level annotation on another test method — the most
+  authoritative) and **`found`** (an earlier LLM answer for exactly the
+  same class-level-only target) are reused; `notfound`/`searching`/
+  `unresolved`/`unannotated` never — an earlier miss says nothing useful
+  for another test. If both exist for the same class, `resolved` wins;
+  within the same status, the first match in `List`'s own stable
+  `ORDER BY test_id, target_key` wins. A reused row is a **literal copy**
+  of the sibling row (status/`model`/`confidence`/covered-* fields
+  unchanged, only `test_id`/`target_key` rewritten to the own test) — no
+  separate "reused" marker, so the existing per-status badge
+  (`source: haiku` on `found`, no badge on `resolved`) just naturally
+  appears. **Determinism:** the lookup is its **own Activity**
+  (`reuseTestCoverSiblings`, the only place that reads `testcovers.List`
+  — the matching itself, `reuseSiblingCovers`, is a pure function of that
+  snapshot); the **number** of `resolveTestCoversWithModel` calls (zero
+  once every named class has been reused) is thus a function of that
+  Activity result from the history, the same replay pattern as
+  callresolve's `HadCandidates` gate. This only saves Haiku calls — it
+  doesn't reintroduce Sonnet escalation (that stays off, see above).
+- **Endpoints:** `POST /api/workflows/resolve_test_covers` (start; body
+  `{pr, testId, testFile, testClass, testName, classes}`) and read-only
   `GET /api/testcovers?pr=N`.
 - **Frontend** (`home.mjs`): `state.testCovers` (`loadTestCovers`).
-  **Richting 1** (test → geteste methode): `resolvedTestCoverChildren(b)` voor
-  een TEST-blok `b` — kind `covers`, dezelfde diffstat/`Ongewijzigd`-badge en
-  `bron: haiku`-badge als een `method_call`-child (sinds de Sonnet-escalatie is
-  geschrapt is `model` hier altijd `haiku`; het badge-mechanisme zelf toont nog
-  gewoon wat er in de rij staat). **Richting 2**
-  (geteste productiemethode → dekkende test): `coveredByChildren(b)` — kind
-  `covered_by`, hergebruikt het bestaande test-PR-blok (geen los codesnapshot
-  nodig). Beide zijn **block-level** (zoals `event_listener`): ze vallen weg op
-  `gran==='call'`, net als de listener-children — dekking is geen
-  regel/call-gebonden begrip. `directChildBlocks`/`nestedPrBlocks` (de
-  combinatie-goedkeuringspil) nemen **alleen richting 1** mee (test → geteste
-  methode); richting 2 bewust **niet**, om een method↔test-cyclus in die
-  recursieve rollup te vermijden. **Testdekking verbergt géén enkel blok uit de
-  linkerlijst** — noch de test, noch de geteste methode. Anders dan een
-  call-target of een listener (vaak echt ongewijzigde referentiecode die
-  `resolvedCallTargetIds`/de relatie-children wél uit de lijst halen) is een
-  geteste methode die een PR-blok is **altijd** gewijzigde, primair te-reviewen
-  code (bv. een nieuw toegevoegde controller die de PR introduceert). Een test
-  mag zo'n blok dus nooit uit de tree laten verdwijnen: `recomputeLeftList`
-  voegt `testCoverTargetIds()` **niet** aan de hidden-set toe (de functie
-  bestaat nog, maar wordt niet meer gebruikt om te verbergen). Beide kanten
-  blijven in de lijst én verschijnen daarnaast als elkaars Onderliggende-code-
-  kind: de test toont de geteste methode als `covers`-kind, de methode toont de
-  test als `covered_by`-kind — volledig symmetrisch.
+  **Direction 1** (test → tested method): `resolvedTestCoverChildren(b)`
+  for a TEST block `b` — child `covers`, the same diffstat/`Unchanged`
+  badge and `source: haiku` badge as a `method_call` child (since the
+  Sonnet escalation was removed, `model` here is always `haiku`; the badge
+  mechanism itself still just shows whatever is in the row). **Direction
+  2** (tested production method → covering test):
+  `coveredByChildren(b)` — child `covered_by`, reuses the existing test PR
+  block (no separate code snapshot needed). Both are **block-level** (like
+  `event_listener`): they drop away at `gran==='call'`, just like the
+  listener children — coverage isn't a line/call-bound concept.
+  `directChildBlocks`/`nestedPrBlocks` (the combined-approval rollup) only
+  include **direction 1** (test → tested method); direction 2
+  deliberately **not**, to avoid a method↔test cycle in that recursive
+  rollup. **Test coverage hides no block whatsoever** from the left-hand
+  list — neither the test nor the tested method. Unlike a call target or
+  a listener (often genuinely unchanged reference code that
+  `resolvedCallTargetIds`/the relation children **do** pull out of the
+  list) a tested method that is a PR block is **always** changed, primary
+  reviewable code (e.g. a newly added controller that the PR introduces).
+  A test must therefore never make such a block disappear from the tree:
+  `recomputeLeftList` does **not** add `testCoverTargetIds()` to the
+  hidden set (the function still exists, but is no longer used to hide
+  anything). Both sides stay in the list and additionally appear as each
+  other's Underlying Code child: the test shows the tested method as a
+  `covers` child, the method shows the test as a `covered_by` child — fully
+  symmetric.
   **Warning** (`data-testid=related-covers-warning`, custom inline SVG,
-  in de kaart-header naast `related-approval-total`): getoond zodra het
-  gefocuste TEST-blok een `unannotated`- of (na een mislukte AI-zoektocht)
-  `notfound`-rij heeft, met per geval andere tekst. **"zoeken…"**-indicator
-  (`related-searching`) hergebruikt dezelfde `searching()`/`pending()`-helpers
-  als callresolve — `unresolvedTestCovers(b)` wordt gewoon meegeconcateneerd in
-  hetzelfde `unresolved`-argument van `setRelated`. De AI-search start
-  **automatisch** (`startTestCoverSearch`, dezelfde `setRelated`-watch als
-  `startCallSearch`), gededupt per test+class in `testCoverSearchRequested`.
-- Tests: `testcovers_analysis_test.go` (alle annotatievormen, class-niveau →
-  `unresolved`, een onverifieerbare claim → effectief `unannotated`, een
-  niet-TEST-blok wordt geskipt, en een `build_relations`-end-to-end-test die
-  bevestigt dat de Activity ook `testcovers.db` vult), `resolve_test_covers_test.go`
-  (mirror van `resolve_call_test.go`: Haiku-confident → found, nooit escalatie
-  naar Sonnet ook niet bij een onzeker Haiku-antwoord, notfound, verificatie
-  weigert een methode die niet op de genoemde class bestaat, plus drie tests
-  voor het sibling-hergebruik: een geseede `found`-sibling in hetzelfde
-  testbestand wordt letterlijk gekopieerd zonder dat Haiku wordt aangeroepen
-  (`fake.CallCount() == 0`), dezelfde sibling in een ánder testbestand wordt
-  **niet** hergebruikt (Haiku draait alsnog), en een geseede `resolved`-sibling
-  (methode-niveau-annotatie) wordt net zo hergebruikt als een `found`-sibling),
-  `modules/testcovers/testcovers_test.go` (round-trip,
-  `UpsertGo` beschermt een `found`-rij, `Prune` ruimt weesrijen op).
-  Playwright: `tests/testcovers.spec.mjs` (beide richtingen + drill-recursie,
-  beide warning-varianten, het `bron: sonnet`-badge — een geseede fixture-waarde,
-  toont alleen dat het badge-mechanisme zelf model-onafhankelijk is), geseed via
-  `slash seed … -testcovers <testcovers.json>` (mirror van `-callresolve`,
-  `tests/fixtures/testcovers.json` + `testcovers-blocks.json`, PR 92/93/94).
+  in the card header next to `related-approval-total`): shown as soon as
+  the focused TEST block has an `unannotated` row, or (after a failed AI
+  search) a `notfound` row, with different text per case.
+  **"searching…"** indicator (`related-searching`) reuses the same
+  `searching()`/`pending()` helpers as callresolve —
+  `unresolvedTestCovers(b)` is simply concatenated into the same
+  `unresolved` argument of `setRelated`. The AI search starts
+  **automatically** (`startTestCoverSearch`, the same `setRelated` watch
+  as `startCallSearch`), deduped per test+class in
+  `testCoverSearchRequested`.
+- Tests: `testcovers_analysis_test.go` (all annotation forms, class-level
+  → `unresolved`, an unverifiable claim → effectively `unannotated`, a
+  non-TEST block gets skipped, and a `build_relations` end-to-end test
+  that confirms the Activity also fills `testcovers.db`),
+  `resolve_test_covers_test.go` (mirror of `resolve_call_test.go`:
+  Haiku-confident → found, never escalates to Sonnet even on an
+  uncertain Haiku answer, notfound, verification rejects a method that
+  doesn't exist on the named class, plus three tests for the sibling
+  reuse: a seeded `found` sibling in the same test file gets literally
+  copied without Haiku being called (`fake.CallCount() == 0`), the same
+  sibling in a *different* test file is **not** reused (Haiku runs after
+  all), and a seeded `resolved` sibling (method-level annotation) gets
+  reused just like a `found` sibling), `modules/testcovers/testcovers_test.go`
+  (round-trip, `UpsertGo` protects a `found` row, `Prune` cleans up orphan
+  rows). Playwright: `tests/testcovers.spec.mjs` (both directions + drill
+  recursion, both warning variants, the `source: sonnet` badge — a seeded
+  fixture value, only shows that the badge mechanism itself is
+  model-independent), seeded via `slash seed … -testcovers
+  <testcovers.json>` (mirror of `-callresolve`, `tests/fixtures/testcovers.json`
+  + `testcovers-blocks.json`, PR 92/93/94).
 
-## AI-omschrijving van een if-unit (`explain_code` + `modules/explanations`)
+## AI description of an if-unit (`explain_code` + `modules/explanations`)
 
-Een klein Workflow Type, **`explain_code`**, genereert de **footer-omschrijving**:
-een korte Nederlandse Haiku-uitleg van het if-statement in de gefocuste
-`line`/`group`-navigatie-unit (zie de Footer-sectie in
-`.claude/rules/keyboard-navigation.md` voor de frontend-kant). Eén Execution
-per **unit + code-hash**, geen Signals — hij completet meteen.
+A small Workflow Type, **`explain_code`**, generates the **footer
+description**: a short Dutch Haiku explanation of the if statement in the
+focused `line`/`group` navigation unit (see the Footer section in
+`.claude/rules/keyboard-navigation.md` for the frontend side). One
+Execution per **unit + code hash**, no Signals — it completes right away.
 
-- **`modules/explanations`** (`data/explanations.db`): het read-model
+- **`modules/explanations`** (`data/explanations.db`): the read model
   `explanations(pr, block_id, unit_key, code_hash, status, text, model,
-  updated_at)`, PK `(pr, block_id, unit_key)` — maximaal één levende rij per
-  unit; een nieuwe hash (nieuwe commit) overschrijft de oude rij.
-  `status`: `searching`/`done`/`failed` (`failed` is terminaal — offline/
-  Claude-hiccup, de footer toont dan niets en vraagt niet opnieuw). Writes
-  (`SaveSearching`/`Save`) workflow-only; `List(pr)` read-only. Een rij met
-  **lege `code_hash`** matcht frontend-side elke hash (seed-fixtures).
-- **Input-gedreven, geen worktree-reads:** `ExplainCodeInput` draagt álles wat
-  de LLM ziet — de unit-code (new-side tekst van de aligned rows), de
-  omringende blokcode als context (frontend-truncated,
-  `EXPLAIN_CONTEXT_LINES`), bestand/label/gran, de `unitKey`
-  (`group-<start>-<end>`/`line-<row>`, dezelfde codeRef-vorm als
-  `commentPath`) en de `codeHash` (frontend-`fnv1a` over code+context; de
-  backend slaat 'm alleen op). De workflow-body is dus een pure functie van
-  zijn input.
+  updated_at)`, PK `(pr, block_id, unit_key)` — at most one live row per
+  unit; a new hash (new commit) overwrites the old row. `status`:
+  `searching`/`done`/`failed` (`failed` is terminal — offline/Claude
+  hiccup, the footer then shows nothing and doesn't ask again). Writes
+  (`SaveSearching`/`Save`) workflow-only; `List(pr)` read-only. A row with
+  an **empty `code_hash`** matches any hash on the frontend side (seed
+  fixtures).
+- **Input-driven, no worktree reads:** `ExplainCodeInput` carries
+  everything the LLM sees — the unit code (new-side text of the aligned
+  rows), the surrounding block code as context (frontend-truncated,
+  `EXPLAIN_CONTEXT_LINES`), file/label/gran, the `unitKey`
+  (`group-<start>-<end>`/`line-<row>`, the same codeRef form as
+  `commentPath`) and the `codeHash` (frontend `fnv1a` over code+context;
+  the backend only stores it). The workflow body is thus a pure function
+  of its input.
 - **Workflow** (`workflows.go` + `explain.go`): `markExplainSearching` →
-  `generateExplanation` (Haiku via `modules/claude`, **context-only** — geen
-  tools, geen Sonnet-escalatie; lege output → `failed`) → `saveExplanation`.
-  De done/failed-beslissing leest het **opgeslagen** Activity-resultaat
-  (history), dus replay-deterministisch.
-- **Idempotente start:** `StartExplainCode` gebruikt `StartWorkflowID` met een
-  **deterministische Run ID** (`explainRunID`: `expl-` + sha256 over
-  pr|blockId|unitKey|codeHash, gehasht omdat block-id's paden/dubbele punten
-  bevatten en Run ID's als JSONL-bestandsnaam dienen) — een herhaalde selectie
-  of dubbele POST hergebruikt de bestaande run i.p.v. een tweede LLM-call.
+  `generateExplanation` (Haiku via `modules/claude`, **context-only** — no
+  tools, no Sonnet escalation; empty output → `failed`) →
+  `saveExplanation`. The done/failed decision reads the **stored**
+  Activity result (history), so replay-deterministic.
+- **Idempotent start:** `StartExplainCode` uses `StartWorkflowID` with a
+  **deterministic Run ID** (`explainRunID`: `expl-` + sha256 over
+  pr|blockId|unitKey|codeHash, hashed because block ids contain
+  paths/colons and Run IDs serve as JSONL file names) — a repeated
+  selection or a duplicate POST reuses the existing run instead of a
+  second LLM call.
 - **Endpoints:** `POST /api/workflows/explain_code` (start; body
-  `{pr, blockId, file, label, gran, unitKey, codeHash, code, context}`) en
+  `{pr, blockId, file, label, gran, unitKey, codeHash, code, context}`) and
   read-only `GET /api/explanations?pr=N`.
-- **Frontend** (`home.mjs`): de footer-`watch` detecteert een if in de
-  gefocuste unit (`reIfStatement`), toont "genereren…" en start de workflow
-  automatisch met een 600ms-debounce, client-side gededupt
-  (`explainRequested`) en pas nadat het read-model minstens één keer geladen
-  is (`explanationsLoaded` — anders zou een verse run een al bestaande/geseede
-  rij overschrijven vóór de eerste GET binnen was). `SLASH_CLAUDE=off` →
-  `claude.Fake` → `failed`-rij → footer stil.
-- Tests: `explain_test.go` (Fake-Haiku → done-rij + Nederlandse prompt-check,
-  idempotente herstart, offline → failed),
-  `modules/explanations/explanations_test.go` (round-trip + hash-supersede),
-  `tests/footer-explanation.spec.mjs` (geseede weergave, if vs. geen if,
-  gedrilde kolom; PR 97, geseed via `slash seed … -explanations
-  <explanations.json>` + de in `tests/_setup.mjs` gematerialiseerde
-  `pr-97`-worktrees).
+- **Frontend** (`home.mjs`): the footer `watch` detects an if in the
+  focused unit (`reIfStatement`), shows "generating…" and starts the
+  workflow automatically with a 600ms debounce, client-side deduped
+  (`explainRequested`) and only after the read model has been loaded at
+  least once (`explanationsLoaded` — otherwise a fresh run would overwrite
+  an already-existing/seeded row before the first GET had landed).
+  `SLASH_CLAUDE=off` → `claude.Fake` → `failed` row → footer stays silent.
+- Tests: `explain_test.go` (Fake-Haiku → done row + Dutch prompt check,
+  idempotent restart, offline → failed),
+  `modules/explanations/explanations_test.go` (round-trip + hash
+  supersede), `tests/footer-explanation.spec.mjs` (seeded display, if vs.
+  no if, drilled column; PR 97, seeded via `slash seed … -explanations
+  <explanations.json>` + the `pr-97` worktrees materialized in
+  `tests/_setup.mjs`).
 
-## Reviewer-goedkeuring persisteren (`approve` + `modules/approvals`)
+## Persisting reviewer approval (`approve` + `modules/approvals`)
 
-Een vijfde Workflow Type, **`approve`** (één Execution per PR), maakt reviewer-
-goedkeuring **durable** zodat een browser-refresh onthoudt wat is afgevinkt.
-Patroon van `build_relations`/`pr_status`.
+A fifth Workflow Type, **`approve`** (one Execution per PR), makes
+reviewer approval **durable** so a browser refresh remembers what's been
+checked off. Pattern of `build_relations`/`pr_status`.
 
-- **`modules/approvals`** (`data/approvals.db`): het read-model
-  `approvals(pr, block_id, rows, calls, PRIMARY KEY(pr, block_id))`, met `rows`/
-  `calls` als JSON-arrays (de goedgekeurde rij-indices resp. de
-  `${row}:${segStart}`-call-segment-keys — de client-side `b.approvedRows`/
-  `b.approvedCalls`). Write `Replace(pr, blockID, rows, calls)` (workflow-only):
-  full-swap per block, een **leeg** stel verwijdert de rij → replay-safe. Read
-  `List(pr)`.
-- **Workflow** (`workflows.go`): `approveWorkflow` is een lus op een **`set`**-
-  Signal (`ApprovalSignal{blockId, rows, calls}`); elke `set` draait één
-  `saveApproval`-Activity die `approvals.Replace` aanroept. Deterministisch: het
-  aantal Activities is exact het aantal `set`-Signals in de history (geen live
-  state, geen klok/random). Nooit-completend — een lange-levende per-PR tracker.
-  `EnsureApprovals(pr)` (spiegelt `EnsurePRStatus`) start/hergebruikt één Execution
-  per PR, ook na herstart (`engine.Recover()` her-blokkeert de waiting Execution op
-  `set`; `findApproveLocked` vindt 'm terug).
+- **`modules/approvals`** (`data/approvals.db`): the read model
+  `approvals(pr, block_id, rows, calls, PRIMARY KEY(pr, block_id))`, with
+  `rows`/`calls` as JSON arrays (the approved row indices resp. the
+  `${row}:${segStart}` call-segment keys — the client-side
+  `b.approvedRows`/`b.approvedCalls`). Write `Replace(pr, blockID, rows,
+  calls)` (workflow-only): full swap per block, an **empty** set removes
+  the row → replay-safe. Read `List(pr)`.
+- **Workflow** (`workflows.go`): `approveWorkflow` is a loop on a **`set`**
+  Signal (`ApprovalSignal{blockId, rows, calls}`); every `set` runs one
+  `saveApproval` Activity that calls `approvals.Replace`. Deterministic:
+  the number of Activities is exactly the number of `set` Signals in the
+  history (no live state, no clock/random). Never completes — a long-lived
+  per-PR tracker. `EnsureApprovals(pr)` (mirrors `EnsurePRStatus`) starts/
+  reuses one Execution per PR, also after a restart (`engine.Recover()`
+  re-blocks the waiting Execution on `set`; `findApproveLocked` finds it
+  back).
 - **Endpoints** (`tasks_api.go`): `POST /api/workflows/approve {pr}` →
-  `EnsureApprovals`, geeft `runId`; de generieke `POST
-  /api/workflows/{runID}/signals/set {blockId, rows, calls}` levert het Signal;
-  read-only `GET /api/approvals?pr=N` → `approvals.List(pr)`.
-- **Frontend** (`home.mjs`): `loadApprovals` ensuret de tracker (runId in
-  `state.approveRunId`) en herstelt per block-id `b.approvedRows`/`b.approvedCalls`.
-  Elke mutatie (`toggleApprove`/`toggleCallApprove`, plus de top-checkbox via de
-  `onApprove`-callback die `Block.mjs` uitvoert) stuurt ná de lokale hertoewijzing
-  `persistApproval(b)` → het `set`-Signal met het volledige stel voor dat block. De
-  UI schrijft nooit direct — alleen dit Signal (write-boundary).
-- **GitHub "Viewed"-vinkje in sync houden:** een viewed-verzoek lift mee op
-  hetzelfde `set`-Signal — mirror van `ReactionSignal.Action`. `ApprovalSignal`
-  draagt daarvoor `File string` + `Viewed *bool`: `nil` = gewone block-approval-
-  set (bestaand gedrag), niet-`nil` = "markeer/ontmarkeer dit bestand" en
-  `BlockID`/`Rows`/`Calls` worden genegeerd. `approveWorkflow` vertakt op
-  `sig.Viewed != nil` naar de Activity **`setFileViewed`** (i.p.v.
-  `saveApproval`), die `github.Client.MarkFileViewed(ctx, pr, file, viewed)`
-  aanroept — de enige plek die GitHub's Files-changed-"Viewed"-checkbox zet
-  (`gh api graphql`: eerst het PR-node-ID ophalen, dan `markFileAsViewed`/
-  `unmarkFileAsViewed` als mutatie). De UI detecteert de transitie zelf:
-  `syncViewedFiles` in `home.mjs` groepeert `state.blocks` per bestand en
-  vergelijkt "alle blokken van dit bestand volledig approved + code geladen"
-  tegen `state.viewedFiles`; alleen bij een overgang (net compleet / niet meer
-  compleet) stuurt het het signal. Het draait aan het eind van
-  `persistApproval` (elke approve-toggle) én in `ensureCode` zodra een block se
-  code alsnog arriveert (voor het geval een bestand pas ná een refresh z'n
-  laatste code-fetch binnenkrijgt).
+  `EnsureApprovals`, returns `runId`; the generic `POST
+  /api/workflows/{runID}/signals/set {blockId, rows, calls}` delivers the
+  Signal; read-only `GET /api/approvals?pr=N` → `approvals.List(pr)`.
+- **Frontend** (`home.mjs`): `loadApprovals` ensures the tracker (runId in
+  `state.approveRunId`) and restores `b.approvedRows`/`b.approvedCalls` per
+  block id. Every mutation (`toggleApprove`/`toggleCallApprove`, plus the
+  top checkbox via the `onApprove` callback that `Block.mjs` runs) sends,
+  after the local reassignment, `persistApproval(b)` → the `set` Signal
+  with the full set for that block. The UI never writes directly — only
+  this Signal (write boundary).
+- **Keeping the GitHub "Viewed" checkbox in sync:** a viewed request rides
+  along on the same `set` Signal — mirror of `ReactionSignal.Action`.
+  `ApprovalSignal` carries `File string` + `Viewed *bool` for this: `nil` =
+  a normal block-approval set (existing behavior), non-`nil` = "mark/unmark
+  this file" and `BlockID`/`Rows`/`Calls` are ignored. `approveWorkflow`
+  branches on `sig.Viewed != nil` to the Activity **`setFileViewed`**
+  (instead of `saveApproval`), which calls `github.Client.MarkFileViewed(ctx,
+  pr, file, viewed)` — the only place that sets GitHub's Files-changed
+  "Viewed" checkbox (`gh api graphql`: first fetch the PR node ID, then
+  `markFileAsViewed`/`unmarkFileAsViewed` as the mutation). The UI detects
+  the transition itself: `syncViewedFiles` in `home.mjs` groups
+  `state.blocks` per file and compares "all blocks of this file fully
+  approved + code loaded" against `state.viewedFiles`; only on a
+  transition (newly complete / no longer complete) does it send the
+  signal. It runs at the end of `persistApproval` (every approve toggle)
+  and in `ensureCode` as soon as a block's code arrives after all (in case
+  a file only receives its last code fetch after a refresh).
 
-## Ingest-pipeline als workflow (`ingest` + `.claude/rules/blocks-and-ingest.md`)
+## Ingest pipeline as a workflow (`ingest` + `.claude/rules/blocks-and-ingest.md`)
 
-Een zesde Workflow Type, **`ingest`**, tilt de PR→blocks-pipeline binnen de
-write-boundary: vóór deze workflow schreef `ingestPR` de `blocks`-tabel en de
-git-worktrees rechtstreeks vanuit `handleIngest` (HTTP) en de CLI — de enige
-echte doorbraak van de "alleen workflows muteren state"-regel. Eén Execution
-per ingest-verzoek, **geen Signal** — de workflow-body draait zijn twee
-Activities sequentieel en completet meteen (`StartWorkflow` drijft 'm
-synchroon tot completion omdat er geen `WaitSignal` in zit).
+A sixth Workflow Type, **`ingest`**, brings the PR→blocks pipeline within
+the write boundary: before this workflow, `ingestPR` wrote the `blocks`
+table and the git worktrees directly from `handleIngest` (HTTP) and the
+CLI — the one real breach of the "only workflows mutate state" rule. One
+Execution per ingest request, **no Signal** — the workflow body runs its
+two Activities sequentially and completes right away (`StartWorkflow`
+drives it synchronously to completion since there's no `WaitSignal` in
+it).
 
-- **`prepareWorktrees`-Activity:** `gh pr view` (via `fetchPRMeta`) +
-  `ensureCommits` + de twee `ensureWorktree`-calls (`ingest.go`,
-  `prepareIngestWorktrees`). Retourneert alleen de kleine `worktreeSHAs`-summary
-  (base-SHA, head-SHA, gewijzigde bestandspaden) — niet de worktree-inhoud, die
-  op schijf blijft op zijn deterministische pad (`worktreeDirs`).
-- **`scanAndStoreBlocks`-Activity:** `git diff` + de PHP-scanner/classificatie +
-  `replacePRBlocks` (`ingest.go`, `scanAndStoreIngestBlocks`) — de enige plek die
-  de `blocks`-tabel nog schrijft. Retourneert alleen de kleine
-  `ingestResult`-summary (`{pr, stored, byStatus, warnings}`), niet de blocks
-  zelf, zodat de event-history compact blijft (zelfde patroon als
-  `build_relations`/`pr_inbox`).
-- **`TaskManager.StartIngest(ctx, pr) (*ingestResult, error)`** start de
-  Execution en leest het resultaat terug (`engine.Result`) — de sanctioned
-  write-weg. `handleIngest` (`api.go`) roept 'm aan i.p.v. rechtstreeks
-  `ingestPR`, en roept daarna zoals voorheen `EnsureRelations` aan.
-- **CLI (`slash ingest <pr>`, `main.go`):** bouwt zelf een losse engine +
-  modules via `newTasks(ctx, db, dataDir, repo, resumeRuntime=false)` — de
-  `resumeRuntime`-vlag slaat `ResumePolling`/`EnsureInbox` over (server-only
-  runtime: geen poller-hervatting, geen inbox-fetch voor een one-shot
-  headless-ingest) — en roept dan `StartIngest` + `EnsureRelations` aan, zoals
-  de HTTP-flow.
-- **Determinisme:** beide Activities zijn de enige non-determinisme/IO
-  (netwerk, git, DB); de workflow-body zelf voegt niets non-deterministisch toe
-  en draait de twee stappen altijd in dezelfde volgorde. `ingestMu` (een
-  package-level mutex, ongewijzigd) serialiseert gelijktijdige ingests van
-  dezelfde PR op worktree-niveau — nu binnen elke Activity apart in plaats van
-  rond de oude, ongesplitste `ingestPR`.
-- Zie `.claude/rules/blocks-and-ingest.md` voor de volledige pipeline-uitleg en
-  `ingest_test.go` (`TestIngestWorkflowEndToEnd`, een echte gh/git-afhankelijke
-  end-to-end-test die zichzelf skipt als gh onbereikbaar is).
-- Tests: `approvals_test.go` (module round-trip incl. full-swap/clear, de workflow
-  end-to-end: `set`-Signal → read-model, `EnsureApprovals`-idempotentie, en een
-  viewed-request die `setFileViewed`/`github.Client.MarkFileViewed` drijft i.p.v.
-  het approvals-read-model aan te raken).
+- **`prepareWorktrees` Activity:** `gh pr view` (via `fetchPRMeta`) +
+  `ensureCommits` + the two `ensureWorktree` calls (`ingest.go`,
+  `prepareIngestWorktrees`). Returns only the small `worktreeSHAs` summary
+  (base SHA, head SHA, changed file paths) — not the worktree contents,
+  which stay on disk at their deterministic path (`worktreeDirs`).
+- **`scanAndStoreBlocks` Activity:** `git diff` + the PHP scanner/
+  classification + `replacePRBlocks` (`ingest.go`,
+  `scanAndStoreIngestBlocks`) — the only place that still writes the
+  `blocks` table. Returns only the small `ingestResult` summary (`{pr,
+  stored, byStatus, warnings}`), not the blocks themselves, so the event
+  history stays compact (same pattern as `build_relations`/`pr_inbox`).
+- **`TaskManager.StartIngest(ctx, pr) (*ingestResult, error)`** starts the
+  Execution and reads the result back (`engine.Result`) — the sanctioned
+  write path. `handleIngest` (`api.go`) calls it instead of calling
+  `ingestPR` directly, and afterward calls `EnsureRelations` as before.
+- **CLI (`slash ingest <pr>`, `main.go`):** builds its own separate engine +
+  modules via `newTasks(ctx, db, dataDir, repo, resumeRuntime=false)` — the
+  `resumeRuntime` flag skips `ResumePolling`/`EnsureInbox` (server-only
+  runtime: no poller resumption, no inbox fetch for a one-shot headless
+  ingest) — and then calls `StartIngest` + `EnsureRelations`, just like the
+  HTTP flow.
+- **Determinism:** both Activities are the only non-determinism/IO
+  (network, git, DB); the workflow body itself adds nothing
+  non-deterministic and always runs the two steps in the same order.
+  `ingestMu` (a package-level mutex, unchanged) serializes concurrent
+  ingests of the same PR at the worktree level — now within each Activity
+  separately instead of around the old, unsplit `ingestPR`.
+- See `.claude/rules/blocks-and-ingest.md` for the full pipeline
+  explanation, and `ingest_test.go` (`TestIngestWorkflowEndToEnd`, a real
+  gh/git-dependent end-to-end test that skips itself if gh is
+  unreachable).
+- Tests: `approvals_test.go` (module round-trip incl. full swap/clear, the
+  workflow end-to-end: `set` Signal → read model, `EnsureApprovals`
+  idempotency, and a viewed request that drives `setFileViewed`/
+  `github.Client.MarkFileViewed` instead of touching the approvals read
+  model).
 
-## Een PR daadwerkelijk goed-/afkeuren op GitHub (`submit_review` + `github.Client.SubmitReview`)
+## Actually approving/rejecting a PR on GitHub (`submit_review` + `github.Client.SubmitReview`)
 
-Een zevende Workflow Type, **`submit_review`**, dient een **echte GitHub
-PR-level review** in (approve of request-changes) — bedoeld voor het menu dat
-na het goedkeuren van alle/laatste blokken verschijnt. Signal-loos, één
-Execution per submit-verzoek, mirrort exact `ingest`'s synchrone patroon (geen
-lange-levende tracker, geen Signal-lus).
+A seventh Workflow Type, **`submit_review`**, submits a **real GitHub
+PR-level review** (approve or request-changes) — intended for the menu
+that appears after approving all/the last blocks. Signal-less, one
+Execution per submit request, mirrors `ingest`'s synchronous pattern
+exactly (no long-lived tracker, no Signal loop).
 
 - **`modules/github`:** `Client.SubmitReview(ctx, pr, event, body) error` —
-  `event` is `"APPROVE"` of `"REQUEST_CHANGES"`. `Module.SubmitReview` valideert
-  `event` tegen een vaste allowlist (`allowedReviewEvents`) vóór de `gh api
-  --method POST repos/<repo>/pulls/<pr>/reviews`-call (`-f event=<event>` +
-  `-f body=<body>` alleen als niet leeg) — conform de eis om input te
-  valideren vóór `exec.CommandContext`. `github.Fake` registreert `event`/
-  `body` onvoorwaardelijk (`LastReviewEvent`/`LastReviewBody`/
-  `ReviewSubmittedCount`, voor tests) — de allowlist-validatie zit alleen in de
-  **echte** `Module`, niet in de Fake.
-- **Body-verplicht bij afkeuren:** GitHub weigert een bodyless
-  `REQUEST_CHANGES`-review; een `APPROVE` mag bodyless. Bewuste keuze: **hard
-  afwijzen** (400), geen auto-gegenereerde body — de reviewer moet zijn
-  afkeuring motiveren, en de frontend kan dat afdwingen met een verplicht
-  tekstveld. Gevalideerd door de pure, los testbare functie
-  `validateSubmitReview` (`tasks_api.go`) — vóór de workflow ooit start:
-  `pr <= 0`, een onbekend `event`, of een leeg/whitespace-only `body` bij
-  `REQUEST_CHANGES` geven allemaal een 400 zonder dat `gh` wordt aangeraakt.
-- **Workflow** (`workflows.go`): `submitReviewWorkflow` draait één
-  `ExecuteActivity("submitGithubReview", in, nil)` en completet — geen
-  best-effort-swallow zoals `postGithubComment`: een mislukte submit moet als
-  echte fout bij de reviewer aankomen, dus `Activity`-fouten propageren.
-  `TaskManager.StartSubmitReview(in)` mirrort `StartIngest`: `StartWorkflow`
-  (draait synchroon door tot completion, geen Signal) + een `Status`-check die
-  een `StatusFailed`-run als error teruggeeft.
+  `event` is `"APPROVE"` or `"REQUEST_CHANGES"`. `Module.SubmitReview`
+  validates `event` against a fixed allowlist (`allowedReviewEvents`)
+  before the `gh api --method POST repos/<repo>/pulls/<pr>/reviews` call
+  (`-f event=<event>` + `-f body=<body>` only if non-empty) — in line
+  with the requirement to validate input before `exec.CommandContext`.
+  `github.Fake` unconditionally records `event`/`body`
+  (`LastReviewEvent`/`LastReviewBody`/`ReviewSubmittedCount`, for tests) —
+  the allowlist validation only lives in the **real** `Module`, not in the
+  Fake.
+- **Body required when rejecting:** GitHub refuses a bodyless
+  `REQUEST_CHANGES` review; an `APPROVE` may be bodyless. Deliberate
+  choice: **hard reject** (400), no auto-generated body — the reviewer
+  must justify the rejection, and the frontend can enforce that with a
+  required text field. Validated by the pure, independently testable
+  function `validateSubmitReview` (`tasks_api.go`) — before the workflow
+  ever starts: `pr <= 0`, an unknown `event`, or an empty/whitespace-only
+  `body` with `REQUEST_CHANGES` all yield a 400 without `gh` being
+  touched.
+- **Workflow** (`workflows.go`): `submitReviewWorkflow` runs one
+  `ExecuteActivity("submitGithubReview", in, nil)` and completes — no
+  best-effort swallow like `postGithubComment`: a failed submit must
+  reach the reviewer as a real error, so `Activity` failures propagate.
+  `TaskManager.StartSubmitReview(in)` mirrors `StartIngest`:
+  `StartWorkflow` (runs synchronously through to completion, no Signal) +
+  a `Status` check that returns a `StatusFailed` run as an error.
 - **Endpoint:** `POST /api/workflows/submit_review` — body
   `{"pr": N, "event": "APPROVE"|"REQUEST_CHANGES", "body": "…"}`, 200
-  `{"runId": "…"}`, 400 bij een ongeldig verzoek (vóór elke GitHub-call), 502
-  `{"error": "…"}` als de `gh`-submit zelf faalt.
-- Tests: `submit_review_test.go` (`TestValidateSubmitReview`, tabel-test op de
-  validatiefunctie incl. de body-verplicht-bij-afkeuren-regel;
-  `TestSubmitReviewWorkflowPassesEventAndBody`, workflow-niveau met
-  `github.Fake` — bewijst dat `event`/`body` ongewijzigd doorgegeven worden
-  voor zowel APPROVE als REQUEST_CHANGES; `TestGithubModuleRejectsUnknownReviewEvent`,
-  de echte `Module`'s allowlist als defense-in-depth).
+  `{"runId": "…"}`, 400 on an invalid request (before any GitHub call),
+  502 `{"error": "…"}` if the `gh` submit itself fails.
+- Tests: `submit_review_test.go` (`TestValidateSubmitReview`, a table test
+  on the validation function including the body-required-on-rejection
+  rule; `TestSubmitReviewWorkflowPassesEventAndBody`, workflow-level with
+  `github.Fake` — proves that `event`/`body` are passed through unchanged
+  for both APPROVE and REQUEST_CHANGES;
+  `TestGithubModuleRejectsUnknownReviewEvent`, the real `Module`'s
+  allowlist as defense-in-depth).
 
-## AI-risicocontrole van de hele PR (`code_warning` + `code_warning.go`)
+## AI risk check of the whole PR (`code_warning` + `code_warning.go`)
 
-Een achtste Workflow Type, **`code_warning`**, doet een **PR-brede, agentische**
-risicocontrole: geen per-regel check, maar één run die de **hele PR** doorzoekt
-op risico's — correctheid, security én stijl/kwaliteit, mét een blik op de
-code waarmee een wijziging **verbonden** is (aanroepers, aangeroepen code,
-tests, listeners) die de PR zelf niet aanraakt. Dit is bewust **uitsluitend
-agentisch Sonnet** (`claude.ModelSonnet`, met `Read`/`Grep`/`Glob` in de
-head-worktree) — géén Haiku-context-only-pas zoals `explain_code`, en géén
-Haiku-eerst-dan-Sonnet-escalatie zoals `resolve_call` ooit deed: het punt is
-juist dat het model zelf de worktree moet verkennen om iets te vinden dat
-buiten de door ons vooraf aangeleverde context ligt (een aanroeper die een
-gewijzigde signature niet meer klopt, een test die nog de oude vorm checkt,
-een event-listener die een nieuw payload-veld niet verwerkt). Eén Execution
-per handmatige run, **geen Signal** — de workflow draait zijn Activities
-sequentieel en completet, mirrort `submit_review`/`ingest`.
+An eighth Workflow Type, **`code_warning`**, does a **PR-wide, agentic**
+risk check: not a per-line check, but a single run that searches the
+**whole PR** for risks — correctness, security, and style/quality — while
+also looking at code a change is **connected** to (callers, called code,
+tests, listeners) that the PR itself doesn't touch. This is deliberately
+**agentic Sonnet only** (`claude.ModelSonnet`, with `Read`/`Grep`/`Glob` in
+the head worktree) — no Haiku context-only pass like `explain_code`, and
+no Haiku-first-then-Sonnet escalation like `resolve_call` used to do: the
+whole point is that the model itself must explore the worktree to find
+something outside the context we hand it in advance (a caller whose call
+no longer matches a changed signature, a test that still checks the old
+form, an event listener that doesn't handle a new payload field). One
+Execution per manual run, **no Signal** — the workflow runs its Activities
+sequentially and completes, mirroring `submit_review`/`ingest`.
 
-- **Trigger: handmatig, PR-breed** (niet per group/line/call) — een nieuw item
-  **"Controleer de hele PR op risico's"** in het `/`-menu (`PR_COMMANDS`,
-  `home.mjs`), dat `POST /api/workflows/code_warning {pr}` aanroept
-  (`checkPRWarnings`). Bewust géén automatische trigger (zoals
-  `explain_code`'s debounce of `resolve_call`'s auto-search): een PR-brede
-  agentische Sonnet-pass met een oordelend (niet enkel zoekend) doel is te
-  duur/te ruisgevoelig om stilzwijgend op elke navigatiestap te draaien.
-  **Herhaald draaien is een bewuste, herhaalbare "refresh" van de check** —
-  geen idempotente Run-ID-dedup zoals `explain_code` (`StartCodeWarning` is
-  een kale `StartWorkflow`): elke run supersedet (zie onder) de vorige
-  bevindingen van de bestanden in scope, dus opnieuw draaien vervangt in
-  plaats van te stapelen.
-  **Incrementeel bij een nieuwe commit is bewust NOG NIET gebouwd** — een
-  fast-follow zou dit laten meeliften op `pr_status`'s ingest-refresh-delta
-  (`refreshIngestDelta`'s al-berekende gewijzigde-bestandenlijst), maar raakt
-  dan `pr_status`'s workflow-body en het `ingestResult`-schema, wat bewust
-  buiten deze taak is gehouden.
-- **Scope + cap (`resolveWarningScope`-Activity):** leest de PR's huidige
-  blokken (`blocksByPR`) en leidt daaruit de te controleren bestanden af
-  (`CodeWarningInput.Files` leeg → alle huidige gewijzigde bestanden van de
-  PR; gevuld → ongewijzigd doorgegeven, gereserveerd voor de incrementele
-  fast-follow, vandaag altijd leeg vanuit de enige aanroeper). Levert ook het
-  aantal blokken in scope, dat de vondsten-cap bepaalt: **`warningsPerBlock`
-  (2) × blokken-in-scope**, met een vloer van 2 — "per blok gemiddeld
-  maximaal ~2 warnings", niet een vast getal. Het model krijgt die cap +
-  instructie ("kwaliteit boven kwantiteit") ook in de prompt
-  (`warningPrompt`), maar de cap wordt **hard afgedwongen in Go**
-  (`runCodeWarningReview` sorteert op `file, line` en knipt af op
-  `MaxFindings`) — een model dat de instructie negeert kan 'm dus nooit
-  overschrijden.
-- **Findings terug als een lijst met eigen anker, gemapt op het bestaande
-  comment-ankermodel:** het model antwoordt met een JSON-array
+- **Trigger: manual, PR-wide** (not per group/line/call) — a new item
+  **"Check the whole PR for risks"** in the `/` menu (`PR_COMMANDS`,
+  `home.mjs`), which calls `POST /api/workflows/code_warning {pr}`
+  (`checkPRWarnings`). Deliberately no automatic trigger (like
+  `explain_code`'s debounce or `resolve_call`'s auto-search): a PR-wide
+  agentic Sonnet pass with a judgment-based (not merely searching) goal is
+  too expensive/too noise-sensitive to run silently on every navigation
+  step.
+  **Running it repeatedly is a deliberate, repeatable "refresh" of the
+  check** — no idempotent Run-ID dedup like `explain_code`
+  (`StartCodeWarning` is a bare `StartWorkflow`): every run supersedes
+  (see below) the previous findings of the files in scope, so running it
+  again replaces instead of stacking.
+  **Incremental on a new commit is deliberately NOT built yet** — a
+  fast-follow could piggyback this on `pr_status`'s ingest-refresh delta
+  (`refreshIngestDelta`'s already-computed changed-file list), but that
+  touches `pr_status`'s workflow body and the `ingestResult` schema, which
+  was deliberately kept out of this task.
+- **Scope + cap (`resolveWarningScope` Activity):** reads the PR's current
+  blocks (`blocksByPR`) and derives the files to check from that
+  (`CodeWarningInput.Files` empty → all currently changed files of the PR;
+  filled → passed through unchanged, reserved for the incremental
+  fast-follow, today always empty from the one caller). Also yields the
+  number of blocks in scope, which determines the findings cap:
+  **`warningsPerBlock` (2) × blocks-in-scope**, with a floor of 2 — "on
+  average at most ~2 warnings per block", not a fixed number. The model
+  also gets that cap + instruction ("quality over quantity") in the prompt
+  (`warningPrompt`), but the cap is **hard-enforced in Go**
+  (`runCodeWarningReview` sorts on `file, line` and truncates at
+  `MaxFindings`) — a model that ignores the instruction can thus never
+  exceed it.
+- **Findings come back as a list with their own anchor, mapped onto the
+  existing comment anchor model:** the model responds with a JSON array
   `[{"file","line","text"}]` (`claude.CodeWarningSystemPrompt`,
-  `modules/claude/prompts/code_warning.md`) — er is geen vooraf-geselecteerde
-  unit meer, dus de agentische call moet zelf de locaties teruggeven.
-  **Hallucinatie-bescherming:** een finding wordt alleen vertrouwd als zijn
-  `file` letterlijk een van de bestanden is die de prompt aan het model gaf
-  (`runCodeWarningReview`'s `allowed`-set) — een compleet verzonnen pad wordt
-  stil verworpen, nooit getoond. `anchoredWarning` (`code_warning.go`)
-  hergebruikt vervolgens **letterlijk** `blockForLine`/`rowForLine` — hetzelfde
-  mechanisme waarmee een geïmporteerde GitHub review-comment ankert (zie
-  "Bestaande GitHub-comments importeren" hierboven): valt de `file`+`line`
-  binnen een blok van deze PR, dan wordt het een **normale, block-gescopete**
-  warning (`Kind ""`, `Gran "line"`, geanchored op zijn rij — precies zoals
-  elke andere regel-comment); valt hij **niet** binnen een blok (een
-  onveranderde/context-regel, of een `line` die het model net mis heeft), dan
-  wordt het — in plaats van stil weggegooid — een **PR-brede** warning
-  (`Kind "ai_warning"`, toegevoegd aan `isPRWide` in `comment_import.go`),
-  zichtbaar in de PR-brede-comments-kaart onder de PR-info-kolom (zie
-  "PR-brede comments" in `.claude/rules/detail-layout.md`) — `File` blijft
-  wel gezet, als hint waar de bevinding over gaat, ook zonder precieze rij.
-- **Auto-supersede, gescoped per bestand** (`supersedeFileWarnings`-Activity,
-  draait **vóór** de agentische call): voor elk bestand in scope wordt elke
-  bestaande `Source:"ai"`-comment op dat bestand verwijderd via het
-  **bestaande delete-Signal** (`ReactionSignal{Action:"delete"}` op de
-  comment's eigen `task_code_comment`-Execution — hetzelfde mechanisme als de
-  UI's "Verwijder comment", zie de sectie hierboven) — best-effort per
-  comment (een run die al gesloten is kan niet nogmaals gesignald worden, dat
-  mag de rest van de supersede niet blokkeren). Een bestand **buiten** deze
-  run se scope houdt zijn oude AI-warnings gewoon.
-- **Elke warning is een gewone `task_code_comment`-Execution** — géén nieuwe
-  comment-machinery: `createWarningComment`-Activity roept simpelweg
-  `TaskManager.StartCodeComment` aan (dezelfde sanctioned write-weg als een
-  UI-geplaatste comment) met `Source:"ai"` (nieuwe waarde naast `"ui"`/
-  `"github"`) + `Local:true` (nooit naar GitHub — dezelfde vlag als een
-  privé-notitie), `Author:"AI-controle"`. Doordat het een volwaardige
-  Execution is, kan de reviewer 'm net als elke andere comment resolven of
-  verwijderen (het bestaande delete-Signal, zie boven) — geen apart
-  read-model, geen aparte UI-laag.
-- **Determinisme/write-boundary:** de workflow-body (`codeWarningWorkflow`)
-  doet zelf geen IO — alleen `ExecuteActivity`-calls in vaste volgorde
-  (scope-resolutie → supersede → de ene Sonnet-call → per finding één
-  `createWarningComment`); het aantal `createWarningComment`-calls is exact
-  `len(toCreate)`, een functie van `runAgenticReview`'s **opgeslagen**
-  resultaat, dus replay-safe. Alle non-determinisme/IO (DB-reads, de
-  Sonnet-call, comments-reads/deletes/creates) zit in Activities; de enige
-  schrijvers zijn de bestaande sanctioned paden (`TaskManager.Signal`/
-  `StartCodeComment`) — geen nieuwe directe module-writes.
-- **Frontend:** de warning krijgt een eigen badge — dezelfde
-  waarschuwings-driehoek-SVG als `related-covers-warning` (zie "Testdekking
-  koppelen" hierboven), nu als kleine pil (`aiWarningBadge`,
-  `data-testid=comment-ai-warning`, `RelatedPanel.mjs`) in de comment-rij, de
-  thread-header, én de PR-brede-comments-rij (`PW_KIND_LABEL.ai_warning` =
-  "AI-risico"). De "Taken"-kolom toont de run als **"Risicocontrole"**
-  (`WORKFLOW_LABELS.code_warning`); een lopende run toont "doorzoekt de PR op
-  risico's…", een afgeronde run toont het **exacte aantal** bevindingen —
-  inclusief "geen risico's gevonden" — via een nieuw `WorkflowRunView.
-  WarningsFound`-veld (`tasks_api.go`'s `RunsForPR`, gelezen uit de run's
-  eigen opgeslagen `Result` met `engine.Result`, mirrort hoe `Comment` uit de
-  run's `Input` wordt geparsed).
+  `modules/claude/prompts/code_warning.md`) — there's no pre-selected unit
+  anymore, so the agentic call must return the locations itself.
+  **Hallucination protection:** a finding is only trusted if its `file` is
+  literally one of the files the prompt gave the model
+  (`runCodeWarningReview`'s `allowed` set) — a completely made-up path is
+  silently rejected, never shown. `anchoredWarning` (`code_warning.go`)
+  then reuses **literally** `blockForLine`/`rowForLine` — the same
+  mechanism an imported GitHub review comment uses to anchor (see
+  "Importing existing GitHub comments" above): if the `file`+`line` falls
+  within a block of this PR, it becomes a **normal, block-scoped** warning
+  (`Kind ""`, `Gran "line"`, anchored on its row — exactly like any other
+  line comment); if it does **not** fall within a block (an
+  unchanged/context line, or a `line` the model got slightly wrong), then
+  — instead of being silently discarded — it becomes a **PR-wide** warning
+  (`Kind "ai_warning"`, added to `isPRWide` in `comment_import.go`),
+  visible in the PR-wide-comments card under the PR-info column (see
+  "PR-wide comments" in `.claude/rules/detail-layout.md`) — `File` still
+  gets set, as a hint of what the finding is about, even without a precise
+  line.
+- **Auto-supersede, scoped per file** (`supersedeFileWarnings` Activity,
+  runs **before** the agentic call): for each file in scope, every
+  existing `Source:"ai"` comment on that file gets deleted via the
+  **existing delete Signal** (`ReactionSignal{Action:"delete"}` on the
+  comment's own `task_code_comment` Execution — the same mechanism as the
+  UI's "Delete comment", see the section above) — best-effort per comment
+  (a run that's already closed can't be signaled again, and that must not
+  block the rest of the supersede). A file **outside** this run's scope
+  simply keeps its old AI warnings.
+- **Every warning is a normal `task_code_comment` Execution** — no new
+  comment machinery: the `createWarningComment` Activity simply calls
+  `TaskManager.StartCodeComment` (the same sanctioned write path as a
+  UI-placed comment) with `Source:"ai"` (a new value alongside `"ui"`/
+  `"github"`) + `Local:true` (never to GitHub — the same flag as a private
+  note), `Author:"AI check"`. Because it's a full Execution, the reviewer
+  can resolve or delete it just like any other comment (the existing
+  delete Signal, see above) — no separate read model, no separate UI
+  layer.
+- **Determinism/write boundary:** the workflow body (`codeWarningWorkflow`)
+  does no IO itself — only `ExecuteActivity` calls in a fixed order
+  (scope resolution → supersede → the one Sonnet call → one
+  `createWarningComment` per finding); the number of `createWarningComment`
+  calls is exactly `len(toCreate)`, a function of `runAgenticReview`'s
+  **stored** result, so replay-safe. All non-determinism/IO (DB reads, the
+  Sonnet call, comments reads/deletes/creates) sits in Activities; the
+  only writers are the existing sanctioned paths (`TaskManager.Signal`/
+  `StartCodeComment`) — no new direct module writes.
+- **Frontend:** the warning gets its own badge — the same warning-triangle
+  SVG as `related-covers-warning` (see "Linking test coverage" above), now
+  as a small pill (`aiWarningBadge`, `data-testid=comment-ai-warning`,
+  `RelatedPanel.mjs`) in the comment row, the thread header, and the
+  PR-wide-comments row (`PW_KIND_LABEL.ai_warning` = "AI risk"). The
+  "Tasks" column shows the run as **"Risk check"**
+  (`WORKFLOW_LABELS.code_warning`); a running run shows "searching the PR
+  for risks…", a finished run shows the **exact number** of findings —
+  including "no risks found" — via a new `WorkflowRunView.WarningsFound`
+  field (`tasks_api.go`'s `RunsForPR`, read from the run's own stored
+  `Result` with `engine.Result`, mirroring how `Comment` is parsed from the
+  run's `Input`).
 - **Endpoint:** `POST /api/workflows/code_warning {pr}` (`handleCodeWarning`).
-  `GET /api/workflows?pr=N` (bestaand) toont de run zoals elke andere.
-- Tests: `code_warning_test.go` (Fake-Sonnet levert een findings-array →
-  ankerbaar wordt block-gescopet met `Source:"ai"`/`Local:true`,
-  niet-ankerbaar wordt PR-wide `Kind:"ai_warning"`, een finding buiten scope
-  wordt stil verworpen, een tweede run supersedet de eerste in plaats van te
-  stapelen, en de `warningsPerBlock`-cap wordt hard afgedwongen ondanks een
-  model dat 'm negeert).
+  `GET /api/workflows?pr=N` (existing) shows the run like any other.
+- Tests: `code_warning_test.go` (Fake-Sonnet yields a findings array →
+  anchorable becomes block-scoped with `Source:"ai"`/`Local:true`,
+  non-anchorable becomes PR-wide `Kind:"ai_warning"`, a finding outside
+  scope is silently rejected, a second run supersedes the first instead of
+  stacking, and the `warningsPerBlock` cap is hard-enforced despite a
+  model ignoring it).
 
-## PR's verbergen uit de inbox (`ignore` + `modules/ignore`)
+## Hiding PRs from the inbox (`ignore` + `modules/ignore`)
 
-Een negende Workflow Type, **`ignore`** (één Execution per **repo**, mal van
-`approve`/`pr_inbox`), maakt reviewer-keuzes om een PR uit de `/pr-overview`-inbox
-te verbergen **durable**. Puur lokaal — het raakt nooit het netwerk (geen
-GitHub/Claude), dus geen `SLASH_*=off`-gating nodig.
+A ninth Workflow Type, **`ignore`** (one Execution per **repo**, mold of
+`approve`/`pr_inbox`), makes reviewer choices to hide a PR from the
+`/pr-overview` inbox **durable**. Purely local — it never touches the
+network (no GitHub/Claude), so no `SLASH_*=off` gating is needed.
 
-- **`modules/ignore`** (`data/ignore.db`, mal van `modules/approvals`): het
-  read-model `ignores(repo, pr, until)`, PK `(repo, pr)`. `until` is een
-  **absolute Unix-ms-vervaldatum** (`0` = altijd, nooit verlopen). Write
-  `Set(repo, pr, until)` (workflow-only): upsert, of — bij **`until < 0`** — een
-  DELETE van de rij (un-ignore). Read `List(repo)`. `List` filtert **niet** op
-  verval: de "is deze ignore nog geldig?"-check gebeurt op **leestijd** in de UI
-  (`until === 0 || until > Date.now()`), niet server-side.
-- **Workflow** (`workflows.go`): `ignoreWorkflow` is een lus op een
-  **`SignalIgnore = "ignore"`**-Signal (`IgnoreSignal{PR, Until, Clear}`); elke
-  signal draait één `saveIgnore`-Activity (`Clear` → `Set(..., -1)`, anders
-  `Set(..., Until)`). **Deterministisch zonder klok:** de UI berekent de absolute
-  `Until` (browser-lokale tijd) en stuurt 'm mee, dus de workflow-body leest nooit
-  `w.Now()` — het aantal Activities is exact het aantal signals in de history.
-  Nooit-completend, één lange-levende per-repo tracker. `EnsureIgnore()`
-  (spiegelt `EnsureInbox`, veld `ignoreRun` + `findIgnoreRunLocked`) start/
-  hergebruikt de Execution, ook na herstart (`engine.Recover` her-blokkeert 'm op
-  het signal); aangeroepen bij server-startup naast `EnsureInbox`.
-- **Endpoints** (`tasks_api.go`): `POST /api/workflows/ignore` → `EnsureIgnore`,
-  geeft `runId` (de UI signalt daar ignore/un-ignore aan); de generieke
-  `POST /api/workflows/{runID}/signals/ignore {pr, until|clear}` levert het
-  Signal (nieuwe decode-branch, `PR>0` gevalideerd); read-only
+- **`modules/ignore`** (`data/ignore.db`, mold of `modules/approvals`): the
+  read model `ignores(repo, pr, until)`, PK `(repo, pr)`. `until` is an
+  **absolute Unix-ms expiry** (`0` = always, never expires). Write
+  `Set(repo, pr, until)` (workflow-only): upsert, or — when **`until <
+  0`** — a DELETE of the row (un-ignore). Read `List(repo)`. `List` does
+  **not** filter on expiry: the "is this ignore still valid?" check
+  happens at **read time** in the UI (`until === 0 || until >
+  Date.now()`), not server-side.
+- **Workflow** (`workflows.go`): `ignoreWorkflow` is a loop on a
+  **`SignalIgnore = "ignore"`** Signal (`IgnoreSignal{PR, Until, Clear}`);
+  every signal runs one `saveIgnore` Activity (`Clear` → `Set(..., -1)`,
+  otherwise `Set(..., Until)`). **Deterministic without a clock:** the UI
+  computes the absolute `Until` (browser-local time) and sends it along,
+  so the workflow body never reads `w.Now()` — the number of Activities is
+  exactly the number of signals in the history. Never completes, one
+  long-lived per-repo tracker. `EnsureIgnore()` (mirrors `EnsureInbox`,
+  field `ignoreRun` + `findIgnoreRunLocked`) starts/reuses the Execution,
+  also after a restart (`engine.Recover` re-blocks it on the signal);
+  called at server startup alongside `EnsureInbox`.
+- **Endpoints** (`tasks_api.go`): `POST /api/workflows/ignore` →
+  `EnsureIgnore`, returns `runId` (the UI signals ignore/un-ignore there);
+  the generic `POST /api/workflows/{runID}/signals/ignore {pr, until|clear}`
+  delivers the Signal (new decode branch, `PR>0` validated); read-only
   `GET /api/ignore` → `{ok, ignores:[{pr, until}]}`.
-- **Frontend:** zie de sectie "Ignore / verbergen uit de inbox" in
-  `.claude/rules/pages-and-routing.md` (de per-rij popover-actie "Negeer PR" met
-  termijnkeuze, de client-side verberging + "verborgen"-view).
-- Tests: `modules/ignore/ignore_test.go` (round-trip, upsert-overschrijft,
-  `until<0` wist); `ignore_test.go` (package main: `EnsureIgnore`-idempotentie +
-  `ignore`-Signal → read-model + un-ignore via `Clear`).
+- **Frontend:** see the section "Ignore / hiding from the inbox" in
+  `.claude/rules/pages-and-routing.md` (the per-row popover action "Ignore
+  PR" with duration choice, the client-side hiding + "hidden" view).
+- Tests: `modules/ignore/ignore_test.go` (round-trip, upsert-overwrites,
+  `until<0` clears); `ignore_test.go` (package main: `EnsureIgnore`
+  idempotency + `ignore` Signal → read model + un-ignore via `Clear`).
