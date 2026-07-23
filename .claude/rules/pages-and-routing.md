@@ -1,445 +1,457 @@
-# Pagina's & routing
+# Pages & routing
 
-De app heeft twee pagina's, beide statische HTML-shells zonder build-stap; de
-Go-server (`api.go`, `routes`) bepaalt welke shell een route krijgt:
+The app has two pages, both static HTML shells with no build step; the Go
+server (`api.go`, `routes`) decides which shell a route gets:
 
-- **`/pr/<id>`** — de review-pagina van één PR (`index.html` → `home.mjs`). De
-  PR-id komt uit het **pad**, niet uit de query-string: `home.mjs` leest 'm met
-  `prFromPath()` (regex `^/pr/(\d+)`) en zet 'm in `state.pr`. Zonder geldige
-  id in het pad doet `home.mjs` een `location.replace('/pr-overview')`.
-- **`/pr-overview`** — de **PR-inbox**: een live GitHub-dashboard van PR's die je
-  aandacht nodig hebben (`overview.html` → `src/overview.mjs`). Zie de sectie
-  **PR-inbox** hieronder. Elke rij opent bij een klik hetzelfde popover-menu; een
-  geïngeste PR (`hasGraph`) bereikt `/pr/<id>` via de menu-keuze "Open
-  review-boom". De read-only "recent gegenereerd"-lade voedt nog steeds uit
-  **`GET /api/prs`** (`handlePRs` → `listPRs`, block/file-counts per PR uit
+- **`/pr/<id>`** — the review page for a single PR (`index.html` → `home.mjs`).
+  The PR id comes from the **path**, not the query string: `home.mjs` reads it
+  with `prFromPath()` (regex `^/pr/(\d+)`) and sets it in `state.pr`. Without a
+  valid id in the path, `home.mjs` does a `location.replace('/pr-overview')`.
+- **`/pr-overview`** — the **PR inbox**: a live GitHub dashboard of PRs that
+  need your attention (`overview.html` → `src/overview.mjs`). See the
+  **PR inbox** section below. Every row opens the same popover menu on click;
+  an ingested PR (`hasGraph`) reaches `/pr/<id>` via the menu choice "Open
+  review tree". The read-only "recently generated" drawer still feeds from
+  **`GET /api/prs`** (`handlePRs` → `listPRs`, block/file counts per PR from
   `PRSummary`).
-- **`/`** redirect (302) naar `/pr-overview`; alle overige paden
-  (`/src/*`, `/overview.html`, …) worden statisch geserveerd door de
-  `http.FileServer`. De `/pr/`- en `/pr-overview`-routes serveren hun shell via
+- **`/`** redirects (302) to `/pr-overview`; every other path
+  (`/src/*`, `/overview.html`, …) is served statically by the
+  `http.FileServer`. The `/pr/` and `/pr-overview` routes serve their shell via
   `serveFile(staticDir, name)`.
 
-## PR-inbox (`/pr-overview`)
+## PR inbox (`/pr-overview`)
 
-De startpagina is een **GitHub-inbox**, nagebouwd op GitHub's eigen
-`github.com/pulls`-dashboard: dezelfde secties en taal ("Ready to merge", "Needs
-your review", …), met per rij review-status, CI-checks, reviewers en diff-stats.
-Hij is **volledig read-only** in de zin dat hij nooit direct een module/tabel
-schrijft (conform `workflows-write-boundary.md`). **Elke rij** — geïngest of
-niet — opent bij een klik hetzelfde popover-menu (`prRow`/`popover(pr)` in
-`src/overview.mjs`, `@click="${() => togglePopover(pr.number)}"` op de hele
-rij, een `role="button"`-`<div>`, geen `<a>`); alleen de **inhoud** van dat menu
-verschilt op `pr.hasGraph`:
+The landing page is a **GitHub inbox**, rebuilt on top of GitHub's own
+`github.com/pulls` dashboard: the same sections and language ("Ready to merge",
+"Needs your review", …), with per-row review status, CI checks, reviewers, and
+diff stats. It is **fully read-only** in the sense that it never writes
+directly to a module/table (per `workflows-write-boundary.md`). **Every row**
+— ingested or not — opens the same popover menu on click (`prRow`/`popover(pr)`
+in `src/overview.mjs`, `@click="${() => togglePopover(pr.number)}"` on the
+whole row, a `role="button"` `<div>`, no `<a>`); only the menu's **content**
+differs by `pr.hasGraph`:
 
-- **`pr.hasGraph === false`** (nog niet geïngest, `generateAction(pr)`):
-  als **eerste** keuze **"Genereer review-boom"** (`data-testid=generate-page`)
-  — die start het bestaande **`POST /api/ingest {"pr":N}`**-endpoint (zie
-  `.claude/rules/blocks-and-ingest.md`), de sanctioned write-weg (een Workflow
-  Execution starten), niet een directe module-write. De knop toont tijdens het
-  genereren een spinner + de **echte pipeline-fase** i.p.v. een statische
-  tekst — "Werktrees voorbereiden…" / "Blocks scannen…" / "Relaties opbouwen…"
-  (`INGEST_STAGE_LABELS`, fallback "Bezig met genereren…" zolang er nog geen
-  fase bekend is) — en is dan `disabled` (`ui.ingesting`, tegen een dubbele
-  ingest). `generatePage` pollt daarvoor elke 800ms
-  **`GET /api/ingest/progress?pr=N`** (`ingest_progress.go`, een puur
-  in-memory, ephemere teller die de `prepareWorktrees`/`scanAndStoreBlocks`/
-  `buildRelations`-Activities in `workflows.go` bijwerken — geen module/
-  read-model, dus binnen de write-boundary-uitzondering voor state-loze pings,
-  zie `.claude/rules/workflows-write-boundary.md`) in `ui.ingestStage`.
-  Zowel de busy-tekst/-icoon als de `disabled`/`class`-styling hangen aan hun
-  **eigen** geneste `${() => …}`-bindings (`ingestBusy`/`ingestLabel`/
-  `ingestIcon`) i.p.v. een plain-JS-ternary op een ooit-gecapturede `busy`-
-  variabele — anders update de knop niet terwijl de popover al openstaat (zie
-  de arrow.js-valkuil in `conventions.md`). `handleIngest` (`api.go`)
-  antwoordt pas 200 zodra de ingest-pipeline **en** `EnsureRelations`
-  synchroon zijn afgerond, dus `generatePage` doet op succes een simpele volle
-  `location.href = '/pr/<n>'`-redirect — de verse paginalaad heeft dan alles al
-  nodig. Mislukt het genereren, dan blijft de popover open met de foutmelding
-  (`ui.ingestError`, `data-testid=generate-error`) en verandert de rij zelf
-  niet (nog steeds `hasGraph:false`).
-- **`pr.hasGraph === true`** (al geïngest, `ingestedActions(pr)`): twee
-  keuzes — **"Open review-boom"** (`data-testid=open-tree`, navigeert direct
-  naar `location.href = '/pr/' + pr.number`) en **"Opnieuw genereren"**
-  (`data-testid=regenerate-page`) die dezelfde `generatePage`/`ui.ingesting`/
-  `ui.ingestStage`-flow hergebruikt als de niet-geïngeste tak, maar met
-  `{ redirect: false }` (`generatePage(pr, { redirect })` — default `true`
-  voor de "Genereer"-tak; "Opnieuw genereren" moet **niet** navigeren, de
-  reviewer blijft op de overview en wil alleen de achterliggende data
-  verversen; `ui.ingesting` gaat zelf terug op `null` op succes). Een
-  mislukte regeneratie toont de foutmelding onder de knop, binnen dezelfde
-  popover (`data-testid=regenerate-error`).
+- **`pr.hasGraph === false`** (not yet ingested, `generateAction(pr)`):
+  as the **first** choice, **"Generate review tree"** (`data-testid=
+  generate-page`) — this starts the existing **`POST /api/ingest {"pr":N}`**
+  endpoint (see `.claude/rules/blocks-and-ingest.md`), the sanctioned write
+  path (starting a Workflow Execution), not a direct module write. During
+  generation, the button shows a spinner + the **actual pipeline stage**
+  instead of static text — "Preparing worktrees…" / "Scanning blocks…" /
+  "Building relations…" (`INGEST_STAGE_LABELS`, fallback "Generating…" as long
+  as no stage is known yet) — and is `disabled` (`ui.ingesting`, against a
+  double ingest). `generatePage` polls **`GET /api/ingest/progress?pr=N`**
+  every 800ms for this (`ingest_progress.go`, a purely in-memory, ephemeral
+  counter that the `prepareWorktrees`/`scanAndStoreBlocks`/`buildRelations`
+  Activities in `workflows.go` update — no module/read model, so within the
+  write-boundary exception for state-less pings, see
+  `.claude/rules/workflows-write-boundary.md`) into `ui.ingestStage`. Both the
+  busy text/icon and the `disabled`/`class` styling hang off their **own**
+  nested `${() => …}` bindings (`ingestBusy`/`ingestLabel`/`ingestIcon`)
+  instead of a plain-JS ternary on a once-captured `busy` variable —
+  otherwise the button wouldn't update while the popover is already open (see
+  the arrow.js pitfall in `conventions.md`). `handleIngest` (`api.go`)
+  responds 200 only once the ingest pipeline **and** `EnsureRelations` have
+  finished synchronously, so `generatePage` does a simple full
+  `location.href = '/pr/<n>'` redirect on success — the fresh page load
+  already has everything it needs by then. If generation fails, the popover
+  stays open with the error message (`ui.ingestError`,
+  `data-testid=generate-error`) and the row itself doesn't change (still
+  `hasGraph:false`).
+- **`pr.hasGraph === true`** (already ingested, `ingestedActions(pr)`): two
+  choices — **"Open review tree"** (`data-testid=open-tree`, navigates
+  directly to `location.href = '/pr/' + pr.number`) and **"Regenerate"**
+  (`data-testid=regenerate-page`) which reuses the same
+  `generatePage`/`ui.ingesting`/`ui.ingestStage` flow as the not-yet-ingested
+  branch, but with `{ redirect: false }` (`generatePage(pr, { redirect })` —
+  default `true` for the "Generate" branch; "Regenerate" must **not**
+  navigate, the reviewer stays on the overview and just wants the
+  underlying data refreshed; `ui.ingesting` itself goes back to `null` on
+  success). A failed regeneration shows the error message under the button,
+  within the same popover (`data-testid=regenerate-error`).
 
-Onder beide takken staan ongewijzigd *Open op GitHub* / *Open Jira-ticket*,
-gevolgd door **"Kopieer GitHub URL"** (`data-testid=copy-url`,
-`navigator.clipboard.writeText(pr.url)` met korte "Gekopieerd!"-feedback via de
-efemere `ui.copiedFor`) en de **ignore-sectie** (zie hieronder).
-Omdat er nu nooit meer een `<a href="/pr/<id>">` in de rij zit — de navigatie
-naar de tree loopt altijd via de menu-keuze "Open review-boom" — is er ook geen
-losse hover-only regenerate-knop (`regenerateButton`) of aparte `data-row`-
-wrapper meer nodig; die zijn vervallen (was eerder nodig om een interactief
-element niet in een `<a>` te nesten, wat nu niet meer speelt).
+Below both branches sit, unchanged, *Open on GitHub* / *Open Jira ticket*,
+followed by **"Copy GitHub URL"** (`data-testid=copy-url`,
+`navigator.clipboard.writeText(pr.url)` with brief "Copied!" feedback via the
+ephemeral `ui.copiedFor`) and the **ignore section** (see below).
+Because there's now never an `<a href="/pr/<id>">` in the row anymore — the
+navigation to the tree always runs through the menu choice "Open review
+tree" — there's also no separate hover-only regenerate button
+(`regenerateButton`) or separate `data-row` wrapper needed anymore; those
+have been removed (they were previously needed to avoid nesting an
+interactive element inside an `<a>`, which no longer applies).
 
-### Filter-drawer (voor-ingestelde filters, live gh-search)
+### Filter drawer (preset filters, live gh search)
 
-Naast "Recent gegenereerd" staat een tweede uitklapknop **"Filters"**
-(`filterDrawer`, `data-testid=filter-drawer`, mal van `recentDrawer` —
-`state.filterOpen` toggelt, keyed-array-slot met eigen key per tak
-`filter:closed`/`filter:open`, conform de single↔array-valkuil in
-`conventions.md`). Uitgeklapt toont hij een menu met **vier preset-filters** +
-**"Toon alle verborgen pull requests"** (`data-testid=show-hidden`). Elke preset
-draait een **live gh-search** via `GET /api/prs/filter?preset=<key>`
-(`runPreset` → `state.presetResults`/`state.activePreset`, sequence-guard zoals
-`runSearch`); de resultaten **vervangen tijdelijk de hoofdsecties**
-(`currentView` in `overview.mjs` routeert: query > verborgen > preset > inbox),
-met een "← Terug naar inbox"-balk (`data-testid=back-to-inbox`, `clearPresetView`).
+Next to "Recently generated" sits a second expandable button **"Filters"**
+(`filterDrawer`, `data-testid=filter-drawer`, modeled on `recentDrawer` —
+`state.filterOpen` toggles, a keyed-array slot with its own key per branch
+`filter:closed`/`filter:open`, per the single↔array pitfall in
+`conventions.md`). Expanded, it shows a menu with **four preset filters** +
+**"Show all hidden pull requests"** (`data-testid=show-hidden`). Each preset
+runs a **live gh search** via `GET /api/prs/filter?preset=<key>`
+(`runPreset` → `state.presetResults`/`state.activePreset`, sequence-guarded
+like `runSearch`); the results **temporarily replace the main sections**
+(`currentView` in `overview.mjs` routes: query > hidden > preset > inbox),
+with a "← Back to inbox" bar (`data-testid=back-to-inbox`,
+`clearPresetView`).
 
-De queries zijn **server-side allow-listed** (`filterPresets` in `inbox_api.go`)
-— de UI stuurt alleen een vaste `key`, nooit rauwe zoektekst naar gh
-(`exec`-input-validatie). De vier keys: `updated-oud`
-(`sort:created-asc`, oud eerst), `alle-open`, `alle-draft`, en **`ouder-3-dagen`**
-— die laatste laat `handleFilter` de datumgrens **dynamisch** berekenen
-(`created:<{vandaag−3d}`, `YYYY-MM-DD`; een read-handler, dus `time.Now()` is hier
-toegestaan — de determinisme-regel geldt alleen in workflow-bodies).
-`searchPRsExpr`/`runPRSearch` (`inbox.go`) prependen `repo:<slug>` maar
-respecteren de eigen `sort:`/`draft:` van de preset (anders dan `searchPRs`, dat
-altijd `sort:updated-desc` appendt). De `ouder-3-dagen`-resultaten worden
-frontend-side **gegroepeerd per auteur** (`authorGroups`/`authorGroupBlock`,
-`data-testid=author-group`); de andere drie zijn een platte lijst. Offline
-(`SLASH_GITHUB=off`) honoreert `handleFilter` alleen de `draft:`-qualifier van de
-fixture-rijen. Test: `tests/overview-filter-presets.spec.mjs`.
+The queries are **server-side allow-listed** (`filterPresets` in
+`inbox_api.go`) — the UI only sends a fixed `key`, never raw search text to
+gh (`exec` input validation). The four keys: `updated-oud`
+(`sort:created-asc`, oldest first), `alle-open`, `alle-draft`, and
+**`ouder-3-dagen`** — for that last one, `handleFilter` computes the date
+boundary **dynamically** (`created:<{today−3d}`, `YYYY-MM-DD`; a read
+handler, so `time.Now()` is allowed here — the determinism rule only applies
+in workflow bodies). `searchPRsExpr`/`runPRSearch` (`inbox.go`) prepend
+`repo:<slug>` but respect the preset's own `sort:`/`draft:` (unlike
+`searchPRs`, which always appends `sort:updated-desc`). The
+`ouder-3-dagen` results are **grouped by author** on the frontend
+(`authorGroups`/`authorGroupBlock`, `data-testid=author-group`); the other
+three are a flat list. Offline (`SLASH_GITHUB=off`), `handleFilter` only
+honors the `draft:` qualifier of the fixture rows. Test:
+`tests/overview-filter-presets.spec.mjs`.
 
-### Ignore / verbergen uit de inbox
+### Ignore / hide from the inbox
 
-Een PR kun je vanuit de per-rij popover **negeren** ("Negeer PR", een divider met
-één knop per termijn: **Altijd / Morgen 08:00 / Volgende week maandag 08:00 /
-7 dagen / 14 dagen**, `data-testid=ignore-<kind>`). `ignoreUntil(kind)` rekent de
-**absolute vervaltimestamp** uit in browser-lokale tijd ("altijd" = `0`) en
-`ignorePr` stuurt 'm als `IgnoreSignal{pr, until}` naar de per-repo
-`ignore`-tracker (`POST /api/workflows/<ignoreRunId>/signals/ignore`, de sanctioned
-write-weg — zie `.claude/rules/tembed-workflows.md`). De UI update `state.ignores`
-**optimistisch** (wholesale-reassign, dus de rij verdwijnt meteen) en verzoent op
-de volgende `reloadIgnores`. Een reeds-genegeerde PR toont in plaats van de
-termijnen één **"Niet meer negeren"**-knop (`unignorePr` → `clear:true` → de
-workflow doet `Set(..., -1)`, een DELETE).
+A PR can be **ignored** from the per-row popover ("Ignore PR", a divider with
+one button per duration: **Always / Tomorrow 08:00 / Next Monday 08:00 /
+7 days / 14 days**, `data-testid=ignore-<kind>`). `ignoreUntil(kind)` computes
+the **absolute expiry timestamp** in browser-local time ("always" = `0`) and
+`ignorePr` sends it as `IgnoreSignal{pr, until}` to the per-repo `ignore`
+tracker (`POST /api/workflows/<ignoreRunId>/signals/ignore`, the sanctioned
+write path — see `.claude/rules/tembed-workflows.md`). The UI updates
+`state.ignores` **optimistically** (wholesale reassign, so the row disappears
+immediately) and reconciles on the next `reloadIgnores`. An already-ignored
+PR shows one **"Stop ignoring"** button instead of the duration options
+(`unignorePr` → `clear:true` → the workflow does `Set(..., -1)`, a DELETE).
 
-Verbergen is **client-side op leestijd** (`isIgnored(n)` = `until === 0 ||
-until > Date.now()`): `mainContent` (secties + stacks) filtert genegeerde PR's
-weg; presets/zoekresultaten blijven bewust ongefilterd (expliciete views). Het
-menu-item **"Toon alle verborgen pull requests"** opent de `hiddenBlock`-view
-(`data-testid=hidden-view`): één rij per geldige (niet-verlopen) ignore met de
-titel uit de al-geladen inbox-data (of een minimale `#nummer`-rij voor een PR die
-uit de inbox-query viel), een **"genegeerd tot \<datum\>"**-noot
-(`formatIgnoreUntil`, `until 0` → "altijd") en een un-ignore-knop
-(`data-testid=hidden-unignore`). `state.ignores` wordt bij load gevuld door
-`loadIgnore` (`POST /api/workflows/ignore` → `runId`, dan `GET /api/ignore`);
-`state.ignoreRunId`/`state.ignores`/`state.filterOpen`/`state.activePreset`/
-`state.showHidden` leven **buiten** de URL (efemer, mirror van
-`ui.openPopover`/`recentOpen`). Test: `tests/overview-ignore.spec.mjs`.
+Hiding happens **client-side at read time** (`isIgnored(n)` = `until === 0 ||
+until > Date.now()`): `mainContent` (sections + stacks) filters out ignored
+PRs; presets/search results deliberately remain unfiltered (explicit views).
+The menu item **"Show all hidden pull requests"** opens the `hiddenBlock`
+view (`data-testid=hidden-view`): one row per valid (unexpired) ignore with
+the title from the already-loaded inbox data (or a minimal `#number` row for
+a PR that fell out of the inbox query), an **"ignored until \<date\>"** note
+(`formatIgnoreUntil`, `until 0` → "always"), and an un-ignore button
+(`data-testid=hidden-unignore`). `state.ignores` is filled on load by
+`loadIgnore` (`POST /api/workflows/ignore` → `runId`, then
+`GET /api/ignore`); `state.ignoreRunId`/`state.ignores`/`state.filterOpen`/
+`state.activePreset`/`state.showHidden` live **outside** the URL (ephemeral,
+mirroring `ui.openPopover`/`recentOpen`). Test:
+`tests/overview-ignore.spec.mjs`.
 
-### GitHub-toegang loopt via een workflow (niet rechtstreeks)
+### GitHub access runs through a workflow (never direct)
 
-**De pagina roept GitHub nooit zelf aan.** De PR-lijst wordt gefetcht en beheerd
-door het **`pr_inbox`-Workflow** (één Execution per repo, zie
-`.claude/rules/tembed-workflows.md`); dat
-schrijft de laatste staat in de **`inbox`-module** (een read-model), en de
-HTTP-handlers lezen **alleen** dat read-model. Dit is de kanonieke
-write-boundary-vorm: alleen een workflow praat met GitHub en muteert state.
+**The page never calls GitHub itself.** The PR list is fetched and managed by
+the **`pr_inbox` workflow** (one Execution per repo, see
+`.claude/rules/tembed-workflows.md`); that writes the latest state into the
+**`inbox` module** (a read model), and the HTTP handlers only read that read
+model. This is the canonical write-boundary shape: only a workflow talks to
+GitHub and mutates state.
 
-- **`pr_inbox`-workflow** (`workflows.go`): een `for`-lus op een `refresh`-**Signal**
-  → één `refreshInbox`-**Activity**. De Activity draait `buildInboxSnapshot`
-  (fetch + `statusesFor`), slaat het op in de `inbox`-module, en geeft alléén een
-  klein `{updatedAt, prs}`-summary terug — de data zelf staat in de module, dus de
-  event-history blijft compact ook al refresht de workflow eindeloos.
-- **Poller-cadans (heartbeat-gedreven, net als de comment-poller):** `pollInbox`
-  stuurt een `refresh`-Signal op de **snelle** cadans (`pollInterval`, 1 min)
-  zolang er binnen `heartbeatWindow` een heartbeat kwam, anders op de **trage**
-  cadans (`idlePollInterval`, 10 min). Bij startup stuurt `EnsureInbox` één
-  **synchrone** refresh, zodat het read-model gevuld is vóór de server serveert;
-  na herstart hergebruikt `EnsureInbox` de bestaande Execution (`findInboxRun`).
-- **De UI drijft de cadans:** bij laden stuurt `overview.mjs` een `refresh`-Signal
-  (`POST /api/workflows/{runID}/signals/refresh`) zodat de workflow meteen opnieuw
-  checkt, plus een **heartbeat** (`POST …/heartbeat`) — maar **alleen als het
-  tabblad zichtbaar én gefocust is** (`activeTab()`), zodat een geparkeerd tabblad
-  vanzelf naar de trage cadans zakt. Daarna pollt de UI het read-model periodiek
-  (`reloadSnapshot`) om de nieuwste snapshot te tonen. De heartbeat mutert geen
-  durable state (alleen in-memory poll-timing) en valt dus buiten de
-  write-boundary — precies zoals bij de comments.
+- **`pr_inbox` workflow** (`workflows.go`): a `for` loop on a `refresh`
+  **Signal** → one `refreshInbox` **Activity**. The Activity runs
+  `buildInboxSnapshot` (fetch + `statusesFor`), stores it in the `inbox`
+  module, and returns only a small `{updatedAt, prs}` summary — the data
+  itself lives in the module, so the event history stays compact even though
+  the workflow refreshes endlessly.
+- **Poller cadence (heartbeat-driven, like the comment poller):** `pollInbox`
+  sends a `refresh` Signal on the **fast** cadence (`pollInterval`, 1 min) as
+  long as a heartbeat arrived within `heartbeatWindow`, otherwise on the
+  **slow** cadence (`idlePollInterval`, 10 min). At startup, `EnsureInbox`
+  sends one **synchronous** refresh, so the read model is filled before the
+  server serves; after a restart, `EnsureInbox` reuses the existing
+  Execution (`findInboxRun`).
+- **The UI drives the cadence:** on load, `overview.mjs` sends a `refresh`
+  Signal (`POST /api/workflows/{runID}/signals/refresh`) so the workflow
+  checks again immediately, plus a **heartbeat** (`POST …/heartbeat`) — but
+  **only if the tab is visible and focused** (`activeTab()`), so a parked tab
+  naturally drops to the slow cadence. The UI then polls the read model
+  periodically (`reloadSnapshot`) to show the latest snapshot. The heartbeat
+  doesn't mutate durable state (only in-memory poll timing) and thus falls
+  outside the write boundary — exactly as with comments.
 
-De GitHub-fetch zelf (`inbox.go`): `gh api graphql`-`search`-calls (géén nieuwe
-dependency). `lightFields` tekent de rij, `heavyFields` (`mergeable
-reviewDecision`, `reviewRequests`, `latestReviews`, `statusCheckRollup`) vult de
-pills. `hasGraph` wordt overlayd uit de `blocks`-tabel (`ingestedSet`).
-`inboxSections` spiegelen `/pulls` (qualifiers 1-op-1 uit dash' `INBOX_SECTIONS`,
-incl. `archived:false`, de copilot-query en de **COMMENTED-catch** `keep`-filter);
-queries draaien parallel en worden deterministisch hersamengesteld.
-`mergeReviewers` en `statusesFor` (één aliased call) zoals voorheen.
+The actual GitHub fetch (`inbox.go`): `gh api graphql` `search` calls (no new
+dependency). `lightFields` renders the row, `heavyFields` (`mergeable
+reviewDecision`, `reviewRequests`, `latestReviews`, `statusCheckRollup`) fills
+the pills. `hasGraph` is overlaid from the `blocks` table (`ingestedSet`).
+`inboxSections` mirror `/pulls` (qualifiers 1-to-1 from dash's
+`INBOX_SECTIONS`, incl. `archived:false`, the copilot query, and the
+**COMMENTED-catch** `keep` filter); queries run in parallel and are
+recombined deterministically. `mergeReviewers` and `statusesFor` (one aliased
+call) as before.
 
 **Endpoints:**
 
-| Endpoint | Doet |
+| Endpoint | Does |
 |---|---|
-| `GET /api/inbox` | Leest het read-model → `{ok,live,repo,generatedFor,updatedAt,runId,sections}`. `runId` = het `pr_inbox`-Run ID (voor refresh/heartbeat). Nog geen snapshot → `{ok:false}`. |
-| `GET /api/inbox/status?prs=12,13` | De pills, óók uit het read-model-snapshot (géén GitHub-call). |
-| `POST /api/workflows/{runID}/signals/refresh` | Refresh-Signal (UI bij laden). Start alleen de fetch-Activity. |
-| `POST /api/workflows/{runID}/heartbeat` | Operationele ping (poll-cadans), geen state-write. |
-| `GET /api/prs/search?q=…` | **Nog wél een directe** live gh-`search` (`inbox_api.go`) — een ephemere, geparametriseerde read, geen persistente lijst. Kaal getal → `<n> in:title`. |
-| `GET /api/prs/filter?preset=<key>` | Live gh-`search` voor een **vaste, allow-listed** preset-query (`filterPresets` in `inbox_api.go`) — nooit rauwe UI-tekst naar gh (`exec`-input-validatie). Zie "Filter-drawer" hieronder. |
-| `POST /api/workflows/ignore` | Ensure de per-repo `ignore`-tracker → `{runId}` (de UI signalt ignore/un-ignore daaraan). Zie `.claude/rules/tembed-workflows.md`. |
-| `GET /api/ignore` | Read-only ignore-read-model → `{ok,ignores:[{pr,until}]}`. Verval-check gebeurt client-side op leestijd. |
-| `GET /api/prs` | (bestaand) geïngeste PR's + counts, voor de recent-lade. |
+| `GET /api/inbox` | Reads the read model → `{ok,live,repo,generatedFor,updatedAt,runId,sections}`. `runId` = the `pr_inbox` Run ID (for refresh/heartbeat). No snapshot yet → `{ok:false}`. |
+| `GET /api/inbox/status?prs=12,13` | The pills, also from the read-model snapshot (no GitHub call). |
+| `POST /api/workflows/{runID}/signals/refresh` | Refresh Signal (UI on load). Only starts the fetch Activity. |
+| `POST /api/workflows/{runID}/heartbeat` | Operational ping (poll cadence), no state write. |
+| `GET /api/prs/search?q=…` | **Still a direct** live gh `search` (`inbox_api.go`) — an ephemeral, parameterized read, not a persistent list. A bare number → `<n> in:title`. |
+| `GET /api/prs/filter?preset=<key>` | Live gh `search` for a **fixed, allow-listed** preset query (`filterPresets` in `inbox_api.go`) — never raw UI text to gh (`exec` input validation). See "Filter drawer" below. |
+| `POST /api/workflows/ignore` | Ensures the per-repo `ignore` tracker → `{runId}` (the UI signals ignore/un-ignore to it). See `.claude/rules/tembed-workflows.md`. |
+| `GET /api/ignore` | Read-only ignore read model → `{ok,ignores:[{pr,until}]}`. Expiry check happens client-side at read time. |
+| `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 
-### Offline / test-modus
+### Offline / test mode
 
-Onder **`SLASH_GITHUB=off`** raakt niets het netwerk: `buildInboxSnapshot` (de
-Activity) serveert de **fixture** uit `SLASH_INBOX` (`tests/fixtures/inbox.json`,
-shape `{repo,generatedFor,sections,statuses}`). Bij startup vult de synchrone
-refresh het read-model, dus `GET /api/inbox` heeft meteen data (geen race in
-tests). `hasGraph` komt uit de DB, dus de geseedde PR (12903) toont in zijn
-popover "Open review-boom" naar `/pr/12903`. Faalt de eerste fetch (geen
-fixture, geen snapshot) → `/api/inbox` `{ok:false}` → client valt terug op
-`GET /data/inbox.json` (label "cached").
+Under **`SLASH_GITHUB=off`** nothing touches the network:
+`buildInboxSnapshot` (the Activity) serves the **fixture** from `SLASH_INBOX`
+(`tests/fixtures/inbox.json`, shape `{repo,generatedFor,sections,statuses}`).
+At startup, the synchronous refresh fills the read model, so `GET /api/inbox`
+has data right away (no race in tests). `hasGraph` comes from the DB, so the
+seeded PR (12903) shows "Open review tree" in its popover, pointing to
+`/pr/12903`. If the first fetch fails (no fixture, no snapshot) →
+`/api/inbox` `{ok:false}` → the client falls back to `GET /data/inbox.json`
+(label "cached").
 
-### `?pr=<id>` auto-selecteert de rij waar je vandaan komt
+### `?pr=<id>` auto-selects the row you came from
 
-Vanuit `/pr/<id>` linken zowel de **`←`-nav-chain-exit** (stop 1,
-`state.showDescription`, zie `.claude/rules/keyboard-navigation.md`) als het
-**`/`-menu-item "Naar PR-overzicht"** (`PR_COMMANDS` in `home.mjs`) naar
-`/pr-overview?pr=<state.pr>` — niet naar de kale `/pr-overview`. `overview.mjs`
-leest die param **eenmalig** bij module-load
-(`new URLSearchParams(location.search).get('pr')` → `pendingSelectPr`, mirror
-van `home.mjs`'s `prFromPath()` — geen `bindUrlState`, dit is een
-eenrichtings-consume-bij-load, geen navigatiepositie die teruggeschreven moet
-worden) en past 'm toe zodra de data er is, via **`trySelectPendingPr()`**,
-aangeroepen aan het eind van zowel `applyLive` als `applyCached` (mirror van
-`applyRelRestore`/`applyBlockRefRestore`'s restore-dan-clear-patroon):
+From `/pr/<id>`, both the **`←` nav-chain exit** (stop 1,
+`state.showDescription`, see `.claude/rules/keyboard-navigation.md`) and the
+**`/`-menu item "To PR overview"** (`PR_COMMANDS` in `home.mjs`) link to
+`/pr-overview?pr=<state.pr>` — not the bare `/pr-overview`. `overview.mjs`
+reads that param **once** at module load
+(`new URLSearchParams(location.search).get('pr')` → `pendingSelectPr`,
+mirroring `home.mjs`'s `prFromPath()` — no `bindUrlState`, this is a
+one-way consume-on-load, not a navigation position that needs to be written
+back) and applies it once the data has arrived, via **`trySelectPendingPr()`**,
+called at the end of both `applyLive` and `applyCached` (mirroring
+`applyRelRestore`/`applyBlockRefRestore`'s restore-then-clear pattern):
 
-- Staat de PR in `state.sections` (de hoofd-lijst) → zet de module-level
-  `selKey` op `'row:' + pr` (dezelfde identiteit als `paintSelection`/
-  `reanchorSelection` al gebruiken, zie hierboven) en `pendingSelectPr = null`.
-  De bestaande `sections.length`-watch triggert vanzelf de eerstvolgende
-  `scheduleRepaint()`, die de ring zet + scrollt.
-- Staat de PR daar **niet** in, dan wordt de "Recent gegenereerd"-lade
-  gecheckt: `ensureRecentPrs()` (dezelfde `GET /api/prs`-fetch als
-  `toggleRecent()` — nu een gedeelde helper, met dezelfde
-  `recentLoading`-guard) haalt de lijst op; staat de PR daarin, dan
-  `state.recentOpen = true` (de lade klapt vanzelf open) + `selKey =
-  'recent:' + pr`. Ook hier trekt de bestaande `recentOpen`/`recentPrs.length`-
-  watch de repaint.
-- Staat de PR **nergens** (gemerged/uit de inbox-query gevallen, of nooit
-  geïngest) → stille no-op, net als een niet-gevonden `sel`-restore op
-  `/pr/<id>`. `pendingSelectPr` wordt **hoe dan ook** eenmalig gecleared na de
-  recent-check, ongeacht de uitkomst — een latere achtergrond-reload
-  (`reloadSnapshot`, elke 60s) mag de selectie niet opnieuw forceren.
-- `hoverEnabled = false` wordt meegezet (zoals `move`/`moveTo` al doen) zodat
-  een toevallige muis-hover de auto-selectie niet meteen overschrijft.
-- De `?pr=`-param wordt bewust **niet** opgeschoond (geen
-  `history.replaceState`) — harmless bij een refresh, die selecteert dan
-  gewoon dezelfde PR opnieuw.
+- If the PR is in `state.sections` (the main list) → set the module-level
+  `selKey` to `'row:' + pr` (the same identity `paintSelection`/
+  `reanchorSelection` already use, see above) and `pendingSelectPr = null`.
+  The existing `sections.length` watch automatically triggers the next
+  `scheduleRepaint()`, which sets the ring + scrolls.
+- If the PR is **not** in there, the "Recently generated" drawer is checked:
+  `ensureRecentPrs()` (the same `GET /api/prs` fetch as `toggleRecent()` —
+  now a shared helper, with the same `recentLoading` guard) fetches the
+  list; if the PR is in it, `state.recentOpen = true` (the drawer opens on
+  its own) + `selKey = 'recent:' + pr`. Here too the existing
+  `recentOpen`/`recentPrs.length` watch triggers the repaint.
+- If the PR is **nowhere** (merged/dropped out of the inbox query, or never
+  ingested) → a silent no-op, just like a not-found `sel` restore on
+  `/pr/<id>`. `pendingSelectPr` is cleared once **either way** after the
+  recent check, regardless of outcome — a later background reload
+  (`reloadSnapshot`, every 60s) must not force the selection again.
+- `hoverEnabled = false` is set alongside (like `move`/`moveTo` already do)
+  so a stray mouse hover doesn't immediately override the auto-selection.
+- The `?pr=` param is deliberately **not** cleaned up (no
+  `history.replaceState`) — harmless on a refresh, which then simply selects
+  the same PR again.
 
-Test: `tests/overview-pr-select.spec.mjs` (in-sections, alleen-in-de-lade, en
-de stille no-op).
+Test: `tests/overview-pr-select.spec.mjs` (in-sections, drawer-only, and
+the silent no-op).
 
-### `?sel=` reist mee in dezelfde round-trip: dezelfde block blijft geselecteerd
+### `?sel=` travels along on the same round trip: the same block stays selected
 
-Naast `?pr=` (welke **rij** in de overview selecteren) draagt dezelfde
-round-trip ook `?sel=<file:line>` mee — welk **block** je moet terugkrijgen
-zodra je vanuit de overview weer de review-boom instapt. Dit is een pure
-extensie van het bestaande `sel`-mechanisme (`bindUrlState`/`state.blockRef`/
-`applyBlockRefRestore`, zie de URL-state-sectie in `CLAUDE.md`) — geen nieuw
-opslagmechanisme, geen localStorage: `sel` was al de canonieke, deelbare
-navigatiepositie voor een refresh/gedeelde link, dit hergebruikt 'm simpelweg
-over de heen-en-terug-reis via `/pr-overview`.
+Alongside `?pr=` (which **row** to select in the overview), the same round
+trip also carries `?sel=<file:line>` — which **block** you should get back
+once you re-enter the review tree from the overview. This is a pure
+extension of the existing `sel` mechanism (`bindUrlState`/`state.blockRef`/
+`applyBlockRefRestore`, see the URL-state section in `CLAUDE.md`) — no new
+storage mechanism, no localStorage: `sel` was already the canonical,
+shareable navigation position for a refresh/shared link, this simply reuses
+it across the round trip via `/pr-overview`.
 
-- **Uitgaand (`home.mjs`):** `overviewExitUrl()` bouwt de bestemming voor
-  **beide** exits naar `/pr-overview` (de `←`-nav-chain-exit op stop 1, en het
-  `/`-menu-item "Naar PR-overzicht") — `/pr-overview?pr=<state.pr>`, plus
-  `&sel=<encodeURIComponent(state.blockRef)>` zodra er een selectie is
-  (`state.blockRef` leeg → geen `sel`-param, bv. vlak na laden).
-- **Ingaand (`overview.mjs`):** twee **niet-genulde** module-`let`s,
-  `originPr`/`originSel`, lezen `pr`/`sel` **eenmalig** bij load — bewust
-  **los** van het bestaande, one-shot `pendingSelectPr` (die wordt binnen
-  milliseconden na load al gecleard zodra de rij gevonden/niet-gevonden is;
-  `originPr`/`originSel` moeten daarentegen blijven leven tot de reviewer
-  minuten later daadwerkelijk terug de boom in klikt). `treeUrl(pr)` — gebruikt
-  door **alle drie** de navigatiepunten naar `/pr/<n>` (`generatePage`'s
-  redirect na een geslaagde (re)ingest, "Open review-boom", en de
-  `→`-forward-nav in `openOrGenerate`) — voegt `?sel=<originSel>` alleen toe
-  als `pr.number === originPr`: klik je in de overview op een **andere** PR dan
-  waar je vandaan kwam, dan krijgt die nooit een sel van een niet-gerelateerde
-  PR mee.
-- **Block niet meer gevonden** (verwijderd, of inmiddels volledig goedgekeurd
-  en dus verborgen) leunt op de **bestaande** `applyBlockRefRestore`-fallback
-  (clamp naar de gewone default) — geen nieuwe edge-case-code nodig, exact
-  hetzelfde gedrag als een verlopen/gedeelde `?sel=`-link.
-- **`?drill=`/`?dgran=`/`?dchg=` reizen mee naast `?sel=`** — een open gedrilde
-  Onderliggende-code-kolom (zie "Drillen" in `.claude/rules/detail-layout.md`)
-  is óók een navigatiepositie, dus `overviewExitUrl()` hangt ze aan zodra
-  `state.drillRef` niet leeg is (alleen samen met `sel`, nooit los — drillen
-  heeft geen betekenis zonder een geselecteerd block). `overview.mjs` leest ze
-  in dezelfde stap als `originSel` (`originDrill`/`originDrillGran`/
-  `originDrillChange`, drie extra never-nulled module-`let`s) en `treeUrl(pr)`
-  voegt ze alleen toe wanneer ook `sel` wordt toegevoegd (`pr.number ===
-  originPr`). Terug in `/pr/<n>` lost `applyDrillRefRestore`/
-  `applyDrillCursorRestore` (`home.mjs`) ze op naar echte gedrilde kolommen —
-  zie `.claude/rules/detail-layout.md`. Niet gevonden (relatie weg, resolver
-  opnieuw gedraaid) → dezelfde stille not-found-fallback als `sel` zelf.
+- **Outgoing (`home.mjs`):** `overviewExitUrl()` builds the destination for
+  **both** exits to `/pr-overview` (the `←` nav-chain exit at stop 1, and the
+  `/`-menu item "To PR overview") — `/pr-overview?pr=<state.pr>`, plus
+  `&sel=<encodeURIComponent(state.blockRef)>` whenever there's a selection
+  (`state.blockRef` empty → no `sel` param, e.g. right after loading).
+- **Incoming (`overview.mjs`):** two **never-nulled** module `let`s,
+  `originPr`/`originSel`, read `pr`/`sel` **once** on load — deliberately
+  **separate** from the existing, one-shot `pendingSelectPr` (which gets
+  cleared within milliseconds of load once the row is found/not-found);
+  `originPr`/`originSel`, in contrast, need to stay alive until the reviewer
+  actually clicks back into the tree minutes later. `treeUrl(pr)` — used by
+  **all three** navigation points to `/pr/<n>` (`generatePage`'s redirect
+  after a successful (re)ingest, "Open review tree", and the `→` forward nav
+  in `openOrGenerate`) — only adds `?sel=<originSel>` if
+  `pr.number === originPr`: if you click a **different** PR in the overview
+  than the one you came from, it never gets a sel from an unrelated PR
+  attached.
+- **Block no longer found** (removed, or meanwhile fully approved and thus
+  hidden) relies on the **existing** `applyBlockRefRestore` fallback (clamp
+  to the ordinary default) — no new edge-case code needed, exactly the same
+  behavior as an expired/shared `?sel=` link.
+- **`?drill=`/`?dgran=`/`?dchg=` travel along alongside `?sel=`** — an open
+  drilled Underlying-code column (see "Drilling" in
+  `.claude/rules/detail-layout.md`) is also a navigation position, so
+  `overviewExitUrl()` appends them whenever `state.drillRef` isn't empty
+  (only together with `sel`, never alone — drilling has no meaning without a
+  selected block). `overview.mjs` reads them in the same step as `originSel`
+  (`originDrill`/`originDrillGran`/`originDrillChange`, three extra
+  never-nulled module `let`s) and `treeUrl(pr)` only adds them when `sel` is
+  also added (`pr.number === originPr`). Back in `/pr/<n>`,
+  `applyDrillRefRestore`/`applyDrillCursorRestore` (`home.mjs`) resolve them
+  into real drilled columns — see `.claude/rules/detail-layout.md`. Not
+  found (relation gone, resolver rerun) → the same silent not-found fallback
+  as `sel` itself.
 
 Test: `tests/overview-pr-select-block.spec.mjs`.
 
-### Client (`src/overview.mjs`, arrow.js, dark-zinc, Nederlands)
+### Client (`src/overview.mjs`, arrow.js, dark zinc)
 
-Twee-fasen render via een reactieve `state.statuses` (skeleton → pills, geen
-layout-shift). Features: gesecteerde lijst, debounced zoeken (aparte
-resultaten-regio, sequence-guard), **stacks** (elke PR wiens `baseRefName` =
-een in-view PR's `headRefName` → ingesprongen groep bovenaan), reviewer-avatars,
-review/CI-chips, "recent gegenereerd"-lade (lazy `GET /api/prs`), en
-toetsenbord-nav (↑/↓/Home/End/Enter/`/`/→, met de hover-vs-keyboard-flag zodat
-`scrollIntoView` de selectie niet kaapt). UI-proza is Nederlands; de
-GitHub-sectietitels blijven Engels.
+Two-phase render via a reactive `state.statuses` (skeleton → pills, no
+layout shift). Features: sectioned list, debounced search (separate results
+region, sequence guard), **stacks** (each PR whose `baseRefName` equals an
+in-view PR's `headRefName` → an indented group at the top), reviewer
+avatars, review/CI chips, "recently generated" drawer (lazy
+`GET /api/prs`), and keyboard nav (↑/↓/Home/End/Enter/`/`/→, with the
+hover-vs-keyboard flag so `scrollIntoView` doesn't hijack the selection). The
+GitHub section titles stay in English.
 
-**Stacks zijn een BOOM, geen lineaire keten (`computeStacks`,
-`src/overview.mjs`, geëxporteerd puur voor testbaarheid).** Eén PR kan de
-directe basis zijn voor **meerdere** zuster-PR's tegelijk — b.v. vijf losse
-feature-branches die allemaal rechtstreeks op dezelfde, nog niet gemergede
-branch zijn getakt (een "fan-out"), niet elk op de vorige. Dat is een net zo
-geldige stack-relatie als een lineaire keten (elke zuster-PR's `baseRefName`
-wijst tenslotte naar een in-view PR's `headRefName`), maar een eerdere versie
-modelleerde dit als een strikte lijst (`childOf: Map<parentNum, PR>`, met een
-guard die alleen de eerst-verwerkte kandidaat-child per parent onthield) —
-waardoor bij zo'n fan-out alleen de eerste zuster werd gelift en de rest
-onopgemerkt in zijn normale sectie bleef staan. `computeStacks` bouwt nu
-`childrenOf: Map<parentNum, PR[]>` (alle matches, niet enkel de eerste,
-gesorteerd op PR-nummer oplopend) en vlakt elke boom via een depth-first-walk
-af tot `[{pr, depth}, …]`: de root op `depth 0`, en **alle zuster-PR's die op
-dezelfde parent stapelen delen dezelfde `depth`** (in plaats van elk een
-stap dieper dan de vorige, zoals een lineaire keten dat zou suggereren) — pas
-een *echte* keten (A→B→C, elke stap één nieuwe branch dieper) levert nog
-oplopende dieptes op. `stackGroup`/`listBox`/`connectorMark` (ongewijzigd
-generiek op `opts.depth`) renderen zusters op dezelfde diepte dus gewoon
-achter elkaar, met identieke inspringing/connector. Alleen bomen met ≥ 2
-knopen tellen als een stack. Test: `tests/overview-stack-fanout.spec.mjs`
-(fixture `tests/fixtures/inbox-fanout.json`, een letterlijke reproductie van
-een echte fan-out — 1 basis-PR + 5 zuster-PR's die er allemaal rechtstreeks
-op takken — gevoed als synthetische data rechtstreeks in `computeStacks`,
-niet via `SLASH_INBOX`: de `/api/inbox`-snapshot is één gedeeld, worker-breed
-read-model waar meerdere andere overview-tests exacte rij-tellingen tegen
-aanhouden, dus een tweede inbox-fixture kan daar niet naast bestaan; mirrort
-het "importeer een al-geladen paginamodule, roep zijn geëxporteerde pure
-functie aan met synthetische data"-patroon van `navigate.spec.mjs`'s
-`changeGroups`-test).
+**Stacks are a TREE, not a linear chain (`computeStacks`, `src/overview.mjs`,
+exported purely for testability).** One PR can be the direct base for
+**multiple** sibling PRs at once — e.g. five separate feature branches all
+branched directly off the same, not-yet-merged branch (a "fan-out"), rather
+than each off the previous one. That's just as valid a stack relationship as
+a linear chain (after all, each sibling PR's `baseRefName` points to an
+in-view PR's `headRefName`), but an earlier version modeled this as a strict
+list (`childOf: Map<parentNum, PR>`, with a guard that only remembered the
+first-processed child candidate per parent) — so on such a fan-out, only the
+first sibling got lifted and the rest stayed unnoticed in their normal
+section. `computeStacks` now builds `childrenOf: Map<parentNum, PR[]>` (all
+matches, not just the first, sorted by ascending PR number) and flattens
+each tree via a depth-first walk into `[{pr, depth}, …]`: the root at
+`depth 0`, and **all sibling PRs stacking on the same parent share the same
+`depth`** (rather than each one level deeper than the previous, as a linear
+chain would suggest) — only a *real* chain (A→B→C, each step one new branch
+deeper) still yields increasing depths.
+`stackGroup`/`listBox`/`connectorMark` (unchanged, generic on `opts.depth`)
+thus simply render siblings at the same depth one after another, with
+identical indentation/connector. Only trees with ≥ 2 nodes count as a stack.
+Test: `tests/overview-stack-fanout.spec.mjs` (fixture
+`tests/fixtures/inbox-fanout.json`, a literal reproduction of a real
+fan-out — 1 base PR + 5 sibling PRs all branching directly off it — fed as
+synthetic data directly into `computeStacks`, not via `SLASH_INBOX`: the
+`/api/inbox` snapshot is one shared, worker-wide read model that several
+other overview tests hold exact row counts against, so a second inbox
+fixture can't coexist there; mirrors the "import an already-loaded page
+module, call its exported pure function with synthetic data" pattern from
+`navigate.spec.mjs`'s `changeGroups` test).
 
-**De hover-vs-keyboard-flag (`hoverEnabled`) gate't op een échte
-cursor-positieverandering, niet op het `mousemove`-event zelf.** Elke
-toetsenbordstap (`move`/`moveTo` in `overview.mjs`) zet `hoverEnabled = false`
-vóór `paintSelection()` — die roept altijd `scrollIntoView` aan — juist om te
-voorkomen dat de daaropvolgende scroll een `mouseenter` triggert die de
-keyboard-selectie kaapt. Browsers (Chromium met naam) synthetiseren echter een
-`mousemove`-DOM-event op de **ongewijzigde** cursor-positie om `:hover` na
-zo'n scroll/layout-verandering te resyncen — een kale
-`addEventListener('mousemove', () => hoverEnabled = true)` kan dat niet van een
-echte muisbeweging onderscheiden en zette de flag dus meteen weer aan,
-waarna de rij die toevallig onder de stilstaande cursor lag de selectie
-terugtrok (het gerapporteerde "de PR-items schuiven mee" tijdens
-pijltjestoets-navigatie). De listener bewaart daarom de laatst gezien
-`clientX`/`clientY` en zet `hoverEnabled` alleen aan bij een echte delta.
-Getest in `tests/overview-hover-gate.spec.mjs`: dat dispatcht zelf
-`mousemove`/`mouseenter`-DOM-events (het browser-native scroll-getriggerde
-geval bleek niet deterministisch op te wekken onder Playwright, zie ook de
-`selectRowByKeyboard`-notitie in `overview.spec.mjs`) om de gate zelf te
-bewijzen: zelfde coördinaten kapen de selectie nooit, een echte
-positie-delta doet dat weer normaal.
+**The hover-vs-keyboard flag (`hoverEnabled`) gates on an actual cursor
+position change, not the `mousemove` event itself.** Every keyboard step
+(`move`/`moveTo` in `overview.mjs`) sets `hoverEnabled = false` before
+`paintSelection()` — which always calls `scrollIntoView` — precisely to
+prevent the following scroll from triggering a `mouseenter` that hijacks the
+keyboard selection. Browsers (Chromium by name) however synthesize a
+`mousemove` DOM event at the **unchanged** cursor position to resync `:hover`
+after such a scroll/layout change — a bare
+`addEventListener('mousemove', () => hoverEnabled = true)` can't tell that
+apart from a real mouse move and would thus immediately turn the flag back
+on, after which the row that happened to sit under the stationary cursor
+would pull the selection back (the reported "the PR items shift along"
+during arrow-key navigation). The listener therefore stores the last-seen
+`clientX`/`clientY` and only turns `hoverEnabled` on for an actual delta.
+Tested in `tests/overview-hover-gate.spec.mjs`: it dispatches its own
+`mousemove`/`mouseenter` DOM events (the browser-native scroll-triggered
+case turned out not to reproduce deterministically under Playwright, see
+also the `selectRowByKeyboard` note in `overview.spec.mjs`) to prove the
+gate itself: identical coordinates never hijack the selection, a real
+position delta does so again normally.
 
-**De keyboard-selectie volgt identiteit (`selKey`/`data-nav-key`), niet enkel
-een array-positie (`selIndex`).** Elke navigeerbare rij (`prRow` én
-`recentItem`) draagt naast `data-nav-row`/`data-pr` ook een stabiel
-`data-nav-key` (dezelfde string als de arrow.js `.key(...)` van die rij, bv.
-`"row:12903"`/`"recent:12903"`). `move`/`moveTo` zetten bij elke stap zowel
-`selIndex` als `selKey`; `paintSelection()` roept vóór het schilderen altijd
-eerst `reanchorSelection(rows)` aan, die `selIndex` **herleidt uit `selKey`**
-tegen de op dat moment aanwezige `currentRows()` — staat die rij er nog, dan
-volgt de ring 'm naar zijn (eventueel verschoven) positie; is-ie echt weg, dan
-wordt de selectie **losgelaten** (`selIndex = -1`, geen ring) in plaats van op
-een willekeurige andere rij te belanden. Dit was nodig omdat de onderliggende
-rijenlijst kan veranderen zonder dat de reviewer zelf een pijltje indrukt: een
-zoekopdracht typen/wissen (vervangt de hele rijenset door een andere,
-mogelijk kortere/anders-geordende), een achtergrond-snapshot-reload
-(`reloadSnapshot`, elke 60s), of de "Recent gegenereerd"-lade openen/sluiten
-(zie hieronder) — met een kale positionele `selIndex` bleef de ring dan op
-"wat er toevallig op die plek staat" hangen, vrijwel altijd een andere PR dan
-de reviewer had geselecteerd. Getest in
-`tests/overview-selection-identity.spec.mjs` (zoeken naar een korte,
-anders-geordende resultatenset laat de ring nooit op de enige overgebleven,
-niet-geselecteerde rij landen; de lade dicht-klappen met een selectie erin
-laat de selectie los i.p.v. 'm op een pr-row te laten landen).
+**Keyboard selection follows identity (`selKey`/`data-nav-key`), not just an
+array position (`selIndex`).** Every navigable row (`prRow` and
+`recentItem`) carries, alongside `data-nav-row`/`data-pr`, a stable
+`data-nav-key` (the same string as that row's arrow.js `.key(...)`, e.g.
+`"row:12903"`/`"recent:12903"`). `move`/`moveTo` set both `selIndex` and
+`selKey` on every step; `paintSelection()` always first calls
+`reanchorSelection(rows)` before painting, which **derives `selIndex` from
+`selKey`** against the `currentRows()` present at that moment — if that row
+still exists, the ring follows it to its (possibly shifted) position; if
+it's truly gone, the selection is **released** (`selIndex = -1`, no ring)
+instead of landing on some arbitrary other row. This was needed because the
+underlying row list can change without the reviewer pressing an arrow key
+themselves: typing/clearing a search (replaces the whole row set with
+another, possibly shorter/differently ordered one), a background snapshot
+reload (`reloadSnapshot`, every 60s), or opening/closing the "Recently
+generated" drawer (see below) — with a bare positional `selIndex` the ring
+would then stick to "whatever happens to be in that spot", almost always a
+different PR than the one the reviewer had selected. Tested in
+`tests/overview-selection-identity.spec.mjs` (searching for a short,
+differently ordered result set never lands the ring on the only remaining,
+non-selected row; collapsing the drawer with a selection in it releases the
+selection instead of letting it land on a pr-row).
 
-**`→` en `Enter` betekenen bewust iets anders op de geselecteerde rij.**
-`Enter` (`activateSelected`) blijft ongewijzigd: klik op de rij, wat het
-popover-menu opent (of, voor een "Recent gegenereerd"-item, direct navigeert —
-dat is al een `<a href>`). `→` (`activateSelectedForward`) is de "ga meteen
-door"-toets, analoog aan de `→`-conventie op `/pr/<id>` (zie
-`keyboard-navigation.md`: `→` stapt een stop verder, `Enter` opent een menu):
-op een `hasGraph`-rij navigeert `→` **direct** naar `/pr/<n>` (identiek aan
-"Open review-boom", geen popover zichtbaar); op een niet-geïngeste rij opent
-`→` (`openOrGenerate`) hetzelfde popover als `Enter` zou doen — nodig om de
-bestaande busy-spinner/stage-tekst/foutmelding te tonen tijdens het genereren,
-geen nieuwe UI — en vuurt meteen `generatePage(pr)` (default `redirect:true`)
-af, zodat de tree bij succes automatisch opent. Faalt het, dan blijft het
-popover open met dezelfde inline foutmelding als een muis-gedreven poging.
-`findPrByNumber` zoekt het `pr`-object (met `hasGraph`) op via `data-pr` in
-`state.sections` (dekt ook gestapelde rijen — dezelfde objectreferenties) en
-`state.searchResults`; geen match (defensief) valt terug op het bestaande
-`activateSelected()`. `handlePopoverKey` blijft `→` afvangen zolang een
-popover al open is, dus een tweede `→`-druk op een net geopend
-genereer-popover doet niets extra's.
+**`→` and `Enter` deliberately mean different things on the selected row.**
+`Enter` (`activateSelected`) stays unchanged: click the row, which opens the
+popover menu (or, for a "Recently generated" item, navigates directly —
+that's already an `<a href>`). `→` (`activateSelectedForward`) is the "go
+straight ahead" key, analogous to the `→` convention on `/pr/<id>` (see
+`keyboard-navigation.md`: `→` steps one stop further, `Enter` opens a
+menu): on a `hasGraph` row, `→` navigates **directly** to `/pr/<n>`
+(identical to "Open review tree", no popover shown); on a not-yet-ingested
+row, `→` (`openOrGenerate`) opens the same popover `Enter` would — needed to
+show the existing busy spinner/stage text/error message during generation,
+no new UI — and immediately fires `generatePage(pr)` (default
+`redirect:true`), so the tree opens automatically on success. If it fails,
+the popover stays open with the same inline error message as a
+mouse-driven attempt. `findPrByNumber` looks up the `pr` object (with
+`hasGraph`) via `data-pr` in `state.sections` (also covers stacked rows —
+the same object references) and `state.searchResults`; no match
+(defensive) falls back to the existing `activateSelected()`.
+`handlePopoverKey` keeps intercepting `→` as long as a popover is already
+open, so a second `→` press on a freshly opened generate popover does
+nothing extra.
 
-**De "Recent gegenereerd"-lade doet mee in de `↓`-navigatie zodra hij
-openstaat** — bewuste keuze: `currentRows()` blijft simpelweg alle
-`[data-nav-row]`-elementen (zowel `pr-row` als `recent-item`), dus zodra de
-lade open is stroomt `↓` vanaf de laatste PR-rij gewoon door in de
-lade-items, in DOM-volgorde. Dicht is de lade leeg (geen `recent-item`s in de
-DOM), dus dan doet hij niet mee — en sluit je 'm terwijl de selectie op een
-lade-item stond, dan laat de identiteits-herijking hierboven die selectie los
-(geen ring) i.p.v. 'm op een overgebleven pr-row te plakken.
+**The "Recently generated" drawer joins the `↓` navigation once it's
+open** — a deliberate choice: `currentRows()` simply remains all
+`[data-nav-row]` elements (both `pr-row` and `recent-item`), so once the
+drawer is open, `↓` from the last PR row simply flows on into the drawer
+items, in DOM order. Closed, the drawer is empty (no `recent-item`s in the
+DOM), so then it doesn't participate — and if you close it while the
+selection sits on a drawer item, the identity re-anchoring above releases
+that selection (no ring) instead of pasting it onto a leftover pr-row.
 
-Ook: **`Escape` in de zoekbox blurt het veld** (naast het wissen van
-`state.query`) — anders bleef `document.activeElement` op de (nu lege) input
-staan en at `kbHandler`'s `typing`-guard (`active.tagName === 'INPUT'`) élke
-volgende pijltjestoets op, wat aanvoelde als "de pijltjes doen niks meer" tot
-de reviewer handmatig wegklikte/tabte.
+Also: **`Escape` in the search box blurs the field** (besides clearing
+`state.query`) — otherwise `document.activeElement` would stay on the (now
+empty) input and `kbHandler`'s `typing` guard (`active.tagName === 'INPUT'`)
+would eat *every* subsequent arrow key, which felt like "the arrows just
+stopped working" until the reviewer manually clicked away/tabbed out.
 
-En andersom: **`↑` voorbij de eerste rij springt naar de zoekbalk bovenin**
-(`kbHandler`'s ArrowUp-tak: bij `selIndex <= 0` roept 'ie `focusSearch()` aan
-i.p.v. op rij 0 te klemmen) — die zoekbalk zoekt al over **alle** open PR's van
-de repo (`/api/prs/search`), dus vanaf de lijst omhoog naar het zoeken is één
-toetsaanslag. `focusSearch` focust het veld en laat de rij-selectie los
-(`selKey = null`, geen ring). Test: `tests/overview-ignore.spec.mjs`.
+And conversely: **`↑` past the first row jumps to the search bar at the
+top** (`kbHandler`'s ArrowUp branch: at `selIndex <= 0` it calls
+`focusSearch()` instead of clamping at row 0) — that search bar already
+searches across **all** open PRs of the repo (`/api/prs/search`), so going
+from the list up to search is one keystroke. `focusSearch` focuses the
+field and releases the row selection (`selKey = null`, no ring). Test:
+`tests/overview-ignore.spec.mjs`.
 
-**En de symmetrische weg terug: `↓` in de zoekbox springt weer naar de
-rijenlijst** (`onSearchKeydown`'s `ArrowDown`-tak, naast de bestaande
-`Escape`-tak in diezelfde functie). Zonder dit was landen in de zoekbox — via
-een klik, via de query terugbackspacen tot leeg (geen `Escape`, dus de
-bestaande blur-op-Escape-fix triggert niet), of via de `↑`-sprong hierboven
-(die al bij `selIndex <= 0` vuurt, dus ook meteen na page-load) — een
-**one-way trap**: elke volgende `↓` bleef `kbHandler`'s `typing`-guard raken
-en deed niets, wat als "pijltjes-omlaag doet het niet" oogde zonder dat de
-reviewer besefte dat de focus stiekem in het zoekveld zat. `onSearchKeydown`
-blurt het veld en roept `moveTo(0)` aan — landt op de eerste zichtbare rij
-(van welke `currentView()` dan ook actief is), of is een veilige no-op bij nul
-rijen (bestaande guard in `moveTo`). Test: `tests/overview-search-arrowdown.spec.mjs`.
+**And the symmetric way back: `↓` in the search box jumps back to the row
+list** (`onSearchKeydown`'s `ArrowDown` branch, next to the existing
+`Escape` branch in the same function). Without this, landing in the search
+box — via a click, via backspacing the query down to empty (no `Escape`, so
+the existing blur-on-Escape fix doesn't trigger), or via the `↑` jump above
+(which already fires at `selIndex <= 0`, so also right after page load) —
+was a **one-way trap**: every following `↓` kept hitting `kbHandler`'s
+`typing` guard and did nothing, which read as "arrow-down doesn't work"
+without the reviewer realizing focus was secretly sitting in the search
+field. `onSearchKeydown` blurs the field and calls `moveTo(0)` — landing on
+the first visible row (of whichever `currentView()` is currently active),
+or a safe no-op with zero rows (existing guard in `moveTo`). Test:
+`tests/overview-search-arrowdown.spec.mjs`.
 
-**Zodra een popover open is, bezit hij het toetsenbord — de lijst-navigatie
-hierboven is opgeschort.** `togglePopover` focust bij het openen (via
-`requestAnimationFrame`, na de arrow.js-paint) het **eerste** item in de menu
-(`focusPopoverItem(0)`); `kbHandler` vertakt als **allereerste** check op
-`ui.openPopover != null` naar `handlePopoverKey(e)` — vóór zelfs de
-`/`-zoekbox-shortcut — zodat geen enkele toets nog bij `move`/`moveTo`/
-`activateSelected` terechtkomt zolang het menu open is. In die vertakking: `↑`/`↓`
-cyclen (met wrap-around aan beide uiteinden) door de menu's eigen
-`<button>`/`<a href>`-items (`movePopover`, focus-gebaseerd — geen aparte
-selectie-state, de browser's eigen `:focus` is de bron van waarheid), `Enter`/
-`Space` laat de **native** knop-/link-activatie op het gefocuste element lopen
-(bewust géén `preventDefault` — precies hetzelfde gedrag als een muisklik op
-dat item), `Escape` sluit het menu (`closePopover`, ook hergebruikt door de
-bestaande klik-buiten-de-popover-sluit-listener), en `←`/`→`/`Home`/`End`/`/`
-worden geslikt (`preventDefault`, geen actie) zodat ze niet doorlekken naar de
-rij-lijst; elke andere toets (met name `Tab`) blijft ongemoeid.
+**Once a popover is open, it owns the keyboard — the list navigation above
+is suspended.** `togglePopover` focuses, on open (via
+`requestAnimationFrame`, after the arrow.js paint), the **first** item in
+the menu (`focusPopoverItem(0)`); `kbHandler` branches, as the **very
+first** check, on `ui.openPopover != null` into `handlePopoverKey(e)` —
+before even the `/` search-box shortcut — so that no key ever reaches
+`move`/`moveTo`/`activateSelected` while the menu is open. Within that
+branch: `↑`/`↓` cycle (wrapping at both ends) through the menu's own
+`<button>`/`<a href>` items (`movePopover`, focus-based — no separate
+selection state, the browser's own `:focus` is the source of truth),
+`Enter`/`Space` let the **native** button/link activation run on the
+focused element (deliberately no `preventDefault` — exactly the same
+behavior as a mouse click on that item), `Escape` closes the menu
+(`closePopover`, also reused by the existing click-outside-the-popover-
+closes listener), and `←`/`→`/`Home`/`End`/`/` are swallowed
+(`preventDefault`, no action) so they don't leak through to the row list;
+every other key (notably `Tab`) is left alone.
