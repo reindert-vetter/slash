@@ -70,6 +70,21 @@ differs by `pr.hasGraph`:
   success). A failed regeneration shows the error message under the button,
   within the same popover (`data-testid=regenerate-error`).
 
+For a **draft** PR (`pr.isDraft`), the popover also shows a **"Klaar voor
+review"** section (`data-testid=ready-section`, only rendered for drafts).
+Clicking it (`data-testid=ready-for-review`) fetches `GET /api/reviewers` and
+expands an inline reviewer checklist (`data-testid=ready-picker`, repo
+collaborators sorted **most-used-first** — one `data-testid=reviewer-<login>`
+button per candidate, a `count×` hint on used ones), plus a confirm button
+(`data-testid=ready-confirm`) that POSTs the **`ready_for_review`** workflow
+(the sanctioned write path — flips the draft to ready + requests the checked
+reviewers + bumps their local usage count) and, on success, closes the popover
+and calls `reloadSnapshot()` so the row leaves "Your drafts" without waiting
+for the 60s poll. The ready-flow state lives on `ui` (`readyFor`/`reviewers`/
+`selectedReviewers`/…, all ephemeral) and resets on every
+`togglePopover`/`closePopover`. See the `ready_for_review` workflow +
+`modules/reviewerusage` in `.claude/rules/tembed-workflows.md`.
+
 Below both branches sit, unchanged, *Open on GitHub* / *Open Jira ticket*,
 followed by **"Copy GitHub URL"** (`data-testid=copy-url`,
 `navigator.clipboard.writeText(pr.url)` with brief "Copied!" feedback via the
@@ -194,6 +209,8 @@ call) as before.
 | `GET /api/prs/filter?preset=<key>` | Live gh `search` for a **fixed, allow-listed** preset query (`filterPresets` in `inbox_api.go`) — never raw UI text to gh (`exec` input validation). See "Filter drawer" below. |
 | `POST /api/workflows/ignore` | Ensures the per-repo `ignore` tracker → `{runId}` (the UI signals ignore/un-ignore to it). See `.claude/rules/tembed-workflows.md`. |
 | `GET /api/ignore` | Read-only ignore read model → `{ok,ignores:[{pr,until}]}`. Expiry check happens client-side at read time. |
+| `GET /api/reviewers` | Read-only candidate reviewers → `{ok, reviewers:[{login,avatarUrl,count}]}` — repo collaborators sorted most-used-first (local usage counts). |
+| `POST /api/workflows/ready_for_review` | `{pr, reviewers?}` → flip a draft PR to ready + request reviewers (the sanctioned write path). 400 on an invalid pr/login. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 
 ### Offline / test mode

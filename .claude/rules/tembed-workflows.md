@@ -1495,6 +1495,52 @@ exactly (no long-lived tracker, no Signal loop).
   `TestGithubModuleRejectsUnknownReviewEvent`, the real `Module`'s
   allowlist as defense-in-depth).
 
+## Draft → ready for review + reviewer picker (`ready_for_review` + `modules/reviewerusage`)
+
+A Workflow Type, **`ready_for_review`**, flips a **draft** PR to "ready for
+review" and optionally requests reviewers — driven from the PR-overview
+per-row popover (see "Ready for review" in `.claude/rules/pages-and-routing.md`).
+Signal-less, one Execution per request, mirrors `submit_review`'s synchronous
+pattern.
+
+- **`modules/github`** got three methods (`Client` + `Fake`):
+  `ListCollaborators` (read — `repos/{repo}/collaborators`, the candidate
+  reviewers), `MarkReadyForReview` (GraphQL `markPullRequestReadyForReview`
+  via the existing `prNodeID`), and `RequestReviewers`
+  (`POST repos/{repo}/pulls/{pr}/requested_reviewers`, each login validated
+  against `reReviewerLogin` before `exec`). `Fake` records
+  `ReadyForReviewCount`/`LastRequestedReviewers` + `SetCollaborators` for
+  tests.
+- **`modules/reviewerusage`** (`data/reviewerusage.db`): the local, "personal"
+  usage-store — `reviewer_usage(repo, login, count)`. Nothing else writes it,
+  so it only ever reflects the reviewers this user assigned through this
+  feature. Write `Bump(repo, logins)` (workflow-only, `ON CONFLICT … count+1`,
+  dedups a login within one call); read `List(repo)` (most-used first, ties
+  alphabetical). Opened in `newTasks` and set on the manager
+  **post-construction** (`mgr.reviewerusage = ru`) rather than as a
+  `NewTaskManager` param — deliberately, to avoid churning every existing test
+  call site; a nil store makes the `bumpReviewerUsage` Activity a no-op (like
+  the other module-guarded activities).
+- **Workflow** (`workflows.go`): `readyForReviewWorkflow` runs
+  `markReadyForReview` → (only when reviewers are given) `requestReviewers` →
+  `bumpReviewerUsage`. Deterministic — the number of Activities is a function
+  of the input's reviewer list. `StartReadyForReview` runs it synchronously
+  and surfaces a failed GitHub call as an error (mirrors `StartSubmitReview`).
+- **Reviewer candidates** (`TaskManager.Reviewers`, read): merges
+  `ListCollaborators` with the usage counts and sorts most-used-first (ties +
+  never-used collaborators fall back to alphabetical). Served by read-only
+  `GET /api/reviewers` → `{ok, reviewers:[{login, avatarUrl, count}]}`.
+- **Endpoint:** `POST /api/workflows/ready_for_review {pr, reviewers?}`
+  (`handleReadyForReview`); `validateReadyForReview` rejects a non-positive pr
+  or an invalid login (400) and trims+dedups the reviewer list before the
+  workflow starts.
+- Tests: `ready_for_review_test.go` (`TestValidateReadyForReview`;
+  `TestReadyForReviewWorkflow` — marks ready + requests + bumps usage via the
+  Fake, then `Reviewers()` sorts alice(2)/bob(1)/carol(0);
+  `TestReadyForReviewWorkflowNoReviewers` — the reviewer Activities are skipped
+  with no reviewers), `modules/reviewerusage/reviewerusage_test.go`
+  (Bump/List round-trip + dedup + most-used ordering).
+
 ## AI risk check of the whole PR (`code_warning` + `code_warning.go`)
 
 An eighth Workflow Type, **`code_warning`**, does a **PR-wide, agentic**

@@ -25,6 +25,7 @@ import (
 	"slash/modules/jira"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
+	"slash/modules/reviewerusage"
 	"slash/modules/testcovers"
 )
 
@@ -91,6 +92,12 @@ const (
 	// request. It runs its one Activity (the gh api call) synchronously and
 	// completes — no signal, mirrors WorkflowIngest.
 	WorkflowSubmitReview = "submit_review"
+	// WorkflowReadyForReview is the Workflow Type that flips a draft PR to
+	// "ready for review" and (optionally) requests reviewers: one Execution
+	// per request. It runs its Activities (mark ready → request reviewers →
+	// bump the local reviewer-usage counts) synchronously and completes — no
+	// signal, mirrors WorkflowSubmitReview.
+	WorkflowReadyForReview = "ready_for_review"
 	// WorkflowCodeWarning is the Workflow Type that agentically reviews a PR's
 	// changed files for risks (correctness/security/style, and consistency
 	// with the connected code the changes touch — callers, callees, tests,
@@ -353,6 +360,15 @@ type SubmitReviewInput struct {
 	Body  string `json:"body"`
 }
 
+// ReadyForReviewInput starts a ready_for_review Workflow Execution: flip a
+// draft PR to "ready for review" and optionally request reviewers. Reviewers
+// is a list of user logins (validated by validateReadyForReview before the
+// workflow starts); empty means "just mark ready".
+type ReadyForReviewInput struct {
+	PR        int      `json:"pr"`
+	Reviewers []string `json:"reviewers"`
+}
+
 // CodeWarningInput starts a code_warning Execution: an agentic Sonnet review
 // of a PR for risks. Files is reserved for a future incremental fast-follow
 // (re-checking only the files a new commit touched, piggybacking on
@@ -395,14 +411,20 @@ type TaskManager struct {
 	approvals   *approvals.Module
 	explain     *explanations.Module
 	ignore      *ignore.Module
-	claude      claude.Client
-	jira        jira.Client
-	db          *sql.DB
-	dataDir     string
-	repo        string
-	interval    time.Duration // fast cadence (reviewer active)
-	idle        time.Duration // slow cadence + PR-state check (reviewer idle)
-	logf        func(string, ...any)
+	// reviewerusage counts how often each reviewer was assigned through the
+	// ready_for_review flow (most-used-first sorting of the picker). Set
+	// post-construction in newTasks (not a NewTaskManager param) to avoid
+	// churning every test call site; a nil store makes bumpReviewerUsage a
+	// no-op, like the other module-guarded activities.
+	reviewerusage *reviewerusage.Module
+	claude        claude.Client
+	jira          jira.Client
+	db            *sql.DB
+	dataDir       string
+	repo          string
+	interval      time.Duration // fast cadence (reviewer active)
+	idle          time.Duration // slow cadence + PR-state check (reviewer idle)
+	logf          func(string, ...any)
 
 	// baseCtx is the server-lifetime context background pollers spawned outside
 	// a request (e.g. ensurePRStatus's fresh-poller spawn) run under — a
@@ -1065,6 +1087,40 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.gh.SubmitReview(ctx, arg.PR, arg.Event, arg.Body)
 	})
 
+	// Activities for ready_for_review (write, workflow-driven): flip a draft PR
+	// to ready, request reviewers, and bump the local usage counts. Not
+	// best-effort — a failed GitHub call must surface to the reviewer.
+	engine.RegisterActivity("markReadyForReview", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg ReadyForReviewInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.gh == nil {
+			return nil, fmt.Errorf("ready for review: no github client")
+		}
+		return nil, m.gh.MarkReadyForReview(ctx, arg.PR)
+	})
+	engine.RegisterActivity("requestReviewers", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg ReadyForReviewInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.gh == nil {
+			return nil, fmt.Errorf("request reviewers: no github client")
+		}
+		return nil, m.gh.RequestReviewers(ctx, arg.PR, arg.Reviewers)
+	})
+	engine.RegisterActivity("bumpReviewerUsage", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg ReadyForReviewInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.reviewerusage == nil {
+			return nil, nil
+		}
+		return nil, m.reviewerusage.Bump(ctx, m.repo, arg.Reviewers)
+	})
+
 	// Activity: resolve the code_warning scope — read (write-free) — reads the
 	// PR's current blocks from the DB. Files empty in the input means "the
 	// whole PR": derive the changed-file scope from the blocks themselves;
@@ -1190,6 +1246,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowExplainCode, explainCodeWorkflow)
 	engine.RegisterWorkflow(WorkflowApprove, approveWorkflow)
 	engine.RegisterWorkflow(WorkflowSubmitReview, submitReviewWorkflow)
+	engine.RegisterWorkflow(WorkflowReadyForReview, readyForReviewWorkflow)
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnore, ignoreWorkflow)
 	return m
@@ -1342,6 +1399,95 @@ func (m *TaskManager) StartSubmitReview(in SubmitReviewInput) (string, error) {
 		return runID, fmt.Errorf("submit review failed (run %s)", runID)
 	}
 	return runID, nil
+}
+
+// readyForReviewWorkflow flips a draft PR to ready-for-review, optionally
+// requests reviewers, and bumps the local usage counts. It is deterministic:
+// every side effect is an Activity run in a fixed order; the reviewer
+// Activities only run when Reviewers is non-empty (a function of the input),
+// so replay is stable. No signal — it runs straight through and completes,
+// mirroring submitReviewWorkflow.
+func readyForReviewWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in ReadyForReviewInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	if err := w.ExecuteActivity("markReadyForReview", in, nil); err != nil {
+		return nil, fmt.Errorf("mark ready for review: %w", err)
+	}
+	if len(in.Reviewers) > 0 {
+		if err := w.ExecuteActivity("requestReviewers", in, nil); err != nil {
+			return nil, fmt.Errorf("request reviewers: %w", err)
+		}
+		if err := w.ExecuteActivity("bumpReviewerUsage", in, nil); err != nil {
+			return nil, fmt.Errorf("bump reviewer usage: %w", err)
+		}
+	}
+	return json.Marshal(map[string]any{"pr": in.PR, "reviewers": in.Reviewers})
+}
+
+// StartReadyForReview runs the ready_for_review Workflow Execution to
+// completion (a signal-less workflow runs synchronously) and returns its Run
+// ID. Starting an Execution is the sanctioned write path; a failed GitHub call
+// reaches the caller as an error, mirroring StartSubmitReview.
+func (m *TaskManager) StartReadyForReview(in ReadyForReviewInput) (string, error) {
+	runID, err := m.engine.StartWorkflow(WorkflowReadyForReview, in)
+	if err != nil {
+		return "", err
+	}
+	status, err := m.engine.Status(runID)
+	if err != nil {
+		return runID, err
+	}
+	if status == tembed.StatusFailed {
+		return runID, fmt.Errorf("ready for review failed (run %s)", runID)
+	}
+	return runID, nil
+}
+
+// ReviewerCandidate is one candidate reviewer for the picker: a repo
+// collaborator with its local usage count (0 = never assigned through this
+// feature). READ-only view — no state is mutated by building it.
+type ReviewerCandidate struct {
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatarUrl"`
+	Count     int    `json:"count"`
+}
+
+// Reviewers returns the repo's collaborators as reviewer candidates, sorted
+// most-used-first (by the local reviewer-usage counts), ties and never-used
+// collaborators broken alphabetically. Read — both the github collaborator
+// fetch and the usage List are read methods, so this is safe outside a
+// workflow (it mutates nothing).
+func (m *TaskManager) Reviewers(ctx context.Context) ([]ReviewerCandidate, error) {
+	if m.gh == nil {
+		return nil, fmt.Errorf("reviewers: no github client")
+	}
+	collabs, err := m.gh.ListCollaborators(ctx)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int{}
+	if m.reviewerusage != nil {
+		usage, err := m.reviewerusage.List(ctx, m.repo)
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range usage {
+			counts[u.Login] = u.Count
+		}
+	}
+	out := make([]ReviewerCandidate, 0, len(collabs))
+	for _, c := range collabs {
+		out = append(out, ReviewerCandidate{Login: c.Login, AvatarURL: c.AvatarURL, Count: counts[c.Login]})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Login < out[j].Login
+	})
+	return out, nil
 }
 
 // warningsPerBlock bounds codeWarningWorkflow's finding cap: on average about

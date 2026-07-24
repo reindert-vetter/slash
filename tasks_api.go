@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,23 +26,25 @@ import (
 	"slash/modules/jira"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
+	"slash/modules/reviewerusage"
 	"slash/modules/testcovers"
 )
 
 // tasks holds the workflow engine + the module read sides. It is built once at
 // server start.
 type tasks struct {
-	engine      *tembed.Engine
-	manager     *TaskManager
-	comments    *comments.Module
-	inbox       *inbox.Module
-	relations   *relations.Module
-	prmeta      *prmeta.Module
-	callresolve *callresolve.Module
-	testcovers  *testcovers.Module
-	approvals   *approvals.Module
-	explain     *explanations.Module
-	ignore      *ignore.Module
+	engine        *tembed.Engine
+	manager       *TaskManager
+	comments      *comments.Module
+	inbox         *inbox.Module
+	relations     *relations.Module
+	prmeta        *prmeta.Module
+	callresolve   *callresolve.Module
+	testcovers    *testcovers.Module
+	approvals     *approvals.Module
+	explain       *explanations.Module
+	ignore        *ignore.Module
+	reviewerusage *reviewerusage.Module
 }
 
 // newTasks builds the tembed engine (SQLite + JSONL, so comments live in the
@@ -144,6 +147,20 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ex.Close()
 		return nil, nil, err
 	}
+	ru, err := reviewerusage.Open(dataDir + "/reviewerusage.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ig.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -172,6 +189,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		jr = &jira.Fake{}
 	}
 	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, tc, ap, ex, ig, cl, jr, db, dataDir, repo)
+	// Set post-construction (not a constructor param) so every existing
+	// NewTaskManager test call site stays unchanged; a nil store just makes
+	// bumpReviewerUsage a no-op.
+	mgr.reviewerusage = ru
 	// Record the server-lifetime context + whether background pollers may run,
 	// so ensurePRStatus's fresh-poller spawn uses a context that outlives the
 	// HTTP request that triggered it (see TaskManager.baseCtx).
@@ -205,9 +226,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = ap.Close()
 		_ = ex.Close()
 		_ = ig.Close()
+		_ = ru.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, ignore: ig}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, ignore: ig, reviewerusage: ru}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -412,6 +434,11 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// POST /api/workflows/submit_review {pr,event,body?} → submit a real GitHub
 	// PR-level review (approve or request changes). One Execution per submit.
 	mux.HandleFunc("/api/workflows/submit_review", s.handleSubmitReview)
+	// POST /api/workflows/ready_for_review {pr,reviewers?} → flip a draft PR to
+	// ready + request reviewers. GET /api/reviewers → candidate reviewers
+	// (repo collaborators), most-used-first (read-only).
+	mux.HandleFunc("/api/workflows/ready_for_review", s.handleReadyForReview)
+	mux.HandleFunc("/api/reviewers", s.handleReviewers)
 	// POST /api/workflows/code_warning {pr} → start an agentic Sonnet review of
 	// the whole PR for risks (the "/" menu's "Controleer de hele PR op
 	// risico's"). One Execution per manual run.
@@ -511,7 +538,7 @@ func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "code_warning" || rest == "ignore" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "ignore" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1107,6 +1134,76 @@ func (s *server) handleSubmitReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// reReviewerLogin restricts a reviewer login to GitHub's username charset
+// before the request reaches the workflow (defence in depth alongside the
+// github module's own check).
+var reReviewerLogin = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
+
+// validateReadyForReview checks a ready_for_review request before the workflow
+// starts: pr must be positive and every reviewer login must be a valid GitHub
+// username. Trims + dedups Reviewers in place.
+func validateReadyForReview(in *ReadyForReviewInput) error {
+	if in.PR <= 0 {
+		return fmt.Errorf("invalid pr")
+	}
+	seen := map[string]bool{}
+	out := in.Reviewers[:0]
+	for _, login := range in.Reviewers {
+		login = strings.TrimSpace(login)
+		if login == "" || seen[login] {
+			continue
+		}
+		if !reReviewerLogin.MatchString(login) {
+			return fmt.Errorf("invalid reviewer login %q", login)
+		}
+		seen[login] = true
+		out = append(out, login)
+	}
+	in.Reviewers = out
+	return nil
+}
+
+// handleReadyForReview starts a ready_for_review Workflow Execution (POST) —
+// the sanctioned write path for flipping a draft PR to ready + requesting
+// reviewers. Invalid requests are rejected before the workflow starts.
+func (s *server) handleReadyForReview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in ReadyForReviewInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if err := validateReadyForReview(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.StartReadyForReview(in)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleReviewers returns the repo's candidate reviewers (collaborators),
+// sorted most-used-first by the local reviewer-usage counts (ties and
+// never-used collaborators fall back to alphabetical). Read-only.
+func (s *server) handleReviewers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cands, err := s.tasks.manager.Reviewers(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reviewers": cands})
 }
 
 // handleCodeWarning starts a code_warning Workflow Execution (POST) — an

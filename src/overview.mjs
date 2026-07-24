@@ -59,7 +59,15 @@ const state = reactive({
 // ingestErrorFor lets the standalone regenerate button on an already-ingested
 // row show the error under the right row even though ui.ingesting itself has
 // already reset to null by the time the catch runs.
-const ui = reactive({ openPopover: null, ingesting: null, ingestStage: '', ingestError: null, ingestErrorFor: null, copiedFor: null })
+// readyFor: the pr.number whose reviewer picker is expanded (null = collapsed);
+// reviewers: the fetched candidate list (repo collaborators, most-used-first);
+// reviewersLoading/reviewersError: fetch state; selectedReviewers: a login→true
+// map of the checked reviewers (reassigned wholesale so arrow.js re-renders);
+// readySubmitting: a ready_for_review POST in flight.
+const ui = reactive({
+  openPopover: null, ingesting: null, ingestStage: '', ingestError: null, ingestErrorFor: null, copiedFor: null,
+  readyFor: null, reviewers: [], reviewersLoading: false, reviewersError: null, selectedReviewers: {}, readySubmitting: false,
+})
 
 // INGEST_STAGE_LABELS — Dutch labels for the busy button while /api/ingest is
 // in flight, backed by the real (ephemeral, in-memory) server-side progress
@@ -415,6 +423,10 @@ function togglePopover(number) {
   ui.openPopover = opening ? number : null
   ui.ingestError = null
   ui.ingestErrorFor = null
+  // Collapse any ready-for-review picker from a previous row so it never bleeds
+  // into a different PR's menu.
+  ui.readyFor = null
+  ui.reviewersError = null
   if (opening) requestAnimationFrame(() => focusPopoverItem(0))
 }
 
@@ -711,6 +723,122 @@ function clearPresetView() {
   state.presetResults = []
 }
 
+// ── ready for review (flip a draft PR to ready + request reviewers) ────────
+
+// openReadyPicker expands the reviewer picker for a draft PR and fetches the
+// candidate reviewers (repo collaborators, most-used-first — see
+// GET /api/reviewers). Read-only; the actual write happens in submitReady.
+async function openReadyPicker(pr) {
+  ui.readyFor = pr.number
+  ui.selectedReviewers = {}
+  ui.reviewersError = null
+  ui.reviewersLoading = true
+  try {
+    const res = await fetch('/api/reviewers')
+    const body = await res.json()
+    ui.reviewers = (body && body.reviewers) || []
+  } catch (e) {
+    ui.reviewersError = 'Kon reviewers niet laden'
+    ui.reviewers = []
+  } finally {
+    ui.reviewersLoading = false
+  }
+}
+
+// toggleReviewer flips a reviewer login in/out of the selection (reassigned
+// wholesale so arrow.js re-renders the checkmarks).
+function toggleReviewer(login) {
+  const next = { ...ui.selectedReviewers }
+  if (next[login]) delete next[login]
+  else next[login] = true
+  ui.selectedReviewers = next
+}
+
+// submitReady starts the ready_for_review workflow (the sanctioned write path —
+// starts a Workflow Execution, never a direct module write): it flips the draft
+// PR to ready and requests the checked reviewers (bumping their local usage
+// count for next time). On success it closes the popover and refreshes the
+// inbox snapshot so the row leaves "Your drafts" without waiting for the 60s poll.
+async function submitReady(pr) {
+  const reviewers = Object.keys(ui.selectedReviewers)
+  ui.readySubmitting = true
+  ui.reviewersError = null
+  try {
+    const res = await fetch('/api/workflows/ready_for_review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr: pr.number, reviewers }),
+    })
+    if (!res.ok) throw new Error('ready_for_review failed')
+    closePopover()
+    reloadSnapshot()
+  } catch (e) {
+    ui.reviewersError = 'Omzetten mislukt'
+  } finally {
+    ui.readySubmitting = false
+  }
+}
+
+// readyForReviewSection is the draft-only part of the popover: a "Klaar voor
+// review" button that expands an inline reviewer checklist (most-used-first)
+// plus a confirm button. All controls are plain <button>s so handlePopoverKey
+// cycles them like every other item. Returned as a keyed array-of-one per
+// branch (stable slot shape) to avoid the arrow.js single↔array pitfall.
+function readyForReviewSection(pr) {
+  return html`<div class="mt-1 border-t border-slate-100 dark:border-zinc-700 pt-1" data-testid="ready-section">
+    ${() => {
+      if (ui.readyFor !== pr.number) {
+        return [
+          html`<button
+            type="button"
+            data-testid="ready-for-review"
+            class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
+            @click="${() => openReadyPicker(pr)}"
+          >
+            ${icon('git-pull-request', 'h-3.5 w-3.5')} Klaar voor review
+          </button>`.key('ready-open'),
+        ]
+      }
+      return [
+        html`<div data-testid="ready-picker">
+          <p class="px-2.5 py-1 text-[10.5px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500">Kies reviewers</p>
+          ${() => (ui.reviewersLoading ? html`<p class="px-2.5 py-1 text-[11px] text-slate-500 dark:text-zinc-400">Laden…</p>` : '')}
+          ${() => (ui.reviewersError ? html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400" data-testid="ready-error">${ui.reviewersError}</p>` : '')}
+          <div class="max-h-48 overflow-auto">
+            ${() =>
+              ui.reviewers.map(
+                (rv) =>
+                  html`<button
+                    type="button"
+                    data-testid="${'reviewer-' + rv.login}"
+                    class="${() =>
+                      'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-slate-100 dark:hover:bg-zinc-700 ' +
+                      (ui.selectedReviewers[rv.login] ? 'text-slate-900 dark:text-zinc-50' : 'text-slate-600 dark:text-zinc-300')}"
+                    @click="${() => toggleReviewer(rv.login)}"
+                  >
+                    <span class="inline-flex h-3.5 w-3.5 items-center justify-center">${() => (ui.selectedReviewers[rv.login] ? icon('check', 'h-3.5 w-3.5') : '')}</span>
+                    <span class="flex-1 truncate">${rv.login}</span>
+                    ${rv.count > 0 ? html`<span class="text-[10px] text-slate-400 dark:text-zinc-500">${rv.count}×</span>` : ''}
+                  </button>`.key('rv:' + rv.login),
+              )}
+          </div>
+          <button
+            type="button"
+            data-testid="ready-confirm"
+            ?disabled="${() => ui.readySubmitting}"
+            class="${() =>
+              'mt-1 flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-500/15 ' +
+              (ui.readySubmitting ? 'cursor-not-allowed opacity-60' : '')}"
+            @click="${() => submitReady(pr)}"
+          >
+            ${icon('check', 'h-3.5 w-3.5')} ${() => (ui.readySubmitting ? 'Bezig…' : 'Zet om naar review')}
+          </button>
+        </div>`.key('ready-picker'),
+      ]
+    }}
+  </div>`
+}
+
 // popover — every row (ingested or not) opens this same menu on a click: the
 // ingest-related action(s) first (which action depends on pr.hasGraph, see
 // generateAction/ingestedActions above), then a plain link to GitHub, plus a
@@ -755,6 +883,7 @@ function popover(pr) {
               ${icon('external-link', 'h-3.5 w-3.5')} Open Jira-ticket
             </a>`
           : ''}
+      ${() => (pr.isDraft ? [readyForReviewSection(pr).key('ready-section')] : [])}
       ${ignoreSection(pr)}
     </div>
   `
@@ -1653,6 +1782,8 @@ function closePopover() {
   ui.openPopover = null
   ui.ingestError = null
   ui.ingestErrorFor = null
+  ui.readyFor = null
+  ui.reviewersError = null
 }
 
 // handlePopoverKey is the entire keyboard surface while a popover is open:

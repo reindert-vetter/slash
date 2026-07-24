@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -108,6 +109,18 @@ type Client interface {
 	// REQUEST_CHANGES is enforced by the caller (GitHub itself rejects a
 	// bodyless request-changes review), not by this method.
 	SubmitReview(ctx context.Context, pr int, event, body string) error
+	// ListCollaborators returns the repo's collaborators (candidate reviewers).
+	ListCollaborators(ctx context.Context) ([]Collaborator, error)
+	// MarkReadyForReview flips a draft PR to "ready for review".
+	MarkReadyForReview(ctx context.Context, pr int) error
+	// RequestReviewers requests the given user logins as reviewers on pr.
+	RequestReviewers(ctx context.Context, pr int, logins []string) error
+}
+
+// Collaborator is one repo collaborator — a candidate reviewer.
+type Collaborator struct {
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatarUrl"`
 }
 
 // Module is the production Client: it shells out to `gh api` against repo.
@@ -494,6 +507,68 @@ func (m *Module) SubmitReview(ctx context.Context, pr int, event, body string) e
 	}
 	_, err := m.api(ctx, "POST",
 		fmt.Sprintf("repos/%s/pulls/%d/reviews", m.repo, pr),
+		args...,
+	)
+	return err
+}
+
+// reReviewerLogin restricts a reviewer login to GitHub's allowed username
+// charset before it reaches exec.CommandContext (input-validation rule).
+var reReviewerLogin = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
+
+// ListCollaborators returns the repo's collaborators as candidate reviewers.
+func (m *Module) ListCollaborators(ctx context.Context) ([]Collaborator, error) {
+	var raw []struct {
+		Login     string `json:"login"`
+		AvatarURL string `json:"avatar_url"`
+	}
+	if err := m.apiPaginate(ctx, fmt.Sprintf("repos/%s/collaborators", m.repo), &raw); err != nil {
+		return nil, err
+	}
+	out := make([]Collaborator, 0, len(raw))
+	for _, c := range raw {
+		out = append(out, Collaborator{Login: c.Login, AvatarURL: c.AvatarURL})
+	}
+	return out, nil
+}
+
+// MarkReadyForReview flips a draft PR to "ready for review" via the GraphQL
+// markPullRequestReadyForReview mutation.
+func (m *Module) MarkReadyForReview(ctx context.Context, pr int) error {
+	owner, name, ok := strings.Cut(m.repo, "/")
+	if !ok {
+		return fmt.Errorf("invalid repo slug %q", m.repo)
+	}
+	nodeID, err := m.prNodeID(ctx, owner, name, pr)
+	if err != nil {
+		return err
+	}
+	const query = "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}"
+	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
+		"-f", "query="+query,
+		"-F", "id="+nodeID,
+	)
+	if out, err := cmd.Output(); err != nil {
+		return fmt.Errorf("gh api graphql markPullRequestReadyForReview: %w (%s)", err, out)
+	}
+	return nil
+}
+
+// RequestReviewers requests the given user logins as reviewers on pr. Each
+// login is validated against GitHub's username charset before it reaches gh.
+func (m *Module) RequestReviewers(ctx context.Context, pr int, logins []string) error {
+	if len(logins) == 0 {
+		return nil
+	}
+	args := make([]string, 0, len(logins)*2)
+	for _, login := range logins {
+		if !reReviewerLogin.MatchString(login) {
+			return fmt.Errorf("invalid reviewer login %q", login)
+		}
+		args = append(args, "-f", "reviewers[]="+login)
+	}
+	_, err := m.api(ctx, "POST",
+		fmt.Sprintf("repos/%s/pulls/%d/requested_reviewers", m.repo, pr),
 		args...,
 	)
 	return err

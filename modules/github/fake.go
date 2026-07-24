@@ -29,6 +29,10 @@ type Fake struct {
 	lastReviewEvent string
 	lastReviewBody  string
 	reviewSubmitted int
+
+	collaborators []Collaborator
+	readyPRs      []int      // PRs flipped to ready-for-review, in order
+	requestedRevs [][]string // reviewer login sets requested, in order
 }
 
 func (f *Fake) PostReviewComment(_ context.Context, pr int, file string, startLine, endLine int, side, body string) (int64, error) {
@@ -268,6 +272,51 @@ func (f *Fake) ReviewSubmittedCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.reviewSubmitted
+}
+
+func (f *Fake) ListCollaborators(_ context.Context) ([]Collaborator, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Collaborator(nil), f.collaborators...), nil
+}
+
+// SetCollaborators seeds the collaborator list returned by ListCollaborators.
+func (f *Fake) SetCollaborators(cs []Collaborator) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.collaborators = cs
+}
+
+func (f *Fake) MarkReadyForReview(_ context.Context, pr int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readyPRs = append(f.readyPRs, pr)
+	return nil
+}
+
+func (f *Fake) RequestReviewers(_ context.Context, pr int, logins []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requestedRevs = append(f.requestedRevs, append([]string(nil), logins...))
+	return nil
+}
+
+// ReadyForReviewCount returns how many PRs were flipped to ready-for-review.
+func (f *Fake) ReadyForReviewCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.readyPRs)
+}
+
+// LastRequestedReviewers returns the reviewer set of the most recent
+// RequestReviewers call (nil if none).
+func (f *Fake) LastRequestedReviewers() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requestedRevs) == 0 {
+		return nil
+	}
+	return f.requestedRevs[len(f.requestedRevs)-1]
 }
 
 // IsViewed reports whether MarkFileViewed(pr, path, true) is the last call
