@@ -373,12 +373,32 @@ function isEditableFocused() {
 // field/panel" shortcuts below (isPrWideFocused/relatedActive's ArrowLeft
 // branches) — a caret already at position 0 (e.g. a freshly opened, still
 // empty composer/reply field) has nothing to move left into, so ArrowLeft
-// there keeps its long-standing "step back out" meaning instead.
+// there keeps its long-standing "step back out" meaning instead. See also
+// editableCaretCanMoveRight below, its mirror image for ArrowRight.
 function editableCaretCanMoveLeft() {
   const el = document.activeElement
   if (!el || (el.tagName !== 'TEXTAREA' && el.tagName !== 'INPUT')) return false
   try {
     return el.selectionStart > 0 || el.selectionEnd > 0
+  } catch {
+    return false
+  }
+}
+
+// editableCaretCanMoveRight is the mirror image of editableCaretCanMoveLeft:
+// reports whether a focused text field's caret sits strictly before the very
+// end (there's a character — or a selection — to its right), meaning a
+// plain/Option ArrowRight has somewhere to go *within* the field. Used so
+// ArrowRight moves/word-jumps the caret (leave it to the browser) instead of
+// being hijacked by the isPrWideFocused/relatedActive ArrowRight shortcuts
+// below (e.g. entering a comment's thread) while there's still text to move
+// into — only once the caret is already at the end does ArrowRight keep its
+// existing nav meaning there.
+function editableCaretCanMoveRight() {
+  const el = document.activeElement
+  if (!el || (el.tagName !== 'TEXTAREA' && el.tagName !== 'INPUT')) return false
+  try {
+    return el.selectionStart < el.value.length || el.selectionEnd < el.value.length
   } catch {
     return false
   }
@@ -4652,13 +4672,17 @@ function onKeydown(e) {
   // only the navigation keys below are claimed here.
   if (state.showDescription && isPrWideFocused()) {
     if (
-      (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'Escape'].includes(e.key) &&
-        // ArrowLeft with the caret mid-text in the reply textarea
+      (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key) &&
+        // ArrowLeft/ArrowRight with the caret mid-text in the reply textarea
         // (pw.focus==='thread') must move/word-jump the caret, not pop the
         // thread focus back — only hijack it when the caret has nowhere left
-        // to go (empty/at the start), matching editableCaretCanMoveLeft's own
-        // "nothing to move into" carve-out.
-        !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft())) ||
+        // to go on that side (empty/at the start resp. at the end), matching
+        // editableCaretCanMoveLeft/editableCaretCanMoveRight's own "nothing
+        // to move into" carve-out. (handlePrWideKey has no ArrowRight case
+        // today, so this is mostly symmetry with the relatedActive() branch
+        // below — harmless either way.)
+        !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft()) &&
+        !(e.key === 'ArrowRight' && editableCaretCanMoveRight())) ||
       (e.key === 'Enter' && !e.shiftKey)
     ) {
       e.preventDefault()
@@ -4705,13 +4729,16 @@ function onKeydown(e) {
   if (relatedActive()) {
     if (
       ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key) &&
-      // ArrowLeft with the caret mid-text in the composer/reply textarea
-      // (cs.focus one of 'new'/'comment'/'thread') must move/word-jump the
-      // caret, not exit the sidebar — only hijack it when the caret has
-      // nowhere left to go (empty/at the start, e.g. a freshly opened composer
-      // — that keeps its long-standing "step back out" meaning). Mirrors the
-      // isPrWideFocused() guard above.
-      !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft())
+      // ArrowLeft/ArrowRight with the caret mid-text in the composer/reply
+      // textarea (cs.focus one of 'new'/'comment'/'thread') must move/
+      // word-jump the caret, not exit the sidebar or (for ArrowRight on a
+      // comment row) jump into the thread — only hijack the key when the
+      // caret has nowhere left to go on that side (empty/at the start resp.
+      // at the end, e.g. a freshly opened composer — that keeps its
+      // long-standing nav meaning). Mirrors the isPrWideFocused() guard
+      // above.
+      !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft()) &&
+      !(e.key === 'ArrowRight' && editableCaretCanMoveRight())
     ) {
       e.preventDefault()
       // taskRuns(state).length clamps cs.taskSel while the Taken stop owns

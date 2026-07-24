@@ -1121,6 +1121,22 @@ caret left into anyway. `Escape` remains unchanged as the explicit
 "get me out of here" key, regardless of caret position. See
 `tests/comment-arrowleft-caret.spec.mjs`.
 
+**ArrowRight gets the exact mirror-image guard, for the same reason.**
+`relatedActive()` (`cs.focus==='comment'`) claimed `ArrowRight`
+unconditionally too — including while the reviewer was mid-text in a
+comment row's already-focused reply field (`toComment()` focuses it on
+landing) — which jumped into the thread (`enterThread()`) instead of moving
+the caret right (the reported "first ← works, then → doesn't"). The new
+`editableCaretCanMoveRight()` (`home.mjs`, next to
+`editableCaretCanMoveLeft()`) checks `selectionStart`/`selectionEnd` <
+`value.length` and both branches suppress their `ArrowRight` handling as
+long as that's the case; only once the caret is already at the end does
+`→` keep its existing nav meaning there (entering the thread for a comment
+row; a no-op for `'new'`/`'thread'` and for `isPrWideFocused()`, which has
+no `ArrowRight` case of its own today — added there purely for symmetry
+with the `ArrowLeft` guard, not because a bug reproduced there). See
+`tests/comment-arrowright-caret.spec.mjs`.
+
 ## Footer: inline preview of the selected line + AI description for an if
 
 Below the panels sits a fixed footer (`src/Footer.mjs`, `data-testid=footer`).
