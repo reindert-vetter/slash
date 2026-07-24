@@ -752,6 +752,37 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 				emit(key, nil) // same case on several enums → unresolved
 			}
 		}
+		// 7. Resource usage (new XResource(/XResource::make|collection(/a
+		// `): XResource` return type — the same forms relations.go's
+		// controllerResourceDetector matches) → the toArray() method of that
+		// Resource class, since that is where a Laravel API Resource defines its
+		// actual output. Deliberately a callresolve rule, not a relations
+		// detector: the Resource class is very often NOT itself changed in this
+		// PR (an existing Resource just newly used), so the both-changed
+		// requirement of controllerResourceDetector would otherwise never
+		// surface it — mirrors resolveMigrationModels/resolveDataProviders below.
+		// The call key is "resource:"+class (contains ':', so — like
+		// migration_model:/data_provider: — it never matches a real call-site
+		// literal in the frontend's findCallSites, meaning this child shows at
+		// group/list level, not tied to one line/call, and never collides with
+		// rule 2b's plain class-name constructor key). A Resource class that
+		// doesn't override toArray() (uses the framework default) silently
+		// yields no child — not an ambiguity for the LLM search, just an
+		// absence.
+		for _, m := range reResourceUse.FindAllStringSubmatch(scan, -1) {
+			class := m[1]
+			if class == "" {
+				class = m[2]
+			}
+			if def := methodOnClass(idx, shortName(class), "toArray"); def != nil {
+				emit("resource:"+shortName(class), def)
+			}
+		}
+		for _, m := range reResourceReturn.FindAllStringSubmatch(scan, -1) {
+			if def := methodOnClass(idx, shortName(m[1]), "toArray"); def != nil {
+				emit("resource:"+shortName(m[1]), def)
+			}
+		}
 	}
 	return out
 }

@@ -1832,3 +1832,135 @@ return [
 		}
 	}
 }
+
+// TestResolveCallsResourceToArray: a controller instantiating an API Resource
+// on a changed line (new AffiliateResourceV2($affiliate)) surfaces that
+// Resource's toArray() as underlying code, even though the Resource class
+// itself is not changed in this PR — mirrors resolveMigrationModels/
+// resolveDataProviders (callresolve may point at unchanged code; relations.go's
+// controllerResourceDetector cannot, since it requires both sides changed).
+//
+// Note: reResourceUse/reResourceReturn (shared, unchanged, with
+// relations.go's controllerResourceDetector) require the class name to
+// literally END in "Resource" — a versioned name like "AffiliateResourceV2"
+// (the exact class from the motivating real-world example) does NOT match
+// either detector today. That gap is pre-existing and shared by both
+// call sites; this test therefore uses a plain "AffiliateResource" name to
+// exercise the (correctly reused, unchanged) matching rule.
+func TestResolveCallsResourceToArray(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 60
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Http/Controllers/AffiliateController.php": `<?php
+namespace App\Http\Controllers;
+class AffiliateController {
+    public function show($id, $includes) {
+        $affiliate = Affiliate::query()->findOrFail($id);
+        $resource = new AffiliateResource($affiliate);
+        $affiliate->loadMissing($resource->withRelationships($includes));
+        return Resource::toPayload($resource, $includes);
+    }
+}
+`,
+		"app/Http/Resources/AffiliateResource.php": `<?php
+namespace App\Http\Resources;
+class AffiliateResource {
+    public function toArray($request) {
+        return ['id' => $this->id];
+    }
+}
+`,
+		"app/Http/Resources/ProductResource.php": `<?php
+namespace App\Http\Resources;
+class ProductResource {
+    public function withRelationships($includes) {
+        return $includes;
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Http/Controllers/AffiliateController.php", Class: "AffiliateController", Name: "show", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "resource:AffiliateResource")
+	if !ok {
+		t.Fatalf("no entry for resource:AffiliateResource, got %+v", entries)
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("status=%q, want resolved", e.Status)
+	}
+	if e.Kind != callresolve.KindMethodCall {
+		t.Errorf("kind=%q, want %q (default)", e.Kind, callresolve.KindMethodCall)
+	}
+	if e.ChildClass != "AffiliateResource" || e.ChildMethod != "toArray" {
+		t.Errorf("child=%q::%q, want AffiliateResource::toArray", e.ChildClass, e.ChildMethod)
+	}
+	if !strings.Contains(e.ChildCode, "function toArray") {
+		t.Errorf("ChildCode missing toArray body, got %q", e.ChildCode)
+	}
+
+	// bare `Resource::toPayload(...)` never produces a "resource:" child —
+	// "Resource" is not itself a "<something>Resource"-suffixed class name (the
+	// generic static-call rule 3 still emits its own unrelated "toPayload"
+	// unresolved entry, unaffected by this rule).
+	if _, ok := findEntry(entries, "resource:Resource"); ok {
+		t.Error("unexpected resource: entry for the bare 'Resource' helper class")
+	}
+}
+
+// TestResolveCallsResourceWithoutToArray: a Resource class that doesn't
+// override toArray() (uses the framework default) silently yields no
+// "resource:" child — this is not an ambiguity for the LLM search, just an
+// absence, mirroring resolveMigrationModels/resolveDataProviders' own
+// silent-skip precedent.
+func TestResolveCallsResourceWithoutToArray(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 61
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Http/Controllers/ProductGroupController.php": `<?php
+namespace App\Http\Controllers;
+class ProductGroupController {
+    public function store($request) {
+        $resource = ProductGroupResource::make($request->productGroup);
+        return $resource;
+    }
+}
+`,
+		"app/Http/Resources/ProductGroupResource.php": `<?php
+namespace App\Http\Resources;
+class ProductGroupResource {
+    public static function make($resource = null) {}
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Http/Controllers/ProductGroupController.php", Class: "ProductGroupController", Name: "store", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	for _, e := range entries {
+		if strings.HasPrefix(e.CallKey, "resource:") {
+			t.Errorf("unexpected resource: entry for a class without toArray(): %+v", e)
+		}
+	}
+}

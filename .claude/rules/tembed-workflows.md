@@ -717,6 +717,28 @@ as fallback.
   non-enum classes are ignored; the same case on multiple enums →
   `unresolved`. The frontend's `findCallSites` therefore matches `::name`
   in addition to `name(` and `->name`.
+  **API Resource `toArray()`** (rule 7, reuses relations.go's `reResourceUse`/
+  `reResourceReturn`): a Resource used on a changed line (`new XResource(`,
+  `XResource::make|collection(`, or a `): XResource` return type — the same
+  forms `controllerResourceDetector` matches) also surfaces that Resource's
+  own `toArray()` method as underlying code, since that's where a Laravel
+  API Resource actually defines its output — even when the Resource class
+  itself is **not** changed in this PR (the common case, unlike
+  `controllerResourceDetector`'s both-changed relation, which then finds
+  nothing). Deliberately a callresolve rule for that reason, mirroring
+  `resolveMigrationModels`/`resolveDataProviders` below. Call key
+  `"resource:" + class` (contains `:`, so — like `migration_model:`/
+  `data_provider:` — it never matches a real call-site literal in
+  `findCallSites`, shows at group/list level, and never collides with rule
+  2b's plain class-name constructor key); `Kind` stays the default
+  `method_call` (no special badge — renders exactly like any other resolved
+  method call). A Resource that doesn't override `toArray()` (uses the
+  framework default) silently yields no child, never an `unresolved` row —
+  not an ambiguity for the LLM, just an absence. Note:
+  `reResourceUse`/`reResourceReturn` require the class name to literally
+  **end** in `Resource` — a versioned name like `AffiliateResourceV2` does
+  not match either detector today; that's a pre-existing gap shared with
+  `controllerResourceDetector`, out of scope here.
   **Eloquent magic properties** (rule 5, `reArrowProp`): a `->name`
   **without parentheses** — `$order->billingAddress` — is Laravel syntax
   for the relation **method** `billingAddress()`. We treat it as a call if
