@@ -83,3 +83,30 @@ func TestModuleRejectsInvalidKey(t *testing.T) {
 		t.Fatal("want error for invalid key")
 	}
 }
+
+// TestFakeAssignedToMeRoundTrip asserts the Fake's AssignedToMe returns
+// exactly what was programmed (empty by default), so the task-inbox "jira"
+// task source can be tested without acli/network.
+func TestFakeAssignedToMeRoundTrip(t *testing.T) {
+	f := &Fake{}
+	got, err := f.AssignedToMe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("default AssignedToMe = %+v, want empty", got)
+	}
+
+	want := []Issue{
+		{Key: "INTEG-1", Title: "A", Status: "To Do", URL: "https://x/INTEG-1"},
+		{Key: "INTEG-2", Title: "B", Status: "In Progress", URL: "https://x/INTEG-2"},
+	}
+	f.SetAssigned(want)
+	got, err = f.AssignedToMe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Key != "INTEG-1" || got[1].Status != "In Progress" {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}

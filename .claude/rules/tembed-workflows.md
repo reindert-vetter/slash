@@ -1722,3 +1722,117 @@ sequentially and completes, mirroring `submit_review`/`ingest`.
   scope is silently rejected, a second run supersedes the first instead of
   stacking, and the `warningsPerBlock` cap is hard-enforced despite a
   model ignoring it).
+
+## The task inbox: `task_inbox` + `modules/taskinbox` (backend aggregation, no UI yet)
+
+A "task" is **derived, not primarily stored** — it doesn't live in its own
+table anywhere. Three independent sources each yield candidate tasks;
+`buildTaskInbox` (`taskinbox_analysis.go`) merges and scores them into one
+flat list, which the `task_inbox` workflow (mirrors `pr_inbox` exactly: one
+Execution per repo, a `refresh` Signal drives one Activity, never
+completes) full-swaps into the `taskinbox` read-model. This phase is
+**backend-only** — no frontend page/panel reads `GET /api/tasks` yet; the
+task-level `task_snooze` workflow (`modules/tasksnooze`, hide a task by id
+until a given time) from the previous phase is the intended companion once
+a UI exists, but nothing here reads it yet either.
+
+- **Source A — `pr_review`** (id `pr:<n>`): open PRs where you're a
+  reviewer. Reuses the **existing** "Needs your review" section of
+  `pr_inbox`'s own `buildInboxSnapshot` (`inbox.go`) — no separate GitHub
+  query. `prReviewCandidates` just filters `snap.Sections` by
+  `needsYourReviewTitle`.
+- **Source B — `comment_unread`** (id `comment:<commentID>`): for every
+  **other** open PR you authored (the four remaining `inboxSections`
+  entries that are all `author:@me state:open`, named in
+  `myOpenPRSectionTitles` — together with source A's section they exhaust
+  `author:@me state:open`, since `buildInbox`'s cross-section de-dupe
+  guarantees a PR lands in only the first section it matches), every
+  comment thread (`comments.Module.List`) whose **last message** wasn't
+  written by you and whose status isn't `resolved`. A `comments.Comment`
+  **is** the thread root; its `Reactions` are the replies (see the comments
+  module's own doc comment) — `unreadCommentCandidates` compares the root's
+  own author/time against the last reaction's, if any.
+- **Source C — `jira`** (id `jira:<KEY>`): every Jira issue assigned to you,
+  regardless of status, via the new `jira.Client.AssignedToMe` (`acli jira
+  workitem search --jql "assignee = currentUser() order by updated desc"
+  --fields "key,summary,status" --json`, verified interactively against a
+  real, authenticated `acli`). `jira.Issue` grew a `Status` field for this.
+- **Scoring (`taskinbox_analysis.go`, pure, table-driven):** every kind has
+  a `baseScore` (pr_review 20, comment_unread 20, jira 10) plus zero or more
+  `pointRules` — small `{ID, Kind, Eval(taskSignals) (points, label)}`
+  entries, summed by `computeTaskPoints` into a total + a `[]PointNote`
+  breakdown (always starts with a `"basis"` note, so the base score is
+  never silently hidden). Adding a rule is one new table entry — no change
+  to `computeTaskPoints` itself. Current rules: `ci_failing` (+10, latest
+  CI rollup FAILURE/ERROR), `pr_aging` (+10, PR open > 3 days — the same
+  threshold as the `ouder-3-dagen` filter preset, now read from a plain
+  `createdAt` field added to `inboxRow`/`ghPRNode`/`lightFields` instead of
+  a gh search qualifier), `changes_requested` (+10, the thread's PR
+  currently has `reviewDecision CHANGES_REQUESTED`), `comment_aging` (+10
+  per day unanswered, capped at +30 — day 0 doesn't count, it only just
+  became unread), `jira_active` (+10, ticket status isn't
+  Backlog/To&nbsp;Do — `isJiraActive` matches on the status **name**,
+  case-insensitively, not the statusCategory key, since that taxonomy
+  differs per Jira project).
+- **`modules/taskinbox`** (`data/taskinbox.db`): the read-model,
+  `tasks(id, kind, title, subtitle, points, point_notes, pr, url, detail,
+  updated_at)` — `point_notes`/`detail` are opaque JSON strings (the main
+  package owns their shape per `kind`: `prReviewDetail`/
+  `commentUnreadDetail` (the thread's messages + the comment's own
+  code/gran/label/row anchor, if any)/`jiraDetail`). Write
+  `Replace(tasks)` (workflow-only, full swap, mirrors
+  `relations.Replace`/the inbox snapshot — a derived list, no incremental
+  maintenance); read `List()`. Sort order (by points, tie-break recency) is
+  deliberately left to the later frontend phase — `List` just returns
+  whatever is stored.
+- **Workflow (`workflows.go`):** `taskInboxWorkflow` is an exact mirror of
+  `prInboxWorkflow` — a `for` loop on `SignalRefresh` driving one
+  `refreshTasks` Activity (`buildTaskInbox` + `taskinbox.Replace`).
+  `EnsureTaskInbox`/`findTaskInboxRunLocked`/`pollTaskInbox` mirror
+  `EnsureInbox`/`findInboxRunLocked`/`pollInbox` exactly (heartbeat-driven
+  cadence, one Execution per repo, resumed via `engine.Recover` after a
+  restart). Called once at server startup (`newTasks`, alongside
+  `EnsureInbox`); `taskinbox` itself is wired onto `TaskManager`
+  **post-construction** (`mgr.taskinbox = ti`, the same pattern as
+  `reviewerusage`) rather than as a `NewTaskManager` parameter, so no
+  existing test call site needed to change.
+- **Endpoints:** `POST /api/workflows/task_inbox` (ensure the tracker,
+  returns `{runId}` — only re-ensures if no Run ID exists yet, since
+  `EnsureTaskInbox` spawns a poller goroutine and must not be called
+  repeatedly) and read-only `GET /api/tasks` → `{ok, tasks:[...]}`. The
+  **generic** `.../signals/refresh` handler (already used by `pr_inbox`)
+  works unchanged here too — it just signals whatever Run ID it's given.
+- **Best-effort per source:** `buildTaskInbox` never fails the whole
+  refresh over one source hiccup — a failed `buildInboxSnapshot` skips
+  sources A+B for that round (C still runs), a failed
+  `jira.AssignedToMe`/`comments.List` per PR is likewise swallowed. Mirrors
+  `buildInboxSnapshot`'s own "keep the last good snapshot" philosophy,
+  narrowed to "skip only the failing source" instead of the whole refresh.
+- **Login resolution reuses `snap.GeneratedFor`, never calls `ghLogin`
+  directly:** `ghLogin` (`inbox.go`) always shells out to the real `gh`
+  binary — every existing caller only reaches it from `buildInbox`'s
+  non-offline path. `buildTaskInbox` instead reads the already-resolved
+  login off the `buildInboxSnapshot` result (`ghLogin(ctx)` online, the
+  fixture's own `generatedFor` field offline), so a `SLASH_GITHUB=off` test
+  never touches `gh` even indirectly.
+- **Open point (flagged, not guessed):** the exact `acli jira workitem
+  search` subcommand/flags were verified interactively against a real,
+  authenticated `acli` in this environment (see `AssignedToMe`'s doc
+  comment for the exact invocation and sample output) — so this is
+  confirmed, not a guess. What's still open for whoever authenticates
+  `acli` differently (e.g. a different Jira Cloud site config) is whether
+  the JQL default order (`order by updated desc`) and the `--limit 100`
+  cap need tuning; no test depends on live `acli`.
+- Tests: `modules/jira/jira_test.go` (`AssignedToMe`'s `Fake` round-trip),
+  `modules/taskinbox/taskinbox_test.go` (`Replace`/`List` round-trip +
+  full-swap + empty-clears), `taskinbox_analysis_test.go`
+  (`TestComputeTaskPoints` — a table test per rule, isolated and stacked;
+  `TestIsJiraActive`; `TestUnreadCommentCandidates` — root-vs-reaction last
+  speaker, resolved-thread exclusion, own-comment-with-no-reply exclusion;
+  `TestJiraCandidates`), `workflows_test.go`'s
+  `TestTaskInboxRefreshPopulatesReadModel` (end-to-end: the offline inbox
+  fixture for source A, a seeded unread comment for source B via the real
+  `comments.Module`, `jira.Fake` for source C → `taskinbox.List` filled
+  with one task per source). Entirely offline
+  (`SLASH_GITHUB=off`/`github.Fake`/`jira.Fake`) — no real
+  gh/acli/network call in any test.

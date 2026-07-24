@@ -49,10 +49,17 @@ type prStatus struct {
 // are only populated for the search endpoint (the inbox itself backfills them
 // separately); they are omitted from the light payload.
 type inboxRow struct {
-	Number       int    `json:"number"`
-	Title        string `json:"title"`
-	Author       string `json:"author"`
-	UpdatedAt    string `json:"updatedAt"`
+	Number    int    `json:"number"`
+	Title     string `json:"title"`
+	Author    string `json:"author"`
+	UpdatedAt string `json:"updatedAt"`
+	// CreatedAt is used by the task-inbox "pr_aging" point rule (see
+	// taskinbox_analysis.go) to tell how long a PR has been open/waiting for
+	// review — the same 3-day threshold the "ouder-3-dagen" filter preset
+	// uses, but read here as a plain field instead of a gh search qualifier.
+	// Empty for an older fixture that predates this field (treated as
+	// "unknown age", never triggers the aging rule).
+	CreatedAt    string `json:"createdAt,omitempty"`
 	URL          string `json:"url"`
 	IsDraft      bool   `json:"isDraft"`
 	BaseRefName  string `json:"baseRefName"`
@@ -171,6 +178,7 @@ type ghPRNode struct {
 	Title        string `json:"title"`
 	URL          string `json:"url"`
 	UpdatedAt    string `json:"updatedAt"`
+	CreatedAt    string `json:"createdAt"`
 	IsDraft      bool   `json:"isDraft"`
 	State        string `json:"state"`
 	BaseRefName  string `json:"baseRefName"`
@@ -221,7 +229,7 @@ type ghPRNode struct {
 }
 
 const lightFields = `
-	number title url updatedAt isDraft state baseRefName headRefName
+	number title url updatedAt createdAt isDraft state baseRefName headRefName
 	additions deletions changedFiles author { login } comments { totalCount }`
 
 const heavyFields = `
@@ -303,6 +311,7 @@ func mapPRNode(n ghPRNode, heavy bool) inboxRow {
 		Title:        n.Title,
 		Author:       n.Author.Login,
 		UpdatedAt:    n.UpdatedAt,
+		CreatedAt:    n.CreatedAt,
 		URL:          n.URL,
 		IsDraft:      n.IsDraft,
 		BaseRefName:  n.BaseRefName,

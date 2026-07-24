@@ -25,6 +25,7 @@ import (
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
+	"slash/modules/taskinbox"
 	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
 )
@@ -117,6 +118,15 @@ const (
 	// a long-lived per-repo tracker. Task-level successor of the removed
 	// per-PR ignore feature.
 	WorkflowTaskSnooze = "task_snooze"
+	// WorkflowTaskInbox is the Workflow Type that owns the task inbox: one
+	// Execution per repo, mirroring WorkflowPRInbox exactly. Each "refresh"
+	// Signal drives an Activity that aggregates the three task sources (PR
+	// review requests, unread comments on your own PRs, Jira tickets
+	// assigned to you — see buildTaskInbox in taskinbox_analysis.go) and
+	// writes the scored result into the taskinbox read-model. This is the
+	// only path that derives tasks — the HTTP handlers only read the
+	// read-model.
+	WorkflowTaskInbox = "task_inbox"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -256,6 +266,21 @@ type PRStateSignal struct {
 // PRInboxInput starts the pr_inbox Workflow Execution for a repo.
 type PRInboxInput struct {
 	Repo string `json:"repo"`
+}
+
+// TaskInboxInput starts the task_inbox Workflow Execution for a repo —
+// mirrors PRInboxInput exactly.
+type TaskInboxInput struct {
+	Repo string `json:"repo"`
+}
+
+// taskInboxRefreshResult is the small summary the refreshTasks Activity
+// returns — the actual data lives in the taskinbox read-model, so the event
+// history stays compact even though this workflow refreshes indefinitely
+// (mirrors inboxRefreshResult).
+type taskInboxRefreshResult struct {
+	UpdatedAt string `json:"updatedAt"`
+	Tasks     int    `json:"tasks"`
 }
 
 // BuildRelationsInput starts (and re-signals) a build_relations Execution — one
@@ -420,14 +445,19 @@ type TaskManager struct {
 	// no-op, like the other module-guarded activities.
 	reviewerusage *reviewerusage.Module
 	tasksnooze    *tasksnooze.Module
-	claude        claude.Client
-	jira          jira.Client
-	db            *sql.DB
-	dataDir       string
-	repo          string
-	interval      time.Duration // fast cadence (reviewer active)
-	idle          time.Duration // slow cadence + PR-state check (reviewer idle)
-	logf          func(string, ...any)
+	// taskinbox is the derived task-inbox read-model. Set post-construction in
+	// newTasks (like reviewerusage) rather than as a NewTaskManager param, to
+	// avoid churning every existing test call site; a nil store makes
+	// refreshTasks a no-op, like the other module-guarded activities.
+	taskinbox *taskinbox.Module
+	claude    claude.Client
+	jira      jira.Client
+	db        *sql.DB
+	dataDir   string
+	repo      string
+	interval  time.Duration // fast cadence (reviewer active)
+	idle      time.Duration // slow cadence + PR-state check (reviewer idle)
+	logf      func(string, ...any)
 
 	// baseCtx is the server-lifetime context background pollers spawned outside
 	// a request (e.g. ensurePRStatus's fresh-poller spawn) run under — a
@@ -437,13 +467,14 @@ type TaskManager struct {
 	baseCtx      context.Context
 	runtimeReady bool
 
-	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + inboxRun + snoozeRun + importPolled
+	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + inboxRun + snoozeRun + taskInboxRun + importPolled
 	lastBeat     map[string]time.Time // code-comment/inbox Run ID → last heartbeat
 	prRuns       map[int]string       // PR → pr_status Run ID
 	relRuns      map[int]string       // PR → build_relations Run ID
 	apprRuns     map[int]string       // PR → approve Run ID
 	inboxRun     string               // pr_inbox Run ID (one per repo/process)
 	snoozeRun    string               // task_snooze Run ID (one per repo/process)
+	taskInboxRun string               // task_inbox Run ID (one per repo/process)
 	importPolled map[string]bool      // imported-thread Run ID → poller running (dedup, operational)
 }
 
@@ -480,6 +511,27 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			n += len(s.PRs)
 		}
 		return json.Marshal(inboxRefreshResult{UpdatedAt: updatedAt, PRs: n})
+	})
+
+	// Activity: aggregate the three task sources and store the result (write,
+	// workflow-driven). Best-effort per source (see buildTaskInbox) — a
+	// hiccup in one source never fails the whole refresh.
+	engine.RegisterActivity("refreshTasks", func(ctx context.Context, in []byte) ([]byte, error) {
+		if m.taskinbox == nil {
+			return json.Marshal(taskInboxRefreshResult{})
+		}
+		tasks, err := buildTaskInbox(ctx, taskInboxDeps{db: m.db, comments: m.comments, jira: m.jira})
+		if err != nil {
+			m.logf("task_inbox: refresh skipped: %v", err)
+			return json.Marshal(taskInboxRefreshResult{})
+		}
+		if err := m.taskinbox.Replace(ctx, tasks); err != nil {
+			return nil, fmt.Errorf("save tasks: %w", err)
+		}
+		return json.Marshal(taskInboxRefreshResult{
+			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			Tasks:     len(tasks),
+		})
 	})
 
 	// Activity: the comments module stores the comment (write, workflow-driven).
@@ -1259,6 +1311,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowReadyForReview, readyForReviewWorkflow)
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
 	engine.RegisterWorkflow(WorkflowTaskSnooze, taskSnoozeWorkflow)
+	engine.RegisterWorkflow(WorkflowTaskInbox, taskInboxWorkflow)
 	return m
 }
 
@@ -1300,6 +1353,22 @@ func prInboxWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		var res inboxRefreshResult
 		if err := w.ExecuteActivity("refreshInbox", PRInboxInput{}, &res); err != nil {
 			return nil, fmt.Errorf("refresh inbox: %w", err)
+		}
+	}
+}
+
+// taskInboxWorkflow owns the task inbox for a repo — an exact mirror of
+// prInboxWorkflow: each "refresh" Signal drives one refreshTasks Activity
+// (the only place that aggregates the three task sources, which writes the
+// read-model). It never completes — a long-lived tracker that re-aggregates
+// whenever signalled.
+func taskInboxWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	for {
+		var s json.RawMessage
+		w.WaitSignal(SignalRefresh, &s)
+		var res taskInboxRefreshResult
+		if err := w.ExecuteActivity("refreshTasks", TaskInboxInput{}, &res); err != nil {
+			return nil, fmt.Errorf("refresh tasks: %w", err)
 		}
 	}
 }
@@ -2465,6 +2534,109 @@ func (m *TaskManager) pollInbox(ctx context.Context, runID string) {
 		}
 		if err := m.engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
 			m.logf("pr_inbox: refresh signal run=%s: %v", runID, err)
+		}
+	}
+}
+
+// EnsureTaskInbox starts (or reuses) the single task_inbox Execution for the
+// repo, aggregates an initial snapshot synchronously (so the read-model is
+// populated before the server serves), and launches its refresh poller.
+// Idempotent across restarts: it reuses an existing running/waiting
+// Execution. Exact mirror of EnsureInbox.
+func (m *TaskManager) EnsureTaskInbox(ctx context.Context) {
+	m.mu.Lock()
+	runID := m.taskInboxRun
+	if runID == "" {
+		runID = m.findTaskInboxRunLocked()
+	}
+	m.mu.Unlock()
+
+	if runID == "" {
+		id, err := m.engine.StartWorkflow(WorkflowTaskInbox, TaskInboxInput{Repo: m.repo})
+		if err != nil {
+			m.logf("task_inbox: start: %v", err)
+			return
+		}
+		runID = id
+	}
+	m.mu.Lock()
+	m.taskInboxRun = runID
+	m.mu.Unlock()
+
+	// Initial refresh runs the aggregation Activity synchronously, so
+	// /api/tasks has a snapshot the moment the server comes up.
+	if err := m.engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
+		m.logf("task_inbox: initial refresh: %v", err)
+	}
+	go m.pollTaskInbox(ctx, runID)
+}
+
+// TaskInboxRunID returns the task_inbox Run ID so the UI can signal/heartbeat it.
+func (m *TaskManager) TaskInboxRunID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.taskInboxRun
+}
+
+// findTaskInboxRunLocked scans for a running/waiting task_inbox Execution
+// for m.repo. Mirrors findInboxRunLocked.
+func (m *TaskManager) findTaskInboxRunLocked() string {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowTaskInbox {
+			continue
+		}
+		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var pin TaskInboxInput
+		if json.Unmarshal(in, &pin) == nil && pin.Repo == m.repo {
+			return r.ID
+		}
+	}
+	return ""
+}
+
+// pollTaskInbox signals a "refresh" on the heartbeat-driven cadence: fast
+// (m.interval) while the task inbox is actively viewed (a heartbeat arrived
+// within heartbeatWindow), else slow (m.idle). Mirrors pollInbox exactly.
+func (m *TaskManager) pollTaskInbox(ctx context.Context, runID string) {
+	ticker := time.NewTicker(m.interval)
+	defer ticker.Stop()
+	var lastPoll time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		m.mu.Lock()
+		beat := m.lastBeat[runID]
+		m.mu.Unlock()
+		active := !beat.IsZero() && time.Since(beat) < heartbeatWindow
+		want := m.idle
+		if active {
+			want = m.interval
+		}
+		if !lastPoll.IsZero() && time.Since(lastPoll) < want {
+			continue
+		}
+		lastPoll = time.Now()
+
+		status, err := m.engine.Status(runID)
+		if err != nil || status == tembed.StatusFailed || status == tembed.StatusCompleted {
+			return
+		}
+		if err := m.engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
+			m.logf("task_inbox: refresh signal run=%s: %v", runID, err)
 		}
 	}
 }

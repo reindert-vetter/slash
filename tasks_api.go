@@ -26,6 +26,7 @@ import (
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
+	"slash/modules/taskinbox"
 	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
 )
@@ -45,6 +46,7 @@ type tasks struct {
 	explain       *explanations.Module
 	reviewerusage *reviewerusage.Module
 	tasksnooze    *tasksnooze.Module
+	taskinbox     *taskinbox.Module
 }
 
 // newTasks builds the tembed engine (SQLite + JSONL, so comments live in the
@@ -161,6 +163,21 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ru.Close()
 		return nil, nil, err
 	}
+	ti, err := taskinbox.Open(dataDir + "/taskinbox.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		ts.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -193,6 +210,9 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// NewTaskManager test call site stays unchanged; a nil store just makes
 	// bumpReviewerUsage a no-op.
 	mgr.reviewerusage = ru
+	// Same pattern for the task-inbox read-model: a nil store makes
+	// refreshTasks a no-op.
+	mgr.taskinbox = ti
 	// Record the server-lifetime context + whether background pollers may run,
 	// so ensurePRStatus's fresh-poller spawn uses a context that outlives the
 	// HTTP request that triggered it (see TaskManager.baseCtx).
@@ -214,6 +234,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		if _, err := mgr.EnsureTaskSnooze(); err != nil {
 			mgr.logf("tasksnooze: ensure: %v", err)
 		}
+		// Own the task inbox via the workflow: aggregate an initial snapshot
+		// into the read-model and start the refresh poller (the UI reads only
+		// the read-model). Mirrors EnsureInbox.
+		mgr.EnsureTaskInbox(ctx)
 	}
 
 	closeFn := func() error {
@@ -227,9 +251,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = ex.Close()
 		_ = ru.Close()
 		_ = ts.Close()
+		_ = ti.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, tasksnooze: ts}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, tasksnooze: ts, taskinbox: ti}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -453,6 +478,14 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/tasksnoozes → read-only task-snooze read-model (which tasks are
 	// hidden, and until when). The UI filters expired entries at read time.
 	mux.HandleFunc("/api/tasksnoozes", s.handleTaskSnoozes)
+	// POST /api/workflows/task_inbox → ensure the per-repo task-inbox tracker
+	// (its start synchronously aggregates the three task sources into the
+	// taskinbox read-model). The generic .../signals/refresh handler (below)
+	// re-triggers the aggregation on demand.
+	mux.HandleFunc("/api/workflows/task_inbox", s.handleTaskInboxStart)
+	// GET /api/tasks → read-only, derived task-inbox read-model (PR reviews,
+	// unread comments on your own PRs, Jira tickets assigned to you).
+	mux.HandleFunc("/api/tasks", s.handleTasks)
 	// GET /api/prs/filter?preset=<key> → live gh-search for a fixed, allow-listed
 	// preset query (never raw UI text — see handleFilter).
 	mux.HandleFunc("/api/prs/filter", s.handleFilter)
@@ -539,7 +572,7 @@ func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" || rest == "task_inbox" {
 		http.NotFound(w, r)
 		return
 	}
@@ -990,6 +1023,48 @@ func (s *server) handleTaskSnoozes(w http.ResponseWriter, r *http.Request) {
 		list = []tasksnooze.Snooze{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "snoozes": list})
+}
+
+// handleTaskInboxStart starts (or reuses) the per-repo task-inbox tracker and
+// returns its Run ID. EnsureTaskInbox is normally already called once at
+// server startup (newTasks); this only calls it again if that hasn't
+// happened yet (e.g. a one-shot CLI process with resumeRuntime=false) —
+// EnsureTaskInbox spawns a poller goroutine, so it must not be called on
+// every request once a Run ID already exists. The UI can then re-trigger the
+// aggregation via the generic .../signals/refresh handler above.
+func (s *server) handleTaskInboxStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.tasks.manager.TaskInboxRunID() == "" {
+		s.tasks.manager.EnsureTaskInbox(r.Context())
+	}
+	runID := s.tasks.manager.TaskInboxRunID()
+	if runID == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "task inbox not ready"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleTasks serves GET /api/tasks — the read-only, derived task-inbox
+// read-model (PR reviews, unread comments on your own PRs, Jira tickets
+// assigned to you), aggregated + scored by the task_inbox workflow.
+func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	list, err := s.tasks.taskinbox.List(r.Context())
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []taskinbox.Task{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "tasks": list})
 }
 
 // filterPresets maps an allow-listed preset key to its fixed GitHub search

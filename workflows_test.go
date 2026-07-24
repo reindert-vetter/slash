@@ -15,6 +15,7 @@ import (
 	"slash/modules/jira"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
+	"slash/modules/taskinbox"
 	"slash/modules/testcovers"
 )
 
@@ -541,6 +542,87 @@ func TestPRInboxRefreshPopulatesReadModel(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected PR 12903 in the refreshed inbox, got %+v", sections)
+	}
+}
+
+// TestTaskInboxRefreshPopulatesReadModel is the end-to-end test for the
+// task_inbox workflow: a refresh signal drives buildTaskInbox (via the
+// refreshTasks Activity) over all three sources — PR review requests (from
+// the offline inbox fixture), an unread comment on one of "my" own open PRs
+// (seeded directly into the comments module), and a Jira ticket assigned to
+// me (via jira.Fake) — and the result lands in taskinbox.List. Entirely
+// offline: SLASH_GITHUB=off + the same fixture other inbox tests use,
+// github.Fake, jira.Fake — no real gh/acli/network call.
+func TestTaskInboxRefreshPopulatesReadModel(t *testing.T) {
+	t.Setenv("SLASH_GITHUB", "off")
+	t.Setenv("SLASH_INBOX", "tests/fixtures/inbox.json")
+
+	db, err := openDB(filepath.Join(t.TempDir(), "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cs, err := comments.Open(filepath.Join(t.TempDir(), "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+
+	// PR 12801 ("Ready to merge" in the fixture) is authored by
+	// "reindert-vetter" (the fixture's own generatedFor) — seed one unread
+	// comment from someone else on it, so source B has something to find.
+	if err := cs.Save(context.Background(), comments.Comment{
+		ID: "seed-1", RunID: "seed-1", PR: 12801, File: "a.php", Line: 1,
+		Author: "colleague", Body: "can you double check this?",
+		CreatedAt: time.Now().Add(-2 * 24 * time.Hour).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	jr := &jira.Fake{}
+	jr.SetAssigned([]jira.Issue{
+		{Key: "INTEG-1", Title: "Some ticket", Status: "In Progress", URL: "https://x/INTEG-1"},
+	})
+
+	ti, err := taskinbox.Open(filepath.Join(t.TempDir(), "taskinbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ti.Close()
+
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, jr, db, "", repoSlug)
+	m.taskinbox = ti // set post-construction, mirrors reviewerusage in NewTaskManager tests
+
+	runID, err := engine.StartWorkflow(WorkflowTaskInbox, TaskInboxInput{Repo: repoSlug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Before any refresh, the read-model is empty (no direct fetch exists).
+	if list, _ := ti.List(context.Background()); len(list) != 0 {
+		t.Fatalf("read-model populated before any refresh: %+v", list)
+	}
+	if err := engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := ti.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]bool{}
+	for _, tk := range list {
+		byID[tk.ID] = true
+	}
+	if !byID["pr:12888"] && !byID["pr:12903"] && !byID["pr:12904"] {
+		t.Fatalf("want at least one pr_review task from the 'Needs your review' fixture section, got %+v", list)
+	}
+	if !byID["comment:seed-1"] {
+		t.Fatalf("want the seeded unread comment on PR 12801, got %+v", list)
+	}
+	if !byID["jira:INTEG-1"] {
+		t.Fatalf("want the Jira-assigned task, got %+v", list)
 	}
 }
 
