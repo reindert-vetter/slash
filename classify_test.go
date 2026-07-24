@@ -485,6 +485,66 @@ func TestCategoryForTranslation(t *testing.T) {
 	}
 }
 
+// TestInterfaceMethodClassifiesAsInterfaceRegardlessOfPath proves the
+// Block.IsInterface override in classifyFile: a method declared inside an
+// `interface` gets category "INTERFACE" even under a path that would
+// otherwise match a completely different category rule (here
+// app/Services/, which would normally yield "SERVICE"). See
+// .claude/rules/blocks-and-ingest.md.
+func TestInterfaceMethodClassifiesAsInterfaceRegardlessOfPath(t *testing.T) {
+	oldSrc := `<?php
+interface Repo {
+    public function find(int $id): ?Model;
+}
+`
+	newSrc := `<?php
+interface Repo {
+    public function find(int $id): ?Model;
+    public function all(): array;
+}
+`
+	file := "app/Services/Repo.php"
+	oldBlocks := ScanBlocks([]byte(oldSrc), file)
+	newBlocks := ScanBlocks([]byte(newSrc), file)
+
+	// A real unified diff would show the added "all()" line only.
+	fd := &fileDiff{changedOld: lineSet{}, changedNew: lineSet{4: true}}
+
+	out := classifyFile(1, file, "", oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
+
+	var found *Block
+	for i := range out {
+		if out[i].symbol() == "Repo::all" {
+			found = &out[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected Repo::all to classify as added, got %v", symbols(out))
+	}
+	if found.Category != "INTERFACE" {
+		t.Errorf("expected category %q for an interface method (path would otherwise give SERVICE), got %q", "INTERFACE", found.Category)
+	}
+}
+
+// TestCategoryForInterfaceFilenameFallback proves the path-based
+// `*Interface.php` naming-convention fallback in categoryRules: it only
+// matters for the whole-file-scan fallback scenario (a file the scanner
+// can't parse into real blocks, so Block.IsInterface is never set) — a
+// bare categoryFor(path) call (no scan/classify) is the simplest way to
+// exercise that rule directly.
+func TestCategoryForInterfaceFilenameFallback(t *testing.T) {
+	cases := map[string]string{
+		"packages/plugandpay/Contracts/WebhookResourceDriverInterface.php": "INTERFACE",
+		"app/Services/SomeInterface.php":                                   "INTERFACE",
+		"app/Services/Svc.php":                                             "SERVICE",
+	}
+	for path, want := range cases {
+		if got := categoryFor(path); got != want {
+			t.Errorf("categoryFor(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
 func writeFileT(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

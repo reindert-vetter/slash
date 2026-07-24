@@ -194,6 +194,12 @@ func classifyFile(pr int, path, oldFile string, oldBlocks, newBlocks []Block, fd
 	for _, nb := range newBlocks {
 		nb.PR = pr
 		nb.Category = category
+		if nb.IsInterface {
+			// A method declared directly inside an `interface` body wins over
+			// the path-based category — the reviewer cares that this is an
+			// interface, regardless of which directory it happens to sit in.
+			nb.Category = "INTERFACE"
+		}
 		nb.Side = SideNew
 		nb.OldFile = oldFile
 		sym := nb.symbol()
@@ -229,6 +235,9 @@ func classifyFile(pr int, path, oldFile string, oldBlocks, newBlocks []Block, fd
 	for _, ob := range oldBlocks {
 		ob.PR = pr
 		ob.Category = category
+		if ob.IsInterface {
+			ob.Category = "INTERFACE"
+		}
 		ob.Side = SideOld
 		ob.OldFile = oldFile
 		sym := ob.symbol()
@@ -270,6 +279,18 @@ var categoryRules = []categoryRule{
 	{func(p string) bool {
 		return hasSeg(p, "tests/") || hasSeg(p, "Tests/") || strings.HasSuffix(p, "Test.php")
 	}, "TEST"},
+	// Fallback naming-convention rule for `*Interface.php`, placed early (like
+	// TEST) so it wins regardless of which app/* directory the file lives
+	// under — the same "always wins" precedence the reliable, keyword-based
+	// Block.IsInterface override already has in classifyFile. This path-based
+	// rule only actually matters for the scanner's whole-file-fallback
+	// scenario (a file it can't parse into real blocks — non-.php, or a
+	// brace/string imbalance — so Block.IsInterface is never set, see
+	// phpscan.go's ScanBlocks/wholeFileBlock): a reliably-parsed interface
+	// never reaches this rule, since classifyFile's IsInterface override
+	// already stamped "INTERFACE" on its blocks before this path-based
+	// fallback would apply.
+	{func(p string) bool { return strings.HasSuffix(p, "Interface.php") }, "INTERFACE"},
 	{func(p string) bool { return hasSeg(p, "database/migrations/") }, "MIGRATION"},
 	{func(p string) bool { return hasSeg(p, "database/factories/") }, "FACTORY"},
 	{func(p string) bool { return hasSeg(p, "app/Actions/") }, "ACTION"},

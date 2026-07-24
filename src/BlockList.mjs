@@ -19,6 +19,11 @@ const CATEGORY_STYLE = {
   SERVICE: 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300',
   REPOSITORY: 'bg-lime-100 dark:bg-lime-500/20 text-lime-700 dark:text-lime-300',
   BUILDER: 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300',
+  // Both plain "teal" (already RESOURCE) and plain "cyan" (already REQUEST)
+  // are taken, so INTERFACE uses a noticeably darker/more saturated cyan
+  // shade — still the requested teal/cyan-blue family, but visually
+  // distinguishable from REQUEST's lighter cyan-100 pill at a glance.
+  INTERFACE: 'bg-cyan-200 dark:bg-cyan-600/30 text-cyan-900 dark:text-cyan-200',
   MIGRATION: 'bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300',
   FACTORY: 'bg-pink-100 dark:bg-pink-500/20 text-pink-700 dark:text-pink-300',
   TEST: 'bg-slate-200 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400',

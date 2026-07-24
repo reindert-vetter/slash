@@ -48,7 +48,8 @@ const classHeaderSentinel = "<class-header>"
 // classFrame is a class/trait/interface/enum context on the stack.
 type classFrame struct {
 	name      string
-	openDepth int // brace depth the body lives within
+	kind      string // "class" | "trait" | "interface" | "enum"
+	openDepth int    // brace depth the body lives within
 
 	// Header-block tracking (class/trait/enum only — see classHeaderSentinel).
 	headerEligible bool // named class/trait/enum (not interface, not anonymous)
@@ -103,6 +104,16 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 			return ""
 		}
 		return classes[len(classes)-1].name
+	}
+	// currentClassKind returns the kind ("class"/"trait"/"interface"/"enum")
+	// of the top frame, or "" if there is none — used to stamp
+	// Block.IsInterface on a method declared directly inside an `interface`
+	// (see classify.go's category override; .claude/rules/blocks-and-ingest.md).
+	currentClassKind := func() string {
+		if len(classes) == 0 {
+			return ""
+		}
+		return classes[len(classes)-1].kind
 	}
 	// popClasses removes frames whose body has been closed. A frame that never
 	// saw a method declaration emits its class-header block here, spanning the
@@ -252,6 +263,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 					// depth+1), so openDepth = depth+1.
 					classes = append(classes, classFrame{
 						name:      name,
+						kind:      word,
 						openDepth: depth + 1,
 						// Only a named class/trait/enum gets a header block —
 						// interfaces have no header content worth capturing, and an
@@ -298,6 +310,11 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 				b, next, isDecl := scanFunction(s, end, &line, filename, currentClass(), declLine)
 				if isDecl {
 					b.Description = doc
+					// A method declared directly inside an `interface` body gets
+					// flagged so classify.go can override its category to
+					// "INTERFACE" regardless of the file's path (see
+					// .claude/rules/blocks-and-ingest.md).
+					b.IsInterface = currentClassKind() == "interface"
 					blocks = append(blocks, b)
 					if headerFrame != nil {
 						headerFrame.headerClosed = true

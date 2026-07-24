@@ -703,3 +703,63 @@ class Svc {
 		t.Fatalf("expected empty description, got %q", b.Description)
 	}
 }
+
+// TestInterfaceMethodIsFlaggedIsInterface: a method declared directly inside
+// an `interface` body gets Block.IsInterface=true, so classify.go can
+// override its category to "INTERFACE" regardless of the file's path — see
+// .claude/rules/blocks-and-ingest.md.
+func TestInterfaceMethodIsFlaggedIsInterface(t *testing.T) {
+	src := `<?php
+interface Repo {
+    public function find(int $id): ?Model;
+}
+`
+	got := ScanBlocks([]byte(src), "app/Services/Repo.php")
+	b, ok := blockByName(got, "Repo::find")
+	if !ok {
+		t.Fatalf("expected Repo::find, got %v", symbols(got))
+	}
+	if !b.IsInterface {
+		t.Fatalf("expected Repo::find to be flagged IsInterface")
+	}
+}
+
+// TestClassMethodIsNotFlaggedIsInterface: an ordinary class method (as
+// opposed to an interface method) must never get IsInterface set.
+func TestClassMethodIsNotFlaggedIsInterface(t *testing.T) {
+	src := `<?php
+class Foo {
+    public function bar() {
+        return 1;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Foo.php")
+	b, ok := blockByName(got, "Foo::bar")
+	if !ok {
+		t.Fatalf("expected Foo::bar, got %v", symbols(got))
+	}
+	if b.IsInterface {
+		t.Fatalf("expected Foo::bar NOT to be flagged IsInterface")
+	}
+}
+
+// TestTraitMethodIsNotFlaggedIsInterface: a trait method must also stay
+// unflagged — only a real `interface` body sets IsInterface.
+func TestTraitMethodIsNotFlaggedIsInterface(t *testing.T) {
+	src := `<?php
+trait Helper {
+    public function assist() {
+        return 1;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Helper.php")
+	b, ok := blockByName(got, "Helper::assist")
+	if !ok {
+		t.Fatalf("expected Helper::assist, got %v", symbols(got))
+	}
+	if b.IsInterface {
+		t.Fatalf("expected Helper::assist NOT to be flagged IsInterface")
+	}
+}

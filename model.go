@@ -48,6 +48,13 @@ type Block struct {
 	// no such PHPDoc. See phpscan.go's phpDocDescription and
 	// .claude/rules/blocks-and-ingest.md.
 	Description string `json:"description"`
+	// IsInterface marks a method declared directly inside an `interface`
+	// body (set by phpscan.go's scanPHP, via the enclosing classFrame's
+	// kind). It's a transient classification signal consumed by
+	// classify.go (which overrides Category to "INTERFACE" regardless of
+	// the file's path) — not needed by the frontend, hence json:"-".
+	// See .claude/rules/blocks-and-ingest.md.
+	IsInterface bool `json:"-"`
 }
 
 // ID is stable per (pr, file, symbol) so re-ingest is idempotent.
