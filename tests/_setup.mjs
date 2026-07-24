@@ -225,11 +225,14 @@ ${body}
 // above): ONE file with two methods, so they're linked as same-file
 // neighbours (the dashed connector) — needed to prove a Shift+ArrowDown range
 // selection clamps at the block boundary instead of flowing into the next
-// block like a plain ArrowDown does. `execute` changes FOUR contiguous lines
-// (four separate gran==='line' units in a row, none split by MAX_GROUP since
-// 4 <= 5) so a Shift+ArrowDown range can span more than one but fewer than
-// all of them; `other` changes just one line, only used to prove the flow
-// boundary.
+// block like a plain ArrowDown does. `execute` changes FOUR lines in TWO
+// separate runs of two ($a/$b, then $c/$d), split by one unchanged `$mid`
+// line in between — so at gran==='line' there are still four contiguous
+// gran==='line' units in a row (unaffected by the grouping, none split by
+// MAX_GROUP since each run is well under 5), while at gran==='group' there
+// are now two distinct group units to Shift-select across (the whole point
+// of the group-level range-select test). `other` changes just one line,
+// only used to prove the flow boundary.
 function materializeRangeSelectWorktrees() {
   const contents = (a, b, c, d, x) => `<?php
 
@@ -241,6 +244,7 @@ class RangeSelectAction
     {
         $a = ${a};
         $b = ${b};
+        $mid = 5;
         $c = ${c};
         $d = ${d};
         return $a + $b + $c + $d;

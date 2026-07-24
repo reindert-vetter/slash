@@ -227,14 +227,14 @@ const state = reactive({
   // next/previous call (flowing across same-file blocks like ↓/↑; see fKey/dKey).
   // `change` indexes into the unit list of the current granularity (unitsFor).
   gran: 'group',
-  // rangeAnchor — the unit index a Shift+ArrowDown/ArrowUp multi-line selection
+  // rangeAnchor — the unit index a Shift+ArrowDown/ArrowUp multi-unit selection
   // started from, or null when no such range is active. Only meaningful while
-  // gran === 'line': extendRange is the only place that sets it, and every
-  // plain (non-shift) navigation/zoom/block-switch path clears it back to null
-  // (see clearRangeAnchor). rangeUnit() merges it with the current `change`
-  // into the { start, end } row range that approve/comment/highlighting act on.
-  // The drilled-column equivalent lives per-entry on state.drillCursor[i]
-  // (see drillExtendRange) rather than here.
+  // gran is 'line' or 'group' (see isRangeGran): extendRange is the only place
+  // that sets it, and every plain (non-shift) navigation/zoom/block-switch path
+  // clears it back to null (see clearRangeAnchor). rangeUnit() merges it with
+  // the current `change` into the { start, end } row range that approve/
+  // comment/highlighting act on. The drilled-column equivalent lives per-entry
+  // on state.drillCursor[i] (see drillExtendRange) rather than here.
   rangeAnchor: null,
   // codeVersion bumps every time a block's lazily-loaded `b.code` is filled in
   // (see ensureCode). It is the reliable "code arrived" signal the DetailPanel
@@ -595,9 +595,11 @@ function unitAtRow(units, row) {
 // rangeUnit merges the current unit (`change`) with a Shift+arrow range's
 // starting unit (`anchor`) into the { start, end } row range both should act
 // on — or just returns the current unit when there's no active anchor. Only
-// ever meaningful for gran==='line' (the only granularity extendRange/
-// drillExtendRange set an anchor at, see below), where every unit is a single
-// row, so merging is just a min/max of two row pairs.
+// ever meaningful for gran==='line'/'group' (see isRangeGran — the only
+// granularities extendRange/drillExtendRange set an anchor at): both a line
+// unit and a group unit already carry a { start, end } row range, so merging
+// two of them (possibly with an unchanged gap in between, for two separate
+// groups) is just a min/max of the two row pairs either way.
 function rangeUnit(units, change, anchor) {
   const cur = units[change]
   if (!cur) return null
@@ -605,6 +607,13 @@ function rangeUnit(units, change, anchor) {
   const anchorUnit = units[anchor]
   if (!anchorUnit) return cur
   return { start: Math.min(cur.start, anchorUnit.start), end: Math.max(cur.end, anchorUnit.end) }
+}
+
+// isRangeGran reports whether Shift+arrow multi-unit selection is supported at
+// this granularity — 'group' and 'line' (not 'call': a row there can hold
+// multiple call segments, where "merge two units" has no clear meaning).
+function isRangeGran(gran) {
+  return gran === 'group' || gran === 'line'
 }
 
 // clearRangeAnchor drops an active Shift+arrow multi-line selection at the
@@ -650,12 +659,13 @@ function setGran(delta) {
 }
 
 // extendRange starts (if not already active) or moves a Shift+ArrowDown/
-// ArrowUp multi-line selection of the top-level cursor by `delta` units. Only
-// meaningful at gran==='line'; clamps at the block's own first/last line unit
-// — unlike nextChange/prevChange a range never flows into a same-file
-// neighbour, since approve/comment act on rows of a single block.
+// ArrowUp multi-unit selection of the top-level cursor by `delta` units. Only
+// meaningful at gran==='line' or gran==='group' (see isRangeGran); clamps at
+// the block's own first/last unit — unlike nextChange/prevChange a range
+// never flows into a same-file neighbour, since approve/comment act on rows
+// of a single block.
 function extendRange(delta) {
-  if (state.mode !== 'diff' || state.gran !== 'line') return
+  if (state.mode !== 'diff' || !isRangeGran(state.gran)) return
   const units = unitsOf(state.blocks[state.selected])
   if (!units.length) return
   const anchor = state.rangeAnchor != null ? state.rangeAnchor : state.change
@@ -3011,15 +3021,15 @@ function setDrillGran(level, delta) {
 
 // drillExtendRange mirrors extendRange, but for the drilled column at `level`
 // (its own drillCursor entry instead of state.gran/state.change/
-// state.rangeAnchor). Only meaningful at gran==='line'; clamps at the
-// column's own first/last line unit — a range never flows sideways into a
-// sibling (drillNextChange/drillPrevChange's sibling walk), since approve/
-// comment act on rows of a single block.
+// state.rangeAnchor). Only meaningful at gran==='line' or gran==='group' (see
+// isRangeGran); clamps at the column's own first/last unit — a range never
+// flows sideways into a sibling (drillNextChange/drillPrevChange's sibling
+// walk), since approve/comment act on rows of a single block.
 function drillExtendRange(level, delta) {
   const b = state.drill[level - 1]
   const cur = state.drillCursor[level - 1] || { change: 0, gran: 'group' }
-  if (!b || cur.gran !== 'line') return
-  const units = unitsFor(blockRows(b), 'line')
+  if (!b || !isRangeGran(cur.gran)) return
+  const units = unitsFor(blockRows(b), cur.gran)
   if (!units.length) return
   const anchor = cur.rangeAnchor != null ? cur.rangeAnchor : cur.change
   const change = Math.min(units.length - 1, Math.max(0, cur.change + delta))
@@ -3270,10 +3280,10 @@ function drillIntoChild(child) {
 // own drillCursor[focusLevel-1].{gran,change}, mirroring drillNextChange/
 // setDrillGran. A drilled column has no list-mode equivalent (it's always a
 // self-contained diff), so no mode==='diff' guard is needed for that branch.
-// An active Shift+arrow line-range selection (see rangeUnit) widens the unit
-// to the whole selected range, so a comment posted on it becomes a real
-// multi-line range comment (unitLineRange/startLine/endLine below already
-// support that — GitHub's own multi-line review comments).
+// An active Shift+arrow range selection (see rangeUnit/isRangeGran) widens
+// the unit to the whole selected range, so a comment posted on it becomes a
+// real multi-line range comment (unitLineRange/startLine/endLine below
+// already support that — GitHub's own multi-line review comments).
 function commentTarget() {
   const b = focusedBlock()
   if (!b) return null
@@ -3284,7 +3294,7 @@ function commentTarget() {
   const idx = level > 0 ? cur.change : state.mode === 'diff' ? state.change : 0
   const anchor = level > 0 ? cur.rangeAnchor : state.mode === 'diff' ? state.rangeAnchor : null
   const units = unitsFor(rows, gran)
-  const unit = gran === 'line' ? rangeUnit(units, idx, anchor) : units[idx]
+  const unit = isRangeGran(gran) ? rangeUnit(units, idx, anchor) : units[idx]
   // No unit (block with no navigable changes): a block-level target with an
   // unknown row range (rowStart -1) — the index then shows all block comments.
   // startLine/endLine stay 0 so the backend falls back to the block's own line.
@@ -3844,8 +3854,8 @@ function approveNoun(ctx = approveContext()) {
 
 // approveTargetRows returns the changed row indices an approve action covers now:
 // the current navigation unit's rows in diff mode (merged with an active
-// Shift+arrow line-range selection, see rangeUnit), or the whole block in list
-// mode (where there's no active unit). Takes an explicit ctx (default
+// Shift+arrow range selection, see rangeUnit/isRangeGran), or the whole block
+// in list mode (where there's no active unit). Takes an explicit ctx (default
 // approveContext()), same reason as approveNoun.
 function approveTargetRows(ctx = approveContext()) {
   const b = ctx.b
@@ -3854,7 +3864,7 @@ function approveTargetRows(ctx = approveContext()) {
   const all = changedRows(rows)
   if (ctx.mode !== 'diff') return all
   const units = unitsFor(rows, ctx.gran)
-  const unit = ctx.gran === 'line' ? rangeUnit(units, ctx.change, ctx.anchor) : units[ctx.change]
+  const unit = isRangeGran(ctx.gran) ? rangeUnit(units, ctx.change, ctx.anchor) : units[ctx.change]
   if (!unit) return all
   return all.filter((i) => i >= unit.start && i <= unit.end)
 }
@@ -5659,11 +5669,13 @@ function DetailPanel(state) {
               // In list mode we preview the first change group (the very run →
               // would step onto). In diff mode we follow state.change into the
               // current granularity's units (a run, a line, or a call segment) —
-              // merged with an active Shift+arrow line-range selection, if any
-              // (see rangeUnit/extendRange).
+              // merged with an active Shift+arrow range selection, if any (see
+              // rangeUnit/extendRange/isRangeGran).
               if (state.mode !== 'diff') return groupsFor(b)[0] || null
               const units = unitsOf(b)
-              return state.gran === 'line' ? rangeUnit(units, state.change, state.rangeAnchor) : units[state.change] || null
+              return isRangeGran(state.gran)
+                ? rangeUnit(units, state.change, state.rangeAnchor)
+                : units[state.change] || null
             },
             // Out-of-view change hints belong only to the block being stepped
             // through: the selected card, in diff mode, with the keyboard on it.
@@ -5856,7 +5868,9 @@ function DetailPanel(state) {
                     if (state.focusLevel !== level) return null
                     const cur = state.drillCursor[i] || { change: 0, gran: 'group' }
                     const units = unitsFor(blockRows(b), cur.gran)
-                    return cur.gran === 'line' ? rangeUnit(units, cur.change, cur.rangeAnchor) : units[cur.change] || null
+                    return isRangeGran(cur.gran)
+                      ? rangeUnit(units, cur.change, cur.rangeAnchor)
+                      : units[cur.change] || null
                   },
                   hintsEnabled: () => state.focusLevel === level,
                   diffActive: () => state.focusLevel === level && !relatedActive(),

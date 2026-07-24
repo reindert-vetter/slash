@@ -904,12 +904,13 @@ the line background (red/green) now only marks a real change at the
 line level. An empty added line has no characters and thus no underline
 (correct: nothing to mark).
 
-## Shift+↑/↓ — selecting multiple lines at once (`state.rangeAnchor`)
+## Shift+↑/↓ — selecting multiple lines/groups at once (`state.rangeAnchor`)
 
-At **`gran==='line'`**, **Shift+ArrowDown**/**Shift+ArrowUp**
-(`extendRange`/`drillExtendRange`, `home.mjs`) extend the selection into a
-contiguous range of lines, instead of moving the cursor one line at a time.
-The anchor (the unit index where the shift selection started) lives
+At **`gran==='line'` or `gran==='group'`** (see `isRangeGran`),
+**Shift+ArrowDown**/**Shift+ArrowUp** (`extendRange`/`drillExtendRange`,
+`home.mjs`) extend the selection into a contiguous range of lines resp. a
+merged run of change-groups, instead of moving the cursor one unit at a
+time. The anchor (the unit index where the shift selection started) lives
 alongside the existing `{change, gran}` cursor: top-level in
 `state.rangeAnchor`, for a
 drilled column as `rangeAnchor` on its own `state.drillCursor[level-1]`
@@ -922,28 +923,35 @@ ordinary
 (larger) unit, so the highlighting (`activeGroup`), the approve scope
 (`approveTargetRows`/`approveContext`) and the comment anchoring
 (`commentTarget`) didn't need deeper changes than "use the
-merged unit instead of the single current one".
+merged unit instead of the single current one". This merge works identically
+for a line unit and a group unit (both already carry a `{start, end}` row
+range) — merging two separate groups can span an unchanged gap in between
+(nothing else was selected there), which is fine: the highlighting/approve
+scope still only act on the actually-changed rows within that range.
 
-- **Only at `gran==='line'`.** At `'group'` a contiguous run of
-  lines is already the unit itself (`changeGroups`); at `'call'` it's about
-  segments within one line, not a vertical run. Shift+↑/↓ at any other
-  granularity is a no-op (`extendRange`/`drillExtendRange` return early).
+- **Only at `gran==='line'` or `gran==='group'`** (`isRangeGran`, the single
+  gate both `extendRange`/`drillExtendRange` and every `rangeUnit` call site
+  check). At `'call'` it's about segments within one line, not a vertical
+  run — Shift+↑/↓ there is a no-op (`extendRange`/`drillExtendRange` return
+  early).
 - **Clamps at the block boundary.** Unlike a normal `↓`/`↑` (which flows on
   past the last/first unit to the next same-file block resp. the
   next/previous Underlying-code sibling — see above and
   "Column navigation") an active range never flows out of a block/column: it
-  clamps at the first/last `'line'` unit of the current block. Approve and
-  comment operate per block, so a range spanning two blocks would have
-  no meaningful sense.
+  clamps at the first/last unit (of the active granularity) of the current
+  block. Approve and comment operate per block, so a range spanning two
+  blocks would have no meaningful sense.
 - **Approve approves the whole range at once** — `approveTargetRows`
   now filters `changedRows` on the merged range instead of the single unit,
   so
   `toggleApprove`/the command-palette "approve" action (`Enter`) approves
   exactly
-  the selected lines (or retracts them). The label follows suit:
-  `approveNoun` shows **"Approve these N lines"** once the range spans more
-  than
-  one line, otherwise unchanged "this line".
+  the selected lines/groups (or retracts them). The label follows suit only
+  at `gran==='line'`: `approveNoun` shows **"Approve these N lines"** once
+  the range spans more than one line, otherwise unchanged "this line". At
+  `gran==='group'` the label stays the existing, generic "these lines"
+  regardless of how many groups are merged — a group already spans a
+  variable number of rows, so there's no single natural "N" to name.
 - **Comment uses the range as a multi-line anchor** — `commentTarget()`
   now also builds its code fragment/`startLine`/`endLine` from the merged
   range; `unitLineRange` already supported a multi-line range (for a
