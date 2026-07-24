@@ -376,6 +376,19 @@ function isEditableFocused() {
   return !!el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')
 }
 
+// isModifiedKey reports whether Cmd (Mac) or Ctrl (Windows/Linux) is held —
+// used by the single-letter shortcuts (a/f/d/s) to step aside for the
+// browser/OS's own Cmd+A (select all) / Cmd+F (find) / Cmd+D (bookmark) /
+// Cmd+S (save): `event.key` stays the bare letter regardless of the modifier,
+// so without this check those shortcuts silently ate the native browser
+// behavior even outside any editable field (isEditableFocused() only covers
+// TEXTAREA/INPUT, not a plain, selectable diff/code pane). Deliberately
+// doesn't check altKey/shiftKey — those don't collide with a native
+// select-all/find/bookmark/save shortcut on any platform this app targets.
+function isModifiedKey(e) {
+  return e.metaKey || e.ctrlKey
+}
+
 // editableCaretCanMoveLeft reports whether a focused text field's caret sits
 // strictly past the very start (there's a character — or a selection — to its
 // left), meaning a plain/Option ArrowLeft has somewhere to go *within* the
@@ -4878,8 +4891,10 @@ function onKeydown(e) {
   // toggle-approved row owns the keyboard — state.selected still points at
   // whatever block it did before ↓ walked onto the button, and letting them
   // silently act on it would read as broken ("I'm on the toggle button but
-  // ArrowRight opened a diff").
-  if (state.toggleFocused && ['f', 'd', 's', 'a', 'ArrowRight'].includes(e.key)) {
+  // ArrowRight opened a diff"). A held Cmd/Ctrl is excluded here too (see the
+  // isModifiedKey note below) so e.g. Cmd+A still selects text natively even
+  // while the toggle row happens to have keyboard focus.
+  if (state.toggleFocused && !isModifiedKey(e) && ['f', 'd', 's', 'a', 'ArrowRight'].includes(e.key)) {
     e.preventDefault()
     return
   }
@@ -4887,17 +4902,20 @@ function onKeydown(e) {
   // f / d / s drive the zoom-based selection: f zooms in (and steps to the next
   // call on the finest level), d goes back, s zooms out. f from the list steps
   // into the diff first; d / s only act inside a diff. See fKey / dKey / sKey.
-  if (e.key === 'f') {
+  // isModifiedKey(e) (Cmd/Ctrl held) lets these single letters fall through to
+  // the browser/OS instead — Cmd+F (find), Cmd+D (bookmark), Cmd+S (save) — the
+  // same reasoning as the `a` guard just below.
+  if (e.key === 'f' && !isModifiedKey(e)) {
     e.preventDefault()
     fKey()
     return
   }
-  if (e.key === 'd') {
+  if (e.key === 'd' && !isModifiedKey(e)) {
     e.preventDefault()
     dKey()
     return
   }
-  if (e.key === 's') {
+  if (e.key === 's' && !isModifiedKey(e)) {
     e.preventDefault()
     sKey()
     return
@@ -4915,8 +4933,12 @@ function onKeydown(e) {
   // RelatedPanel.mjs) without ever routing through the panel's own keyboard
   // navigation. A literal "a" typed there would otherwise be eaten by this
   // shortcut instead of reaching the textarea, so guard directly on whether an
-  // editable field currently holds DOM focus.
-  if (e.key === 'a' && !isEditableFocused()) {
+  // editable field currently holds DOM focus. isModifiedKey(e) additionally lets
+  // Cmd+A / Ctrl+A fall through untouched — the diff/code panes are plain,
+  // non-input text (isEditableFocused() doesn't cover them), so without this the
+  // reviewer could never trigger the browser's native "select all" while their
+  // focus/selection was anywhere near the diff. See isModifiedKey below.
+  if (e.key === 'a' && !isEditableFocused() && !isModifiedKey(e)) {
     e.preventDefault()
     toggleDiffView()
     return

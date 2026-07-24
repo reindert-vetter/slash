@@ -770,7 +770,10 @@ diff viewport.
 
 Within a block you zoom with **`f`** (zoom in) and **`s`** (zoom out) through
 three levels (`home.mjs`, `GRANS`). **`d`** is the "back" key which acts as
-previous-call at the finest level (see below):
+previous-call at the finest level (see below). All three step aside for a
+held Cmd/Ctrl (`isModifiedKey(e)`, see the `a` section below) so
+`Cmd+F`/`Cmd+D`/`Cmd+S` still reach the browser (find/bookmark/save)
+instead of zooming:
 
 - **`'group'`** (starting point when stepping in): a whole run of changed
   lines (`changeGroups`) — multiple lines at once.
@@ -988,6 +991,20 @@ otherwise be swallowed by this shortcut. Hence the `a` handler also checks
 TEXTAREA/INPUT → shortcut does nothing, key just flows into the field) — a
 generic, future-proof guard that doesn't depend on which navigation state a
 field happens to track or not.
+
+**A held Cmd/Ctrl always steps aside for the browser/OS
+(`isModifiedKey(e)` in `home.mjs`, shared with the `f`/`d`/`s` zoom keys,
+see below):** `event.key` stays the bare letter `'a'` regardless of a
+modifier, and the diff/code panes are plain, selectable text — not a
+TEXTAREA/INPUT, so `isEditableFocused()` doesn't cover them. Without this
+guard, `Cmd+A`/`Ctrl+A` while the reviewer's focus/selection was anywhere
+near the diff toggled the diff view instead of letting the browser select
+all text natively. `isModifiedKey(e)` (`e.metaKey || e.ctrlKey`) is checked
+next to `isEditableFocused()` on the `a` handler, and next to the plain
+letter check on `f`/`d`/`s` (and on the `state.toggleFocused` swallow list
+that includes those same four keys) — so `Cmd+F`/`Cmd+D`/`Cmd+S` (browser
+find/bookmark/save) also keep working. Test:
+`tests/select-all-shortcut.spec.mjs`.
 
 The state (`state.diffViewMode`, `'split'`/`'new'`/`'fit'`) is ephemeral, no
 URL binding (like `showDescription`/`showApproved`). An already one-sided
