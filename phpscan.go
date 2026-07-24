@@ -371,8 +371,15 @@ func scanFunction(s string, from int, line *int, filename, class string, declLin
 			b := Block{File: filename, Class: class, Name: name, Line: declLine, EndLine: endLine}
 			return b, next, true
 		case ';':
-			// No body (abstract/interface) → single-line block.
-			b := Block{File: filename, Class: class, Name: name, Line: declLine, EndLine: declLine}
+			// No body (abstract/interface) → ends on the line the ';' itself
+			// is on. That's usually declLine (a leading attribute/PHPDoc-free,
+			// single-line stub), but NOT when declLine was pulled back to a
+			// leading #[...]/PHPDoc (see the "function" case above) or when the
+			// signature itself spans multiple lines — *line has been tracked
+			// correctly all along via the newline case just above, so use that
+			// instead of declLine (which would otherwise chop the block down to
+			// just its opening attribute/PHPDoc line).
+			b := Block{File: filename, Class: class, Name: name, Line: declLine, EndLine: *line}
 			return b, j + 1, true
 		case '/':
 			if j+1 < len(s) && s[j+1] == '/' {

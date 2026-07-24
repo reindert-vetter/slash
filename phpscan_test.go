@@ -308,6 +308,70 @@ interface Repo {
 	}
 }
 
+// TestInterfaceMethodWithLeadingDocSpansFullSignature: a body-less (`;`
+// terminated) interface method whose Block.Line was pulled back to a leading
+// PHPDoc must still get an EndLine that spans all the way to the actual
+// signature line (where the `;` sits) — NOT collapse to the PHPDoc's own
+// opening line. Regression test for the bug where such a block rendered as
+// literally just "/**" (see .claude/rules/blocks-and-ingest.md, "PHPDoc
+// description as block description").
+func TestInterfaceMethodWithLeadingDocSpansFullSignature(t *testing.T) {
+	src := `<?php
+interface WebhookResourceDriverInterface {
+    /**
+     * Map raw include strings to this driver's own include enum cases.
+     *
+     * @param array $includes
+     * @return array
+     */
+    public function toIncludes(array $includes): array;
+}
+`
+	got := ScanBlocks([]byte(src), "packages/plugandpay/Contracts/WebhookResourceDriverInterface.php")
+	b, ok := blockByName(got, "WebhookResourceDriverInterface::toIncludes")
+	if !ok {
+		t.Fatalf("expected toIncludes, got %v", symbols(got))
+	}
+	if b.Line != 3 {
+		t.Fatalf("expected Block.Line=3 (the PHPDoc's opening line), got %d", b.Line)
+	}
+	const sigLine = 9 // "    public function toIncludes(array $includes): array;"
+	if b.EndLine != sigLine {
+		t.Fatalf("expected Block.EndLine=%d (the signature/';' line), got %d — the block must not collapse to just the PHPDoc's opening line", sigLine, b.EndLine)
+	}
+	if b.EndLine <= b.Line {
+		t.Fatalf("body span looks wrong: line=%d end=%d", b.Line, b.EndLine)
+	}
+}
+
+// TestInterfaceMethodMultilineSignatureEndLine: even WITHOUT a leading
+// PHPDoc/attribute, a body-less method whose own signature spans multiple
+// lines (a wrapped parameter list) must get an EndLine on the line the `;`
+// itself sits on — not on declLine (the `function` keyword's own line). This
+// is the same underlying scanFunction fix, isolated from the PHPDoc case.
+func TestInterfaceMethodMultilineSignatureEndLine(t *testing.T) {
+	src := `<?php
+interface Repo {
+    public function find(
+        int $id,
+        array $options
+    ): ?Model;
+}
+`
+	got := ScanBlocks([]byte(src), "app/Repository/Repo.php")
+	b, ok := blockByName(got, "Repo::find")
+	if !ok {
+		t.Fatalf("expected Repo::find, got %v", symbols(got))
+	}
+	if b.Line != 3 {
+		t.Fatalf("expected Block.Line=3 (the function keyword's line), got %d", b.Line)
+	}
+	const sigLine = 6 // "    ): ?Model;"
+	if b.EndLine != sigLine {
+		t.Fatalf("expected Block.EndLine=%d (the line the ';' sits on), got %d", sigLine, b.EndLine)
+	}
+}
+
 func TestFreeFunction(t *testing.T) {
 	src := `<?php
 function helper($a) {
