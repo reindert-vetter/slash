@@ -7,6 +7,7 @@
 import { html } from './vendor/arrow.js'
 import { reactive } from './vendor/arrow.js'
 import { highlight, blockLabel, codeGrowthChars } from './Block.mjs'
+import { translationValueView } from './translationDiff.mjs'
 import { statusInfo, categoryClass } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
@@ -1562,6 +1563,10 @@ const KIND_LABEL = {
   // A test's #[DataProvider('m')]/@dataProvider m → the provider method (see
   // .claude/rules/tembed-workflows.md, "PHPUnit data providers").
   data_provider: 'provider',
+  // A trans()/__()/@lang()/trans_choice() call → the lang file's key, one child
+  // per locale (see .claude/rules/tembed-workflows.md, "Resolving translation
+  // keys"). Shows the current value, not a diff.
+  translation: 'vertaling',
 }
 
 // diffStatBadge shows, for a called method (or a test's covered method), how
@@ -1903,16 +1908,18 @@ function relatedCard(r, i, drill) {
         >
       </div>
       ${() =>
-        r.code
-          ? html`<code
-              class="language-php m-0 block whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
-              .innerHTML="${() => highlight(r.code)}"
-            ></code>`
-          : r.loading
-            ? html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500">code laden…</p>`
-            : html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-empty">
-                geen code gevonden
-              </p>`}
+        r.kind === 'translation'
+          ? translationValueView(r.code, r.transKey || r.label, r.locale || '')
+          : r.code
+            ? html`<code
+                class="language-php m-0 block whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
+                .innerHTML="${() => highlight(r.code)}"
+              ></code>`
+            : r.loading
+              ? html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500">code laden…</p>`
+              : html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-empty">
+                  geen code gevonden
+                </p>`}
     </div>
     ${() => (nested.length ? nestedChipColumn([r], nested, drill, [], i) : '')}
     </div>

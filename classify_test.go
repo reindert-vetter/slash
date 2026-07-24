@@ -468,6 +468,23 @@ class PermissionTest {
 	}
 }
 
+// TestCategoryForTranslation: a Laravel lang file classifies as TRANSLATION,
+// both under resources/lang and the older top-level lang/, and an ordinary
+// app file keeps its existing category (no accidental overlap).
+func TestCategoryForTranslation(t *testing.T) {
+	cases := map[string]string{
+		"resources/lang/nl/checkout.php":           "TRANSLATION",
+		"lang/en/cart.php":                         "TRANSLATION",
+		"app/Http/Controllers/OrderController.php": "CONTROLLER",
+		"app/Models/Order.php":                     "MODEL",
+	}
+	for path, want := range cases {
+		if got := categoryFor(path); got != want {
+			t.Errorf("categoryFor(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
 func writeFileT(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

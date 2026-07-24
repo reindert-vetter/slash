@@ -1621,3 +1621,214 @@ class Payment extends Model {
 		t.Errorf("meta: status=%q, want unresolved (cast target not indexed anywhere)", e.Status)
 	}
 }
+
+// TestSliceLangKey covers the array-walking logic directly (no worktree
+// needed — it's a pure function over lang-file text): a scalar key, a key
+// whose own value is a nested sub-array (returned as its `[...]` source
+// text, one keyPath segment deep — not descended further), a value
+// containing an escaped quote and a bracket character (must not confuse the
+// quote/bracket-aware scan), and a missing key.
+func TestSliceLangKey(t *testing.T) {
+	text := `<?php
+
+return [
+    'foo' => 'Hello world',
+    'bar' => [
+        'baz' => 'Nested value',
+    ],
+    'weird' => 'Has a \'quote\' and a [bracket] inside',
+];
+`
+	t.Run("scalar key", func(t *testing.T) {
+		val, line, found := sliceLangKey(text, []string{"foo"})
+		if !found {
+			t.Fatal("expected found=true")
+		}
+		if val != "'Hello world'" {
+			t.Errorf("val = %q, want %q", val, "'Hello world'")
+		}
+		if line != 4 {
+			t.Errorf("line = %d, want 4", line)
+		}
+	})
+
+	t.Run("nested key returns sub-array text", func(t *testing.T) {
+		val, _, found := sliceLangKey(text, []string{"bar"})
+		if !found {
+			t.Fatal("expected found=true")
+		}
+		if !strings.HasPrefix(val, "[") || !strings.HasSuffix(val, "]") {
+			t.Errorf("val = %q, want a bracketed sub-array", val)
+		}
+		if !strings.Contains(val, "'baz' => 'Nested value'") {
+			t.Errorf("val = %q, missing nested entry", val)
+		}
+	})
+
+	t.Run("nested key descended into", func(t *testing.T) {
+		val, _, found := sliceLangKey(text, []string{"bar", "baz"})
+		if !found {
+			t.Fatal("expected found=true")
+		}
+		if val != "'Nested value'" {
+			t.Errorf("val = %q, want %q", val, "'Nested value'")
+		}
+	})
+
+	t.Run("value with escaped quote and bracket", func(t *testing.T) {
+		val, _, found := sliceLangKey(text, []string{"weird"})
+		if !found {
+			t.Fatal("expected found=true")
+		}
+		want := `'Has a \'quote\' and a [bracket] inside'`
+		if val != want {
+			t.Errorf("val = %q, want %q", val, want)
+		}
+	})
+
+	t.Run("missing key", func(t *testing.T) {
+		_, _, found := sliceLangKey(text, []string{"does_not_exist"})
+		if found {
+			t.Error("expected found=false")
+		}
+	})
+
+	t.Run("missing nested key", func(t *testing.T) {
+		_, _, found := sliceLangKey(text, []string{"bar", "nope"})
+		if found {
+			t.Error("expected found=false")
+		}
+	})
+}
+
+// TestResolveTranslations: a trans()/__() call on a changed line resolves to
+// the lang-file value in every locale that has the file, one entry per
+// locale; a key missing in a locale still produces an entry with empty
+// ChildCode; a dynamic argument, a namespaced ("pkg::x.y") key and a bare
+// whole-file reference ("checkout") all produce no entry.
+func TestResolveTranslations(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 90
+	baseDir, headDir := worktreeDirs(dataDir, pr)
+
+	callerBase := `<?php
+namespace App\Http\Controllers;
+class CheckoutController {
+    public function show() {
+        return view('checkout.show');
+    }
+}
+`
+	callerHead := `<?php
+namespace App\Http\Controllers;
+class CheckoutController {
+    public function show() {
+        $label = trans('checkout.foo');
+        $sub = __('checkout.bar.baz');
+        $dyn = trans($dynamic);
+        $pkg = trans('pkg::x.y');
+        $whole = trans('checkout');
+        return view('checkout.show');
+    }
+}
+`
+	for dir, body := range map[string]string{baseDir: callerBase, headDir: callerHead} {
+		p := filepath.Join(dir, "app/Http/Controllers/CheckoutController.php")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	nlLang := `<?php
+
+return [
+    'foo' => 'Vervolg naar afrekenen',
+    'bar' => [
+        'baz' => 'Onderdeel van de bestelling',
+    ],
+];
+`
+	enLang := `<?php
+
+return [
+    'foo' => 'Continue to checkout',
+];
+`
+	for rel, body := range map[string]string{
+		"resources/lang/nl/checkout.php": nlLang,
+		"resources/lang/en/checkout.php": enLang,
+	} {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Http/Controllers/CheckoutController.php", Class: "CheckoutController", Name: "show", Side: SideNew, Status: StatusModified}
+	entries := resolveTranslations(dataDir, pr, []Block{caller})
+
+	if len(entries) != 4 {
+		t.Fatalf("got %d entries, want 4 (2 keys x 2 locales): %+v", len(entries), entries)
+	}
+
+	e, ok := findCallresolveEntry(entries, caller.ID(), "translation:nl:checkout.foo")
+	if !ok {
+		t.Fatalf("no entry for translation:nl:checkout.foo, got %+v", entries)
+	}
+	if e.Status != callresolve.StatusResolved || e.Kind != callresolve.KindTranslation {
+		t.Errorf("status/kind = %q/%q, want resolved/%q", e.Status, e.Kind, callresolve.KindTranslation)
+	}
+	if e.ChildFile != "resources/lang/nl/checkout.php" || e.ChildClass != "nl" || e.ChildMethod != "" {
+		t.Errorf("child = %q/%q/%q, want resources/lang/nl/checkout.php/nl/<empty>", e.ChildFile, e.ChildClass, e.ChildMethod)
+	}
+	if !strings.Contains(e.ChildCode, "Vervolg naar afrekenen") {
+		t.Errorf("ChildCode = %q, missing nl value", e.ChildCode)
+	}
+	if e.ChildLine <= 0 {
+		t.Errorf("ChildLine = %d, want > 0", e.ChildLine)
+	}
+
+	eEn, ok := findCallresolveEntry(entries, caller.ID(), "translation:en:checkout.foo")
+	if !ok {
+		t.Fatalf("no entry for translation:en:checkout.foo, got %+v", entries)
+	}
+	if !strings.Contains(eEn.ChildCode, "Continue to checkout") {
+		t.Errorf("ChildCode = %q, missing en value", eEn.ChildCode)
+	}
+
+	eNlNested, ok := findCallresolveEntry(entries, caller.ID(), "translation:nl:checkout.bar.baz")
+	if !ok {
+		t.Fatalf("no entry for translation:nl:checkout.bar.baz, got %+v", entries)
+	}
+	if !strings.Contains(eNlNested.ChildCode, "Onderdeel van de bestelling") {
+		t.Errorf("ChildCode = %q, missing nested nl value", eNlNested.ChildCode)
+	}
+
+	// en has no 'bar' key at all — still an entry, but empty/missing.
+	eEnMissing, ok := findCallresolveEntry(entries, caller.ID(), "translation:en:checkout.bar.baz")
+	if !ok {
+		t.Fatalf("no entry for translation:en:checkout.bar.baz (missing-in-locale must still be emitted), got %+v", entries)
+	}
+	if eEnMissing.ChildCode != "" {
+		t.Errorf("ChildCode = %q, want empty (key missing in en)", eEnMissing.ChildCode)
+	}
+	if eEnMissing.ChildLine != 1 {
+		t.Errorf("ChildLine = %d, want 1 (key missing in en)", eEnMissing.ChildLine)
+	}
+
+	// Decoys: a dynamic argument, a namespaced key, and a bare whole-file
+	// reference must never produce an entry.
+	for _, ck := range []string{"pkg", "dynamic", "checkout"} {
+		for _, e := range entries {
+			if strings.Contains(e.CallKey, ck) && !strings.Contains(e.CallKey, "checkout.foo") && !strings.Contains(e.CallKey, "checkout.bar.baz") {
+				t.Errorf("unexpected entry for decoy %q: %+v", ck, e)
+			}
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"slash/modules/callresolve"
@@ -432,6 +433,22 @@ var (
 	// reDataProviderDocblock matches the legacy "@dataProvider method" docblock
 	// tag — see resolveDataProviders.
 	reDataProviderDocblock = regexp.MustCompile(`@dataProvider\s+([A-Za-z0-9_]+)`)
+
+	// reTrans*/reLang* match a Laravel translation helper call with a STATIC,
+	// single/double-quoted first argument — see resolveTranslations. RE2 has no
+	// backreferences, so the single- and double-quote forms are separate
+	// regexes (mirrors reMacroDef's quote handling); a call whose first arg is
+	// a variable/concatenation simply matches neither and is silently skipped.
+	reTransSingle       = regexp.MustCompile(`\b(?:trans|__)\(\s*'((?:\\.|[^'\\])*)'`)
+	reTransDouble       = regexp.MustCompile(`\b(?:trans|__)\(\s*"((?:\\.|[^"\\])*)"`)
+	reTransChoiceSingle = regexp.MustCompile(`\btrans_choice\(\s*'((?:\\.|[^'\\])*)'`)
+	reTransChoiceDouble = regexp.MustCompile(`\btrans_choice\(\s*"((?:\\.|[^"\\])*)"`)
+	reLangSingle        = regexp.MustCompile(`@lang\(\s*'((?:\\.|[^'\\])*)'`)
+	reLangDouble        = regexp.MustCompile(`@lang\(\s*"((?:\\.|[^"\\])*)"`)
+
+	// reLangReturn locates a Laravel lang file's top-level `return [ ... ]`
+	// array — see sliceLangKey.
+	reLangReturn = regexp.MustCompile(`\breturn\s*\[`)
 )
 
 // resolveCalls scans every changed new-side block for method calls and resolves
@@ -866,6 +883,322 @@ func resolveDataProviders(dataDir string, pr int, blocks []Block) []callresolve.
 		}
 	}
 	return out
+}
+
+// langLocaleFile is one locale's copy of a lang file (`resources/lang/<locale>/
+// <fileSeg>.php`), found by resolveTranslations for a given key's fileSeg.
+type langLocaleFile struct {
+	locale string // e.g. "nl", "en"
+	file   string // relative path (forward slashes), e.g. "resources/lang/nl/checkout.php"
+}
+
+// resolveTranslations links a `trans('file.key')` / `__('file.key')` /
+// `trans_choice('file.key', ...)` / `@lang('file.key')` call on a CHANGED line
+// to the corresponding value in EVERY locale's lang file — so a reviewer sees
+// what a translation key actually resolves to, per language, even though the
+// lang files themselves are (almost always) unchanged by this PR. Deliberately
+// a callresolve rule (points at unchanged files), Go-only, no LLM fallback: a
+// key whose first argument isn't a static quoted literal, that names a
+// vendor/package translation (contains "::"), or that has no "file.key" form
+// (a bare whole-file reference) simply produces no entry — never an
+// "unresolved" row, mirroring resolveMigrationModels/resolveDataProviders.
+//
+// A key that's missing in a given locale's file still produces an entry (so
+// the reviewer sees "missing in <locale>" instead of nothing) — with an empty
+// ChildCode and ChildLine 1.
+func resolveTranslations(dataDir string, pr int, blocks []Block) []callresolve.Entry {
+	baseDir, headDir := worktreeDirs(dataDir, pr)
+	diffByFile := map[string]*fileChangeSet{}
+	langCache := map[string][]langLocaleFile{} // fileSeg → locales that have <fileSeg>.php
+
+	var out []callresolve.Entry
+	for _, b := range blocks {
+		if b.Side == SideOld {
+			continue
+		}
+		src := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name)
+		if src.Text == "" {
+			continue
+		}
+		fc, ok := diffByFile[b.File]
+		if !ok {
+			fc = changedNewLines(baseDir, headDir, b.File)
+			diffByFile[b.File] = fc
+		}
+		scan := fc.keepChanged(src)
+		if scan == "" {
+			continue // the block's change is old-side only (pure deletions)
+		}
+
+		callerID := b.ID()
+		seen := map[string]bool{} // call keys (translation:<locale>:<key>) already emitted
+
+		for _, key := range translationKeysIn(scan) {
+			if strings.Contains(key, "::") {
+				continue // vendor/namespaced package translation — out of v1 scope
+			}
+			dot := strings.Index(key, ".")
+			if dot < 0 {
+				continue // whole-file reference (no key) — out of v1 scope
+			}
+			fileSeg := key[:dot]
+			keyPath := strings.Split(key[dot+1:], ".")
+
+			locales, cached := langCache[fileSeg]
+			if !cached {
+				locales = localesForLangFile(headDir, fileSeg)
+				langCache[fileSeg] = locales
+			}
+			for _, loc := range locales {
+				callKey := "translation:" + loc.locale + ":" + key
+				if seen[callKey] {
+					continue
+				}
+				seen[callKey] = true
+
+				fileText, err := os.ReadFile(filepath.Join(headDir, loc.file))
+				if err != nil {
+					continue
+				}
+				valueText, line, found := sliceLangKey(string(fileText), keyPath)
+				childLine := 1
+				if found {
+					childLine = line
+				}
+				out = append(out, callresolve.Entry{
+					PR: pr, CallerID: callerID, CallKey: callKey,
+					Status: callresolve.StatusResolved, Kind: callresolve.KindTranslation,
+					ChildFile: loc.file, ChildClass: loc.locale, ChildMethod: "",
+					ChildLine: childLine, ChildCode: valueText,
+				})
+			}
+		}
+	}
+	return out
+}
+
+// translationKeysIn scans a changed-lines excerpt for every recognized
+// translation-helper call and returns the captured (unescaped) key strings.
+func translationKeysIn(scan string) []string {
+	var keys []string
+	push := func(re *regexp.Regexp, quote byte) {
+		for _, m := range re.FindAllStringSubmatch(scan, -1) {
+			keys = append(keys, unescapePHPQuoted(m[1], quote))
+		}
+	}
+	push(reTransSingle, '\'')
+	push(reTransDouble, '"')
+	push(reTransChoiceSingle, '\'')
+	push(reTransChoiceDouble, '"')
+	push(reLangSingle, '\'')
+	push(reLangDouble, '"')
+	return keys
+}
+
+// unescapePHPQuoted undoes the two escapes that matter inside a PHP
+// single/double-quoted literal for our purposes: \<quote> → <quote> and
+// \\ → \. Anything else is left as-is (translation keys are plain identifiers
+// in practice).
+func unescapePHPQuoted(s string, quote byte) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) && (s[i+1] == quote || s[i+1] == '\\') {
+			b.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// localesForLangFile finds the lang root (resources/lang, else lang) under
+// headDir and lists every immediate locale subdirectory that contains
+// <fileSeg>.php, sorted for determinism.
+func localesForLangFile(headDir, fileSeg string) []langLocaleFile {
+	root := langRoot(headDir)
+	if root == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(filepath.Join(headDir, root))
+	if err != nil {
+		return nil
+	}
+	var locales []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(headDir, root, e.Name(), fileSeg+".php")); err == nil {
+			locales = append(locales, e.Name())
+		}
+	}
+	sort.Strings(locales)
+	out := make([]langLocaleFile, 0, len(locales))
+	for _, loc := range locales {
+		out = append(out, langLocaleFile{locale: loc, file: root + "/" + loc + "/" + fileSeg + ".php"})
+	}
+	return out
+}
+
+// langRoot reports the Laravel lang directory relative to headDir:
+// "resources/lang" if present, else the older top-level "lang", else "".
+func langRoot(headDir string) string {
+	if isDir(filepath.Join(headDir, "resources/lang")) {
+		return "resources/lang"
+	}
+	if isDir(filepath.Join(headDir, "lang")) {
+		return "lang"
+	}
+	return ""
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
+// sliceLangKey walks a Laravel lang file's top-level `return [ ... ]` array
+// and returns the SOURCE TEXT of the value at keyPath — a quoted scalar like
+// 'Hello' when keyPath's last segment is reached, or a balanced `[ ... ]`
+// sub-array's text when it still has to descend — plus the 1-based line the
+// value starts on. found=false when the array itself, or any segment of
+// keyPath, cannot be located (missing key, or a scalar value that keyPath
+// tries to descend into further).
+func sliceLangKey(fileText string, keyPath []string) (valueText string, line int, found bool) {
+	if len(keyPath) == 0 {
+		return "", 0, false
+	}
+	loc := reLangReturn.FindStringIndex(fileText)
+	if loc == nil {
+		return "", 0, false
+	}
+	openIdx := loc[1] - 1 // index of the '['
+	closeIdx, ok := matchBracket(fileText, openIdx)
+	if !ok {
+		return "", 0, false
+	}
+	vs, ve, ok := findKeyInArrayBody(fileText, openIdx+1, closeIdx, keyPath)
+	if !ok {
+		return "", 0, false
+	}
+	return fileText[vs:ve], 1 + strings.Count(fileText[:vs], "\n"), true
+}
+
+// findKeyInArrayBody scans one array literal's body (the byte range strictly
+// between its brackets, i.e. NOT including '[' / ']' themselves) for
+// `'key' => value` entries (single- or double-quoted key) and, on a match for
+// keyPath[0], either returns the value's [start,end) byte range (last
+// segment reached) or recurses into it (more segments left — only possible
+// when the value is itself a `[ ... ]` array).
+func findKeyInArrayBody(s string, bodyStart, bodyEnd int, keyPath []string) (valStart, valEnd int, found bool) {
+	i := bodyStart
+	for i < bodyEnd {
+		c := s[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',' {
+			i++
+			continue
+		}
+		if c != '\'' && c != '"' {
+			// Not a key start (e.g. a stray comment) — skip a byte and keep
+			// scanning rather than getting stuck.
+			i++
+			continue
+		}
+		keyEnd, closed := skipQuoted(s, i)
+		if !closed {
+			return 0, 0, false
+		}
+		key := unescapePHPQuoted(s[i+1:keyEnd-1], s[i])
+
+		j := skipHorizWS(s, keyEnd, bodyEnd)
+		if j+1 >= bodyEnd || s[j] != '=' || s[j+1] != '>' {
+			// Not a "key => value" pair after all — recover by moving past the
+			// key and continuing the scan.
+			i = keyEnd
+			continue
+		}
+		j = skipHorizWS(s, j+2, bodyEnd)
+		if j >= bodyEnd {
+			return 0, 0, false
+		}
+
+		var ve int
+		switch s[j] {
+		case '\'', '"':
+			end, closed := skipQuoted(s, j)
+			if !closed {
+				return 0, 0, false
+			}
+			ve = end
+		case '[':
+			end, ok := matchBracket(s, j)
+			if !ok {
+				return 0, 0, false
+			}
+			ve = end + 1
+		default:
+			ve = skipToTopLevelComma(s, j, bodyEnd)
+		}
+
+		if key == keyPath[0] {
+			if len(keyPath) == 1 {
+				return j, ve, true
+			}
+			if s[j] == '[' {
+				return findKeyInArrayBody(s, j+1, ve-1, keyPath[1:])
+			}
+			return 0, 0, false // path wants to descend further into a scalar
+		}
+		i = ve
+	}
+	return 0, 0, false
+}
+
+// skipHorizWS skips ordinary whitespace (space/tab/newline/CR) from i, capped
+// at limit.
+func skipHorizWS(s string, i, limit int) int {
+	for i < limit {
+		switch s[i] {
+		case ' ', '\t', '\n', '\r':
+			i++
+		default:
+			return i
+		}
+	}
+	return i
+}
+
+// skipToTopLevelComma scans forward from i (the start of a bare, unquoted,
+// non-array value — e.g. true/false/a number/a constant) to the next comma at
+// bracket depth 0, or limit if none. Quote- and bracket-aware so a nested
+// structure is never mistaken for the entry separator.
+func skipToTopLevelComma(s string, i, limit int) int {
+	depth := 0
+	for i < limit {
+		switch s[i] {
+		case '\'', '"':
+			end, closed := skipQuoted(s, i)
+			if !closed {
+				return limit
+			}
+			i = end
+			continue
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				return i
+			}
+		}
+		i++
+	}
+	return limit
 }
 
 // singularizeTable is a pragmatic (English, non-exhaustive) singularizer for a

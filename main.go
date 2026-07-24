@@ -174,6 +174,7 @@ func runRelationsCmd(args []string) {
 	// a headless re-run refreshes the Onderliggende-code panel too (UpsertGo
 	// preserves LLM-owned rows, Prune drops call-sites that fell out of the PR).
 	calls := append(resolveCalls(dataDir, pr, blocks), resolveDataProviders(dataDir, pr, blocks)...)
+	calls = append(calls, resolveTranslations(dataDir, pr, blocks)...)
 	cr, err := callresolve.Open(filepath.Join(dataDir, "callresolve.db"))
 	if err != nil {
 		log.Fatalf("open callresolve db: %v", err)

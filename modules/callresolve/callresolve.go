@@ -83,6 +83,7 @@ const (
 	KindModelUsage     = "model_usage"     // a changed line uses an Eloquent model (new/static) → the model as a whole
 	KindMigrationModel = "migration_model" // a changed migration's Schema::create/table → its Eloquent model
 	KindDataProvider   = "data_provider"   // a test's #[DataProvider('m')]/@dataProvider m → the provider method
+	KindTranslation    = "translation"     // a trans('file.key')/__(...)/@lang(...) call → the lang file value, one per locale
 )
 
 // Entry is one call-site → definition resolution.

@@ -1,0 +1,50 @@
+[
+  {
+    "pr": 107,
+    "callerId": "107:app/Http/Requests/CheckoutRequest.php:CheckoutRequest::messages",
+    "callKey": "translation:nl:checkout.foo",
+    "status": "resolved",
+    "kind": "translation",
+    "childFile": "resources/lang/nl/checkout.php",
+    "childClass": "nl",
+    "childMethod": "",
+    "childLine": 4,
+    "childCode": "'nieuw'"
+  },
+  {
+    "pr": 107,
+    "callerId": "107:app/Http/Requests/CheckoutRequest.php:CheckoutRequest::messages",
+    "callKey": "translation:en:checkout.foo",
+    "status": "resolved",
+    "kind": "translation",
+    "childFile": "resources/lang/en/checkout.php",
+    "childClass": "en",
+    "childMethod": "",
+    "childLine": 4,
+    "childCode": "'new-en'"
+  },
+  {
+    "pr": 107,
+    "callerId": "107:app/Http/Requests/CheckoutRequest.php:CheckoutRequest::messages",
+    "callKey": "translation:nl:checkout.only_nl",
+    "status": "resolved",
+    "kind": "translation",
+    "childFile": "resources/lang/nl/checkout.php",
+    "childClass": "nl",
+    "childMethod": "",
+    "childLine": 7,
+    "childCode": "'alleen nl'"
+  },
+  {
+    "pr": 107,
+    "callerId": "107:app/Http/Requests/CheckoutRequest.php:CheckoutRequest::messages",
+    "callKey": "translation:en:checkout.only_nl",
+    "status": "resolved",
+    "kind": "translation",
+    "childFile": "resources/lang/en/checkout.php",
+    "childClass": "en",
+    "childMethod": "",
+    "childLine": 1,
+    "childCode": ""
+  }
+]

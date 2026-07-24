@@ -720,6 +720,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		calls := resolveCalls(m.dataDir, input.PR, blocks)
 		calls = append(calls, resolveMigrationModels(m.dataDir, input.PR, blocks)...)
 		calls = append(calls, resolveDataProviders(m.dataDir, input.PR, blocks)...)
+		calls = append(calls, resolveTranslations(m.dataDir, input.PR, blocks)...)
 		if m.callresolve != nil {
 			if err := m.callresolve.UpsertGo(ctx, calls); err != nil {
 				return nil, fmt.Errorf("build_relations: save calls: %w", err)

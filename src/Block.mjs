@@ -5,6 +5,7 @@
 
 import { html } from './vendor/arrow.js'
 import { categoryClass } from './BlockList.mjs'
+import { translationBlockView } from './translationDiff.mjs'
 import Prism from './vendor/prism.js'
 
 // highlight turns raw PHP source into Prism-tokenised HTML (keywords, strings,
@@ -353,9 +354,25 @@ export default function Block(b, opts = {}) {
         >
       </p>
 
-      ${() => codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn)}
+      ${() => (b.category === 'TRANSLATION' ? translationSlot(b) : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn))}
     </article>
   `
+}
+
+// translationSlot renders a TRANSLATION block as a clean changes-only key
+// overview instead of a raw code diff (see translationDiff.mjs). It reads the
+// same lazily-loaded b.code as codeDiff (undefined = not yet requested, null =
+// loading, { old, new } or { error }), so the DetailPanel's codeVersion-keyed
+// rebuild reruns this the moment the code arrives — same as codeDiff.
+function translationSlot(b) {
+  const c = b.code
+  if (c === undefined || c === null) {
+    return html`<p class="px-4 py-3 text-sm text-slate-400 dark:text-zinc-500">code laden…</p>`
+  }
+  if (c.error) {
+    return html`<p class="px-4 py-3 text-sm text-rose-500 dark:text-rose-400">${c.error}</p>`
+  }
+  return translationBlockView((c.old && c.old.text) || '', (c.new && c.new.text) || '')
 }
 
 // codeDiff renders the old/new source side by side under the block info. Old on

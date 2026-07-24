@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 107,
+    "file": "app/Http/Requests/CheckoutRequest.php",
+    "class": "CheckoutRequest",
+    "name": "messages",
+    "category": "REQUEST",
+    "line": 7,
+    "endLine": 13,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 107,
+    "file": "resources/lang/nl/checkout.php",
+    "class": "",
+    "name": "checkout.php",
+    "category": "TRANSLATION",
+    "line": 1,
+    "endLine": 9,
+    "status": "modified",
+    "side": "new"
+  }
+]

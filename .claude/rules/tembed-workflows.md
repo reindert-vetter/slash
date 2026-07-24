@@ -1110,6 +1110,43 @@ as fallback.
   silently produces nothing — reuses `testCoversBlocks` from
   `testcovers_analysis_test.go` so the scan uses real, scanner-produced
   line numbers, which `methodZone`/`funcDeclLine` require).
+- **Translation keys (`resolveTranslations`, `callresolve_analysis.go`):** a
+  `trans('file.key')` / `__('file.key')` / `@lang('file.key')` /
+  `trans_choice('file.key', …)` call on a **changed line** surfaces the Laravel
+  lang file(s) it references as Underlying Code — **one child per locale**
+  (`resources/lang/<locale>/<file>.php`, e.g. nl **and** en). Same motivation/
+  architecture as "Migration → model"/"PHPUnit data providers": a **callresolve**
+  rule (points at usually-unchanged lang files), **deterministic, no LLM** — the
+  key maps mechanically to a file + array path, so there is nothing to guess.
+  The key is split on the **first** `.` (`fileSeg` = before → `<fileSeg>.php`,
+  the rest = the nested array path); locales are discovered by listing the lang
+  root's subdirectories (`resources/lang/` then `lang/`, whichever exists) that
+  contain `<fileSeg>.php`. Per locale, `sliceLangKey` extracts the key's value
+  source text (a quoted scalar or a nested `[ ... ]` sub-array). `CallKey` is
+  **`translation:<locale>:<key>`** (the `translation:` prefix keeps the PK
+  `(pr, caller_id, call_key)` unique per locale, mirroring `migration_model:`/
+  `data_provider:`); `Kind` = **`translation`** (new `callresolve.Kind*`
+  constant); `ChildFile` = the lang file, `ChildClass` = the locale,
+  `ChildMethod` = "" , `ChildCode` = the sliced value (empty when the key is
+  **absent** in that locale — still emitted, so the frontend can mark it
+  "ontbreekt in <locale>"). **Deliberate v1 boundaries** (silently skipped, no
+  `unresolved`/LLM fallback): a **dynamic** key (`trans($var)`, concatenation),
+  a **namespaced/vendor** key (`pkg::file.key`), and a bare whole-file
+  reference without a `.` (`trans('checkout')`). Merged into the one
+  `UpsertGo`/`Prune` call in **both** the `build_relations` Activity
+  (`workflows.go`) and the headless `slash relations` twin (`main.go`).
+  **Frontend** (`home.mjs` `resolvedCallChildren` + `findCallSites`): a
+  translation child is always a **leaf value view** (never a drillable PR
+  block) — `RelatedPanel`'s `relatedCard` renders `translationValueView`
+  (`translationDiff.mjs`): the **current** value of the key per locale (no
+  diff), or "ontbreekt in <locale>". `findCallSites` couples a translation
+  child to its call site via the **key string literal** (the same literal for
+  every locale, so nl and en both attach to the one `trans(...)` call), so it
+  scopes at `line`/`call` like any other call child. `KIND_LABEL.translation`
+  = "vertaling"; `resolvedCallTargetIds` skips `translation` so a changed lang
+  file's standalone `TRANSLATION` block (see `.claude/rules/blocks-and-ingest.md`)
+  is never pulled out of the left list. Tests: `TestSliceLangKey`/
+  `TestResolveTranslations` (`callresolve_analysis_test.go`).
 
 ## Linking test coverage (`resolve_test_covers` + `modules/testcovers`)
 

@@ -288,6 +288,12 @@ var categoryRules = []categoryRule{
 	{func(p string) bool { return hasSeg(p, "modules/") }, "MODULE"},
 	{func(p string) bool { return hasSeg(p, "routes/") }, "ROUTE"},
 	{func(p string) bool { return strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml") }, "CONFIG"},
+	// Laravel translation files: resources/lang/<locale>/<file>.php (or the
+	// older top-level lang/<locale>/<file>.php). Not under app/, so this never
+	// clashes with any rule above.
+	{func(p string) bool {
+		return strings.HasSuffix(p, ".php") && (hasSeg(p, "/lang/") || strings.HasPrefix(p, "lang/"))
+	}, "TRANSLATION"},
 }
 
 // categoryFor derives a category tag from the file path.

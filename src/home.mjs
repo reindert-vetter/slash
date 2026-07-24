@@ -60,6 +60,7 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
+import { changedKeysOf, translationSiblingView } from './translationDiff.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 
 initTheme()
@@ -248,6 +249,12 @@ const state = reactive({
   // DetailPanel re-runs and its key (which encodes the code-loaded state — see the
   // key comment) flips, yielding a fresh diff binding that reads the loaded code.
   codeVersion: 0,
+  // langSiblings — per TRANSLATION block id → [{ locale, file, text }] of the
+  // OTHER locale files of the same lang file (GET /api/langsiblings, read-only).
+  // Drives the read-only companion card next to a changed lang block, showing
+  // the sibling locale's current values for the keys that changed here.
+  // Reassigned wholesale so the block-column closure re-renders when it loads.
+  langSiblings: {},
   // approvalSummaries — per top-level block id → { done, total } combined
   // approval count of the block *and every PR block nested under it* (its
   // relation children + resolved-call definitions). Computed off-render in a
@@ -1200,6 +1207,10 @@ function resolvedCallTargetIds() {
   const ids = new Set()
   for (const r of state.callResolve || []) {
     if (r.status !== 'resolved' && r.status !== 'found') continue
+    // A translation child points at a lang file and never hides its standalone
+    // TRANSLATION block from the left list — both stay visible (the block in the
+    // list, the key value as a child), like test coverage.
+    if (r.kind === 'translation') continue
     const childId =
       state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
     if (prBlockIds.has(childId)) ids.add(childId)
@@ -1438,15 +1449,25 @@ function childrenOf(b) {
 // static reference — how an enum case (AddressType::BILLING) reaches its enum.
 function findCallSites(rows, name) {
   const sites = []
+  // A translation callKey (translation:<locale>:<file.key>, see resolveTranslations)
+  // couples via the KEY string literal inside a trans()/__()/@lang()/trans_choice()
+  // call — the same literal for every locale, so nl and en children both point at
+  // the one call site.
   // An artisan command key (accounting:import, foo-bar) carries characters no PHP
   // identifier has (':', '-'), so it can never be a method/property/enum name — it
   // appears only as the string literal of a ->command('name …') scheduler call.
   // Match that literal instead of the identifier forms.
   const isCommand = /[^\w]/.test(name)
   const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const re = isCommand
-    ? new RegExp("command\\s*\\(\\s*['\"]" + esc + "(?=[\\s'\"])", 'g')
-    : new RegExp('->\\s*' + name + '\\b|::\\s*' + name + '\\b|\\b' + name + '\\s*\\(', 'g')
+  let re
+  if (name.startsWith('translation:')) {
+    const escKey = name.replace(/^translation:[^:]*:/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    re = new RegExp("['\"]" + escKey + "['\"]", 'g')
+  } else if (isCommand) {
+    re = new RegExp("command\\s*\\(\\s*['\"]" + esc + "(?=[\\s'\"])", 'g')
+  } else {
+    re = new RegExp('->\\s*' + name + '\\b|::\\s*' + name + '\\b|\\b' + name + '\\s*\\(', 'g')
+  }
   for (let i = 0; i < rows.length; i++) {
     const text = rows[i].right
     if (text == null) continue
@@ -1696,6 +1717,36 @@ function resolvedCallChildren(b) {
   return resolved
     .filter((r) => scope == null || !hideOutOfScope || scope.has(r.callKey))
     .map((r) => {
+      // A translation child (a trans()/__()/@lang() key → its lang file, one per
+      // locale) is always a leaf value view — never a drillable PR block. It
+      // shows the CURRENT value of the key in that locale (translationValueView
+      // in RelatedPanel), so it carries no diff/approval/nested chips. callKey is
+      // translation:<locale>:<file.key>; the key + locale drive the render.
+      if (r.kind === 'translation') {
+        const locale = r.childClass || ''
+        const key = r.callKey.replace(/^translation:[^:]*:/, '')
+        return {
+          id: b.id + '::' + r.callKey,
+          blockId: '',
+          label: locale ? `${locale} · ${key}` : key,
+          file: r.childFile,
+          line: r.childLine,
+          kind: 'translation',
+          transKey: key,
+          locale,
+          category: '',
+          code: r.childCode || '',
+          loading: false,
+          size: codeSize(r.childCode || ''),
+          source: '',
+          approve: null,
+          diff: null,
+          prio: 2,
+          groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
+          nested: [],
+          nestedSig: nestedSigOf([]),
+        }
+      }
       const childId = callChildId(r)
       const prBlock = byId.get(childId)
       // Lazily load the called definition's code so its diff-stat can be counted
@@ -2368,6 +2419,49 @@ async function ensureCode(b) {
     b.code = { error: String(e) }
     state.codeVersion++
   }
+}
+
+// langSiblingRequested guards against re-fetching a TRANSLATION block's sibling
+// locales (outside reactive state — reading it must never create a dependency).
+const langSiblingRequested = new Set()
+
+// ensureLangSiblings lazily fetches, for a changed lang (TRANSLATION) block, the
+// OTHER locale files of the same lang file so a read-only companion card can
+// show whether those locales still need the same key changes. Best-effort:
+// GET /api/langsiblings is read-only (reads the head worktree, like /api/code),
+// a failure just leaves no companion. Reassigns state.langSiblings wholesale so
+// the block-column closure re-renders once the siblings arrive.
+async function ensureLangSiblings(b) {
+  if (!b || b.category !== 'TRANSLATION' || langSiblingRequested.has(b.id)) return
+  langSiblingRequested.add(b.id)
+  try {
+    const res = await fetch(`/api/langsiblings?pr=${state.pr}&file=${encodeURIComponent(b.file)}`)
+    if (!res.ok) return
+    const body = await res.json()
+    const sibs = Array.isArray(body.siblings) ? body.siblings : []
+    state.langSiblings = { ...state.langSiblings, [b.id]: sibs }
+  } catch (_) {
+    /* offline — no companion card */
+  }
+}
+
+// companionCard renders a read-only sibling-locale card next to a changed
+// TRANSLATION block: the sibling locale's CURRENT values for exactly the keys
+// that changed here (or a "missing" marker), so the reviewer sees whether that
+// locale still needs updating. No sidebar entry, no approval, not navigable.
+function companionCard(b, sib) {
+  const keys = b.code && !b.code.error ? changedKeysOf((b.code.old && b.code.old.text) || '', (b.code.new && b.code.new.text) || '') : []
+  return html`<div
+    data-testid="translation-companion"
+    data-locale="${sib.locale}"
+    class="flex min-h-0 w-[42rem] shrink-0 flex-col overflow-hidden rounded-xl border border-dashed border-slate-300 bg-white/70 dark:border-zinc-700 dark:bg-zinc-900/60 2xl:w-[49.2rem]"
+  >
+    <div class="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-zinc-800/60">
+      <span class="rounded bg-yellow-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-300">${sib.locale}</span>
+      <span class="text-xs text-slate-500 dark:text-zinc-500">huidige waarden van de gewijzigde sleutels</span>
+    </div>
+    ${translationSiblingView(sib.text || '', keys, sib.locale)}
+  </div>`
 }
 
 async function ingest() {
@@ -5855,6 +5949,18 @@ function DetailPanel(state) {
               b.side,
           )
           out.push(card)
+          // A changed lang (TRANSLATION) block gets a read-only companion card
+          // per sibling locale directly next to it (option a, see
+          // .claude/rules/blocks-and-ingest.md) — only for the selected block,
+          // and only in list/diff of the top-level column (not a preview). The
+          // state.langSiblings read makes this closure re-run once the siblings
+          // load; a one-time event per block (not per keystroke).
+          if (i === sel && b.category === 'TRANSLATION') {
+            ensureLangSiblings(b)
+            for (const sib of state.langSiblings[b.id] || []) {
+              out.push(companionCard(b, sib).key('lang-sib:' + b.id + ':' + sib.locale))
+            }
+          }
         })
         return out
       }}

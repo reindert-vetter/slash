@@ -171,6 +171,24 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Translation fixture (PR 107, translation.spec.mjs): a changed lang block
+  // (resources/lang/nl/checkout.php → the changes-only key overview + the en
+  // companion card) plus a caller with four resolved translation children (two
+  // keys × nl/en, one en value deliberately missing). Worktrees materialized in
+  // _setup.mjs (materializeTranslationWorktrees).
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/translation-blocks.json',
+      '-callresolve',
+      'tests/fixtures/translation-callresolve.json',
+    ],
+    { stdio: 'ignore' },
+  )
   // Deleted-file fixture (PR 98, removed-file.spec.mjs): one block whose whole
   // file was deleted by the PR (fileDeleted: true) plus a loose removed method
   // in a file that still exists — drives the "Verwijderd bestand"/"Verwijderd"

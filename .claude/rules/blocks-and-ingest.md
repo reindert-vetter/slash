@@ -158,6 +158,34 @@ left as a navigable list.
   restore remain unaffected: those look up by block **id**/`file:line`, not by
   index (see the URL-state section in `CLAUDE.md`), so a different order
   changes nothing about where a restored selection lands.
+- **Translation blocks (`TRANSLATION` category + a clean key overview instead
+  of raw code):** a PHP Laravel lang file (`resources/lang/<locale>/<name>.php`
+  or `lang/<locale>/<name>.php`, a `/lang/` path segment) classifies as
+  **`TRANSLATION`** (`classify.go`, `categoryRules` — before the `OTHER`
+  fallback) instead of `OTHER`, with its own yellow `CATEGORY_STYLE` badge.
+  Such a file has no functions, so it stays one whole-file block. Instead of
+  the line-based `codeDiff`, `Block.mjs` renders it (via `translationSlot` →
+  `translationBlockView`, `src/translationDiff.mjs`) as a **changes-only key
+  overview**: only added / removed / changed keys (dotted `file.a.b` form,
+  old→new value), unchanged keys hidden. `translationDiff.mjs` is a small,
+  tolerant, quote-aware PHP-`return [...]`-array parser (nested arrays,
+  single/double-quoted strings with escapes, `//`/`#`/`/* */` comments; legacy
+  `array( ... )` and numeric/list arrays are out of v1 scope — plug-and-pay
+  lang files use `[...]` with string keys). Values render as plain text
+  (arrow.js escapes them), so HTML in a translation shows literally.
+  **Companion sibling card (option a — two separate cards, never merged):** a
+  changed lang block gets a **read-only** companion card per sibling locale
+  directly next to it in the block column (`companionCard`/`ensureLangSiblings`
+  in `home.mjs`, `data-testid=translation-companion`), showing that locale's
+  **current** values for exactly the keys that changed here — so the reviewer
+  sees whether e.g. `en` still needs the same change when only `nl` was
+  touched. The sibling files (the OTHER locales, excluding the file's own
+  locale and the `vendor/` namespace dir) come from the read-only
+  `GET /api/langsiblings?pr=N&file=<lang file>` (`langsiblings.go`, reads the
+  head worktree like `/api/code`, within the write boundary). The companion has
+  no sidebar entry, no approval, is not navigable. See also "Resolving
+  translation keys" in `.claude/rules/tembed-workflows.md` for the resolved
+  `trans()`-child render (the second render mode).
 - **Hiding approved blocks (`BlockList.mjs`):** fully approved **top-level**
   blocks (the pill `done === total`, subtree) are hidden by default from the
   "Start" list; a button at the bottom (`data-testid=toggle-approved`, "Show N

@@ -24,6 +24,7 @@ const CATEGORY_STYLE = {
   TEST: 'bg-slate-200 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400',
   MODULE: 'bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-300',
   ROUTE: 'bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300',
+  TRANSLATION: 'bg-yellow-100 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-300',
   CONFIG: 'bg-stone-200 dark:bg-stone-500/20 text-stone-600 dark:text-stone-400',
   OTHER: 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400',
 }

@@ -16,6 +16,70 @@ export default function globalSetup() {
   materializeRangeSelectWorktrees()
   materializePreviewWidthWorktrees()
   materializeDrillLineSkipWorktrees()
+  materializeTranslationWorktrees()
+}
+
+// materializeTranslationWorktrees writes the synthetic PR 107 fixture worktrees
+// for translation.spec.mjs (same rationale as materializeTreeWorktrees above): a
+// changed Laravel lang file `resources/lang/nl/checkout.php` (a TRANSLATION
+// block → the changes-only key overview), its unchanged `en` sibling (for the
+// read-only companion card + GET /api/langsiblings), and a caller
+// CheckoutRequest::messages that references two keys via trans()/__() (the
+// resolved translation children come from tests/fixtures/translation-callresolve.json).
+function materializeTranslationWorktrees() {
+  const nlBase = `<?php
+
+return [
+    'foo' => 'oud',
+    'bar' => 'zelfde',
+    'weg' => 'verwijderd',
+    'only_nl' => 'alleen nl',
+];
+`
+  const nlHead = `<?php
+
+return [
+    'foo' => 'nieuw',
+    'bar' => 'zelfde',
+    'extra' => 'toegevoegd',
+    'only_nl' => 'alleen nl',
+];
+`
+  const en = `<?php
+
+return [
+    'foo' => 'new-en',
+    'bar' => 'same',
+    'extra' => 'added-en',
+];
+`
+  const caller = (body) => `<?php
+
+namespace App\\Http\\Requests;
+
+class CheckoutRequest
+{
+    public function messages()
+    {
+        return [${body}];
+    }
+}
+`
+  const write = (side, relPath, contents) => {
+    const full = `data/worktrees/pr-107-${side}/${relPath}`
+    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
+    writeFileSync(full, contents)
+  }
+  write('base', 'resources/lang/nl/checkout.php', nlBase)
+  write('head', 'resources/lang/nl/checkout.php', nlHead)
+  write('base', 'resources/lang/en/checkout.php', en)
+  write('head', 'resources/lang/en/checkout.php', en)
+  write('base', 'app/Http/Requests/CheckoutRequest.php', caller(''))
+  write(
+    'head',
+    'app/Http/Requests/CheckoutRequest.php',
+    caller("\n            'x' => trans('checkout.foo'),\n            'y' => __('checkout.only_nl'),\n        "),
+  )
 }
 
 // materializeTreeWorktrees writes the (gitignored, normally real-git-derived)
@@ -267,7 +331,7 @@ class RangeSelectAction
   write('head', contents(1, 2, 3, 4, 9))
 }
 
-// materializePreviewWidthWorktrees writes the synthetic PR 105 fixture
+// materializePreviewWidthWorktrees writes the synthetic PR 107 fixture
 // worktrees for preview-matches-active-width.spec.mjs (Task 29, same
 // rationale as materializeTreeWorktrees above): a one-sided `added` block
 // (selected — a whole new file, only written to the head worktree, never the
@@ -291,7 +355,7 @@ class ${name}
 }
 `
   const write = (side, relPath, contents) => {
-    const full = `data/worktrees/pr-105-${side}/${relPath}`
+    const full = `data/worktrees/pr-107-${side}/${relPath}`
     mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
     writeFileSync(full, contents)
   }
