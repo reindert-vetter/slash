@@ -276,6 +276,16 @@ const state = reactive({
   // from the starting-points list, revealed by the "Toon N goedgekeurde blokken"
   // button at the bottom. Ephemeral UI state, not bound to the URL.
   showApproved: false,
+  // pinnedApprovedId — the id of a fully-approved block that a restored
+  // ?sel=file:line (see applyBlockRefRestore/revealSelectedIfHidden) happened
+  // to land on. BlockList.mjs's renderList keeps exactly that ONE row visible
+  // (a per-row exception, alongside i === state.selected) WITHOUT unfolding
+  // every other approved block via showApproved — see revealSelectedIfHidden.
+  // Deliberately never set by the live approve flow (approving the block
+  // you're currently looking at still hides it immediately, unchanged
+  // behaviour — see tests/selected-reveal-hidden.spec.mjs). Ephemeral, not
+  // bound to the URL.
+  pinnedApprovedId: null,
   // toggleFocused — true once ↓ has walked the list-mode keyboard cursor past
   // the last visible block onto the toggle-approved button itself (see
   // stepListSelection). Not a block, so `state.selected` stays put underneath
@@ -1125,23 +1135,27 @@ function stepListSelection(dir) {
   state.selected = stepVisibleSelected(-1)
 }
 
-// revealSelectedIfHidden unfolds the approved section (state.showApproved =
-// true) when state.selected points at a block BlockList's renderList doesn't
-// render (fully approved while state.showApproved is false — the exact same
-// isFullyApproved criterion). A selection restored from the URL
-// (?sel=file:line via applyBlockRefRestore) is the reviewer's OWN position:
-// moving it away to the first visible block (the earlier
-// clampSelectedToVisible behaviour) read as a lost selection — instead the
-// hidden block is revealed and highlights. Visible already (or no block at
-// all) → no-op. Called ONLY from the load path — never from the live approve
-// flow (approving the block you're looking at keeps it selected and visible;
-// stepVisibleSelected handles walking off it), and deliberately NOT from
-// setSearch (see clampSelectedToVisible below).
+// revealSelectedIfHidden pins the restored selection visible when it points at
+// a fully-approved block, instead of unfolding the whole approved section.
+// A selection restored from the URL (?sel=file:line via applyBlockRefRestore)
+// is the reviewer's OWN position: moving it away to the first visible block
+// (the clampSelectedToVisible behaviour used for search) read as a lost
+// selection, but unfolding EVERY approved block PR-wide just to show this one
+// (the old state.showApproved = true behaviour) revealed far more than the
+// reviewer asked for. state.pinnedApprovedId + BlockList.mjs's renderList (a
+// per-row exception for i === state.selected && b.id === pinnedApprovedId)
+// keep exactly that one row visible/selected; every other approved block
+// stays hidden. Already visible (or no block at all) → no-op. Called ONLY
+// from the load path — never from the live approve flow (approving the block
+// you're currently looking at still hides it immediately, since
+// pinnedApprovedId is never set there — see
+// tests/selected-reveal-hidden.spec.mjs), and deliberately NOT from setSearch
+// (see clampSelectedToVisible below).
 function revealSelectedIfHidden() {
   const b = state.blocks[state.selected]
   if (!b) return
-  if (state.showApproved || !isFullyApproved(state, b)) return
-  state.showApproved = true
+  if (!isFullyApproved(state, b)) return
+  state.pinnedApprovedId = b.id
   scrollSelectedIntoView()
 }
 

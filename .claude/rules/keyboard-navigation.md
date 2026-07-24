@@ -628,12 +628,25 @@ the links fall back to the bare PR URL resp. the Jira base.
   **The same gap existed on the load/search paths, and each resolves it
   differently** (`revealSelectedIfHidden`/`clampSelectedToVisible` in
   `home.mjs`):
-  - **Load/refresh-restore → reveal.** A refresh restores `?sel=file:line`
-    even to a hidden block (`applyBlockRefRestore`) — that's the reviewer's
-    **own** position, so instead of moving the selection away,
-    `revealSelectedIfHidden` opens up the approved section
-    (`state.showApproved = true` + `scrollSelectedIntoView`): the block
-    becomes visible and stays selected/highlighted. Already visible → no-op.
+  - **Load/refresh-restore → pin, don't unfold everything.** A refresh
+    restores `?sel=file:line` even to a hidden block (`applyBlockRefRestore`)
+    — that's the reviewer's **own** position, so instead of moving the
+    selection away, `revealSelectedIfHidden` sets `state.pinnedApprovedId` to
+    that block's id + `scrollSelectedIntoView`. `BlockList.mjs`'s `renderList`
+    then keeps exactly that ONE row visible via a per-row exception
+    (`i === state.selected && b.id === state.pinnedApprovedId`) — **every
+    other** approved block PR-wide stays hidden, `state.showApproved` itself
+    is never touched. (An earlier version of this DID flip
+    `state.showApproved = true`, unfolding the whole approved section just to
+    show this one block — reverted on explicit request: landing on an
+    already-approved block via a shared/restored link should not reveal
+    unrelated approved blocks elsewhere in the tree.) Already visible → no-op.
+    Deliberately narrower than "the selected row is always shown": the live
+    approve flow (fully approving the block you're currently looking at)
+    never sets `pinnedApprovedId`, so that row still hides immediately the
+    moment it becomes fully approved — see the "live approve flow stays
+    deliberately untouched" paragraph further below and
+    `tests/selected-reveal-hidden.spec.mjs`.
   - **Search → clamp.** `setSearch` resets to index 0 — a synthetic
     landing, not the reviewer's own position. Typing should never suddenly
     reveal all approved blocks PR-wide (and doesn't type back closed), so

@@ -198,7 +198,10 @@ left as a navigable list.
   `watch` that fills `approvalSummaries` (a flat snapshot, so the heading never
   becomes a co-subscriber on a block's `b.code`). `renderList` **always**
   returns a keyed array (empty state as an array-of-one) to avoid the
-  arrow.js single↔array slot pitfall (see `.claude/rules/conventions.md`).
+  arrow.js single↔array slot pitfall (see `.claude/rules/conventions.md`). One
+  per-row exception: the block `state.pinnedApprovedId` names stays visible
+  while it's also the current selection — see "Load/refresh-restore → reveal"
+  in `.claude/rules/keyboard-navigation.md`.
 - **Pipeline:** `gh pr view` → `git fetch` (pull-ref + develop, fallback by
   sha) → two detached worktrees under `data/worktrees/pr-<pr>-{base,head}`
   (**absolute paths**!) → `git diff --unified=0` → PHP scanner (`phpscan.go`,

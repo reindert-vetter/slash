@@ -7,11 +7,13 @@ import { test, expect } from './_fixtures.mjs'
 //
 // - LOAD (revealSelectedIfHidden): a page reload restores the selection via
 //   ?sel=file:line (applyBlockRefRestore) — that is the reviewer's OWN
-//   position, so instead of moving it away the approved section is unfolded
-//   (state.showApproved = true): the hidden block becomes visible and stays
-//   selected/highlighted. Runs only after the approvals + blockstats have
-//   landed and the approvalSummaries watch flushed (isFullyApproved needs
-//   them), and after applyBlockRefRestore (a visible restore is a no-op).
+//   position, so instead of moving it away, state.pinnedApprovedId is set to
+//   that block's id: BlockList's renderList keeps exactly that ONE row
+//   visible/selected via a per-row exception, WITHOUT unfolding every other
+//   approved block PR-wide (state.showApproved itself stays false). Runs only
+//   after the approvals + blockstats have landed and the approvalSummaries
+//   watch flushed (isFullyApproved needs them), and after
+//   applyBlockRefRestore (a visible restore is a no-op).
 //
 // - SEARCH (clampSelectedToVisible): setSearch's `selected = 0` reset is a
 //   synthetic landing, not the reviewer's position — typing a query must never
@@ -20,7 +22,8 @@ import { test, expect } from './_fixtures.mjs'
 //
 // stepVisibleSelected already covered ↑/↓ (see sidebar-skip-approved.spec.mjs).
 // The live approve flow is deliberately untouched: approving the block you're
-// looking at keeps it selected (asserted below, before the reload).
+// looking at hides it immediately (pinnedApprovedId is never set there) —
+// asserted below, before the reload.
 //
 // Same fixture/shape as sidebar-skip-approved.spec.mjs: PR 12903,
 // category-sorted so ContractController::index (CONTROLLER) is index 0 and
@@ -55,8 +58,8 @@ async function clearBlock1Approval(page) {
     .toBe(true)
 }
 
-test.describe('PR Review Tree — hidden approved selection: reveal on load, clamp on search', () => {
-  test('reload reveals the hidden approved block; search clamps to a visible match', async ({
+test.describe('PR Review Tree — hidden approved selection: pin the restored block on load, clamp on search', () => {
+  test('reload pins only the restored approved block visible; search clamps to a visible match', async ({
     page,
   }) => {
     await clearBlock1Approval(page)
@@ -92,11 +95,13 @@ test.describe('PR Review Tree — hidden approved selection: reveal on load, cla
       })
       .toBe(true)
 
-    // ── Reload: ?sel= points at the hidden block → REVEAL, don't move ────────
+    // ── Reload: ?sel= points at the hidden block → PIN just that one row ─────
     await page.reload()
     // The approvals land async after load; once they do, revealSelectedIfHidden
-    // unfolds the approved section: block 1's row exists again, is the ONE
-    // highlighted row, and the selection (and ?sel=) never moved off it.
+    // sets state.pinnedApprovedId to block 1's id: its row exists again, is
+    // the ONE highlighted row, and the selection (and ?sel=) never moved off
+    // it — but state.showApproved itself stays false, so the section is never
+    // unfolded; the toggle row still offers "Toon", not "Verberg".
     const highlighted = page.locator(
       '[data-idx].bg-indigo-50, [data-idx].dark\\:bg-indigo-500\\/15',
     )
@@ -105,17 +110,15 @@ test.describe('PR Review Tree — hidden approved selection: reveal on load, cla
     await expect(highlighted).toHaveAttribute('data-idx', '1')
     expect(selParam(page)).toBe(BLOCK1_SEL)
     await expect(page.getByTestId('block-column')).toContainText('CreatePaymentAction::execute')
-    // The reveal flipped state.showApproved — the toggle row now offers to hide.
-    await expect(page.getByTestId('toggle-approved')).toContainText('Verberg')
+    // Nothing was unfolded — the toggle row still says "Toon", never "Verberg".
+    await expect(page.getByTestId('toggle-approved')).toContainText('Toon')
 
     // ── Search: the top match is the hidden block → CLAMP, don't unfold ──────
-    // Fold the approved section back first (the reveal above left it open).
-    await page.getByTestId('toggle-approved').click()
-    await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
     // 'payment' matches both CreatePaymentAction blocks; after the filter the
     // hidden approved `execute` is index 0, so setSearch's `selected = 0` lands
     // on it — the clamp moves to the first visible match instead, and the
-    // approved section stays folded.
+    // approved section stays folded (the pin only applies while the pinned
+    // block itself is the selection, which the clamp just moved away from).
     await page.getByTestId('block-search').fill('payment')
     await expect(highlighted).toHaveCount(1)
     await expect(highlighted).toContainText('findOrCreateCustomer')

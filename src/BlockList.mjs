@@ -129,15 +129,24 @@ export function isFullyApproved(state, b) {
 
 // renderList builds the starting-points list. Fully-approved blocks are hidden by
 // default (state.showApproved === false) and revealed by a toggle row at the
-// bottom. It ALWAYS returns a keyed array (never a bare element), so arrow.js
-// never freezes on a single↔array slot-shape switch (see conventions.md): the
-// empty state is wrapped as an array of one keyed element.
+// bottom. ONE exception: the block state.pinnedApprovedId names stays visible
+// while it's also the current selection (i === state.selected) — set by
+// home.mjs's revealSelectedIfHidden when a restored ?sel=file:line lands on an
+// already fully-approved block, so that link works without unfolding every
+// OTHER approved block PR-wide. Deliberately narrower than "the selected row is
+// always shown": the live approve flow (fully approving the block you're
+// currently looking at) never sets pinnedApprovedId, so that row still hides
+// immediately, unchanged — see tests/selected-reveal-hidden.spec.mjs. It
+// ALWAYS returns a keyed array (never a bare element), so arrow.js never
+// freezes on a single↔array slot-shape switch (see conventions.md): the empty
+// state is wrapped as an array of one keyed element.
 function renderList(state) {
   if (state.blocks.length === 0) return [emptyState(state).key('empty')]
   const approvedCount = state.blocks.filter((b) => isFullyApproved(state, b)).length
   const items = []
   state.blocks.forEach((b, i) => {
-    if (!state.showApproved && isFullyApproved(state, b)) return
+    const pinnedVisible = i === state.selected && b.id === state.pinnedApprovedId
+    if (!state.showApproved && !pinnedVisible && isFullyApproved(state, b)) return
     items.push(row(state, b, i))
   })
   if (approvedCount > 0) items.push(toggleRow(state, approvedCount))
