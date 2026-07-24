@@ -22,6 +22,7 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/blocks", s.handleBlocks)
 	mux.HandleFunc("/api/blockstats", s.handleBlockStats)
+	mux.HandleFunc("/api/approvalsummary", s.handleApprovalSummary)
 	mux.HandleFunc("/api/code", s.handleCode)
 	mux.HandleFunc("/api/langsiblings", s.handleLangSiblings)
 	mux.HandleFunc("/api/ingest", s.handleIngest)

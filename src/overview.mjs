@@ -26,6 +26,7 @@ const state = reactive({
   inboxRunId: '', // pr_inbox workflow Run ID — target for refresh signal + heartbeat
   sections: [], // [{ title, prs: Row[] }]
   statuses: {}, // pr.number -> Status, backfilled async
+  approvals: {}, // pr.number -> { done, total }, backfilled async (ingested PRs only)
   query: '',
   searching: false,
   searchResults: null, // null = no active search
@@ -305,6 +306,23 @@ function graphChip(pr) {
   return chip('op GitHub ›', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30', 'graph-chip')
 }
 
+// approvalPill — the per-PR reviewer-approval badge (done/total changed rows over
+// the whole PR, from GET /api/approvalsummary via kickOffApprovals). Mirrors the
+// /pr/<id> sidebar pill: hidden until total>0, green + ✓ once fully approved,
+// neutral grey while still in progress. Returned as a keyed array (never a bare
+// element/null) so the backfill flip from "nothing" → pill can't hit the
+// arrow.js single↔array slot pitfall (see .claude/rules/conventions.md).
+function approvalPill(pr) {
+  const a = pr.hasGraph ? state.approvals[pr.number] : null
+  if (!a || !a.total) return []
+  const done = a.done || 0
+  const full = done >= a.total
+  const cls = full
+    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30'
+    : 'bg-slate-100 dark:bg-zinc-500/15 text-slate-500 dark:text-zinc-400 ring-slate-300/50 dark:ring-zinc-500/30'
+  return [chip(done + '/' + a.total, cls, 'approval-badge', full ? 'check' : null).key('approval:' + done + '/' + a.total + ':' + full)]
+}
+
 function commentsBit(pr) {
   if (!pr.comments) return null
   return html`<span class="inline-flex items-center gap-1 text-[12px] text-slate-500 dark:text-zinc-500"
@@ -406,7 +424,7 @@ function rowInner(pr, opts) {
     `,
     html`
       <div class="flex shrink-0 items-center gap-3">
-        ${statusArea(pr)} ${commentsBit(pr)} ${graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
+        ${statusArea(pr)} ${() => approvalPill(pr)} ${commentsBit(pr)} ${graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
       </div>
     `,
   ]
@@ -1513,6 +1531,7 @@ async function loadInbox() {
       if (body && body.ok && body.live) {
         applyLive(body)
         kickOffStatuses(gen)
+        kickOffApprovals(gen)
         return
       }
     }
@@ -1683,6 +1702,29 @@ async function kickOffStatuses(gen) {
     }
   } catch (e) {
     // status backfill is best-effort — rows just keep their skeleton
+  }
+}
+
+// kickOffApprovals backfills the per-PR approval badge (GET /api/approvalsummary),
+// mirroring kickOffStatuses. Only ingested rows (pr.hasGraph) have an approval
+// concept, so we scope the request to those numbers — that also bounds the
+// (worktree/LCS) server-side cost to just the visible ingested rows.
+async function kickOffApprovals(gen) {
+  const numbers = []
+  state.sections.forEach((sec) => sec.prs.forEach((pr) => pr.hasGraph && numbers.push(pr.number)))
+  if (!numbers.length) return
+  try {
+    const res = await fetch('/api/approvalsummary?prs=' + numbers.join(','))
+    if (!res.ok) return
+    const body = await res.json()
+    if (gen !== loadGen) return // page moved on — drop this response
+    if (body && body.ok && body.summaries) {
+      Object.keys(body.summaries).forEach((k) => {
+        state.approvals[k] = body.summaries[k]
+      })
+    }
+  } catch (e) {
+    // approval backfill is best-effort — rows just show no badge
   }
 }
 
@@ -2134,6 +2176,7 @@ async function reloadSnapshot() {
       state.sections = normalizeSections(body.sections)
       state.cached = false
       kickOffStatuses(gen)
+      kickOffApprovals(gen)
     }
   } catch (e) {
     // keep the current snapshot on a transient failure
