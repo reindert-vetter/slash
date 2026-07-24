@@ -25,6 +25,7 @@ import (
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
+	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
 )
 
@@ -108,6 +109,14 @@ const (
 	// Activities sequentially and completes. See
 	// .claude/rules/tembed-workflows.md ("AI-risicocontrole").
 	WorkflowCodeWarning = "code_warning"
+	// WorkflowTaskSnooze is the Workflow Type that persists which tasks the
+	// reviewer chose to snooze (hide from the tasks inbox until a given time):
+	// one Execution per repo. Each "snooze" Signal carries one task id + an
+	// absolute expiry (computed by the UI, so the body needs no clock), which
+	// one Activity writes into the tasksnooze read-model. It never completes —
+	// a long-lived per-repo tracker. Task-level successor of the removed
+	// per-PR ignore feature.
+	WorkflowTaskSnooze = "task_snooze"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -126,6 +135,10 @@ const (
 	// comment. It is delivered to the workflow as a ReactionSignal (Action:
 	// "delete") under SignalReply — see ReactionSignal's doc comment.
 	SignalDelete = "delete"
+	// SignalSnooze delivers one task's snooze state to the task_snooze
+	// workflow (from the UI, on "snooze" / un-snooze). It carries an absolute
+	// expiry timestamp the UI computed, so the workflow body needs no clock.
+	SignalSnooze = "snooze"
 
 	// pollInterval is the fast cadence the GitHub poller uses while the reviewer
 	// is actively viewing the thread (a heartbeat arrived within heartbeatWindow).
@@ -274,6 +287,22 @@ type ApprovalSignal struct {
 	Viewed  *bool    `json:"viewed"`
 }
 
+// TaskSnoozeInput starts a task_snooze Execution — one tracker per repo.
+type TaskSnoozeInput struct {
+	Repo string `json:"repo"`
+}
+
+// SnoozeSignal carries one task's snooze state into the task_snooze tracker
+// (delivered under SignalSnooze). Until is an absolute Unix-ms expiry the UI
+// computed (0 = forever); Clear = true un-snoozes the task (Until is ignored
+// then). Both ride the same Signal because a workflow can only WaitSignal on
+// one name at a time.
+type SnoozeSignal struct {
+	TaskID string `json:"taskId"`
+	Until  int64  `json:"until"`
+	Clear  bool   `json:"clear"`
+}
+
 // ResolveCallInput starts a resolve_call Execution: it asks the LLM to resolve
 // the given (Go-unresolved) call keys made by one caller block.
 type ResolveCallInput struct {
@@ -390,6 +419,7 @@ type TaskManager struct {
 	// churning every test call site; a nil store makes bumpReviewerUsage a
 	// no-op, like the other module-guarded activities.
 	reviewerusage *reviewerusage.Module
+	tasksnooze    *tasksnooze.Module
 	claude        claude.Client
 	jira          jira.Client
 	db            *sql.DB
@@ -407,19 +437,20 @@ type TaskManager struct {
 	baseCtx      context.Context
 	runtimeReady bool
 
-	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + inboxRun + importPolled
+	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + inboxRun + snoozeRun + importPolled
 	lastBeat     map[string]time.Time // code-comment/inbox Run ID → last heartbeat
 	prRuns       map[int]string       // PR → pr_status Run ID
 	relRuns      map[int]string       // PR → build_relations Run ID
 	apprRuns     map[int]string       // PR → approve Run ID
 	inboxRun     string               // pr_inbox Run ID (one per repo/process)
+	snoozeRun    string               // task_snooze Run ID (one per repo/process)
 	importPolled map[string]bool      // imported-thread Run ID → poller running (dedup, operational)
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
-func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, tc *testcovers.Module, ap *approvals.Module, ex *explanations.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
+func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, tc *testcovers.Module, ap *approvals.Module, ex *explanations.Module, ts *tasksnooze.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
 	m := &TaskManager{
-		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
+		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, tasksnooze: ts, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
 		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{},
 		importPolled: map[string]bool{},
@@ -1016,6 +1047,24 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.approvals.Replace(ctx, arg.PR, arg.BlockID, arg.Rows, arg.Calls)
 	})
 
+	// Activity: persist one task's snooze state (write, workflow-driven). The
+	// tasksnooze module is the only writer of the tasksnooze read-model. Until
+	// < 0 (Clear) deletes the row (un-snooze); the workflow computes that from
+	// the signal so this Activity input stays a plain absolute value.
+	engine.RegisterActivity("saveTaskSnooze", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			TaskID string `json:"taskId"`
+			Until  int64  `json:"until"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.tasksnooze == nil {
+			return nil, nil
+		}
+		return nil, m.tasksnooze.Set(ctx, arg.TaskID, arg.Until)
+	})
+
 	// Activity: mark/unmark a file's GitHub "Viewed" checkbox (write,
 	// workflow-driven — the only place that talks to GitHub for this).
 	engine.RegisterActivity("setFileViewed", func(ctx context.Context, in []byte) ([]byte, error) {
@@ -1209,6 +1258,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowSubmitReview, submitReviewWorkflow)
 	engine.RegisterWorkflow(WorkflowReadyForReview, readyForReviewWorkflow)
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
+	engine.RegisterWorkflow(WorkflowTaskSnooze, taskSnoozeWorkflow)
 	return m
 }
 
@@ -1548,6 +1598,35 @@ func approveWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}{PR: in.PR, BlockID: sig.BlockID, Rows: sig.Rows, Calls: sig.Calls}
 		if err := w.ExecuteActivity("saveApproval", arg, nil); err != nil {
 			return nil, fmt.Errorf("save approval: %w", err)
+		}
+	}
+}
+
+// taskSnoozeWorkflow persists which tasks are snoozed (hidden from the tasks
+// inbox) for a repo. It is deterministic: the only side effect (the read-model
+// write) is an Activity, the number of Activities is exactly the number of
+// "snooze" Signals in the history, and the expiry is an absolute value carried
+// in the signal (the UI computed it) — the body never reads a clock. It never
+// completes: a long-lived per-repo tracker recording each snooze/un-snooze as
+// it happens.
+func taskSnoozeWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in TaskSnoozeInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	for {
+		var sig SnoozeSignal
+		w.WaitSignal(SignalSnooze, &sig)
+		until := sig.Until
+		if sig.Clear {
+			until = -1 // Set(...) deletes the row on a negative expiry
+		}
+		arg := struct {
+			TaskID string `json:"taskId"`
+			Until  int64  `json:"until"`
+		}{TaskID: sig.TaskID, Until: until}
+		if err := w.ExecuteActivity("saveTaskSnooze", arg, nil); err != nil {
+			return nil, fmt.Errorf("save task snooze: %w", err)
 		}
 	}
 }
@@ -2225,6 +2304,57 @@ func (m *TaskManager) findApproveLocked(pr int) string {
 		}
 		var pin ApproveInput
 		if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
+			return r.ID
+		}
+	}
+	return ""
+}
+
+// EnsureTaskSnooze ensures the single task_snooze tracker for the repo exists
+// (starting one if none is live) and returns its Run ID. The UI calls this on
+// load so it has a Run ID to signal snoozes to; the tracker is reused across
+// restarts (its waiting Execution is re-driven by engine.Recover). Starting/
+// reusing an Execution is the sanctioned UI write path. Per-repo, mirrors
+// EnsureInbox.
+func (m *TaskManager) EnsureTaskSnooze() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.snoozeRun != "" {
+		return m.snoozeRun, nil
+	}
+	if id := m.findTaskSnoozeRunLocked(); id != "" {
+		m.snoozeRun = id
+		return id, nil
+	}
+	id, err := m.engine.StartWorkflow(WorkflowTaskSnooze, TaskSnoozeInput{Repo: m.repo})
+	if err != nil {
+		return "", err
+	}
+	m.snoozeRun = id
+	return id, nil
+}
+
+// findTaskSnoozeRunLocked scans for a running/waiting task_snooze Execution
+// for m.repo. It reads only the engine, so it is safe to call while holding
+// m.mu.
+func (m *TaskManager) findTaskSnoozeRunLocked() string {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowTaskSnooze {
+			continue
+		}
+		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var pin TaskSnoozeInput
+		if json.Unmarshal(in, &pin) == nil && pin.Repo == m.repo {
 			return r.ID
 		}
 	}

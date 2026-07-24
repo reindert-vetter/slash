@@ -26,6 +26,7 @@ import (
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
+	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
 )
 
@@ -43,6 +44,7 @@ type tasks struct {
 	approvals     *approvals.Module
 	explain       *explanations.Module
 	reviewerusage *reviewerusage.Module
+	tasksnooze    *tasksnooze.Module
 }
 
 // newTasks builds the tembed engine (SQLite + JSONL, so comments live in the
@@ -145,6 +147,20 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ex.Close()
 		return nil, nil, err
 	}
+	ts, err := tasksnooze.Open(dataDir + "/tasksnooze.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -172,7 +188,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	if os.Getenv("SLASH_JIRA") == "off" {
 		jr = &jira.Fake{}
 	}
-	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, tc, ap, ex, cl, jr, db, dataDir, repo)
+	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, tc, ap, ex, ts, cl, jr, db, dataDir, repo)
 	// Set post-construction (not a constructor param) so every existing
 	// NewTaskManager test call site stays unchanged; a nil store just makes
 	// bumpReviewerUsage a no-op.
@@ -193,6 +209,11 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		// Own the PR inbox via the workflow: fetch an initial snapshot into the
 		// read-model and start the refresh poller (the UI reads only the read-model).
 		mgr.EnsureInbox(ctx)
+		// Own the per-repo task-snooze tracker so the UI has a Run ID to signal
+		// snooze/un-snooze to (no poller — it only reacts to UI signals).
+		if _, err := mgr.EnsureTaskSnooze(); err != nil {
+			mgr.logf("tasksnooze: ensure: %v", err)
+		}
 	}
 
 	closeFn := func() error {
@@ -205,9 +226,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = ap.Close()
 		_ = ex.Close()
 		_ = ru.Close()
+		_ = ts.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, tasksnooze: ts}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -424,6 +446,13 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/approvals?pr=N → read-only approval read-model (per block: the
 	// approved changed rows + call segments) for refresh-restore.
 	mux.HandleFunc("/api/approvals", s.handleApprovals)
+	// POST /api/workflows/task_snooze {repo?} → ensure the per-repo task-snooze
+	// tracker; the UI then signals snooze/un-snooze to its Run ID via
+	// .../signals/snooze.
+	mux.HandleFunc("/api/workflows/task_snooze", s.handleTaskSnoozeStart)
+	// GET /api/tasksnoozes → read-only task-snooze read-model (which tasks are
+	// hidden, and until when). The UI filters expired entries at read time.
+	mux.HandleFunc("/api/tasksnoozes", s.handleTaskSnoozes)
 	// GET /api/prs/filter?preset=<key> → live gh-search for a fixed, allow-listed
 	// preset query (never raw UI text — see handleFilter).
 	mux.HandleFunc("/api/prs/filter", s.handleFilter)
@@ -510,7 +539,7 @@ func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" {
 		http.NotFound(w, r)
 		return
 	}
@@ -584,6 +613,22 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
+			return
+		}
+		// The snooze signal carries one task id + an absolute expiry (or clear)
+		// to the per-repo task-snooze tracker — the UI write path for
+		// hiding/un-hiding a task.
+		if parts[2] == SignalSnooze {
+			var body SnoozeSignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.TaskID == "" {
+				http.Error(w, "invalid snooze", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalSnooze, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "snoozed"})
 			return
 		}
 		// The delete signal carries no comment body — it just asks the workflow
@@ -910,6 +955,41 @@ func (s *server) handleApprovals(w http.ResponseWriter, r *http.Request) {
 		list = []approvals.Approval{}
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// handleTaskSnoozeStart starts (or reuses) the per-repo task-snooze tracker and
+// returns its Run ID. Starting an Execution is the sanctioned UI write path;
+// the UI then signals snooze/un-snooze to this Run ID via .../signals/snooze.
+func (s *server) handleTaskSnoozeStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	runID, err := s.tasks.manager.EnsureTaskSnooze()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleTaskSnoozes serves GET /api/tasksnoozes — the read-only task-snooze
+// read-model (which tasks are hidden, and until when). It does not filter
+// expired entries: the UI compares Until against Date.now() at read time.
+func (s *server) handleTaskSnoozes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	list, err := s.tasks.tasksnooze.List(r.Context())
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []tasksnooze.Snooze{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "snoozes": list})
 }
 
 // filterPresets maps an allow-listed preset key to its fixed GitHub search

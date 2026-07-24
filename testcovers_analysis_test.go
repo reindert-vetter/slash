@@ -355,7 +355,7 @@ func TestBuildRelationsWorkflowFillsTestCovers(t *testing.T) {
 	defer tc.Close()
 
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, tc, nil, nil, nil, nil, db, dataDir, "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, tc, nil, nil, nil, nil, nil, db, dataDir, "test/repo")
 
 	ctx := context.Background()
 	m.EnsureRelations(ctx, pr) // initial build runs inside StartWorkflow

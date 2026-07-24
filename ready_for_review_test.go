@@ -41,7 +41,7 @@ func TestReadyForReviewWorkflow(t *testing.T) {
 	defer ru.Close()
 
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 	m.reviewerusage = ru
 
 	if _, err := m.StartReadyForReview(ReadyForReviewInput{PR: 7, Reviewers: []string{"alice", "bob"}}); err != nil {
@@ -83,7 +83,7 @@ func TestReadyForReviewWorkflow(t *testing.T) {
 func TestReadyForReviewWorkflowNoReviewers(t *testing.T) {
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	if _, err := m.StartReadyForReview(ReadyForReviewInput{PR: 7}); err != nil {
 		t.Fatal(err)
