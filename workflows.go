@@ -721,6 +721,13 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		calls = append(calls, resolveMigrationModels(m.dataDir, input.PR, blocks)...)
 		calls = append(calls, resolveDataProviders(m.dataDir, input.PR, blocks)...)
 		calls = append(calls, resolveTranslations(m.dataDir, input.PR, blocks)...)
+		// An interface method that already got a concrete "A" parent — either
+		// the both-changed interfaceImplementationDetector edge above (rels)
+		// or any resolved/found call above (calls, e.g. resolveCalls' rule
+		// 3a) — must not ALSO get "B"'s up-to-2 implementations: exclusive
+		// per interface method (see interfaces.go).
+		claimedIfaceIDs := claimedInterfaceMethodIDs(input.PR, rels, calls)
+		calls = append(calls, resolveInterfaceImplementations(m.dataDir, input.PR, blocks, claimedIfaceIDs)...)
 		if m.callresolve != nil {
 			if err := m.callresolve.UpsertGo(ctx, calls); err != nil {
 				return nil, fmt.Errorf("build_relations: save calls: %w", err)

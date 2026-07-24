@@ -30,6 +30,7 @@ var relationDetectors = []relationDetector{
 	controllerResourceDetector,
 	controllerModelDetector,
 	requestPolicyDetector,
+	interfaceImplementationDetector,
 }
 
 // buildRelations runs every detector over the PR's blocks and concatenates the

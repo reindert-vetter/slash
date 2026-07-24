@@ -1567,6 +1567,18 @@ const KIND_LABEL = {
   // per locale (see .claude/rules/tembed-workflows.md, "Resolving translation
   // keys"). Shows the current value, not a diff.
   translation: 'vertaling',
+  // A concrete method that both implements an interface method AND changed
+  // together with it in this PR (relations.KindInterfaceMethod, "A2" — see
+  // .claude/rules/tembed-workflows.md, "Interface methods as underlying
+  // code"). No diffstat here — like event_listener/route_controller/etc.,
+  // this is always a real, both-changed PR block, so a plain role badge is
+  // enough.
+  interface_method: 'interface',
+  // An interface method with no changed caller/implementer in this PR ("B")
+  // → up to 2 concrete implementations, shown alongside a diffstat/
+  // "Ongewijzigd" badge (DIFFSTAT_KINDS below) since an implementation MAY
+  // itself be a changed PR block.
+  interface_impl: 'implementatie',
 }
 
 // diffStatBadge shows, for a called method (or a test's covered method), how
@@ -1576,7 +1588,14 @@ const KIND_LABEL = {
 // instead (leftStatusBadge, below), not here. Also covers the class-level
 // callresolve kinds (model_usage/migration_model/data_provider) — they carry a
 // diff just like a method_call child.
-const DIFFSTAT_KINDS = new Set(['method_call', 'covers', 'model_usage', 'migration_model', 'data_provider'])
+const DIFFSTAT_KINDS = new Set([
+  'method_call',
+  'covers',
+  'model_usage',
+  'migration_model',
+  'data_provider',
+  'interface_impl',
+])
 function diffStatBadge(r) {
   if (!DIFFSTAT_KINDS.has(r.kind) || !r.diff) return ''
   return html`

@@ -39,6 +39,18 @@ type symbolIndex struct {
 	// modelCasts maps a model short name → its `$casts` array (field name →
 	// cast target class short name) — see resolveCalls rule 5b.
 	modelCasts map[string]map[string]string
+	// interfaceClasses records every short class name that is an `interface`
+	// (via Block.IsInterface, phpscan.go) — used by resolveCalls's
+	// interface-typed-receiver rule (see interfaces.go, section "A1") to give
+	// an explicitly interface-typed call priority over an otherwise-ambiguous
+	// concrete-implementation candidate.
+	interfaceClasses map[string]bool
+	// implementors maps an interface's short name to every class in the
+	// worktree that declares `implements ... ThatInterface ...`
+	// (interfaces.go's scanClassImplements) — feeds both
+	// interfaceImplementationDetector ("A2") and resolveInterfaceImplementations
+	// ("B"), see interfaces.go.
+	implementors map[string][]implClass
 }
 
 // idxSkipDirs is deliberately narrow: "tests" is NOT skipped, because a
@@ -68,6 +80,9 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		models:      map[string]Block{},
 		modelTables: map[string]string{},
 		modelCasts:  map[string]map[string]string{},
+
+		interfaceClasses: map[string]bool{},
+		implementors:     map[string][]implClass{},
 	}
 	_ = filepath.WalkDir(headDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -100,6 +115,20 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 			idx.byMethod[b.Name] = append(idx.byMethod[b.Name], b)
 			if alias := scopeAliasOf(b.Name); alias != "" {
 				idx.scopeAlias[alias] = append(idx.scopeAlias[alias], b)
+			}
+			if b.IsInterface {
+				idx.interfaceClasses[short] = true
+			}
+		}
+		// A `class X implements ... Y ...` declaration — index Y → X so a call
+		// through an interface-typed receiver (resolveCalls) and the
+		// "implementations of an unclaimed interface method" rule
+		// (resolveInterfaceImplementations) both have a worktree-wide
+		// interface → implementors lookup, without a second file read (see
+		// interfaces.go).
+		for iface, classes := range scanClassImplements(src) {
+			for _, class := range classes {
+				idx.implementors[iface] = append(idx.implementors[iface], implClass{class: class, file: rel})
 			}
 		}
 		// A Laravel artisan command declares its name in `protected $signature =
@@ -387,6 +416,17 @@ var (
 	// same heuristic resolvePrompt teaches the LLM.
 	reVarCall = regexp.MustCompile(`\$([A-Za-z_]\w*)->([A-Za-z_]\w*)\s*\(`)
 	reVarProp = regexp.MustCompile(`\$([A-Za-z_]\w*)->([A-Za-z_]\w*)`)
+	// reTypedParamNamed is like relations.go's reTypedParam, but also captures
+	// the variable name (`Foo $var`) — used by resolveCalls rule 3a
+	// (interfaces.go) to map a bare $var/property name to its declared type
+	// (a constructor/method parameter or a promoted/readonly property), so a
+	// later `$var->method(`/`$this->prop->method(` call can be checked
+	// against idx.interfaceClasses.
+	reTypedParamNamed = regexp.MustCompile(`([\\A-Za-z0-9_]+)\s+\$([A-Za-z_]\w*)`)
+	// reThisPropCall matches `$this->prop->method(` — a constructor-promoted
+	// (or ordinary) property accessed via $this, called from a method OTHER
+	// than the one declaring its type (resolveCalls rule 3a).
+	reThisPropCall = regexp.MustCompile(`\$this->([A-Za-z_]\w*)->([A-Za-z_]\w*)\s*\(`)
 	// reRelationCall recognises an Eloquent relationship method body — a method
 	// returning $this->hasMany(...) / morphOne(...) / belongsTo(...) etc. is the
 	// definition a magic property like $order->billingAddress resolves to.
@@ -461,6 +501,15 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 	baseDir, headDir := worktreeDirs(dataDir, pr)
 	idx := buildSymbolIndex(headDir)
 	diffByFile := map[string]*fileChangeSet{}
+	// interfaceVarsByFile caches, per file, the "$var name → interface short
+	// name" map rule 3a needs — built from the WHOLE file (not just the
+	// current block's own body), since a constructor-PROMOTED property's type
+	// hint sits in __construct's signature while it is typically USED via
+	// $this->prop in other methods of the same class (see interfaces.go /
+	// .claude/rules/tembed-workflows.md, "Interface methods as underlying
+	// code"). Cached like diffByFile below, so a class with several changed
+	// methods only re-reads/re-scans its own file once.
+	interfaceVarsByFile := map[string]map[string]string{}
 
 	var out []callresolve.Entry
 	for _, b := range blocks {
@@ -596,6 +645,61 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 				}
 			}
 			emit(m[2], def)
+		}
+		// 3a. $var->m( (a plain local/parameter) OR $this->prop->m( (a
+		// constructor-PROMOTED or ordinary property, accessed from a
+		// DIFFERENT method than the one declaring its type) where the
+		// variable/property's DECLARED type is one of the worktree's scanned
+		// INTERFACE classes (idx.interfaceClasses) → resolve straight to that
+		// interface's OWN method declaration. Runs before the receiver-NAME
+		// heuristic (3b) and the global unique-match fallback (4): once a
+		// concrete implementation of the interface also defines the same
+		// method name, idx.byMethod[key] holds >1 candidate and rule 4 alone
+		// would give up as ambiguous/"unresolved" — exactly what left a
+		// changed interface method stranded as an orphan top-level start
+		// point instead of underlying code of its caller (see
+		// .claude/rules/tembed-workflows.md, "Interface methods as
+		// underlying code"). An explicit interface type hint is a stronger
+		// signal than 3b's bare receiver-NAME guess, hence it runs first and
+		// its matches are marked `seen` so 3b/4 never re-process the same
+		// call key. The type/name pairing (reTypedParamNamed) is scanned over
+		// the WHOLE FILE, not just this block's own body/signature — a
+		// promoted property's type sits in __construct's signature, while
+		// it's typically USED as $this->prop in other methods of the same
+		// class (interfaceVarsByFile caches this per file, like diffByFile).
+		varInterfaceType, ok := interfaceVarsByFile[b.File]
+		if !ok {
+			varInterfaceType = map[string]string{}
+			if wholeFile, err := os.ReadFile(filepath.Join(headDir, b.File)); err == nil {
+				for _, m := range reTypedParamNamed.FindAllStringSubmatch(string(wholeFile), -1) {
+					if iface := shortName(m[1]); idx.interfaceClasses[iface] {
+						varInterfaceType[m[2]] = iface
+					}
+				}
+			}
+			interfaceVarsByFile[b.File] = varInterfaceType
+		}
+		if len(varInterfaceType) > 0 {
+			resolveInterfaceVar := func(recv, key string) bool {
+				if seen[key] {
+					return true
+				}
+				iface, ok := varInterfaceType[recv]
+				if !ok {
+					return false
+				}
+				if def := methodOnClass(idx, iface, key); def != nil {
+					emit(key, def)
+					return true
+				}
+				return false
+			}
+			for _, m := range reVarCall.FindAllStringSubmatch(scan, -1) {
+				resolveInterfaceVar(m[1], m[2])
+			}
+			for _, m := range reThisPropCall.FindAllStringSubmatch(scan, -1) {
+				resolveInterfaceVar(m[1], m[2])
+			}
 		}
 		// 3b. $var->m( → infer the receiver class from the variable name
 		// ($order->billingAddress() → Order::billingAddress), the heuristic

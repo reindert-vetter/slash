@@ -55,6 +55,15 @@ const (
 	KindControllerResource = "controller_resource" // controller method → an API Resource it returns/builds
 	KindControllerModel    = "controller_model"    // controller method → a route-model-bound Eloquent model param
 	KindRequestPolicy      = "request_policy"      // FormRequest::authorize → the Policy method it checks
+
+	// KindInterfaceMethod links a concrete method that both implements an
+	// interface method AND changed together with it in this PR (parent = the
+	// concrete implementing method, child = the interface's own method
+	// declaration — "interface = onderliggende code van het concrete blok").
+	// See interfaces.go's interfaceImplementationDetector and
+	// .claude/rules/tembed-workflows.md ("Interface methods as underlying
+	// code").
+	KindInterfaceMethod = "interface_method"
 )
 
 // Relation is one directed parent→child edge between two blocks (by block ID,
