@@ -6,7 +6,7 @@
 
 import { html } from './vendor/arrow.js'
 import { reactive } from './vendor/arrow.js'
-import { highlight, blockLabel } from './Block.mjs'
+import { highlight, blockLabel, codeGrowthChars } from './Block.mjs'
 import { statusInfo, categoryClass } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
@@ -1803,51 +1803,10 @@ function nestedChipColumn(ancestors, kids, drill, path, cardIdx) {
   `
 }
 
-// codeGrowthChars — a REPRESENTATIVE non-comment line length in `code`, not
-// the single longest line. Comment lines (a leading PHPDoc block, `//`/`#`
-// line comments) are free-form prose and must never make the "Onderliggende
-// code" column grow — only real PHP code lines may (see the width discussion
-// in detail-layout.md). Deterministic, regex/state-machine based (no parser,
-// matching the rest of this codebase's PHP-adjacent heuristics, e.g.
-// phpscan.go's PHPDoc detection) and — load-bearing — no live DOM
-// measurement: it only counts characters in the raw source string, so it can
-// run inside a reactive binding without racing any render/layout pass.
-//
-// A single outlier line (one exceptionally long call, e.g. a
-// `Cache::remember(...)` one-liner buried in an otherwise normal-width
-// method) must not alone dictate the column width — that stretched a whole
-// card to the ceiling for one wrapping-worthy line while the rest of the
-// method was perfectly narrow. The plain median turned out too aggressive
-// the other way: a method's brace-only lines (`{`/`}`) drag the middle value
-// down to almost nothing even for a genuinely wide method (with as few as
-// 3-4 real content lines, the median lands on one of those single-char
-// lines). The 75th percentile (nearest-rank) is the middle ground: it still
-// reflects the wider half of a method's real content lines without being
-// hostage to its single longest line.
-function codeGrowthChars(code) {
-  if (!code) return 0
-  let inBlockComment = false
-  const lens = []
-  for (const raw of code.split('\n')) {
-    const line = raw.replace(/\s+$/, '')
-    const trimmed = line.trim()
-    if (inBlockComment) {
-      if (trimmed.endsWith('*/')) inBlockComment = false
-      continue
-    }
-    if (trimmed === '') continue
-    if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('*')) continue
-    if (trimmed.startsWith('/*')) {
-      if (!trimmed.endsWith('*/')) inBlockComment = true
-      continue
-    }
-    lens.push(line.length)
-  }
-  if (lens.length === 0) return 0
-  lens.sort((a, b) => a - b)
-  const idx = Math.min(lens.length - 1, Math.max(0, Math.ceil(0.75 * lens.length) - 1))
-  return lens[idx]
-}
+// codeGrowthChars now lives in Block.mjs (exported from there) — shared with
+// that file's own fitWidthCls (the `a`-toggle's 'fit' stand, see
+// keyboard-navigation.md/detail-layout.md), same 75th-percentile
+// non-comment-line calculation, no live DOM measurement.
 
 // relatedColumnWidthCls — the reactive width of the WHOLE Onderliggende-code
 // column (not per-card): it grows with a representative non-comment code

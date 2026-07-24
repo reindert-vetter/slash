@@ -1176,8 +1176,9 @@ block on the right — see the layout paragraph above):
   **The `a` toggle (`state.diffViewMode`, see below) is such a width
   transition but touches none of the `setRelated` watch's dependencies
   (`state.selected`/`mode`/`gran`/`change`/…) — so the watch doesn't fire and
-  `setCallArrows` isn't called again, while every card shrinks to 60% width
-  anyway.** Without a countermeasure, the arrow stayed drawn at the
+  `setCallArrows` isn't called again, while every card's width changes
+  anyway (a fixed 60% for `'new'`, a content-based width for `'fit'`, see
+  below).** Without a countermeasure, the arrow stayed drawn at the
   pre-toggle (wide) coordinates, disconnected from the now-narrower pane
   edge. `toggleDiffView` (`home.mjs`) therefore explicitly calls
   `resettleCallArrows()` (`callArrows.mjs`): the same immediate + 250ms
@@ -1317,6 +1318,23 @@ automatically to **every** visible card (top-level selected/preview and
 every drilled column), since they all share the same `Block()` component
 and the same `viewMode` opt (`() => state.diffViewMode`).
 
+**`a` cycles through a THIRD stand, `'fit'`, between `'new'` and back to
+`'split'`** (`DIFF_VIEW_CYCLE` in `home.mjs`): both panes come back (like
+`'split'` — `forcedNewOnly` only ever reacts to `'new'`), but the card's
+width becomes **content-based** instead of the fixed `70rem`/`82rem`:
+`widthCls(b, viewMode)` (`Block.mjs`) delegates to `fitWidthCls(b)` for
+this stand, which sizes the card off a representative (75th-percentile,
+non-comment) line length of the block's own code — `codeGrowthChars`,
+moved out of `RelatedPanel.mjs` into `Block.mjs` and exported so both files
+share the exact same calculation — clamped between the existing 60% floor
+and the full split ceiling, so `'fit'` always sits between the other two
+stands. A genuinely two-sided block uses the wider of its old/new side,
+doubled (both panes render at equal width) plus a fixed gutter allowance;
+an already one-sided block (only one pane ever renders, regardless of
+`viewMode`) uses the single-pane variant instead, based on just that one
+visible side. See `.claude/rules/keyboard-navigation.md` ("`a` — cycling
+the diff view") for the full mechanism. Test: `tests/diffview.spec.mjs`.
+
 **A look-ahead preview must never be wider/richer than the active block next
 to it (`activeSingleSided`, both preview spots).** Without a
 countermeasure, every card determines its width/pane choice purely from its
@@ -1349,4 +1367,10 @@ the override (there's only one side to show anyway); and a one-sided
 preview next to a two-sided active block simply stays narrower (no forced
 widening). The active card itself never gets this override — only its own
 `singleSide(b)` + the global `state.diffViewMode` determine its own
-display, unchanged. Test: `tests/preview-matches-active-width.spec.mjs`.
+display, unchanged. **The override always forces `'new'`, never `'fit'`** —
+even if the global stand is `'fit'`: forcing the narrower, fixed-width
+`'new'` here is what guarantees the "never wider than active" rule holds
+deterministically; `'fit'`'s content-based width could in principle exceed
+the active card's width even for a one-sided active block, which would
+defeat the whole point of this override. Test:
+`tests/preview-matches-active-width.spec.mjs`.

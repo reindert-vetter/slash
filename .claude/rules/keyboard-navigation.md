@@ -967,76 +967,88 @@ scope still only act on the actually-changed rows within that range.
   Underlying-code panel). This is deliberately the same "an ordinary step
   releases the selection" behavior as in a text editor.
 
-## `a` — toggling the diff view (side-by-side ↔ new only, 60% wide)
+## `a` — cycling the diff view (split → new-only → fit → split)
 
-**`a`** toggles globally, for **every visible diff card at once** — the
+**`a`** cycles globally, for **every visible diff card at once** — the
 selected/preview card and every open drilled column (`state.drill`) —
-between
-the existing side-by-side view (old+new, default) and a **new-only**
-view (only the right/new pane). Sits next to `f`/`d`/`s` in `onKeydown`
-(`home.mjs`), so with the same earlier guards (command palette/search
-box/
-related panel active) in front — works in both `'list'` and `'diff'` mode.
-**Extra guard, separate from those existing guards:** `relatedActive()`
-(`cs.focus !==
-null`) doesn't cover every path where a text field has DOM focus —
-`startComment()`
-(among others the command-palette fallback "Create a comment with this")
-only sets
+through `DIFF_VIEW_CYCLE` (`home.mjs`, `['split', 'new', 'fit']`):
+side-by-side (old+new, default) → **new-only** (only the right/new pane,
+fixed 60% width) → **fit** (both panes again, but the card's width follows
+the block's own code instead of a fixed number) → back to split. Sits next
+to `f`/`d`/`s` in `onKeydown` (`home.mjs`), so with the same earlier guards
+(command palette/search box/related panel active) in front — works in both
+`'list'` and `'diff'` mode. **Extra guard, separate from those existing
+guards:** `relatedActive()` (`cs.focus !== null`) doesn't cover every path
+where a text field has DOM focus — `startComment()` (among others the
+command-palette fallback "Create a comment with this") only sets
 `cs.composing`, not `cs.focus`, so `relatedActive()` stays `false` there
-while
-the composer does have focus. A literal "a" typed there would otherwise be
-swallowed by
-this shortcut. Hence the `a` handler also checks
+while the composer does have focus. A literal "a" typed there would
+otherwise be swallowed by this shortcut. Hence the `a` handler also checks
 `document.activeElement` directly (`isEditableFocused()` in `home.mjs`:
-TEXTAREA/INPUT →
-shortcut does nothing, key just flows into the field) — a generic,
-future-proof guard that doesn't depend on which navigation state a
+TEXTAREA/INPUT → shortcut does nothing, key just flows into the field) — a
+generic, future-proof guard that doesn't depend on which navigation state a
 field happens to track or not.
 
-The state (`state.diffViewMode`, `'split'`/`'new'`) is ephemeral, no URL
-binding
-(like `showDescription`/`showApproved`). An already one-sided block
-(`added`/`removed`) has no other side to hide/show — the toggle
-has no effect there on the **pane choice**, `singleSide(b)` stays in
-charge
+The state (`state.diffViewMode`, `'split'`/`'new'`/`'fit'`) is ephemeral, no
+URL binding (like `showDescription`/`showApproved`). An already one-sided
+block (`added`/`removed`) has no other side to hide/show — the toggle has
+no effect there on the **pane choice**, `singleSide(b)` stays in charge
 (`effectiveOnly` in `Block.mjs`'s `codeDiff`). A **truly two-sided**
 (`modified`) block does collapse in `viewMode==='new'` to its new pane
 (`forcedNewOnly(b, viewMode)` in `Block.mjs` remains the condition for
-this).
+this) — **`'fit'` deliberately does NOT collapse the pane**: a two-sided
+block keeps showing both panes in `'fit'`, only the card's width changes
+(see below), so `forcedNewOnly` only ever reacts to `'new'`.
 
-**But the card width now only follows `viewMode()`, not `singleSide`:**
+**The card width in `'new'` only follows `viewMode()`, not `singleSide`:**
 as soon as `viewMode()==='new'`, **every** visible card shrinks to **60%
-width**
-(`w-[42rem] 2xl:w-[49.2rem]` instead of `w-[70rem] 2xl:w-[82rem]`) —
-`modified`/`added`/`removed` all alike, plus every preview/look-ahead
-card and every drilled column (they all share the same `Block()`
-component +
-the same `viewMode` option). This was previously limited to the
-two-sided case
-(a one-sided block deliberately kept its full width, see the
+width** (`w-[42rem] 2xl:w-[49.2rem]` instead of `w-[70rem] 2xl:w-[82rem]`) —
+`modified`/`added`/`removed` all alike, plus every preview/look-ahead card
+and every drilled column (they all share the same `Block()` component +
+the same `viewMode` option). This was previously limited to the two-sided
+case (a one-sided block deliberately kept its full width, see the
 width-stability rule in `.claude/rules/detail-layout.md`); the reviewer
-now wants `a` to make **everything** narrow as long as it's on, regardless
-of
-block type. The simple `narrowed(viewMode)` in `Block.mjs` (only
-`viewMode()==='new'`, no `singleSide` check) is the condition behind the
-width ternary; `forcedNewOnly` remains the separate condition for the
-pane choice — the two can therefore diverge (a one-sided block:
-`narrowed`
-true, `forcedNewOnly` false) and that is deliberate.
+wanted `a` to make **everything** narrow as long as `'new'` is on,
+regardless of block type. The simple `narrowed(viewMode)` in `Block.mjs`
+(only `viewMode()==='new'`, no `singleSide` check) is the condition behind
+this branch of the width ternary; `forcedNewOnly` remains the separate
+condition for the pane choice — the two can therefore diverge (a one-sided
+block: `narrowed` true, `forcedNewOnly` false) and that is deliberate.
 
-Read as `viewMode()` within `Block()`'s own per-card `${() =>
-codeDiff(...)}` slot (not in the outer per-column closure of `home.mjs`) —
-mirroring how that slot already reads `b.code`, so a toggle only
-re-renders the
-diff structure (via `forcedNewOnly`) and the width (via `narrowed`) of
-each
+**`'fit'` (the third stand) sizes the card off its own code instead of a
+fixed number, via `fitWidthCls(b)` in `Block.mjs`** — the same 75th-
+percentile, non-comment-line character count (`codeGrowthChars`, moved
+into `Block.mjs` and exported, shared with `RelatedPanel.mjs`'s
+`relatedColumnWidthCls`) clamped between the existing 60% floor
+(`42rem`/`49.2rem`) and the full split ceiling (`70rem`/`82rem`) — `'fit'`
+therefore always sits between the other two stands, never wider than
+`'split'`. Purely a character-count calculation on the already-loaded
+source text (`b.code`), computed once per code-load (via the existing
+`state.codeVersion`/key-forcing rebuild, see `.claude/rules/conventions.md`
+— **not** re-derived on every navigation step, which would risk the
+"outer closure depends on navigation state" flicker pitfall). Two cases:
+- A genuinely **two-sided** (`modified`) block keeps **both** panes in
+  `'fit'` (unlike `'new'`) — the width is based on whichever side (old or
+  new) needs more room (`Math.max`), since the two panes always render at
+  equal width, **doubled** for the two panes plus a fixed gutter/padding
+  allowance.
+- An already **one-sided** (`added`/`removed`) block only ever renders
+  **one** pane regardless of `viewMode` (`singleSide(b)` wins over
+  `forcedNewOnly` in `codeDiff`) — sizing it with the two-pane formula
+  above would make the card needlessly wide for content shown only once,
+  so it gets the **single-pane** variant instead (no doubling), based on
+  just the one visible side.
+
+Read as `viewMode()` within `Block()`'s own per-card `${() => ...}` class
+binding (not in the outer per-column closure of `home.mjs`) — mirroring how
+`codeDiff`'s own slot already reads `b.code`, so a toggle only re-renders
+the diff structure (via `forcedNewOnly`) and the width (via
+`narrowed`/`fitWidthCls`, both inside `widthCls(b, viewMode)`) of each
 visible card, not the card-building closures themselves. The width ternary
-sits
-in the same card-wide `${() => ...}` `class` binding as `diffActive()`/
-`preview` (already reactive, the whole value at once — no
-partial string interpolation, see the arrow.js class-binding pitfall in
-`conventions.md`).
+sits in the same card-wide `${() => ...}` `class` binding as `diffActive()`/
+`preview` (already reactive, the whole value at once — no partial string
+interpolation, see the arrow.js class-binding pitfall in `conventions.md`).
+Test: `tests/diffview.spec.mjs`.
 
 ## Generic input-focus guard (typing in a field must never be swallowed by a shortcut)
 

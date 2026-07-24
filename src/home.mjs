@@ -299,12 +299,15 @@ const state = reactive({
   // the in-card "meer…"/"Inklappen" affordance — one flag, so they stay in
   // lockstep. Ephemeral UI state, NOT bound to the URL (like showDescription).
   descriptionExpanded: false,
-  // diffViewMode — the global diff-pane preference, toggled everywhere with `a`
-  // (onKeydown): 'split' (default, old+new side by side) or 'new' (only the
-  // new/right pane, full width). Read by every visible Block() card (the
-  // selected/preview cards and every open drilled column) via its viewMode opt
-  // — see Block.mjs's codeDiff. Ephemeral UI state, not bound to the URL, like
-  // showDescription/showApproved above.
+  // diffViewMode — the global diff-pane preference, cycled everywhere with `a`
+  // (onKeydown, DIFF_VIEW_CYCLE below): 'split' (default, old+new side by
+  // side, full width) → 'new' (only the new/right pane, fixed 60% width) →
+  // 'fit' (both panes again like 'split', but the card's width follows the
+  // block's own code instead of a fixed width — see Block.mjs's
+  // widthCls/fitWidthCls) → back to 'split'. Read by every visible Block()
+  // card (the selected/preview cards and every open drilled column) via its
+  // viewMode opt — see Block.mjs's codeDiff. Ephemeral UI state, not bound to
+  // the URL, like showDescription/showApproved above.
   diffViewMode: 'split',
   // explanations — the AI unit-explanation read-model (GET /api/explanations):
   // per `${blockId}|${unitKey}` an entry { codeHash, status, text }, generated
@@ -337,21 +340,29 @@ const state = reactive({
   footerVisible: false,
 })
 
-// toggleDiffView flips the global diff-pane preference between full side-by-side
-// and new-only (see state.diffViewMode above). The reactive re-render rebuilds
-// every visible pane's HTML (Block.mjs's codeDiff, .innerHTML) from scratch,
-// which resets each pane's scrollTop to 0 — without re-centring, the diff jumps
-// to the top of the function instead of staying on the active change. Not a
+// DIFF_VIEW_CYCLE is the fixed order `a` steps through — see state.diffViewMode
+// above. 'new' collapses a two-sided block to just its new pane at a fixed
+// 60% width (Block.mjs's forcedNewOnly/narrowed); 'fit' keeps both panes
+// (like 'split') but sizes the card off the block's own code
+// (Block.mjs's fitWidthCls) instead of a fixed width.
+const DIFF_VIEW_CYCLE = ['split', 'new', 'fit']
+
+// toggleDiffView steps state.diffViewMode to the next stand in DIFF_VIEW_CYCLE
+// (see state.diffViewMode above). The reactive re-render rebuilds every
+// visible pane's HTML (Block.mjs's codeDiff, .innerHTML) from scratch, which
+// resets each pane's scrollTop to 0 — without re-centring, the diff jumps to
+// the top of the function instead of staying on the active change. Not a
 // navigation step, so no glide (mirrors ensureCode's `false` for a cached/
 // already-loaded re-render, see detail-layout.md).
-// This resizes every visible card to 60% width (narrowed(), Block.mjs) without
-// touching state.selected/mode/gran/change, so the setRelated watch that
-// normally drives the call-arrow overlay never fires — resettleCallArrows
-// redraws the existing pairs at the new (narrower) geometry, with the same
-// immediate + 250ms-settle schedule callArrowPairs pushes use for the 200ms
-// width transition (see detail-layout.md's "Call-pijl-overlay").
+// This resizes every visible card (narrowed()/fitWidthCls(), Block.mjs)
+// without touching state.selected/mode/gran/change, so the setRelated watch
+// that normally drives the call-arrow overlay never fires — resettleCallArrows
+// redraws the existing pairs at the new geometry, with the same immediate +
+// 250ms-settle schedule callArrowPairs pushes use for the 200ms width
+// transition (see detail-layout.md's "Call-pijl-overlay").
 function toggleDiffView() {
-  state.diffViewMode = state.diffViewMode === 'new' ? 'split' : 'new'
+  const idx = DIFF_VIEW_CYCLE.indexOf(state.diffViewMode)
+  state.diffViewMode = DIFF_VIEW_CYCLE[(idx + 1) % DIFF_VIEW_CYCLE.length]
   scrollChangeIntoView(false)
   resettleCallArrows()
 }
@@ -4892,10 +4903,12 @@ function onKeydown(e) {
     return
   }
 
-  // `a` toggles the diff-pane view everywhere (every visible Block card: the
-  // selected/preview cards and every open drilled column) between full
-  // side-by-side (default) and new-only, full width. Placed alongside f/d/s so
-  // it's guarded by the same earlier menu/search/related checks above — except
+  // `a` cycles the diff-pane view everywhere (every visible Block card: the
+  // selected/preview cards and every open drilled column) through
+  // DIFF_VIEW_CYCLE: full side-by-side (default) → new-only, fixed 60% width
+  // → 'fit' (side-by-side again, but sized to the block's own code) → back to
+  // split. Placed alongside f/d/s so it's guarded by the same earlier
+  // menu/search/related checks above — except
   // those key on cs.focus (relatedActive()), which stays null when the composer
   // is opened via a path that only flips cs.composing (e.g. the command
   // palette's "Maak hiermee een comment" fallback, see startComment in

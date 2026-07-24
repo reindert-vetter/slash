@@ -86,7 +86,10 @@ export function singleSide(b) {
 // only its one pane), so the toggle is a no-op for *pane selection* there.
 // Used by codeDiff to decide which pane(s) to show. NOT used for card width
 // any more — see `narrowed` below, which the reviewer wants to apply
-// uniformly regardless of singleSide.
+// uniformly regardless of singleSide. Deliberately excludes 'fit': that third
+// `a` stand keeps BOTH panes for a two-sided block (only its width becomes
+// content-based, see widthCls/fitWidthCls below) — only 'new' collapses to a
+// single pane.
 function forcedNewOnly(b, viewMode) {
   return viewMode() === 'new' && singleSide(b) === null
 }
@@ -97,9 +100,115 @@ function forcedNewOnly(b, viewMode) {
 // removed, a preview/look-ahead card, or any drilled column — to shrink in
 // lockstep while `a` is on, not just the two-sided blocks that actually have a
 // pane to hide. Shared by every card via the same viewMode option, so this one
-// flag keeps them all in sync.
+// flag keeps them all in sync. Deliberately excludes 'fit' (see widthCls
+// below) — that third `a` stand gets its own, content-based width instead of
+// this fixed 60%.
 function narrowed(viewMode) {
   return viewMode() === 'new'
+}
+
+// codeGrowthChars — a REPRESENTATIVE non-comment line length in `code`, not
+// the single longest line. Comment lines (a leading PHPDoc block, `//`/`#`
+// line comments) are free-form prose and must never drive a width — only real
+// PHP code lines may. Deterministic, regex/state-machine based (no parser,
+// matching the rest of this codebase's PHP-adjacent heuristics, e.g.
+// phpscan.go's PHPDoc detection) and — load-bearing — no live DOM
+// measurement: it only counts characters in the raw source string, so it can
+// run inside a reactive binding without racing any render/layout pass.
+//
+// A single outlier line (one exceptionally long call, e.g. a
+// `Cache::remember(...)` one-liner buried in an otherwise normal-width
+// method) must not alone dictate a width — that stretched a card to its
+// ceiling for one wrapping-worthy line while the rest of the method was
+// perfectly narrow. The plain median turned out too aggressive the other
+// way: a method's brace-only lines (`{`/`}`) drag the middle value down to
+// almost nothing even for a genuinely wide method (with as few as 3-4 real
+// content lines, the median lands on one of those single-char lines). The
+// 75th percentile (nearest-rank) is the middle ground: it still reflects the
+// wider half of a method's real content lines without being hostage to its
+// single longest line.
+//
+// Shared by RelatedPanel.mjs's relatedColumnWidthCls (the Onderliggende-code
+// column width) and this file's own fitWidthCls (the `a`-toggle's 'fit'
+// stand, see widthCls below) — both apply the exact same calculation to
+// different pieces of raw code text.
+export function codeGrowthChars(code) {
+  if (!code) return 0
+  let inBlockComment = false
+  const lens = []
+  for (const raw of code.split('\n')) {
+    const line = raw.replace(/\s+$/, '')
+    const trimmed = line.trim()
+    if (inBlockComment) {
+      if (trimmed.endsWith('*/')) inBlockComment = false
+      continue
+    }
+    if (trimmed === '') continue
+    if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('*')) continue
+    if (trimmed.startsWith('/*')) {
+      if (!trimmed.endsWith('*/')) inBlockComment = true
+      continue
+    }
+    lens.push(line.length)
+  }
+  if (lens.length === 0) return 0
+  lens.sort((a, b) => a - b)
+  const idx = Math.min(lens.length - 1, Math.max(0, Math.ceil(0.75 * lens.length) - 1))
+  return lens[idx]
+}
+
+// widthCls picks the card's width class for the current `a` stand: the
+// content-based 'fit' clamp (fitWidthCls, below) for 'fit', otherwise the
+// existing binary choice (narrow 60% vs. full split width).
+function widthCls(b, viewMode) {
+  if (viewMode() === 'fit') return fitWidthCls(b)
+  return narrowed(viewMode) || singleSide(b)
+    ? 'w-[42rem] 2xl:w-[49.2rem] '
+    : 'w-[70rem] 2xl:w-[82rem] '
+}
+
+// fitWidthCls — the card width for the `a` toggle's third ('fit') stand:
+// make the card as wide as its own code actually needs, instead of the fixed
+// 60% ('new') or full ('split') width — clamped so it never goes narrower
+// than the existing 60% floor nor wider than the full split ceiling (`a`
+// cycles split → new → fit → split, so 'fit' always sits between the other
+// two). Uses codeGrowthChars (the 75th-percentile non-comment line length,
+// same technique as RelatedPanel.mjs's relatedColumnWidthCls) — purely a
+// character-count calculation on the already-loaded source text, no live DOM
+// measurement.
+//
+// 'fit' does NOT force a single pane (see forcedNewOnly above, which
+// deliberately only reacts to 'new') — a genuinely two-sided (modified)
+// block keeps showing BOTH panes side by side in 'fit', so the width must
+// account for both: it's based on whichever side needs more room
+// (Math.max(old, new)) since the two panes always render at equal width,
+// doubled for the two panes plus a fixed allowance for the gutter/padding
+// between them (the same kind of fudge constant as relatedColumnWidthCls's
+// `+ 2rem`, just doubled for the second pane).
+//
+// A block that's already one-sided (added/removed, singleSide(b) !== null)
+// only ever renders ONE pane regardless of viewMode (codeDiff's `only` wins
+// over forcedNewOnly) — sizing it with the two-pane formula above would make
+// the card needlessly wide for content that's only shown once. Such a block
+// therefore gets the single-pane variant instead, based on just the one side
+// that's actually visible.
+function fitWidthCls(b) {
+  const c = b.code
+  const oldText = c && !c.error && c.old ? c.old.text : ''
+  const newText = c && !c.error && c.new ? c.new.text : ''
+  const only = singleSide(b)
+  if (only) {
+    const chars = codeGrowthChars(only === 'left' ? oldText : newText)
+    return (
+      `w-[clamp(42rem,calc(${chars}ch_+_2rem),70rem)] ` +
+      `2xl:w-[clamp(49.2rem,calc(${chars}ch_+_2rem),82rem)] `
+    )
+  }
+  const chars = Math.max(codeGrowthChars(oldText), codeGrowthChars(newText))
+  return (
+    `w-[clamp(42rem,calc(${chars}ch_*_2_+_4.5rem),70rem)] ` +
+    `2xl:w-[clamp(49.2rem,calc(${chars}ch_*_2_+_4.5rem),82rem)] `
+  )
 }
 
 /**
@@ -109,10 +218,12 @@ function narrowed(viewMode) {
  */
 export default function Block(b, opts = {}) {
   // viewMode — a function returning the global diff-view preference: 'split'
-  // (default, both panes side by side) or 'new' (only the new/right pane, full
-  // width — hides the old side). Toggled everywhere with `a` (home.mjs). A
-  // function so codeDiff's own reactive slot picks up the change, mirroring
-  // activeGroup/hintsEnabled above.
+  // (default, both panes side by side, full width), 'new' (only the new/right
+  // pane, hides the old side, fixed 60% width), or 'fit' (both panes again
+  // like 'split', but the card width follows the block's own code instead of
+  // a fixed width — see widthCls/fitWidthCls above). Cycled everywhere with
+  // `a` (home.mjs). A function so codeDiff's own reactive slot picks up the
+  // change, mirroring activeGroup/hintsEnabled above.
   const viewModeFn = opts.viewMode || (() => 'split')
   const preview = !!opts.preview
   // activeGroup is a function returning the currently-navigated change group
@@ -158,11 +269,9 @@ export default function Block(b, opts = {}) {
         // toggle gives every card. A two-sided (modified) block keeps the full
         // two-pane width, and the `a` toggle (viewMode==='new', see `narrowed`)
         // then shrinks EVERY visible card — modified included — to that same
-        // narrow width in lockstep. So the narrow width applies whenever the card
-        // is single-side OR `a` is on.
-        (narrowed(viewModeFn) || singleSide(b)
-          ? 'w-[42rem] 2xl:w-[49.2rem] '
-          : 'w-[70rem] 2xl:w-[82rem] ') +
+        // narrow width in lockstep. `a`'s third stand ('fit') gets its own,
+        // content-based width instead — see widthCls.
+        widthCls(b, viewModeFn) +
         (preview
           ? 'max-h-72 border-slate-200 dark:border-zinc-800 opacity-50'
           : diffActive()

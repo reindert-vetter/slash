@@ -1,13 +1,15 @@
 import { test, expect } from './_fixtures.mjs'
 
-// `a` toggles the global diff-pane view (state.diffViewMode, see
-// keyboard-navigation.md "`a` — diff-weergave toggelen") between the default
-// side-by-side rendering and a new-only rendering — everywhere a Block() card
-// is visible. A genuinely two-sided (modified) block also drops its old pane
+// `a` cycles the global diff-pane view (state.diffViewMode, see
+// keyboard-navigation.md "`a` — diff-weergave toggelen") through THREE stands
+// — split → new → fit → split — everywhere a Block() card is visible. A
+// genuinely two-sided (modified) block drops its old pane only in 'new'
 // (forcedNewOnly in Block.mjs); an already one-sided (added/removed) block
-// keeps its single pane either way. The card WIDTH, however, shrinks to 60%
-// for every visible card regardless of singleSide (`narrowed` in Block.mjs) —
-// modified, added and removed alike.
+// keeps its single pane in every stand. The card WIDTH: 'new' shrinks every
+// visible card to a fixed 60% regardless of singleSide (`narrowed` in
+// Block.mjs) — modified, added and removed alike; 'fit' instead sizes the
+// card off its own code (`fitWidthCls`), clamped between that same 60% floor
+// and the full split ceiling.
 test.describe('PR Review Tree — diff view toggle (`a`)', () => {
   // Direct-mount unit test: Block()'s viewMode opt controls whether codeDiff
   // renders both panes or just the new one, for a genuinely two-sided
@@ -64,12 +66,115 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await expect(card).toHaveClass(/2xl:w-\[49\.2rem\]/)
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
 
+    // Flip to 'fit': BOTH panes come back (unlike 'new', 'fit' never forces a
+    // single pane — see forcedNewOnly in Block.mjs), but the width class is no
+    // longer the fixed 70rem/82rem — it's a clamp() driven by the code's own
+    // (short) content, so it should still sit at (or near) the 60% floor for
+    // this tiny fixture.
+    await page.evaluate(() => {
+      window.__vm.mode = 'fit'
+    })
+    await expect(panes).toHaveCount(2)
+    await expect(card).toHaveClass(/clamp\(42rem/)
+    await expect(card).not.toHaveClass(/w-\[70rem\]/)
+    await expect(card).not.toHaveClass(/w-\[42rem\]/) // no longer the fixed 'new' width either
+
     // Flip back: side by side again, full width restored.
     await page.evaluate(() => {
       window.__vm.mode = 'split'
     })
     await expect(panes).toHaveCount(2)
     await expect(card).toHaveClass(/w-\[70rem\]/)
+  })
+
+  // Direct-mount unit test: in 'fit', a card with genuinely wide code lines
+  // grows past the 60% floor (but never past the full split ceiling) — proof
+  // that fitWidthCls actually reacts to the block's own content, not just a
+  // fixed clamp() that always resolves to its floor.
+  test('viewMode="fit" grows a card with wide code lines past the 60% floor', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+
+    await page.evaluate(async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      // 35 chars total on the line (incl. the 4-space indent) — probed to sit
+      // comfortably between the 60% floor and the full split ceiling (see the
+      // width assertions below), proving fitWidthCls actually scales with the
+      // content instead of just resolving to one of the two extremes.
+      const wideLine = 'return $this->fooBarValues($a);'
+      const b = reactive({
+        category: 'ACTION',
+        label: 'Foo::wide',
+        status: 'modified',
+        file: 'app/Foo.php',
+        line: 60,
+        name: 'wide',
+        class: 'Foo',
+        approved: false,
+        code: {
+          old: { start: 60, end: 62, text: 'public function wide(): int {\n    return 1;\n}' },
+          new: { start: 60, end: 62, text: `public function wide(): int {\n    ${wideLine}\n}` },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'fit-wide-host'
+      document.body.appendChild(host)
+      Block(b, { viewMode: () => 'fit' })(host)
+    })
+
+    const card = page.locator('#fit-wide-host article')
+    await expect(card).toHaveClass(/clamp\(42rem/)
+    const width = await card.evaluate((el) => el.getBoundingClientRect().width)
+    // Comfortably past the 60% floor (42rem = 672px at the default 16px root)
+    // for this deliberately widened line, and comfortably under the full
+    // split ceiling (70rem = 1120px) — proves fitWidthCls is actually
+    // proportional to the content, not just clamped at one extreme.
+    expect(width).toBeGreaterThan(700)
+    expect(width).toBeLessThan(1000)
+  })
+
+  // Direct-mount unit test: the OTHER end of the clamp — a genuinely very wide
+  // line caps the card at the full split width instead of growing past it.
+  test('viewMode="fit" caps a card with an extremely wide line at the full split width', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+
+    await page.evaluate(async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const veryWideLine =
+        'return $this->veryLongMethodNameThatDescribesSomethingComplicated($argumentOne, $argumentTwo, $argumentThree);'
+      const b = reactive({
+        category: 'ACTION',
+        label: 'Foo::verywide',
+        status: 'modified',
+        file: 'app/Foo.php',
+        line: 70,
+        name: 'verywide',
+        class: 'Foo',
+        approved: false,
+        code: {
+          old: { start: 70, end: 72, text: 'public function verywide(): int {\n    return 1;\n}' },
+          new: { start: 70, end: 72, text: `public function verywide(): int {\n    ${veryWideLine}\n}` },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'fit-verywide-host'
+      document.body.appendChild(host)
+      Block(b, { viewMode: () => 'fit' })(host)
+    })
+
+    const card = page.locator('#fit-verywide-host article')
+    const width = await card.evaluate((el) => el.getBoundingClientRect().width)
+    // Capped at the full split width (70rem = 1120px), never wider — 'fit'
+    // must never make a card wider than 'split' itself.
+    expect(width).toBeLessThanOrEqual(1120)
+    expect(width).toBeGreaterThan(1000)
   })
 
   // An already one-sided (added) block has no old pane to hide, so the toggle
@@ -120,6 +225,16 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     // `a` on: still one pane, still narrow — no change for a one-sided block.
     await expect(panes).toHaveCount(1)
     await expect(card).toHaveClass(/w-\[42rem\]/)
+    await expect(card).not.toHaveClass(/w-\[70rem\]/)
+
+    await page.evaluate(() => {
+      window.__addedVm.mode = 'fit'
+    })
+    // `fit`: still one pane (singleSide wins over the two-pane fit formula —
+    // see fitWidthCls), and this fixture's short code lands the clamp() on
+    // (or near) the same 60% floor.
+    await expect(panes).toHaveCount(1)
+    await expect(card).toHaveClass(/clamp\(42rem/)
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
 
     await page.evaluate(() => {
@@ -176,15 +291,24 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await expect(panes).toHaveCount(1)
     await expect(card).toHaveClass(/w-\[42rem\]/)
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
+
+    await page.evaluate(() => {
+      window.__removedVm.mode = 'fit'
+    })
+    // Same single-pane fit formula as the added-block case above (based on the
+    // OLD side's text here, since that's the only side a removed block has).
+    await expect(panes).toHaveCount(1)
+    await expect(card).toHaveClass(/clamp\(42rem/)
+    await expect(card).not.toHaveClass(/w-\[70rem\]/)
   })
 
-  // End-to-end: pressing `a` in the real app flips the visible block's diff
-  // between side-by-side and new-only, and `a` again flips it back. Anchored
-  // on block 1 of PR 12903 (CreatePaymentAction::execute), which reliably
-  // carries a real (two-sided) change — see the data caveat in
-  // conventions.md. Block 0 (ContractController::index) sorts first as the
-  // sole CONTROLLER (categoryRank in home.mjs) but has no local diff.
-  test('`a` toggles the live diff card between side-by-side and new-only', async ({
+  // End-to-end: pressing `a` in the real app cycles the visible block's diff
+  // through all three stands — split → new → fit → split. Anchored on block 1
+  // of PR 12903 (CreatePaymentAction::execute), which reliably carries a real
+  // (two-sided) change — see the data caveat in conventions.md. Block 0
+  // (ContractController::index) sorts first as the sole CONTROLLER
+  // (categoryRank in home.mjs) but has no local diff.
+  test('`a` cycles the live diff card through split → new → fit → split', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -203,19 +327,39 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     const card = page.locator('article.border-indigo-300')
     const splitBox = await card.boundingBox()
 
-    await page.keyboard.press('a')
+    await page.keyboard.press('a') // split → new
     await expect(panes).toHaveCount(1)
     // The card really shrinks on screen (not just a class string) — 60% of the
     // split width, well under a loose 80% sanity bound to absorb rounding/
     // sub-pixel layout without pinning an exact px value.
+    let newWidth
+    await expect
+      .poll(async () => {
+        const box = await card.boundingBox()
+        newWidth = box.width
+        return box.width
+      })
+      .toBeLessThan(splitBox.width * 0.8)
+
+    await page.keyboard.press('a') // new → fit
+    // 'fit' brings BOTH panes back (unlike 'new'), sized off the block's own
+    // (real, non-trivial) code — somewhere between the 60% floor and the full
+    // split width, never outside that range.
+    await expect(panes).toHaveCount(2)
     await expect
       .poll(async () => {
         const box = await card.boundingBox()
         return box.width
       })
-      .toBeLessThan(splitBox.width * 0.8)
+      .toBeGreaterThanOrEqual(newWidth - 1)
+    await expect
+      .poll(async () => {
+        const box = await card.boundingBox()
+        return box.width
+      })
+      .toBeLessThanOrEqual(splitBox.width + 1)
 
-    await page.keyboard.press('a')
+    await page.keyboard.press('a') // fit → split
     await expect(panes).toHaveCount(2)
     await expect
       .poll(async () => {
