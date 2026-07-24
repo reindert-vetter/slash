@@ -1,0 +1,8 @@
+[
+  {
+    "pr": 106,
+    "parentId": "106:app/Actions/TreeParentAction2.php:TreeParentAction2::execute",
+    "childId": "106:app/Actions/TreeChildAction2.php:TreeChildAction2::run",
+    "kind": "event_listener"
+  }
+]

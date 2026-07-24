@@ -225,6 +225,26 @@ function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/previewwidth-blocks.json'], {
     stdio: 'ignore',
   })
+  // Drilled-column same-block-skip fixture (PR 106,
+  // drill-approve-line-skip.spec.mjs): mold of the PR-95 tree fixture, but the
+  // event_listener child has TWO adjacent changed lines (worktrees
+  // materialized in _setup.mjs, materializeDrillLineSkipWorktrees) so
+  // approving the first line via the palette, while a drilled Onderliggende-
+  // code column owns the keyboard, has a second not-yet-approved line to jump
+  // to WITHOUT the postApprove menu appearing in between.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/drilllineskip-blocks.json',
+      '-relations',
+      'tests/fixtures/drilllineskip-relations.json',
+    ],
+    { stdio: 'ignore' },
+  )
 }
 
 function canConnect(port) {

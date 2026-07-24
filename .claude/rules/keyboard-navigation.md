@@ -297,17 +297,33 @@ menu simply stays closed, as always).
 asking "continue or not" is pure friction when there's nothing else to
 choose besides continuing within the block the reviewer is already looking
 at. This is exactly step 1 below (`findNextUnapproved`'s "further within the
-column that currently owns the keyboard" branch): the plan then has an
-**empty `path`** and `root === state.selected` (no drill, no child block, no
-other top-level block). `afterApproveAction` checks those two fields (plus
-`!keepList`, so that an approval from the block index — which leaves
-nothing else in that same block anyway — never hits this path) and in that
-case calls `applyNextUnapproved(target)` directly instead of
-`openMenu('postApprove')`. Any other outcome (down into a child subtree, up
-to a sibling, or on to another top-level block — steps 2-4 below) still
-shows the follow-up menu. "Next" follows the review **tree**, not just the
-flat sidebar list, depth-first
-(`findNextUnapproved` in `home.mjs`, four steps on each call):
+column that currently owns the keyboard" branch). `toggleApprove`/
+`toggleCallApprove` pass the id of the block they just approved into
+`afterApproveAction(approving, blockId)`, captured synchronously (same
+reason as `keepList`, before the async `findNextUnapproved` gap);
+`afterApproveAction` compares that `blockId` against the plan's **landing
+block** — the last entry of `target.path`, or (an empty `path`) the
+top-level block at `target.root` — plus `!keepList` (so that an approval
+from the block index, which leaves nothing else in that same block anyway,
+never hits this path) and `root === state.selected` (no jump to another
+top-level block). On a match it calls `applyNextUnapproved(target)` directly
+instead of `openMenu('postApprove')`. **This is deliberately NOT a bare
+`target.path.length === 0` check** — inside a drilled column
+(`state.focusLevel > 0`, see "Drilling"/"Column navigation" in
+`.claude/rules/detail-layout.md`), step 1's own plan always carries a
+non-empty `path` (`state.drill.slice(0, level)` — by the
+`focusLevel === state.drill.length` invariant, that's always the *same*
+drill stack, even though nothing but the change/gran cursor moved within it)
+— a path-length check alone would therefore never fire there, so approving
+a line with another unapproved line still ahead in the *same* drilled block
+used to wrongly open the follow-up menu instead of jumping straight to it,
+exactly like the top-level case already did. Comparing landing-block-id
+instead fixes that at any drill depth, while a step-2/3/4 outcome (down into
+a child subtree, up to a sibling, or on to another top-level block) still
+shows the follow-up menu as before, since the landing block then differs.
+Test: `tests/drill-approve-line-skip.spec.mjs`. "Next" follows the review
+**tree**, not just the flat sidebar list, depth-first (`findNextUnapproved`
+in `home.mjs`, four steps on each call):
 
 1. **Further within the column that currently owns the keyboard** — the
    top-level block (`state.gran`/`state.change`), or — if there is a drill

@@ -3941,7 +3941,7 @@ function toggleApprove() {
   b.approvedRows = [...set].sort((x, y) => x - y)
   persistApproval(b)
   // allIn was false → this action just ADDED approval (not revoked it).
-  afterApproveAction(!allIn)
+  afterApproveAction(!allIn, b.id)
 }
 
 // toggleCallApprove flips approval of exactly the one call segment the
@@ -3987,7 +3987,7 @@ function toggleCallApprove(b, change = state.change) {
   }
   b.approvedRows = [...rowSet].sort((x, y) => x - y)
   persistApproval(b)
-  afterApproveAction(approving)
+  afterApproveAction(approving, b.id)
 }
 
 // unitFullyApproved reports whether every changed row (or, at gran==='call', the
@@ -4204,24 +4204,26 @@ let postApproveTarget = null
 // COMMANDS/REVIEW_CHOICE_COMMANDS): fully done → just "Keur de PR goed"; not
 // yet fully done → the extra choice "Wijs de PR af" (which itself needs a
 // non-empty reason, see the 'reviewReject' menu mode).
-// `keepList` is captured synchronously, right here — before the async
-// findNextUnapproved gap — so it reflects the mode the reviewer was actually
-// in when they ran the approve action, not whatever state.mode happens to be
-// once the promise resolves.
-// EXCEPTION — next unit stays in the SAME block, no menu: when the plan's
-// `path` is empty and its `root` is still the current top-level block, this is
-// exactly findNextUnapproved's step-1 branch ("forward within whichever
-// column currently owns the keyboard") — no drill, no block change, just the
-// next unapproved line/call/group in the block the reviewer is already
-// looking at. Asking "ga door of niet" there is pure friction, so this jumps
-// straight there via applyNextUnapproved instead of opening the postApprove
-// menu. Any other outcome (down into a child's subtree, up to a sibling, or
-// across to a different top-level block) still opens the menu, unchanged.
-// `!keepList` guards this from ever firing off a list-mode block-approve
-// (approving a whole block from the index leaves nothing else inside it to
-// jump to in that same block anyway, but this keeps the two paths cleanly
-// separated).
-function afterApproveAction(approving) {
+// `keepList` and `blockId` are both captured synchronously, right here (resp.
+// by the caller, see toggleApprove/toggleCallApprove) — before the async
+// findNextUnapproved gap — so they reflect the mode/block the reviewer was
+// actually in when they ran the approve action, not whatever state happens to
+// be once the promise resolves.
+// EXCEPTION — next unit stays in the SAME block, no menu: if the plan's
+// landing block (the last entry of `path`, or — an empty `path` — the
+// top-level block at `root`) is the very block that was just approved
+// (`blockId`), this is exactly findNextUnapproved's step-1 branch ("forward
+// within whichever column currently owns the keyboard") — no block change,
+// just the next unapproved line/call/group in the block the reviewer is
+// already looking at, TOP-LEVEL OR DRILLED. Asking "ga door of niet" there is
+// pure friction, so this jumps straight there via applyNextUnapproved instead
+// of opening the postApprove menu. Any other outcome (down into a child's
+// subtree, up to a sibling, or across to a different top-level block) still
+// opens the menu, unchanged. `!keepList` guards this from ever firing off a
+// list-mode block-approve (approving a whole block from the index leaves
+// nothing else inside it to jump to in that same block anyway, but this keeps
+// the two paths cleanly separated).
+function afterApproveAction(approving, blockId) {
   if (!approving) return
   const keepList = state.mode !== 'diff'
   findNextUnapproved().then(async (target) => {
@@ -4238,7 +4240,26 @@ function afterApproveAction(approving) {
       openMenu(allDone ? 'reviewApprove' : 'reviewChoice')
       return
     }
-    const sameBlock = !keepList && target.path.length === 0 && target.root === state.selected
+    // The landing block of the plan — the last entry of target.path, or (an
+    // empty path) the top-level block at target.root. Comparing THIS against
+    // blockId (the block that was just approved, captured synchronously by
+    // the caller before this async gap) is what "stays in the same block"
+    // actually means — NOT target.path.length === 0, which only happens to
+    // be true at the top level (state.focusLevel === 0). Inside a drilled
+    // column (state.focusLevel > 0), findNextUnapproved's own step-1 branch
+    // ("forward within the column that currently owns the keyboard") returns
+    // target.path = state.drill.slice(0, level) — by the focusLevel ===
+    // state.drill.length invariant (see detail-layout.md, "Column
+    // navigation"), that's always the SAME, non-empty drill stack, even
+    // though nothing but the change/gran cursor moved. A bare
+    // path.length === 0 check therefore never fired here, so approving a
+    // line with another unapproved line still ahead in the same drilled
+    // block wrongly opened the postApprove menu instead of jumping straight
+    // there (the reported gap for gedrilde kolommen).
+    const landingId = target.path.length
+      ? target.path[target.path.length - 1].id
+      : state.blocks[target.root] && state.blocks[target.root].id
+    const sameBlock = !keepList && target.root === state.selected && landingId === blockId
     if (sameBlock) {
       applyNextUnapproved(target)
       return

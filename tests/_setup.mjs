@@ -15,6 +15,7 @@ export default function globalSetup() {
   materializeArrowWorktrees()
   materializeRangeSelectWorktrees()
   materializePreviewWidthWorktrees()
+  materializeDrillLineSkipWorktrees()
 }
 
 // materializeTreeWorktrees writes the (gitignored, normally real-git-derived)
@@ -299,4 +300,53 @@ class ${name}
   // Modified block: real old+new text, so its diff is genuinely two-sided.
   write('base', 'app/Actions/PreviewWidthModAction.php', file('PreviewWidthModAction', 'execute', 1))
   write('head', 'app/Actions/PreviewWidthModAction.php', file('PreviewWidthModAction', 'execute', 2))
+}
+
+// materializeDrillLineSkipWorktrees writes the synthetic PR 106 fixture
+// worktrees for drill-approve-line-skip.spec.mjs (same rationale as
+// materializeTreeWorktrees above): a parent block (one changed line, mold of
+// the PR-95 tree fixture) whose event_listener child (TreeChildAction2::run)
+// has TWO adjacent changed lines instead of one — contiguous, so they still
+// form a single 'group' unit, but f (zoom in) splits them into two separate
+// 'line' units. That shape is exactly what's needed to prove the "next unit
+// stays in the same block" exception in afterApproveAction (home.mjs) also
+// fires while a drilled Onderliggende-code column owns the keyboard, not only
+// at the top level.
+function materializeDrillLineSkipWorktrees() {
+  const parent = (value) => `<?php
+
+namespace App\\Actions;
+
+class TreeParentAction2
+{
+    public function execute()
+    {
+        $value = ${value};
+        return $value;
+    }
+}
+`
+  const child = (a, b) => `<?php
+
+namespace App\\Actions;
+
+class TreeChildAction2
+{
+    public function run()
+    {
+        $a = ${a};
+        $b = ${b};
+        return $a + $b;
+    }
+}
+`
+  const write = (side, relPath, contents) => {
+    const full = `data/worktrees/pr-106-${side}/${relPath}`
+    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
+    writeFileSync(full, contents)
+  }
+  write('base', 'app/Actions/TreeParentAction2.php', parent(1))
+  write('head', 'app/Actions/TreeParentAction2.php', parent(2))
+  write('base', 'app/Actions/TreeChildAction2.php', child(1, 2))
+  write('head', 'app/Actions/TreeChildAction2.php', child(10, 20))
 }
