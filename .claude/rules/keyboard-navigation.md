@@ -1025,6 +1025,28 @@ TEXTAREA/INPUT → shortcut does nothing, key just flows into the field) — a
 generic, future-proof guard that doesn't depend on which navigation state a
 field happens to track or not.
 
+**Compact status indicator (`viewModeIndicator`, `Block.mjs`):** three small
+icon buttons (split/new/fit, `data-testid=diffview-split`/`-new`/`-fit`) in
+the block card's metadata row (next to the file:line, before the approve
+checkbox) show which of the three stands is active (an indigo ring on the
+current one) and, since `state.diffViewMode` is global (every visible card
+reacts to it at once, see above), are **only rendered on the card that
+currently owns the diff keyboard** — `diffActive()`, the same opt that
+already drives the card's indigo border (see "Focus highlight per stop"
+above and detail-layout.md's `.key` explanation) — never on a preview/
+look-ahead card or an unfocused (collapsed-to-rail) drilled column, so it
+never doubles up or shows on something you're not actively reviewing. A
+click on an icon jumps `state.diffViewMode` **straight** to that stand
+(`setViewMode` opt → `home.mjs`'s `setDiffViewMode` → `applyDiffViewMode`,
+the same helper `toggleDiffView` itself now calls) — `a` keeps cycling as
+before, this is purely an additional, direct way to reach a stand. The
+three icons are a fixed, unchanging `.map()` over `VIEW_MODE_META`
+(`Block.mjs`) — always the same 3 entries in the same order, so no keyed-
+node pitfall applies (conventions.md); each button's own class is its own
+whole-value `${() => ...}` binding so only the highlight re-evaluates on a
+`viewMode` change, not the surrounding card header. Test:
+`tests/diffview.spec.mjs` ("the split/new/fit indicator …").
+
 **A held Cmd/Ctrl always steps aside for the browser/OS
 (`isModifiedKey(e)` in `home.mjs`, shared with the `f`/`d`/`s` zoom keys,
 see below):** `event.key` stays the bare letter `'a'` regardless of a

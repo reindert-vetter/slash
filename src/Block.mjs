@@ -193,6 +193,65 @@ function widthCls(b, viewMode) {
 // the card needlessly wide for content that's only shown once. Such a block
 // therefore gets the single-pane variant instead, based on just the one side
 // that's actually visible.
+// VIEW_MODE_META describes the three `a`-cycle stands (state.diffViewMode,
+// see DIFF_VIEW_CYCLE in home.mjs) for the compact status indicator in the
+// block-card header: a tooltip label and a small inline SVG glyph per
+// stand — our own static markup (no icon lib, per the vendoring rule).
+// Fixed, unchanging order/length, so viewModeIndicator's .map() over it is
+// safe without the keyed-node caveats that apply to a truly dynamic list
+// (see conventions.md) — this array never grows/shrinks/reorders.
+const VIEW_MODE_META = [
+  {
+    mode: 'split',
+    label: 'Split-weergave (oud + nieuw naast elkaar)',
+    svg: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="6" height="12" rx="1"/><rect x="9" y="2" width="6" height="12" rx="1"/></svg>',
+  },
+  {
+    mode: 'new',
+    label: 'Alleen nieuwe code (60% breed)',
+    svg: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="6" height="12" rx="1" stroke-dasharray="1.4 1.4" opacity="0.5"/><rect x="9" y="2" width="6" height="12" rx="1" fill="currentColor" stroke="none"/></svg>',
+  },
+  {
+    mode: 'fit',
+    label: 'Breedte volgt de code',
+    svg: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="2" width="10" height="12" rx="1"/><path d="M1 8h1.6M14.4 8H16" stroke-linecap="round"/></svg>',
+  },
+]
+
+// viewModeIndicator — the compact status indicator for the `a`-cycle: three
+// small icon buttons (split/new/fit), the active stand highlighted with an
+// indigo ring. A click jumps straight to that stand (setViewMode); `a`
+// keeps cycling as before (home.mjs). Only rendered by Block() while
+// diffActive() is true — i.e. only on the card that currently owns the
+// diff keyboard (see the caller below), never on a preview/collapsed card.
+// Each button's class is its own whole-value `${() => ...}` function
+// binding (see the arrow.js class-binding rule in conventions.md) so only
+// the highlight re-evaluates on a viewMode change, not the surrounding
+// card header.
+function viewModeIndicator(viewModeFn, setViewMode) {
+  return html`
+    <span class="flex items-center gap-0.5" data-testid="diffview-indicator">
+      ${VIEW_MODE_META.map(
+        (m) => html`
+          <button
+            type="button"
+            title="${m.label}"
+            data-testid="${'diffview-' + m.mode}"
+            class="${() =>
+              'flex h-4 w-4 items-center justify-center rounded transition ' +
+              (viewModeFn() === m.mode
+                ? 'bg-indigo-100 text-indigo-600 ring-1 ring-indigo-300 dark:bg-indigo-500/20 dark:text-indigo-300 dark:ring-indigo-500/40'
+                : 'text-slate-400 hover:text-slate-600 dark:text-zinc-600 dark:hover:text-zinc-400')}"
+            @click="${() => setViewMode(m.mode)}"
+          >
+            <span class="h-3 w-3" .innerHTML="${() => m.svg}"></span>
+          </button>
+        `.key(m.mode),
+      )}
+    </span>
+  `
+}
+
 function fitWidthCls(b) {
   const c = b.code
   const oldText = c && !c.error && c.old ? c.old.text : ''
@@ -226,6 +285,13 @@ export default function Block(b, opts = {}) {
   // `a` (home.mjs). A function so codeDiff's own reactive slot picks up the
   // change, mirroring activeGroup/hintsEnabled above.
   const viewModeFn = opts.viewMode || (() => 'split')
+  // setViewMode — called with a stand ('split'/'new'/'fit') when the reviewer
+  // clicks one of the three icons in viewModeIndicator below; home.mjs jumps
+  // state.diffViewMode straight to it (setDiffViewMode). Defaults to a no-op
+  // so a caller that doesn't pass one (e.g. the drill-preview/look-ahead
+  // cards, which never show the indicator anyway since diffActive is always
+  // false there) doesn't need to wire it up.
+  const setViewMode = opts.setViewMode || (() => {})
   const preview = !!opts.preview
   // activeGroup is a function returning the currently-navigated change group
   // ({ start, end } row indices) for this block, or null. It's a function (not a
@@ -319,6 +385,13 @@ export default function Block(b, opts = {}) {
           >
         </span>
         <span class="flex-1"></span>
+        ${() =>
+          // Only the card that currently owns the diff keyboard (diffActive,
+          // e.g. the selected top-level block or the focused drilled column
+          // — never a preview/look-ahead card) shows the split/new/fit
+          // status indicator; see viewModeIndicator above and the "a —
+          // cycling the diff view" section in keyboard-navigation.md.
+          diffActive() ? viewModeIndicator(viewModeFn, setViewMode) : ''}
         ${() =>
           b.tests === false
             ? html`<span

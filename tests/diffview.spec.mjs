@@ -420,4 +420,93 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
       })
       .toBeGreaterThan(0)
   })
+
+  // The compact split/new/fit status indicator (Block.mjs's viewModeIndicator)
+  // is only rendered on the card that currently owns the diff keyboard
+  // (diffActive() — see the "a — cycling the diff view" section in
+  // keyboard-navigation.md), shows the active stand highlighted, and a click
+  // jumps state.diffViewMode straight to that stand via the setViewMode opt.
+  test('the split/new/fit indicator only shows on the focused card, highlights the active stand, and a click jumps to it', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+
+    await page.evaluate(async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const b = reactive({
+        category: 'ACTION',
+        label: 'Foo::bar',
+        status: 'modified',
+        file: 'app/Foo.php',
+        line: 26,
+        name: 'bar',
+        class: 'Foo',
+        approved: false,
+        code: {
+          old: { start: 26, end: 28, text: 'public function bar(): int {\n    return 1;\n}' },
+          new: { start: 26, end: 29, text: 'public function bar(): ?int {\n    return 2;\n}' },
+        },
+      })
+      window.__vm = reactive({ mode: 'split', focused: false })
+      window.__setViewModeCalls = []
+      const host = document.createElement('div')
+      host.id = 'view-mode-indicator-host'
+      // Sit above the rest of the page (position:fixed z-index), like the
+      // app's own overlays — otherwise a fixed-position app element (the
+      // sidebar/pr-index) can sit on top of this host in normal flow and
+      // intercept the click below.
+      host.style.cssText = 'position:fixed;top:0;left:0;z-index:9999;background:white;'
+      document.body.appendChild(host)
+      Block(b, {
+        viewMode: () => window.__vm.mode,
+        diffActive: () => window.__vm.focused,
+        setViewMode: (mode) => window.__setViewModeCalls.push(mode),
+      })(host)
+    })
+
+    const host = page.locator('#view-mode-indicator-host')
+    const indicator = host.locator('[data-testid="diffview-indicator"]')
+
+    // Not focused (diffActive() === false, e.g. a preview/look-ahead card):
+    // no indicator at all — no empty space reserved either.
+    await expect(indicator).toHaveCount(0)
+
+    // Focus this card: the indicator appears, with the current stand ('split')
+    // highlighted and the other two not.
+    await page.evaluate(() => {
+      window.__vm.focused = true
+    })
+    await expect(indicator).toHaveCount(1)
+    const split = host.locator('[data-testid="diffview-split"]')
+    const newBtn = host.locator('[data-testid="diffview-new"]')
+    const fit = host.locator('[data-testid="diffview-fit"]')
+    await expect(split).toHaveClass(/ring-indigo-300/)
+    await expect(newBtn).not.toHaveClass(/ring-indigo-300/)
+    await expect(fit).not.toHaveClass(/ring-indigo-300/)
+
+    // A click on 'fit' calls setViewMode('fit') — home.mjs's setDiffViewMode
+    // then jumps state.diffViewMode straight there (unit-tested here via the
+    // opt itself, not the global state).
+    await fit.click()
+    await expect
+      .poll(() => page.evaluate(() => window.__setViewModeCalls))
+      .toEqual(['fit'])
+
+    // Once the underlying viewMode actually flips to 'fit' (mirroring what
+    // home.mjs's setDiffViewMode would do), the highlight follows it.
+    await page.evaluate(() => {
+      window.__vm.mode = 'fit'
+    })
+    await expect(fit).toHaveClass(/ring-indigo-300/)
+    await expect(split).not.toHaveClass(/ring-indigo-300/)
+
+    // Losing focus (diffActive() false again, e.g. stepping into a drilled
+    // column) hides the indicator again.
+    await page.evaluate(() => {
+      window.__vm.focused = false
+    })
+    await expect(indicator).toHaveCount(0)
+  })
 })

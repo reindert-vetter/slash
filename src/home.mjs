@@ -380,9 +380,27 @@ const DIFF_VIEW_CYCLE = ['split', 'new', 'fit']
 // transition (see detail-layout.md's "Call-pijl-overlay").
 function toggleDiffView() {
   const idx = DIFF_VIEW_CYCLE.indexOf(state.diffViewMode)
-  state.diffViewMode = DIFF_VIEW_CYCLE[(idx + 1) % DIFF_VIEW_CYCLE.length]
+  applyDiffViewMode(DIFF_VIEW_CYCLE[(idx + 1) % DIFF_VIEW_CYCLE.length])
+}
+
+// applyDiffViewMode sets state.diffViewMode to an explicit stand (instead of
+// stepping to the next one) and runs the same follow-up as toggleDiffView —
+// re-centre the diff (a pane re-render resets scrollTop) and resettle the
+// call-arrow overlay. Shared by toggleDiffView (`a`) and setDiffViewMode (a
+// click on the compact split/new/fit indicator in Block.mjs's card header,
+// see the "a — cycling the diff view" section in keyboard-navigation.md), so
+// clicking a stand directly behaves exactly like cycling onto it with `a`.
+function applyDiffViewMode(mode) {
+  if (!DIFF_VIEW_CYCLE.includes(mode) || mode === state.diffViewMode) return
+  state.diffViewMode = mode
   scrollChangeIntoView(false)
   resettleCallArrows()
+}
+
+// setDiffViewMode is the Block.mjs-facing callback (opts.setViewMode) — a
+// click on one of the three indicator icons jumps straight to that stand.
+function setDiffViewMode(mode) {
+  applyDiffViewMode(mode)
 }
 
 // isEditableFocused reports whether DOM focus currently sits on a text input —
@@ -5909,6 +5927,11 @@ function DetailPanel(state) {
             // active card is one-sided (activeSingleSided, see above) — Task 29,
             // never applied to the selected card itself.
             viewMode: () => (i !== sel && activeSingleSided ? 'new' : state.diffViewMode),
+            // A click on the compact split/new/fit indicator (only rendered
+            // by Block.mjs while diffActive() above is true, i.e. never on
+            // the preview card) jumps state.diffViewMode straight to that
+            // stand — see applyDiffViewMode/setDiffViewMode.
+            setViewMode: setDiffViewMode,
             // The key encodes (a) whether this card is the *selected* one or the
             // look-ahead *preview*, (b) whether its code has loaded yet, and (c)
             // whether the keyboard is actually focused on it (vs. a drilled
@@ -6093,6 +6116,7 @@ function DetailPanel(state) {
                   onApprove: (blk) => persistApproval(blk),
                   commentedRows: () => commentRowSet(b),
                   viewMode: () => state.diffViewMode,
+                  setViewMode: setDiffViewMode,
                 })}
               </div>
               ${
