@@ -88,7 +88,7 @@ for the 60s poll. The ready-flow state lives on `ui` (`readyFor`/`reviewers`/
 Below both branches sit, unchanged, *Open on GitHub* / *Open Jira ticket*,
 followed by **"Copy GitHub URL"** (`data-testid=copy-url`,
 `navigator.clipboard.writeText(pr.url)` with brief "Copied!" feedback via the
-ephemeral `ui.copiedFor`) and the **ignore section** (see below).
+ephemeral `ui.copiedFor`).
 Because there's now never an `<a href="/pr/<id>">` in the row anymore — the
 navigation to the tree always runs through the menu choice "Open review
 tree" — there's also no separate hover-only regenerate button
@@ -102,12 +102,11 @@ Next to "Recently generated" sits a second expandable button **"Filters"**
 (`filterDrawer`, `data-testid=filter-drawer`, modeled on `recentDrawer` —
 `state.filterOpen` toggles, a keyed-array slot with its own key per branch
 `filter:closed`/`filter:open`, per the single↔array pitfall in
-`conventions.md`). Expanded, it shows a menu with **four preset filters** +
-**"Show all hidden pull requests"** (`data-testid=show-hidden`). Each preset
-runs a **live gh search** via `GET /api/prs/filter?preset=<key>`
+`conventions.md`). Expanded, it shows a menu with **four preset filters**.
+Each preset runs a **live gh search** via `GET /api/prs/filter?preset=<key>`
 (`runPreset` → `state.presetResults`/`state.activePreset`, sequence-guarded
 like `runSearch`); the results **temporarily replace the main sections**
-(`currentView` in `overview.mjs` routes: query > hidden > preset > inbox),
+(`currentView` in `overview.mjs` routes: query > preset > inbox),
 with a "← Back to inbox" bar (`data-testid=back-to-inbox`,
 `clearPresetView`).
 
@@ -126,35 +125,6 @@ in workflow bodies). `searchPRsExpr`/`runPRSearch` (`inbox.go`) prepend
 three are a flat list. Offline (`SLASH_GITHUB=off`), `handleFilter` only
 honors the `draft:` qualifier of the fixture rows. Test:
 `tests/overview-filter-presets.spec.mjs`.
-
-### Ignore / hide from the inbox
-
-A PR can be **ignored** from the per-row popover ("Ignore PR", a divider with
-one button per duration: **Always / Tomorrow 08:00 / Next Monday 08:00 /
-7 days / 14 days**, `data-testid=ignore-<kind>`). `ignoreUntil(kind)` computes
-the **absolute expiry timestamp** in browser-local time ("always" = `0`) and
-`ignorePr` sends it as `IgnoreSignal{pr, until}` to the per-repo `ignore`
-tracker (`POST /api/workflows/<ignoreRunId>/signals/ignore`, the sanctioned
-write path — see `.claude/rules/tembed-workflows.md`). The UI updates
-`state.ignores` **optimistically** (wholesale reassign, so the row disappears
-immediately) and reconciles on the next `reloadIgnores`. An already-ignored
-PR shows one **"Stop ignoring"** button instead of the duration options
-(`unignorePr` → `clear:true` → the workflow does `Set(..., -1)`, a DELETE).
-
-Hiding happens **client-side at read time** (`isIgnored(n)` = `until === 0 ||
-until > Date.now()`): `mainContent` (sections + stacks) filters out ignored
-PRs; presets/search results deliberately remain unfiltered (explicit views).
-The menu item **"Show all hidden pull requests"** opens the `hiddenBlock`
-view (`data-testid=hidden-view`): one row per valid (unexpired) ignore with
-the title from the already-loaded inbox data (or a minimal `#number` row for
-a PR that fell out of the inbox query), an **"ignored until \<date\>"** note
-(`formatIgnoreUntil`, `until 0` → "always"), and an un-ignore button
-(`data-testid=hidden-unignore`). `state.ignores` is filled on load by
-`loadIgnore` (`POST /api/workflows/ignore` → `runId`, then
-`GET /api/ignore`); `state.ignoreRunId`/`state.ignores`/`state.filterOpen`/
-`state.activePreset`/`state.showHidden` live **outside** the URL (ephemeral,
-mirroring `ui.openPopover`/`recentOpen`). Test:
-`tests/overview-ignore.spec.mjs`.
 
 ### GitHub access runs through a workflow (never direct)
 
@@ -207,8 +177,6 @@ call) as before.
 | `POST /api/workflows/{runID}/heartbeat` | Operational ping (poll cadence), no state write. |
 | `GET /api/prs/search?q=…` | **Still a direct** live gh `search` (`inbox_api.go`) — an ephemeral, parameterized read, not a persistent list. A bare number → `<n> in:title`. |
 | `GET /api/prs/filter?preset=<key>` | Live gh `search` for a **fixed, allow-listed** preset query (`filterPresets` in `inbox_api.go`) — never raw UI text to gh (`exec` input validation). See "Filter drawer" below. |
-| `POST /api/workflows/ignore` | Ensures the per-repo `ignore` tracker → `{runId}` (the UI signals ignore/un-ignore to it). See `.claude/rules/tembed-workflows.md`. |
-| `GET /api/ignore` | Read-only ignore read model → `{ok,ignores:[{pr,until}]}`. Expiry check happens client-side at read time. |
 | `GET /api/reviewers` | Read-only candidate reviewers → `{ok, reviewers:[{login,avatarUrl,count}]}` — repo collaborators sorted most-used-first (local usage counts). |
 | `POST /api/workflows/ready_for_review` | `{pr, reviewers?}` → flip a draft PR to ready + request reviewers (the sanctioned write path). 400 on an invalid pr/login. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
@@ -439,7 +407,7 @@ top** (`kbHandler`'s ArrowUp branch: at `selIndex <= 0` it calls
 searches across **all** open PRs of the repo (`/api/prs/search`), so going
 from the list up to search is one keystroke. `focusSearch` focuses the
 field and releases the row selection (`selKey = null`, no ring). Test:
-`tests/overview-ignore.spec.mjs`.
+`tests/overview.spec.mjs`.
 
 **And the symmetric way back: `↓` in the search box jumps back to the row
 list** (`onSearchKeydown`'s `ArrowDown` branch, next to the existing

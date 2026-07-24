@@ -382,4 +382,37 @@ test.describe('PR Review Tree — PR inbox', () => {
     )
     await expect(page).toHaveURL(/\/pr-overview$/)
   })
+
+  test('Kopieer GitHub URL writes the PR url to the clipboard', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__copied = null
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: (t) => {
+            window.__copied = t
+            return Promise.resolve()
+          },
+          readText: () => Promise.resolve(window.__copied),
+        },
+      })
+    })
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    await page.locator('[data-testid="pr-row"][data-pr="12888"]').click()
+    await page.locator('[data-testid="copy-url"]').click()
+    await expect.poll(() => page.evaluate(() => window.__copied)).toContain('/pull/12888')
+  })
+
+  test('ArrowUp past the first row focuses the search box (which searches all PRs)', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+    await expect(page.locator('[data-testid="pr-row"]').first()).toBeVisible()
+
+    await page.keyboard.press('ArrowDown') // select the first row
+    await page.keyboard.press('ArrowUp') // past the top → search box
+    const focused = await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))
+    expect(focused).toBe('search')
+  })
 })

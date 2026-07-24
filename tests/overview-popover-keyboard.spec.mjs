@@ -10,9 +10,8 @@ test.describe('PR Review Tree — popover keyboard navigation', () => {
   // 12888 ("Fix comment notification retry backoff (BLOG-1421)") is not yet
   // ingested and its title carries a Jira key. Its popover's first two items
   // are stable in document order (Genereer review-boom, Open op GitHub); the
-  // rest (Kopieer GitHub URL, Open Jira-ticket, and the ignore-termijn buttons)
-  // vary, so the wrap-around is exercised over the actual item count rather than
-  // a hardcoded three.
+  // rest (Kopieer GitHub URL, Open Jira-ticket) vary, so the wrap-around is
+  // exercised over the actual item count rather than a hardcoded three.
   test('↑/↓ cycle the popover items, Escape closes it, and the row list stays put', async ({ page }) => {
     await page.goto('/pr-overview')
     await page.waitForLoadState('networkidle')

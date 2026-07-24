@@ -1,6 +1,6 @@
 import { test, expect } from './_fixtures.mjs'
 
-// The symmetric counterpart to overview-ignore.spec.mjs's "ArrowUp past the
+// The symmetric counterpart to overview.spec.mjs's "ArrowUp past the
 // first row focuses the search box" test: ArrowDown from the search box must
 // hand the keyboard back to the row list — a one-way trap here was the root
 // cause of "I can't navigate down with the arrow keys" (see
