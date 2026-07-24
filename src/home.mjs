@@ -19,6 +19,7 @@ import Block, {
   updateHints,
   blockLabel,
   singleSide,
+  sweepBracketOnlyForward,
 } from './Block.mjs'
 import RelatedPanel, {
   CommentsSidebar,
@@ -3936,8 +3937,18 @@ function toggleApprove() {
   const target = approveTargetRows(ctx)
   if (!target.length) return
   const set = approvedRowSet(b)
+  // allIn (and thus the label's "goedkeuren vs. intrekken" choice, see
+  // COMMANDS' 'approve' item) is deliberately computed on the RAW target —
+  // never on a swept one — so the sweep below can't itself flip whether this
+  // action counts as an approve or a retract.
   const allIn = target.every((i) => set.has(i))
-  target.forEach((i) => (allIn ? set.delete(i) : set.add(i)))
+  // One-way sweep (see sweepBracketOnlyForward, Block.mjs): only on the ADD
+  // path does approving a line/group also pull in any directly-FOLLOWING
+  // bracket-only row (a lone `});`/`},`/etc.) — retracting only ever affects
+  // the rows the reviewer actually navigated to, never an auto-swept
+  // neighbor.
+  const applyTo = allIn ? target : sweepBracketOnlyForward(blockRows(b), target)
+  applyTo.forEach((i) => (allIn ? set.delete(i) : set.add(i)))
   b.approvedRows = [...set].sort((x, y) => x - y)
   persistApproval(b)
   // allIn was false → this action just ADDED approval (not revoked it).

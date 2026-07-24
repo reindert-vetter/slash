@@ -1017,18 +1017,23 @@ export function unitsFor(rows, gran) {
 // simply "are all changed rows approved?". The array is always reassigned (never
 // mutated in place) so arrow.js re-renders the checkbox and the pane bars.
 
+// displayText returns a row's *display* side text — the new (right) side for
+// an `ins` row (including a paired modification, whose display side is always
+// the new one), the old (left) side for a del-only row with no replacement.
+// Shared by rowHasContent and isBracketOnlyRow below.
+function displayText(r) {
+  return r.rightMark === 'ins' ? r.right : r.left
+}
+
 // rowHasContent reports whether a changed row actually carries visible text on
-// its *display* side — the new (right) side for an `ins` row (including a
-// paired modification, whose display side is always the new one), the old
-// (left) side for a del-only row with no replacement. A row can be
-// `rowChanged` (it carries a del/ins mark) yet be a blank/whitespace-only
-// line that's purely part of the diff — e.g. a blank line inside a wholly
-// *added* function (status: 'added', so the entire body is emitted as
-// one-sided `ins` rows including its blank lines) or a blank *removed* line.
-// That's diff noise, not reviewable content: nothing to read or judge. Used
-// to additionally filter changedRows/changeLines/changeCalls (see below) so
-// such a row never counts toward the approve total and is never its own
-// landable line/call unit ("ik kan het selecteren zonder dat ik het zie").
+// its display side. A row can be `rowChanged` (it carries a del/ins mark) yet
+// be a blank/whitespace-only line that's purely part of the diff — e.g. a
+// blank line inside a wholly *added* function (status: 'added', so the entire
+// body is emitted as one-sided `ins` rows including its blank lines) or a
+// blank *removed* line. That's diff noise, not reviewable content: nothing to
+// read or judge. Used to additionally filter changedRows/changeLines/changeCalls
+// (see below) so such a row never counts toward the approve total and is never
+// its own landable line/call unit ("ik kan het selecteren zonder dat ik het zie").
 // Deliberately NOT applied to changeGroups/rowChanged themselves: a blank row
 // still rides along inside whichever group run it falls in (same as a
 // bracket-only row, see hasLetter) so a group's highlighted range never jumps
@@ -1036,8 +1041,26 @@ export function unitsFor(rows, gran) {
 //
 // Go port: blockstats.go's rowHasContent — keep both in lockstep.
 function rowHasContent(r) {
-  const text = r.rightMark === 'ins' ? r.right : r.left
+  const text = displayText(r)
   return !!(text && text.trim() !== '')
+}
+
+// isBracketOnlyRow reports whether a changed row's display text is nothing
+// but closing/structural punctuation — ')', '}', ';', ',', ']', '{' — after
+// trim (combinations count too, e.g. a lone `});` line closing a callback, or
+// a stray `},`/`{` on its own line). Such a line needs no separate review of
+// its own: see sweepBracketOnlyForward (home.mjs), which auto-approves it
+// once the reviewer approves the line/group right before it. This does NOT
+// change what counts toward changedRows/the approve total (a bracket-only
+// row already counts, same as before) — it only affects which specific rows
+// end up in b.approvedRows when an approve action runs, so no Go port is
+// needed here (see blocks-and-ingest.md).
+export function isBracketOnlyRow(r) {
+  if (!rowChanged(r)) return false
+  const text = displayText(r)
+  if (!text) return false
+  const t = text.trim()
+  return t !== '' && /^[)};,\]{]+$/.test(t)
 }
 
 // changedRows returns the indices of every navigable (changed, non-ws-only,
@@ -1048,6 +1071,25 @@ export function changedRows(rows) {
   for (let i = 0; i < rows.length; i++)
     if (rowChanged(rows[i]) && rowHasContent(rows[i])) out.push(i)
   return out
+}
+
+// sweepBracketOnlyForward extends a set of just-approved row indices with the
+// run of directly FOLLOWING (forward only — never backward, a deliberate
+// scope choice) changed rows whose content is nothing but closing punctuation
+// (isBracketOnlyRow): approving a line/group also approves the `});`/`},`/
+// etc. line(s) right after it, so the reviewer never has to approve those
+// separately. One-way: only meant to be applied on the ADD path of an
+// approve toggle (see toggleApprove in home.mjs) — retracting an approval
+// never un-approves an already-swept neighbor, so there is no shared-row
+// edge case (a bracket-only row sitting between two independently-approved
+// lines) to resolve. `target` must be non-empty; returns it unchanged
+// otherwise.
+export function sweepBracketOnlyForward(rows, target) {
+  if (!target.length) return target
+  const set = new Set(target)
+  const hi = Math.max(...target)
+  for (let j = hi + 1; j < rows.length && isBracketOnlyRow(rows[j]); j++) set.add(j)
+  return [...set].sort((a, b) => a - b)
 }
 
 // diffStat tallies added vs removed lines over aligned rows, git-diff-stat style:

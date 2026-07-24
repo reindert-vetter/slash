@@ -213,7 +213,11 @@ contains **block actions**: toggling approve and commenting on this line
 action is **scoped to the current navigation unit** (`toggleApprove`/
 `approveTargetRows`): in list mode the whole block, in diff mode the
 selected group/line/call — it approves exactly the rows of that unit (or
-retracts them if they are already approved).
+retracts them if they are already approved). At `gran==='group'`/`'line'`
+(not `'call'`) an approve additionally sweeps forward: a directly-following
+bracket/punctuation-only row (a lone `});`/`},`/etc., see
+`isBracketOnlyRow`/`sweepBracketOnlyForward` in `.claude/rules/blocks-and-ingest.md`)
+gets auto-approved along with it, one-way (never un-swept on a retract).
 **`focusLevel`/`drillCursor`-aware:** a drilled Underlying-code column
 (`state.focusLevel > 0`, see "Drilling"/"Column navigation" in
 `.claude/rules/detail-layout.md`) has its own block plus its own

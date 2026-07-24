@@ -120,6 +120,27 @@ left as a navigable list.
   own countability/landability is suppressed, not its place in a broader
   group highlight (no visual jump in a group's diff highlighting). See also
   `changeLines`/`changeCalls` in `.claude/rules/keyboard-navigation.md`.
+- **Approving a line/group also sweeps in a directly-FOLLOWING bracket/
+  punctuation-only row — `isBracketOnlyRow`/`sweepBracketOnlyForward`
+  (`Block.mjs`), frontend-only, no Go port.** A changed row whose display
+  text (same side-selection as `rowHasContent`) is, after `trim()`, nothing
+  but `)` `}` `;` `,` `]` `{` (combinations count too, e.g. a lone `});`
+  closing a callback) still counts toward `changedRows`/the approve
+  `total` like any other row (that part is unchanged — this is NOT another
+  `rowHasContent`-style exclusion), but the reviewer no longer has to
+  approve it separately: `toggleApprove` (`home.mjs`, `gran==='group'`/
+  `'line'` only — **not** `'call'`, `toggleCallApprove` is untouched) sweeps
+  it into `b.approvedRows` automatically the moment the line/group right
+  before it gets approved. Deliberately **one-way and forward-only**: the
+  sweep only runs on the ADD path (`allIn` — whether this action approves
+  or retracts — is computed on the RAW, un-swept target first, so the sweep
+  itself can never flip that decision), never on retract, and only looks at
+  rows AFTER the approved unit, never before. That sidesteps the edge case
+  of a bracket-only row sitting between two independently-approved
+  neighbors (retracting one side would otherwise have to decide whether to
+  un-sweep a row the other side still relies on) — once swept in, a
+  bracket-only row simply stays approved regardless of what happens next to
+  a neighboring line.
 - **Sort order of the left list (`categoryRank` in `recomputeLeftList`,
   `home.mjs`):** the left list is not simply ingest/source order — it sorts by
   category priority: **ROUTE** first (the root of the
