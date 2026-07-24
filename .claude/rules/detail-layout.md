@@ -279,10 +279,16 @@ the right edge (`data-testid=sidebar-collapsed`, `right-0 w-12`, clickable):
 two numbers, a speech-bubble icon with the **number of comments**
 (`visibleComments().length` — scoped to the selected block/navigation unit,
 the same scope as the comment index itself) and a clock icon with the
-**number of active (running/waiting) tasks**
-(`runningTaskCount(state)`, the same `running`/`waiting` filter as
-`taskRuns`). Purely a hint — no click actions per number, only the whole
-rail is clickable.
+**number of genuinely running tasks** (`runningTaskCount(state)`, strictly
+`status === 'running'` — **not** `waiting`, unlike `taskRuns`' own
+active/done split). Several long-lived per-PR trackers (`build_relations`,
+`approve`, `pr_status`) sit in `waiting` indefinitely once their initial run
+is done, without being busy (see `.claude/rules/tembed-workflows.md`), so
+counting/coloring those as "active" here was misleading — the clock icon's
+color follows the same count (a reactive whole-value class binding, per the
+arrow.js rule in `conventions.md`): amber only while `runningTaskCount(state)
+> 0`, otherwise the same neutral gray as the comments icon. Purely a hint —
+no click actions per number, only the whole rail is clickable.
 
 **`<main>` reserves a reactive right margin so it doesn't disappear behind the
 rail/sidebar.** Both are separate `position:fixed` overlays with a **higher**

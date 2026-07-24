@@ -2692,13 +2692,22 @@ export function PrWideComments(state) {
 // (toggleSidebar, home.mjs' onKeydown) rather than reached by stepping →
 // through the nav chain — see keyboard-navigation.md. Collapsed
 // (!cs.sidebarOpen) it renders as a narrow hint rail showing the comment count
-// + the running/waiting task count; a click on the rail opens it the same way
-// Cmd+→ does.
+// + the genuinely running task count; a click on the rail opens it the same
+// way Cmd+→ does.
 
-// runningTaskCount is the number of active (running/waiting) runs — the second
-// number on the collapsed hint rail.
+// runningTaskCount is the number of genuinely active (`running`) runs — the
+// second number on the collapsed hint rail, and also what drives its color
+// (see sidebarHintRail below). Deliberately NOT `waiting` too: several
+// long-lived per-PR trackers (build_relations, approve, pr_status) sit in
+// `waiting` indefinitely once their initial run is done, without being busy
+// (see `.claude/rules/tembed-workflows.md`/the buildRelationsSummary "idle"
+// note in this file) — counting/coloring those as "active" was misleading.
+// Only used here (not by taskRuns' own active/done split, which — for the
+// Active/Recent grouping of the open sidebar — deliberately keeps treating
+// `waiting` as "still open", since a waiting comment thread etc. should stay
+// visually grouped with running work there, not sink to "Recent").
 function runningTaskCount(state) {
-  return taskRuns(state).filter((r) => r.status === 'running' || r.status === 'waiting').length
+  return taskRuns(state).filter((r) => r.status === 'running').length
 }
 
 // openSidebar is the "open it" half of toggleSidebar, also used directly by a
@@ -2749,7 +2758,7 @@ function restoreLastSidebarFocus() {
 }
 
 // sidebarHintRail — the collapsed state: a narrow rail on the right edge with
-// the comment count and the running/waiting task count, clickable to open.
+// the comment count and the genuinely running task count, clickable to open.
 function sidebarHintRail(state) {
   return html`
     <button
@@ -2786,7 +2795,18 @@ function sidebarHintRail(state) {
           >${() => visibleComments().length}</span
         >
       </span>
-      <span class="flex flex-col items-center gap-0.5 text-amber-600 dark:text-amber-400" data-testid="sidebar-hint-tasks">
+      <span
+        class="${() =>
+          // Whole-value class binding (arrow.js rule, see conventions.md):
+          // amber only while something is genuinely running, otherwise the
+          // same neutral gray as the comments icon next to it — a task list
+          // that's merely `waiting` (idle, see runningTaskCount above) must
+          // not look "active".
+          `flex flex-col items-center gap-0.5 ${
+            runningTaskCount(state) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-zinc-400'
+          }`}"
+        data-testid="sidebar-hint-tasks"
+      >
         <svg
           xmlns="http://www.w3.org/2000/svg"
           viewBox="0 0 24 24"
