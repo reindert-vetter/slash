@@ -734,11 +734,16 @@ as fallback.
   `method_call` (no special badge — renders exactly like any other resolved
   method call). A Resource that doesn't override `toArray()` (uses the
   framework default) silently yields no child, never an `unresolved` row —
-  not an ambiguity for the LLM, just an absence. Note:
-  `reResourceUse`/`reResourceReturn` require the class name to literally
-  **end** in `Resource` — a versioned name like `AffiliateResourceV2` does
-  not match either detector today; that's a pre-existing gap shared with
-  `controllerResourceDetector`, out of scope here.
+  not an ambiguity for the LLM, just an absence.
+  `reResourceUse`/`reResourceReturn` also match a **versioned/collection**
+  class-name suffix — `AffiliateResourceV2`, `AffiliateResourceCollection`,
+  `AffiliateResourceCollectionV3` (`(?:Collection)?(?:V\d+)?` right after
+  the required `Resource`) — not just the plain `XResource` form; the
+  suffix is anchored immediately before the `(`/`::`/return-type boundary,
+  so a class merely containing "Resource" followed by an unrelated word
+  (`ResourceManager`, `ResourceController`) still never matches. This
+  extension automatically applies to `controllerResourceDetector`
+  (relations.go) too, since both share the same two regexes.
   **Eloquent magic properties** (rule 5, `reArrowProp`): a `->name`
   **without parentheses** — `$order->billingAddress` — is Laravel syntax
   for the relation **method** `billingAddress()`. We treat it as a call if

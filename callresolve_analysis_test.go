@@ -1834,19 +1834,13 @@ return [
 }
 
 // TestResolveCallsResourceToArray: a controller instantiating an API Resource
-// on a changed line (new AffiliateResourceV2($affiliate)) surfaces that
+// on a changed line (new AffiliateResource($affiliate)) surfaces that
 // Resource's toArray() as underlying code, even though the Resource class
 // itself is not changed in this PR — mirrors resolveMigrationModels/
 // resolveDataProviders (callresolve may point at unchanged code; relations.go's
 // controllerResourceDetector cannot, since it requires both sides changed).
-//
-// Note: reResourceUse/reResourceReturn (shared, unchanged, with
-// relations.go's controllerResourceDetector) require the class name to
-// literally END in "Resource" — a versioned name like "AffiliateResourceV2"
-// (the exact class from the motivating real-world example) does NOT match
-// either detector today. That gap is pre-existing and shared by both
-// call sites; this test therefore uses a plain "AffiliateResource" name to
-// exercise the (correctly reused, unchanged) matching rule.
+// See TestResolveCallsResourceToArrayVersionedName for the versioned/collection
+// class-name form (AffiliateResourceV2).
 func TestResolveCallsResourceToArray(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 60
@@ -1916,6 +1910,74 @@ class ProductResource {
 	// unresolved entry, unaffected by this rule).
 	if _, ok := findEntry(entries, "resource:Resource"); ok {
 		t.Error("unexpected resource: entry for the bare 'Resource' helper class")
+	}
+}
+
+// TestResolveCallsResourceToArrayVersionedName proves the versioned/collection
+// class-name form (AffiliateResourceV2 — the exact class from the motivating
+// real-world example, not just the plain "XResource" form) also resolves to
+// its toArray() method. False-positive guard: a class ending in "Resource"
+// followed by an unrelated word (ResourceManager) must never match.
+func TestResolveCallsResourceToArrayVersionedName(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 62
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Http/Controllers/AffiliateController.php": `<?php
+namespace App\Http\Controllers;
+class AffiliateController {
+    public function show($affiliate) {
+        $resource = new AffiliateResourceV2($affiliate);
+        $manager = new ResourceManager();
+        return $resource;
+    }
+}
+`,
+		"app/Http/Resources/AffiliateResourceV2.php": `<?php
+namespace App\Http\Resources;
+class AffiliateResourceV2 {
+    public function toArray($request) {
+        return ['id' => $this->id];
+    }
+}
+`,
+		"app/Support/ResourceManager.php": `<?php
+namespace App\Support;
+class ResourceManager {
+    public function toArray($request) {
+        return [];
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Http/Controllers/AffiliateController.php", Class: "AffiliateController", Name: "show", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "resource:AffiliateResourceV2")
+	if !ok {
+		t.Fatalf("no entry for resource:AffiliateResourceV2, got %+v", entries)
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("status=%q, want resolved", e.Status)
+	}
+	if e.ChildClass != "AffiliateResourceV2" || e.ChildMethod != "toArray" {
+		t.Errorf("child=%q::%q, want AffiliateResourceV2::toArray", e.ChildClass, e.ChildMethod)
+	}
+
+	// ResourceManager is NOT a "Resource"/"ResourceCollection"(+version)
+	// class — must never be picked up by this rule.
+	if _, ok := findEntry(entries, "resource:ResourceManager"); ok {
+		t.Error("unexpected resource: entry for ResourceManager (false positive)")
 	}
 }
 

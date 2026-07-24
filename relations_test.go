@@ -511,6 +511,49 @@ func TestBuildRelationsLaravelBothSidesRequired(t *testing.T) {
 	}
 }
 
+// TestBuildRelationsControllerResourceVersionedName proves reResourceUse
+// matches a versioned/collection Resource class name (AffiliateResourceV2,
+// not just the plain "XResource" form) — the real-world motivating case that
+// was previously silently missed by controllerResourceDetector.
+func TestBuildRelationsControllerResourceVersionedName(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 62
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Http/Controllers/AffiliateController.php": `<?php
+namespace App\Http\Controllers;
+class AffiliateController {
+    public function show($affiliate) {
+        $resource = new AffiliateResourceV2($affiliate);
+        return $resource;
+    }
+}
+`,
+		"app/Http/Resources/AffiliateResourceV2.php": `<?php
+namespace App\Http\Resources;
+class AffiliateResourceV2 {
+    public function toArray($request) { return []; }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctrl := Block{PR: pr, File: "app/Http/Controllers/AffiliateController.php", Class: "AffiliateController", Name: "show", Category: "CONTROLLER", Side: SideNew, Status: StatusModified}
+	resource := Block{PR: pr, File: "app/Http/Resources/AffiliateResourceV2.php", Class: "AffiliateResourceV2", Name: "toArray", Category: "RESOURCE", Side: SideNew, Status: StatusModified}
+
+	rels := buildRelations(dataDir, pr, []Block{ctrl, resource})
+	if !hasKindEdge(rels, ctrl, resource, relations.KindControllerResource) {
+		t.Errorf("missing controller→resource edge for versioned class AffiliateResourceV2: %+v", rels)
+	}
+}
+
 // The build_relations workflow: EnsureRelations starts it, the buildRelations
 // Activity runs synchronously and fills the relations read-model.
 func TestBuildRelationsWorkflow(t *testing.T) {

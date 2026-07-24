@@ -421,9 +421,15 @@ var (
 	// A FormRequest type-hinted parameter: `SomethingRequest $var`.
 	reRequestParam = regexp.MustCompile(`([\\A-Za-z0-9_]*Request)\s+\$`)
 	// An API Resource constructed in a controller body: new XResource( / XResource::make|collection(.
-	reResourceUse = regexp.MustCompile(`new\s+([\\A-Za-z0-9_]+Resource)\s*\(|([\\A-Za-z0-9_]+Resource)::(?:make|collection)\s*\(`)
-	// A Resource named as the method's return type: `): XResource` / `): ?XResource`.
-	reResourceReturn = regexp.MustCompile(`\)\s*:\s*\??([\\A-Za-z0-9_]+Resource)\b`)
+	// The class name may carry a versioned/collection suffix — XResourceV2,
+	// XResourceCollection, XResourceCollectionV3 — but nothing else after
+	// "Resource": this stays precise (no ResourceManager/ResourceController
+	// false positives) because the suffix is anchored immediately before the
+	// "(" / "::" that follows.
+	reResourceUse = regexp.MustCompile(`new\s+([\\A-Za-z0-9_]+Resource(?:Collection)?(?:V\d+)?)\s*\(|([\\A-Za-z0-9_]+Resource(?:Collection)?(?:V\d+)?)::(?:make|collection)\s*\(`)
+	// A Resource named as the method's return type: `): XResource` / `): ?XResource`
+	// (same versioned/collection suffix as reResourceUse above).
+	reResourceReturn = regexp.MustCompile(`\)\s*:\s*\??([\\A-Za-z0-9_]+Resource(?:Collection)?(?:V\d+)?)\b`)
 	// Any type-hinted parameter `Foo $var` (filtered to changed models afterwards).
 	reTypedParam = regexp.MustCompile(`([\\A-Za-z0-9_]+)\s+\$`)
 	// FormRequest::authorize policy check: ->can('ability', Policy::class) and the
