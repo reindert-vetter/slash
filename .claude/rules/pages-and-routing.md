@@ -1,6 +1,6 @@
 # Pages & routing
 
-The app has two pages, both static HTML shells with no build step; the Go
+The app has three pages, all static HTML shells with no build step; the Go
 server (`api.go`, `routes`) decides which shell a route gets:
 
 - **`/pr/<id>`** — the review page for a single PR (`index.html` → `home.mjs`).
@@ -14,10 +14,14 @@ server (`api.go`, `routes`) decides which shell a route gets:
   review tree". The read-only "recently generated" drawer still feeds from
   **`GET /api/prs`** (`handlePRs` → `listPRs`, block/file counts per PR from
   `PRSummary`).
+- **`/inbox`** — the **task inbox**: a personal, scored to-do list across PR
+  reviews, unread comments on your own PRs, and Jira tickets assigned to you
+  (`inbox.html` → `src/inbox.mjs`). See **The task inbox page (`/inbox`)**
+  section below.
 - **`/`** redirects (302) to `/pr-overview`; every other path
   (`/src/*`, `/overview.html`, …) is served statically by the
-  `http.FileServer`. The `/pr/` and `/pr-overview` routes serve their shell via
-  `serveFile(staticDir, name)`.
+  `http.FileServer`. The `/pr/`, `/pr-overview`, and `/inbox` routes serve
+  their shell via `serveFile(staticDir, name)`.
 
 ## PR inbox (`/pr-overview`)
 
@@ -440,3 +444,113 @@ behavior as a mouse click on that item), `Escape` closes the menu
 closes listener), and `←`/`→`/`Home`/`End`/`/` are swallowed
 (`preventDefault`, no action) so they don't leak through to the row list;
 every other key (notably `Tab`) is left alone.
+
+## The task inbox page (`/inbox`)
+
+A separate, personal to-do list — distinct from the PR-centric
+`/pr-overview` inbox above — over the derived, scored **task** list from
+`GET /api/tasks` (the `task_inbox` workflow's aggregation of PR reviews,
+unread comments on your own PRs, and Jira tickets assigned to you; see
+"The task inbox: `task_inbox` + `modules/taskinbox`" in
+`.claude/rules/tembed-workflows.md` for the backend/scoring side).
+`inbox.html` → `src/inbox.mjs`; registered in `api.go`'s `routes` next to
+`/pr-overview`, same static-shell pattern. **Not yet linked from either of
+the other two pages** — reached only by navigating to `/inbox` directly.
+
+**Layout mirrors `/pr/<id>`:** a `position:fixed` left **index**
+(`data-testid=task-index`, `w-[26rem]`, mirrors `pr-index`) and a
+`position:fixed` right **detail panel** (`data-testid=task-detail`,
+mirrors the block column) — no URL-state binding (`sel`/`gran`/…, unlike
+`/pr/<id>`): `state.selectedId` (the clicked/`↑`/`↓`-selected task's id)
+lives purely in memory, reset on every page load to the first visible row.
+
+- **Index (`taskIndex`):** one row per task (`taskRow`,
+  `data-testid=task-row`, `data-task-id`), sorted **points descending**
+  (tie-break: most recently updated first, `visibleTasks()`) — a kind icon
+  (`ICON_PATHS`/`KIND_ICON_CLS`, one SVG per `pr_review`/`comment_unread`/
+  `jira`), title + subtitle, a points pill (`data-testid=task-points`), and
+  a clock-icon **snooze button** (`data-testid=task-snooze-btn`) that opens
+  a small duration popover (`snoozePopover`, `data-testid=
+  task-snooze-popover`: Tomorrow 08:00 / Next Monday 08:00 / 7 days /
+  14 days / Always — `SNOOZE_CHOICES`, mirrors the removed PR-`ignore`
+  feature's own duration choices) right on the row. Choosing one calls
+  `snoozeTask(taskId, kind)`: `snoozeUntil(kind)` computes the **absolute**
+  expiry in browser-local time (mirrors the old `ignoreUntil`), the row is
+  **optimistically** removed (`state.snoozes` reassigned wholesale, so it
+  disappears immediately, reconciled on the next `loadSnoozes()` poll), and
+  the choice is sent as a `SnoozeSignal` to the per-repo `task_snooze`
+  tracker (`POST /api/workflows/{taskSnoozeRunId}/signals/snooze
+  {taskId, until}` — the sanctioned write path, see "Snoozing a task" in
+  `.claude/rules/tembed-workflows.md`). Below the row list, a
+  **"Show/Hide N snoozed tasks"** toggle (`data-testid=task-snoozed-toggle`)
+  expands a compact list of currently-snoozed tasks
+  (`data-testid=task-snoozed-row`, `snoozedTasks()`) with their expiry
+  (`formatSnoozeUntil`) and an **unsnooze** button
+  (`data-testid=task-snoozed-unsnooze` → `unsnoozeTask`, sends
+  `{taskId, clear:true}`) — mirrors the removed PR-`ignore` feature's
+  "hidden" drawer. `isSnoozed(taskId)` (`until === 0 || until >
+  Date.now()`) is the same read-time expiry check as that removed feature
+  used, just keyed on a task id instead of a PR number now.
+- **Detail panel (`taskDetailPanel`/`taskDetail`):** shows the selected
+  task's kind-specific view (`detailBodyFor`, routed through a `${() =>
+  …}` function binding so a kind switch correctly swaps the nested
+  template shape instead of leaving the previous kind's DOM in place — the
+  "static template↔string slot" pitfall from `.claude/rules/conventions.md`,
+  generalized here to template↔template) plus a shared **points
+  breakdown** (`pointsBreakdown`, `data-testid=task-points-breakdown`: the
+  total plus one `data-testid=task-point-note` row per `PointNote` the
+  backend computed — "basis" first, always present, then each matching
+  bonus rule, see the scoring table in `tembed-workflows.md`).
+  - **`pr_review`** (`prReviewDetail`): title, author, `+adds −dels`,
+    review-decision pill, a CI-status pill (`CHECKS_STYLE`), and action
+    links — **"Open review tree"** (`data-testid=task-open-tree`, only
+    shown when `detail.hasGraph`, links straight to `/pr/<n>`) and **"Open
+    on GitHub"**.
+  - **`comment_unread`** (`commentUnreadDetail`): title, file/label, the
+    same `composeTargetHint` code-fragment card `RelatedPanel.mjs` already
+    uses for a placed comment's reference code (reused, not duplicated —
+    only shown when the task's comment carries one), the full thread
+    (`commentThreadMessage`, reusing `avatarHTML`/`commentBody` from
+    `avatar.mjs`/`RelatedPanel.mjs`), a reply textarea
+    (`data-testid=task-reply-input`) and two buttons — **"Verstuur"**
+    (`data-testid=task-reply-send` → `replyComment`) and **"Oplossen"**
+    (`data-testid=task-reply-resolve` → `resolveComment`, sends the
+    sentinel `/resolve` body when the field is empty). Both go through
+    **the same, existing** `task_code_comment` reply Signal
+    (`POST /api/workflows/{runId}/signals/reply {author, body, done}`) that
+    `RelatedPanel.mjs` already uses on `/pr/<id>` — no new write path: a
+    `comment_unread` task's id is `"comment:" + runId`
+    (`commentRunId(t)` strips the prefix), and a comment's `RunID` **is**
+    its id (see `modules/comments`' doc comment in
+    `.claude/rules/tembed-workflows.md`), so the very same Signal target
+    resolves it.
+  - **`jira`** (`jiraDetail`): title, ticket key + status, the description
+    rendered as **Markdown** (`renderMarkdown`, the same `snarkdown`-based
+    helper as the PR-info column, see `.claude/rules/conventions.md`), and
+    an **"Open in Jira"** link (`data-testid=task-open-jira`).
+- **Load/poll (mirrors `overview.mjs`):** on load, `init()` ensures both
+  trackers (`POST /api/workflows/task_inbox` and `…/task_snooze`, each
+  returning a Run ID), fires one `refresh` Signal on the task-inbox
+  tracker, then loads both read-models (`GET /api/tasks`,
+  `GET /api/tasksnoozes`). A 60s heartbeat (`sendHeartbeat`, only while the
+  tab is visible+focused — `activeTab()`, the existing heartbeat
+  convention) and a 15s reload of both read-models (only while the tab is
+  active) keep it current, mirroring the PR-overview's own
+  heartbeat/`reloadSnapshot` cadence.
+- **Keyboard:** a plain `window` `keydown` listener (no command-palette/
+  popover-focus machinery like `/pr/<id>`/`overview.mjs`) — `↑`/`↓`
+  (`moveSelection`) walk `visibleTasks()` and scroll the row into view;
+  `s` toggles the snooze popover for the selected row; `Escape` closes an
+  open popover, or blurs a focused textarea/input first if one has focus.
+  Typing in the reply textarea is left alone (the listener bails out early
+  whenever `document.activeElement` is a TEXTAREA/INPUT, except for
+  `Escape`).
+- **Write paths, all sanctioned:** snooze/un-snooze
+  (`task_snooze`'s `signals/snooze`) and comment reply/resolve (the
+  existing `task_code_comment` reply Signal) — both start-or-signal an
+  Execution, per `.claude/rules/workflows-write-boundary.md`. Everything
+  else on this page is read-only (`GET /api/tasks`, `GET /api/tasksnoozes`).
+- Test: `tests/inbox-tasks.spec.mjs` (all three kinds rendered with a
+  points badge + breakdown; an unread comment placed via
+  `task_code_comment` on an authored PR turns it into a `comment_unread`
+  task deterministically, entirely offline).

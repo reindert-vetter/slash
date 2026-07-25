@@ -75,6 +75,11 @@ only loaded when the topic is relevant. Update the details there, not here.
   `.claude/rules/tembed-workflows.md` and the hard rules
   `.claude/rules/workflow-determinism.md` /
   `.claude/rules/workflows-write-boundary.md`.
+- **Task inbox** — the `/inbox` page: a personal, scored to-do list across PR
+  reviews, unread comments on your own PRs, and Jira tickets assigned to you
+  (`task_inbox`/`modules/taskinbox`), with per-task snoozing
+  (`task_snooze`/`modules/tasksnooze`). See the task-inbox sections in
+  `.claude/rules/tembed-workflows.md` and `.claude/rules/pages-and-routing.md`.
 - **Conventions** — file naming conventions, arrow.js pitfalls, Prism
   vendoring, Go conventions, language choice. See
   `.claude/rules/conventions.md`.

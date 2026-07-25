@@ -1723,18 +1723,64 @@ sequentially and completes, mirroring `submit_review`/`ingest`.
   stacking, and the `warningsPerBlock` cap is hard-enforced despite a
   model ignoring it).
 
-## The task inbox: `task_inbox` + `modules/taskinbox` (backend aggregation, no UI yet)
+## Snoozing a task (`task_snooze` + `modules/tasksnooze`)
+
+A ninth Workflow Type, **`task_snooze`** (one Execution per **repo**, mold
+of `approve`/`ignore` — the task-level successor of the removed per-PR
+`ignore` feature), makes reviewer choices to hide a **task** from the
+`/inbox` task list **durable**. Purely local — it never touches the
+network, so no `SLASH_*=off` gating is needed. Unlike the removed `ignore`
+feature (keyed on a PR number), this is keyed on a generic **task id**
+(`pr:<n>` / `comment:<runId>` / `jira:<KEY>`, the same ids `taskinbox_analysis.go`
+assigns — see below), since a task isn't always a PR.
+
+- **`modules/tasksnooze`** (`data/tasksnooze.db`, mold of `modules/ignore`):
+  the read model `snoozes(task_id, until)`, PK `task_id`. `until` is an
+  **absolute Unix-ms expiry** (`0` = forever, never expires). Write
+  `Set(taskID, until)` (workflow-only): upsert, or — when **`until < 0`** —
+  a DELETE of the row (un-snooze). Read `List()`. `List` does **not**
+  filter on expiry: the "is this still snoozed?" check happens at
+  **read time** in the UI (`until === 0 || until > Date.now()`), exactly
+  like the old `ignore` feature's own client-side check.
+- **Workflow** (`workflows.go`): `taskSnoozeWorkflow` is a loop on
+  **`SignalSnooze = "snooze"`** (`SnoozeSignal{TaskID, Until, Clear}`);
+  every signal runs one `saveTaskSnooze` Activity (`Clear` → `Set(...,
+  -1)`, otherwise `Set(..., Until)`). **Deterministic without a clock:**
+  the UI computes the absolute `Until` (browser-local time,
+  `snoozeUntil(kind)` in `src/inbox.mjs`) and sends it along, so the
+  workflow body never reads `w.Now()` — the number of Activities is
+  exactly the number of signals in the history. Never completes, one
+  long-lived per-repo tracker. `EnsureTaskSnooze()` (mirrors `EnsureInbox`,
+  field `snoozeRun` + `findTaskSnoozeRunLocked`) starts/reuses the
+  Execution, also after a restart (`engine.Recover` re-blocks it on the
+  signal); called at server startup (`newTasks`) alongside `EnsureInbox`.
+  Unlike `pr_inbox`/`task_inbox`, `EnsureTaskSnooze` has **no poller** — it
+  only ever reacts to UI signals, there's nothing to periodically refresh.
+- **Endpoints** (`tasks_api.go`): `POST /api/workflows/task_snooze` →
+  `EnsureTaskSnooze`, returns `{runId}` (the UI signals snooze/un-snooze
+  there); the **generic** `POST /api/workflows/{runID}/signals/snooze
+  {taskId, until|clear}` delivers the Signal (a decode branch alongside
+  `set`/`reply`/`rebuild`); read-only `GET /api/tasksnoozes` →
+  `{ok, snoozes:[{taskId, until}]}`.
+- **Frontend:** see "The task inbox page (`/inbox`)" in
+  `.claude/rules/pages-and-routing.md` (the per-row snooze-duration
+  popover, the client-side hiding + "snoozed tasks" drawer).
+- Tests: `modules/tasksnooze/tasksnooze_test.go` (round-trip, upsert
+  overwrites, a negative `until` clears), `task_snooze_test.go`
+  (`TestTaskSnoozeWorkflow`: `EnsureTaskSnooze` + a `snooze` Signal → read
+  model, a `Clear` Signal un-snoozes, and `EnsureTaskSnooze` idempotency).
+
+## The task inbox: `task_inbox` + `modules/taskinbox` (aggregation) + the `/inbox` page
 
 A "task" is **derived, not primarily stored** — it doesn't live in its own
 table anywhere. Three independent sources each yield candidate tasks;
 `buildTaskInbox` (`taskinbox_analysis.go`) merges and scores them into one
 flat list, which the `task_inbox` workflow (mirrors `pr_inbox` exactly: one
 Execution per repo, a `refresh` Signal drives one Activity, never
-completes) full-swaps into the `taskinbox` read-model. This phase is
-**backend-only** — no frontend page/panel reads `GET /api/tasks` yet; the
-task-level `task_snooze` workflow (`modules/tasksnooze`, hide a task by id
-until a given time) from the previous phase is the intended companion once
-a UI exists, but nothing here reads it yet either.
+completes) full-swaps into the `taskinbox` read-model. `GET /api/tasks`
+serves that read-model to the `/inbox` page (`src/inbox.mjs`, see "The task
+inbox page (`/inbox`)" in `.claude/rules/pages-and-routing.md`), which
+combines it with the `task_snooze` read-model above to hide snoozed tasks.
 
 - **Source A — `pr_review`** (id `pr:<n>`): open PRs where you're a
   reviewer. Reuses the **existing** "Needs your review" section of
@@ -1823,6 +1869,12 @@ a UI exists, but nothing here reads it yet either.
   `acli` differently (e.g. a different Jira Cloud site config) is whether
   the JQL default order (`order by updated desc`) and the `--limit 100`
   cap need tuning; no test depends on live `acli`.
+- **Frontend (`src/inbox.mjs`):** see "The task inbox page (`/inbox`)" in
+  `.claude/rules/pages-and-routing.md` for the index/detail layout, the
+  three kind-specific detail views, and how snoozing (see the `task_snooze`
+  section above) and the `comment_unread` reply/resolve flow (the existing
+  `task_code_comment` reply Signal, see "The first slash task" above) hang
+  off this same read-model.
 - Tests: `modules/jira/jira_test.go` (`AssignedToMe`'s `Fake` round-trip),
   `modules/taskinbox/taskinbox_test.go` (`Replace`/`List` round-trip +
   full-swap + empty-clears), `taskinbox_analysis_test.go`
@@ -1835,4 +1887,7 @@ a UI exists, but nothing here reads it yet either.
   `comments.Module`, `jira.Fake` for source C → `taskinbox.List` filled
   with one task per source). Entirely offline
   (`SLASH_GITHUB=off`/`github.Fake`/`jira.Fake`) — no real
-  gh/acli/network call in any test.
+  gh/acli/network call in any test. Playwright: `tests/inbox-tasks.spec.mjs`
+  (all three kinds shown with a points badge + breakdown, seeded via the
+  shared `tests/fixtures/inbox.json` + `tests/fixtures/jira-assigned.json`
+  under `SLASH_JIRA_ASSIGNED`, see `tests/_fixtures.mjs`).
