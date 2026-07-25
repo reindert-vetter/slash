@@ -200,10 +200,23 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		cl = claude.NewFake()
 	}
 	// Under SLASH_JIRA=off the Jira bridge never shells out (offline/tests): an
-	// empty Fake reports no linked issue for every key.
+	// empty Fake reports no linked issue for every key. SLASH_JIRA_ASSIGNED
+	// optionally points at a JSON fixture ([]jira.Issue) that seeds the Fake's
+	// AssignedToMe result deterministically — mirrors SLASH_INBOX for the
+	// task_inbox workflow's "jira" task source (see
+	// .claude/rules/tembed-workflows.md, task_inbox).
 	var jr jira.Client = jira.New()
 	if os.Getenv("SLASH_JIRA") == "off" {
-		jr = &jira.Fake{}
+		fake := &jira.Fake{}
+		if path := os.Getenv("SLASH_JIRA_ASSIGNED"); path != "" {
+			if raw, err := os.ReadFile(path); err == nil {
+				var issues []jira.Issue
+				if json.Unmarshal(raw, &issues) == nil {
+					fake.SetAssigned(issues)
+				}
+			}
+		}
+		jr = fake
 	}
 	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, tc, ap, ex, ts, cl, jr, db, dataDir, repo)
 	// Set post-construction (not a constructor param) so every existing

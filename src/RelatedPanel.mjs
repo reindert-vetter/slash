@@ -1219,7 +1219,7 @@ const GRAN_LABEL = {
 // example of the exact unit — so the reviewer sees the link *while* typing,
 // before the comment is placed. `target` is the `commentTarget()` result passed
 // down from home.mjs (null until a block is selected).
-function composeTargetHint(target) {
+export function composeTargetHint(target) {
   if (!target) return ''
   return html`
     <div
@@ -2559,7 +2559,7 @@ const PW_KIND_LABEL = { issue: 'PR-comment', review: 'PR-comment', review_summar
 // same renderMarkdown used by prInfoCard for the PR summary/description, see
 // markdown.mjs) meant for an `.innerHTML` binding — never a plain-text slot,
 // see the arrow.js `.innerHTML` convention in conventions.md.
-function commentBody(c) {
+export function commentBody(c) {
   return () => (c ? renderMarkdown(c.body) : '')
 }
 
