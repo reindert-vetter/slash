@@ -186,9 +186,67 @@ left as a navigable list.
   locale and the `vendor/` namespace dir) come from the read-only
   `GET /api/langsiblings?pr=N&file=<lang file>` (`langsiblings.go`, reads the
   head worktree like `/api/code`, within the write boundary). The companion has
-  no sidebar entry, no approval, is not navigable. See also "Resolving
-  translation keys" in `.claude/rules/tembed-workflows.md` for the resolved
-  `trans()`-child render (the second render mode).
+  no sidebar entry, no approval, and no cursor of its own — it only **mirrors**
+  the primary block's per-key highlight (see "Per-key navigation" just below).
+  See also "Resolving translation keys" in `.claude/rules/tembed-workflows.md`
+  for the resolved `trans()`-child render (the second render mode).
+  **`ensureLangSiblings`'s fetch-then-render must also bump `state.codeVersion`:**
+  the block-column closure that calls it also reads `b.code` (the existing
+  `codeVersion`-keyed card rebuild, see "Approval" above) — reassigning
+  `state.langSiblings` alone intermittently never re-triggered that closure
+  (reproduced: the companion card stayed on "geen gewijzigde sleutels"
+  indefinitely, well after the fetch had resolved), the exact same "multiple
+  reactive consumers of the same property" pitfall as `.claude/rules/conventions.md`
+  describes for the diff render itself. Bumping the SAME `state.codeVersion`
+  counter this closure already subscribes to (`void state.codeVersion`) fixes
+  it, mirroring `ensureCode`'s own fix. A residual, much rarer version of the
+  same race can still occur in **list mode** (no `state.mode==='diff'`
+  transition to help settle it) — a known, pre-existing limitation, not fully
+  eliminated.
+  **Per-key navigation, approve and comment (`translationRowUnits`,
+  `Block.mjs`):** the reviewer navigates a TRANSLATION block **per changed
+  key** — `↑`/`↓` step through the key rows (highlighting one at a time, an
+  indigo inset bar exactly like the diff's active-row highlight); `f`/`d`/`s`
+  are a deliberate no-op (no group/line/call zoom — a key is always exactly
+  one step). This deliberately reuses the EXISTING row-indexed
+  approve/comment infrastructure instead of a parallel system:
+  `translationRowUnits(b)` (`Block.mjs`) maps each changed/added/removed key
+  (`translationChangeUnits`, `translationDiff.mjs` — the same
+  changed/added/removed list `translationBlockView` renders, now carrying a
+  1-based source line per key via a small position-tracking addition to the
+  hand-rolled array parser: every parsed leaf entry records the byte offset
+  of its own key token, converted to a line number) onto the **aligned-diff
+  row** `blockRows(b)` already computes for the same block (a `newLineToRow`/
+  `oldLineToRow` index built once from `blockRows`, since aligned rows carry
+  no line numbers of their own). Once a key has a `row`, it slots directly
+  into everything that already operates on `{start, end}` row ranges —
+  `b.approvedRows` (approve/retract, the existing `changedRows`-based
+  "approve X/Y" counter — deliberately **not** ported to Go/blockstats.go;
+  each key falls on its own row in the common case, so the existing counter
+  already reflects per-key approval correctly), `unitLineRange`/
+  `commentTarget` (comment anchoring: a changed/added key anchors on its
+  **new** line, a removed key on its **old** line, exactly like an ordinary
+  code comment), and the "next unapproved" walk. `home.mjs`'s `navUnitsOf(b,
+  rows, gran)` is the one dispatch point (used by `unitsOf`/`groupsFor`/
+  `commentTarget`/`approveTargetRows`/`firstUnapprovedOwnUnit`/`openTask`):
+  for a TRANSLATION block it always returns the per-key unit list regardless
+  of `gran` (which stays pinned at `'group'`, since `setGran`/`extendRange`
+  early-return for this category); every other block keeps using the
+  granularity-based `unitsFor`. Each unit also carries its own `idx` (its
+  index into `translationRowUnits`) alongside `{start, end}` — needed because
+  two **different** keys can share the same aligned row (an added key
+  directly followed by a removed one gets zipped into one del+ins row by
+  `alignRows`, the same way an ordinary code block would) — `row` alone is
+  therefore not always a reliable way back to "which key", so
+  `Block.mjs`'s `translationSlot` reads `idx` directly instead of
+  re-deriving the unit from its row. Rendering the active/approved state per
+  row lives in each row's **own** nested `${() => …}` binding (not resolved
+  once up front) — `translationBlockView`/`translationSlot` are otherwise
+  only re-invoked on a `codeVersion`/focus change, not on every `↑`/`↓`
+  step, so a synchronous, one-shot computation would freeze the highlight at
+  whatever it was on that render (the same "outer closure vs. nested
+  reactive slot" distinction as the `stepChevronSlot`/`companionCard`
+  pitfalls in `conventions.md`). Test: `tests/translation-navigation.spec.mjs`.
 - **Hiding approved blocks (`BlockList.mjs`):** fully approved **top-level**
   blocks (the pill `done === total`, subtree) are hidden by default from the
   "Start" list; a button at the bottom (`data-testid=toggle-approved`, "Show N

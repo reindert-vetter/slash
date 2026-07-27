@@ -22,6 +22,30 @@
   (`.innerHTML="${() => htmlString}"`) — arrow.js then sets the property
   instead of escaping. Make sure the string is safe (e.g. Prism.highlight,
   which escapes itself).
+- **arrow.js — an attribute value with ANY `${...}` interpolation must be the
+  whole value, even a PLAIN (non-function) one.** The "entire value" rule
+  above is usually phrased for the reactive `${() => ...}` case, but it
+  applies just as much to a bare, one-shot interpolation:
+  `class="text-sm font-bold ${cls}"` (no `()=>`) ALSO throws "Invalid HTML
+  position" — arrow.js's static template compiler can't handle a MIXED
+  literal+dynamic attribute value at all, reactive or not. Found while
+  building the TRANSLATION per-key overview (`translationDiff.mjs`): a badge
+  class built as `` `shrink-0 rounded ... ${KIND_BADGE_CLS[u.kind]}` `` broke
+  the whole surrounding template; fixed by moving the concatenation OUTSIDE
+  the template into one `${wholeString}` slot
+  (`` `${'shrink-0 rounded ... ' + KIND_BADGE_CLS[u.kind]}` ``). Symptom is
+  identical to the HTML-comment case ("Invalid HTML position", thrown from
+  deep inside `vendor/arrow.js`'s template parser) — if you see that error,
+  audit every attribute for a partial `${...}` interpolation, not just
+  looking for stray `<!-- -->`.
+- **arrow.js — a single `html`` `` tag can only ever have ONE root element.**
+  `` html`<p>a</p><p>b</p>` `` (two sibling top-level tags in one tagged
+  template) also throws "Invalid HTML position" — build an ARRAY of two
+  separately-tagged, `.key()`ed templates instead
+  (`[html\`<p>a</p>\`.key('a'), html\`<p>b</p>\`.key('b')]`) and interpolate
+  the array as an ordinary keyed-list slot. Came up in the same
+  `translationBlockView` row (a 'changed' key shows both its old and new
+  value as two `<p>`s).
 - **arrow.js `watch(getter, cb)` — enumerate your reactive deps _inline_ in the
   getter.** If you hide all reads inside a called function with early
   returns/conditional paths (e.g. `watch(() => buildStuff(), …)`), the

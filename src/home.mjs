@@ -7,7 +7,6 @@ import BlockList, { isFullyApproved } from './BlockList.mjs'
 import Footer from './Footer.mjs'
 import Block, {
   blockRows,
-  changeGroups,
   changedRows,
   diffStat,
   approvedRowSet,
@@ -20,6 +19,7 @@ import Block, {
   blockLabel,
   singleSide,
   sweepBracketOnlyForward,
+  translationRowUnits,
 } from './Block.mjs'
 import RelatedPanel, {
   CommentsSidebar,
@@ -643,17 +643,56 @@ function overviewExitUrl() {
   return url
 }
 
+// translationNavUnits adapts translationRowUnits(b) (Block.mjs) — one entry
+// per changed/added/removed KEY, each carrying the blockRows row index it
+// maps onto — into the generic { start, end } row-range shape every other
+// navigation unit (changeGroups/changeLines/changeCalls) already has. Both
+// start and end are the same single row (a key is always exactly one
+// navigable step, see the granularity note on navUnitsOf below), so a
+// TRANSLATION block's per-key units slot into EVERY existing consumer of
+// that shape (activeGroup highlighting, unitLineRange's comment/GitHub
+// anchoring, approveTargetRows, stepBlock/nextChange/prevChange, the
+// postApprove "next unapproved" walk, ...) without those consumers needing
+// their own TRANSLATION branch.
+function translationNavUnits(b) {
+  // `idx` (the unit's own index into translationRowUnits(b)) rides along
+  // next to the generic { start, end } shape every consumer already reads —
+  // it's needed because `row` alone is NOT a reliable way back to "which
+  // key is this": an added key directly adjacent to a removed one lands on
+  // the SAME aligned row (alignRows pairs a del+ins pair into one row,
+  // exactly like it would for an ordinary code block), so two DIFFERENT
+  // translation units can share one `row`. translationSlot's activeIndex
+  // (Block.mjs) reads `idx` directly instead of re-deriving the unit from
+  // its row, which a shared row would make ambiguous.
+  return translationRowUnits(b).map((u, idx) => ({ start: u.row, end: u.row, idx }))
+}
+
+// navUnitsOf is the one place that decides whether a block navigates at the
+// requested code granularity (group/line/call, unitsFor) or — for a
+// TRANSLATION block — per changed KEY instead (translationNavUnits,
+// regardless of `gran`: a translation block has no group/line/call
+// distinction, see setGran/extendRange's own TRANSLATION guard below, which
+// keeps state.gran pinned at 'group' there). Shared by unitsOf/groupsFor
+// (navigation + list-mode preview), commentTarget and approveTargetRows so
+// per-key navigation, approve-targeting and comment-anchoring all agree on
+// the exact same unit list — see .claude/rules/blocks-and-ingest.md
+// ("Translation blocks — per-key navigation").
+function navUnitsOf(b, rows, gran) {
+  if (b && b.category === 'TRANSLATION') return translationNavUnits(b)
+  return unitsFor(rows, gran)
+}
+
 // groupsFor returns the group-granularity change runs of a block (empty until its
 // code has loaded). Used for the list-mode preview, which always previews the
 // first *group* regardless of the diff-mode granularity.
 function groupsFor(b) {
-  return b ? changeGroups(blockRows(b)) : []
+  return b ? navUnitsOf(b, blockRows(b), 'group') : []
 }
 
 // unitsOf returns the navigation units of a block at the *current* granularity
 // (empty until its code has loaded). This is what all diff-mode navigation walks.
 function unitsOf(b) {
-  return b ? unitsFor(blockRows(b), state.gran) : []
+  return b ? navUnitsOf(b, blockRows(b), state.gran) : []
 }
 
 // GRANS orders the granularities coarse → fine so f steps one finer and d one
@@ -726,6 +765,11 @@ function clearRangeAnchor(level = state.focusLevel) {
 function setGran(delta) {
   if (state.mode !== 'diff') return
   const b = state.blocks[state.selected]
+  // A TRANSLATION block navigates per changed KEY only (see navUnitsOf) —
+  // there is no group/line/call distinction to zoom through, so f/d/s are a
+  // deliberate no-op here (see .claude/rules/blocks-and-ingest.md,
+  // "Translation blocks — per-key navigation").
+  if (b && b.category === 'TRANSLATION') return
   const rows = blockRows(b)
   const from = GRANS.indexOf(state.gran)
   const cur = unitsFor(rows, state.gran)[state.change]
@@ -752,7 +796,11 @@ function setGran(delta) {
 // of a single block.
 function extendRange(delta) {
   if (state.mode !== 'diff' || !isRangeGran(state.gran)) return
-  const units = unitsOf(state.blocks[state.selected])
+  const b = state.blocks[state.selected]
+  // Per-key navigation is deliberately single-key only (see setGran above) —
+  // a TRANSLATION block never gets a Shift+arrow multi-key range either.
+  if (b && b.category === 'TRANSLATION') return
+  const units = unitsOf(b)
   if (!units.length) return
   const anchor = state.rangeAnchor != null ? state.rangeAnchor : state.change
   state.rangeAnchor = anchor
@@ -2517,7 +2565,17 @@ const langSiblingRequested = new Set()
 // show whether those locales still need the same key changes. Best-effort:
 // GET /api/langsiblings is read-only (reads the head worktree, like /api/code),
 // a failure just leaves no companion. Reassigns state.langSiblings wholesale so
-// the block-column closure re-renders once the siblings arrive.
+// the block-column closure re-renders once the siblings arrive — but that
+// closure ALSO reads b.code (ensureCode/the card key), so it's already a
+// co-subscriber the same way the diff render itself is (see the "arrow.js
+// reuses a keyed node... drops the null→loaded update" pitfall in
+// conventions.md): the langSiblings reassignment alone intermittently never
+// triggered a re-render (reproduced: the companion card stayed on "geen
+// gewijzigde sleutels" indefinitely, well after the fetch had resolved).
+// Bumping state.codeVersion — the SAME counter ensureCode already bumps for
+// exactly this reason, which this closure explicitly subscribes to
+// (`void state.codeVersion`, see DetailPanel) — is the same, already
+// established fix.
 async function ensureLangSiblings(b) {
   if (!b || b.category !== 'TRANSLATION' || langSiblingRequested.has(b.id)) return
   langSiblingRequested.add(b.id)
@@ -2527,6 +2585,7 @@ async function ensureLangSiblings(b) {
     const body = await res.json()
     const sibs = Array.isArray(body.siblings) ? body.siblings : []
     state.langSiblings = { ...state.langSiblings, [b.id]: sibs }
+    state.codeVersion++
   } catch (_) {
     /* offline — no companion card */
   }
@@ -2535,9 +2594,28 @@ async function ensureLangSiblings(b) {
 // companionCard renders a read-only sibling-locale card next to a changed
 // TRANSLATION block: the sibling locale's CURRENT values for exactly the keys
 // that changed here (or a "missing" marker), so the reviewer sees whether that
-// locale still needs updating. No sidebar entry, no approval, not navigable.
+// locale still needs updating. No sidebar entry, no approval, not navigable —
+// but it DOES mirror the nl block's own per-key highlight (see
+// translationRowUnits/state.change): purely visual context, so the reviewer
+// sees the sibling's current value for exactly the key they're reviewing.
 function companionCard(b, sib) {
   const keys = b.code && !b.code.error ? changedKeysOf((b.code.old && b.code.old.text) || '', (b.code.new && b.code.new.text) || '') : []
+  // activeKeyFn is a FUNCTION, deliberately not resolved here: companionCard
+  // itself is called synchronously from the OUTER, per-block DetailPanel
+  // array-building closure (not from Block's own per-card reactive binding
+  // like translationSlot above) — reading state.change directly in THIS
+  // function's body would make that whole outer closure depend on it and
+  // rebuild every card on every arrow-key step (the documented "outer
+  // closure depends on state.x" pitfall, see conventions.md). Passing a
+  // function down instead lets translationSiblingView read it from its OWN
+  // nested per-row ${() => ...} binding, so only that row's highlight
+  // re-evaluates on a step — mirrors how Block() itself is only ever handed
+  // activeGroup/approvedFn as functions, never their resolved values.
+  const activeKeyFn = () => {
+    const units = translationRowUnits(b)
+    const u = units[state.change]
+    return u ? u.key : null
+  }
   return html`<div
     data-testid="translation-companion"
     data-locale="${sib.locale}"
@@ -2547,7 +2625,7 @@ function companionCard(b, sib) {
       <span class="rounded bg-yellow-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-300">${sib.locale}</span>
       <span class="text-xs text-slate-500 dark:text-zinc-500">huidige waarden van de gewijzigde sleutels</span>
     </div>
-    ${translationSiblingView(sib.text || '', keys, sib.locale)}
+    ${translationSiblingView(sib.text || '', keys, sib.locale, activeKeyFn)}
   </div>`
 }
 
@@ -2725,7 +2803,7 @@ async function openTask(run) {
   const rows = blockRows(b)
   const gran = c.gran || 'group'
   state.gran = gran
-  const units = unitsFor(rows, gran)
+  const units = navUnitsOf(b, rows, gran)
   state.change = units.length ? unitAtRow(units, c.rowStart >= 0 ? c.rowStart : 0) : 0
   scrollChangeIntoView()
   // Give arrow.js a couple of microtask turns to flush the setCommentScope
@@ -3519,7 +3597,12 @@ function commentTarget() {
   const gran = level > 0 ? cur.gran : state.mode === 'diff' ? state.gran : 'group'
   const idx = level > 0 ? cur.change : state.mode === 'diff' ? state.change : 0
   const anchor = level > 0 ? cur.rangeAnchor : state.mode === 'diff' ? state.rangeAnchor : null
-  const units = unitsFor(rows, gran)
+  // A TRANSLATION block never drills (see blocks-and-ingest.md — a
+  // translation child is always a read-only leaf value view, never a
+  // drillable PR block), so navUnitsOf's TRANSLATION branch only ever
+  // applies to the top-level cursor (level === 0) — passing `b` through is
+  // still correct either way.
+  const units = navUnitsOf(b, rows, gran)
   const unit = isRangeGran(gran) ? rangeUnit(units, idx, anchor) : units[idx]
   // No unit (block with no navigable changes): a block-level target with an
   // unknown row range (rowStart -1) — the index then shows all block comments.
@@ -4075,6 +4158,7 @@ function approveContext() {
 // re-derive it.
 function approveNoun(ctx = approveContext()) {
   if (ctx.mode !== 'diff') return 'dit block'
+  if (ctx.b && ctx.b.category === 'TRANSLATION') return 'deze vertaling'
   if (ctx.gran === 'call') return 'deze call'
   if (ctx.gran === 'line') {
     if (ctx.anchor != null && ctx.anchor !== ctx.change) return `deze ${Math.abs(ctx.change - ctx.anchor) + 1} regels`
@@ -4094,7 +4178,7 @@ function approveTargetRows(ctx = approveContext()) {
   const rows = blockRows(b)
   const all = changedRows(rows)
   if (ctx.mode !== 'diff') return all
-  const units = unitsFor(rows, ctx.gran)
+  const units = navUnitsOf(b, rows, ctx.gran)
   const unit = isRangeGran(ctx.gran) ? rangeUnit(units, ctx.change, ctx.anchor) : units[ctx.change]
   if (!unit) return all
   return all.filter((i) => i >= unit.start && i <= unit.end)
@@ -4208,7 +4292,7 @@ function unitFullyApproved(b, unit, gran, all) {
 function firstUnapprovedOwnUnit(b, gran, afterIndex) {
   const rows = blockRows(b)
   const all = changedRows(rows)
-  const units = unitsFor(rows, gran)
+  const units = navUnitsOf(b, rows, gran)
   for (let i = afterIndex + 1; i < units.length; i++) {
     if (!unitFullyApproved(b, units[i], gran, all)) return i
   }

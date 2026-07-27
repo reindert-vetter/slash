@@ -5,7 +5,7 @@
 
 import { html } from './vendor/arrow.js'
 import { categoryClass } from './BlockList.mjs'
-import { translationBlockView } from './translationDiff.mjs'
+import { translationBlockView, translationChangeUnits } from './translationDiff.mjs'
 import Prism from './vendor/prism.js'
 
 // highlight turns raw PHP source into Prism-tokenised HTML (keywords, strings,
@@ -467,9 +467,70 @@ export default function Block(b, opts = {}) {
         >
       </p>
 
-      ${() => (b.category === 'TRANSLATION' ? translationSlot(b) : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn))}
+      ${() => (b.category === 'TRANSLATION' ? translationSlot(b, activeGroup, approvedFn) : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn))}
     </article>
   `
+}
+
+// translationRowUnitsCache memoizes translationRowUnits() per block, keyed on
+// b.code's own reference identity — same rationale/precedent as
+// blockRowsCache above (b.code is always wholesale-reassigned, never mutated
+// in place, so a reference match is an exact, correct invalidation check).
+// translationRowUnits is read on every render of a TRANSLATION card (see
+// translationSlot) and every keyboard step in home.mjs's navigation
+// (unitsOf/commentTarget/approveTargetRows), so it's worth memoizing exactly
+// like blockRows itself.
+const translationRowUnitsCache = new WeakMap()
+
+// translationRowUnits maps each changed/added/removed KEY of a TRANSLATION
+// block (translationChangeUnits, translationDiff.mjs — carries a 1-based
+// oldLine/newLine per key) onto the aligned-diff ROW index blockRows(b)
+// already computes for that same block — so per-key navigation, approve and
+// comment-anchoring can all reuse the EXISTING row-indexed infrastructure
+// (b.approvedRows, unitLineRange, ...) instead of a parallel system. Returns
+// units in the same order translationBlockView renders them (changed, added,
+// removed), each `{ key, kind, oldVal?, newVal?, val?, row }` — `row` is the
+// blockRows index a 'changed'/'added' key's NEW line maps to, or a 'removed'
+// key's OLD line; entries whose line can't be mapped onto any row (should not
+// happen for the common one-key-per-line case this targets — see
+// blocks-and-ingest.md "Translation blocks" — but kept as a defensive
+// boundary for a multi-line/nested value whose exact row is ambiguous) are
+// dropped: such a key would show in the raw key overview but isn't
+// individually navigable/approvable/commentable, only the whole-block
+// checkbox still covers it (via changedRows(blockRows(b)), unaffected).
+export function translationRowUnits(b) {
+  const c = b && b.code
+  if (!c || c.error) return []
+  const cached = translationRowUnitsCache.get(b)
+  if (cached && cached.code === c) return cached.units
+  const oldText = (c.old && c.old.text) || ''
+  const newText = (c.new && c.new.text) || ''
+  const rows = blockRows(b)
+  // newLineToRow[j] / oldLineToRow[j] — the blockRows index of the (j+1)-th
+  // line (0-based j) of the new resp. old text, in source order. blockRows
+  // aligns old/new line-by-line (see alignRows) without reordering, so a
+  // simple running counter per side is enough — no separate line-number
+  // bookkeeping needed there.
+  const newLineToRow = []
+  const oldLineToRow = []
+  rows.forEach((r, i) => {
+    if (r.right != null) newLineToRow.push(i)
+    if (r.left != null) oldLineToRow.push(i)
+  })
+  const changeUnits = translationChangeUnits(oldText, newText)
+  const units = []
+  for (const u of changeUnits) {
+    const row =
+      u.newLine != null
+        ? newLineToRow[u.newLine - 1]
+        : u.oldLine != null
+        ? oldLineToRow[u.oldLine - 1]
+        : undefined
+    if (row === undefined) continue
+    units.push({ ...u, row })
+  }
+  translationRowUnitsCache.set(b, { code: c, units })
+  return units
 }
 
 // translationSlot renders a TRANSLATION block as a clean changes-only key
@@ -477,7 +538,21 @@ export default function Block(b, opts = {}) {
 // same lazily-loaded b.code as codeDiff (undefined = not yet requested, null =
 // loading, { old, new } or { error }), so the DetailPanel's codeVersion-keyed
 // rebuild reruns this the moment the code arrives — same as codeDiff.
-function translationSlot(b) {
+//
+// `activeGroup`/`approvedFn` are the SAME reactive opts Block() already
+// builds for codeDiff (see above) — home.mjs's unitsOf/groupsFor being
+// TRANSLATION-aware (see home.mjs's translationNavUnits) makes activeGroup()
+// return the `{start,end,idx}` shape of the currently navigated KEY for a
+// TRANSLATION block: `idx` is that unit's own index (read directly below,
+// NOT re-derived from `start`/the row — two DIFFERENT keys can share the
+// same aligned row, e.g. a removed key directly followed by an added one,
+// exactly like an ordinary code block's del+ins pairing — so the row alone
+// isn't a reliable way back to "which key", see translationNavUnits).
+// approvedFn is the existing Set of approved blockRows row indices — a
+// key's row is simply one more member of that same Set (see home.mjs's
+// approveTargetRows), so a per-key approve toggle needs no separate storage
+// either.
+function translationSlot(b, activeGroup, approvedFn) {
   const c = b.code
   if (c === undefined || c === null) {
     return html`<p class="px-4 py-3 text-sm text-slate-400 dark:text-zinc-500">code laden…</p>`
@@ -485,7 +560,12 @@ function translationSlot(b) {
   if (c.error) {
     return html`<p class="px-4 py-3 text-sm text-rose-500 dark:text-rose-400">${c.error}</p>`
   }
-  return translationBlockView((c.old && c.old.text) || '', (c.new && c.new.text) || '')
+  const units = translationRowUnits(b)
+  const activeIndex = () => {
+    const g = activeGroup()
+    return g && g.idx != null ? g.idx : null
+  }
+  return translationBlockView(units, { activeIndex, approvedRowSet: approvedFn })
 }
 
 // codeDiff renders the old/new source side by side under the block info. Old on
