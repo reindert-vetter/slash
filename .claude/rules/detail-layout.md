@@ -581,7 +581,11 @@ A drill entry is **one of two forms**:
   misleading here, class/name split from `child.label` on `::`), for which
   `ensureCode` fetches the old/new source just like for any other block. This
   level shows **only** its diff — no Underlying-code card of its own (no
-  caller scan is ever run for a synthetic frame).
+  caller scan is ever run for a synthetic frame). Since it has zero changed
+  rows, its card also shows **no approve checkbox** at all (`Block.mjs`
+  hides the checkbox entirely for `b.status === 'unchanged'` — there's
+  nothing to approve, so a permanently empty, unclickable-in-any-meaningful-
+  way toggle would only confuse).
 
 **A drilled column survives a refresh** — `state.drill`/`drillCursor` do not
 themselves live in the URL (too large/not directly serializable, the same

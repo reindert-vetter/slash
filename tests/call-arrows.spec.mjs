@@ -178,4 +178,36 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
       page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]'),
     ).toBeVisible()
   })
+
+  // Regression: an 'unchanged' synthetic drill frame (arrowPlain, resolved to
+  // a file this PR doesn't touch — see "Drilling" in detail-layout.md) has
+  // zero changed rows, so its card must not show the approve checkbox at all
+  // (Block.mjs hides it entirely for b.status === 'unchanged'). A drilled
+  // column onto an actually-changed block (arrowHelper) still shows it.
+  test('geen approve-checkbox in een gedrilde "unchanged" (synthetische) kolom', async ({
+    page,
+  }) => {
+    await page.goto('/pr/100')
+    await expect(page.getByTestId('block-row')).toHaveCount(1)
+    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await page.keyboard.press('ArrowRight') // caller's diff
+    await page.keyboard.press('ArrowRight') // → Onderliggende code
+
+    const helperChild = page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]')
+    await helperChild.click() // drill into a real, changed PR block
+    const drill = page.getByTestId('drill-column')
+    await expect(drill).toContainText('ArrowHelperService::arrowHelper')
+    await expect(drill.locator('input[type=checkbox]')).toHaveCount(1)
+
+    // Back out, then drill into the OTHER child (arrowPlain — unchanged file,
+    // status:'unchanged' synthetic frame).
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('drill-column')).toHaveCount(0)
+    const arrowPlainItem = page.locator('[data-testid=related-item][data-child-id*="arrowPlain"]')
+    await expect(arrowPlainItem).toBeVisible()
+    await arrowPlainItem.click()
+    const plainDrill = page.getByTestId('drill-column')
+    await expect(plainDrill).toContainText('arrowPlain')
+    await expect(plainDrill.locator('input[type=checkbox]')).toHaveCount(0)
+  })
 })

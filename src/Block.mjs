@@ -486,19 +486,32 @@ export default function Block(b, opts = {}) {
                 >${b.author}</span
               >`
             : ''}
-        <label class="flex cursor-pointer items-center gap-1 text-xs text-slate-600 dark:text-zinc-400">
-          <input
-            type="checkbox"
-            class="h-3.5 w-3.5 rounded border-slate-300 dark:border-zinc-700"
-            checked="${() => blockApproved(b)}"
-            .indeterminate="${() => blockPartlyApproved(b)}"
-            @change="${() => {
-              toggleBlockApproval(b)
-              onApprove(b)
-            }}"
-          />
-          ${() => approveSummary(b)}
-        </label>
+        ${() =>
+          // An 'unchanged' block (a synthetic drilled call-frame pointing at
+          // a file the PR doesn't touch, see "Drilling" in
+          // detail-layout.md) has zero changed rows — nothing to approve —
+          // so the checkbox is hidden entirely instead of showing a
+          // permanently empty, meaningless "approve" toggle. Plain nested
+          // slot, same shape as the b.tests/b.author ternaries above (not a
+          // keyed list item, so the "bare toggling expression" pitfall in
+          // conventions.md doesn't apply here).
+          b.status === 'unchanged'
+            ? ''
+            : html`<label
+                class="flex cursor-pointer items-center gap-1 text-xs text-slate-600 dark:text-zinc-400"
+              >
+                <input
+                  type="checkbox"
+                  class="h-3.5 w-3.5 rounded border-slate-300 dark:border-zinc-700"
+                  checked="${() => blockApproved(b)}"
+                  .indeterminate="${() => blockPartlyApproved(b)}"
+                  @change="${() => {
+                    toggleBlockApproval(b)
+                    onApprove(b)
+                  }}"
+                />
+                ${() => approveSummary(b)}
+              </label>`}
       </div>
 
       <p class="border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-sm leading-relaxed">
