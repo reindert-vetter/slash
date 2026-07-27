@@ -17,6 +17,46 @@ export default function globalSetup() {
   materializePreviewWidthWorktrees()
   materializeDrillLineSkipWorktrees()
   materializeTranslationWorktrees()
+  materializeDefaultSelWorktrees()
+}
+
+// materializeDefaultSelWorktrees writes the synthetic PR 108 fixture worktrees
+// for fresh-open-default-selection.spec.mjs (same rationale/mold as
+// materializeTreeWorktrees above, but its OWN PR number — PR 95 is mutated to
+// fully-approved by postapprove-tree.spec.mjs without cleanup, so reusing it
+// here would make this spec's outcome depend on run order within the same
+// worker). Two independent, hand-written PHP files with one real changed line
+// each (deliberately NOT linked via a relation — a relation child's approval
+// count rolls up into its parent's combined subtree total, see
+// subtreeApproveCount/detail-layout.md, so a parent can never itself read as
+// "fully approved" while its own child is still open; two independent
+// top-level blocks keep this fixture's approval math simple and
+// unambiguous), so GET /api/blockstats has an actual on-disk diff to read —
+// that's what lets a plain `rows:[0]` signal fully approve a block via the
+// approve workflow (see fresh-open-default-selection.spec.mjs).
+function materializeDefaultSelWorktrees() {
+  const file = (name, method, value) => `<?php
+
+namespace App\\Actions;
+
+class ${name}
+{
+    public function ${method}()
+    {
+        $value = ${value};
+        return $value;
+    }
+}
+`
+  const write = (side, relPath, contents) => {
+    const full = `data/worktrees/pr-108-${side}/${relPath}`
+    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
+    writeFileSync(full, contents)
+  }
+  write('base', 'app/Actions/DefaultSelBlockA.php', file('DefaultSelBlockA', 'run', 1))
+  write('head', 'app/Actions/DefaultSelBlockA.php', file('DefaultSelBlockA', 'run', 2))
+  write('base', 'app/Actions/DefaultSelBlockB.php', file('DefaultSelBlockB', 'run', 1))
+  write('head', 'app/Actions/DefaultSelBlockB.php', file('DefaultSelBlockB', 'run', 2))
 }
 
 // materializeTranslationWorktrees writes the synthetic PR 107 fixture worktrees

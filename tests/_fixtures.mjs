@@ -263,6 +263,15 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Fresh-open default-selection fixture (PR 108,
+  // fresh-open-default-selection.spec.mjs): two independent top-level blocks,
+  // each with one real changed line (worktrees materialized in _setup.mjs,
+  // materializeDefaultSelWorktrees) — its own PR number so it doesn't share
+  // mutable approval state with PR 95 (which postapprove-tree.spec.mjs leaves
+  // fully approved without cleanup).
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/defaultsel-blocks.json'], {
+    stdio: 'ignore',
+  })
 }
 
 function canConnect(port) {

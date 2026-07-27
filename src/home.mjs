@@ -944,7 +944,26 @@ async function loadBlocks() {
   state.allBlocks = all
   state.relations = rels
   recomputeLeftList()
+  // hadSelParam captures — before applyBlockRefRestore nulls it — whether this
+  // load is restoring a real `?sel=file:line` (a refresh/shared link/the
+  // /pr-overview round trip) or a genuinely fresh open (no sel at all, e.g.
+  // "Open review tree" without a remembered position). Only the latter gets
+  // the new default-unapproved-selection treatment below; a restored sel keeps
+  // going through the existing reveal/pin path untouched.
+  const hadSelParam = blockRefPending != null
   applyBlockRefRestore()
+  // pristineSelected/pristineToggleFocused snapshot the selection right after
+  // the synchronous load steps above, so applyDefaultUnapprovedSelection below
+  // — which only runs after the approvals/blockstats round trip — can detect
+  // whether the reviewer (or any other mechanism) has already moved the
+  // selection away in the meantime. Without this guard it would unconditionally
+  // overwrite whatever the reviewer just clicked/navigated to while the fetch
+  // was still in flight, silently reverting a real interaction — unlike
+  // revealSelectedIfHidden, which is self-correcting (a no-op unless the
+  // CURRENT selection is hidden), applyDefaultUnapprovedSelection always picks
+  // a target, so it needs this explicit check instead.
+  const pristineSelected = state.selected
+  const pristineToggleFocused = state.toggleFocused
   const callResolvePromise = loadCallResolve()
   const testCoversPromise = loadTestCovers()
   loadExplanations()
@@ -953,15 +972,18 @@ async function loadBlocks() {
   // — isFullyApproved reads state.approvalSummaries, which the decoupled
   // approval-rollup watch recomputes from exactly those inputs. Await them,
   // give arrow.js a couple of microtask turns to flush that watch (the same
-  // openTask precedent as selectComment's scope wait), then reveal a selection
-  // that landed on a hidden block by unfolding the approved section (the
-  // reviewer keeps their own selection). Deliberately AFTER
-  // applyBlockRefRestore: a restored ?sel= pointing at a visible block is a
-  // no-op, only a hidden outcome triggers the reveal.
+  // openTask precedent as selectComment's scope wait), then either reveal a
+  // restored selection that landed on a hidden block (?sel=) or, on a fresh
+  // open with no sel at all — and only if nothing already moved the selection
+  // in the meantime — land on the first not-yet-approved item instead
+  // (applyDefaultUnapprovedSelection) — see its own doc comment below.
   await Promise.all([loadApprovals(), loadBlockStats()])
   await Promise.resolve()
   await Promise.resolve()
-  revealSelectedIfHidden()
+  if (hadSelParam) revealSelectedIfHidden()
+  else if (state.selected === pristineSelected && state.toggleFocused === pristineToggleFocused) {
+    applyDefaultUnapprovedSelection()
+  }
   // A pending ?drill= restore needs relatedChildren's own dependencies —
   // callresolve/testcovers — to have landed first (a method_call/covers child
   // wouldn't otherwise be findable yet); both are already in flight above
@@ -1243,6 +1265,29 @@ function revealSelectedIfHidden() {
   if (!isFullyApproved(state, b)) return
   state.pinnedApprovedId = b.id
   scrollSelectedIntoView()
+}
+
+// applyDefaultUnapprovedSelection lands a genuinely fresh open (no ?sel=
+// restored at all — see hadSelParam in loadBlocks) on the first not-yet-
+// fully-approved item in state.blocks, in plain list order. Deliberately no
+// distinction between a top-level Start block and an underlying-code child
+// (recomputeLeftList/BlockList.mjs's renderList already treat them as one
+// flat, ordered list, and so does ↑/↓ via stepVisibleSelected) — whichever
+// comes first in that order wins. If every item is already fully approved
+// (or there are no blocks at all), there's nothing to select: instead land
+// the keyboard on the toggle-approved row (mirrors stepListSelection's own
+// ↓-past-the-end stop), provided that row actually exists
+// (toggleRowVisible). Called only from the load path, after
+// loadApprovals/loadBlockStats have landed (see loadBlocks) — isFullyApproved
+// depends on state.approvalSummaries, which isn't known any earlier.
+function applyDefaultUnapprovedSelection() {
+  const idx = state.blocks.findIndex((b) => !isFullyApproved(state, b))
+  if (idx >= 0) {
+    state.selected = idx
+    scrollSelectedIntoView()
+    return
+  }
+  if (toggleRowVisible()) state.toggleFocused = true
 }
 
 // clampSelectedToVisible moves state.selected off a hidden (fully-approved,
