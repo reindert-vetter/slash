@@ -73,6 +73,45 @@ func TestSetStatus(t *testing.T) {
 	}
 }
 
+func TestSetGithubID(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	if err := m.Save(ctx, Comment{ID: "c1", RunID: "c1", PR: 1, File: "a.php", Line: 1, Body: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := m.List(ctx, 1)
+	if list[0].GithubID != 0 {
+		t.Fatalf("githubId = %d, want 0 before SetGithubID", list[0].GithubID)
+	}
+
+	if err := m.SetGithubID(ctx, "c1", 12345); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = m.List(ctx, 1)
+	if list[0].GithubID != 12345 {
+		t.Fatalf("githubId = %d, want 12345", list[0].GithubID)
+	}
+
+	// A no-op for id <= 0 (never clears an already-known id).
+	if err := m.SetGithubID(ctx, "c1", 0); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = m.List(ctx, 1)
+	if list[0].GithubID != 12345 {
+		t.Fatalf("githubId = %d after SetGithubID(0), want unchanged 12345", list[0].GithubID)
+	}
+
+	// A Save after SetGithubID must not clobber it back to 0 — Save preserves
+	// the existing github_id (COALESCE), same as status/reaction_count.
+	if err := m.Save(ctx, Comment{ID: "c1", RunID: "c1", PR: 1, File: "a.php", Line: 1, Body: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = m.List(ctx, 1)
+	if list[0].GithubID != 12345 {
+		t.Fatalf("githubId after re-save = %d, want 12345 (preserved)", list[0].GithubID)
+	}
+}
+
 func TestSearchByPathPrefix(t *testing.T) {
 	m := openTest(t)
 	ctx := context.Background()

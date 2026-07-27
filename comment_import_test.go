@@ -131,6 +131,18 @@ func TestImportPRCommentsIntoReadModel(t *testing.T) {
 	if gh.PostedCount() != 0 {
 		t.Fatalf("github posted %d, want 0 (imports must not re-post)", gh.PostedCount())
 	}
+	// Each imported comment's own GitHub database id is persisted (the
+	// ImportedRootID), so the frontend can build a "view on GitHub" deep link
+	// without depending on the runId's "gh-<id>" shape.
+	if id := list[byID["gh-100"]].GithubID; id != 100 {
+		t.Fatalf("gh-100 githubId = %d, want 100", id)
+	}
+	if id := list[byID["gh-200"]].GithubID; id != 200 {
+		t.Fatalf("gh-200 githubId = %d, want 200", id)
+	}
+	if id := list[byID["gh-300"]].GithubID; id != 300 {
+		t.Fatalf("gh-300 githubId = %d, want 300", id)
+	}
 
 	// A second import is a no-op reuse: still exactly three comments, still no posts.
 	m.importPRComments(ctx, pr)

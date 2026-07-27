@@ -40,6 +40,7 @@ import RelatedPanel, {
   commentSelIndex,
   deleteFocusedComment,
   resolveFocusedComment,
+  focusedCommentGithubId,
   commentRowSet,
   setCommentScope,
   setRelated,
@@ -2896,28 +2897,55 @@ function defaultSel(list) {
   return Math.min(1, Math.max(0, list.length - 1))
 }
 
-// COMMENT_COMMANDS — shown when Enter is pressed on a focused comment row
-// (not mid-reply): resolving or deleting it. Kept separate from COMMANDS
-// (block actions) since a comment isn't tied to the selected block/diff.
-// "Resolve comment" also resolves the conversation on GitHub (for a review-diff
-// thread) — see resolveFocusedComment (RelatedPanel.mjs) and the reply-loop's
-// resolveGithubThread Activity (workflows.go). "Sluit menu" is pinned first
-// (withClose); the menu opens on the 2nd item (defaultSel), so "Resolve
-// comment" stays the default Enter action.
-const COMMENT_COMMANDS = withClose([
-  {
-    id: 'resolve-comment',
-    label: 'Resolve comment',
-    hint: 'resolve',
-    run: () => resolveFocusedComment(),
-  },
-  {
-    id: 'delete-comment',
-    label: 'Verwijder comment',
-    hint: 'delete',
-    run: () => deleteFocusedComment(),
-  },
-])
+// commentCommandsFor builds COMMENT_COMMANDS freshly every time (called from
+// openMenu('comment'), plain non-reactive code — see rootCommandsFor): Enter on
+// a focused comment row (not mid-reply) offers resolving or deleting it. Kept
+// separate from COMMANDS (block actions) since a comment isn't tied to the
+// selected block/diff. "Resolve comment" also resolves the conversation on
+// GitHub (for a review-diff thread) — see resolveFocusedComment
+// (RelatedPanel.mjs) and the reply-loop's resolveGithubThread Activity
+// (workflows.go). "Sluit menu" is pinned first (withClose); the menu opens on
+// the 2nd item (defaultSel), so "Resolve comment" stays the default Enter
+// action.
+//
+// "Open op GitHub" is appended at the bottom, ONLY when the focused comment
+// actually has a GitHub anchor (focusedCommentGithubId() — a local/private
+// note, or a comment whose GitHub post hasn't landed yet/failed, has none) —
+// this is a data-conditional list (not a static const like the block above),
+// so it must be built here, at open time, rather than once at module load;
+// this mirrors the existing resolveLabel/snapshotCommands pattern of reading
+// live state exactly once, non-reactively, so nothing that reads global state
+// ever reaches CommandMenu's never-disposed reactive tree (see the "disposal
+// gap" note in conventions.md). The comment-scoped panel only ever shows
+// block-scoped comments (kind === '', see recomputeView's !c.kind filter in
+// RelatedPanel.mjs), which are always a GitHub review/diff comment — so the
+// anchor form is always "#discussion_r<id>", never "#issuecomment-<id>".
+function commentCommandsFor() {
+  const items = [
+    {
+      id: 'resolve-comment',
+      label: 'Resolve comment',
+      hint: 'resolve',
+      run: () => resolveFocusedComment(),
+    },
+    {
+      id: 'delete-comment',
+      label: 'Verwijder comment',
+      hint: 'delete',
+      run: () => deleteFocusedComment(),
+    },
+  ]
+  const githubId = focusedCommentGithubId()
+  if (githubId) {
+    items.push({
+      id: 'comment-github',
+      label: 'Open op GitHub',
+      hint: 'github',
+      run: () => window.open((state.prUrl || GITHUB_PR) + '#discussion_r' + githubId, '_blank'),
+    })
+  }
+  return withClose(items)
+}
 
 // COMPOSE_COMMANDS — shown when Enter (or the composer button) is pressed on a
 // filled new-comment composer (menu mode 'compose'): choose what to do with the
@@ -4744,7 +4772,7 @@ async function openGithubLine() {
 // so a live label function never reaches CommandMenu's reactive tree — see the
 // menu/ms comment above.
 function rootCommandsFor(mode) {
-  if (mode === 'comment') return COMMENT_COMMANDS
+  if (mode === 'comment') return commentCommandsFor()
   if (mode === 'postApprove') return POSTAPPROVE_COMMANDS
   if (mode === 'reviewApprove') return REVIEW_APPROVE_COMMANDS
   if (mode === 'reviewChoice') return REVIEW_CHOICE_COMMANDS

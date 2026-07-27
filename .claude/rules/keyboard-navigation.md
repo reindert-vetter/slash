@@ -262,7 +262,8 @@ logic.
 **Every (small) menu opens with a pinned `"Close menu"` at the top, and
 starts focused on the 2nd item.** `withClose(list, onClose)` (`home.mjs`)
 prepends that item to every root list (`COMMANDS`, `PR_COMMANDS`,
-`COMPOSE_COMMANDS`, `COMMENT_COMMANDS`, `POSTAPPROVE_COMMANDS`,
+`COMPOSE_COMMANDS`, the comment-scoped list built by `commentCommandsFor()`,
+`POSTAPPROVE_COMMANDS`,
 `REVIEW_APPROVE_COMMANDS`, `REVIEW_CHOICE_COMMANDS`) as well as every submenu
 (`children`, incl. "Open GitHub" and the PR-wide/compose Jira submenus) —
 choosing it in **any** case closes the entire palette, even from a submenu
@@ -488,12 +489,27 @@ payload) and the updated last test in `tests/postapprove-menu.spec.mjs`
 The same menu mechanism also serves a **comment-scoped** variant: if the
 keyboard is on a placed comment row in `RelatedPanel` (`cs.focus === 'comment'`,
 before stepping into the thread) and the reply field is still **empty**,
-`Enter` opens not the block palette but a menu with three rows — **"Close
-menu"** (pinned at the top), **"Resolve comment"** (default, the 2nd item,
-where the selection opens) and **"Delete comment"**
-(`menu.mode = 'comment'`, `COMMENT_COMMANDS` in `home.mjs`; `resolveCommands`
-switches on `menu.mode`, `openMenu(mode)` sets it, `closeMenu` resets it back
-to `'block'`). A **non-empty** reply field leaves `Enter` alone — then the
+`Enter` opens not the block palette but a menu with three or four rows —
+**"Close menu"** (pinned at the top), **"Resolve comment"** (default, the 2nd
+item, where the selection opens), **"Delete comment"**, and — only when the
+focused comment actually has a GitHub anchor — a fourth, bottom item **"Open
+op GitHub"** (`menu.mode = 'comment'`, built by `commentCommandsFor()` in
+`home.mjs`, called fresh from `openMenu('comment')`/`rootCommandsFor` every
+time — unlike the other, static command lists, this one is data-conditional
+per focused comment, so it can't be a module-level const; it still goes
+through `withClose` the same way, `resolveCommands` switches on `menu.mode`,
+`openMenu(mode)` sets it, `closeMenu` resets it back to `'block'`).
+`focusedCommentGithubId()` (`RelatedPanel.mjs`) decides whether that fourth
+item appears at all — `null` for a local/private note or a comment whose
+GitHub post hasn't landed/failed (`comments.Comment.GithubID` is 0 then, see
+the `github_id` paragraph under "The first slash task" in
+`tembed-workflows.md`) — so there is never a dead, no-op row for a comment
+with nothing to open. Choosing it opens
+`(state.prUrl || GITHUB_PR) + '#discussion_r' + githubId` in a new tab — the
+comment-scoped panel only ever shows block-scoped review/diff comments
+(`kind === ''`, see `RelatedPanel.mjs`'s `recomputeView`), so that anchor form
+is always correct (never `#issuecomment-<id>`, which is for a PR-wide
+issue/review-summary comment instead). A **non-empty** reply field leaves `Enter` alone — then the
 reply field's own `keydown` wins (`sendReaction`), so "type a quick reply,
 press Enter" keeps working (`isCommentFocused`/`commentReplyEmpty` in
 `RelatedPanel.mjs` guard that distinction). `menuAnchor`/`menuRegion` anchor

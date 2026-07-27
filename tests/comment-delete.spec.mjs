@@ -52,12 +52,16 @@ test.describe('PR Review Tree — delete a comment', () => {
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     const rows = page.getByTestId('command-row')
-    // Three items: "Sluit menu" (pinned first), "Resolve comment" (default,
-    // 2nd — where the selection opens) and "Verwijder comment".
-    await expect(rows).toHaveCount(3)
+    // Four items: "Sluit menu" (pinned first), "Resolve comment" (default,
+    // 2nd — where the selection opens), "Verwijder comment", and "Open op
+    // GitHub" (the comment posted successfully via the github Fake, so it has
+    // a non-zero githubId — see comment-view-on-github.spec.mjs for the case
+    // where that item is absent).
+    await expect(rows).toHaveCount(4)
     await expect(rows.first()).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('Resolve comment')
     await expect(rows.nth(2)).toContainText('Verwijder comment')
+    await expect(rows.nth(3)).toContainText('Open op GitHub')
 
     // Move to the delete row before running it (resolve is the default).
     await page.keyboard.press('ArrowDown')

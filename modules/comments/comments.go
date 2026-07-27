@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS comments (
   seg            TEXT NOT NULL DEFAULT '',
   path           TEXT NOT NULL DEFAULT '',
   source         TEXT NOT NULL DEFAULT '',
-  kind           TEXT NOT NULL DEFAULT ''
+  kind           TEXT NOT NULL DEFAULT '',
+  github_id      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS reactions (
@@ -96,7 +97,17 @@ type Comment struct {
 	// Kind classifies a comment's anchor: "" for a normal line/block comment
 	// (has file:line), or "issue"/"review_summary" for a PR-wide comment with no
 	// file:line anchor (shown in the PR-info column, not the block-scoped index).
-	Kind      string     `json:"kind,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// GithubID is the comment's own GitHub review-comment database id — set for
+	// an imported comment (== the ImportedRootID) or, once known, for a
+	// UI-placed comment that got posted to GitHub (the workflow's own
+	// postResult.RootID, persisted after the fact via SetGithubID once that post
+	// completes — see taskCodeCommentWorkflow in workflows.go). 0 means "not
+	// (yet) known": a local/private note, a comment whose GitHub post hasn't
+	// landed yet, or one that failed to post. The frontend uses this to build a
+	// "#discussion_r<id>" deep link and to decide whether to show that option
+	// at all (see focusedCommentGithubId in RelatedPanel.mjs).
+	GithubID  int64      `json:"githubId,omitempty"`
 	Reactions []Reaction `json:"reactions,omitempty"`
 }
 
@@ -152,6 +163,7 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE comments ADD COLUMN path TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE comments ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE comments ADD COLUMN kind TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE comments ADD COLUMN github_id INTEGER NOT NULL DEFAULT 0`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -175,13 +187,28 @@ func (m *Module) Save(ctx context.Context, c Comment) error {
 	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO comments
-		   (id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind)
+		   (id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind, github_id)
 		 VALUES (?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT reaction_count FROM comments WHERE id = ?), 0),
 		   COALESCE((SELECT status FROM comments WHERE id = ?), ?),
-		   ?,?,?,?,?,?,?,?,?)`,
+		   ?,?,?,?,?,?,?,?,?,
+		   COALESCE((SELECT github_id FROM comments WHERE id = ?), ?))`,
 		c.ID, c.RunID, c.PR, c.File, c.Line, c.Author, c.Body, c.CreatedAt, c.ID, c.ID, c.Status,
-		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg, c.Path, c.Source, c.Kind)
+		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg, c.Path, c.Source, c.Kind, c.ID, c.GithubID)
+	return err
+}
+
+// SetGithubID records the GitHub review-comment database id a comment's
+// thread mirrors to, once it's known (either the ImportedRootID for an
+// already-existing GitHub comment, or the id returned by posting a fresh one
+// — see taskCodeCommentWorkflow in workflows.go). A no-op for id <= 0 (a
+// local note, or a post that never happened/failed) — the column then simply
+// stays at its zero-value default. WRITE — workflow-driven only.
+func (m *Module) SetGithubID(ctx context.Context, id string, githubID int64) error {
+	if githubID <= 0 {
+		return nil
+	}
+	_, err := m.db.ExecContext(ctx, `UPDATE comments SET github_id = ? WHERE id = ?`, githubID, id)
 	return err
 }
 
@@ -262,7 +289,7 @@ func (m *Module) Search(ctx context.Context, prefix string) ([]Comment, error) {
 // query runs the comment select with an optional WHERE clause + args and
 // attaches each comment's reactions. Shared by List and Search.
 func (m *Module) query(ctx context.Context, where string, args ...any) ([]Comment, error) {
-	q := `SELECT id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind
+	q := `SELECT id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind, github_id
 	      FROM comments`
 	if where != "" {
 		q += ` ` + where
@@ -280,7 +307,7 @@ func (m *Module) query(ctx context.Context, where string, args ...any) ([]Commen
 		var c Comment
 		if err := rows.Scan(&c.ID, &c.RunID, &c.PR, &c.File, &c.Line, &c.Author,
 			&c.Body, &c.CreatedAt, &c.ReactionCount, &c.Status, &c.Code, &c.Gran, &c.Label,
-			&c.RowStart, &c.RowEnd, &c.Seg, &c.Path, &c.Source, &c.Kind); err != nil {
+			&c.RowStart, &c.RowEnd, &c.Seg, &c.Path, &c.Source, &c.Kind, &c.GithubID); err != nil {
 			return nil, err
 		}
 		byID[c.ID] = len(out)

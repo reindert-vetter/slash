@@ -570,6 +570,21 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, cs.Save(ctx, c)
 	})
 
+	// Activity: record the comment's own GitHub review-comment id, once known —
+	// either an import's ImportedRootID or a fresh post's returned RootID (see
+	// the RootID switch in taskCodeCommentWorkflow). A no-op for id <= 0 (local
+	// note, or a post that didn't happen/failed) — see comments.SetGithubID.
+	engine.RegisterActivity("saveCommentGithubID", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			ID       string `json:"id"`
+			GithubID int64  `json:"githubId"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return nil, cs.SetGithubID(ctx, arg.ID, arg.GithubID)
+	})
+
 	// Activity: the github module posts the line comment (best-effort — a
 	// failure must not sink the workflow, so local/no-gh runs still work).
 	engine.RegisterActivity("postGithubComment", func(ctx context.Context, in []byte) ([]byte, error) {
@@ -2121,6 +2136,19 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		if err := w.ExecuteActivity("postGithubComment", in, &posted); err != nil {
 			return nil, fmt.Errorf("post github comment: %w", err)
 		}
+	}
+	// Persist the now-known GitHub id into the comments read-model (a no-op for
+	// 0 — a local note, or a post that didn't happen/failed) so the frontend
+	// can build a "view on GitHub" deep link without depending on the runID's
+	// "gh-<id>" shape (only true for an imported comment, see importedRunID).
+	// This ALWAYS runs (its own Activity, unconditionally) so the number of
+	// ExecuteActivity calls stays a fixed function of the input shape, not of
+	// posted.RootID's value — replay-deterministic; SetGithubID itself is the
+	// one that no-ops on 0.
+	if err := w.ExecuteActivity("saveCommentGithubID", map[string]any{
+		"id": runID, "githubId": posted.RootID,
+	}, nil); err != nil {
+		return nil, fmt.Errorf("save comment github id: %w", err)
 	}
 
 	// Reactions loop: each "reply" Signal (UI or GitHub) is stored, mirrored to

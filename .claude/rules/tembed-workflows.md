@@ -107,6 +107,30 @@ code** and keeping the thread alive. Terminology follows Temporal — a
     remains workflow-only (`saveComment` Activity). Separately, the diff
     marks every line with a comment with a **💬** (`commentRowSet` → `Block`
     `commentedRows` → `paneHTML`, presence-only).
+    A comment also carries **`github_id`** (`Comment.GithubID`,
+    `json:"githubId,omitempty"`): its own GitHub review-comment database id,
+    once known — set for an imported comment (`= ImportedRootID`, right
+    away) and, for a normal in-app comment, once its `postGithubComment`
+    call actually completes. `taskCodeCommentWorkflow` persists this via its
+    own **`saveCommentGithubID` Activity**, called unconditionally right
+    after the existing `posted.RootID` switch (import/local/normal) — so the
+    number of Activities stays a fixed function of the input shape, not of
+    whether the post happened to succeed (replay-deterministic); the
+    Activity itself (`comments.Module.SetGithubID`) is a no-op for `id <= 0`
+    (a local/private note, or a post that never happened/failed), so the
+    column then simply stays at its zero-value default. **Purely additive
+    read data** — no new write path, `SetGithubID` is only ever called from
+    this one Activity. The frontend reads it via `focusedCommentGithubId`
+    (`RelatedPanel.mjs`) to show/hide and build the **"Open op GitHub"**
+    item at the bottom of the comment-command-menu (see `COMMENT_COMMANDS`
+    in `.claude/rules/keyboard-navigation.md`) — a `"#discussion_r<id>"` deep
+    link on the PR URL, since the comment-scoped panel only ever shows
+    block-scoped review/diff comments (`kind === ''`). For a comment
+    imported/seeded before this field existed, `focusedCommentGithubId`
+    falls back to parsing the `"gh-<id>"` shape an imported comment's
+    `runId` always has (`importedRunID` in `comment_import.go`) — but that
+    fallback only ever covers `source === 'github'`; a normal in-app comment
+    has no such fallback and simply shows the option once `github_id` lands.
     The **thread** also opens with the comment itself as the **first
     message**: the body that titles the comment also appears as the first
     chat bubble (on the reviewer's side), followed by the reactions.
@@ -432,7 +456,11 @@ GitHub, GitHub replies get polled in), instead of read-only copies.
   GitHub — never re-post), so the reply poller runs and UI replies do
   mirror to the real thread; **local** (private note) → `RootID 0`, all
   GitHub calls no-op; **normal** → post + record `RootID`. `saveComment`
-  stores `Source`/`Kind`/`CreatedAt`.
+  stores `Source`/`Kind`/`CreatedAt`. Right after this switch, a further
+  **`saveCommentGithubID`** Activity persists whatever `posted.RootID` ended
+  up being into the comment's own `github_id` column (see the `github_id`
+  paragraph in "The first slash task" above) — so this also covers the
+  **normal** (in-app, non-imported) case, not only an import.
 - **Reply loop per thread kind (`isPRWide(kind)` = `issue`/`review_summary`/
   `review`):** echo prevention unchanged (only `Source == "ui"` mirrors to
   GitHub, `github`-sourced replies don't), but the **mirror path** depends

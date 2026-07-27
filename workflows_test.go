@@ -153,6 +153,31 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 	}
 }
 
+// A normal (non-local, non-imported) comment gets its GitHub-posted comment id
+// persisted into the read model (comments.Comment.GithubID) once the post
+// completes — the frontend uses this to build a "view on GitHub" deep link
+// (see focusedCommentGithubId in RelatedPanel.mjs).
+func TestTaskCodeCommentPersistsGithubID(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reindert",
+		Body: "This branch looks unreachable.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gh.PostedCount() != 1 {
+		t.Fatalf("github posted %d, want 1", gh.PostedCount())
+	}
+	list, _ := cs.List(ctx, 42)
+	if len(list) != 1 || list[0].ID != runID || list[0].GithubID == 0 {
+		t.Fatalf("comments = %+v, want a non-zero githubId", list)
+	}
+}
+
 // A UI resolve of a review-diff thread resolves the conversation on GitHub via
 // ResolveReviewThread, flips the read-model status to resolved, and never posts
 // the "/resolve" sentinel as a reply comment.
@@ -308,6 +333,9 @@ func TestTaskCodeCommentLocalSkipsGitHub(t *testing.T) {
 	list, _ := cs.List(ctx, 42)
 	if len(list) != 1 || list[0].ID != runID || list[0].Status != "open" {
 		t.Fatalf("comments = %+v", list)
+	}
+	if list[0].GithubID != 0 {
+		t.Fatalf("githubId = %d, want 0 for a local note (never posted)", list[0].GithubID)
 	}
 
 	// Deleting a local note removes it from the store without a GitHub delete

@@ -982,6 +982,27 @@ export function commentSelIndex() {
   return selI()
 }
 
+// focusedCommentGithubId returns the focused comment's GitHub review-comment
+// database id (as a string, for direct use in a URL) — or null when there is
+// none (a local/private note, or a comment whose GitHub post hasn't landed
+// yet/failed), which is also the signal home.mjs uses to decide whether to
+// show the "Open op GitHub" menu item at all (see commentCommandsFor).
+// Prefers the backend's own `githubId` field (comments.Comment.GithubID, see
+// tembed-workflows.md — set for both an imported comment and a UI-placed one
+// that got posted); falls back to parsing the "gh-<id>" runId shape that an
+// imported comment's Run ID always has (importedRunID in comment_import.go)
+// for a comment seeded/stored before that field existed.
+export function focusedCommentGithubId() {
+  const c = selComment()
+  if (!c) return null
+  if (c.githubId) return String(c.githubId)
+  if (c.source === 'github' && typeof c.runId === 'string' && c.runId.startsWith('gh-')) {
+    const id = c.runId.slice(3)
+    if (/^\d+$/.test(id)) return id
+  }
+  return null
+}
+
 // deleteFocusedComment sends the "delete" signal for the focused comment's
 // Workflow Execution. This is the only write path: the workflow first flips
 // the comment's status to "deleting", then removes it from GitHub and from
