@@ -545,6 +545,75 @@ func TestPRInboxRefreshPopulatesReadModel(t *testing.T) {
 	}
 }
 
+// TestPRInboxBadgeCountsOpenSlashComments proves the "💬 n" badge count comes
+// from slash's own comments read-model (open comments only), NOT GitHub's raw
+// PullRequest.comments.totalCount. Seeds 2 open + 1 resolved + 1 deleting
+// comment on a fixture PR and asserts the enriched inbox row reports 2.
+func TestPRInboxBadgeCountsOpenSlashComments(t *testing.T) {
+	t.Setenv("SLASH_GITHUB", "off")
+	t.Setenv("SLASH_INBOX", "tests/fixtures/inbox.json")
+
+	db, err := openDB(filepath.Join(t.TempDir(), "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cs, err := comments.Open(filepath.Join(t.TempDir(), "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+
+	// PR 12903 is in the fixture. Seed 2 open + 1 resolved + 1 deleting.
+	seed := func(id, status string) {
+		if err := cs.Save(context.Background(), comments.Comment{
+			ID: id, RunID: id, PR: 12903, File: "a.php", Line: 1,
+			Author: "reviewer", Body: "b", Status: status,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("open-1", "open")
+	seed("open-2", "open")
+	seed("resolved-1", "resolved")
+	seed("deleting-1", "deleting")
+
+	ib := testInbox(t)
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, cs, ib, testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, db, "", repoSlug)
+
+	runID, err := engine.StartWorkflow(WorkflowPRInbox, PRInboxInput{Repo: repoSlug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RefreshInbox(runID); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := ib.Get(context.Background(), repoSlug)
+	if err != nil || snap == nil {
+		t.Fatalf("read-model empty after refresh (err=%v)", err)
+	}
+	var sections []inboxSection
+	if err := json.Unmarshal(snap.Sections, &sections); err != nil {
+		t.Fatalf("sections json: %v", err)
+	}
+	got, found := -1, false
+	for _, s := range sections {
+		for _, p := range s.PRs {
+			if p.Number == 12903 {
+				got, found = p.Comments, true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("PR 12903 not in refreshed inbox: %+v", sections)
+	}
+	if got != 2 {
+		t.Fatalf("badge count = %d, want 2 (only the 2 open comments; resolved/deleting excluded)", got)
+	}
+}
+
 // TestTaskInboxRefreshPopulatesReadModel is the end-to-end test for the
 // task_inbox workflow: a refresh signal drives buildTaskInbox (via the
 // refreshTasks Activity) over all three sources — PR review requests (from

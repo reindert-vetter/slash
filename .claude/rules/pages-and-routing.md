@@ -165,6 +165,15 @@ The actual GitHub fetch (`inbox.go`): `gh api graphql` `search` calls (no new
 dependency). `lightFields` renders the row, `heavyFields` (`mergeable
 reviewDecision`, `reviewRequests`, `latestReviews`, `statusCheckRollup`) fills
 the pills. `hasGraph` is overlaid from the `blocks` table (`ingestedSet`).
+The **"💬 n" comment badge** (`commentsBit` in `overview.mjs`) reads
+`row.comments`, but that field is **not** GitHub's raw
+`PullRequest.comments.totalCount` (issue-conversation comments, a different
+category): the `refreshInbox` Activity (`workflows.go`) overwrites it per row
+with the count of slash's **own** open comments — `comments.List(pr)` filtered
+to `status not in {resolved, deleting, deleted}`. That read-model includes
+both slash-placed (`source: ui`) and imported GitHub-conversation comments
+(`source: github`), so resolving a comment in slash lowers the badge directly.
+Read-only enrichment inside the Activity — no new write path.
 `inboxSections` mirror `/pulls` (qualifiers 1-to-1 from dash's
 `INBOX_SECTIONS`, incl. `archived:false`, the copilot query, and the
 **COMMENTED-catch** `keep` filter); queries run in parallel and are

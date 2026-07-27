@@ -497,6 +497,33 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			m.logf("pr_inbox: refresh skipped: %v", err)
 			return json.Marshal(inboxRefreshResult{})
 		}
+		// The "💬 n" badge counts slash's OWN comments, not GitHub's raw
+		// PullRequest.comments.totalCount (which is issue-conversation comments,
+		// a different category). comments.List includes both slash-placed
+		// (source: ui) and imported GitHub-conversation comments (source:
+		// github), so resolving a comment in slash lowers the badge directly.
+		// Read-only enrichment inside the Activity — no new write path.
+		if m.comments != nil {
+			for si := range snap.Sections {
+				for pi := range snap.Sections[si].PRs {
+					pr := &snap.Sections[si].PRs[pi]
+					cs, err := m.comments.List(ctx, pr.Number)
+					if err != nil {
+						continue // keep the GitHub count on a read hiccup
+					}
+					open := 0
+					for _, c := range cs {
+						switch c.Status {
+						case "resolved", "deleting", "deleted":
+							// excluded
+						default:
+							open++
+						}
+					}
+					pr.Comments = open
+				}
+			}
+		}
 		sections, _ := json.Marshal(snap.Sections)
 		statuses, _ := json.Marshal(snap.Statuses)
 		updatedAt := time.Now().UTC().Format(time.RFC3339)
