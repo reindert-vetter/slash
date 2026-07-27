@@ -863,15 +863,20 @@ block on the right — see the layout paragraph above):
   the indigo ring when selected — there's nothing to review.
   Fed from the relations read-model via `GET /api/relations?pr=N`;
   `home.mjs` (`childrenOf`/`relatedChildren`) pulls the children from
-  `state.allBlocks` and lazily loads their code. A child is **removed from
-  the left list** and shown here instead; what remains stays on the left.
-  `recomputeLeftList` in `home.mjs` determines the left list:
-  `state.blocks` = `allBlocks` minus (a) all relation `childId`s and (b) any
-  **PR block that is the definition of a resolved/found method call**
-  (`resolvedCallTargetIds`) — so a function that appears as "Underlying
-  code" under a parent (e.g.
-  `ProcessCartAction::buildShippingAddressAttributes` called on a changed
-  line) doesn't *also* show up separately in the left list. It runs on
+  `state.allBlocks` and lazily loads their code. A **relation child** stays
+  in the left list as a fully navigable row (own diff, selection, `?sel=`
+  restore) but sorts to the very bottom, under an **"Onderliggende code"
+  heading** (`data-testid=underlying-heading`, `BlockList.mjs`) — marked via
+  `state.underlyingIds` (a plain `{blockId: true}` map, reassigned wholesale
+  alongside `state.blocks`). The PR-wide approval header skips those
+  underlying rows when summing `state.approvalTotal` (they're already
+  counted inside their parent's subtree). `recomputeLeftList` in `home.mjs`
+  determines the left list: `state.blocks` = `allBlocks` minus any **PR
+  block that is the definition of a resolved/found method call**
+  (`resolvedCallTargetIds`, including a relation child that is also such a
+  target) — so a function that appears as "Underlying code" under a parent
+  (e.g. `ProcessCartAction::buildShippingAddressAttributes` called on a
+  changed line) doesn't *also* show up separately in the left list. It runs on
   `loadBlocks` and again after every `loadCallResolve` (initial + the poll
   after a search action), and preserves selection by **block id** so a
   callResolve reload doesn't shift the cursor.

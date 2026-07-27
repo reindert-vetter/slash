@@ -578,7 +578,8 @@ is itself also changed** in this PR (both sides must change for a link).
   (like `event_listener`: an edge only appears if both blocks change in
   this PR; unchanged files are never injected as a node, and the
   highest level that **does** change automatically becomes the tree root
-  since `recomputeLeftList` pulls each child out of the left-hand list).
+  since `recomputeLeftList` sorts each relation child to the bottom of the
+  left-hand list, under the "Onderliggende code" heading).
   The head worktree may be read freely for the mapping (like
   `providerEventMap` reads unchanged ServiceProviders). Middleware is
   **deliberately out of scope**. The detectors share `blockIndex`

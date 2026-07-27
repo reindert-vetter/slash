@@ -145,8 +145,11 @@ left as a navigable list.
   `home.mjs`):** the left list is not simply ingest/source order — it sorts by
   category priority: **ROUTE** first (the root of the
   route→controller→request/resource/model hierarchy, see Task 7), then
-  **CONTROLLER**, then everything else unchanged. The sort happens **after**
-  the existing filters (children/resolved-call-targets/search term) and is a
+  **CONTROLLER**, then everything else unchanged — and **relation children
+  after everything** (the "Onderliggende code" section at the bottom, see
+  `recomputeLeftList`/`state.underlyingIds` in
+  `.claude/rules/detail-layout.md`). The sort happens **after** the existing
+  filters (resolved-call-targets/search term) and is a
   **stable** sort (`Array.prototype.sort`, guaranteed stable in modern JS
   engines) — within each rank the original order thus stays intact. This is
   safe for `sameFileNeighbour`/`stepBlock` (the same-file connector +
