@@ -1469,6 +1469,22 @@ function childrenOf(b) {
     .filter(Boolean)
 }
 
+// isBlockLevelCallKey recognizes the synthetic, colon-containing callKey
+// prefixes emitted by callresolve rules that deliberately have NO single line
+// in the caller to anchor to (see the callresolve_analysis.go doc comments
+// for resolveMigrationModels/resolveDataProviders and rule 7 "Resource
+// usage" in tembed-workflows.md — all three explicitly note their key
+// "never matches a real call-site literal"). Such a child is block-level
+// knowledge, not tied to one line/call, and must never be scoped away by
+// callScopeMethods/hideOutOfScope just because findCallSites can't (and
+// isn't meant to) find a literal site for it. `translation:` is NOT included
+// here — that prefix DOES have a real literal site (the quoted key string
+// inside a trans()/__()/@lang() call, matched separately below), so it stays
+// properly scoped to the line it's actually used on.
+function isBlockLevelCallKey(name) {
+  return /^(resource|migration_model|data_provider):/.test(name)
+}
+
 // findCallSites locates, in a block's aligned diff rows, every place method
 // `name` is called on the *new* side — returning the row index and the call
 // *segment* (segStart, same key changeCalls/rowCallSegments use) that call sits
@@ -1481,6 +1497,15 @@ function childrenOf(b) {
 // static reference — how an enum case (AddressType::BILLING) reaches its enum.
 function findCallSites(rows, name) {
   const sites = []
+  // A block-level synthetic key (resource:/migration_model:/data_provider:,
+  // see isBlockLevelCallKey) never appears as a literal anywhere in the
+  // caller's own text — there is no single call site to find, by design.
+  // Return no sites rather than falling into the "isCommand" branch below,
+  // which would build a `command('resource:Foo'...)` regex that can never
+  // match — callScopeMethods special-cases this key shape to stay in scope
+  // regardless, so an empty result here is harmless (only used elsewhere for
+  // the "is this call on a changed line" ordering heuristic).
+  if (isBlockLevelCallKey(name)) return sites
   // A translation callKey (translation:<locale>:<file.key>, see resolveTranslations)
   // couples via the KEY string literal inside a trans()/__()/@lang()/trans_choice()
   // call — the same literal for every locale, so nl and en children both point at
@@ -1539,6 +1564,17 @@ function callScopeMethods(b, rows) {
   if (!unit) return null
   const methods = new Set()
   for (const r of callRows(b)) {
+    // A block-level synthetic key (resource:/migration_model:/data_provider:)
+    // has no line to check against — findCallSites deliberately returns no
+    // sites for it (see isBlockLevelCallKey) — so treat it as always in
+    // scope instead of letting the empty site list read as "not here",
+    // which would otherwise make hideOutOfScope filter it out entirely at
+    // 'line'/'call' granularity even though its underlying call genuinely
+    // sits on the selected line.
+    if (isBlockLevelCallKey(r.callKey)) {
+      methods.add(r.callKey)
+      continue
+    }
     const sites = findCallSites(rows, r.callKey)
     const inScope =
       cur.gran === 'call'
