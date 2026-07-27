@@ -100,56 +100,20 @@ All of this loads/polls regardless of whether the column is currently visible
 — `state.showDescription` only determines whether it's rendered, not whether
 the data exists by the time you open it.
 
-**PR-wide comments (`PrWideComments`, under `prInfoCard` in the same
-`pr-info-column`):** a second card (`data-testid=pr-wide-comments`, its own
-internal scroll), **below** `prInfoCard` in the same `state.showDescription`
-gated container in `PrInfoPanel` — so it has **no toggle of its own for
-visibility**, it simply doesn't exist until the column itself is mounted.
-**Height distribution follows which of the two cards holds the keyboard
-(`isPrWideFocused()`, reads `pw.focus`):** with the keyboard on the description
-(`pw.focus === null`) this card gets `flex-[4]` (4/5) and `prInfoCard` the
-small share `flex-1` (1/5); navigating within this block (`pw.focus !== null`)
-gives this card `flex-[5]` (5/6) and `prInfoCard` still `flex-1` (1/6) —
-`prInfoCard` thus stays fixed at `flex-1` in both states, only this card
-switches between `flex-[4]`/`flex-[5]`. This card's share in the
-description-focused state was doubled on request (was 2/5) — the comments are
-often truncated too short to read comfortably, so they get structurally more
-room, not only once they have focus; a `min-h-[20rem]` on the card itself also
-guarantees a readable floor, no matter how narrow the column actually turns
-out to be in practice. Both class bindings are reactive whole-value functions
-(`${() => ...}`, per the arrow.js class-binding convention) that read the same
-`isPrWideFocused()` — `flex-1`/`flex-[n]` both set a 0% flex-basis, so the
-ratio comes purely from the two grow numbers. Replaces the earlier fixed
-`shrink-0 max-h-[16rem]` cap. Shows the comments with **`kind !== ''`** —
-GitHub-imported issue comments and review(-summary) comments without a
-line anchor — from the same `cs.list` that the block-scoped comments panel
-(see "Comments/tasks sidebar" below) already loads/polls (`syncComments`, no
-second fetch); `recomputeView` deliberately filters those *out* there
-(`!c.kind`), so this card is their only place. Each row
-(`data-testid=pr-wide-item`) shows a status dot (the same `CSTATUS_DOT` as the
-block-scoped panel), a kind badge (`data-testid=pr-wide-kind`, "PR comment"
-for `issue`/`review`, "Review" for `review_summary`), the existing
-`sourceBadge` ("source: github") and a relative time (`relTime`). A click
-(or `Enter`, see below) opens the thread **inline below the row** — unlike the
-block-scoped panel (which shows the list and thread side by side) this is a
-single column here, so the selected item shows its `threadMessages`/
-`reactionBubble`s (reused, unchanged) plus a reply textarea
-(`data-testid=pr-wide-compose`) and a separate resolve button
-(`data-testid=pr-wide-resolve`) directly below its own row. Reply/resolve go
-through **exactly the same** `POST /api/workflows/{runId}/signals/reply`
-Signal as the block-scoped panel (`done:false`/`done:true`) — the backend
-already turns a reply on a PR-wide thread into a new GitHub issue comment and
-treats resolve as local-only, so the frontend needs no separate case.
-The comment body text is rendered by one small shared helper
-(`commentBody(c)`, `RelatedPanel.mjs`, reused by both this card and the
-block-scoped `commentRow`) — purely plain text, deliberately no markdown yet,
-but exactly the one place a later markdown pass would need to change.
-**Own cursor `pw`** (`RelatedPanel.mjs`, separate from `cs.focus`/`cs.sel` of
-the block-scoped panel and separate from `state.showDescription` itself):
-`pw.focus` (`null`/`'item'`/`'thread'`) + `pw.sel` + `pw.threadPos` — see
-`.claude/rules/keyboard-navigation.md` (section "PR-wide comments, stop 1")
-for the full keyboard mechanism (`handlePrWideKey`/`isPrWideFocused`, called
-from `home.mjs`'s `onKeydown`).
+**PR-wide comments are no longer a separate card — they're navigable
+"Start"-index items.** GitHub-imported issue/review(-summary) comments and
+`code_warning` findings without a block anchor (`kind !== ''`) used to live in
+their own `PrWideComments` card under `prInfoCard` in the `pr-info-column`;
+that card and its own keyboard cursor (`pw`/`handlePrWideKey`/
+`isPrWideFocused`) have been removed entirely. Instead, `home.mjs`'s
+`recomputeLeftList` turns each one into a **synthetic `state.blocks` item**
+(`commentBlockItem`, `kind:'comment'`, id `'comment:'+c.id`) that sits right
+alongside the ordinary PR blocks in the sidebar (`BlockList.mjs`) — see
+"Comment-index items" further below for the full mechanism (the 0/1 approval
+mapping, the detail card that replaces a `Block` diff card in the column to
+the right of the index, and the action menu). `prInfoCard` itself is
+therefore the **only** card in the `pr-info-column` now and simply takes the
+full column height (`flex-1`, no ratio logic against a second card).
 
 Next comes the **block column** (`data-testid=block-column`,
 **`shrink-0`** — not `flex-1`, so at its **natural diff width**
@@ -181,6 +145,138 @@ appears in it) — stop 5 of the nav chain, unchanged, inline in `<main>`'s
 horizontally scrolling column flow (see "Underlying code" further down).
 Comments and Tasks are **no longer** part of this column flow — see the
 "Comments/tasks sidebar" section below.
+
+## Comment-index items (PR-wide comments as navigable "Start" rows)
+
+A PR-wide comment (`kind !== ''` — GitHub-imported issue/review(-summary)
+comments, plus a `code_warning` finding that couldn't be pinned to a block,
+`kind:'ai_warning'`) has no `file:line` to anchor it to a real block, so it
+never shows in the block-scoped comments index (`RelatedPanel.mjs`'s
+`recomputeView` still excludes `kind !== ''` there). Instead of its own card
+(the removed `PrWideComments`), `home.mjs` turns each one into a **synthetic,
+fully navigable item in the "Start" sidebar itself** — the reviewer selects it
+with `↑`/`↓`/click exactly like an ordinary PR block, and the block column to
+the right of the index shows its thread instead of a diff.
+
+- **The synthetic item (`commentBlockItem`, `recomputeLeftList`,
+  `home.mjs`):** `{ id: 'comment:'+c.id, kind: 'comment', label: <a short
+  body snippet>, category: 'COMMENT', status: '', comment: c }` — `kind` is
+  the marker every block-assuming code path guards on (see below); `id` is
+  stable across a recompute so selection survives a reload of the comments
+  list; `comment` carries the raw row back for the detail card/action menu.
+  `BlockList.mjs` gets a matching `CATEGORY_STYLE.COMMENT` pill colour
+  (`red`, not used by any real block category) and its own **"PR-comments"
+  heading** (`commentHeading`, `data-testid=comment-heading`) above the first
+  visible comment item — mirrors `underlyingHeading`'s role for relation
+  children, same "own keyed item in one flat array" shape (no single↔array
+  pitfall). `recomputeLeftList`'s `rank()` puts comment items **first**
+  (rank `-1`, ahead of `ROUTE`) — they're PR-wide feedback that usually wants
+  attention before diving into the tree. Comment items are synthesized fresh
+  from `RelatedPanel.mjs`'s exported `prWideComments()` (the same `kind !==
+  ''`-filtered, kilo-review-bot-excluded subset of `cs.list` the old card
+  used) on every `recomputeLeftList()` call; a dedicated `watch(() =>
+  prWideComments(), () => recomputeLeftList())` re-derives `state.blocks`
+  whenever that list changes (initial load, a poll pickup, a resolve) — safe
+  because `prWideComments()` only reads `cs.list` (no block's own `.code`),
+  so it can't trigger the "stuck on loading" co-subscriber race (see
+  conventions.md). `cs.list` itself keeps being loaded/polled by
+  `syncComments`, called from `CommentsSidebar` regardless of the sidebar's
+  own open/closed state — no separate fetch needed.
+- **"Resolved == approved" (0/1 → 1/1), mapped into the EXISTING generic
+  machinery — `isFullyApproved` (`BlockList.mjs`) itself is untouched.** A
+  comment item has no changed rows to approve, so `blockApproveCount`
+  (`home.mjs`) special-cases `b.kind === 'comment'` right at its top: `{done:
+  resolved?1:0, total:1}` (`resolved` = `b.comment.status === 'resolved'`),
+  and `subtreeApproveCount` short-circuits to that (no `nestedPrBlocks` call —
+  a comment item has no relation children). Both are only ever called from
+  the existing `approvalSummaries`/`approvalTotal` watch, which fills
+  `state.approvalSummaries[b.id]` for **every** `state.blocks` entry
+  (comment items included) — `isFullyApproved`/`approvalPill` then read that
+  map exactly as they always did, no branch needed there. The practical
+  effect: not-yet-resolved shows `0/1` inline in "Start"; once resolved it
+  folds into the same "Toon N goedgekeurde blocks" section as any other
+  fully-approved block (`renderList`'s existing `!state.showApproved &&
+  isFullyApproved(...)` hide check, unchanged) and counts toward the PR-wide
+  `X/Y goedgekeurd` header. This also makes `applyDefaultUnapprovedSelection`
+  (a fresh, no-`?sel=` open lands on the first not-fully-approved item, see
+  keyboard-navigation.md) work generically across comment items for free —
+  the very reason the mapping was pushed down into `blockApproveCount`
+  instead of a bespoke `isFullyApproved` branch.
+- **Guards on every path that assumes a real PR block.** A comment item
+  lives only in `state.blocks` (synthesized), never in `state.allBlocks`, so
+  most code that iterates `allBlocks`/reads `b.code` is naturally unaffected
+  (the "code not loaded yet" branch already present everywhere handles a
+  permanently-codeless item for free — `blockRows`/`relatedChildren`/the
+  footer/`callArrows` watches all already tolerate `b.code == null`). The
+  handful of spots that needed an explicit `b.kind === 'comment'` early-exit:
+  `enterDiff` (→/`f` on a comment item never enters diff mode — see below for
+  what → does instead), `ensureCode` (no `/api/code` fetch — a comment item
+  has no `.file`/`.label`), `sameFileNeighbour` (both sides guarded — two
+  adjacent comment items would otherwise coincidentally match on
+  `undefined === undefined`), the `state.blockRef` mirror watch (stays `''`
+  for a comment selection — deliberately **no** new `?sel=comment:<id>`
+  scheme; a comment selection simply doesn't survive a refresh, falling back
+  to `applyDefaultUnapprovedSelection`'s default landing), `commentTarget`/
+  `placeComment` (a comment item can't anchor a NEW line comment — both
+  return/no-op rather than post one with `file:undefined`), and the
+  `DetailPanel` `pair.forEach` render loop (see next bullet). `findNextUnapproved`
+  needs no explicit guard: its forward-only walk starts at
+  `state.selected + 1`, and since comment items always rank before every real
+  block, a real block's own index is never followed by a comment item's —
+  the "Continue to next unapproved" postApprove flow can therefore never
+  land on one structurally.
+- **The detail card, in place of a `Block` diff card.** `DetailPanel`'s
+  `pair.forEach` loop (`home.mjs`, the same loop that builds the selected +
+  look-ahead-preview cards for the block column) branches at the very top on
+  `b.kind === 'comment'`: instead of `ensureCode(b)` + `Block(b, {...})` it
+  renders `commentDetailCard(b.comment, { preview })` (`RelatedPanel.mjs`,
+  exported) — a read-only thread (status dot, kind badge, source/AI-warning
+  badge, relative time, markdown body via the shared `commentBody`, then
+  every reaction via the shared `threadMessages`/`reactionBubble`) wrapped in
+  the same `data-testid=detail-card` stable-`contents` root as an ordinary
+  card, keyed on `'detail:'+role+':comment:'+id+':'+status` (a resolve thus
+  forces a fresh node, same rekey-on-status-change reasoning as the ordinary
+  block-card key). `preview` (`i !== sel || !focusedHere`) dims the
+  look-ahead card exactly like `Block()`'s own `preview` prop — **load-bearing
+  distinction:** the reply-composer state `picm` (below) is a **single,
+  module-level** reactive object shared by every `commentDetailCard` call, so
+  it's scoped by `commentId`, not just a bare boolean — otherwise opening the
+  reply field on the selected item would also reveal one on the (different!)
+  preview card. The connector/step-chevron cue between two stacked cards
+  (dashed line for same-file blocks) is skipped whenever either side is a
+  comment item (no `.file` to compare). This card is the "blok rechts van de
+  index" the reviewer asked for — reached purely by **selection**, no hover.
+- **Enter/→ open the same small action menu (`ms.mode = 'prComment'`,
+  `prCommentCommandsFor`, `home.mjs`).** `selectedComment()` (`curBlock().kind
+  === 'comment' ? curBlock().comment : null`) gates a dedicated branch in
+  `onKeydown`, checked **before** the generic block-palette Enter/→ handling
+  — a comment item has no diff, so neither should ever reach `enterDiff`/the
+  block `COMMANDS`. Both keys open the identical menu: **"Sluit menu"**
+  (pinned, per the `withClose` convention) then **"Beantwoorden"** (the
+  first real item, thus default-selected via `defaultSel`) then **"Resolve
+  comment"**. Because selection alone already shows the detail card/thread
+  in the block column (previous bullet), "the menu appears with the thread
+  above it" is simply a consequence of anchoring the menu there
+  (`menuAnchor`/`menuRegion`'s new `ms.mode === 'prComment'` branches target
+  `[data-testid=comment-detail-card]`, falling back to
+  `[data-testid=block-column]`) rather than a distinct "with/without thread"
+  menu variant — Enter and → are deliberately identical here. **"Beantwoorden"**
+  (`startPrCommentReply(selectedComment())`) only reveals the reply textarea
+  in the detail card (`picm.replying = true` + `picm.commentId = c.id`) and
+  focuses it — the reviewer types and sends from there (`Enter` in the field,
+  or the send button), never from the menu itself; this mirrors the
+  "Beantwoorden pas zichtbaar na Enter op het item" requirement literally.
+  **"Resolve comment"** (`resolvePrCommentItem`) sends the same "/resolve"
+  sentinel + `done:true` reply Signal as the block-scoped
+  `resolveFocusedComment` — local-only for a PR-wide thread, GitHub-resolved
+  for a review-diff thread (unchanged backend behaviour, see
+  `.claude/rules/tembed-workflows.md`). Both the reply and the resolve action
+  go through the **existing** `POST /api/workflows/{runId}/signals/reply`
+  Signal — no new write path.
+- **Not part of the Cmd+→ comments/tasks sidebar** — that sidebar (see
+  below) only ever showed block-scoped comments (`kind === ''`) even before
+  this change (`recomputeView`'s `!c.kind` filter); a comment-index item's
+  thread lives exclusively in its own detail card now.
 
 ## Comments/tasks sidebar (fixed, toggled with Cmd+→)
 

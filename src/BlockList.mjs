@@ -32,6 +32,11 @@ const CATEGORY_STYLE = {
   TRANSLATION: 'bg-yellow-100 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-300',
   CONFIG: 'bg-stone-200 dark:bg-stone-500/20 text-stone-600 dark:text-stone-400',
   OTHER: 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400',
+  // Synthetic comment-index items (kind:'comment', see commentBlockItem in
+  // home.mjs) — a PR-wide comment turned into a navigable "Start" row. `red`
+  // isn't used by any real block category above, so it reads distinctly from
+  // the code-derived pills.
+  COMMENT: 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300',
 }
 
 // Colour + glyph per change status: + new, - gone, -/+ changed.
@@ -149,10 +154,19 @@ function renderList(state) {
   if (state.blocks.length === 0) return [emptyState(state).key('empty')]
   const approvedCount = state.blocks.filter((b) => isFullyApproved(state, b)).length
   const items = []
+  let commentHeadingDone = false
   let underlyingHeadingDone = false
   state.blocks.forEach((b, i) => {
     const pinnedVisible = i === state.selected && b.id === state.pinnedApprovedId
     if (!state.showApproved && !pinnedVisible && isFullyApproved(state, b)) return
+    // Comment-index items (kind:'comment', see commentBlockItem in home.mjs)
+    // sort to the very top of state.blocks (recomputeLeftList's rank -1) —
+    // the first VISIBLE one gets its own "PR-comments" heading, mirroring
+    // underlyingHeading below.
+    if (!commentHeadingDone && b.kind === 'comment') {
+      items.push(commentHeading().key('comment-heading'))
+      commentHeadingDone = true
+    }
     // Relation children sort to the bottom of state.blocks (recomputeLeftList,
     // home.mjs); the first VISIBLE one gets the "Onderliggende code" heading
     // above it — its own keyed item, so the list stays one flat keyed array.
@@ -164,6 +178,21 @@ function renderList(state) {
   })
   if (approvedCount > 0) items.push(toggleRow(state, approvedCount))
   return items
+}
+
+// commentHeading titles the comment-index-items section at the top of the
+// index (see recomputeLeftList/commentBlockItem in home.mjs) — PR-wide
+// comments (issue/review/review_summary/ai_warning) turned into ordinary,
+// navigable "Start" rows instead of their own separate card.
+function commentHeading() {
+  return html`
+    <div
+      data-testid="comment-heading"
+      class="border-b border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
+    >
+      PR-comments
+    </div>
+  `
 }
 
 // underlyingHeading titles the relation-children section at the bottom of the

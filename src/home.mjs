@@ -52,9 +52,11 @@ import RelatedPanel, {
   taskRuns,
   toggleSidebar,
   sidebarOpen,
-  PrWideComments,
-  handlePrWideKey,
-  isPrWideFocused,
+  prWideComments,
+  commentDetailCard,
+  startPrCommentReply,
+  cancelPrCommentReply,
+  resolvePrCommentItem,
   scrollIntoViewVertical,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
@@ -437,8 +439,8 @@ function isModifiedKey(e) {
 // left), meaning a plain/Option ArrowLeft has somewhere to go *within* the
 // field. Used to decide whether ArrowLeft should move/word-jump the caret
 // (leave it to the browser) or fall through to the existing "exit the
-// field/panel" shortcuts below (isPrWideFocused/relatedActive's ArrowLeft
-// branches) — a caret already at position 0 (e.g. a freshly opened, still
+// field/panel" shortcuts below (relatedActive's ArrowLeft branch) — a caret
+// already at position 0 (e.g. a freshly opened, still
 // empty composer/reply field) has nothing to move left into, so ArrowLeft
 // there keeps its long-standing "step back out" meaning instead. See also
 // editableCaretCanMoveRight below, its mirror image for ArrowRight.
@@ -457,8 +459,8 @@ function editableCaretCanMoveLeft() {
 // end (there's a character — or a selection — to its right), meaning a
 // plain/Option ArrowRight has somewhere to go *within* the field. Used so
 // ArrowRight moves/word-jumps the caret (leave it to the browser) instead of
-// being hijacked by the isPrWideFocused/relatedActive ArrowRight shortcuts
-// below (e.g. entering a comment's thread) while there's still text to move
+// being hijacked by relatedActive's ArrowRight shortcut below (e.g. entering
+// a comment's thread) while there's still text to move
 // into — only once the caret is already at the end does ArrowRight keep its
 // existing nav meaning there.
 function editableCaretCanMoveRight() {
@@ -527,8 +529,21 @@ watch(
   () => [state.selected, state.blocks],
   () => {
     const b = state.blocks[state.selected]
-    state.blockRef = b ? `${b.file}:${b.line}` : ''
+    // A synthetic comment-index item (kind:'comment') has no file:line and
+    // deliberately isn't given its own ?sel= scheme (Task decision) — leave
+    // blockRef empty, same as no selection at all, so a refresh simply falls
+    // back to the usual default (applyDefaultUnapprovedSelection) instead of
+    // writing a bogus "undefined:undefined" into the URL.
+    state.blockRef = b && b.kind !== 'comment' ? `${b.file}:${b.line}` : ''
   },
+)
+
+// A stray "Beantwoorden"-revealed reply field must never leak onto whatever
+// gets selected next — reset it on every selection change (mirrors how the
+// composer/reply focus elsewhere always resets on a block switch).
+watch(
+  () => state.selected,
+  () => cancelPrCommentReply(),
 )
 
 // Keep drillRef/drillGran/drillChange mirroring state.drill/drillCursor — see
@@ -813,11 +828,14 @@ function extendRange(delta) {
 // exists and belongs to the same file — i.e. whether stepping there is allowed.
 function sameFileNeighbour(delta) {
   const next = state.selected + delta
-  return (
-    next >= 0 &&
-    next < state.blocks.length &&
-    state.blocks[next].file === state.blocks[state.selected].file
-  )
+  if (next < 0 || next >= state.blocks.length) return false
+  const cur = state.blocks[state.selected]
+  const nb = state.blocks[next]
+  // A synthetic comment-index item (kind:'comment') has no `.file` at all —
+  // without this guard two adjacent comment items would coincidentally match
+  // on `undefined === undefined`. Neither side of a same-file step may be one.
+  if (cur.kind === 'comment' || nb.kind === 'comment') return false
+  return nb.file === cur.file
 }
 
 // pendingLast records that we stepped *up* into a block whose code hasn't loaded
@@ -1163,6 +1181,34 @@ function categoryRank(cat) {
   if (cat === 'CONTROLLER') return 1
   return 2
 }
+
+// commentBlockItem turns a PR-wide comment (kind !== '', see
+// RelatedPanel.mjs's prWideComments — issue/review/review_summary comments
+// plus code_warning's ai_warning findings) into a synthetic, navigable
+// state.blocks item: kind:'comment' marks it (guarded everywhere something
+// assumes a real PR block — see enterDiff/ensureCode/sameFileNeighbour/
+// blockApproveCount/the DetailPanel pair.forEach branch), a stable id
+// ('comment:'+c.id, never colliding with a real block id's 'pr:file:label'
+// shape) so selection survives a recompute, and `comment` carries the raw
+// data back for the detail card / action menu. `label` is a short, one-line
+// snippet of the body (falls back to the kind label for an empty body) so
+// the sidebar row reads sensibly; `category` is a dedicated pseudo-category
+// (BlockList.mjs's CATEGORY_STYLE.COMMENT) so it gets its own pill colour
+// instead of falling into OTHER. `status` stays '' — there's no
+// added/modified/removed concept for a comment, so the status pill/mark
+// simply shows nothing (statusInfo's fallback).
+function commentBlockItem(c) {
+  const snippet = (c.body || '').trim().replace(/\s+/g, ' ').slice(0, 60)
+  return {
+    id: 'comment:' + c.id,
+    kind: 'comment',
+    label: snippet || (c.kind === 'ai_warning' ? 'AI-risico' : 'PR-comment'),
+    category: 'COMMENT',
+    status: '',
+    comment: c,
+  }
+}
+
 function recomputeLeftList() {
   // Only the resolved-call targets are hidden from the index (panel-only
   // reference code). Relation children STAY in state.blocks — fully navigable
@@ -1175,9 +1221,16 @@ function recomputeLeftList() {
   const childIds = new Set(state.relations.map((r) => r.childId))
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
   const q = (state.search || '').trim().toLowerCase()
-  const rank = (b) => (childIds.has(b.id) ? 3 : categoryRank(b.category))
-  state.blocks = state.allBlocks
-    .filter((b) => !hidden.has(b.id))
+  // Comment items rank ahead of every real category (their own group at the
+  // top of "Start", above ROUTE) — they're PR-wide feedback that usually
+  // wants attention first; once resolved they fold into the same
+  // "Toon N goedgekeurde blocks" section as a fully-approved block (see
+  // isFullyApproved/blockApproveCount's comment-item branch below), exactly
+  // like any other row.
+  const rank = (b) => (b.kind === 'comment' ? -1 : childIds.has(b.id) ? 3 : categoryRank(b.category))
+  const commentItems = prWideComments().map(commentBlockItem)
+  state.blocks = [...state.allBlocks, ...commentItems]
+    .filter((b) => b.kind === 'comment' || !hidden.has(b.id))
     .filter((b) => !q || (b.label + ' ' + b.category).toLowerCase().includes(q))
     .sort((a, b) => rank(a) - rank(b))
   const underlying = {}
@@ -1186,6 +1239,17 @@ function recomputeLeftList() {
   const at = state.blocks.findIndex((b) => b.id === selId)
   state.selected = at >= 0 ? at : Math.min(state.selected, Math.max(0, state.blocks.length - 1))
 }
+
+// Re-derive state.blocks whenever the PR-wide comment list changes (initial
+// load, a poll picking up a new/imported comment, a resolve) — mirrors
+// loadCallResolve's own recomputeLeftList() call after its async load.
+// prWideComments() only reads RelatedPanel.mjs's cs.list (a plain filter, no
+// b.code involved), so this never risks the "stuck on loading" co-subscriber
+// pitfall (see conventions.md) the way reading a block's own code would.
+watch(
+  () => prWideComments(),
+  () => recomputeLeftList(),
+)
 
 // stepVisibleSelected walks state.selected one raw state.blocks index at a time
 // in the direction of dir (+1 down, -1 up), skipping any index BlockList's
@@ -1284,6 +1348,10 @@ function applyDefaultUnapprovedSelection() {
   const idx = state.blocks.findIndex((b) => !isFullyApproved(state, b))
   if (idx >= 0) {
     state.selected = idx
+    // A comment-index item (kind:'comment') has no diff — a stray restored
+    // `?mode=diff` (with no matching ?sel=, so this default-landing path ran
+    // at all) must not leave the app in diff mode with nothing to show one.
+    if (state.blocks[idx].kind === 'comment') state.mode = 'list'
     scrollSelectedIntoView()
     return
   }
@@ -2419,6 +2487,16 @@ function nestedPrBlocks(b, seen = new Set()) {
 // changed rows: exact once code is loaded (intersect with the changed rows),
 // otherwise the size of approvedRows (which only ever holds changed-row indices).
 function blockApproveCount(b) {
+  // A synthetic comment-index item (kind:'comment', see commentBlockItem) has
+  // no changed rows to count — "resolved == approved" (Task decision): 1/1
+  // once its comment is resolved, 0/1 otherwise. This is the ONE place that
+  // special-cases kind:'comment' for approval — isFullyApproved itself
+  // (BlockList.mjs) stays generic, reading only state.approvalSummaries[b.id],
+  // which subtreeApproveCount below fills from this branch.
+  if (b.kind === 'comment') {
+    const resolved = !!(b.comment && b.comment.status === 'resolved')
+    return { done: resolved ? 1 : 0, total: 1 }
+  }
   const backendTotal =
     state.blockTotals && typeof state.blockTotals[b.id] === 'number'
       ? state.blockTotals[b.id]
@@ -2437,6 +2515,9 @@ function blockApproveCount(b) {
 // subtreeApproveCount aggregates blockApproveCount over b and every PR block
 // nested under it — the combined approval progress the sidebar shows.
 function subtreeApproveCount(b) {
+  // A comment-index item has no nested PR blocks (nestedPrBlocks assumes a
+  // real block id/relations entry) — just its own 0/1 or 1/1.
+  if (b.kind === 'comment') return blockApproveCount(b)
   let done = 0
   let total = 0
   for (const x of [b, ...nestedPrBlocks(b)]) {
@@ -2523,6 +2604,10 @@ async function ensureCode(b) {
   // childCode); there's no stored PR block to fetch, so never hit /api/code for it
   // — that would clobber the inline code with null and hang on "loading".
   if (b.synthetic) return
+  // A synthetic comment-index item (kind:'comment', see commentBlockItem) has
+  // no source to fetch — it has no .file/.label at all, so /api/code would
+  // 404 uselessly.
+  if (b.kind === 'comment') return
   const key = b.file + '|' + b.label + '|' + b.side
   if (codeRequested.has(key)) return
   codeRequested.add(key)
@@ -2805,7 +2890,12 @@ function scrollChangeIntoView(animate = true, tries = 10) {
 // yet reachable by a plain list-mode →. See tests/enter-diff-zero-groups.spec.mjs.
 function enterDiff() {
   const b = state.blocks[state.selected]
-  if (!b) return
+  // A synthetic comment-index item (kind:'comment') has no diff — → on it is
+  // instead handled in onKeydown (opens the prComment action menu) and never
+  // reaches this function via that path; guarded here too as a defensive
+  // no-op for any other caller (f, applyDefaultUnapprovedSelection's
+  // scroll-only landing, …).
+  if (!b || b.kind === 'comment') return
   state.mode = 'diff'
   // Stepping in from the list always starts at the coarsest granularity (a whole
   // change run); the reviewer refines from there with f.
@@ -2990,6 +3080,37 @@ function commentCommandsFor() {
     })
   }
   return withClose(items)
+}
+
+// prCommentCommandsFor builds the small action menu for a selected
+// comment-index item (Enter/→ on a sidebar row with kind:'comment' — see
+// selectedComment/recomputeLeftList). "Beantwoorden" is deliberately the
+// FIRST real item (default-selected, see defaultSel/withClose) — it only
+// reveals the reply textarea in the detail card to the right of the index
+// (startPrCommentReply, RelatedPanel.mjs); the reviewer then types and sends
+// from there, not from this menu. "Resolve comment" resolves the thread via
+// the existing reply Signal (done:true, RelatedPanel.mjs's
+// resolvePrCommentItem) — the same write path as the block-scoped "Resolve
+// comment" command above, just against this item's own comment instead of
+// cs's selected one.
+function prCommentCommandsFor() {
+  return withClose([
+    {
+      id: 'pr-comment-reply',
+      label: 'Beantwoorden',
+      hint: 'reply',
+      run: () => startPrCommentReply(selectedComment()),
+    },
+    {
+      id: 'pr-comment-resolve',
+      label: 'Resolve comment',
+      hint: 'resolve',
+      run: () => {
+        const c = selectedComment()
+        if (c) resolvePrCommentItem(c)
+      },
+    },
+  ])
 }
 
 // COMPOSE_COMMANDS — shown when Enter (or the composer button) is pressed on a
@@ -3242,6 +3363,17 @@ function granNoun() {
 
 function curBlock() {
   return state.blocks[state.selected]
+}
+
+// selectedComment returns the underlying comment object when the currently
+// selected sidebar item is a synthetic PR-wide-comment entry (kind:'comment',
+// see recomputeLeftList/commentBlockItem) — null for an ordinary PR block.
+// Such an item has no diff to step into: Enter and → both open its own small
+// action menu (prCommentCommandsFor) instead of the block palette/the diff —
+// see onKeydown's Enter/ArrowRight branches.
+function selectedComment() {
+  const b = curBlock()
+  return b && b.kind === 'comment' ? b.comment : null
 }
 
 // focusedBlock is whichever block the active Onderliggende-code panel (and its
@@ -3673,7 +3805,12 @@ function drillIntoChild(child) {
 // already support that — GitHub's own multi-line review comments).
 function commentTarget() {
   const b = focusedBlock()
-  if (!b) return null
+  // A synthetic comment-index item (kind:'comment') has no file/line to
+  // anchor a NEW comment to — this only matters via the `/`-menu's "Comment
+  // plaatsen" (PR_COMMANDS), which doesn't itself check what's selected;
+  // return null so placeComment's existing "nothing to anchor to" no-op
+  // applies, same as no block at all.
+  if (!b || b.kind === 'comment') return null
   const rows = blockRows(b)
   const level = state.focusLevel
   const cur = level > 0 ? state.drillCursor[level - 1] || { change: 0, gran: 'group' } : null
@@ -4900,6 +5037,7 @@ async function openGithubLine() {
 // menu/ms comment above.
 function rootCommandsFor(mode) {
   if (mode === 'comment') return commentCommandsFor()
+  if (mode === 'prComment') return prCommentCommandsFor()
   if (mode === 'postApprove') return POSTAPPROVE_COMMANDS
   if (mode === 'reviewApprove') return REVIEW_APPROVE_COMMANDS
   if (mode === 'reviewChoice') return REVIEW_CHOICE_COMMANDS
@@ -4922,6 +5060,10 @@ function resolveCommands(query) {
   // The comment-scoped menu (Enter on a focused comment row) is just its own
   // small list — no submenu, no make-a-comment fallback.
   if (ms.mode === 'comment') return filterCommands(ms.commands, query)
+  // The comment-INDEX-item menu (Enter/→ on a selected comment row in the
+  // sidebar — see selectedComment/prCommentCommandsFor): same shape, just its
+  // own small list.
+  if (ms.mode === 'prComment') return filterCommands(ms.commands, query)
   // The postApprove follow-up (opened right after an approve action finds a
   // next not-yet-approved unit ahead): just its two choices, no submenu, no
   // make-a-comment fallback.
@@ -5144,34 +5286,6 @@ function onKeydown(e) {
     return
   }
 
-  // Stop 1's own PR-wide comment block (PrWideComments/handlePrWideKey, see
-  // RelatedPanel.mjs) owns arrows/Enter/Escape once the reviewer has stepped
-  // into it (↓ from the description) — handled early, mirroring relatedActive()
-  // below, so none of the generic Enter-opens-menu/`/`/f-d-s shortcuts steal
-  // the keystroke while a PR-wide comment/thread has the keyboard. Typed
-  // characters flow into the reply textarea untouched (not preventDefault'd);
-  // only the navigation keys below are claimed here.
-  if (state.showDescription && isPrWideFocused()) {
-    if (
-      (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key) &&
-        // ArrowLeft/ArrowRight with the caret mid-text in the reply textarea
-        // (pw.focus==='thread') must move/word-jump the caret, not pop the
-        // thread focus back — only hijack it when the caret has nowhere left
-        // to go on that side (empty/at the start resp. at the end), matching
-        // editableCaretCanMoveLeft/editableCaretCanMoveRight's own "nothing
-        // to move into" carve-out. (handlePrWideKey has no ArrowRight case
-        // today, so this is mostly symmetry with the relatedActive() branch
-        // below — harmless either way.)
-        !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft()) &&
-        !(e.key === 'ArrowRight' && editableCaretCanMoveRight())) ||
-      (e.key === 'Enter' && !e.shiftKey)
-    ) {
-      e.preventDefault()
-      handlePrWideKey(e.key)
-    }
-    return
-  }
-
   // Enter on a filled new-comment composer opens the comment-kind menu (Claude /
   // Git / private / Jira) instead of placing directly. Handled before the
   // relatedActive() branch so it works whether the composer was opened via the
@@ -5216,8 +5330,7 @@ function onKeydown(e) {
       // comment row) jump into the thread — only hijack the key when the
       // caret has nowhere left to go on that side (empty/at the start resp.
       // at the end, e.g. a freshly opened composer — that keeps its
-      // long-standing nav meaning). Mirrors the isPrWideFocused() guard
-      // above.
+      // long-standing nav meaning).
       !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft()) &&
       !(e.key === 'ArrowRight' && editableCaretCanMoveRight())
     ) {
@@ -5326,6 +5439,19 @@ function onKeydown(e) {
   if (e.key === 'Enter' && state.toggleFocused) {
     e.preventDefault()
     state.showApproved = !state.showApproved
+    return
+  }
+
+  // Enter on a selected comment-index item (kind:'comment', synthesized from a
+  // PR-wide comment into the sidebar — see recomputeLeftList/
+  // commentBlockItem) opens its own small action menu ("Beantwoorden" /
+  // "Resolve comment", prCommentCommandsFor) instead of the block palette —
+  // there is no diff to act on. Checked before the generic Enter-opens-menu
+  // branch below so it wins for this item; never true while showDescription
+  // is true (a comment item can only be selected in the plain block index).
+  if (e.key === 'Enter' && selectedComment()) {
+    e.preventDefault()
+    openMenu('prComment')
     return
   }
 
@@ -5469,20 +5595,15 @@ function onKeydown(e) {
   // Stop 1 of the nav chain (the PR-description column) sits to the left of the
   // block-index and owns the keyboard while open: → closes it back to stop 2,
   // ← exits the chain entirely to the PR overview (/pr-overview) — there's
-  // nothing further left than stop 1. Reached here only while the PR-wide
-  // comment sub-block (see above) does NOT itself own the keyboard
-  // (isPrWideFocused() false) — ↓ hands it the keyboard instead (entering its
-  // first entry) when it has any PR-wide comments; a no-op otherwise. Any
-  // other key is a no-op and doesn't move the block selection underneath it.
-  // The `?pr=`/`?sel=` params let /pr-overview auto-select the PR — and hand
-  // back the same block reference on return — we just came from (see
-  // overviewExitUrl above, and trySelectPendingPr()/originPr/originSel in
-  // overview.mjs).
+  // nothing further left than stop 1. Any other key is a no-op and doesn't move
+  // the block selection underneath it. The `?pr=`/`?sel=` params let
+  // /pr-overview auto-select the PR — and hand back the same block reference on
+  // return — we just came from (see overviewExitUrl above, and
+  // trySelectPendingPr()/originPr/originSel in overview.mjs).
   if (state.showDescription) {
     e.preventDefault()
     if (e.key === 'ArrowRight') state.showDescription = false
     else if (e.key === 'ArrowLeft') location.href = overviewExitUrl()
-    else if (e.key === 'ArrowDown') handlePrWideKey('ArrowDown')
     return
   }
 
@@ -5498,7 +5619,11 @@ function onKeydown(e) {
     scrollChangeIntoView(false)
   } else if (e.key === 'ArrowRight') {
     e.preventDefault()
-    enterDiff()
+    // A selected comment-index item (kind:'comment', see recomputeLeftList)
+    // has no diff to step into — → opens its own small action menu instead
+    // (mirrors the Enter branch above; see selectedComment's own comment).
+    if (selectedComment()) openMenu('prComment')
+    else enterDiff()
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault()
     state.toggleFocused = false
@@ -5719,6 +5844,16 @@ function menuAnchor() {
       document.querySelector('[data-testid="comments-panel"]')
     )
   }
+  // The comment-index-item menu ('prComment') anchors on its own detail card
+  // in the block column, to the right of the index — that card already shows
+  // the thread (see commentDetailCard/detail-layout.md), so the menu opens
+  // right underneath it instead of over the sidebar row.
+  if (ms.mode === 'prComment') {
+    return (
+      document.querySelector('[data-testid="comment-detail-card"]') ||
+      document.querySelector('[data-testid="block-column"]')
+    )
+  }
   // Enter from the blokken-index (list mode): anchor on the selected row
   // itself, not the list-mode diff preview beneath it (see
   // .claude/rules/keyboard-navigation.md).
@@ -5764,6 +5899,12 @@ function menuRegion() {
     return (
       document.querySelector('[data-testid="comment-thread"]') ||
       document.querySelector('[data-testid="comments-panel"]')
+    )
+  }
+  if (ms.mode === 'prComment') {
+    return (
+      document.querySelector('[data-testid="comment-detail-card"]') ||
+      document.querySelector('[data-testid="block-column"]')
     )
   }
   if (isIndexMenu()) {
@@ -5922,13 +6063,10 @@ function prInfoCard(state) {
     <div
       class="${() =>
         'flex min-h-0 flex-col gap-3 overflow-auto rounded-2xl border bg-white dark:bg-zinc-900 p-5 shadow-sm ' +
-        // Height: this description card now always takes the small share so
-        // the PR-wide comment block below it renders roughly twice as tall as
-        // it used to in the normal (description-selected) state — a flat 1/5
-        // there (complement of PrWideComments' flex-[4]) and 1/6 while
-        // navigating the comment block (complement of flex-[5]); see
-        // PrWideComments in RelatedPanel.mjs. flex-grow with a 0 basis (like
-        // flex-1), so the ratio is purely the two numbers.
+        // The pr-info-column now holds only this one card (PR-wide comments
+        // no longer have their own card here — they're navigable "Start"
+        // sidebar items instead, see recomputeLeftList/commentBlockItem and
+        // detail-layout.md), so it simply takes the column's full height.
         'flex-1 ' +
         // Light-blue border while the keyboard drives stop 1 (this panel is only
         // ever mounted while showDescription is true, but read it here anyway so
@@ -6073,7 +6211,6 @@ function PrInfoPanel(state) {
               data-testid="pr-info-column"
             >
               ${prInfoCard(state)}
-              ${PrWideComments(state)}
             </div>`.key('pr-info-column')
           : ''}
     </div>
@@ -6167,13 +6304,34 @@ function DetailPanel(state) {
         // re-triggers this outer closure. See conventions.md / detail-layout.md.
         out.push(stepChevronSlot(-1, 'up').key('step-up'))
         pair.forEach(({ b, i }, idx) => {
-          ensureCode(b)
-          if (idx > 0 && pair[idx - 1].b.file === b.file) {
+          // A synthetic comment-index item (kind:'comment', see
+          // commentBlockItem/recomputeLeftList) has no diff — never call
+          // ensureCode/Block() for it (both assume a real PR block). It gets
+          // its own small read-only thread card, to the right of the index,
+          // exactly where a Block diff card would otherwise sit — see
+          // commentDetailCard (RelatedPanel.mjs) and detail-layout.md
+          // ("Comment-index items"). The `.key` includes the comment's own
+          // status so a resolve forces a fresh node (same rekey-on-status-
+          // change reasoning as the ordinary block-card key below).
+          if (b.kind === 'comment') {
+            const inner = commentDetailCard(b.comment, { preview: i !== sel || !focusedHere })
+            const card = html`<div class="contents" data-testid="detail-card">${inner}</div>`.key(
+              'detail:' + (i === sel ? 'sel' : 'prev') + ':comment:' + b.id + ':' + (b.comment && b.comment.status),
+            )
+            out.push(card)
+            return
+          }
+          // A connector/step-down cue only makes sense between two ordinary
+          // same-file blocks — never next to a comment item, which has no
+          // .file (guarding both sides avoids an accidental
+          // undefined === undefined match between two adjacent comment items).
+          if (idx > 0 && pair[idx - 1].b.kind !== 'comment' && pair[idx - 1].b.file === b.file) {
             // The step-down cue sits *below* the selected card, just above the
             // dashed connector to the next same-file block ↓ would flow into.
             out.push(stepChevronSlot(1, 'down').key('step-down'))
             out.push(connector().key('conn:' + b.file + ':' + i))
           }
+          ensureCode(b)
           const inner = Block(b, {
             // Dimmed like the look-ahead preview whenever it isn't the selected
             // card, OR the keyboard focus has stepped off it onto a drilled

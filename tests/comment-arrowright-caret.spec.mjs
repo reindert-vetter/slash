@@ -125,7 +125,9 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
     await expect(page.getByTestId('reaction-bubble').first()).toHaveClass(/ring-indigo-400/)
   })
 
-  test('PR-wide reply thread: ArrowRight/Alt+ArrowRight move the caret, thread stays open', async ({ page }) => {
+  test('comment-index item reply field: ArrowRight/Alt+ArrowRight move the caret, field stays open', async ({
+    page,
+  }) => {
     const now = new Date().toISOString()
     const comments = [
       {
@@ -151,13 +153,18 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
     )
 
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toBeVisible()
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    // A fresh, no-?sel= open lands on the first not-yet-resolved item, which
+    // is this comment (see recomputeLeftList/applyDefaultUnapprovedSelection).
+    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 
-    await page.keyboard.press('ArrowLeft') // stop 1: the description
-    await page.keyboard.press('ArrowDown') // hand the keyboard to the PR-wide block
-    await page.keyboard.press('Enter') // open its thread + focus the reply field
+    // Enter opens the small action menu, default-selected on "Beantwoorden" —
+    // a second Enter runs it, revealing the reply field.
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await page.keyboard.press('Enter')
 
-    const compose = page.getByTestId('pr-wide-compose')
+    const compose = page.getByTestId('comment-detail-reply')
     await expect(compose).toBeFocused()
     await compose.type('quick reply')
     await expect(compose).toHaveValue('quick reply')
@@ -169,7 +176,7 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
     let pos = await compose.evaluate((el) => el.selectionStart)
     expect(pos).toBe(len - 2)
 
-    // A plain ArrowRight moves the caret, doesn't pop the row/thread focus.
+    // A plain ArrowRight moves the caret, doesn't pop any focus.
     await page.keyboard.press('ArrowRight')
     await expect(compose).toBeFocused()
     pos = await compose.evaluate((el) => el.selectionStart)
@@ -183,8 +190,9 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
 
     await expect(compose).toHaveValue('quick reply')
 
-    // Escape still steps out of the field (back to the row highlight).
+    // Escape hides the reply field again; the thread/detail card stays.
     await page.keyboard.press('Escape')
-    await expect(page.getByTestId('pr-wide-item').first()).toHaveAttribute('data-active', 'true')
+    await expect(page.getByTestId('comment-detail-reply')).toHaveCount(0)
+    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
   })
 })

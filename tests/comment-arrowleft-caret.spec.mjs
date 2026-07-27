@@ -3,11 +3,14 @@ import { test, expect } from './_fixtures.mjs'
 // Regression test for: "option naar links, moet niet uit comment input gaan" —
 // ArrowLeft (and Option/Alt+ArrowLeft, the Mac word-jump) inside a genuinely
 // DOM-focused comment/reply textarea must move the caret, not pop the
-// thread/sidebar focus or exit the panel. Before the fix, the
-// isPrWideFocused()/relatedActive() branches in home.mjs's onKeydown always
-// preventDefault'd + hijacked ArrowLeft, even while the reviewer was mid-edit
-// in the composer or a reply field. See the isEditableFocused() guard added
-// to both branches (keyboard-navigation.md, "Generieke input-focus-guard").
+// thread/sidebar focus or exit the panel. Before the fix, the relatedActive()
+// branch in home.mjs's onKeydown always preventDefault'd + hijacked ArrowLeft,
+// even while the reviewer was mid-edit in the composer or a reply field. See
+// the isEditableFocused() guard added to that branch (keyboard-navigation.md,
+// "Generieke input-focus-guard"). The comment-index item's own reply field
+// (RelatedPanel.mjs's commentDetailCard) needs no such guard at all — it isn't
+// wired into any cs.focus-based branch, so a plain ArrowLeft there simply
+// falls through to the browser untouched; the third test below covers that.
 test.describe('ArrowLeft caret guard in comment inputs', () => {
   test('block-scoped composer: ArrowLeft/Alt+ArrowLeft move the caret, field stays open', async ({ page }) => {
     await page.goto('/pr/12903')
@@ -91,7 +94,9 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
     await expect(page.getByTestId('comment-thread')).toBeVisible()
   })
 
-  test('PR-wide reply thread: ArrowLeft/Alt+ArrowLeft move the caret, thread stays open', async ({ page }) => {
+  test('comment-index item reply field: ArrowLeft/Alt+ArrowLeft move the caret, field stays open', async ({
+    page,
+  }) => {
     const now = new Date().toISOString()
     const comments = [
       {
@@ -117,13 +122,19 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
     )
 
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toBeVisible()
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    // A fresh, no-?sel= open lands on the first not-yet-resolved item, which
+    // is this comment (see recomputeLeftList/applyDefaultUnapprovedSelection)
+    // — its detail card already shows to the right of the index.
+    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 
-    await page.keyboard.press('ArrowLeft') // stop 1: the description
-    await page.keyboard.press('ArrowDown') // hand the keyboard to the PR-wide block
-    await page.keyboard.press('Enter') // open its thread + focus the reply field
+    // Enter opens the small action menu, default-selected on "Beantwoorden" —
+    // a second Enter runs it, revealing the reply field.
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await page.keyboard.press('Enter')
 
-    const compose = page.getByTestId('pr-wide-compose')
+    const compose = page.getByTestId('comment-detail-reply')
     await expect(compose).toBeFocused()
     await compose.type('quick reply')
     await expect(compose).toHaveValue('quick reply')
@@ -140,9 +151,10 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
 
     await expect(compose).toHaveValue('quick reply')
 
-    // Escape still steps out of the field (back to the row highlight).
+    // Escape hides the reply field again; the thread/detail card stays.
     await page.keyboard.press('Escape')
-    await expect(page.getByTestId('pr-wide-item').first()).toHaveAttribute('data-active', 'true')
+    await expect(page.getByTestId('comment-detail-reply')).toHaveCount(0)
+    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
   })
 
   test('ArrowLeft still navigates normally when the composer row is only highlighted (no field focus)', async ({

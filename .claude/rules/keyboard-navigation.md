@@ -62,12 +62,10 @@ required relative to the older per-mechanism behavior:
   the search box (`activateSearch()`); it now **opens the description**
   (`state.showDescription = true`). `→` from the description closes it again
   (`state.showDescription = false`) and gives the block index the keyboard
-  back. While the description is open, `↑` does nothing; `↓` gives — if there
-  are PR-wide comments — the keyboard to the **PR-wide comments block** below
-  the card (see the separate section "PR-wide comments, stop 1" further on);
-  without such comments `↓` is also a no-op (there's no internal cursor to
-  move otherwise) — that prevents them from shifting the block selection
-  below.
+  back. While the description is open, `↑`/`↓` are both no-ops — PR-wide
+  comments no longer live under the description card (see "Comment-index
+  items" in `.claude/rules/detail-layout.md`: they're navigable rows in the
+  block index itself now, stop 2, selected the ordinary way).
   **The search box is not its own stop** — it belongs to stop 2 and is no
   longer reachable via `←` (that was its only keyboard entry); it remains
   reachable via a mouse click (and native Tab), and typing filters as always
@@ -94,66 +92,37 @@ required relative to the older per-mechanism behavior:
   **outside** the URL (like `menu`/`ui.task` elsewhere) — ephemeral cursor
   state, not a navigation position a refresh needs to restore.
 
-### PR-wide comments, stop 1 (`PrWideComments`, `handlePrWideKey`)
+### Comment-index items (PR-wide comments as ordinary "Start" rows)
 
-Below the PR description card (stop 1) sits a second card
-(`data-testid=pr-wide-comments`, see "PR-wide comments" in
-`.claude/rules/detail-layout.md`) with the PR-wide comments (`kind !== ''` —
-GitHub issue/review comments without a line anchor). That has its **own**
-cursor `pw` (`RelatedPanel.mjs`, separate from `cs.focus`/`cs.sel` of the
-block-scoped comments/tasks panel and separate from `state.showDescription`
-itself) and its own keyboard handler, `handlePrWideKey(key)`, invoked from
-`home.mjs`'s `onKeydown` **as long as `state.showDescription` is true** —
-before all generic shortcuts (`Enter` opens menu, `/`, `f`/`d`/`s`), so those
-don't accidentally steal a keystroke while this block owns the keyboard
-(same ordering precedent as `relatedActive()` further down in `onKeydown`).
-`isPrWideFocused()` (`pw.focus !== null`) determines whether this block
-currently owns the keyboard:
+PR-wide comments no longer have their own keyboard cursor/stop — a comment
+(`kind !== ''`) is a synthetic, ordinary row in the block index (stop 2,
+`kind:'comment'`, see "Comment-index items" in `.claude/rules/detail-layout.md`
+for the full mechanism: the `0/1`→`1/1` approval mapping, the detail card
+that replaces a diff card in the block column, and how it's synthesized).
+`↑`/`↓`/click select it exactly like an ordinary PR block
+(`stepVisibleSelected`/`stepListSelection` are generic over it); selection
+alone reveals its thread (body + reactions) in the block column to the right
+of the index — no hover, no separate cursor.
 
-- **`↓` from the description** (stop 1 itself, `pw.focus === null`) gives
-  the keyboard to this block — lands on the **first** entry (`pw.focus = 'item'`,
-  `pw.sel = 0`) — provided there are PR-wide comments; otherwise a no-op (the
-  description keeps the keyboard).
-- **`↓`/`↑`** move, while `pw.focus === 'item'`, through the flat entry list
-  (`pw.sel`, clamped at start/end); `↑` on the **first** entry gives the
-  keyboard back to the description (`pw.focus = null`) — mirroring how `↑`
-  on the first row of the block-scoped index steps back to the diff.
-- **`Enter`** on an entry (`pw.focus === 'item'`) opens its thread
-  (`pw.focus = 'thread'`, `pw.threadPos = 0`, reply field focused) —
-  functionally a click on the row. Within the thread `↑`/`↓` walk the
-  message history (`pw.threadPos`, mirroring `cs.threadPos`); `↓` at the
-  bottom (`pw.threadPos === 0`, the reply field) steps to the **next**
-  entry (`pw.focus` back to `'item'`), if one exists.
-  **`Enter` within the thread** is the discoverable resolve shortcut: an
-  **empty** reply field + `Enter` **resolves** the comment (`done:true`, the
-  same `POST /signals/reply` as the resolve button); a **non-empty** field +
-  `Enter` is handled by the field's own `@keydown` (sends the reply,
-  `done:false`) — the global `handlePrWideKey('Enter')` branch deliberately
-  does nothing in that case (the `pwComposeEmpty()` guard), so there's no
-  double send. Shift+Enter remains a newline (the global handler ignores
-  `Enter` with `e.shiftKey`).
-- **`←`** steps, from anywhere within this block (`pw.focus !== null`), back
-  one level: out of a thread to row focus (`pw.focus = 'item'`), and from
-  row focus back to the description (`pw.focus = null`) — the description
-  simply stays open in the process (this is not a stop transition, just an
-  internal step back). **Only** once this block has no focus at all
-  (`pw.focus === null`, i.e. back on the description itself) does `←` fall
-  through to the existing stop-1 `←` handling in `onKeydown` (away to
-  `/pr-overview`, see "Before stop 1" above) — `handlePrWideKey('ArrowLeft')`
-  then returns `false` and the caller (`onKeydown`) does the navigation
-  itself.
-- **`Escape`** closes this block's focus in one move (`pw.focus = null`), just
-  like `←` from row focus, but in one step regardless of how deep you were
-  (thread or row).
-- **`Enter` on stop 1 itself** (the description card, `pw.focus === null`)
-  remains, unchanged, opening the **PR-wide** command menu (see below) — this
-  block only claims `Enter` while it itself has the focus.
-
-Reply/resolve go via the **same** `POST /api/workflows/{runId}/signals/reply`
-Signal as the block-scoped comments panel — see "Persisting reviewer
-approval"/"The first slash task" in `.claude/rules/tembed-workflows.md` for
-the underlying `task_code_comment` mechanism; no separate write path is
-needed here (the backend already handles a PR-wide reply/resolve correctly).
+**`Enter` and `→` both open the same small action menu**
+(`ms.mode = 'prComment'`, `prCommentCommandsFor` in `home.mjs`) instead of
+the block palette/entering a diff — `selectedComment()` gates a dedicated
+branch checked **before** the generic Enter-opens-menu/list-mode `→`
+handling. The menu: **"Sluit menu"** (pinned) → **"Beantwoorden"** (the
+default-selected 2nd item) → **"Resolve comment"**. Because the detail card
+already shows on selection (independent of Enter/→), the menu simply opens
+anchored on/below that card — "the thread shows above the menu" is a
+consequence of that anchoring (`menuAnchor`/`menuRegion`'s `'prComment'`
+branches), not a distinct menu variant; `→` and `Enter` are deliberately
+identical here. **"Beantwoorden"** only reveals the reply textarea in the
+detail card (`startPrCommentReply`) and focuses it — typing + `Enter` (or
+the send button) is what actually sends, via the same
+`POST /api/workflows/{runId}/signals/reply` Signal the block-scoped comments
+panel uses (`done:false`). **"Resolve comment"** sends the same Signal with
+the `"/resolve"` sentinel + `done:true` (`resolvePrCommentItem`) — see
+"Persisting reviewer approval"/"The first slash task" in
+`.claude/rules/tembed-workflows.md` for the underlying mechanism; no new
+write path either way.
 
 **`Enter`** opens a **command palette** (`src/CommandMenu.mjs`,
 `data-testid=command-menu`): a searchable command menu that appears as a
@@ -1230,8 +1199,7 @@ this fallback.
 
 **ArrowLeft within a focused comment field moves the caret, doesn't leave
 the field
-— unless the caret is already right at the start.** Both the
-`isPrWideFocused()` branch (PR-wide reply thread, stop 1) and the
+— unless the caret is already right at the start.** The
 `relatedActive()` branch (`cs.focus` `'new'`/`'comment'`/`'thread'`, the
 comments sidebar) used to claim `ArrowLeft` unconditionally — even while
 the reply/composer `<textarea>` actually had DOM focus and the reviewer
@@ -1266,10 +1234,12 @@ the caret right (the reported "first ← works, then → doesn't"). The new
 `value.length` and both branches suppress their `ArrowRight` handling as
 long as that's the case; only once the caret is already at the end does
 `→` keep its existing nav meaning there (entering the thread for a comment
-row; a no-op for `'new'`/`'thread'` and for `isPrWideFocused()`, which has
-no `ArrowRight` case of its own today — added there purely for symmetry
-with the `ArrowLeft` guard, not because a bug reproduced there). See
-`tests/comment-arrowright-caret.spec.mjs`.
+row; a no-op for `'new'`/`'thread'`). See `tests/comment-arrowright-caret.spec.mjs`.
+The comment-index item's own reply field (`commentDetailCard`,
+`RelatedPanel.mjs`) needs no such guard at all: it isn't wired into any
+`cs.focus`-based branch, so a plain ArrowLeft/ArrowRight there simply falls
+through to the browser untouched — moving the caret natively — by
+construction, not because of an explicit carve-out.
 
 ## Footer: inline preview of the selected line + AI description for an if
 

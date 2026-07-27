@@ -51,12 +51,14 @@ test('comment row, reply bubble, and PR-wide item all show author + avatar', asy
   await expect(page.getByTestId('reaction-author-line').nth(1).getByTestId('avatar-fallback')).toHaveText('RE')
 })
 
-// Same coverage for the PR-wide comment block (issue-comment style, no
-// file:line anchor) — its own render path (prWideItem in RelatedPanel.mjs)
-// must show author + avatar too. task_code_comment rejects an empty `file`
-// (see handleTaskCodeComment), so — like tests/pr-wide-comments.spec.mjs —
-// this mocks GET /api/comments directly instead of starting a real run.
-test('PR-wide comment item shows author + avatar', async ({ page }) => {
+// Same coverage for a PR-wide comment (issue-comment style, no file:line
+// anchor), now a navigable comment-index item in the "Start" sidebar (see
+// recomputeLeftList/commentBlockItem in home.mjs) — its detail card
+// (commentDetailCard in RelatedPanel.mjs) must show author + avatar too.
+// task_code_comment rejects an empty `file` (see handleTaskCodeComment), so —
+// like tests/comment-index-items.spec.mjs — this mocks GET /api/comments
+// directly instead of starting a real run.
+test('comment-index item detail card shows author + avatar', async ({ page }) => {
   const now = new Date().toISOString()
   const comments = [
     {
@@ -82,15 +84,11 @@ test('PR-wide comment item shows author + avatar', async ({ page }) => {
   )
 
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toBeVisible()
-  await page.keyboard.press('Escape')
-  await page.keyboard.press('ArrowLeft') // stop 1: open the PR description column
-
-  const item = page.getByTestId('pr-wide-item').first()
-  await expect(item).toBeVisible()
-  await expect(item.getByTestId('pr-wide-author')).toHaveText('octocat')
-  // Scope to the summary row's own author-line — the thread may already be
-  // open by default (first item selected) and would otherwise also match a
-  // reaction-author-line avatar-fallback.
-  await expect(item.getByTestId('pr-wide-author-line').getByTestId('avatar-fallback')).toHaveText('OC')
+  // A fresh, no-?sel= open lands on this not-yet-resolved comment item (see
+  // applyDefaultUnapprovedSelection); its detail card shows to the right of
+  // the index right away.
+  const card = page.getByTestId('comment-detail-card')
+  await expect(card).toBeVisible()
+  await expect(card.getByTestId('comment-detail-author')).toHaveText('octocat')
+  await expect(card.getByTestId('comment-detail-author-line').getByTestId('avatar-fallback')).toHaveText('OC')
 })
