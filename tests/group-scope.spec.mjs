@@ -7,9 +7,10 @@ import { test, expect } from './_fixtures.mjs'
 // (GroupScopeChildA/B); tests/fixtures/relations.json links both as
 // event_listener children of `execute`, one (`A`) anchored (via the new
 // `line` field, see relations.go's matchLine) on that one real changed line,
-// the other (`B`) on an unrelated line elsewhere in the block's body. Both are
-// hidden from the left list as usual (they are relation children), so this
-// doesn't disturb blocks.spec.mjs's exact-9-row fixture.
+// the other (`B`) on an unrelated line elsewhere in the block's body. Both
+// also sit at the bottom of the left list under the "Onderliggende code"
+// heading (relation children stay navigable index rows, see recomputeLeftList
+// in home.mjs); blocks.spec.mjs's fixture-order list includes them.
 const DEEP_LINK = '/pr/12903?mode=diff&sel=app%2FActions%2FCreatePaymentAction.php%3A26'
 
 test.describe('PR Review Tree — line/call hide vs group reorder scoping', () => {

@@ -1,12 +1,15 @@
 import { test, expect } from './_fixtures.mjs'
 
-// The fixture (tests/fixtures/blocks.json) has 9 blocks. The left list sorts by
-// category priority (ROUTE first, then CONTROLLER, then everything else,
+// The fixture (tests/fixtures/blocks.json) has 11 blocks. The left list sorts
+// by category priority (ROUTE first, then CONTROLLER, then everything else,
 // stable — see categoryRank in home.mjs); this fixture has no ROUTE block, so
 // the sole CONTROLLER (ContractController::index) moves to the front and
 // everything else keeps its original (file, line) order behind it. Rows 1-2
 // share a file (CreatePaymentAction.php) — that adjacency drives the connector
-// test.
+// test. The two GroupScopeChild blocks are relation children (see
+// tests/fixtures/relations.json + group-scope.spec.mjs): those stay navigable
+// index rows but sort to the very bottom, under the "Onderliggende code"
+// heading (recomputeLeftList's underlyingIds → BlockList.mjs).
 const EXPECTED_LABELS = [
   'ContractController::index',
   'CreatePaymentAction::execute',
@@ -17,6 +20,8 @@ const EXPECTED_LABELS = [
   'Order::address',
   'up',
   'AddressTypeTest::test_it_casts_type',
+  'GroupScopeChildA::run',
+  'GroupScopeChildB::run',
 ]
 
 test.describe('PR Review Tree — block list', () => {

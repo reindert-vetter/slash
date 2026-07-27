@@ -149,13 +149,36 @@ function renderList(state) {
   if (state.blocks.length === 0) return [emptyState(state).key('empty')]
   const approvedCount = state.blocks.filter((b) => isFullyApproved(state, b)).length
   const items = []
+  let underlyingHeadingDone = false
   state.blocks.forEach((b, i) => {
     const pinnedVisible = i === state.selected && b.id === state.pinnedApprovedId
     if (!state.showApproved && !pinnedVisible && isFullyApproved(state, b)) return
+    // Relation children sort to the bottom of state.blocks (recomputeLeftList,
+    // home.mjs); the first VISIBLE one gets the "Onderliggende code" heading
+    // above it — its own keyed item, so the list stays one flat keyed array.
+    if (!underlyingHeadingDone && state.underlyingIds && state.underlyingIds[b.id]) {
+      items.push(underlyingHeading().key('underlying-heading'))
+      underlyingHeadingDone = true
+    }
     items.push(row(state, b, i))
   })
   if (approvedCount > 0) items.push(toggleRow(state, approvedCount))
   return items
+}
+
+// underlyingHeading titles the relation-children section at the bottom of the
+// index (the rows recomputeLeftList marks in state.underlyingIds) — the same
+// blocks that also appear as children in the Onderliggende-code panel, kept
+// navigable here as ordinary rows.
+function underlyingHeading() {
+  return html`
+    <div
+      data-testid="underlying-heading"
+      class="border-b border-t border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
+    >
+      Onderliggende code
+    </div>
+  `
 }
 
 // toggleRow is the bottom button that hides/shows the fully-approved blocks.

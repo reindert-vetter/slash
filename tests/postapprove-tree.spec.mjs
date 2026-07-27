@@ -10,19 +10,21 @@ import { test, expect } from './_fixtures.mjs'
 // PR 95 (tests/fixtures/tree-blocks.json + tree-relations.json,
 // data/worktrees/pr-95-{base,head} materialized by _setup.mjs) has exactly
 // two blocks, both with one real changed line: TreeParentAction::execute (the
-// sole top-level block — the relation pulls TreeChildAction::run out of the
-// left list) and TreeChildAction::run (its event_listener child, shown in
-// "Onderliggende code").
+// sole top-level block) and TreeChildAction::run (its event_listener child —
+// shown in "Onderliggende code" AND, since relation children stay navigable
+// index rows, at the bottom of the left list under that same heading).
 test.describe('PR Review Tree — postApprove follow-up menu walks the tree', () => {
   test('"Ga door" descends into the Onderliggende-code child instead of stopping', async ({
     page,
   }) => {
     await page.goto('/pr/95')
 
-    // Only the parent is in the left list; the child is pulled into
-    // "Onderliggende code" instead (see relatedChildren/recomputeLeftList).
-    await expect(page.getByTestId('block-row')).toHaveCount(1)
+    // The parent leads the left list; the child sits at the bottom under the
+    // "Onderliggende code" heading (relation children stay navigable index
+    // rows, see recomputeLeftList) and ALSO shows in the panel.
+    await expect(page.getByTestId('block-row')).toHaveCount(2)
     await expect(page.getByTestId('block-row').first()).toContainText('TreeParentAction::execute')
+    await expect(page.getByTestId('block-row').nth(1)).toContainText('TreeChildAction::run')
     const related = page.getByTestId('related-item')
     await expect(related).toContainText('TreeChildAction::run')
 
@@ -62,8 +64,10 @@ test.describe('PR Review Tree — postApprove follow-up menu walks the tree', ()
     await expect(menu).toBeVisible()
     const rows = page.getByTestId('command-row')
     await expect(rows).toHaveCount(2)
-    await expect(rows.nth(0)).toContainText('Keur de PR goed')
-    await expect(rows.nth(1)).toContainText('Sluit menu')
+    // "Sluit menu" is pinned at the top of every palette (withClose, home.mjs);
+    // the default selection opens on the 2nd item, "Keur de PR goed".
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Keur de PR goed')
     await rows.filter({ hasText: 'Sluit menu' }).click()
     await expect(menu).not.toBeVisible()
   })

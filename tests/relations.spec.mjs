@@ -2,21 +2,37 @@ import { test, expect } from './_fixtures.mjs'
 
 // PR 90 (tests/fixtures/relations-blocks.json + relations.json) has two blocks:
 // a dispatcher (PlaceOrderAction::execute) and a listener (SendOrderMail::handle).
-// A seeded event_listener relation makes the listener a CHILD of the dispatcher,
-// so it is pulled out of the left list and shown in the RelatedPanel instead.
+// A seeded event_listener relation makes the listener a CHILD of the dispatcher:
+// it stays in the index as a fully navigable row, but moves to the bottom under
+// an "Onderliggende code" heading, and ALSO shows in the RelatedPanel.
 test.describe('PR Review Tree — block relations', () => {
-  test('a child block leaves the left list and nests under its parent on the right', async ({
+  test('a child block moves under the "Onderliggende code" index heading and nests under its parent on the right', async ({
     page,
   }) => {
     await page.goto('/pr/90')
 
-    // Only the parent (non-child) block remains in the left list.
+    // Parent first, then the heading, then the child row at the bottom.
     const rows = page.getByTestId('block-row')
-    await expect(rows).toHaveCount(1)
+    await expect(rows).toHaveCount(2)
     await expect(rows.nth(0)).toContainText('PlaceOrderAction::execute')
-    await expect(page.getByTestId('block-row')).not.toContainText('SendOrderMail::handle')
+    await expect(rows.nth(1)).toContainText('SendOrderMail::handle')
+    const heading = page.getByTestId('underlying-heading')
+    await expect(heading).toHaveCount(1)
+    await expect(heading).toContainText('Onderliggende code')
+    // DOM order within the scroll container: parent row → heading → child row.
+    const order = await page.$$eval('#block-scroll > *', (els) =>
+      els.map((e) => e.getAttribute('data-testid')),
+    )
+    expect(order.slice(0, 3)).toEqual(['block-row', 'underlying-heading', 'block-row'])
 
-    // The child shows in the "Onderliggende code" panel (top-right of the block).
+    // The child row is navigable like any other: ↓ selects it, → opens its diff.
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('block-column')).toContainText('SendOrderMail::handle')
+    await page.keyboard.press('ArrowLeft')
+
+    // The child ALSO shows in the "Onderliggende code" panel (top-right of the block).
+    await rows.nth(0).click()
     const related = page.getByTestId('related-code')
     const child = related.getByTestId('related-item')
     await expect(child).toHaveCount(1)

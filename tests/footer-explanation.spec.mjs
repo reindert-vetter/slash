@@ -53,9 +53,9 @@ test.describe('PR Review Tree — footer AI description for if-units', () => {
   }) => {
     await page.goto('/pr/97')
     // The parent + ExplainNoIfAction (unrelated, see the test below) are in
-    // the left list; the child is pulled into "Onderliggende code" via the
-    // event_listener relation.
-    await expect(page.getByTestId('block-row')).toHaveCount(2)
+    // the left list; the child (an event_listener relation) sits at the bottom
+    // under the "Onderliggende code" heading and ALSO shows in the panel.
+    await expect(page.getByTestId('block-row')).toHaveCount(3)
     await expect(page.getByTestId('related-item').first()).toContainText('ExplainChildAction::handle')
 
     // Enter the parent's diff → the footer shows the parent's group description.

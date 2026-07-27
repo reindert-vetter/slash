@@ -262,6 +262,12 @@ const state = reactive({
   // to each block's reactive b.code (which would re-trigger the diff
   // "stuck on loading" race). Reassigned wholesale so arrow.js re-renders.
   approvalSummaries: {},
+  // underlyingIds — plain { blockId: true } map of the relation children that
+  // recomputeLeftList keeps in state.blocks but sorts to the bottom of the
+  // index, under the "Onderliggende code" heading (BlockList.mjs). Reassigned
+  // wholesale together with state.blocks. A plain object, not a Set — a
+  // reactive-proxied Set throws (see the viewedFiles note below).
+  underlyingIds: {},
   // approvalTotal — the PR-wide { done, total } combined-approval count shown in
   // the "Start" header. Summed over every top-level block's subtree count in the
   // same off-render watch that fills approvalSummaries (a plain snapshot, so the
@@ -1053,11 +1059,13 @@ function signalFileViewed(file, viewed) {
 }
 
 // recomputeLeftList derives state.blocks from allBlocks: everything except the
-// blocks that are nested under a parent in the RelatedPanel — the relation
-// children and the PR blocks that are the definition of a resolved method call
-// (both already shown in "Onderliggende code"). A called-and-shown function
-// shouldn't also sit in the left list; those targets often live in files the PR
-// didn't change (pure reference code shown for context). Test coverage is
+// PR blocks that are the definition of a resolved method call (already shown
+// in the "Onderliggende code" panel). A called-and-shown function shouldn't
+// also sit in the left list; those targets often live in files the PR didn't
+// change (pure reference code shown for context). Relation children, however,
+// DO stay in the list — sorted to the bottom under an "Onderliggende code"
+// heading (state.underlyingIds), so they remain fully navigable index rows
+// while still also appearing as children in the panel. Test coverage is
 // DELIBERATELY exempt: a test must never make another (changed, reviewable)
 // block vanish from the tree. Unlike a call-target or a listener, a covered
 // method that testCoverTargetIds would return is ALWAYS a changed PR block —
@@ -1085,14 +1093,25 @@ function categoryRank(cat) {
   return 2
 }
 function recomputeLeftList() {
-  const hidden = new Set(state.relations.map((r) => r.childId))
-  for (const id of resolvedCallTargetIds()) hidden.add(id)
+  // Only the resolved-call targets are hidden from the index (panel-only
+  // reference code). Relation children STAY in state.blocks — fully navigable
+  // rows (own diff, selection, ?sel= restore for free) — but sort to the very
+  // bottom, under the "Onderliggende code" heading (state.underlyingIds →
+  // BlockList.mjs). A relation child that is ALSO a resolved call target keeps
+  // following the hidden set (it already shows in the panel as a resolved
+  // call).
+  const hidden = resolvedCallTargetIds()
+  const childIds = new Set(state.relations.map((r) => r.childId))
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
   const q = (state.search || '').trim().toLowerCase()
+  const rank = (b) => (childIds.has(b.id) ? 3 : categoryRank(b.category))
   state.blocks = state.allBlocks
     .filter((b) => !hidden.has(b.id))
     .filter((b) => !q || (b.label + ' ' + b.category).toLowerCase().includes(q))
-    .sort((a, b) => categoryRank(a.category) - categoryRank(b.category))
+    .sort((a, b) => rank(a) - rank(b))
+  const underlying = {}
+  for (const b of state.blocks) if (childIds.has(b.id)) underlying[b.id] = true
+  state.underlyingIds = underlying
   const at = state.blocks.findIndex((b) => b.id === selId)
   state.selected = at >= 0 ? at : Math.min(state.selected, Math.max(0, state.blocks.length - 1))
 }
@@ -3998,6 +4017,7 @@ watch(
     const deps = [
       state.blocks,
       state.allBlocks,
+      state.underlyingIds,
       state.relations,
       state.callResolve,
       state.testCovers,
@@ -4017,6 +4037,10 @@ watch(
     for (const b of state.blocks) {
       const c = subtreeApproveCount(b)
       map[b.id] = c
+      // A relation child ("Onderliggende code" index row) is already counted
+      // inside its parent's subtree — skipping it here keeps the PR-wide
+      // header count identical to when children weren't index rows at all.
+      if (state.underlyingIds[b.id]) continue
       done += c.done
       total += c.total
     }
