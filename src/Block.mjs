@@ -108,33 +108,18 @@ function narrowed(viewMode) {
   return viewMode() === 'new'
 }
 
-// codeGrowthChars — a REPRESENTATIVE non-comment line length in `code`, not
-// the single longest line. Comment lines (a leading PHPDoc block, `//`/`#`
-// line comments) are free-form prose and must never drive a width — only real
-// PHP code lines may. Deterministic, regex/state-machine based (no parser,
-// matching the rest of this codebase's PHP-adjacent heuristics, e.g.
-// phpscan.go's PHPDoc detection) and — load-bearing — no live DOM
-// measurement: it only counts characters in the raw source string, so it can
-// run inside a reactive binding without racing any render/layout pass.
-//
-// A single outlier line (one exceptionally long call, e.g. a
-// `Cache::remember(...)` one-liner buried in an otherwise normal-width
-// method) must not alone dictate a width — that stretched a card to its
-// ceiling for one wrapping-worthy line while the rest of the method was
-// perfectly narrow. The plain median turned out too aggressive the other
-// way: a method's brace-only lines (`{`/`}`) drag the middle value down to
-// almost nothing even for a genuinely wide method (with as few as 3-4 real
-// content lines, the median lands on one of those single-char lines). The
-// 75th percentile (nearest-rank) is the middle ground: it still reflects the
-// wider half of a method's real content lines without being hostage to its
-// single longest line.
-//
-// Shared by RelatedPanel.mjs's relatedColumnWidthCls (the Onderliggende-code
-// column width) and this file's own fitWidthCls (the `a`-toggle's 'fit'
-// stand, see widthCls below) — both apply the exact same calculation to
-// different pieces of raw code text.
-export function codeGrowthChars(code) {
-  if (!code) return 0
+// nonCommentLineLengths — the shared scan behind codeGrowthChars and
+// codeMaxLineChars below: the character lengths of every non-blank,
+// non-comment line in `code` (a leading PHPDoc block, `//`/`#` line
+// comments skipped — free-form prose must never drive a width, only real
+// PHP code lines may), sorted ascending. Deterministic, regex/state-machine
+// based (no parser, matching the rest of this codebase's PHP-adjacent
+// heuristics, e.g. phpscan.go's PHPDoc detection) and — load-bearing — no
+// live DOM measurement: it only counts characters in the raw source string,
+// so it can run inside a reactive binding without racing any render/layout
+// pass.
+function nonCommentLineLengths(code) {
+  if (!code) return []
   let inBlockComment = false
   const lens = []
   for (const raw of code.split('\n')) {
@@ -152,10 +137,49 @@ export function codeGrowthChars(code) {
     }
     lens.push(line.length)
   }
-  if (lens.length === 0) return 0
   lens.sort((a, b) => a - b)
+  return lens
+}
+
+// codeGrowthChars — a REPRESENTATIVE non-comment line length in `code`, not
+// the single longest line.
+//
+// A single outlier line (one exceptionally long call, e.g. a
+// `Cache::remember(...)` one-liner buried in an otherwise normal-width
+// method) must not alone dictate a width — that stretched a card to its
+// ceiling for one wrapping-worthy line while the rest of the method was
+// perfectly narrow. The plain median turned out too aggressive the other
+// way: a method's brace-only lines (`{`/`}`) drag the middle value down to
+// almost nothing even for a genuinely wide method (with as few as 3-4 real
+// content lines, the median lands on one of those single-char lines). The
+// 75th percentile (nearest-rank) is the middle ground: it still reflects the
+// wider half of a method's real content lines without being hostage to its
+// single longest line.
+//
+// Shared by RelatedPanel.mjs's relatedColumnWidthCls (the Onderliggende-code
+// column width, which keeps this non-ballooning percentile behavior) — NOT
+// used any more by this file's own fitWidthCls (the `a`-toggle's 'fit'
+// stand), see codeMaxLineChars below for why 'fit' deliberately wants a
+// different, stronger guarantee.
+export function codeGrowthChars(code) {
+  const lens = nonCommentLineLengths(code)
+  if (lens.length === 0) return 0
   const idx = Math.min(lens.length - 1, Math.max(0, Math.ceil(0.75 * lens.length) - 1))
   return lens[idx]
+}
+
+// codeMaxLineChars — the TRUE longest non-comment line in `code` (not a
+// percentile). Used only by fitWidthCls's 'fit' stand: unlike the
+// non-ballooning default width elsewhere (codeGrowthChars, still used by
+// relatedColumnWidthCls and by every other card width in this file), the
+// reviewer explicitly wants 'fit' to guarantee that the single widest real
+// code line is never cut off/hidden behind an invisible horizontal scroll —
+// see fitWidthCls's own doc comment for the full reasoning and the
+// deliberate scope (only 'fit'; 'split'/'new' keep their existing, fixed
+// widths and can still clip a very long line).
+function codeMaxLineChars(code) {
+  const lens = nonCommentLineLengths(code)
+  return lens.length ? lens[lens.length - 1] : 0
 }
 
 // widthCls picks the card's width class for the current `a` stand: the
@@ -170,13 +194,29 @@ function widthCls(b, viewMode) {
 
 // fitWidthCls — the card width for the `a` toggle's third ('fit') stand:
 // make the card as wide as its own code actually needs, instead of the fixed
-// 60% ('new') or full ('split') width — clamped so it never goes narrower
-// than the existing 60% floor nor wider than the full split ceiling (`a`
-// cycles split → new → fit → split, so 'fit' always sits between the other
-// two). Uses codeGrowthChars (the 75th-percentile non-comment line length,
-// same technique as RelatedPanel.mjs's relatedColumnWidthCls) — purely a
+// 60% ('new') or full ('split') width. Floored at the existing 60% width (so
+// 'fit' never goes narrower than 'new'), but — on explicit reviewer request —
+// deliberately UNCAPPED upward: unlike every other width in this file (and
+// unlike codeGrowthChars, the 75th-percentile non-ballooning technique
+// RelatedPanel.mjs's relatedColumnWidthCls still uses), 'fit' must guarantee
+// that the single widest real code line of the block is fully visible,
+// without wrapping and without an invisible horizontal scroll — cutting off
+// part of a long line defeats the entire point of a stand whose stated
+// purpose is "width follows the code". Uses codeMaxLineChars (the TRUE
+// longest non-comment line, not a percentile) for exactly that reason — a
+// percentile-based width plus a ceiling is precisely what let a genuinely
+// long line get silently clipped before this change (reported: a `modified`
+// block's 168-character `throw new RuntimeException(...)` line was cut off
+// mid-word in 'fit', identically to 'split' — see the CSS `max()` below,
+// which drops the previous `clamp(...)` ceiling entirely). Purely a
 // character-count calculation on the already-loaded source text, no live DOM
-// measurement.
+// measurement (`scrollWidth`/`getBoundingClientRect`), per the existing
+// approach and the arrow.js pitfalls in conventions.md.
+//
+// Deliberately scoped to 'fit' ONLY — 'split' and 'new' keep their existing,
+// fixed widths and can still clip a very long line exactly as before; this
+// was an explicit, discussed choice (not a guess), see keyboard-navigation.md
+// ("`a` — cycling the diff view").
 //
 // 'fit' does NOT force a single pane (see forcedNewOnly above, which
 // deliberately only reacts to 'new') — a genuinely two-sided (modified)
@@ -258,16 +298,16 @@ function fitWidthCls(b) {
   const newText = c && !c.error && c.new ? c.new.text : ''
   const only = singleSide(b)
   if (only) {
-    const chars = codeGrowthChars(only === 'left' ? oldText : newText)
+    const chars = codeMaxLineChars(only === 'left' ? oldText : newText)
     return (
-      `w-[clamp(42rem,calc(${chars}ch_+_2rem),70rem)] ` +
-      `2xl:w-[clamp(49.2rem,calc(${chars}ch_+_2rem),82rem)] `
+      `w-[max(42rem,calc(${chars}ch_+_2rem))] ` +
+      `2xl:w-[max(49.2rem,calc(${chars}ch_+_2rem))] `
     )
   }
-  const chars = Math.max(codeGrowthChars(oldText), codeGrowthChars(newText))
+  const chars = Math.max(codeMaxLineChars(oldText), codeMaxLineChars(newText))
   return (
-    `w-[clamp(42rem,calc(${chars}ch_*_2_+_4.5rem),70rem)] ` +
-    `2xl:w-[clamp(49.2rem,calc(${chars}ch_*_2_+_4.5rem),82rem)] `
+    `w-[max(42rem,calc(${chars}ch_*_2_+_4.5rem))] ` +
+    `2xl:w-[max(49.2rem,calc(${chars}ch_*_2_+_4.5rem))] `
   )
 }
 

@@ -1827,10 +1827,12 @@ function nestedChipColumn(ancestors, kids, drill, path, cardIdx) {
   `
 }
 
-// codeGrowthChars now lives in Block.mjs (exported from there) — shared with
-// that file's own fitWidthCls (the `a`-toggle's 'fit' stand, see
-// keyboard-navigation.md/detail-layout.md), same 75th-percentile
-// non-comment-line calculation, no live DOM measurement.
+// codeGrowthChars now lives in Block.mjs (exported from there) — this
+// column's own width calculation below still uses it (the 75th-percentile,
+// non-ballooning technique, no live DOM measurement). Block.mjs's own
+// fitWidthCls (the `a`-toggle's 'fit' stand) switched to a different,
+// max-line-based, uncapped calculation instead — see its doc comment and
+// keyboard-navigation.md/detail-layout.md — deliberately NOT applied here.
 
 // relatedColumnWidthCls — the reactive width of the WHOLE Onderliggende-code
 // column (not per-card): it grows with a representative non-comment code

@@ -1329,17 +1329,30 @@ and the same `viewMode` opt (`() => state.diffViewMode`).
 `'split'` — `forcedNewOnly` only ever reacts to `'new'`), but the card's
 width becomes **content-based** instead of the fixed `70rem`/`82rem`:
 `widthCls(b, viewMode)` (`Block.mjs`) delegates to `fitWidthCls(b)` for
-this stand, which sizes the card off a representative (75th-percentile,
-non-comment) line length of the block's own code — `codeGrowthChars`,
-moved out of `RelatedPanel.mjs` into `Block.mjs` and exported so both files
-share the exact same calculation — clamped between the existing 60% floor
-and the full split ceiling, so `'fit'` always sits between the other two
-stands. A genuinely two-sided block uses the wider of its old/new side,
-doubled (both panes render at equal width) plus a fixed gutter allowance;
-an already one-sided block (only one pane ever renders, regardless of
-`viewMode`) uses the single-pane variant instead, based on just that one
-visible side. See `.claude/rules/keyboard-navigation.md` ("`a` — cycling
-the diff view") for the full mechanism. Test: `tests/diffview.spec.mjs`.
+this stand. Floored at the existing 60% width (never narrower than
+`'new'`) but **deliberately uncapped upward** — on explicit reviewer
+request, `'fit'` guarantees that the single widest non-comment code line of
+the block is always fully visible, never cut off behind an invisible
+horizontal scroll (which is exactly what a percentile-based width plus a
+ceiling used to allow: a genuinely long line — e.g. a 168-character `throw
+new RuntimeException(...)`, PR 13042 — was clipped identically in `'fit'`
+and `'split'`, defeating `'fit'`'s whole "width follows the code" premise).
+`fitWidthCls` therefore uses `codeMaxLineChars` (the TRUE longest
+non-comment line, not a percentile) via a CSS `max(floor, calc(...))` —
+no ceiling `clamp(...)` any more. `codeGrowthChars` (the 75th-percentile,
+non-ballooning technique) stays exactly as it was and is still used by
+`RelatedPanel.mjs`'s `relatedColumnWidthCls` — only `'fit'`'s own card
+width switched to the max-based, uncapped calculation; `'split'`/`'new'`
+keep their existing fixed widths (and can still clip a very long line,
+unchanged, discussed and accepted). A genuinely two-sided block uses the
+wider of its old/new side, doubled (both panes render at equal width) plus
+a fixed gutter allowance; an already one-sided block (only one pane ever
+renders, regardless of `viewMode`) uses the single-pane variant instead,
+based on just that one visible side. Purely a character-count calculation
+on the already-loaded source text — no live DOM measurement
+(`scrollWidth`/`getBoundingClientRect`), per the existing approach. See
+`.claude/rules/keyboard-navigation.md` ("`a` — cycling the diff view") for
+the full mechanism. Test: `tests/diffview.spec.mjs`.
 
 **A look-ahead preview must never be wider/richer than the active block next
 to it (`activeSingleSided`, both preview spots).** Without a

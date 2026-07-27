@@ -8,8 +8,13 @@ import { test, expect } from './_fixtures.mjs'
 // keeps its single pane in every stand. The card WIDTH: 'new' shrinks every
 // visible card to a fixed 60% regardless of singleSide (`narrowed` in
 // Block.mjs) — modified, added and removed alike; 'fit' instead sizes the
-// card off its own code (`fitWidthCls`), clamped between that same 60% floor
-// and the full split ceiling.
+// card off its own code (`fitWidthCls`), floored at that same 60% width but
+// deliberately UNCAPPED upward (a CSS `max(...)`, not `clamp(...)`) — on
+// explicit reviewer request, 'fit' must never cut off a genuinely long code
+// line behind an invisible horizontal scroll, even if that means growing
+// past the full split width. `codeMaxLineChars` (the TRUE longest
+// non-comment line) drives this, not `codeGrowthChars`'s 75th-percentile
+// (which `relatedColumnWidthCls` still uses, unaffected by this change).
 test.describe('PR Review Tree — diff view toggle (`a`)', () => {
   // Direct-mount unit test: Block()'s viewMode opt controls whether codeDiff
   // renders both panes or just the new one, for a genuinely two-sided
@@ -68,14 +73,14 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     // Flip to 'fit': BOTH panes come back (unlike 'new', 'fit' never forces a
     // single pane — see forcedNewOnly in Block.mjs), but the width class is no
-    // longer the fixed 70rem/82rem — it's a clamp() driven by the code's own
+    // longer the fixed 70rem/82rem — it's a CSS max() driven by the code's own
     // (short) content, so it should still sit at (or near) the 60% floor for
     // this tiny fixture.
     await page.evaluate(() => {
       window.__vm.mode = 'fit'
     })
     await expect(panes).toHaveCount(2)
-    await expect(card).toHaveClass(/clamp\(42rem/)
+    await expect(card).toHaveClass(/max\(42rem/)
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
     await expect(card).not.toHaveClass(/w-\[42rem\]/) // no longer the fixed 'new' width either
 
@@ -126,19 +131,24 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     })
 
     const card = page.locator('#fit-wide-host article')
-    await expect(card).toHaveClass(/clamp\(42rem/)
+    await expect(card).toHaveClass(/max\(42rem/)
     const width = await card.evaluate((el) => el.getBoundingClientRect().width)
     // Comfortably past the 60% floor (42rem = 672px at the default 16px root)
     // for this deliberately widened line, and comfortably under the full
     // split ceiling (70rem = 1120px) — proves fitWidthCls is actually
-    // proportional to the content, not just clamped at one extreme.
+    // proportional to the content, not just resolving to the floor.
     expect(width).toBeGreaterThan(700)
     expect(width).toBeLessThan(1000)
   })
 
-  // Direct-mount unit test: the OTHER end of the clamp — a genuinely very wide
-  // line caps the card at the full split width instead of growing past it.
-  test('viewMode="fit" caps a card with an extremely wide line at the full split width', async ({
+  // Direct-mount unit test: the OTHER end of the spectrum — a genuinely very
+  // wide line now GROWS the card past the full split width instead of being
+  // capped there. This is a deliberate reversal (was: "caps ... at the full
+  // split width") — on explicit reviewer request, 'fit' must guarantee the
+  // single widest real code line is always fully visible (no wrap, no hidden
+  // horizontal scroll), even past what 'split' itself would show. See
+  // fitWidthCls's doc comment in Block.mjs.
+  test('viewMode="fit" grows a card past the full split width for an extremely wide line', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -171,10 +181,10 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     const card = page.locator('#fit-verywide-host article')
     const width = await card.evaluate((el) => el.getBoundingClientRect().width)
-    // Capped at the full split width (70rem = 1120px), never wider — 'fit'
-    // must never make a card wider than 'split' itself.
-    expect(width).toBeLessThanOrEqual(1120)
-    expect(width).toBeGreaterThan(1000)
+    // Genuinely wider than the full split width (70rem = 1120px) — 'fit' no
+    // longer caps at 'split's width; the whole point is that the widest real
+    // line must never be cut off, even if that means 'fit' > 'split'.
+    expect(width).toBeGreaterThan(1120)
   })
 
   // An already one-sided (added) block has no old pane to hide, so the toggle
@@ -231,10 +241,10 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
       window.__addedVm.mode = 'fit'
     })
     // `fit`: still one pane (singleSide wins over the two-pane fit formula —
-    // see fitWidthCls), and this fixture's short code lands the clamp() on
+    // see fitWidthCls), and this fixture's short code lands the max() on
     // (or near) the same 60% floor.
     await expect(panes).toHaveCount(1)
-    await expect(card).toHaveClass(/clamp\(42rem/)
+    await expect(card).toHaveClass(/max\(42rem/)
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
 
     await page.evaluate(() => {
@@ -298,7 +308,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     // Same single-pane fit formula as the added-block case above (based on the
     // OLD side's text here, since that's the only side a removed block has).
     await expect(panes).toHaveCount(1)
-    await expect(card).toHaveClass(/clamp\(42rem/)
+    await expect(card).toHaveClass(/max\(42rem/)
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
   })
 
@@ -343,8 +353,12 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     await page.keyboard.press('a') // new → fit
     // 'fit' brings BOTH panes back (unlike 'new'), sized off the block's own
-    // (real, non-trivial) code — somewhere between the 60% floor and the full
-    // split width, never outside that range.
+    // (real, non-trivial) code — at least the 60% floor, but deliberately
+    // UNCAPPED upward (no more full-split-width ceiling, see fitWidthCls):
+    // this real block (CreatePaymentAction::execute) happens to carry a line
+    // wide enough that 'fit' genuinely grows past 'split' itself here, which
+    // is exactly the intended behavior (a long line must never be hidden
+    // behind an invisible horizontal scroll).
     await expect(panes).toHaveCount(2)
     await expect
       .poll(async () => {
@@ -352,12 +366,6 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
         return box.width
       })
       .toBeGreaterThanOrEqual(newWidth - 1)
-    await expect
-      .poll(async () => {
-        const box = await card.boundingBox()
-        return box.width
-      })
-      .toBeLessThanOrEqual(splitBox.width + 1)
 
     await page.keyboard.press('a') // fit → split
     await expect(panes).toHaveCount(2)

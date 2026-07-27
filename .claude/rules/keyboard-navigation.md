@@ -1091,13 +1091,23 @@ condition for the pane choice — the two can therefore diverge (a one-sided
 block: `narrowed` true, `forcedNewOnly` false) and that is deliberate.
 
 **`'fit'` (the third stand) sizes the card off its own code instead of a
-fixed number, via `fitWidthCls(b)` in `Block.mjs`** — the same 75th-
-percentile, non-comment-line character count (`codeGrowthChars`, moved
-into `Block.mjs` and exported, shared with `RelatedPanel.mjs`'s
-`relatedColumnWidthCls`) clamped between the existing 60% floor
-(`42rem`/`49.2rem`) and the full split ceiling (`70rem`/`82rem`) — `'fit'`
-therefore always sits between the other two stands, never wider than
-`'split'`. Purely a character-count calculation on the already-loaded
+fixed number, via `fitWidthCls(b)` in `Block.mjs`** — floored at the
+existing 60% width (`42rem`/`49.2rem`, so `'fit'` is never narrower than
+`'new'`) but **deliberately uncapped upward**, on explicit reviewer
+request: the previous version clamped this at the full split ceiling
+(`70rem`/`82rem`) using the same 75th-percentile line length as
+`RelatedPanel.mjs`'s `relatedColumnWidthCls` (`codeGrowthChars`) — which let
+a genuinely long line (wider than the ceiling) get silently cut off behind
+an invisible horizontal scroll, identically in `'fit'` and `'split'`. That
+defeated `'fit'`'s whole premise ("width follows the code"), so `fitWidthCls`
+now uses **`codeMaxLineChars`** (the TRUE longest non-comment line, not a
+percentile) and a CSS `max(floor, calc(...))` — no ceiling — so `'fit'` can
+now genuinely grow wider than `'split'` for a block with one very long
+line. `codeGrowthChars`/the percentile approach is untouched and still used
+by `relatedColumnWidthCls` — this change is scoped to `fitWidthCls` only.
+`'split'`/`'new'` keep their existing fixed widths and can still clip a
+very long line, unchanged — a deliberate, discussed scope boundary, not an
+oversight. Purely a character-count calculation on the already-loaded
 source text (`b.code`), computed once per code-load (via the existing
 `state.codeVersion`/key-forcing rebuild, see `.claude/rules/conventions.md`
 — **not** re-derived on every navigation step, which would risk the
