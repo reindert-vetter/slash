@@ -1288,6 +1288,20 @@ function stepVisibleSelected(dir) {
   }
 }
 
+// lastVisibleIndex is the mirror-image scan of stepVisibleSelected: the last
+// state.blocks index BlockList's renderList would actually render a row for
+// (same isIgnoredComment/isFullyApproved skip rules), or -1 if nothing is
+// visible. Used to wrap ArrowUp around from the topmost visible block to the
+// bottom of the list, instead of leaving the selection stuck at the top.
+function lastVisibleIndex() {
+  for (let i = state.blocks.length - 1; i >= 0; i--) {
+    const b = state.blocks[i]
+    if (!state.showIgnored && isIgnoredComment(state, b)) continue
+    if (state.showApproved || !isFullyApproved(state, b)) return i
+  }
+  return -1
+}
+
 // toggleRowVisible mirrors BlockList's renderList: the toggle-approved button
 // only exists once at least one top-level block is fully approved — regardless
 // of whether state.showApproved currently reveals or folds it away.
@@ -1303,6 +1317,13 @@ function toggleRowVisible() {
 // instead (state.toggleFocused), which BlockList highlights with the same
 // indigo ring as a selected row. ↑ from there simply drops the flag and lands
 // back on the (unchanged) last block — state.selected never moved.
+// ↑ from the TOPMOST visible block wraps around to the bottom of the list —
+// the last visible block (lastVisibleIndex), NOT the toggle button — instead
+// of leaving the selection stuck at the top: `stepVisibleSelected(-1)`
+// returning the unchanged index is exactly the "nothing further up" signal.
+// Deliberately asymmetric with ↓ (which does stop on the toggle button as an
+// extra stop): wrapping is about the block list itself, the toggle button is
+// a separate affordance below it.
 function stepListSelection(dir) {
   if (dir > 0) {
     if (state.toggleFocused) return // already the bottom-most stop
@@ -1318,7 +1339,13 @@ function stepListSelection(dir) {
     state.toggleFocused = false
     return
   }
-  state.selected = stepVisibleSelected(-1)
+  const prev = stepVisibleSelected(-1)
+  if (prev === state.selected) {
+    const last = lastVisibleIndex()
+    if (last >= 0) state.selected = last
+    return
+  }
+  state.selected = prev
 }
 
 // revealSelectedIfHidden pins the restored selection visible when it points at

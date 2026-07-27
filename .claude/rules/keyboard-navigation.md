@@ -669,6 +669,14 @@ the links fall back to the bare PR URL resp. the Jira base.
   (`setSearch`), always resets
   `toggleFocused` to `false` — a new navigation context never silently
   leaves the button focused.
+  **`↑` from the topmost visible block wraps around to the bottom of the
+  list** (`lastVisibleIndex`, the mirror-image scan of `stepVisibleSelected`)
+  instead of staying put: `stepListSelection(-1)` treats
+  `stepVisibleSelected(-1)` returning the unchanged index as "nothing further
+  up" and jumps straight to the last visible block. Deliberately
+  **asymmetric** with `↓` — this wrap targets the last **block**, never the
+  toggle-approved button (that's a separate affordance below the list, not
+  part of the wrap-around).
   Order is load-bearing: on the load path the reveal only runs **after**
   `applyBlockRefRestore` (a restored `?sel=` to a visible block is a
   no-op) and after `loadBlocks` has awaited `loadApprovals`/`loadBlockStats`
