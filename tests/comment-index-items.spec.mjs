@@ -82,7 +82,9 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
 
     const card = page.getByTestId('comment-detail-card')
     await expect(card).toBeVisible()
-    await expect(card.getByTestId('comment-detail-body')).toContainText('Overall this looks great')
+    // The body is shown once, as the first message of the thread (no separate
+    // duplicated title above it — see commentDetailCard's own doc comment).
+    await expect(card.getByTestId('reaction-bubble').first()).toContainText('Overall this looks great')
   })
 
   test('↑/↓ selects it like any other Start row', async ({ page }) => {

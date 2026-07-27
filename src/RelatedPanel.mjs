@@ -2500,9 +2500,11 @@ export async function resolvePrCommentItem(c) {
 }
 
 // commentDetailCard renders the read-only thread (status dot, kind badge,
-// source/AI-warning badges, relative time, markdown body, then every
-// reaction) of a comment-index item, plus — once picm.replying is true (see
-// startPrCommentReply) — a reply textarea + send button. This is what
+// source/AI-warning badges, relative time, then every reaction via
+// threadMessages — the comment's own body is already the first message
+// there, so it is deliberately NOT also rendered as a separate title above
+// the thread (that looked duplicated), plus — once picm.replying is true
+// (see startPrCommentReply) — a reply textarea + send button. This is what
 // home.mjs's DetailPanel shows in the block column, to the right of the
 // index, in place of a Block diff card whenever the selected sidebar item is
 // a synthetic comment item (b.kind === 'comment') — see detail-layout.md.
@@ -2534,11 +2536,6 @@ export function commentDetailCard(c, opts) {
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)}
         <span class="text-[10px] text-slate-400 dark:text-zinc-500">${relTime(c.createdAt)}</span>
       </div>
-      <div
-        class="[overflow-wrap:anywhere] text-sm text-slate-700 dark:text-zinc-300"
-        data-testid="comment-detail-body"
-        .innerHTML="${commentBody(c)}"
-      ></div>
       <div class="flex max-h-64 flex-col gap-1.5 overflow-auto" data-testid="comment-detail-thread">
         ${() => threadMessages(c).map((r, ti, arr) => reactionBubble(r, ti, arr.length).key('detail-msg:' + r.id))}
       </div>
