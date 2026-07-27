@@ -1292,19 +1292,21 @@ export function changeGroups(rows) {
 }
 
 // changeLines is the line-granularity navigation list: one unit per changed row
-// that carries *new* code, each a single-row range { start: i, end: i }. Same
-// shape as a changeGroups entry so the two are interchangeable for range
-// highlighting. Only the new side (the right pane) is navigable — a pure
-// deletion (a removed line with no replacement, rightMark !== 'ins') has no new
-// code to select, so it's skipped. Added and modified rows both keep their
-// right side, so they stay.
+// that carries visible content, each a single-row range { start: i, end: i }.
+// Same shape as a changeGroups entry so the two are interchangeable for range
+// highlighting. Added and modified rows are landable via their new (right) side;
+// a pure deletion (a removed line with no replacement, rightMark !== 'ins') is
+// ALSO landable — it counts toward changedRows/the approve total (it's a real
+// change), so it must be individually approvable at line granularity too, not
+// only at group/call level. That mirrors changeCalls, which already lands on a
+// removed line. Its approve ✓ then renders on the old (left) pane (approveHere
+// in paneHTML). Only a blank/whitespace-only row (see rowHasContent) stays
+// skipped on both sides — diff noise with nothing to read or judge.
 export function changeLines(rows) {
   const units = []
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]
-    // A blank ins-only row (see rowHasContent) is skipped: it's diff noise
-    // with nothing to land on, not its own line-granularity unit.
-    if (rowChanged(r) && r.rightMark === 'ins' && rowHasContent(r)) units.push({ start: i, end: i })
+    if (rowChanged(r) && rowHasContent(r)) units.push({ start: i, end: i })
   }
   return units
 }

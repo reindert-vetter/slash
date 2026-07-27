@@ -833,18 +833,21 @@ instead of zooming:
   (`#6366f1`,
   `UNDERLINE_CLS`) as the inset left bar of the active row.
 
-**Only new/adjusted lines are selectable at the finer levels, but on
-`'call'` you walk through the whole line.** `'line'` navigates only along
-the **new side** (the right/`ins` pane) and skips a pure deletion.
-`'call'` splits the **whole** new line into segments — **every** segment is
-landable, changed or not (later a relation will hang off it there), not
-just the diff part. One exception: a **removed** line with no replacement
-remains
-landable too — as one empty new segment (nothing on the right) with the
-whole old line underlined on the old side, so you can land on it as an
-empty right-side row marking what's gone. (`'group'` remains a whole run
-including removed
-lines, so stepping in and the connector flow stay unchanged.)
+**Every changed content row is selectable at the finer levels, and on
+`'call'` you walk through the whole line.** `'line'` lands on an added/
+modified row via its **new side** (the right/`ins` pane) **and** on a
+**pure deletion** (a removed line with no replacement) — a removed line is a
+real change that counts toward the approve total, so it must be individually
+approvable at `'line'` granularity too, not only at group/call level (its
+approve ✓ then renders on the old/left pane, see `approveHere` in
+`Block.mjs`). `'call'` splits the **whole** new line into segments —
+**every** segment is landable, changed or not (later a relation will hang
+off it there), not just the diff part; a **removed** line with no
+replacement is landable there too — as one empty new segment (nothing on the
+right) with the whole old line underlined on the old side. (`'group'`
+remains a whole run including removed lines, so stepping in and the connector
+flow stay unchanged.) Only a completely blank row (see below) stays
+un-landable at every finer level.
 
 **A completely empty (after `trim()`) added/removed line is not its own
 landable unit at `'line'`/`'call'`, and doesn't count toward the approve

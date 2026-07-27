@@ -340,11 +340,14 @@ test.describe('PR Review Tree — change navigation', () => {
         })),
       }
     })
-    // One group spanning all three rows; lines cover only the new-code rows.
+    // One group spanning all three rows; lines cover every content row —
+    // including the pure deletion (row 2), which is a real change that must be
+    // individually approvable at line granularity, not only at group/call level.
     expect(out.groups).toEqual([{ start: 0, end: 2 }])
     expect(out.lines).toEqual([
       { start: 0, end: 0 },
       { start: 1, end: 1 },
+      { start: 2, end: 2 },
     ])
     // Row 0 splits into its whole-line call segments (`$order`, `->customer()`,
     // `->name();`) — every segment, not just the changed one; the `;` rides along
@@ -403,8 +406,11 @@ test.describe('PR Review Tree — change navigation', () => {
   })
 
   // Same blank-row exclusion for a pure deletion (old side blank, no
-  // replacement) — the display side there is the old (left) text.
-  test('a blank pure-deletion row is diff noise too', async ({ page }) => {
+  // replacement) — the display side there is the old (left) text. The two
+  // content pure-deletions (rows 0, 2) ARE landable line units now (a removed
+  // line is a real change and must be individually approvable at line
+  // granularity); only the blank row 1 stays excluded as diff noise.
+  test('a blank pure-deletion row is diff noise, but content deletions are landable lines', async ({ page }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
     const out = await page.evaluate(async () => {
@@ -415,12 +421,15 @@ test.describe('PR Review Tree — change navigation', () => {
         { left: 'return $a;', right: null, leftMark: 'del', rightMark: null },
       ]
       return {
-        lines: changeLines(rows), // pure deletions are never line-granular anyway
+        lines: changeLines(rows),
         calls: changeCalls(rows).map((u) => u.start),
         changed: changedRows(rows),
       }
     })
-    expect(out.lines).toEqual([])
+    expect(out.lines).toEqual([
+      { start: 0, end: 0 },
+      { start: 2, end: 2 },
+    ])
     expect(out.calls).not.toContain(1)
     expect(out.changed).toEqual([0, 2])
   })
