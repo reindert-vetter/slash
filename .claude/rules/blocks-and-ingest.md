@@ -54,6 +54,39 @@ left as a navigable list.
   `persistApproval`). The UI thus **never** writes directly — only this signal,
   within the write boundary. See `.claude/rules/tembed-workflows.md` (section
   "Persisting reviewer approval").
+- **Placing a comment retracts the approval it hangs on
+  (`revokeApprovalForComment`, `home.mjs`):** a reviewer who places a comment
+  on an already-approved unit is signalling "this isn't OK after all" — the
+  approval of exactly that anchor is therefore retracted right after the
+  comment is placed, via the same `set` Signal (`persistApproval`), never a
+  direct write. Hooked into **both** `COMPOSE_COMMANDS` items that actually
+  place a comment ("Plaats comment" and "Alleen voor mijzelf" — a private
+  note counts too, since the reviewer is still flagging the code, even though
+  it never reaches GitHub); a **reply** in an existing thread
+  (`sendReaction`) does **not** retract anything — only placing a fresh
+  comment does. Both call sites capture `focusedBlock()` + `commentTarget()`
+  **before** the `await placeComment(...)` (the same anchor `placeComment`
+  itself posts with), so the revoke always targets the block/unit the
+  comment was actually anchored to — including a drilled column, mirroring
+  `approveContext()`'s own `focusLevel` handling.
+  At `gran !== 'call'` (group/line, or a TRANSLATION per-key unit — both
+  already flow through the same aligned-row range) every row in
+  `[t.rowStart, t.rowEnd]` is dropped from `b.approvedRows`, plus any
+  `b.approvedCalls` entries whose row falls in that range (a coarser comment
+  supersedes a finer, partial call approval on the same rows). At
+  `gran === 'call'` it's precise instead: only the **one** segment the
+  comment is on (found via `t.seg`, the same `segKey()` `commentTarget()`
+  itself computed) loses its approval — sibling segments on the same row
+  keep theirs; a row that had graduated into `b.approvedRows` (every segment
+  already approved) is first expanded back into explicit per-segment keys,
+  mirroring `toggleCallApprove`'s own "wasFullRow" branch. Both arrays are
+  always reassigned wholesale (never mutated in place), per the arrow.js
+  reactivity rule below. A comment placed by the system itself (an imported
+  GitHub comment, or an AI risk-check `code_warning` finding) does **not**
+  trigger this — those are created directly by a backend Activity, never
+  through this frontend `placeComment`/`createComment` path. Test:
+  `tests/comment-revokes-approval.spec.mjs` (both the group/line case and
+  the call-segment precision case).
 - **Combined approval per tree (sidebar + Underlying code):** the left sidebar
   shows a pill per top-level block (`data-testid=block-approval`) with
   `done/total` for that block **plus all descendant blocks combined** — its
