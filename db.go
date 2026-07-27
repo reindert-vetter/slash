@@ -252,6 +252,32 @@ func listPRs(db *sql.DB) ([]PRSummary, error) {
 	return out, rows.Err()
 }
 
+// purgePRBlocks removes every stored block and the ingest-SHA record of pr —
+// the graph.db half of the cleanup workflow's per-PR data-retention purge
+// (the other tables live in the separate module DBs, see each module's own
+// Purge). WRITE — call only from the cleanup workflow's purgePR Activity.
+// Returns the number of block rows removed, for logging.
+func purgePRBlocks(db *sql.DB, pr int) (int, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`DELETE FROM blocks WHERE pr = ?`, pr)
+	if err != nil {
+		return 0, fmt.Errorf("delete pr blocks: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`DELETE FROM pr_ingest WHERE pr = ?`, pr); err != nil {
+		return int(n), fmt.Errorf("delete pr_ingest: %w", err)
+	}
+	return int(n), tx.Commit()
+}
+
 // blocksByPR reads all blocks of one PR, stably sorted by (file, line).
 func blocksByPR(db *sql.DB, pr int) ([]Block, error) {
 	rows, err := db.Query(`

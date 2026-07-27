@@ -824,6 +824,12 @@ func TestPRStatusThreeStages(t *testing.T) {
 	if _, err := m.EnsurePRStatus(7); err != nil {
 		t.Fatal(err)
 	}
+	// EnsurePRStatus starts pr_status with StartWorkflowDeferLow: basics (stage
+	// 1) run synchronously, but generatePRSummary (stage 2, PriorityLow) and the
+	// statuses that follow it drain in the background so a startup ensure never
+	// blocks on the LLM summary. Wait for that background advance before asserting
+	// the later stages (the Fake Haiku returns immediately, so this is quick).
+	engine.Wait()
 
 	meta, ok, err := pm.Get(context.Background(), 7)
 	if err != nil || !ok {

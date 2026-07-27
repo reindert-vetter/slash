@@ -52,6 +52,11 @@ type Store interface {
 	LoadRun(runID string) (RunRecord, []Event, error)
 	// ListRuns returns every run's metadata (for crash recovery).
 	ListRuns() ([]RunRecord, error)
+	// DeleteRun permanently removes a run's metadata and full event history.
+	// Deleting a run that does not exist is a no-op (not an error) — this
+	// keeps a caller that retries/repeats a delete (e.g. a daily cleanup pass)
+	// idempotent by construction.
+	DeleteRun(runID string) error
 	// Close releases any resources (files, DB handles).
 	Close() error
 }
@@ -126,6 +131,24 @@ func (m *MemoryStore) ListRuns() ([]RunRecord, error) {
 	return out, nil
 }
 
+// DeleteRun removes runID's metadata and events. A missing run is a no-op.
+func (m *MemoryStore) DeleteRun(runID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.runs[runID]; !ok {
+		return nil
+	}
+	delete(m.runs, runID)
+	delete(m.events, runID)
+	for i, id := range m.order {
+		if id == runID {
+			m.order = append(m.order[:i], m.order[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
 func (m *MemoryStore) Close() error { return nil }
 
 // MultiStore fans writes out to every wrapped Store and reads from the first
@@ -174,6 +197,19 @@ func (s *MultiStore) LoadRun(runID string) (RunRecord, []Event, error) {
 }
 
 func (s *MultiStore) ListRuns() ([]RunRecord, error) { return s.stores[0].ListRuns() }
+
+// DeleteRun removes runID from every wrapped store. Continues past a "not
+// found"-shaped no-op in any one store (each store's own DeleteRun is
+// itself a no-op for a missing run, so this simply fans out); the first real
+// error wins, mirroring CreateRun/SetStatus/AppendEvent above.
+func (s *MultiStore) DeleteRun(runID string) error {
+	for _, st := range s.stores {
+		if err := st.DeleteRun(runID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func (s *MultiStore) Close() error {
 	var firstErr error

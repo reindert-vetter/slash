@@ -26,6 +26,10 @@ type Meta struct {
 	Deletions    int    `json:"deletions"`
 	ChangedFiles int    `json:"changedFiles"`
 	HeadRef      string `json:"headRef"`
+	// MergedAt is the RFC3339 merge timestamp, empty when the PR isn't merged
+	// (open, or closed without merging). Used by the cleanup workflow to
+	// decide whether a PR's data is old enough to purge.
+	MergedAt string `json:"mergedAt"`
 }
 
 // Reply is one reply/reaction on a review-comment thread.
@@ -348,8 +352,8 @@ func (m *Module) PRState(ctx context.Context, pr int) (string, error) {
 	return meta.State, nil
 }
 
-// PRMeta fetches the PR's title, web URL, body, author, diff-stats and head
-// branch (one `gh api` call).
+// PRMeta fetches the PR's title, web URL, body, author, diff-stats, head
+// branch, and merge timestamp (one `gh api` call).
 func (m *Module) PRMeta(ctx context.Context, pr int) (Meta, error) {
 	out, err := m.api(ctx, "GET",
 		fmt.Sprintf("repos/%s/pulls/%d", m.repo, pr))
@@ -365,14 +369,19 @@ func (m *Module) PRMeta(ctx context.Context, pr int) (Meta, error) {
 		Deletions    int                    `json:"deletions"`
 		ChangedFiles int                    `json:"changed_files"`
 		Head         struct{ Ref string }   `json:"head"`
+		MergedAt     *string                `json:"merged_at"` // null when not merged
 	}
 	if err := json.Unmarshal(out, &meta); err != nil {
 		return Meta{}, err
 	}
+	mergedAt := ""
+	if meta.MergedAt != nil {
+		mergedAt = *meta.MergedAt
+	}
 	return Meta{
 		Title: meta.Title, URL: meta.HTMLURL, Body: meta.Body, Author: meta.User.Login,
 		Additions: meta.Additions, Deletions: meta.Deletions, ChangedFiles: meta.ChangedFiles,
-		HeadRef: meta.Head.Ref,
+		HeadRef: meta.Head.Ref, MergedAt: mergedAt,
 	}, nil
 }
 

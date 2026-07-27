@@ -207,6 +207,18 @@ func (m *Module) Prune(ctx context.Context, pr int, keep []Entry) error {
 	return err
 }
 
+// Purge removes every test-coverage row of pr — unlike Prune, unconditional
+// (no keep set): the whole PR is being retired. WRITE — workflow-only, the
+// per-PR data-retention cleanup path (see the cleanup workflow). Returns the
+// number of rows removed, for logging.
+func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
+	res, err := m.db.ExecContext(ctx, `DELETE FROM test_covers WHERE pr = ?`, pr)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // SaveSearching marks the given targets of a test as being searched by the
 // LLM. WRITE — workflow-Activity-only.
 func (m *Module) SaveSearching(ctx context.Context, pr int, testID string, targetKeys []string) error {

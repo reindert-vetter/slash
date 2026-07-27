@@ -264,6 +264,18 @@ func (m *Module) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+// Purge removes every comment (and, via ON DELETE CASCADE, its reactions) of
+// pr — the same cascade Delete already relies on. WRITE — workflow-only, the
+// per-PR data-retention cleanup path (see the cleanup workflow). Returns the
+// number of comments removed, for logging.
+func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
+	res, err := m.db.ExecContext(ctx, `DELETE FROM comments WHERE pr = ?`, pr)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // List returns the comments of one PR (or all PRs if pr <= 0), each with its
 // reactions. READ — safe for the UI.
 func (m *Module) List(ctx context.Context, pr int) ([]Comment, error) {

@@ -99,6 +99,17 @@ func (m *Module) Replace(ctx context.Context, pr int, blockID string, rows []int
 	return err
 }
 
+// Purge removes every approval row of pr. WRITE — workflow-only, the per-PR
+// data-retention cleanup path (see the cleanup workflow). Returns the number
+// of rows removed, for logging.
+func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
+	res, err := m.db.ExecContext(ctx, `DELETE FROM approvals WHERE pr = ?`, pr)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // List returns every block's approval state for a PR, ordered deterministically.
 // READ — safe for the UI/API.
 func (m *Module) List(ctx context.Context, pr int) ([]Approval, error) {

@@ -127,6 +127,14 @@ const (
 	// only path that derives tasks — the HTTP handlers only read the
 	// read-model.
 	WorkflowTaskInbox = "task_inbox"
+	// WorkflowCleanup is the Workflow Type that purges all data of PRs merged
+	// more than cleanupMergedAge ago: worktrees, workflow runs, and every
+	// read-model row keyed on that PR. One Execution per run; it runs its two
+	// Activities (resolveCleanupTargets, then purgePR once per resolved
+	// target) sequentially and completes — no signal, mirrors WorkflowIngest/
+	// WorkflowSubmitReview. Triggered manually (POST /api/workflows/cleanup)
+	// and automatically once a day (see TaskManager.StartCleanupScheduler).
+	WorkflowCleanup = "cleanup"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -1340,6 +1348,34 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(map[string]string{"runId": runID})
 	})
 
+	engine.RegisterActivity("resolveCleanupTargets", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg CleanupInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		targets, err := resolveCleanupTargets(ctx, m.gh, m.db, m.dataDir, arg)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(targets)
+	})
+	engine.RegisterActivity("purgePR", func(ctx context.Context, in []byte) ([]byte, error) {
+		var t CleanupTarget
+		if err := json.Unmarshal(in, &t); err != nil {
+			return nil, err
+		}
+		deps := purgeDeps{
+			engine: m.engine, db: m.db, dataDir: m.dataDir,
+			comments: m.comments, approvals: m.approvals, relations: m.relations,
+			callresolve: m.callresolve, testcovers: m.testcovers, prmeta: m.prmeta, explain: m.explain,
+		}
+		res, err := purgePR(ctx, deps, t.PR)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(res)
+	})
+
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
@@ -1354,6 +1390,26 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
 	engine.RegisterWorkflow(WorkflowTaskSnooze, taskSnoozeWorkflow)
 	engine.RegisterWorkflow(WorkflowTaskInbox, taskInboxWorkflow)
+	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
+
+	// The LLM-heavy workflows make many/long claude calls (resolve_call runs one
+	// claude call per unresolved call in the block; code_warning a whole agentic
+	// Sonnet pass). If the process is killed mid-flight, those uncompleted
+	// activities re-execute live on Recover — so recovering them synchronously
+	// would block server startup (and the fast, important workflows) for minutes.
+	// Mark them PriorityLow so Recover drains them in the background instead. See
+	// .claude/rules/tembed-workflows.md ("Recovery priority").
+	engine.SetWorkflowPriority(WorkflowResolveCall, tembed.PriorityLow)
+	engine.SetWorkflowPriority(WorkflowResolveTestCovers, tembed.PriorityLow)
+	engine.SetWorkflowPriority(WorkflowExplainCode, tembed.PriorityLow)
+	engine.SetWorkflowPriority(WorkflowCodeWarning, tembed.PriorityLow)
+
+	// pr_status itself is important (merge/close detection + ingest refresh) and
+	// stays Normal — but its one slow LLM step, generatePRSummary (a Haiku call),
+	// must not block startup if a pr_status run was killed mid-summary. Marking
+	// just that activity PriorityLow defers such a run to the background at
+	// exactly that step, without demoting the whole workflow.
+	engine.SetActivityPriority("generatePRSummary", tembed.PriorityLow)
 	return m
 }
 
@@ -1479,6 +1535,65 @@ func (m *TaskManager) StartIngest(ctx context.Context, pr int) (*ingestResult, e
 		return nil, fmt.Errorf("ingest failed (run %s)", runID)
 	}
 	var res ingestResult
+	if err := m.engine.Result(runID, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+// cleanupWorkflow purges all data of merged-and-old PRs. It is deterministic:
+// the cutoff is read once via w.Now() (recorded through SideEffect, so replay
+// reuses the same value) unless the input already carries one; all side
+// effects (the github/DB/disk reads in resolveCleanupTargets, the worktree/
+// workflow-run/DB removals in purgePR) live in its two Activities. The number
+// of purgePR calls is exactly len(targets.Targets) — a function of the stored
+// resolveCleanupTargets result, so replay-safe. No signals, one Execution per
+// run — mirrors ingestWorkflow/submitReviewWorkflow.
+func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in CleanupInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	if in.Cutoff.IsZero() {
+		in.Cutoff = w.Now().Add(-cleanupMergedAge)
+	}
+
+	var targets CleanupTargets
+	if err := w.ExecuteActivity("resolveCleanupTargets", in, &targets); err != nil {
+		return nil, fmt.Errorf("resolve cleanup targets: %w", err)
+	}
+
+	res := CleanupResult{Cutoff: in.Cutoff}
+	for _, t := range targets.Targets {
+		var purged CleanupPurgeResult
+		if err := w.ExecuteActivity("purgePR", t, &purged); err != nil {
+			return nil, fmt.Errorf("purge pr %d: %w", t.PR, err)
+		}
+		res.Purged = append(res.Purged, purged)
+	}
+	return json.Marshal(res)
+}
+
+// StartCleanup runs the cleanup Workflow Execution to completion (mirrors
+// StartIngest/StartSubmitReview — a signal-less workflow, so StartWorkflow
+// drives it synchronously) and returns its result summary. This is the
+// sanctioned write path — the only way merged-PR data (worktrees, workflow
+// runs, read-model rows) gets removed. Called both by the manual
+// POST /api/workflows/cleanup endpoint and the daily scheduler (see
+// StartCleanupScheduler in tasks_api.go).
+func (m *TaskManager) StartCleanup(ctx context.Context) (*CleanupResult, error) {
+	runID, err := m.engine.StartWorkflow(WorkflowCleanup, CleanupInput{})
+	if err != nil {
+		return nil, err
+	}
+	status, err := m.engine.Status(runID)
+	if err != nil {
+		return nil, err
+	}
+	if status == tembed.StatusFailed {
+		return nil, fmt.Errorf("cleanup failed (run %s)", runID)
+	}
+	var res CleanupResult
 	if err := m.engine.Result(runID, &res); err != nil {
 		return nil, err
 	}
@@ -2279,7 +2394,14 @@ func (m *TaskManager) ensurePRStatus(pr int) (string, error) {
 		m.mu.Unlock()
 		return id, nil
 	}
-	id, err := m.engine.StartWorkflow(WorkflowPRStatus, PRStatusInput{PR: pr})
+	// DeferLow: pr_status is fire-and-forget (the UI polls the read model and
+	// never awaits this start), so its one slow LLM step, generatePRSummary,
+	// must not block the caller — at startup ResumePolling ensures a tracker per
+	// PR on the startup goroutine, and a synchronous summary there delays
+	// ListenAndServe. The generatePRSummary activity is PriorityLow, so this
+	// returns as soon as the fast basics stage is recorded and the summary +
+	// statuses drain in the background (progressive load, exactly as designed).
+	id, err := m.engine.StartWorkflowDeferLow(WorkflowPRStatus, PRStatusInput{PR: pr})
 	if err != nil {
 		m.mu.Unlock()
 		return "", err

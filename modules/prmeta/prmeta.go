@@ -170,6 +170,17 @@ func (m *Module) SaveStatuses(ctx context.Context, pr int, reviewDecision string
 	return err
 }
 
+// Purge removes the stored pr_meta row of pr, if any. WRITE — workflow-only,
+// the per-PR data-retention cleanup path (see the cleanup workflow). Returns
+// the number of rows removed (0 or 1), for logging.
+func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
+	res, err := m.db.ExecContext(ctx, `DELETE FROM pr_meta WHERE pr = ?`, pr)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // Get returns the stored metadata for pr (ok=false when none is stored yet).
 // READ — safe for the UI. Fields whose stage hasn't run yet are simply zero
 // values, so the UI can render progressively.

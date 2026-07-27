@@ -94,8 +94,13 @@ the "stuck on loading" pitfall in `conventions.md`).
 stages** (basics → Claude `summary` → review/checks statuses), so each section
 appears as soon as its stage is done (placeholder ("generating summary…", a
 pulsing skeleton pill) until then). `loadPRMeta` fires the
-`POST /api/workflows/pr_status` **fire-and-forget** (not awaited — that POST
-blocks until all 3 stages are done) and then immediately starts the poll loop.
+`POST /api/workflows/pr_status` **fire-and-forget** (not awaited) and then
+immediately starts the poll loop. The endpoint itself no longer blocks until
+all 3 stages are done either: `ensurePRStatus` starts pr_status with
+`StartWorkflowDeferLow`, so the POST returns as soon as **stage 1 (basics)** is
+recorded and the `PriorityLow` `generatePRSummary` (+ the statuses after it)
+drain in the background — the client polls for those anyway. See "Recovery
+priority" in `.claude/rules/tembed-workflows.md`.
 All of this loads/polls regardless of whether the column is currently visible
 — `state.showDescription` only determines whether it's rendered, not whether
 the data exists by the time you open it.

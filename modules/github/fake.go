@@ -19,7 +19,8 @@ type Fake struct {
 	reviewComments  []ReviewComment
 	general         []GeneralComment
 	prState         string          // "" reads as "open"
-	prMeta          Meta            // returned by PRMeta (SetPRMeta overrides)
+	prMeta          Meta            // returned by PRMeta (SetPRMeta overrides), PR-independent fallback
+	prMetas         map[int]Meta    // per-PR override (SetPRMetaFor), checked first
 	viewed          map[string]bool // "pr|path" -> viewed
 
 	lastStartLine int
@@ -162,14 +163,31 @@ func (f *Fake) SetPRState(state string) {
 func (f *Fake) PRMeta(_ context.Context, pr int) (Meta, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if m, ok := f.prMetas[pr]; ok {
+		return m, nil
+	}
 	return f.prMeta, nil
 }
 
-// SetPRMeta makes the next PRMeta calls report m.
+// SetPRMeta makes the next PRMeta calls report m for every PR that has no
+// per-PR override set via SetPRMetaFor.
 func (f *Fake) SetPRMeta(m Meta) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prMeta = m
+}
+
+// SetPRMetaFor makes PRMeta(pr) report m for exactly that PR, overriding the
+// single PR-independent value SetPRMeta sets — for tests that need several
+// PRs with distinct metadata at once (e.g. the cleanup workflow, which checks
+// mergedAt per candidate PR).
+func (f *Fake) SetPRMetaFor(pr int, m Meta) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.prMetas == nil {
+		f.prMetas = map[int]Meta{}
+	}
+	f.prMetas[pr] = m
 }
 
 // EnqueueReply makes r visible to the next FetchReplies (as if it appeared on

@@ -127,6 +127,25 @@ func (s *JSONLStore) ListRuns() ([]RunRecord, error) {
 	return out, nil
 }
 
+// DeleteRun removes runID's meta and events files. Missing files are not an
+// error (idempotent — a repeated delete, or one racing a run that was never
+// created, is a no-op).
+func (s *JSONLStore) DeleteRun(runID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := removeIfExists(s.metaPath(runID)); err != nil {
+		return err
+	}
+	return removeIfExists(s.eventsPath(runID))
+}
+
+func removeIfExists(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 func (s *JSONLStore) Close() error { return nil }
 
 // readLines returns the non-empty lines of a file, or nil if it does not exist.

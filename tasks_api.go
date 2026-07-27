@@ -251,6 +251,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		// into the read-model and start the refresh poller (the UI reads only
 		// the read-model). Mirrors EnsureInbox.
 		mgr.EnsureTaskInbox(ctx)
+		// Daily maintenance: purge all data of PRs merged more than
+		// cleanupMergedAge ago. See StartCleanupScheduler for why this is a
+		// plain background ticker rather than a durable in-workflow loop.
+		mgr.StartCleanupScheduler(ctx)
 	}
 
 	closeFn := func() error {
@@ -344,6 +348,55 @@ func (m *TaskManager) ResumePRStatusPolling(ctx context.Context) {
 		// fresh-tracker spawn in ensurePRStatus).
 		go m.pollImportComments(ctx, r.ID, input.PR)
 	}
+}
+
+// cleanupScheduleInterval is how often the cleanup workflow is triggered
+// automatically once the server is running (see StartCleanupScheduler).
+const cleanupScheduleInterval = 24 * time.Hour
+
+// StartCleanupScheduler starts the daily-maintenance background loop: an
+// immediate cleanup pass, then one more every cleanupScheduleInterval, for as
+// long as ctx lives. Running an extra pass (e.g. right after every server
+// restart) is harmless — resolveCleanupTargets/purgePR are idempotent, a PR
+// with no remaining data simply isn't a candidate anymore.
+//
+// This is a plain background goroutine — the same "operational, no durable
+// state of its own" shape as pollInbox/pollIngestRefresh/pollImportComments —
+// rather than a durable w.Sleep loop inside the cleanup workflow itself.
+// Unlike those pollers, cleanup has no reviewer-driven heartbeat concept: it's
+// unconditional daily maintenance, not something a user is "actively
+// viewing", so the fast/slow cadence machinery those pollers use doesn't
+// apply here — a plain fixed-interval ticker is the simplest fit. Keeping the
+// scheduling outside the `cleanup` Workflow Type itself also keeps that
+// workflow a short, one-shot, signal-less run (mirroring ingest/
+// submit_review) instead of an unusual infinite-loop workflow that never
+// completes and would otherwise sit permanently "waiting" in
+// GET /api/workflows.
+func (m *TaskManager) StartCleanupScheduler(ctx context.Context) {
+	go func() {
+		m.runCleanupOnce(ctx)
+		ticker := time.NewTicker(cleanupScheduleInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.runCleanupOnce(ctx)
+			}
+		}
+	}()
+}
+
+// runCleanupOnce runs one cleanup pass and logs the outcome (or failure) —
+// shared by the initial kick-off and every subsequent tick.
+func (m *TaskManager) runCleanupOnce(ctx context.Context) {
+	res, err := m.StartCleanup(ctx)
+	if err != nil {
+		m.logf("cleanup: run failed: %v", err)
+		return
+	}
+	m.logf("cleanup: purged %d pr(s) (cutoff=%s)", len(res.Purged), res.Cutoff.Format(time.RFC3339))
 }
 
 // WorkflowRunView is one row of the read-only "Taken" (tasks) list: a workflow
@@ -499,6 +552,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/tasks → read-only, derived task-inbox read-model (PR reviews,
 	// unread comments on your own PRs, Jira tickets assigned to you).
 	mux.HandleFunc("/api/tasks", s.handleTasks)
+	// POST /api/workflows/cleanup → manually trigger the daily data-retention
+	// cleanup pass (purges all data of PRs merged more than 7 days ago). Runs
+	// automatically once a day too — see StartCleanupScheduler.
+	mux.HandleFunc("/api/workflows/cleanup", s.handleCleanup)
 	// GET /api/prs/filter?preset=<key> → live gh-search for a fixed, allow-listed
 	// preset query (never raw UI text — see handleFilter).
 	mux.HandleFunc("/api/prs/filter", s.handleFilter)
@@ -585,7 +642,7 @@ func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" || rest == "task_inbox" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" || rest == "task_inbox" || rest == "cleanup" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1224,6 +1281,24 @@ func (s *server) handleSubmitReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleCleanup starts a cleanup Workflow Execution (POST) — the sanctioned
+// write path for manually triggering the daily data-retention purge (it also
+// runs automatically once a day, see StartCleanupScheduler). No request body:
+// the cutoff (now − cleanupMergedAge) is always computed server-side, so a
+// caller can't widen the safety window via the API.
+func (s *server) handleCleanup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	res, err := s.tasks.manager.StartCleanup(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // reReviewerLogin restricts a reviewer login to GitHub's username charset

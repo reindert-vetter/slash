@@ -43,9 +43,60 @@ abstract** — it knows nothing about PRs, blocks, or gh; keep it that way.
   no cgo), and `MultiStore` to combine them (SQLite for queries + JSONL as
   an audit trail). The only runtime dependency is `modernc.org/sqlite`.
 - **Recovery:** `engine.Recover()` at startup dry-runs every `running`/
-  `waiting` run again (replants timers, re-blocks on signals).
+  `waiting` run again (replants timers, re-blocks on signals) — **prioritised**,
+  see "Recovery priority" below.
 - **Tests:** `tembed/*_test.go` (activity replay, signals, buffered signal,
-  durable timer, activity failure, SQLite+JSONL combination).
+  durable timer, activity failure, SQLite+JSONL combination, recovery
+  priority + `StartWorkflowDeferLow`).
+
+## Recovery priority (don't let slow LLM work block startup)
+
+`advance()` runs an activity **inline** (blocking) when its result isn't yet in
+history, and `Recover()` re-drives every mid-flight run at startup. So a run
+that was killed **mid-activity** re-executes that activity live on recovery —
+and for the LLM workflows (`resolve_call` makes **one `claude` call per
+unresolved call** in the block; `code_warning` a whole agentic Sonnet pass)
+that's dozens of ~30s subprocess calls, serially, on the **startup goroutine**,
+*before* `ListenAndServe`. That once wedged the whole server (it never came up).
+tembed therefore has a **priority** mechanism (still fully abstract — it knows
+nothing about LLMs/PRs):
+
+- **`Priority`** — `PriorityLow` / `PriorityNormal` (default) / `PriorityHigh`.
+  Affects **only** recovery; live `StartWorkflow`/`SignalWorkflow` are
+  unaffected.
+- **`Engine.SetWorkflowPriority(name, p)`** — a whole workflow type's recovery
+  priority. In `Recover()`, Normal/High runs are re-driven **synchronously**
+  (High first), so recovery blocks until they're back on their feet; **Low**
+  runs are drained by a **single background goroutine** (serially, to avoid a
+  thundering herd of subprocess/LLM calls), so a slow one never blocks startup
+  or the fast, important workflows. Tracked by `e.wg`, so `Wait()` still covers
+  it. slash marks the pure-LLM workflows Low: `resolve_call`,
+  `resolve_test_covers`, `explain_code`, `code_warning` (in `NewTaskManager`,
+  `workflows.go`).
+- **`Engine.SetActivityPriority(name, p)`** — one **activity's** recovery
+  priority, for a workflow that is otherwise important/fast but has a single
+  slow LLM step. During synchronous recovery, if a Normal/High run's replay
+  reaches a **live** (unrecorded) `PriorityLow` activity, the whole run **yields
+  to the background** at that point instead of running it on the startup path
+  (nothing is recorded — the background re-drive replays to the same point and
+  runs it then, so it stays deterministic; already-recorded earlier activities
+  replay from history as usual). slash marks **`generatePRSummary`** (pr_status's
+  Haiku step) Low so a pr_status run killed mid-summary doesn't block startup,
+  without demoting the whole (merge-detection/ingest-refresh) workflow.
+- **`Engine.StartWorkflowDeferLow(name, input)`** — the same activity-level
+  deferral, but for a **fresh, fire-and-forget start** (not recovery): runs the
+  fast leading activities synchronously, then yields at the first live
+  `PriorityLow` activity to the background. `ensurePRStatus` uses it so
+  `ResumePolling` ensuring a pr_status tracker per PR at startup returns after
+  stage 1 (basics) instead of blocking on the Haiku summary — the UI polls the
+  read model for the rest anyway (progressive load, see "Progressive loading"
+  in `.claude/rules/detail-layout.md`). If a workflow has no live low-priority
+  activity, it behaves exactly like `StartWorkflow`.
+
+Net effect: the server reaches `ListenAndServe` promptly and the deferred LLM
+work (interrupted `resolve_call` searches, an unfinished summary) drains in the
+background without blocking anything. Tests: `tembed/engine_test.go`
+(`TestRecoverDefersLowPriority`, `TestStartWorkflowDeferLow`).
 
 ## Hard rule: only workflows mutate state
 
@@ -1920,3 +1971,126 @@ combines it with the `task_snooze` read-model above to hide snoozed tasks.
   (all three kinds shown with a points badge + breakdown, seeded via the
   shared `tests/fixtures/inbox.json` + `tests/fixtures/jira-assigned.json`
   under `SLASH_JIRA_ASSIGNED`, see `tests/_fixtures.mjs`).
+
+
+## Daily data cleanup (`cleanup` + per-module `Purge`)
+
+A tenth Workflow Type, **`cleanup`**, purges **all** data of a PR once it has
+been merged for more than 7 days. Motivation: `data/` is dominated (~99.6%) by
+the git worktrees the ingest pipeline materializes per PR
+(`data/worktrees/pr-<n>-{base,head}`, ~300 MB per checkout) — a PR that's
+long since merged has no further reason to keep that disk around, and neither
+do its workflow runs or its read-model rows. One Execution per run,
+**signal-less** — it runs its two Activities sequentially and completes,
+mirroring `WorkflowIngest`/`WorkflowSubmitReview`.
+
+- **`cleanupMergedAge`** (`cleanup.go`) is the retention window — `7 * 24 *
+  time.Hour`. The workflow body computes the cutoff **once**, via `w.Now()`
+  (recorded through `SideEffect`, so replay reuses the same value) unless the
+  input already carries an explicit `Cutoff` (tests pin one this way, so they
+  don't depend on wall-clock timing).
+- **`resolveCleanupTargets` Activity** (read-only: github + DB + disk reads,
+  never a write) determines the candidate PRs and which of them qualify:
+  - **Candidates** (`cleanupCandidatePRs`) are the **union** of `DISTINCT pr`
+    from `blocks`, `DISTINCT pr` from `pr_ingest` (graph.db), and any PR
+    number found in a `data/worktrees/pr-<n>-{base,head}` directory name —
+    not just the blocks table. This makes a half-finished previous cleanup
+    (worktree already gone but a stray read-model row survived, or vice
+    versa — e.g. the process died mid-purge) self-healing: the next run
+    still finds it as a candidate and finishes the job.
+  - **Eligibility** relies on `github.Client.PRMeta`'s new **`MergedAt`**
+    field (RFC3339, empty when the PR isn't merged — `Module.PRMeta` reads
+    GitHub's nullable `merged_at` alongside the fields it already fetched, no
+    extra `gh api` call). A PR is a target only if `MergedAt` is non-empty
+    (really merged — a closed-without-merging PR is **never** touched,
+    "niet enkel closed") **and** parses **and** falls before the cutoff. A
+    `gh` hiccup, an unparsable timestamp, or a too-recent merge all simply
+    leave the PR out — cleanup only ever removes data it's certain about.
+    `github.Fake` grew `SetPRMetaFor(pr, meta)` (a per-PR override, checked
+    before the existing PR-independent `SetPRMeta`) so a test can give
+    several candidate PRs distinct merge states at once.
+- **`purgePR` Activity**, called once per resolved target (so the number of
+  calls is a function of `resolveCleanupTargets`'s **stored** result —
+  replay-safe), removes, for that one PR:
+  1. **Worktrees** — `removePRWorktrees` deregisters each directory via `git
+     worktree remove --force` (best-effort — an already-broken/foreign
+     directory just falls through) and then `os.RemoveAll`s it; a directory
+     that's already gone is simply skipped. Finishes with a best-effort `git
+     worktree remove`/`prune` sweep. By far the biggest disk win.
+  2. **Workflow runs** — `deletePRWorkflowRuns` walks `engine.Runs()` and
+     parses each run's stored input for a `"pr"` field, **exactly** the way
+     `RunsForPR` (`tasks_api.go`) already does, then calls the new
+     `Engine.DeleteRun(runID)` (see below) for every match. A **per-repo**
+     tracker (`pr_inbox`/`task_inbox`/`task_snooze` — no `"pr"` field in
+     their input) never matches and is therefore never touched.
+  3. **Read-model rows** — `purgePRBlocks` (`db.go`, `blocks` + `pr_ingest`
+     in one transaction) plus a new **`Purge(ctx, pr) (int64, error)`**
+     method on every other read-model with a `pr` column: `comments`
+     (a single `DELETE FROM comments`, relying on the same `reactions`
+     cascade `Delete` already trusts), `approvals`, `relations`,
+     `callresolve` (unconditional, unlike `Prune`'s keep-set variant),
+     `testcovers` (ditto), `prmeta`, `explanations`. There is **no** `ignore`
+     module anymore — the old per-PR ignore feature was already replaced by
+     the task-level, per-repo `task_snooze` (see "Snoozing a task" above), so
+     there's nothing to purge there.
+  Every dependency (each module, the engine, the DB) is optionally `nil`,
+  mirroring every other Activity in `NewTaskManager` — a caller that doesn't
+  wire a given module simply skips that store. `purgePR` logs, per PR, the
+  worktrees/workflow-runs/row counts removed (`log.Printf`, inside the
+  Activity — never in the workflow body itself, consistent with every other
+  workflow here). Every underlying `DELETE`/`os.RemoveAll` is unconditional
+  on `pr`/the path, so **re-running cleanup on the same PR is always a
+  no-op** once its data is gone — that's the idempotency the daily trigger
+  (below) relies on.
+- **`Engine.DeleteRun(runID)` (`tembed/engine.go` + `Store.DeleteRun`)** is a
+  new, deliberately abstract tembed primitive (it knows nothing about PRs) —
+  the engine previously had no way to remove a run at all. `Store.DeleteRun`
+  is implemented by all four stores: `MemoryStore`/`SQLiteStore` (SQLite:
+  `DELETE FROM events` then `DELETE FROM runs` in one tx — explicit rather
+  than relying on the `events.run_id` `ON DELETE CASCADE`, since SQLite's
+  `PRAGMA foreign_keys` is per-connection and `database/sql`'s pool may hand
+  out a different connection than the one the schema was applied on) and
+  `JSONLStore` (removes the `<id>.meta.jsonl`/`<id>.events.jsonl` files,
+  tolerating "already gone"). `MultiStore.DeleteRun` fans out to every
+  wrapped store. `Engine.DeleteRun` additionally stops/discards any pending
+  durable timer for that run and releases its run lock — a deleted run can
+  never be woken up again. **Deleting an unknown run ID is a no-op, not an
+  error** — the idempotency guarantee a repeated cleanup pass (and thus
+  `deletePRWorkflowRuns`) needs. Test: `tembed/engine_test.go`'s
+  `TestEngineDeleteRun`.
+- **Triggered two ways:**
+  - **Manually:** `POST /api/workflows/cleanup` (`handleCleanup`,
+    `tasks_api.go`) — the sanctioned write path, no request body (the cutoff
+    is always computed server-side, so a caller can't widen the safety
+    window via the API).
+  - **Automatically, once a day:** `TaskManager.StartCleanupScheduler(ctx)`,
+    called from `newTasks` alongside the other `Ensure*` calls (gated by
+    `resumeRuntime`, so a one-shot CLI caller never starts it). It's a
+    **plain background goroutine** with a `time.Ticker` (24h) — an immediate
+    pass, then one every `cleanupScheduleInterval` — **not** a durable
+    `w.Sleep` loop inside the `cleanup` workflow itself. Chosen because: (1)
+    it's the same shape every other periodic trigger in this codebase
+    already uses (`pollInbox`/`pollIngestRefresh`/`pollImportComments` — all
+    external goroutines that Start/Signal on a cadence, never a workflow
+    that sleeps forever); (2) cleanup has no reviewer-driven heartbeat
+    concept to piggyback on — it's unconditional daily maintenance, not
+    something a user is "actively viewing", so the fast/slow cadence
+    machinery those pollers use doesn't apply; (3) it keeps the `cleanup`
+    Workflow Type itself a short, one-shot, signal-less run (mirroring
+    `ingest`/`submit_review`) instead of an unusual infinite-loop workflow
+    that would otherwise sit permanently `waiting` in `GET /api/workflows`.
+    Running an extra pass on every restart is harmless — see the
+    idempotency guarantee above.
+- **Endpoint:** `POST /api/workflows/cleanup` → `{cutoff, purged:[{pr,
+  worktreesRemoved, workflowRunsDeleted, rowsDeleted}]}` (`handleCleanup`,
+  added to the reserved-names guard in `handleWorkflows` alongside the other
+  signal-less Workflow Types).
+- Tests: `cleanup_test.go` (`TestResolveCleanupTargets` — candidate
+  discovery via the blocks table *and* bare worktree dirs, and the four
+  eligibility branches: merged-old/merged-recent/open/unparsable;
+  `TestPurgePRRemovesEverything` — seeds one row in every read-model plus a
+  worktree pair plus a per-PR **and** a per-repo workflow run, then asserts
+  everything PR-scoped is gone and the per-repo tracker survives;
+  `TestCleanupSkipsRecentMerge`; `TestCleanupNeverTouchesOpenPR`;
+  `TestCleanupIdempotent` — a second same-day run is a no-op). Entirely
+  offline (`github.Fake`), no real gh/network call.

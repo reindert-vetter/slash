@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 )
@@ -38,14 +39,34 @@ type Engine struct {
 	clock func() time.Time
 	logf  func(string, ...any)
 
-	mu         sync.Mutex
-	workflows  map[string]WorkflowFunc
-	activities map[string]ActivityFunc
-	locks      map[string]*sync.Mutex
-	timers     map[string]*time.Timer
+	mu            sync.Mutex
+	workflows     map[string]WorkflowFunc
+	activities    map[string]ActivityFunc
+	priorities    map[string]Priority // recovery priority per workflow type
+	actPriorities map[string]Priority // recovery priority per activity
+	locks         map[string]*sync.Mutex
+	timers        map[string]*time.Timer
 
-	wg sync.WaitGroup // tracks in-flight timer callbacks (for Wait)
+	wg sync.WaitGroup // tracks in-flight timer callbacks + background recovery (for Wait)
 }
+
+// Priority controls the order — and the blocking behaviour — in which Recover
+// re-drives mid-flight runs at startup. It affects only recovery; live
+// StartWorkflow/SignalWorkflow are unaffected. See SetWorkflowPriority.
+type Priority int
+
+const (
+	// PriorityLow runs are recovered in the background (after every
+	// higher-priority run has been recovered synchronously), so a slow activity
+	// in such a workflow — e.g. a long LLM/subprocess call — never blocks
+	// startup or the fast, important workflows. Use it for workflows whose
+	// activities are slow and deferrable.
+	PriorityLow Priority = -1
+	// PriorityNormal is the default: recovered synchronously at startup.
+	PriorityNormal Priority = 0
+	// PriorityHigh runs are recovered synchronously, ahead of Normal ones.
+	PriorityHigh Priority = 1
+)
 
 // Option configures an Engine.
 type Option func(*Engine)
@@ -59,13 +80,15 @@ func WithLogger(fn func(string, ...any)) Option { return func(e *Engine) { e.log
 // New returns an Engine backed by store.
 func New(store Store, opts ...Option) *Engine {
 	e := &Engine{
-		store:      store,
-		clock:      time.Now,
-		logf:       log.Printf,
-		workflows:  map[string]WorkflowFunc{},
-		activities: map[string]ActivityFunc{},
-		locks:      map[string]*sync.Mutex{},
-		timers:     map[string]*time.Timer{},
+		store:         store,
+		clock:         time.Now,
+		logf:          log.Printf,
+		workflows:     map[string]WorkflowFunc{},
+		activities:    map[string]ActivityFunc{},
+		priorities:    map[string]Priority{},
+		actPriorities: map[string]Priority{},
+		locks:         map[string]*sync.Mutex{},
+		timers:        map[string]*time.Timer{},
 	}
 	for _, o := range opts {
 		o(e)
@@ -85,6 +108,45 @@ func (e *Engine) RegisterActivity(name string, fn ActivityFunc) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.activities[name] = fn
+}
+
+// SetWorkflowPriority sets the recovery priority for a workflow type (default
+// PriorityNormal). It affects only Recover(): PriorityLow runs are re-driven in
+// the background — after every higher-priority run has been recovered
+// synchronously — so a slow activity in such a workflow (an LLM/subprocess call)
+// never blocks startup or the fast, important workflows. See Priority.
+func (e *Engine) SetWorkflowPriority(name string, p Priority) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.priorities[name] = p
+}
+
+func (e *Engine) priorityOf(workflow string) Priority {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.priorities[workflow] // zero value == PriorityNormal
+}
+
+// SetActivityPriority marks an activity's recovery priority (default
+// PriorityNormal). It matters only during Recover(): if a Normal/High-priority
+// workflow is being recovered synchronously and its replay reaches a
+// PriorityLow activity whose result was NOT yet recorded — so it would
+// re-execute live — the whole run is deferred to the background instead of
+// running that slow activity on the startup path. Any already-recorded
+// activities replay from history as usual; only a live (unrecorded) low
+// activity triggers the deferral. This lets one slow LLM/subprocess activity
+// inside an otherwise important, fast workflow (e.g. a summary step) not block
+// startup, without demoting the whole workflow to PriorityLow.
+func (e *Engine) SetActivityPriority(name string, p Priority) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.actPriorities[name] = p
+}
+
+func (e *Engine) activityPriorityOf(name string) Priority {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.actPriorities[name] // zero value == PriorityNormal
 }
 
 func (e *Engine) now() time.Time { return e.clock() }
@@ -109,7 +171,19 @@ func newRunID() string {
 // StartWorkflow creates a new run of the named workflow with input (JSON-
 // encoded) and drives it until it blocks or completes. It returns the run ID.
 func (e *Engine) StartWorkflow(name string, input any) (string, error) {
-	return e.StartWorkflowID(newRunID(), name, input)
+	return e.startWorkflowID(newRunID(), name, input, false)
+}
+
+// StartWorkflowDeferLow is StartWorkflow but yields to the background at the
+// first live PriorityLow activity (exactly like Recover's synchronous phase)
+// instead of running it on the caller's goroutine. Use it for a fire-and-forget
+// start whose early steps are fast but which then reaches a slow (LLM/
+// subprocess) activity: the caller returns promptly and the slow work drains in
+// the background, filling the run's read models progressively as it records
+// each step. If the workflow has no live low-priority activity, it behaves like
+// StartWorkflow (runs synchronously until it blocks/completes).
+func (e *Engine) StartWorkflowDeferLow(name string, input any) (string, error) {
+	return e.startWorkflowID(newRunID(), name, input, true)
 }
 
 // StartWorkflowID is StartWorkflow with a caller-supplied run ID, making the
@@ -121,6 +195,10 @@ func (e *Engine) StartWorkflow(name string, input any) (string, error) {
 // Execution. The existence check + create is done under the run lock so two
 // concurrent starts of the same id can't both create.
 func (e *Engine) StartWorkflowID(id, name string, input any) (string, error) {
+	return e.startWorkflowID(id, name, input, false)
+}
+
+func (e *Engine) startWorkflowID(id, name string, input any, deferLow bool) (string, error) {
 	e.mu.Lock()
 	_, ok := e.workflows[name]
 	e.mu.Unlock()
@@ -134,23 +212,39 @@ func (e *Engine) StartWorkflowID(id, name string, input any) (string, error) {
 
 	l := e.runLock(id)
 	l.Lock()
-	defer l.Unlock()
 
 	// Idempotent reuse: a run with this ID already exists → no-op.
 	if _, _, err := e.store.LoadRun(id); err == nil {
+		l.Unlock()
 		return id, nil
 	}
 
 	now := e.now()
 	rec := RunRecord{ID: id, Workflow: name, Status: StatusRunning, CreatedAt: now, UpdatedAt: now}
 	if err := e.store.CreateRun(rec); err != nil {
+		l.Unlock()
 		return "", err
 	}
 	if err := e.store.AppendEvent(id, Event{Seq: 0, Type: EventWorkflowStarted, Payload: in, Time: now}); err != nil {
+		l.Unlock()
 		return "", err
 	}
 
-	e.advance(id)
+	deferred := e.advanceMode(id, deferLow)
+	l.Unlock()
+	// Reached a live PriorityLow activity under deferLow — finish driving the
+	// run in the background so the caller returns promptly (the run is durable;
+	// the background advance replays to the same point and runs the activity).
+	if deferred {
+		e.wg.Add(1)
+		go func() {
+			defer e.wg.Done()
+			l := e.runLock(id)
+			l.Lock()
+			e.advance(id)
+			l.Unlock()
+		}()
+	}
 	return id, nil
 }
 
@@ -190,7 +284,15 @@ type blocked struct {
 // advance loads the run, replays its history by re-running the workflow
 // function, executes any newly reached activities, and persists the outcome.
 // The caller must hold the run lock.
-func (e *Engine) advance(runID string) {
+func (e *Engine) advance(runID string) { e.advanceMode(runID, false) }
+
+// advanceMode is advance with a recovery-time flag. When deferLow is true, a
+// live (not-yet-recorded) PriorityLow activity yields the run instead of
+// running — reported as deferred == true — so the caller can re-drive it in the
+// background rather than blocking on a slow activity. deferLow is set only by
+// Recover's synchronous phase; every other caller (Start/Signal/timer/the
+// background drain) passes false and runs activities inline as usual.
+func (e *Engine) advanceMode(runID string, deferLow bool) (deferred bool) {
 	rec, hist, err := e.store.LoadRun(runID)
 	if err != nil {
 		e.logf("tembed: advance load %s: %v", runID, err)
@@ -212,7 +314,7 @@ func (e *Engine) advance(runID string) {
 		input = hist[0].Payload
 	}
 
-	w := &Workflow{engine: e, runID: runID, history: hist, sigIdx: map[string]int{}}
+	w := &Workflow{engine: e, runID: runID, history: hist, sigIdx: map[string]int{}, deferLowActivities: deferLow}
 
 	var (
 		result   []byte
@@ -244,6 +346,12 @@ func (e *Engine) advance(runID string) {
 		// attempt and let the next advance (a poll, a signal, or the next
 		// Recover) replay against the now-current history.
 		e.logf("tembed: concurrent advance for run %s, will retry", runID)
+	case blk != nil && blk.kind == "defer":
+		// A recovering Normal/High run reached a live PriorityLow activity — no
+		// event was recorded (the panic fired before the activity ran), so the
+		// run stays exactly as it was (still running/waiting). Report it so the
+		// caller re-drives it in the background with defer off.
+		deferred = true
 	case blk != nil && blk.kind == "timer":
 		e.setStatus(runID, StatusWaiting)
 		e.scheduleTimer(runID, blk.fireAt)
@@ -268,6 +376,7 @@ func (e *Engine) advance(runID string) {
 		}
 		e.setStatus(runID, StatusCompleted)
 	}
+	return deferred
 }
 
 // safeRecord records e on w, tolerating the case where some other writer
@@ -344,19 +453,62 @@ func (e *Engine) fireTimer(runID string) {
 // Recover re-drives every run that was mid-flight (running or waiting) when the
 // process last stopped: it replays their histories, reschedules pending timers,
 // and re-blocks on unfulfilled signals. Call it once at startup.
+//
+// Recovery is prioritised (see SetWorkflowPriority): runs of Normal/High
+// priority are re-driven synchronously here (High first), so Recover blocks
+// until they're back on their feet. Runs of PriorityLow are re-driven in a
+// background goroutine that drains them serially, so a slow activity in such a
+// workflow — a long LLM/subprocess call whose result wasn't yet recorded when
+// the process died, and which therefore re-executes live on replay — never
+// blocks Recover's return (and thus the caller's ListenAndServe) or the
+// recovery of the fast, important workflows above it. The background goroutine
+// is tracked by e.wg, so Wait() still covers it (tests, graceful shutdown).
 func (e *Engine) Recover() error {
 	runs, err := e.store.ListRuns()
 	if err != nil {
 		return err
 	}
+	var immediate, deferred []RunRecord
 	for _, r := range runs {
 		if r.Status != StatusRunning && r.Status != StatusWaiting {
 			continue
 		}
+		if e.priorityOf(r.Workflow) <= PriorityLow {
+			deferred = append(deferred, r)
+		} else {
+			immediate = append(immediate, r)
+		}
+	}
+	// Higher priority first; stable so equal-priority runs keep ListRuns order.
+	sort.SliceStable(immediate, func(i, j int) bool {
+		return e.priorityOf(immediate[i].Workflow) > e.priorityOf(immediate[j].Workflow)
+	})
+	for _, r := range immediate {
 		l := e.runLock(r.ID)
 		l.Lock()
-		e.advance(r.ID)
+		// Recover synchronously, but with activity-level deferral on: if this
+		// run's replay reaches a live PriorityLow activity, it yields (nothing
+		// recorded) and joins the background drain instead of blocking here.
+		if e.advanceMode(r.ID, true) {
+			deferred = append(deferred, r)
+		}
 		l.Unlock()
+	}
+	// Drain low-priority runs serially in the background — one at a time, to
+	// avoid a thundering herd of side-effecting activities (dozens of
+	// subprocess/LLM calls launching at once). Each advance still takes the
+	// run's own lock, so a live server request touching the same run is safe.
+	if len(deferred) > 0 {
+		e.wg.Add(1)
+		go func() {
+			defer e.wg.Done()
+			for _, r := range deferred {
+				l := e.runLock(r.ID)
+				l.Lock()
+				e.advance(r.ID)
+				l.Unlock()
+			}
+		}()
 	}
 	return nil
 }
@@ -413,6 +565,35 @@ func (e *Engine) History(runID string) ([]Event, error) {
 // Runs returns every run's metadata (for building read-models or resuming
 // per-run side work such as pollers after a restart).
 func (e *Engine) Runs() ([]RunRecord, error) { return e.store.ListRuns() }
+
+// DeleteRun permanently removes a run's metadata and full event history from
+// the store (and, e.g. a JSONL store, its files on disk) — a durable-cleanup
+// primitive, not a workflow concept itself: a caller (an Activity of some
+// other, PR-scoped cleanup workflow, say) decides which runs qualify and
+// calls this for each. Deleting an unknown run ID is a no-op, not an error,
+// so a repeated/idempotent cleanup pass never fails on a run it already
+// removed. Also cancels any pending durable timer for runID and releases its
+// run lock, so a deleted run can never be woken up again.
+func (e *Engine) DeleteRun(runID string) error {
+	l := e.runLock(runID)
+	l.Lock()
+	defer l.Unlock()
+
+	e.mu.Lock()
+	if t, ok := e.timers[runID]; ok {
+		t.Stop()
+		delete(e.timers, runID)
+	}
+	e.mu.Unlock()
+
+	err := e.store.DeleteRun(runID)
+
+	e.mu.Lock()
+	delete(e.locks, runID)
+	e.mu.Unlock()
+
+	return err
+}
 
 // Input returns the JSON-encoded input a run was started with.
 func (e *Engine) Input(runID string) ([]byte, error) {

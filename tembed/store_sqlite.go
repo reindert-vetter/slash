@@ -169,4 +169,26 @@ func (s *SQLiteStore) ListRuns() ([]RunRecord, error) {
 	return out, rows.Err()
 }
 
+// DeleteRun removes runID's row and all its events. Explicit two-statement
+// delete (rather than relying on the events.run_id ON DELETE CASCADE) because
+// SQLite's `PRAGMA foreign_keys = ON` is a per-connection setting and
+// database/sql may hand out a different pooled connection than the one the
+// schema was applied on — deleting both tables ourselves is correct
+// regardless. Deleting a run that doesn't exist affects 0 rows, which is not
+// an error (idempotent).
+func (s *SQLiteStore) DeleteRun(runID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM events WHERE run_id = ?`, runID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM runs WHERE id = ?`, runID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *SQLiteStore) Close() error { return s.db.Close() }

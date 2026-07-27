@@ -241,6 +241,148 @@ func TestActivityFailurePropagates(t *testing.T) {
 	}
 }
 
+// TestRecoverDefersLowPriority proves that Recover re-drives Normal-priority
+// runs synchronously but pushes PriorityLow runs (a slow LLM/subprocess call
+// that re-executes live because its result wasn't recorded before the crash)
+// to the background — so a slow low-priority activity never blocks Recover's
+// return or the recovery of the fast, important runs.
+func TestRecoverDefersLowPriority(t *testing.T) {
+	store := NewMemoryStore()
+	// Seed two interrupted, mid-flight runs (status running, only their
+	// WorkflowStarted event) — as if the process died before either activity
+	// recorded its result. On Recover both would re-execute their activity live.
+	now := time.Now()
+	seed := func(id, workflow string) {
+		if err := store.CreateRun(RunRecord{ID: id, Workflow: workflow, Status: StatusRunning, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.AppendEvent(id, Event{Seq: 0, Type: EventWorkflowStarted, Payload: []byte("null"), Time: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("fast-run", "fast")
+	seed("slow-run", "slow")
+
+	e := New(store)
+	var fastRan, slowDone int32
+	release := make(chan struct{})
+	e.RegisterActivity("fastAct", func(context.Context, []byte) ([]byte, error) {
+		atomic.AddInt32(&fastRan, 1)
+		return []byte("null"), nil
+	})
+	e.RegisterActivity("slowAct", func(context.Context, []byte) ([]byte, error) {
+		<-release // block until released (simulates a slow LLM/subprocess call)
+		atomic.AddInt32(&slowDone, 1)
+		return []byte("null"), nil
+	})
+	e.RegisterWorkflow("fast", func(w *Workflow, _ []byte) ([]byte, error) {
+		return nil, w.ExecuteActivity("fastAct", nil, nil)
+	})
+	e.RegisterWorkflow("slow", func(w *Workflow, _ []byte) ([]byte, error) {
+		return nil, w.ExecuteActivity("slowAct", nil, nil)
+	})
+	e.SetWorkflowPriority("slow", PriorityLow)
+
+	// Recover must return promptly, without waiting on the slow activity.
+	done := make(chan error, 1)
+	go func() { done <- e.Recover() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Recover blocked on the low-priority run's slow activity")
+	}
+
+	// The Normal run was recovered synchronously — completed before Recover returned.
+	if atomic.LoadInt32(&fastRan) != 1 {
+		t.Fatalf("fast activity ran %d times, want 1 (synchronous recovery)", fastRan)
+	}
+	if s, _ := e.Status("fast-run"); s != StatusCompleted {
+		t.Fatalf("fast run status = %s, want completed", s)
+	}
+	// The Low run is still in-flight in the background — not completed.
+	if atomic.LoadInt32(&slowDone) != 0 {
+		t.Fatal("slow activity completed before release — was it recovered synchronously?")
+	}
+	if s, _ := e.Status("slow-run"); s != StatusRunning {
+		t.Fatalf("slow run status = %s, want running (deferred to background)", s)
+	}
+
+	// Releasing it lets the background recovery finish; Wait() covers that goroutine.
+	close(release)
+	e.Wait()
+	if s, _ := e.Status("slow-run"); s != StatusCompleted {
+		t.Fatalf("slow run status = %s, want completed after release", s)
+	}
+}
+
+// TestStartWorkflowDeferLow proves that StartWorkflowDeferLow runs a workflow's
+// fast leading activities synchronously but yields to the background at the
+// first live PriorityLow activity — so a fire-and-forget start (e.g. pr_status,
+// whose only slow step is an LLM summary) returns promptly instead of blocking
+// the caller on that activity.
+func TestStartWorkflowDeferLow(t *testing.T) {
+	e := New(NewMemoryStore())
+	var fastRan, slowDone int32
+	release := make(chan struct{})
+	e.RegisterActivity("basics", func(context.Context, []byte) ([]byte, error) {
+		atomic.AddInt32(&fastRan, 1)
+		return []byte("null"), nil
+	})
+	e.RegisterActivity("summary", func(context.Context, []byte) ([]byte, error) {
+		<-release // slow LLM-like step
+		atomic.AddInt32(&slowDone, 1)
+		return []byte("null"), nil
+	})
+	e.RegisterWorkflow("prstatus", func(w *Workflow, _ []byte) ([]byte, error) {
+		if err := w.ExecuteActivity("basics", nil, nil); err != nil {
+			return nil, err
+		}
+		if err := w.ExecuteActivity("summary", nil, nil); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	e.SetActivityPriority("summary", PriorityLow)
+
+	done := make(chan string, 1)
+	go func() {
+		id, err := e.StartWorkflowDeferLow("prstatus", nil)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- id
+	}()
+	var id string
+	select {
+	case id = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartWorkflowDeferLow blocked on the low-priority activity")
+	}
+
+	// The fast leading activity ran synchronously; the low one is deferred.
+	if atomic.LoadInt32(&fastRan) != 1 {
+		t.Fatalf("basics ran %d times, want 1 (synchronous)", fastRan)
+	}
+	if atomic.LoadInt32(&slowDone) != 0 {
+		t.Fatal("summary completed before release — it wasn't deferred")
+	}
+	if s, _ := e.Status(id); s != StatusRunning {
+		t.Fatalf("status = %s, want running (deferred to background)", s)
+	}
+
+	close(release)
+	e.Wait()
+	if s, _ := e.Status(id); s != StatusCompleted {
+		t.Fatalf("status = %s, want completed after release", s)
+	}
+	if atomic.LoadInt32(&fastRan) != 1 {
+		t.Fatalf("basics ran %d times total, want 1 (replayed from history, not re-run)", fastRan)
+	}
+}
+
 func TestSQLiteAndJSONLStores(t *testing.T) {
 	dir := t.TempDir()
 	sq, err := NewSQLiteStore(filepath.Join(dir, "graph.db"))
@@ -290,5 +432,80 @@ func TestSQLiteAndJSONLStores(t *testing.T) {
 		if len(runs) != 1 || runs[0].Status != StatusCompleted {
 			t.Fatalf("store %T runs = %+v", s, runs)
 		}
+	}
+}
+
+// TestEngineDeleteRun proves Engine.DeleteRun removes a run's metadata + full
+// history from every wrapped store (both SQLite rows and the JSONL files on
+// disk), and that deleting an already-gone (or never-existing) run ID is a
+// no-op, not an error — the idempotency a repeated daily cleanup pass relies
+// on.
+func TestEngineDeleteRun(t *testing.T) {
+	dir := t.TempDir()
+	sq, err := NewSQLiteStore(filepath.Join(dir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sq.Close()
+	jsonlDir := filepath.Join(dir, "jsonl")
+	jl, err := NewJSONLStore(jsonlDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewMultiStore(sq, jl)
+	e := New(store)
+	e.RegisterActivity("double", func(_ context.Context, in []byte) ([]byte, error) {
+		var n int
+		_ = json.Unmarshal(in, &n)
+		return json.Marshal(n * 2)
+	})
+	e.RegisterWorkflow("math", func(w *Workflow, in []byte) ([]byte, error) {
+		var n int
+		_ = json.Unmarshal(in, &n)
+		var out int
+		if err := w.ExecuteActivity("double", n, &out); err != nil {
+			return nil, err
+		}
+		return json.Marshal(out)
+	})
+	id, err := e.StartWorkflow("math", 21)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	metaPath := filepath.Join(jsonlDir, id+".meta.jsonl")
+	eventsPath := filepath.Join(jsonlDir, id+".events.jsonl")
+	if _, err := readLines(metaPath); err != nil {
+		t.Fatalf("expected jsonl meta file to exist before delete: %v", err)
+	}
+
+	if err := e.DeleteRun(id); err != nil {
+		t.Fatalf("DeleteRun: %v", err)
+	}
+
+	if runs, err := e.Runs(); err != nil || len(runs) != 0 {
+		t.Fatalf("Runs() after delete = %+v, %v, want empty", runs, err)
+	}
+	if _, err := e.Status(id); err == nil {
+		t.Fatal("expected Status to error for a deleted run")
+	}
+	var out int
+	if err := e.Result(id, &out); err == nil {
+		t.Fatal("expected Result to error for a deleted run")
+	}
+	if lines, err := readLines(metaPath); err != nil || len(lines) != 0 {
+		t.Fatalf("jsonl meta file after delete: lines=%v err=%v, want gone/empty", lines, err)
+	}
+	if lines, err := readLines(eventsPath); err != nil || len(lines) != 0 {
+		t.Fatalf("jsonl events file after delete: lines=%v err=%v, want gone/empty", lines, err)
+	}
+
+	// Idempotent: deleting again (and deleting a run that never existed) must
+	// not error.
+	if err := e.DeleteRun(id); err != nil {
+		t.Fatalf("second DeleteRun of the same id: %v", err)
+	}
+	if err := e.DeleteRun("never-existed"); err != nil {
+		t.Fatalf("DeleteRun of an unknown id: %v", err)
 	}
 }

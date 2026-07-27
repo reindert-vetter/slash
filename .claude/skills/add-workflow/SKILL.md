@@ -27,6 +27,14 @@ a **Run ID**), **Activity** (side-effect work), **Signal** (external input).
    external input via `w.WaitSignal`, time via `w.Now`/`w.Sleep`.
 5. **Register** the workflow (`engine.RegisterWorkflow(type, fn)`), usually in
    a `NewXxxManager(engine, modules...)` that also wires the Activities.
+   - **If it makes slow LLM/subprocess calls**, mark it
+     `engine.SetWorkflowPriority(type, tembed.PriorityLow)` (or, for one slow
+     step inside an otherwise fast workflow,
+     `engine.SetActivityPriority("thatActivity", tembed.PriorityLow)`) so an
+     interrupted run doesn't block server startup on recovery. A
+     fire-and-forget start whose slow step should run in the background uses
+     `engine.StartWorkflowDeferLow(...)`. See "Recovery priority" in
+     `.claude/rules/tembed-workflows.md`.
 6. **Endpoints** (`tasks_api.go`, see skill `add-api-endpoint` for the server
    conventions):
    - `POST /api/workflows/<type>` → `StartWorkflow` → `{ "runId": ... }`.

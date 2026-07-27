@@ -24,6 +24,12 @@ type Workflow struct {
 	timerIdx int            // timers consumed
 	sideIdx  int            // side effects consumed
 	sigIdx   map[string]int // per-name signals consumed
+
+	// deferLowActivities is set only while a run is being recovered
+	// synchronously (Recover's high/normal phase). It makes a live (unrecorded)
+	// PriorityLow activity yield the whole run to the background instead of
+	// running on the startup path. See Engine.SetActivityPriority / advanceMode.
+	deferLowActivities bool
 }
 
 // RunID returns the run's unique ID.
@@ -59,6 +65,13 @@ func (w *Workflow) ExecuteActivity(name string, input, result any) error {
 	w.engine.mu.Unlock()
 	if fn == nil {
 		return fmt.Errorf("tembed: unknown activity %q", name)
+	}
+	// During synchronous recovery, a slow PriorityLow activity (an LLM/subprocess
+	// call) must not run on the startup path. Yield the whole run to the
+	// background instead — nothing has been recorded yet, so the re-drive (with
+	// deferral off) replays to exactly this point and runs the activity then.
+	if w.deferLowActivities && w.engine.activityPriorityOf(name) <= PriorityLow {
+		panic(blocked{kind: "defer"})
 	}
 	out, aerr := fn(context.Background(), in)
 	if aerr != nil {

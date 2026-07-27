@@ -115,6 +115,17 @@ VALUES (?,?,?,?,?,?,?,?)`,
 	return err
 }
 
+// Purge removes every explanation row of pr. WRITE — workflow-only, the
+// per-PR data-retention cleanup path (see the cleanup workflow). Returns the
+// number of rows removed, for logging.
+func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
+	res, err := m.db.ExecContext(ctx, `DELETE FROM explanations WHERE pr = ?`, pr)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // List returns all explanations for a PR, ordered deterministically. READ —
 // safe for the UI/API.
 func (m *Module) List(ctx context.Context, pr int) ([]Entry, error) {
