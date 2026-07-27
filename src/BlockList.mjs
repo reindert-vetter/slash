@@ -137,6 +137,16 @@ export function isFullyApproved(state, b) {
   return !!s && s.total > 0 && s.done === s.total
 }
 
+// isIgnoredComment reports whether a PR-comment index item (kind:'comment', see
+// commentBlockItem in home.mjs) was explicitly hidden via the "Ignore" action in
+// its action menu (prCommentCommandsFor). A SEPARATE, ephemeral flag from
+// approval/resolve — a comment can be ignored without being resolved, and vice
+// versa (see "Comment-index items" in detail-layout.md for the full mechanism
+// and the deliberate not-persisted trade-off).
+export function isIgnoredComment(state, b) {
+  return b.kind === 'comment' && !!(state.ignoredComments && state.ignoredComments[b.id])
+}
+
 // renderList builds the starting-points list. Fully-approved blocks are hidden by
 // default (state.showApproved === false) and revealed by a toggle row at the
 // bottom. ONE exception: the block state.pinnedApprovedId names stays visible
@@ -153,19 +163,33 @@ export function isFullyApproved(state, b) {
 function renderList(state) {
   if (state.blocks.length === 0) return [emptyState(state).key('empty')]
   const approvedCount = state.blocks.filter((b) => isFullyApproved(state, b)).length
+  const ignoredCount = state.blocks.filter((b) => isIgnoredComment(state, b)).length
   const items = []
   let commentHeadingDone = false
   let underlyingHeadingDone = false
+  let hiddenCommentHeadingDone = false
   state.blocks.forEach((b, i) => {
+    // An ignored comment (see isIgnoredComment) is its own, SEPARATE hidden
+    // section from the approved-blocks one below — checked first: an ignored
+    // comment stays hidden regardless of its resolved status, and vice versa.
+    if (!state.showIgnored && isIgnoredComment(state, b)) return
     const pinnedVisible = i === state.selected && b.id === state.pinnedApprovedId
     if (!state.showApproved && !pinnedVisible && isFullyApproved(state, b)) return
     // Comment-index items (kind:'comment', see commentBlockItem in home.mjs)
     // sort to the very top of state.blocks (recomputeLeftList's rank -1) —
     // the first VISIBLE one gets its own "PR-comments" heading, mirroring
     // underlyingHeading below.
-    if (!commentHeadingDone && b.kind === 'comment') {
+    if (!commentHeadingDone && b.kind === 'comment' && !isIgnoredComment(state, b)) {
       items.push(commentHeading().key('comment-heading'))
       commentHeadingDone = true
+    }
+    // A revealed (state.showIgnored) ignored comment gets its own "Verborgen
+    // comments" heading, distinct from the "PR-comments" one above — it's a
+    // separately toggled section, not merely a continuation of the PR-comments
+    // list.
+    if (!hiddenCommentHeadingDone && isIgnoredComment(state, b)) {
+      items.push(hiddenCommentHeading().key('hidden-comment-heading'))
+      hiddenCommentHeadingDone = true
     }
     // Relation children sort to the bottom of state.blocks (recomputeLeftList,
     // home.mjs); the first VISIBLE one gets the "Onderliggende code" heading
@@ -177,6 +201,7 @@ function renderList(state) {
     items.push(row(state, b, i))
   })
   if (approvedCount > 0) items.push(toggleRow(state, approvedCount))
+  if (ignoredCount > 0) items.push(ignoreToggleRow(state, ignoredCount))
   return items
 }
 
@@ -191,6 +216,21 @@ function commentHeading() {
       class="border-b border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
     >
       PR-comments
+    </div>
+  `
+}
+
+// hiddenCommentHeading titles the section of comment-index items the reviewer
+// explicitly ignored (see isIgnoredComment/toggleIgnoreComment in home.mjs),
+// revealed via ignoreToggleRow below — a SEPARATE section from the ordinary
+// "PR-comments" one (commentHeading above), independent of resolved status.
+function hiddenCommentHeading() {
+  return html`
+    <div
+      data-testid="hidden-comment-heading"
+      class="border-b border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
+    >
+      Verborgen comments
     </div>
   `
 }
@@ -235,6 +275,27 @@ function toggleRow(state, count) {
           : `Toon ${count} goedgekeurde ${count === 1 ? 'block' : 'blocks'}`}
     </button>
   `.key('toggle-approved')
+}
+
+// ignoreToggleRow is the bottom button that hides/shows ignored PR-comment
+// index items — a mirror of toggleRow above, but for a SEPARATE section
+// (state.showIgnored, not state.showApproved). Deliberately click-only: unlike
+// toggleRow it is NOT wired into the ↑/↓ keyboard cursor's final stop
+// (stepListSelection in home.mjs only walks blocks/toggleRow) — a deliberate
+// simplification, since this is a secondary, rarely-used toggle.
+function ignoreToggleRow(state, count) {
+  return html`
+    <button
+      data-testid="toggle-ignored"
+      class="w-full border-t border-slate-100 dark:border-zinc-800/60 px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60"
+      @click="${() => (state.showIgnored = !state.showIgnored)}"
+    >
+      ${() =>
+        state.showIgnored
+          ? `Verberg ${count} verborgen ${count === 1 ? 'comment' : 'comments'}`
+          : `Toon ${count} verborgen ${count === 1 ? 'comment' : 'comments'}`}
+    </button>
+  `.key('toggle-ignored')
 }
 
 // approvalSummaryLine is the PR-wide combined-approval counter in the header,

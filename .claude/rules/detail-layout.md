@@ -254,7 +254,7 @@ the right of the index shows its thread instead of a diff.
   block `COMMANDS`. Both keys open the identical menu: **"Sluit menu"**
   (pinned, per the `withClose` convention) then **"Beantwoorden"** (the
   first real item, thus default-selected via `defaultSel`) then **"Resolve
-  comment"**. Because selection alone already shows the detail card/thread
+  comment"** then **"Ignore"**. Because selection alone already shows the detail card/thread
   in the block column (previous bullet), "the menu appears with the thread
   above it" is simply a consequence of anchoring the menu there
   (`menuAnchor`/`menuRegion`'s new `ms.mode === 'prComment'` branches target
@@ -273,6 +273,31 @@ the right of the index shows its thread instead of a diff.
   `.claude/rules/tembed-workflows.md`). Both the reply and the resolve action
   go through the **existing** `POST /api/workflows/{runId}/signals/reply`
   Signal — no new write path.
+  **"Ignore"** (`toggleIgnoreComment`, label a function that flips to "Ignore
+  ongedaan maken" once already ignored — resolved once by `snapshotCommands`
+  at open time, same pattern as the approve label) is a **separate,
+  ephemeral, purely client-side** flag (`state.ignoredComments`, a plain
+  `{blockId: true}` map, mirrors `state.showApproved`/`pinnedApprovedId`/
+  `toggleFocused` — deliberately **not bound to a workflow/Signal**, unlike
+  reply/resolve/delete: the ask was a sidebar grouping/toggle, not a
+  persisted reviewer decision, so a refresh always starts with nothing
+  ignored). It's independent of "resolved" — a comment can be ignored
+  without being resolved and vice versa; being ignored **only affects
+  sidebar visibility**, not the `blockApproveCount`/`isFullyApproved`
+  approval mapping described above. `BlockList.mjs`'s `renderList` hides an
+  ignored comment item by default (checked **before** the approved-hide
+  check, so it stays hidden even if not resolved) and, once revealed via
+  its own bottom toggle (`ignoreToggleRow`, `data-testid=toggle-ignored`,
+  "Toon/Verberg N verborgen comments" — a SEPARATE toggle from
+  `state.showApproved`'s "Toon N goedgekeurde blocks"), shows it under its
+  own **"Verborgen comments"** heading (`hiddenCommentHeading`,
+  `data-testid=hidden-comment-heading`) — distinct from the ordinary
+  "PR-comments" heading above it, mirroring how `underlyingHeading` gets its
+  own heading. `stepVisibleSelected` (`home.mjs`) skips a hidden-and-ignored
+  row for `↑`/`↓`, same reasoning as it already does for a hidden approved
+  block. Deliberately **no** keyboard "final stop" for `ignoreToggleRow`
+  (unlike `toggleRow`'s `state.toggleFocused`) — click-only, a
+  simplification since this is a secondary, rarely-used toggle.
 - **Not part of the Cmd+→ comments/tasks sidebar** — that sidebar (see
   below) only ever showed block-scoped comments (`kind === ''`) even before
   this change (`recomputeView`'s `!c.kind` filter); a comment-index item's

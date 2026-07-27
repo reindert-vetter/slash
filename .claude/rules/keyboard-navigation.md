@@ -109,7 +109,12 @@ of the index — no hover, no separate cursor.
 the block palette/entering a diff — `selectedComment()` gates a dedicated
 branch checked **before** the generic Enter-opens-menu/list-mode `→`
 handling. The menu: **"Sluit menu"** (pinned) → **"Beantwoorden"** (the
-default-selected 2nd item) → **"Resolve comment"**. Because the detail card
+default-selected 2nd item) → **"Resolve comment"** → **"Ignore"**
+("Ignore ongedaan maken" once already ignored — `toggleIgnoreComment`, an
+ephemeral, purely client-side sidebar-visibility flag, **not** a persisted
+Signal like reply/resolve/delete; see "Comment-index items" in
+`.claude/rules/detail-layout.md` for the full mechanism and the deliberate
+not-persisted trade-off). Because the detail card
 already shows on selection (independent of Enter/→), the menu simply opens
 anchored on/below that card — "the thread shows above the menu" is a
 consequence of that anchoring (`menuAnchor`/`menuRegion`'s `'prComment'`

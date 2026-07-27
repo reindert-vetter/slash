@@ -3,7 +3,7 @@
 // up/down keyboard navigation through the flat list.
 
 import { reactive, html, watch } from './vendor/arrow.js'
-import BlockList, { isFullyApproved } from './BlockList.mjs'
+import BlockList, { isFullyApproved, isIgnoredComment } from './BlockList.mjs'
 import Footer from './Footer.mjs'
 import Block, {
   blockRows,
@@ -301,6 +301,18 @@ const state = reactive({
   // it — this is purely an extra, final stop in the ↑/↓ chain. Ephemeral, not
   // bound to the URL, like showApproved above.
   toggleFocused: false,
+  // ignoredComments — { blockId: true } of PR-comment index items (kind:'comment',
+  // see commentBlockItem) the reviewer explicitly ignored via the "Ignore" action
+  // in prCommentCommandsFor. Hidden by default from the "PR-comments" section,
+  // revealed by their own "Toon N verborgen comments" toggle — a SEPARATE section
+  // from the approved-blocks one above (a comment can be ignored without being
+  // resolved, and vice versa). Ephemeral, not bound to the URL: a refresh always
+  // starts with nothing ignored (see .claude/rules/detail-layout.md for the
+  // deliberate trade-off vs. a persisted flag). Reassigned wholesale so arrow.js
+  // re-renders.
+  ignoredComments: {},
+  // showIgnored — mirrors showApproved above, but for the ignoredComments section.
+  showIgnored: false,
   ingesting: false,
   error: '',
   onIngest: ingest,
@@ -1270,7 +1282,9 @@ function stepVisibleSelected(dir) {
   for (;;) {
     candidate += dir
     if (candidate < 0 || candidate > last) return i
-    if (state.showApproved || !isFullyApproved(state, state.blocks[candidate])) return candidate
+    const b = state.blocks[candidate]
+    if (!state.showIgnored && isIgnoredComment(state, b)) continue
+    if (state.showApproved || !isFullyApproved(state, b)) return candidate
   }
 }
 
@@ -3110,7 +3124,34 @@ function prCommentCommandsFor() {
         if (c) resolvePrCommentItem(c)
       },
     },
+    {
+      id: 'pr-comment-ignore',
+      // Label is a function so it names the current state (resolveLabel/
+      // snapshotCommands read it ONCE, right now, when the menu opens — see
+      // that comment for why this must never become a live binding).
+      label: () => (isIgnoredComment(state, curBlock()) ? 'Ignore ongedaan maken' : 'Ignore'),
+      hint: 'ignore',
+      run: () => toggleIgnoreComment(selectedComment()),
+    },
   ])
+}
+
+// toggleIgnoreComment flips whether a PR-comment index item (kind:'comment')
+// is hidden from the "PR-comments" section — a SEPARATE, ephemeral flag from
+// "resolved" (which already folds a comment into the *approved* section, see
+// blockApproveCount/isFullyApproved's comment-item branch). Deliberately not
+// persisted (not bound to a workflow/Signal, unlike resolve/delete/reply) —
+// see the "Comment-index items" section in detail-layout.md for the
+// trade-off: a refresh always shows an ignored comment again. Reassigns
+// state.ignoredComments wholesale so arrow.js re-renders (never mutated in
+// place, per the arrow.js reactivity rule).
+function toggleIgnoreComment(c) {
+  if (!c) return
+  const id = 'comment:' + c.id
+  const next = { ...state.ignoredComments }
+  if (next[id]) delete next[id]
+  else next[id] = true
+  state.ignoredComments = next
 }
 
 // COMPOSE_COMMANDS — shown when Enter (or the composer button) is pressed on a
