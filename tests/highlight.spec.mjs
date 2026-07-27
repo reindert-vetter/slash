@@ -9,6 +9,8 @@ test.describe('PR Review Tree — code highlighting', () => {
   test('renders Prism-tokenised PHP in both code panes', async ({ page }) => {
     await page.goto('/pr/12903')
 
+    await page.waitForLoadState('networkidle')
+
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default

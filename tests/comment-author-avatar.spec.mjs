@@ -8,7 +8,7 @@ import { test, expect } from './_fixtures.mjs'
 // this always exercises the initials-fallback path — which is also what a
 // SLASH_GITHUB=off/offline run needs to look right.
 test('comment row, reply bubble, and PR-wide item all show author + avatar', async ({ page }) => {
-  const pr = 970002
+  const pr = 970009
   const start = await page.request.post('/api/workflows/task_code_comment', {
     data: {
       pr,

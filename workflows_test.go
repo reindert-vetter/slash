@@ -470,9 +470,17 @@ func TestPollStopsWhenPRMerged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s, _ := m.engine.Status(prRunID); s != tembed.StatusWaiting {
-		t.Fatalf("pr_status = %q, want waiting", s)
-	}
+	// ensurePRStatus starts pr_status with StartWorkflowDeferLow: stage 1
+	// (basics) runs synchronously, but generatePRSummary (stage 2,
+	// PriorityLow) and the statuses after it drain in the BACKGROUND so a
+	// startup ensure never blocks on the LLM summary — so the run is still
+	// 'running' for a beat before it settles on the signal loop's WaitSignal.
+	// Wait for that background advance instead of reading the status once (the
+	// same deferral TestPRStatusThreeStages waits out with engine.Wait()).
+	waitFor(t, func() bool {
+		s, _ := m.engine.Status(prRunID)
+		return s == tembed.StatusWaiting
+	})
 
 	// The PR merges — the idle poller must observe it, record it, and complete
 	// the tracker.

@@ -2,13 +2,44 @@
 // seeds its own DB and starts its own server against this binary (see
 // _fixtures.mjs) — so we never rebuild per test and workers don't share write
 // state. The per-worker DBs/servers live under tests/.tmp/w<n>/.
+//
+// Every fixture worktree this file materializes lands under TEST_DATA_DIR
+// (tests/.tmp/data), NOT the live data/ tree, and every worker server runs
+// with `-data tests/.tmp/data` (see _fixtures.mjs). Two reasons:
+//  1. A test run must never touch the reviewer's real worktrees/DBs. The live
+//     data/ tree is owned by the running dev server and by the daily `cleanup`
+//     workflow, which purges the data of PRs merged more than a week ago —
+//     including, before this split, the fixture worktrees written here (the
+//     fixture PR numbers are real, long-merged plug-and-pay PR numbers). That
+//     wiped the suite's main anchor fixture out from under it.
+//  2. It makes the whole suite reproducible from a fresh checkout: everything
+//     the specs read off disk is written here, by hand, instead of coming from
+//     a real `gh`/`git` ingest that another machine/CI can't reproduce.
+// tests/.tmp is gitignored, so this stays generated-not-committed — the
+// fixture *content* is committed (it lives in this file), the materialized
+// tree is a build artifact, exactly like tests/.tmp/slash itself.
 import { execSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+
+export const TEST_DATA_DIR = 'tests/.tmp/data'
+
+// worktreeWriter returns a write(side, relPath, contents) for one fixture PR's
+// base/head worktrees under TEST_DATA_DIR — the shared shape every
+// materialize*Worktrees function below uses (it mirrors the layout
+// worktreeDirs() in ingest.go expects: <data>/worktrees/pr-<n>-{base,head}).
+function worktreeWriter(pr) {
+  return (side, relPath, contents) => {
+    const full = `${TEST_DATA_DIR}/worktrees/pr-${pr}-${side}/${relPath}`
+    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
+    writeFileSync(full, contents)
+  }
+}
 
 export default function globalSetup() {
   rmSync('tests/.tmp', { recursive: true, force: true })
   mkdirSync('tests/.tmp', { recursive: true })
   execSync('go build -o tests/.tmp/slash .', { stdio: 'inherit' })
+  materializeMainWorktrees()
   materializeTreeWorktrees()
   materializeExplainWorktrees()
   materializeTestsGroupWorktrees()
@@ -18,6 +49,331 @@ export default function globalSetup() {
   materializeDrillLineSkipWorktrees()
   materializeTranslationWorktrees()
   materializeDefaultSelWorktrees()
+}
+
+// materializeMainWorktrees writes the base/head worktrees for the suite's MAIN
+// anchor fixture, PR 12903 (tests/fixtures/blocks.json) — the fixture most
+// specs navigate: blocks.spec, navigate, urlstate, command-menu,
+// postapprove-menu, review-submit-menu, drill-*, related-*, group-scope, …
+//
+// This used to be REAL data: a `gh`/`git` ingest of the actual plug-and-pay PR
+// 12903, hand-topped-up with a couple of synthetic support files, living in the
+// live data/ tree. That was unreproducible (a fresh checkout/CI never had it,
+// and the on-disk pair had drifted away from the PR's real base/head SHAs) and
+// — since the daily `cleanup` workflow purges the data of PRs merged over a
+// week ago — deletable out from under the suite, which is exactly what
+// happened. So the fixture is hand-written here now, like every other
+// materialize*Worktrees function in this file.
+//
+// The specs pin down the required diff SHAPE precisely (see the fixture notes
+// in postapprove-menu.spec.mjs / review-submit-menu.spec.mjs /
+// drill-sibling-walk.spec.mjs); every file below is written to satisfy it:
+//
+//   - EXACTLY TWO blocks carry a change, one single-row change group each, so
+//     that approving those two is "the whole PR approved" and the
+//     block-spanning "next unapproved" search has a deterministic route:
+//       * CreatePaymentAction::execute — `$order->address->update([` →
+//         `$order->billingAddress->update([`. The changed line sits at
+//         ABSOLUTE line 67 (execute itself starts at line 26): load-bearing
+//         for group-scope.spec.mjs, whose relation fixture anchors
+//         GroupScopeChildA on line 67 (inside the selected group → groupTier
+//         0) and GroupScopeChildB on line 30 (outside it → groupTier 1). It
+//         also sits ~40 lines into a deliberately long function body, so
+//         drill-focus.spec.mjs's "the parent re-scrolls to its active change"
+//         test has something to scroll (scrollTop > 0) — a short function
+//         would fit the pane and never scroll at all.
+//         Its new side splits into 3 call segments (`$order` /
+//         `->billingAddress` / `->update([`), which is what lets `f` on the
+//         single-row group jump straight to 'call' and then step to chg=1.
+//       * Order::address — `morphOne(...)` → `billingAddress()`, likewise one
+//         single-row group whose new side carries a call segment to underline.
+//         Present in BOTH worktrees even though its fixture status is
+//         'removed' (which only makes the card render one pane): drill-focus /
+//         drill-sibling-walk / drill-preview patch that status to 'modified'
+//         and expect a genuine two-sided diff.
+//   - EVERY other block has ZERO changed rows: its file is byte-identical in
+//     base and head. That includes the two `added` relation children
+//     (GroupScopeChildA/B) — they must exist in the BASE worktree too, since an
+//     added block whose base file is missing reads as all-new rows, which would
+//     add changed rows to execute's subtree total and break "approving blocks 1
+//     and 6 approves the PR".
+//   - CreatePaymentAction::findOrCreateCustomer deliberately has no change of
+//     its own while living in the SAME file as execute: that same-file
+//     adjacency drives the connector/step-chevron/look-ahead-preview tests, and
+//     its zero change groups give drill-sibling-walk a single-keypress
+//     overflow.
+function materializeMainWorktrees() {
+  const write = worktreeWriter(12903)
+
+  // pad(n) fills the gap up to a wanted line number with harmless, unchanged
+  // body lines, so a block's declaration (and its one changed line) can sit at
+  // the exact ABSOLUTE line the fixtures/specs expect. Every padded line is
+  // identical in base and head, so it never shows up as a change.
+  const pad = (n, indent = '        ') =>
+    Array.from({ length: n }, (_, i) => `${indent}$step${i} = ${i};`).join('\n')
+
+  // --- app/Actions/CreatePaymentAction.php ---------------------------------
+  // Lines 1-25: header. Line 26: `execute`'s declaration. Line 67: the one
+  // changed line. Everything else is identical on both sides.
+  const createPayment = (addressProp) => `<?php
+
+declare(strict_types=1);
+
+namespace App\\Actions;
+
+use App\\Enums\\AddressType;
+use App\\Models\\Address;
+use App\\Models\\Customer;
+use App\\Models\\Order;
+use App\\Support\\PaymentInputAdapter;
+use App\\Support\\Psp;
+use Illuminate\\Support\\Facades\\Redis;
+
+/**
+ * Creates a PSP payment for one of our own orders.
+ *
+ * The class-level docblock and the use-list above are only here to push
+ * execute()'s declaration down to line 26 and its changed line to line 67 —
+ * see materializeMainWorktrees in tests/_setup.mjs for why those two absolute
+ * line numbers are load-bearing.
+ */
+final class CreatePaymentAction
+{
+    // Create a new PSP payment based on our internal Order model
+    public static function execute(Order $order, array $options): ?array
+    {
+        $paymentResource = null;
+        Psp::setMode($order->mode);
+
+        if (!self::findOrCreateCustomer($order)) {
+            return null;
+        }
+
+        // Transform our internal Order object to a format the PSP can handle
+        $input = PaymentInputAdapter::get($order);
+${pad(21)}
+
+        // We must know the payment flow started, even without a response
+        $order->payment_id = 'empty';
+        $order->saveWithoutTimestamps();
+
+        $paymentResource = Psp::createPayment($input);
+
+        $order->payment_id = $paymentResource['id'];
+        $order->save();
+        $order->${addressProp}->update([
+            'payment_options' => $paymentResource['options'],
+        ]);
+
+        return $paymentResource;
+    }
+
+    private static function findOrCreateCustomer(Order $order): bool
+    {
+        $customer = Customer::query()->firstWhere('email', $order->email);
+        if ($customer === null) {
+            $customer = Customer::create(['email' => $order->email]);
+        }
+
+        $order->customer_id = $customer->id;
+
+        return true;
+    }
+}
+`
+
+  // --- app/Models/Order.php -----------------------------------------------
+  // One changed line inside address(): a morphOne relation call becomes a
+  // delegating call to billingAddress().
+  const order = (addressBody) => `<?php
+
+declare(strict_types=1);
+
+namespace App\\Models;
+
+class Order
+{
+    public function customer()
+    {
+        return $this->belongsTo(Customer::class);
+    }
+
+    public function address()
+    {
+        ${addressBody}
+    }
+
+    public function billingAddress()
+    {
+        return $this->morphOne(Address::class, 'addressable')->where('type', 'billing');
+    }
+}
+`
+
+  const same = {
+    'app/Actions/ProcessCartAction.php': `<?php
+
+declare(strict_types=1);
+
+namespace App\\Actions;
+
+class ProcessCartAction
+{
+    public function handle(array $cart): array
+    {
+        $lines = [];
+        foreach ($cart as $item) {
+            $lines[] = $this->buildLine($item);
+        }
+
+        return $lines;
+    }
+
+    private function buildLine(array $item): array
+    {
+        return ['sku' => $item['sku'], 'qty' => $item['qty']];
+    }
+}
+`,
+    'app/Enums/AddressType.php': `<?php
+
+declare(strict_types=1);
+
+namespace App\\Enums;
+
+enum AddressType: string
+{
+    case BILLING = 'billing';
+    case SHIPPING = 'shipping';
+
+    public static function fromString(string $value): self
+    {
+        return self::from($value);
+    }
+}
+`,
+    'app/Http/Controllers/Api/ContractController.php': `<?php
+
+declare(strict_types=1);
+
+namespace App\\Http\\Controllers\\Api;
+
+use App\\Models\\Contract;
+
+/**
+ * Read-only contract endpoints.
+ *
+ * Padded so index() starts at line 30 — blocks.spec.mjs asserts the card's
+ * meta line reads ContractController.php:30, matching the seeded fixture.
+ */
+class ContractController
+{
+    private array $filters = [];
+
+    private array $sorts = [];
+
+    private int $perPage = 25;
+
+    public function __construct()
+    {
+        $this->filters = [];
+    }
+
+    public function index()
+    {
+        $contracts = Contract::query()->paginate($this->perPage);
+
+        return $contracts;
+    }
+}
+`,
+    'app/Models/Address.php': `<?php
+
+declare(strict_types=1);
+
+namespace App\\Models;
+
+class Address
+{
+    public function billingAddress()
+    {
+        return $this->where('type', 'billing');
+    }
+}
+`,
+    'database/migrations/2026_07_06_120000_add_type_to_addresses_table.php': `<?php
+
+declare(strict_types=1);
+
+use Illuminate\\Database\\Migrations\\Migration;
+use Illuminate\\Database\\Schema\\Blueprint;
+use Illuminate\\Support\\Facades\\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('addresses', function (Blueprint $table) {
+            $table->string('type')->default('billing');
+        });
+    }
+};
+`,
+    'tests/Feature/Addresses/AddressTypeTest.php': `<?php
+
+declare(strict_types=1);
+
+namespace Tests\\Feature\\Addresses;
+
+use App\\Enums\\AddressType;
+use Tests\\TestCase;
+
+class AddressTypeTest extends TestCase
+{
+    public function test_it_casts_type(): void
+    {
+        $this->assertSame(AddressType::BILLING, AddressType::fromString('billing'));
+    }
+}
+`,
+    'zzz_test_support/GroupScopeChildA.php': `<?php
+
+namespace ZzzTestSupport;
+
+class GroupScopeChildA
+{
+    public function run()
+    {
+        return 'a';
+    }
+}
+`,
+    'zzz_test_support/GroupScopeChildB.php': `<?php
+
+namespace ZzzTestSupport;
+
+class GroupScopeChildB
+{
+    public function run()
+    {
+        return 'b';
+    }
+}
+`,
+  }
+
+  write('base', 'app/Actions/CreatePaymentAction.php', createPayment('address'))
+  write('head', 'app/Actions/CreatePaymentAction.php', createPayment('billingAddress'))
+  write(
+    'base',
+    'app/Models/Order.php',
+    order("return $this->morphOne(Address::class, 'addressable');"),
+  )
+  write('head', 'app/Models/Order.php', order('return $this->billingAddress();'))
+  for (const [rel, contents] of Object.entries(same)) {
+    write('base', rel, contents)
+    write('head', rel, contents)
+  }
 }
 
 // materializeDefaultSelWorktrees writes the synthetic PR 108 fixture worktrees
@@ -48,11 +404,7 @@ class ${name}
     }
 }
 `
-  const write = (side, relPath, contents) => {
-    const full = `data/worktrees/pr-108-${side}/${relPath}`
-    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
-    writeFileSync(full, contents)
-  }
+  const write = worktreeWriter(108)
   write('base', 'app/Actions/DefaultSelBlockA.php', file('DefaultSelBlockA', 'run', 1))
   write('head', 'app/Actions/DefaultSelBlockA.php', file('DefaultSelBlockA', 'run', 2))
   write('base', 'app/Actions/DefaultSelBlockB.php', file('DefaultSelBlockB', 'run', 1))
@@ -105,11 +457,7 @@ class CheckoutRequest
     }
 }
 `
-  const write = (side, relPath, contents) => {
-    const full = `data/worktrees/pr-107-${side}/${relPath}`
-    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
-    writeFileSync(full, contents)
-  }
+  const write = worktreeWriter(107)
   write('base', 'resources/lang/nl/checkout.php', nlBase)
   write('head', 'resources/lang/nl/checkout.php', nlHead)
   write('base', 'resources/lang/en/checkout.php', en)
@@ -130,8 +478,8 @@ class CheckoutRequest
 // Every other seeded fixture PR (90/91/92/93/94) deliberately has NO worktree
 // on disk — their tests only exercise child-listing/drill mechanics, never
 // real diff/approval content (see relations.spec.mjs) — but a tree-descent
-// approve test needs something real to approve, and data/worktrees/ is
-// shared + read-only across workers (see _fixtures.mjs) rather than
+// approve test needs something real to approve, and TEST_DATA_DIR/worktrees/
+// is shared + read-only across workers (see _fixtures.mjs) rather than
 // per-worker, so this writes it once here, like the binary build above,
 // instead of relying on a real `gh`/`git` ingest that CI/a fresh checkout
 // can't reproduce.
@@ -149,11 +497,7 @@ class ${name}
     }
 }
 `
-  const write = (side, relPath, contents) => {
-    const full = `data/worktrees/pr-95-${side}/${relPath}`
-    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
-    writeFileSync(full, contents)
-  }
+  const write = worktreeWriter(95)
   write('base', 'app/Actions/TreeParentAction.php', file('TreeParentAction', 'execute', 1))
   write('head', 'app/Actions/TreeParentAction.php', file('TreeParentAction', 'execute', 2))
   write('base', 'app/Actions/TreeChildAction.php', file('TreeChildAction', 'run', 1))
@@ -190,11 +534,7 @@ class ${name}
     }
 }
 `
-  const write = (side, relPath, contents) => {
-    const full = `data/worktrees/pr-99-${side}/${relPath}`
-    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
-    writeFileSync(full, contents)
-  }
+  const write = worktreeWriter(99)
   write('base', 'app/Models/TgOrder.php', file('App\\Models', 'TgOrder', 'billingAddress', 1))
   write('head', 'app/Models/TgOrder.php', file('App\\Models', 'TgOrder', 'billingAddress', 2))
   write('base', 'tests/Feature/TgOrderBillingTest.php', file('Tests\\Feature', 'TgOrderBillingTest', 'testBilling', 1))
@@ -264,11 +604,7 @@ class ArrowNestedService
     }
 }
 `
-  const write = (side, relPath, contents) => {
-    const full = `data/worktrees/pr-100-${side}/${relPath}`
-    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
-    writeFileSync(full, contents)
-  }
+  const write = worktreeWriter(100)
   write('base', 'app/Actions/ArrowCallerAction.php', caller('false', 'old', 1, 1))
   write('head', 'app/Actions/ArrowCallerAction.php', caller('true', 'context', 2, 3))
   write('base', 'app/Services/ArrowHelperService.php', helper(1, 1))
@@ -291,11 +627,7 @@ ${body}
     }
 }
 `
-  const write = (side, relPath, contents) => {
-    const full = `data/worktrees/pr-97-${side}/${relPath}`
-    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
-    writeFileSync(full, contents)
-  }
+  const write = worktreeWriter(97)
   write('base', 'app/Actions/ExplainAction.php', file('ExplainAction', 'execute', 'value', '        $value = 1;'))
   write(
     'head',
@@ -362,16 +694,13 @@ class RangeSelectAction
     }
 }
 `
-  const write = (side, contents_) => {
-    const full = `data/worktrees/pr-102-${side}/app/Actions/RangeSelectAction.php`
-    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
-    writeFileSync(full, contents_)
-  }
-  write('base', contents(0, 0, 0, 0, 8))
-  write('head', contents(1, 2, 3, 4, 9))
+  const write = worktreeWriter(102)
+  const rel = 'app/Actions/RangeSelectAction.php'
+  write('base', rel, contents(0, 0, 0, 0, 8))
+  write('head', rel, contents(1, 2, 3, 4, 9))
 }
 
-// materializePreviewWidthWorktrees writes the synthetic PR 107 fixture
+// materializePreviewWidthWorktrees writes the synthetic PR 105 fixture
 // worktrees for preview-matches-active-width.spec.mjs (Task 29, same
 // rationale as materializeTreeWorktrees above): a one-sided `added` block
 // (selected — a whole new file, only written to the head worktree, never the
@@ -394,11 +723,11 @@ class ${name}
     }
 }
 `
-  const write = (side, relPath, contents) => {
-    const full = `data/worktrees/pr-107-${side}/${relPath}`
-    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
-    writeFileSync(full, contents)
-  }
+  // PR 105 — previewwidth-blocks.json's own number. (This said 107 before, a
+  // copy/paste slip from the translation fixture above: the worktrees landed
+  // under pr-107 while the blocks were seeded as PR 105, so this fixture's
+  // diffs were never actually on disk where /api/code looks for them.)
+  const write = worktreeWriter(105)
   // Added block: head-only, no base file at all (fileAdded-equivalent).
   write('head', 'app/Actions/PreviewWidthAddedAction.php', file('PreviewWidthAddedAction', 'execute', 1))
   // Modified block: real old+new text, so its diff is genuinely two-sided.
@@ -444,11 +773,7 @@ class TreeChildAction2
     }
 }
 `
-  const write = (side, relPath, contents) => {
-    const full = `data/worktrees/pr-106-${side}/${relPath}`
-    mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
-    writeFileSync(full, contents)
-  }
+  const write = worktreeWriter(106)
   write('base', 'app/Actions/TreeParentAction2.php', parent(1))
   write('head', 'app/Actions/TreeParentAction2.php', parent(2))
   write('base', 'app/Actions/TreeChildAction2.php', child(1, 2))

@@ -11,6 +11,9 @@ test.describe('PR Review Tree — hide approved blocks + header counter', () => 
     page,
   }) => {
     await page.goto('/pr/12903')
+    // Settle the app's own load before mounting a second component into the
+    // live page (the cold-start mount race in conventions.md).
+    await page.waitForLoadState('networkidle')
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const BlockList = (await import('/src/BlockList.mjs')).default
@@ -66,6 +69,9 @@ test.describe('PR Review Tree — hide approved blocks + header counter', () => 
 
   test('the header counter is hidden when there is nothing to approve', async ({ page }) => {
     await page.goto('/pr/12903')
+    // Settle the app's own load before mounting a second component into the
+    // live page (the cold-start mount race in conventions.md).
+    await page.waitForLoadState('networkidle')
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const BlockList = (await import('/src/BlockList.mjs')).default

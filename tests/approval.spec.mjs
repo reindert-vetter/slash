@@ -35,6 +35,9 @@ test.describe('PR Review Tree — combined approval', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
+    // Settle the app's own load before mounting a second component into the
+    // live page (the cold-start mount race in conventions.md).
+    await page.waitForLoadState('networkidle')
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const BlockList = (await import('/src/BlockList.mjs')).default
@@ -79,6 +82,12 @@ test.describe('PR Review Tree — combined approval', () => {
 
   test('the underlying-code panel shows a per-child badge', async ({ page }) => {
     await page.goto('/pr/12903')
+    // Settle the app's own load (module imports + lazy fetches + its
+    // history.replaceState burst) before mounting a second component into the
+    // live page — that burst can disturb the mount, the cold-start race
+    // conventions.md describes. The sibling tests below already do this via
+    // evaluateSettled/networkidle; this one used to mount straight away.
+    await page.waitForLoadState('networkidle')
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const mod = await import('/src/RelatedPanel.mjs')

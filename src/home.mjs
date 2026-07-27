@@ -6520,7 +6520,26 @@ function DetailPanel(state) {
           if (i === sel && b.category === 'TRANSLATION') {
             ensureLangSiblings(b)
             for (const sib of state.langSiblings[b.id] || []) {
-              out.push(companionCard(b, sib).key('lang-sib:' + b.id + ':' + sib.locale))
+              // The key carries the block's CODE state, exactly like the block
+              // card's own key just above. companionCard derives its rows from
+              // b.code (changedKeysOf on the old/new text), and langSiblings
+              // can land BEFORE the code does — the first render then builds a
+              // legitimately empty card. Without the code state in the key,
+              // arrow.js reuses that node when the code finally arrives (move
+              // + patch, without re-running its bindings, see the keyed-node
+              // pitfall in conventions.md) and the companion stays empty
+              // forever. This is the "residual race in list mode" that
+              // blocks-and-ingest.md flagged as a known limitation.
+              out.push(
+                companionCard(b, sib).key(
+                  'lang-sib:' +
+                    b.id +
+                    ':' +
+                    sib.locale +
+                    ':' +
+                    (b.code && !b.code.error ? 'code' : b.code && b.code.error ? 'err' : 'load'),
+                ),
+              )
             }
           }
         })

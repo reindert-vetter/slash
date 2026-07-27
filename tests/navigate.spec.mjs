@@ -194,7 +194,7 @@ test.describe('PR Review Tree — change navigation', () => {
     // not the diff, so it needs no ingested blocks. The first comment carries a
     // code snippet so we can assert the thread shows it (like the composer
     // preview) — a comment without code shows no hint.
-    const pr = 970002
+    const pr = 970010
     const seeds = [
       {
         body: 'first review comment',

@@ -48,9 +48,20 @@ test.describe('PR overview — ?sel= round-trip keeps the same block selected', 
     // PR 12903 with.
     await page.getByTestId('recent').click()
     const item = page.locator('[data-testid="recent-item"][data-pr="90"]')
-    await item.click()
 
+    // Assert the no-sel on the LINK, not on the settled page URL: once /pr/90
+    // has loaded its own blocks, home.mjs' blockRef watch writes that PR's OWN
+    // `sel` into the query string (every block has a real file:line, so `sel`
+    // is structurally present — see the URL-state section in CLAUDE.md). So a
+    // `page.url()` check after the navigation is a race against that write,
+    // not a check of what was carried along. The href is what this test is
+    // actually about (recentItem is not a treeUrl() call site).
+    await expect(item).toHaveAttribute('href', '/pr/90')
+
+    await item.click()
     await expect(page).toHaveURL(/\/pr\/90(?:$|[?&])/)
-    expect(page.url()).not.toContain('sel=')
+    // Whatever `sel` the app writes for itself must be PR 90's own block, never
+    // the CreatePaymentAction reference we left PR 12903 with.
+    expect(page.url()).not.toContain('CreatePaymentAction')
   })
 })

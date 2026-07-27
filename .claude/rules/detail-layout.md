@@ -385,6 +385,24 @@ sidebar (the global Cmd+→ handler in `home.mjs` explicitly ignores the key as
 long as `isEditableFocused()` is true). Mirrors the `preTaskFocus` pattern.
 Test: `tests/sidebar-focus-restore.spec.mjs`.
 
+**A DEFERRED focus must never land after the keyboard has moved on
+(`focusToken`/`releaseFocus` in `RelatedPanel.mjs`).** Every landing helper
+that drops the caret into a text field (`toNew`, `toComment`, `focusThread`)
+does so a frame later via `focusEl`/its own `requestAnimationFrame` — the
+reactive re-render has to swap the matching pane in first. So anything the
+reviewer does *in between* runs first, and the classic case is a click on a
+comment row (which focuses its reply field) followed straight away by `←`:
+`exitRelated` blurs and hands the keyboard back to the diff, and then the
+pending rAF fired anyway and silently pulled DOM focus back into the
+still-mounted textarea. From that moment on the sidebar looked dead — every
+Cmd+→ was swallowed by `home.mjs`'s `isEditableFocused()` guard, so neither
+the restore nor the close worked. Each of those transitions (plus
+`enterComments`/`toTask`/`exitRelated`) therefore bumps a module-level
+`focusToken`, and a deferred focus only lands while the token still matches
+the value captured when it was requested. The two tests in
+`tests/sidebar-focus-restore.spec.mjs` are the regression guard (they failed
+~6 out of 8 runs before this).
+
 **A placed comment immediately gives the keyboard back to the code it's
 attached to.** `placeComment` (`RelatedPanel.mjs`) — called by both
 `COMPOSE_COMMANDS` items in `home.mjs` ("Place comment" and "Only for

@@ -1,7 +1,9 @@
 // Per-worker isolated server. Each Playwright worker gets its own seeded SQLite
 // DB (and, since newTasks puts the workflow/comments/relations/... DBs next to
 // it, its own copy of ALL write state) plus its own Go server on its own port.
-// The read-only base/head worktrees under data/ stay shared. This removes the
+// The read-only base/head worktrees under tests/.tmp/data (TEST_DATA_DIR,
+// materialized by globalSetup and passed to every worker via -data) stay
+// shared — the live data/ tree is never touched. This removes the
 // cross-worker write races (comment/workflow SQLite contention) and page-load
 // contention that made the suite flaky under a single shared server, and lets us
 // scale workers freely.
@@ -21,13 +23,21 @@
 // Spec files import { test, expect } from './_fixtures.mjs' instead of
 // '@playwright/test' so every page.goto() targets this worker's own server via the
 // baseURL override below.
-import { test as base, expect } from '@playwright/test'
+import { test as base, expect, request as apiRequest } from '@playwright/test'
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
+import { TEST_DATA_DIR } from './_setup.mjs'
 
 const BIN = path.resolve('tests/.tmp/slash')
+
+// APPROVAL_RESET_PRS — the fixture PRs whose stored approvals the auto
+// `_cleanApprovals` fixture below wipes before every test: the shared main
+// anchor (12903) plus every small fixture PR some spec approves (95's tree,
+// 106's drilled line-skip, 107's translation keys, 108's fresh-open default).
+// Add a PR here as soon as a new spec approves anything on it durably.
+const APPROVAL_RESET_PRS = [95, 106, 107, 108, 12903]
 
 // seed replicates the seed passes the old webServer command ran: the main
 // blocks fixture (PR 12903), the relations/callresolve fixtures (PR 90/91),
@@ -306,7 +316,11 @@ export const test = base.extend({
       seed(db)
 
       const port = 4200 + i
-      const proc = spawn(BIN, ['-db', db, '-addr', `127.0.0.1:${port}`, '-static', '.'], {
+      // -data points every worker at the throwaway test data tree
+      // (tests/.tmp/data) that globalSetup materialized, so a run never reads
+      // — let alone writes — the live data/ tree. See TEST_DATA_DIR in
+      // _setup.mjs for why that split exists.
+      const proc = spawn(BIN, ['-db', db, '-data', TEST_DATA_DIR, '-addr', `127.0.0.1:${port}`, '-static', '.'], {
         env: {
           ...process.env,
           SLASH_GITHUB: 'off',
@@ -337,6 +351,74 @@ export const test = base.extend({
   baseURL: async ({ _server }, use) => {
     await use(`http://127.0.0.1:${_server.port}`)
   },
+
+  // Auto, test-scoped: reset the shared fixture state (stored approvals, plus
+  // the shared anchor PR's comments) before every test.
+  //
+  // The worker DB lives for the whole worker (one seed per worker, see above),
+  // so an approval is DURABLE across tests AND across spec files that happen
+  // to land on the same worker. Several specs deliberately approve block 1
+  // (CreatePaymentAction::execute) of the shared main fixture — the palette
+  // approve tests, postapprove-menu, review-submit-menu,
+  // selected-reveal-hidden, sidebar-skip-approved, comment-revokes-approval —
+  // and a FULLY approved top-level block is hidden from the sidebar by default
+  // (state.showApproved, BlockList.mjs). Any later test that clicks
+  // `[data-idx="1"]` then times out on a row that no longer exists, which read
+  // as broad, unrelated flakiness across a dozen specs (whichever ones the
+  // scheduler happened to run after an approving one). Several specs already
+  // carried their own clearBlockApproval() helper precisely because of this;
+  // doing it here once makes every spec order-independent instead, without
+  // each having to know which of its neighbours approve what.
+  //
+  // Every fixture PR a spec ever approves is reset (APPROVAL_RESET_PRS), not
+  // just the main one: PR 95 has exactly the same collision (drill-approve
+  // approves its tree, postapprove-tree then wants both of its rows visible),
+  // and that is precisely the hazard fresh-open-default-selection.spec.mjs
+  // worked around by claiming its own PR 108. No spec seeds approvals outside
+  // a test body (no beforeAll does), so resetting per test can't undercut
+  // anyone's setup.
+  //
+  // Writes go through the sanctioned path — the approve workflow's `set`
+  // Signal with an empty set removes the row (see workflows-write-boundary.md).
+  _cleanApprovals: [
+    async ({ _server }, use) => {
+      const base = `http://127.0.0.1:${_server.port}`
+      const ctx = await apiRequest.newContext({ baseURL: base })
+      try {
+        // Comments on the shared anchor PR go too: a PR-WIDE comment
+        // (kind !== '') becomes a synthetic, navigable row in the "Start"
+        // sidebar (commentBlockItem/recomputeLeftList, home.mjs), so one left
+        // behind by an earlier spec shifts every row count and [data-idx]
+        // position on 12903 for whatever runs next. Deleting goes through the
+        // comment's own workflow `delete` Signal (its Run ID *is* the comment
+        // id), i.e. the sanctioned write path.
+        const cs = await ctx.get('/api/comments?pr=12903')
+        const comments = cs.ok() ? await cs.json() : []
+        if (Array.isArray(comments)) {
+          for (const c of comments) {
+            await ctx.post(`/api/workflows/${c.id}/signals/delete`, { data: {} })
+          }
+        }
+        for (const pr of APPROVAL_RESET_PRS) {
+          const res = await ctx.get(`/api/approvals?pr=${pr}`)
+          const rows = res.ok() ? await res.json() : []
+          if (!Array.isArray(rows) || !rows.length) continue
+          const start = await ctx.post('/api/workflows/approve', { data: { pr } })
+          const { runId } = await start.json()
+          for (const r of rows) {
+            await ctx.post(`/api/workflows/${runId}/signals/set`, {
+              data: { blockId: r.blockId, rows: [], calls: [] },
+            })
+          }
+        }
+      } catch {
+        // Best-effort: a failed reset must never fail the test that follows.
+      }
+      await ctx.dispose()
+      await use()
+    },
+    { auto: true },
+  ],
 })
 
 export { expect }

@@ -24,6 +24,13 @@ import { test, expect } from './_fixtures.mjs'
 // first unit as "active" in list-mode preview (groupsFor's fallback) — this
 // border only ever appears once state.mode is really 'diff'.
 async function enterDiffAndSettle(page) {
+  // Wait for the block's own key overview to be on screen first: enterDiff()
+  // reads the SELECTED block (curBlock()) and silently no-ops while
+  // state.blocks is still empty, so pressing ArrowRight straight after the
+  // goto() can land before loadBlocks/applyBlockRefRestore have run — the
+  // keypress is then simply swallowed and mode never becomes 'diff' (the
+  // border below then never appears, whatever we wait for afterwards).
+  await expect(page.getByTestId('translation-row').first()).toBeVisible()
   await page.keyboard.press('Escape')
   await page.keyboard.press('ArrowRight')
   await expect(page.locator('[data-testid="detail-card"] article').first()).toHaveClass(/border-indigo-300/)

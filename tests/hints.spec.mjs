@@ -13,6 +13,8 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
   }) => {
     await page.goto('/pr/12903')
 
+    await page.waitForLoadState('networkidle')
+
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
@@ -80,6 +82,8 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
   test('shows no hints when the whole diff fits in view', async ({ page }) => {
     await page.goto('/pr/12903')
 
+    await page.waitForLoadState('networkidle')
+
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
@@ -118,6 +122,8 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
+
+    await page.waitForLoadState('networkidle')
 
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

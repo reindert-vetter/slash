@@ -463,15 +463,41 @@ function exitRelated() {
   }
   cs.focus = null
   cs.composing = false
+  releaseFocus() // a focus request still in flight must not land after this
   const el = document.activeElement
   if (el && el.blur) el.blur()
 }
 export { exitRelated as leaveRelated }
 
+// focusToken counts every sidebar-focus transition. focusEl's deferred focus
+// (below) is only allowed to land while the token still matches the value at
+// request time — i.e. while the reviewer has not moved on since.
+let focusToken = 0
+
+// releaseFocus invalidates any focus request still in flight. Called by every
+// transition that means "the sidebar no longer owns the keyboard" or "the
+// keyboard moved somewhere else within it".
+function releaseFocus() {
+  focusToken++
+}
+
 // focusEl focuses a right-pane input a frame later (once the reactive re-render
 // has swapped in the matching view: the new-comment composer or the reply field).
+//
+// The token guard is load-bearing, not defensive dressing: the focus lands a
+// FRAME later, so anything the reviewer does in between — most concretely a ←
+// right after clicking a comment row (toComment focuses its reply field) —
+// runs first. exitRelated then blurs and hands the keyboard back to the diff,
+// after which this rAF used to fire anyway and silently steal DOM focus back
+// into the (still-mounted) textarea. From there every subsequent Cmd+→ was
+// swallowed by home.mjs' isEditableFocused() guard, so the sidebar stopped
+// responding entirely: no restore, no close. Bumping the token on each
+// transition makes a stale request a no-op instead.
+// Regression test: tests/sidebar-focus-restore.spec.mjs.
 function focusEl(sel) {
+  const want = focusToken
   requestAnimationFrame(() => {
+    if (want !== focusToken) return
     const el = document.querySelector(sel)
     if (el) el.focus()
   })
@@ -482,6 +508,7 @@ function focusEl(sel) {
 // straight away, no → needed: 'new' shows an empty new-comment composer; a
 // comment shows its history with the reply field focused.
 function toNew() {
+  releaseFocus()
   cs.composing = true
   cs.focus = 'new'
   focusEl('[data-testid=comment-compose]')
@@ -498,6 +525,7 @@ function toNew() {
 // already-focused field (isEditableFocused would swallow it).
 // Enter (home.mjs, via openComposer) is what actually opens the composer.
 function enterComments() {
+  releaseFocus()
   cs.composing = false
   cs.focus = 'new'
 }
@@ -532,6 +560,7 @@ let preTaskFocus = 'new'
 // left to go (the last comment row, the empty composer, or the bottom of a
 // thread) — see handleRelatedKey.
 function toTask(i = 0) {
+  releaseFocus()
   preTaskFocus = cs.focus
   cs.composing = false
   cs.focus = 'task'
@@ -584,6 +613,7 @@ export function taskRuns(state) {
 // textarea — mirroring how a fresh Cmd+ArrowRight-open (enterComments) only highlights
 // the "+ Comment op deze regel" row rather than opening it.
 function toComment(focusInput = true) {
+  releaseFocus()
   cs.composing = false
   cs.focus = 'comment'
   scrollCommentIntoView()
@@ -665,7 +695,10 @@ function scrollReactionIntoView() {
 // remembered thread position should re-highlight it, not immediately drop
 // the keyboard into the reply field.
 function focusThread(focusInput = true) {
+  releaseFocus()
+  const want = focusToken
   requestAnimationFrame(() => {
+    if (want !== focusToken) return
     const input = document.querySelector('[data-testid=reaction-compose]')
     if (cs.threadPos === 0) {
       if (input && focusInput) input.focus()

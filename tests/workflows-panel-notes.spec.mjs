@@ -17,6 +17,8 @@ test.describe('PR Review Tree — Taken panel: waiting note + relative update ti
   }) => {
     await page.goto('/pr/12903')
 
+    await page.waitForLoadState('networkidle')
+
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const mod = await import('/src/RelatedPanel.mjs')

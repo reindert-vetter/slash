@@ -232,10 +232,19 @@ left as a navigable list.
   reactive consumers of the same property" pitfall as `.claude/rules/conventions.md`
   describes for the diff render itself. Bumping the SAME `state.codeVersion`
   counter this closure already subscribes to (`void state.codeVersion`) fixes
-  it, mirroring `ensureCode`'s own fix. A residual, much rarer version of the
-  same race can still occur in **list mode** (no `state.mode==='diff'`
-  transition to help settle it) — a known, pre-existing limitation, not fully
-  eliminated.
+  it, mirroring `ensureCode`'s own fix.
+  **The residual half of that race — the companion card staying EMPTY (zero
+  sibling rows) — was a keyed-node reuse, and is fixed too:** the siblings
+  (`/api/langsiblings`) and the block's own code (`/api/code`) are independent
+  fetches, so the siblings can land FIRST; `companionCard` derives its rows
+  from `b.code` (`changedKeysOf` over the old/new text) and then legitimately
+  renders nothing. Its `.key(...)` did not encode the code state, so when the
+  code finally arrived arrow.js reused that node (move + patch, *without*
+  re-running its bindings — the keyed-node pitfall in `conventions.md`) and the
+  card stayed empty **forever**. The key now carries the same
+  `code`/`err`/`load` component as the block card's own key right above it.
+  Regression test: `tests/translation-navigation.spec.mjs` ("the en companion
+  card mirrors the same per-key highlight").
   **Per-key navigation, approve and comment (`translationRowUnits`,
   `Block.mjs`):** the reviewer navigates a TRANSLATION block **per changed
   key** — `↑`/`↓` step through the key rows (highlighting one at a time, an
@@ -693,7 +702,14 @@ left as a navigable list.
   `tasks_api.go`) and immediately after that `EnsureRelations`, just like the
   HTTP flow. The server side is `POST /api/ingest {"pr":N}` (`handleIngest` →
   `StartIngest` → `EnsureRelations`). Server: `go run . [-db path]
-  [-addr host:port] [-static dir]`. DB path also via `SLASH_DB`. **The local
+  [-data dir] [-addr host:port] [-static dir]`. DB path also via `SLASH_DB`;
+  the **data dir** (holding `worktrees/pr-<n>-{base,head}`, which the read
+  handlers `/api/code`, `/api/blockstats`, `/api/approvalsummary` and
+  `/api/langsiblings` slice their diffs out of) also via **`SLASH_DATA`**,
+  default `"data"` (`dataDirPath` in `main.go`, mirroring `dbPath`). It is
+  configurable so the Playwright harness can point every worker server at its
+  own throwaway fixture tree and never read or write the live `data/` tree —
+  see "Playwright test infra" in `.claude/rules/conventions.md`. **The local
   clone** where all git/worktree operations run (`repoDir()` in `gh.go`) comes
   from **`SLASH_REPO_DIR`** (env), defaulting to `~/dev/plug-and-pay` — a
   leading `~` is expanded via `os.UserHomeDir()`, so `SLASH_REPO_DIR=

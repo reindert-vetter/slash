@@ -9,6 +9,8 @@ test.describe('PR Review Tree — sidebar hint rail: task indicator only colors 
   test('all-waiting runs show 0 and gray; a running run shows the count and amber', async ({ page }) => {
     await page.goto('/pr/12903')
 
+    await page.waitForLoadState('networkidle')
+
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const mod = await import('/src/RelatedPanel.mjs')

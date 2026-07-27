@@ -460,7 +460,7 @@ export default function Block(b, opts = {}) {
                   >${b.oldFile}</span
                 >`
               : ''}
-          <span class="text-slate-500 dark:text-zinc-500"
+          <span class="font-mono text-slate-500 dark:text-zinc-500"
             >${() => b.file + ':' + b.line}</span
           >
         </span>

@@ -46,17 +46,34 @@ func dbPath(flagVal string) string {
 	return "data/graph.db"
 }
 
+// dataDirPath resolves the data directory (the base/head worktrees the read
+// handlers slice their diffs out of) from a flag value, falling back to
+// SLASH_DATA then a default — mirrors dbPath. Configurable so the Playwright
+// harness can point every worker server at its own throwaway test data
+// directory instead of the live "data" tree (see tests/_setup.mjs).
+func dataDirPath(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	if env := os.Getenv("SLASH_DATA"); env != "" {
+		return env
+	}
+	return "data"
+}
+
 // runServe starts the HTTP server (default command).
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dbFlag := fs.String("db", "", "path to the SQLite DB (or SLASH_DB env)")
+	dataFlag := fs.String("data", "", "data directory holding the PR worktrees (or SLASH_DATA env)")
 	addr := fs.String("addr", "127.0.0.1:8765", "listen address")
 	staticDir := fs.String("static", ".", "directory served statically")
 	_ = fs.Parse(args)
 
 	ensureEnvSetup()
-	if err := os.MkdirAll("data", 0o755); err != nil {
-		log.Fatalf("mkdir data: %v", err)
+	resolvedData := dataDirPath(*dataFlag)
+	if err := os.MkdirAll(resolvedData, 0o755); err != nil {
+		log.Fatalf("mkdir %s: %v", resolvedData, err)
 	}
 	resolvedDB := dbPath(*dbFlag)
 	db, err := openDB(resolvedDB)
@@ -66,14 +83,14 @@ func runServe(args []string) {
 	defer db.Close()
 
 	// Workflow/comments stores live next to the DB, so a test DB isolates its
-	// workflow state too. (The worktree data dir stays "data" — see server.)
+	// workflow state too. (The worktree data dir is separate — see server below.)
 	tk, closeTasks, err := newTasks(context.Background(), db, filepath.Dir(resolvedDB), repoSlug, true)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)
 	}
 	defer closeTasks()
 
-	srv := &server{db: db, dataDir: "data", tasks: tk}
+	srv := &server{db: db, dataDir: resolvedData, tasks: tk}
 	log.Printf("PR Review Tree listening on http://%s", *addr)
 	if err := http.ListenAndServe(*addr, srv.routes(*staticDir)); err != nil {
 		log.Fatal(err)

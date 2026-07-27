@@ -76,9 +76,16 @@ test.describe('PR Review Tree — block list', () => {
       await page.keyboard.press('ArrowUp')
       await expect(rows.nth(i)).toHaveClass(/bg-indigo-50/)
     }
-    // Clamp at the top.
+    // ↑ on the topmost visible block WRAPS to the bottom of the list — it no
+    // longer clamps there (stepListSelection/lastVisibleIndex in home.mjs,
+    // "↑ from the TOPMOST visible block wraps around" in
+    // keyboard-navigation.md). ↓ deliberately stays asymmetric: it clamps
+    // (with the toggle-approved button as an extra stop when one exists), as
+    // asserted above. The dedicated test for the wrap itself lives in
+    // tests/list-nav-wrap.spec.mjs.
     await page.keyboard.press('ArrowUp')
-    await expect(rows.nth(0)).toHaveClass(/bg-indigo-50/)
+    await expect(rows.nth(EXPECTED_LABELS.length - 1)).toHaveClass(/bg-indigo-50/)
+    await expect(rows.nth(0)).not.toHaveClass(/bg-indigo-50/)
   })
 
   test('clicking a row selects it', async ({ page }) => {

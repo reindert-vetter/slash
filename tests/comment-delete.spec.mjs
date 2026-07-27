@@ -11,11 +11,11 @@ import { test, expect } from './_fixtures.mjs'
 test.describe('PR Review Tree — delete a comment', () => {
   // Use a PR of its own (unseeded, no ingested blocks) so this doesn't share the
   // comments read-model with other specs seeding on their own dedicated PRs
-  // (970001 in comment-thread.spec.mjs, 970002 in navigate.spec.mjs — tests run
+  // (970006 in comment-thread.spec.mjs, 970007 in navigate.spec.mjs — tests run
   // fully parallel). The delete flow doesn't need real blocks: clicking a
   // comment row focuses it (relatedActive() becomes true) independently of the
   // block sidebar.
-  const PR = 970003
+  const PR = 970008
 
   async function seedComment(page, body) {
     const start = await page.request.post('/api/workflows/task_code_comment', {

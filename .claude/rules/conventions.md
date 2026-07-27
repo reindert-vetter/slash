@@ -117,6 +117,29 @@
   checking for the preview card's presence, verifies that the rendered diff
   text of the selected card always belongs to that block's own `/api/code`
   source — never a neighboring block).
+- **arrow.js — disposing a nested reconciler's mounted subtree must also FORGET
+  it (`LOCAL PATCH 2b` in `src/vendor/arrow.js`).** LOCAL PATCH 2 (above) made
+  `Ft`/destroyChunk cascade into nested `${() => componentCall(...)}` subtrees,
+  which fixed the unbounded memory growth — but turned the old *leak* into a
+  **use-after-free**: `Ft` nulls a chunk's own DOM boundaries
+  (`ref.f`/`ref.l`), while the nested reconciler still held that chunk as its
+  `previous`. The next time that reconciler ran — and it does run again, the
+  same late/queued-effect window LOCAL PATCH 1 guards: a reactive expression
+  whose slot is still alive fires in the microtask flush after the owning keyed
+  node is gone — it took the "replace what's mounted" path on the dead chunk
+  and did `insertionPoint(previous).after(...)`, where the insertion point is
+  `previous.ref.l` → `null` → **`Cannot read properties of null (reading
+  'after')`**. Worse than a one-off crash: the throw leaves that reconciler
+  wedged, so the subtree stops updating entirely and the app silently freezes
+  on whatever it last rendered. Concretely: entering a block's diff and
+  pressing ↓ into a same-file neighbour block crashed on the step-chevron
+  slot's toggle and froze **all** further keyboard navigation (the URL stopped
+  changing, no error visible in the UI). The fix is one token — clear
+  `previous` after disposing it (`e&&(qt(e,!0),e=void 0)`), so a late run
+  mounts fresh into the owner's own detached fragment instead of patching a
+  destroyed chunk. Regression tests:
+  `tests/step-preview-stability.spec.mjs`, `tests/diff-code-vs-title.spec.mjs`
+  (both walk a ↓/↑ same-file block cycle and assert zero page errors).
 - **arrow.js — a STATICALLY interpolated value that per instance is either a
   template or a string (`` ${cond ? html`…` : ''} `` without `() =>`) leaks
   the template function as text on chunk reuse.** Observed in the drill-hint
@@ -563,7 +586,12 @@
   (comments/workflows/relations/callresolve/inbox/prmeta) **next to** the
   `-db` path (`filepath.Dir`), one `-db tests/.tmp/w<n>/test.db` immediately
   isolates **all write state** per worker. The read-only base/head worktrees
-  under `data/` stay shared (server `dataDir` is hardcoded `"data"`). This
+  live under **`tests/.tmp/data`** (`TEST_DATA_DIR` in `tests/_setup.mjs`) and
+  stay shared across workers; every worker server is started with
+  **`-data tests/.tmp/data`**, so **a test run never touches the live `data/`
+  tree at all**. The server's data dir is therefore no longer hardcoded: it
+  comes from the `-data` flag / `SLASH_DATA` env, defaulting to `"data"`
+  (`dataDirPath` in `main.go`, mirroring `dbPath`/`-db`/`SLASH_DB`). This
   removes both the cross-worker **write races** (comment/workflow SQLite
   contention previously gave an empty `runId`) and the page-load contention
   that made the suite flaky.
@@ -579,23 +607,48 @@
   live app page — needed for `index.html`'s Tailwind/Prism CSS — and the
   app's `history.replaceState` burst during load can briefly disturb that
   mount). A real failure fails both attempts.
-- **Data note:** the diff content (`/api/code`) comes from the **gitignored**
-  `data/worktrees/pr-<n>-{base,head}` — not a committed fixture. If those
-  have locally drifted to a different commit (e.g. base+head on two adjacent
-  commits instead of base=merge-base), most blocks show **no** changes and
-  diff-content-dependent tests fail. So anchor diff-navigation tests on a
-  block that reliably carries a change (block 0 of PR 12903).
-- **A new fixture PR that really needs diff content** (not just
-  child-listing/drill mechanics like PR 90/91/92/93/94, which deliberately
-  have **no** worktree on disk) can **materialize its own small
-  `data/worktrees/pr-<n>-{base,head}` programmatically in `globalSetup`**
-  (`tests/_setup.mjs`) instead of relying on a real, locally present
-  `gh`/`git` ingest (which isn't reproducible on another machine/CI) — see
-  `materializeTreeWorktrees` (PR 95, `tests/postapprove-tree.spec.mjs`): a
-  few hand-written PHP files with one genuinely changed line, written before
-  each worker starts (shared, read-only, just like the existing worktrees),
-  with the corresponding `blocks.json`/`relations.json` added to `seed()` in
-  `tests/_fixtures.mjs`.
+- **Never anchor a test on real, ingested `gh`/`git` data — every worktree the
+  suite reads is hand-written in `globalSetup`.** All diff content
+  (`/api/code`, `/api/blockstats`, `/api/langsiblings`) comes from the
+  `materialize*Worktrees` functions in `tests/_setup.mjs`, which write
+  `tests/.tmp/data/worktrees/pr-<n>-{base,head}` before the workers start
+  (shared + read-only across workers, rebuilt on every run — `tests/.tmp` is
+  gitignored, so the fixture *content* is committed as code in `_setup.mjs`
+  while the materialized tree is a build artifact, exactly like
+  `tests/.tmp/slash`). Use `worktreeWriter(pr)` for a new one.
+  **This replaces the old arrangement**, where the main anchor fixture (PR
+  12903) was a real ingest of the actual plug-and-pay PR sitting in the live
+  `data/` tree. That was (a) unreproducible — a fresh checkout/CI never had
+  it, and the on-disk pair had drifted away from the PR's real base/head SHAs,
+  so its diff shape existed nowhere but that one machine — and (b) **deletable
+  out from under the suite**: the daily `cleanup` workflow purges the data of
+  PRs merged over a week ago, which is exactly what wiped it (54 specs failed
+  at once). The fixture PR numbers are real, long-merged PR numbers, so the
+  `-data` split above — not renaming them — is what keeps `cleanup` away from
+  them.
+  `materializeMainWorktrees` (PR 12903) is the one to read first: its own
+  comment spells out the diff shape the specs depend on (exactly two blocks
+  with one single-row change group each, the changed line at absolute line 67,
+  everything else byte-identical between base and head) and why each of those
+  properties is load-bearing. Small per-feature fixture PRs (90/91/92/93/94)
+  deliberately have **no** worktree at all — their specs only exercise
+  child-listing/drill mechanics.
+- **Shared fixture state is reset per test, not per worker
+  (`_cleanApprovals`, an auto fixture in `tests/_fixtures.mjs`).** A worker's
+  DB lives for the whole worker, so a durable approval (or a PR-wide comment)
+  written by one spec leaks into every spec that lands on that worker
+  afterwards — and both change what the sidebar renders: a fully approved
+  top-level block is hidden (`state.showApproved`), and a PR-wide comment adds
+  a synthetic "Start" row (`commentBlockItem`). Whichever spec then clicked
+  `[data-idx="1"]` or counted rows failed, seemingly at random, depending on
+  the scheduler. The fixture wipes the stored approvals of every fixture PR a
+  spec approves (`APPROVAL_RESET_PRS`) plus the anchor PR's comments before
+  each test, through the sanctioned write paths (the approve workflow's `set`
+  Signal with an empty set; a comment's own `delete` Signal). **Add a PR to
+  `APPROVAL_RESET_PRS` as soon as a new spec approves anything on it.**
+  Related rule of thumb: **give a spec that seeds comments its own synthetic
+  PR number** (the `97xxxx` range) rather than sharing one — a shared number
+  makes any exact comment-count assertion order-dependent.
 - **The harness always forces offline, regardless of the shell environment:**
   the worker fixture (`tests/_fixtures.mjs`) starts every server with
   **both `SLASH_GITHUB=off` and `SLASH_CLAUDE=off`** hardcoded in the

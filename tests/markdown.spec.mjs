@@ -11,6 +11,8 @@ test.describe('PR Review Tree — Markdown rendering', () => {
   test('renders headings, lists, bold, links, images and Prism-highlighted code fences', async ({ page }) => {
     await page.goto('/pr/12903')
 
+    await page.waitForLoadState('networkidle')
+
     await page.evaluate(async () => {
       const { renderMarkdown } = await import('/src/markdown.mjs')
       const md = [
@@ -83,6 +85,8 @@ test.describe('PR Review Tree — Markdown rendering', () => {
 
   test('neutralises a javascript: URL scheme on a real Markdown link', async ({ page }) => {
     await page.goto('/pr/12903')
+
+    await page.waitForLoadState('networkidle')
 
     await page.evaluate(async () => {
       const { renderMarkdown } = await import('/src/markdown.mjs')
