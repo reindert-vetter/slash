@@ -33,10 +33,17 @@ directly to a module/table (per `workflows-write-boundary.md`). **Every row**
 — ingested or not — opens the same popover menu on click (`prRow`/`popover(pr)`
 in `src/overview.mjs`, `@click="${() => togglePopover(pr.number)}"` on the
 whole row, a `role="button"` `<div>`, no `<a>`); only the menu's **content**
-differs by `pr.hasGraph`:
+after the pinned close item differs by `pr.hasGraph`. Every popover opens with
+a pinned **"Sluit menu"** as its literal first item (`data-testid=
+close-popover`, mirrors the CommandMenu's own `withClose` pattern in
+`home.mjs`) — but `togglePopover` default-focuses the **2nd** item
+(`focusPopoverItem(1)`, the first real action) on open, so a stray Enter
+never merely closes the menu; `↑`/`↓` (`movePopover`) cycle through every
+item including the pinned one, wrapping at both ends.
 
 - **`pr.hasGraph === false`** (not yet ingested, `generateAction(pr)`):
-  as the **first** choice, **"Generate review tree"** (`data-testid=
+  as the first **action** (2nd item overall, right after "Sluit menu"),
+  **"Generate review tree"** (`data-testid=
   generate-page`) — this starts the existing **`POST /api/ingest {"pr":N}`**
   endpoint (see `.claude/rules/blocks-and-ingest.md`), the sanctioned write
   path (starting a Workflow Execution), not a direct module write. During

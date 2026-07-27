@@ -439,7 +439,11 @@ function togglePopover(number) {
   // into a different PR's menu.
   ui.readyFor = null
   ui.reviewersError = null
-  if (opening) requestAnimationFrame(() => focusPopoverItem(0))
+  // Default focus lands on the 2nd item (the first real action) — the pinned
+  // "Sluit menu" item (see popover() below) always sits first so a stray
+  // Enter never merely closes the menu; focusPopoverItem clamps, so a
+  // popover with only that one item still focuses it.
+  if (opening) requestAnimationFrame(() => focusPopoverItem(1))
 }
 
 // generatePage runs the existing ingest workflow endpoint (the sanctioned
@@ -754,14 +758,18 @@ function readyForReviewSection(pr) {
   </div>`
 }
 
-// popover — every row (ingested or not) opens this same menu on a click: the
-// ingest-related action(s) first (which action depends on pr.hasGraph, see
-// generateAction/ingestedActions above), then a plain link to GitHub, plus a
-// Jira link when the title carries a KEY-123-style ticket key. The panel gets
-// a solid (white in light mode) background plus a strong shadow + ring: it
-// necessarily overlaps the status pills of the row below, and with a
-// near-page-background tint that overlap read as the pill's text being cut
-// off instead of a floating menu covering it.
+// popover — every row (ingested or not) opens this same menu on a click: a
+// pinned "Sluit menu" first (mirrors the CommandMenu's own withClose pattern
+// in home.mjs — closes via closePopover, but togglePopover deliberately
+// default-focuses the 2nd item on open, see focusPopoverItem(1) there, so a
+// stray Enter never merely closes the menu), then the ingest-related
+// action(s) (which action depends on pr.hasGraph, see generateAction/
+// ingestedActions above), then a plain link to GitHub, plus a Jira link when
+// the title carries a KEY-123-style ticket key. The panel gets a solid (white
+// in light mode) background plus a strong shadow + ring: it necessarily
+// overlaps the status pills of the row below, and with a near-page-background
+// tint that overlap read as the pill's text being cut off instead of a
+// floating menu covering it.
 function popover(pr) {
   const m = (pr.title || '').match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
   return html`
@@ -770,6 +778,23 @@ function popover(pr) {
       data-testid="pr-popover"
       @click="${(e) => e.stopPropagation()}"
     >
+      <button
+        type="button"
+        data-testid="close-popover"
+        class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-500 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-700"
+        @click="${(e) => {
+          // Stop propagation FIRST, before closePopover() removes the
+          // popover from the DOM (and thus its own stopPropagation
+          // listener) — otherwise bubbling continues past the
+          // now-detached wrapper straight to the row's own
+          // togglePopover(), which immediately reopens the very popover
+          // this button just closed. See the popover() doc comment.
+          e.stopPropagation()
+          closePopover()
+        }}"
+      >
+        ${icon('x', 'h-3.5 w-3.5')} Sluit menu
+      </button>
       ${pr.hasGraph ? ingestedActions(pr) : generateAction(pr)}
       <a
         href="${pr.url}"

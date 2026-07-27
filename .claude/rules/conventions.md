@@ -298,6 +298,30 @@
   rather than guessing from minified text — see the `LOCAL PATCH 2` comment
   block in `vendor/arrow.js` for the full mechanism and the exact restore
   instructions on an arrow.js upgrade.
+- **A nested `@click` handler that synchronously mutates reactive state can
+  remove its own ancestor's `stopPropagation` listener before native bubbling
+  reaches it — call `e.stopPropagation()` FIRST, before the state mutation.**
+  Seen in `overview.mjs`'s row popover (`popover(pr)`): the wrapping popover
+  `<div>` has `@click="${(e) => e.stopPropagation()}"` so a click anywhere
+  inside it never bubbles to the row's own `@click="${() =>
+  togglePopover(pr.number)}"`. A **nested button** whose own click handler
+  synchronously flips reactive state that unmounts that wrapping div (e.g.
+  `closePopover()` setting `ui.openPopover = null`, which the `${() =>
+  ui.openPopover === pr.number ? popover(pr) : null}` slot reacts to)
+  apparently detaches the wrapper (and its `removeEventListener`'d
+  stopPropagation handler) **synchronously, within the same click-event
+  dispatch** — before the event finishes bubbling past it. The browser then
+  finds no listener left on that node to call `stopPropagation()`, so the
+  click keeps bubbling to the row, which immediately reopens the very popover
+  the button just closed (`togglePopover` sees `ui.openPopover` is now `null`
+  and flips it back open). **Fix:** call `e.stopPropagation()` in the
+  button's *own* handler, before triggering the state mutation — `stopped`
+  is then already set on the event by the time bubbling would reach the
+  (about-to-be-removed) ancestor, regardless of DOM-removal timing. See the
+  "Sluit menu" button in `popover()`. Symptom to watch for: a close/dismiss
+  button inside a click-swallowing overlay that "does nothing" (or instantly
+  reopens) — check whether its own handler also stops propagation, don't
+  assume the ancestor's `stopPropagation` still fires.
 - **`Element.scrollIntoView({block: 'nearest'|'center'})` also moves the
   horizontal axis if you omit `inline`** — that's the DOM default, not an
   arrow.js quirk, but it bit here because a vertical "keep this row in view"
