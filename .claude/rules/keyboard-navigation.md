@@ -1107,27 +1107,31 @@ condition for the pane choice — the two can therefore diverge (a one-sided
 block: `narrowed` true, `forcedNewOnly` false) and that is deliberate.
 
 **`'fit'` (the third stand) sizes the card off its own code instead of a
-fixed number, via `fitWidthCls(b)` in `Block.mjs`** — floored at the
-existing 60% width (`42rem`/`49.2rem`, so `'fit'` is never narrower than
-`'new'`) but **deliberately uncapped upward**, on explicit reviewer
-request: the previous version clamped this at the full split ceiling
-(`70rem`/`82rem`) using the same 75th-percentile line length as
-`RelatedPanel.mjs`'s `relatedColumnWidthCls` (`codeGrowthChars`) — which let
-a genuinely long line (wider than the ceiling) get silently cut off behind
-an invisible horizontal scroll, identically in `'fit'` and `'split'`. That
-defeated `'fit'`'s whole premise ("width follows the code"), so `fitWidthCls`
-now uses **`codeMaxLineChars`** (the TRUE longest non-comment line, not a
+fixed number — but PHP and non-PHP files get genuinely different
+treatment** (`isPhpFile(b)` in `Block.mjs`, a plain `.php` extension check;
+`widthCls` routes on it, only for `'fit'`):
+
+**A `.php` file** uses `fitWidthCls(b)` — floored at the existing 60% width
+(`42rem`/`49.2rem`, so `'fit'` is never narrower than `'new'`) but
+**deliberately uncapped upward**, on explicit reviewer request: an earlier
+version clamped this at the full split ceiling (`70rem`/`82rem`) using the
+same 75th-percentile line length as `RelatedPanel.mjs`'s
+`relatedColumnWidthCls` (`codeGrowthChars`) — which let a genuinely long
+line (wider than the ceiling) get silently cut off behind an invisible
+horizontal scroll, identically in `'fit'` and `'split'`. That defeated
+`'fit'`'s whole premise ("width follows the code"), so `fitWidthCls` uses
+**`codeMaxLineChars`** (the TRUE longest non-comment line, not a
 percentile) and a CSS `max(floor, calc(...))` — no ceiling — so `'fit'` can
-now genuinely grow wider than `'split'` for a block with one very long
+genuinely grow wider than `'split'` for a PHP block with one very long
 line. `codeGrowthChars`/the percentile approach is untouched and still used
-by `relatedColumnWidthCls` — this change is scoped to `fitWidthCls` only.
-`'split'`/`'new'` keep their existing fixed widths and can still clip a
-very long line, unchanged — a deliberate, discussed scope boundary, not an
-oversight. Purely a character-count calculation on the already-loaded
-source text (`b.code`), computed once per code-load (via the existing
-`state.codeVersion`/key-forcing rebuild, see `.claude/rules/conventions.md`
-— **not** re-derived on every navigation step, which would risk the
-"outer closure depends on navigation state" flicker pitfall). Two cases:
+by `relatedColumnWidthCls`. `'split'`/`'new'` keep their existing fixed
+widths and can still clip a very long line, unchanged, for every file
+type — a deliberate, discussed scope boundary, not an oversight. Purely a
+character-count calculation on the already-loaded source text (`b.code`),
+computed once per code-load (via the existing `state.codeVersion`/
+key-forcing rebuild, see `.claude/rules/conventions.md` — **not**
+re-derived on every navigation step, which would risk the "outer closure
+depends on navigation state" flicker pitfall). Two cases:
 - A genuinely **two-sided** (`modified`) block keeps **both** panes in
   `'fit'` (unlike `'new'`) — the width is based on whichever side (old or
   new) needs more room (`Math.max`), since the two panes always render at
@@ -1139,6 +1143,23 @@ source text (`b.code`), computed once per code-load (via the existing
   above would make the card needlessly wide for content shown only once,
   so it gets the **single-pane** variant instead (no doubling), based on
   just the one visible side.
+
+**Any other file** (markdown, JSON, config, …) gets `boundedWrapWidthCls(b)`
+instead — the same bounded width `'split'` already uses (narrow 60% for a
+one-sided block, full split width for a two-sided one) — and its rows
+**wrap** (`whitespace-pre-wrap break-words`) within that width instead of
+growing the card. Reported: the PHP-only uncapped guarantee above, applied
+indiscriminately, grew a card to ~6800px for a single 336-character
+markdown bullet — prose reads perfectly fine wrapped (unlike a PHP
+statement), so `'fit'` must not balloon the card for it ("niet breder dan
+nodig"). A one-sided block reuses `codePane`/`paneHTML` with a `wrap` flag
+(only one column, no cross-pane alignment concern); a two-sided block uses
+**`wrappedCodeDiff`/`pairedRowHTML`** instead of two independent `codePane`
+columns — see the "`a` cycles through a THIRD stand" section in
+`.claude/rules/detail-layout.md` for the full row-alignment mechanism
+(a shared `<div class="flex items-stretch">` row-wrapper per aligned row,
+so the old/new cells of one row always share the same height even once one
+of them wraps onto multiple visual lines).
 
 Read as `viewMode()` within `Block()`'s own per-card `${() => ...}` class
 binding (not in the outer per-column closure of `home.mjs`) — mirroring how

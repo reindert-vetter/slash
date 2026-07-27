@@ -187,6 +187,86 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     expect(width).toBeGreaterThan(1120)
   })
 
+  // Direct-mount unit test: a NON-PHP file (e.g. a markdown/config file) does
+  // NOT get the uncapped, max-line-based 'fit' width above — it stays at the
+  // same bounded width 'split' uses (boundedWrapWidthCls in Block.mjs) and
+  // instead wraps the long line within that width (wrappedCodeDiff/
+  // pairedRowHTML), so an isolated long prose/config line can never balloon
+  // the card the way it can for PHP. See isPhpFile/fitWidthCls's doc comment.
+  test('viewMode="fit" bounds a non-PHP file at the split width and wraps its long line instead', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+
+    await page.evaluate(async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      // A single, deliberately very long prose line (well past both the
+      // 60% floor and the full split width) — the markdown-bullet case
+      // reported in practice.
+      const longLine =
+        '- Structure every test body as `// Given` / `// When` / `// Then`. Separate the phases with a **blank line above each `// When` and `// Then` marker** whenever a previous phase precedes it. This keeps the three phases visually separated and readable at a glance.'
+      const b = reactive({
+        category: 'OTHER',
+        label: 'notes.md',
+        status: 'modified',
+        file: 'docs/notes.md',
+        line: 1,
+        name: 'notes.md',
+        class: '',
+        approved: false,
+        code: {
+          old: { start: 1, end: 3, text: '# Notes\nShort line.\n' },
+          new: { start: 1, end: 4, text: `# Notes\nShort line.\n${longLine}\n` },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'fit-nonphp-host'
+      document.body.appendChild(host)
+      Block(b, { viewMode: () => 'fit' })(host)
+    })
+
+    const card = page.locator('#fit-nonphp-host article')
+    // Bounded at the full split width — NOT a content-based max()/clamp()
+    // formula (unlike the PHP case above).
+    await expect(card).toHaveClass(/w-\[70rem\]/)
+    await expect(card).not.toHaveClass(/max\(/)
+    await expect(card).not.toHaveClass(/clamp\(/)
+    const width = await card.evaluate((el) => el.getBoundingClientRect().width)
+    expect(width).toBeLessThanOrEqual(1120 + 1)
+
+    // The long line's row wraps (whitespace-pre-wrap) instead of overflowing
+    // horizontally — no hidden content behind an invisible scroll.
+    const pane = card.locator('[data-scrollsync]').first()
+    const overflow = await pane.evaluate((el) => ({
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    }))
+    expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1)
+
+    // The two sides of the aligned long-line row stay the same height (row
+    // alignment survives the wrap): find the tallest row-pair (the wrapped
+    // long line — its exact index isn't asserted, since trailing-newline
+    // alignment could shift it) and check its two cells (old/new, excluding
+    // the thin divider) share that same height, proving the shorter/filler
+    // side really did stretch to match instead of drifting out of alignment.
+    const heights = await card.evaluate((el) =>
+      Array.from(el.querySelectorAll('[data-row-pair]')).map((pair) =>
+        Array.from(pair.children)
+          .filter((c) => !c.classList.contains('w-px'))
+          .map((c) => c.getBoundingClientRect().height),
+      ),
+    )
+    const tallest = heights.reduce((a, b) => (Math.max(...b) > Math.max(...a) ? b : a))
+    expect(tallest.length).toBe(2)
+    // The wrapped row is genuinely taller than a normal single line (~20px
+    // at this font/line-height) — proves it actually wrapped onto multiple
+    // visual lines instead of just being a coincidentally-equal filler pair.
+    expect(Math.max(...tallest)).toBeGreaterThan(30)
+    expect(tallest[0]).toBeCloseTo(tallest[1], 0)
+  })
+
   // An already one-sided (added) block has no old pane to hide, so the toggle
   // A one-sided (added/removed) block only ever shows one pane, so it renders
   // at the narrow (60%) width by default — the same width the `a` toggle gives

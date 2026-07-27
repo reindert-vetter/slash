@@ -108,6 +108,19 @@ function narrowed(viewMode) {
   return viewMode() === 'new'
 }
 
+// isPhpFile — the discriminator between 'fit''s two different behaviors
+// (see fitWidthCls/boundedWrapWidthCls below): a plain `.php` extension
+// check on b.file. PHP code gets the uncapped, max-line-based 'fit' width
+// (a long PHP statement is typically one unbreakable logical line, so it
+// must stay fully visible, unwrapped); everything else (markdown, JSON,
+// config, …) gets a bounded width with wrapping instead — prose/config text
+// reads perfectly fine wrapped, and letting one long line balloon the card
+// (reported: a 336-character markdown bullet grew the card to ~6800px) is
+// exactly what "don't be wider than necessary" rules out.
+function isPhpFile(b) {
+  return !!(b.file && b.file.toLowerCase().endsWith('.php'))
+}
+
 // nonCommentLineLengths — the shared scan behind codeGrowthChars and
 // codeMaxLineChars below: the character lengths of every non-blank,
 // non-comment line in `code` (a leading PHPDoc block, `//`/`#` line
@@ -182,41 +195,68 @@ function codeMaxLineChars(code) {
   return lens.length ? lens[lens.length - 1] : 0
 }
 
-// widthCls picks the card's width class for the current `a` stand: the
-// content-based 'fit' clamp (fitWidthCls, below) for 'fit', otherwise the
-// existing binary choice (narrow 60% vs. full split width).
+// widthCls picks the card's width class for the current `a` stand: for
+// 'fit', a PHP file gets the uncapped, content-based width (fitWidthCls);
+// any other file gets a bounded width instead (boundedWrapWidthCls) — see
+// isPhpFile above for why. Every other stand keeps the existing binary
+// choice (narrow 60% vs. full split width), unchanged for every file type.
 function widthCls(b, viewMode) {
-  if (viewMode() === 'fit') return fitWidthCls(b)
+  if (viewMode() === 'fit') return isPhpFile(b) ? fitWidthCls(b) : boundedWrapWidthCls(b)
   return narrowed(viewMode) || singleSide(b)
     ? 'w-[42rem] 2xl:w-[49.2rem] '
     : 'w-[70rem] 2xl:w-[82rem] '
 }
 
-// fitWidthCls — the card width for the `a` toggle's third ('fit') stand:
-// make the card as wide as its own code actually needs, instead of the fixed
-// 60% ('new') or full ('split') width. Floored at the existing 60% width (so
-// 'fit' never goes narrower than 'new'), but — on explicit reviewer request —
-// deliberately UNCAPPED upward: unlike every other width in this file (and
-// unlike codeGrowthChars, the 75th-percentile non-ballooning technique
-// RelatedPanel.mjs's relatedColumnWidthCls still uses), 'fit' must guarantee
-// that the single widest real code line of the block is fully visible,
-// without wrapping and without an invisible horizontal scroll — cutting off
-// part of a long line defeats the entire point of a stand whose stated
-// purpose is "width follows the code". Uses codeMaxLineChars (the TRUE
-// longest non-comment line, not a percentile) for exactly that reason — a
-// percentile-based width plus a ceiling is precisely what let a genuinely
-// long line get silently clipped before this change (reported: a `modified`
-// block's 168-character `throw new RuntimeException(...)` line was cut off
-// mid-word in 'fit', identically to 'split' — see the CSS `max()` below,
-// which drops the previous `clamp(...)` ceiling entirely). Purely a
-// character-count calculation on the already-loaded source text, no live DOM
-// measurement (`scrollWidth`/`getBoundingClientRect`), per the existing
-// approach and the arrow.js pitfalls in conventions.md.
+// boundedWrapWidthCls — the 'fit' width for a NON-PHP file (see isPhpFile):
+// the same bounded width 'split' already uses (narrow 60% for a one-sided
+// added/removed block, full split width for a two-sided modified block) —
+// deliberately NOT content-based. Long lines are made to fit THIS width by
+// wrapping instead (wrappedCodeDiff/pairedRowHTML, and the `wrap` flag on
+// codePane/paneHTML for a one-sided block), so nothing needs to balloon the
+// card past what's actually necessary — the direct fix for "the 3rd stand
+// must not be wider than needed" for non-code (markdown/prose/config) text,
+// where a long line reads perfectly fine wrapped, unlike a PHP statement.
+function boundedWrapWidthCls(b) {
+  return singleSide(b) ? 'w-[42rem] 2xl:w-[49.2rem] ' : 'w-[70rem] 2xl:w-[82rem] '
+}
+
+// fitWidthCls — the card width for the `a` toggle's third ('fit') stand, for
+// a PHP FILE ONLY (widthCls routes any other file to boundedWrapWidthCls
+// instead, see isPhpFile above): make the card as wide as its own code
+// actually needs, instead of the fixed 60% ('new') or full ('split') width.
+// Floored at the existing 60% width (so 'fit' never goes narrower than
+// 'new'), but — on explicit reviewer request — deliberately UNCAPPED
+// upward: unlike every other width in this file (and unlike codeGrowthChars,
+// the 75th-percentile non-ballooning technique RelatedPanel.mjs's
+// relatedColumnWidthCls still uses), 'fit' must guarantee that the single
+// widest real PHP code line of the block is fully visible, without wrapping
+// and without an invisible horizontal scroll — cutting off part of a long
+// line defeats the entire point of a stand whose stated purpose is "width
+// follows the code". Uses codeMaxLineChars (the TRUE longest non-comment
+// line, not a percentile) for exactly that reason — a percentile-based width
+// plus a ceiling is precisely what let a genuinely long line get silently
+// clipped before this change (reported: a `modified` block's 168-character
+// `throw new RuntimeException(...)` line was cut off mid-word in 'fit',
+// identically to 'split' — see the CSS `max()` below, which drops the
+// previous `clamp(...)` ceiling entirely). Purely a character-count
+// calculation on the already-loaded source text, no live DOM measurement
+// (`scrollWidth`/`getBoundingClientRect`), per the existing approach and the
+// arrow.js pitfalls in conventions.md.
 //
-// Deliberately scoped to 'fit' ONLY — 'split' and 'new' keep their existing,
-// fixed widths and can still clip a very long line exactly as before; this
-// was an explicit, discussed choice (not a guess), see keyboard-navigation.md
-// ("`a` — cycling the diff view").
+// This uncapped guarantee turned out to backfire for a NON-PHP file: a
+// markdown bullet/prose line reads perfectly fine wrapped (unlike a PHP
+// statement, which loses nothing by staying on one physical line but reads
+// terribly split mid-expression), so an isolated long prose line ballooned
+// the whole card (reported: 336 characters → ~6800px). Hence the PHP-only
+// scope: a non-PHP file gets boundedWrapWidthCls + wrapping instead
+// (wrappedCodeDiff/pairedRowHTML) — see there for the full mechanism,
+// including how row alignment between the old/new panes is kept intact once
+// a line wraps to multiple visual lines.
+//
+// Deliberately scoped to 'fit' + PHP ONLY — 'split' and 'new' keep their
+// existing, fixed widths and can still clip a very long line exactly as
+// before, for every file type; this was an explicit, discussed choice (not a
+// guess), see keyboard-navigation.md ("`a` — cycling the diff view").
 //
 // 'fit' does NOT force a single pane (see forcedNewOnly above, which
 // deliberately only reacts to 'new') — a genuinely two-sided (modified)
@@ -616,10 +656,18 @@ function codeDiff(
   // one-sided (added/removed) has nothing to hide/show on the other side, so
   // the toggle has no effect there — `only` wins.
   const effectiveOnly = only || (forcedNewOnly(b, viewMode) ? 'right' : null)
+  // A non-PHP file in 'fit' wraps its lines within a bounded width instead of
+  // growing the card to fit the longest line (widthCls/boundedWrapWidthCls
+  // pick the matching width; this flag makes the row rendering itself wrap
+  // instead of overflowing on a single `whitespace-pre` line) — see
+  // isPhpFile/fitWidthCls's own doc comment for the full reasoning.
+  const wrap = viewMode() === 'fit' && !isPhpFile(b)
   // One-sided blocks (added / removed) render at the card's full width; a
   // modified block collapsed by the `a` toggle renders at the card's narrower
   // 60% width (see forcedNewOnly above) — either way, just the non-empty pane,
-  // no divider, no empty counterpart.
+  // no divider, no empty counterpart. A one-sided block never needs the
+  // paired-row structure below (there's only one column to wrap), so it just
+  // reuses codePane/paneHTML with the `wrap` flag threaded through.
   if (effectiveOnly === 'right') {
     return html`
       <div
@@ -627,7 +675,7 @@ function codeDiff(
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn)}
+        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap)}
         ${scrollHint('up')}
         ${scrollHint('down')}
       </div>
@@ -655,12 +703,20 @@ function codeDiff(
               : 'Verwijderd — deze code bestaat niet meer'}
         </div>
         <div class="relative flex min-h-0 flex-1 overflow-hidden">
-          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn)}
+          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap)}
           ${scrollHint('up')}
           ${scrollHint('down')}
         </div>
       </div>
     `
+  }
+  // Two-sided (old + new both shown): a wrapping non-PHP block needs the
+  // paired-row structure (wrappedCodeDiff) so the two sides of the same
+  // aligned row stay the same height even once one of them wraps onto
+  // multiple visual lines — see wrappedCodeDiff/pairedRowHTML's own doc
+  // comment for why that can't just reuse two independent codePane columns.
+  if (wrap) {
+    return wrappedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn)
   }
   return html`
     <div
@@ -774,6 +830,12 @@ function syncScroll(e) {
 // the L-range in the header. The body is the shared aligned `rows`, projected to
 // this side (`left` = old, `right` = new). Both panes render the same number of
 // rows at the same line-height, so they line up vertically without any JS.
+// `wrap` (only ever true for a non-PHP file in 'fit', see isPhpFile/codeDiff)
+// switches every row from `whitespace-pre` to `whitespace-pre-wrap
+// break-words` — safe here because this is the SINGLE-pane path (one-sided
+// added/removed, or the 'new'-collapsed view): there's no second pane whose
+// row height needs to stay in lockstep. The two-sided case uses
+// wrappedCodeDiff/pairedRowHTML instead — see there for why.
 function codePane(
   side,
   data,
@@ -785,6 +847,7 @@ function codePane(
   approvedFn = () => new Set(),
   commentedFn = () => new Set(),
   approvedCallsFn = () => new Set(),
+  wrap = false,
 ) {
   return html`
     <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}" data-pane="${side}">
@@ -792,103 +855,116 @@ function codePane(
         <code
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           .innerHTML="${() =>
-            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn())}"
+            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap)}"
         ></code>
       </div>
     </div>
   `
 }
 
+// rowCellHTML builds the <div> for ONE (row, side) — the shared building
+// block behind both paneHTML (below, the existing per-pane `whitespace-pre`
+// rendering used everywhere except a wrapping non-PHP 'fit' block) and
+// pairedRowHTML (wrappedCodeDiff's per-row-pair renderer). `wrap` switches
+// `whitespace-pre` → `whitespace-pre-wrap break-words`; every other
+// computation (active tint, checkmark, comment marker, call underline) is
+// identical between the two render paths, so extracting this avoids
+// duplicating that logic.
+function rowCellHTML(r, i, sideKey, group, approved, commented, wrap) {
+  const text = sideKey === 'left' ? r.left : r.right
+  const mark = sideKey === 'left' ? r.leftMark : r.rightMark
+  const ws = wsOnly(r)
+  // A row-level flag (a real change on either side) so a single pane's rows
+  // carry the full set of changes — updateHints scans just one pane. Del
+  // rows are marked on the left, ins rows via their filler row, so both are
+  // covered. Whitespace-only re-alignments don't count (see rowChanged/wsOnly).
+  const changed = rowChanged(r)
+  const active = changed && group && i >= group.start && i <= group.end
+  // At call granularity the active unit is a single row plus the char indices
+  // of the one call segment being navigated; underline those (per side) so the
+  // exact segment within the line is marked. null at group/line granularity.
+  const underline =
+    active && group.char ? (sideKey === 'left' ? group.left : group.right) : null
+  // A fully-approved changed row gets a small checkmark in the left gutter —
+  // see approveHere below for which side draws it. The active (indigo)
+  // highlight takes precedence visually while the cursor is on the row.
+  const isApproved = changed && approved.has(i)
+  // Backgrounds are ~20% lighter than the raw Tailwind rose/emerald shades
+  // (mixed 20% toward white) so the tint reads as an accent, not a fill.
+  let cls = 'relative block px-3 ' + (wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre')
+  if (active) {
+    // Brighter tint + an inset left bar (box-shadow, so it adds no width and
+    // the bars of adjacent active rows merge into one continuous accent).
+    cls += ' shadow-[inset_3px_0_0_#6366f1]'
+    if (mark === 'del') cls += ' bg-[#fed7dc] dark:bg-rose-500/25' // rose-200 +20% white
+    else if (mark === 'ins') cls += ' bg-[#b9f5d9] dark:bg-emerald-500/25' // emerald-200 +20% white
+    else cls += ' bg-indigo-50 dark:bg-indigo-500/15'
+  } else {
+    if (ws) {
+      // Whitespace-only re-alignment: no full-line tint (it isn't a real
+      // change). Only the shifted whitespace itself is coloured, in the body.
+    } else if (mark === 'del') cls += ' bg-[#ffe9eb] dark:bg-rose-500/10' // rose-100 +20% white
+    else if (mark === 'ins') cls += ' bg-[#dafbea] dark:bg-emerald-500/10' // emerald-100 +20% white
+    else if (text === null) cls += ' bg-slate-50 dark:bg-zinc-800/60' // filler for the missing side
+  }
+  // A row modified on both sides (a del paired with an ins) gets an intra-line
+  // char diff so the reviewer sees *what* changed — the inserted/removed
+  // characters are marked, not just the whole line. One-sided rows (a pure
+  // add or remove) have nothing to diff against, so they highlight plainly.
+  const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
+  let body
+  if (text === null) body = '&nbsp;'
+  else if (paired) body = highlightChanges(r, sideKey, ws, underline)
+  else if (underline && underline.size)
+    // A one-sided change (pure add / remove): its whole line is the single
+    // edit, so underline it end to end.
+    body = markChars(highlight(text), (pi) => (underline.has(pi) ? UNDERLINE_CLS : ''))
+  else body = highlight(text)
+  // A 💬 marks a row that carries a comment — presence only (the count
+  // doesn't matter). Shown once per row: on the new (right) pane for a normal
+  // row, on the old (left) pane only for a pure deletion (no right side), so a
+  // modified row doesn't get the marker twice. Appended after the code so it
+  // trails the line and scrolls with it.
+  const commentedHere =
+    text !== null && commented.has(i) && (sideKey === 'right' || r.right == null)
+  const marker = commentedHere
+    ? ' <span class="select-none opacity-60" data-comment="1" title="Er zit een comment op deze regel">💬</span>'
+    : ''
+  // Anchor the first row of the active group so home.mjs can scroll it to
+  // the vertical centre of the diff viewport.
+  const anchor = active && i === group.start ? ' data-change-active="1"' : ''
+  const flag = changed ? ' data-changed="1"' : ''
+  // approveHere mirrors commentedHere: the approve mark for a row belongs on
+  // the new (right) pane normally, and on the old (left) pane only for a pure
+  // deletion (no right side) — so a modified row never gets it twice.
+  const approveHere = sideKey === 'right' || r.right == null
+  // No leading space here: the span is absolutely positioned so it should
+  // take no flow width, but a plain leading space character would still be
+  // a real char in this white-space:pre row and shift the whole line one
+  // monospace column to the right on an approved row.
+  const check =
+    isApproved && approveHere
+      ? '<span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">✓</span>'
+      : ''
+  // data-row carries the aligned-row index: the DOM child index can't be used
+  // to find a row (the partial-call circle rows below insert extra divs), and
+  // only the active group's first row has an anchor otherwise. Used by the
+  // call-arrow overlay (src/callArrows.mjs) to anchor an arrow on the exact
+  // call-site row.
+  return `<div class="${cls}"${anchor}${flag} data-row="${i}">${check}${body}${marker}</div>`
+}
+
 // paneHTML builds the innerHTML string of one pane's <code>: one <div> per
-// aligned row. Present lines are Prism-highlighted (which escapes the text);
-// blank/filler lines get a non-breaking space so the row keeps its height. The
-// only unescaped bits are our own static class strings, so the result is safe to
-// hand to the .innerHTML binding.
-function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Set(), approvedCalls = new Set()) {
+// aligned row (via rowCellHTML), plus the call-approval segment-dots row
+// where applicable. Present lines are Prism-highlighted (which escapes the
+// text); blank/filler lines get a non-breaking space so the row keeps its
+// height. The only unescaped bits are our own static class strings, so the
+// result is safe to hand to the .innerHTML binding.
+function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Set(), approvedCalls = new Set(), wrap = false) {
   const parts = []
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]
-    const text = sideKey === 'left' ? r.left : r.right
-    const mark = sideKey === 'left' ? r.leftMark : r.rightMark
-    const ws = wsOnly(r)
-    // A row-level flag (a real change on either side) so a single pane's rows
-    // carry the full set of changes — updateHints scans just the left pane. Del
-    // rows are marked on the left, ins rows via their filler row, so both are
-    // covered. Whitespace-only re-alignments don't count (see rowChanged/wsOnly).
-    const changed = rowChanged(r)
-    const active = changed && group && i >= group.start && i <= group.end
-    // At call granularity the active unit is a single row plus the char indices
-    // of the one call segment being navigated; underline those (per side) so the
-    // exact segment within the line is marked. null at group/line granularity.
-    const underline =
-      active && group.char ? (sideKey === 'left' ? group.left : group.right) : null
-    // A fully-approved changed row gets a small checkmark in the left gutter —
-    // see approveHere below for which side draws it. The active (indigo)
-    // highlight takes precedence visually while the cursor is on the row.
-    const isApproved = changed && approved.has(i)
-    // Backgrounds are ~20% lighter than the raw Tailwind rose/emerald shades
-    // (mixed 20% toward white) so the tint reads as an accent, not a fill.
-    let cls = 'relative block whitespace-pre px-3'
-    if (active) {
-      // Brighter tint + an inset left bar (box-shadow, so it adds no width and
-      // the bars of adjacent active rows merge into one continuous accent).
-      cls += ' shadow-[inset_3px_0_0_#6366f1]'
-      if (mark === 'del') cls += ' bg-[#fed7dc] dark:bg-rose-500/25' // rose-200 +20% white
-      else if (mark === 'ins') cls += ' bg-[#b9f5d9] dark:bg-emerald-500/25' // emerald-200 +20% white
-      else cls += ' bg-indigo-50 dark:bg-indigo-500/15'
-    } else {
-      if (ws) {
-        // Whitespace-only re-alignment: no full-line tint (it isn't a real
-        // change). Only the shifted whitespace itself is coloured, in the body.
-      } else if (mark === 'del') cls += ' bg-[#ffe9eb] dark:bg-rose-500/10' // rose-100 +20% white
-      else if (mark === 'ins') cls += ' bg-[#dafbea] dark:bg-emerald-500/10' // emerald-100 +20% white
-      else if (text === null) cls += ' bg-slate-50 dark:bg-zinc-800/60' // filler for the missing side
-    }
-    // A row modified on both sides (a del paired with an ins) gets an intra-line
-    // char diff so the reviewer sees *what* changed — the inserted/removed
-    // characters are marked, not just the whole line. One-sided rows (a pure
-    // add or remove) have nothing to diff against, so they highlight plainly.
-    const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
-    let body
-    if (text === null) body = '&nbsp;'
-    else if (paired) body = highlightChanges(r, sideKey, ws, underline)
-    else if (underline && underline.size)
-      // A one-sided change (pure add / remove): its whole line is the single
-      // edit, so underline it end to end.
-      body = markChars(highlight(text), (pi) => (underline.has(pi) ? UNDERLINE_CLS : ''))
-    else body = highlight(text)
-    // A 💬 marks a row that carries a comment — presence only (the count
-    // doesn't matter). Shown once per row: on the new (right) pane for a normal
-    // row, on the old (left) pane only for a pure deletion (no right side), so a
-    // modified row doesn't get the marker twice. Appended after the code so it
-    // trails the line and scrolls with it.
-    const commentedHere =
-      text !== null && commented.has(i) && (sideKey === 'right' || r.right == null)
-    const marker = commentedHere
-      ? ' <span class="select-none opacity-60" data-comment="1" title="Er zit een comment op deze regel">💬</span>'
-      : ''
-    // Anchor the first row of the active group so home.mjs can scroll it to
-    // the vertical centre of the diff viewport.
-    const anchor = active && i === group.start ? ' data-change-active="1"' : ''
-    const flag = changed ? ' data-changed="1"' : ''
-    // approveHere mirrors commentedHere: the approve mark for a row belongs on
-    // the new (right) pane normally, and on the old (left) pane only for a pure
-    // deletion (no right side) — so a modified row never gets it twice.
-    const approveHere = sideKey === 'right' || r.right == null
-    // No leading space here: the span is absolutely positioned so it should
-    // take no flow width, but a plain leading space character would still be
-    // a real char in this white-space:pre row and shift the whole line one
-    // monospace column to the right on an approved row.
-    const check =
-      isApproved && approveHere
-        ? '<span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">✓</span>'
-        : ''
-    // data-row carries the aligned-row index: the DOM child index can't be used
-    // to find a row (the partial-call circle rows below insert extra divs), and
-    // only the active group's first row has an anchor otherwise. Used by the
-    // call-arrow overlay (src/callArrows.mjs) to anchor an arrow on the exact
-    // call-site row.
-    parts.push(`<div class="${cls}"${anchor}${flag} data-row="${i}">${check}${body}${marker}</div>`)
+    parts.push(rowCellHTML(r, i, sideKey, group, approved, commented, wrap))
 
     // Partial call approval: once at least one — but not all — of this row's
     // call segments is approved, an open circle marks every segment still
@@ -896,15 +972,89 @@ function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Se
     // evaluate the exact same (row, approval-state) inputs, so they insert this
     // extra row at the same index on both sides and stay line-for-line aligned:
     // only the side that actually shows the segments draws the dots, the other
-    // gets a blank filler row of equal height.
+    // gets a blank filler row of equal height. (Not used by the wrap path's
+    // pairedRowHTML — a call segment's monospace column position is only
+    // meaningful on an unwrapped line, and `call` granularity essentially
+    // never applies to a whole-file non-PHP block anyway.)
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
     if (partial) {
+      const text = sideKey === 'left' ? r.left : r.right
+      const approveHere = sideKey === 'right' || r.right == null
       parts.push(
         approveHere ? circleRowHTML(text, partial.segs, partial.approvedStarts) : BLANK_MARK_ROW,
       )
     }
   }
   return parts.join('')
+}
+
+// pairedRowHTML builds the innerHTML for wrappedCodeDiff's single shared
+// scroll container: one row-wrapper `<div class="flex">` per aligned row,
+// containing the old cell and new cell as flex children side by side.
+// Unlike paneHTML (two INDEPENDENT per-pane `<code>` blocks — only ever
+// correct together because nothing there wraps, so every row is exactly one
+// line tall on both sides) pairing both cells inside ONE flex row guarantees
+// they share the same rendered height even once one (or both) sides wraps
+// onto multiple visual lines: flexbox's default `align-items: stretch`
+// stretches the shorter cell to match the taller one, so aligned row index i
+// always occupies the same vertical span on both sides. This is the
+// load-bearing reason a wrapping non-PHP 'fit' block needs a different
+// container shape instead of reusing codePane twice — two independent
+// scrolling columns have no way to coordinate a per-row height once wrapping
+// makes row heights variable. `min-w-0` on each cell is required for the
+// wrap to actually take effect (the classic flexbox min-width:auto trap that
+// would otherwise let the cell overflow instead of wrapping).
+//
+// Deliberately does NOT render the call-approval segment-dots row (see
+// paneHTML) — those assume a monospace column position that's only
+// meaningful on an unwrapped line, and this path is for non-PHP files where
+// `call`-granularity navigation essentially never applies.
+function pairedRowHTML(rows, group, approved, commented) {
+  const parts = []
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
+    const left = rowCellHTML(r, i, 'left', group, approved, commented, true)
+    const right = rowCellHTML(r, i, 'right', group, approved, commented, true)
+    parts.push(
+      `<div class="flex items-stretch" data-row-pair="${i}">` +
+        `<div class="w-1/2 min-w-0">${left}</div>` +
+        `<div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>` +
+        `<div class="w-1/2 min-w-0">${right}</div>` +
+        `</div>`,
+    )
+  }
+  return parts.join('')
+}
+
+// wrappedCodeDiff renders the two-sided ('modified') diff for a non-PHP file
+// in 'fit' — the wrap counterpart of the default two-codePane return at the
+// bottom of codeDiff. A SINGLE scrolling container (not two independently
+// scrolling, horizontally-synced panes — see syncScroll) holding
+// pairedRowHTML's row-pairs: since text now wraps to fit the bounded card
+// width (boundedWrapWidthCls), there's no horizontal overflow left to
+// scroll — only vertical, which this single container handles on its own,
+// so the old cross-pane scroll-sync machinery isn't needed here (though
+// `data-scrollsync`/`syncScroll` are still wired up for updateHints's sake,
+// which reads `[data-scrollsync]`/`[data-changed]` off whichever container
+// it finds — harmless to keep, and one less thing to special-case).
+function wrappedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn) {
+  return html`
+    <div
+      class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
+      data-testid="code-diff"
+      data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
+    >
+      <div class="no-scrollbar min-h-0 flex-1 overflow-auto" data-scrollsync @scroll="${syncScroll}">
+        <code
+          class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
+          .innerHTML="${() =>
+            pairedRowHTML(rows, activeGroup(), approvedFn(), commentedFn())}"
+        ></code>
+      </div>
+      ${scrollHint('up')}
+      ${scrollHint('down')}
+    </div>
+  `
 }
 
 // BLANK_MARK_ROW is the filler used on the pane that doesn't draw the

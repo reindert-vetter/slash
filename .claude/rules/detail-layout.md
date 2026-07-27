@@ -1332,32 +1332,59 @@ and the same `viewMode` opt (`() => state.diffViewMode`).
 **`a` cycles through a THIRD stand, `'fit'`, between `'new'` and back to
 `'split'`** (`DIFF_VIEW_CYCLE` in `home.mjs`): both panes come back (like
 `'split'` — `forcedNewOnly` only ever reacts to `'new'`), but the card's
-width becomes **content-based** instead of the fixed `70rem`/`82rem`:
-`widthCls(b, viewMode)` (`Block.mjs`) delegates to `fitWidthCls(b)` for
-this stand. Floored at the existing 60% width (never narrower than
-`'new'`) but **deliberately uncapped upward** — on explicit reviewer
-request, `'fit'` guarantees that the single widest non-comment code line of
-the block is always fully visible, never cut off behind an invisible
-horizontal scroll (which is exactly what a percentile-based width plus a
-ceiling used to allow: a genuinely long line — e.g. a 168-character `throw
-new RuntimeException(...)`, PR 13042 — was clipped identically in `'fit'`
-and `'split'`, defeating `'fit'`'s whole "width follows the code" premise).
-`fitWidthCls` therefore uses `codeMaxLineChars` (the TRUE longest
-non-comment line, not a percentile) via a CSS `max(floor, calc(...))` —
-no ceiling `clamp(...)` any more. `codeGrowthChars` (the 75th-percentile,
-non-ballooning technique) stays exactly as it was and is still used by
-`RelatedPanel.mjs`'s `relatedColumnWidthCls` — only `'fit'`'s own card
-width switched to the max-based, uncapped calculation; `'split'`/`'new'`
-keep their existing fixed widths (and can still clip a very long line,
-unchanged, discussed and accepted). A genuinely two-sided block uses the
-wider of its old/new side, doubled (both panes render at equal width) plus
-a fixed gutter allowance; an already one-sided block (only one pane ever
-renders, regardless of `viewMode`) uses the single-pane variant instead,
-based on just that one visible side. Purely a character-count calculation
-on the already-loaded source text — no live DOM measurement
-(`scrollWidth`/`getBoundingClientRect`), per the existing approach. See
-`.claude/rules/keyboard-navigation.md` ("`a` — cycling the diff view") for
-the full mechanism. Test: `tests/diffview.spec.mjs`.
+width changes — **differently for a PHP file than for anything else**
+(`isPhpFile(b)` in `Block.mjs`, a plain `.php` extension check on
+`b.file`; `widthCls(b, viewMode)` routes on it for `'fit'` only):
+
+- **A `.php` file** gets a **content-based**, uncapped width instead of the
+  fixed `70rem`/`82rem`: `widthCls` delegates to `fitWidthCls(b)`. Floored
+  at the existing 60% width (never narrower than `'new'`) but **deliberately
+  uncapped upward** — on explicit reviewer request, `'fit'` guarantees that
+  the single widest non-comment PHP code line of the block is always fully
+  visible, never cut off behind an invisible horizontal scroll (which is
+  exactly what a percentile-based width plus a ceiling used to allow: a
+  genuinely long line — e.g. a 168-character `throw new
+  RuntimeException(...)`, PR 13042 — was clipped identically in `'fit'` and
+  `'split'`, defeating `'fit'`'s whole "width follows the code" premise).
+  `fitWidthCls` uses `codeMaxLineChars` (the TRUE longest non-comment line,
+  not a percentile) via a CSS `max(floor, calc(...))` — no ceiling
+  `clamp(...)`. `codeGrowthChars` (the 75th-percentile, non-ballooning
+  technique) stays exactly as it was and is still used by
+  `RelatedPanel.mjs`'s `relatedColumnWidthCls`. A genuinely two-sided block
+  uses the wider of its old/new side, doubled (both panes render at equal
+  width) plus a fixed gutter allowance; an already one-sided block (only one
+  pane ever renders, regardless of `viewMode`) uses the single-pane variant
+  instead, based on just that one visible side. Purely a character-count
+  calculation on the already-loaded source text — no live DOM measurement
+  (`scrollWidth`/`getBoundingClientRect`), per the existing approach.
+- **Any other file** (markdown, JSON, config, …) gets the **same bounded
+  width `'split'` already uses** instead (`boundedWrapWidthCls(b)` — narrow
+  60% for a one-sided added/removed block, full split width for a two-sided
+  modified block), and its rows **wrap** (`whitespace-pre-wrap break-words`
+  instead of `whitespace-pre`) within that width rather than growing the
+  card. The PHP-only uncapped guarantee above backfired for prose/config
+  text: an isolated long markdown bullet (336 characters, no natural break
+  point for a PHP-style width formula) grew a card to ~6800px — prose reads
+  perfectly fine wrapped, unlike a PHP statement, so there is no reason to
+  balloon the card for it. A one-sided block reuses `codePane`/`paneHTML`
+  with a `wrap` flag (no cross-pane alignment concern, only one column); a
+  two-sided block uses **`wrappedCodeDiff`/`pairedRowHTML`** instead of two
+  independent `codePane` columns — a single scrolling container holding one
+  `<div class="flex items-stretch">` row-wrapper per aligned row, with the
+  old/new cells as its two flex children. This is load-bearing: two
+  independently-scrolling panes (the normal `codePane` shape) have no way to
+  keep a row's height in sync between them once wrapping makes row heights
+  variable, but flexbox's default `align-items: stretch` on a **shared** row
+  wrapper stretches the shorter cell to match the taller one automatically,
+  so the aligned row index always occupies the same vertical span on both
+  sides — no JS measurement needed. Does not render the call-approval
+  segment-dots row (`circleRowHTML`/`partialCallApproval` in `Block.mjs`) —
+  those assume a monospace column position only meaningful on an unwrapped
+  line, and `call`-granularity navigation essentially never applies to a
+  whole-file non-PHP block anyway.
+
+See `.claude/rules/keyboard-navigation.md` ("`a` — cycling the diff view")
+for the full mechanism. Test: `tests/diffview.spec.mjs`.
 
 **A look-ahead preview must never be wider/richer than the active block next
 to it (`activeSingleSided`, both preview spots).** Without a
