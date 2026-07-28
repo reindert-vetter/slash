@@ -116,7 +116,15 @@ test.describe('Task inbox (/inbox)', () => {
     const runId = await placeUnreadComment(page)
 
     await page.goto('/inbox')
-    const commentRow = page.getByTestId('task-row').filter({ hasText: 'Onbeantwoorde reactie · PR #12801' })
+    // Matched on this comment's own data-task-id ("comment:<runId>"), not on
+    // its title text: the earlier "shows all three task kinds" test in this
+    // file leaves its own unread comment unresolved, so by the time this test
+    // runs there can be TWO "Onbeantwoorde reactie · PR #12801" rows in the
+    // same worker's DB — a plain text filter would then hit Playwright's
+    // strict-mode ambiguity. Titles legitimately collide in real usage too
+    // (two distinct unread comments on the same PR read identically) — this
+    // is a test-isolation fix, not a change in app behavior.
+    const commentRow = page.locator('[data-testid="task-row"][data-task-id="' + 'comment:' + runId + '"]')
     await expect(commentRow).toBeVisible({ timeout: 15000 })
     await commentRow.click()
     await expect(page.getByTestId('task-detail-comment')).toBeVisible()
@@ -147,8 +155,9 @@ test.describe('Task inbox (/inbox)', () => {
     expect(resolveBody.done).toBe(true)
 
     // Resolved ⇒ no longer "unread" ⇒ the task disappears from the inbox.
-    await expect(page.getByTestId('task-row').filter({ hasText: 'Onbeantwoorde reactie' })).toHaveCount(0, {
-      timeout: 15000,
-    })
+    // Scoped to this comment's own row (not every "Onbeantwoorde reactie" row)
+    // for the same isolation reason as above — an earlier test's own,
+    // still-unresolved comment must not make this assertion fail.
+    await expect(commentRow).toHaveCount(0, { timeout: 15000 })
   })
 })

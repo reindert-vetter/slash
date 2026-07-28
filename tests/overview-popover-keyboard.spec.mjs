@@ -112,6 +112,16 @@ test.describe('PR Review Tree — popover keyboard navigation', () => {
     const popover = page.locator('[data-testid="pr-popover"]')
     await expect(popover).toBeVisible()
 
+    // togglePopover default-focuses the 2nd item via requestAnimationFrame
+    // (see focusPopoverItem(1) in overview.mjs) — wait for that focus to
+    // actually land (mirrors the other test in this file) before pressing
+    // ArrowDown, otherwise the keypress can race the rAF and land on
+    // whatever ui.openPopover happened to leave focused (or nothing at all),
+    // which movePopover then treats as "no current item" and wraps to the
+    // first one instead of stepping from the 2nd to the 3rd.
+    const generate = popover.locator('[data-testid="generate-page"]')
+    await expect(generate).toBeFocused()
+
     // Move focus off the first item onto "Open op GitHub" (a target="_blank"
     // link) and confirm Enter follows it instead of running the first item's
     // (Generate) action.

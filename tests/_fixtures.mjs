@@ -35,9 +35,10 @@ const BIN = path.resolve('tests/.tmp/slash')
 // APPROVAL_RESET_PRS — the fixture PRs whose stored approvals the auto
 // `_cleanApprovals` fixture below wipes before every test: the shared main
 // anchor (12903) plus every small fixture PR some spec approves (95's tree,
-// 106's drilled line-skip, 107's translation keys, 108's fresh-open default).
+// 102's Shift+range selection, 106's drilled line-skip, 107's translation
+// keys, 108's fresh-open default).
 // Add a PR here as soon as a new spec approves anything on it durably.
-const APPROVAL_RESET_PRS = [95, 106, 107, 108, 12903]
+const APPROVAL_RESET_PRS = [95, 102, 106, 107, 108, 12903]
 
 // seed replicates the seed passes the old webServer command ran: the main
 // blocks fixture (PR 12903), the relations/callresolve fixtures (PR 90/91),
