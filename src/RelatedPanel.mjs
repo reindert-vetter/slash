@@ -1124,7 +1124,7 @@ const CSTATUS_DOT = { open: 'bg-amber-400', resolved: 'bg-emerald-500' }
 function sourceBadge(c) {
   if (c.source !== 'github') return ''
   return html`<span
-    class="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500 dark:bg-zinc-800 dark:text-zinc-400"
+    class="shrink-0 rounded-full bg-slate-200/70 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-400"
     data-testid="comment-source"
     >bron: github</span
   >`
@@ -1184,7 +1184,7 @@ function reactionBubble(r, i, total, isActive) {
     <div class="${() => 'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}">
       <div class="flex items-center gap-1.5" data-testid="reaction-author-line">
         ${avatarHTML(r.author, r.avatarUrl, 'h-4 w-4')}
-        <span class="text-[10px] font-medium text-slate-500 dark:text-zinc-400" data-testid="reaction-author"
+        <span class="text-[10px] font-medium text-slate-600 dark:text-zinc-400" data-testid="reaction-author"
           >${r.author || 'onbekend'}</span
         >
       </div>
@@ -1194,8 +1194,8 @@ function reactionBubble(r, i, total, isActive) {
           return (
             'markdown-body max-w-[92%] rounded-xl border px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] ' +
             (mine
-              ? 'border-indigo-200 bg-indigo-50 text-slate-800 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-zinc-200'
-              : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300') +
+              ? 'border-indigo-300 bg-indigo-50 text-slate-800 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-zinc-200'
+              : 'border-slate-300 bg-slate-100 text-slate-800 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300') +
             (sel ? ' ring-2 ring-indigo-400' : '')
           )
         }}"
@@ -2436,12 +2436,12 @@ export function commentDetailCard(c, opts) {
           >${c.author || 'onbekend'}</span
         >
         <span
-          class="rounded-full bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-500 dark:text-zinc-400"
+          class="rounded-full bg-slate-200/70 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-600 dark:text-zinc-400"
           data-testid="comment-detail-kind"
           >${COMMENT_KIND_LABEL[c.kind] || c.kind}</span
         >
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)}
-        <span class="ml-auto shrink-0 text-[10px] text-slate-400 dark:text-zinc-500">${relTime(c.createdAt)}</span>
+        <span class="ml-auto shrink-0 text-[10px] text-slate-500 dark:text-zinc-500">${relTime(c.createdAt)}</span>
       </div>
       <div
         class="${() =>

@@ -174,74 +174,76 @@
 
       /* Dark-mode overrides for the two colour blocks above — see index.html
          for the full explanation of the two-block (@media + data-theme)
-         mirroring pattern. */
+         mirroring pattern, and why every selector in the @media block carries
+         a `:root:not([data-theme='light'])` gate (the manual light toggle
+         must win from an OS on dark). Keep the gate when editing. */
       @media (prefers-color-scheme: dark) {
-        .language-php .token.comment,
-        .language-php .token.prolog,
-        .language-php .token.doctype,
-        .language-php .token.cdata {
+        :root:not([data-theme='light']) .language-php .token.comment,
+        :root:not([data-theme='light']) .language-php .token.prolog,
+        :root:not([data-theme='light']) .language-php .token.doctype,
+        :root:not([data-theme='light']) .language-php .token.cdata {
           color: #8b949e;
         }
-        .language-php .token.punctuation {
+        :root:not([data-theme='light']) .language-php .token.punctuation {
           color: #c9d1d9;
         }
-        .language-php .token.property,
-        .language-php .token.variable,
-        .language-php .token.regex,
-        .language-php .token.tag,
-        .language-php .token.symbol,
-        .language-php .token.deleted {
+        :root:not([data-theme='light']) .language-php .token.property,
+        :root:not([data-theme='light']) .language-php .token.variable,
+        :root:not([data-theme='light']) .language-php .token.regex,
+        :root:not([data-theme='light']) .language-php .token.tag,
+        :root:not([data-theme='light']) .language-php .token.symbol,
+        :root:not([data-theme='light']) .language-php .token.deleted {
           color: #ffa657;
         }
-        .language-php .token.boolean,
-        .language-php .token.number,
-        .language-php .token.constant {
+        :root:not([data-theme='light']) .language-php .token.boolean,
+        :root:not([data-theme='light']) .language-php .token.number,
+        :root:not([data-theme='light']) .language-php .token.constant {
           color: #79c0ff;
         }
-        .language-php .token.selector,
-        .language-php .token.attr-name,
-        .language-php .token.string,
-        .language-php .token.char,
-        .language-php .token.builtin,
-        .language-php .token.inserted {
+        :root:not([data-theme='light']) .language-php .token.selector,
+        :root:not([data-theme='light']) .language-php .token.attr-name,
+        :root:not([data-theme='light']) .language-php .token.string,
+        :root:not([data-theme='light']) .language-php .token.char,
+        :root:not([data-theme='light']) .language-php .token.builtin,
+        :root:not([data-theme='light']) .language-php .token.inserted {
           color: #7ee787;
         }
-        .language-php .token.operator,
-        .language-php .token.entity,
-        .language-php .token.url,
-        .language-php .token.atrule,
-        .language-php .token.attr-value,
-        .language-php .token.keyword {
+        :root:not([data-theme='light']) .language-php .token.operator,
+        :root:not([data-theme='light']) .language-php .token.entity,
+        :root:not([data-theme='light']) .language-php .token.url,
+        :root:not([data-theme='light']) .language-php .token.atrule,
+        :root:not([data-theme='light']) .language-php .token.attr-value,
+        :root:not([data-theme='light']) .language-php .token.keyword {
           color: #ff7b72;
         }
-        .language-php .token.function,
-        .language-php .token.class-name {
+        :root:not([data-theme='light']) .language-php .token.function,
+        :root:not([data-theme='light']) .language-php .token.class-name {
           color: #d2a8ff;
         }
 
-        .markdown-body h1,
-        .markdown-body h2,
-        .markdown-body h3,
-        .markdown-body h4,
-        .markdown-body h5,
-        .markdown-body h6 {
+        :root:not([data-theme='light']) .markdown-body h1,
+        :root:not([data-theme='light']) .markdown-body h2,
+        :root:not([data-theme='light']) .markdown-body h3,
+        :root:not([data-theme='light']) .markdown-body h4,
+        :root:not([data-theme='light']) .markdown-body h5,
+        :root:not([data-theme='light']) .markdown-body h6 {
           color: #e4e4e7;
         }
-        .markdown-body blockquote {
+        :root:not([data-theme='light']) .markdown-body blockquote {
           border-left-color: #3f3f46;
           color: #a1a1aa;
         }
-        .markdown-body a {
+        :root:not([data-theme='light']) .markdown-body a {
           color: #818cf8;
         }
-        .markdown-body code {
+        :root:not([data-theme='light']) .markdown-body code {
           background: rgba(99, 102, 241, 0.15);
           color: #c7d2fe;
         }
-        .markdown-body pre {
+        :root:not([data-theme='light']) .markdown-body pre {
           background: #18181b;
         }
-        .markdown-body hr {
+        :root:not([data-theme='light']) .markdown-body hr {
           border-top-color: #3f3f46;
         }
       }

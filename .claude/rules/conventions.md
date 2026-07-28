@@ -550,7 +550,15 @@
   nesting, for maximum browser compatibility) that actually wins once the
   manual toggle overrides the OS setting. Both share the same palette: a
   GitHub-dark-inspired Prism palette + the zinc/indigo colors of the rest of
-  dark mode.
+  dark mode. **Every selector inside the `@media` block carries a
+  `:root:not([data-theme='light'])` gate** (in `index.html` AND `inbox.html`
+  — keep it when editing): a media query only sees the OS preference, so
+  without the gate an OS on dark + the manual **light** toggle
+  (`data-theme="light"`, no `.dark` class — all Tailwind renders light)
+  still applied these dark Prism/markdown colors, leaving near-black `pre`
+  blocks and lavender inline-code pills inside white cards. With the gate
+  the media block stays the pre-JS/no-JS fallback (attribute absent → OS
+  wins) but loses to an explicit light choice.
   **Diff-row backgrounds** (`Block.mjs`, `paneHTML`) are arbitrary-value hex
   classes (`bg-[#fed7dc]` etc., "20% toward white" mixed with the
   Tailwind rose/emerald shade — see `blocks-and-ingest.md`); those got a
