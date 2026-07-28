@@ -902,12 +902,14 @@ arrow.js pitfall, `drillColumnCls` was already a plain, non-reactive string
 per `.map()` iteration (the same precedent as the `drill-enter` animation
 class above). Test: `tests/drill-left-hint-visible.spec.mjs` — note: a bare
 `getBoundingClientRect().left >= 0` check on the chevron would **not** catch
-this, because that coordinate is relative to the entire browser viewport and
-`<main>` itself already sits at a positive left offset (the list/diff-mode
-`left-6`/`left-[29rem]` padding), so `rect.left` stays positive even if the
-chevron is fully hidden behind `<main>`'s own clip edge; the test therefore
-uses an `IntersectionObserver` ratio (which does account for ancestor
-`overflow` clipping).
+this, because that coordinate is relative to the entire browser viewport, and
+even a chevron fully hidden behind `<main>`'s own clip edge still sits a few
+pixels into positive territory (the `scroll-ml-4` reservation keeps it just
+inside `<main>`'s own scrollport, regardless of whether `<main>` itself
+starts at the viewport edge — `left-0` in diff mode — or further in — the
+list-mode `left-[29rem]`): a coordinate check alone can't distinguish
+"visible" from "clipped by an ancestor's `overflow`"; the test therefore
+uses an `IntersectionObserver` ratio (which does account for that clipping).
 
 **Look-ahead preview of the next sibling (`drillPreviewColumns`,
 `data-testid=drill-preview-column`):** **below** the card of the focused
@@ -1439,7 +1441,14 @@ The block card keeps its fixed `w-[70rem] 2xl:w-[82rem]` width (no more
 `flex-1`, and regardless of whether the block is one- or two-sided), so the
 diff doesn't stretch and the panel sits snugly next to it. In `'list'` mode
 `<main>` starts at `left-[29rem]` (next to the sidebar), in `'diff'` mode at
-`left-6` (more room); in both cases the columns keep packing from the left.
+`left-0` (flush with the viewport edge — no sidebar to clear there, so no
+reason to reserve a margin); in both cases the columns keep packing from the
+left. `<main>`'s right edge is `right-0` in every mode, **deliberately
+asymmetric** with every other panel (sidebar/footer/PrInfoPanel keep their
+own 1.5rem edge): the far edge is exactly where a wide last column's own
+content used to get clipped (hidden behind the `no-scrollbar` convention)
+before it was scrolled fully into view, so the margin there was traded for
+extra usable/scrollable width instead.
 
 **Exception: the `a` toggle (`state.diffViewMode`, see
 `.claude/rules/keyboard-navigation.md`) shrinks EVERY visible card to 60%

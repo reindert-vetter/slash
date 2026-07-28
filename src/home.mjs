@@ -6570,12 +6570,17 @@ function DetailPanel(state) {
         // while it also shows an AI unit description — so the columns never
         // slide in behind it, but don't leave dead space once it's gone either.
         (!state.footerVisible ? 'bottom-6 ' : state.footerExplain ? 'bottom-[140px] ' : 'bottom-[90px] ') +
-        // No competing fixed overlay on the right anymore (comments moved
-        // inline, Tasks moved under the PR-description column) — a plain
-        // 1.5rem margin, matching every other panel edge.
-        'right-6 ' +
+        // No 1.5rem margin on the right anymore — the far edge is where the
+        // last column's own content clipped (hidden by no-scrollbar) before
+        // it was fully scrolled into view, so <main> now runs flush to the
+        // viewport edge instead, reclaiming that margin as extra usable/
+        // scrollable width. Deliberately asymmetric with every other panel
+        // (sidebar/footer/PrInfoPanel), which keep their own 1.5rem edge.
+        'right-0 ' +
         (state.mode === 'diff'
-          ? 'left-6'
+          ? // Flush to the left edge too, for the same reason — in diff mode
+            // there's no sidebar to clear, so no reason to reserve a margin.
+            'left-0'
           : // showDescription (list-mode only) pushes PrInfoPanel to left-6 and
             // slides the pr-index right by one column-width (40.5rem, see
             // BlockList.mjs) — <main> needs to clear both, so it shifts the same
