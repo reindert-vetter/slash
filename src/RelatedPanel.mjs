@@ -494,13 +494,17 @@ export function selectComment(id) {
 }
 
 // threadMessages builds the rendered thread of a comment: its own body as the
-// first message (the reviewer's opening, shown as their own bubble) followed by
-// every reaction. So the comment that titles the thread also reads back as its
-// first chat message. The synthetic opening carries source 'ui' so it renders on
-// the reviewer's side, like the composer that placed it.
+// first message (the opening, shown as its author's bubble) followed by every
+// reaction. So the comment that titles the thread also reads back as its first
+// chat message. The synthetic opening carries the comment's OWN source (with
+// 'ui' as the fallback for an app-placed comment without one), so an imported
+// GitHub comment or an AI finding opens on the LEFT like any other foreign
+// message — only genuinely own (ui-placed) comments render on the reviewer's
+// side. An earlier version hardcoded 'ui' here, which put e.g. a review bot's
+// whole opening comment in the reviewer's own right-aligned bubble.
 function threadMessages(c) {
   if (!c) return []
-  const origin = { id: 'origin:' + c.id, source: 'ui', author: c.author, body: c.body }
+  const origin = { id: 'origin:' + c.id, source: c.source || 'ui', author: c.author, body: c.body }
   return [origin, ...(c.reactions || [])]
 }
 
@@ -1168,9 +1172,17 @@ function aiWarningBadge(c) {
 function reactionBubble(r, i, total, isActive) {
   const mine = r.source === 'ui'
   const active = isActive || (() => cs.focus === 'thread' && cs.threadPos === total - i)
+  // Own (ui-placed) messages get a soft indigo tint instead of the earlier
+  // saturated bg-indigo-500 + white text — markdown bodies (links, inline
+  // code, fenced code with Prism colours) are unreadable on that. Foreign
+  // messages keep the neutral tint but gain a subtle border so bubbles read
+  // as cards on both themes. The `markdown-body` class on the bubble is
+  // load-bearing: without it a fenced code block misses index.html's
+  // `.markdown-body pre { overflow-x:auto }` styling and a long code line
+  // gets clipped at the bubble edge instead of scrolling.
   return html`
     <div class="${() => 'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}">
-      <div class="flex items-center gap-1" data-testid="reaction-author-line">
+      <div class="flex items-center gap-1.5" data-testid="reaction-author-line">
         ${avatarHTML(r.author, r.avatarUrl, 'h-4 w-4')}
         <span class="text-[10px] font-medium text-slate-500 dark:text-zinc-400" data-testid="reaction-author"
           >${r.author || 'onbekend'}</span
@@ -1180,8 +1192,10 @@ function reactionBubble(r, i, total, isActive) {
         class="${() => {
           const sel = active()
           return (
-            'max-w-[85%] rounded-2xl px-3 py-1.5 text-xs leading-relaxed [overflow-wrap:anywhere] ' +
-            (mine ? 'bg-indigo-500 text-white' : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300') +
+            'markdown-body max-w-[92%] rounded-xl border px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] ' +
+            (mine
+              ? 'border-indigo-200 bg-indigo-50 text-slate-800 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-zinc-200'
+              : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300') +
             (sel ? ' ring-2 ring-indigo-400' : '')
           )
         }}"
@@ -2410,12 +2424,15 @@ export function commentDetailCard(c, opts) {
       (preview ? 'opacity-60' : '')}"
       data-testid="comment-detail-card"
     >
-      <div class="flex flex-wrap items-center gap-1.5" data-testid="comment-detail-author-line">
+      <div
+        class="flex flex-wrap items-center gap-1.5 border-b border-slate-100 pb-2.5 dark:border-zinc-800/60"
+        data-testid="comment-detail-author-line"
+      >
         <span
           class="${'h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"
         ></span>
-        ${avatarHTML(c.author, c.avatarUrl, 'h-4 w-4')}
-        <span class="text-[11px] font-medium text-slate-600 dark:text-zinc-400" data-testid="comment-detail-author"
+        ${avatarHTML(c.author, c.avatarUrl, 'h-5 w-5')}
+        <span class="text-xs font-semibold text-slate-800 dark:text-zinc-200" data-testid="comment-detail-author"
           >${c.author || 'onbekend'}</span
         >
         <span
@@ -2424,11 +2441,11 @@ export function commentDetailCard(c, opts) {
           >${COMMENT_KIND_LABEL[c.kind] || c.kind}</span
         >
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)}
-        <span class="text-[10px] text-slate-400 dark:text-zinc-500">${relTime(c.createdAt)}</span>
+        <span class="ml-auto shrink-0 text-[10px] text-slate-400 dark:text-zinc-500">${relTime(c.createdAt)}</span>
       </div>
       <div
         class="${() =>
-          'flex max-h-64 flex-col gap-1.5 overflow-auto rounded-lg ' +
+          'flex max-h-[70vh] flex-col gap-2.5 overflow-auto rounded-lg ' +
           (!preview && pct.commentId === c.id ? 'ring-2 ring-indigo-200 dark:ring-indigo-500/30' : '')}"
         data-testid="comment-detail-thread"
       >
