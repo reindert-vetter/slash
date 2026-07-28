@@ -3266,16 +3266,11 @@ const POSTAPPROVE_COMMANDS = withClose(
   [
     {
       id: 'postapprove-next',
-      // A function label so it can name what "next" actually means: the next
-      // *block* when the triggering approve ran from the blokken-index
-      // (postApproveTarget.keepList, see applyNextUnapproved), else the usual
-      // next changed code. Resolved once, at snapshot time (openMenu →
-      // snapshotCommands), right after afterApproveAction sets postApproveTarget
-      // — same safe, non-reactive read as the 'approve' command's own label.
-      label: () =>
-        postApproveTarget && postApproveTarget.keepList
-          ? 'Ga door naar het volgende niet-goedgekeurde block'
-          : 'Ga door naar de volgende niet-goedgekeurde code',
+      // A list-mode (`keepList`) approve never reaches this menu anymore — it
+      // always jumps straight to the next unapproved block itself (see
+      // afterApproveAction's EXCEPTION 2) — so this label only ever needs the
+      // diff-mode wording now.
+      label: 'Ga door naar de volgende niet-goedgekeurde code',
       hint: 'volgende',
       run: () => {
         if (postApproveTarget) applyNextUnapproved(postApproveTarget)
@@ -4846,7 +4841,7 @@ let postApproveTarget = null
 // findNextUnapproved gap — so they reflect the mode/block the reviewer was
 // actually in when they ran the approve action, not whatever state happens to
 // be once the promise resolves.
-// EXCEPTION — next unit stays in the SAME block, no menu: if the plan's
+// EXCEPTION 1 — next unit stays in the SAME block, no menu: if the plan's
 // landing block (the last entry of `path`, or — an empty `path` — the
 // top-level block at `root`) is the very block that was just approved
 // (`blockId`), this is exactly findNextUnapproved's step-1 branch ("forward
@@ -4856,10 +4851,14 @@ let postApproveTarget = null
 // pure friction, so this jumps straight there via applyNextUnapproved instead
 // of opening the postApprove menu. Any other outcome (down into a child's
 // subtree, up to a sibling, or across to a different top-level block) still
-// opens the menu, unchanged. `!keepList` guards this from ever firing off a
-// list-mode block-approve (approving a whole block from the index leaves
-// nothing else inside it to jump to in that same block anyway, but this keeps
-// the two paths cleanly separated).
+// opens the menu — UNLESS exception 2 below also applies.
+// EXCEPTION 2 — approving FROM THE BLOKKEN-INDEX (`keepList`, state.mode was
+// 'list', not 'diff'): there's nothing else to choose there either way (no
+// diff/drill to jump into, `applyNextUnapproved`'s own `keepList` branch only
+// ever moves the sidebar selection) — asking "ga door of niet" is just as
+// much friction as exception 1, so a list-mode approve ALWAYS jumps straight
+// to the next not-yet-approved block instead of opening the postApprove menu,
+// regardless of whether that next block is the same one or a different one.
 function afterApproveAction(approving, blockId) {
   if (!approving) return
   const keepList = state.mode !== 'diff'
@@ -4897,8 +4896,12 @@ function afterApproveAction(approving, blockId) {
       ? target.path[target.path.length - 1].id
       : state.blocks[target.root] && state.blocks[target.root].id
     const sameBlock = !keepList && target.root === state.selected && landingId === blockId
-    if (sameBlock) {
-      applyNextUnapproved(target)
+    if (sameBlock || keepList) {
+      // `applyNextUnapproved` reads `target.keepList` to decide whether to
+      // stay in the list (see its own doc comment) — `target` itself never
+      // carries that flag, only the stashed `postApproveTarget` normally
+      // does, so it must be merged in here too.
+      applyNextUnapproved({ ...target, keepList })
       return
     }
     postApproveTarget = { ...target, keepList }

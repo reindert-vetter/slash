@@ -65,18 +65,17 @@ test.describe('PR Review Tree — hidden approved selection: pin the restored bl
     await clearBlock1Approval(page)
     await page.goto('/pr/12903')
     // Select + fully approve block 1 (CreatePaymentAction::execute) via the
-    // palette, exactly like sidebar-skip-approved.spec.mjs.
+    // top checkbox — a direct toggle that never navigates away (unlike the
+    // command palette's approve action, which since the postApprove-skip
+    // change now always jumps straight to the next unapproved block when
+    // approving from the blokken-index, see postapprove-menu.spec.mjs).
     await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('Escape') // leave the auto-focused search box
     expect(selParam(page)).toBe(BLOCK1_SEL)
 
-    await page.keyboard.press('Enter')
-    await page.getByTestId('command-input').fill('keur')
-    await page.getByTestId('command-row').first().click()
-    const menu = page.getByTestId('command-menu')
-    await expect(menu).toBeVisible()
-    await page.getByTestId('command-row').filter({ hasText: 'Sluit menu' }).click()
-    await expect(menu).not.toBeVisible()
+    const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
+    await approve.click()
+    await expect(approve).toBeChecked()
 
     // Block 1 is now fully approved and hidden from the rendered list — but the
     // LIVE flow keeps it selected (the reviewer is still looking at it): no

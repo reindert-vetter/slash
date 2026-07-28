@@ -153,10 +153,11 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
   })
 
   // Approving from the blokken-index itself (Enter with no ArrowRight — state.mode
-  // stays 'list') must keep you there: "Ga door" only moves the sidebar selection
-  // forward, it never drops you into a block's diff. See isIndexMenu (menuAnchor/
-  // menuRegion) and the keepList branch of applyNextUnapproved/afterApproveAction.
-  test('approving from the blokken-index stays there: "Ga door" only moves the selection, no diff-instap', async ({
+  // stays 'list') skips the postApprove follow-up menu entirely — there's
+  // nothing else to choose there anyway (no diff/drill to jump into), so it
+  // always jumps straight to the next not-yet-approved block. See the
+  // `keepList` branch of afterApproveAction/applyNextUnapproved in home.mjs.
+  test('approving from the blokken-index skips the follow-up menu and jumps straight to the next unapproved block', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -169,31 +170,12 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
 
     // Approve execute's only group via the palette, straight from the index.
     await page.keyboard.press('Enter')
-    const anchor = page.getByTestId('command-anchor')
-    await expect(anchor).toHaveCSS('visibility', 'visible')
-    const firstMenuBox = await anchor.boundingBox()
     await page.getByTestId('command-input').fill('keur')
     await page.getByTestId('command-row').first().click()
 
-    // The follow-up opens with the list-mode wording ("... block", not "... code").
+    // No follow-up menu opens this time — the palette closes right away
+    // (runCommand's own close, not a postApprove follow-up).
     const menu = page.getByTestId('command-menu')
-    await expect(menu).toBeVisible()
-    const rows = page.getByTestId('command-row')
-    await expect(rows.nth(0)).toContainText('Sluit menu')
-    await expect(rows.nth(1)).toContainText('Ga door naar het volgende niet-goedgekeurde block')
-
-    // Regression: approving this block fully-approves it, which auto-hides its
-    // row from the sidebar (state.showApproved, see BlockList.mjs) — the exact
-    // row this follow-up menu needs to anchor on. It must reuse the first
-    // menu's cached position (lastIndexRowRect in home.mjs) instead of falling
-    // back to the whole `pr-index` aside, which used to throw it to the top of
-    // the viewport.
-    await expect(anchor).toHaveCSS('visibility', 'visible')
-    const postApproveBox = await anchor.boundingBox()
-    expect(postApproveBox.y).toBeCloseTo(firstMenuBox.y, 0)
-    expect(postApproveBox.x).toBeCloseTo(firstMenuBox.x, 0)
-
-    await rows.filter({ hasText: 'Ga door' }).click()
     await expect(menu).not.toBeVisible()
 
     // Lands on block 6 (the next not-yet-approved block, same skip-past-2-5 as

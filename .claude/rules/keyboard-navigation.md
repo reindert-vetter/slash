@@ -348,30 +348,34 @@ navigation state can't have shifted in the meantime. This is a one-off step:
 after navigating, **no** new follow-up menu opens automatically — the
 reviewer approves the new unit themselves again with `Enter`.
 
-**From the block index, "Continue" stays in the index.** If the reviewer
-pressed `Enter` while `state.mode==='list'` was true (see above: the menu
-then already anchors on the sidebar row, not the diff preview), the old
-"Continue" would still step into the diff — that feels like a jump away from
-the index while you were just there. `afterApproveAction` therefore captures
-**synchronously**, before the async `findNextUnapproved()` gap,
-`keepList = state.mode !== 'diff'` and stashes it along
-in `postApproveTarget` (`{ ...target, keepList }`) — synchronously because
-`state.mode` may have already changed by the time the promise resolves, but
-at the moment of the approve action itself it's exactly the context the
-reviewer pressed it from. `applyNextUnapproved` branches on `target.keepList`:
-if true, it moves **only** `state.selected` (to `target.root`) +
-`scrollSelectedIntoView()` — `target.path` is ignored (no `state.mode`/
-`gran`/`change`, no diff entry, no drill), so even if the found plan would
-run through an Underlying-code child, "Continue" from the index stays at the
-plain list step — drilling only makes sense once you're in the diff. If
-false, the existing path (drills to `target.path` if needed and jumps into
-the diff of the new unit). The `postapprove-next` label (the 2nd item of
-`POSTAPPROVE_COMMANDS`, after the pinned "Close menu" — see above)
-is for that reason also a **function** (instead of the previous bare
-string), read at snapshot time (`openMenu` → `snapshotCommands`, right after
-`postApproveTarget` is set — the same safe, non-reactive timing as the
-`approve` label): "Continue to the next unapproved **block**" when
-`keepList`, otherwise the existing "... **code**" text.
+**From the block index, approving skips the follow-up menu entirely — it
+always jumps straight to the next unapproved block.** Just like the
+same-block exception above (approving within a block that still has another
+unapproved unit ahead never asks "continue or not"), approving **from the
+blokken-index** (`state.mode==='list'`, not `'diff'`) has nothing else to
+offer either — there's no diff/drill to jump into from there, only the
+sidebar selection to move — so `afterApproveAction` treats it the same way:
+no `postApprove` menu, straight to `applyNextUnapproved`. `afterApproveAction`
+captures **synchronously**, before the async `findNextUnapproved()` gap,
+`keepList = state.mode !== 'diff'` — synchronously because `state.mode` may
+have already changed by the time the promise resolves, but at the moment of
+the approve action itself it's exactly the context the reviewer pressed it
+from. Whenever `keepList` is true, `afterApproveAction` calls
+`applyNextUnapproved(target)` directly instead of stashing `postApproveTarget`
+and opening the menu. `applyNextUnapproved` itself still branches on
+`target.keepList` (stashed on it for this one case): it moves **only**
+`state.selected` (to `target.root`) + `scrollSelectedIntoView()` —
+`target.path` is ignored (no `state.mode`/`gran`/`change`, no diff entry, no
+drill), so even when the found plan would run through an Underlying-code
+child, an index-approve stays at the plain list step — drilling only makes
+sense once you're in the diff. A **diff-mode** approve (`!keepList`) that
+lands on a *different* block still opens the `postApprove` menu as before
+("Sluit menu" / "Ga door naar de volgende niet-goedgekeurde code") — only the
+list-mode case is now menu-less. Because the `postApprove` menu can therefore
+never open with `keepList` true anymore, its `postapprove-next` item
+(`POSTAPPROVE_COMMANDS`, the 2nd item after the pinned "Close menu" — see
+above) is a plain string again ("Ga door naar de volgende niet-goedgekeurde
+code") instead of the earlier keepList-aware label function.
 
 **The postApprove follow-up menu opens at the SAME spot as the menu you
 approved with, even if the approved row has meanwhile disappeared from the

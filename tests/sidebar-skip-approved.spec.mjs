@@ -32,10 +32,9 @@ test.describe('PR Review Tree — sidebar navigation skips hidden (approved) blo
     await page.keyboard.press('Enter')
     await page.getByTestId('command-input').fill('keur')
     await page.getByTestId('command-row').first().click()
-    const menu = page.getByTestId('command-menu')
-    await expect(menu).toBeVisible()
-    await page.getByTestId('command-row').filter({ hasText: 'Sluit menu' }).click()
-    await expect(menu).not.toBeVisible()
+    // Approving from the blokken-index skips the postApprove follow-up menu
+    // entirely (see postapprove-menu.spec.mjs) — the palette just closes.
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
 
     // Block 1 is now fully approved and hidden from the rendered list.
     await expect(page.locator('[data-idx="1"]')).toHaveCount(0)

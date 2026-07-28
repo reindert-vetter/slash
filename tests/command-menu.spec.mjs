@@ -69,10 +69,15 @@ test.describe('PR Review Tree — command palette', () => {
     await expect(rows).toHaveCount(1)
     await expect(rows.first()).toContainText('Keur dit block goed')
 
-    // Enter runs it: the menu closes and the block is approved.
+    // Enter runs it: the menu closes and the block is approved. Approving
+    // from the blokken-index skips the postApprove follow-up menu and jumps
+    // straight to the next unapproved block (see postapprove-menu.spec.mjs),
+    // so `approve` itself (bound to whichever block is CURRENTLY selected)
+    // no longer reliably points at block 1 afterward — assert via the row
+    // disappearing instead (fully approved blocks hide by default).
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
-    await expect(approve).toBeChecked()
+    await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
   })
 
   test('no match falls back to "Maak hiermee een comment" and pre-fills the composer', async ({
@@ -204,8 +209,14 @@ test.describe('PR Review Tree — command palette', () => {
     await page.getByTestId('command-input').fill('keur')
     await page.getByTestId('command-row').first().click()
 
+    // Approving from the blokken-index skips the postApprove follow-up menu
+    // and jumps straight to the next unapproved block (see
+    // postapprove-menu.spec.mjs), so `approve` (bound to whichever block is
+    // CURRENTLY selected) no longer reliably points at block 1 afterward —
+    // assert via the row disappearing instead (fully approved blocks hide by
+    // default).
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
-    await expect(approve).toBeChecked()
+    await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
   })
 
   // Approval is granular now: the approve command targets the *current* navigation
