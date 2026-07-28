@@ -427,6 +427,21 @@ a separate, dedicated task will replace it (here and at its other two call
 sites, `compactConversation`/`commentDetailCard`) with a colorblind-friendly
 checkmark/glyph.
 
+**`compactConversation`'s meta line also names who sent the LAST message,
+not just the root author (`lastReplyNote`, next to `threadMessages`).**
+Neither the author+avatar line nor the reaction count changes once someone
+replies, so a collapsed thread with several reactions gave no clue whether
+the reviewer's own reply is the newest one or someone else's — the reviewer
+had to expand every thread to find out who's turn it is. `lastReplyNote(c)`
+looks at the last entry of `threadMessages(c)` and appends
+`" · <author> reageerde"` to the existing `comment-meta` text — empty as
+long as there's nothing beyond the opening message (the author line already
+covers that) and empty once the reviewer's OWN reply is the last one
+(`author === 'reviewer'`, the current in-app-reply sentinel — see the
+`github_id`/avatar datamodel note above). Plain text, not color, so it also
+carries meaning for a colorblind reviewer — unlike the still-color-only
+`CSTATUS_DOT` above.
+
 **The expanded thread has no height cap/internal scroll of its own.**
 `expandedConversation`'s message list (`data-testid=comment-thread`) grows
 with the conversation instead of clipping it — an earlier `max-h-64

@@ -517,6 +517,25 @@ function threadMessages(c) {
   return [origin, ...(c.reactions || [])]
 }
 
+// lastReplyNote — who sent the LAST message of the thread, for the compact
+// summary (see compactConversation): the meta line otherwise only shows the
+// ROOT author + reaction count, which never changes once someone replies —
+// so a reviewer had no way to tell whether the ball is still in their own
+// court without expanding every thread. Empty as long as there's nothing
+// beyond the opening message (the author line already covers that), and
+// empty once the reviewer's OWN reply is the last one — 'reviewer' is the
+// current in-app-reply sentinel (a real GitHub login isn't threaded through
+// yet, see the note in detail-layout.md); once that lands this still works,
+// as long as the reviewer's own login is compared the same way. Plain text,
+// not color, so it also carries meaning for a colorblind reviewer.
+function lastReplyNote(c) {
+  if (!c || !c.reactionCount) return ''
+  const msgs = threadMessages(c)
+  const last = msgs[msgs.length - 1]
+  if (!last || !last.author || last.author === 'reviewer') return ''
+  return ' · ' + last.author + ' reageerde'
+}
+
 // reactionCount is the number of bubbles the thread renders (opening + reactions)
 // — the upper bound the keyboard walks to when stepping up through the history.
 function reactionCount() {
@@ -1261,7 +1280,8 @@ function compactConversation(c, i) {
           .innerHTML="${commentBody(c)}"
         ></span>
         <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
-          >${() => c.file + ':' + c.line + ' · ' + c.reactionCount + ' reacties · ' + c.status}</span
+          >${() =>
+            c.file + ':' + c.line + ' · ' + c.reactionCount + ' reacties · ' + c.status + lastReplyNote(c)}</span
         >
       </span>
     </button>
