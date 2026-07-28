@@ -15,6 +15,9 @@ type server struct {
 	db      *sql.DB
 	dataDir string
 	tasks   *tasks // workflow engine + comments read-model (nil in headless tools)
+
+	avatars          *avatarCache // in-memory avatar image cache, see avatar_proxy.go
+	avatarHTTPClient *http.Client // overridden by tests; nil means http.DefaultClient
 }
 
 // routes builds the ServeMux: static files + the /api/* bridge.
@@ -29,6 +32,7 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	mux.HandleFunc("/api/ingest/progress", s.handleIngestProgress)
 	mux.HandleFunc("/api/prs", s.handlePRs)
 	mux.HandleFunc("/api/prs/search", s.handleSearch)
+	mux.HandleFunc("/api/avatar", s.handleAvatar)
 	if s.tasks != nil {
 		s.routesTasks(mux)
 	}

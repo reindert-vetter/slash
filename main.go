@@ -90,7 +90,7 @@ func runServe(args []string) {
 	}
 	defer closeTasks()
 
-	srv := &server{db: db, dataDir: resolvedData, tasks: tk}
+	srv := &server{db: db, dataDir: resolvedData, tasks: tk, avatars: newAvatarCache()}
 	log.Printf("PR Review Tree listening on http://%s", *addr)
 	if err := http.ListenAndServe(*addr, srv.routes(*staticDir)); err != nil {
 		log.Fatal(err)

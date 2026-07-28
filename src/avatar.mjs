@@ -16,6 +16,16 @@ export function initialsOf(name) {
 const FALLBACK_CLS =
   'flex shrink-0 items-center justify-center rounded-full bg-slate-200 dark:bg-zinc-700 text-[10px] font-medium uppercase text-slate-700 dark:text-zinc-200 ring-1 ring-slate-200 dark:ring-zinc-700'
 
+// proxiedAvatarUrl routes an avatar through our own /api/avatar cache instead
+// of hitting GitHub's CDN directly on every mount — avatars never change, so
+// the server caches the fetched image in memory and answers with a long-lived
+// Cache-Control, giving the browser a stable, same-origin URL to cache too
+// (see avatar_proxy.go). Not itself validated client-side; the endpoint
+// rejects anything that isn't avatars.githubusercontent.com.
+function proxiedAvatarUrl(avatarUrl) {
+  return '/api/avatar?url=' + encodeURIComponent(avatarUrl)
+}
+
 // avatarHTML renders one avatar circle for `name` (the author/login shown as
 // the title + the initials fallback), sized by `sizeCls` (default h-6 w-6 —
 // the PR-list size). Pass a falsy `avatarUrl` to always get the initials
@@ -38,7 +48,7 @@ export function avatarHTML(name, avatarUrl, sizeCls = 'h-6 w-6', extraCls = '') 
   }
   return html`<span class="${'relative inline-flex shrink-0 ' + sizeCls}" title="${title}" data-testid="avatar">
     <img
-      src="${avatarUrl}"
+      src="${proxiedAvatarUrl(avatarUrl)}"
       alt=""
       loading="lazy"
       class="${sizeCls + ' rounded-full object-cover ring-1 ring-slate-200 dark:ring-zinc-700 ' + extraCls}"
