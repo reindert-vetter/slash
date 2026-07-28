@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS comments (
   file           TEXT NOT NULL,
   line           INTEGER NOT NULL,
   author         TEXT NOT NULL DEFAULT '',
+  avatar_url     TEXT NOT NULL DEFAULT '',
   body           TEXT NOT NULL,
   created_at     TEXT NOT NULL,
   reaction_count INTEGER NOT NULL DEFAULT 0,
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS reactions (
   comment_id TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
   source     TEXT NOT NULL DEFAULT '',
   author     TEXT NOT NULL DEFAULT '',
+  avatar_url TEXT NOT NULL DEFAULT '',
   body       TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -57,12 +59,17 @@ CREATE INDEX IF NOT EXISTS idx_reactions_comment ON reactions(comment_id);
 
 // Comment is a review comment on one line of code, with its reactions.
 type Comment struct {
-	ID            string `json:"id"`
-	RunID         string `json:"runId"`
-	PR            int    `json:"pr"`
-	File          string `json:"file"`
-	Line          int    `json:"line"`
-	Author        string `json:"author"`
+	ID     string `json:"id"`
+	RunID  string `json:"runId"`
+	PR     int    `json:"pr"`
+	File   string `json:"file"`
+	Line   int    `json:"line"`
+	Author string `json:"author"`
+	// AvatarURL is the author's GitHub profile picture, carried through from the
+	// GitHub fetch for an imported comment (see github.ReviewComment.AvatarURL).
+	// Empty for a comment placed in this app or by the AI risk check — the
+	// frontend's avatarHTML then falls back to an initials circle.
+	AvatarURL     string `json:"avatarUrl,omitempty"`
 	Body          string `json:"body"`
 	CreatedAt     string `json:"createdAt"`
 	ReactionCount int    `json:"reactionCount"`
@@ -117,6 +124,9 @@ type Reaction struct {
 	CommentID string `json:"commentId"`
 	Source    string `json:"source"` // ui | github
 	Author    string `json:"author"`
+	// AvatarURL is the reply author's GitHub profile picture (see
+	// Comment.AvatarURL) — empty for a reply written in this app.
+	AvatarURL string `json:"avatarUrl,omitempty"`
 	Body      string `json:"body"`
 	Resolves  bool   `json:"resolves"` // resolves the thread
 	CreatedAt string `json:"createdAt"`
@@ -164,6 +174,8 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE comments ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE comments ADD COLUMN kind TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE comments ADD COLUMN github_id INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE comments ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE reactions ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -187,13 +199,13 @@ func (m *Module) Save(ctx context.Context, c Comment) error {
 	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO comments
-		   (id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind, github_id)
-		 VALUES (?,?,?,?,?,?,?,?,
+		   (id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind, github_id)
+		 VALUES (?,?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT reaction_count FROM comments WHERE id = ?), 0),
 		   COALESCE((SELECT status FROM comments WHERE id = ?), ?),
 		   ?,?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT github_id FROM comments WHERE id = ?), ?))`,
-		c.ID, c.RunID, c.PR, c.File, c.Line, c.Author, c.Body, c.CreatedAt, c.ID, c.ID, c.Status,
+		c.ID, c.RunID, c.PR, c.File, c.Line, c.Author, c.AvatarURL, c.Body, c.CreatedAt, c.ID, c.ID, c.Status,
 		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg, c.Path, c.Source, c.Kind, c.ID, c.GithubID)
 	return err
 }
@@ -212,6 +224,20 @@ func (m *Module) SetGithubID(ctx context.Context, id string, githubID int64) err
 	return err
 }
 
+// SetAvatarURL records the author's GitHub profile picture on an existing
+// comment. Needed because a comment imported before the avatar was threaded
+// through has an empty column and its Execution is never re-run (the import is
+// idempotent on the gh-<id> Run ID), so the import glue backfills it through
+// the workflow instead — see the "avatar" ReactionSignal action in
+// workflows.go. A no-op for an empty url. WRITE — workflow-driven only.
+func (m *Module) SetAvatarURL(ctx context.Context, id, url string) error {
+	if url == "" {
+		return nil
+	}
+	_, err := m.db.ExecContext(ctx, `UPDATE comments SET avatar_url = ? WHERE id = ?`, url, id)
+	return err
+}
+
 // AddReaction stores a reaction and does the module's own thing: it bumps the
 // comment's reaction_count and resolves the thread when a reaction says so.
 // WRITE — workflow-driven only. Idempotent on reaction ID.
@@ -226,14 +252,24 @@ func (m *Module) AddReaction(ctx context.Context, r Reaction) error {
 	defer tx.Rollback()
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO reactions (id, comment_id, source, author, body, created_at)
-		 VALUES (?,?,?,?,?,?)`,
-		r.ID, r.CommentID, r.Source, r.Author, r.Body, r.CreatedAt)
+		`INSERT OR IGNORE INTO reactions (id, comment_id, source, author, avatar_url, body, created_at)
+		 VALUES (?,?,?,?,?,?,?)`,
+		r.ID, r.CommentID, r.Source, r.Author, r.AvatarURL, r.Body, r.CreatedAt)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return tx.Commit() // already recorded — no double count
+		// Already recorded — no double count. Do fill in the author's avatar if
+		// this reply predates the avatar column (the reply poller re-signals every
+		// GitHub reply after a restart, so this is where an old reply catches up).
+		if r.AvatarURL != "" {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE reactions SET avatar_url = ? WHERE id = ? AND avatar_url = ''`,
+				r.AvatarURL, r.ID); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
 	}
 
 	if _, err := tx.ExecContext(ctx,
@@ -301,7 +337,7 @@ func (m *Module) Search(ctx context.Context, prefix string) ([]Comment, error) {
 // query runs the comment select with an optional WHERE clause + args and
 // attaches each comment's reactions. Shared by List and Search.
 func (m *Module) query(ctx context.Context, where string, args ...any) ([]Comment, error) {
-	q := `SELECT id, run_id, pr, file, line, author, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind, github_id
+	q := `SELECT id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind, github_id
 	      FROM comments`
 	if where != "" {
 		q += ` ` + where
@@ -317,7 +353,7 @@ func (m *Module) query(ctx context.Context, where string, args ...any) ([]Commen
 	byID := map[string]int{}
 	for rows.Next() {
 		var c Comment
-		if err := rows.Scan(&c.ID, &c.RunID, &c.PR, &c.File, &c.Line, &c.Author,
+		if err := rows.Scan(&c.ID, &c.RunID, &c.PR, &c.File, &c.Line, &c.Author, &c.AvatarURL,
 			&c.Body, &c.CreatedAt, &c.ReactionCount, &c.Status, &c.Code, &c.Gran, &c.Label,
 			&c.RowStart, &c.RowEnd, &c.Seg, &c.Path, &c.Source, &c.Kind, &c.GithubID); err != nil {
 			return nil, err
@@ -333,14 +369,14 @@ func (m *Module) query(ctx context.Context, where string, args ...any) ([]Commen
 	}
 
 	rrows, err := m.db.QueryContext(ctx,
-		`SELECT id, comment_id, source, author, body, created_at FROM reactions ORDER BY created_at`)
+		`SELECT id, comment_id, source, author, avatar_url, body, created_at FROM reactions ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
 	defer rrows.Close()
 	for rrows.Next() {
 		var r Reaction
-		if err := rrows.Scan(&r.ID, &r.CommentID, &r.Source, &r.Author, &r.Body, &r.CreatedAt); err != nil {
+		if err := rrows.Scan(&r.ID, &r.CommentID, &r.Source, &r.Author, &r.AvatarURL, &r.Body, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		if i, ok := byID[r.CommentID]; ok {

@@ -176,7 +176,12 @@ type CodeCommentInput struct {
 	File   string `json:"file"`
 	Line   int    `json:"line"`
 	Author string `json:"author"`
-	Body   string `json:"body"`
+	// AvatarURL is the author's GitHub profile picture, set when this comment is
+	// imported from GitHub (see mapReviewComment). Stored on the comment so the
+	// thread shows the real picture instead of an initials circle; empty for a
+	// comment placed in this app.
+	AvatarURL string `json:"avatarUrl"`
+	Body      string `json:"body"`
 	// Code is the source snippet the comment attaches to, with Gran/Label
 	// describing it — carried so the thread shows the same code the composer did.
 	Code  string `json:"code"`
@@ -243,9 +248,14 @@ type ReactionSignal struct {
 	ID     string `json:"id"`
 	Source string `json:"source"` // ui | github
 	Author string `json:"author"`
-	Body   string `json:"body"`
-	Done   bool   `json:"done"`   // resolves the thread
-	Action string `json:"action"` // "" (reply, default) | "delete"
+	// AvatarURL is the reply author's GitHub profile picture, filled by the reply
+	// poller for a github-sourced reply; empty for a UI reply. With Action
+	// "avatar" it instead carries the ROOT comment's own avatar (a backfill, no
+	// reply is stored).
+	AvatarURL string `json:"avatarUrl"`
+	Body      string `json:"body"`
+	Done      bool   `json:"done"`   // resolves the thread
+	Action    string `json:"action"` // "" (reply, default) | "delete" | "avatar" (backfill the root's avatar)
 }
 
 // postResult carries the GitHub root comment ID (0 when GitHub is unavailable).
@@ -487,6 +497,7 @@ type TaskManager struct {
 	snoozeRun    string               // task_snooze Run ID (one per repo/process)
 	taskInboxRun string               // task_inbox Run ID (one per repo/process)
 	importPolled map[string]bool      // imported-thread Run ID → poller running (dedup, operational)
+	avatarTried  map[string]bool      // imported-thread Run ID → avatar backfill attempted (dedup, operational)
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
@@ -496,6 +507,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		interval: pollInterval, idle: idlePollInterval,
 		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{},
 		importPolled: map[string]bool{},
+		avatarTried:  map[string]bool{},
 		logf:         log.Printf,
 	}
 
@@ -594,6 +606,21 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, err
 		}
 		return nil, cs.SetGithubID(ctx, arg.ID, arg.GithubID)
+	})
+
+	// Activity: fill in the author's GitHub avatar URL on a comment imported
+	// before that field existed (the import never re-runs its Execution, so the
+	// glue backfills through an "avatar" ReactionSignal — see
+	// taskCodeCommentWorkflow). A no-op for an empty url.
+	engine.RegisterActivity("saveCommentAvatar", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			ID        string `json:"id"`
+			AvatarURL string `json:"avatarUrl"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return nil, cs.SetAvatarURL(ctx, arg.ID, arg.AvatarURL)
 	})
 
 	// Activity: the github module posts the line comment (best-effort — a
@@ -2250,7 +2277,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	// lands in the read-model via the workflow, not from the UI.
 	comment := comments.Comment{
 		ID: runID, RunID: runID, PR: in.PR, File: in.File, Line: in.Line,
-		Author: in.Author, Body: in.Body, CreatedAt: in.CreatedAt,
+		Author: in.Author, AvatarURL: in.AvatarURL, Body: in.Body, CreatedAt: in.CreatedAt,
 		Code: in.Code, Gran: in.Gran, Label: in.Label,
 		RowStart: in.RowStart, RowEnd: in.RowEnd, Seg: in.Seg,
 		Path: commentPath(in, runID), Source: in.Source, Kind: in.Kind,
@@ -2299,6 +2326,19 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		var r ReactionSignal
 		w.WaitSignal(SignalReply, &r)
 
+		// An "avatar" action is a pure metadata backfill: it records the ROOT
+		// comment's own GitHub avatar URL (see importPRComments) and stores no
+		// reply, so the thread itself is untouched. Input-driven like every other
+		// branch here, so the Activity sequence stays replay-deterministic.
+		if r.Action == "avatar" {
+			if err := w.ExecuteActivity("saveCommentAvatar", map[string]any{
+				"id": runID, "avatarUrl": r.AvatarURL,
+			}, nil); err != nil {
+				return nil, fmt.Errorf("save comment avatar: %w", err)
+			}
+			continue
+		}
+
 		if r.Action == "delete" {
 			if err := w.ExecuteActivity("markCommentDeleting", map[string]any{"id": runID}, nil); err != nil {
 				return nil, fmt.Errorf("mark comment deleting: %w", err)
@@ -2316,7 +2356,8 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 
 		reactions++
 		if err := w.ExecuteActivity("saveReaction", comments.Reaction{
-			ID: r.ID, CommentID: runID, Source: r.Source, Author: r.Author, Body: r.Body, Resolves: r.Done,
+			ID: r.ID, CommentID: runID, Source: r.Source, Author: r.Author, AvatarURL: r.AvatarURL,
+			Body: r.Body, Resolves: r.Done,
 		}, nil); err != nil {
 			return nil, fmt.Errorf("save reaction: %w", err)
 		}
@@ -2983,8 +3024,41 @@ func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
 	// imports of the same comment; this additionally dedups against app-created
 	// ones, whose Run ID is NOT gh-<id>.
 	known := m.knownGithubIDs(pr)
+	// Comments already in the read-model whose avatar column is still empty: a
+	// comment imported before the avatar was threaded through never re-runs its
+	// Execution (StartWorkflowID reuses the gh-<id> Run ID), so its picture is
+	// backfilled through the workflow below instead. Read-only lookup here; the
+	// write is the "avatar" Signal's own Activity.
+	avatarMissing := map[string]bool{}
+	if m.comments != nil {
+		if list, err := m.comments.List(ctx, pr); err != nil {
+			m.logf("import comments: list pr=%d: %v", pr, err)
+		} else {
+			for _, c := range list {
+				if c.AvatarURL == "" {
+					avatarMissing[c.ID] = true
+				}
+			}
+		}
+	}
 	for _, in := range inputs {
 		if known[in.ImportedRootID] {
+			runID := importedRunID(in.ImportedRootID)
+			// Once per process per thread: a thread that already completed/failed
+			// (a resolved or deleted comment) can't be signaled anymore, and
+			// retrying it every poll tick would only repeat the same log line.
+			m.mu.Lock()
+			tried := m.avatarTried[runID]
+			m.avatarTried[runID] = true
+			m.mu.Unlock()
+			if !tried && in.AvatarURL != "" && avatarMissing[runID] {
+				if err := m.Signal(runID, ReactionSignal{
+					ID: "sys-" + newUIReactionID(), Source: "github",
+					Action: "avatar", AvatarURL: in.AvatarURL,
+				}); err != nil {
+					m.logf("import comments: avatar backfill run=%s: %v", runID, err)
+				}
+			}
 			continue
 		}
 		// Never import a kilo-review bot summary (see isKiloReview) — skip
@@ -3120,7 +3194,7 @@ func (m *TaskManager) poll(ctx context.Context, runID string, pr int, rootID int
 			seen[r.ID] = true
 			sig := ReactionSignal{
 				ID: fmt.Sprintf("gh-%d", r.ID), Source: "github",
-				Author: r.Author, Body: r.Body, Done: r.Done,
+				Author: r.Author, AvatarURL: r.AvatarURL, Body: r.Body, Done: r.Done,
 			}
 			if err := m.engine.SignalWorkflow(runID, SignalReply, sig); err != nil {
 				m.logf("task_code_comment: signal run=%s: %v", runID, err)

@@ -504,7 +504,16 @@ export function selectComment(id) {
 // whole opening comment in the reviewer's own right-aligned bubble.
 function threadMessages(c) {
   if (!c) return []
-  const origin = { id: 'origin:' + c.id, source: c.source || 'ui', author: c.author, body: c.body }
+  // The opening bubble carries the comment's own author AND avatar, so it shows
+  // the same profile picture as the header above it instead of falling back to
+  // an initials circle.
+  const origin = {
+    id: 'origin:' + c.id,
+    source: c.source || 'ui',
+    author: c.author,
+    avatarUrl: c.avatarUrl,
+    body: c.body,
+  }
   return [origin, ...(c.reactions || [])]
 }
 
@@ -1182,9 +1191,11 @@ function reactionBubble(r, i, total, isActive) {
   // gets clipped at the bubble edge instead of scrolling.
   return html`
     <div class="${() => 'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}">
-      <div class="flex items-center gap-1.5" data-testid="reaction-author-line">
-        ${avatarHTML(r.author, r.avatarUrl, 'h-4 w-4')}
-        <span class="text-[10px] font-medium text-slate-600 dark:text-zinc-400" data-testid="reaction-author"
+      <div class="flex items-center gap-2 py-0.5" data-testid="reaction-author-line">
+        ${avatarHTML(r.author, r.avatarUrl, 'h-5 w-5')}
+        <span
+          class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400"
+          data-testid="reaction-author"
           >${r.author || 'onbekend'}</span
         >
       </div>
@@ -1237,9 +1248,9 @@ function compactConversation(c, i) {
     >
       <span class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
       <span class="flex min-w-0 flex-col gap-0.5">
-        <span class="flex items-center gap-1.5" data-testid="comment-author-line">
-          ${avatarHTML(c.author, c.avatarUrl, 'h-4 w-4')}
-          <span class="truncate text-[11px] font-medium text-slate-600 dark:text-zinc-400" data-testid="comment-author"
+        <span class="flex min-w-0 items-center gap-2" data-testid="comment-author-line">
+          ${avatarHTML(c.author, c.avatarUrl, 'h-5 w-5')}
+          <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400" data-testid="comment-author"
             >${c.author || 'onbekend'}</span
           >
           ${() => sourceBadge(c)}
@@ -1269,9 +1280,9 @@ function expandedConversation(c) {
       data-expanded="true"
     >
       <div class="flex items-start justify-between gap-2">
-        <span class="flex items-center gap-1.5" data-testid="comment-author-line">
-          ${avatarHTML(c.author, c.avatarUrl, 'h-4 w-4')}
-          <span class="truncate text-[11px] font-medium text-slate-600 dark:text-zinc-400" data-testid="comment-author"
+        <span class="flex min-w-0 items-center gap-2" data-testid="comment-author-line">
+          ${avatarHTML(c.author, c.avatarUrl, 'h-5 w-5')}
+          <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400" data-testid="comment-author"
             >${c.author || 'onbekend'}</span
           >
           ${() => sourceBadge(c)}
@@ -2440,14 +2451,16 @@ export function commentDetailCard(c, opts) {
       data-testid="comment-detail-card"
     >
       <div
-        class="flex flex-wrap items-center gap-1.5 border-b border-slate-100 pb-2.5 dark:border-zinc-800/60"
+        class="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2.5 dark:border-zinc-800/60"
         data-testid="comment-detail-author-line"
       >
         <span
           class="${'h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"
         ></span>
-        ${avatarHTML(c.author, c.avatarUrl, 'h-5 w-5')}
-        <span class="text-xs font-semibold text-slate-800 dark:text-zinc-200" data-testid="comment-detail-author"
+        ${avatarHTML(c.author, c.avatarUrl, 'h-6 w-6')}
+        <span
+          class="mr-0.5 whitespace-nowrap text-sm font-semibold leading-6 text-slate-800 dark:text-zinc-200"
+          data-testid="comment-detail-author"
           >${c.author || 'onbekend'}</span
         >
         <span

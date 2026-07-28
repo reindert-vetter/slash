@@ -44,6 +44,53 @@ func TestSourceAndKindRoundTrip(t *testing.T) {
 	}
 }
 
+// Save/AddReaction round-trip the author's GitHub avatar URL, on the comment
+// root as well as on a reply — that's what lets the thread show the real
+// profile picture (including a bot's) instead of an initials circle. A comment
+// placed in this app carries no URL and must stay empty.
+func TestAvatarURLRoundTrip(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	const botAvatar = "https://avatars.githubusercontent.com/in/1234?v=4"
+	const humanAvatar = "https://avatars.githubusercontent.com/u/5678?v=4"
+
+	if err := m.Save(ctx, Comment{ID: "gh-1", RunID: "gh-1", PR: 7, File: "a.php", Line: 3,
+		Author: "kilo-code-bot[bot]", AvatarURL: botAvatar, Body: "WARNING: …",
+		Source: "github"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Save(ctx, Comment{ID: "u1", RunID: "u1", PR: 7, File: "a.php", Line: 3,
+		Author: "me", Body: "local note"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AddReaction(ctx, Reaction{ID: "gh-2", CommentID: "gh-1", Source: "github",
+		Author: "BOGSAT", AvatarURL: humanAvatar, Body: "fixed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := m.List(ctx, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Comment{}
+	for _, c := range list {
+		got[c.ID] = c
+	}
+	if a := got["gh-1"].AvatarURL; a != botAvatar {
+		t.Fatalf("gh-1 avatarUrl = %q, want %q", a, botAvatar)
+	}
+	if a := got["u1"].AvatarURL; a != "" {
+		t.Fatalf("u1 avatarUrl = %q, want empty (app-placed comment)", a)
+	}
+	rs := got["gh-1"].Reactions
+	if len(rs) != 1 {
+		t.Fatalf("gh-1 has %d reactions, want 1", len(rs))
+	}
+	if a := rs[0].AvatarURL; a != humanAvatar {
+		t.Fatalf("reply avatarUrl = %q, want %q", a, humanAvatar)
+	}
+}
+
 func TestSetStatus(t *testing.T) {
 	m := openTest(t)
 	ctx := context.Background()

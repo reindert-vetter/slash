@@ -184,6 +184,92 @@ func TestImportSkipsKiloReviewComment(t *testing.T) {
 // An imported review-diff thread is a live thread: the workflow records the known
 // GitHub root without re-posting, mirrors a UI reply to GitHub, and does NOT echo
 // a GitHub-sourced reply back.
+// An imported comment carries its author's GitHub avatar URL all the way into
+// the read-model — for a bot account ("…[bot]") just as much as for a human —
+// and so does a reply that arrives via the poller. That's what lets the thread
+// render the real profile picture instead of an initials circle.
+func TestImportCarriesAuthorAvatars(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+	m.interval = 3 * time.Millisecond // fast reply poll for the test
+	m.idle = 3 * time.Millisecond
+	const botAvatar = "https://avatars.githubusercontent.com/in/1234?v=4"
+	const humanAvatar = "https://avatars.githubusercontent.com/u/5678?v=4"
+
+	gh.SetReviewComments([]github.ReviewComment{
+		{ID: 100, Author: "kilo-code-bot[bot]", AvatarURL: botAvatar,
+			Body: "WARNING: naming", Path: "src/Order.php", Line: 10, Side: "RIGHT"},
+	})
+	gh.SetGeneralComments([]github.GeneralComment{
+		{ID: 200, Author: "BOGSAT", AvatarURL: humanAvatar, Body: "please add a test", Kind: "issue"},
+	})
+
+	m.importPRComments(ctx, pr)
+
+	list, _ := cs.List(ctx, pr)
+	got := map[string]comments.Comment{}
+	for _, c := range list {
+		got[c.ID] = c
+	}
+	if a := got["gh-100"].AvatarURL; a != botAvatar {
+		t.Fatalf("gh-100 avatarUrl = %q, want %q", a, botAvatar)
+	}
+	if a := got["gh-200"].AvatarURL; a != humanAvatar {
+		t.Fatalf("gh-200 avatarUrl = %q, want %q", a, humanAvatar)
+	}
+
+	// A comment imported BEFORE the avatar was threaded through (empty column,
+	// and its Execution never re-runs) gets its picture backfilled on the next
+	// import tick, via the "avatar" Signal.
+	if _, err := m.engine.StartWorkflowID(importedRunID(500), WorkflowTaskCodeComment, CodeCommentInput{
+		PR: pr, Body: "older import", Author: "BOGSAT", Kind: "issue",
+		ImportedRootID: 500, Source: "github", RowStart: -1, RowEnd: -1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gh.SetGeneralComments([]github.GeneralComment{
+		{ID: 500, Author: "BOGSAT", AvatarURL: humanAvatar, Body: "older import", Kind: "issue"},
+	})
+	m.importPRComments(ctx, pr)
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, pr)
+		for _, c := range l {
+			if c.ID == "gh-500" && c.AvatarURL == humanAvatar {
+				return true
+			}
+		}
+		return false
+	})
+
+	// A GitHub reply arriving via the per-thread reply poller keeps its own
+	// avatar too. Polled on a live thread of its own (the imported roots above
+	// have no worktree to anchor to here, so they degrade to PR-wide comments,
+	// which have no reply thread to poll).
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: pr, File: "src/Order.php", Line: 10, Author: "me", Body: "question",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh.EnqueueReply(github.Reply{ID: 400, Author: "BOGSAT", AvatarURL: humanAvatar, Body: "fixed"})
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, pr)
+		for _, c := range l {
+			if c.ID != runID {
+				continue
+			}
+			for _, r := range c.Reactions {
+				if r.ID == "gh-400" && r.AvatarURL == humanAvatar {
+					return true
+				}
+			}
+		}
+		return false
+	})
+}
+
 func TestImportedThreadMirrorsWithoutEcho(t *testing.T) {
 	m, gh, cs := newTestManager(t)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -19,10 +19,12 @@ const FALLBACK_CLS =
 // avatarHTML renders one avatar circle for `name` (the author/login shown as
 // the title + the initials fallback), sized by `sizeCls` (default h-6 w-6 —
 // the PR-list size). Pass a falsy `avatarUrl` to always get the initials
-// circle — comments/replies don't carry an avatar URL today (the GitHub
-// comment/reaction fetch only threads the login through, see
-// tembed-workflows.md), so every comment avatar renders as initials until a
-// later backend change adds it. When an avatarUrl IS present the <img> falls
+// circle — a comment/reply written in this app has no GitHub avatar to show,
+// whereas a github-imported comment or a polled GitHub reply does: its author's
+// `user.avatar_url` is threaded through the fetch into the comments read-model
+// (see tembed-workflows.md), which covers bot accounts too — a "[bot]" login
+// has no github.com/<login>.png shorthand, so the real field is the only
+// source. When an avatarUrl IS present the <img> falls
 // back to the same initials circle via `onerror`, so an unreachable image
 // (e.g. offline/test runs with SLASH_GITHUB=off) never leaves a broken-image
 // icon. `extraCls` (default '') is appended to the circle's own class (image

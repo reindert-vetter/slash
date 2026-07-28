@@ -36,8 +36,12 @@ type Meta struct {
 type Reply struct {
 	ID     int64  `json:"id"`
 	Author string `json:"author"`
-	Body   string `json:"body"`
-	Done   bool   `json:"done"` // reviewer resolved the thread (body contains /resolve)
+	// AvatarURL is the author's GitHub profile picture (user.avatar_url). Taken
+	// from the API rather than derived from the login, because a GitHub App bot
+	// ("kilo-code-bot[bot]") has no github.com/<login>.png shorthand.
+	AvatarURL string `json:"avatarUrl"`
+	Body      string `json:"body"`
+	Done      bool   `json:"done"` // reviewer resolved the thread (body contains /resolve)
 }
 
 // ReviewComment is a top-level (thread-root) review comment on the diff of a PR:
@@ -45,8 +49,10 @@ type Reply struct {
 // replies are fetched separately via FetchReplies once it is imported as a live
 // thread.
 type ReviewComment struct {
-	ID        int64  `json:"id"`
-	Author    string `json:"author"`
+	ID     int64  `json:"id"`
+	Author string `json:"author"`
+	// AvatarURL is the author's GitHub profile picture (see Reply.AvatarURL).
+	AvatarURL string `json:"avatarUrl"`
 	Body      string `json:"body"`
 	Path      string `json:"path"`      // file the comment anchors to
 	Line      int    `json:"line"`      // line on Side (falls back to original_line)
@@ -60,8 +66,10 @@ type ReviewComment struct {
 // comment (the PR conversation) or a review summary (the body of a submitted
 // review). Kind distinguishes the two.
 type GeneralComment struct {
-	ID        int64  `json:"id"`
-	Author    string `json:"author"`
+	ID     int64  `json:"id"`
+	Author string `json:"author"`
+	// AvatarURL is the author's GitHub profile picture (see Reply.AvatarURL).
+	AvatarURL string `json:"avatarUrl"`
 	Body      string `json:"body"`
 	CreatedAt string `json:"createdAt"`
 	HTMLURL   string `json:"htmlUrl"`
@@ -135,18 +143,26 @@ type Module struct {
 // New returns a Module for the given owner/name repo slug.
 func New(repo string) *Module { return &Module{repo: repo} }
 
+// ghUser is the author sub-object every comment/review payload carries. Only
+// the login and the avatar URL are used; the avatar comes straight from the
+// API so bot accounts (whose login contains "[bot]") get a picture too.
+type ghUser struct {
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatar_url"`
+}
+
 type ghComment struct {
-	ID           int64                  `json:"id"`
-	Body         string                 `json:"body"`
-	User         struct{ Login string } `json:"user"`
-	InReplyTo    int64                  `json:"in_reply_to_id"`
-	Path         string                 `json:"path"`
-	Line         int                    `json:"line"`
-	OriginalLine int                    `json:"original_line"`
-	StartLine    int                    `json:"start_line"`
-	Side         string                 `json:"side"`
-	CreatedAt    string                 `json:"created_at"`
-	HTMLURL      string                 `json:"html_url"`
+	ID           int64  `json:"id"`
+	Body         string `json:"body"`
+	User         ghUser `json:"user"`
+	InReplyTo    int64  `json:"in_reply_to_id"`
+	Path         string `json:"path"`
+	Line         int    `json:"line"`
+	OriginalLine int    `json:"original_line"`
+	StartLine    int    `json:"start_line"`
+	Side         string `json:"side"`
+	CreatedAt    string `json:"created_at"`
+	HTMLURL      string `json:"html_url"`
 }
 
 // PostReviewComment posts a review comment on file (anchored to the PR head
@@ -240,10 +256,11 @@ func (m *Module) FetchReplies(ctx context.Context, pr int, rootID int64) ([]Repl
 			continue
 		}
 		replies = append(replies, Reply{
-			ID:     c.ID,
-			Author: c.User.Login,
-			Body:   c.Body,
-			Done:   strings.Contains(strings.ToLower(c.Body), "/resolve"),
+			ID:        c.ID,
+			Author:    c.User.Login,
+			AvatarURL: c.User.AvatarURL,
+			Body:      c.Body,
+			Done:      strings.Contains(strings.ToLower(c.Body), "/resolve"),
 		})
 	}
 	return replies, nil
@@ -270,7 +287,7 @@ func (m *Module) FetchReviewComments(ctx context.Context, pr int) ([]ReviewComme
 			side = "RIGHT"
 		}
 		out = append(out, ReviewComment{
-			ID: c.ID, Author: c.User.Login, Body: c.Body,
+			ID: c.ID, Author: c.User.Login, AvatarURL: c.User.AvatarURL, Body: c.Body,
 			Path: c.Path, Line: line, StartLine: c.StartLine, Side: side,
 			CreatedAt: c.CreatedAt, HTMLURL: c.HTMLURL,
 		})
@@ -289,17 +306,17 @@ func (m *Module) FetchGeneralComments(ctx context.Context, pr int) ([]GeneralCom
 	}
 	for _, c := range issues {
 		out = append(out, GeneralComment{
-			ID: c.ID, Author: c.User.Login, Body: c.Body,
+			ID: c.ID, Author: c.User.Login, AvatarURL: c.User.AvatarURL, Body: c.Body,
 			CreatedAt: c.CreatedAt, HTMLURL: c.HTMLURL, Kind: "issue",
 		})
 	}
 
 	var reviews []struct {
-		ID          int64                  `json:"id"`
-		Body        string                 `json:"body"`
-		User        struct{ Login string } `json:"user"`
-		SubmittedAt string                 `json:"submitted_at"`
-		HTMLURL     string                 `json:"html_url"`
+		ID          int64  `json:"id"`
+		Body        string `json:"body"`
+		User        ghUser `json:"user"`
+		SubmittedAt string `json:"submitted_at"`
+		HTMLURL     string `json:"html_url"`
 	}
 	if err := m.apiPaginate(ctx, fmt.Sprintf("repos/%s/pulls/%d/reviews", m.repo, pr), &reviews); err != nil {
 		return nil, err
@@ -309,7 +326,7 @@ func (m *Module) FetchGeneralComments(ctx context.Context, pr int) ([]GeneralCom
 			continue // approve/request-changes with no written summary
 		}
 		out = append(out, GeneralComment{
-			ID: r.ID, Author: r.User.Login, Body: r.Body,
+			ID: r.ID, Author: r.User.Login, AvatarURL: r.User.AvatarURL, Body: r.Body,
 			CreatedAt: r.SubmittedAt, HTMLURL: r.HTMLURL, Kind: "review_summary",
 		})
 	}

@@ -443,17 +443,28 @@
   `author`, see `threadMessages`) and `prWideItem` (the PR-wide comments):
   author name + avatar on their own line above the body/kind badge
   (`data-testid=comment-author`/`reaction-author`/`pr-wide-author`, plus the
-  corresponding `*-author-line` wrapper). **Data-model note:**
-  comments/reactions (`modules/comments`) do carry an `author` login
-  (`Comment.Author`/`Reaction.Author`, also filled for GitHub-imported
-  comments/replies, see `comment_import.go`), but **no avatar URL** — the
-  GitHub fetch (`modules/github`) only threads `user.login` through, never
-  `user.avatar_url`. Every comment/reply avatar therefore always renders as
-  an initials circle today; a later backend extension (carrying an avatar
-  URL through `ghComment`/`Reply`/`ReviewComment`/`GeneralComment` + a new
-  column in `comments.db`) would make the real GitHub profile picture appear
-  without needing to change the frontend (`avatarHTML` already supports it).
-  See `tests/comment-author-avatar.spec.mjs`.
+  corresponding `*-author-line` wrapper). **Data-model note: a
+  github-sourced comment/reply carries a real avatar URL, an app-placed one
+  doesn't.** `modules/github` threads the author's `user.avatar_url` (a shared
+  `ghUser` sub-struct) through `Reply`/`ReviewComment`/`GeneralComment`;
+  `comment_import.go`/the reply poller carry it on
+  `CodeCommentInput.AvatarURL`/`ReactionSignal.AvatarURL`, and the existing
+  `saveComment`/`saveReaction` Activities store it in the `avatar_url` column
+  of both `comments` and `reactions` (light `ALTER TABLE … ADD COLUMN`
+  migration) → `Comment.AvatarURL`/`Reaction.AvatarURL` → `avatarUrl` in
+  `/api/comments`. The frontend needed no change for this: `avatarHTML`
+  already renders an `<img>` as soon as a URL is present. Deliberately the
+  **real API field**, never a URL derived from the login — a GitHub App bot
+  (`kilo-code-bot[bot]`) has no `github.com/<login>.png` shorthand, and those
+  bot avatars are exactly the ones a reviewer wants to recognize. A comment
+  placed in this app (or by the AI risk check) has no URL and keeps the
+  initials circle, as does every offline/`SLASH_GITHUB=off` test run. The
+  author line itself is deliberately roomy (avatar `h-5 w-5`, name
+  `text-[11px]`; `h-6 w-6`/`text-sm` on the PR-comment detail card) so a
+  long login/bot name isn't cramped next to its badges. See
+  `tests/comment-author-avatar.spec.mjs`, plus `TestAvatarURLRoundTrip`
+  (`modules/comments`) and `TestImportCarriesAuthorAvatars`
+  (`comment_import_test.go`) for the backend chain.
 - **Theme: system/light/dark, with a manual cycle button
   (`src/theme.mjs`).** The theme once followed **exclusively** the system
   setting (`prefers-color-scheme`, Tailwind `darkMode:'media'`, no own
