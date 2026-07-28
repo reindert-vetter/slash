@@ -6663,12 +6663,14 @@ function DetailPanel(state) {
           )
         })
       }}
-      ${() =>
-        InlineComments(state, commentTarget, () => {
-          if (composeHasText()) openMenu('compose')
-        }).key('inline-comments')}
-      ${() =>
-        RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
+      <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="comments-and-related">
+        ${() =>
+          InlineComments(state, commentTarget, () => {
+            if (composeHasText()) openMenu('compose')
+          }).key('inline-comments')}
+        ${() =>
+          RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
+      </div>
     </main>
   `
 }

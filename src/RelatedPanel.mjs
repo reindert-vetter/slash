@@ -1373,8 +1373,12 @@ function newCommentComposer(state, commentTarget, openCompose) {
 // selected unit (visibleComments()).
 export function InlineComments(state, commentTarget, openCompose) {
   syncComments(state ? state.pr : null)
+  // No own fixed width: this stacks directly above the related-code section
+  // in a shared flex-col column (see DetailPanel, home.mjs) and stretches
+  // (default align-items:stretch) to that section's own, dynamically
+  // computed width instead of carrying a separate, narrower one of its own.
   return html`
-    <div class="flex w-[22rem] shrink-0 flex-col gap-2" data-testid="inline-comments">
+    <div class="flex shrink-0 flex-col gap-2" data-testid="inline-comments">
       ${newCommentComposer(state, commentTarget, openCompose)}
       ${() => visibleComments().map((c, i) => commentCard(c, i).key('comment:' + c.id))}
     </div>
