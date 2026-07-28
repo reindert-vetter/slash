@@ -151,4 +151,44 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     await expect(items.nth(1)).toHaveAttribute('data-expanded', 'false')
     await expect(items.nth(0).getByTestId('comment-thread')).toContainText('eerste conversatie')
   })
+
+  test('the expanded thread has no internal height cap — a long conversation is never clipped', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await ready(page)
+    const first = await ident(page)
+
+    const created = await page.request.post('/api/workflows/task_code_comment', {
+      data: { pr: 12903, file: first.file, line: 1, author: 'reviewer', body: 'lange conversatie', label: first.label, rowStart: -1, rowEnd: -1 },
+    })
+    expect(created.ok()).toBeTruthy()
+    const { runId } = await created.json()
+    expect(runId).toBeTruthy()
+
+    // Enough replies to make the thread taller than the old max-h-64 (16rem/256px) cap.
+    for (let i = 0; i < 15; i++) {
+      const res = await page.request.post(`/api/workflows/${runId}/signals/reply`, {
+        data: { author: 'bogsat', body: 'reactie nummer ' + i, done: false },
+      })
+      expect(res.ok()).toBeTruthy()
+    }
+
+    await page.goto('/pr/12903?sel=' + encodeURIComponent(first.fileLine))
+    await waitBlock(page, first.label)
+
+    const item = page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: 'lange conversatie' })
+    await item.click()
+    await expect(item).toHaveAttribute('data-expanded', 'true')
+
+    const thread = item.getByTestId('comment-thread')
+    const lastBubble = thread.getByTestId('reaction-bubble').last()
+    await expect(lastBubble).toContainText('reactie nummer 14')
+
+    // No internal clipping: the thread's content height fits its own box (no
+    // overflow beyond it — height simply grows with the conversation).
+    const overflow = await thread.evaluate((el) => el.scrollHeight - el.clientHeight)
+    expect(overflow).toBe(0)
+
+    // The last message is fully visible without any scroll action.
+    await expect(lastBubble).toBeInViewport()
+  })
 })

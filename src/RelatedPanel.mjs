@@ -1291,7 +1291,7 @@ function expandedConversation(c) {
         <span class="${() => 'mt-0.5 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
       </div>
       ${() => (c && c.code ? composeTargetHint({ gran: c.gran, label: c.label, code: c.code }) : '')}
-      <div class="no-scrollbar flex max-h-64 min-h-0 flex-col gap-2 overflow-auto" data-testid="comment-thread">
+      <div class="flex min-h-0 flex-col gap-2" data-testid="comment-thread">
         ${() => threadMessages(c).map((r, i, arr) => reactionBubble(r, i, arr.length).key('msg:' + r.id))}
       </div>
       <div class="flex items-center gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">

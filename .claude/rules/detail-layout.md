@@ -411,6 +411,18 @@ root per card (`commentCard`) — not a bare toggling expression — per the
 key stays `'comment:' + c.id` regardless of expand/collapse, only the nested
 `${() => …}` binding swaps.
 
+**The expanded thread has no height cap/internal scroll of its own.**
+`expandedConversation`'s message list (`data-testid=comment-thread`) grows
+with the conversation instead of clipping it — an earlier `max-h-64
+overflow-auto no-scrollbar` silently cut off the tail of a longer thread
+behind a scrollbar hidden by `no-scrollbar` (`overflow-auto` + no visible
+scrollbar chrome), which read as a cut-off conversation rather than "scroll
+for more". `commentDetailCard`'s own thread (`comment-detail-thread`, the
+PR-wide comment-index detail card, see "Comment-index items" below) is a
+separate component and deliberately keeps its existing `max-h-[70vh]` —
+that's already close to the full viewport height, so it wasn't the cause of
+the reported clipping.
+
 **Always-present "+ Nieuwe comment" trigger, deliberately OUTSIDE the
 arrow-key traversal.** `newCommentComposer` renders a "+ Nieuwe comment"
 button (`data-testid=new-comment`) for every unit, whether or not it already
