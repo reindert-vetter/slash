@@ -4,6 +4,7 @@
 
 import { html } from './vendor/arrow.js'
 import { removedLabel } from './Block.mjs'
+import { avatarHTML } from './avatar.mjs'
 
 // Tailwind classes per category tag, so the pills read like the screenshot.
 const CATEGORY_STYLE = {
@@ -348,6 +349,28 @@ function rowFocused(state, i) {
   return i === state.selected && !state.toggleFocused && !state.ignoreToggleFocused
 }
 
+// categoryOrAvatar renders the leading badge of a row: for a synthetic
+// comment-index item (kind:'comment', see commentBlockItem in home.mjs) the
+// author's avatar (avatarHTML, shared with RelatedPanel.mjs's comment/reply
+// rows) instead of the generic red "COMMENT" category pill — the avatar names
+// *who* left the comment, which reads better than a category label that's
+// the same for every comment row. Every real PR block keeps the ordinary
+// category pill. A nested `${() => …}` slot (like removedPill/approvalPill
+// below), so both branches are whole templates — no partial-interpolation or
+// static template↔string pitfall (see conventions.md).
+function categoryOrAvatar(b) {
+  if (b.kind === 'comment') {
+    const c = b.comment || {}
+    return avatarHTML(c.author, c.avatarUrl, 'h-5 w-5')
+  }
+  return html`
+    <span
+      class="${'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wide ' + categoryClass(b.category)}"
+      >${b.category}</span
+    >
+  `
+}
+
 function row(state, b, i) {
   const st = statusInfo(b.status)
   return html`
@@ -369,12 +392,7 @@ function row(state, b, i) {
         class="${() => (rowFocused(state, i) ? 'text-indigo-500 dark:text-indigo-400' : 'text-transparent')}"
         >›</span
       >
-      <span
-        class="${() =>
-          'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wide ' +
-          categoryClass(b.category)}"
-        >${b.category}</span
-      >
+      ${() => categoryOrAvatar(b)}
       <span
         class="flex-1 truncate font-mono text-[13px] text-slate-800 dark:text-zinc-200"
         title="${b.label}"
