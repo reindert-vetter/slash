@@ -218,18 +218,34 @@ the right of the index shows its thread instead of a diff.
   what → does instead), `ensureCode` (no `/api/code` fetch — a comment item
   has no `.file`/`.label`), `sameFileNeighbour` (both sides guarded — two
   adjacent comment items would otherwise coincidentally match on
-  `undefined === undefined`), the `state.blockRef` mirror watch (stays `''`
-  for a comment selection — deliberately **no** new `?sel=comment:<id>`
-  scheme; a comment selection simply doesn't survive a refresh, falling back
-  to `applyDefaultUnapprovedSelection`'s default landing), `commentTarget`/
-  `placeComment` (a comment item can't anchor a NEW line comment — both
-  return/no-op rather than post one with `file:undefined`), and the
-  `DetailPanel` `pair.forEach` render loop (see next bullet). `findNextUnapproved`
-  needs no explicit guard: its forward-only walk starts at
-  `state.selected + 1`, and since comment items always rank before every real
-  block, a real block's own index is never followed by a comment item's —
-  the "Continue to next unapproved" postApprove flow can therefore never
-  land on one structurally.
+  `undefined === undefined`), `commentTarget`/`placeComment` (a comment item
+  can't anchor a NEW line comment — both return/no-op rather than post one
+  with `file:undefined`), and the `DetailPanel` `pair.forEach` render loop
+  (see next bullet). `findNextUnapproved` needs no explicit guard: its
+  forward-only walk starts at `state.selected + 1`, and since comment items
+  always rank before every real block, a real block's own index is never
+  followed by a comment item's — the "Continue to next unapproved"
+  postApprove flow can therefore never land on one structurally.
+- **`?sel=comment:<id>` — a comment selection survives a refresh too.** The
+  `state.blockRef` mirror watch (`home.mjs`) mirrors a selected comment
+  item's own stable `.id` (`comment:<id>`) instead of a `file:line` — the
+  same `?sel=` param a real block already uses, just a different shape that
+  never collides with `file:line` (a real file path never contains a bare
+  `comment:` prefix). Restoring it back is more involved than an ordinary
+  block: comment items are populated by `RelatedPanel`'s own comment poll
+  (`syncComments`), independent of `loadBlocks`, so they may well not exist
+  in `state.blocks` yet the one time `applyBlockRefRestore` itself runs.
+  `applyCommentRefRestore` is therefore retried from the existing
+  `watch(() => prWideComments(), …)` (see `recomputeLeftList` above) on
+  every later comment-list update, until the target is found — or never is
+  (a deleted/expired link), the same silent not-found fallback as a real
+  block ref. Once found, it also forces `state.mode = 'list'` (a stray
+  restored `?mode=diff` must not leave the app in diff mode with a comment
+  selected — comment items have no diff) and reveals the selection if the
+  comment happens to already be resolved (thus hidden by default, exactly
+  like a fully-approved block — `revealSelectedIfHidden`, generic over
+  `isFullyApproved`/`blockApproveCount`'s comment branch above). Test:
+  `tests/comment-index-url-restore.spec.mjs`.
 - **The detail card, in place of a `Block` diff card.** `DetailPanel`'s
   `pair.forEach` loop (`home.mjs`, the same loop that builds the selected +
   look-ahead-preview cards for the block column) branches at the very top on

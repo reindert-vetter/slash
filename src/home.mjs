@@ -215,7 +215,12 @@ const state = reactive({
   // bindUrlState below) by a watch that re-derives it from state.selected, and
   // resolved back to an index once after loadBlocks (see the blockRef-restore
   // note further down) — never read directly by the navigation, which still
-  // works purely in terms of `selected`.
+  // works purely in terms of `selected`. A synthetic comment-index item
+  // (kind:'comment', see commentBlockItem) carries its own stable `.id`
+  // (`comment:<id>`) here instead of a `file:line` — resolved back by
+  // applyCommentRefRestore, since comment items load independently of
+  // loadBlocks (RelatedPanel's own comment poll) and may not exist yet at the
+  // usual blockRef-restore time.
   blockRef: '',
   // mode: 'list' — up/down move between blocks in the sidebar; → steps into the
   // selected block's diff. 'diff' — up/down move between change groups inside the
@@ -528,6 +533,17 @@ bindUrlState(state, [
 // later navigation.
 let blockRefPending = state.blockRef || null
 
+// hadInitialSelParam snapshots, once, whether the URL carried a `?sel=` at
+// all — independent of whether blockRefPending has since been consumed. A
+// `?sel=comment:<id>` (see applyCommentRefRestore) can resolve out of order
+// relative to loadBlocks: RelatedPanel's own comment poll sometimes lands
+// BEFORE loadBlocks' /api/blocks fetch does, which already nulls
+// blockRefPending. loadBlocks' own `hadSelParam` check must still see "yes,
+// there was a sel param" in that case — reading `blockRefPending != null`
+// there directly would flip to false and wrongly let
+// applyDefaultUnapprovedSelection override the just-restored selection.
+const hadInitialSelParam = blockRefPending != null
+
 // drillRefPending mirrors blockRefPending for the drill path restored from
 // `?drill=id1>id2>...` — snapshotted before the state.drill mirror watch below
 // (which also runs once immediately against the still-empty state.drill) can
@@ -552,17 +568,16 @@ let drillCursorPending =
 // refresh/shared link restores the same block regardless of how the left
 // list has since been filtered/reordered. Reads state.blocks/selected inline
 // (the watch-getter convention — see conventions.md) so it reliably re-runs
-// on every selection change.
+// on every selection change. A synthetic comment-index item (kind:'comment',
+// see commentBlockItem) has no file:line — it mirrors its own stable `.id`
+// instead (`comment:<id>`, never colliding with a real block's `file:line`
+// shape), so navigating through PR-wide comments also survives a refresh
+// (see applyCommentRefRestore below for the restore side).
 watch(
   () => [state.selected, state.blocks],
   () => {
     const b = state.blocks[state.selected]
-    // A synthetic comment-index item (kind:'comment') has no file:line and
-    // deliberately isn't given its own ?sel= scheme (Task decision) — leave
-    // blockRef empty, same as no selection at all, so a refresh simply falls
-    // back to the usual default (applyDefaultUnapprovedSelection) instead of
-    // writing a bogus "undefined:undefined" into the URL.
-    state.blockRef = b && b.kind !== 'comment' ? `${b.file}:${b.line}` : ''
+    state.blockRef = b ? (b.kind === 'comment' ? b.id : `${b.file}:${b.line}`) : ''
   },
 )
 
@@ -598,13 +613,55 @@ watch(
 // the end of loadBlocks — the same "resolve after the data push" pattern as
 // RelatedPanel's applyRelRestore). Not found (stale/shared link, or the block
 // got filtered out) → leave whatever recomputeLeftList already clamped
-// state.selected to.
+// state.selected to. A restored `?sel=comment:<id>` (see commentBlockItem) is
+// delegated to applyCommentRefRestore instead — comment items are populated
+// by RelatedPanel's own comment poll, independent of loadBlocks, so
+// blockRefPending is deliberately left set for a retry there rather than
+// given up on after this one attempt.
 function applyBlockRefRestore() {
   if (blockRefPending == null) return
   const ref = blockRefPending
+  if (ref.startsWith('comment:')) {
+    applyCommentRefRestore()
+    return
+  }
   blockRefPending = null
-  const idx = state.blocks.findIndex((b) => `${b.file}:${b.line}` === ref)
+  const idx = state.blocks.findIndex((b) => b.kind !== 'comment' && `${b.file}:${b.line}` === ref)
   if (idx >= 0) state.selected = idx
+}
+
+// applyCommentRefRestore resolves a `?sel=comment:<id>` restored at load time
+// into a real state.selected index — a PR-wide comment turned into a
+// synthetic "Start" row (see commentBlockItem/recomputeLeftList). Unlike an
+// ordinary block, comment items only exist once RelatedPanel's own comment
+// poll (syncComments) has landed, which runs independently of loadBlocks and
+// may well not have completed yet the first time this runs (from
+// applyBlockRefRestore). So this is called again — safely, it's a no-op once
+// resolved — from the watch on prWideComments() below, every time the
+// comment list changes, until the target is actually found or blockRefPending
+// gets cleared some other way. Not found (yet, or ever — a deleted/expired
+// link) simply leaves blockRefPending pending, mirroring
+// applyBlockRefRestore's own not-found fallback, except this one keeps
+// retrying instead of giving up after one attempt (since "not there yet" and
+// "never there" look identical from here). A stray restored `?mode=diff`
+// must not leave the app in diff mode with a comment selected — comment
+// items have no diff (see enterDiff's own guard) — mirrors
+// applyDefaultUnapprovedSelection's identical guard. Reveals the selection if
+// it lands on an already-resolved (thus hidden-by-default) comment
+// (revealSelectedIfHidden, generic over isFullyApproved/blockApproveCount's
+// comment branch), deferred a couple of microtask turns so the
+// approvalSummaries watch (which depends on state.blocks) has flushed first —
+// the same wait loadBlocks itself already relies on elsewhere.
+function applyCommentRefRestore() {
+  if (blockRefPending == null || !blockRefPending.startsWith('comment:')) return
+  const idx = state.blocks.findIndex((b) => b.kind === 'comment' && b.id === blockRefPending)
+  if (idx < 0) return
+  state.selected = idx
+  state.mode = 'list'
+  blockRefPending = null
+  Promise.resolve()
+    .then(() => Promise.resolve())
+    .then(() => revealSelectedIfHidden())
 }
 
 // applyDrillRefRestore resolves the `?drill=id1>id2>...` path restored at load
@@ -994,13 +1051,19 @@ async function loadBlocks() {
   state.allBlocks = all
   state.relations = rels
   recomputeLeftList()
-  // hadSelParam captures — before applyBlockRefRestore nulls it — whether this
-  // load is restoring a real `?sel=file:line` (a refresh/shared link/the
-  // /pr-overview round trip) or a genuinely fresh open (no sel at all, e.g.
-  // "Open review tree" without a remembered position). Only the latter gets
-  // the new default-unapproved-selection treatment below; a restored sel keeps
-  // going through the existing reveal/pin path untouched.
-  const hadSelParam = blockRefPending != null
+  // hadSelParam reuses the top-level hadInitialSelParam snapshot (whether this
+  // load is restoring a real `?sel=file:line`/`?sel=comment:<id>` — a refresh/
+  // shared link/the /pr-overview round trip — or a genuinely fresh open, e.g.
+  // "Open review tree" without a remembered position) rather than
+  // re-reading `blockRefPending != null` here: a `?sel=comment:<id>` restore
+  // can already have resolved (and nulled blockRefPending) by this point if
+  // RelatedPanel's comment poll happened to land before this /api/blocks
+  // fetch did — reading it fresh here would then wrongly read as "no sel
+  // param" and let the new default-unapproved-selection treatment below
+  // override the just-restored selection. Only a genuinely fresh open gets
+  // that treatment; a restored sel keeps going through the existing
+  // reveal/pin path untouched.
+  const hadSelParam = hadInitialSelParam
   applyBlockRefRestore()
   // pristineSelected/pristineToggleFocused snapshot the selection right after
   // the synchronous load steps above, so applyDefaultUnapprovedSelection below
@@ -1278,9 +1341,16 @@ function recomputeLeftList() {
 // prWideComments() only reads RelatedPanel.mjs's cs.list (a plain filter, no
 // b.code involved), so this never risks the "stuck on loading" co-subscriber
 // pitfall (see conventions.md) the way reading a block's own code would.
+// Also retries a pending `?sel=comment:<id>` restore (applyCommentRefRestore)
+// every time this list updates — comment items only exist in state.blocks
+// once this watch has run at least once with actual data, which may well be
+// later than loadBlocks' own one-shot applyBlockRefRestore call.
 watch(
   () => prWideComments(),
-  () => recomputeLeftList(),
+  () => {
+    recomputeLeftList()
+    applyCommentRefRestore()
+  },
 )
 
 // stepVisibleSelected walks state.selected one raw state.blocks index at a time

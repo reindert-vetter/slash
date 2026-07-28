@@ -318,9 +318,14 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await page.reload()
     await expect(page.getByTestId('toggle-approved')).toBeVisible()
     await expect(page.getByTestId('toggle-approved')).toContainText('1')
-    // The comment row itself is hidden by default (folded into that button),
-    // like any other fully-approved block.
-    await expect(page.getByTestId('comment-heading')).toHaveCount(0)
+    // A comment selection now survives a refresh (?sel=comment:<id>, see
+    // applyCommentRefRestore/detail-layout.md) — the reviewer's own restored
+    // position on this now-resolved comment stays visible/selected via the
+    // same revealSelectedIfHidden pin an already-approved block gets, instead
+    // of folding away into "Toon N goedgekeurde blocks" like every OTHER
+    // resolved comment still would.
+    await expect(page.getByTestId('comment-heading')).toBeVisible()
+    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
   })
 
   test('an ai_warning finding is also a navigable comment-index item', async ({ page }) => {
