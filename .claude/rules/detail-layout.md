@@ -399,17 +399,33 @@ both stacked sections visually the same width.
 threads can hang off the same unit; each gets its own card
 (`data-testid=comment-item`), but only the one the keyboard currently owns
 (`cs.sel` + `cs.focus` one of `'comment'`/`'thread'`) renders its full thread
-(`expandedConversation`: header, `composeTargetHint` if the comment carries a
-code snippet, every message via the unchanged `threadMessages`/
-`reactionBubble`, and a working reply field) — every other conversation on
-that same unit stays a compact one-line summary (`compactConversation`:
-status dot, author + avatar, a truncated body preview, `data-expanded=false`
-vs. `data-expanded=true` on the DOM node so a test can assert which one is
-open). The toggle between the two lives in a stable `<div class="contents">`
-root per card (`commentCard`) — not a bare toggling expression — per the
-"bare toggling expression" pitfall in `conventions.md`: the outer `.map()`
-key stays `'comment:' + c.id` regardless of expand/collapse, only the nested
-`${() => …}` binding swaps.
+(`expandedConversation`: a slim, right-aligned meta line (`comment-meta-line`
+— source/AI-warning badge + the status dot, see below), `composeTargetHint`
+if the comment carries a code snippet, every message via the unchanged
+`threadMessages`/`reactionBubble`, and a working reply field) — every other
+conversation on that same unit stays a compact one-line summary
+(`compactConversation`: status dot, author + avatar, a truncated body
+preview, `data-expanded=false` vs. `data-expanded=true` on the DOM node so a
+test can assert which one is open). The toggle between the two lives in a
+stable `<div class="contents">` root per card (`commentCard`) — not a bare
+toggling expression — per the "bare toggling expression" pitfall in
+`conventions.md`: the outer `.map()` key stays `'comment:' + c.id` regardless
+of expand/collapse, only the nested `${() => …}` binding swaps.
+
+**`expandedConversation` no longer has its own author+avatar header** — that
+duplicated the opening bubble `threadMessages()` already renders (the
+comment's own body as the first message, see `threadMessages`'s own doc
+comment): expanded, a conversation showed "author + avatar" once in a header
+row and again, directly below it, as the first chat bubble. Only the bits the
+bubbles don't carry — the source/AI-warning badge and the status dot — remain,
+now right-aligned in one slim `comment-meta-line` row instead of the previous
+`justify-between` row (which, once its emptied-out left side/avatar was gone,
+read as an almost-empty bar). `compactConversation`'s own one-line summary is
+unaffected — it never shows the thread body, so it still needs its own
+author+avatar line. The status dot (`CSTATUS_DOT`) stays color-only for now —
+a separate, dedicated task will replace it (here and at its other two call
+sites, `compactConversation`/`commentDetailCard`) with a colorblind-friendly
+checkmark/glyph.
 
 **The expanded thread has no height cap/internal scroll of its own.**
 `expandedConversation`'s message list (`data-testid=comment-thread`) grows

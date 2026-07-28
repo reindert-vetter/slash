@@ -1271,7 +1271,16 @@ function compactConversation(c, i) {
 // expandedConversation — the full thread (every message via threadMessages/
 // reactionBubble, unchanged) plus a working reply field, for the ONE
 // conversation currently focused (selI() === i && cs.focus is 'comment'/
-// 'thread').
+// 'thread'). No separate author+avatar header here anymore — that duplicated
+// the opening bubble threadMessages() already renders (see threadMessages'
+// own doc comment); only the bits the bubbles don't carry (source/AI-warning
+// badge, status dot) remain, right-aligned in one slim meta line instead of
+// the previous justify-between row (which, once its left side/avatar was
+// removed, read as an almost-empty bar).
+// The status dot is color-only (CSTATUS_DOT) — a dedicated follow-up task
+// will replace it everywhere with a colorblind-friendly checkmark/glyph;
+// keep it a plain, easily swappable class binding here, not a new
+// shape/layout that task would have to unwind.
 function expandedConversation(c) {
   return html`
     <div
@@ -1279,16 +1288,9 @@ function expandedConversation(c) {
       data-testid="comment-item"
       data-expanded="true"
     >
-      <div class="flex items-start justify-between gap-2">
-        <span class="flex min-w-0 items-center gap-2" data-testid="comment-author-line">
-          ${avatarHTML(c.author, c.avatarUrl, 'h-5 w-5')}
-          <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400" data-testid="comment-author"
-            >${c.author || 'onbekend'}</span
-          >
-          ${() => sourceBadge(c)}
-          ${() => aiWarningBadge(c)}
-        </span>
-        <span class="${() => 'mt-0.5 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
+      <div class="flex items-center justify-end gap-2" data-testid="comment-meta-line">
+        ${() => sourceBadge(c)} ${() => aiWarningBadge(c)}
+        <span class="${() => 'h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
       </div>
       ${() => (c && c.code ? composeTargetHint({ gran: c.gran, label: c.label, code: c.code }) : '')}
       <div class="flex min-h-0 flex-col gap-2" data-testid="comment-thread">
