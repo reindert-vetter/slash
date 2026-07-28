@@ -1407,6 +1407,9 @@ const KIND_LABEL = {
   // A test's #[DataProvider('m')]/@dataProvider m → the provider method (see
   // .claude/rules/tembed-workflows.md, "PHPUnit data providers").
   data_provider: 'provider',
+  // A class's `use TraitName;` → the trait as a whole (see
+  // .claude/rules/tembed-workflows.md, "Resolving trait usage").
+  trait_usage: 'trait',
   // A trans()/__()/@lang()/trans_choice() call → the lang file's key, one child
   // per locale (see .claude/rules/tembed-workflows.md, "Resolving translation
   // keys"). Shows the current value, not a diff.
@@ -1430,14 +1433,15 @@ const KIND_LABEL = {
 // when there IS a diff — a call/covered method into an unchanged file has no
 // diff (r.diff == null) and shows its "Ongewijzigd" status on the LEFT
 // instead (leftStatusBadge, below), not here. Also covers the class-level
-// callresolve kinds (model_usage/migration_model/data_provider) — they carry a
-// diff just like a method_call child.
+// callresolve kinds (model_usage/migration_model/data_provider/trait_usage) —
+// they carry a diff just like a method_call child.
 const DIFFSTAT_KINDS = new Set([
   'method_call',
   'covers',
   'model_usage',
   'migration_model',
   'data_provider',
+  'trait_usage',
   'interface_impl',
 ])
 function diffStatBadge(r) {

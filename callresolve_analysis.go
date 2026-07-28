@@ -31,6 +31,7 @@ type symbolIndex struct {
 	commands   map[string]Block   // artisan command name (accounting:import) → its handle method
 	facades    map[string]string  // Laravel facade short name → accessor class short name
 	models     map[string]Block   // Eloquent model short name (app/Models/) → its whole-class block
+	traits     map[string]Block   // trait short name → its whole-class block (resolveCalls rule 8)
 	// modelTables maps an explicit `protected $table = 'name'` override (app/Models/)
 	// to the model's short class name — the migrationModel rule's primary mapping
 	// source (see resolveMigrationModels); the Eloquent naming convention
@@ -78,6 +79,7 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		commands:    map[string]Block{},
 		facades:     map[string]string{},
 		models:      map[string]Block{},
+		traits:      map[string]Block{},
 		modelTables: map[string]string{},
 		modelCasts:  map[string]map[string]string{},
 
@@ -162,6 +164,12 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		// accessor so AccountingClient::providers() resolves to AccountingDriver.
 		for f, acc := range scanFacades(src) {
 			idx.facades[f] = acc
+		}
+		// A trait declaration is not a method either; index it as a whole-class
+		// block (mirrors scanModels/scanEnums) so a `use TraitName;` in a class
+		// header (resolveCalls rule 8) can point at the trait's own definition.
+		for _, b := range scanTraits(src, rel) {
+			idx.traits[shortName(b.Class)] = b
 		}
 		// An Eloquent model (app/Models/) is indexed as a whole-class block so a
 		// `new Model()`/`Model::` usage can point at the model itself rather than a
@@ -249,6 +257,30 @@ func scanEnums(src []byte, filename string) []Block {
 		name := s[loc[2]:loc[3]]
 		// The header (`: string implements X`) never contains '{'; the first
 		// one opens the body.
+		i := loc[1]
+		for i < len(s) && s[i] != '{' {
+			i++
+		}
+		if i >= len(s) {
+			continue
+		}
+		startLine := 1 + strings.Count(s[:loc[0]], "\n")
+		bodyLine := 1 + strings.Count(s[:i], "\n")
+		endLine, _ := skipBody(s, i, &bodyLine)
+		out = append(out, Block{File: filename, Class: name, Line: startLine, EndLine: endLine})
+	}
+	return out
+}
+
+// scanTraits finds PHP trait declarations and returns one synthetic block per
+// trait (Class = the trait name, Name empty), spanning the whole declaration —
+// mirrors scanModels/scanEnums. blockSource falls back to line-slicing for it,
+// since ScanBlocks never surfaces a class-level symbol.
+func scanTraits(src []byte, filename string) []Block {
+	s := string(src)
+	var out []Block
+	for _, loc := range reTraitDef.FindAllStringSubmatchIndex(s, -1) {
+		name := s[loc[2]:loc[3]]
 		i := loc[1]
 		for i < len(s) && s[i] != '{' {
 			i++
@@ -437,6 +469,14 @@ var (
 	// app/Models/ files, see scanModels), so a model surfaces as one whole-class
 	// block rather than a single method.
 	reModelClassDef = regexp.MustCompile(`(?m)^\s*(?:abstract\s+|final\s+)*class\s+([A-Za-z_]\w*)`)
+	// reTraitDef matches a PHP trait declaration line — see scanTraits.
+	reTraitDef = regexp.MustCompile(`(?m)^\s*trait\s+([A-Za-z_]\w*)`)
+	// reTraitUse matches a `use TraitA, TraitB;` trait-import statement inside a
+	// class's header region (classHeaderSentinel) — resolveCalls rule 8. Only
+	// the plain form ending directly in `;` is matched; a trait-adaptation
+	// block (`use A, B { A::foo insteadof B; }`) is deliberately out of scope
+	// (v1) — see .claude/rules/tembed-workflows.md.
+	reTraitUse = regexp.MustCompile(`(?m)^\s*use\s+((?:\\?[A-Za-z_][\w\\]*\s*,\s*)*\\?[A-Za-z_][\w\\]*)\s*;`)
 	// reStaticRef matches Foo::name — with or without a call; a trailing `(`
 	// (a static call, rule 3's territory) is filtered by inspecting the char
 	// after the match, like reArrowProp.
@@ -885,6 +925,35 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		for _, m := range reResourceReturn.FindAllStringSubmatch(scan, -1) {
 			if def := methodOnClass(idx, shortName(m[1]), "toArray"); def != nil {
 				emit("resource:"+shortName(m[1]), def)
+			}
+		}
+		// 8. `use TraitName;` added to a class's header (a trait-import
+		// statement) → the trait's own definition, since a class using a trait
+		// wants the trait's code shown as underlying code, even though the
+		// trait itself is very often NOT changed by this PR. Deliberately a
+		// callresolve rule (points at possibly-unchanged code), Go-only, no LLM
+		// fallback — mirrors resolveMigrationModels/resolveDataProviders. Only
+		// meaningful within the class-header region (classHeaderSentinel, see
+		// phpscan.go) where a use-statement actually lives; a trait added
+		// elsewhere in the class body (unusual PHP, after the first method)
+		// falls outside every block's scanned text and is silently missed
+		// (same kind of scope boundary as scanMacros' boot-method-only reach).
+		// The call key is "trait_usage:"+trait (contains ':', so — like
+		// migration_model:/data_provider: — it never matches a real call-site
+		// literal, meaning this child shows at group/list level, not tied to
+		// one line/call). A name that isn't an indexed trait (a vendor trait, a
+		// typo) silently yields no child — never an "unresolved" row.
+		if b.Name == classHeaderSentinel {
+			for _, m := range reTraitUse.FindAllStringSubmatch(scan, -1) {
+				for _, name := range strings.Split(m[1], ",") {
+					trait := shortName(strings.TrimSpace(name))
+					if trait == "" {
+						continue
+					}
+					if def, ok := idx.traits[trait]; ok {
+						emitKind("trait_usage:"+trait, &def, callresolve.KindTraitUsage)
+					}
+				}
 			}
 		}
 	}

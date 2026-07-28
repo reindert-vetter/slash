@@ -2026,3 +2026,125 @@ class ProductGroupResource {
 		}
 	}
 }
+
+func TestResolveCallsTraitUsage(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 63
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Services/OrderService.php": `<?php
+namespace App\Services;
+
+class OrderService
+{
+    use Loggable, MissingTrait;
+
+    public function process($order)
+    {
+        return $order;
+    }
+}
+`,
+		"app/Concerns/Loggable.php": `<?php
+namespace App\Concerns;
+
+trait Loggable
+{
+    public function log($message)
+    {
+        return $message;
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Services/OrderService.php", Class: "OrderService", Name: classHeaderSentinel, Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "trait_usage:Loggable")
+	if !ok {
+		t.Fatalf("no entry for trait_usage:Loggable, got %+v", entries)
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("status=%q, want resolved", e.Status)
+	}
+	if e.Kind != callresolve.KindTraitUsage {
+		t.Errorf("kind=%q, want %q", e.Kind, callresolve.KindTraitUsage)
+	}
+	if e.ChildClass != "Loggable" || e.ChildMethod != "" {
+		t.Errorf("child=%q::%q, want Loggable::<empty>", e.ChildClass, e.ChildMethod)
+	}
+	if !strings.Contains(e.ChildCode, "function log") {
+		t.Errorf("ChildCode missing the trait body, got %q", e.ChildCode)
+	}
+
+	// MissingTrait isn't indexed anywhere in the worktree — it silently yields
+	// no entry, never an "unresolved" row (no LLM fallback for this rule).
+	for _, e := range entries {
+		if strings.HasPrefix(e.CallKey, "trait_usage:MissingTrait") {
+			t.Errorf("unexpected entry for an unindexed trait: %+v", e)
+		}
+	}
+}
+
+func TestResolveCallsTraitUsageOutsideHeaderIgnored(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 64
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		// A `use Loggable;` statement AFTER the first method declaration falls
+		// outside the class-header block (classHeaderSentinel only spans up to
+		// the first method), so this is a deliberate scope boundary: no entry.
+		"app/Services/OrderService.php": `<?php
+namespace App\Services;
+
+class OrderService
+{
+    public function process($order)
+    {
+        return $order;
+    }
+
+    use Loggable;
+}
+`,
+		"app/Concerns/Loggable.php": `<?php
+namespace App\Concerns;
+
+trait Loggable
+{
+    public function log($message)
+    {
+        return $message;
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Services/OrderService.php", Class: "OrderService", Name: "process", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	for _, e := range entries {
+		if strings.HasPrefix(e.CallKey, "trait_usage:") {
+			t.Errorf("unexpected trait_usage entry from outside the class header: %+v", e)
+		}
+	}
+}

@@ -84,6 +84,7 @@ const (
 	KindMigrationModel = "migration_model" // a changed migration's Schema::create/table → its Eloquent model
 	KindDataProvider   = "data_provider"   // a test's #[DataProvider('m')]/@dataProvider m → the provider method
 	KindTranslation    = "translation"     // a trans('file.key')/__(...)/@lang(...) call → the lang file value, one per locale
+	KindTraitUsage     = "trait_usage"     // a class's `use TraitName;` → the trait as a whole
 	// KindInterfaceImplementation marks a changed interface method that has
 	// no concrete "A" parent in this PR (see interfaces.go): up to
 	// MaxInterfaceImplementations concrete implementations — possibly

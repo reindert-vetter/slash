@@ -1254,6 +1254,30 @@ as fallback.
   file's standalone `TRANSLATION` block (see `.claude/rules/blocks-and-ingest.md`)
   is never pulled out of the left list. Tests: `TestSliceLangKey`/
   `TestResolveTranslations` (`callresolve_analysis_test.go`).
+- **Resolving trait usage (rule 8, `callresolve_analysis.go`):** a
+  `use TraitName;` statement added to a class's header
+  (`classHeaderSentinel`, see `.claude/rules/blocks-and-ingest.md`) surfaces
+  the trait's own definition as Underlying Code, since a class importing a
+  trait is very often reusing an **already-existing, unchanged** trait —
+  same motivation/architecture as "Migration → model"/"PHPUnit data
+  providers": a **callresolve** rule, Go-only, no LLM fallback. Every `.php`
+  file in the worktree is scanned for `trait X { ... }` declarations
+  (`scanTraits`, mirrors `scanModels`/`scanEnums` — a whole-class synthetic
+  block, `ChildMethod` empty) and indexed into `symbolIndex.traits`. Only a
+  changed `classHeaderSentinel` block is scanned (`b.Name ==
+  classHeaderSentinel`), matching `reTraitUse` (`use A, B;`, comma-separated,
+  only the plain form ending directly in `;`) against that block's **changed
+  lines** — a trait-adaptation block (`use A, B { A::foo insteadof B; }`) is
+  deliberately out of v1 scope, as is a `use` statement added elsewhere in
+  the class body (after the first method), since that text falls outside
+  every block the scanner produces. `CallKey = "trait_usage:" + trait`
+  (contains `:`, so — like `migration_model:`/`data_provider:` — never
+  matches a real call site, meaning this child shows at `group`/list level,
+  not tied to one line/call); `Kind = KindTraitUsage` (`KIND_LABEL.trait_usage`
+  = "trait"). A name that isn't an indexed trait (a vendor trait, a typo)
+  produces **silently nothing**, never an `unresolved` row. Tests:
+  `TestResolveCallsTraitUsage`/`TestResolveCallsTraitUsageOutsideHeaderIgnored`
+  (`callresolve_analysis_test.go`).
 
 ## Linking test coverage (`resolve_test_covers` + `modules/testcovers`)
 
