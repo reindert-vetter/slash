@@ -47,6 +47,30 @@ import (
 // eligible for cleanup.
 const cleanupMergedAge = 7 * 24 * time.Hour
 
+// retiredWorkflowTypes are Workflow Types that used to exist in this codebase
+// but have since been permanently removed — the code that registered them is
+// gone for good, not merely absent from one particular binary (the headless
+// `slash ingest`/`relations`/`seed` CLI commands deliberately register only a
+// subset of workflows via newTasks(..., resumeRuntime=false), which is a
+// completely different, expected situation and must never be treated as
+// "retired"). A run whose Workflow Type is in this map is thus a genuine
+// orphan from before the removal: engine.Recover() logs "uses unregistered
+// workflow" for it on every server start and it can never make progress
+// again, so purgeRetiredWorkflowRuns permanently deletes it.
+//
+// This is a deliberately explicit, hand-maintained allowlist rather than
+// "whatever engine.Runs() reports as currently unregistered" — the latter
+// would risk deleting a perfectly legitimate run just because this
+// particular process (e.g. the headless CLI) happens not to register that
+// workflow type. Add a name here only once its registering code has been
+// removed from the codebase entirely.
+var retiredWorkflowTypes = map[string]bool{
+	// The old per-PR "ignore" feature (a workflow + modules/ignore) was
+	// replaced by the per-repo task_snooze workflow — see "Snoozing a task"
+	// in .claude/rules/tembed-workflows.md. modules/ignore no longer exists.
+	"ignore": true,
+}
+
 // CleanupInput starts a cleanup Execution. Cutoff is normally left zero — the
 // workflow body fills it in deterministically via w.Now() — but can be set
 // explicitly (e.g. by a test) to pin a specific point in time.
@@ -79,6 +103,10 @@ type CleanupPurgeResult struct {
 type CleanupResult struct {
 	Cutoff time.Time            `json:"cutoff"`
 	Purged []CleanupPurgeResult `json:"purged"`
+	// RetiredRunsDeleted is the number of orphaned runs of a permanently
+	// retired Workflow Type (see retiredWorkflowTypes) removed this pass —
+	// unconditional, not scoped to any one PR target above.
+	RetiredRunsDeleted int `json:"retiredRunsDeleted"`
 }
 
 // reWorktreeDir extracts a PR number from a worktrees dir name
@@ -341,6 +369,29 @@ func deletePRWorkflowRuns(engine *tembed.Engine, pr int) (int, error) {
 		}
 		if err := engine.DeleteRun(r.ID); err != nil {
 			return n, fmt.Errorf("delete run %s: %w", r.ID, err)
+		}
+		n++
+	}
+	return n, nil
+}
+
+// purgeRetiredWorkflowRuns removes every run whose Workflow Type is in
+// retiredWorkflowTypes (see its own doc comment) — permanent orphans left
+// over from a feature that no longer exists. Unlike deletePRWorkflowRuns
+// this is not scoped to one PR: it runs once per cleanup pass, independent
+// of the resolved PR targets. Returns the number of runs deleted.
+func purgeRetiredWorkflowRuns(engine *tembed.Engine) (int, error) {
+	runs, err := engine.Runs()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range runs {
+		if !retiredWorkflowTypes[r.Workflow] {
+			continue
+		}
+		if err := engine.DeleteRun(r.ID); err != nil {
+			return n, fmt.Errorf("delete retired run %s (%s): %w", r.ID, r.Workflow, err)
 		}
 		n++
 	}

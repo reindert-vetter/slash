@@ -383,3 +383,63 @@ func TestCleanupIdempotent(t *testing.T) {
 		t.Fatalf("second run Purged = %+v, want empty (already purged)", res2.Purged)
 	}
 }
+
+// TestCleanupPurgesRetiredWorkflowRuns proves the cleanup workflow also
+// removes an orphaned run of a retired Workflow Type (the real-world case
+// that motivated this: a leftover per-repo "ignore" tracker from before that
+// feature was replaced by task_snooze) — unconditionally, not scoped to any
+// PR target — while leaving a run of a still-current per-repo tracker alone.
+func TestCleanupPurgesRetiredWorkflowRuns(t *testing.T) {
+	ctm := newCleanupTestManager(t)
+
+	// Simulate the real orphan: a run of a workflow type that is no longer
+	// registered in the real app (retiredWorkflowTypes only names it, the
+	// registering code itself is gone) but was once a normal, waiting
+	// per-repo tracker. Registering it here only long enough to start it
+	// mirrors that shape without needing the removed modules/ignore code.
+	ctm.mgr.engine.RegisterWorkflow("ignore", func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		var out struct{}
+		w.WaitSignal("ignore", &out) // blocks forever, like the real tracker did
+		return nil, nil
+	})
+	retiredID, err := ctm.mgr.engine.StartWorkflow("ignore", struct {
+		Repo string `json:"repo"`
+	}{Repo: "test/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := ctm.mgr.engine.Status(retiredID); err != nil || status != tembed.StatusWaiting {
+		t.Fatalf("retired run status = %q, %v, want waiting", status, err)
+	}
+
+	// A current, still-registered per-repo tracker must survive the same pass.
+	currentID, err := ctm.mgr.engine.StartWorkflow(WorkflowPRInbox, struct {
+		Repo string `json:"repo"`
+	}{Repo: "test/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := ctm.mgr.StartCleanup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RetiredRunsDeleted != 1 {
+		t.Fatalf("RetiredRunsDeleted = %d, want 1", res.RetiredRunsDeleted)
+	}
+	if _, err := ctm.mgr.engine.Status(retiredID); err == nil {
+		t.Fatal("retired run still present after cleanup")
+	}
+	if _, err := ctm.mgr.engine.Status(currentID); err != nil {
+		t.Fatalf("current per-repo tracker was removed by cleanup: %v", err)
+	}
+
+	// A second pass is a no-op — nothing left to delete.
+	res2, err := ctm.mgr.StartCleanup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.RetiredRunsDeleted != 0 {
+		t.Fatalf("second pass RetiredRunsDeleted = %d, want 0", res2.RetiredRunsDeleted)
+	}
+}

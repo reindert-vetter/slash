@@ -1375,6 +1375,16 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		return json.Marshal(res)
 	})
+	// Activity: permanently delete any run of a retired Workflow Type (see
+	// retiredWorkflowTypes in cleanup.go) — unconditional, run once per
+	// cleanup pass regardless of the resolved PR targets.
+	engine.RegisterActivity("purgeRetiredWorkflows", func(ctx context.Context, in []byte) ([]byte, error) {
+		n, err := purgeRetiredWorkflowRuns(m.engine)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]int{"deleted": n})
+	})
 
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
@@ -1541,14 +1551,17 @@ func (m *TaskManager) StartIngest(ctx context.Context, pr int) (*ingestResult, e
 	return &res, nil
 }
 
-// cleanupWorkflow purges all data of merged-and-old PRs. It is deterministic:
-// the cutoff is read once via w.Now() (recorded through SideEffect, so replay
-// reuses the same value) unless the input already carries one; all side
-// effects (the github/DB/disk reads in resolveCleanupTargets, the worktree/
-// workflow-run/DB removals in purgePR) live in its two Activities. The number
-// of purgePR calls is exactly len(targets.Targets) — a function of the stored
-// resolveCleanupTargets result, so replay-safe. No signals, one Execution per
-// run — mirrors ingestWorkflow/submitReviewWorkflow.
+// cleanupWorkflow purges all data of merged-and-old PRs, plus any run of a
+// permanently retired Workflow Type. It is deterministic: the cutoff is read
+// once via w.Now() (recorded through SideEffect, so replay reuses the same
+// value) unless the input already carries one; all side effects (the
+// github/DB/disk reads in resolveCleanupTargets, the worktree/workflow-run/DB
+// removals in purgePR, the retired-run deletions in purgeRetiredWorkflows)
+// live in its Activities. The number of purgePR calls is exactly
+// len(targets.Targets) — a function of the stored resolveCleanupTargets
+// result, so replay-safe; purgeRetiredWorkflows runs exactly once,
+// unconditionally. No signals, one Execution per run — mirrors
+// ingestWorkflow/submitReviewWorkflow.
 func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in CleanupInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -1558,12 +1571,19 @@ func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		in.Cutoff = w.Now().Add(-cleanupMergedAge)
 	}
 
+	var retired struct {
+		Deleted int `json:"deleted"`
+	}
+	if err := w.ExecuteActivity("purgeRetiredWorkflows", nil, &retired); err != nil {
+		return nil, fmt.Errorf("purge retired workflow runs: %w", err)
+	}
+
 	var targets CleanupTargets
 	if err := w.ExecuteActivity("resolveCleanupTargets", in, &targets); err != nil {
 		return nil, fmt.Errorf("resolve cleanup targets: %w", err)
 	}
 
-	res := CleanupResult{Cutoff: in.Cutoff}
+	res := CleanupResult{Cutoff: in.Cutoff, RetiredRunsDeleted: retired.Deleted}
 	for _, t := range targets.Targets {
 		var purged CleanupPurgeResult
 		if err := w.ExecuteActivity("purgePR", t, &purged); err != nil {

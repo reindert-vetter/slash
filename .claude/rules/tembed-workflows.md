@@ -2081,10 +2081,36 @@ mirroring `WorkflowIngest`/`WorkflowSubmitReview`.
     that would otherwise sit permanently `waiting` in `GET /api/workflows`.
     Running an extra pass on every restart is harmless — see the
     idempotency guarantee above.
+- **Also purges orphaned runs of a permanently retired Workflow Type
+  (`purgeRetiredWorkflowRuns` + `retiredWorkflowTypes`, `cleanup.go`) —
+  unconditional, run once per cleanup pass via its own `purgeRetiredWorkflows`
+  Activity, independent of the resolved PR targets above.** Motivation: when
+  a Workflow Type's registering code is removed from the codebase (e.g. the
+  old per-PR `ignore` feature, replaced by the per-repo `task_snooze` — see
+  "Snoozing a task" above), any run of that type that was still
+  `running`/`waiting` becomes a permanent orphan: `engine.Recover()` logs
+  `tembed: run <id> uses unregistered workflow "<name>"` on **every** server
+  start, forever, since nothing can ever advance it again.
+  `retiredWorkflowTypes` is a small, explicit, hand-maintained map of names
+  known to be gone for good (currently just `"ignore"`) — deliberately
+  **not** "whatever `engine.Runs()` reports as currently unregistered": the
+  headless CLI (`slash ingest`/`relations`/`seed`) registers only a subset of
+  workflows on purpose (`newTasks(..., resumeRuntime=false)`), so treating
+  "not registered in this process" as "safe to delete" would risk deleting a
+  perfectly legitimate run just because the binary invoking cleanup happens
+  not to register that type. A name only belongs in this map once its
+  registering code has been deleted from the codebase entirely. Because
+  `cleanup` itself only runs in the actual server (`StartCleanupScheduler` is
+  gated by `resumeRuntime`, see below), the headless CLI never runs this
+  purge either — reinforcing that this stays a deliberate, server-only,
+  explicitly-named cleanup, never an automatic "unregistered = dead"
+  inference. `purgeRetiredWorkflowRuns` walks `engine.Runs()` and calls the
+  same `Engine.DeleteRun` as `deletePRWorkflowRuns` for every match; the
+  result count lands in the new `CleanupResult.RetiredRunsDeleted` field.
 - **Endpoint:** `POST /api/workflows/cleanup` → `{cutoff, purged:[{pr,
-  worktreesRemoved, workflowRunsDeleted, rowsDeleted}]}` (`handleCleanup`,
-  added to the reserved-names guard in `handleWorkflows` alongside the other
-  signal-less Workflow Types).
+  worktreesRemoved, workflowRunsDeleted, rowsDeleted}], retiredRunsDeleted}`
+  (`handleCleanup`, added to the reserved-names guard in `handleWorkflows`
+  alongside the other signal-less Workflow Types).
 - Tests: `cleanup_test.go` (`TestResolveCleanupTargets` — candidate
   discovery via the blocks table *and* bare worktree dirs, and the four
   eligibility branches: merged-old/merged-recent/open/unparsable;
@@ -2092,5 +2118,8 @@ mirroring `WorkflowIngest`/`WorkflowSubmitReview`.
   worktree pair plus a per-PR **and** a per-repo workflow run, then asserts
   everything PR-scoped is gone and the per-repo tracker survives;
   `TestCleanupSkipsRecentMerge`; `TestCleanupNeverTouchesOpenPR`;
-  `TestCleanupIdempotent` — a second same-day run is a no-op). Entirely
-  offline (`github.Fake`), no real gh/network call.
+  `TestCleanupIdempotent` — a second same-day run is a no-op;
+  `TestCleanupPurgesRetiredWorkflowRuns` — a simulated orphaned `"ignore"`
+  run is deleted and its count reported, while a current per-repo tracker
+  survives the same pass). Entirely offline (`github.Fake`), no real
+  gh/network call.
