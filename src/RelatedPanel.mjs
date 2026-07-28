@@ -2384,6 +2384,14 @@ export function commentDetailCard(c, opts) {
   // look-ahead card — passed by home.mjs's DetailPanel when this isn't the
   // selected/focused sidebar item (i !== sel || not focusedHere).
   const preview = !!(opts && opts.preview)
+  // The thread container below gets a ring while pct.commentId === c.id (the
+  // keyboard has stepped into this item's thread, see enterPrCommentThread) —
+  // needed because the rest position (pct.pos === 0) deliberately highlights
+  // no single bubble (mirrors the block-scoped thread's cs.threadPos===0
+  // convention, see reactionBubble). There that rest position is still
+  // visible because it focuses a real reply input (focusThread); this thread
+  // has no such input at that point, so without this container ring → looked
+  // like it did nothing at all.
   return html`
     <div
       class="${'flex w-[42rem] shrink-0 flex-col gap-3 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 shadow-sm ' +
@@ -2406,7 +2414,12 @@ export function commentDetailCard(c, opts) {
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)}
         <span class="text-[10px] text-slate-400 dark:text-zinc-500">${relTime(c.createdAt)}</span>
       </div>
-      <div class="flex max-h-64 flex-col gap-1.5 overflow-auto" data-testid="comment-detail-thread">
+      <div
+        class="${() =>
+          'flex max-h-64 flex-col gap-1.5 overflow-auto rounded-lg ' +
+          (!preview && pct.commentId === c.id ? 'ring-2 ring-indigo-200 dark:ring-indigo-500/30' : '')}"
+        data-testid="comment-detail-thread"
+      >
         ${() =>
           threadMessages(c).map((r, ti, arr) =>
             reactionBubble(r, ti, arr.length, () => !preview && pct.commentId === c.id && pct.pos === arr.length - ti).key(

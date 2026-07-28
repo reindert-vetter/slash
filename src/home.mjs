@@ -3593,9 +3593,10 @@ function curBlock() {
 // selectedComment returns the underlying comment object when the currently
 // selected sidebar item is a synthetic PR-wide-comment entry (kind:'comment',
 // see recomputeLeftList/commentBlockItem) — null for an ordinary PR block.
-// Such an item has no diff to step into: Enter and → both open its own small
-// action menu (prCommentCommandsFor) instead of the block palette/the diff —
-// see onKeydown's Enter/ArrowRight branches.
+// Such an item has no diff to step into: Enter opens its own small action
+// menu (prCommentCommandsFor) instead of the block palette; → instead steps
+// into the item's own thread (enterPrCommentThread, RelatedPanel.mjs) — see
+// onKeydown's Enter/ArrowRight branches.
 function selectedComment() {
   const b = curBlock()
   return b && b.kind === 'comment' ? b.comment : null

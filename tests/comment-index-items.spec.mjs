@@ -159,10 +159,13 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(bubbles).toHaveCount(2) // the comment's own opening body + the one reaction
 
     // → steps into the thread — no menu opens, nothing highlighted yet (rest position).
+    // But the thread container itself DOES get a ring right away — without any
+    // signal at all, → looked like it did nothing (see commentDetailCard).
     await page.keyboard.press('ArrowRight')
     await expect(page.getByTestId('command-menu')).toHaveCount(0)
     await expect(bubbles.nth(0)).not.toHaveClass(/ring-indigo-400/)
     await expect(bubbles.nth(1)).not.toHaveClass(/ring-indigo-400/)
+    await expect(page.getByTestId('comment-detail-thread')).toHaveClass(/ring-indigo-200/)
 
     // ↑ walks up to the newest message first (the reaction, bottom of the thread).
     await page.keyboard.press('ArrowUp')
@@ -188,6 +191,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     // focused.
     await page.keyboard.press('ArrowLeft')
     await expect(bubbles.nth(1)).not.toHaveClass(/ring-indigo-400/)
+    await expect(page.getByTestId('comment-detail-thread')).not.toHaveClass(/ring-indigo-200/)
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).toBeVisible()
   })
