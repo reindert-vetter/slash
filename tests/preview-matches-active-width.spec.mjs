@@ -1,16 +1,24 @@
 import { test, expect } from './_fixtures.mjs'
 
-// Task 29: a look-ahead preview card must never be wider or show more (e.g. an
-// old pane) than the ACTIVE (selected) card it's stacked next to. PR 105
+// Task 29: a look-ahead preview card must never be WIDER than the ACTIVE
+// (selected) card it's stacked next to. PR 105
 // (materializePreviewWidthWorktrees, tests/_setup.mjs) seeds a one-sided
 // `added` block (selected, index 0 — its own singleSide() already narrows it)
 // immediately followed by a two-sided `modified` block (index 1, the
 // look-ahead preview) that genuinely has real old+new text on disk. Without
 // the activeSingleSided override in home.mjs, that preview would render at
-// its own natural full width with both panes (including the old/removed
-// side) — wider and richer than the one-sided active card next to it.
+// its own natural full width with both panes side by side — wider than the
+// one-sided active card next to it.
+//
+// Since the `a`-cycle's 2nd stand was reworked from "hide the old pane" into
+// "unified: stack old (-) above new (+) in one column", this override no
+// longer guarantees the preview shows nothing the active card doesn't have —
+// a genuinely two-sided preview forced into 'unified' still shows its own
+// removed (-) line, only narrow and stacked instead of side by side. That
+// guarantee was deliberately dropped (see detail-layout.md); only the WIDTH
+// guarantee remains.
 test.describe('PR Review Tree — look-ahead preview matches a one-sided active block', () => {
-  test('preview card narrows to new-only when the active card is one-sided', async ({ page }) => {
+  test('preview card narrows to unified when the active card is one-sided', async ({ page }) => {
     await page.goto('/pr/105')
     await page.waitForLoadState('networkidle')
 
@@ -33,10 +41,16 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
     await expect(preview).toHaveClass(/w-\[42rem\]/)
     await expect(preview).not.toHaveClass(/w-\[70rem\]/)
 
-    // And it must not carry an old/removed pane — only the new side, exactly
-    // like the active card next to it.
+    // It renders as ONE unified column (data-pane="new" — the same meaning
+    // that attribute already carries on the ordinary new/right codePane —
+    // never a separate `[data-pane="old"]` wrapper), but that single column
+    // DOES show the removed (-) line of its own real change: unified no
+    // longer hides old content, it only restructures it — see the header
+    // comment above.
     await expect(preview.locator('[data-pane="old"]')).toHaveCount(0)
     await expect(preview.locator('[data-pane="new"]')).toHaveCount(1)
+    await expect(preview.locator('span.text-rose-500')).toHaveCount(1)
+    await expect(preview.locator('span.text-emerald-500')).toHaveCount(1)
 
     // Sanity: the active card's own bounding width and the preview's agree —
     // never wider, per the one-directional rule (see detail-layout.md).

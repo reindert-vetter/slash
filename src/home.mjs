@@ -360,10 +360,12 @@ const state = reactive({
   descriptionExpanded: false,
   // diffViewMode — the global diff-pane preference, cycled everywhere with `a`
   // (onKeydown, DIFF_VIEW_CYCLE below): 'split' (default, old+new side by
-  // side, full width) → 'new' (only the new/right pane, fixed 60% width) →
-  // 'fit' (both panes again like 'split', but the card's width follows the
-  // block's own code instead of a fixed width — see Block.mjs's
-  // widthCls/fitWidthCls) → back to 'split'. Read by every visible Block()
+  // side, full width) → 'unified' (a genuinely two-sided block collapses to
+  // ONE column, old (-) directly above new (+), fixed 60% width — see
+  // Block.mjs's unifiedCodeDiff) → 'fit' (both panes again like 'split', but
+  // the card's width follows the block's own code instead of a fixed width —
+  // see Block.mjs's widthCls/fitWidthCls) → back to 'split'. Read by every
+  // visible Block()
   // card (the selected/preview cards and every open drilled column) via its
   // viewMode opt — see Block.mjs's codeDiff. Ephemeral UI state, not bound to
   // the URL, like showDescription/showApproved above.
@@ -401,11 +403,11 @@ const state = reactive({
 })
 
 // DIFF_VIEW_CYCLE is the fixed order `a` steps through — see state.diffViewMode
-// above. 'new' collapses a two-sided block to just its new pane at a fixed
-// 60% width (Block.mjs's forcedNewOnly/narrowed); 'fit' keeps both panes
-// (like 'split') but sizes the card off the block's own code
-// (Block.mjs's fitWidthCls) instead of a fixed width.
-const DIFF_VIEW_CYCLE = ['split', 'new', 'fit']
+// above. 'unified' restructures a two-sided block into one "old above new"
+// column at a fixed 60% width (Block.mjs's unifiedCodeDiff/narrowed); 'fit'
+// keeps both panes (like 'split') but sizes the card off the block's own
+// code (Block.mjs's fitWidthCls) instead of a fixed width.
+const DIFF_VIEW_CYCLE = ['split', 'unified', 'fit']
 
 // toggleDiffView steps state.diffViewMode to the next stand in DIFF_VIEW_CYCLE
 // (see state.diffViewMode above). The reactive re-render rebuilds every
@@ -429,7 +431,7 @@ function toggleDiffView() {
 // stepping to the next one) and runs the same follow-up as toggleDiffView —
 // re-centre the diff (a pane re-render resets scrollTop) and resettle the
 // call-arrow overlay. Shared by toggleDiffView (`a`) and setDiffViewMode (a
-// click on the compact split/new/fit indicator in Block.mjs's card header,
+// click on the compact split/unified/fit indicator in Block.mjs's card header,
 // see the "a — cycling the diff view" section in keyboard-navigation.md), so
 // clicking a stand directly behaves exactly like cycling onto it with `a`.
 function applyDiffViewMode(mode) {
@@ -5791,8 +5793,9 @@ function onKeydown(e) {
 
   // `a` cycles the diff-pane view everywhere (every visible Block card: the
   // selected/preview cards and every open drilled column) through
-  // DIFF_VIEW_CYCLE: full side-by-side (default) → new-only, fixed 60% width
-  // → 'fit' (side-by-side again, but sized to the block's own code) → back to
+  // DIFF_VIEW_CYCLE: full side-by-side (default) → unified (a two-sided
+  // block collapses to one "old above new" column), fixed 60% width →
+  // 'fit' (side-by-side again, but sized to the block's own code) → back to
   // split. Placed alongside f/d/s so it's guarded by the same earlier
   // menu/search/related checks above — except
   // those key on cs.focus (relatedActive()), which stays null when the composer
@@ -6081,7 +6084,11 @@ function drillPreviewColumns() {
   // Whether the currently-focused drilled column's own card — the one this
   // preview is stacked directly under — is one-sided (added/removed). Task 29:
   // mirrors the top-level look-ahead preview's activeSingleSided check, one
-  // directional only (never forces a one-sided preview to widen).
+  // directional only (never forces a one-sided preview to widen) — this only
+  // narrows the preview's WIDTH to match; it no longer guarantees the preview
+  // shows no removed content (a genuinely two-sided preview forced into
+  // 'unified' still shows its old (-) lines, just narrow and stacked, see
+  // "preview matches active width" in detail-layout.md).
   const activeSingleSided = !!singleSide(focusedBlock() || {})
   return [
     connector().key('drill-preview-connector'),
@@ -6098,7 +6105,7 @@ function drillPreviewColumns() {
           approvedCalls: () => approvedCallSet(previewBlock),
           onApprove: (blk) => persistApproval(blk),
           commentedRows: () => commentRowSet(previewBlock),
-          viewMode: () => (activeSingleSided ? 'new' : state.diffViewMode),
+          viewMode: () => (activeSingleSided ? 'unified' : state.diffViewMode),
         })}
       </div>
     `.key('drill-preview:' + previewBlock.id + ':' + codeState),
@@ -6608,15 +6615,17 @@ function DetailPanel(state) {
           .filter(({ i }) => i === sel || i === sel + 1)
         const out = []
         // Whether the ACTIVE (selected) card is one-sided (added/removed) — see
-        // singleSide() in Block.mjs. Task 29: a look-ahead preview must never be
-        // wider or show more (e.g. an old pane) than the active card next to it.
-        // A one-sided active card is already narrow + single-pane on its own, so
-        // forcing the preview's viewMode to 'new' below matches it in width
-        // (narrowed()) and pane selection (forcedNewOnly()) — the same knob the
-        // `a` toggle already uses, just conditioned per-render instead of only
-        // on the global state.diffViewMode. One-directional only: a two-sided
-        // active card never forces a one-sided preview to widen. See
-        // detail-layout.md.
+        // singleSide() in Block.mjs. Task 29: a look-ahead preview next to a
+        // one-sided active card must never be WIDER than it. A one-sided active
+        // card is already narrow + single-pane on its own, so forcing the
+        // preview's viewMode to 'unified' below matches it in width (narrowed())
+        // — the same knob the `a` toggle already uses, just conditioned
+        // per-render instead of only on the global state.diffViewMode.
+        // One-directional only: a two-sided active card never forces a
+        // one-sided preview to widen. This no longer guarantees the preview
+        // shows nothing the active card doesn't have — a genuinely two-sided
+        // preview forced into 'unified' still shows its own old (-) lines,
+        // just narrow and stacked instead of side by side. See detail-layout.md.
         const activeSingleSided = !!singleSide(state.blocks[sel] || {})
         // A step-up cue sits *above* the selected card when ↑ would flow into the
         // previous same-file block (which isn't rendered here — it's up the list).
@@ -6707,11 +6716,11 @@ function DetailPanel(state) {
             // Global diff-pane preference (see state.diffViewMode / the `a` key) —
             // read inside Block's own per-card slot, so toggling re-renders this
             // card's diff structure without touching this outer closure. The
-            // preview card (i !== sel) additionally forces 'new' whenever the
+            // preview card (i !== sel) additionally forces 'unified' whenever the
             // active card is one-sided (activeSingleSided, see above) — Task 29,
             // never applied to the selected card itself.
-            viewMode: () => (i !== sel && activeSingleSided ? 'new' : state.diffViewMode),
-            // A click on the compact split/new/fit indicator (only rendered
+            viewMode: () => (i !== sel && activeSingleSided ? 'unified' : state.diffViewMode),
+            // A click on the compact split/unified/fit indicator (only rendered
             // by Block.mjs while diffActive() above is true, i.e. never on
             // the preview card) jumps state.diffViewMode straight to that
             // stand — see applyDiffViewMode/setDiffViewMode.

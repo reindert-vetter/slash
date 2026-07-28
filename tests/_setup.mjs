@@ -707,8 +707,8 @@ class RangeSelectAction
 // base one) followed in the blocks list by a two-sided `modified` block (the
 // look-ahead preview) — so the preview's own diff is genuinely two-sided
 // (has real old+new text) and the test can prove home.mjs's
-// activeSingleSided override actually collapses it to narrow + new-only
-// instead of showing its natural, wider, both-panes diff.
+// activeSingleSided override actually collapses it to narrow + unified
+// instead of showing its natural, wider, side-by-side both-panes diff.
 function materializePreviewWidthWorktrees() {
   const file = (name, method, value) => `<?php
 

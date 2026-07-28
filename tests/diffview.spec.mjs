@@ -2,24 +2,26 @@ import { test, expect } from './_fixtures.mjs'
 
 // `a` cycles the global diff-pane view (state.diffViewMode, see
 // keyboard-navigation.md "`a` — diff-weergave toggelen") through THREE stands
-// — split → new → fit → split — everywhere a Block() card is visible. A
-// genuinely two-sided (modified) block drops its old pane only in 'new'
-// (forcedNewOnly in Block.mjs); an already one-sided (added/removed) block
-// keeps its single pane in every stand. The card WIDTH: 'new' shrinks every
-// visible card to a fixed 60% regardless of singleSide (`narrowed` in
-// Block.mjs) — modified, added and removed alike; 'fit' instead sizes the
-// card off its own code (`fitWidthCls`), floored at that same 60% width but
-// deliberately UNCAPPED upward (a CSS `max(...)`, not `clamp(...)`) — on
-// explicit reviewer request, 'fit' must never cut off a genuinely long code
-// line behind an invisible horizontal scroll, even if that means growing
-// past the full split width. `codeMaxLineChars` (the TRUE longest
-// non-comment line) drives this, not `codeGrowthChars`'s 75th-percentile
-// (which `relatedColumnWidthCls` still uses, unaffected by this change).
+// — split → unified → fit → split — everywhere a Block() card is visible. A
+// genuinely two-sided (modified) block collapses to a single "old (-) above
+// new (+)" column only in 'unified' (unifiedCodeDiff in Block.mjs); an
+// already one-sided (added/removed) block keeps its single pane in every
+// stand. The card WIDTH: 'unified' shrinks every visible card to a fixed 60%
+// regardless of singleSide (`narrowed` in Block.mjs) — modified, added and
+// removed alike; 'fit' instead sizes the card off its own code
+// (`fitWidthCls`), floored at that same 60% width but deliberately UNCAPPED
+// upward (a CSS `max(...)`, not `clamp(...)`) — on explicit reviewer
+// request, 'fit' must never cut off a genuinely long code line behind an
+// invisible horizontal scroll, even if that means growing past the full
+// split width. `codeMaxLineChars` (the TRUE longest non-comment line) drives
+// this, not `codeGrowthChars`'s 75th-percentile (which `relatedColumnWidthCls`
+// still uses, unaffected by this change).
 test.describe('PR Review Tree — diff view toggle (`a`)', () => {
   // Direct-mount unit test: Block()'s viewMode opt controls whether codeDiff
-  // renders both panes or just the new one, for a genuinely two-sided
-  // (modified) block.
-  test('viewMode="new" collapses a modified block to just the new pane', async ({
+  // renders a side-by-side split, or collapses a genuinely two-sided
+  // (modified) block into ONE column with the old (-) line directly above
+  // the new (+) line (unifiedCodeDiff).
+  test('viewMode="unified" collapses a modified block to one old-above-new column', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -59,30 +61,36 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await expect(card).toHaveClass(/w-\[70rem\]/)
     await expect(card).toHaveClass(/2xl:w-\[82rem\]/)
 
-    // Flip to new-only: only the new/right pane remains, and the card itself
-    // shrinks to 60% of its normal width (42rem/49.2rem of 70rem/82rem) —
-    // deliberately narrower, not full-width, since a reviewer who hid the old
-    // side wants the more compact view.
+    // Flip to unified: a single column remains — both the old (-) and the
+    // new (+) line of the changed row, stacked instead of side by side — and
+    // the card itself shrinks to 60% of its normal width (42rem/49.2rem of
+    // 70rem/82rem), same as the removed 'new'-only stand's width.
     await page.evaluate(() => {
-      window.__vm.mode = 'new'
+      window.__vm.mode = 'unified'
     })
     await expect(panes).toHaveCount(1)
     await expect(card).toHaveClass(/w-\[42rem\]/)
     await expect(card).toHaveClass(/2xl:w-\[49\.2rem\]/)
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
+    // The unified column really shows BOTH a "-" (old, rose) and a "+" (new,
+    // emerald) gutter line for each of the two changed rows (the return
+    // type and the return value) — proof it's a stacked old-above-new
+    // rendering, not the old new-only pane that hid the old side entirely.
+    await expect(panes.first().locator('span.text-rose-500')).toHaveCount(2)
+    await expect(panes.first().locator('span.text-emerald-500')).toHaveCount(2)
 
-    // Flip to 'fit': BOTH panes come back (unlike 'new', 'fit' never forces a
-    // single pane — see forcedNewOnly in Block.mjs), but the width class is no
-    // longer the fixed 70rem/82rem — it's a CSS max() driven by the code's own
-    // (short) content, so it should still sit at (or near) the 60% floor for
-    // this tiny fixture.
+    // Flip to 'fit': BOTH panes come back side by side (unlike 'unified',
+    // 'fit' never restructures into a single column — see unifiedCodeDiff in
+    // Block.mjs), but the width class is no longer the fixed 70rem/82rem —
+    // it's a CSS max() driven by the code's own (short) content, so it
+    // should still sit at (or near) the 60% floor for this tiny fixture.
     await page.evaluate(() => {
       window.__vm.mode = 'fit'
     })
     await expect(panes).toHaveCount(2)
     await expect(card).toHaveClass(/max\(42rem/)
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
-    await expect(card).not.toHaveClass(/w-\[42rem\]/) // no longer the fixed 'new' width either
+    await expect(card).not.toHaveClass(/w-\[42rem\]/) // no longer the fixed 'unified' width either
 
     // Flip back: side by side again, full width restored.
     await page.evaluate(() => {
@@ -310,7 +318,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
 
     await page.evaluate(() => {
-      window.__addedVm.mode = 'new'
+      window.__addedVm.mode = 'unified'
     })
     // `a` on: still one pane, still narrow — no change for a one-sided block.
     await expect(panes).toHaveCount(1)
@@ -376,7 +384,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
 
     await page.evaluate(() => {
-      window.__removedVm.mode = 'new'
+      window.__removedVm.mode = 'unified'
     })
     await expect(panes).toHaveCount(1)
     await expect(card).toHaveClass(/w-\[42rem\]/)
@@ -393,12 +401,12 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
   })
 
   // End-to-end: pressing `a` in the real app cycles the visible block's diff
-  // through all three stands — split → new → fit → split. Anchored on block 1
-  // of PR 12903 (CreatePaymentAction::execute), which reliably carries a real
-  // (two-sided) change — see the data caveat in conventions.md. Block 0
-  // (ContractController::index) sorts first as the sole CONTROLLER
-  // (categoryRank in home.mjs) but has no local diff.
-  test('`a` cycles the live diff card through split → new → fit → split', async ({
+  // through all three stands — split → unified → fit → split. Anchored on
+  // block 1 of PR 12903 (CreatePaymentAction::execute), which reliably
+  // carries a real (two-sided) change — see the data caveat in
+  // conventions.md. Block 0 (ContractController::index) sorts first as the
+  // sole CONTROLLER (categoryRank in home.mjs) but has no local diff.
+  test('`a` cycles the live diff card through split → unified → fit → split', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -417,7 +425,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     const card = page.locator('article.border-indigo-300')
     const splitBox = await card.boundingBox()
 
-    await page.keyboard.press('a') // split → new
+    await page.keyboard.press('a') // split → unified
     await expect(panes).toHaveCount(1)
     // The card really shrinks on screen (not just a class string) — 60% of the
     // split width, well under a loose 80% sanity bound to absorb rounding/
@@ -431,8 +439,8 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
       })
       .toBeLessThan(splitBox.width * 0.8)
 
-    await page.keyboard.press('a') // new → fit
-    // 'fit' brings BOTH panes back (unlike 'new'), sized off the block's own
+    await page.keyboard.press('a') // unified → fit
+    // 'fit' brings BOTH panes back side by side (unlike 'unified'), sized off the block's own
     // (real, non-trivial) code — at least the 60% floor, but deliberately
     // UNCAPPED upward (no more full-split-width ceiling, see fitWidthCls):
     // this real block (CreatePaymentAction::execute) happens to carry a line
@@ -485,7 +493,8 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     expect(scrollTopBefore).toBeGreaterThan(0)
 
     await page.keyboard.press('a')
-    // The pane's HTML gets rebuilt (fewer/no old-pane) — re-query after the toggle.
+    // The pane's HTML gets rebuilt (restructured into one unified column) —
+    // re-query after the toggle.
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await expect
       .poll(async () => {
@@ -496,7 +505,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
       })
       .toBeGreaterThan(0)
 
-    // Toggling back should also keep it in view, not just the one-shot new-only case.
+    // Toggling back should also keep it in view, not just the one-shot unified case.
     await page.keyboard.press('a')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await expect
@@ -509,12 +518,13 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
       .toBeGreaterThan(0)
   })
 
-  // The compact split/new/fit status indicator (Block.mjs's viewModeIndicator)
-  // is only rendered on the card that currently owns the diff keyboard
-  // (diffActive() — see the "a — cycling the diff view" section in
-  // keyboard-navigation.md), shows the active stand highlighted, and a click
-  // jumps state.diffViewMode straight to that stand via the setViewMode opt.
-  test('the split/new/fit indicator only shows on the focused card, highlights the active stand, and a click jumps to it', async ({
+  // The compact split/unified/fit status indicator (Block.mjs's
+  // viewModeIndicator) is only rendered on the card that currently owns the
+  // diff keyboard (diffActive() — see the "a — cycling the diff view"
+  // section in keyboard-navigation.md), shows the active stand highlighted,
+  // and a click jumps state.diffViewMode straight to that stand via the
+  // setViewMode opt.
+  test('the split/unified/fit indicator only shows on the focused card, highlights the active stand, and a click jumps to it', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -568,10 +578,10 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     })
     await expect(indicator).toHaveCount(1)
     const split = host.locator('[data-testid="diffview-split"]')
-    const newBtn = host.locator('[data-testid="diffview-new"]')
+    const unifiedBtn = host.locator('[data-testid="diffview-unified"]')
     const fit = host.locator('[data-testid="diffview-fit"]')
     await expect(split).toHaveClass(/ring-indigo-300/)
-    await expect(newBtn).not.toHaveClass(/ring-indigo-300/)
+    await expect(unifiedBtn).not.toHaveClass(/ring-indigo-300/)
     await expect(fit).not.toHaveClass(/ring-indigo-300/)
 
     // A click on 'fit' calls setViewMode('fit') — home.mjs's setDiffViewMode

@@ -1040,14 +1040,17 @@ scope still only act on the actually-changed rows within that range.
   Underlying-code panel). This is deliberately the same "an ordinary step
   releases the selection" behavior as in a text editor.
 
-## `a` — cycling the diff view (split → new-only → fit → split)
+## `a` — cycling the diff view (split → unified → fit → split)
 
 **`a`** cycles globally, for **every visible diff card at once** — the
 selected/preview card and every open drilled column (`state.drill`) —
-through `DIFF_VIEW_CYCLE` (`home.mjs`, `['split', 'new', 'fit']`):
-side-by-side (old+new, default) → **new-only** (only the right/new pane,
-fixed 60% width) → **fit** (both panes again, but the card's width follows
-the block's own code instead of a fixed number) → back to split. Sits next
+through `DIFF_VIEW_CYCLE` (`home.mjs`, `['split', 'unified', 'fit']`):
+side-by-side (old+new, default) → **unified** (a genuinely two-sided block
+collapses into ONE column, the old (`-`) line directly above the new (`+`)
+line — mirroring the footer's own inline-diff convention, see "Footer" below
+— fixed 60% width) → **fit** (both panes again, side by side, but the
+card's width follows the block's own code instead of a fixed number) → back
+to split. Sits next
 to `f`/`d`/`s` in `onKeydown` (`home.mjs`), so with the same earlier guards
 (command palette/search box/related panel active) in front — works in both
 `'list'` and `'diff'` mode. **Extra guard, separate from those existing
@@ -1063,7 +1066,7 @@ generic, future-proof guard that doesn't depend on which navigation state a
 field happens to track or not.
 
 **Compact status indicator (`viewModeIndicator`, `Block.mjs`):** three small
-icon buttons (split/new/fit, `data-testid=diffview-split`/`-new`/`-fit`) in
+icon buttons (split/unified/fit, `data-testid=diffview-split`/`-unified`/`-fit`) in
 the block card's metadata row (next to the file:line, before the approve
 checkbox) show which of the three stands is active (an indigo ring on the
 current one) and, since `state.diffViewMode` is global (every visible card
@@ -1082,7 +1085,7 @@ three icons are a fixed, unchanging `.map()` over `VIEW_MODE_META`
 node pitfall applies (conventions.md); each button's own class is its own
 whole-value `${() => ...}` binding so only the highlight re-evaluates on a
 `viewMode` change, not the surrounding card header. Test:
-`tests/diffview.spec.mjs` ("the split/new/fit indicator …").
+`tests/diffview.spec.mjs` ("the split/unified/fit indicator …").
 
 **A held Cmd/Ctrl always steps aside for the browser/OS
 (`isModifiedKey(e)` in `home.mjs`, shared with the `f`/`d`/`s` zoom keys,
@@ -1098,31 +1101,54 @@ that includes those same four keys) — so `Cmd+F`/`Cmd+D`/`Cmd+S` (browser
 find/bookmark/save) also keep working. Test:
 `tests/select-all-shortcut.spec.mjs`.
 
-The state (`state.diffViewMode`, `'split'`/`'new'`/`'fit'`) is ephemeral, no
-URL binding (like `showDescription`/`showApproved`). An already one-sided
-block (`added`/`removed`) has no other side to hide/show — the toggle has
+The state (`state.diffViewMode`, `'split'`/`'unified'`/`'fit'`) is ephemeral,
+no URL binding (like `showDescription`/`showApproved`). An already one-sided
+block (`added`/`removed`) has no other side to restructure — the toggle has
 no effect there on the **pane choice**, `singleSide(b)` stays in charge
-(`effectiveOnly` in `Block.mjs`'s `codeDiff`). A **truly two-sided**
-(`modified`) block does collapse in `viewMode==='new'` to its new pane
-(`forcedNewOnly(b, viewMode)` in `Block.mjs` remains the condition for
-this) — **`'fit'` deliberately does NOT collapse the pane**: a two-sided
-block keeps showing both panes in `'fit'`, only the card's width changes
-(see below), so `forcedNewOnly` only ever reacts to `'new'`.
+(`effectiveOnly` in `Block.mjs`'s `codeDiff`, unconditional on `viewMode` —
+it's just `singleSide(b)`). A **truly two-sided** (`modified`) block does
+restructure in `viewMode==='unified'` into ONE column via
+`unifiedCodeDiff(...)` (the condition for that branch in `codeDiff` is
+simply `viewMode() === 'unified'`, checked after `effectiveOnly`, so it
+never fires for an already one-sided block) — **`'fit'` deliberately does
+NOT restructure into that single column**: a two-sided block keeps showing
+both panes side by side in `'fit'`, only the card's width changes (see
+below).
 
-**The card width in `'new'` only follows `viewMode()`, not `singleSide`:**
-as soon as `viewMode()==='new'`, **every** visible card shrinks to **60%
-width** (`w-[42rem] 2xl:w-[49.2rem]` instead of `w-[70rem] 2xl:w-[82rem]`) —
-`modified`/`added`/`removed` all alike, plus every preview/look-ahead card
-and every drilled column (they all share the same `Block()` component +
-the same `viewMode` option). This was previously limited to the two-sided
-case (a one-sided block deliberately kept its full width, see the
-width-stability rule in `.claude/rules/detail-layout.md`); the reviewer
-wanted `a` to make **everything** narrow as long as `'new'` is on,
-regardless of block type. The simple `narrowed(viewMode)` in `Block.mjs`
-(only `viewMode()==='new'`, no `singleSide` check) is the condition behind
-this branch of the width ternary; `forcedNewOnly` remains the separate
-condition for the pane choice — the two can therefore diverge (a one-sided
-block: `narrowed` true, `forcedNewOnly` false) and that is deliberate.
+**Unlike the earlier "hide the old pane" behavior this replaced, `'unified'`
+does NOT hide anything — it restructures a paired change into two stacked
+lines instead of one hidden/one shown.** For an aligned row that's a real
+del+ins pair (or a whitespace-only re-alignment, see `wsOnly` in
+`Block.mjs`), `unifiedRowHTML` renders the OLD line (`-`, rose) directly
+above the NEW line (`+`, emerald) — mirroring the `-`/`+` gutter convention
+Footer.mjs's own inline-diff preview already used (`line()` in
+`Footer.mjs`). A context row (unchanged) or a one-sided row (a pure
+add/remove) still renders as a single line. Exactly **one** of the two
+lines of a pair carries the row's metadata (`data-row`/`data-changed`/the
+change-active anchor/the checkmark/the comment marker) — the same
+canonical side `approveHere`/`commentedHere` already single out elsewhere
+(the new/right side, or the old/left side when there's no right at all) —
+so a `callArrows.mjs`/`updateHints` query for a given row index still finds
+exactly one element, never the purely decorative OLD half of a pair. The
+approve checkmark moves from its usual absolute overlay into an inline,
+fixed-width slot right after the `-`/`+` marker (`gutterSpan` in
+`Block.mjs`) — the overlay would otherwise sit on top of the leading gutter
+text.
+
+**The card width in `'unified'` only follows `viewMode()`, not
+`singleSide`:** as soon as `viewMode()==='unified'`, **every** visible card
+shrinks to **60% width** (`w-[42rem] 2xl:w-[49.2rem]` instead of
+`w-[70rem] 2xl:w-[82rem]`) — `modified`/`added`/`removed` all alike, plus
+every preview/look-ahead card and every drilled column (they all share the
+same `Block()` component + the same `viewMode` option). This was previously
+limited to the two-sided case (a one-sided block deliberately kept its full
+width, see the width-stability rule in `.claude/rules/detail-layout.md`);
+the reviewer wanted `a` to make **everything** narrow as long as `'unified'`
+is on, regardless of block type. The simple `narrowed(viewMode)` in
+`Block.mjs` (only `viewMode()==='unified'`, no `singleSide` check) is the
+condition behind this branch of the width ternary — independent of, but
+consistent with, the `viewMode()==='unified'` check in `codeDiff` that
+picks `unifiedCodeDiff` for a two-sided block.
 
 **`'fit'` (the third stand) sizes the card off its own code instead of a
 fixed number — but PHP and non-PHP files get genuinely different
@@ -1130,7 +1156,7 @@ treatment** (`isPhpFile(b)` in `Block.mjs`, a plain `.php` extension check;
 `widthCls` routes on it, only for `'fit'`):
 
 **A `.php` file** uses `fitWidthCls(b)` — floored at the existing 60% width
-(`42rem`/`49.2rem`, so `'fit'` is never narrower than `'new'`) but
+(`42rem`/`49.2rem`, so `'fit'` is never narrower than `'unified'`) but
 **deliberately uncapped upward**, on explicit reviewer request: an earlier
 version clamped this at the full split ceiling (`70rem`/`82rem`) using the
 same 75th-percentile line length as `RelatedPanel.mjs`'s
@@ -1142,7 +1168,7 @@ horizontal scroll, identically in `'fit'` and `'split'`. That defeated
 percentile) and a CSS `max(floor, calc(...))` — no ceiling — so `'fit'` can
 genuinely grow wider than `'split'` for a PHP block with one very long
 line. `codeGrowthChars`/the percentile approach is untouched and still used
-by `relatedColumnWidthCls`. `'split'`/`'new'` keep their existing fixed
+by `relatedColumnWidthCls`. `'split'`/`'unified'` keep their existing fixed
 widths and can still clip a very long line, unchanged, for every file
 type — a deliberate, discussed scope boundary, not an oversight. Purely a
 character-count calculation on the already-loaded source text (`b.code`),
@@ -1151,16 +1177,16 @@ key-forcing rebuild, see `.claude/rules/conventions.md` — **not**
 re-derived on every navigation step, which would risk the "outer closure
 depends on navigation state" flicker pitfall). Two cases:
 - A genuinely **two-sided** (`modified`) block keeps **both** panes in
-  `'fit'` (unlike `'new'`) — the width is based on whichever side (old or
-  new) needs more room (`Math.max`), since the two panes always render at
-  equal width, **doubled** for the two panes plus a fixed gutter/padding
-  allowance.
+  `'fit'` (unlike `'unified'`, which restructures into one column) — the
+  width is based on whichever side (old or new) needs more room
+  (`Math.max`), since the two panes always render at equal width,
+  **doubled** for the two panes plus a fixed gutter/padding allowance.
 - An already **one-sided** (`added`/`removed`) block only ever renders
-  **one** pane regardless of `viewMode` (`singleSide(b)` wins over
-  `forcedNewOnly` in `codeDiff`) — sizing it with the two-pane formula
-  above would make the card needlessly wide for content shown only once,
-  so it gets the **single-pane** variant instead (no doubling), based on
-  just the one visible side.
+  **one** pane regardless of `viewMode` (`singleSide(b)` always wins in
+  `codeDiff`) — sizing it with the two-pane formula above would make the
+  card needlessly wide for content shown only once, so it gets the
+  **single-pane** variant instead (no doubling), based on just the one
+  visible side.
 
 **Any other file** (markdown, JSON, config, …) gets `boundedWrapWidthCls(b)`
 instead — the same bounded width `'split'` already uses (narrow 60% for a
@@ -1182,9 +1208,10 @@ of them wraps onto multiple visual lines).
 Read as `viewMode()` within `Block()`'s own per-card `${() => ...}` class
 binding (not in the outer per-column closure of `home.mjs`) — mirroring how
 `codeDiff`'s own slot already reads `b.code`, so a toggle only re-renders
-the diff structure (via `forcedNewOnly`) and the width (via
-`narrowed`/`fitWidthCls`, both inside `widthCls(b, viewMode)`) of each
-visible card, not the card-building closures themselves. The width ternary
+the diff structure (the `viewMode()==='unified'` branch in `codeDiff`, which
+picks `unifiedCodeDiff`) and the width (via `narrowed`/`fitWidthCls`, both
+inside `widthCls(b, viewMode)`) of each visible card, not the card-building
+closures themselves. The width ternary
 sits in the same card-wide `${() => ...}` `class` binding as `diffActive()`/
 `preview` (already reactive, the whole value at once — no partial string
 interpolation, see the arrow.js class-binding pitfall in `conventions.md`).

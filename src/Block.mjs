@@ -80,32 +80,18 @@ export function singleSide(b) {
   return null
 }
 
-// forcedNewOnly reports whether the `a` toggle (viewMode) is actually
-// collapsing this block to its new-only pane — only true for a genuinely
-// two-sided (modified) block. A block that's already one-sided (added/
-// removed, singleSide(b) !== null) has nothing to collapse (it already shows
-// only its one pane), so the toggle is a no-op for *pane selection* there.
-// Used by codeDiff to decide which pane(s) to show. NOT used for card width
-// any more — see `narrowed` below, which the reviewer wants to apply
-// uniformly regardless of singleSide. Deliberately excludes 'fit': that third
-// `a` stand keeps BOTH panes for a two-sided block (only its width becomes
-// content-based, see widthCls/fitWidthCls below) — only 'new' collapses to a
-// single pane.
-function forcedNewOnly(b, viewMode) {
-  return viewMode() === 'new' && singleSide(b) === null
-}
-
 // narrowed reports whether the `a` toggle should shrink this card to its 60%
-// width. Unlike forcedNewOnly (pane selection), this deliberately ignores
-// singleSide(b): the reviewer wants EVERY visible card — modified, added,
-// removed, a preview/look-ahead card, or any drilled column — to shrink in
-// lockstep while `a` is on, not just the two-sided blocks that actually have a
-// pane to hide. Shared by every card via the same viewMode option, so this one
-// flag keeps them all in sync. Deliberately excludes 'fit' (see widthCls
-// below) — that third `a` stand gets its own, content-based width instead of
-// this fixed 60%.
+// width. The reviewer wants EVERY visible card — modified, added, removed, a
+// preview/look-ahead card, or any drilled column — to shrink in lockstep
+// while `a`'s unified stand is on, regardless of singleSide(b): a
+// genuinely one-sided block was already narrow on its own, and the unified
+// stand's single "old above new" column (see unifiedCodeDiff below) is
+// exactly as narrow. Shared by every card via the same viewMode option, so
+// this one flag keeps them all in sync. Deliberately excludes 'fit' (see
+// widthCls below) — that third `a` stand gets its own, content-based width
+// instead of this fixed 60%.
 function narrowed(viewMode) {
-  return viewMode() === 'new'
+  return viewMode() === 'unified'
 }
 
 // isPhpFile — the discriminator between 'fit''s two different behaviors
@@ -188,7 +174,7 @@ export function codeGrowthChars(code) {
 // reviewer explicitly wants 'fit' to guarantee that the single widest real
 // code line is never cut off/hidden behind an invisible horizontal scroll —
 // see fitWidthCls's own doc comment for the full reasoning and the
-// deliberate scope (only 'fit'; 'split'/'new' keep their existing, fixed
+// deliberate scope (only 'fit'; 'split'/'unified' keep their existing, fixed
 // widths and can still clip a very long line).
 function codeMaxLineChars(code) {
   const lens = nonCommentLineLengths(code)
@@ -223,9 +209,9 @@ function boundedWrapWidthCls(b) {
 // fitWidthCls — the card width for the `a` toggle's third ('fit') stand, for
 // a PHP FILE ONLY (widthCls routes any other file to boundedWrapWidthCls
 // instead, see isPhpFile above): make the card as wide as its own code
-// actually needs, instead of the fixed 60% ('new') or full ('split') width.
-// Floored at the existing 60% width (so 'fit' never goes narrower than
-// 'new'), but — on explicit reviewer request — deliberately UNCAPPED
+// actually needs, instead of the fixed 60% ('unified') or full ('split')
+// width. Floored at the existing 60% width (so 'fit' never goes narrower
+// than 'unified'), but — on explicit reviewer request — deliberately UNCAPPED
 // upward: unlike every other width in this file (and unlike codeGrowthChars,
 // the 75th-percentile non-ballooning technique RelatedPanel.mjs's
 // relatedColumnWidthCls still uses), 'fit' must guarantee that the single
@@ -253,26 +239,26 @@ function boundedWrapWidthCls(b) {
 // including how row alignment between the old/new panes is kept intact once
 // a line wraps to multiple visual lines.
 //
-// Deliberately scoped to 'fit' + PHP ONLY — 'split' and 'new' keep their
+// Deliberately scoped to 'fit' + PHP ONLY — 'split' and 'unified' keep their
 // existing, fixed widths and can still clip a very long line exactly as
 // before, for every file type; this was an explicit, discussed choice (not a
 // guess), see keyboard-navigation.md ("`a` — cycling the diff view").
 //
-// 'fit' does NOT force a single pane (see forcedNewOnly above, which
-// deliberately only reacts to 'new') — a genuinely two-sided (modified)
-// block keeps showing BOTH panes side by side in 'fit', so the width must
-// account for both: it's based on whichever side needs more room
-// (Math.max(old, new)) since the two panes always render at equal width,
-// doubled for the two panes plus a fixed allowance for the gutter/padding
-// between them (the same kind of fudge constant as relatedColumnWidthCls's
-// `+ 2rem`, just doubled for the second pane).
+// 'fit' does NOT restructure into 'unified''s single-column layout — a
+// genuinely two-sided (modified) block keeps showing BOTH panes side by
+// side in 'fit', so the width must account for both: it's based on
+// whichever side needs more room (Math.max(old, new)) since the two panes
+// always render at equal width, doubled for the two panes plus a fixed
+// allowance for the gutter/padding between them (the same kind of fudge
+// constant as relatedColumnWidthCls's `+ 2rem`, just doubled for the second
+// pane).
 //
 // A block that's already one-sided (added/removed, singleSide(b) !== null)
-// only ever renders ONE pane regardless of viewMode (codeDiff's `only` wins
-// over forcedNewOnly) — sizing it with the two-pane formula above would make
-// the card needlessly wide for content that's only shown once. Such a block
-// therefore gets the single-pane variant instead, based on just the one side
-// that's actually visible.
+// only ever renders ONE pane regardless of viewMode (codeDiff's `only`
+// always wins, see below) — sizing it with the two-pane formula above would
+// make the card needlessly wide for content that's only shown once. Such a
+// block therefore gets the single-pane variant instead, based on just the
+// one side that's actually visible.
 // VIEW_MODE_META describes the three `a`-cycle stands (state.diffViewMode,
 // see DIFF_VIEW_CYCLE in home.mjs) for the compact status indicator in the
 // block-card header: a tooltip label and a small inline SVG glyph per
@@ -287,9 +273,9 @@ const VIEW_MODE_META = [
     svg: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="6" height="12" rx="1"/><rect x="9" y="2" width="6" height="12" rx="1"/></svg>',
   },
   {
-    mode: 'new',
-    label: 'Alleen nieuwe code (60% breed)',
-    svg: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="6" height="12" rx="1" stroke-dasharray="1.4 1.4" opacity="0.5"/><rect x="9" y="2" width="6" height="12" rx="1" fill="currentColor" stroke="none"/></svg>',
+    mode: 'unified',
+    label: 'Unified diff (oud boven nieuw, 60% breed)',
+    svg: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="14" height="5" rx="1" stroke-dasharray="1.4 1.4" opacity="0.5"/><rect x="1" y="9" width="14" height="5" rx="1" fill="currentColor" stroke="none"/></svg>',
   },
   {
     mode: 'fit',
@@ -299,7 +285,7 @@ const VIEW_MODE_META = [
 ]
 
 // viewModeIndicator — the compact status indicator for the `a`-cycle: three
-// small icon buttons (split/new/fit), the active stand highlighted with an
+// small icon buttons (split/unified/fit), the active stand highlighted with an
 // indigo ring. A click jumps straight to that stand (setViewMode); `a`
 // keeps cycling as before (home.mjs). Only rendered by Block() while
 // diffActive() is true — i.e. only on the card that currently owns the
@@ -358,14 +344,15 @@ function fitWidthCls(b) {
  */
 export default function Block(b, opts = {}) {
   // viewMode — a function returning the global diff-view preference: 'split'
-  // (default, both panes side by side, full width), 'new' (only the new/right
-  // pane, hides the old side, fixed 60% width), or 'fit' (both panes again
-  // like 'split', but the card width follows the block's own code instead of
-  // a fixed width — see widthCls/fitWidthCls above). Cycled everywhere with
-  // `a` (home.mjs). A function so codeDiff's own reactive slot picks up the
-  // change, mirroring activeGroup/hintsEnabled above.
+  // (default, both panes side by side, full width), 'unified' (a genuinely
+  // two-sided block collapses to ONE column, old (-) directly above new (+)
+  // — see unifiedCodeDiff below — fixed 60% width), or 'fit' (both panes
+  // again like 'split', but the card width follows the block's own code
+  // instead of a fixed width — see widthCls/fitWidthCls above). Cycled
+  // everywhere with `a` (home.mjs). A function so codeDiff's own reactive
+  // slot picks up the change, mirroring activeGroup/hintsEnabled above.
   const viewModeFn = opts.viewMode || (() => 'split')
-  // setViewMode — called with a stand ('split'/'new'/'fit') when the reviewer
+  // setViewMode — called with a stand ('split'/'unified'/'fit') when the reviewer
   // clicks one of the three icons in viewModeIndicator below; home.mjs jumps
   // state.diffViewMode straight to it (setDiffViewMode). Defaults to a no-op
   // so a caller that doesn't pass one (e.g. the drill-preview/look-ahead
@@ -414,10 +401,10 @@ export default function Block(b, opts = {}) {
         // A one-sided (added/removed) block only ever shows a single pane, so it
         // renders at the narrow (60%) width by default — the same width the `a`
         // toggle gives every card. A two-sided (modified) block keeps the full
-        // two-pane width, and the `a` toggle (viewMode==='new', see `narrowed`)
-        // then shrinks EVERY visible card — modified included — to that same
-        // narrow width in lockstep. `a`'s third stand ('fit') gets its own,
-        // content-based width instead — see widthCls.
+        // two-pane width, and the `a` toggle (viewMode==='unified', see
+        // `narrowed`) then shrinks EVERY visible card — modified included — to
+        // that same narrow width in lockstep. `a`'s third stand ('fit') gets its
+        // own, content-based width instead — see widthCls.
         widthCls(b, viewModeFn) +
         (preview
           ? 'max-h-72 border-slate-200 dark:border-zinc-800 opacity-50'
@@ -632,7 +619,7 @@ function translationSlot(b, activeGroup, approvedFn) {
 // viewMode() is read directly here (not in a nested slot) so this call's own
 // enclosing `${() => codeDiff(...)}` slot in Block() picks up state.diffViewMode
 // as a dependency, same as its existing b.code dependency — flipping `a`
-// re-renders just this per-card slot (split ↔ single new-only pane), not the
+// re-renders just this per-card slot (split ↔ unified single column), not the
 // outer per-column closures in home.mjs. See keyboard-navigation.md.
 function codeDiff(
   b,
@@ -663,24 +650,25 @@ function codeDiff(
   }
   const rows = blockRows(b)
   const only = singleSide(b)
-  // Toggle `a` (home.mjs) forces a two-sided (modified) block down to just its
-  // new pane — see forcedNewOnly, shared with Block()'s own card-width choice
-  // so the pane-drop and the width shrink always agree. A block that's already
-  // one-sided (added/removed) has nothing to hide/show on the other side, so
-  // the toggle has no effect there — `only` wins.
-  const effectiveOnly = only || (forcedNewOnly(b, viewMode) ? 'right' : null)
+  // Unlike the removed old-'new' stand, the unified stand no longer hides a
+  // two-sided (modified) block's old pane — it restructures the block into
+  // ONE column instead (unifiedCodeDiff below, old (-) directly above new
+  // (+)), see the branch further down. A block that's already one-sided
+  // (added/removed) has nothing to restructure — `only` (from singleSide)
+  // still wins here, unaffected by viewMode.
+  const effectiveOnly = only
   // A non-PHP file in 'fit' wraps its lines within a bounded width instead of
   // growing the card to fit the longest line (widthCls/boundedWrapWidthCls
   // pick the matching width; this flag makes the row rendering itself wrap
   // instead of overflowing on a single `whitespace-pre` line) — see
   // isPhpFile/fitWidthCls's own doc comment for the full reasoning.
   const wrap = viewMode() === 'fit' && !isPhpFile(b)
-  // One-sided blocks (added / removed) render at the card's full width; a
-  // modified block collapsed by the `a` toggle renders at the card's narrower
-  // 60% width (see forcedNewOnly above) — either way, just the non-empty pane,
-  // no divider, no empty counterpart. A one-sided block never needs the
-  // paired-row structure below (there's only one column to wrap), so it just
-  // reuses codePane/paneHTML with the `wrap` flag threaded through.
+  // A one-sided block (added/removed) renders at the card's full width in
+  // every stand — the `a` toggle's narrower 60% width (`narrowed`, see above)
+  // still applies to the card itself, just without a second pane to hide;
+  // there's no divider, no empty counterpart. A one-sided block never needs
+  // the paired-row structure below (there's only one column to wrap), so it
+  // just reuses codePane/paneHTML with the `wrap` flag threaded through.
   if (effectiveOnly === 'right') {
     return html`
       <div
@@ -722,6 +710,12 @@ function codeDiff(
         </div>
       </div>
     `
+  }
+  // Two-sided (old + new both shown) + the unified stand: one "old above
+  // new" column instead of the side-by-side default below — see
+  // unifiedCodeDiff's own doc comment.
+  if (viewMode() === 'unified') {
+    return unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn, approvedCallsFn)
   }
   // Two-sided (old + new both shown): a wrapping non-PHP block needs the
   // paired-row structure (wrappedCodeDiff) so the two sides of the same
@@ -845,10 +839,12 @@ function syncScroll(e) {
 // rows at the same line-height, so they line up vertically without any JS.
 // `wrap` (only ever true for a non-PHP file in 'fit', see isPhpFile/codeDiff)
 // switches every row from `whitespace-pre` to `whitespace-pre-wrap
-// break-words` — safe here because this is the SINGLE-pane path (one-sided
-// added/removed, or the 'new'-collapsed view): there's no second pane whose
-// row height needs to stay in lockstep. The two-sided case uses
-// wrappedCodeDiff/pairedRowHTML instead — see there for why.
+// break-words` — safe here because this is the SINGLE-pane path (a
+// one-sided added/removed block, in any stand): there's no second pane
+// whose row height needs to stay in lockstep. A genuinely two-sided
+// (modified) block never reaches this function any more in the unified
+// stand (see unifiedCodeDiff instead); the wrapping two-sided case uses
+// wrappedCodeDiff/pairedRowHTML — see there for why.
 function codePane(
   side,
   data,
@@ -876,14 +872,31 @@ function codePane(
 }
 
 // rowCellHTML builds the <div> for ONE (row, side) — the shared building
-// block behind both paneHTML (below, the existing per-pane `whitespace-pre`
-// rendering used everywhere except a wrapping non-PHP 'fit' block) and
-// pairedRowHTML (wrappedCodeDiff's per-row-pair renderer). `wrap` switches
-// `whitespace-pre` → `whitespace-pre-wrap break-words`; every other
-// computation (active tint, checkmark, comment marker, call underline) is
-// identical between the two render paths, so extracting this avoids
-// duplicating that logic.
-function rowCellHTML(r, i, sideKey, group, approved, commented, wrap) {
+// block behind paneHTML (below, the existing per-pane `whitespace-pre`
+// rendering used everywhere except a wrapping non-PHP 'fit' block),
+// pairedRowHTML (wrappedCodeDiff's per-row-pair renderer) and unifiedHTML
+// (the unified stand's single "old above new" column, further below).
+// `wrap` switches `whitespace-pre` → `whitespace-pre-wrap break-words`;
+// every other computation (active tint, checkmark, comment marker, call
+// underline) is identical between all three render paths, so extracting
+// this avoids duplicating that logic.
+//
+// `opts.gutter` (only ever true from unifiedHTML) prepends a leading
+// "- "/"+ "/"  " marker — mirrors Footer.mjs's own inline-diff gutter — and
+// moves the approve checkmark from its usual absolute overlay into an
+// inline slot right after that marker (the overlay would otherwise sit on
+// top of the gutter text).
+//
+// `opts.emitMeta` (defaults to true; only ever false from unifiedHTML, for
+// the purely decorative OLD half of a paired change) suppresses
+// data-row/data-changed/the change-active anchor/the checkmark/the comment
+// marker — so a paired row's two stacked lines never both carry the same
+// `data-row="i"`, which would make a callArrows/updateHints query for that
+// index ambiguous. Exactly one line per row keeps carrying metadata: the
+// same canonical side approveHere/commentedHere below already single out
+// (the new/right side, or the old/left side when there's no right at all).
+function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, opts = {}) {
+  const { gutter = false, emitMeta = true } = opts
   const text = sideKey === 'left' ? r.left : r.right
   const mark = sideKey === 'left' ? r.leftMark : r.rightMark
   const ws = wsOnly(r)
@@ -939,32 +952,65 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap) {
   // modified row doesn't get the marker twice. Appended after the code so it
   // trails the line and scrolls with it.
   const commentedHere =
-    text !== null && commented.has(i) && (sideKey === 'right' || r.right == null)
+    emitMeta && text !== null && commented.has(i) && (sideKey === 'right' || r.right == null)
   const marker = commentedHere
     ? ' <span class="select-none opacity-60" data-comment="1" title="Er zit een comment op deze regel">💬</span>'
     : ''
   // Anchor the first row of the active group so home.mjs can scroll it to
-  // the vertical centre of the diff viewport.
-  const anchor = active && i === group.start ? ' data-change-active="1"' : ''
-  const flag = changed ? ' data-changed="1"' : ''
+  // the vertical centre of the diff viewport. Suppressed on the decorative
+  // OLD half of a unified pair (emitMeta false) — see the doc comment above.
+  const anchor = emitMeta && active && i === group.start ? ' data-change-active="1"' : ''
+  const flag = emitMeta && changed ? ' data-changed="1"' : ''
   // approveHere mirrors commentedHere: the approve mark for a row belongs on
   // the new (right) pane normally, and on the old (left) pane only for a pure
   // deletion (no right side) — so a modified row never gets it twice.
-  const approveHere = sideKey === 'right' || r.right == null
+  const approveHere = emitMeta && (sideKey === 'right' || r.right == null)
+  // gutterHtml (unified stand only, opts.gutter): the leading "- "/"+ "/"  "
+  // marker plus an inline, fixed-width checkmark slot — see the doc comment
+  // above for why the checkmark can't stay an absolute overlay here.
+  const gutterHtml = gutter ? gutterSpan(mark, isApproved && approveHere) : ''
   // No leading space here: the span is absolutely positioned so it should
   // take no flow width, but a plain leading space character would still be
   // a real char in this white-space:pre row and shift the whole line one
-  // monospace column to the right on an approved row.
+  // monospace column to the right on an approved row. Only used outside the
+  // unified stand — there the checkmark rides along inside gutterHtml instead.
   const check =
-    isApproved && approveHere
+    !gutter && isApproved && approveHere
       ? '<span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">✓</span>'
       : ''
   // data-row carries the aligned-row index: the DOM child index can't be used
   // to find a row (the partial-call circle rows below insert extra divs), and
   // only the active group's first row has an anchor otherwise. Used by the
   // call-arrow overlay (src/callArrows.mjs) to anchor an arrow on the exact
-  // call-site row.
-  return `<div class="${cls}"${anchor}${flag} data-row="${i}">${check}${body}${marker}</div>`
+  // call-site row. Suppressed when emitMeta is false, see above.
+  const dataRow = emitMeta ? ` data-row="${i}"` : ''
+  return `<div class="${cls}"${anchor}${flag}${dataRow}>${check}${gutterHtml}${body}${marker}</div>`
+}
+
+// gutterSpan renders the leading "- "/"+ "/"  " marker for the unified
+// stand (Block()'s `a`-cycle 2nd stand) — mirrors Footer.mjs's own
+// inline-diff gutter (`line()`) so the two "old above new" renderings share
+// one visual language. `approvedMark` reserves a second, fixed-width slot
+// right after the gutter for the checkmark: the usual absolute-positioned
+// checkmark (see rowCellHTML) would sit on top of this leading text, so
+// here it renders inline instead, always at the same width (a checkmark or
+// a blank), so the code body itself never shifts a column depending on
+// approve state.
+function gutterSpan(mark, approvedMark) {
+  const ch = mark === 'del' ? '-' : mark === 'ins' ? '+' : ' '
+  const color =
+    mark === 'del'
+      ? 'text-rose-500 dark:text-rose-400'
+      : mark === 'ins'
+      ? 'text-emerald-500'
+      : 'text-slate-300 dark:text-zinc-700'
+  const check = approvedMark
+    ? '<span class="text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">✓</span>'
+    : ' '
+  return (
+    `<span class="select-none ${color}">${ch} </span>` +
+    `<span class="select-none inline-block w-3">${check}</span>`
+  )
 }
 
 // paneHTML builds the innerHTML string of one pane's <code>: one <div> per
@@ -1070,9 +1116,88 @@ function wrappedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedF
   `
 }
 
+// unifiedRowHTML renders one aligned row for the unified stand (`a`'s 2nd
+// stand, a genuinely two-sided/modified block): the OLD (-) line directly
+// above the NEW (+) line, in ONE column — mirroring Footer.mjs's own
+// "- old / + new" inline-diff convention — instead of 'split''s side-by-side
+// panes. A context row (no leftMark/rightMark) or a one-sided row (a pure
+// add/remove) still renders as a single line; only a PAIRED row (both
+// leftMark:'del' and rightMark:'ins' — a real replacement OR a
+// whitespace-only re-alignment, see wsOnly) renders both lines. See
+// rowCellHTML's own doc comment for why exactly one of the two lines (the
+// canonical, metadata-carrying one) ever gets `data-row`/etc.
+function unifiedRowHTML(r, i, group, approved, commented) {
+  const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
+  if (paired) {
+    return (
+      rowCellHTML(r, i, 'left', group, approved, commented, false, { gutter: true, emitMeta: false }) +
+      rowCellHTML(r, i, 'right', group, approved, commented, false, { gutter: true, emitMeta: true })
+    )
+  }
+  if (r.right != null) {
+    return rowCellHTML(r, i, 'right', group, approved, commented, false, { gutter: true, emitMeta: true })
+  }
+  if (r.left != null) {
+    return rowCellHTML(r, i, 'left', group, approved, commented, false, { gutter: true, emitMeta: true })
+  }
+  return ''
+}
+
+// unifiedCallText picks the same "current" text a call-segment progress row
+// (circleRowHTML) needs to align its dots against — the new/right text when
+// there is one, otherwise the old/left text (a pure deletion) — mirroring
+// paneHTML's own approveHere-driven side choice.
+function unifiedCallText(r) {
+  return r.right != null ? r.right : r.left
+}
+
+// unifiedHTML builds the innerHTML string of the unified stand's single
+// column: one (or, for a paired change, two) unifiedRowHTML lines per
+// aligned row, plus the call-approval segment-dots row where applicable —
+// simpler than paneHTML's two-pane version above, since there's only one
+// column to keep aligned (no blank filler row needed for "the other pane
+// didn't draw it").
+function unifiedHTML(rows, group, approved = new Set(), commented = new Set(), approvedCalls = new Set()) {
+  const parts = []
+  for (let i = 0; i < rows.length; i++) {
+    parts.push(unifiedRowHTML(rows[i], i, group, approved, commented))
+    const partial = partialCallApproval(rows, i, approved, approvedCalls)
+    if (partial) parts.push(circleRowHTML(unifiedCallText(rows[i]), partial.segs, partial.approvedStarts))
+  }
+  return parts.join('')
+}
+
+// unifiedCodeDiff renders the two-sided ('modified') diff for the `a`-cycle
+// unified stand: a SINGLE scrolling column instead of two side-by-side
+// panes — see unifiedRowHTML/unifiedHTML above for the per-row "old above
+// new" shape. Carries `data-pane="new"` (the same meaning that attribute
+// already carries on the ordinary new/right codePane — the side the call
+// site actually lives on) so the call-arrow overlay
+// (callArrows.mjs's `[data-pane="new"]` query) still finds it.
+function unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn, approvedCallsFn) {
+  return html`
+    <div
+      class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
+      data-testid="code-diff"
+      data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
+    >
+      <div class="no-scrollbar min-h-0 flex-1 overflow-auto" data-pane="new" data-scrollsync @scroll="${syncScroll}">
+        <code
+          class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
+          .innerHTML="${() =>
+            unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn())}"
+        ></code>
+      </div>
+      ${scrollHint('up')}
+      ${scrollHint('down')}
+    </div>
+  `
+}
+
 // BLANK_MARK_ROW is the filler used on the pane that doesn't draw the
 // call-approval circles, so both panes keep the same row count and stay
-// vertically aligned (see paneHTML).
+// vertically aligned (see paneHTML). Not used by unifiedHTML above (one
+// column, no second pane to keep aligned with).
 const BLANK_MARK_ROW = '<div class="block whitespace-pre px-3 leading-none">&nbsp;</div>'
 
 // partialCallApproval decides whether row `i` should show the per-segment

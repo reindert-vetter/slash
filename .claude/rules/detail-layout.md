@@ -1400,35 +1400,50 @@ diff doesn't stretch and the panel sits snugly next to it. In `'list'` mode
 
 **Exception: the `a` toggle (`state.diffViewMode`, see
 `.claude/rules/keyboard-navigation.md`) shrinks EVERY visible card to 60%
-width, regardless of whether it actually hides a pane.** With `viewMode
-==='new'`, a card shrinks to `w-[42rem] 2xl:w-[49.2rem]` (60% of
+width, regardless of whether it actually restructures a pane.** With
+`viewMode==='unified'`, a card shrinks to `w-[42rem] 2xl:w-[49.2rem]` (60% of
 `w-[70rem] 2xl:w-[82rem]`) — for a two-sided (`modified`) block that then
-also really hides its old/left pane, but **equally so** for an already
-one-sided `added`/`removed` block that has nothing to hide. This was
-earlier restricted to the two-sided case (the deliberate width stability
-for one-sided blocks won out then); that's been deliberately abandoned: the
+also restructures into one "old above new" column
+(`unifiedCodeDiff`), but **equally so** for an already one-sided
+`added`/`removed` block that has nothing to restructure. This was earlier
+restricted to the two-sided case (the deliberate width stability for
+one-sided blocks won out then); that's been deliberately abandoned: the
 reviewer wants `a` to make **everything currently visible** equally narrow,
 so the layout doesn't differ per block type as long as the toggle is on.
-Two separate, decoupled conditions in `Block.mjs`: `forcedNewOnly(b,
-viewMode)` remains unchanged and still determines **which pane(s)**
+Two separate, decoupled conditions in `Block.mjs`: `codeDiff`'s own
+`viewMode() === 'unified'` check (after `effectiveOnly`, so it never fires
+for an already one-sided block) determines **which pane structure**
 `codeDiff` shows (only relevant for a genuinely two-sided block — a
-one-sided block already showed only one side anyway); the new, simpler
-`narrowed(viewMode)` (just `viewMode()==='new'`, no `singleSide` check)
+one-sided block already showed only one side anyway); the separate, simpler
+`narrowed(viewMode)` (just `viewMode()==='unified'`, no `singleSide` check)
 determines the **width** in `Block()`'s own card `class` binding. Applies
 automatically to **every** visible card (top-level selected/preview and
 every drilled column), since they all share the same `Block()` component
 and the same `viewMode` opt (`() => state.diffViewMode`).
 
-**`a` cycles through a THIRD stand, `'fit'`, between `'new'` and back to
-`'split'`** (`DIFF_VIEW_CYCLE` in `home.mjs`): both panes come back (like
-`'split'` — `forcedNewOnly` only ever reacts to `'new'`), but the card's
-width changes — **differently for a PHP file than for anything else**
-(`isPhpFile(b)` in `Block.mjs`, a plain `.php` extension check on
-`b.file`; `widthCls(b, viewMode)` routes on it for `'fit'` only):
+**`unifiedCodeDiff` restructures a paired changed row into two stacked
+lines instead of hiding one of them.** For a real del+ins pair (or a
+whitespace-only re-alignment, see `wsOnly`), the OLD line (`-`, rose) renders
+directly above the NEW line (`+`, emerald) in the SAME single column —
+mirroring the `-`/`+` gutter convention `Footer.mjs`'s own inline-diff
+preview already used. A context row or an already one-sided row still
+renders as a single line. Exactly one of a pair's two lines carries the
+row's metadata (`data-row`/the change-active anchor/the checkmark/the
+comment marker — `rowCellHTML`'s `opts.emitMeta`), so a `callArrows.mjs`/
+`updateHints` query for a row index never finds the purely decorative OLD
+half of a pair.
+
+**`a` cycles through a THIRD stand, `'fit'`, between `'unified'` and back
+to `'split'`** (`DIFF_VIEW_CYCLE` in `home.mjs`): both panes come back side
+by side (like `'split'` — `'fit'` never restructures into `unifiedCodeDiff`'s
+single column), but the card's width changes — **differently for a PHP file
+than for anything else** (`isPhpFile(b)` in `Block.mjs`, a plain `.php`
+extension check on `b.file`; `widthCls(b, viewMode)` routes on it for
+`'fit'` only):
 
 - **A `.php` file** gets a **content-based**, uncapped width instead of the
   fixed `70rem`/`82rem`: `widthCls` delegates to `fitWidthCls(b)`. Floored
-  at the existing 60% width (never narrower than `'new'`) but **deliberately
+  at the existing 60% width (never narrower than `'unified'`) but **deliberately
   uncapped upward** — on explicit reviewer request, `'fit'` guarantees that
   the single widest non-comment PHP code line of the block is always fully
   visible, never cut off behind an invisible horizontal scroll (which is
@@ -1476,42 +1491,52 @@ width changes — **differently for a PHP file than for anything else**
 See `.claude/rules/keyboard-navigation.md` ("`a` — cycling the diff view")
 for the full mechanism. Test: `tests/diffview.spec.mjs`.
 
-**A look-ahead preview must never be wider/richer than the active block next
-to it (`activeSingleSided`, both preview spots).** Without a
-countermeasure, every card determines its width/pane choice purely from its
-**own** `status` (`singleSide(b)`, now exported from `Block.mjs`) plus the
-**global** `state.diffViewMode` — so a one-sided (`added`/`removed`, narrow
-+ one pane) active block could sit next to a **two-sided** (`modified`)
-preview block that, without the `a` toggle, simply showed its full width +
-both panes (thus also the old code): wider *and* richer than what the
-reviewer is currently reviewing. Both look-ahead preview spots — the
-top-level `pair.forEach` in `DetailPanel` (`home.mjs`) and
-`drillPreviewColumns()` — therefore compute
+**A look-ahead preview must never be WIDER than the active block next to it
+(`activeSingleSided`, both preview spots).** Without a countermeasure, every
+card determines its width/pane choice purely from its **own** `status`
+(`singleSide(b)`, now exported from `Block.mjs`) plus the **global**
+`state.diffViewMode` — so a one-sided (`added`/`removed`, narrow + one pane)
+active block could sit next to a **two-sided** (`modified`) preview block
+that, without the `a` toggle, simply showed its full width + both panes side
+by side: wider than what the reviewer is currently reviewing. Both
+look-ahead preview spots — the top-level `pair.forEach` in `DetailPanel`
+(`home.mjs`) and `drillPreviewColumns()` — therefore compute
 `const activeSingleSided = !!singleSide(<the active block>)` (top-level:
 `state.blocks[sel]`; drilled-column sibling: `focusedBlock()`, the block
 of the card this preview hangs directly beneath) and give **only the
 preview card** an override `viewMode`:
-`() => (i !== sel && activeSingleSided) ? 'new' : state.diffViewMode` resp.
-`() => (activeSingleSided ? 'new' : state.diffViewMode)`. Since
-`narrowed`/`forcedNewOnly` already react purely to `viewMode()==='new'`
-(see above), this one override suffices to make the preview both narrow
-(`narrowed`) and new-only (`forcedNewOnly`, hides the old pane) — exactly
-the same lever as the `a` toggle, only applied per-render conditionally
-instead of solely on the global state. **A one-way rule, deliberately:**
-this never widens/enriches a one-sided preview back to two-sided if the
-active block itself is two-sided — the preview may then simply stay
-narrower than active, that's not a violation. Two edge cases remain
-deliberately untouched: an already-one-sided preview (its own
-`singleSide(b)` wins in `codeDiff`'s `effectiveOnly = only ||
-(forcedNewOnly ? 'right' : null)`) just shows its own side, regardless of
-the override (there's only one side to show anyway); and a one-sided
-preview next to a two-sided active block simply stays narrower (no forced
+`() => (i !== sel && activeSingleSided) ? 'unified' : state.diffViewMode`
+resp. `() => (activeSingleSided ? 'unified' : state.diffViewMode)`. Since
+`narrowed` already reacts purely to `viewMode()==='unified'` (see above),
+this override suffices to make the preview narrow — exactly the same lever
+as the `a` toggle, only applied per-render conditionally instead of solely
+on the global state.
+
+**This override no longer guarantees the preview shows nothing the active
+card doesn't have — that guarantee was deliberately dropped.** Before the
+`a`-cycle's 2nd stand was reworked from "hide the old pane" into "unified:
+stack old (-) above new (+) in one column", forcing a two-sided preview
+into that stand also hid its old/removed content entirely, so "never
+wider" and "never richer" held together for free. Now a two-sided preview
+forced into `'unified'` still shows its own removed (-) line — narrow and
+stacked, but not narrower in *content* than what it would show in
+`'split'`. The reviewer explicitly accepted this: the WIDTH guarantee is
+what actually matters for the layout (a preview that suddenly widens the
+column next to the active card), not whether it happens to reveal a
+removed line. **A one-way rule, deliberately:** this never widens a
+one-sided preview back to two-sided if the active block itself is
+two-sided — the preview may then simply stay narrower than active, that's
+not a violation. Two edge cases remain deliberately untouched: an
+already-one-sided preview (its own `singleSide(b)` always wins in
+`codeDiff`'s `effectiveOnly`) just shows its own side, regardless of the
+override (there's only one side to show anyway); and a one-sided preview
+next to a two-sided active block simply stays narrower (no forced
 widening). The active card itself never gets this override — only its own
 `singleSide(b)` + the global `state.diffViewMode` determine its own
-display, unchanged. **The override always forces `'new'`, never `'fit'`** —
-even if the global stand is `'fit'`: forcing the narrower, fixed-width
-`'new'` here is what guarantees the "never wider than active" rule holds
-deterministically; `'fit'`'s content-based width could in principle exceed
-the active card's width even for a one-sided active block, which would
-defeat the whole point of this override. Test:
+display, unchanged. **The override always forces `'unified'`, never
+`'fit'`** — even if the global stand is `'fit'`: forcing the narrower,
+fixed-width `'unified'` here is what guarantees the "never wider than
+active" rule holds deterministically; `'fit'`'s content-based width could
+in principle exceed the active card's width even for a one-sided active
+block, which would defeat the whole point of this override. Test:
 `tests/preview-matches-active-width.spec.mjs`.
