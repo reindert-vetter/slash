@@ -251,12 +251,15 @@ the right of the index shows its thread instead of a diff.
   (dashed line for same-file blocks) is skipped whenever either side is a
   comment item (no `.file` to compare). This card is the "blok rechts van de
   index" the reviewer asked for — reached purely by **selection**, no hover.
-- **Enter/→ open the same small action menu (`ms.mode = 'prComment'`,
-  `prCommentCommandsFor`, `home.mjs`).** `selectedComment()` (`curBlock().kind
-  === 'comment' ? curBlock().comment : null`) gates a dedicated branch in
-  `onKeydown`, checked **before** the generic block-palette Enter/→ handling
-  — a comment item has no diff, so neither should ever reach `enterDiff`/the
-  block `COMMANDS`. Both keys open the identical menu: **"Sluit menu"**
+- **Enter opens a small action menu (`ms.mode = 'prComment'`,
+  `prCommentCommandsFor`, `home.mjs`); → instead steps into the item's own
+  thread (deliberately NOT the same action anymore — reversed on explicit
+  request, so → on a comment item mirrors → on an ordinary block: it steps
+  you "into" it rather than opening a menu).** `selectedComment()`
+  (`curBlock().kind === 'comment' ? curBlock().comment : null`) gates a
+  dedicated branch in `onKeydown`, checked **before** the generic
+  block-palette Enter handling — a comment item has no diff, so Enter should
+  never reach the block `COMMANDS`. Enter opens: **"Sluit menu"**
   (pinned, per the `withClose` convention) then **"Beantwoorden"** (the
   first real item, thus default-selected via `defaultSel`) then **"Resolve
   comment"** then **"Ignore"**. Because selection alone already shows the detail card/thread
@@ -265,7 +268,30 @@ the right of the index shows its thread instead of a diff.
   (`menuAnchor`/`menuRegion`'s new `ms.mode === 'prComment'` branches target
   `[data-testid=comment-detail-card]`, falling back to
   `[data-testid=block-column]`) rather than a distinct "with/without thread"
-  menu variant — Enter and → are deliberately identical here. **"Beantwoorden"**
+  menu variant. **→ (`enterPrCommentThread`, `RelatedPanel.mjs`)** steps the
+  keyboard into the comment's own thread history instead — reusing the
+  existing `threadMessages`/`reactionBubble` rendering that the block-scoped
+  inline-comment thread (`cs.focus === 'thread'`, see the "Real comments"
+  section further below) already uses for exactly this "walk the messages
+  with ↑/↓" shape, rather than a second, parallel implementation. The
+  cursor itself, however, is a **separate, ephemeral, non-URL-bound**
+  reactive (`pct`, `{commentId, pos}` — `RelatedPanel.mjs`) instead of that
+  same panel's own `cs.focus`/`cs.threadPos`: those are bound to the URL
+  (`rel.foc`/`rel.thr`) for the block-scoped, diff-mode-only case, and
+  reusing them here would restore a stray `'thread'` focus into list mode on
+  every refresh, before any comment item is even selected. `isActive` is an
+  optional override `reactionBubble` now accepts for exactly this reason —
+  `commentDetailCard` passes `() => !preview && pct.commentId === c.id &&
+  pct.pos === total - i` so the look-ahead preview card (which renders
+  through the very same `commentDetailCard`, see the previous bullet) never
+  also lights up. `↑`/`↓` walk the thread (clamped at both ends — no
+  fall-through to a next conversation or an Onderliggende-code panel, unlike
+  the block-scoped case: a comment-index item has neither), `←`
+  (`exitPrCommentThread`) steps back out to the index; a `state.selected`
+  change (a different row, or navigating away) also resets it, mirroring how
+  the same watch already resets `picm`/`cancelPrCommentReply`. `Enter` keeps
+  opening the menu regardless of whether the thread is currently focused.
+  **"Beantwoorden"**
   (`startPrCommentReply(selectedComment())`) only reveals the reply textarea
   in the detail card (`picm.replying = true` + `picm.commentId = c.id`) and
   focuses it — the reviewer types and sends from there (`Enter` in the field,

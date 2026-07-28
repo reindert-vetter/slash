@@ -1159,11 +1159,15 @@ function aiWarningBadge(c) {
 
 // reactionBubble — one message in the thread. `i`/`total` let it light up when it
 // is the one the reviewer walked up to (cs.threadPos counts from the bottom).
-// Each bubble carries its own author's avatar+name above it — reactions/replies
-// have an `author` just like the comment root (see threadMessages), so this
-// works for every message in the thread, not only the opening one.
-function reactionBubble(r, i, total) {
+// `isActive`, when given, overrides that default check — used by
+// commentDetailCard, whose thread cursor is pct (see its own comment above),
+// not cs.focus/cs.threadPos. Each bubble carries its own author's avatar+name
+// above it — reactions/replies have an `author` just like the comment root
+// (see threadMessages), so this works for every message in the thread, not
+// only the opening one.
+function reactionBubble(r, i, total, isActive) {
   const mine = r.source === 'ui'
+  const active = isActive || (() => cs.focus === 'thread' && cs.threadPos === total - i)
   return html`
     <div class="${() => 'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}">
       <div class="flex items-center gap-1" data-testid="reaction-author-line">
@@ -1174,7 +1178,7 @@ function reactionBubble(r, i, total) {
       </div>
       <div
         class="${() => {
-          const sel = cs.focus === 'thread' && cs.threadPos === total - i
+          const sel = active()
           return (
             'max-w-[85%] rounded-2xl px-3 py-1.5 text-xs leading-relaxed [overflow-wrap:anywhere] ' +
             (mine ? 'bg-indigo-500 text-white' : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300') +
@@ -2198,9 +2202,10 @@ export default function RelatedPanel(state, commentTarget, search) {
 // zero/one ("0/1" not-resolved / "1/1" resolved) so it folds into the existing
 // "Toon N goedgekeurde blocks" section once resolved (isFullyApproved stays
 // generic — home.mjs's blockApproveCount special-cases a comment item's
-// done/total instead). Enter/→ on the selected row open a small action menu
+// done/total instead). Enter on the selected row opens a small action menu
 // (prCommentCommandsFor in home.mjs: "Beantwoorden" first, then "Resolve
-// comment") and the block column to the right of the index shows this
+// comment"); → instead steps into the item's own thread (enterPrCommentThread
+// below). The block column to the right of the index shows this
 // module's commentDetailCard (thread: body + reactions) instead of a Block
 // diff card — see the DetailPanel pair.forEach branch in home.mjs and
 // detail-layout.md.
@@ -2241,6 +2246,62 @@ const COMMENT_KIND_LABEL = { issue: 'PR-comment', review: 'PR-comment', review_s
 // conventions.md.
 export function commentBody(c) {
   return () => (c ? renderMarkdown(c.body) : '')
+}
+
+// pct ("PR-comment thread") is the ephemeral thread cursor for a selected
+// comment-index item's own thread — → on such an item (home.mjs's onKeydown)
+// steps into it, ↑/↓ then walk its messages (threadMessages, exactly the
+// rendering commentDetailCard already uses) and ← steps back out to the
+// index. This deliberately reuses that presentation, but is its OWN,
+// non-URL-bound reactive rather than the block-scoped panel's `cs.focus`/
+// `cs.threadPos` (which serve the exact same role for the inline-comments
+// panel, reached only in diff mode, and ARE bound to the URL there — reusing
+// them here would restore a stray 'thread' focus into list mode on every
+// refresh, before any comment item is even selected). `commentId` scopes the
+// cursor to one specific comment, mirroring picm.commentId just below (the
+// selected item + its look-ahead preview both render through
+// commentDetailCard, so a bare position wouldn't say WHICH comment's thread
+// it belongs to).
+const pct = reactive({ commentId: null, pos: 0 })
+
+// enterPrCommentThread steps the keyboard into comment `c`'s own thread
+// history — called by home.mjs on → from a selected comment-index item.
+export function enterPrCommentThread(c) {
+  if (!c) return
+  pct.commentId = c.id
+  pct.pos = 0
+}
+
+// isPrCommentThreadFocused reports whether the keyboard currently sits
+// inside comment `c`'s thread (as opposed to owning the sidebar list) — used
+// by home.mjs both to route ↑/↓/← there instead of the generic list
+// navigation, and to reset the cursor on a selection change.
+export function isPrCommentThreadFocused(c) {
+  return !!c && pct.commentId === c.id
+}
+
+// exitPrCommentThread releases the thread cursor — called on ← out of the
+// thread and whenever the sidebar selection moves off the comment it belongs
+// to (mirrors the reasoning behind the selection-change watch that already
+// resets picm/cancelPrCommentReply for the reply field).
+export function exitPrCommentThread() {
+  pct.commentId = null
+  pct.pos = 0
+}
+
+// handlePrCommentThreadKey drives ↑/↓/← while comment `c`'s thread owns the
+// keyboard (see isPrCommentThreadFocused) — ↑ steps to an older message, ↓
+// to a newer one (clamped at the bottom, unlike the block-scoped
+// handleRelatedKey's 'thread' branch: there is no further stop below to fall
+// through to here, only ← exits), ← steps back out to the index.
+export function handlePrCommentThreadKey(c, key) {
+  if (key === 'ArrowUp') {
+    pct.pos = Math.min(pct.pos + 1, threadMessages(c).length)
+  } else if (key === 'ArrowDown') {
+    pct.pos = Math.max(pct.pos - 1, 0)
+  } else if (key === 'ArrowLeft') {
+    exitPrCommentThread()
+  }
 }
 
 // picm ("PR-index comment menu") is the ephemeral reply-composer state for
@@ -2346,7 +2407,12 @@ export function commentDetailCard(c, opts) {
         <span class="text-[10px] text-slate-400 dark:text-zinc-500">${relTime(c.createdAt)}</span>
       </div>
       <div class="flex max-h-64 flex-col gap-1.5 overflow-auto" data-testid="comment-detail-thread">
-        ${() => threadMessages(c).map((r, ti, arr) => reactionBubble(r, ti, arr.length).key('detail-msg:' + r.id))}
+        ${() =>
+          threadMessages(c).map((r, ti, arr) =>
+            reactionBubble(r, ti, arr.length, () => !preview && pct.commentId === c.id && pct.pos === arr.length - ti).key(
+              'detail-msg:' + r.id,
+            ),
+          )}
       </div>
       <div class="contents">
         ${() =>

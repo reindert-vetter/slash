@@ -53,6 +53,10 @@ import RelatedPanel, {
   startPrCommentReply,
   cancelPrCommentReply,
   resolvePrCommentItem,
+  enterPrCommentThread,
+  isPrCommentThreadFocused,
+  exitPrCommentThread,
+  handlePrCommentThreadKey,
   scrollIntoViewVertical,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
@@ -561,12 +565,16 @@ watch(
   },
 )
 
-// A stray "Beantwoorden"-revealed reply field must never leak onto whatever
-// gets selected next — reset it on every selection change (mirrors how the
+// A stray "Beantwoorden"-revealed reply field, or a still-focused comment
+// thread (see enterPrCommentThread), must never leak onto whatever gets
+// selected next — reset both on every selection change (mirrors how the
 // composer/reply focus elsewhere always resets on a block switch).
 watch(
   () => state.selected,
-  () => cancelPrCommentReply(),
+  () => {
+    cancelPrCommentReply()
+    exitPrCommentThread()
+  },
 )
 
 // Keep drillRef/drillGran/drillChange mirroring state.drill/drillCursor — see
@@ -3277,8 +3285,9 @@ function commentCommandsFor() {
 }
 
 // prCommentCommandsFor builds the small action menu for a selected
-// comment-index item (Enter/→ on a sidebar row with kind:'comment' — see
-// selectedComment/recomputeLeftList). "Beantwoorden" is deliberately the
+// comment-index item (Enter on a sidebar row with kind:'comment' — see
+// selectedComment/recomputeLeftList; → instead steps into the item's own
+// thread, see enterPrCommentThread in RelatedPanel.mjs). "Beantwoorden" is deliberately the
 // FIRST real item (default-selected, see defaultSel/withClose) — it only
 // reveals the reply textarea in the detail card to the right of the index
 // (startPrCommentReply, RelatedPanel.mjs); the reviewer then types and sends
@@ -5284,7 +5293,7 @@ function resolveCommands(query) {
   // The comment-scoped menu (Enter on a focused comment row) is just its own
   // small list — no submenu, no make-a-comment fallback.
   if (ms.mode === 'comment') return filterCommands(ms.commands, query)
-  // The comment-INDEX-item menu (Enter/→ on a selected comment row in the
+  // The comment-INDEX-item menu (Enter on a selected comment row in the
   // sidebar — see selectedComment/prCommentCommandsFor): same shape, just its
   // own small list.
   if (ms.mode === 'prComment') return filterCommands(ms.commands, query)
@@ -5813,6 +5822,24 @@ function onKeydown(e) {
     return
   }
 
+  // A selected comment-index item's thread (entered via → below, see
+  // enterPrCommentThread) owns ↑/↓/← while focused — the sidebar counterpart
+  // of the block-scoped inline-comment thread's own ↑/↓/← handling
+  // (handleRelatedKey's 'thread' branch): ↑/↓ walk the thread's messages, ←
+  // steps back out to the index. Checked before the generic list-mode arrows
+  // below so it wins for this item; Enter still opens the action menu
+  // regardless (see the Enter branch above), untouched by this.
+  const focusedListComment = selectedComment()
+  if (
+    focusedListComment &&
+    isPrCommentThreadFocused(focusedListComment) &&
+    (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft')
+  ) {
+    e.preventDefault()
+    handlePrCommentThreadKey(focusedListComment, e.key)
+    return
+  }
+
   if (e.key === 'ArrowDown') {
     e.preventDefault()
     stepListSelection(1)
@@ -5826,10 +5853,16 @@ function onKeydown(e) {
   } else if (e.key === 'ArrowRight') {
     e.preventDefault()
     // A selected comment-index item (kind:'comment', see recomputeLeftList)
-    // has no diff to step into — → opens its own small action menu instead
-    // (mirrors the Enter branch above; see selectedComment's own comment).
-    if (selectedComment()) openMenu('prComment')
-    else enterDiff()
+    // has no diff to step into — → instead steps into its thread's message
+    // history (mirrors → on a block-scoped inline comment conversation, see
+    // enterThread in RelatedPanel.mjs), reusing the same threadMessages
+    // rendering; ↑/↓/← are handled above once focused. Enter still opens the
+    // action menu (see the Enter branch above) — deliberately no longer the
+    // same action as →.
+    const sc = selectedComment()
+    if (sc) {
+      if (!isPrCommentThreadFocused(sc)) enterPrCommentThread(sc)
+    } else enterDiff()
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault()
     state.toggleFocused = false

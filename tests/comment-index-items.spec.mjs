@@ -104,7 +104,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
   })
 
-  test('Enter opens the action menu, → opens the same menu (thread already showing)', async ({ page }) => {
+  test('Enter opens the action menu', async ({ page }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
@@ -117,12 +117,79 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(menu).toContainText('Resolve comment')
     await page.keyboard.press('Escape')
     await expect(menu).toHaveCount(0)
+  })
 
-    // → opens the very same menu; the thread card is already visible above it
-    // (selection alone shows the detail card, independent of Enter/→).
-    await page.keyboard.press('ArrowRight')
-    await expect(menu).toBeVisible()
+  // → used to open the same action menu as Enter; changed on explicit request
+  // so → mirrors an ordinary block (steps you INTO it) instead of opening a
+  // menu — see enterPrCommentThread/isPrCommentThreadFocused/
+  // handlePrCommentThreadKey (RelatedPanel.mjs) and detail-layout.md
+  // ("Comment-index items").
+  test('→ steps into the comment thread; ↑/↓ walk the messages, ← steps back to the index', async ({ page }) => {
+    const now = new Date().toISOString()
+    await page.route('**/api/comments?*', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'ci-1',
+            runId: 'run-ci-1',
+            pr: 12903,
+            file: '',
+            line: 0,
+            author: 'octocat',
+            body: 'Overall this looks great, one nit below',
+            createdAt: now,
+            reactionCount: 1,
+            status: 'open',
+            source: 'github',
+            kind: 'issue',
+            reactions: [{ id: 'react-1', author: 'reviewer', body: 'thanks, will fix', source: 'ui', createdAt: now }],
+            rowStart: -1,
+            rowEnd: -1,
+          },
+        ]),
+      }),
+    )
+    await page.goto('/pr/12903')
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+
+    const bubbles = page.getByTestId('reaction-bubble')
+    await expect(bubbles).toHaveCount(2) // the comment's own opening body + the one reaction
+
+    // → steps into the thread — no menu opens, nothing highlighted yet (rest position).
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('command-menu')).toHaveCount(0)
+    await expect(bubbles.nth(0)).not.toHaveClass(/ring-indigo-400/)
+    await expect(bubbles.nth(1)).not.toHaveClass(/ring-indigo-400/)
+
+    // ↑ walks up to the newest message first (the reaction, bottom of the thread).
+    await page.keyboard.press('ArrowUp')
+    await expect(bubbles.nth(1)).toHaveClass(/ring-indigo-400/)
+    await expect(bubbles.nth(0)).not.toHaveClass(/ring-indigo-400/)
+
+    // ↑ again walks further up, to the comment's own opening message.
+    await page.keyboard.press('ArrowUp')
+    await expect(bubbles.nth(0)).toHaveClass(/ring-indigo-400/)
+    await expect(bubbles.nth(1)).not.toHaveClass(/ring-indigo-400/)
+
+    // ↑ at the oldest message clamps — no further change.
+    await page.keyboard.press('ArrowUp')
+    await expect(bubbles.nth(0)).toHaveClass(/ring-indigo-400/)
+
+    // ↓ walks back down towards the newest message.
+    await page.keyboard.press('ArrowDown')
+    await expect(bubbles.nth(1)).toHaveClass(/ring-indigo-400/)
+    await expect(bubbles.nth(0)).not.toHaveClass(/ring-indigo-400/)
+
+    // ← steps back out to the index — the highlight disappears, and Enter
+    // still opens the action menu regardless of the thread ever having been
+    // focused.
+    await page.keyboard.press('ArrowLeft')
+    await expect(bubbles.nth(1)).not.toHaveClass(/ring-indigo-400/)
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('command-menu')).toBeVisible()
   })
 
   test('"Beantwoorden" reveals the reply field only after Enter, and sends via the reply Signal', async ({

@@ -104,22 +104,33 @@ that replaces a diff card in the block column, and how it's synthesized).
 alone reveals its thread (body + reactions) in the block column to the right
 of the index — no hover, no separate cursor.
 
-**`Enter` and `→` both open the same small action menu**
-(`ms.mode = 'prComment'`, `prCommentCommandsFor` in `home.mjs`) instead of
-the block palette/entering a diff — `selectedComment()` gates a dedicated
-branch checked **before** the generic Enter-opens-menu/list-mode `→`
-handling. The menu: **"Sluit menu"** (pinned) → **"Beantwoorden"** (the
-default-selected 2nd item) → **"Resolve comment"** → **"Ignore"**
-("Ignore ongedaan maken" once already ignored — `toggleIgnoreComment`, an
-ephemeral, purely client-side sidebar-visibility flag, **not** a persisted
-Signal like reply/resolve/delete; see "Comment-index items" in
-`.claude/rules/detail-layout.md` for the full mechanism and the deliberate
-not-persisted trade-off). Because the detail card
-already shows on selection (independent of Enter/→), the menu simply opens
-anchored on/below that card — "the thread shows above the menu" is a
+**`Enter` opens a small action menu; `→` instead steps into the item's own
+thread history — the two are deliberately NOT identical here** (this used to
+be the case; changed on explicit request so `→` on a comment item mirrors
+`→` on an ordinary block, which steps you "into" it instead of opening a
+menu). `Enter` (`ms.mode = 'prComment'`, `prCommentCommandsFor` in
+`home.mjs`) — `selectedComment()` gates a dedicated branch checked **before**
+the generic Enter-opens-menu handling. The menu: **"Sluit menu"** (pinned) →
+**"Beantwoorden"** (the default-selected 2nd item) → **"Resolve comment"** →
+**"Ignore"** ("Ignore ongedaan maken" once already ignored —
+`toggleIgnoreComment`, an ephemeral, purely client-side sidebar-visibility
+flag, **not** a persisted Signal like reply/resolve/delete; see
+"Comment-index items" in `.claude/rules/detail-layout.md` for the full
+mechanism and the deliberate not-persisted trade-off). Because the detail
+card already shows on selection (independent of Enter/→), the menu simply
+opens anchored on/below that card — "the thread shows above the menu" is a
 consequence of that anchoring (`menuAnchor`/`menuRegion`'s `'prComment'`
-branches), not a distinct menu variant; `→` and `Enter` are deliberately
-identical here. **"Beantwoorden"** only reveals the reply textarea in the
+branches), not a distinct menu variant. `→` (`enterPrCommentThread`,
+`RelatedPanel.mjs`) instead steps the keyboard into the comment's own thread
+history, reusing the same `threadMessages`/`reactionBubble` rendering the
+block-scoped inline-comment thread already uses (see "Comment-index items"
+in `detail-layout.md` for the cursor itself, `pct`, and why it's a separate,
+non-URL-bound reactive rather than that panel's own `cs.focus`/
+`cs.threadPos`); `↑`/`↓` then walk the messages (clamped at both ends — no
+fall-through to anything else, since a comment-index item has no
+Onderliggende-code panel), and `←` steps back out to the index. `Enter`
+still always opens the menu, regardless of whether the thread is currently
+focused. **"Beantwoorden"** only reveals the reply textarea in the
 detail card (`startPrCommentReply`) and focuses it — typing + `Enter` (or
 the send button) is what actually sends, via the same
 `POST /api/workflows/{runId}/signals/reply` Signal the block-scoped comments
