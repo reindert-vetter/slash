@@ -2290,18 +2290,30 @@ export function exitPrCommentThread() {
 }
 
 // handlePrCommentThreadKey drives ↑/↓/← while comment `c`'s thread owns the
-// keyboard (see isPrCommentThreadFocused) — ↑ steps to an older message, ↓
-// to a newer one (clamped at the bottom, unlike the block-scoped
-// handleRelatedKey's 'thread' branch: there is no further stop below to fall
-// through to here, only ← exits), ← steps back out to the index.
+// keyboard (see isPrCommentThreadFocused) — ↑ steps to an older message,
+// clamped at the top (no fall-through: mirrors the block-scoped
+// handleRelatedKey's 'thread' branch, where ↑ also just clamps). ↓ steps to
+// a newer one; once already at the newest message (pos === 0, nothing left
+// to descend into), it instead FALLS THROUGH — returns `false` and leaves
+// the thread (see below) — so the caller (home.mjs's onKeydown) can advance
+// the sidebar cursor to the next comment/block, mirroring the block-scoped
+// panel's own `advanceFromComment` "↓ loopt door" convention (see
+// detail-layout.md, "Inline comment blocks"). ← steps back out to the
+// index (same row, not the next one). Returns `true` when the key was fully
+// handled here, `false` only for the ↓-falls-through case above.
 export function handlePrCommentThreadKey(c, key) {
   if (key === 'ArrowUp') {
     pct.pos = Math.min(pct.pos + 1, threadMessages(c).length)
   } else if (key === 'ArrowDown') {
-    pct.pos = Math.max(pct.pos - 1, 0)
+    if (pct.pos === 0) {
+      exitPrCommentThread()
+      return false
+    }
+    pct.pos -= 1
   } else if (key === 'ArrowLeft') {
     exitPrCommentThread()
   }
+  return true
 }
 
 // picm ("PR-index comment menu") is the ephemeral reply-composer state for

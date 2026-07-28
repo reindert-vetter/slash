@@ -284,10 +284,19 @@ the right of the index shows its thread instead of a diff.
   `commentDetailCard` passes `() => !preview && pct.commentId === c.id &&
   pct.pos === total - i` so the look-ahead preview card (which renders
   through the very same `commentDetailCard`, see the previous bullet) never
-  also lights up. `↑`/`↓` walk the thread (clamped at both ends — no
-  fall-through to a next conversation or an Onderliggende-code panel, unlike
-  the block-scoped case: a comment-index item has neither), `←`
-  (`exitPrCommentThread`) steps back out to the index; a `state.selected`
+  also lights up. `↑` walks up the thread and clamps at the oldest message
+  (no fall-through — mirrors the block-scoped case's own clamp there). `↓`
+  walks down towards the newest message, but once already there
+  (`pct.pos === 0`) it FALLS THROUGH instead of clamping:
+  `handlePrCommentThreadKey` exits the thread itself and returns `false`,
+  and `onKeydown` (`home.mjs`) falls into the ordinary `stepListSelection(1)`
+  right after — advancing the sidebar cursor to the next comment/block, the
+  same "↓ loopt door" convention the block-scoped panel's own
+  `advanceFromComment` already applies (see "Inline comment blocks" further
+  below) — a comment-index item has no Onderliggende-code panel of its own,
+  so here it falls through straight to the next **index row** instead. `←`
+  (`exitPrCommentThread`) steps back out to the index (the same row, not the
+  next one); a `state.selected`
   change (a different row, or navigating away) also resets it, mirroring how
   the same watch already resets `picm`/`cancelPrCommentReply`. `Enter` keeps
   opening the menu regardless of whether the thread is currently focused.

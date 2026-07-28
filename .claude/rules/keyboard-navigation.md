@@ -126,9 +126,14 @@ history, reusing the same `threadMessages`/`reactionBubble` rendering the
 block-scoped inline-comment thread already uses (see "Comment-index items"
 in `detail-layout.md` for the cursor itself, `pct`, and why it's a separate,
 non-URL-bound reactive rather than that panel's own `cs.focus`/
-`cs.threadPos`); `↑`/`↓` then walk the messages (clamped at both ends — no
-fall-through to anything else, since a comment-index item has no
-Onderliggende-code panel), and `←` steps back out to the index. `Enter`
+`cs.threadPos`); `↑` walks up the messages and clamps at the oldest one (no
+fall-through there). `↓` walks down towards the newest message, but once
+already there it FALLS THROUGH — leaves the thread and advances the sidebar
+cursor to the next comment/block (the ordinary `stepListSelection(1)`,
+`home.mjs`) instead of clamping, mirroring the block-scoped panel's own
+`advanceFromComment` "↓ loopt door" convention — a comment-index item has no
+Onderliggende-code panel to fall through to, so it falls through to the next
+**index row** instead. `←` steps back out to the index (same row). `Enter`
 still always opens the menu, regardless of whether the thread is currently
 focused. **"Beantwoorden"** only reveals the reply textarea in the
 detail card (`startPrCommentReply`) and focuses it — typing + `Enter` (or

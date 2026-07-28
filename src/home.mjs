@@ -5830,6 +5830,11 @@ function onKeydown(e) {
   // steps back out to the index. Checked before the generic list-mode arrows
   // below so it wins for this item; Enter still opens the action menu
   // regardless (see the Enter branch above), untouched by this.
+  // ↓ at the newest message FALLS THROUGH instead of clamping —
+  // handlePrCommentThreadKey already exits the thread itself and returns
+  // `false` in that case, so we fall into the ordinary stepListSelection(1)
+  // below to advance to the next comment/block (mirrors the block-scoped
+  // panel's ↓-falls-through convention, see detail-layout.md).
   const focusedListComment = selectedComment()
   if (
     focusedListComment &&
@@ -5837,7 +5842,10 @@ function onKeydown(e) {
     (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft')
   ) {
     e.preventDefault()
-    handlePrCommentThreadKey(focusedListComment, e.key)
+    if (handlePrCommentThreadKey(focusedListComment, e.key)) return
+    stepListSelection(1)
+    scrollSelectedIntoView()
+    scrollChangeIntoView(false)
     return
   }
 

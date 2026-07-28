@@ -196,6 +196,33 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(page.getByTestId('command-menu')).toBeVisible()
   })
 
+  // ↓ used to clamp at the newest thread message, leaving no way to continue
+  // reviewing without first pressing ← back to the index. It now falls
+  // through — exactly like the block-scoped panel's own "↓ loopt door"
+  // convention — and advances the sidebar cursor to the next comment/block,
+  // see handlePrCommentThreadKey (RelatedPanel.mjs) and detail-layout.md
+  // ("Comment-index items").
+  test('↓ at the bottom of the comment thread falls through to the next block', async ({ page }) => {
+    await mockComments(page)
+    await page.goto('/pr/12903')
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
+
+    // → steps into the thread — rest position, nothing highlighted yet, but
+    // already at the "newest message" end (pos === 0).
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('comment-detail-thread')).toHaveClass(/ring-indigo-200/)
+
+    // ↓ from here falls through immediately: the thread cursor releases and
+    // the sidebar selection advances to the next row (the first real PR
+    // block), instead of doing nothing.
+    await page.keyboard.press('ArrowDown')
+    await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
+    await expect(page.locator('[data-idx="0"]')).not.toHaveClass(/bg-indigo-50/)
+    await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
+  })
+
   test('"Beantwoorden" reveals the reply field only after Enter, and sends via the reply Signal', async ({
     page,
   }) => {
