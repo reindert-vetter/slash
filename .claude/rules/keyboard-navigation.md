@@ -649,38 +649,56 @@ the links fall back to the bare PR URL resp. the Jira base.
     `stepVisibleSelected`; the search filter itself needs no separate check
     — a filtered-out block simply isn't in `state.blocks` anymore).
   Both use exactly the same `isFullyApproved` criterion as `renderList`.
-  **↓ past the last visible block lands on the "Show/Hide N
-  approved blocks" button itself** (`state.toggleFocused`, `stepListSelection`
-  in `home.mjs` — replaces the bare `stepVisibleSelected` call in both
-  ArrowDown/ArrowUp branches above): the button was previously only reachable
-  with the mouse. `stepListSelection(1)` falls back to `stepVisibleSelected`
-  and, only if that finds nothing further (`next === state.selected`) and
-  the button actually exists (`toggleRowVisible()` — there's at least one
-  approved top-level block, regardless of `showApproved`), sets
-  `state.toggleFocused = true`; `state.selected` stays unchanged, so the
-  button is an extra, final stop on top of the blocks, not a replacement.
-  `BlockList.mjs`'s `toggleRow` then shows the same indigo bg/ring as a
-  selected row (and dims the row highlight of the underlying
-  `state.selected` block, so there are never two indigo highlights visible
-  at once). **`↑`** from the
-  button (`stepListSelection(-1)`) simply sets `toggleFocused` back to
-  `false` — the last block was and remains `state.selected`, so this is
-  purely a focus step, not re-navigation. **`Enter`/`→`** there toggle
-  `state.showApproved` (mirroring a click on the button) instead of opening
-  the command menu resp. stepping into the diff; **`f`/`d`/`s`/`a`** are
-  no-ops while the button owns the keyboard (there's no block/diff context
-  to act on). A click on a regular row, or typing in the search box
-  (`setSearch`), always resets
-  `toggleFocused` to `false` — a new navigation context never silently
-  leaves the button focused.
-  **`↑` from the topmost visible block wraps around to the bottom of the
-  list** (`lastVisibleIndex`, the mirror-image scan of `stepVisibleSelected`)
-  instead of staying put: `stepListSelection(-1)` treats
-  `stepVisibleSelected(-1)` returning the unchanged index as "nothing further
-  up" and jumps straight to the last visible block. Deliberately
-  **asymmetric** with `↓` — this wrap targets the last **block**, never the
-  toggle-approved button (that's a separate affordance below the list, not
-  part of the wrap-around).
+  **The sidebar's `↑`/`↓` cursor forms one circular loop** (`stepListSelection`/
+  `searchStepSelection` in `home.mjs`, replacing the bare `stepVisibleSelected`
+  call in both ArrowDown/ArrowUp branches above):
+  ```
+  first visible block → … → last visible block
+    → toggle-approved (if any hidden approved blocks exist)
+    → toggle-ignored (if any hidden ignored comments exist — see
+      "Comment-index items" in detail-layout.md)
+    → the search box
+    → back to the first visible block
+  ```
+  `↑` walks the exact same loop backwards. Each toggle row is only a stop
+  when it's actually rendered (`toggleRowVisible()`/`ignoreToggleRowVisible()`
+  in `home.mjs`); the search box is always the loop's other end.
+  `stepListSelection(1)` falls back to `stepVisibleSelected` and, only if
+  that finds nothing further (`next === state.selected`), steps onto
+  whichever of `toggle-approved` / `toggle-ignored` / the search box is the
+  next actually-existing stop (`state.selected` stays unchanged while a
+  toggle row owns the keyboard, so a toggle row is an extra stop on top of
+  the blocks, not a replacement). `BlockList.mjs`'s `toggleRow`/
+  `ignoreToggleRow` show the same indigo bg/ring as a selected row via
+  `state.toggleFocused`/`state.ignoreToggleFocused` respectively (`rowFocused`
+  dims the underlying `state.selected` block's own ring while either flag is
+  set, so there are never two indigo highlights visible at once — except
+  while the search box also holds real DOM focus, see below, which is a
+  pre-existing, separate ring). **`Enter`/`→`** on a toggle row flips its
+  own `state.showApproved`/`state.showIgnored` (mirroring a click on the
+  button) instead of opening the command menu resp. stepping into the diff;
+  **`f`/`d`/`s`/`a`** are no-ops while either toggle row owns the keyboard
+  (there's no block/diff context to act on). A click on a regular row, or
+  typing in the search box (`setSearch`), always resets both toggle flags —
+  a new navigation context never silently leaves a toggle button focused.
+  **The search box is reached via `activateSearch()`** (real DOM focus, so
+  `BlockList.mjs`'s existing focus ring lights up) **and marks the arrival
+  as deliberate via `state.searchLoopFocused`** — a separate flag from
+  `state.searchActive` itself, because the box also ends up with real DOM
+  focus for two reasons that are **not** a loop arrival: a load-time
+  convenience focus (`focusSearchBox`, so the reviewer can start typing a
+  filter right away without clicking — this is the "auto-focused search
+  box" several specs defensively press `Escape` past) and a plain click to
+  start typing. Only while `state.searchLoopFocused` is true does
+  `searchStepSelection` exit the box again on the very next `↑`/`↓` (`↓` →
+  the first visible block; `↑` → `toggle-ignored`, else `toggle-approved`,
+  else the last visible block); otherwise (ambient/typing) `↑`/`↓` keep the
+  **existing** "browse the filtered matches while focus stays in the box"
+  behaviour, with its own wrap at either end of the (possibly filtered)
+  results, and — pre-existing, unrelated to this loop — reach only
+  `toggle-approved`, never `toggle-ignored`. Typing (`setSearch`),
+  `→`/`Enter` (step into the diff) and `Escape` (back to the list) all clear
+  `searchLoopFocused` via `exitSearch`, regardless of how the box got focus.
   Order is load-bearing: on the load path the reveal only runs **after**
   `applyBlockRefRestore` (a restored `?sel=` to a visible block is a
   no-op) and after `loadBlocks` has awaited `loadApprovals`/`loadBlockStats`

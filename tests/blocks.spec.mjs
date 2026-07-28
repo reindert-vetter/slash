@@ -67,25 +67,23 @@ test.describe('PR Review Tree — block list', () => {
     // Last row visible in the scroll viewport.
     await expect(rows.nth(EXPECTED_LABELS.length - 1)).toBeInViewport()
 
-    // Clamp at the bottom.
+    // ↓ past the last visible row now continues the sidebar's ↑/↓ loop into
+    // the search box (no toggle row exists in this fixture — see
+    // stepListSelection/searchStepSelection in home.mjs and
+    // tests/list-nav-wrap.spec.mjs for the full loop, incl. the toggle rows).
+    // The last row keeps its own highlight — the search box gets its own,
+    // separate ring, exactly like the existing "browse while typing" feature.
     await page.keyboard.press('ArrowDown')
+    await expect(page.getByTestId('block-search')).toBeFocused()
     await expect(rows.nth(EXPECTED_LABELS.length - 1)).toHaveClass(/bg-indigo-50/)
 
-    // Walk back up to the top.
+    // Re-select the last row (a click resets the loop) and walk back up to
+    // the top.
+    await rows.nth(EXPECTED_LABELS.length - 1).click()
     for (let i = EXPECTED_LABELS.length - 2; i >= 0; i--) {
       await page.keyboard.press('ArrowUp')
       await expect(rows.nth(i)).toHaveClass(/bg-indigo-50/)
     }
-    // ↑ on the topmost visible block WRAPS to the bottom of the list — it no
-    // longer clamps there (stepListSelection/lastVisibleIndex in home.mjs,
-    // "↑ from the TOPMOST visible block wraps around" in
-    // keyboard-navigation.md). ↓ deliberately stays asymmetric: it clamps
-    // (with the toggle-approved button as an extra stop when one exists), as
-    // asserted above. The dedicated test for the wrap itself lives in
-    // tests/list-nav-wrap.spec.mjs.
-    await page.keyboard.press('ArrowUp')
-    await expect(rows.nth(EXPECTED_LABELS.length - 1)).toHaveClass(/bg-indigo-50/)
-    await expect(rows.nth(0)).not.toHaveClass(/bg-indigo-50/)
   })
 
   test('clicking a row selects it', async ({ page }) => {

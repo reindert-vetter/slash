@@ -116,7 +116,11 @@ export default function BlockList(state) {
               ? 'border-indigo-300 dark:border-indigo-500 bg-white dark:bg-zinc-900 ring-2 ring-indigo-200 dark:ring-indigo-500/30'
               : 'border-slate-200 dark:border-zinc-800 hover:border-slate-300 dark:hover:border-zinc-700')}"
           @input="${(e) => state.onSearch && state.onSearch(e.target.value)}"
-          @focus="${() => (state.searchActive = true)}"
+          @focus="${() => {
+            state.searchActive = true
+            state.toggleFocused = false
+            state.ignoreToggleFocused = false
+          }}"
           @blur="${() => (state.searchActive = false)}"
         />
       </header>
@@ -251,10 +255,11 @@ function underlyingHeading() {
 }
 
 // toggleRow is the bottom button that hides/shows the fully-approved blocks.
-// It's also the extra, final ↓ stop of the sidebar's keyboard cursor (see
-// stepListSelection in home.mjs): state.toggleFocused gives it the same
-// indigo highlight as a selected row (data-idx rows above) while the keyboard
-// sits on it, rather than on any block.
+// It's also a stop of the sidebar's keyboard ↑/↓ loop (see stepListSelection/
+// searchStepSelection in home.mjs, which also runs through toggleRow's own
+// sibling ignoreToggleRow and the search box): state.toggleFocused gives it
+// the same indigo highlight as a selected row (data-idx rows above) while the
+// keyboard sits on it, rather than on any block.
 function toggleRow(state, count) {
   return html`
     <button
@@ -267,6 +272,7 @@ function toggleRow(state, count) {
       @click="${() => {
         state.showApproved = !state.showApproved
         state.toggleFocused = true
+        state.ignoreToggleFocused = false
       }}"
     >
       ${() =>
@@ -279,16 +285,23 @@ function toggleRow(state, count) {
 
 // ignoreToggleRow is the bottom button that hides/shows ignored PR-comment
 // index items — a mirror of toggleRow above, but for a SEPARATE section
-// (state.showIgnored, not state.showApproved). Deliberately click-only: unlike
-// toggleRow it is NOT wired into the ↑/↓ keyboard cursor's final stop
-// (stepListSelection in home.mjs only walks blocks/toggleRow) — a deliberate
-// simplification, since this is a secondary, rarely-used toggle.
+// (state.showIgnored, not state.showApproved). Also a stop of the sidebar's
+// keyboard ↑/↓ loop, exactly like toggleRow: state.ignoreToggleFocused gives
+// it the same indigo highlight while the keyboard sits on it.
 function ignoreToggleRow(state, count) {
   return html`
     <button
       data-testid="toggle-ignored"
-      class="w-full border-t border-slate-100 dark:border-zinc-800/60 px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60"
-      @click="${() => (state.showIgnored = !state.showIgnored)}"
+      class="${() =>
+        'w-full border-t border-slate-100 dark:border-zinc-800/60 px-3 py-2 text-left text-xs font-medium ' +
+        (state.ignoreToggleFocused
+          ? 'bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/40 text-indigo-700 dark:text-indigo-300'
+          : 'text-slate-500 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
+      @click="${() => {
+        state.showIgnored = !state.showIgnored
+        state.ignoreToggleFocused = true
+        state.toggleFocused = false
+      }}"
     >
       ${() =>
         state.showIgnored
@@ -323,6 +336,18 @@ function approvalSummaryLine(state) {
   `
 }
 
+// rowFocused reports whether row i currently owns the sidebar's keyboard
+// highlight — not while a toggle row has it (state.toggleFocused/
+// ignoreToggleFocused). Deliberately independent of state.searchActive: a row
+// keeps its highlight while the search box also holds real DOM focus,
+// exactly like the existing "browse the filtered matches while still typing"
+// feature already did before the toggle-ignored/search loop existed (see
+// stepListSelection/searchStepSelection in home.mjs) — the search box gets
+// its own, separate ring for that.
+function rowFocused(state, i) {
+  return i === state.selected && !state.toggleFocused && !state.ignoreToggleFocused
+}
+
 function row(state, b, i) {
   const st = statusInfo(b.status)
   return html`
@@ -331,19 +356,17 @@ function row(state, b, i) {
       data-testid="block-row"
       class="${() =>
         'flex cursor-default items-center gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2 text-sm ' +
-        (i === state.selected && !state.toggleFocused
+        (rowFocused(state, i)
           ? 'bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/40'
           : 'hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       @click="${() => {
         state.selected = i
         state.toggleFocused = false
+        state.ignoreToggleFocused = false
       }}"
     >
       <span
-        class="${() =>
-          i === state.selected && !state.toggleFocused
-            ? 'text-indigo-500 dark:text-indigo-400'
-            : 'text-transparent'}"
+        class="${() => (rowFocused(state, i) ? 'text-indigo-500 dark:text-indigo-400' : 'text-transparent')}"
         >›</span
       >
       <span

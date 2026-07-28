@@ -300,9 +300,11 @@ the right of the index shows its thread instead of a diff.
   "PR-comments" heading above it, mirroring how `underlyingHeading` gets its
   own heading. `stepVisibleSelected` (`home.mjs`) skips a hidden-and-ignored
   row for `↑`/`↓`, same reasoning as it already does for a hidden approved
-  block. Deliberately **no** keyboard "final stop" for `ignoreToggleRow`
-  (unlike `toggleRow`'s `state.toggleFocused`) — click-only, a
-  simplification since this is a secondary, rarely-used toggle.
+  block. `ignoreToggleRow` **is** a stop of the sidebar's `↑`/`↓` loop, just
+  like `toggleRow` (`state.ignoreToggleFocused`, mirroring
+  `state.toggleFocused`) — see "The sidebar's `↑`/`↓` cursor forms one
+  circular loop" in `.claude/rules/keyboard-navigation.md` for the full
+  mechanism (both toggle rows, plus the search box, chained into one loop).
 - **Not part of the inline comment blocks** (see below) — those only ever
   show block-scoped comments (`kind === ''`) even before this change
   (`recomputeView`'s `!c.kind` filter); a comment-index item's thread lives

@@ -297,6 +297,13 @@ const state = reactive({
   // it — this is purely an extra, final stop in the ↑/↓ chain. Ephemeral, not
   // bound to the URL, like showApproved above.
   toggleFocused: false,
+  // ignoreToggleFocused — the same idea as toggleFocused above, but for the
+  // toggle-ignored button ("Toon N verborgen comments"): true once the
+  // keyboard cursor sits on THAT row instead of a block. Mutually exclusive
+  // with toggleFocused and with searchActive (see stepListSelection/
+  // searchStepSelection, which always clear the other stops on every
+  // transition). Ephemeral, not bound to the URL.
+  ignoreToggleFocused: false,
   // ignoredComments — { blockId: true } of PR-comment index items (kind:'comment',
   // see commentBlockItem) the reviewer explicitly ignored via the "Ignore" action
   // in prCommentCommandsFor. Hidden by default from the "PR-comments" section,
@@ -319,6 +326,14 @@ const state = reactive({
   // stealing focus. Reached by ← from the list, left by → / Enter / Escape.
   search: '',
   searchActive: false,
+  // searchLoopFocused — true only while the search box is a DELIBERATE stop
+  // of the sidebar's ↑/↓ loop (see stepListSelection/searchStepSelection),
+  // never for the box's real DOM focus alone: the box also ends up focused
+  // ambiently (a browser quirk — the sole text input gets focus on a fresh
+  // load, well before any navigation) and while the reviewer is simply
+  // typing a filter, neither of which is a "loop arrival". Set exclusively
+  // by activateSearch, cleared by exitSearch/setSearch.
+  searchLoopFocused: false,
   onSearch: setSearch,
   // showDescription — stop 1 of the left→right nav chain (see
   // keyboard-navigation.md): the PR-info/description column, hidden by default so
@@ -1287,10 +1302,23 @@ function stepVisibleSelected(dir) {
 // lastVisibleIndex is the mirror-image scan of stepVisibleSelected: the last
 // state.blocks index BlockList's renderList would actually render a row for
 // (same isIgnoredComment/isFullyApproved skip rules), or -1 if nothing is
-// visible. Used to wrap ArrowUp around from the topmost visible block to the
-// bottom of the list, instead of leaving the selection stuck at the top.
+// visible. Used as the ↑-from-a-toggle-row/search-box landing spot (see
+// stepListSelection/searchStepSelection below).
 function lastVisibleIndex() {
   for (let i = state.blocks.length - 1; i >= 0; i--) {
+    const b = state.blocks[i]
+    if (!state.showIgnored && isIgnoredComment(state, b)) continue
+    if (state.showApproved || !isFullyApproved(state, b)) return i
+  }
+  return -1
+}
+
+// firstVisibleIndex is the mirror image of lastVisibleIndex: the first
+// state.blocks index BlockList's renderList would actually render a row for,
+// or -1 if nothing is visible. Used as the ↓-from-the-search-box landing spot
+// (searchStepSelection below) — "eerste blok" in the sidebar's ↑/↓ loop.
+function firstVisibleIndex() {
+  for (let i = 0; i < state.blocks.length; i++) {
     const b = state.blocks[i]
     if (!state.showIgnored && isIgnoredComment(state, b)) continue
     if (state.showApproved || !isFullyApproved(state, b)) return i
@@ -1305,22 +1333,122 @@ function toggleRowVisible() {
   return state.blocks.some((b) => isFullyApproved(state, b))
 }
 
-// stepListSelection is the list-mode ↑/↓ step (dir=+1 down, -1 up), extending
-// stepVisibleSelected with one extra, final stop: the toggle-approved button
-// at the very bottom of the sidebar. Stepping ↓ past the last visible block
-// used to just stay put (stepVisibleSelected's "nothing further" behaviour) —
-// now, if the button is actually rendered, the keyboard cursor moves onto it
-// instead (state.toggleFocused), which BlockList highlights with the same
-// indigo ring as a selected row. ↑ from there simply drops the flag and lands
-// back on the (unchanged) last block — state.selected never moved.
-// ↑ from the TOPMOST visible block wraps around to the bottom of the list —
-// the last visible block (lastVisibleIndex), NOT the toggle button — instead
-// of leaving the selection stuck at the top: `stepVisibleSelected(-1)`
-// returning the unchanged index is exactly the "nothing further up" signal.
-// Deliberately asymmetric with ↓ (which does stop on the toggle button as an
-// extra stop): wrapping is about the block list itself, the toggle button is
-// a separate affordance below it.
+// ignoreToggleRowVisible mirrors toggleRowVisible above, for the toggle-ignored
+// button ("Toon N verborgen comments") — exists once at least one PR-comment
+// index item has been explicitly ignored (see isIgnoredComment), regardless of
+// whether state.showIgnored currently reveals or folds them away.
+function ignoreToggleRowVisible() {
+  return state.blocks.some((b) => isIgnoredComment(state, b))
+}
+
+// stepListSelection is the list-mode ↑/↓ step (dir=+1 down, -1 up) while the
+// keyboard cursor sits on an ordinary block or one of the two toggle rows —
+// NOT already inside the search box itself (see searchStepSelection for that
+// case). It closes the sidebar into one circular loop:
+//   block0 → … → blockN → toggle-approved? → toggle-ignored? → search → block0
+// (↑ walks the exact same loop backwards). The two toggle rows are each only a
+// stop when actually rendered (toggleRowVisible/ignoreToggleRowVisible); the
+// search box is always the loop's other end, reached via activateSearch()
+// (which also drives real DOM focus, so BlockList's existing searchActive
+// ring lights up) — stepping further from search itself is handled by
+// searchStepSelection once state.searchActive is true. See
+// keyboard-navigation.md.
 function stepListSelection(dir) {
+  if (dir > 0) {
+    if (state.ignoreToggleFocused) {
+      // Already the bottom-most block-list stop — continue into the search box.
+      state.ignoreToggleFocused = false
+      activateSearch()
+      return
+    }
+    if (state.toggleFocused) {
+      state.toggleFocused = false
+      if (ignoreToggleRowVisible()) state.ignoreToggleFocused = true
+      else activateSearch()
+      return
+    }
+    const next = stepVisibleSelected(1)
+    if (next === state.selected) {
+      if (toggleRowVisible()) state.toggleFocused = true
+      else if (ignoreToggleRowVisible()) state.ignoreToggleFocused = true
+      else activateSearch()
+      return
+    }
+    state.selected = next
+    return
+  }
+  if (state.ignoreToggleFocused) {
+    state.ignoreToggleFocused = false
+    if (toggleRowVisible()) state.toggleFocused = true
+    // No toggle-approved row: state.selected already holds the last visible
+    // block (unchanged all the way through the toggle rows) — nothing to do.
+    return
+  }
+  if (state.toggleFocused) {
+    state.toggleFocused = false
+    return
+  }
+  const prev = stepVisibleSelected(-1)
+  if (prev === state.selected) {
+    // Topmost visible block already reached — continue up into the search
+    // box (its permanent up-neighbour in the loop above).
+    activateSearch()
+    return
+  }
+  state.selected = prev
+}
+
+// searchStepSelection is the ↑/↓ step while the search box already holds real
+// DOM focus (state.searchActive). Two distinct behaviours, gated on
+// state.searchLoopFocused — NOT on whether state.search is empty, because the
+// search box also ends up with real DOM focus ambiently (a browser quirk:
+// the sole text input on the page gets initial focus on a fresh load/reload,
+// well before the reviewer has done anything — see the "leave the
+// auto-focused search box" Escape presses sprinkled through the test suite).
+// Gating on an empty query would make that ambient, unintentional focus
+// indistinguishable from a deliberate arrival via the loop below, and every
+// plain ArrowDown right after load would misfire straight back to the first
+// block instead of just walking the list.
+// - state.searchLoopFocused (only ever set by stepListSelection's own
+//   loop-boundary transitions below, and by nothing else — see
+//   activateSearch/exitSearch): the box is purely the loop's other end. ↓
+//   exits onto the first visible block, ↑ exits onto the toggle-ignored row,
+//   else the toggle-approved row, else the last visible block — whichever of
+//   those is the search box's actual up-neighbour in the loop right now.
+// - Otherwise (ambient focus from load/reload, or the reviewer clicked into
+//   the box and is actively typing a filter): keep the EXISTING
+//   behaviour — walk the (possibly filtered) list while focus stays in the
+//   box, with its own wrap at either end. Deliberately unchanged from before
+//   this loop existed, and deliberately only ever reaches toggle-approved
+//   (never toggle-ignored) — this narrow, already-documented "browse while
+//   typing" feature keeps its old, simpler shape; the new toggle-ignored/
+//   search loop below is about deliberate keyboard navigation only.
+function searchStepSelection(dir) {
+  if (state.searchLoopFocused) {
+    exitSearch()
+    if (dir > 0) {
+      const first = firstVisibleIndex()
+      if (first >= 0) state.selected = first
+      return
+    }
+    // Going up from search always lands on the last visible block underneath
+    // whichever stop is next (a toggle row, or the block itself) — unlike the
+    // down-from-toggle-rows case, state.selected can't be trusted to already
+    // hold that index here: the reviewer may have gotten to this exact spot
+    // via a full ↓ wrap-around (which resets state.selected to the FIRST
+    // visible block), so it must be set explicitly on every branch below.
+    const last = lastVisibleIndex()
+    if (last >= 0) state.selected = last
+    if (ignoreToggleRowVisible()) {
+      state.ignoreToggleFocused = true
+      return
+    }
+    if (toggleRowVisible()) {
+      state.toggleFocused = true
+      return
+    }
+    return
+  }
   if (dir > 0) {
     if (state.toggleFocused) return // already the bottom-most stop
     const next = stepVisibleSelected(1)
@@ -1425,6 +1553,11 @@ function setSearch(q) {
   // Typing is a fresh navigation reset — never leave the keyboard cursor
   // parked on the toggle-approved row from a previous, now-irrelevant walk.
   state.toggleFocused = false
+  // Typing is also a deliberate switch to the "browse while typing" feature
+  // (see searchStepSelection): it must win over an earlier, still-pending
+  // loop-stop arrival, so the very next ArrowDown/ArrowUp walks the filtered
+  // results instead of exiting the box.
+  state.searchLoopFocused = false
   // The top match can be a hidden (fully-approved) block — land on the first
   // visible one instead so a row always highlights (see clampSelectedToVisible;
   // deliberately a clamp, not a reveal — see the comments above).
@@ -1432,18 +1565,38 @@ function setSearch(q) {
   scrollSelectedIntoView()
 }
 
-// activateSearch / exitSearch move the keyboard in and out of the search box.
-// They flip state.searchActive AND drive real DOM focus (the box's @focus/@blur
-// mirror the flag back, so a mouse click stays in sync). Reached by ← from the
-// list; left by → / Enter (step into the diff) or Escape (back to the list).
-function activateSearch() {
+// focusSearchBox is the low-level primitive: flip state.searchActive AND
+// drive real DOM focus (the box's @focus/@blur mirror the flag back, so a
+// mouse click stays in sync) — nothing more. Used by the load-time
+// convenience focus below (a diff-mode deep link never calls this, see its
+// own guard) and by activateSearch, which additionally marks the arrival as
+// a DELIBERATE loop stop.
+function focusSearchBox() {
   state.searchActive = true
   const el = document.getElementById('block-search')
   if (el) el.focus()
 }
 
+// activateSearch moves the keyboard into the search box AS A DELIBERATE LOOP
+// STOP (state.searchLoopFocused — see searchStepSelection for why this is a
+// separate flag from state.searchActive itself: the box also ends up focused
+// for reasons that are NOT a loop arrival, namely the load-time convenience
+// focus below and a plain click to start typing — searchLoopFocused stays
+// false for both of those). Reached by stepListSelection (↓ past the last
+// block-list stop, or ↑ from the topmost visible block — see the sidebar's
+// ↑/↓ loop there). Left again via searchStepSelection (↓/↑ while
+// state.searchLoopFocused is true), or by → / Enter (step into the diff) or
+// Escape (back to the list) — those last two, and typing (setSearch), always
+// clear searchLoopFocused too via exitSearch, regardless of how the box got
+// focus.
+function activateSearch() {
+  focusSearchBox()
+  state.searchLoopFocused = true
+}
+
 function exitSearch() {
   state.searchActive = false
+  state.searchLoopFocused = false
   const el = document.getElementById('block-search')
   if (el) el.blur()
 }
@@ -2837,7 +2990,11 @@ window.addEventListener('resize', refreshHints)
 function scrollSelectedIntoView() {
   requestAnimationFrame(() => {
     const el = document.querySelector(
-      state.toggleFocused ? '[data-testid="toggle-approved"]' : `[data-idx="${state.selected}"]`
+      state.ignoreToggleFocused
+        ? '[data-testid="toggle-ignored"]'
+        : state.toggleFocused
+          ? '[data-testid="toggle-approved"]'
+          : `[data-idx="${state.selected}"]`
     )
     if (el) el.scrollIntoView({ block: 'nearest' })
   })
@@ -5327,21 +5484,26 @@ function onKeydown(e) {
       e.preventDefault()
       exitSearch()
       state.toggleFocused = false
+      state.ignoreToggleFocused = false
       state.showDescription = true
       return
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      stepListSelection(1)
+      searchStepSelection(1)
       scrollSelectedIntoView()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      stepListSelection(-1)
+      searchStepSelection(-1)
       scrollSelectedIntoView()
     } else if (e.key === 'ArrowRight' || e.key === 'Enter') {
       e.preventDefault()
       if (state.toggleFocused) {
         state.showApproved = !state.showApproved
+        return
+      }
+      if (state.ignoreToggleFocused) {
+        state.showIgnored = !state.showIgnored
         return
       }
       exitSearch()
@@ -5471,6 +5633,13 @@ function onKeydown(e) {
     return
   }
 
+  // Mirror of the toggle-approved branch above, for the toggle-ignored row.
+  if (e.key === 'Enter' && state.ignoreToggleFocused) {
+    e.preventDefault()
+    state.showIgnored = !state.showIgnored
+    return
+  }
+
   // Enter on a selected comment-index item (kind:'comment', synthesized from a
   // PR-wide comment into the sidebar — see recomputeLeftList/
   // commentBlockItem) opens its own small action menu ("Beantwoorden" /
@@ -5499,14 +5668,18 @@ function onKeydown(e) {
   if (state.blocks.length === 0) return
 
   // Same trailing-row special case as Enter above: none of these diff-only
-  // shortcuts (zoom, view-toggle, step into the diff) mean anything while the
-  // toggle-approved row owns the keyboard — state.selected still points at
+  // shortcuts (zoom, view-toggle, step into the diff) mean anything while
+  // either toggle row owns the keyboard — state.selected still points at
   // whatever block it did before ↓ walked onto the button, and letting them
   // silently act on it would read as broken ("I'm on the toggle button but
   // ArrowRight opened a diff"). A held Cmd/Ctrl is excluded here too (see the
   // isModifiedKey note below) so e.g. Cmd+A still selects text natively even
-  // while the toggle row happens to have keyboard focus.
-  if (state.toggleFocused && !isModifiedKey(e) && ['f', 'd', 's', 'a', 'ArrowRight'].includes(e.key)) {
+  // while a toggle row happens to have keyboard focus.
+  if (
+    (state.toggleFocused || state.ignoreToggleFocused) &&
+    !isModifiedKey(e) &&
+    ['f', 'd', 's', 'a', 'ArrowRight'].includes(e.key)
+  ) {
     e.preventDefault()
     return
   }
@@ -5660,6 +5833,7 @@ function onKeydown(e) {
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault()
     state.toggleFocused = false
+    state.ignoreToggleFocused = false
     state.showDescription = true // step left out of the list into stop 1 (the description)
   }
 }
@@ -6703,7 +6877,14 @@ Footer(state)(app)
 // true, an invalid combination the layout never expects (see the
 // state.mode==='diff' ? 'left-6' : ... ternary above), which is what made the
 // description render behind the diff card instead of beside it.
-if (state.mode === 'list') requestAnimationFrame(activateSearch)
+// Plain focus, deliberately NOT activateSearch(): this is a load-time
+// convenience (let the reviewer start typing a filter right away, no click
+// needed), not an arrival at the sidebar's ↑/↓ loop stop — see
+// focusSearchBox/activateSearch above. Using activateSearch here would mark
+// state.searchLoopFocused true from the very first paint, so a completely
+// ordinary first ArrowDown/ArrowUp would misfire straight into the loop-exit
+// behaviour instead of simply walking the list.
+if (state.mode === 'list') requestAnimationFrame(focusSearchBox)
 
 // Kick off the initial load.
 loadBlocks()
