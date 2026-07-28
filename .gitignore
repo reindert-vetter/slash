@@ -29,6 +29,8 @@ go.work.sum
 
 # PR Review Tree: local data, worktrees and test artifacts
 /slash
+/slash-bin
+.claude/scripts/server.log
 data/*.db
 data/*.db-*
 data/worktrees/
