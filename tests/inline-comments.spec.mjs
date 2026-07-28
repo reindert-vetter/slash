@@ -1,12 +1,16 @@
 import { test, expect } from './_fixtures.mjs'
 
-// The comment index is scoped to the selected block (and, drilling into the diff,
-// to the unit under the selection: call ⊂ line ⊂ group ⊂ block). A diff row that
-// carries a comment shows a 💬 marker. See RelatedPanel (visibleComments /
-// commentUnder / commentRowSet + the state→cs.scope watch in home.mjs) and
-// Block.mjs (paneHTML marker). The selected block is restored from ?sel= on load
-// (bindUrlState), so the scoping is exercised deterministically via a deep link.
-test.describe('PR Review Tree — comment index scoping', () => {
+// Block-scoped comments (task_code_comment workflow) render as their own
+// inline blocks, directly above the Onderliggende-code card — not a browsable,
+// unscoped index. They are scoped to the selected block (and, in the diff, to
+// the unit under the selection: call ⊂ line ⊂ group ⊂ block — see
+// RelatedPanel's visibleComments/commentUnder/commentRowSet + the
+// state→cs.scope watch in home.mjs). A diff row that carries a comment shows
+// a 💬 marker (Block.mjs's paneHTML). Per conversation, exactly one card:
+// several threads on the same unit each get their own, compact card, and only
+// the one currently focused/selected expands to its full thread. See
+// detail-layout.md ("Inline comment blocks").
+test.describe('PR Review Tree — inline comment blocks', () => {
   async function ready(page) {
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
   }
@@ -27,7 +31,7 @@ test.describe('PR Review Tree — comment index scoping', () => {
     await expect(selectedCard(page).locator('h2').first()).toHaveText(label)
   }
 
-  test('a comment shows only on its own block, with a 💬 on its row', async ({ page }) => {
+  test('a comment shows only as an inline block on its own block, with a 💬 on its row', async ({ page }) => {
     // Discover a block other than the first (so this spec never pollutes the first
     // block other 12903 specs select by default) and remember its file:line ref
     // (?sel= carries the block's `file:line`, not its index — see CLAUDE.md).
@@ -57,26 +61,18 @@ test.describe('PR Review Tree — comment index scoping', () => {
     })
     expect(res.ok()).toBeTruthy()
 
-    // The comment index lives in the fixed comments/taken sidebar, toggled with
-    // Cmd+ArrowRight (see detail-layout.md) — it renders nothing (just the collapsed hint
-    // rail) until opened.
-    const item = page.getByTestId('comments-sidebar').getByTestId('comment-item').filter({ hasText: 'commentaar op mijn blok' })
+    const item = page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: 'commentaar op mijn blok' })
 
-    // Deep-link to the default (first) block — the comment is on another block, so
-    // the block-scoped index does not show it.
+    // Deep-link to the default (first) block — the comment is on another
+    // block, so it never shows as an inline block there.
     await page.goto('/pr/12903')
     await waitBlock(page, first.label)
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
-    await page.keyboard.press('Meta+ArrowRight')
-    await expect(page.getByTestId('comments-sidebar')).toBeVisible()
     await expect(item).toHaveCount(0)
 
-    // Deep-link with its block selected — the comment shows, and its diff row
-    // carries a 💬 marker.
+    // Deep-link with its own block selected — the comment shows as an inline
+    // card, and its diff row carries a 💬 marker.
     await page.goto('/pr/12903?sel=' + encodeURIComponent(mine.fileLine))
     await waitBlock(page, mine.label)
-    await page.keyboard.press('Escape')
-    await page.keyboard.press('Meta+ArrowRight')
     await expect(item).toHaveCount(1)
     await expect(page.getByTestId('block-column').locator('[data-comment]').first()).toBeVisible()
   })
@@ -116,5 +112,43 @@ test.describe('PR Review Tree — comment index scoping', () => {
 
     // syncComments polls cs.list; the marker disappears reactively once it refetches.
     await expect(marker).toBeHidden({ timeout: 15000 })
+  })
+
+  test('multiple conversations on the same unit each get their own card; only the focused one expands', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await ready(page)
+    const first = await ident(page)
+
+    // Two separate conversations, same block, same (whole-block) anchor.
+    const bodies = ['eerste conversatie', 'tweede conversatie']
+    for (const body of bodies) {
+      const res = await page.request.post('/api/workflows/task_code_comment', {
+        data: { pr: 12903, file: first.file, line: 1, author: 'reviewer', body, label: first.label, rowStart: -1, rowEnd: -1 },
+      })
+      expect(res.ok()).toBeTruthy()
+    }
+
+    await page.goto('/pr/12903?sel=' + encodeURIComponent(first.fileLine))
+    await waitBlock(page, first.label)
+
+    const items = page.getByTestId('inline-comments').getByTestId('comment-item')
+    await expect(items).toHaveCount(2)
+    // Neither is focused yet — both render compact.
+    await expect(items.nth(0)).toHaveAttribute('data-expanded', 'false')
+    await expect(items.nth(1)).toHaveAttribute('data-expanded', 'false')
+
+    // Clicking the second expands only that one; the first stays compact.
+    await items.nth(1).click()
+    await expect(items.nth(0)).toHaveAttribute('data-expanded', 'false')
+    await expect(items.nth(1)).toHaveAttribute('data-expanded', 'true')
+    await expect(items.nth(1).getByTestId('comment-thread')).toContainText('tweede conversatie')
+
+    // Clicking the first expands it instead and collapses the second again.
+    await items.nth(0).click()
+    await expect(items.nth(0)).toHaveAttribute('data-expanded', 'true')
+    await expect(items.nth(1)).toHaveAttribute('data-expanded', 'false')
+    await expect(items.nth(0).getByTestId('comment-thread')).toContainText('eerste conversatie')
   })
 })

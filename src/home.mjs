@@ -22,14 +22,15 @@ import Block, {
   translationRowUnits,
 } from './Block.mjs'
 import RelatedPanel, {
-  CommentsSidebar,
+  InlineComments,
+  TasksPanel,
+  hasVisibleComments,
+  enterCommentsHead,
   startComment,
   createComment,
   placeComment,
   isComposeOpen,
   composeHasText,
-  isNewFocused,
-  openComposer,
   relatedActive,
   enterRelated,
   leaveRelated,
@@ -47,11 +48,6 @@ import RelatedPanel, {
   focusedRelatedChild,
   focusedChipChain,
   selectComment,
-  isTaskFocused,
-  focusedTaskRun,
-  taskRuns,
-  toggleSidebar,
-  sidebarOpen,
   prWideComments,
   commentDetailCard,
   startPrCommentReply,
@@ -5365,28 +5361,12 @@ function onKeydown(e) {
     return
   }
 
-  // Cmd+ArrowRight toggles the comments/taken sidebar (CommentsSidebar, see
-  // detail-layout.md) — globally, in both list and diff mode, and regardless
-  // of whether the diff, the inline Onderliggende-code card, or the sidebar
-  // itself currently owns the keyboard (toggleSidebar branches on that).
-  // Handled before the relatedActive() branch below (which would otherwise eat
-  // any key that isn't an arrow/Enter while the sidebar owns the keyboard) so
-  // it also closes the sidebar from inside it, and before the plain ArrowRight
-  // handling further down so a bare → is untouched (metaKey distinguishes the
-  // two). Same isEditableFocused guard as `a`: typing in the composer/reply
-  // field must not toggle it, and preventDefault suppresses the browser/OS
-  // default (history-forward / cursor-to-end) for Cmd+→.
-  if (e.metaKey && e.key === 'ArrowRight' && !isEditableFocused()) {
-    e.preventDefault()
-    toggleSidebar()
-    return
-  }
-
   // Once the reviewer has stepped into either the inline Onderliggende-code
-  // card (→ from the diff, cs.focus === 'code') or the comments/taken sidebar
-  // (`g`, cs.focus one of 'new'/'comment'/'thread'/'task') it owns the arrows:
-  // ↑/↓/←/→ walk it (see handleRelatedKey in RelatedPanel). Handled before
-  // Enter/f/d/s so those stay suspended while it's active — but typed
+  // card ('code') or an inline comment conversation ('new'/'comment'/
+  // 'thread', reached by → from the diff only when the selected unit has
+  // comments — see hasVisibleComments/enterCommentsHead below) it owns the
+  // arrows: ↑/↓/←/→ walk it (see handleRelatedKey in RelatedPanel). Handled
+  // before Enter/f/d/s so those stay suspended while it's active — but typed
   // characters (letters, Enter) are left alone so they flow into the focused
   // reply field, like the menu.
   if (relatedActive()) {
@@ -5394,8 +5374,8 @@ function onKeydown(e) {
       ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key) &&
       // ArrowLeft/ArrowRight with the caret mid-text in the composer/reply
       // textarea (cs.focus one of 'new'/'comment'/'thread') must move/
-      // word-jump the caret, not exit the sidebar or (for ArrowRight on a
-      // comment row) jump into the thread — only hijack the key when the
+      // word-jump the caret, not exit the conversation or (for ArrowRight on
+      // a comment card) jump into the thread — only hijack the key when the
       // caret has nowhere left to go on that side (empty/at the start resp.
       // at the end, e.g. a freshly opened composer — that keeps its
       // long-standing nav meaning).
@@ -5403,9 +5383,7 @@ function onKeydown(e) {
       !(e.key === 'ArrowRight' && editableCaretCanMoveRight())
     ) {
       e.preventDefault()
-      // taskRuns(state).length clamps cs.taskSel while the Taken stop owns
-      // the keyboard — see handleRelatedKey/taskRuns in RelatedPanel.mjs.
-      handleRelatedKey(e.key, taskRuns(state).length)
+      handleRelatedKey(e.key)
       // Exiting the panel (← / Escape from the code card's first block) just
       // hands the keyboard back to the diff of whichever column is currently
       // focused (handleRelatedKey's exitRelated already did that) — it does
@@ -5420,18 +5398,7 @@ function onKeydown(e) {
       if (!relatedActive()) scrollFocusIntoView()
       return
     }
-    // Enter on the highlighted "+ Comment op deze regel" row opens the
-    // composer (a fresh `g`-open only highlights the row — see enterComments
-    // in RelatedPanel.mjs — so a 2nd `g` can toggle the sidebar shut right
-    // away instead of typing a literal "g" into an already-focused textarea).
-    // Already-open composer is left alone (isComposeOpen guards against
-    // re-triggering while typing).
-    if (e.key === 'Enter' && isNewFocused() && !isComposeOpen()) {
-      e.preventDefault()
-      openComposer()
-      return
-    }
-    // Enter on a focused comment row (reply field empty — see commentReplyEmpty)
+    // Enter on a focused comment card (reply field empty — see commentReplyEmpty)
     // opens the comment-scoped menu (delete, for now) instead of falling through
     // to the reply field. A non-empty reply field is left alone so "type a quick
     // reply, hit Enter" (the reply input's own keydown handler) still works.
@@ -5457,15 +5424,6 @@ function onKeydown(e) {
         const child = focusedRelatedChild()
         if (child) drillIntoChild(child)
       }
-    }
-    // Enter on the Taken stop (comments/taken sidebar) opens the focused run the
-    // same way clicking it does (openTask) — only meaningful for a
-    // task_code_comment run with a resolved comment; a purely informational run
-    // is a silent no-op there too.
-    if (e.key === 'Enter' && isTaskFocused()) {
-      e.preventDefault()
-      const run = focusedTaskRun(taskRuns(state))
-      if (run) openTask(run)
     }
     return
   }
@@ -5651,11 +5609,15 @@ function onKeydown(e) {
       }
     } else if (e.key === 'ArrowRight') {
       e.preventDefault()
-      // Stepping into the Onderliggende-code panel leaves this column's diff —
-      // clear any active line-range selection, mirroring every other
-      // navigation path that supersedes one (see clearRangeAnchor).
+      // Stepping right leaves this column's diff — clear any active
+      // line-range selection, mirroring every other navigation path that
+      // supersedes one (see clearRangeAnchor). Lands on the first inline
+      // comment conversation of the selected unit if there is one (see
+      // hasVisibleComments/enterCommentsHead in RelatedPanel.mjs); otherwise
+      // it goes straight to the Onderliggende-code panel, exactly as before.
       clearRangeAnchor()
-      enterRelated() // step into the right-hand Related panel of the focused column
+      if (hasVisibleComments()) enterCommentsHead()
+      else enterRelated()
     }
     return
   }
@@ -5903,13 +5865,13 @@ function menuAnchor() {
   if (ms.mode === 'compose') {
     return (
       document.querySelector('[data-testid="comment-compose"]') ||
-      document.querySelector('[data-testid="comments-panel"]')
+      document.querySelector('[data-testid="inline-comments"]')
     )
   }
   if (ms.mode === 'comment') {
     return (
       document.querySelectorAll('[data-testid="comment-item"]')[commentSelIndex()] ||
-      document.querySelector('[data-testid="comments-panel"]')
+      document.querySelector('[data-testid="inline-comments"]')
     )
   }
   // The comment-index-item menu ('prComment') anchors on its own detail card
@@ -5962,11 +5924,20 @@ function menuAnchor() {
 // reviewing. Falls back to the OLD pane (a removed block has no new pane),
 // then the whole block column.
 function menuRegion() {
-  // Both comment-scoped menus sit over the comment thread pane.
-  if (ms.mode === 'comment' || ms.mode === 'compose') {
+  // The comment-kind menu ('compose') sits over the composer itself; the
+  // comment-scoped menu ('comment') sits over the expanded thread pane.
+  // Both fall back to the whole inline-comments block if their own element
+  // isn't there yet (e.g. still mid-transition).
+  if (ms.mode === 'compose') {
+    return (
+      document.querySelector('[data-testid="comment-composer"]') ||
+      document.querySelector('[data-testid="inline-comments"]')
+    )
+  }
+  if (ms.mode === 'comment') {
     return (
       document.querySelector('[data-testid="comment-thread"]') ||
-      document.querySelector('[data-testid="comments-panel"]')
+      document.querySelector('[data-testid="inline-comments"]')
     )
   }
   if (ms.mode === 'prComment') {
@@ -6043,19 +6014,13 @@ function menuOverlay() {
 }
 
 // MenuHost mounts the command-palette overlay at the top level (sibling of
-// PrInfoPanel/BlockList/DetailPanel/CommentsSidebar), not nested inside
-// <main>. <main> is itself `position:fixed` with an explicit z-index (z-10),
-// which makes it a stacking-context root: any `fixed`/z-indexed descendant
-// (the overlay was z-40/z-50) only stacks *within* <main>'s own subtree —
-// externally the whole thing is capped at <main>'s z-10. That's lower than
-// CommentsSidebar's z-20 (see below), so with the overlay still nested inside
-// <main> the comments/taken sidebar rendered *on top of* an open command
-// menu whenever it overlapped it (the compose-mode menu anchors on the
-// composer, which now lives in that sidebar) — clicks meant for a command row
-// landed on a workflow row underneath instead. Mounting the overlay as a
-// separate top-level element lets its own z-40/z-50 compete directly at the
-// root stacking context, where it correctly wins over both <main> and the
-// sidebar.
+// PrInfoPanel/BlockList/DetailPanel), not nested inside <main>. <main> is
+// itself `position:fixed` with an explicit z-index (z-10), which makes it a
+// stacking-context root: any `fixed`/z-indexed descendant (the overlay was
+// z-40/z-50) only stacks *within* <main>'s own subtree — externally the whole
+// thing is capped at <main>'s z-10. Mounting the overlay as a separate
+// top-level element lets its own z-40/z-50 compete directly at the root
+// stacking context instead.
 function MenuHost() {
   return html` <div>${() => (menu.open ? menuOverlay().key('command-overlay') : '')}</div> `
 }
@@ -6131,10 +6096,12 @@ function prInfoCard(state) {
     <div
       class="${() =>
         'flex min-h-0 flex-col gap-3 overflow-auto rounded-2xl border bg-white dark:bg-zinc-900 p-5 shadow-sm ' +
-        // The pr-info-column now holds only this one card (PR-wide comments
-        // no longer have their own card here — they're navigable "Start"
-        // sidebar items instead, see recomputeLeftList/commentBlockItem and
-        // detail-layout.md), so it simply takes the column's full height.
+        // PR-wide comments no longer have their own card here — they're
+        // navigable "Start" sidebar items instead, see recomputeLeftList/
+        // commentBlockItem and detail-layout.md. The Tasks block (TasksPanel,
+        // see PrInfoPanel below) is a shrink-0 sibling stacked below this
+        // card in the same pr-info-column, so this card takes whatever's
+        // left of the column's height instead of always the full height.
         'flex-1 ' +
         // Light-blue border while the keyboard drives stop 1 (this panel is only
         // ever mounted while showDescription is true, but read it here anyway so
@@ -6269,6 +6236,11 @@ function prInfoCard(state) {
 // links" note in detail-layout.md for the full rationale/measurements.
 // Width is 1.5x the original 26rem (w-[39rem]) — the reviewer wanted more
 // room to read the PR title/summary/description/Jira box without truncation.
+// TasksPanel (RelatedPanel.mjs) used to live in a fixed right-hand sidebar
+// (CommentsSidebar, toggled with Cmd+→); it now sits here instead, stacked
+// below prInfoCard in the same PR-description column (stop 1 of the nav
+// chain) — only shows runs that are genuinely in progress or that have been
+// sitting idle for a while (see visibleWorkflowRuns' 5-minute filter).
 function PrInfoPanel(state) {
   return html`
     <div>
@@ -6278,7 +6250,7 @@ function PrInfoPanel(state) {
               class="fixed bottom-6 left-6 top-6 z-10 flex min-h-0 w-[39rem] flex-col gap-3"
               data-testid="pr-info-column"
             >
-              ${prInfoCard(state)}
+              ${prInfoCard(state)} ${TasksPanel(state, openTask)}
             </div>`.key('pr-info-column')
           : ''}
     </div>
@@ -6299,15 +6271,10 @@ function DetailPanel(state) {
         // while it also shows an AI unit description — so the columns never
         // slide in behind it, but don't leave dead space once it's gone either.
         (!state.footerVisible ? 'bottom-6 ' : state.footerExplain ? 'bottom-[140px] ' : 'bottom-[90px] ') +
-        // Right margin clears the comments/taken sidebar (RelatedPanel.mjs),
-        // which is a separate position:fixed overlay with a higher z-index —
-        // without this, <main>'s last column (Onderliggende code, or the
-        // rightmost drilled column) scrolls in behind it. Collapsed it's a
-        // 3rem hint rail flush against the edge (right-0, w-12); open it's
-        // right-6 (1.5rem) + w-[36rem], so its left edge sits 37.5rem in. Both
-        // get the same 1.5rem breathing-room gap used elsewhere for this kind
-        // of panel-to-panel spacing (see left-[69.5rem] below).
-        (sidebarOpen() ? 'right-[39rem] ' : 'right-[4.5rem] ') +
+        // No competing fixed overlay on the right anymore (comments moved
+        // inline, Tasks moved under the PR-description column) — a plain
+        // 1.5rem margin, matching every other panel edge.
+        'right-6 ' +
         (state.mode === 'diff'
           ? 'left-6'
           : // showDescription (list-mode only) pushes PrInfoPanel to left-6 and
@@ -6694,6 +6661,10 @@ function DetailPanel(state) {
         })
       }}
       ${() =>
+        InlineComments(state, commentTarget, () => {
+          if (composeHasText()) openMenu('compose')
+        }).key('inline-comments')}
+      ${() =>
         RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
     </main>
   `
@@ -6701,22 +6672,13 @@ function DetailPanel(state) {
 
 // Mount the sidebar and the detail panel into #app. PrInfoPanel is mounted
 // first so it stacks visually under the pr-index while the latter slides
-// right over it during the ~200ms transition (see BlockList.mjs). CommentsSidebar
-// is its own fixed right-hand overlay (see detail-layout.md) — mounted
-// alongside, not nested inside DetailPanel's <main>, since it's reached via
-// `g` rather than <main>'s column flow.
+// right over it during the ~200ms transition (see BlockList.mjs). Comments
+// and Tasks are no longer separate mounts — comments render inline inside
+// DetailPanel's <main>, Tasks inside PrInfoPanel's own column.
 const app = document.getElementById('app')
 PrInfoPanel(state)(app)
 BlockList(state)(app)
 DetailPanel(state)(app)
-CommentsSidebar(
-  state,
-  commentTarget,
-  () => {
-    if (composeHasText()) openMenu('compose')
-  },
-  openTask
-)(app)
 MenuHost()(app)
 // The call-arrow overlay: one static fixed <svg> drawn imperatively (see
 // src/callArrows.mjs). Top-level like MenuHost — inside <main> its z-index

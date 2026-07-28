@@ -135,9 +135,10 @@ test.describe('TRANSLATION block — per-key navigation/approve/comment', () => 
     await page.keyboard.press('ArrowDown') // move onto the added key 'extra'
     await expect(page.getByTestId('translation-row').nth(1)).toHaveAttribute('data-active', '1')
 
-    await page.keyboard.press('Meta+ArrowRight') // open the comments sidebar
-    await expect(page.getByTestId('comments-sidebar')).toBeVisible()
-    await page.keyboard.press('Enter') // focus the composer
+    // Enter opens the block command palette; "Comment op deze regel" starts
+    // the inline composer and focuses it.
+    await page.keyboard.press('Enter')
+    await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeFocused()
     await composer.fill('deze vertaling klopt niet')

@@ -147,20 +147,19 @@ test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
       })
       .toBe(true)
 
-    // Step into the panel, then Cmd+ArrowRight ↓ : Cmd+ArrowRight opens the comments/taken sidebar
-    // (lands on the new-comment button) and ↓ steps onto the seeded comment.
+    // Step into the diff: → now lands directly on the seeded comment
+    // conversation (hasVisibleComments/enterCommentsHead, RelatedPanel.mjs) —
+    // no sidebar to open first.
     await intoRelated(page)
-    await page.keyboard.press('Meta+ArrowRight')
-    await page.keyboard.press('ArrowDown')
-    await expect(page.getByTestId('comment-item').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('comment-item').first()).toHaveAttribute('data-expanded', 'true')
     await expect.poll(() => new URL(page.url()).searchParams.get('rel.foc')).toBe('comment')
 
     // Reload: the comment focus must come back once loadComments re-populates the
-    // list (applyRelRestore's comments trigger) — the row is highlighted and the
+    // list (applyRelRestore's comments trigger) — the card stays expanded and the
     // reply field regains focus.
     await page.reload()
     await page.waitForLoadState('networkidle')
-    await expect(page.getByTestId('comment-item').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('comment-item').first()).toHaveAttribute('data-expanded', 'true')
     await expect(page.getByTestId('reaction-compose')).toBeFocused()
     expect(new URL(page.url()).searchParams.get('rel.foc')).toBe('comment')
   })

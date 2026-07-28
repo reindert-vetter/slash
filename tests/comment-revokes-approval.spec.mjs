@@ -77,8 +77,7 @@ async function approveCurrentUnit(page) {
 }
 
 async function placeComment(page, text) {
-  await page.keyboard.press('Meta+ArrowRight') // open sidebar, highlight composer row
-  await page.keyboard.press('Enter') // focus the composer
+  await page.getByTestId('new-comment').click() // open + focus the composer
   const composer = page.getByTestId('comment-compose')
   await expect(composer).toBeFocused()
   await composer.fill(text)

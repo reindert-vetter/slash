@@ -20,8 +20,6 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await page.keyboard.press('ArrowRight') // list -> diff
 
-    await page.keyboard.press('Meta+ArrowRight') // open the comments/taken sidebar
-    await expect(page.getByTestId('comments-sidebar')).toBeVisible()
     await page.getByTestId('new-comment').click()
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeFocused()
@@ -51,7 +49,6 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
 
     // Neither arrow-right press touched the composer's content or closed it.
     await expect(composer).toHaveValue('hello world')
-    await expect(page.getByTestId('comments-sidebar')).toBeVisible()
 
     // Escape remains the explicit "get me out" gesture.
     await page.keyboard.press('Escape')
@@ -78,10 +75,9 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
 
     await page.goto('/pr/' + pr)
     await page.keyboard.press('Escape') // leave the auto-focused search box
-    await page.keyboard.press('Meta+ArrowRight')
     const item = page.getByTestId('comment-item').first()
     await expect(item).toBeVisible()
-    await item.click() // lands on the comment row, reply field auto-focused (cs.focus === 'comment')
+    await item.click() // lands on the comment card, reply field auto-focused (cs.focus === 'comment')
 
     const reply = page.getByTestId('reaction-compose')
     await expect(reply).toBeFocused()

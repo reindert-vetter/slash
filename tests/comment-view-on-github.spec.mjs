@@ -29,10 +29,7 @@ test.describe('PR Review Tree — "Open op GitHub" in the comment menu', () => {
       }
     })
     await page.goto('/pr/' + PR)
-    // The comments/taken sidebar is a fixed overlay toggled with Cmd+ArrowRight
-    // (see detail-layout.md), collapsed by default.
     await page.keyboard.press('Escape') // leave the auto-focused search box
-    await page.keyboard.press('Meta+ArrowRight')
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
     await row.click()

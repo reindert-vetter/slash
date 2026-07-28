@@ -443,10 +443,10 @@ code** and keeping the thread alive. Terminology follows Temporal — a
   `{file,label,gran,line,rowStart,rowEnd,snippet}` — `snippet` is `Body`
   truncated at a word boundary (`commentSnippet`, ~60 characters + `…`).
   `RunID` (== the comment's id, see above) is already on the outer view.
-  Feeds the "Tasks" column (`workflows-panel`, part of `CommentsSidebar`
-  in `RelatedPanel.mjs`), see `.claude/rules/detail-layout.md`: the
-  per-row description and the click-through-to-the-comment (`openTask` in
-  `home.mjs`) rely on this field.
+  Feeds the "Taken" block (`workflows-panel`, `TasksPanel` in
+  `RelatedPanel.mjs`, under the PR-description column), see
+  `.claude/rules/detail-layout.md`: the per-row description and the
+  click-through-to-the-comment (`openTask` in `home.mjs`) rely on this field.
   For PR metadata: `POST /api/workflows/pr_status {pr}` (ensure the
   tracker, which synchronously runs the three stages) + read-only
   `GET /api/pr?pr=N` (reads the `prmeta` read model: `{ok,pr,title,url,

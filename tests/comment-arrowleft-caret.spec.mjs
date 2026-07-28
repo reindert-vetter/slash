@@ -21,8 +21,6 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await page.keyboard.press('ArrowRight') // list -> diff
 
-    await page.keyboard.press('Meta+ArrowRight') // open the comments/taken sidebar
-    await expect(page.getByTestId('comments-sidebar')).toBeVisible()
     await page.getByTestId('new-comment').click()
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeFocused()
@@ -31,7 +29,7 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
     await expect(composer).toHaveValue('hello world')
 
     // Caret sits at the end (position 11) — a plain ArrowLeft moves it one
-    // character left, it must NOT exit the field/sidebar.
+    // character left, it must NOT exit the field.
     await page.keyboard.press('ArrowLeft')
     await expect(composer).toBeFocused()
     let pos = await composer.evaluate((el) => el.selectionStart)
@@ -45,7 +43,6 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
 
     // Neither arrow-left press touched the composer's content or closed it.
     await expect(composer).toHaveValue('hello world')
-    await expect(page.getByTestId('comments-sidebar')).toBeVisible()
 
     // Escape remains the explicit "get me out" gesture.
     await page.keyboard.press('Escape')
@@ -70,7 +67,6 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
 
     await page.goto('/pr/' + pr)
     await page.keyboard.press('Escape') // leave the auto-focused search box
-    await page.keyboard.press('Meta+ArrowRight')
     const item = page.getByTestId('comment-item').first()
     await expect(item).toBeVisible()
     await item.click()
@@ -157,27 +153,35 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
   })
 
-  test('ArrowLeft still navigates normally when the composer row is only highlighted (no field focus)', async ({
+  test('ArrowLeft still navigates normally when a comment conversation is highlighted (caret at the start)', async ({
     page,
   }) => {
-    await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toBeVisible()
-    await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape')
-    await page.keyboard.press('ArrowRight')
+    // Reaching a comment conversation always focuses its reply field
+    // immediately (toComment, RelatedPanel.mjs) — there is no longer a
+    // "highlighted but unfocused" composer state reachable via arrow keys
+    // (the composer only opens via an explicit click/Enter/the command
+    // palette, never via ↓/→ browsing — see hasVisibleComments in
+    // RelatedPanel.mjs). This covers the empty-field boundary instead: an
+    // empty reply field's caret is already at position 0, so ArrowLeft must
+    // still peel back to the diff rather than being swallowed as a caret
+    // move (see editableCaretCanMoveLeft in home.mjs).
+    const pr = 970003
+    const start = await page.request.post('/api/workflows/task_code_comment', {
+      data: { pr, file: 'test.php', line: 1, author: 'reviewer', body: 'origineel', rowStart: -1, rowEnd: -1 },
+    })
+    expect((await start.json()).runId).toBeTruthy()
 
-    await page.keyboard.press('Meta+ArrowRight')
-    const sidebar = page.getByTestId('comments-sidebar')
-    await expect(sidebar).toBeVisible()
-    // A fresh Cmd+ArrowRight-open only highlights the "+ Comment op deze regel"
-    // row (enterComments) — no textarea DOM focus yet.
-    await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
-    await expect(page.getByTestId('comment-compose')).toHaveCount(0)
+    await page.goto('/pr/' + pr)
+    await page.keyboard.press('Escape') // leave the auto-focused search box
+    const item = page.getByTestId('comment-item').first()
+    await expect(item).toBeVisible()
+    await item.click()
+    const reply = page.getByTestId('reaction-compose')
+    await expect(reply).toBeFocused()
 
-    // ArrowLeft here must still exit back to the diff (unchanged behavior) —
-    // the sidebar stays open, only the keyboard focus leaves it.
+    // Nothing typed — the caret sits at position 0, nowhere left to move —
+    // so ArrowLeft peels back one stop instead.
     await page.keyboard.press('ArrowLeft')
-    await expect(sidebar).toBeVisible()
-    await expect(page.getByTestId('new-comment')).not.toHaveClass(/ring-indigo-300/)
+    await expect(reply).toHaveCount(0)
   })
 })

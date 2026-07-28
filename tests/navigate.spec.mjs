@@ -180,10 +180,9 @@ test.describe('PR Review Tree — change navigation', () => {
 
   // Comments are the task_code_comment workflow; seeding one is the only write
   // path (POST /api/workflows/task_code_comment). A "+ Comment op deze regel"
-  // button leads the list; clicking a comment opens its thread. See RelatedPanel
-  // (commentsSection). The comments/taken sidebar is a fixed overlay toggled
-  // with Cmd+ArrowRight (see detail-layout.md), so it must be opened first. The server
-  // runs with SLASH_GITHUB=off so seeding never touches a real repo.
+  // trigger is always present; clicking a comment card expands its thread. See
+  // RelatedPanel (InlineComments). The server runs with SLASH_GITHUB=off so
+  // seeding never touches a real repo.
   test('the new-comment button leads the list; clicking a comment opens its thread', async ({
     page,
     request,
@@ -213,33 +212,32 @@ test.describe('PR Review Tree — change navigation', () => {
 
     await page.goto('/pr/' + pr)
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
-    await page.keyboard.press('Meta+ArrowRight') // open the comments/taken sidebar
-    const panel = page.getByTestId('comments-sidebar')
+    const panel = page.getByTestId('inline-comments')
     const items = panel.getByTestId('comment-item')
-    const active = /bg-indigo-50/
 
-    // The new-comment button leads the list, and both seeded comments show.
+    // The new-comment trigger is always present, and both seeded comments
+    // show as inline cards right away — no sidebar to open.
     await expect(panel.getByTestId('new-comment')).toBeVisible()
     await expect(items).toHaveCount(2)
 
-    // Clicking a comment selects it and its thread header follows; a comment
-    // with a snippet shows the code hint in its thread (like the composer).
+    // Clicking a comment expands it and its thread follows; a comment with a
+    // snippet shows the code hint in its thread (like the composer).
     await items.nth(0).click()
-    await expect(items.nth(0)).toHaveClass(active)
-    await expect(items.nth(1)).not.toHaveClass(active)
-    const thread = panel.getByTestId('comment-thread')
+    await expect(items.nth(0)).toHaveAttribute('data-expanded', 'true')
+    await expect(items.nth(1)).toHaveAttribute('data-expanded', 'false')
+    const thread = items.nth(0).getByTestId('comment-thread')
     await expect(thread).toContainText('first review comment')
-    await expect(thread.getByTestId('comment-target')).toBeVisible()
-    await expect(thread.getByTestId('comment-target')).toContainText('billingAddress')
+    await expect(items.nth(0).getByTestId('comment-target')).toBeVisible()
+    await expect(items.nth(0).getByTestId('comment-target')).toContainText('billingAddress')
 
     // The second comment has no snippet, so its thread shows no code hint.
     await items.nth(1).click()
-    await expect(thread.getByTestId('comment-target')).toHaveCount(0)
+    await expect(items.nth(1).getByTestId('comment-target')).toHaveCount(0)
   })
 
   // The Onderliggende-code card (RelatedPanel's default export) renders all
-  // children as one flat vertical list, inline next to the diff, unaffected by
-  // the comments/taken sidebar. ↓/↑ walk the list (↓ clamps on the last child,
+  // children as one flat vertical list, inline next to the diff. ↓/↑ walk the
+  // list (↓ clamps on the last child,
   // ↑ from the first exits back to the diff); ← returns to the diff from any
   // child. Mount RelatedPanel directly with mock children + drive the exported
   // nav functions so the test is independent of the fixture's child count.

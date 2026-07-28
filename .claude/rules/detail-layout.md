@@ -185,8 +185,8 @@ the right of the index shows its thread instead of a diff.
   because `prWideComments()` only reads `cs.list` (no block's own `.code`),
   so it can't trigger the "stuck on loading" co-subscriber race (see
   conventions.md). `cs.list` itself keeps being loaded/polled by
-  `syncComments`, called from `CommentsSidebar` regardless of the sidebar's
-  own open/closed state — no separate fetch needed.
+  `syncComments`, called unconditionally by `InlineComments` (see "Inline
+  comment blocks" below) — no separate fetch needed.
 - **"Resolved == approved" (0/1 → 1/1), mapped into the EXISTING generic
   machinery — `isFullyApproved` (`BlockList.mjs`) itself is untouched.** A
   comment item has no changed rows to approve, so `blockApproveCount`
@@ -303,87 +303,83 @@ the right of the index shows its thread instead of a diff.
   block. Deliberately **no** keyboard "final stop" for `ignoreToggleRow`
   (unlike `toggleRow`'s `state.toggleFocused`) — click-only, a
   simplification since this is a secondary, rarely-used toggle.
-- **Not part of the Cmd+→ comments/tasks sidebar** — that sidebar (see
-  below) only ever showed block-scoped comments (`kind === ''`) even before
-  this change (`recomputeView`'s `!c.kind` filter); a comment-index item's
-  thread lives exclusively in its own detail card now.
+- **Not part of the inline comment blocks** (see below) — those only ever
+  show block-scoped comments (`kind === ''`) even before this change
+  (`recomputeView`'s `!c.kind` filter); a comment-index item's thread lives
+  exclusively in its own detail card now.
 
-## Comments/tasks sidebar (fixed, toggled with Cmd+→)
+## Inline comment blocks
 
-Comments and Tasks together form their **own `position:fixed` panel on the
-right side of the screen** (`RelatedPanel.mjs`'s `CommentsSidebar` export,
-`data-testid=comments-sidebar`, `right-6 top-6 w-[36rem]`, with a
-**reactive**, 3-way bottom reservation — `bottom-6` (no reservation) as soon
-as the footer shows nothing (`!state.footerVisible`), `bottom-[90px]` as soon
-as only the inline diff is showing, or `bottom-[140px]` as long as the footer
-is also showing an AI description (`state.footerExplain`, see the Footer
-section in `.claude/rules/keyboard-navigation.md`); the collapsed hint rail
-mirrors that) — mirroring how `PrInfoPanel` is a fixed panel on the left (see
-the section above), **separate from** `<main>`'s horizontally scrolling
-column flow. Mounted as its own top-level component next to
-`PrInfoPanel`/`BlockList`/`DetailPanel` in `home.mjs`, not nested inside
-`DetailPanel`. Within the sidebar sits the **comment block**
-(`data-testid=comments-panel`, `flex-1`) **above** the **tasks block**
-(`data-testid=workflows-panel`, `shrink-0 max-h-[16rem]`) — stacked
-vertically, comments gets the most room and scrolls internally as it grows,
-tasks holds a smaller, self-scrolling height beneath it.
+Block-scoped comment threads (`kind === ''`, the `task_code_comment`
+workflow) are **no longer a fixed, Cmd+→-toggled sidebar with a browsable,
+unscoped index** — they render as their own small stack of inline cards,
+directly in `<main>`'s column flow, right above the Onderliggende-code card
+of the currently focused column (top-level, or a drilled column — the same
+`focusedBlock()` source the Underlying-code card already follows).
+`RelatedPanel.mjs`'s exported `InlineComments(state, commentTarget,
+openCompose)` renders exactly the same, already-scoped list `cs.view` always
+was (`visibleComments()`/`commentUnder` — unchanged: scoped to the selected
+block and, in the diff, to the exact unit under the cursor, call ⊂ line ⊂
+group ⊂ block); the only thing that changed is that this scoped set now
+renders **inline and always visible for the current unit** — "alleen en
+direct zichtbaar als de bijbehorende groep/line/call geselecteerd is" —
+instead of behind a separate toggle.
 
-**Toggled with Cmd+→** (`e.metaKey && e.key === 'ArrowRight'`, `toggleSidebar`,
-exported from `RelatedPanel.mjs`, called from `home.mjs`'s `onKeydown` —
-globally, in both `'list'` and `'diff'` mode, regardless of whether the diff,
-the Underlying-code card, or the sidebar itself currently holds the keyboard):
-closed → open + **restore the last comment spot of this session**
-(`restoreLastSidebarFocus`, see below), or — without such a memory — highlight
-on the "+ Comment on this line" row (`enterComments`, a deterministic anchor
-point — mirroring how `enterRelated` always lands on the first child); open
-but the keyboard is elsewhere (diff/Underlying code) → highlight back to that
-row, stays open; open and the keyboard is already in the sidebar
-(composer/comment row/thread/task) → close, keyboard back to the diff.
-**`enterComments` deliberately does not yet open the composer/focus a
-textarea** (unlike `toNew`, which `startComment`/arrow navigation to row 0/the
-restore flow still do use) — only highlighting, so a **second Cmd+→**
-immediately collapses the sidebar again instead of the key landing in the
-already-focused text field (the `isEditableFocused` guard would otherwise eat
-it). Only **`Enter`** on that highlighted row (`isNewFocused()` +
-`openComposer()` in `home.mjs`, mirroring the
-`isCommentFocused`/`isCodeFocused`/`isTaskFocused` Enter branches) actually
-opens the composer and focuses the textarea. Visibility lives in its own,
-**ephemeral** flag `cs.sidebarOpen` (not in the URL — just like
-`state.showDescription` — a refresh always starts collapsed), decoupled from
-`cs.focus`: the sidebar can stay open while the diff has the keyboard (after
-`←`, see below). A click on the collapsed hint rail (see below) follows the
-same open+focus logic as Cmd+→ (`openSidebar`).
+**One card per conversation, only the focused one expands.** Multiple
+threads can hang off the same unit; each gets its own card
+(`data-testid=comment-item`), but only the one the keyboard currently owns
+(`cs.sel` + `cs.focus` one of `'comment'`/`'thread'`) renders its full thread
+(`expandedConversation`: header, `composeTargetHint` if the comment carries a
+code snippet, every message via the unchanged `threadMessages`/
+`reactionBubble`, and a working reply field) — every other conversation on
+that same unit stays a compact one-line summary (`compactConversation`:
+status dot, author + avatar, a truncated body preview, `data-expanded=false`
+vs. `data-expanded=true` on the DOM node so a test can assert which one is
+open). The toggle between the two lives in a stable `<div class="contents">`
+root per card (`commentCard`) — not a bare toggling expression — per the
+"bare toggling expression" pitfall in `conventions.md`: the outer `.map()`
+key stays `'comment:' + c.id` regardless of expand/collapse, only the nested
+`${() => …}` binding swaps.
 
-**Cmd+→-out → Cmd+→-back restores the last comment/thread row within the same
-session** (not merely "open on row 0"). Every time the sidebar leaves the
-keyboard via `exitRelated` (`←` from the sidebar, or the closing Cmd+→ branch
-above) and `cs.focus` at that moment was `'new'`/`'comment'`/`'thread'`,
-`exitRelated` snapshots that into the module `let` `lastSidebarFocus`
-(`{focus, sel, threadPos}` — deliberately **not** `'code'` or `'task'`, and
-deliberately **not** on `cs`/in the URL: this is a purely within-session
-memory, not a navigation-position restore — that already exists separately
-for `cs.focus`/`sel`/`threadPos` via the `rel` URL namespace, and
-`cs.sidebarOpen` itself stays outside the URL, so a refresh still always
-starts collapsed). A subsequent `openSidebar` (Cmd+→, or a click on the hint
-rail) calls `restoreLastSidebarFocus`: if the last spot was a comment row or a
-thread, the keyboard lands there again (row index clamped to the currently
-visible comment list, `threadPos` clamped to the thread length — mirroring
-`applyRelRestore`'s clamping); if the last spot was the composer row itself,
-or there's no memory yet, or the remembered comment/thread is no longer
-visible (deleted, or the reviewer has since moved to a different block/unit
-whose comment scope is empty), it falls back to the existing
-`enterComments()` landing (row 0, highlight only). **This restore
-deliberately never focuses the reply/reaction text field**
-(`toComment(false)`/`focusThread(false)` — the `focusInput` parameter,
-default `true` for every other caller such as a click or an arrow-key step):
-only highlight the row/thread again, exactly the same "highlight-only"
-philosophy as `enterComments()` itself. Without this, a Cmd+→ reopen — if the
-reviewer had earlier left the sidebar from a comment row or thread — would
-land right in a focused text field, after which a **second Cmd+→** (meant to
-collapse the sidebar again) would land in that field instead of closing the
-sidebar (the global Cmd+→ handler in `home.mjs` explicitly ignores the key as
-long as `isEditableFocused()` is true). Mirrors the `preTaskFocus` pattern.
-Test: `tests/sidebar-focus-restore.spec.mjs`.
+**Always-present "+ Nieuwe comment" trigger, deliberately OUTSIDE the
+arrow-key traversal.** `newCommentComposer` renders a "+ Nieuwe comment"
+button (`data-testid=new-comment`) for every unit, whether or not it already
+has comments — a click (or `Enter`/the command palette's "Comment op deze
+regel", `startComment`) opens the composer in that same slot
+(`data-testid=comment-composer` while open). This is a deliberate,
+self-contained design choice (not itself part of Reindert's ↓/→ rule): the
+rule governs how the reviewer walks through *existing* conversations with
+the keyboard, not where the "start a new one" affordance lives, so keeping
+it always clickable/`Enter`-reachable doesn't contradict it.
+
+**Keyboard: the comment block is only a REACHABLE stop in the ←/→ chain when
+the unit actually has a comment; ↓ falls through instead of clamping.**
+`hasVisibleComments()` (exported, `visibleComments().length > 0`) gates
+every entry into it:
+
+- `→` from the diff (`home.mjs`'s `onKeydown`, diff-mode `ArrowRight`): if
+  the selected unit has ≥1 comment, lands on the **first** conversation
+  (`enterCommentsHead()`, `cs.sel=0` + `toComment()`, which also focuses the
+  reply field); otherwise it goes straight on to the Onderliggende-code card
+  (`enterRelated()`), exactly as before this change.
+- `↓` on a conversation (`cs.focus==='comment'`) or at the bottom of an open
+  thread (`cs.focus==='thread' && threadPos===0`) advances to the **next**
+  conversation on the same unit if there is one; if there isn't, it falls
+  through to the Onderliggende-code card (`enterRelated()`) instead of
+  clamping (`advanceFromComment()`, internal to `RelatedPanel.mjs`) — "↓
+  loopt door naar het onderliggende-code-blok".
+- `↑` on the **first** conversation exits to the diff; on the Onderliggende
+  code card's **first** child, `↑` (and `←`, both mirror the same rule)
+  steps back onto the **last** conversation of the unit if one exists
+  (`enterCommentsTail()`, highlight-only — no reply-field focus-steal,
+  mirroring every other "step back into a populated stop" landing), else
+  straight to the diff.
+- `→` on a conversation steps into its thread (`enterThread`, unchanged);
+  `↑`/`↓` there walk the message history (`threadPos`, unchanged); `←` from
+  the thread steps back **one stop** to the conversation level (not all the
+  way to the diff) — mirrors the drill-hint chip path's "← climbs one level"
+  precedent in this same file; `←` from the conversation level exits to the
+  diff.
 
 **A DEFERRED focus must never land after the keyboard has moved on
 (`focusToken`/`releaseFocus` in `RelatedPanel.mjs`).** Every landing helper
@@ -391,178 +387,87 @@ that drops the caret into a text field (`toNew`, `toComment`, `focusThread`)
 does so a frame later via `focusEl`/its own `requestAnimationFrame` — the
 reactive re-render has to swap the matching pane in first. So anything the
 reviewer does *in between* runs first, and the classic case is a click on a
-comment row (which focuses its reply field) followed straight away by `←`:
-`exitRelated` blurs and hands the keyboard back to the diff, and then the
-pending rAF fired anyway and silently pulled DOM focus back into the
-still-mounted textarea. From that moment on the sidebar looked dead — every
-Cmd+→ was swallowed by `home.mjs`'s `isEditableFocused()` guard, so neither
-the restore nor the close worked. Each of those transitions (plus
-`enterComments`/`toTask`/`exitRelated`) therefore bumps a module-level
-`focusToken`, and a deferred focus only lands while the token still matches
-the value captured when it was requested. The two tests in
-`tests/sidebar-focus-restore.spec.mjs` are the regression guard (they failed
-~6 out of 8 runs before this).
+comment conversation (which focuses its reply field) followed straight away
+by `←`: `exitRelated` blurs and hands the keyboard back to the diff, and then
+the pending rAF fired anyway and silently pulled DOM focus back into the
+still-mounted textarea, after which every subsequent key press was swallowed
+by `home.mjs`'s `isEditableFocused()` guard. Each of those transitions
+therefore bumps a module-level `focusToken`, and a deferred focus only lands
+while the token still matches the value captured when it was requested. Test:
+`tests/place-comment-return-focus.spec.mjs`.
 
 **A placed comment immediately gives the keyboard back to the code it's
 attached to.** `placeComment` (`RelatedPanel.mjs`) — called by both
 `COMPOSE_COMMANDS` items in `home.mjs` ("Place comment" and "Only for
-myself") — after a successful `createComment` no longer only calls
-`cs.composing = false` but `exitRelated()`: functionally the same step as a
-`←` from the sidebar (see above) — keyboard focus goes back to the diff of
-the block/column the comment was attached to (`commentTarget()` follows
-`focusedBlock()`, so also a drilled column), the sidebar itself stays open.
+myself") — after a successful `createComment` calls `exitRelated()`: keyboard
+focus goes back to the diff of the block/column the comment was attached to
+(`commentTarget()` follows `focusedBlock()`, so also a drilled column).
 `home.mjs`'s `compose-post`/`compose-self` `run` functions then call
-`scrollFocusIntoView()` to re-align `<main>` on that column — the same call
-that `onKeydown`'s `relatedActive()` branch already does after a `←` exit.
-This lets the reviewer continue with `↑`/`↓`/`f`/`d`/`s` through the diff
-right after "type, Enter, Enter", without navigating back themselves. Test:
+`scrollFocusIntoView()` to re-align `<main>` on that column. This lets the
+reviewer continue with `↑`/`↓`/`f`/`d`/`s` through the diff right after
+"type, Enter, Enter", without navigating back themselves. Test:
 `tests/place-comment-return-focus.spec.mjs`.
 
-**Collapsed** (`!cs.sidebarOpen`) the sidebar renders as a narrow hint rail on
-the right edge (`data-testid=sidebar-collapsed`, `right-0 w-12`, clickable):
-two numbers, a speech-bubble icon with the **number of comments**
-(`visibleComments().length` — scoped to the selected block/navigation unit,
-the same scope as the comment index itself) and a clock icon with the
-**number of genuinely running tasks** (`runningTaskCount(state)`, strictly
-`status === 'running'` — **not** `waiting`, unlike `taskRuns`' own
-active/done split). Several long-lived per-PR trackers (`build_relations`,
-`approve`, `pr_status`) sit in `waiting` indefinitely once their initial run
-is done, without being busy (see `.claude/rules/tembed-workflows.md`), so
-counting/coloring those as "active" here was misleading — the clock icon's
-color follows the same count (a reactive whole-value class binding, per the
-arrow.js rule in `conventions.md`): amber only while `runningTaskCount(state)
-> 0`, otherwise the same neutral gray as the comments icon. Purely a hint —
-no click actions per number, only the whole rail is clickable.
+## Tasks: a block under the PR-description column
 
-**`<main>` reserves a reactive right margin so it doesn't disappear behind the
-rail/sidebar.** Both are separate `position:fixed` overlays with a **higher**
-z-index than `<main>` (`z-20` vs. `<main>`'s `z-10`), so without a margin
-`<main>`'s rightmost column (the Underlying-code card, or the rightmost
-drilled column) would visibly disappear behind/under it as soon as you scroll
-`<main>` all the way right — `<main>`'s own `overflow-x-auto` doesn't clip
-anything beyond its own right edge, so what you see always stays within that
-edge. `DetailPanel`'s class binding (`home.mjs`) reads `sidebarOpen()` for
-this (exported from `RelatedPanel.mjs`, a thin reader on `cs.sidebarOpen` —
-`cs` is module-private, so `home.mjs` cannot read it directly, the same
-pattern as `isCodeFocused`/`relatedActive`) in the same function binding as
-the existing `state.showDescription` ternary for the left margin: closed
-(the rail, `right-0 w-12` = 3rem) → `right-[4.5rem]`; open (`right-6
-w-[36rem]`, so the sidebar's left edge sits at `1.5rem + 36rem = 37.5rem`) →
-`right-[39rem]`. Both add another 1.5rem of breathing room on top — the same
-gap convention as the PR-info-column margin (`left-[69.5rem]` = 39rem +
-1.5rem + 29rem, see above). Because the class string stays a single whole
-(no partial interpolation) and this is an ordinary attribute function binding
-(not a keyed array item), no arrow.js pitfall from `conventions.md` applies
-here.
+Tasks (workflow runs of the current PR) used to live in the fixed
+comments/tasks sidebar removed above; they now sit in a **shrink-0** block
+(`TasksPanel(state, openTask)`, `<section data-testid=workflows-panel>`,
+title **"Taken"**) stacked directly **below** `prInfoCard` inside
+`PrInfoPanel`'s own fixed column (stop 1 of the nav chain — see
+`.claude/rules/keyboard-navigation.md`) — only visible while
+`state.showDescription` is true, exactly like the description card itself.
+This is a plain sibling in that column's existing `flex-col gap-3`
+container, so `prInfoCard`'s own `flex-1` simply shares the column's height
+with this `shrink-0 max-h-[16rem]` block, the same stacking ratio the old
+sidebar already used between its comments/tasks halves.
 
-**Keyboard within the sidebar:** comments is a flat row list (the empty
-composer at row 0, then one row per comment — see `rowCount`/`currentRow`/
-`gotoRow` in `RelatedPanel.mjs`), tasks its own row list
-(`cs.taskSel`/`taskRuns`). **`↓`/`↑` walk within such a list, and also cross
-between them** — the stacked-layout equivalent of what `→`/`←` used to do
-between comments and Tasks: `↓` on the last comment row (or the empty
-composer if there are no comments), or on the bottom of an opened thread
-(`threadPos === 0`, the reply field), descends to the first task row; `↑` on
-the first task row climbs back to where it came from
-(`preTaskFocus`/`toTask` — the composer, a comment row, or the same thread).
-`→` on a comment row still goes deeper into the thread
-(`enterThread`, unchanged); within a thread `↑`/`↓` still walk through the
-message history (`threadPos`), not between comments/tasks — only the
-**bottom** of the thread (`threadPos === 0`) descends further into tasks.
-**`←` closes **no** column and peels back **nothing** layer by layer** — from
-**anywhere** in the sidebar (comment row, thread, task) `←` goes back in
-**one jump** to the diff of the last-active block/column
-(`state.focusLevel` stays unchanged), and the **sidebar stays open** (only
-the keyboard focus leaves it, `cs.sidebarOpen` stays `true`) — this replaces
-the older step-by-step pattern (`toComment`/`toCode` as intermediate steps)
-entirely for this path.
+**Filtered to what actually needs attention — no more Active/Recent split.**
+`visibleWorkflowRuns(state)` (exported from `RelatedPanel.mjs`) shows a run
+only while it's genuinely **`running`**, or once it hasn't been updated in
+over **5 minutes** (`TASK_STALE_MS`) — deliberately not `waiting` too:
+several long-lived per-PR trackers (`build_relations`, `approve`,
+`pr_status`) sit in `waiting` indefinitely once their initial run is done,
+without being busy (see `.claude/rules/tembed-workflows.md`). Practical
+effect: a run that just started (or just finished) stays out of view for a
+few minutes — nothing to act on yet — and only resurfaces once it's either
+actively running or has been sitting idle long enough to be worth a look
+(e.g. a stuck/long-`waiting` tracker). Running-first, then most-recently-
+updated. Test: `tests/workflows-panel-notes.spec.mjs`.
 
-The **tasks block** (`<section data-testid=workflows-panel>`, title
-**"Tasks"**) shows the **workflow runs of the current PR** (`state.workflows`,
-filled by `pollWorkflows` in `home.mjs` via `GET /api/workflows?pr=N`, every
-2.5s). That endpoint is **read-only** (`RunsForPR` in `tasks_api.go` filters
-`engine.Runs()` on the `pr` field in each run's stored input — no mutation, so
-within the write boundary), not to be confused with the existing, unrelated
-placeholder block `data-testid=tasks` (Tasks + chat) *inside* the comment
-block. The card splits **active** (`running`/`waiting`, at the top, at full
-opacity) from **recently done** (`completed`/`failed`, below, dimmed) under
-the headings "Active"/"Recent"; each row shows a readable workflow label
-(`WORKFLOW_LABELS` in `RelatedPanel.mjs`, e.g. `build_relations`→"Relations")
-plus a color-coded status badge (amber/blue/green/red). The row key encodes
-**runId + status** (not just runId) so a status change (e.g.
-`running`→`completed`) forces a **fresh** node instead of reusing a keyed
-node without re-evaluating its static classes — the same pitfall as the
-block-card key, see `.claude/rules/conventions.md`. The empty state wraps in
-an array of one (`.key('no-workflows')`), per the "no comments" pitfall in
-that same conventions rule.
+**Click-only — no keyboard cursor.** Stop 1 (the PR-description column)
+already suppresses `↑`/`↓` (see the left→right nav chain in
+`.claude/rules/keyboard-navigation.md`), so a Taken row (`workflowRow`) has
+no focus ring/keyboard cursor of its own anymore — only a click on a
+`comment`-bearing row calls `openTask(run)` (`home.mjs`), which looks up the
+block by `comment.file`+`comment.label`, steps the diff to the stored
+granularity/row range (`unitsFor`+`unitAtRow`, the same walk as `setGran`),
+and selects the comment itself via `selectComment(runId)` (exported from
+`RelatedPanel.mjs`) once the comment-scope watch has caught up (a couple of
+`await Promise.resolve()` ticks — see the watch-timing note in
+`conventions.md`). A run without a `comment` ref is purely informational.
 
-Each row also shows, below the label + status badge, a short **description**
-(`data-testid=workflow-note`, gray, `line-clamp-2`, `workflowNote` in
-`RelatedPanel.mjs`): for a `task_code_comment` run the rich
+Each row still shows, below the label + status badge, the same short
+**description** (`data-testid=workflow-note`, gray, `line-clamp-2`,
+`workflowNote` in `RelatedPanel.mjs`): for a `task_code_comment` run the rich
 `class::method · line N · "snippet"` from the run's supplied `comment` ref
 (`WorkflowRunView.comment`, see `.claude/rules/tembed-workflows.md`); for
 every other type a short sentence explaining *why* the run is in that status
-(`WORKFLOW_STATUS_NOTE`, a `${workflow}:${status}` map, e.g.
-`resolve_call:running` → "searching for call definitions"), with the bare
-status as fallback when no combination matches. **The text must never
-suggest active work while the badge shows "waiting"** — `build_relations`
-runs its build Activity once synchronously at start and then waits
-indefinitely for a `rebuild` Signal (see
-`.claude/rules/tembed-workflows.md`), so `waiting` there always means
-"already built, idle until the next rebuild", never "busy". `workflowNote`
-therefore replaces the generic text for that combination with a concrete
-summary of what has already been built (`buildRelationsSummary`, read from
-`state.relations`/`state.callResolve`/`state.testCovers` — the same arrays
-the rest of the panel already tracks, no extra fetch), e.g. "3 relations · 5
-calls resolved — waiting for changes"; without usable data it falls back to
-the static `WORKFLOW_STATUS_NOTE` text. Below the description sits a second,
-even smaller line (`data-testid=workflow-updated`, `relTime(run.updatedAt)`)
-with a relative time indication ("just now" / "4 min ago" / "2 hours ago" /
-"1 day ago") — `updatedAt` already comes along in `GET /api/workflows`
-(`WorkflowRunView.UpdatedAt`, `tasks_api.go`), so this is a pure frontend
-addition without a backend change.
-
-A run with a `comment` ref is **clickable** (`cursor-pointer`, the rest is
-purely informational): the click calls `openTask(run)`, a callback that
-`home.mjs` passes to `CommentsSidebar(state, commentTarget, openCompose,
-openTask)` (separate from `search.drill`, which now only goes to the
-`RelatedPanel` default export/Underlying-code card — see below). `openTask`
-(in `home.mjs`) looks up the block in `state.blocks` by
-`comment.file`+`comment.label`, selects it, steps the diff to the stored
-granularity/row range (`unitsFor`+`unitAtRow`, the same walk as `setGran`),
-and finally selects the comment itself via `selectComment(runId)` (exported
-from `RelatedPanel.mjs` — `runId` == the comment's id) once the
-comment-scope watch has had a chance to catch up (a couple of
-`await Promise.resolve()` ticks, needed because arrow.js' `watch` runs
-microtask-deferred — see the watch-timing note in `conventions.md`). If a
-step fails (block/comment not yet found), `openTask` silently does nothing.
-This does not explicitly open/focus the sidebar itself — it's only called
-from a click/`Enter` on an already-visible tasks row, so the sidebar is
-already open at that moment.
-
-**Keyboard within Tasks:** `cs.focus === 'task'` gives the Tasks card the
-keyboard — reached via `↓` from comments (see "Comments/tasks sidebar" above
-for the full cross-navigation), no longer via `→`/stop 7 of the old nav
-chain. `↓`/`↑` move `cs.taskSel` through the **active-then-done** order
-(`taskRuns(state)`, exported from `RelatedPanel.mjs` — the same order
-`workflowsSection` renders, so the row index and keyboard cursor always
-match); the focused row gets an indigo ring (`data-active=true` on
-`data-testid=workflow-row`). `↑` on the first row climbs back to where `↓`
-came from (`preTaskFocus` in `RelatedPanel.mjs`: the composer, a comment
-row, or the same thread) — going back to the **composer** only highlights
-the "+ Comment on this line" row (`enterComments`, just like a fresh
-Cmd+→ open), without opening/focusing it immediately; only an explicit
-`Enter` (`isNewFocused`+`openComposer`, `home.mjs`) opens it. Going back to a
-**comment row**/**thread** still immediately focuses the reply field, as
-ordinary row navigation within comments always does. `←` closes the
-sidebar focus in one jump toward the diff (see above), regardless of
-`preTaskFocus`. `Enter` (handled in `home.mjs`, not in `RelatedPanel.mjs` —
-`openTask` lives there because it drives the shared navigation `state`)
-opens the focused run just like a click on it; only meaningful for a
-`task_code_comment` run with a linked comment, silently ignored for the rest
-(the same `run.comment` guard as the click). A click on a non-clickable row
-also lands the keyboard cursor on it now (`toTask(i)`), so mouse and
-keyboard share the same cursor.
+(`WORKFLOW_STATUS_NOTE`, a `${workflow}:${status}` map), with the bare status
+as fallback. **The text must never suggest active work while the badge shows
+"waiting"** — `build_relations` runs its build Activity once synchronously
+at start and then waits indefinitely for a `rebuild` Signal, so `waiting`
+there always means "already built, idle until the next rebuild", never
+"busy"; `workflowNote` replaces the generic text for that combination with a
+concrete summary of what has already been built (`buildRelationsSummary`,
+read from `state.relations`/`state.callResolve`/`state.testCovers`).
+Below the description sits a second, even smaller line
+(`data-testid=workflow-updated`, `relTime(run.updatedAt)`) with a relative
+time indication ("just now" / "4 min ago" / …). The row key encodes **runId
++ status** so a status change forces a fresh node instead of reusing a keyed
+node without re-evaluating its static classes (the block-card-key
+convention, see `conventions.md`); the empty state wraps in an array of one
+(`.key('no-workflows')`), per the "no comments" pitfall in that same rule.
 
 ## Drilling: Underlying code as its own column (`state.drill`)
 
@@ -1047,48 +952,15 @@ block on the right — see the layout paragraph above):
   on a reused keyed node. Regression test:
   `tests/related-empty-code.spec.mjs` (PR 96, embedded empty; PR 90, lazy
   load that completes empty).
-  The card is a **navigable list**: `→` from the diff selects the **first**
-  item (`cs.codeSel=0`); `↓`/`↑` then move through the items (clamps at
-  first/last — `↑` on the first item steps back out to the diff), `←` steps
-  from any item back to the diff (see
-  `.claude/rules/keyboard-navigation.md`). This list is entirely
-  **separate** from the comments/tasks sidebar (see above) — there is no
-  more `→`/`↓` here that jumps to comments/tasks; that's only via Cmd+→
-  now. The selected item gets an indigo ring (`data-active=true`). All items
-  stack **vertically** at full width (no more arrow hint — that's been
-  removed); the card no longer collapses to make room next to the
-  comments/tasks columns (that happened previously when they were still
-  part of the same column flow — no longer needed, they're now a separate,
-  `position:fixed` overlay, see "Comments/tasks sidebar" below).
-
-  **Laptop-width auto-collapse next to an open comments/tasks sidebar
-  (`relatedRailActive`/`relatedRail`, `RelatedPanel.mjs`):** that sidebar is
-  a separate overlay, but still competes for horizontal room once the
-  screen is too narrow to show both comfortably side by side. Below
-  Tailwind's `2xl` breakpoint (1536px — the same point the rest of the
-  layer already uses for width scaling, e.g. `Block.mjs`'s
-  `w-[70rem] 2xl:w-[82rem]`) the card therefore collapses into a narrow
-  rail (`data-testid=related-collapsed`, mirroring `collapsedColumnHTML`/
-  `sidebarHintRail`: icon + vertical label + the number of children) as
-  soon as **two** conditions hold: the sidebar is open (`sidebarOpen()`)
-  **and** the card doesn't currently have the keyboard (`cs.focus !==
-  'code'`) — that last condition mirrors the existing rule for drilled
-  columns (`collapsedColumnHTML`, home.mjs): only what has the keyboard
-  stays fully visible. That guarantees `→` (`enterRelated`, sets
-  `cs.focus = 'code'`) always lands on the fully expanded, navigable card —
-  never on hidden content. Leaving the card again (`←`, `cs.focus = null`),
-  it collapses again as long as the sidebar remains open and the screen is
-  narrow. A click on the rail calls `enterRelated()` directly — the card
-  then immediately expands again and grabs the keyboard, just like a fresh
-  `→` from the diff. On a `2xl`+ screen, or as long as the sidebar is
-  closed, the card always stays the full (default or grown, see below)
-  card; `viewport.wide` (a `matchMedia('(min-width: 1536px)')` listener,
-  mirroring `theme.mjs`'s system-preference listener) keeps that reactively
-  up to date, even on a resize. The toggle between rail and full card
-  lives — per the "bare toggling expression" pitfall in `conventions.md` —
-  in a **stable element root** (`<div class="contents"
-  data-testid=related-panel-root">`), not in the entire body of the
-  template itself. See `tests/related-code-narrow.spec.mjs`.
+  The card is a **navigable list**: `→` from the diff (or `↓` falling
+  through the last inline comment conversation, see "Inline comment blocks"
+  above) selects the **first** item (`cs.codeSel=0`); `↓`/`↑` then move
+  through the items (clamps at last — `↑` on the first item steps back onto
+  the last inline comment conversation if the unit has one, else out to the
+  diff, see `hasVisibleComments`/`enterCommentsTail`), `←` steps from any
+  item back the same way (see `.claude/rules/keyboard-navigation.md`). The
+  selected item gets an indigo ring (`data-active=true`). All items stack
+  **vertically** at full width.
   The card has **no fixed height cap**: it grows with its content up to the
   full available height of the block column and then scrolls internally
   (`min-h-0`, body `flex-1 overflow-auto`). The code excerpts **wrap** (no

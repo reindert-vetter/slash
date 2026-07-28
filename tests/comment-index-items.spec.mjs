@@ -69,8 +69,12 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(row).toBeVisible()
     await expect(row).toContainText('Overall this looks great')
     await expect(row.getByTestId('block-approval')).toHaveText('0/1')
-    // The block-scoped comment never becomes its own Start row.
-    await expect(page.getByText('please rename this variable')).toHaveCount(0)
+    // The block-scoped comment never becomes its own Start row — it's
+    // anchored to block 0 (the currently selected block, whole-block scope),
+    // so it does show up as an inline comment card there, just never in the
+    // "Start" index (no [data-idx] row for it).
+    await expect(page.locator('[data-idx]').getByText('please rename this variable')).toHaveCount(0)
+    await expect(page.getByTestId('inline-comments').getByText('please rename this variable')).toBeVisible()
   })
 
   test('a fresh open lands on the unresolved comment item, with its thread shown to the right', async ({ page }) => {

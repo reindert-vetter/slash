@@ -33,10 +33,7 @@ test.describe('PR Review Tree — delete a comment', () => {
     await seedComment(page, body)
 
     await page.goto('/pr/' + PR)
-    // The comments/taken sidebar is a fixed overlay toggled with Cmd+ArrowRight (see
-    // detail-layout.md), collapsed by default.
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
-    await page.keyboard.press('Meta+ArrowRight')
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
     await row.click()
@@ -85,10 +82,7 @@ test.describe('PR Review Tree — delete a comment', () => {
     const runId = await seedComment(page, body)
 
     await page.goto('/pr/' + PR)
-    // The comments/taken sidebar is a fixed overlay toggled with Cmd+ArrowRight (see
-    // detail-layout.md), collapsed by default.
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
-    await page.keyboard.press('Meta+ArrowRight')
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
     await row.click()
@@ -116,7 +110,6 @@ test.describe('PR Review Tree — delete a comment', () => {
 
     await page.goto('/pr/' + PR)
     await page.keyboard.press('Escape') // leave the auto-focused search box
-    await page.keyboard.press('Meta+ArrowRight')
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
     await row.click()

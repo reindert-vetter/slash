@@ -1,8 +1,13 @@
-// RelatedPanel — the column to the right of the selected block. Two stacked
-// cards: on top the underlying code the block calls into — its child blocks
-// from the relations read-model (GET /api/relations), passed down by home.mjs —
-// below the live **comments** on lines of code (wired to the task_code_comment
-// workflow).
+// RelatedPanel — the column to the right of the selected block: the
+// underlying code the block calls into — its child blocks from the relations
+// read-model (GET /api/relations), passed down by home.mjs. The live
+// **comments** on lines of code (wired to the task_code_comment workflow) are
+// no longer part of this card — home.mjs renders them as their own inline
+// block(s), directly above this card, via InlineComments below (one card per
+// conversation, visible only while its unit is selected — see
+// detail-layout.md). Tasks (workflow runs) also no longer live here — they
+// moved to a block under the PR-description column (TasksPanel below, mounted
+// from home.mjs' prInfoCard area).
 
 import { html } from './vendor/arrow.js'
 import { reactive } from './vendor/arrow.js'
@@ -19,23 +24,29 @@ import { avatarHTML } from './avatar.mjs'
 // (POST /api/workflows/{runId}/signals/reply). Everything else here is read-only
 // (GET /api/comments?pr=N). Per the write-boundary rule, the UI only ever writes
 // by starting or signalling a workflow — never straight to a store.
-// focus/threadPos drive the keyboard navigation of this right-hand panel (see
-// home.mjs → onKeydown). focus is which region owns the arrows: null (the diff/
-// list has the keyboard), 'code' (the related-code block, light-blue border), 'new'
-// (the "+ Comment op deze regel" button), 'comment' (a comment row in the index,
-// cs.sel), or 'thread' (inside the selected comment's thread). threadPos indexes
-// the thread bottom-up: 0 = the reply field (typing), 1..n = the n-th message
-// from the bottom (1 = newest), so ↑ walks to older messages and ↓ back down.
-// A thread's messages are the comment's own body (its opening message) followed
-// by its reactions — see threadMessages.
+// focus/threadPos drive the keyboard navigation of the inline comment block
+// (see home.mjs → onKeydown). focus is which region owns the arrows: null (the
+// diff/list has the keyboard), 'code' (the related-code block, light-blue
+// border), 'new' (composing a brand-new comment — reached only via an
+// explicit Enter/command-palette trigger, never via arrow browsing), 'comment'
+// (an existing conversation, cs.sel — walked with ↓/↑, only entered when at
+// least one exists on the selected unit), or 'thread' (inside that
+// conversation's message history). threadPos indexes the thread bottom-up: 0 =
+// the reply field (typing), 1..n = the n-th message from the bottom (1 =
+// newest), so ↑ walks to older messages and ↓ back down. A thread's messages
+// are the comment's own body (its opening message) followed by its reactions
+// — see threadMessages.
 // `scope` is the current selection context (from home.mjs, pushed via
 // setCommentScope): { file, label, mode, gran, rowStart, rowEnd, seg } or null.
-// It lives on cs — RelatedPanel's own reactive — on purpose: the index render
-// reads cs and reliably re-renders on cs changes, whereas reading home.mjs'
-// `state` across the module boundary from inside this list binding did not
-// retrigger it. home.mjs bridges state→cs.scope with an arrow.js watch.
+// It lives on cs — RelatedPanel's own reactive — on purpose: the render reads
+// cs and reliably re-renders on cs changes, whereas reading home.mjs' `state`
+// across the module boundary from inside this list binding did not retrigger
+// it. home.mjs bridges state→cs.scope with an arrow.js watch. cs.view (see
+// recomputeView) is ALREADY scoped to exactly the selected unit — this is
+// what InlineComments renders, unchanged from before this stops being a
+// browsable, unscoped index.
 // codeSel indexes the selected underlying-code child while cs.focus === 'code':
-// → walks it forward through the child list, ↓ leaves it for the comments column.
+// → walks it forward through the child list.
 const cs = reactive({
   pr: null,
   list: [],
@@ -59,24 +70,8 @@ const cs = reactive({
   // [] whenever codeSel changes — a chip path only makes sense relative to
   // the card it hangs off. Deliberately NOT bound to the URL (unlike codeSel
   // above): a sub-cursor one level deeper than anything else in this panel
-  // has ever restored, ephemeral like taskSel below.
+  // has ever restored, purely ephemeral.
   chipPath: [],
-  // taskSel indexes the flat active+done workflow-run list while
-  // cs.focus === 'task' (the Taken stop of the comments/taken sidebar).
-  // Deliberately NOT bound to the URL (unlike codeSel/sel/threadPos below) —
-  // it's a step further than any of those flows have gone before and, like
-  // `menu`/`ui.task` elsewhere, an ephemeral cursor rather than a navigation
-  // position worth restoring on refresh.
-  taskSel: 0,
-  // sidebarOpen — whether the comments/taken sidebar (see CommentsSidebar
-  // below) is expanded (comments-on-top-of-taken, w-[36rem]) or collapsed to a
-  // narrow hint rail on the right edge. Toggled with Cmd+→ (home.mjs' onKeydown).
-  // Deliberately NOT bound to the URL — ephemeral UI state, like
-  // showDescription/`menu` elsewhere: a refresh always starts collapsed.
-  // Distinct from cs.focus on purpose: the sidebar can stay open while the
-  // keyboard sits elsewhere (diff, or the inline Onderliggende-code card) —
-  // see toggleSidebar/exitSidebarToDiff.
-  sidebarOpen: false,
 })
 
 // The panel cursor survives a browser refresh: focus/codeSel/sel/threadPos live in
@@ -251,83 +246,6 @@ export function relatedActive() {
   return cs.focus !== null
 }
 
-// sidebarOpen reports whether the comments/taken sidebar (CommentsSidebar,
-// toggled with Cmd+→) is expanded or collapsed to its hint rail. home.mjs reads
-// this to keep <main>'s right-hand margin clear of whichever one is showing
-// (see the DetailPanel comment in home.mjs and detail-layout.md).
-export function sidebarOpen() {
-  return cs.sidebarOpen
-}
-
-// ── Onderliggende-code auto-collapse on a laptop-width viewport ──────────────
-// Once the comments/taken sidebar is open (see sidebarOpen above) on a screen
-// narrower than Tailwind's 2xl breakpoint (1536px — the same threshold the
-// rest of the layout already uses for width scaling, e.g. Block.mjs's
-// w-[70rem] 2xl:w-[82rem]), the sidebar and the full-width Onderliggende-code
-// card compete for room. `viewport` tracks whether the window is at least
-// 2xl-wide via matchMedia (mirrors theme.mjs's system-preference listener),
-// reactively — a resize (or DevTools viewport change) re-evaluates it live.
-const viewport = reactive({
-  wide: typeof window !== 'undefined' ? window.matchMedia('(min-width: 1536px)').matches : true,
-})
-if (typeof window !== 'undefined') {
-  const mq = window.matchMedia('(min-width: 1536px)')
-  const applyMQ = (e) => {
-    viewport.wide = e.matches
-  }
-  if (mq.addEventListener) mq.addEventListener('change', applyMQ)
-  else if (mq.addListener) mq.addListener(applyMQ) // older Safari fallback
-}
-
-// relatedRailActive reports whether the Onderliggende-code card should
-// collapse to a narrow rail (see relatedRail) instead of its full card: the
-// sidebar is open, the viewport is narrower than 2xl, AND the card does not
-// currently own the keyboard. That last condition mirrors the drilled-column
-// rail rule (collapsedColumnHTML, home.mjs): only the column/card that
-// currently owns the keyboard stays full-width, everything else collapses.
-// It guarantees → (enterRelated, which sets cs.focus = 'code') always lands
-// on a fully expanded, navigable card — keyboard navigation never lands on
-// dead/hidden content.
-function relatedRailActive() {
-  return sidebarOpen() && !viewport.wide && cs.focus !== 'code'
-}
-
-// relatedRail — the collapsed state of the Onderliggende-code card: a narrow
-// rail (mirrors collapsedColumnHTML in home.mjs / sidebarHintRail below),
-// icon + vertical label + the current child count, clickable to expand. A
-// click calls enterRelated() directly — the same landing → takes from the
-// diff — which flips cs.focus to 'code' and, via relatedRailActive() above,
-// immediately re-expands this same slot into the full card.
-function relatedRail() {
-  return html`
-    <button
-      type="button"
-      class="flex h-full w-14 shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
-      data-testid="related-collapsed"
-      title="Onderliggende code"
-      aria-label="Onderliggende code tonen"
-      @click="${() => enterRelated()}"
-    >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        class="h-4 w-4 shrink-0"
-      ><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>
-      <span class="max-h-40 overflow-hidden text-ellipsis text-[10px] font-medium [writing-mode:vertical-rl]"
-        >Onderliggende code</span
-      >
-      <span class="text-[11px] font-semibold tabular-nums" data-testid="related-collapsed-count"
-        >${() => rc.children.length}</span
-      >
-    </button>
-  `
-}
-
 // isCodeFocused reports whether the keyboard is on the Onderliggende-code block
 // (so home.mjs can wire Enter there to the LLM call-search).
 export function isCodeFocused() {
@@ -428,8 +346,11 @@ export function focusedChipChain() {
   return chain
 }
 
-// enterRelated hands the keyboard to the panel, starting on the first
-// underlying-code child. Called by home.mjs on → from the diff.
+// enterRelated hands the keyboard to the Onderliggende-code panel, starting
+// on the first underlying-code child. Called by home.mjs on → from the diff
+// (only when the selected unit carries no comments, see hasVisibleComments/
+// enterCommentsHead below) and on ↓ falling through the last inline comment
+// conversation (see advanceFromComment).
 export function enterRelated() {
   cs.composing = false
   cs.focus = 'code'
@@ -438,29 +359,11 @@ export function enterRelated() {
   scrollCodeIntoView()
 }
 
-// lastSidebarFocus remembers the comments-sidebar substop (only 'new'/
-// 'comment'/'thread' — never 'code' or 'task') the keyboard sat on the last
-// time it left the sidebar this session (← or a closing Cmd+ArrowRight, both go through
-// exitRelated below), so a later Cmd+ArrowRight-reopen (openSidebar) can land back there
-// instead of always resetting to the composer row. Deliberately a plain
-// module `let`, not on `cs`/the URL: this is a within-session memory only —
-// the reviewer asked for "g out, g back → same spot", not a refresh-restore
-// (that already exists separately for cs.focus/sel/threadPos via the `rel`
-// URL namespace, and cs.sidebarOpen itself deliberately stays out of the URL,
-// see the sidebarOpen field comment above). Mirrors the preTaskFocus pattern.
-let lastSidebarFocus = null
-
 // exitRelated releases the keyboard back to the diff and drops any input focus /
 // half-typed new comment. Exported as leaveRelated for home.mjs: drillIntoChild
 // calls it to hand a freshly-drilled column's keyboard to its own diff instead
-// of landing on its Onderliggende-code panel (see the "Drillen" flow). It
-// deliberately never touches cs.sidebarOpen — leaving the code card (or the
-// sidebar, see handleRelatedKey's ArrowLeft below) must not close a sidebar
-// the reviewer left open.
+// of landing on its Onderliggende-code panel (see the "Drillen" flow).
 function exitRelated() {
-  if (cs.focus === 'new' || cs.focus === 'comment' || cs.focus === 'thread') {
-    lastSidebarFocus = { focus: cs.focus, sel: cs.sel, threadPos: cs.threadPos }
-  }
   cs.focus = null
   cs.composing = false
   releaseFocus() // a focus request still in flight must not land after this
@@ -475,25 +378,26 @@ export { exitRelated as leaveRelated }
 let focusToken = 0
 
 // releaseFocus invalidates any focus request still in flight. Called by every
-// transition that means "the sidebar no longer owns the keyboard" or "the
-// keyboard moved somewhere else within it".
+// transition that means "this comment conversation no longer owns the
+// keyboard" or "the keyboard moved somewhere else within the inline comment
+// block".
 function releaseFocus() {
   focusToken++
 }
 
-// focusEl focuses a right-pane input a frame later (once the reactive re-render
-// has swapped in the matching view: the new-comment composer or the reply field).
+// focusEl focuses an inline-comment-block input a frame later (once the
+// reactive re-render has swapped in the matching view: the new-comment
+// composer or the reply field).
 //
 // The token guard is load-bearing, not defensive dressing: the focus lands a
 // FRAME later, so anything the reviewer does in between — most concretely a ←
-// right after clicking a comment row (toComment focuses its reply field) —
+// right after clicking a comment card (toComment focuses its reply field) —
 // runs first. exitRelated then blurs and hands the keyboard back to the diff,
 // after which this rAF used to fire anyway and silently steal DOM focus back
-// into the (still-mounted) textarea. From there every subsequent Cmd+→ was
-// swallowed by home.mjs' isEditableFocused() guard, so the sidebar stopped
-// responding entirely: no restore, no close. Bumping the token on each
-// transition makes a stale request a no-op instead.
-// Regression test: tests/sidebar-focus-restore.spec.mjs.
+// into the (still-mounted) textarea. From there every subsequent key press
+// was swallowed by home.mjs' isEditableFocused() guard. Bumping the token on
+// each transition makes a stale request a no-op instead.
+// Regression test: tests/place-comment-return-focus.spec.mjs.
 function focusEl(sel) {
   const want = focusToken
   requestAnimationFrame(() => {
@@ -503,10 +407,10 @@ function focusEl(sel) {
   })
 }
 
-// toNew / toComment land on a left-column item of the comments sidebar. Landing
-// already opens the right pane and drops the caret in it — the reviewer types
-// straight away, no → needed: 'new' shows an empty new-comment composer; a
-// comment shows its history with the reply field focused.
+// toNew / toComment land on an inline comment card. Landing already opens the
+// reply pane and drops the caret in it — the reviewer types straight away, no
+// → needed: 'new' shows an empty new-comment composer; a comment shows its
+// history with the reply field focused.
 function toNew() {
   releaseFocus()
   cs.composing = true
@@ -514,110 +418,63 @@ function toNew() {
   focusEl('[data-testid=comment-compose]')
 }
 
-// enterComments hands the keyboard to the comments/taken sidebar, always
-// landing on the "+ Comment op deze regel" row (row 0) — a deterministic
-// anchor, mirroring enterRelated always landing on the first child /
-// toTask defaulting to row 0. Called by toggleSidebar (Cmd+→, home.mjs) and by
-// a click on the collapsed hint rail — both "open the sidebar and highlight
-// comments" paths. Deliberately does NOT open the composer / focus its
-// textarea (unlike toNew): a fresh Cmd+→-open must leave the keyboard free so a
-// 2nd Cmd+→ can toggle the sidebar shut right away instead of typing into an
-// already-focused field (isEditableFocused would swallow it).
-// Enter (home.mjs, via openComposer) is what actually opens the composer.
-function enterComments() {
-  releaseFocus()
-  cs.composing = false
-  cs.focus = 'new'
-}
-
-// toggleSidebar drives Cmd+→ (home.mjs' onKeydown), globally (list or diff mode):
-// closed → open + focus comments; open but the keyboard sits elsewhere (diff,
-// or the inline Onderliggende-code card) → focus comments, stays open; open
-// and already focused inside it (composer/comment/thread/task) → close and
-// hand the keyboard back to the diff. Exported for home.mjs.
-export function toggleSidebar() {
-  const inSidebar = cs.focus === 'new' || cs.focus === 'comment' || cs.focus === 'thread' || cs.focus === 'task'
-  if (cs.sidebarOpen && inSidebar) {
-    cs.sidebarOpen = false
-    exitRelated()
-  } else {
-    openSidebar()
-  }
-}
-
-// preTaskFocus remembers which comments-substop (the 'new' composer, a
-// comment row, or a comment's 'thread') ↓ advanced from into the Taken stop,
-// so ↑ out of Taken lands back where it left off instead of always resetting
-// to the composer. A plain module `let`, not on `cs` — it's a one-shot
-// breadcrumb for a single step back, not navigation state worth
-// exposing/restoring. Note: landing back on 'new' (see handleRelatedKey's
-// ArrowUp branch) only highlights the composer row via enterComments — it
-// does not auto-open/focus it, unlike the 'comment'/'thread' cases.
-let preTaskFocus = 'new'
-
-// toTask hands the keyboard to the Taken/workflows panel, landing on row `i`
-// (default the first row). Reached by ↓ once comments has nowhere deeper down
-// left to go (the last comment row, the empty composer, or the bottom of a
-// thread) — see handleRelatedKey.
-function toTask(i = 0) {
-  releaseFocus()
-  preTaskFocus = cs.focus
-  cs.composing = false
-  cs.focus = 'task'
-  cs.taskSel = i
-  scrollTaskIntoView()
-}
-
-// scrollTaskIntoView keeps the selected Taken row in view while walking it
-// with the arrows, mirroring scrollCodeIntoView/scrollCommentIntoView.
-function scrollTaskIntoView() {
-  requestAnimationFrame(() => {
-    const el = document.querySelectorAll('[data-testid=workflow-row]')[cs.taskSel]
-    if (el) scrollIntoViewVertical(el)
-  })
-}
-
-// isTaskFocused / focusedTaskRun mirror isCodeFocused/focusedRelatedChild for
-// the Taken panel: home.mjs reads these on Enter to know whether — and which
-// run — to hand to its own openTask (which lives in home.mjs, since it drives
-// the shared navigation state, not this panel). `runs` is the same ordered
-// list `workflowsSection` renders (active runs, then done — see `taskRuns`),
-// passed in by the caller rather than read from home.mjs' `state` directly
-// (this module stays decoupled from that reactive's shape, like `rc`/`cs`
-// elsewhere).
-export function isTaskFocused() {
-  return cs.focus === 'task'
-}
-
-export function focusedTaskRun(runs) {
-  return cs.focus === 'task' && Array.isArray(runs) ? runs[cs.taskSel] || null : null
-}
-
-// taskRuns is the single ordering both workflowsSection (row indices) and
-// home.mjs (handleRelatedKey's taskCount + focusedTaskRun's `runs`) rely on —
-// active runs first, then done — so cs.taskSel always points at the same run
-// in both the render and the keyboard nav.
-export function taskRuns(state) {
-  const all = state && Array.isArray(state.workflows) ? state.workflows : []
-  const active = all.filter((r) => r.status === 'running' || r.status === 'waiting')
-  const done = all.filter((r) => r.status === 'completed' || r.status === 'failed')
-  return active.concat(done)
-}
-
 // `focusInput` defaults to true for every existing caller (a click or an
-// explicit arrow-key step onto a comment row) — landing already opens the
+// explicit arrow-key step onto a comment card) — landing already opens the
 // reply pane and drops the caret in it, per this file's own long-standing
-// convention. `restoreLastSidebarFocus` (a Cmd+ArrowRight-reopen restoring where the
-// reviewer left off) is the one exception: passing `false` there re-selects
-// the row/scrolls it into view WITHOUT stealing the keyboard into the reply
-// textarea — mirroring how a fresh Cmd+ArrowRight-open (enterComments) only highlights
-// the "+ Comment op deze regel" row rather than opening it.
+// convention. `enterCommentsTail` below is the one exception: passing `false`
+// there re-selects the card/scrolls it into view WITHOUT stealing the
+// keyboard into the reply textarea, mirroring the ↑-from-the-first-
+// underlying-code-child landing it's called from.
 function toComment(focusInput = true) {
   releaseFocus()
   cs.composing = false
   cs.focus = 'comment'
   scrollCommentIntoView()
   if (focusInput) focusEl('[data-testid=reaction-compose]')
+}
+
+// hasVisibleComments reports whether the currently selected unit carries at
+// least one comment conversation — the gate home.mjs' → (from the diff) and
+// the Onderliggende-code panel's ↑ (from its first child) both check before
+// entering the inline comment block: the block is only ever a REACHABLE stop
+// in the arrow-key chain when it actually has something to show (see
+// keyboard-navigation.md). The always-present "+ Nieuwe comment" trigger is
+// deliberately or­thogonal to this — it stays clickable/Enter-reachable
+// regardless, just never part of this arrow-key gate.
+export function hasVisibleComments() {
+  return visibleComments().length > 0
+}
+
+// enterCommentsHead lands the keyboard on the FIRST comment conversation of
+// the selected unit — called by home.mjs on → from the diff, only when
+// hasVisibleComments() is true (otherwise → goes straight to enterRelated()).
+export function enterCommentsHead() {
+  cs.sel = 0
+  toComment()
+}
+
+// enterCommentsTail lands on the LAST comment conversation — the mirror of
+// enterCommentsHead, reached via ↑ from the first Onderliggende-code child
+// (handleRelatedKey) when hasVisibleComments() is true. Highlight-only (no
+// reply-field focus-steal), matching every other "step back into an already-
+// populated stop" landing in this file.
+export function enterCommentsTail() {
+  cs.sel = Math.max(0, visibleComments().length - 1)
+  toComment(false)
+}
+
+// advanceFromComment steps ↓ from the currently focused comment conversation
+// (or from the bottom of its thread, threadPos === 0) to the next one — and,
+// once there is no next conversation, continues on into the Onderliggende-
+// code panel instead of clamping (see keyboard-navigation.md: "↓ loopt door
+// naar het onderliggende-code-blok").
+function advanceFromComment() {
+  if (selI() < visibleComments().length - 1) {
+    cs.sel += 1
+    toComment()
+  } else {
+    enterRelated()
+  }
 }
 
 // selectComment focuses the panel on the comment whose id matches `id` (a
@@ -691,9 +548,9 @@ function scrollReactionIntoView() {
 // (threadPos 0, ready to type) or, once the reviewer walks up into the history,
 // blurs it and scrolls the selected older message into view. `focusInput`
 // (default true, see toComment's own comment on the same pattern) is only
-// passed false by restoreLastSidebarFocus — a Cmd+ArrowRight-reopen restoring a
-// remembered thread position should re-highlight it, not immediately drop
-// the keyboard into the reply field.
+// passed false by applyRelRestore — a refresh-restore of a remembered thread
+// position should re-highlight it, not immediately drop the keyboard into the
+// reply field.
 function focusThread(focusInput = true) {
   releaseFocus()
   const want = focusToken
@@ -743,106 +600,41 @@ function applyRelRestore() {
     cs.focus = 'code'
     scrollCodeIntoView()
   } else if (want.focus === 'new') {
-    // 'new'/'thread'/'comment' are sidebar stops (see cs.sidebarOpen) — a
-    // restored focus there means the sidebar must come back open too, not
-    // just cs.focus, or it would render as the collapsed hint rail with the
-    // keyboard silently sitting on hidden content.
-    cs.sidebarOpen = true
     toNew()
   } else if (want.focus === 'thread') {
-    cs.sidebarOpen = true
     cs.focus = 'thread'
     cs.threadPos = Math.min(want.threadPos, reactionCount())
     focusThread()
   } else if (want.focus === 'comment') {
-    cs.sidebarOpen = true
     toComment()
   }
   // else (focus null): leave the diff with the keyboard, indices restored silently.
 }
 
-// The comments column (top of the sidebar) is one flat vertical list the
-// arrows walk: the "+ Comment op deze regel" button (row 0), then one row per
-// comment (row 1 + i). Modelling it as a single cursor — instead of per-region
-// special cases — is what keeps ↑/↓ deterministic: the same key always moves
-// one row, whatever path you took to get there.
-function rowCount() {
-  return 1 + visibleComments().length
-}
-
-// currentRow maps the live focus/selection back to that flat index.
-function currentRow() {
-  if (cs.focus === 'new') return 0
-  return 1 + selI()
-}
-
-// gotoRow lands on row `n` (clamped into range) via the matching landing action,
-// so the right pane and input focus follow the cursor. Rows ≥ 1 are comments.
-function gotoRow(n) {
-  n = Math.max(0, Math.min(n, rowCount() - 1))
-  if (n === 0) toNew()
-  else {
-    cs.sel = n - 1
-    toComment()
-  }
-}
-
 // handleRelatedKey drives the panel for one arrow/Escape press and returns 'exit'
-// when focus leaves the panel back to the diff (else true). It serves two
+// when focus leaves the panel back to the diff (else true). It serves three
 // independent regions that share the same cs.focus enum:
-//  - the inline Onderliggende-code card ('code', reached by → from the diff,
-//    see enterRelated) — unchanged: ↓/↑ walk its children, ← exits to the diff.
-//  - the comments/taken sidebar ('new'/'comment'/'thread'/'task', reached by
-//    Cmd+→ — see toggleSidebar) — comments is a flat row walk (gotoRow), thread
-//    is the one region where ↑/↓ mean something else (walk the message
-//    history), and task is its own row walk. ↓/↑ cross between the comments
-//    list and the taken list (the sidebar stacks them vertically, comments on
-//    top of taken); ← from *anywhere* in the sidebar exits straight back to
-//    the diff in one step, leaving the sidebar open (see toggleSidebar's
-//    comment on cs.sidebarOpen) — unlike 'code', which is a single flat region
-//    with nothing to descend into further.
-// `taskCount` is the current length of the Taken/workflows list (see `taskRuns`,
-// exported for the caller to compute from its own state) — needed here only to
-// clamp cs.taskSel while cs.focus === 'task'.
-export function handleRelatedKey(key, taskCount = 0) {
+//  - the inline Onderliggende-code card ('code', reached by → from the diff
+//    when the unit has no comments, or by ↓ falling through the last comment
+//    conversation — see advanceFromComment/enterRelated) — unchanged: ↓/↑
+//    walk its children, ← exits to the diff (or back into comments, see
+//    below).
+//  - an inline comment conversation ('new'/'comment', reached by → from the
+//    diff only when hasVisibleComments() is true — see enterCommentsHead) —
+//    ↓ walks to the next conversation, falling through to the
+//    Onderliggende-code panel once there is no next one (advanceFromComment);
+//    ↑ at the first conversation exits to the diff; → steps into the
+//    conversation's message history ('thread'); ← exits to the diff.
+//  - that conversation's own message history ('thread') — ↑/↓ walk older/
+//    newer messages; ↓ at the bottom (threadPos === 0) advances to the next
+//    conversation (or the Onderliggende-code panel), same as the 'comment'
+//    case; ← steps back to the 'comment' level (one stop back, not all the
+//    way to the diff — mirrors the chip-path "← climbs one level" pattern
+//    just below).
+export function handleRelatedKey(key) {
   if (key === 'Escape') {
     exitRelated()
     return 'exit'
-  }
-  if (cs.focus === 'task') {
-    // ↓ walks down the task rows; ↑ at the first row climbs back up into
-    // whichever comments-substop it descended from (preTaskFocus/toTask) —
-    // climbing back to the composer only highlights it (see enterComments
-    // below), a comment row or thread still auto-focuses its reply field as
-    // before; ← exits straight to the diff, sidebar stays open.
-    if (key === 'ArrowDown') {
-      cs.taskSel = Math.min(cs.taskSel + 1, Math.max(0, taskCount - 1))
-      scrollTaskIntoView()
-    } else if (key === 'ArrowUp') {
-      if (cs.taskSel === 0) {
-        if (preTaskFocus === 'thread') {
-          cs.focus = 'thread'
-          focusThread()
-        } else if (preTaskFocus === 'comment') {
-          toComment()
-        } else {
-          // preTaskFocus is 'new' — climb back to the composer substop the
-          // same way a fresh Cmd+ArrowRight-open lands on it (enterComments): highlight
-          // the "+ Comment op deze regel" row only, don't auto-open/focus the
-          // composer. Mirrors the Cmd+ArrowRight rationale (don't hijack the keyboard
-          // into a textarea the reviewer didn't explicitly ask to type into) —
-          // an explicit Enter (isNewFocused + openComposer, home.mjs) opens it.
-          enterComments()
-        }
-      } else {
-        cs.taskSel -= 1
-        scrollTaskIntoView()
-      }
-    } else if (key === 'ArrowLeft') {
-      exitRelated()
-      return 'exit'
-    }
-    return true
   }
   if (cs.focus === 'thread') {
     if (key === 'ArrowUp') {
@@ -850,15 +642,13 @@ export function handleRelatedKey(key, taskCount = 0) {
       focusThread()
     } else if (key === 'ArrowDown') {
       if (cs.threadPos === 0) {
-        // Bottom of the thread (the reply field) — descend into Taken.
-        toTask(0)
+        advanceFromComment()
       } else {
         cs.threadPos -= 1
         focusThread()
       }
     } else if (key === 'ArrowLeft') {
-      exitRelated()
-      return 'exit'
+      toComment(false)
     }
     return true
   }
@@ -901,8 +691,13 @@ export function handleRelatedKey(key, taskCount = 0) {
           scrollChipIntoView()
         }
       } else if (cs.codeSel === 0) {
-        exitRelated()
-        return 'exit'
+        // Nothing further up in this list — step back to the last comment
+        // conversation of the unit, if there is one, else out to the diff.
+        if (hasVisibleComments()) enterCommentsTail()
+        else {
+          exitRelated()
+          return 'exit'
+        }
       } else {
         cs.codeSel -= 1
         scrollCodeIntoView()
@@ -917,6 +712,8 @@ export function handleRelatedKey(key, taskCount = 0) {
       if (cs.chipPath.length) {
         cs.chipPath = cs.chipPath.slice(0, -1)
         scrollChipIntoView()
+      } else if (hasVisibleComments()) {
+        enterCommentsTail()
       } else {
         exitRelated()
         return 'exit'
@@ -924,18 +721,20 @@ export function handleRelatedKey(key, taskCount = 0) {
     }
     return true
   }
-  // cs.focus is 'new' or 'comment' here (the flat comments row-walk).
+  // cs.focus is 'new' or 'comment' here — an inline comment conversation (or
+  // the still-empty composer). ↓ advances to the next conversation, falling
+  // through to Onderliggende code once there's no next one (advanceFromComment);
+  // ↑ at the first conversation exits to the diff; ← always exits to the diff.
   if (key === 'ArrowDown') {
-    if (currentRow() >= rowCount() - 1) {
-      // Last comments row (or the empty composer) — descend into Taken.
-      toTask(0)
-    } else {
-      gotoRow(currentRow() + 1)
+    advanceFromComment()
+  } else if (key === 'ArrowUp') {
+    if (selI() === 0) {
+      exitRelated()
+      return 'exit'
     }
-  } else if (key === 'ArrowUp') gotoRow(currentRow() - 1)
-  else if (key === 'ArrowLeft') {
-    // Exit straight back to the diff, in one step — the sidebar stays open
-    // (see toggleSidebar).
+    cs.sel -= 1
+    toComment()
+  } else if (key === 'ArrowLeft') {
     exitRelated()
     return 'exit'
   } else if (key === 'ArrowRight') {
@@ -948,14 +747,14 @@ export function handleRelatedKey(key, taskCount = 0) {
 }
 
 // startComment opens the "new comment on this line" composer — the command menu
-// (home.mjs) calls it so the reviewer can start a comment task from `/`. Mirrors
-// toNew(): besides flipping the local composing flag it also opens the sidebar
-// (cs.sidebarOpen) and hands the keyboard focus to 'new' (the "+ Comment op deze
-// regel" button shows as selected) and focuses the textarea so the reviewer can
-// type immediately. Placing the comment still goes through the workflow
+// (home.mjs) calls it so the reviewer can start a comment task from `/`, and it
+// is also the only way the composer opens: it's an explicit trigger (a click on
+// "+ Nieuwe comment", Enter/the command palette), never reached via arrow
+// browsing (see hasVisibleComments/handleRelatedKey above). Mirrors toNew():
+// hands the keyboard focus to 'new' and focuses the textarea so the reviewer
+// can type immediately. Placing the comment still goes through the workflow
 // (placeComment), so the write-boundary is unchanged.
 export function startComment() {
-  cs.sidebarOpen = true
   cs.composing = true
   cs.focus = 'new'
   focusEl('[data-testid=comment-compose]')
@@ -976,20 +775,10 @@ export function composeHasText() {
   return !!el && el.value.trim() !== ''
 }
 
-// isNewFocused reports whether the "+ Comment op deze regel" row currently
-// owns the keyboard (highlighted, but — since enterComments no longer
-// auto-opens the composer on a fresh Cmd+ArrowRight — not necessarily composing yet).
-// home.mjs's Enter handler uses this to know when Enter should open the
-// composer (see openComposer below).
-export function isNewFocused() {
-  return cs.focus === 'new'
-}
-
 // openComposer actually opens the composer (composing=true) and focuses its
-// textarea — the same landing toNew() has always done. Exported so home.mjs's
-// Enter handler can trigger it once the reviewer has highlighted the "+
-// Comment op deze regel" row (cs.focus === 'new') via Cmd+ArrowRight — a fresh Cmd+ArrowRight-open
-// only highlights that row (enterComments), it deliberately doesn't call this.
+// textarea — the same landing toNew()/startComment() have always done.
+// Exported so the always-present "+ Nieuwe comment" trigger's own click
+// handler can call it (see the new-comment button below).
 export function openComposer() {
   toNew()
 }
@@ -1262,9 +1051,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
   })
   el.value = ''
   // The reviewer placed a comment tied to a piece of code — hand the keyboard
-  // back to that code's diff (same as ← from the sidebar) instead of leaving
-  // it sitting on the composer row. The sidebar itself stays open (exitRelated
-  // never touches cs.sidebarOpen), only the keyboard focus moves.
+  // back to that code's diff instead of leaving it sitting on the composer.
   exitRelated()
 }
 
@@ -1325,49 +1112,6 @@ async function sendReaction(done) {
 }
 
 const CSTATUS_DOT = { open: 'bg-amber-400', resolved: 'bg-emerald-500' }
-
-// commentRow — one placed comment (a Workflow Execution) in the left list.
-function commentRow(c, i) {
-  return html`
-    <button
-      class="${() =>
-        'flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left transition ' +
-        (selI() === i && cs.focus === 'comment'
-          ? 'bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
-          : selI() === i && (cs.focus === 'thread' || cs.focus === 'comment')
-          ? // still the comment whose thread is open in the chat on the right,
-            // just not the row the keyboard is on right now: a lighter border
-            // keeps it marked without competing with an actively-focused row.
-            'bg-indigo-50/40 dark:bg-indigo-500/10 ring-1 ring-indigo-100 dark:ring-indigo-500/20'
-          : 'hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
-      data-testid="comment-item"
-      @click="${() => {
-        cs.sel = i
-        toComment()
-        beat()
-      }}"
-    >
-      <span class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
-      <span class="flex min-w-0 flex-col gap-0.5">
-        <span class="flex items-center gap-1.5" data-testid="comment-author-line">
-          ${avatarHTML(c.author, c.avatarUrl, 'h-4 w-4')}
-          <span class="truncate text-[11px] font-medium text-slate-600 dark:text-zinc-400" data-testid="comment-author"
-            >${c.author || 'onbekend'}</span
-          >
-          ${() => sourceBadge(c)}
-          ${() => aiWarningBadge(c)}
-        </span>
-        <span
-          class="truncate [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200"
-          .innerHTML="${commentBody(c)}"
-        ></span>
-        <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
-          >${() => c.file + ':' + c.line + ' · ' + c.reactionCount + ' reacties · ' + c.status}</span
-        >
-      </span>
-    </button>
-  `
-}
 
 // sourceBadge marks a comment imported from GitHub (source === 'github'), so the
 // reviewer can tell app-placed from imported comments — mirrors the "bron:
@@ -1444,158 +1188,196 @@ function reactionBubble(r, i, total) {
   `
 }
 
-// commentsSection — the wired panel: placed comments on the left, the selected
-// comment's reactions + a working composer on the right, and a "+ Comment op deze
-// regel" button that starts a new Execution on the current block.
-function commentsSection(state, commentTarget, openCompose) {
-  syncComments(state ? state.pr : null)
-  // Prefer commentTarget()'s file/line — it follows focusedBlock() (the column
-  // that currently owns the diff keyboard, which may be a drilled column, see
-  // home.mjs) — over the top-level state.selected block, so this header never
-  // shows a different block's file than the one the composer is actually
-  // linked to (see composeTargetHint just below, which already does this).
+// ── Inline comment blocks ──────────────────────────────────────────────────
+// A block-scoped comment thread is no longer a browsable, unscoped index in a
+// fixed sidebar — it's a small stack of cards rendered inline, directly above
+// the Onderliggende-code card (see home.mjs' DetailPanel), one card per
+// conversation, EXACTLY the set already scoped to the selected unit
+// (visibleComments()/cs.view — unchanged, see recomputeView/commentUnder
+// above). Only the currently focused conversation renders expanded (full
+// thread + reply field); every other one on the same unit stays a compact,
+// clickable one-line summary — several threads on one line thus don't all
+// compete for space at once. The "+ Nieuwe comment" trigger is always
+// present (click, Enter, or the command palette), regardless of whether the
+// unit already has comments — it is deliberately NOT part of the ↓/→
+// arrow-key traversal below (see hasVisibleComments/handleRelatedKey above),
+// which only ever walks EXISTING conversations.
+
+// compactConversation — a collapsed one-line summary of a conversation that
+// isn't currently focused/expanded.
+function compactConversation(c, i) {
+  return html`
+    <button
+      class="flex w-full items-start gap-2 rounded-md border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2.5 py-2 text-left transition hover:bg-slate-50 dark:hover:bg-zinc-800/60"
+      data-testid="comment-item"
+      data-expanded="false"
+      @click="${() => {
+        cs.sel = i
+        toComment()
+        beat()
+      }}"
+    >
+      <span class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
+      <span class="flex min-w-0 flex-col gap-0.5">
+        <span class="flex items-center gap-1.5" data-testid="comment-author-line">
+          ${avatarHTML(c.author, c.avatarUrl, 'h-4 w-4')}
+          <span class="truncate text-[11px] font-medium text-slate-600 dark:text-zinc-400" data-testid="comment-author"
+            >${c.author || 'onbekend'}</span
+          >
+          ${() => sourceBadge(c)}
+          ${() => aiWarningBadge(c)}
+        </span>
+        <span
+          class="truncate [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200"
+          .innerHTML="${commentBody(c)}"
+        ></span>
+        <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
+          >${() => c.file + ':' + c.line + ' · ' + c.reactionCount + ' reacties · ' + c.status}</span
+        >
+      </span>
+    </button>
+  `
+}
+
+// expandedConversation — the full thread (every message via threadMessages/
+// reactionBubble, unchanged) plus a working reply field, for the ONE
+// conversation currently focused (selI() === i && cs.focus is 'comment'/
+// 'thread').
+function expandedConversation(c) {
+  return html`
+    <div
+      class="flex flex-col gap-2 rounded-xl border border-indigo-300 dark:border-indigo-500/40 bg-white dark:bg-zinc-900 p-3 ring-1 ring-black/5"
+      data-testid="comment-item"
+      data-expanded="true"
+    >
+      <div class="flex items-start justify-between gap-2">
+        <span class="flex items-center gap-1.5" data-testid="comment-author-line">
+          ${avatarHTML(c.author, c.avatarUrl, 'h-4 w-4')}
+          <span class="truncate text-[11px] font-medium text-slate-600 dark:text-zinc-400" data-testid="comment-author"
+            >${c.author || 'onbekend'}</span
+          >
+          ${() => sourceBadge(c)}
+          ${() => aiWarningBadge(c)}
+        </span>
+        <span class="${() => 'mt-0.5 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
+      </div>
+      ${() => (c && c.code ? composeTargetHint({ gran: c.gran, label: c.label, code: c.code }) : '')}
+      <div class="no-scrollbar flex max-h-64 min-h-0 flex-col gap-2 overflow-auto" data-testid="comment-thread">
+        ${() => threadMessages(c).map((r, i, arr) => reactionBubble(r, i, arr.length).key('msg:' + r.id))}
+      </div>
+      <div class="flex items-center gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
+        <input
+          class="flex-1 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
+          placeholder="Reageer op deze comment…"
+          data-testid="reaction-compose"
+          @keydown="${(e) => e.key === 'Enter' && sendReaction(false)}"
+        />
+        <button
+          class="shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600"
+          data-testid="reaction-send"
+          @click="${() => sendReaction(false)}"
+        >
+          Stuur
+        </button>
+        <button
+          class="shrink-0 rounded-lg border border-emerald-300 dark:border-emerald-500/40 px-2.5 py-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/15"
+          data-testid="reaction-resolve"
+          @click="${() => sendReaction(true)}"
+        >
+          ✓
+        </button>
+      </div>
+    </div>
+  `
+}
+
+// commentCard toggles a conversation between compact and expanded. Wrapped in
+// a stable `contents` root — not a bare toggling expression — so the swap
+// never corrupts arrow.js's keyed reconcile (the "bare toggling expression"
+// pitfall in conventions.md): the outer `.key('comment:'+c.id)` (see
+// InlineComments below) never needs to change on this toggle, the nested
+// `${() => …}` binding handles it.
+function commentCard(c, i) {
+  return html`
+    <div class="contents">
+      ${() => (selI() === i && (cs.focus === 'comment' || cs.focus === 'thread') ? expandedConversation(c) : compactConversation(c, i))}
+    </div>
+  `
+}
+
+// newCommentComposer — the always-present "+ Nieuwe comment" trigger; once
+// open (cs.focus === 'new') the same slot shows the composer fields instead
+// of the button. Same stable-root pattern as commentCard.
+function newCommentComposer(state, commentTarget, openCompose) {
   const target = () => {
     const t = commentTarget && commentTarget()
     if (t) return t.file + ':' + (t.startLine || t.line)
     const b = state && state.blocks && state.blocks[state.selected]
     return b ? b.file + ':' + b.line : 'geen regel geselecteerd'
   }
-  // The `new-comment` button's "open" click (below) routes through openComposer()
-  // (toNew()) instead of a bare `cs.composing = !cs.composing` toggle: that used
-  // to leave cs.focus untouched, so a click here while cs.focus wasn't already
-  // 'new' opened the textarea without relatedActive() ever becoming true —
-  // home.mjs's onKeydown then had no signal that a real editable field owned DOM
-  // focus, and s/d/f/arrows/`/` leaked through as global shortcuts instead of
-  // flowing into the composer. openComposer() keeps cs.focus in lockstep with
-  // cs.composing, like every other path into this composer (toNew/startComment).
-  // See keyboard-navigation.md and the isEditableFocused() fallback in home.mjs.
   return html`
-    <section
-      class="flex w-full min-h-0 flex-1 flex-row overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
-      data-testid="comments-panel"
-    >
-      <div class="flex w-56 shrink-0 flex-col overflow-hidden border-r border-slate-100 dark:border-zinc-800/60">
-        <div class="border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2.5">
-          <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">Comments</h2>
-          <p class="text-[11px] text-slate-400 dark:text-zinc-500">op regels code · live</p>
-        </div>
-        <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto p-1.5">
-          <button
-            class="${() =>
-              'flex w-full items-center gap-2 rounded-md border border-dashed px-2.5 py-2 text-left transition ' +
-              (cs.focus === 'new'
-                ? 'border-indigo-400 text-indigo-600 dark:text-indigo-400 ring-1 ring-indigo-300 dark:ring-indigo-500/40'
-                : 'border-slate-200 dark:border-zinc-800 text-slate-400 dark:text-zinc-500 hover:border-indigo-200 dark:hover:border-indigo-500/40 hover:text-indigo-500 dark:hover:text-indigo-400')}"
-            data-testid="new-comment"
-            @click="${() => (cs.composing ? (cs.composing = false) : openComposer())}"
-          >
-            <span
-              class="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-current text-[11px] leading-none"
-              >+</span
-            >
-            <span class="text-xs font-medium">Comment op deze regel</span>
-          </button>
-          ${() => {
-            // Always return an ARRAY from this slot. Arrow.js mishandles a slot
-            // that alternates between a single element (the "no comments" note) and
-            // an array (the comment rows): after the empty render it would not
-            // re-render the rows when navigating back to a block whose comments had
-            // repopulated, leaving the list frozen empty. Wrapping the empty note in
-            // a one-element array keeps the slot's shape stable so it re-renders.
-            const cts = visibleComments()
-            return cts.length === 0
-              ? [html`<p class="px-2.5 py-3 text-[11px] text-slate-400 dark:text-zinc-500">Nog geen comments.</p>`.key('no-comments')]
-              : cts.map((c, i) => commentRow(c, i).key('comment:' + c.id))
-          }}
-        </div>
-      </div>
-
-      <div class="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="comment-thread">
-        <div class="border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
-          <h2 class="truncate text-sm font-semibold text-slate-800 dark:text-zinc-200">
-            ${() =>
-              cs.composing
-                ? 'Nieuwe comment · ' + target()
-                : selComment()
-                  ? selComment().body
-                  : // Idle fallback: "Thread", not "Comments" — the list column
-                    // to the left is already titled "Comments", and two bare
-                    // "Comments" headings side by side read as a duplicate.
-                    'Thread'}
-          </h2>
-          ${() => aiWarningBadge(selComment())}
-          <p class="text-[11px] text-slate-400 dark:text-zinc-500">
-            ${() => (cs.composing ? 'start een task op deze regel' : 'reacties hooken hier op de comment in')}
-          </p>
-        </div>
-
-        ${() =>
-          cs.composing
-            ? html`
-                <div class="flex min-h-0 flex-1 flex-col gap-2 p-3">
-                  ${() => composeTargetHint(commentTarget ? commentTarget() : null)}
-                  <textarea
-                    class="min-h-24 flex-1 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
-                    placeholder="Je comment op deze regel…"
-                    data-testid="comment-compose"
-                  ></textarea>
-                  <div class="flex items-center justify-end gap-2">
-                    <button
-                      class="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"
-                      @click="${() => (cs.composing = false)}"
-                    >
-                      Annuleer
-                    </button>
-                    <button
-                      class="${() =>
-                        'rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
-                        (cs.busy ? 'opacity-50' : 'hover:bg-indigo-600')}"
-                      data-testid="comment-send"
-                      @click="${() => (openCompose ? openCompose() : placeComment(state, commentTarget))}"
-                    >
-                      Plaats…
-                    </button>
-                  </div>
-                </div>
-              `
-            : html`
-                <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
-                  ${() => {
-                    const c = selComment()
-                    return c && c.code
-                      ? composeTargetHint({ gran: c.gran, label: c.label, code: c.code })
-                      : ''
-                  }}
-                  ${() =>
-                    threadMessages(selComment()).map((r, i, arr) =>
-                      reactionBubble(r, i, arr.length).key('msg:' + r.id)
-                    )}
-                </div>
-                <div class="flex items-center gap-2 border-t border-slate-100 dark:border-zinc-800/60 p-2.5">
-                  <input
-                    class="flex-1 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
-                    placeholder="Reageer op deze comment…"
-                    data-testid="reaction-compose"
-                    @keydown="${(e) => e.key === 'Enter' && sendReaction(false)}"
-                  />
+    <div class="contents">
+      ${() =>
+        cs.focus === 'new'
+          ? html`
+              <div
+                class="flex flex-col gap-2 rounded-xl border border-indigo-300 dark:border-indigo-500/40 bg-white dark:bg-zinc-900 p-3 ring-1 ring-black/5"
+                data-testid="comment-composer"
+              >
+                <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">Nieuwe comment · ${() => target()}</p>
+                ${() => composeTargetHint(commentTarget ? commentTarget() : null)}
+                <textarea
+                  class="min-h-20 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
+                  placeholder="Je comment op deze regel…"
+                  data-testid="comment-compose"
+                ></textarea>
+                <div class="flex items-center justify-end gap-2">
                   <button
-                    class="shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600"
-                    data-testid="reaction-send"
-                    @click="${() => sendReaction(false)}"
+                    class="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"
+                    @click="${() => (cs.composing = false)}"
                   >
-                    Stuur
+                    Annuleer
                   </button>
                   <button
-                    class="shrink-0 rounded-lg border border-emerald-300 dark:border-emerald-500/40 px-2.5 py-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/15"
-                    data-testid="reaction-resolve"
-                    @click="${() => sendReaction(true)}"
+                    class="${() =>
+                      'rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
+                      (cs.busy ? 'opacity-50' : 'hover:bg-indigo-600')}"
+                    data-testid="comment-send"
+                    @click="${() => (openCompose ? openCompose() : placeComment(state, commentTarget))}"
                   >
-                    ✓
+                    Plaats…
                   </button>
                 </div>
-              `}
-      </div>
-    </section>
+              </div>
+            `
+          : html`
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md border border-dashed border-slate-200 dark:border-zinc-800 px-2.5 py-2 text-left text-slate-400 dark:text-zinc-500 transition hover:border-indigo-200 dark:hover:border-indigo-500/40 hover:text-indigo-500 dark:hover:text-indigo-400"
+                data-testid="new-comment"
+                @click="${() => openComposer()}"
+              >
+                <span class="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-current text-[11px] leading-none"
+                  >+</span
+                >
+                <span class="text-xs font-medium">Comment op deze regel</span>
+              </button>
+            `}
+    </div>
+  `
+}
+
+// InlineComments — the exported block home.mjs mounts directly above the
+// Onderliggende-code card (see DetailPanel): the always-present "+ Nieuwe
+// comment" trigger, then one card per conversation already scoped to the
+// selected unit (visibleComments()).
+export function InlineComments(state, commentTarget, openCompose) {
+  syncComments(state ? state.pr : null)
+  return html`
+    <div class="flex w-[22rem] shrink-0 flex-col gap-2" data-testid="inline-comments">
+      ${newCommentComposer(state, commentTarget, openCompose)}
+      ${() => visibleComments().map((c, i) => commentCard(c, i).key('comment:' + c.id))}
+    </div>
   `
 }
 
@@ -1935,8 +1717,8 @@ function relatedColumnWidthCls() {
 // grandchildren (r.nested), a dashed connector to a narrow chip column on the
 // right (nestedChipColumn) — the drill-hint that there is more underneath.
 // The row div is the template's stable root; the chip column is a static
-// interpolation (fresh keyed node per nested change — the key in fullCard
-// encodes the nested signature). data-child-id stays on the inner card, so
+// interpolation (fresh keyed node per nested change — the key in the
+// related-code render encodes the nested signature). data-child-id stays on the inner card, so
 // the call-arrow overlay (callArrows.mjs, which targets the card's LEFT edge)
 // is unaffected by the chips on the right.
 function relatedCard(r, i, drill) {
@@ -2018,8 +1800,8 @@ function relatedCard(r, i, drill) {
 // click/Enter toggle the expansion through the same drill callback a card
 // uses (drillIntoChild branches on the kind). The chevron/data-expanded/chips
 // are static interpolations on purpose: the descriptor is a plain object and
-// every toggle rebuilds the keyed node (the key encodes open/closed, see
-// fullCard), so nothing here needs its own reactive binding.
+// every toggle rebuilds the keyed node (the key encodes open/closed, see the
+// related-code render above), so nothing here needs its own reactive binding.
 function testsBar(r, i, drill) {
   // The card's own highlight steps aside once the cursor descends into one of
   // its drill-hint chips (cs.chipPath, see nestedChip/handleRelatedKey) — only
@@ -2182,30 +1964,54 @@ function workflowNote(run, state) {
   return WORKFLOW_STATUS_NOTE[run.workflow + ':' + run.status] || run.status
 }
 
-// workflowRow renders one run at flat index `i` (its position in `taskRuns`'
-// active-then-done order — see workflowsSection). A task_code_comment run with
-// a resolved `comment` reference is clickable: it opens that comment's
-// block/diff-unit and selects its thread (openTask, from home.mjs via the
-// `search` options object). Other run types are purely informational — a click
-// still lands the keyboard cursor on the row (mouse equivalent of → walking
-// here, see toTask) but doesn't navigate anywhere.
-function workflowRow(run, openTask, i, state) {
+// TASK_STALE_MS — a run older than this (by its own updatedAt) without being
+// genuinely in progress is shown again as a "this hasn't moved in a while"
+// signal (see visibleWorkflowRuns below).
+const TASK_STALE_MS = 5 * 60 * 1000
+
+// visibleWorkflowRuns is what TasksPanel (below, mounted under the
+// PR-description column, see detail-layout.md) actually renders: a run shows
+// only while it's genuinely IN PROGRESS (status === 'running' — deliberately
+// not 'waiting' too: several long-lived per-PR trackers, build_relations/
+// approve/pr_status, sit in 'waiting' indefinitely once their initial run is
+// done, without being busy) OR it hasn't been updated in over
+// TASK_STALE_MS — a recently completed/waiting run thus disappears for the
+// first few minutes (nothing to act on), then reappears as a "this has been
+// sitting idle for a while" signal. Running-first, then most-recently-updated.
+export function visibleWorkflowRuns(state) {
+  const all = state && Array.isArray(state.workflows) ? state.workflows : []
+  const now = Date.now()
+  const stale = (r) => {
+    const t = new Date(r.updatedAt).getTime()
+    return Number.isNaN(t) || now - t > TASK_STALE_MS
+  }
+  const visible = all.filter((r) => r.status === 'running' || stale(r))
+  return visible.sort((a, b) => {
+    if ((a.status === 'running') !== (b.status === 'running')) return a.status === 'running' ? -1 : 1
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+  })
+}
+
+// workflowRow renders one run. A task_code_comment run with a resolved
+// `comment` reference is clickable: it opens that comment's block/diff-unit
+// and selects its thread (openTask, from home.mjs). Other run types are
+// purely informational. No keyboard cursor here — Tasks is click-only (it
+// lives under the PR-description column, which already suppresses ↑/↓, see
+// keyboard-navigation.md).
+function workflowRow(run, openTask, state) {
   const badge = STATUS_BADGES[run.status] || { label: run.status, cls: 'bg-slate-50 dark:bg-zinc-800/60 text-slate-500 dark:text-zinc-500 ring-slate-200 dark:ring-zinc-800' }
   const active = run.status === 'running' || run.status === 'waiting'
   const clickable = !!(run.comment && openTask)
-  const focused = () => cs.focus === 'task' && cs.taskSel === i
   return html`
     <div
       class="${() =>
-        'flex flex-col gap-0.5 rounded-md px-2 py-1.5 ring-1 ring-inset ' +
+        'flex flex-col gap-0.5 rounded-md px-2 py-1.5 ring-1 ring-inset ring-transparent ' +
         (active ? '' : 'opacity-60') +
-        (clickable ? ' cursor-pointer hover:bg-slate-50 dark:hover:bg-zinc-800/60' : '') +
-        (focused() ? ' ring-indigo-300 dark:ring-indigo-500/40 bg-indigo-50/60 dark:bg-indigo-500/10' : ' ring-transparent')}"
+        (clickable ? ' cursor-pointer hover:bg-slate-50 dark:hover:bg-zinc-800/60' : '')}"
       data-testid="workflow-row"
       data-status="${run.status}"
       data-run-id="${run.runId}"
-      data-active="${() => focused()}"
-      @click="${() => (clickable ? openTask(run) : toTask(i))}"
+      @click="${() => (clickable ? openTask(run) : null)}"
     >
       <div class="flex items-center gap-2">
         <span class="min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-zinc-300" data-testid="workflow-label"
@@ -2227,13 +2033,15 @@ function workflowRow(run, openTask, i, state) {
   `
 }
 
-function workflowsSection(state, openTask) {
-  const runs = () => (state && Array.isArray(state.workflows) ? state.workflows : [])
-  const activeRuns = () => runs().filter((r) => r.status === 'running' || r.status === 'waiting')
-  const doneRuns = () => runs().filter((r) => r.status === 'completed' || r.status === 'failed')
+// TasksPanel — the exported "Taken" block, mounted by home.mjs under the
+// PR-description column (prInfoCard), no longer a fixed right-hand sidebar.
+// Only shows runs that are genuinely in progress, or that have been sitting
+// idle for a while (visibleWorkflowRuns) — no more Active/Recent split, a
+// single filtered list.
+export function TasksPanel(state, openTask) {
   return html`
     <section
-      class="flex w-full shrink-0 max-h-[16rem] min-h-[10rem] flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
+      class="flex w-full shrink-0 max-h-[16rem] min-h-[6rem] flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
       data-testid="workflows-panel"
     >
       <div class="border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2.5">
@@ -2245,38 +2053,14 @@ function workflowsSection(state, openTask) {
           // Always return an ARRAY from this slot (see the "no comments" note
           // above): a slot that alternates between a single element and an
           // array can freeze empty after the first empty render.
-          const all = runs()
-          if (all.length === 0) {
-            return [html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">Geen taken.</p>`.key('no-workflows')]
-          }
-          const rows = []
-          const act = activeRuns()
-          const done = doneRuns()
-          // idx tracks each run's position in the flat active-then-done order —
-          // the same order `taskRuns` (exported) returns — so cs.taskSel always
-          // points at the same run the keyboard nav (home.mjs) sees.
-          let idx = 0
-          if (act.length > 0) {
-            rows.push(
-              html`<p class="px-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500">Actief</p>`.key(
-                'hdr-active'
-              )
-            )
-            // Key includes status: a run whose status just changed (e.g.
-            // running → completed) needs a fresh node, not a patched one —
-            // arrow.js only re-runs a keyed node's own bindings on a key
-            // change (see the block-card-key convention in conventions.md).
-            for (const r of act) rows.push(workflowRow(r, openTask, idx++, state).key('run:' + r.runId + ':' + r.status))
-          }
-          if (done.length > 0) {
-            rows.push(
-              html`<p class="px-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500">Recent</p>`.key(
-                'hdr-done'
-              )
-            )
-            for (const r of done) rows.push(workflowRow(r, openTask, idx++, state).key('run:' + r.runId + ':' + r.status))
-          }
-          return rows
+          const runs = visibleWorkflowRuns(state)
+          return runs.length === 0
+            ? [html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">Geen taken.</p>`.key('no-workflows')]
+            : // Key includes status: a run whose status just changed (e.g.
+              // running → completed) needs a fresh node, not a patched one —
+              // arrow.js only re-runs a keyed node's own bindings on a key
+              // change (see the block-card-key convention in conventions.md).
+              runs.map((r) => workflowRow(r, openTask, state).key('run:' + r.runId + ':' + r.status))
         }}
       </div>
     </section>
@@ -2337,17 +2121,7 @@ export default function RelatedPanel(state, commentTarget, search) {
   // Clicking a child drills into it as its own diff column — the same path Enter
   // takes on a focused child (drillIntoChild in home.mjs), just mouse-driven.
   const drill = (r) => search && search.drill && search.drill(r)
-  // fullCard is the ordinary, expanded Onderliggende-code card — unchanged from
-  // before the laptop-width auto-collapse (see relatedRailActive/relatedRail
-  // above). Wrapped in its own function (rather than being the direct return
-  // value) so the outer return below can toggle it against relatedRail() from
-  // within a *stable element root* — see the "kale toggelende expressie"
-  // pitfall in conventions.md: a template whose entire body is one toggling
-  // expression corrupts arrow.js's keyed reconcile once it flips shape (here:
-  // <section> ↔ <button>). The `<div class="contents">` wrapper keeps the
-  // outer .key('related-panel') (home.mjs) pointed at a permanent element
-  // while only the inner slot swaps.
-  const fullCard = () => html`
+  return html`
     <section
       class="${() => 'relative flex shrink-0 max-h-full min-h-0 flex-col overflow-hidden ' + relatedColumnWidthCls()}"
       data-testid="related-code"
@@ -2402,11 +2176,6 @@ export default function RelatedPanel(state, commentTarget, search) {
       </div>
     </section>
   `
-  return html`
-    <div class="contents" data-testid="related-panel-root">
-      ${() => (relatedRailActive() ? relatedRail() : fullCard())}
-    </div>
-  `
 }
 
 // ── PR-wide comments as navigable index items ────────────────────────────────
@@ -2440,9 +2209,8 @@ function isKiloReview(body) {
 // order cs.list already carries — minus kilo-review bot summaries (see
 // isKiloReview). Exported so home.mjs can turn each entry into a synthetic
 // index item (recomputeLeftList/commentBlockItem); cs.list is kept loaded/
-// polled by syncComments (CommentsSidebar, still mounted regardless of the
-// sidebar's own open/closed state — see toggleSidebar), so this needs no
-// separate fetch of its own.
+// polled by syncComments (called unconditionally by InlineComments below),
+// so this needs no separate fetch of its own.
 export function prWideComments() {
   return cs.list.filter((c) => c.kind && !isKiloReview(c.body))
 }
@@ -2456,8 +2224,8 @@ export function prWideComments() {
 const COMMENT_KIND_LABEL = { issue: 'PR-comment', review: 'PR-comment', review_summary: 'Review', ai_warning: 'AI-risico' }
 
 // commentBody is the single place a comment's body text is rendered — kept
-// tiny and reusable (block-scoped commentRow/reactionBubble and
-// commentDetailCard below) so this one function drives markdown rendering
+// tiny and reusable (compactConversation/expandedConversation/reactionBubble
+// above and commentDetailCard below) so this one function drives markdown rendering
 // everywhere a comment body shows up. Returns a getter of a *safe HTML
 // string* (via the same renderMarkdown used by prInfoCard for the PR
 // summary/description, see markdown.mjs) meant for an `.innerHTML` binding —
@@ -2607,182 +2375,3 @@ export function commentDetailCard(c, opts) {
   `
 }
 
-// ── Comments/taken sidebar (fixed, toggled with Cmd+→) ────────────────────────
-// A fixed right-hand overlay (mirrors PrInfoPanel's fixed left-hand column,
-// see detail-layout.md), independent of <main>'s horizontal-scrolling column
-// flow: comments on top, taken stacked below. Toggled globally with Cmd+→
-// (toggleSidebar, home.mjs' onKeydown) rather than reached by stepping →
-// through the nav chain — see keyboard-navigation.md. Collapsed
-// (!cs.sidebarOpen) it renders as a narrow hint rail showing the comment count
-// + the genuinely running task count; a click on the rail opens it the same
-// way Cmd+→ does.
-
-// runningTaskCount is the number of genuinely active (`running`) runs — the
-// second number on the collapsed hint rail, and also what drives its color
-// (see sidebarHintRail below). Deliberately NOT `waiting` too: several
-// long-lived per-PR trackers (build_relations, approve, pr_status) sit in
-// `waiting` indefinitely once their initial run is done, without being busy
-// (see `.claude/rules/tembed-workflows.md`/the buildRelationsSummary "idle"
-// note in this file) — counting/coloring those as "active" was misleading.
-// Only used here (not by taskRuns' own active/done split, which — for the
-// Active/Recent grouping of the open sidebar — deliberately keeps treating
-// `waiting` as "still open", since a waiting comment thread etc. should stay
-// visually grouped with running work there, not sink to "Recent").
-function runningTaskCount(state) {
-  return taskRuns(state).filter((r) => r.status === 'running').length
-}
-
-// openSidebar is the "open it" half of toggleSidebar, also used directly by a
-// click on the collapsed hint rail (which can only ever mean "open"). Restores
-// the last comments-sidebar spot (see restoreLastSidebarFocus) instead of
-// always resetting to the composer row.
-function openSidebar() {
-  cs.sidebarOpen = true
-  restoreLastSidebarFocus()
-}
-
-// restoreLastSidebarFocus lands the keyboard back on the comment/thread the
-// reviewer left last this session (lastSidebarFocus, set by exitRelated),
-// falling back to the default enterComments() landing (row 0, highlight only
-// — see its own comment for why that doesn't auto-open the composer) when:
-// there is no remembered spot yet, it was the composer row itself (which is
-// exactly what enterComments already lands on), or the remembered comment is
-// no longer visible (deleted, or the reviewer since moved to a block/unit
-// whose comment scope is now empty). A remembered index past the end of a
-// shrunk-but-non-empty list clamps to the last comment instead of bouncing to
-// the default, mirroring applyRelRestore's clamping.
-// Highlight only, like enterComments — does NOT drop the keyboard into the
-// reply/reaction textarea (toComment(false)/focusThread(false)): a Cmd+ArrowRight
-// re-open must behave the same way a fresh open does (see enterComments'
-// own comment on why) — landing straight in an editable field would swallow
-// the reviewer's very next keystroke (e.g. a literal "g" meant to toggle the
-// sidebar shut again) as typed text instead. An explicit Enter still opens
-// it (isCommentFocused/openComposer in home.mjs), same as a fresh Cmd+ArrowRight-open.
-function restoreLastSidebarFocus() {
-  const want = lastSidebarFocus
-  if (!want || want.focus === 'new') {
-    enterComments()
-    return
-  }
-  const n = visibleComments().length
-  if (n === 0) {
-    enterComments()
-    return
-  }
-  cs.sel = Math.min(want.sel, n - 1)
-  if (want.focus === 'thread') {
-    cs.focus = 'thread'
-    cs.threadPos = Math.min(want.threadPos, reactionCount())
-    focusThread(false)
-  } else {
-    toComment(false)
-  }
-}
-
-// sidebarHintRail — the collapsed state: a narrow rail on the right edge with
-// the comment count and the genuinely running task count, clickable to open.
-function sidebarHintRail(state) {
-  return html`
-    <button
-      type="button"
-      class="${() =>
-        // Mirror <main>'s reactive bottom reservation (home.mjs's DetailPanel):
-        // none once the footer has nothing to show (state.footerVisible
-        // false), 90px for just the inline diff, 140px while it also shows an
-        // AI unit description — so the rail never slides in behind it, but
-        // doesn't reserve dead space once the footer itself is gone. Whole-
-        // value function binding (arrow.js class rule, see conventions.md).
-        `fixed right-0 top-6 ${
-          !(state && state.footerVisible) ? 'bottom-6' : state.footerExplain ? 'bottom-[140px]' : 'bottom-[90px]'
-        } z-20 flex w-12 flex-col items-center justify-center gap-4 rounded-l-xl border border-r-0 border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400`}"
-      data-testid="sidebar-collapsed"
-      title="Comments &amp; taken (g)"
-      aria-label="Comments en taken tonen"
-      @click="${() => openSidebar()}"
-    >
-      <span class="flex flex-col items-center gap-0.5" data-testid="sidebar-hint-comments">
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          class="h-4 w-4"
-        >
-          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
-        </svg>
-        <span class="text-[11px] font-semibold tabular-nums" data-testid="sidebar-hint-comments-count"
-          >${() => visibleComments().length}</span
-        >
-      </span>
-      <span
-        class="${() =>
-          // Whole-value class binding (arrow.js rule, see conventions.md):
-          // amber only while something is genuinely running, otherwise the
-          // same neutral gray as the comments icon next to it — a task list
-          // that's merely `waiting` (idle, see runningTaskCount above) must
-          // not look "active".
-          `flex flex-col items-center gap-0.5 ${
-            runningTaskCount(state) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-zinc-400'
-          }`}"
-        data-testid="sidebar-hint-tasks"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          class="h-4 w-4"
-        >
-          <circle cx="12" cy="12" r="9"></circle>
-          <polyline points="12 7 12 12 16 14"></polyline>
-        </svg>
-        <span class="text-[11px] font-semibold tabular-nums" data-testid="sidebar-hint-tasks-count"
-          >${() => runningTaskCount(state)}</span
-        >
-      </span>
-    </button>
-  `
-}
-
-// CommentsSidebar — the fixed-position sidebar itself: comments on top, taken
-// stacked below when open (cs.sidebarOpen), else the collapsed hint rail.
-// Mounted once, at top level, alongside PrInfoPanel/BlockList/DetailPanel (see
-// home.mjs) — not inside <main>'s column flow.
-export function CommentsSidebar(state, commentTarget, openCompose, openTaskFn) {
-  const openTask = (run) => openTaskFn && openTaskFn(run)
-  // Load comments (and start the poll/heartbeat) unconditionally, once, at
-  // mount — regardless of whether the sidebar is open. commentsSection() only
-  // runs its own syncComments() call while cs.sidebarOpen is true (it's inside
-  // the collapsible branch below), so without this the comment list — and
-  // hence visibleComments(), which the ↓/↑ row-walk and the hint-rail count
-  // both depend on — would stay empty until the reviewer opens the sidebar
-  // for the first time. Mirrors how state.prMeta/state.workflows already load
-  // progressively regardless of whether their column happens to be visible.
-  syncComments(state ? state.pr : null)
-  return html`
-    <div>
-      ${() =>
-        cs.sidebarOpen
-          ? html`<div
-              class="${() =>
-                // Reactive bottom reservation, same 3-way rule as
-                // sidebarHintRail above (mirrors <main>'s DetailPanel binding
-                // in home.mjs).
-                `fixed right-6 top-6 ${
-                  !(state && state.footerVisible) ? 'bottom-6' : state.footerExplain ? 'bottom-[140px]' : 'bottom-[90px]'
-                } z-20 flex w-[36rem] min-h-0 flex-col gap-3`}"
-              data-testid="comments-sidebar"
-            >
-              ${commentsSection(state, commentTarget, openCompose)}
-              ${workflowsSection(state, openTask)}
-            </div>`.key('comments-sidebar-open')
-          : sidebarHintRail(state).key('comments-sidebar-collapsed')}
-    </div>
-  `
-}

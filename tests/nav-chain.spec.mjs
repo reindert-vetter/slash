@@ -92,7 +92,7 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await expect(page.getByTestId('inbox')).toBeVisible()
   })
 
-  test('Cmd+ArrowRight opens the comments sidebar; ← exits straight to the diff (sidebar stays open); ↓ with nothing deeper reaches Taken; Enter opens the task', async ({
+  test('→ reaches the inline comment stop only when the unit has one, and ↓ falls through to Onderliggende code', async ({
     page,
     request,
   }) => {
@@ -100,116 +100,51 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     // ContractController::index, sorts first as the sole CONTROLLER, see
     // categoryRank in home.mjs, but has no local diff) is the one fixture
     // block guaranteed to carry a real diff (see the data caveat in
-    // conventions.md) — it has exactly one changed line, so there's no
-    // "later, non-colliding" unit within it to place a comment on without
-    // landing in the same scope other specs already use for their own
-    // comments on it (comment-index.spec.mjs, related-nav.spec.mjs).
-    // Comments are scoped per BLOCK, but Taken (the workflows list) is scoped
-    // to the whole PR — so seed the comment on a *different* block
-    // (findOrCreateCustomer — index 1 of the raw, unsorted /api/blocks
-    // response, distinct from the UI's sorted list index used below) that
-    // nothing else here touches; it still shows up as a Taken row for this
-    // PR, with zero risk of also surfacing in this block's comment index.
+    // conventions.md). Seed the comment on this exact block (whole-block
+    // scope, rowStart/-End -1) — `_cleanApprovals` wipes PR 12903's comments
+    // before every test, so this is order-independent.
     const blocks = await (await request.get('/api/blocks?pr=12903')).json()
-    const other = blocks[1]
+    const b = blocks.find((x) => x.class === 'CreatePaymentAction' && x.name === 'execute')
     const start = await request.post('/api/workflows/task_code_comment', {
       data: {
         pr: 12903,
-        file: other.file,
+        file: b.file,
         line: 1,
         author: 'reviewer',
         body: 'nav-chain comment',
-        label: other.class + '::' + other.name,
+        label: b.class + '::' + b.name,
         rowStart: -1,
         rowEnd: -1,
       },
     })
-    const runId = (await start.json()).runId
-    expect(runId).toBeTruthy()
-    await expect
-      .poll(async () => {
-        const runs = await (await request.get('/api/workflows?pr=12903')).json()
-        return (runs.runs || []).some((r) => r.runId === runId)
-      })
-      .toBe(true)
+    expect(await start.json()).toHaveProperty('runId')
 
     await page.goto('/pr/12903')
     await page.locator('[data-idx="1"]').click() // CreatePaymentAction::execute
     // The related-code card has no outer focus border anymore (removed so its
     // children read as loose blocks); the code stop owning the keyboard shows as
-    // cs.focus === 'code', mirrored to the URL as rel.foc (this block has no
-    // underlying-code children here, so there's no selected item to assert on).
+    // cs.focus === 'code', mirrored to the URL as rel.foc.
     const relFoc = () => new URL(page.url()).searchParams.get('rel.foc')
     await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
     await page.keyboard.press('ArrowRight') // list → diff (this block's one change)
-    await page.keyboard.press('ArrowRight') // diff → related panel (code)
+
+    // → lands on the inline comment stop first — the unit has one — before
+    // reaching Onderliggende code (see keyboard-navigation.md).
+    await page.keyboard.press('ArrowRight')
+    await expect.poll(relFoc).toBe('comment')
+    const inlineComments = page.getByTestId('inline-comments')
+    await expect(inlineComments.getByTestId('comment-thread')).toContainText('nav-chain comment')
+
+    // ↓ with no further conversation on this unit falls through to
+    // Onderliggende code instead of clamping.
+    await page.keyboard.press('ArrowDown')
     await expect.poll(relFoc).toBe('code')
 
-    // Cmd+ArrowRight opens the comments/taken sidebar (independent of the code stop —
-    // it's a separate, fixed overlay, not the next stop in the chain) and
-    // highlights the "+ Comment op deze regel" row — but does NOT auto-focus
-    // the composer (see enterComments in RelatedPanel.mjs: a fresh Cmd+ArrowRight-open
-    // only highlights the row, so a 2nd Cmd+ArrowRight can toggle the sidebar shut right
-    // away instead of typing a literal "g" into an already-focused textarea).
-    const sidebar = page.getByTestId('comments-sidebar')
-    await page.keyboard.press('Meta+ArrowRight')
-    await expect(sidebar).toBeVisible()
-    await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
-    await expect(page.getByTestId('comment-compose')).toHaveCount(0)
-
-    // Enter opens the composer and focuses it.
-    await page.keyboard.press('Enter')
-    await expect(page.getByTestId('comment-compose')).toBeFocused()
-
-    // ← from the composer exits straight back to the diff in one step — not
-    // back to the Onderliggende-code stop — and the sidebar stays open (the
-    // composer itself closes — exitRelated drops cs.composing — so the
-    // "+ Comment op deze regel" button loses its focus ring instead).
+    // ← peels back to the comment stop, then to the diff.
+    await page.keyboard.press('ArrowLeft')
+    await expect.poll(relFoc).toBe('comment')
     await page.keyboard.press('ArrowLeft')
     await expect.poll(relFoc).toBe(null)
-    await expect(sidebar).toBeVisible()
-    await expect(page.getByTestId('new-comment')).not.toHaveClass(/ring-indigo-300/)
-
-    // Cmd+ArrowRight again — the sidebar is open but the keyboard sits on the diff —
-    // re-highlights the row without auto-focusing the composer. Nothing
-    // deeper to go from there — ↓ advances straight to Taken. Exactly one row
-    // should carry the keyboard highlight.
-    await page.keyboard.press('Meta+ArrowRight')
-    await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
-    await expect(page.getByTestId('comment-compose')).toHaveCount(0)
-    await page.keyboard.press('ArrowDown')
-    const active = page.locator('[data-testid=workflow-row][data-active="true"]')
-    await expect(active).toHaveCount(1)
-
-    // ↑ from the first Taken row climbs back to the composer substop — but,
-    // like the Cmd+ArrowRight-open above, only highlights the "+ Comment op deze regel"
-    // row. It must NOT auto-open/focus the composer (see enterComments in
-    // RelatedPanel.mjs's handleRelatedKey ArrowUp branch).
-    await page.keyboard.press('ArrowUp')
-    await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
-    await expect(page.getByTestId('comment-compose')).toHaveCount(0)
-    // Re-enter Taken to continue the walk below.
-    await page.keyboard.press('ArrowDown')
-    await expect(active).toHaveCount(1)
-
-    // Walk ↓ until the highlighted row is the one for our seeded run (other
-    // workflow types for this PR — pr_status, build_relations, … — sit in the
-    // same list), then confirm the reachable count so the loop can't spin
-    // forever if something regresses.
-    const ourRow = page.locator(`[data-testid=workflow-row][data-run-id="${runId}"]`)
-    await expect(ourRow).toHaveCount(1)
-    const total = await page.locator('[data-testid=workflow-row]').count()
-    for (let i = 0; i < total; i++) {
-      if ((await ourRow.getAttribute('data-active')) === 'true') break
-      await page.keyboard.press('ArrowDown')
-    }
-    await expect(ourRow).toHaveAttribute('data-active', 'true')
-
-    // Enter opens the focused run the same way a click does: it jumps to the
-    // comment's block/unit and selects its thread.
-    await page.keyboard.press('Enter')
-    await expect(page.getByTestId('comment-thread')).toContainText('nav-chain comment')
-    await expect(page.getByTestId('reaction-compose')).toBeFocused()
   })
 
   test('← from a diff deep-link goes to the block-index first, then the description on a second ←', async ({

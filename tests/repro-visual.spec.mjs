@@ -1,15 +1,9 @@
 import { test, expect } from './_fixtures.mjs'
 
-// The comments/taken sidebar is a fixed overlay toggled with Cmd+ArrowRight (see
-// detail-layout.md), collapsed by default — open it before touching anything
-// inside it.
+// Comments render inline, next to the diff; the "+ Comment op deze regel"
+// trigger is always present and clickable directly.
 async function placeVia(page, body) {
-  // Cmd+ArrowRight opens the sidebar, highlighting the "+ Comment op deze regel" row
-  // (enterComments); Enter then opens the composer and focuses it
-  // (openComposer) — a fresh Cmd+ArrowRight-open no longer auto-focuses the composer, so
-  // a 2nd Cmd+ArrowRight can toggle the sidebar shut instead of typing into it.
-  await page.keyboard.press('Meta+ArrowRight')
-  await page.keyboard.press('Enter')
+  await page.getByTestId('new-comment').click()
   await page.getByTestId('comment-compose').fill(body)
   await page.getByTestId('comment-send').click()
   await page.waitForTimeout(200)
@@ -19,7 +13,7 @@ async function placeVia(page, body) {
   await page.waitForTimeout(800)
 }
 function item(page, body) {
-  return page.getByTestId('comments-sidebar').getByTestId('comment-item').filter({ hasText: body })
+  return page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: body })
 }
 
 test('call gran on billingAddress-like block, then re-navigate', async ({ page }) => {

@@ -1,87 +1,29 @@
 import { test, expect } from './_fixtures.mjs'
 
-// Keyboard navigation into the inline Onderliggende-code card and the fixed
-// comments/taken sidebar. From the diff, → selects the related-code block
-// (stop 5 of the left→right nav chain, unaffected by the sidebar). The
-// comments/taken sidebar is a separate, Cmd+ArrowRight-toggled overlay (see
-// detail-layout.md): Cmd+ArrowRight opens it on the composer; ↓/↑ cross between the
-// comments list and the taken list (stacked vertically); → on a comment opens
-// its thread with the reply field focused; ↑ walks up through the old
-// messages; ← from *anywhere* in the sidebar exits straight back to the diff
-// in one step, and the sidebar stays open. See home.mjs (onKeydown →
-// relatedActive/enterRelated/handleRelatedKey/toggleSidebar) and
-// RelatedPanel.mjs (the cs.focus/threadPos/sidebarOpen state machine).
+// Keyboard navigation into the inline comment block and the Onderliggende-code
+// card. From the diff, → lands on the first comment conversation of the
+// selected unit if there is one (stop between the diff and Onderliggende
+// code, only reachable when the unit actually has comments — see
+// hasVisibleComments/enterCommentsHead in RelatedPanel.mjs), else straight on
+// Onderliggende code. ↓ within a conversation advances to the next one,
+// falling through to Onderliggende code once there is no next one; → on a
+// conversation opens its thread with the reply field focused; ↑ walks up
+// through the old messages; ← peels back one stop at a time (thread →
+// conversation → diff). See home.mjs (onKeydown → relatedActive/enterRelated/
+// handleRelatedKey) and RelatedPanel.mjs (the cs.focus/threadPos state
+// machine).
 test.describe('PR Review Tree — related-panel navigation', () => {
-  // stepIntoRelated: from a fresh load (list mode), → steps into the diff, →
-  // again hands the keyboard to the inline Onderliggende-code card.
-  async function stepIntoRelated(page) {
-    await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
-    // in home.mjs) has no local diff to preview; select block 1
-    // (CreatePaymentAction::execute).
-    await page.locator('[data-idx="1"]').click()
-    await expect(page.locator('[data-change-active]').first()).toBeVisible()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
-    await page.keyboard.press('ArrowRight') // list → diff
-    await page.keyboard.press('ArrowRight') // diff → related-code
-  }
-
-  test('Cmd+ArrowRight opens the comments sidebar on the "+ Comment op deze regel" row without auto-focusing the composer; Enter opens it; Cmd+ArrowRight still toggles the sidebar shut straight away', async ({
-    page,
-  }) => {
-    await stepIntoRelated(page)
-
-    // Cmd+ArrowRight opens the comments/taken sidebar and highlights the "+ Comment op
-    // deze regel" row — a deterministic anchor, regardless of where the
-    // keyboard was (the diff, or this related-code card) — but does NOT drop
-    // keyboard focus into the composer, so a second Cmd+ArrowRight can close the sidebar
-    // right away instead of typing a literal "g" into an already-focused field.
-    await page.keyboard.press('Meta+ArrowRight')
-    const sidebar = page.getByTestId('comments-sidebar')
-    await expect(sidebar).toBeVisible()
-    await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
-    await expect(page.getByTestId('comment-compose')).toHaveCount(0)
-
-    // Cmd+ArrowRight again immediately toggles the sidebar shut — nothing ever stole the
-    // keyboard focus, so the keypress reaches toggleSidebar unhindered.
-    await page.keyboard.press('Meta+ArrowRight')
-    await expect(sidebar).toHaveCount(0)
-    await expect(page.getByTestId('sidebar-collapsed')).toBeVisible()
-
-    // Re-open, then Enter on the highlighted row opens the composer and
-    // focuses it.
-    await page.keyboard.press('Meta+ArrowRight')
-    await page.keyboard.press('Enter')
-    await expect(page.getByTestId('comment-compose')).toBeFocused()
-
-    // ← exits straight back to the diff in one step — the sidebar stays open.
-    await page.keyboard.press('ArrowLeft')
-    await expect(page.getByTestId('new-comment')).not.toHaveClass(/ring-indigo-300/)
-    await expect(sidebar).toBeVisible()
-
-    // Cmd+ArrowRight again — the sidebar is open but the keyboard sits elsewhere (the
-    // diff) — re-highlights the row without auto-focusing the composer.
-    await page.keyboard.press('Meta+ArrowRight')
-    await expect(page.getByTestId('new-comment')).toHaveClass(/ring-indigo-300/)
-    await expect(page.getByTestId('comment-compose')).toHaveCount(0)
-
-    // Cmd+ArrowRight once more closes it straight away.
-    await page.keyboard.press('Meta+ArrowRight')
-    await expect(sidebar).toHaveCount(0)
-    await expect(page.getByTestId('sidebar-collapsed')).toBeVisible()
-  })
-
-  test('↓ into the comment index, → opens the thread (reply focused), ↑ selects an old message, ← exits to the diff', async ({
+  test('↓ into the comment conversation, → opens the thread (reply focused), ↑ selects an old message, ← peels back one stop at a time', async ({
     page,
   }) => {
     // The comment index is scoped to the selected block, so seed the comment on
-    // the same block stepIntoRelated below will select (block 1,
-    // CreatePaymentAction::execute — block 0, ContractController::index, sorts
-    // first as the sole CONTROLLER, see categoryRank in home.mjs, but carries
-    // no local diff) — read its file/label from the card. An unknown row
-    // anchor (rowStart -1) means "block-level", so it shows for that block
-    // whatever unit is selected. Writes still go through the workflow endpoints
-    // (start + reply signal), so the write-boundary holds.
+    // the same block this test will select (block 1, CreatePaymentAction::execute
+    // — block 0, ContractController::index, sorts first as the sole
+    // CONTROLLER, see categoryRank in home.mjs, but carries no local diff) —
+    // read its file/label from the card. An unknown row anchor (rowStart -1)
+    // means "block-level", so it shows for that block whatever unit is
+    // selected. Writes still go through the workflow endpoints (start + reply
+    // signal), so the write-boundary holds.
     await page.goto('/pr/12903')
     await page.locator('[data-idx="1"]').click()
     const card = page.getByTestId('block-column').locator('article').first()
@@ -107,15 +49,22 @@ test.describe('PR Review Tree — related-panel navigation', () => {
       })
       .toBeGreaterThan(0)
 
-    await stepIntoRelated(page)
+    // Reload so the comment list loads fresh with the just-seeded comment
+    // already present (the frontend's own 5s poll cadence would otherwise
+    // race the next steps).
+    await page.goto('/pr/12903')
+    await page.locator('[data-idx="1"]').click()
 
-    // g opens the sidebar on the "+ Comment op deze regel" row (highlighted,
-    // not yet focused into the composer); ↓ steps down into the comment index
-    // (the seeded comment). Landing on the comment shows its history and
-    // focuses the reply field, so the reviewer can type a reply straight away.
-    await page.keyboard.press('Meta+ArrowRight')
-    await page.keyboard.press('ArrowDown')
-    await expect(page.getByTestId('comment-item').first()).toHaveClass(/bg-indigo-50/)
+    // → into the diff, → onto the (only) comment conversation of this unit —
+    // reachable because it exists (see hasVisibleComments). Landing on it
+    // shows its history and focuses the reply field, so the reviewer can type
+    // a reply straight away.
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await page.keyboard.press('ArrowRight') // list → diff
+    await page.keyboard.press('ArrowRight') // diff → the comment conversation
+    const inlineComments = page.getByTestId('inline-comments')
+    await expect(inlineComments.getByTestId('comment-item').first()).toHaveAttribute('data-expanded', 'true')
     await expect(page.getByTestId('reaction-compose')).toBeFocused()
 
     // → steps into the thread (so ↑ now walks the old messages); ↑ highlights the
@@ -130,12 +79,33 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     await expect(page.getByTestId('reaction-bubble').first()).toHaveClass(/ring-indigo-400/)
     await expect(page.getByTestId('reaction-bubble').first()).toContainText('eerste comment')
 
-    // ← from inside the thread exits straight back to the diff in one step —
-    // not just one level back to the comment index — and the sidebar stays
-    // open (see toggleSidebar/handleRelatedKey).
+    // ← from inside the thread steps back one stop — to the conversation
+    // level, still expanded, reply field no longer focused — not all the way
+    // to the diff in one jump.
     await page.keyboard.press('ArrowLeft')
-    await expect(page.getByTestId('comments-sidebar')).toBeVisible()
-    await expect(page.getByTestId('comment-item').first()).not.toHaveClass(/bg-indigo-50/)
+    await expect(inlineComments.getByTestId('comment-item').first()).toHaveAttribute('data-expanded', 'true')
     await expect(page.getByTestId('reaction-compose')).not.toBeFocused()
+
+    // A further ← exits to the diff.
+    const relFoc = () => new URL(page.url()).searchParams.get('rel.foc')
+    await page.keyboard.press('ArrowLeft')
+    await expect.poll(relFoc).toBe(null)
+  })
+
+  test('→ from the diff goes straight to Onderliggende code when the selected unit has no comments', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
+    // in home.mjs) has no local diff to preview; select block 1
+    // (CreatePaymentAction::execute).
+    await page.locator('[data-idx="1"]').click()
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await page.keyboard.press('ArrowRight') // list → diff
+    await page.keyboard.press('ArrowRight') // diff → related-code (no comments here)
+
+    const relFoc = () => new URL(page.url()).searchParams.get('rel.foc')
+    await expect.poll(relFoc).toBe('code')
   })
 })

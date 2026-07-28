@@ -20,12 +20,10 @@ test('Enter on a filled composer defaults to "Plaats comment" (public) and refre
   await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
   await page.keyboard.press('ArrowRight') // list -> diff
 
-  // Cmd+ArrowRight opens the sidebar and highlights "+ Comment op deze regel" (no
-  // auto-focus, see enterComments in RelatedPanel.mjs); Enter opens+focuses
-  // the composer.
-  await page.keyboard.press('Meta+ArrowRight')
-  await expect(page.getByTestId('comments-sidebar')).toBeVisible()
+  // Enter opens the block command palette; "Comment op deze regel" starts the
+  // inline composer (startComment, RelatedPanel.mjs) and focuses it.
   await page.keyboard.press('Enter')
+  await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
   const composer = page.getByTestId('comment-compose')
   await expect(composer).toBeFocused()
   await composer.fill('publieke comment via het compose-menu')
@@ -67,11 +65,11 @@ test('Enter on a filled composer defaults to "Plaats comment" (public) and refre
   await expect(menu).not.toBeVisible()
   await refreshPromise
 
-  // The comment shows up in the index right away (loadComments already ran as
-  // part of createComment/placeComment).
+  // The comment shows up as an inline card right away (loadComments already
+  // ran as part of createComment/placeComment).
   await expect(
     page
-      .getByTestId('comments-sidebar')
+      .getByTestId('inline-comments')
       .getByTestId('comment-item')
       .filter({ hasText: 'publieke comment via het compose-menu' })
   ).toHaveCount(1)

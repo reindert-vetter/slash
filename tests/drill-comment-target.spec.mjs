@@ -51,21 +51,15 @@ async function drillIntoAddress(page) {
   return drillColumn
 }
 
-async function ensureSidebarOpen(page) {
-  if ((await page.getByTestId('comments-sidebar').count()) === 0) {
-    await page.keyboard.press('Meta+ArrowRight')
-  }
-}
-
 test('composing a comment while a drilled column is focused targets that column, not the top-level block', async ({
   page,
 }) => {
   await drillIntoAddress(page)
 
-  await ensureSidebarOpen(page)
   if ((await page.getByTestId('comment-compose').count()) === 0) {
     await page.getByTestId('new-comment').click()
   }
+  const composer = page.getByTestId('comment-composer')
 
   const hint = page.getByTestId('comment-target')
   await expect(hint).toBeVisible()
@@ -74,10 +68,10 @@ test('composing a comment while a drilled column is focused targets that column,
   await expect(hint).toContainText('Order::address')
   await expect(hint).not.toContainText('CreatePaymentAction::execute')
 
-  // The "Nieuwe comment · <file>:<line>" thread header must reference the
+  // The "Nieuwe comment · <file>:<line>" composer header must reference the
   // drilled child's file too.
-  await expect(page.getByTestId('comment-thread')).toContainText('Order.php')
-  await expect(page.getByTestId('comment-thread')).not.toContainText('CreatePaymentAction.php')
+  await expect(composer).toContainText('Order.php')
+  await expect(composer).not.toContainText('CreatePaymentAction.php')
 
   // The drilled column landed on a single-line group.
   await expect(hint).toContainText('een groep wijzigingen')
@@ -88,7 +82,7 @@ test('composing a comment while a drilled column is focused targets that column,
   await page.getByText('Alleen voor mijzelf').click()
 
   const item = page
-    .getByTestId('comments-sidebar')
+    .getByTestId('inline-comments')
     .getByTestId('comment-item')
     .filter({ hasText: 'drilled column comment' })
   await expect(item).toHaveCount(1, { timeout: 4000 })

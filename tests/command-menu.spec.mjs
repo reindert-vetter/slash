@@ -155,12 +155,11 @@ test.describe('PR Review Tree — command palette', () => {
     await expect(composer).toBeVisible()
     // The palette's "Comment op deze regel" hands the keyboard focus to the
     // composer directly (startComment mirrors toNew()): the reviewer can type
-    // right away, the comments/taken sidebar opens (it's collapsed by default,
-    // see detail-layout.md), and the "+ Comment op deze regel" button shows as
-    // selected. Onderliggende code (inline, next to the diff) is unaffected.
+    // right away, the inline composer card replaces the "+ Comment op deze
+    // regel" trigger. Onderliggende code (inline, next to the diff) is
+    // unaffected.
     await expect(composer).toBeFocused()
-    await expect(page.getByTestId('comments-sidebar')).toBeVisible()
-    await expect(page.getByTestId('new-comment')).toHaveClass(/border-indigo-400/)
+    await expect(page.getByTestId('comment-composer')).toBeVisible()
     await composer.fill('dit is een notitie')
 
     // Enter opens the kind-menu (not a newline, not a direct place).

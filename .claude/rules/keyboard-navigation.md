@@ -9,11 +9,12 @@ Separate from the individual mechanisms below, `←`/`→` together form one
 continuous chain of **stops**, from left to right across the whole layout:
 
 1. **Description** (`prInfoCard`/`state.showDescription`) — the PR title/
-   summary/description. **Hidden by default** (takes up no width then — the
-   column disappears entirely, no rail like the comments/tasks sidebar's
-   collapse) and the leftmost stop. `←` here leaves the whole chain to
-   `/pr-overview` (see
-   below) — there is nothing to the left of stop 1.
+   summary/description, plus (stacked below it) the **Taken** block — see
+   "Tasks: a block under the PR-description column" in
+   `.claude/rules/detail-layout.md`. **Hidden by default** (takes up no width
+   then — the column disappears entirely) and the leftmost stop. `←` here
+   leaves the whole chain to `/pr-overview` (see below) — there is nothing to
+   the left of stop 1.
 2. **PR block index** (`data-testid=pr-index`, the sidebar, `state.mode==='list'`)
    — physically shifts right as soon as stop 1 is open, so the description
    really sits to its left instead of after it (see `.claude/rules/detail-layout.md`).
@@ -22,18 +23,16 @@ continuous chain of **stops**, from left to right across the whole layout:
    a strict stop: only reachable via Enter/click on an Underlying-code child
    (see "Drilling" in `.claude/rules/detail-layout.md`), not via `→`. `←` does
    peel them back one by one, just like the other stops.
-5. **Underlying code** (`RelatedPanel`, `cs.focus==='code'`) — the rightmost
+5. **Inline comment block(s)** (`cs.focus` one of `'new'`/`'comment'`/
+   `'thread'`) — a **conditional** stop: only reachable via `→` (or `↓`
+   falling through from Onderliggende code) when the selected unit actually
+   has a comment (`hasVisibleComments()`, see "Inline comment blocks" in
+   `.claude/rules/detail-layout.md`); otherwise `→` skips straight past it.
+6. **Underlying code** (`RelatedPanel`, `cs.focus==='code'`) — the rightmost
    stop of this chain; there is no `→`/`←` stop after it.
 
-**Comments and Tasks are no longer stops in this chain.** Together they form
-a standalone, **Cmd+→-toggled** fixed sidebar (`CommentsSidebar`, see
-"Comments/tasks sidebar" in `.claude/rules/detail-layout.md`) that you can
-open/close from **any** position in the app, regardless of which stop of the
-chain above currently owns the keyboard. Within that sidebar, `↓`/`↑` move
-between comments (top) and tasks (below, stacked); `←` closes from anywhere
-in the sidebar in a single move back to the diff (the sidebar itself stays
-open — only the keyboard focus leaves it). See that section for the full
-mechanism (`toggleSidebar`/`cs.sidebarOpen`/the hint rail).
+Tasks no longer has its own keyboard stop at all — it's click-only, under
+stop 1 (see `.claude/rules/detail-layout.md`).
 
 **Focus highlight per stop:** stops 1-3 show the *same* on/off indigo
 focus border (`border-indigo-300 ring-1 ring-indigo-200`, otherwise the
@@ -81,16 +80,17 @@ required relative to the older per-mechanism behavior:
   immediately selected, not whatever was selected earlier on that PR.
 - **Stop 2 ↔ 3 / stop 3 ↔ 4:** unchanged — see the `'list'`/`'diff'` sections
   below resp. "Column navigation" in `.claude/rules/detail-layout.md`.
-- **Stop 3/4 ↔ 5:** unchanged — `→` from the diff is `enterRelated()`, `←`
-  from `cs.focus==='code'` (on the first child, or via `↑` there) is
-  `exitRelated()`. `→` from `'code'` no longer does anything — it used to
-  jump to the comments column (`gotoRow(1)`), but that is no longer a stop in
-  this chain (see above and "Comments/tasks sidebar" in
-  `.claude/rules/detail-layout.md`); comments/tasks are only reachable via
-  Cmd+→, from any stop.
-- `state.showDescription`/`cs.taskSel`/`cs.sidebarOpen` deliberately live
-  **outside** the URL (like `menu`/`ui.task` elsewhere) — ephemeral cursor
-  state, not a navigation position a refresh needs to restore.
+- **Stop 3/4 ↔ 5 ↔ 6:** `→` from the diff lands on stop 5 (the first inline
+  comment conversation) only when the selected unit has one
+  (`hasVisibleComments()`/`enterCommentsHead()`), else it skips straight to
+  stop 6 (`enterRelated()`). `↓` on the last comment conversation (or the
+  bottom of an open thread) falls through to stop 6 instead of clamping;
+  `↑`/`←` on stop 6's first child step back onto stop 5's last conversation
+  if one exists, else to the diff. See "Inline comment blocks" in
+  `.claude/rules/detail-layout.md` for the full mechanism.
+- `state.showDescription` deliberately lives **outside** the URL (like
+  `menu`/`ui.task` elsewhere) — ephemeral cursor state, not a navigation
+  position a refresh needs to restore.
 
 ### Comment-index items (PR-wide comments as ordinary "Start" rows)
 
@@ -718,17 +718,16 @@ the links fall back to the bare PR URL resp. the Jira base.
   hidden.
 
 In `'diff'` mode, **`→`** steps into the **Underlying-code card**
-(`enterRelated` in `RelatedPanel.mjs`, `cs.focus === 'code'`) and lands on
-the **first** child block (`cs.codeSel = 0`). All the child blocks stack
+(`enterRelated` in `RelatedPanel.mjs`, `cs.focus === 'code'`) — either
+directly from the diff (no comment on the selected unit) or from the last
+inline comment conversation (`↓` falling through) — and lands on the
+**first** child block (`cs.codeSel = 0`). All the child blocks stack
 vertically at full width (no side-by-side hint anymore) and the card is a
 **pure list navigation**: **`↓`** selects the **next** child block (stays on
 the last), **`↑`** the **previous** child block — from the **first** child
-block, **`↑`** goes back to the diff instead (`exitRelated`). **`←`** goes
-from any child block back to the diff (`exitRelated`). This card no longer
-has a `→` that leaves it — that used to jump to the comments column, but
-comments/tasks are no longer part of this chain (see above and "Comments/tasks
-sidebar" in `.claude/rules/detail-layout.md`); those are only reachable via
-Cmd+→ now.
+block, **`↑`**/**`←`** step back onto the last inline comment conversation
+of the unit if one exists (`hasVisibleComments()`/`enterCommentsTail()`),
+else to the diff (`exitRelated`). This card has no `→` that leaves it.
 This panel cursor
 (`cs.focus`/`codeSel`/`sel`/`threadPos`) lives in the **URL** under its own
 `rel` namespace (`rel.foc`/`rel.code`/`rel.csel`/`rel.thr`, via
@@ -745,8 +744,8 @@ the same path: the child opens as its own
 diff column to the right of the existing ones, between those columns and
 `RelatedPanel`
 (`drillIntoChild`, see the "Drilling" section in `.claude/rules/detail-layout.md`),
-and the Underlying-code panel + the tasks/chat below it jump along to that
-level (`focusedBlock()`). This applies **always to the focused child**; if
+and the Underlying-code panel + the inline comment blocks above it jump along
+to that level (`focusedBlock()`). This applies **always to the focused child**; if
 no child is focused (empty list) then `Enter` does nothing — unresolved
 calls are **automatically** picked up by the LLM search without a key or
 button (see
@@ -768,16 +767,15 @@ drilled further. See the section
 "Column navigation" in `.claude/rules/detail-layout.md` for the full
 `state.focusLevel` mechanism + the rail. `←`/`Escape` from the first
 position of the
-Underlying-code panel (`cs.codeSel === 0`) gives keyboard focus back to
-the diff of **that same** column (`handleRelatedKey`'s `exitRelated()`) —
-that is no longer a separate "pop" step, the column-by-column navigation
-above only follows once
-`relatedActive()` is `false` again. This code branch (`cs.focus === 'code'`)
-is entirely separate from the comments/tasks sidebar in `handleRelatedKey` —
-see "Comments/tasks sidebar" in `.claude/rules/detail-layout.md` for that
-navigation. Visually: all child blocks stack vertically at full
-width (no arrow hint anymore); the selected child block gets an indigo ring
-(`data-active=true`). See `.claude/rules/detail-layout.md`.
+Underlying-code panel (`cs.codeSel === 0`) steps back onto the last inline
+comment conversation of the unit if one exists, else gives keyboard focus
+back to the diff of **that same** column (`handleRelatedKey`'s
+`hasVisibleComments()`/`enterCommentsTail()`/`exitRelated()`) — that is no
+longer a separate "pop" step, the column-by-column navigation above only
+follows once `relatedActive()` is `false` again. Visually: all child blocks
+stack vertically at full width (no arrow hint anymore); the selected child
+block gets an indigo ring (`data-active=true`). See
+`.claude/rules/detail-layout.md`.
 
 When stepping in (`→`), selection jumps to the **first changed line**
 (added, removed, or modified) — `state.change` is the index. The

@@ -22,12 +22,9 @@ test('delayed code load + seeded comments: arrow orphan + list update', async ({
     await page.waitForTimeout(400) // comments load; code still pending
     await page.keyboard.press('ArrowRight')
     await page.waitForTimeout(1200) // code arrives late -> re-render
-    // now place a comment live — the comments/taken sidebar is a fixed
-    // overlay toggled with Cmd+ArrowRight (see detail-layout.md), collapsed by default.
-    // Cmd+ArrowRight highlights the "+ Comment op deze regel" row; Enter then opens/
-    // focuses the composer (a fresh Cmd+ArrowRight-open no longer auto-focuses it).
-    await page.keyboard.press('Meta+ArrowRight').catch(() => {})
-    await page.keyboard.press('Enter').catch(() => {})
+    // now place a comment live — comments render inline, next to the diff; the
+    // "+ Comment op deze regel" trigger is always present.
+    await page.getByTestId('new-comment').click().catch(() => {})
     const body = 'late ' + i
     await page.getByTestId('comment-compose').fill(body).catch(() => {})
     await page.getByTestId('comment-send').click().catch(() => {})
@@ -36,7 +33,7 @@ test('delayed code load + seeded comments: arrow orphan + list update', async ({
     await page.waitForTimeout(150)
     await page.keyboard.press('Enter')
     await page.waitForTimeout(700)
-    const listed = await page.getByTestId('comments-sidebar').getByTestId('comment-item').filter({ hasText: body }).count()
+    const listed = await page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: body }).count()
     console.log(`ITER ${i}: listed=${listed} errs=${errors.length} ${errors.length ? JSON.stringify([...new Set(errors)]) : ''}`)
   }
 })
