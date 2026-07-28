@@ -362,6 +362,23 @@ renders **inline and always visible for the current unit** — "alleen en
 direct zichtbaar als de bijbehorende groep/line/call geselecteerd is" —
 instead of behind a separate toggle.
 
+**`InlineComments`' own wrapper carries the SAME explicit width as
+`related-code` right below it (`relatedColumnWidthCls()`, exported from
+`RelatedPanel.mjs`, reused as-is — no separate calculation).** Without an
+explicit width of its own, this section used to rely on "stretches to the
+sibling's width" — which never actually held, since a flex-column's
+cross-axis stretch only applies to a child whose own width is `auto`, and
+`related-code` already sets an explicit width. Left unbounded, one unwrapped
+long line inside a comment — `composeTargetHint`'s code excerpt, or a fenced
+code block in a Markdown comment body (`commentBody`/`renderMarkdown`) —
+forced this whole column, and thus `<main>`, to shrink-to-fit around that one
+line instead of clipping/scrolling inside it (`overflow-auto`/
+`.markdown-body pre {overflow-x:auto}` only actually clip once their
+ancestor has a real, non-auto width to clip against) — which pushed the
+block/drill columns to its left out of view ("comment section heel breed").
+Giving it the identical clamp width as `related-code` fixes that and keeps
+both stacked sections visually the same width.
+
 **One card per conversation, only the focused one expands.** Multiple
 threads can hang off the same unit; each gets its own card
 (`data-testid=comment-item`), but only the one the keyboard currently owns

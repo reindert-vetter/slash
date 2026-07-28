@@ -1391,12 +1391,24 @@ function newCommentComposer(state, commentTarget, openCompose) {
 // selected unit (visibleComments()).
 export function InlineComments(state, commentTarget, openCompose) {
   syncComments(state ? state.pr : null)
-  // No own fixed width: this stacks directly above the related-code section
-  // in a shared flex-col column (see DetailPanel, home.mjs) and stretches
-  // (default align-items:stretch) to that section's own, dynamically
-  // computed width instead of carrying a separate, narrower one of its own.
+  // Reuses relatedColumnWidthCls() (below) — the SAME clamp width as the
+  // related-code section it stacks above in the shared flex-col column (see
+  // DetailPanel, home.mjs) — so this section carries its own explicit,
+  // bounded width instead of the earlier "no own width, stretches to the
+  // sibling" comment, which no longer held: a flex-col's cross-axis stretch
+  // only applies to a child whose OWN width is auto, and related-code
+  // already sets its own explicit width, so it never stretched this one.
+  // Left unbounded, an unwrapped long line inside a comment (composeTargetHint's
+  // code excerpt, or a fenced code block in a Markdown comment body via
+  // commentBody/renderMarkdown — see conventions.md) forced this whole
+  // column — and thus <main> — to shrink-to-fit around that one long line
+  // instead of clipping/scrolling inside it, pushing the block/drill columns
+  // to its left out of view. Giving this section the same explicit width as
+  // related-code fixes that: `overflow-auto`/`.markdown-body pre
+  // {overflow-x:auto}` only actually clip+scroll once their ancestor has a
+  // real (non-auto) width to clip against. See detail-layout.md.
   return html`
-    <div class="flex shrink-0 flex-col gap-2" data-testid="inline-comments">
+    <div class="${() => 'flex shrink-0 flex-col gap-2 ' + relatedColumnWidthCls()}" data-testid="inline-comments">
       ${newCommentComposer(state, commentTarget, openCompose)}
       ${() => visibleComments().map((c, i) => commentCard(c, i).key('comment:' + c.id))}
     </div>
@@ -1724,7 +1736,10 @@ function nestedChipColumn(ancestors, kids, drill, path, cardIdx) {
 // block's own `b.code` — so this cannot co-subscribe with the diff render
 // (see the stuck-on-loading pitfall in conventions.md); it is exactly the
 // same kind of read `kids()` below already does.
-function relatedColumnWidthCls() {
+// Exported: InlineComments (above, in the same stacked flex-col column) reuses
+// this exact same class so both sections always share one width — see its own
+// doc comment for why that's load-bearing, not just cosmetic.
+export function relatedColumnWidthCls() {
   let chars = 0
   for (const r of rc.children) {
     if (r.kind === 'tests_group' || !r.code) continue
