@@ -360,14 +360,17 @@ type ResolveTestCoversInput struct {
 	Classes   []string `json:"classes"`
 }
 
-// ExplainCodeInput starts an explain_code Execution: it asks Haiku to describe
-// (in Dutch, 1-2 sentences) the if-statement inside one selected navigation
-// unit. Everything the LLM sees travels in the input — the unit's code plus
-// the surrounding block source — so the workflow body stays a pure function of
-// its input (no worktree reads). UnitKey addresses the unit within the block
-// in aligned-row space (`group-<start>-<end>` / `line-<row>`, the same codeRef
-// shape as commentPath); CodeHash fingerprints Code+Context so a stale row is
-// ignored by the frontend after the code changes.
+// ExplainCodeInput starts an explain_code Execution: it asks Opus to describe
+// (in Dutch, 1-2 sentences) one selected navigation unit — any group/line
+// unit the reviewer lands on while navigating a diff, not only one containing
+// an if-statement (the frontend's earlier if-only gate was lifted, see
+// footerUnitInfo in home.mjs). Everything the LLM sees travels in the input —
+// the unit's code plus the surrounding block source — so the workflow body
+// stays a pure function of its input (no worktree reads). UnitKey addresses
+// the unit within the block in aligned-row space (`group-<start>-<end>` /
+// `line-<row>`, the same codeRef shape as commentPath); CodeHash fingerprints
+// Code+Context so a stale row is ignored by the frontend after the code
+// changes.
 type ExplainCodeInput struct {
 	PR       int    `json:"pr"`
 	BlockID  string `json:"blockId"`
@@ -405,13 +408,13 @@ type ReadyForReviewInput struct {
 	Reviewers []string `json:"reviewers"`
 }
 
-// CodeWarningInput starts a code_warning Execution: an agentic Sonnet review
+// CodeWarningInput starts a code_warning Execution: an agentic Opus review
 // of a PR for risks. Files is reserved for a future incremental fast-follow
 // (re-checking only the files a new commit touched, piggybacking on
 // pr_status's ingest-refresh delta) — it is always empty today: the only
-// caller (the "/" menu's "Controleer de hele PR op risico's") starts a full
-// baseline run, and resolveWarningScope derives the scope itself from the
-// PR's current blocks whenever Files is empty.
+// caller (the "/" menu's "Diepgravend onderzoek") starts a full baseline run,
+// and resolveWarningScope derives the scope itself from the PR's current
+// blocks whenever Files is empty.
 type CodeWarningInput struct {
 	PR    int      `json:"pr"`
 	Files []string `json:"files,omitempty"`
@@ -985,11 +988,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		})
 	})
 
-	// Activity: ask Haiku (context-only, no tools — everything it needs travels
-	// in the input) for a short Dutch description of the unit's if-statement.
-	// Shells out to the claude CLI — a side effect, hence an Activity. Best-effort:
-	// a Claude hiccup yields empty text (the workflow then records "failed")
-	// rather than sinking the run.
+	// Activity: ask Opus (context-only, no tools — everything it needs travels
+	// in the input) for a short Dutch description of the unit. Shells out to
+	// the claude CLI — a side effect, hence an Activity. Best-effort: a Claude
+	// hiccup yields empty text (the workflow then records "failed") rather than
+	// sinking the run.
 	engine.RegisterActivity("generateExplanation", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg ExplainCodeInput
 		if err := json.Unmarshal(in, &arg); err != nil {
@@ -1000,7 +1003,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		text, err := m.claude.Run(ctx, claude.RunRequest{
 			Prompt:       explainPrompt(arg),
-			Model:        claude.ModelHaiku,
+			Model:        claude.ModelOpus,
 			SystemPrompt: claude.ExplainCodeSystemPrompt,
 		})
 		if err != nil {
@@ -1308,7 +1311,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(map[string]int{"removed": removed})
 	})
 
-	// Activity: the one agentic Sonnet call — reads the head worktree +
+	// Activity: the one agentic Opus call — reads the head worktree +
 	// shells out to the claude CLI (a side effect, hence an Activity) — and
 	// maps every accepted finding onto the existing comment-anchoring model
 	// (anchoredWarning, code_warning.go), ready to hand to createWarningComment.
@@ -1404,7 +1407,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 
 	// The LLM-heavy workflows make many/long claude calls (resolve_call runs one
 	// claude call per unresolved call in the block; code_warning a whole agentic
-	// Sonnet pass). If the process is killed mid-flight, those uncompleted
+	// Opus pass). If the process is killed mid-flight, those uncompleted
 	// activities re-execute live on Recover — so recovering them synchronously
 	// would block server startup (and the fast, important workflows) for minutes.
 	// Mark them PriorityLow so Recover drains them in the background instead. See
@@ -1953,7 +1956,7 @@ func explainCodeWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("generate explanation: %w", err)
 	}
 	status := explanations.StatusDone
-	model := "haiku"
+	model := "opus"
 	if gen.Text == "" {
 		// Offline (claude.Fake) or a Claude hiccup: record a terminal "failed"
 		// row so the frontend stops showing "genereren…" and never re-requests

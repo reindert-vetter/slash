@@ -25,6 +25,7 @@ import (
 const (
 	ModelHaiku  = "claude-haiku-4-5"
 	ModelSonnet = "claude-sonnet-5"
+	ModelOpus   = "claude-opus-5"
 )
 
 // RunRequest is a single non-interactive `claude -p` invocation.

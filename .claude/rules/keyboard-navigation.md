@@ -579,8 +579,8 @@ on the item after it), **"To PR overview"** (navigates to
 `/pr-overview`, and thus the default item where the selection opens),
 **"GitHub"** and **"Jira"** (as a **submenu** via the existing `children`
 mechanism — each submenu itself also gets such a pinned "Close menu"),
-**"Check the whole PR for risks"** (starts
-`code_warning`, see `checkPRWarnings`/`.claude/rules/tembed-workflows.md`), and
+**"Diepgravend onderzoek"** ("in-depth investigation", starts
+`code_warning` on Opus, see `checkPRWarnings`/`.claude/rules/tembed-workflows.md`), and
 **"Show full description" / "Collapse description"** (the last item,
 a label function that toggles `state.descriptionExpanded` — the same
 ephemeral flag as the in-card "more…" affordance in the PR info column, see

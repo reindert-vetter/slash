@@ -365,8 +365,8 @@ const state = reactive({
   diffViewMode: 'split',
   // explanations — the AI unit-explanation read-model (GET /api/explanations):
   // per `${blockId}|${unitKey}` an entry { codeHash, status, text }, generated
-  // by the explain_code workflow for a line/group unit containing an
-  // if-statement. Reassigned wholesale on every load so the footer watch
+  // by the explain_code workflow (Opus) for any line/group unit the reviewer
+  // navigates to. Reassigned wholesale on every load so the footer watch
   // re-fires. See the footer-explanation block below.
   explanations: {},
   // footerUnit / footerExplain — plain snapshots the footer renders, pushed by
@@ -381,9 +381,10 @@ const state = reactive({
   // (kept explicitly null rather than an empty array, both to keep the
   // truthiness check in updateFooter correct and to avoid the arrow.js
   // single↔array slot pitfall in Footer.mjs, see conventions.md).
-  // footerExplain is the AI description of the unit's if-statement
-  // ({ status: 'searching'|'done', text }, null when the unit has no if / the
-  // generation failed / not in diff mode). Both are ephemeral (never in the URL).
+  // footerExplain is the AI description of the focused unit
+  // ({ status: 'searching'|'done', text }, null when the unit has no code /
+  // the generation failed / not in diff mode). Both are ephemeral (never in
+  // the URL).
   footerUnit: null,
   footerExplain: null,
   // footerVisible — derived by updateFooter(): true once footerUnit or
@@ -3485,8 +3486,9 @@ async function submitReview(event, body = '') {
   }
 }
 
-// checkPRWarnings starts a code_warning Execution: an agentic Sonnet review
-// of every changed file in the whole PR for risks (security/style/
+// checkPRWarnings starts a code_warning Execution — the "Diepgravend
+// onderzoek" ("in-depth investigation") PR_COMMANDS item: an agentic Opus
+// review of every changed file in the whole PR for risks (security/style/
 // consistency with connected code — callers, callees, tests, listeners),
 // creating one AI-authored comment per finding (block-scoped when it anchors
 // to a line, PR-wide otherwise — see .claude/rules/tembed-workflows.md).
@@ -4312,21 +4314,16 @@ watch(
   },
 )
 
-// ── Footer: focused unit + AI if-statement description ─────────────────────
+// ── Footer: focused unit + AI description ───────────────────────────────────
 // The footer shows (1) the inline diff of the focused single-row unit and
-// (2) a short Dutch AI description whenever the focused line/group unit
-// contains an if-statement (the explain_code workflow). Both follow the
-// column that owns the diff keyboard — the top-level block on focusLevel 0
-// (state.gran/state.change) or a drilled column's own drillCursor entry — and
-// are pushed into plain state.footerUnit/state.footerExplain by the decoupled
-// watch below, so Footer.mjs never reads blockRows/b.code itself (the
-// co-subscriber pitfall, see conventions.md).
-
-// reIfStatement detects an if/elseif/else-if statement in the raw unit text.
-// Deliberately a plain regex on the line text — a parser is overkill for a
-// cosmetic hint, so an "if(" inside a string/comment is an accepted false
-// positive.
-const reIfStatement = /(?:^|[^\w$])(?:else\s+)?(?:if|elseif)\s*\(/
+// (2) a short Dutch AI description of the focused line/group unit — every
+// such unit, not just an if-statement (the explain_code workflow, Opus).
+// Both follow the column that owns the diff keyboard — the top-level block on
+// focusLevel 0 (state.gran/state.change) or a drilled column's own
+// drillCursor entry — and are pushed into plain
+// state.footerUnit/state.footerExplain by the decoupled watch below, so
+// Footer.mjs never reads blockRows/b.code itself (the co-subscriber pitfall,
+// see conventions.md).
 
 // fnv1a is a tiny 32-bit content hash for the explain request's code+context.
 // It only has to be stable between the frontend and the stored read-model row
@@ -4358,10 +4355,11 @@ function explainContext(b) {
 // line/call unit (always single-row), one row per changed line for a
 // multi-row group, so the footer can show a per-line breakdown of "what
 // changed" for the whole selected block/group, not just a one-liner — and,
-// for a line/group unit whose text contains an if-statement, the
-// explain-request descriptor (blockId + unitKey in the commentPath codeRef
-// shape + code/context + hash). Follows focusedBlock() and the focused
-// column's own cursor, so a drilled column previews its own unit.
+// for ANY line/group unit with actual code (no longer gated on containing an
+// if-statement — see the "Diepgravend onderzoek" change), the explain-request
+// descriptor (blockId + unitKey in the commentPath codeRef shape +
+// code/context + hash). Follows focusedBlock() and the focused column's own
+// cursor, so a drilled column previews its own unit.
 function footerUnitInfo() {
   if (state.mode !== 'diff') return null
   const b = focusedBlock()
@@ -4402,7 +4400,9 @@ function footerUnitInfo() {
     const t = r && (r.right != null ? r.right : r.left)
     if (t != null) code += (code ? '\n' : '') + t
   }
-  if (!reIfStatement.test(code)) return info
+  // Nothing to explain for a blank/whitespace-only unit (e.g. a lone filler
+  // row) — every other unit now gets a description, not just an if-statement.
+  if (!code.trim()) return info
   const context = explainContext(b)
   info.explain = {
     blockId: b.id,
@@ -4469,8 +4469,8 @@ async function requestExplain(req) {
 }
 
 // updateFooter pushes the focused unit's snapshots into state.footerUnit/
-// state.footerExplain and auto-schedules the AI generation for an if-containing
-// line/group unit that has no (matching-hash) explanation yet. A stored row
+// state.footerExplain and auto-schedules the AI generation for any line/group
+// unit with code that has no (matching-hash) explanation yet. A stored row
 // with an empty codeHash matches any hash (seeded test fixtures). It also
 // derives state.footerVisible = !!(footerUnit || footerExplain) — the single
 // source of truth Footer.mjs and every bottom-reservation binding read (see
@@ -5196,11 +5196,11 @@ const PR_COMMANDS = withClose([
   },
   {
     id: 'pr-check-warnings',
-    label: "Controleer de hele PR op risico's",
+    label: 'Diepgravend onderzoek',
     hint: 'risicocontrole',
-    // Starts an agentic Sonnet review of the whole PR (code_warning); see
+    // Starts an agentic Opus review of the whole PR (code_warning); see
     // checkPRWarnings above. Re-running supersedes the previous run's
-    // findings, so this is a plain, repeatable "refresh the risk check".
+    // findings, so this is a plain, repeatable "refresh the deep review".
     run: () => checkPRWarnings(),
   },
   {

@@ -86,7 +86,7 @@ func TestCodeWarningAnchorsToBlock(t *testing.T) {
 	}
 
 	fake := claude.NewFake()
-	fake.SetOutput(claude.ModelSonnet, `[{"file":"app/Services/OrderService.php","line":6,"text":"Hardcoded 1.21 VAT rate — extract as a named constant."}]`)
+	fake.SetOutput(claude.ModelOpus, `[{"file":"app/Services/OrderService.php","line":6,"text":"Hardcoded 1.21 VAT rate — extract as a named constant."}]`)
 	m, cs, gh := warningManager(t, dataDir, fake)
 
 	runID, err := m.StartCodeWarning(CodeWarningInput{PR: pr})
@@ -137,7 +137,7 @@ func TestCodeWarningFallsBackToPRWide(t *testing.T) {
 
 	fake := claude.NewFake()
 	// Line 2 (the namespace declaration) falls outside the build block (4-8).
-	fake.SetOutput(claude.ModelSonnet, `[{"file":"app/Services/OrderService.php","line":2,"text":"Onduidelijke namespace-structuur."}]`)
+	fake.SetOutput(claude.ModelOpus, `[{"file":"app/Services/OrderService.php","line":2,"text":"Onduidelijke namespace-structuur."}]`)
 	m, cs, _ := warningManager(t, dataDir, fake)
 
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
@@ -174,7 +174,7 @@ func TestCodeWarningDropsOutOfScopeFile(t *testing.T) {
 	}
 
 	fake := claude.NewFake()
-	fake.SetOutput(claude.ModelSonnet, `[{"file":"app/Elsewhere/NotInScope.php","line":3,"text":"Should never surface."}]`)
+	fake.SetOutput(claude.ModelOpus, `[{"file":"app/Elsewhere/NotInScope.php","line":3,"text":"Should never surface."}]`)
 	m, cs, _ := warningManager(t, dataDir, fake)
 
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
@@ -200,7 +200,7 @@ func TestCodeWarningSupersedesPreviousRun(t *testing.T) {
 	}
 
 	fake := claude.NewFake()
-	fake.SetOutput(claude.ModelSonnet, `[{"file":"app/Services/OrderService.php","line":6,"text":"First pass finding."}]`)
+	fake.SetOutput(claude.ModelOpus, `[{"file":"app/Services/OrderService.php","line":6,"text":"First pass finding."}]`)
 	m, cs, _ := warningManager(t, dataDir, fake)
 
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
@@ -213,7 +213,7 @@ func TestCodeWarningSupersedesPreviousRun(t *testing.T) {
 
 	// Second run, different finding text — the stale first-run comment must
 	// be gone, not merely joined by a second one.
-	fake.SetOutput(claude.ModelSonnet, `[{"file":"app/Services/OrderService.php","line":6,"text":"Second pass finding."}]`)
+	fake.SetOutput(claude.ModelOpus, `[{"file":"app/Services/OrderService.php","line":6,"text":"Second pass finding."}]`)
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestCodeWarningCapsFindingsPerBlock(t *testing.T) {
 	}
 
 	fake := claude.NewFake()
-	fake.SetOutput(claude.ModelSonnet, `[
+	fake.SetOutput(claude.ModelOpus, `[
 		{"file":"app/Services/OrderService.php","line":8,"text":"d"},
 		{"file":"app/Services/OrderService.php","line":7,"text":"c"},
 		{"file":"app/Services/OrderService.php","line":6,"text":"b"},

@@ -14,12 +14,16 @@ import (
 // reads the head worktree and shells out to the claude CLI, so it runs only
 // inside a code_warning Activity). Unlike resolve_call/resolve_test_covers
 // (Haiku first, agentic Sonnet only as an escalation that this repo has since
-// removed), this workflow uses ONLY the agentic Sonnet pass — deliberately:
-// the whole point is to explore the checked-out repo for risks connected to,
-// but not necessarily inside, the changed lines themselves (a caller a
-// changed signature broke, a test still asserting the old shape, an event
-// listener that doesn't handle a new payload field, …), which a context-only
-// Haiku call — fed only what we chose to hand it — cannot discover on its own.
+// removed), this workflow uses ONLY one agentic pass — deliberately: the
+// whole point is to explore the checked-out repo for risks connected to, but
+// not necessarily inside, the changed lines themselves (a caller a changed
+// signature broke, a test still asserting the old shape, an event listener
+// that doesn't handle a new payload field, …), which a context-only Haiku
+// call — fed only what we chose to hand it — cannot discover on its own. The
+// agentic model is Opus (claude.ModelOpus) — this is the "Diepgravend
+// onderzoek" ("in-depth investigation") PR-wide menu item, deliberately the
+// strongest available model since it's a manually-triggered, low-frequency
+// action rather than something run on every navigation step.
 // See the "AI-risicocontrole" decision in .claude/rules/tembed-workflows.md.
 
 // warningReviewArg is the payload of the runAgenticReview Activity.
@@ -42,7 +46,7 @@ type warningFinding struct {
 // circle, since these comments never carry an avatar URL).
 const warningAuthor = "AI-controle"
 
-// runCodeWarningReview makes the one agentic Sonnet call and returns the
+// runCodeWarningReview makes the one agentic Opus call and returns the
 // accepted findings — verified against the scope the model was actually
 // given (never a fabricated file), sorted, and capped at arg.MaxFindings.
 // Never returns an error: a model/CLI failure degrades to no findings (like
@@ -53,7 +57,7 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	}
 	_, headDir := worktreeDirs(dataDir, arg.PR)
 	req := claude.RunRequest{
-		Model:        claude.ModelSonnet,
+		Model:        claude.ModelOpus,
 		Prompt:       warningPrompt(arg),
 		SystemPrompt: claude.CodeWarningSystemPrompt,
 		WorkDir:      headDir,

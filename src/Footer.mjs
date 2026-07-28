@@ -2,14 +2,15 @@
 // shown once there is actually something to preview: state.footerVisible
 // (derived in home.mjs's updateFooter() as
 // `!!(state.footerUnit || state.footerExplain)`) — the AI-generated Dutch
-// description of the focused unit's if-statement, or the inline diff of the
-// active unit's rows (- removed / + added per changed line: one row for a
-// line/call unit, one row per changed line for a multi-row group — so
-// selecting a whole change-group/"block" shows a per-line breakdown of what
-// changed, not just a one-liner). A unit with neither (no if, and — in
-// practice never, every navigable unit has at least one row) hides the bar
-// entirely, rather than showing an empty balk for the whole diff-mode
-// session as before. The panels above reserve 0/90/140px to match (0 when
+// description of the focused unit (Opus, every line/group unit with code, not
+// just an if-statement), or the inline diff of the active unit's rows
+// (- removed / + added per changed line: one row for a line/call unit, one
+// row per changed line for a multi-row group — so selecting a whole
+// change-group/"block" shows a per-line breakdown of what changed, not just
+// a one-liner). A unit with neither (blank/whitespace-only, and — in practice
+// never, every navigable unit has at least one row) hides the bar entirely,
+// rather than showing an empty balk for the whole diff-mode session as
+// before. The panels above reserve 0/90/140px to match (0 when
 // !footerVisible, 90 with just the inline diff, 140 while a description also
 // shows — the reactive bottom-[…] bindings in home.mjs/RelatedPanel.mjs), so
 // nothing is reserved when the footer itself is gone. A multi-row group's
@@ -70,7 +71,7 @@ function wrapClass(state) {
 // explainText renders the AI-description line: the Dutch explanation once it is
 // done, a subdued "genereren…" while the explain_code workflow runs, and ''
 // (the <p> is hidden via its class below) when the focused unit has no
-// if-statement / the generation failed.
+// code / the generation failed.
 function explainText(state) {
   const e = state.footerExplain
   if (!e) return ''
@@ -79,8 +80,8 @@ function explainText(state) {
 
 export default function Footer(state) {
   // Only reveal the footer once state.footerVisible is true — there is
-  // nothing to preview otherwise (list mode, or a multi-row group with no
-  // if-statement). The footer grows to 140px while the description shows so
+  // nothing to preview otherwise (list mode, or a unit with no code). The
+  // footer grows to 140px while the description shows so
   // 1-2 full sentences fit above the inline diff. Every class string is one
   // reactive function binding (arrow.js requires the full attribute value in
   // a single binding, see .claude/rules/conventions.md); the `hidden` toggle

@@ -530,9 +530,9 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// (repo collaborators), most-used-first (read-only).
 	mux.HandleFunc("/api/workflows/ready_for_review", s.handleReadyForReview)
 	mux.HandleFunc("/api/reviewers", s.handleReviewers)
-	// POST /api/workflows/code_warning {pr} → start an agentic Sonnet review of
-	// the whole PR for risks (the "/" menu's "Controleer de hele PR op
-	// risico's"). One Execution per manual run.
+	// POST /api/workflows/code_warning {pr} → start an agentic Opus review of
+	// the whole PR for risks (the "/" menu's "Diepgravend onderzoek"). One
+	// Execution per manual run.
 	mux.HandleFunc("/api/workflows/code_warning", s.handleCodeWarning)
 	// GET /api/approvals?pr=N → read-only approval read-model (per block: the
 	// approved changed rows + call segments) for refresh-restore.
@@ -1372,10 +1372,10 @@ func (s *server) handleReviewers(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCodeWarning starts a code_warning Workflow Execution (POST) — an
-// agentic Sonnet review of a PR's changed files for risks. The only current
-// caller is the "/" menu's "Controleer de hele PR op risico's" (see
-// StartCodeWarning); Files is always omitted from the request today (a full
-// baseline run) — the field exists for a future incremental fast-follow.
+// agentic Opus review of a PR's changed files for risks. The only current
+// caller is the "/" menu's "Diepgravend onderzoek" (see StartCodeWarning);
+// Files is always omitted from the request today (a full baseline run) — the
+// field exists for a future incremental fast-follow.
 func (s *server) handleCodeWarning(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

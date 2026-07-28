@@ -55,7 +55,7 @@ abstract** — it knows nothing about PRs, blocks, or gh; keep it that way.
 history, and `Recover()` re-drives every mid-flight run at startup. So a run
 that was killed **mid-activity** re-executes that activity live on recovery —
 and for the LLM workflows (`resolve_call` makes **one `claude` call per
-unresolved call** in the block; `code_warning` a whole agentic Sonnet pass)
+unresolved call** in the block; `code_warning` a whole agentic Opus pass)
 that's dozens of ~30s subprocess calls, serially, on the **startup goroutine**,
 *before* `ListenAndServe`. That once wedged the whole server (it never came up).
 tembed therefore has a **priority** mechanism (still fully abstract — it knows
@@ -987,7 +987,7 @@ as fallback.
     varying call content, via `--append-system-prompt`.**
     `RunRequest.SystemPrompt` carries the call-independent part of each
     prompt (task description + JSON contract for `resolve_call`, the
-    Dutch if-explanation instruction for `explain_code`, the
+    Dutch unit-explanation instruction for `explain_code`, the
     "Summarize…" instruction for `pr_status`'s summary) — **byte-for-byte**
     the same text that previously sat inline in the `-p` prompt, now moved
     to `modules/claude/prompts/{resolve_call,explain_code,pr_summary}.md`
@@ -1464,13 +1464,17 @@ only for one specific case.
   <testcovers.json>` (mirror of `-callresolve`, `tests/fixtures/testcovers.json`
   + `testcovers-blocks.json`, PR 92/93/94).
 
-## AI description of an if-unit (`explain_code` + `modules/explanations`)
+## AI description of a code unit (`explain_code` + `modules/explanations`)
 
 A small Workflow Type, **`explain_code`**, generates the **footer
-description**: a short Dutch Haiku explanation of the if statement in the
-focused `line`/`group` navigation unit (see the Footer section in
-`.claude/rules/keyboard-navigation.md` for the frontend side). One
-Execution per **unit + code hash**, no Signals — it completes right away.
+description**: a short Dutch Opus explanation of the focused `line`/`group`
+navigation unit (see the Footer section in
+`.claude/rules/keyboard-navigation.md` for the frontend side) — **every**
+such unit with actual code, not only one containing an if-statement (the
+frontend's earlier `reIfStatement` gate in `footerUnitInfo`, `home.mjs`, was
+lifted as part of "Diepgravend onderzoek", see the `code_warning` section
+below). One Execution per **unit + code hash**, no Signals — it completes
+right away.
 
 - **`modules/explanations`** (`data/explanations.db`): the read model
   `explanations(pr, block_id, unit_key, code_hash, status, text, model,
@@ -1490,10 +1494,10 @@ Execution per **unit + code hash**, no Signals — it completes right away.
   the backend only stores it). The workflow body is thus a pure function
   of its input.
 - **Workflow** (`workflows.go` + `explain.go`): `markExplainSearching` →
-  `generateExplanation` (Haiku via `modules/claude`, **context-only** — no
-  tools, no Sonnet escalation; empty output → `failed`) →
-  `saveExplanation`. The done/failed decision reads the **stored**
-  Activity result (history), so replay-deterministic.
+  `generateExplanation` (Opus via `modules/claude`, **context-only** — no
+  tools; empty output → `failed`) → `saveExplanation`. The done/failed
+  decision reads the **stored** Activity result (history), so
+  replay-deterministic.
 - **Idempotent start:** `StartExplainCode` uses `StartWorkflowID` with a
   **deterministic Run ID** (`explainRunID`: `expl-` + sha256 over
   pr|blockId|unitKey|codeHash, hashed because block ids contain
@@ -1503,18 +1507,20 @@ Execution per **unit + code hash**, no Signals — it completes right away.
 - **Endpoints:** `POST /api/workflows/explain_code` (start; body
   `{pr, blockId, file, label, gran, unitKey, codeHash, code, context}`) and
   read-only `GET /api/explanations?pr=N`.
-- **Frontend** (`home.mjs`): the footer `watch` detects an if in the
-  focused unit (`reIfStatement`), shows "generating…" and starts the
-  workflow automatically with a 600ms debounce, client-side deduped
-  (`explainRequested`) and only after the read model has been loaded at
-  least once (`explanationsLoaded` — otherwise a fresh run would overwrite
-  an already-existing/seeded row before the first GET had landed).
-  `SLASH_CLAUDE=off` → `claude.Fake` → `failed` row → footer stays silent.
-- Tests: `explain_test.go` (Fake-Haiku → done row + Dutch prompt check,
+- **Frontend** (`home.mjs`): the footer `watch` builds an explain-request
+  descriptor for the focused unit as soon as it has actual (non-blank) code
+  (`footerUnitInfo` — no longer gated on containing an if-statement), shows
+  "generating…" and starts the workflow automatically with a 600ms
+  debounce, client-side deduped (`explainRequested`) and only after the
+  read model has been loaded at least once (`explanationsLoaded` —
+  otherwise a fresh run would overwrite an already-existing/seeded row
+  before the first GET had landed). `SLASH_CLAUDE=off` → `claude.Fake` →
+  `failed` row → footer stays silent.
+- Tests: `explain_test.go` (Fake-Opus → done row + Dutch prompt check,
   idempotent restart, offline → failed),
   `modules/explanations/explanations_test.go` (round-trip + hash
-  supersede), `tests/footer-explanation.spec.mjs` (seeded display, if vs.
-  no if, drilled column; PR 97, seeded via `slash seed … -explanations
+  supersede), `tests/footer-explanation.spec.mjs` (seeded display, drilled
+  column; PR 97, seeded via `slash seed … -explanations
   <explanations.json>` + the `pr-97` worktrees materialized in
   `tests/_setup.mjs`).
 
@@ -1716,22 +1722,26 @@ risk check: not a per-line check, but a single run that searches the
 **whole PR** for risks — correctness, security, and style/quality — while
 also looking at code a change is **connected** to (callers, called code,
 tests, listeners) that the PR itself doesn't touch. This is deliberately
-**agentic Sonnet only** (`claude.ModelSonnet`, with `Read`/`Grep`/`Glob` in
+**agentic Opus only** (`claude.ModelOpus`, with `Read`/`Grep`/`Glob` in
 the head worktree) — no Haiku context-only pass like `explain_code`, and
-no Haiku-first-then-Sonnet escalation like `resolve_call` used to do: the
-whole point is that the model itself must explore the worktree to find
+no Haiku-first-then-Sonnet/Opus escalation like `resolve_call` used to do:
+the whole point is that the model itself must explore the worktree to find
 something outside the context we hand it in advance (a caller whose call
 no longer matches a changed signature, a test that still checks the old
-form, an event listener that doesn't handle a new payload field). One
-Execution per manual run, **no Signal** — the workflow runs its Activities
-sequentially and completes, mirroring `submit_review`/`ingest`.
+form, an event listener that doesn't handle a new payload field). Opus is
+deliberately the strongest available model here — this is a manually
+triggered, low-frequency action, not something run on every navigation
+step (unlike `explain_code`, which is also Opus but on-demand per unit —
+see above). One Execution per manual run, **no Signal** — the workflow
+runs its Activities sequentially and completes, mirroring
+`submit_review`/`ingest`.
 
-- **Trigger: manual, PR-wide** (not per group/line/call) — a new item
-  **"Check the whole PR for risks"** in the `/` menu (`PR_COMMANDS`,
-  `home.mjs`), which calls `POST /api/workflows/code_warning {pr}`
-  (`checkPRWarnings`). Deliberately no automatic trigger (like
+- **Trigger: manual, PR-wide** (not per group/line/call) — the item
+  **"Diepgravend onderzoek"** ("in-depth investigation") in the `/` menu
+  (`PR_COMMANDS`, `home.mjs`), which calls `POST /api/workflows/code_warning
+  {pr}` (`checkPRWarnings`). Deliberately no automatic trigger (like
   `explain_code`'s debounce or `resolve_call`'s auto-search): a PR-wide
-  agentic Sonnet pass with a judgment-based (not merely searching) goal is
+  agentic Opus pass with a judgment-based (not merely searching) goal is
   too expensive/too noise-sensitive to run silently on every navigation
   step.
   **Running it repeatedly is a deliberate, repeatable "refresh" of the
@@ -1799,11 +1809,11 @@ sequentially and completes, mirroring `submit_review`/`ingest`.
   layer.
 - **Determinism/write boundary:** the workflow body (`codeWarningWorkflow`)
   does no IO itself — only `ExecuteActivity` calls in a fixed order
-  (scope resolution → supersede → the one Sonnet call → one
+  (scope resolution → supersede → the one Opus call → one
   `createWarningComment` per finding); the number of `createWarningComment`
   calls is exactly `len(toCreate)`, a function of `runAgenticReview`'s
   **stored** result, so replay-safe. All non-determinism/IO (DB reads, the
-  Sonnet call, comments reads/deletes/creates) sits in Activities; the
+  Opus call, comments reads/deletes/creates) sits in Activities; the
   only writers are the existing sanctioned paths (`TaskManager.Signal`/
   `StartCodeComment`) — no new direct module writes.
 - **Frontend:** the warning gets its own badge — the same warning-triangle
@@ -1820,7 +1830,7 @@ sequentially and completes, mirroring `submit_review`/`ingest`.
   run's `Input`).
 - **Endpoint:** `POST /api/workflows/code_warning {pr}` (`handleCodeWarning`).
   `GET /api/workflows?pr=N` (existing) shows the run like any other.
-- Tests: `code_warning_test.go` (Fake-Sonnet yields a findings array →
+- Tests: `code_warning_test.go` (Fake-Opus yields a findings array →
   anchorable becomes block-scoped with `Source:"ai"`/`Local:true`,
   non-anchorable becomes PR-wide `Kind:"ai_warning"`, a finding outside
   scope is silently rejected, a second run supersedes the first instead of
