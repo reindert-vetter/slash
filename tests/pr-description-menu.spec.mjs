@@ -80,4 +80,59 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()
   })
+
+  // Regression: state.selected can still point at a comment-index item
+  // (kind:'comment', see recomputeLeftList/commentBlockItem) while stop 1
+  // owns the keyboard — e.g. a fresh PR-wide comment auto-selects the first
+  // "Start" row, and the reviewer then steps left into the description. Enter
+  // there must open the PR-wide menu, not the comment item's own action menu
+  // ("Beantwoorden"/"Resolve comment"/"Ignore") — see the !state.showDescription
+  // guard on the selectedComment() branch in onKeydown (home.mjs).
+  test('Enter on stop 1 opens the PR-wide menu, not the comment-item menu, when a comment row is selected', async ({
+    page,
+  }) => {
+    const now = new Date().toISOString()
+    await page.route('**/api/comments?*', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'ci-desc-1',
+            runId: 'run-ci-desc-1',
+            pr: 12903,
+            file: '',
+            line: 0,
+            author: 'octocat',
+            body: 'Overall this looks great, one nit below',
+            createdAt: now,
+            reactionCount: 0,
+            status: 'open',
+            source: 'github',
+            kind: 'issue',
+            reactions: [],
+            rowStart: -1,
+            rowEnd: -1,
+          },
+        ]),
+      }),
+    )
+    await page.goto('/pr/12903')
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    // A fresh open auto-selects the unresolved comment item (rank -1, first).
+    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('pr-info-column')).toBeVisible()
+
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await expect(menu).toContainText('Naar PR-overzicht')
+    await expect(menu).not.toContainText('Beantwoorden')
+    await expect(menu).not.toContainText('Resolve comment')
+
+    await page.keyboard.press('Escape')
+    await expect(menu).not.toBeVisible()
+  })
 })

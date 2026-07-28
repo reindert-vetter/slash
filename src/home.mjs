@@ -5725,9 +5725,12 @@ function onKeydown(e) {
   // commentBlockItem) opens its own small action menu ("Beantwoorden" /
   // "Resolve comment", prCommentCommandsFor) instead of the block palette —
   // there is no diff to act on. Checked before the generic Enter-opens-menu
-  // branch below so it wins for this item; never true while showDescription
-  // is true (a comment item can only be selected in the plain block index).
-  if (e.key === 'Enter' && selectedComment()) {
+  // branch below so it wins for this item. Explicitly gated on
+  // !state.showDescription: state.selected can still point at a comment item
+  // while stop 1 (the PR-description column) owns the keyboard (the reviewer
+  // selected a comment row, then stepped left) — Enter there must open the
+  // PR-wide menu, not this item's own comment menu.
+  if (e.key === 'Enter' && !state.showDescription && selectedComment()) {
     e.preventDefault()
     openMenu('prComment')
     return
