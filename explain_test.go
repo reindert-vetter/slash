@@ -76,6 +76,14 @@ func TestExplainCodeGeneratesDescription(t *testing.T) {
 	if call.SystemPrompt != claude.ExplainCodeSystemPrompt {
 		t.Fatalf("system prompt = %q, want the embedded claude.ExplainCodeSystemPrompt", call.SystemPrompt)
 	}
+	// The footer only has room for two clamped lines (line-clamp-2) — the
+	// prompt must keep enforcing a hard brevity budget so a future edit
+	// doesn't silently regress back to a long, multi-clause answer that gets
+	// cut off. See the measured budget in modules/claude/prompts/explain_code.md
+	// and the matching EXPLAIN_PROMPT_VERSION bump in home.mjs.
+	if !strings.Contains(call.SystemPrompt, "40 woorden") || !strings.Contains(call.SystemPrompt, "275 tekens") {
+		t.Fatalf("system prompt misses the length budget instruction:\n%s", call.SystemPrompt)
+	}
 	if fake.Calls[0].WorkDir != "" || len(fake.Calls[0].Tools) != 0 {
 		t.Fatalf("explain run must be context-only, got %+v", fake.Calls[0])
 	}

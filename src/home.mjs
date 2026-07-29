@@ -4417,6 +4417,19 @@ function fnv1a(s) {
 // to keep the prompt (and the workflow input in the event history) bounded.
 const EXPLAIN_CONTEXT_LINES = 120
 
+// EXPLAIN_PROMPT_VERSION rides along in the explain-request hash (see
+// footerUnitInfo below) purely so a change to explain_code's prompt text can
+// invalidate every previously generated explanation — a stored row's
+// codeHash simply stops matching, so the unit lazily re-requests a fresh
+// description the next time it's focused (the same "new commit → new hash"
+// path the codeHash already relies on, just triggered by a prompt change
+// instead of a code change). No backend migration/bulk-delete needed. Bump
+// this whenever the prompt changes in a way that changes the desired output
+// (e.g. v2: capped the answer to ~40 words / ~275 characters so it reliably
+// fits the footer's line-clamp-2 instead of being cut off — see
+// modules/claude/prompts/explain_code.md).
+const EXPLAIN_PROMPT_VERSION = 'v2'
+
 // explainContext returns the focused block's new-side source (old side for a
 // pure removal), truncated, as prompt context for the LLM.
 function explainContext(b) {
@@ -4487,7 +4500,7 @@ function footerUnitInfo() {
     unitKey: cur.gran === 'group' ? `group-${unit.start}-${unit.end}` : `line-${unit.start}`,
     code,
     context,
-    codeHash: fnv1a(code + '\n ' + context),
+    codeHash: fnv1a(EXPLAIN_PROMPT_VERSION + '|' + code + '\n ' + context),
   }
   return info
 }

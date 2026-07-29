@@ -1501,9 +1501,20 @@ right away.
   rows), the surrounding block code as context (frontend-truncated,
   `EXPLAIN_CONTEXT_LINES`), file/label/gran, the `unitKey`
   (`group-<start>-<end>`/`line-<row>`, the same codeRef form as
-  `commentPath`) and the `codeHash` (frontend `fnv1a` over code+context;
-  the backend only stores it). The workflow body is thus a pure function
-  of its input.
+  `commentPath`) and the `codeHash` (frontend `fnv1a` over
+  `EXPLAIN_PROMPT_VERSION + '|' + code + context`; the backend only stores
+  it). The workflow body is thus a pure function of its input. The prompt
+  itself caps the answer at roughly **40 words / 275 characters** (measured:
+  a real answer fits ~52 words/341 characters into the footer's two clamped
+  lines at a ~1378px window before `line-clamp-2` starts cutting it off —
+  the budget takes ~80% of that as a safety margin) so it reliably fits
+  `Footer.mjs`'s `line-clamp-2` instead of ending in "…". `EXPLAIN_PROMPT_VERSION`
+  (`home.mjs`) is a small frontend-only version token folded into `codeHash`
+  for exactly this kind of change: bumping it invalidates every previously
+  generated (now too-long) row without a backend migration — a stale row's
+  hash simply stops matching, so `computeFooterSnapshots` treats it as "no
+  explanation yet" and lazily re-requests a fresh (shorter) one the next
+  time that unit is focused.
 - **Workflow** (`workflows.go` + `explain.go`): `markExplainSearching` →
   `generateExplanation` (Opus via `modules/claude`, **context-only** — no
   tools; empty output → `failed`) → `saveExplanation`. The done/failed

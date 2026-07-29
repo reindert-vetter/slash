@@ -1452,9 +1452,13 @@ line shows
 `SLASH_CLAUDE=off`) hides the line again. The row match is based on
 `blockId|unitKey` (unitKey = `group-<start>-<end>`/`line-<row>`, the same
 codeRef shape as `commentPath`) plus a **code-hash check** (`fnv1a` over
-unit code + context): a stale row from before a new commit is ignored
-and regenerated; a seeded row with an empty hash always matches
-(test fixtures). While the description shows, the footer grows from 90px to
+`EXPLAIN_PROMPT_VERSION + '|' + code + context`): a stale row from before a
+new commit — or a prompt-text change that bumped `EXPLAIN_PROMPT_VERSION` —
+is ignored and regenerated; a seeded row with an empty hash always matches
+(test fixtures). The prompt itself caps the answer at ~40 words/~275
+characters (measured against `line-clamp-2` at the footer's real width, see
+`.claude/rules/tembed-workflows.md`) so it fits the two-line clamp below
+without being cut off. While the description shows, the footer grows from 90px to
 **140px** and `<main>` (`home.mjs`) and the comments/tasks sidebar +
 hint rail (`RelatedPanel.mjs`) reactively reserve `bottom-[140px]` instead
 of
