@@ -19,6 +19,28 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
+)
+
+// contextTimeout/agenticTimeout bound a single `claude -p` invocation, applied
+// by this module itself so a hung claude can never block a workflow run
+// indefinitely — see modules/jira's cliTimeout doc comment for the full
+// rationale (inline/blocking SignalWorkflow, "shorter deadline always wins",
+// var-not-const purely for testability with a fake, slow binary).
+//
+// Two values, not one, because the two run shapes are genuinely different:
+//   - contextTimeout (no Tools — a pure completion: resolve_call's Haiku pass,
+//     explain_code, pr_status's summary) — tembed-workflows.md's own
+//     recovery-priority notes call ~30s typical for these; 90s gives ~3x
+//     headroom while still bounding it.
+//   - agenticTimeout (Tools set — Sonnet/Opus exploring a worktree with
+//     Read/Grep/Glob, e.g. code_warning's PR-wide risk check) may legitimately
+//     run for minutes; 10 minutes is generous but finite, so a wedged tool
+//     call/auth prompt still can't hang the workflow forever. If a real
+//     agentic run turns out to need more than this in practice, raise it.
+var (
+	contextTimeout = 90 * time.Second
+	agenticTimeout = 10 * time.Minute
 )
 
 // Full model IDs (see the claude-api reference).
@@ -102,6 +124,14 @@ func (m *Module) Run(ctx context.Context, req RunRequest) (string, error) {
 	if req.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", req.SystemPrompt)
 	}
+	// Agentic (Tools set) legitimately needs much more time than a bare
+	// context-only completion — see the contextTimeout/agenticTimeout doc.
+	timeout := contextTimeout
+	if len(req.Tools) > 0 {
+		timeout = agenticTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	switch {
 	case req.WorkDir != "":

@@ -12,7 +12,26 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
+
+// cliTimeout bounds a single `acli` invocation, applied by this module itself
+// (never relying solely on the caller): tembed's SignalWorkflow/advance runs a
+// workflow — and thus its Activities — inline/blocking, so a hung acli (e.g. an
+// interactive re-auth prompt with no TTY to answer it) would otherwise block
+// that workflow run, and every later signal on the same run, forever. A real
+// `acli jira workitem search` was measured at ~6s; 20s gives roughly 3x
+// headroom for a slow network without allowing an unbounded hang. This is a
+// production default, kept as a var (not a const) purely so tests can shrink
+// it temporarily to exercise the timeout path against a fake, slow binary
+// without waiting out the real value.
+//
+// context.WithTimeout on an already-bounded ctx only ever tightens the
+// deadline — the shorter of the two always wins — so a caller's own shorter
+// timeout is never overridden by this. Don't "optimize" this comment/call
+// away; modules/github and modules/claude apply the same rule with their own
+// values and refer back to this note instead of repeating it.
+var cliTimeout = 20 * time.Second
 
 // Issue is the Jira fields the pr_status tracker (and the task-inbox
 // aggregation, see the "jira" task source in taskinbox_analysis.go) care
@@ -87,6 +106,8 @@ func (m *Module) Issue(ctx context.Context, key string) (Issue, error) {
 	if !keyPattern.MatchString(key) {
 		return Issue{}, fmt.Errorf("jira: invalid issue key %q", key)
 	}
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "acli", "jira", "workitem", "view", key,
 		"--fields", "summary,description", "--json")
 	out, err := cmd.Output()
@@ -117,6 +138,8 @@ func (m *Module) Issue(ctx context.Context, key string) (Issue, error) {
 // acliSearchIssue. No shell string is built from user input — the JQL here is
 // a fixed constant, not built from any request parameter.
 func (m *Module) AssignedToMe(ctx context.Context) ([]Issue, error) {
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "acli", "jira", "workitem", "search",
 		"--jql", "assignee = currentUser() order by updated desc",
 		"--fields", "key,summary,status",

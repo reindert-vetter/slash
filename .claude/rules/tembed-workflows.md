@@ -213,6 +213,17 @@ code** and keeping the thread alive. Terminology follows Temporal — a
     `jira.Fake` (`SetIssue`) for tests; **`SLASH_JIRA=off`** → `jira.Fake{}`
     (no network, mirrors `SLASH_GITHUB=off`/`SLASH_CLAUDE=off`), wired up in
     `newTasks` (`tasks_api.go`).
+  - **Each of these three CLI-bridge modules enforces its own default
+    `exec.CommandContext` deadline internally, never relying solely on the
+    caller** — a hung subprocess (e.g. `acli`/`gh` waiting on an interactive
+    re-auth prompt with no TTY) would otherwise block that workflow run, and
+    every later Signal on the same run, forever (`SignalWorkflow`/`advance`
+    runs a workflow — and thus its Activities — inline/blocking). See the
+    `cliTimeout` doc comment in `modules/jira/jira.go` (also referenced from
+    `modules/github/github.go`) for the "shorter deadline always wins" rule
+    and the var-not-const testability note, and the
+    `contextTimeout`/`agenticTimeout` doc comment in `modules/claude/claude.go`
+    for why Claude gets two different values depending on `RunRequest.Tools`.
 - **Flow:** `saveComment` (comments) + `postGithubComment` (github, best-effort),
   then a loop on `reply`-**Signals**. A reaction comes in via the **UI**
   (`POST /api/workflows/{runID}/signals/reply`) and via a **per-thread poller**;

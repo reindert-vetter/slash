@@ -13,7 +13,23 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// cliTimeout bounds a single `gh` invocation, applied by this module itself
+// so a hung gh can never block a workflow run indefinitely — see the doc
+// comment on modules/jira's cliTimeout for the full rationale (inline/blocking
+// SignalWorkflow, "shorter deadline always wins", var-not-const for
+// testability). Same 20s value: a `gh api`/`gh api graphql` call is a single,
+// lightweight round trip, same class of call as acli's.
+//
+// apiPaginate below applies this PER PAGE (each api() call gets its own fresh
+// deadline), not once over the whole paginated fetch — deliberately: each `gh`
+// call is its own round trip and should be judged on its own, not penalized by
+// however many pages came before it. The trade-off, accepted here: a
+// pathologically long result set (many slow pages in a row) can still take a
+// while in total, just never hang on any single page.
+var cliTimeout = 20 * time.Second
 
 // Meta is PR metadata fetched by the pr_status tracker's basics stage and
 // stored in the prmeta read-model.
@@ -431,6 +447,8 @@ func (m *Module) ResolveReviewThread(ctx context.Context, pr int, commentID int6
 		return nil // no matching thread on GitHub — nothing to resolve
 	}
 	const mutation = `mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}`
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout) // see cliTimeout doc
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
 		"-f", "query="+mutation,
 		"-F", "id="+threadID,
@@ -445,6 +463,8 @@ func (m *Module) ResolveReviewThread(ctx context.Context, pr int, commentID int6
 // comment has REST id commentID, or "" if none matches.
 func (m *Module) reviewThreadID(ctx context.Context, owner, name string, pr int, commentID int64) (string, error) {
 	const query = `query($o:String!,$n:String!,$pr:Int!){repository(owner:$o,name:$n){pullRequest(number:$pr){reviewThreads(first:100){nodes{id comments(first:1){nodes{databaseId}}}}}}}`
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout) // see cliTimeout doc
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
 		"-f", "query="+query,
 		"-F", "o="+owner,
@@ -506,6 +526,8 @@ func (m *Module) MarkFileViewed(ctx context.Context, pr int, path string, viewed
 	query := fmt.Sprintf(
 		"mutation($p:String!,$id:ID!){%s(input:{path:$p, pullRequestId:$id}){clientMutationId}}",
 		mutation)
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout) // see cliTimeout doc
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
 		"-f", "query="+query,
 		"-F", "p="+path,
@@ -588,6 +610,8 @@ func (m *Module) MarkReadyForReview(ctx context.Context, pr int) error {
 		return err
 	}
 	const query = "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}"
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout) // see cliTimeout doc
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
 		"-f", "query="+query,
 		"-F", "id="+nodeID,
@@ -621,6 +645,8 @@ func (m *Module) RequestReviewers(ctx context.Context, pr int, logins []string) 
 // prNodeID fetches the GraphQL global node ID of a pull request.
 func (m *Module) prNodeID(ctx context.Context, owner, name string, pr int) (string, error) {
 	const query = `query($o:String!,$n:String!,$pr:Int!){repository(owner:$o,name:$n){pullRequest(number:$pr){id}}}`
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout) // see cliTimeout doc
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
 		"-f", "query="+query,
 		"-F", "o="+owner,
@@ -684,7 +710,12 @@ func (m *Module) apiPaginate(ctx context.Context, endpoint string, out any) erro
 	return json.Unmarshal(merged, out)
 }
 
+// api runs one `gh api` call, bounded by cliTimeout. apiPaginate calls this
+// once per page, so each page gets its own fresh deadline (see the cliTimeout
+// doc comment for why that's deliberate).
 func (m *Module) api(ctx context.Context, method, endpoint string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
+	defer cancel()
 	full := append([]string{"api", "--method", method, endpoint}, args...)
 	cmd := exec.CommandContext(ctx, "gh", full...)
 	out, err := cmd.Output()
