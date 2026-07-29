@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -134,5 +135,56 @@ func TestBlockChangedRowCountReadsRenamedOldPath(t *testing.T) {
 	control := Block{File: newPath, Class: "Foo", Name: "bar"}
 	if got := blockChangedRowCount(baseDir, headDir, control); got == 1 {
 		t.Errorf("control (no oldFile) unexpectedly matched the old path; want the added-method count, got %d", got)
+	}
+}
+
+// TestRowForLineSharesRowSpaceWithApproveTotal pins the invariant every anchor
+// consumer depends on: rowForLine (which turns a source line into a row index for
+// an imported comment) and blockChangedRowCount (which sizes the approve total)
+// must measure the SAME rows. Both now go through blockAlignedRows, so a block
+// whose leading PHPDoc gets folded away for display shifts them together.
+//
+// Before that, rowForLine read the raw extractBlockSource while the approve total
+// read the folded one, so on this block an imported comment landed 4 rows too high.
+func TestRowForLineSharesRowSpaceWithApproveTotal(t *testing.T) {
+	baseDir, headDir := t.TempDir(), t.TempDir()
+	rel := "app/Foo.php"
+	// A 4-line leading PHPDoc that enrichSignatureWithDocTypes folds into the
+	// signature, so the displayed block starts at `public function bar(): int`.
+	docSrc := func(ret string) string {
+		return "<?php\nclass Foo {\n" +
+			"    /**\n     * Does a thing.\n     * @return int\n     */\n" +
+			"    public function bar() {\n        return " + ret + ";\n    }\n}\n"
+	}
+	writeFileT(t, filepath.Join(baseDir, rel), docSrc("1"))
+	writeFileT(t, filepath.Join(headDir, rel), docSrc("2"))
+
+	// Block.Line is the PHPDoc's own opening line (the scanner pulls it up, see
+	// blocks-and-ingest.md), so the raw slice starts 4 lines above the signature.
+	b := Block{File: rel, Class: "Foo", Name: "bar", Line: 3, EndLine: 9}
+
+	rows, _, newSide := blockAlignedRows(baseDir, headDir, b)
+	if want := b.Line + 4; newSide.Start != want {
+		t.Fatalf("post-fold Start = %d, want %d (the 4 doc lines dropped)", newSide.Start, want)
+	}
+	// `return 2;` — the only changed line — is the one row the approve total counts.
+	if got := blockChangedRowCount(baseDir, headDir, b); got != 1 {
+		t.Fatalf("changed rows = %d, want 1", got)
+	}
+
+	// The same line, resolved by rowForLine, must land on that very row: a valid
+	// index into the rows above, marked changed, and carrying the new text.
+	row, ok := rowForLine(baseDir, headDir, b, 8, "RIGHT")
+	if !ok {
+		t.Fatal("rowForLine did not resolve line 8 (`return 2;`)")
+	}
+	if row < 0 || row >= len(rows) {
+		t.Fatalf("row %d out of range for %d aligned rows", row, len(rows))
+	}
+	if got := strings.TrimSpace(rowDisplayText(rows[row])); got != "return 2;" {
+		t.Errorf("row %d displays %q, want %q — the two row spaces disagree", row, got, "return 2;")
+	}
+	if !rowChanged(rows[row]) {
+		t.Errorf("row %d is not marked changed, so it isn't the approvable row", row)
 	}
 }

@@ -187,6 +187,41 @@ fully navigable item in the "Start" sidebar itself** — the reviewer selects it
 with `↑`/`↓`/click exactly like an ordinary PR block, and the block column to
 the right of the index shows its thread instead of a diff.
 
+**An ORPHANED block comment joins them** (`anchorState === 'orphan'`,
+`isOrphanComment`): a new commit renamed or removed the symbol it was anchored
+to, so `recomputeView` can never scope it to a block again (its `file`/`label`
+match nothing) and it would be visible **nowhere at all** — it was still in the
+DB and still served by `/api/comments`, just unreachable in every view. Both
+`prWideComments()` and `recomputeLeftList`/`commentBlockItem` therefore accept
+`kind !== '' || anchorState === 'orphan'`, and `recomputeView` excludes it in
+turn so it can't also leak into the null-scope list-mode view (which would show
+it twice). Deliberately **not** by flipping its `kind` to a PR-wide one — that
+would change how its replies mirror to GitHub (`isPRWide`, see
+`.claude/rules/tembed-workflows.md`); the orphan stays a block-scoped review
+comment that merely lost its block. Its fallback label (used when the body is
+empty) names the block it *used* to hang on, and its kind badge falls back to
+"Regelcomment" instead of rendering empty. A **`staleAnchorBadge`** pill
+(`data-testid=comment-stale-anchor`) marks both degraded states in the comment
+card, the compact conversation and the detail card — "verouderd — code
+verdwenen" for an orphan, "verouderd — regel gewijzigd" for an `unpinned` one,
+so the reviewer can tell that the thread's stored snippet is a record of code
+that no longer exists in this shape rather than a comment that just sits
+somewhere odd. Per the colorblind rule the **word** carries the meaning; the
+amber tint is decoration on top. Who sets `anchorState`, and why an anchor goes
+stale at all, is the re-anchor pass — see "Comment/approval anchors are
+RE-ANCHORED on every refresh" under `pr_status` in
+`.claude/rules/tembed-workflows.md`. Test:
+`tests/comment-orphan-anchor.spec.mjs`.
+
+**`commentRowSet` deliberately has NO bounds check against the block's row
+count.** It looks like it should need one (a stale `rowStart` from before the
+re-anchor pass existed, or from a file the delta didn't touch), but it would be
+dead weight: `paneHTML` (`Block.mjs`) walks the block's own rows and asks
+`commented.has(i)`, so an index past the end is structurally unrenderable. And
+an index that is stale but still **in range** would mark the wrong row, which no
+bound can catch — only re-anchoring can. Same reasoning applies to
+`approvedRowSet`.
+
 - **The synthetic item (`commentBlockItem`, `recomputeLeftList`,
   `home.mjs`):** `{ id: 'comment:'+c.id, kind: 'comment', label: <a short
   body snippet>, category: 'COMMENT', status: '', comment: c }` — `kind` is

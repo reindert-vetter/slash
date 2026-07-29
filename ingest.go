@@ -27,6 +27,20 @@ type ingestResult struct {
 	// pipeline because the PR's base SHA moved (e.g. rebased onto a newer
 	// develop) — an incremental diff against the old base would be unsound.
 	FullFallback bool `json:"fullFallback,omitempty"`
+	// PrevBaseSHA/PrevHeadSHA are the SHAs this PR was last ingested at, before
+	// this refresh moved them on, and ChangedFiles the paths it re-scanned. The
+	// re-anchor pass (reanchor.go, driven from prStatusWorkflow) needs all three:
+	// the paths to know which stored anchors can have gone stale, and the previous
+	// SHAs to rebuild the aligned-row space an approval was written in — the head
+	// worktree has by then already been checked out to the new SHA in place.
+	//
+	// Recorded here rather than re-read from pr_ingest afterwards because the
+	// refresh has already overwritten those rows by the time it returns, and
+	// because a workflow must take such values from a recorded Activity result to
+	// stay replay-deterministic.
+	PrevBaseSHA  string   `json:"prevBaseSHA,omitempty"`
+	PrevHeadSHA  string   `json:"prevHeadSHA,omitempty"`
+	ChangedFiles []string `json:"changedFiles,omitempty"`
 }
 
 // worktreeDirs returns absolute base/head worktree paths for a PR under
@@ -111,6 +125,27 @@ func scanAndStoreIngestBlocks(ctx context.Context, db *sql.DB, dataDir string, p
 // ingest without re-locking a non-reentrant mutex.
 func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir string, pr int, shas worktreeSHAs) (*ingestResult, error) {
 	res := &ingestResult{PR: pr, ByStatus: map[string]int{}}
+
+	// Read the SHAs the blocks table currently holds BEFORE replacing it, so the
+	// re-anchor pass can rebuild the aligned-row space every stored comment/
+	// approval anchor was written in (see reanchor.go). Without this a manual
+	// re-ingest ("Regenereren", or `slash ingest`) after new commits landed would
+	// swap in a fresh row space and leave every anchor of a changed file pointing
+	// at whatever code took its index — and worse, saveIngestSHAs below then makes
+	// the delta poller report Skipped for that same delta, so the refresh path
+	// would never repair it either.
+	//
+	// Absent (no prior ingest) is the normal first-ingest case: nothing can be
+	// stale yet, and the empty SHAs make the approval remap a no-op.
+	prevBase, prevHead, _, err := loadIngestSHAs(db, pr)
+	if err != nil {
+		return nil, fmt.Errorf("load previous ingest state: %w", err)
+	}
+	res.PrevBaseSHA, res.PrevHeadSHA = prevBase, prevHead
+	// A full swap re-scans everything, so every path of the PR may hold a stale
+	// anchor — not just a delta. That also makes one re-ingest repair anchors that
+	// went stale before this pass existed.
+	res.ChangedFiles = shas.Paths
 
 	baseDir, headDir := worktreeDirs(dataDir, pr)
 
@@ -220,6 +255,9 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 		if err != nil {
 			return nil, fmt.Errorf("full ingest fallback: scan and store: %w", err)
 		}
+		// PrevBaseSHA/PrevHeadSHA/ChangedFiles are filled by
+		// scanAndStoreIngestBlocksLocked itself (it reads the pre-swap SHAs), so
+		// the re-anchor pass covers this path exactly like a delta refresh.
 		full.FullFallback = true
 		return full, nil
 	}
@@ -260,7 +298,8 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 		return nil, fmt.Errorf("save ingest shas: %w", err)
 	}
 
-	res := &ingestResult{PR: pr, Stored: len(blocks), ByStatus: map[string]int{}}
+	res := &ingestResult{PR: pr, Stored: len(blocks), ByStatus: map[string]int{},
+		PrevBaseSHA: prevBase, PrevHeadSHA: prevHead, ChangedFiles: deltaFiles}
 	for _, b := range blocks {
 		res.ByStatus[b.Status]++
 	}

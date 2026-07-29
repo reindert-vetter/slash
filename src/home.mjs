@@ -56,6 +56,7 @@ import RelatedPanel, {
   focusedChipChain,
   selectComment,
   prWideComments,
+  isOrphanComment,
   commentDetailCard,
   startPrCommentReply,
   cancelPrCommentReply,
@@ -1466,10 +1467,19 @@ let freshDefaultSelectionAt = null // { blockId } | { toggle: true } | null
 
 function commentBlockItem(c) {
   const snippet = (c.body || '').trim().replace(/\s+/g, ' ').slice(0, 60)
+  // An orphan is a block comment that lost its block (a commit renamed/removed
+  // the symbol — see reanchor.go): it gets a row here instead of vanishing, and
+  // its fallback label names the block it USED to hang on, so the reviewer can
+  // still tell what it was about when the body itself is empty.
+  const fallback = isOrphanComment(c)
+    ? c.label || 'Verdwenen code'
+    : c.kind === 'ai_warning'
+      ? 'AI-risico'
+      : 'PR-comment'
   return {
     id: 'comment:' + c.id,
     kind: 'comment',
-    label: snippet || (c.kind === 'ai_warning' ? 'AI-risico' : 'PR-comment'),
+    label: snippet || fallback,
     category: 'COMMENT',
     status: '',
     comment: c,

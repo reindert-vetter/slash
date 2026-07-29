@@ -1,0 +1,38 @@
+[
+  {
+    "id": "orphan-1",
+    "runId": "orphan-1",
+    "pr": 970600,
+    "file": "app/Actions/OrphanAction.php",
+    "line": 9,
+    "author": "colleague",
+    "body": "Dit ophalen hoort in de repository, niet hier.",
+    "createdAt": "2026-01-05T10:00:00Z",
+    "status": "open",
+    "code": "        return $this->gone();",
+    "gran": "line",
+    "label": "OrphanAction::vanished",
+    "rowStart": 2,
+    "rowEnd": 2,
+    "anchorState": "orphan",
+    "path": "/pr-970600/app/Actions/OrphanAction.php/OrphanAction::vanished/line-2/comment-orphan-1",
+    "source": "github"
+  },
+  {
+    "id": "pinned-1",
+    "runId": "pinned-1",
+    "pr": 970600,
+    "file": "app/Actions/OrphanAction.php",
+    "line": 9,
+    "author": "colleague",
+    "body": "Deze hangt nog wel aan bestaande code.",
+    "createdAt": "2026-01-05T10:05:00Z",
+    "status": "open",
+    "code": "        return $this->stillHere();",
+    "gran": "line",
+    "label": "OrphanAction::stillHere",
+    "rowStart": 2,
+    "rowEnd": 2,
+    "source": "github"
+  }
+]
