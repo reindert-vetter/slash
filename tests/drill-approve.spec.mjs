@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The command-palette "approve"-action (COMMANDS' 'approve' item, home.mjs)
 // used to be hardcoded to the top-level curBlock()/state.gran/state.change,
@@ -23,7 +23,7 @@ test.describe('PR Review Tree — approving inside a drilled Onderliggende-code 
   }) => {
     await page.goto('/pr/95')
 
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // step into the parent's diff
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await page.keyboard.press('ArrowRight') // → into the Onderliggende-code panel

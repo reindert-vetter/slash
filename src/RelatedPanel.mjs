@@ -470,13 +470,41 @@ function releaseFocus() {
 // was swallowed by home.mjs' isEditableFocused() guard. Bumping the token on
 // each transition makes a stale request a no-op instead.
 // Regression test: tests/place-comment-return-focus.spec.mjs.
+//
+// It waits ACROSS a few frames (FOCUS_FRAMES) rather than giving up after one,
+// because the element it targets does not exist yet at call time and is
+// mounted BY the very state change that called us: `reaction-compose` only
+// renders inside expandedConversation, i.e. once cs.focus === 'comment' has
+// already flipped. One frame is normally plenty (arrow.js's reactive update is
+// a microtask, so it flushes before the rAF), but not guaranteed — a nested
+// reactive slot can need a further pass, and a saturated box can push the
+// render past the frame. A single attempt then found nothing and dropped the
+// focus SILENTLY AND PERMANENTLY on the restore path, where applyRelRestore
+// runs at most once (restorePending is cleared before it lands, by design, so
+// it can never hijack later navigation): after a reload the comment card came
+// back expanded with rel.foc=comment intact, but its reply field never got the
+// caret — which flaked tests/urlstate.spec.mjs' "landing on a comment survives
+// a reload" roughly one full-suite run in six.
+//
+// Retrying does not weaken the token guard above — that's re-checked before
+// every attempt, so a navigation in between still cancels the whole thing;
+// bounded frames only mean "wait for the render that this transition itself
+// caused", never "keep hunting for something to focus".
+const FOCUS_FRAMES = 10
+
 function focusEl(sel) {
   const want = focusToken
-  requestAnimationFrame(() => {
-    if (want !== focusToken) return
-    const el = document.querySelector(sel)
-    if (el) el.focus()
-  })
+  const attempt = (left) =>
+    requestAnimationFrame(() => {
+      if (want !== focusToken) return
+      const el = document.querySelector(sel)
+      if (el) {
+        el.focus()
+        return
+      }
+      if (left > 0) attempt(left - 1)
+    })
+  attempt(FOCUS_FRAMES)
 }
 
 // prefillField is focusEl's sibling for the ONE case that also needs to seed
@@ -485,17 +513,25 @@ function focusEl(sel) {
 // keyboard move in between (see focusEl's own doc comment) makes this a no-op
 // too instead of clobbering whatever now owns the keyboard. Places the caret
 // at the end of the seeded text (not the start), so the reviewer can keep
-// typing straight after the AI's own wording.
+// typing straight after the AI's own wording. Waits across the same bounded
+// number of frames as focusEl, for the same reason (the field is mounted by the
+// state change that called us) — a missed prefill would leave the composer open
+// but empty, silently dropping the AI's text the reviewer was meant to edit.
 function prefillField(sel, text) {
   const want = focusToken
-  requestAnimationFrame(() => {
-    if (want !== focusToken) return
-    const el = document.querySelector(sel)
-    if (!el) return
-    el.value = text
-    el.focus()
-    el.setSelectionRange(el.value.length, el.value.length)
-  })
+  const attempt = (left) =>
+    requestAnimationFrame(() => {
+      if (want !== focusToken) return
+      const el = document.querySelector(sel)
+      if (!el) {
+        if (left > 0) attempt(left - 1)
+        return
+      }
+      el.value = text
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
+    })
+  attempt(FOCUS_FRAMES)
 }
 
 // warningOverride, while set, forces the "+ Nieuwe comment" composer (below)

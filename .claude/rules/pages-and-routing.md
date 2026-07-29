@@ -362,6 +362,31 @@ also the `selectRowByKeyboard` note in `overview.spec.mjs`) to prove the
 gate itself: identical coordinates never hijack the selection, a real
 position delta does so again normally.
 
+**Second half of that same gate: a data-driven repaint (`scheduleRepaint`)
+also disarms `hoverEnabled`, because the coordinate check alone cannot catch
+a row sliding under a stationary pointer.** The coordinate delta only proves
+*the pointer* moved — but the hijack also happens the other way around, with
+the pointer legitimately parked where it last moved to while the **content**
+moves under it: closing the "Recent gegenereerd" drawer shrinks the document,
+the browser clamps `scrollTop`, and whatever row now lands under the idle
+cursor fires a perfectly **genuine** `mouseenter` (not a synthetic resync, so
+no coordinate is "stale" — the pointer really is there, e.g. on the drawer
+toggle it was just clicked on). What actually distinguishes the two cases is
+that no real mouse movement happened *since the row set changed*, so
+`scheduleRepaint` — which only ever runs from the row-set `watch`, never from
+a keypress or from the `onmouseenter` handler's own `paintSelection()` call —
+sets `hoverEnabled = false` both synchronously and again inside its `rAF`, so
+a boundary event dispatched on either side of that frame is ignored either
+way. A genuine `mousemove` re-arms hover immediately, so mouse hovering is
+unchanged apart from needing one pixel of movement after the list itself
+changed. This was a real, reproducible source of **test flakiness** (~3 in 8
+runs at 4 workers) in `tests/overview-selection-identity.spec.mjs`'s drawer
+case, which clicks the drawer toggle with the mouse and then asserts that
+collapsing it releases the selection: the scroll clamp did exactly the above,
+and how far the page had scrolled (thus whether a row landed under the
+cursor) depended on the drawer's height. Covered by the second test in
+`tests/overview-hover-gate.spec.mjs`.
+
 **Keyboard selection follows identity (`selKey`/`data-nav-key`), not just an
 array position (`selIndex`).** Every navigable row (`prRow` and
 `recentItem`) carries, alongside `data-nav-row`/`data-pr`, a stable

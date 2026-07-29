@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // Enter on a focused comment row (reply field empty) opens a small menu with a
 // "Verwijder comment" option. Choosing it signals the task_code_comment
@@ -33,7 +33,7 @@ test.describe('PR Review Tree — delete a comment', () => {
     await seedComment(page, body)
 
     await page.goto('/pr/' + PR)
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
     await row.click()
@@ -82,7 +82,7 @@ test.describe('PR Review Tree — delete a comment', () => {
     const runId = await seedComment(page, body)
 
     await page.goto('/pr/' + PR)
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
     await row.click()
@@ -109,7 +109,7 @@ test.describe('PR Review Tree — delete a comment', () => {
     const runId = await seedComment(page, body)
 
     await page.goto('/pr/' + PR)
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
     await row.click()

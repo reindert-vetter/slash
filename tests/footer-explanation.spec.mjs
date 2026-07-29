@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The footer shows a short Dutch AI description whenever the focused line or
 // group unit contains an if-statement (the explain_code workflow +
@@ -20,7 +20,7 @@ test.describe('PR Review Tree — footer AI description for if-units', () => {
     // (group-2-4, the three inserted if-lines) — a multi-row unit, so the
     // footer's inline diff now covers all three rows, and the group also
     // contains an if: the footer shows the seeded group description too.
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 

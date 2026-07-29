@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // A PR-wide comment (kind !== '') is a synthetic, navigable "Start" sidebar
 // item (kind:'comment', see recomputeLeftList/commentBlockItem in home.mjs).
@@ -44,7 +44,7 @@ test.describe('Comment-index selection survives a refresh (?sel=comment:<id>)', 
       comment('ci-3', 'Third PR-wide comment'),
     ])
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
 
     // A fresh open lands on the first unresolved comment item (rank -1, see
     // applyDefaultUnapprovedSelection) — step down onto the second one.

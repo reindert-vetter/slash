@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // PR-wide comments (issue/review/review_summary comments + code_warning's
 // ai_warning findings — c.kind !== '') no longer live in their own card
@@ -9,6 +9,19 @@ import { test, expect } from './_fixtures.mjs'
 // handlePrWideKey. See detail-layout.md ("Comment-index items") and
 // keyboard-navigation.md.
 
+// mockComments installs the comments route ONCE and serves whatever
+// `state.comments` holds at request time. The mutable-state shape matters: a
+// test that needs a different payload later must never `page.unroute()` and
+// re-`route()` to get it. Those two calls are not atomic, and the app polls
+// /api/comments every few seconds, so a poll landing in the gap reaches the
+// REAL endpoint — which returns [] for this PR (the _cleanApprovals fixture
+// wipes 12903's comments before every test). The mocked comment then vanishes
+// from state.blocks, the selection falls onto an ordinary block, and the
+// ?sel=comment:<id> the mirror watch had written is replaced by that block's
+// own ref — so the subsequent reload restores the wrong row and the assertion
+// on the "PR-comments" heading fails. That flaked the resolve test below
+// (~2 in 12 runs at 4 workers) and had nothing to do with the behaviour under
+// test. Swap the payload via the returned handle instead.
 function mockComments(page, extra = []) {
   const now = new Date().toISOString()
   const comments = [
@@ -52,16 +65,22 @@ function mockComments(page, extra = []) {
     },
     ...extra,
   ]
-  return page.route('**/api/comments?*', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(comments) }),
+  const state = { comments }
+  const ready = page.route('**/api/comments?*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(state.comments),
+    }),
   )
+  return Object.assign(ready, { serve: (next) => (state.comments = next) })
 }
 
 test.describe('Comment-index items ("Start" sidebar)', () => {
   test('shows a PR-wide comment as a "0/1" Start row, never the anchored one', async ({ page }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
 
     await expect(page.getByTestId('comment-heading')).toBeVisible()
@@ -80,7 +99,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
   test('a fresh open lands on the unresolved comment item, with its thread shown to the right', async ({ page }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
     await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
 
@@ -94,8 +113,17 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
   test('↑/↓ selects it like any other Start row', async ({ page }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
+    // Wait for the comment item to actually BE the selection before stepping.
+    // A block-row being visible only proves /api/blocks landed; the comment
+    // item comes from RelatedPanel's own, independent comment poll, so the
+    // default selection lands on it a moment later (applyCommentRefRestore/
+    // retryDefaultSelectionForComments, home.mjs). Stepping ↓ before that
+    // starts from an ordinary block instead, and the ↑ back then lands on a
+    // block too — the detail card never appears and the assertion below fails
+    // for a reason that has nothing to do with ↑/↓.
+    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
     // Already on the comment item (index 0) — step down onto an ordinary
     // block, then back up onto the comment item again.
     await page.keyboard.press('ArrowDown')
@@ -107,7 +135,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
   test('Enter opens the action menu', async ({ page }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 
     await page.keyboard.press('Enter')
@@ -152,7 +180,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
       }),
     )
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 
     const bubbles = page.getByTestId('reaction-bubble')
@@ -205,7 +233,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
   test('↓ at the bottom of the comment thread falls through to the next block', async ({ page }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
     await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
 
@@ -234,7 +262,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     })
 
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 
     await page.keyboard.press('Enter')
@@ -259,7 +287,8 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
   })
 
   test('resolving moves the item into "Toon N goedgekeurde blocks" (1/1)', async ({ page }) => {
-    await mockComments(page)
+    const mock = mockComments(page)
+    await mock
     let replyBody = null
     await page.route('**/signals/reply', (route) => {
       replyBody = route.request().postDataJSON()
@@ -267,7 +296,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     })
 
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 
     await page.keyboard.press('Enter')
@@ -281,36 +310,32 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     expect(replyBody.body).toBe('/resolve')
 
     // The mocked GET /api/comments never actually flips the row to
-    // status:'resolved' server-side (it's a static route mock) — re-mock it
-    // as resolved and reload, proving the item folds into the approved
-    // section once its status is (same as any other fully-approved block).
-    await page.unroute('**/api/comments?*')
+    // status:'resolved' server-side (it's a static route mock) — serve it as
+    // resolved from here on and reload, proving the item folds into the
+    // approved section once its status is (same as any other fully-approved
+    // block). Swapping the payload through the existing handler
+    // (mock.serve) rather than unroute+route is load-bearing — see
+    // mockComments' own comment for the flake that caused.
     const now = new Date().toISOString()
-    await page.route('**/api/comments?*', (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify([
-          {
-            id: 'ci-1',
-            runId: 'run-ci-1',
-            pr: 12903,
-            file: '',
-            line: 0,
-            author: 'octocat',
-            body: 'Overall this looks great, one nit below',
-            createdAt: now,
-            reactionCount: 0,
-            status: 'resolved',
-            source: 'github',
-            kind: 'issue',
-            reactions: [],
-            rowStart: -1,
-            rowEnd: -1,
-          },
-        ]),
-      }),
-    )
+    mock.serve([
+      {
+        id: 'ci-1',
+        runId: 'run-ci-1',
+        pr: 12903,
+        file: '',
+        line: 0,
+        author: 'octocat',
+        body: 'Overall this looks great, one nit below',
+        createdAt: now,
+        reactionCount: 0,
+        status: 'resolved',
+        source: 'github',
+        kind: 'issue',
+        reactions: [],
+        rowStart: -1,
+        rowEnd: -1,
+      },
+    ])
     // Force a fresh comments load (mirrors the poll cycle) via a resolve on a
     // no-op signal — simplest robust trigger here is just to wait for the
     // existing 5s poll, but that's slow; instead reload the page against the
@@ -350,7 +375,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
       },
     ])
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
     await expect(page.getByTestId('comment-heading')).toBeVisible()
     // Two comment-index rows now: the plain issue comment (index 0, already

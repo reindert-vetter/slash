@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // Verifies: a placed comment shows its code snippet in the thread (feature 1)
 // and its original body as the first chat bubble (feature 2).
@@ -21,7 +21,7 @@ test('placed comment shows code snippet + original body as first message', async
   expect((await start.json()).runId).toBeTruthy()
 
   await page.goto('/pr/' + pr)
-  await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+  await leaveSearchBox(page)
   const item = page.getByTestId('comment-item').first()
   await expect(item).toBeVisible()
   await item.click()

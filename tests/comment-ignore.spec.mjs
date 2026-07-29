@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // "Ignore" — a fourth item in the PR-comment index item's action menu
 // (prCommentCommandsFor, ms.mode === 'prComment') that hides a comment from
@@ -38,7 +38,7 @@ test.describe('Ignoring a PR-comment index item', () => {
   test('Ignore hides the row into its own "Verborgen comments" toggle, and back', async ({ page }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.getByTestId('comment-heading')).toBeVisible()
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 

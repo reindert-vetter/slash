@@ -1890,8 +1890,27 @@ function setupKeyboard() {
   window.addEventListener('keydown', kbHandler, true)
 }
 
+// scheduleRepaint runs on a data-driven change of the visible row set (see the
+// watch below), never on a keypress. It disarms hoverEnabled for the same
+// reason every keyboard move does: the row set just changed underneath a
+// possibly stationary cursor, so the *next* mouseenter is very likely not the
+// reviewer pointing at that row but a row sliding under the pointer — closing
+// the "Recent gegenereerd" drawer, for instance, shrinks the document, the
+// browser clamps scrollTop, and whatever row now lands under the idle cursor
+// fires a perfectly genuine mouseenter that would hijack the selection.
+//
+// The coordinate gate on the mousemove listener below can't catch that case on
+// its own: the pointer really is at the coordinates it last moved to (e.g. the
+// drawer toggle it was just clicked on), so nothing distinguishes "moved here
+// and stopped" from "content moved under here". What does distinguish them is
+// that no real mouse movement happened *since the layout changed* — hence
+// disarming here, synchronously as well as inside the frame, so a boundary
+// event dispatched either side of the rAF is ignored either way. A genuine
+// mousemove re-arms hover immediately, so hovering keeps working as before.
 function scheduleRepaint() {
+  hoverEnabled = false
   requestAnimationFrame(() => {
+    hoverEnabled = false
     setupKeyboard()
     paintSelection()
   })

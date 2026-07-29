@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, leaveSearchBox } from './_fixtures.mjs'
 
 // Change navigation: from the sidebar (list mode) → steps into the selected
 // block's diff and selects the first changed line; ↑/↓ then walk the change
@@ -11,7 +11,7 @@ test.describe('PR Review Tree — change navigation', () => {
     // Let the app's initial module load + lazy fetches settle; otherwise an
     // in-page evaluate() can race the load and hit "context destroyed".
     await page.waitForLoadState('networkidle')
-    const groups = await page.evaluate(async () => {
+    const groups = await evaluateSettled(page, async () => {
       const { changeGroups } = await import('/src/Block.mjs')
       // Changed rows carry letter text so the MAX_GROUP split is allowed to fall
       // on them (the split only lands on a row with an actual letter — see
@@ -39,7 +39,7 @@ test.describe('PR Review Tree — change navigation', () => {
   }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    const groups = await page.evaluate(async () => {
+    const groups = await evaluateSettled(page, async () => {
       const { changeGroups } = await import('/src/Block.mjs')
       // 7 changed rows whose text is just braces — over MAX_GROUP, but none carries
       // a letter, so the split is suppressed and they stay one group. The two
@@ -59,7 +59,7 @@ test.describe('PR Review Tree — change navigation', () => {
   test('an active group is highlighted with an anchor on both panes', async ({ page }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
       const b = reactive({
@@ -212,7 +212,7 @@ test.describe('PR Review Tree — change navigation', () => {
     }
 
     await page.goto('/pr/' + pr)
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     const panel = page.getByTestId('inline-comments')
     const items = panel.getByTestId('comment-item')
 
@@ -248,7 +248,7 @@ test.describe('PR Review Tree — change navigation', () => {
   }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const mod = await import('/src/RelatedPanel.mjs')
       const state = reactive({ pr: 12903, blocks: [], allBlocks: [], selected: 0 })
@@ -317,7 +317,7 @@ test.describe('PR Review Tree — change navigation', () => {
   }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    const out = await page.evaluate(async () => {
+    const out = await evaluateSettled(page, async () => {
       const { changeGroups, changeLines, changeCalls } = await import('/src/Block.mjs')
       // A modified row (its new line is a two-call chain), a one-sided added row,
       // and a pure deletion (old removed, no replacement).
@@ -375,7 +375,7 @@ test.describe('PR Review Tree — change navigation', () => {
   }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    const out = await page.evaluate(async () => {
+    const out = await evaluateSettled(page, async () => {
       const { changeGroups, changeLines, changeCalls, changedRows } = await import(
         '/src/Block.mjs'
       )
@@ -412,7 +412,7 @@ test.describe('PR Review Tree — change navigation', () => {
   test('a blank pure-deletion row is diff noise, but content deletions are landable lines', async ({ page }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    const out = await page.evaluate(async () => {
+    const out = await evaluateSettled(page, async () => {
       const { changeLines, changeCalls, changedRows } = await import('/src/Block.mjs')
       const rows = [
         { left: '$a = 1;', right: null, leftMark: 'del', rightMark: null },
@@ -441,7 +441,7 @@ test.describe('PR Review Tree — change navigation', () => {
   }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    const segs = await page.evaluate(async () => {
+    const segs = await evaluateSettled(page, async () => {
       const { changeCalls } = await import('/src/Block.mjs')
       const rows = [
         {
@@ -476,7 +476,7 @@ test.describe('PR Review Tree — change navigation', () => {
   }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    const segs = await page.evaluate(async () => {
+    const segs = await evaluateSettled(page, async () => {
       const { changeCalls } = await import('/src/Block.mjs')
       const rows = [
         {
@@ -511,7 +511,7 @@ test.describe('PR Review Tree — change navigation', () => {
   }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const mod = await import('/src/Block.mjs')
       const Block = mod.default
@@ -620,6 +620,35 @@ test.describe('PR Review Tree — change navigation', () => {
     await page.keyboard.press('f') // single-row group → jumps straight to 'call'
     await expect(page).toHaveURL(/gran=call/)
     await expect(page).not.toHaveURL(/chg=/) // first call segment → index 0, omitted
+
+    // First let the page go quiet: wait until no attribute mutation lands
+    // inside the block column for 300ms straight. This is load-bearing for
+    // determinism, not politeness — the app has several async loads in flight
+    // that legitimately patch this column when they land (a look-ahead
+    // preview's own /api/code arriving bumps state.codeVersion and rebuilds
+    // the cards; /api/approvals + /api/blockstats feed the approve pill/
+    // checkbox), and none of them are caused by the keypress this test
+    // measures. With 4 parallel workers briefly saturating the box, those can
+    // slip past `networkidle` into the measurement window below and get
+    // counted as a "flicker" that never happened — which is exactly how this
+    // spec flaked.
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const target = document.querySelector('[data-testid="block-column"]')
+          let timer
+          const finish = () => {
+            obs.disconnect()
+            resolve()
+          }
+          const obs = new MutationObserver(() => {
+            clearTimeout(timer)
+            timer = setTimeout(finish, 300)
+          })
+          obs.observe(target, { attributes: true, subtree: true })
+          timer = setTimeout(finish, 300)
+        }),
+    )
 
     // Watch every attribute mutation on the block column for the next step. The
     // active-row highlight itself is a .innerHTML replace inside <code> (not an

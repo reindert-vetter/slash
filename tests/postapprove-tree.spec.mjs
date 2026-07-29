@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The postApprove follow-up menu ("Ga door naar de volgende niet-goedgekeurde
 // code") walks the review TREE depth-first, not just the flat sidebar list:
@@ -29,7 +29,7 @@ test.describe('PR Review Tree — postApprove follow-up menu walks the tree', ()
     await expect(related).toContainText('TreeChildAction::run')
 
     // Step into the parent's diff and approve its only group via the palette.
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 

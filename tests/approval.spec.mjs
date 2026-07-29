@@ -1,27 +1,8 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, evaluateSettled } from './_fixtures.mjs'
 
-// evaluateSettled runs an in-page evaluate that's resilient to the documented
-// cold-start mount-race (see .claude/rules/conventions.md): home.mjs's
-// bindUrlState watches keep firing history.replaceState right after
-// 'networkidle', and that burst can tear down the very execution context our
-// evaluate() just started running in ("Execution context was destroyed").
-// waitForLoadState('networkidle') alone doesn't guarantee the burst is over, so
-// on that specific error we just wait for the page to go idle again and retry
-// the whole evaluate — a few attempts, not a broad retries: N sledgehammer, and
-// scoped to this one flaky race rather than every test.
-async function evaluateSettled(page, fn, attempts = 4) {
-  let lastErr
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await page.evaluate(fn)
-    } catch (err) {
-      if (!/context was destroyed/i.test(err.message) || i === attempts - 1) throw err
-      lastErr = err
-      await page.waitForLoadState('networkidle')
-    }
-  }
-  throw lastErr
-}
+// evaluateSettled (the mount-race-resilient page.evaluate) started here and now
+// lives in _fixtures.mjs, since every spec that mounts a component via an
+// in-page dynamic import needs it — see its doc comment there.
 
 // Combined approval indicators. The seeded fixture DB has no worktrees, so
 // /api/code (and thus a real diff with changed rows) is unavailable — like the
@@ -38,7 +19,7 @@ test.describe('PR Review Tree — combined approval', () => {
     // Settle the app's own load before mounting a second component into the
     // live page (the cold-start mount race in conventions.md).
     await page.waitForLoadState('networkidle')
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const BlockList = (await import('/src/BlockList.mjs')).default
       const state = reactive({
@@ -88,7 +69,7 @@ test.describe('PR Review Tree — combined approval', () => {
     // conventions.md describes. The sibling tests below already do this via
     // evaluateSettled/networkidle; this one used to mount straight away.
     await page.waitForLoadState('networkidle')
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const mod = await import('/src/RelatedPanel.mjs')
       const state = reactive({ pr: 12903, blocks: [], allBlocks: [], selected: 0 })

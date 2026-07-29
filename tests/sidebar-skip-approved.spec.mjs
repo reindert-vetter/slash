@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // Regression: ArrowDown/ArrowUp in the blokken-index used to step state.selected
 // as a raw index into the FULL state.blocks array, ignoring that a fully-approved
@@ -26,7 +26,7 @@ test.describe('PR Review Tree — sidebar navigation skips hidden (approved) blo
     // Select + fully approve block 1 (CreatePaymentAction::execute) straight from
     // the index, exactly like the "approving from the blokken-index" flow.
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     expect(selParam(page)).toBe(BLOCK1_SEL)
 
     await page.keyboard.press('Enter')

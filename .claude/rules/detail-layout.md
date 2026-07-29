@@ -824,6 +824,28 @@ therefore bumps a module-level `focusToken`, and a deferred focus only lands
 while the token still matches the value captured when it was requested. Test:
 `tests/place-comment-return-focus.spec.mjs`.
 
+**The flip side: that deferred focus waits ACROSS a few frames
+(`FOCUS_FRAMES`, 10) instead of giving up after one, because the element it
+targets is mounted BY the very state change that requested the focus.**
+`reaction-compose` only renders inside `expandedConversation` — i.e. only once
+`cs.focus === 'comment'` has already flipped — so `focusEl`'s
+`querySelector` is looking for something that does not exist yet at call time.
+One frame is normally plenty (arrow.js's reactive update is a microtask, so it
+flushes before the `rAF`), but it is not guaranteed: a nested reactive slot can
+need a further pass, and a saturated box can push the render past the frame.
+The old single attempt then found nothing and dropped the focus **silently and
+permanently** — worst on the refresh-restore path, where `applyRelRestore` runs
+at most once by design (`restorePending` is cleared before the focus lands, so
+it can never hijack later navigation): the card came back expanded with
+`rel.foc=comment` intact, but its reply field never got the caret. That flaked
+`tests/urlstate.spec.mjs`'s "landing on a comment survives a reload" about one
+full-suite run in six. The bounded retry re-checks `focusToken` before **every**
+attempt, so it weakens nothing above — it only means "wait for the render this
+transition itself caused", never "keep hunting for something to focus".
+`prefillField` (the AI-finding conversion composer) does the same, for the same
+reason: a missed prefill would leave the composer open but empty, silently
+dropping the text the reviewer was meant to edit.
+
 **The same `focusToken` also guards `placeComment`'s/`createComment`'s own
 async tail (POST + comments reload), not just a deferred DOM focus.**
 `COMPOSE_COMMANDS`' `run()` is fired without being awaited (`runCommand`,

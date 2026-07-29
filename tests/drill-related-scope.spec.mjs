@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // Onderliggende-code scoping (relatedChildren/callScopeMethods/groupLineRange/
 // resolvedCallChildren in home.mjs) is supposed to hide a line/call-scoped
@@ -28,7 +28,7 @@ test.describe('PR Review Tree — Onderliggende-code scoping in a focused drille
   }) => {
     await page.goto('/pr/100')
     await expect(page.getByTestId('block-row')).toHaveCount(1)
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // caller's diff
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await page.keyboard.press('ArrowRight') // → Onderliggende code

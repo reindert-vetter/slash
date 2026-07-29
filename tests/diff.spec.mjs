@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, evaluateSettled } from './_fixtures.mjs'
 
 // Line-aligned diff in the code panes. Block.mjs runs a pure LCS line diff
 // (alignRows/diffLines — no AI) so the two sides line up row-for-row: unchanged
@@ -15,7 +15,7 @@ test.describe('PR Review Tree — code diff alignment', () => {
     // execution context can be destroyed mid-import ("context destroyed").
     await page.waitForLoadState('networkidle')
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
       const b = reactive({
@@ -82,7 +82,7 @@ test.describe('PR Review Tree — code diff alignment', () => {
     // import doesn't race a client re-render / navigation ("context destroyed").
     await page.waitForLoadState('networkidle')
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
       const b = reactive({

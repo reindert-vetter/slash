@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, evaluateSettled } from './_fixtures.mjs'
 
 // Out-of-view change hints. When a diff is taller than its viewport, Block.mjs
 // floats a small bar with a chevron at the top/bottom edge of the code body to
@@ -15,7 +15,7 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
 
     await page.waitForLoadState('networkidle')
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
       // A 30-line function whose FIRST and LAST lines differ between old and new,
@@ -60,7 +60,7 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
 
     // Scrolled to the top: the top change is visible, the bottom one is below the
     // fold → down hint on, up hint off. (Compute hints as home.mjs would.)
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { updateHints } = await import('/src/Block.mjs')
       updateHints(document.querySelector('#hint-host [data-testid="code-diff"]'))
     })
@@ -84,7 +84,7 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
 
     await page.waitForLoadState('networkidle')
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
       const b = reactive({
@@ -125,7 +125,7 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
 
     await page.waitForLoadState('networkidle')
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
       const middle = Array.from({ length: 28 }, (_, i) => `    $step${i} = ${i};`)

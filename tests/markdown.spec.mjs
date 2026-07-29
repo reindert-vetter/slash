@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, evaluateSettled } from './_fixtures.mjs'
 
 // renderMarkdown (src/markdown.mjs) wraps the vendored snarkdown
 // (src/vendor/snarkdown.js) for the PR-info column's summary/body/Jira text.
@@ -13,7 +13,7 @@ test.describe('PR Review Tree — Markdown rendering', () => {
 
     await page.waitForLoadState('networkidle')
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { renderMarkdown } = await import('/src/markdown.mjs')
       const md = [
         '# Title',
@@ -62,7 +62,7 @@ test.describe('PR Review Tree — Markdown rendering', () => {
       await d.dismiss()
     })
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { renderMarkdown } = await import('/src/markdown.mjs')
       const md = 'Before <script>alert("xss")</script> after, and <img src=x onerror="alert(1)"> too.'
       const host = document.createElement('div')
@@ -88,7 +88,7 @@ test.describe('PR Review Tree — Markdown rendering', () => {
 
     await page.waitForLoadState('networkidle')
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { renderMarkdown } = await import('/src/markdown.mjs')
       const md = '[click me](javascript:alert(1))'
       const host = document.createElement('div')

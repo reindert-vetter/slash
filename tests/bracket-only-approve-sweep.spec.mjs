@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, evaluateSettled } from './_fixtures.mjs'
 
 // Approving a line/group also sweeps in a directly-FOLLOWING bracket/
 // punctuation-only row (a lone `});`/`},`/etc.) so the reviewer doesn't have
@@ -13,7 +13,7 @@ test.describe('PR Review Tree — bracket-only row auto-approve sweep', () => {
   }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    const results = await page.evaluate(async () => {
+    const results = await evaluateSettled(page, async () => {
       const { isBracketOnlyRow } = await import('/src/Block.mjs')
       const changed = (right, left = null) => ({
         left,
@@ -66,7 +66,7 @@ test.describe('PR Review Tree — bracket-only row auto-approve sweep', () => {
   }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    const results = await page.evaluate(async () => {
+    const results = await evaluateSettled(page, async () => {
       const { sweepBracketOnlyForward } = await import('/src/Block.mjs')
       const changed = (right) => ({ left: null, right, leftMark: null, rightMark: 'ins' })
       const unchanged = (text) => ({ left: text, right: text, leftMark: null, rightMark: null })

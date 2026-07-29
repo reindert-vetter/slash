@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The postApprove follow-up menu: approving via the command palette (not the
 // top checkbox — that stays a direct toggle) opens a small follow-up menu when
@@ -66,7 +66,7 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     // Block 0 (ContractController::index, CONTROLLER-first) has no local
     // diff; select block 1 (CreatePaymentAction::execute).
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // step it into its diff
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -165,7 +165,7 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     // rows, so it would already read as vacuously approved; select block 1
     // (CreatePaymentAction::execute), which has a real unit to approve.
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page).not.toHaveURL(/mode=diff/)
 
     // Approve execute's only group via the palette, straight from the index.

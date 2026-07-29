@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // Regression test for: "ik kan niet <-, ->, s, d of f typen in de comment" — the
 // composer's own focus-tracking (cs.focus) has to stay in lockstep with real DOM
@@ -20,7 +20,7 @@ test.describe('PR Review Tree — composer typing guard', () => {
     // PR — select block 1 (CreatePaymentAction::execute) so → actually enters
     // diff mode (mirrors nav-chain.spec.mjs).
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list → diff
 
     const granOf = () => new URL(page.url()).searchParams.get('gran')

@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The sidebar's ↑/↓ cursor forms one circular loop through the "Start" index:
 //   first visible block → … → last visible block → toggle-approved (if any
@@ -61,7 +61,7 @@ test.describe('PR Review Tree — sidebar ↑/↓ loop through the toggle rows a
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
 
     // Fully approve block 1 (CreatePaymentAction::execute) so a
     // toggle-approved row exists (same approach as
@@ -107,7 +107,7 @@ test.describe('PR Review Tree — sidebar ↑/↓ loop through the toggle rows a
   }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
 
     await ignoreCommentRow(page)
 

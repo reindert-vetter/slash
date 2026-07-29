@@ -770,3 +770,67 @@
   safe. **So never run the suite with loose `SLASH_GITHUB`/`SLASH_CLAUDE` env
   vars to get it offline** — the harness already does that; those vars are
   only still relevant for `go run .`/`slash` outside Playwright.
+- **Mount a component through `evaluateSettled` (exported from
+  `tests/_fixtures.mjs`), never a bare `page.evaluate`.** ~14 specs mount a
+  component by dynamically importing a module *inside* `page.evaluate()`
+  against the live app page (they need `index.html`'s Tailwind/Prism CSS for
+  computed-style and geometry assertions, so a bare fixture page won't do).
+  Two load-timing errors hit that pattern: `home.mjs`'s `bindUrlState` watches
+  fire a burst of `history.replaceState` during load which can tear down the
+  execution context the evaluate is running in ("Execution context was
+  destroyed"), and under 4 parallel workers the dynamic import can lose its
+  race with a briefly saturated server ("Failed to fetch dynamically imported
+  module"). `waitForLoadState('networkidle')` does **not** guarantee the burst
+  is over. `evaluateSettled` retries the whole evaluate (up to 4 attempts) on
+  exactly those two messages, waiting for idle in between — a targeted retry
+  instead of leaning on the config's `retries: 1`, which would also hand a
+  free retry to a genuine, unrelated failure elsewhere in the same spec and
+  hides how often the race fires. It started as a local helper in
+  `approval.spec.mjs` (where three of its own four mounting evaluates never
+  used it — that gap is what flaked); it's shared now, so **use it for every
+  mounting evaluate**. Requirement to keep it safe: put the `await import(...)`
+  calls **first** in the body, before creating the host element — a context
+  torn down at the import hasn't mounted anything yet, so a retry can't leave a
+  duplicate host behind (which would trip Playwright's strict-mode locator).
+- **Open a `/pr/<id>` spec with `await leaveSearchBox(page)` (exported from
+  `tests/_fixtures.mjs`), never a bare `page.keyboard.press('Escape')`.**
+  `home.mjs` focuses the sidebar search box from a
+  `requestAnimationFrame(focusSearchBox)` on load (a list-mode convenience so
+  the reviewer can type a filter straight away). A bare `Escape` sent before
+  that frame runs is handled with nothing focused, and the rAF then focuses the
+  box **anyway** — after which every later key goes through `onKeydown`'s
+  `searchActive` branch, which does something different from the
+  nothing-focused path (`ArrowRight` there means "step into the diff", not the
+  navigation the spec was driving). The helper waits for the load-time focus,
+  presses `Escape`, and asserts the box released focus, so the keyboard
+  genuinely belongs to the app's nav handler from then on. ~70 sites used the
+  bare form; it flaked `comment-index-items.spec.mjs` (a `→` that never entered
+  the comment thread, so the thread's focus ring never appeared).
+- **Never assert a TRANSIENT intermediate state — assert the end state.** A
+  Playwright assertion polls, so it can only observe a state that lasts long
+  enough to be sampled; anything the app passes *through* on its way somewhere
+  else is a race by construction. Concretely:
+  `tests/range-select.spec.mjs` clicked the palette's approve item and then
+  asserted `expect(menu).not.toBeVisible()` — `runCommand` (`home.mjs`) does
+  close the menu before running the action, but this particular approve
+  finishes the block, so `afterApproveAction` immediately reopens the palette
+  as the **postApprove follow-up menu** (see "Enter — command palette" in
+  `keyboard-navigation.md`). How long the closed frame lasts is purely how
+  fast `findNextUnapproved`'s awaited `ensureCode` fetch resolves, and the
+  reopen regularly won that race. Fix: wait for the follow-up menu's own
+  identifying content ("Ga door naar de volgende…") instead. Rule of thumb —
+  before asserting that something is gone/closed/absent, check whether the
+  same user action also starts an async follow-up that brings it back; if so,
+  assert what distinguishes the follow-up instead.
+- **A test that drives the UI with the MOUSE also parks a pointer somewhere,
+  and a later layout change can then fire a genuine `mouseenter` from it.**
+  A `.click()` moves the real pointer and leaves it there for the rest of the
+  test, so any subsequent DOM/scroll change that slides a hoverable element
+  under it behaves exactly like the reviewer hovering that element — which
+  bit `tests/overview-selection-identity.spec.mjs` (see the
+  `scheduleRepaint`/`hoverEnabled` paragraph in `pages-and-routing.md` for the
+  app-side fix). Whether it triggers depends on scroll position, so it
+  presents as order-dependent flakiness: passing alone, failing a few runs in
+  eight at 4 workers. When a spec's subject is *not* hover, prefer a
+  `dispatchEvent('click')` (drives the handler without moving the pointer)
+  over `.click()`.

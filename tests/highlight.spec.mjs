@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, evaluateSettled } from './_fixtures.mjs'
 
 // Syntax highlighting of the code panes. The real /api/code path needs the
 // base/head worktrees (absent for the seeded fixture DB), so we mount a Block
@@ -11,7 +11,7 @@ test.describe('PR Review Tree — code highlighting', () => {
 
     await page.waitForLoadState('networkidle')
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
       const b = reactive({

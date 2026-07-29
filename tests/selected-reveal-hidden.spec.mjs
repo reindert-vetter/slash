@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // state.selected is a raw index into state.blocks, but BlockList's renderList
 // doesn't render a row for a hidden (fully-approved, while state.showApproved
@@ -70,7 +70,7 @@ test.describe('PR Review Tree — hidden approved selection: pin the restored bl
     // change now always jumps straight to the next unapproved block when
     // approving from the blokken-index, see postapprove-menu.spec.mjs).
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     expect(selParam(page)).toBe(BLOCK1_SEL)
 
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()

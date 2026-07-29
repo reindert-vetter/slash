@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The comment-command-menu (Enter on a focused, not-yet-replied-to comment
 // row) gets a fourth item, "Open op GitHub", pinned at the bottom — but ONLY
@@ -29,7 +29,7 @@ test.describe('PR Review Tree — "Open op GitHub" in the comment menu', () => {
       }
     })
     await page.goto('/pr/' + PR)
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
     await row.click()

@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The left→right navigation chain (see keyboard-navigation.md, "De links→rechts
 // navigatieketen"): PR-description → block-index → diff → onderliggende code.
@@ -125,7 +125,7 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     // children read as loose blocks); the code stop owning the keyboard shows as
     // cs.focus === 'code', mirrored to the URL as rel.foc.
     const relFoc = () => new URL(page.url()).searchParams.get('rel.foc')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list → diff (this block's one change)
 
     // → lands on the inline comment stop first — the unit has one — before

@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, evaluateSettled } from './_fixtures.mjs'
 
 // A TRANSLATION block's per-key overview reuses the EXACT SAME green
 // out-of-view scroll hint (scrollHint/updateHints, Block.mjs) as an ordinary
@@ -15,7 +15,7 @@ test.describe('PR Review Tree — TRANSLATION block out-of-view scroll hints', (
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
       // 30 changed keys — far more than fit in a 160px-tall host.
@@ -65,7 +65,7 @@ test.describe('PR Review Tree — TRANSLATION block out-of-view scroll hints', (
     await expect(down.locator('span')).toHaveClass(/bg-emerald-500/)
     await expect(up.locator('span')).toHaveClass(/bg-emerald-500/)
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { updateHints } = await import('/src/Block.mjs')
       updateHints(document.querySelector('#translation-hint-host [data-testid="code-diff"]'))
     })
@@ -89,7 +89,7 @@ test.describe('PR Review Tree — TRANSLATION block out-of-view scroll hints', (
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
       const old = `<?php\n\nreturn [\n    'foo' => 'oud',\n];\n`

@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, evaluateSettled } from './_fixtures.mjs'
 
 // Hiding fully-approved starting points + the PR-wide header counter. Like the
 // combined-approval tests, we mount BlockList directly with inline state (the
@@ -14,7 +14,7 @@ test.describe('PR Review Tree — hide approved blocks + header counter', () => 
     // Settle the app's own load before mounting a second component into the
     // live page (the cold-start mount race in conventions.md).
     await page.waitForLoadState('networkidle')
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const BlockList = (await import('/src/BlockList.mjs')).default
       const mk = (id, label) => ({
@@ -72,7 +72,7 @@ test.describe('PR Review Tree — hide approved blocks + header counter', () => 
     // Settle the app's own load before mounting a second component into the
     // live page (the cold-start mount race in conventions.md).
     await page.waitForLoadState('networkidle')
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const BlockList = (await import('/src/BlockList.mjs')).default
       const state = reactive({

@@ -441,6 +441,14 @@ export const test = base.extend({
         // position on 12903 for whatever runs next. Deleting goes through the
         // comment's own workflow `delete` Signal (its Run ID *is* the comment
         // id), i.e. the sanctioned write path.
+        //
+        // Only the shared anchor needs this: a spec that seeds comments on its
+        // own synthetic PR (the 97xxxx range, see the note above) is already
+        // isolated from every other spec by that PR number, and each such spec
+        // was verified to still pass on a second run against its own leftovers
+        // (every comment spec green under --repeat-each=2). Resetting all of
+        // them here would cost a per-PR fetch on all ~290 tests for a race
+        // nothing actually exhibits.
         const cs = await ctx.get('/api/comments?pr=12903')
         const comments = cs.ok() ? await cs.json() : []
         if (Array.isArray(comments)) {
@@ -471,3 +479,105 @@ export const test = base.extend({
 })
 
 export { expect }
+
+// leaveSearchBox replaces the `await page.keyboard.press('Escape') // leave the
+// auto-focused starting-points search box` idiom that ~70 spec sites open with.
+// That bare press is a race: home.mjs focuses the search box from a
+// `requestAnimationFrame(focusSearchBox)` on load (a list-mode convenience, so
+// the reviewer can type a filter straight away), and a press sent before that
+// frame runs is handled while nothing is focused — then the rAF lands and the
+// box takes focus anyway. Every later key is swallowed by onKeydown's
+// searchActive branch, which does something entirely different from the
+// key-with-nothing-focused path: ArrowRight becomes "step into the diff"
+// instead of the navigation the spec was driving. That flaked
+// comment-index-items.spec.mjs (`→` never entered the comment thread, so the
+// thread's focus ring never appeared).
+//
+// So: let that rAF actually run first (two frames, so we are past it whether it
+// was already queued or not), then press Escape and assert the box does not
+// hold focus — that last assertion, not the press, is the real guarantee.
+//
+// Deliberately NOT `await expect(box).toBeFocused()` up front: plenty of call
+// sites click a sidebar row before this (which moves focus off the box), and
+// some load a page in diff mode, where home.mjs' load-time focus is guarded off
+// entirely. Requiring the focus would fail there for no reason — the postcondition
+// ("the box is not holding the keyboard") is what every caller actually needs.
+export async function leaveSearchBox(page) {
+  const box = page.locator('#block-search')
+  await expect(box).toHaveCount(1)
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  )
+  await page.keyboard.press('Escape')
+  await expect(box).not.toBeFocused()
+}
+
+// evaluateSettled runs an in-page evaluate() that is resilient to the
+// documented cold-start mount race (see "Playwright test infra" in
+// .claude/rules/conventions.md). A fair number of specs mount a component by
+// dynamically importing a module *inside* page.evaluate() against the live app
+// page — they need index.html's Tailwind/Prism CSS for their computed-style and
+// geometry assertions, so a bare fixture page won't do. Meanwhile home.mjs's
+// bindUrlState watches fire a burst of history.replaceState during load, and
+// that burst can tear down the very execution context the evaluate() is running
+// in ("Execution context was destroyed"); under 4 parallel workers the dynamic
+// import itself can also simply lose its race with a briefly saturated server
+// ("Failed to fetch dynamically imported module"). waitForLoadState
+// ('networkidle') does not guarantee the burst is over, so on exactly those two
+// errors we wait for the page to go idle again and retry the whole evaluate.
+//
+// This started life as a local helper in approval.spec.mjs; it lives here now
+// because every mounting spec needs it — relying on the config's `retries: 1`
+// instead means a genuine, unrelated failure in the same spec file also gets a
+// free retry, and it hides how often this race actually fires.
+//
+// A retry MUST NOT leave the previous attempt's mount standing. The tear-down
+// can land anywhere in the body, including after `Block(b, …)(host)` has already
+// appended and mounted a host — the second attempt then appends a second host
+// with the same id, and `#some-host code.language-php` resolves to two elements
+// instead of one. That is not hypothetical: it flaked diffview.spec.mjs's
+// one-sided-removed-block test with "Expected 1, Received 2" and two identical
+// <article>s in the failure snapshot. So before every retry we remove whatever
+// the failed attempt appended to <body>.
+//
+// Identifying that without knowing each spec's host id: mark the pre-existing
+// body children with a data attribute (DOM state, so it survives an execution
+// context being recreated for the same document — a `window.__x` Set would not),
+// then treat every unmarked body child as the failed attempt's. Guarded on at
+// least one mark still being present, so a real navigation (fresh document, no
+// marks) skips the cleanup instead of deleting the app's entire UI. It cannot
+// delete app chrome either: every caller awaits `networkidle` before mounting,
+// by which time the app's own body-level mounts (MenuHost, the call-arrows svg)
+// are long done — anything appearing after our mark is the test's own host.
+//
+// Covered by tests/evaluate-settled.spec.mjs, which drives that retry path
+// deterministically (mount, then throw the race's own error once).
+const MOUNT_RACE = /context was destroyed|Failed to fetch dynamically imported module/i
+const PRE_MARK = 'data-eval-settled-pre'
+
+export async function evaluateSettled(page, fn, arg, attempts = 4) {
+  let lastErr
+  for (let i = 0; i < attempts; i++) {
+    // (Re)mark before each attempt: whatever exists right now is not ours.
+    await page
+      .evaluate((attr) => {
+        for (const el of Array.from(document.body.children)) el.setAttribute(attr, '1')
+      }, PRE_MARK)
+      .catch(() => {})
+    try {
+      return await page.evaluate(fn, arg)
+    } catch (err) {
+      if (!MOUNT_RACE.test(err.message) || i === attempts - 1) throw err
+      lastErr = err
+      await page.waitForLoadState('networkidle')
+      await page
+        .evaluate((attr) => {
+          const kids = Array.from(document.body.children)
+          if (!kids.some((el) => el.hasAttribute(attr))) return // fresh document — not ours to clean
+          for (const el of kids) if (!el.hasAttribute(attr)) el.remove()
+        }, PRE_MARK)
+        .catch(() => {})
+    }
+  }
+  throw lastErr
+}

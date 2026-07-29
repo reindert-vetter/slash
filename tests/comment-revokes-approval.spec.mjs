@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // "Als iemand een comment plaatst, dan wil ik dat de bijbehorende regel niet
 // meer approved is" — placing a comment on an already-approved unit signals
@@ -116,7 +116,7 @@ test.afterEach(async ({ page }) => {
 test('placing a comment retracts the approval of the group/line it hangs on', async ({ page }) => {
   await mockCommentPost(page)
   await page.goto('/pr/12903')
-  await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+  await leaveSearchBox(page)
   await page.locator('[data-idx="1"]').click()
   await page.keyboard.press('ArrowRight') // list -> diff, block 1, gran 'group'
 

@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The call-arrow overlay (src/callArrows.mjs): a flowing indigo bezier from the
 // changed call-site row inside the ACTIVE navigation unit (new pane of the
@@ -38,7 +38,7 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
     // reorders it, see relatedChildren/resolvedCallChildren), so the
     // arrowHelper child card is still shown here — and the arrow must reach
     // it too (this is the reported bug: card visible, no arrow).
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     const arrowHelperItem = page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]')
@@ -126,7 +126,7 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
     await page.goto('/pr/100')
     await expect(page.getByTestId('block-row')).toHaveCount(1)
     await expect(page.getByTestId('block-row').first()).toContainText('ArrowCallerAction::execute')
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // caller's diff
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await page.keyboard.press('ArrowRight') // → Onderliggende code
@@ -189,7 +189,7 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
   }) => {
     await page.goto('/pr/100')
     await expect(page.getByTestId('block-row')).toHaveCount(1)
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // caller's diff
     await page.keyboard.press('ArrowRight') // → Onderliggende code
 

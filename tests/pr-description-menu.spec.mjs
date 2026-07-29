@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // Enter on stop 1 (the PR-description column, state.showDescription) opens the
 // PR-wide command menu ('pr' mode, same list as `/`) — and it must open *near
@@ -64,7 +64,7 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
     await page.goto('/pr/12903')
     // Block 0 (CONTROLLER-first) has no local diff preview; select block 1.
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     await page.keyboard.press('/')
@@ -118,7 +118,7 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
       }),
     )
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     // A fresh open auto-selects the unresolved comment item (rank -1, first).
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 

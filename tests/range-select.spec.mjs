@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // Shift+ArrowDown/ArrowUp multi-unit range selection (extendRange/
 // drillExtendRange, state.rangeAnchor — home.mjs). Meaningful at
@@ -17,7 +17,7 @@ test.describe('PR Review Tree — Shift+arrow line/group-range selection', () =>
     page,
   }) => {
     await page.goto('/pr/102')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
 
     await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
     await page.keyboard.press('ArrowRight') // step into execute's diff (gran 'group')
@@ -73,7 +73,7 @@ test.describe('PR Review Tree — Shift+arrow line/group-range selection', () =>
 
   test('also extends across gran==="group" units, merging two separate groups', async ({ page }) => {
     await page.goto('/pr/102')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
 
     await page.keyboard.press('ArrowRight') // step into execute's diff — starts at gran 'group', unit 0 ($a/$b)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
@@ -96,7 +96,20 @@ test.describe('PR Review Tree — Shift+arrow line/group-range selection', () =>
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     await page.getByTestId('command-row').nth(1).click()
-    await expect(menu).not.toBeVisible()
+
+    // Deliberately NOT `await expect(menu).not.toBeVisible()` here: this
+    // approve covers every changed row of `execute`, so the next unapproved
+    // unit sits in a DIFFERENT block ('other') and afterApproveAction reopens
+    // the palette right away as the postApprove follow-up menu (unlike the
+    // same-block case in the previous test, which stays closed). runCommand
+    // closes the menu before running the action, so there *is* a closed frame
+    // in between — but how long it lasts depends purely on how fast
+    // findNextUnapproved's awaited ensureCode fetch resolves, which the
+    // follow-up open regularly wins the race against. Asserting that
+    // transient frame made this spec flaky; wait for the follow-up menu's own
+    // content instead, which is the actually meaningful end state.
+    const nextItem = page.getByTestId('command-row').filter({ hasText: 'Ga door naar de volgende' })
+    await expect(nextItem).toBeVisible()
 
     await expect
       .poll(async () => {
@@ -110,10 +123,8 @@ test.describe('PR Review Tree — Shift+arrow line/group-range selection', () =>
       })
       .toBe(4)
 
-    // That approves every changed row of `execute` — the next unapproved unit
-    // is in a different block ('other'), so the postApprove follow-up menu
-    // opens (unlike the same-block case in the previous test); dismiss it via
-    // the pinned "Sluit menu" item without navigating further.
+    // Dismiss that follow-up menu via the pinned "Sluit menu" item, without
+    // navigating further.
     await expect(menu).toBeVisible()
     await page.getByTestId('command-row').filter({ hasText: 'Sluit menu' }).click()
     await expect(menu).not.toBeVisible()
@@ -130,7 +141,7 @@ test.describe('PR Review Tree — Shift+arrow line/group-range selection', () =>
     page,
   }) => {
     await page.goto('/pr/102')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
 
     await page.keyboard.press('ArrowRight') // step into execute's diff (gran 'group')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()

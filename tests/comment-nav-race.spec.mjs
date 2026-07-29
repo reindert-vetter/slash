@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // Regression test for the reported bug: "after placing a comment, navigating
 // away with the keyboard and then back in sometimes shows the wrong thing to
@@ -27,7 +27,7 @@ test('a stale placeComment tail must not clobber a later, unrelated Onderliggend
 
   await page.goto('/pr/12903')
   await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
-  await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+  await leaveSearchBox(page)
 
   // Block A: idx 1 (ContractController::index at idx 0 has no local diff, see
   // place-comment-return-focus.spec.mjs) — place a comment on it.

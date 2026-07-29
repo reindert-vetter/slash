@@ -9,14 +9,21 @@ export default defineConfig({
   testMatch: '**/*.spec.mjs',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  // A handful of specs mount a component by dynamically importing a module inside
-  // page.evaluate() against the live app page (they need index.html's Tailwind +
-  // Prism styles for computed-colour assertions). The app fires a burst of
-  // history.replaceState() during load, and when the box is briefly saturated at
-  // startup that can tear down the import context or delay the mount — a pure
-  // load-timing artifact. One retry re-runs such a test from a clean page; genuine
-  // failures still fail both attempts.
-  retries: 1,
+  // No retries: a failure here is a failure. This used to be `retries: 1` as a
+  // blanket cover for the cold-start mount race (specs that mount a component via
+  // a dynamic import inside page.evaluate() against the live app page, which the
+  // app's own history.replaceState() burst during load can tear down). That race
+  // now has a targeted fix instead — evaluateSettled in tests/_fixtures.mjs retries
+  // just that evaluate, on just those two error messages — so the blanket retry
+  // only bought two bad things: a free second attempt for genuine, unrelated
+  // failures in the same file, and silence about how often anything actually
+  // flakes. Every other flake the suite exhibited has since been traced to its own
+  // root cause (two of them real app bugs; see the "Playwright test infra" section
+  // in .claude/rules/conventions.md for the full list and the patterns to avoid).
+  //
+  // So: if a test fails here, do not restore this to 1 — find the race. The suite
+  // was verified green four consecutive full runs with retries off at 4 workers.
+  retries: 0,
   // 8-core machine. Each worker runs its own Go server + a Chromium; 4 workers
   // keeps the box from saturating (which showed up as flaky assertion timeouts at
   // higher worker counts) while still running everything in parallel.

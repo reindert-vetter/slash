@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, evaluateSettled } from './_fixtures.mjs'
 
 // A genuinely deleted file (absent from the head worktree — git's
 // `+++ /dev/null`) is persisted as a reliable per-block flag
@@ -37,7 +37,7 @@ test.describe('PR Review Tree — deleted-file markers', () => {
     await page.goto('/pr/98')
     await page.waitForLoadState('networkidle')
 
-    await page.evaluate(async () => {
+    await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
       const mount = (id, extra) => {

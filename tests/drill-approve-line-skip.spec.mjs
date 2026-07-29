@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // afterApproveAction's "next unit stays in the SAME block, no menu" exception
 // (home.mjs, see the doc comment above afterApproveAction and the section
@@ -29,7 +29,7 @@ test.describe('PR Review Tree — approving a line inside a drilled column jumps
   }) => {
     await page.goto('/pr/106')
 
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // step into the parent's diff
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await page.keyboard.press('ArrowRight') // → into the Onderliggende-code panel

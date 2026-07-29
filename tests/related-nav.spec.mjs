@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // Keyboard navigation into the inline comment block and the Onderliggende-code
 // card. From the diff, → lands on the first comment conversation of the
@@ -60,7 +60,7 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     // shows its history and focuses the reply field, so the reviewer can type
     // a reply straight away.
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list → diff
     await page.keyboard.press('ArrowRight') // diff → the comment conversation
     const inlineComments = page.getByTestId('inline-comments')
@@ -101,7 +101,7 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     // (CreatePaymentAction::execute).
     await page.locator('[data-idx="1"]').click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list → diff
     await page.keyboard.press('ArrowRight') // diff → related-code (no comments here)
 

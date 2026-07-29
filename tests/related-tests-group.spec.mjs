@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // PR 99 (tests/fixtures/testsgroup-*.json + materializeTestsGroupWorktrees in
 // _setup.mjs): a production method (TgOrder::billingAddress) with TWO covering
@@ -86,7 +86,7 @@ test.describe('PR Review Tree — grouped covering tests (tests bar)', () => {
     const rows = page.getByTestId('block-row')
     await rows.filter({ hasText: 'TgOrder::billingAddress' }).click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list → diff
     await page.keyboard.press('ArrowRight') // diff → related panel, first row
 

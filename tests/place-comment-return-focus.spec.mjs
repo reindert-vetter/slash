@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // After placing a comment tied to a piece of code, the reviewer wants to keep
 // reviewing that code — not sit on the composer. placeComment (called by both
@@ -17,7 +17,7 @@ test('placing a comment returns the keyboard to the diff', async ({ page }) => {
 
   await page.goto('/pr/12903')
   await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
-  await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+  await leaveSearchBox(page)
   // Block 0 (ContractController::index, CONTROLLER-first) has no local diff to
   // step into (see command-menu.spec.mjs) — select block 1, which does.
   await page.locator('[data-idx="1"]').click()

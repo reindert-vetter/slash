@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // Regression test for: "in een comment kan ik niet met pijltjestoets naar
 // rechts (eerst naar links in de input met een zin, en dan naar rechts)" —
@@ -17,7 +17,7 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
     // Block 0 carries no local diff on this seeded PR — pick block 1 so →
     // actually enters diff mode (mirrors comment-arrowleft-caret.spec.mjs).
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list -> diff
 
     await page.getByTestId('new-comment').click()
@@ -74,7 +74,7 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
     expect((await start.json()).runId).toBeTruthy()
 
     await page.goto('/pr/' + pr)
-    await page.keyboard.press('Escape') // leave the auto-focused search box
+    await leaveSearchBox(page)
     const item = page.getByTestId('comment-item').first()
     await expect(item).toBeVisible()
     await item.click() // lands on the comment card, reply field auto-focused (cs.focus === 'comment')
@@ -149,7 +149,7 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
     )
 
     await page.goto('/pr/12903')
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     // A fresh, no-?sel= open lands on the first not-yet-resolved item, which
     // is this comment (see recomputeLeftList/applyDefaultUnapprovedSelection).
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()

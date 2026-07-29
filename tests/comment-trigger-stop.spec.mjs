@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The always-present "+ Nieuwe comment" trigger is now also a genuine ↑/↓
 // stop (previously it was click/Enter-only, deliberately outside arrow
@@ -36,7 +36,7 @@ test.describe('PR Review Tree — the "+ Nieuwe comment" trigger as a ↑/↓ st
     await page.goto('/pr/12903')
     await page.locator('[data-idx="1"]').click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list → diff
     await page.keyboard.press('ArrowRight') // diff → the (only) comment conversation
     await expect.poll(() => relFoc(page)).toBe('comment')

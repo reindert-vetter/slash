@@ -72,4 +72,53 @@ test.describe('PR overview — keyboard nav is not hijacked by a same-position m
     await page.locator('[data-nav-row]').nth(0).dispatchEvent('mouseenter')
     await expect.poll(() => isSelected(0)).toBe(true)
   })
+
+  // Second half of the same gate, for the case the coordinate check alone
+  // cannot catch: the pointer really is where it last moved to (so the
+  // coordinates are legitimately "fresh"), but the row set changed underneath
+  // it — closing the "Recent gegenereerd" drawer shrinks the document, the
+  // browser clamps scrollTop, and a row slides under the idle cursor and fires
+  // a perfectly genuine mouseenter. That must not hijack the selection either;
+  // scheduleRepaint disarms hover on every data-driven repaint for exactly
+  // this reason (see src/overview.mjs). This was a real source of flakiness in
+  // overview-selection-identity.spec.mjs, where the drawer toggle is clicked
+  // with the mouse and the resulting scroll clamp did precisely this.
+  test('a row set change disarms hover, so a stationary-pointer mouseenter afterwards is ignored', async ({
+    page,
+  }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    const rows = page.locator('[data-nav-row]')
+    await expect(rows).toHaveCount(4)
+    const isSelected = (i) =>
+      rows.nth(i).evaluate((el) => el.classList.contains('ring-emerald-500/50'))
+
+    // Arm hover with a genuine mouse move and select row 1 by hovering it, so
+    // hover is demonstrably live at these coordinates.
+    await page.evaluate(() => {
+      window.dispatchEvent(new MouseEvent('mousemove', { clientX: 120, clientY: 140 }))
+    })
+    await rows.nth(1).dispatchEvent('mouseenter')
+    await expect.poll(() => isSelected(1)).toBe(true)
+
+    // Now change the visible row set without any mouse movement — opening the
+    // drawer via a keyboard-free click would move the pointer, so drive the
+    // toggle's own click handler directly.
+    await page.locator('[data-testid="recent"]').dispatchEvent('click')
+    await expect(page.locator('[data-testid="recent-item"]').first()).toBeVisible()
+
+    // A mouseenter now (pointer never moved — the content did) must be
+    // ignored: the selection stays released/where it was, and row 0 in
+    // particular does not steal it.
+    await rows.nth(0).dispatchEvent('mouseenter')
+    expect(await isSelected(0)).toBe(false)
+
+    // And a genuine move re-arms it right away, so hovering still works.
+    await page.evaluate(() => {
+      window.dispatchEvent(new MouseEvent('mousemove', { clientX: 200, clientY: 260 }))
+    })
+    await rows.nth(0).dispatchEvent('mouseenter')
+    await expect.poll(() => isSelected(0)).toBe(true)
+  })
 })

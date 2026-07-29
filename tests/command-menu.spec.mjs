@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, leaveSearchBox } from './_fixtures.mjs'
 
 // Command palette: pressing Enter opens a searchable menu overlaid on the
 // next-block preview slot. Typing fuzzy-filters, ↑/↓ move the selection, Enter
@@ -14,7 +14,7 @@ test.describe('PR Review Tree — command palette', () => {
   }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
 
     const menu = page.getByTestId('command-menu')
     await expect(menu).not.toBeVisible()
@@ -55,7 +55,7 @@ test.describe('PR Review Tree — command palette', () => {
     // checked already (0/0 changed rows). Select block 1
     // (CreatePaymentAction::execute), which reliably has one changed row.
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await expect(approve).not.toBeChecked()
 
@@ -88,7 +88,7 @@ test.describe('PR Review Tree — command palette', () => {
     // diff, so its comment-target snippet would be empty; select block 1
     // (CreatePaymentAction::execute), which has a real changed line.
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
 
     // Nothing should be posted yet — the fallback only opens the composer, it
     // does not place the comment on its own.
@@ -144,7 +144,7 @@ test.describe('PR Review Tree — command palette', () => {
   }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
 
     let posted = null
     await page.route('**/api/workflows/task_code_comment', async (route) => {
@@ -201,7 +201,7 @@ test.describe('PR Review Tree — command palette', () => {
     // rows, so its checkbox would be vacuously checked already; select block 1
     // (CreatePaymentAction::execute), which has one changed row to approve.
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await expect(approve).not.toBeChecked()
 
@@ -227,7 +227,7 @@ test.describe('PR Review Tree — command palette', () => {
     // Block 0 (ContractController::index, CONTROLLER-first) has no local diff
     // to preview; select block 1 (CreatePaymentAction::execute).
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     const rows = page.getByTestId('command-row')
@@ -256,7 +256,7 @@ test.describe('PR Review Tree — command palette', () => {
   test('a block is approved only once every changed row is', async ({ page }) => {
     await page.goto('/pr/12903')
     await page.waitForLoadState('networkidle')
-    const r = await page.evaluate(async () => {
+    const r = await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const { blockApproved, blockPartlyApproved, changedRows, blockRows } = await import(
         '/src/Block.mjs'
@@ -296,7 +296,7 @@ test.describe('PR Review Tree — command palette', () => {
   }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
 
     await page.keyboard.press('Enter')
     const rows = page.getByTestId('command-row')
@@ -334,7 +334,7 @@ test.describe('PR Review Tree — command palette', () => {
     // Block 0 (ContractController::index, CONTROLLER-first) has no local diff
     // to step into; select block 1 (CreatePaymentAction::execute).
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     // Step into the diff so both panes are shown, then open the palette.
@@ -377,7 +377,7 @@ test.describe('PR Review Tree — command palette', () => {
     // to preview; select block 1 (CreatePaymentAction::execute).
     await page.locator('[data-idx="1"]').click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
 
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).toBeVisible()
@@ -393,7 +393,7 @@ test.describe('PR Review Tree — command palette', () => {
   test('block navigation is suspended while the menu is open', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
 

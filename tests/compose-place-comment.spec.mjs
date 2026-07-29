@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The compose-kind menu (Enter/"Plaats…" on a filled composer, menu mode
 // 'compose', COMPOSE_COMMANDS in home.mjs) used to offer no way to place a
@@ -17,7 +17,7 @@ test('Enter on a filled composer defaults to "Plaats comment" (public) and refre
 }) => {
   await page.goto('/pr/12903')
   await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
-  await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+  await leaveSearchBox(page)
   await page.keyboard.press('ArrowRight') // list -> diff
 
   // Enter opens the block command palette; "Comment op deze regel" starts the

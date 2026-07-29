@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // "Comment hiervan maken" turns an AI-authored finding (code_warning,
 // source:'ai') into a real, reviewer-owned comment the reviewer can edit
@@ -138,7 +138,7 @@ test.describe('Convert an AI-controle finding into a real comment', () => {
     expect(runId).toBeTruthy()
 
     await page.goto('/pr/' + PR_WIDE)
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.getByTestId('comment-detail-card')).toContainText(aiBody)
     await expect(page.getByTestId('comment-detail-card').getByTestId('comment-ai-warning')).toBeVisible()
 
@@ -175,7 +175,21 @@ test.describe('Convert an AI-controle finding into a real comment', () => {
     expect(created.kind).toBe('issue')
     expect(created.source).not.toBe('ai')
     expect(created.local).toBeFalsy()
-    // ...and the original finding is gone.
-    expect(list.some((c) => c.id === runId)).toBe(false)
+
+    // ...and the original finding is gone. Deliberately its OWN poll rather
+    // than a check against the snapshot above: placeComment only fires the
+    // finding's delete Signal AFTER the replacement is confirmed placed (see
+    // "Converting an AI-controle finding into a real comment" in
+    // detail-layout.md), and that Signal then travels through the finding's own
+    // task_code_comment Execution (status 'deleting' → read-model row removed).
+    // So the removal always lands strictly later than the creation this test
+    // just polled for — asserting both against one fetch was a race, and did
+    // flake.
+    await expect
+      .poll(async () => {
+        const rows = await (await page.request.get('/api/comments?pr=' + PR_WIDE)).json()
+        return rows.some((c) => c.id === runId)
+      })
+      .toBe(false)
   })
 })

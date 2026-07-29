@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The `/` key opens a general, PR-wide tree menu (distinct from Enter's
 // block palette): a pinned "Sluit menu" first (withClose, home.mjs), then
@@ -14,7 +14,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     // in home.mjs) has no local diff to preview; select block 1
     // (CreatePaymentAction::execute).
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     const menu = page.getByTestId('command-menu')
@@ -48,7 +48,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     // in home.mjs) has no local diff to preview; select block 1
     // (CreatePaymentAction::execute).
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     await page.keyboard.press('/')
@@ -84,7 +84,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     // in home.mjs) has no local diff to preview; select block 1
     // (CreatePaymentAction::execute).
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     await page.keyboard.press('/')
@@ -103,7 +103,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     // in home.mjs) has no local diff to preview; select block 1
     // (CreatePaymentAction::execute).
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     await page.keyboard.press('/')
@@ -131,7 +131,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     // in home.mjs) has no local diff to preview; select block 1
     // (CreatePaymentAction::execute).
     await page.locator('[data-idx="1"]').click()
-    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+    await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     const menu = page.getByTestId('command-menu')
