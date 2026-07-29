@@ -134,6 +134,25 @@ func runGitIn(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	return out, nil
 }
 
+// showFileAtSHA returns the contents of one file as of a commit, without checking
+// anything out. Unlike runGit it captures stdout ONLY — runGit's CombinedOutput
+// would splice git's stderr into the file content — and it deliberately returns a
+// bare error for a path that didn't exist at that revision, which callers treat as
+// "no old side to compare against" rather than a failure.
+//
+// Used by the re-anchor pass (reanchor.go) to rebuild the aligned-row space an
+// approval was written in: the head worktree has by then already been checked out
+// to the new SHA in place (updateWorktree below), so the previous sides are only
+// still reachable through git.
+func showFileAtSHA(ctx context.Context, sha, path string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoDir(), "show", sha+":"+path)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show %s:%s: %w", sha, path, err)
+	}
+	return out, nil
+}
+
 // updateWorktree points an existing worktree at dir to sha in place (a
 // detached checkout inside that worktree), avoiding ensureWorktree's full
 // remove+recreate. The ingest-refresh path (refreshIngestDelta) runs on every

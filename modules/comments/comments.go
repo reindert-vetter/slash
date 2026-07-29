@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS comments (
   row_start      INTEGER NOT NULL DEFAULT -1,
   row_end        INTEGER NOT NULL DEFAULT -1,
   seg            TEXT NOT NULL DEFAULT '',
+  anchor_state   TEXT NOT NULL DEFAULT '',
   path           TEXT NOT NULL DEFAULT '',
   source         TEXT NOT NULL DEFAULT '',
   kind           TEXT NOT NULL DEFAULT '',
@@ -89,6 +90,25 @@ type Comment struct {
 	RowStart int    `json:"rowStart"`
 	RowEnd   int    `json:"rowEnd"`
 	Seg      string `json:"seg,omitempty"`
+	// AnchorState says how much the row anchor above can still be trusted after a
+	// new commit re-scanned the block (see reanchor.go — the anchor is re-derived
+	// from Code on every ingest refresh):
+	//
+	//   AnchorPinned ("")        the rows point at the code the comment is about.
+	//   AnchorUnpinned           the block is still there but the anchored code
+	//                            was edited away, so RowStart is -1 again: the
+	//                            comment shows anywhere within its block and
+	//                            claims no 💬 row (the pre-existing convention).
+	//   AnchorOrphan             the symbol itself is gone from the PR (renamed,
+	//                            deleted, file dropped). The rows are kept as a
+	//                            record of where it WAS; the frontend surfaces
+	//                            such a comment as its own index row so it isn't
+	//                            silently lost.
+	//
+	// Deliberately separate from Kind: an orphan is still a block-scoped review
+	// comment, and flipping its Kind to a PR-wide one would change how its replies
+	// mirror to GitHub (see isPRWide in comment_import.go).
+	AnchorState string `json:"anchorState,omitempty"`
 	// Path is the hierarchical address the comment hangs on, from PR down to the
 	// exact code reference:  /pr-<pr>/<file>/<label>/<codeRef>/comment-<id>. It's
 	// built by the workflow (deterministic from the input + Run ID, see
@@ -175,6 +195,7 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE comments ADD COLUMN kind TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE comments ADD COLUMN github_id INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE comments ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE comments ADD COLUMN anchor_state TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE reactions ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
@@ -184,6 +205,14 @@ func migrate(db *sql.DB) {
 	// DB — where the column is added here, not by CREATE TABLE — can't error.
 	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_comments_path ON comments(path)`)
 }
+
+// The AnchorState values a comment's row anchor can be in — see the field's own
+// doc comment on Comment above.
+const (
+	AnchorPinned   = ""
+	AnchorUnpinned = "unpinned"
+	AnchorOrphan   = "orphan"
+)
 
 func (m *Module) Close() error { return m.db.Close() }
 
@@ -199,14 +228,33 @@ func (m *Module) Save(ctx context.Context, c Comment) error {
 	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO comments
-		   (id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind, github_id)
+		   (id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, anchor_state, path, source, kind, github_id)
 		 VALUES (?,?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT reaction_count FROM comments WHERE id = ?), 0),
 		   COALESCE((SELECT status FROM comments WHERE id = ?), ?),
-		   ?,?,?,?,?,?,?,?,?,
+		   ?,?,?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT github_id FROM comments WHERE id = ?), ?))`,
 		c.ID, c.RunID, c.PR, c.File, c.Line, c.Author, c.AvatarURL, c.Body, c.CreatedAt, c.ID, c.ID, c.Status,
-		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg, c.Path, c.Source, c.Kind, c.ID, c.GithubID)
+		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg, c.AnchorState, c.Path, c.Source, c.Kind, c.ID, c.GithubID)
+	return err
+}
+
+// SetAnchor moves a comment's row anchor (and the codeRef segment of its
+// hierarchical Path, which encodes the same rows — otherwise a prefix Search would
+// drift out of sync with the anchor it addresses) and records how much that anchor
+// can still be trusted. Called once per changed anchor after an ingest refresh
+// re-scanned the block; the new values are computed by reanchor.go and delivered as
+// a Signal to the comment's own Execution, so the move lands in that comment's
+// replayable history like every other change to it.
+//
+// Gran rides along because a 'call' anchor degrades to 'line' when its character
+// offsets no longer apply. Code is deliberately NOT touched: the stored snippet is
+// what the comment is about and what the matcher searches for next time.
+// WRITE — workflow-driven only.
+func (m *Module) SetAnchor(ctx context.Context, id string, rowStart, rowEnd int, seg, gran, anchorState, path string) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE comments SET row_start = ?, row_end = ?, seg = ?, gran = ?, anchor_state = ?, path = ? WHERE id = ?`,
+		rowStart, rowEnd, seg, gran, anchorState, path, id)
 	return err
 }
 
@@ -337,7 +385,7 @@ func (m *Module) Search(ctx context.Context, prefix string) ([]Comment, error) {
 // query runs the comment select with an optional WHERE clause + args and
 // attaches each comment's reactions. Shared by List and Search.
 func (m *Module) query(ctx context.Context, where string, args ...any) ([]Comment, error) {
-	q := `SELECT id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, path, source, kind, github_id
+	q := `SELECT id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, anchor_state, path, source, kind, github_id
 	      FROM comments`
 	if where != "" {
 		q += ` ` + where
@@ -355,7 +403,7 @@ func (m *Module) query(ctx context.Context, where string, args ...any) ([]Commen
 		var c Comment
 		if err := rows.Scan(&c.ID, &c.RunID, &c.PR, &c.File, &c.Line, &c.Author, &c.AvatarURL,
 			&c.Body, &c.CreatedAt, &c.ReactionCount, &c.Status, &c.Code, &c.Gran, &c.Label,
-			&c.RowStart, &c.RowEnd, &c.Seg, &c.Path, &c.Source, &c.Kind, &c.GithubID); err != nil {
+			&c.RowStart, &c.RowEnd, &c.Seg, &c.AnchorState, &c.Path, &c.Source, &c.Kind, &c.GithubID); err != nil {
 			return nil, err
 		}
 		byID[c.ID] = len(out)
