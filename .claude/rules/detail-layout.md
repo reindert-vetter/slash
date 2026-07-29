@@ -400,17 +400,43 @@ threads can hang off the same unit; each gets its own card
 (`data-testid=comment-item`), but only the one the keyboard currently owns
 (`cs.sel` + `cs.focus` one of `'comment'`/`'thread'`) renders its full thread
 (`expandedConversation`: a slim, right-aligned meta line (`comment-meta-line`
-— source/AI-warning badge + the status dot, see below), `composeTargetHint`
+— source/AI-warning badge + the status mark, see below), `composeTargetHint`
 if the comment carries a code snippet, every message via the unchanged
 `threadMessages`/`reactionBubble`, and a working reply field) — every other
 conversation on that same unit stays a compact one-line summary
-(`compactConversation`: status dot, author + avatar, a truncated body
+(`compactConversation`: status mark, author + avatar, a truncated body
 preview, `data-expanded=false` vs. `data-expanded=true` on the DOM node so a
 test can assert which one is open). The toggle between the two lives in a
 stable `<div class="contents">` root per card (`commentCard`) — not a bare
 toggling expression — per the "bare toggling expression" pitfall in
 `conventions.md`: the outer `.map()` key stays `'comment:' + c.id` regardless
 of expand/collapse, only the nested `${() => …}` binding swaps.
+
+**Status mark is a colorblind-friendly ✓, not a color-only dot — and a
+resolved card is muted to the "Onderliggende code" style so it recedes.**
+`commentStatusMark(c, extraCls)` (`RelatedPanel.mjs`) replaces the former
+`CSTATUS_DOT` (`open` amber / `resolved` emerald circle, meaning carried
+purely by color): it renders nothing for `open` (the neutral/default state —
+"dots may go away" was explicit feedback from a colorblind reviewer) and a
+plain `✓` glyph for `resolved`, the same bare-character convention as the
+done/undone ✓ elsewhere (`BlockList.mjs`'s approval pills,
+`translationDiff.mjs`'s per-key ✓) — the emerald tint on that glyph is
+decoration on top of a shape that already carries the meaning, never the
+sole carrier. Used, via a `${() => …}` function binding (never a static
+interpolation — the "leaks the template function as text" pitfall in
+`conventions.md`), in `compactConversation`/`expandedConversation` and in
+`commentDetailCard` (the PR-wide comment-index detail card, see
+"Comment-index items" below) — the same three spots `CSTATUS_DOT` used to
+live. Once `c.status === 'resolved'`, the same three cards also swap their
+background from `bg-white`/`bg-zinc-900` to the muted
+`bg-slate-50/60 dark:bg-zinc-800/40` the Underlying-code card
+(`relatedCard`) already uses for an unselected item — a resolved
+conversation is done, so it should recede visually like already-reviewed
+reference code instead of continuing to stand out as an active card; the
+border stays the same neutral `border-slate-200 dark:border-zinc-800` in
+both states (only `expandedConversation`'s indigo focus border is
+untouched, since expanded always implies the keyboard is on it — that's an
+orthogonal focus cue, not a status color).
 
 **`expandedConversation` no longer has its own author+avatar header** — that
 duplicated the opening bubble `threadMessages()` already renders (the

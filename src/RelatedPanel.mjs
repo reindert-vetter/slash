@@ -1143,7 +1143,28 @@ async function sendReaction(done) {
   }
 }
 
-const CSTATUS_DOT = { open: 'bg-amber-400', resolved: 'bg-emerald-500' }
+// commentStatusMark is the colorblind-friendly replacement for the former
+// color-only status dot (CSTATUS_DOT: open amber / resolved emerald) — a
+// reviewer who can't tell amber from emerald gets nothing useful out of a
+// plain colored circle. "open" is the neutral/default state and stays
+// unmarked (no invented glyph needed for it — dropping the dot there is
+// exactly "bolletjes mogen weg"); only "resolved" gets a mark, a plain ✓
+// glyph (the same bare-character convention as the done/undone ✓ elsewhere
+// in the app — BlockList.mjs's approval pills, translationDiff.mjs's
+// per-key ✓ — no SVG). The emerald tint is decoration on top of the glyph,
+// never the sole carrier of meaning. `extraCls` lets a call site add its
+// own spacing (e.g. compactConversation's `mt-1` to align with the avatar
+// row) without a second, near-duplicate function. Returns '' for anything
+// else (open, or a null/undefined c during an edge-case render).
+function commentStatusMark(c, extraCls) {
+  if (!c || c.status !== 'resolved') return ''
+  return html`<span
+    class="${'shrink-0 text-xs font-bold leading-none text-emerald-600 dark:text-emerald-400 ' + (extraCls || '')}"
+    data-testid="comment-resolved-mark"
+    title="Opgelost"
+    >✓</span
+  >`
+}
 
 // sourceBadge marks a comment imported from GitHub (source === 'github'), so the
 // reviewer can tell app-placed from imported comments — mirrors the "bron:
@@ -1256,7 +1277,11 @@ function reactionBubble(r, i, total, isActive) {
 function compactConversation(c, i) {
   return html`
     <button
-      class="flex w-full items-start gap-2 rounded-md border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2.5 py-2 text-left transition hover:bg-slate-50 dark:hover:bg-zinc-800/60"
+      class="${() =>
+        'flex w-full items-start gap-2 rounded-md border border-slate-200 dark:border-zinc-800 px-2.5 py-2 text-left transition ' +
+        (c.status === 'resolved'
+          ? 'bg-slate-50/60 dark:bg-zinc-800/40 hover:border-indigo-200 dark:hover:border-indigo-500/40'
+          : 'bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       data-testid="comment-item"
       data-expanded="false"
       @click="${() => {
@@ -1265,7 +1290,7 @@ function compactConversation(c, i) {
         beat()
       }}"
     >
-      <span class="${() => 'mt-1 h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
+      ${() => commentStatusMark(c, 'mt-1')}
       <span class="flex min-w-0 flex-col gap-0.5">
         <span class="flex min-w-0 items-center gap-2" data-testid="comment-author-line">
           ${avatarHTML(c.author, c.avatarUrl, 'h-5 w-5')}
@@ -1296,21 +1321,21 @@ function compactConversation(c, i) {
 // own doc comment); only the bits the bubbles don't carry (source/AI-warning
 // badge, status dot) remain, right-aligned in one slim meta line instead of
 // the previous justify-between row (which, once its left side/avatar was
-// removed, read as an almost-empty bar).
-// The status dot is color-only (CSTATUS_DOT) — a dedicated follow-up task
-// will replace it everywhere with a colorblind-friendly checkmark/glyph;
-// keep it a plain, easily swappable class binding here, not a new
-// shape/layout that task would have to unwind.
+// removed, read as an almost-empty bar). The status mark itself is
+// commentStatusMark (see its own doc comment) — a colorblind-friendly ✓
+// instead of the former color-only dot.
 function expandedConversation(c) {
   return html`
     <div
-      class="flex flex-col gap-2 rounded-xl border border-indigo-300 dark:border-indigo-500/40 bg-white dark:bg-zinc-900 p-3 ring-1 ring-black/5"
+      class="${() =>
+        'flex flex-col gap-2 rounded-xl border border-indigo-300 dark:border-indigo-500/40 p-3 ring-1 ring-black/5 ' +
+        (c.status === 'resolved' ? 'bg-slate-50/60 dark:bg-zinc-800/40' : 'bg-white dark:bg-zinc-900')}"
       data-testid="comment-item"
       data-expanded="true"
     >
       <div class="flex items-center justify-end gap-2" data-testid="comment-meta-line">
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)}
-        <span class="${() => 'h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"></span>
+        ${() => commentStatusMark(c)}
       </div>
       ${() => (c && c.code ? composeTargetHint({ gran: c.gran, label: c.label, code: c.code }) : '')}
       <div class="flex min-h-0 flex-col gap-2" data-testid="comment-thread">
@@ -2443,7 +2468,7 @@ export async function resolvePrCommentItem(c) {
   await loadComments(cs.pr)
 }
 
-// commentDetailCard renders the read-only thread (status dot, kind badge,
+// commentDetailCard renders the read-only thread (status mark, kind badge,
 // source/AI-warning badges, relative time, then every reaction via
 // threadMessages — the comment's own body is already the first message
 // there, so it is deliberately NOT also rendered as a separate title above
@@ -2468,17 +2493,17 @@ export function commentDetailCard(c, opts) {
   // like it did nothing at all.
   return html`
     <div
-      class="${'flex w-[42rem] shrink-0 flex-col gap-3 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 shadow-sm ' +
-      (preview ? 'opacity-60' : '')}"
+      class="${() =>
+        'flex w-[42rem] shrink-0 flex-col gap-3 rounded-2xl border border-slate-200 dark:border-zinc-800 p-4 shadow-sm ' +
+        (c.status === 'resolved' ? 'bg-slate-50/60 dark:bg-zinc-800/40 ' : 'bg-white dark:bg-zinc-900 ') +
+        (preview ? 'opacity-60' : '')}"
       data-testid="comment-detail-card"
     >
       <div
         class="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2.5 dark:border-zinc-800/60"
         data-testid="comment-detail-author-line"
       >
-        <span
-          class="${'h-2 w-2 shrink-0 rounded-full ' + (CSTATUS_DOT[c.status] || 'bg-slate-300 dark:bg-zinc-600')}"
-        ></span>
+        ${() => commentStatusMark(c)}
         ${avatarHTML(c.author, c.avatarUrl, 'h-6 w-6')}
         <span
           class="mr-0.5 whitespace-nowrap text-sm font-semibold leading-6 text-slate-800 dark:text-zinc-200"
