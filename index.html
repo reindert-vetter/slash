@@ -30,7 +30,19 @@
       // dark) — 'selector' makes every dark: utility key off a `.dark` class
       // on <html> instead of prefers-color-scheme directly. See
       // .claude/rules/conventions.md ("Thema: systeem/licht/donker").
-      tailwind.config = { darkMode: 'selector' }
+      //
+      // `narrow` is a custom, max-width screen (a hard cutoff at 1400px, not
+      // a gradually-scaling vw-based value) used by Block.mjs's widthCls and
+      // RelatedPanel.mjs's relatedColumnWidthCls to shrink the diff card and
+      // the comments/Onderliggende-code column below that width — see
+      // "Narrow viewport (< 1400px)" in detail-layout.md. At/above 1400px
+      // nothing changes: the `narrow:` utilities Tailwind generates for it
+      // simply never match. Tailwind always emits a screen's CSS after the
+      // unprefixed base utility (same source-order mechanism min-width
+      // screens like the existing `2xl:` already rely on), so a `narrow:`
+      // class placed alongside a base class reliably overrides it once the
+      // viewport drops under 1400px, with no specificity conflict.
+      tailwind.config = { darkMode: 'selector', theme: { extend: { screens: { narrow: { max: '1399px' } } } } }
     </script>
     <style>
       /* Keep programmatic scrolling (scrollIntoView for keyboard nav) but hide

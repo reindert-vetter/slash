@@ -209,11 +209,29 @@ function codeMaxLineChars(code) {
 // any other file gets a bounded width instead (boundedWrapWidthCls) — see
 // isPhpFile above for why. Every other stand keeps the existing binary
 // choice (narrow 60% vs. full split width), unchanged for every file type.
+//
+// Below the `narrow` breakpoint (< 1400px, see the tailwind.config comment
+// in index.html) BOTH tiers shrink further — the reviewer explicitly asked
+// for the diff column itself to narrow too, not just the comments/
+// Onderliggende-code column next to it (see "Narrow viewport (< 1400px)" in
+// detail-layout.md for the full width budget this was measured against):
+// 70rem/82rem -> 42rem (the same number the "narrow 60%" tier already used
+// above 1400px) and 42rem/49.2rem -> 28rem, keeping roughly the same ~60%
+// ratio between the two tiers so a same-file `a` toggle (unified vs. split)
+// still visibly differs at this viewport too — see the ratio assertion in
+// diffview.spec.mjs ("`a` cycles the live diff card through split ->
+// unified -> fit -> split"). Deliberately scoped to THIS function — `fit`'s
+// own uncapped, content-based width (fitWidthCls/boundedWrapWidthCls) stays
+// untouched: it's an opt-in stand that already routinely exceeds every
+// fixed width here by design, so it was never going to reliably fit at
+// 1378px regardless, and narrowing its floor too would only add risk to the
+// many `fit`-specific assertions in diffview.spec.mjs for no product
+// benefit.
 function widthCls(b, viewMode) {
   if (viewMode() === 'fit') return isPhpFile(b) ? fitWidthCls(b) : boundedWrapWidthCls()
   return narrowed(viewMode) || singleSide(b)
-    ? 'w-[42rem] 2xl:w-[49.2rem] '
-    : 'w-[70rem] 2xl:w-[82rem] '
+    ? 'w-[42rem] narrow:w-[28rem] 2xl:w-[49.2rem] '
+    : 'w-[70rem] narrow:w-[42rem] 2xl:w-[82rem] '
 }
 
 // boundedWrapWidthCls — the 'fit' width for a NON-PHP file (see isPhpFile):

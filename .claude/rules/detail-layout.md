@@ -1390,6 +1390,53 @@ block on the right — see the layout paragraph above):
   `conventions.md`). The symmetry with the neighboring column (see above)
   thus only holds as a **default** now, not as a guarantee. Test:
   `tests/related-code-grow.spec.mjs`.
+
+  **Narrow viewport (< 1400px): both the diff column and this column shrink
+  further, via a Tailwind `narrow` screen (a hard cutoff, not a
+  vw-scaling formula).** Reported: on a ~1378px-wide browser window, a
+  genuinely two-sided diff card (`w-[70rem]` = 1120px) next to even just the
+  floor width of this column (`w-[42rem]` = 672px) already overflows by
+  430px — the reviewer has to scroll away most of the diff just to glimpse
+  the comments/Onderliggende-code column at all. `index.html`'s
+  `tailwind.config` defines a custom **max-width** screen,
+  `narrow: { max: '1399px' }` (next to the existing `darkMode` option) —
+  Tailwind always emits a screen's generated CSS after the corresponding
+  unprefixed utility, the same source-order mechanism the existing `2xl:`
+  min-width screen already relies on, so a `narrow:` class placed alongside
+  a base class reliably wins once the viewport drops under 1400px, with no
+  specificity conflict; at/above 1400px nothing changes at all — those
+  `narrow:` utilities simply never match. Below that breakpoint:
+  - **`relatedColumnWidthCls`** (this column, and — since `InlineComments`
+    shares this exact class, see above — the comment blocks stacked above
+    it) drops its floor/ceiling from `w-[42rem]`/`w-[56rem]` (672px/896px)
+    to **`w-[40rem]`/`w-[48rem]` (640px/768px)**.
+  - **`widthCls`** (`Block.mjs`, the diff card — top-level and every drilled
+    column, since they all share this function) drops its two tiers from
+    `w-[70rem]`/`w-[42rem]` (1120px/672px) to **`w-[42rem]`/`w-[28rem]`
+    (672px/448px)** — the two-sided (`split`) tier reuses the exact number
+    the narrow-60%/`singleSide` tier already had above 1400px, and that
+    tier in turn drops further, keeping roughly the same ~60% ratio between
+    the two so the `a` toggle (`unified` vs. `split`) still visibly differs
+    at this viewport too. Deliberately scoped to `widthCls`'s own two
+    tiers — `fit`'s content-driven width (`fitWidthCls`/
+    `boundedWrapWidthCls`) is untouched: it's an opt-in stand that already
+    routinely exceeds every fixed width here by design (deliberately
+    uncapped upward, see "The `a` toggle" further down), so it was never
+    going to reliably fit at 1378px regardless of this change.
+  - **The sum, at the (most common) floor**: `42rem`(diff, narrow) +
+    `1rem`(the `gap-4` between `<main>`'s flex children) + `40rem`(this
+    column, narrow floor) = `83rem` = 1328px — comfortably within a
+    ~1378px window (≈50px of slack for a scrollbar/rounding), unlike the
+    reported 1808px (1120 + 16 + 672) at the pre-existing widths. A
+    genuinely wide child still grows this column up to its (now lower)
+    ceiling and may still require some horizontal scroll next to a
+    two-sided diff card — narrowing only shrinks the *typical*, unscrolled
+    case, it doesn't guarantee every combination fits.
+  Since the Playwright suite's default viewport (1280×720, see
+  "Playwright test infra" in `conventions.md`) is itself below 1400px,
+  effectively the whole suite exercises these narrower widths by default —
+  `tests/related-code-grow.spec.mjs`'s ceiling assertion reflects the
+  narrow ceiling (768px), not the wider one.
   Any child that is itself a PR block (relation child or a method call
   whose definition changes in the PR) carries an **approval badge**
   (`data-testid=related-approval`, `done/total`, green + ✓ when fully

@@ -2091,6 +2091,17 @@ function nestedChipColumn(ancestors, kids, drill, path, cardIdx) {
 // block's own `b.code` — so this cannot co-subscribe with the diff render
 // (see the stuck-on-loading pitfall in conventions.md); it is exactly the
 // same kind of read `kids()` below already does.
+//
+// Below the `narrow` breakpoint (< 1400px, see the tailwind.config comment
+// in index.html) both the floor and the ceiling drop further — a smaller
+// browser window means less room next to the diff card, which itself also
+// narrows below this breakpoint (see widthCls in Block.mjs) — to
+// w-[40rem]/w-[48rem] (640px/768px), instead of 42rem/56rem, so this column
+// + the (also narrowed) diff card comfortably fit side by side at ~1378px
+// without horizontal scroll at the floor width: 42rem(diff, narrow) +
+// 1rem(gap) + 40rem(this column, narrow floor) = 83rem = 1328px, leaving
+// ~50px of slack for a scrollbar/rounding. See "Narrow viewport (< 1400px)"
+// in detail-layout.md for the full measurement this was based on.
 // Exported: InlineComments (above, in the same stacked flex-col column) reuses
 // this exact same class so both sections always share one width — see its own
 // doc comment for why that's load-bearing, not just cosmetic.
@@ -2103,6 +2114,7 @@ export function relatedColumnWidthCls() {
   }
   return (
     `w-[clamp(42rem,calc(${chars}ch_+_2rem),56rem)] ` +
+    `narrow:w-[clamp(40rem,calc(${chars}ch_+_2rem),48rem)] ` +
     `2xl:w-[clamp(49.2rem,calc(${chars}ch_+_2rem),65rem)]`
   )
 }

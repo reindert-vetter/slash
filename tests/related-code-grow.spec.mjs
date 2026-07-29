@@ -11,6 +11,11 @@ import { test, expect } from './_fixtures.mjs'
 // the column. See RelatedPanel.mjs (codeGrowthChars/relatedColumnWidthCls)
 // and detail-layout.md ("Onderliggende code").
 //
+// Below the `narrow` breakpoint (< 1400px, see index.html's tailwind.config)
+// the floor/ceiling are smaller still (w-[40rem]/w-[48rem]) — the suite's
+// default 1280px viewport is itself below that breakpoint, so this test
+// (like most of the suite) exercises the narrow ceiling, not the wider one.
+//
 // PR 103 (tests/fixtures/growcode-blocks.json + growcode-callresolve.json) has
 // two independent caller blocks, each with one embedded resolved-call child:
 // GrowLongAction::run -> GrowLongTarget::longTarget (one ~200-char CODE line,
@@ -44,9 +49,12 @@ test.describe('PR Review Tree — Onderliggende code column grows with long code
 
     expect(longBox.width).toBeGreaterThan(commentBox.width * 1.15)
 
-    // Never exceeds the documented ceiling (w-[56rem] at this < 2xl viewport
-    // = 896px) — some generous slack for rounding, never runaway growth.
-    expect(longBox.width).toBeLessThanOrEqual(896 + 4)
+    // Never exceeds the documented ceiling — at the suite's default 1280px
+    // viewport (< the `narrow` breakpoint, 1400px, see index.html's
+    // tailwind.config) that's w-[48rem] = 768px, not the wider w-[56rem]
+    // (896px) that applies at >= 1400px — some generous slack for rounding,
+    // never runaway growth.
+    expect(longBox.width).toBeLessThanOrEqual(768 + 4)
 
     // Switching back to the comment-only caller shrinks the column back down
     // (the width is a live function of the currently focused block's
