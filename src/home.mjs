@@ -6131,8 +6131,13 @@ function isReviewFollowup(mode) {
 // via Enter from the sidebar, or one of the approve-follow-up modes —
 // see the isIndexMenu() guard below) the selected sidebar row, so the menu
 // opens right there instead of over the list-mode diff preview; otherwise the
-// active change row (present in diff mode) if there is one, else the selected
-// block's card, else the sidebar row. Always something on-screen so the menu
+// LAST row of the active change unit (`[data-change-active-end]`, Block.mjs)
+// if there is one — the same row for a single-line unit, but the bottom of a
+// multi-row `group` unit or an extended Shift+up/down range (see rangeUnit),
+// so the menu never overlaps the selection it was opened on — else the
+// selected block's card, else the sidebar row. `[data-change-active]` (the
+// FIRST row) stays reserved for scrollChangeIntoView, which centres on the
+// top of the selection, not the menu. Always something on-screen so the menu
 // opens under whatever is selected.
 function isIndexMenu() {
   return state.mode === 'list' && (ms.mode === 'block' || isReviewFollowup(ms.mode))
@@ -6212,6 +6217,11 @@ function menuAnchor() {
     )
   }
   return (
+    // The last row of the active unit, so a multi-row selection (group unit
+    // or a Shift-extended range) gets the menu below its bottom instead of
+    // its top (see the doc comment above) — falls back to the first-row
+    // anchor for the unlikely case the end marker is missing.
+    document.querySelector('[data-change-active-end]') ||
     document.querySelector('[data-change-active]') ||
     document.querySelector('[data-testid="detail-panel"] article') ||
     document.querySelector(`[data-idx="${state.selected}"]`)

@@ -118,4 +118,42 @@ test.describe('PR Review Tree — Shift+arrow line/group-range selection', () =>
     await page.getByTestId('command-row').filter({ hasText: 'Sluit menu' }).click()
     await expect(menu).not.toBeVisible()
   })
+
+  // Regression: menuAnchor() used to anchor the command palette on
+  // `[data-change-active]`, the FIRST row of the active unit — for a
+  // multi-row selection (a `group` unit, or an extended Shift+arrow range)
+  // that made the menu overlap/start above the selection instead of sitting
+  // below its bottom. Fixed by a second marker, `[data-change-active-end]`
+  // (the LAST row, Block.mjs), which menuAnchor now prefers. See
+  // keyboard-navigation.md.
+  test('command palette anchors below the LAST selected line, not the first, for a multi-line range', async ({
+    page,
+  }) => {
+    await page.goto('/pr/102')
+    await page.keyboard.press('Escape') // leave the auto-focused starting-points search box
+
+    await page.keyboard.press('ArrowRight') // step into execute's diff (gran 'group')
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+
+    await page.keyboard.press('f') // zoom to gran 'line' — lands on the first changed line
+    const activeRows = page.locator('div[class*="#b9f5d9"]')
+    await expect(activeRows).toHaveCount(1)
+
+    await page.keyboard.press('Shift+ArrowDown')
+    await page.keyboard.press('Shift+ArrowDown')
+    // The range now spans 3 of the 4 changed lines.
+    await expect(activeRows).toHaveCount(3)
+
+    const firstBox = await activeRows.first().boundingBox()
+    const lastBox = await activeRows.last().boundingBox()
+    expect(lastBox.y).toBeGreaterThan(firstBox.y) // sanity: the range really spans multiple rows
+
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    const menuBox = await page.getByTestId('command-anchor').boundingBox()
+    // The menu must clear the bottom of the LAST selected row, not just the
+    // first one (positionMenu adds an 8px gap below the anchor).
+    expect(menuBox.y).toBeGreaterThanOrEqual(lastBox.y + lastBox.height)
+  })
 })

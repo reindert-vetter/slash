@@ -1071,6 +1071,14 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, opts = {})
   // the vertical centre of the diff viewport. Suppressed on the decorative
   // OLD half of a unified pair (emitMeta false) — see the doc comment above.
   const anchor = emitMeta && active && i === group.start ? ' data-change-active="1"' : ''
+  // Anchor the LAST row of the active group too, so home.mjs's command
+  // palette can float below the bottom of a multi-row selection (a `group`
+  // unit, or an extended Shift+up/down range — see rangeUnit) instead of
+  // overlapping it by anchoring on the first row like scrollChangeIntoView
+  // does. Same guard as the first-row anchor above; for a single-row unit
+  // (start === end) both attributes land on the same row, so nothing changes
+  // there. See "menuAnchor" in home.mjs and keyboard-navigation.md.
+  const anchorEnd = emitMeta && active && i === group.end ? ' data-change-active-end="1"' : ''
   const flag = emitMeta && changed ? ' data-changed="1"' : ''
   // approveHere mirrors commentedHere: the approve mark for a row belongs on
   // the new (right) pane normally, and on the old (left) pane only for a pure
@@ -1095,7 +1103,7 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, opts = {})
   // call-arrow overlay (src/callArrows.mjs) to anchor an arrow on the exact
   // call-site row. Suppressed when emitMeta is false, see above.
   const dataRow = emitMeta ? ` data-row="${i}"` : ''
-  return `<div class="${cls}"${anchor}${flag}${dataRow}>${check}${gutterHtml}${body}${marker}</div>`
+  return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}>${check}${gutterHtml}${body}${marker}</div>`
 }
 
 // gutterSpan renders the leading "- "/"+ "/"  " marker for the unified

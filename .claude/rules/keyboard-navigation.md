@@ -160,9 +160,17 @@ command-anchor`) with a full-screen catch layer (`data-testid=command-overlay`)
 that closes on a click outside the menu. `positionMenu` anchors it just
 **below** the selection and gives it the **width of the right (NEW) pane** —
 so **half width, over the right side** (the new code you're reviewing). The
-vertical position comes from `menuAnchor()` (the active change row
-`[data-change-active]`, present in both list preview and diff mode; otherwise
-the block card, otherwise the sidebar row); the width + left edge come from
+vertical position comes from `menuAnchor()` (the **last** row of the active
+change unit, `[data-change-active-end]` — present in both list preview and
+diff mode; otherwise the block card, otherwise the sidebar row). This is the
+**last**, not the first, row on purpose: for a multi-row `group` unit or an
+extended Shift+↑/↓ range (`rangeUnit`, see "Shift+↑/↓" further below), the
+menu must float below the *bottom* of the selection instead of covering it by
+anchoring on its top — `[data-change-active]` (`Block.mjs`) itself keeps
+marking only the **first** row of the active unit and stays reserved for
+`scrollChangeIntoView`, which centres the viewport on the top of the
+selection; for a single-row unit both attributes land on the same row, so
+nothing changes there. The width + left edge come from
 `menuRegion()` (the `[data-pane="new"]` pane of the selected block; falls
 back to `[data-pane="old"]` for a removed block, then the whole block column
 — the `data-pane` hook sits on `codePane` in `Block.mjs`). **From the block
