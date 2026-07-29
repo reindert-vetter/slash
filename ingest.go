@@ -27,6 +27,20 @@ type ingestResult struct {
 	// pipeline because the PR's base SHA moved (e.g. rebased onto a newer
 	// develop) — an incremental diff against the old base would be unsound.
 	FullFallback bool `json:"fullFallback,omitempty"`
+	// PrevBaseSHA/PrevHeadSHA are the SHAs this PR was last ingested at, before
+	// this refresh moved them on, and ChangedFiles the paths it re-scanned. The
+	// re-anchor pass (reanchor.go, driven from prStatusWorkflow) needs all three:
+	// the paths to know which stored anchors can have gone stale, and the previous
+	// SHAs to rebuild the aligned-row space an approval was written in — the head
+	// worktree has by then already been checked out to the new SHA in place.
+	//
+	// Recorded here rather than re-read from pr_ingest afterwards because the
+	// refresh has already overwritten those rows by the time it returns, and
+	// because a workflow must take such values from a recorded Activity result to
+	// stay replay-deterministic.
+	PrevBaseSHA  string   `json:"prevBaseSHA,omitempty"`
+	PrevHeadSHA  string   `json:"prevHeadSHA,omitempty"`
+	ChangedFiles []string `json:"changedFiles,omitempty"`
 }
 
 // worktreeDirs returns absolute base/head worktree paths for a PR under
@@ -221,6 +235,10 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 			return nil, fmt.Errorf("full ingest fallback: scan and store: %w", err)
 		}
 		full.FullFallback = true
+		full.PrevBaseSHA, full.PrevHeadSHA = prevBase, prevHead
+		// A full swap re-scans everything, so every path of the PR may hold a
+		// stale anchor — not just the delta.
+		full.ChangedFiles = shas.Paths
 		return full, nil
 	}
 
@@ -260,7 +278,8 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 		return nil, fmt.Errorf("save ingest shas: %w", err)
 	}
 
-	res := &ingestResult{PR: pr, Stored: len(blocks), ByStatus: map[string]int{}}
+	res := &ingestResult{PR: pr, Stored: len(blocks), ByStatus: map[string]int{},
+		PrevBaseSHA: prevBase, PrevHeadSHA: prevHead, ChangedFiles: deltaFiles}
 	for _, b := range blocks {
 		res.ByStatus[b.Status]++
 	}

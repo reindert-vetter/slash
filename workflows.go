@@ -255,7 +255,11 @@ type ReactionSignal struct {
 	AvatarURL string `json:"avatarUrl"`
 	Body      string `json:"body"`
 	Done      bool   `json:"done"`   // resolves the thread
-	Action    string `json:"action"` // "" (reply, default) | "delete" | "avatar" (backfill the root's avatar)
+	Action    string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor"
+	// Anchor carries the comment's re-derived row anchor with Action "reanchor" (a
+	// pure metadata move, no reply stored) — see reanchor.go for how it's computed
+	// and comments.Module.SetAnchor for what it changes.
+	Anchor *commentAnchorUpdate `json:"anchor,omitempty"`
 }
 
 // postResult carries the GitHub root comment ID (0 when GitHub is unavailable).
@@ -631,6 +635,26 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, cs.SetAvatarURL(ctx, arg.ID, arg.AvatarURL)
 	})
 
+	// Activity: move a comment's row anchor after a new commit re-scanned its
+	// block (the "reanchor" ReactionSignal action — see reanchor.go for how the
+	// new anchor is derived). Pure metadata: the body and the stored code snippet
+	// the matcher searches for are left alone.
+	engine.RegisterActivity("saveCommentAnchor", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			ID          string `json:"id"`
+			RowStart    int    `json:"rowStart"`
+			RowEnd      int    `json:"rowEnd"`
+			Seg         string `json:"seg"`
+			Gran        string `json:"gran"`
+			AnchorState string `json:"anchorState"`
+			Path        string `json:"path"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return nil, cs.SetAnchor(ctx, arg.ID, arg.RowStart, arg.RowEnd, arg.Seg, arg.Gran, arg.AnchorState, arg.Path)
+	})
+
 	// Activity: the github module posts the line comment (best-effort — a
 	// failure must not sink the workflow, so local/no-gh runs still work).
 	engine.RegisterActivity("postGithubComment", func(ctx context.Context, in []byte) ([]byte, error) {
@@ -831,6 +855,90 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err != nil {
 			return nil, fmt.Errorf("pr_status: refresh ingest delta: %w", err)
 		}
+		return json.Marshal(res)
+	})
+
+	// Activity: move every stored comment/approval anchor the refresh just
+	// invalidated onto the rows it now belongs to (reanchor.go works out what those
+	// are; this applies them).
+	//
+	// Planning is a read — the read-models, the blocks table, the worktrees and
+	// `git show` — and applying goes exclusively through the sanctioned write
+	// paths: a "reanchor" Signal to each comment's own Execution, and the approve
+	// tracker's existing "set" Signal per remapped block. So the write boundary
+	// holds, and each moved anchor lands in its own comment's replayable history.
+	//
+	// Plan and apply live in ONE Activity, mirroring supersedeFileWarnings (which
+	// likewise lists comments and signals each of them): the alternative — return
+	// the plan and let the workflow body loop over it — would put a variable number
+	// of Signal sends in the body, which only stays replay-deterministic because
+	// it's driven off a recorded result. One Activity is simply a fixed position in
+	// the history and needs no such argument. Best-effort per anchor: a comment
+	// whose Execution has already completed can't be signalled again, and that must
+	// not sink the rest of the pass.
+	engine.RegisterActivity("reanchorAfterRefresh", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR           int      `json:"pr"`
+			PrevBaseSHA  string   `json:"prevBaseSHA"`
+			PrevHeadSHA  string   `json:"prevHeadSHA"`
+			ChangedFiles []string `json:"changedFiles"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if len(arg.ChangedFiles) == 0 || cs == nil {
+			return json.Marshal(reanchorResult{})
+		}
+		blocks, err := blocksByPR(m.db, arg.PR)
+		if err != nil {
+			return nil, fmt.Errorf("reanchor: load blocks: %w", err)
+		}
+		cmts, err := cs.List(ctx, arg.PR)
+		if err != nil {
+			return nil, fmt.Errorf("reanchor: load comments: %w", err)
+		}
+		var aps []approvals.Approval
+		if m.approvals != nil {
+			if aps, err = m.approvals.List(ctx, arg.PR); err != nil {
+				return nil, fmt.Errorf("reanchor: load approvals: %w", err)
+			}
+		}
+		plan := planReanchor(ctx, m.dataDir, arg.PR, arg.ChangedFiles,
+			arg.PrevBaseSHA, arg.PrevHeadSHA, cmts, aps, blocks)
+		if plan.empty() {
+			return json.Marshal(reanchorResult{})
+		}
+
+		res := reanchorResult{}
+		for _, u := range plan.Comments {
+			anchor := u
+			if err := m.Signal(u.RunID, ReactionSignal{
+				ID: "sys-" + newUIReactionID(), Source: "system",
+				Action: "reanchor", Anchor: &anchor,
+			}); err != nil {
+				m.logf("reanchor: comment %s skipped: %v", u.RunID, err)
+				continue
+			}
+			res.Comments++
+		}
+		if len(plan.Approvals) > 0 {
+			runID, err := m.EnsureApprovals(arg.PR)
+			if err != nil {
+				m.logf("reanchor: no approve tracker for pr %d: %v", arg.PR, err)
+			} else {
+				for _, r := range plan.Approvals {
+					if err := m.engine.SignalWorkflow(runID, SignalSet, ApprovalSignal{
+						BlockID: r.BlockID, Rows: r.Rows, Calls: r.Calls,
+					}); err != nil {
+						m.logf("reanchor: approvals for %s skipped: %v", r.BlockID, err)
+						continue
+					}
+					res.Approvals++
+				}
+			}
+		}
+		log.Printf("reanchor pr %d: moved %d comment anchor(s), %d approval set(s)",
+			arg.PR, res.Comments, res.Approvals)
 		return json.Marshal(res)
 	})
 
@@ -2173,6 +2281,18 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				return nil, fmt.Errorf("refresh ingest delta: %w", err)
 			}
 			if !res.Skipped {
+				// Move the stored comment/approval anchors of the re-scanned files
+				// onto their new rows before anything else looks at them: those
+				// anchors are row indices into a row space this refresh just
+				// rewrote, so until this runs they point at whatever code took
+				// their place (see reanchor.go). Covers the full-fallback path too
+				// — ChangedFiles is then every path of the PR.
+				if err := w.ExecuteActivity("reanchorAfterRefresh", map[string]any{
+					"pr": in.PR, "prevBaseSHA": res.PrevBaseSHA,
+					"prevHeadSHA": res.PrevHeadSHA, "changedFiles": res.ChangedFiles,
+				}, nil); err != nil {
+					return nil, fmt.Errorf("reanchor after refresh: %w", err)
+				}
 				if err := w.ExecuteActivity("buildRelations", BuildRelationsInput{PR: in.PR}, nil); err != nil {
 					return nil, fmt.Errorf("rebuild relations after refresh: %w", err)
 				}
@@ -2394,6 +2514,28 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				"id": runID, "avatarUrl": r.AvatarURL,
 			}, nil); err != nil {
 				return nil, fmt.Errorf("save comment avatar: %w", err)
+			}
+			continue
+		}
+
+		// A "reanchor" action is likewise pure metadata: a new commit moved (or
+		// dissolved) the code this comment hangs on, so its row anchor is
+		// re-derived and written here. Stores no reply, leaves the body and the
+		// stored code snippet alone. Input-driven, so replay-deterministic.
+		if r.Action == "reanchor" && r.Anchor != nil {
+			a := *r.Anchor
+			// The path's codeRef segment encodes the same rows, so rebuild it from
+			// the moved anchor — reusing commentPath rather than patching the string,
+			// so the two can't drift apart. Everything else (pr/file/label) is
+			// unchanged, hence a copy of the original input.
+			moved := in
+			moved.RowStart, moved.RowEnd, moved.Seg, moved.Gran = a.RowStart, a.RowEnd, a.Seg, a.Gran
+			if err := w.ExecuteActivity("saveCommentAnchor", map[string]any{
+				"id": runID, "rowStart": a.RowStart, "rowEnd": a.RowEnd,
+				"seg": a.Seg, "gran": a.Gran, "anchorState": a.AnchorState,
+				"path": commentPath(moved, runID),
+			}, nil); err != nil {
+				return nil, fmt.Errorf("save comment anchor: %w", err)
 			}
 			continue
 		}

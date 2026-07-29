@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
+	"github.com/reindert-vetter/tembed"
 	"slash/modules/approvals"
 	"slash/modules/comments"
+	"slash/modules/github"
 )
 
 // reanchor_test.go covers the matcher in reanchor.go: given the worktree pair a
@@ -386,6 +389,76 @@ func TestSetAnchorRoundTrip(t *testing.T) {
 	if len(under) != 1 {
 		t.Errorf("prefix search under the new unit found %d, want 1", len(under))
 	}
+}
+
+// The write path end to end: a "reanchor" ReactionSignal on a live comment
+// Execution moves the stored anchor AND rewrites its Path's codeRef, so a prefix
+// search keeps finding the comment under the unit it now hangs on. The reply loop
+// must treat it as pure metadata — no reaction stored, thread untouched.
+func TestReanchorSignalMovesStoredAnchor(t *testing.T) {
+	dir := t.TempDir()
+	cs, err := comments.Open(filepath.Join(dir, "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t),
+		nil, nil, nil, nil, nil, nil, nil, nil, dir, "test/repo")
+
+	ctx := context.Background()
+	pr := 940016
+	in := CodeCommentInput{PR: pr, File: "Foo.php", Label: "Foo::total", Line: 4,
+		Body: "why?", Gran: "line", Code: bodySnippet("return $x;"), RowStart: 2, RowEnd: 2, Local: true}
+	runID, err := engine.StartWorkflow(WorkflowTaskCodeComment, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		got, _ := cs.List(ctx, pr)
+		return len(got) == 1 && got[0].RowStart == 2
+	})
+
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "sys-1", Source: "system", Action: "reanchor",
+		Anchor: &commentAnchorUpdate{RowStart: 5, RowEnd: 5, Gran: "line", AnchorState: comments.AnchorPinned},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		got, _ := cs.List(ctx, pr)
+		return len(got) == 1 && got[0].RowStart == 5
+	})
+
+	got, err := cs.List(ctx, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := got[0]
+	if c.RowEnd != 5 || c.Gran != "line" {
+		t.Errorf("anchor = rows %d..%d gran %q, want 5..5 line", c.RowStart, c.RowEnd, c.Gran)
+	}
+	// The path's codeRef moved with it, so the unit prefix search follows.
+	if want := "/pr-940016/Foo.php/Foo::total/line-5/comment-" + runID; c.Path != want {
+		t.Errorf("path = %q, want %q", c.Path, want)
+	}
+	// Pure metadata: no reaction stored, body and stored snippet untouched.
+	if c.ReactionCount != 0 || len(c.Reactions) != 0 {
+		t.Errorf("reactions = %d/%d, want none — a reanchor is not a reply", c.ReactionCount, len(c.Reactions))
+	}
+	if c.Body != "why?" || c.Code != bodySnippet("return $x;") {
+		t.Errorf("body/code changed: %q / %q", c.Body, c.Code)
+	}
+
+	// And the thread is still alive: an ordinary reply after a reanchor still lands.
+	if err := m.Signal(runID, ReactionSignal{ID: "r1", Source: "ui", Author: "reviewer", Body: "ack"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		got, _ := cs.List(ctx, pr)
+		return len(got) == 1 && got[0].ReactionCount == 1
+	})
 }
 
 // An orphan mark round-trips through the read model and reaches the API shape the
