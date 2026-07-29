@@ -15,6 +15,24 @@
   Underlying-code child as its own column re-scopes the panel and tears down
   cards mid-flush). On an arrow.js upgrade this patch must be **reapplied**
   (see the comment for the original line).
+- **Snapshot/compare a selection by stable ID across an async gap, never by raw
+  array index — the list can reindex itself in between.** A "did anything move
+  the selection while I was awaiting X?" guard is a recurring pattern (see
+  `loadBlocks`' `pristineSelectedId`/`curSelectedId` in `home.mjs`, and the
+  `?sel=`/`blockRef` mechanism in `CLAUDE.md`'s URL-state section, which exists
+  for exactly the same reason). Comparing the raw index before/after the await
+  is **not equivalent** to comparing identity: `recomputeLeftList` (and
+  anything similarly id-preserving) can legitimately reindex an unchanged
+  selection out from under you — e.g. a PR-wide comment item arriving and
+  inserting itself at rank -1 shifts every existing block one slot to the
+  right — and an index-only guard then wrongly concludes "the reviewer already
+  moved the selection," silently skipping whatever the guard was meant to gate
+  (here: `applyDefaultUnapprovedSelection`, which as a result never got to
+  consider the very comment item it should have landed on). Symptom to watch
+  for: a "fresh open" default/auto-selection that intermittently or
+  consistently lands on the wrong item whenever an async, independently-loaded
+  list (comments, in this case) can insert itself ahead of the current
+  selection before your own guard re-checks it.
 - **arrow.js pitfalls** (from practice): no HTML comments (`<!-- -->`) in an
   `html`` `` template (throws "Invalid HTML position"); a reactive attribute
   value must be the **entire** value (`class="${() => ...}"`, not

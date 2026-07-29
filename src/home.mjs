@@ -1070,17 +1070,25 @@ async function loadBlocks() {
   // reveal/pin path untouched.
   const hadSelParam = hadInitialSelParam
   applyBlockRefRestore()
-  // pristineSelected/pristineToggleFocused snapshot the selection right after
-  // the synchronous load steps above, so applyDefaultUnapprovedSelection below
-  // — which only runs after the approvals/blockstats round trip — can detect
-  // whether the reviewer (or any other mechanism) has already moved the
-  // selection away in the meantime. Without this guard it would unconditionally
-  // overwrite whatever the reviewer just clicked/navigated to while the fetch
-  // was still in flight, silently reverting a real interaction — unlike
-  // revealSelectedIfHidden, which is self-correcting (a no-op unless the
-  // CURRENT selection is hidden), applyDefaultUnapprovedSelection always picks
-  // a target, so it needs this explicit check instead.
-  const pristineSelected = state.selected
+  // pristineSelectedId/pristineToggleFocused snapshot the selection right
+  // after the synchronous load steps above, so applyDefaultUnapprovedSelection
+  // below — which only runs after the approvals/blockstats round trip — can
+  // detect whether the reviewer (or any other mechanism) has already moved
+  // the selection away in the meantime. Without this guard it would
+  // unconditionally overwrite whatever the reviewer just clicked/navigated to
+  // while the fetch was still in flight, silently reverting a real
+  // interaction — unlike revealSelectedIfHidden, which is self-correcting (a
+  // no-op unless the CURRENT selection is hidden), applyDefaultUnapprovedSelection
+  // always picks a target, so it needs this explicit check instead.
+  // Deliberately an ID snapshot, not the raw index: the prWideComments()
+  // watch (recomputeLeftList, see below) can insert new rank -1 comment
+  // items and reindex the SAME still-selected block to a different index in
+  // the meantime — that's not the reviewer moving the selection, just
+  // recomputeLeftList's own id-preserving reindex (mirrors its own `selId`
+  // logic) — an index-only comparison here would treat that reindex as "the
+  // reviewer already moved on" and skip the default pick entirely, even
+  // when a comment item legitimately deserves that pick once it exists.
+  const pristineSelectedId = state.blocks[state.selected] ? state.blocks[state.selected].id : null
   const pristineToggleFocused = state.toggleFocused
   const callResolvePromise = loadCallResolve()
   const testCoversPromise = loadTestCovers()
@@ -1098,8 +1106,14 @@ async function loadBlocks() {
   await Promise.all([loadApprovals(), loadBlockStats()])
   await Promise.resolve()
   await Promise.resolve()
+  const curSelectedId = state.blocks[state.selected] ? state.blocks[state.selected].id : null
   if (hadSelParam) revealSelectedIfHidden()
-  else if (state.selected === pristineSelected && state.toggleFocused === pristineToggleFocused) {
+  else if (curSelectedId === pristineSelectedId && state.toggleFocused === pristineToggleFocused) {
+    // A comment item that hasn't arrived yet (see freshDefaultSelectionAt's
+    // own comment) can still win this pick later, once the independent
+    // comment poll lands — retryDefaultSelectionForComments below picks up
+    // from here.
+    freshDefaultSelectionPending = true
     applyDefaultUnapprovedSelection()
   }
   // A pending ?drill= restore needs relatedChildren's own dependencies —
@@ -1297,6 +1311,19 @@ function categoryRank(cat) {
 // instead of falling into OTHER. `status` stays '' — there's no
 // added/modified/removed concept for a comment, so the status pill/mark
 // simply shows nothing (statusInfo's fallback).
+
+// freshDefaultSelectionPending/freshDefaultSelectionAt back the retry of
+// applyDefaultUnapprovedSelection's fresh-open pick once the PR-wide comment
+// list arrives (see that function's own doc comment, and
+// retryDefaultSelectionForComments below) — declared here, ahead of the
+// prWideComments() watch a little further down, which calls
+// retryDefaultSelectionForComments() from its own callback the moment it's
+// registered (arrow.js runs a fresh watch's callback once, synchronously):
+// a `let` declared after that point would still be in its temporal dead
+// zone at that first, synchronous call.
+let freshDefaultSelectionPending = false
+let freshDefaultSelectionAt = null // { blockId } | { toggle: true } | null
+
 function commentBlockItem(c) {
   const snippet = (c.body || '').trim().replace(/\s+/g, ' ').slice(0, 60)
   return {
@@ -1347,14 +1374,17 @@ function recomputeLeftList() {
 // b.code involved), so this never risks the "stuck on loading" co-subscriber
 // pitfall (see conventions.md) the way reading a block's own code would.
 // Also retries a pending `?sel=comment:<id>` restore (applyCommentRefRestore)
-// every time this list updates — comment items only exist in state.blocks
-// once this watch has run at least once with actual data, which may well be
-// later than loadBlocks' own one-shot applyBlockRefRestore call.
+// and a still-pending fresh-open default selection
+// (retryDefaultSelectionForComments) every time this list updates — comment
+// items only exist in state.blocks once this watch has run at least once
+// with actual data, which may well be later than loadBlocks' own one-shot
+// applyBlockRefRestore/applyDefaultUnapprovedSelection calls.
 watch(
   () => prWideComments(),
   () => {
     recomputeLeftList()
     applyCommentRefRestore()
+    retryDefaultSelectionForComments()
   },
 )
 
@@ -1593,6 +1623,23 @@ function revealSelectedIfHidden() {
 // (toggleRowVisible). Called only from the load path, after
 // loadApprovals/loadBlockStats have landed (see loadBlocks) — isFullyApproved
 // depends on state.approvalSummaries, which isn't known any earlier.
+//
+// freshDefaultSelectionPending/freshDefaultSelectionAt back a RETRY of this
+// same pick once the PR-wide comment list (which ranks first, see
+// recomputeLeftList's rank -1) arrives — comment items are populated by
+// RelatedPanel's own, independent comment poll (loadComments), which now
+// awaits ensureMe() before pushing cs.list (see avatar.mjs — the reviewer's
+// own GitHub identity lookup), an extra network round trip that can land
+// well after this function's one-shot call in loadBlocks already picked an
+// ordinary block/the toggle row. Without a retry, a comment item that should
+// have won the very first default selection never gets it, and the reviewer
+// silently lands elsewhere. freshDefaultSelectionAt snapshots the picked
+// block's stable id (not its raw index — recomputeLeftList reindexes
+// existing rows by id when the comment watch inserts new rank -1 items, so
+// the id is what stays stable across that reindex) resp. `true` for the
+// toggle-row pick, so retryDefaultSelectionForComments can tell whether
+// nothing else (a click, an arrow key, a restored ?sel=) has since moved the
+// selection away from that automatic pick.
 function applyDefaultUnapprovedSelection() {
   const idx = state.blocks.findIndex((b) => !isFullyApproved(state, b))
   if (idx >= 0) {
@@ -1601,10 +1648,44 @@ function applyDefaultUnapprovedSelection() {
     // `?mode=diff` (with no matching ?sel=, so this default-landing path ran
     // at all) must not leave the app in diff mode with nothing to show one.
     if (state.blocks[idx].kind === 'comment') state.mode = 'list'
+    state.toggleFocused = false
     scrollSelectedIntoView()
+    freshDefaultSelectionAt = { blockId: state.blocks[idx].id }
     return
   }
-  if (toggleRowVisible()) state.toggleFocused = true
+  if (toggleRowVisible()) {
+    state.toggleFocused = true
+    freshDefaultSelectionAt = { toggle: true }
+  } else {
+    freshDefaultSelectionAt = null
+  }
+}
+
+// retryDefaultSelectionForComments re-applies applyDefaultUnapprovedSelection
+// once the PR-wide comment list changes (see the watch on prWideComments()
+// below) — but only as long as the selection is still exactly where the last
+// automatic pick left it (see freshDefaultSelectionAt's own comment above);
+// any other outcome means the reviewer (or some other restore path) has
+// since moved on, so retrying would wrongly yank the selection back.
+// Deliberately consumed AT MOST ONCE (freshDefaultSelectionPending is always
+// cleared here, whether or not it actually reapplies): the comment list can
+// legitimately change again much later in the same session (a new comment
+// gets imported while the reviewer is mid-review) and that must never yank
+// the selection back to a "fresh open" pick at that point — this retry only
+// exists to give the *initial* comment load, delayed behind loadComments'
+// own ensureMe() round trip, one fair shot at the very selection
+// loadBlocks' one-shot call otherwise already raced past.
+function retryDefaultSelectionForComments() {
+  if (!freshDefaultSelectionPending) return
+  freshDefaultSelectionPending = false
+  const at = freshDefaultSelectionAt
+  const stillAtPick = at
+    ? at.toggle
+      ? state.toggleFocused
+      : !state.toggleFocused && state.blocks[state.selected] && state.blocks[state.selected].id === at.blockId
+    : !state.toggleFocused && state.blocks.length === 0
+  if (!stillAtPick) return
+  applyDefaultUnapprovedSelection()
 }
 
 // clampSelectedToVisible moves state.selected off a hidden (fully-approved,
