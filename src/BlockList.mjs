@@ -501,7 +501,7 @@ function emptyState(state) {
         data-testid="ingest-btn"
         class="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
         @click="${() => state.onIngest && state.onIngest()}"
-        ?disabled="${() => state.ingesting}"
+        disabled="${() => state.ingesting}"
       >
         ${() => (state.ingesting ? 'Ingesting…' : 'Ingest #' + state.pr)}
       </button>

@@ -550,7 +550,7 @@ function generateAction(pr) {
     <button
       type="button"
       data-testid="generate-page"
-      ?disabled="${() => ingestBusy(pr)}"
+      disabled="${() => ingestBusy(pr)}"
       class="${() =>
         'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700 ' +
         (ingestBusy(pr) ? 'cursor-not-allowed opacity-60' : '')}"
@@ -582,7 +582,7 @@ function ingestedActions(pr) {
     <button
       type="button"
       data-testid="regenerate-page"
-      ?disabled="${() => ingestBusy(pr)}"
+      disabled="${() => ingestBusy(pr)}"
       class="${() =>
         'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700 ' +
         (ingestBusy(pr) ? 'cursor-not-allowed opacity-60' : '')}"
@@ -744,7 +744,7 @@ function readyForReviewSection(pr) {
           <button
             type="button"
             data-testid="ready-confirm"
-            ?disabled="${() => ui.readySubmitting}"
+            disabled="${() => ui.readySubmitting}"
             class="${() =>
               'mt-1 flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-500/15 ' +
               (ui.readySubmitting ? 'cursor-not-allowed opacity-60' : '')}"

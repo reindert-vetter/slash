@@ -194,6 +194,11 @@ test.describe('PR Review Tree — PR inbox', () => {
     await generate.click()
 
     await expect(generate).toHaveText(/Blocks scannen/)
+    // Really disabled (a native `disabled` attribute, not just dimmed via a
+    // CSS class) — a stray extra click can't start a second ingest while one
+    // is already in flight. See the ?disabled= vs disabled= note in
+    // .claude/rules/conventions.md.
+    await expect(generate).toBeDisabled()
 
     resolveIngest()
     await expect(page).toHaveURL(/\/pr\/12801$/)
@@ -241,6 +246,43 @@ test.describe('PR Review Tree — PR inbox', () => {
 
     await expect.poll(() => ingestCalls).toBe(1)
     // No navigation — the "Opnieuw genereren" action stays on the overview.
+    await expect(page).toHaveURL(/\/pr-overview$/)
+  })
+
+  // Mirrors "generating shows the real ingest stage while busy" above, but for
+  // the already-ingested (regenerate) branch — proves the button is really
+  // disabled (native `disabled` attribute) while busy, not just dimmed, so a
+  // stray extra click can never start a second, overlapping ingest of the
+  // same PR.
+  test('regenerating is really disabled while busy, not just dimmed', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await page.waitForLoadState('networkidle')
+
+    let ingestCalls = 0
+    let resolveIngest
+    const ingestDone = new Promise((resolve) => {
+      resolveIngest = resolve
+    })
+    await page.route('**/api/ingest', async (route) => {
+      ingestCalls++
+      await ingestDone
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    })
+
+    const row = page.locator('[data-testid="pr-row"][data-pr="12903"]')
+    await row.click()
+    const regenerate = page.locator('[data-testid="pr-popover"] [data-testid="regenerate-page"]')
+    await regenerate.click()
+
+    await expect(regenerate).toBeDisabled()
+    // A trial click (checks actionability, never performs the action) fails
+    // precisely because the element is disabled — proof the browser itself
+    // would refuse a real click here, not just that our own click handler
+    // happens to be idempotent.
+    await expect(regenerate.click({ trial: true, timeout: 500 })).rejects.toThrow()
+
+    resolveIngest()
+    await expect.poll(() => ingestCalls).toBe(1)
     await expect(page).toHaveURL(/\/pr-overview$/)
   })
 
