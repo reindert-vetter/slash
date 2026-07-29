@@ -59,9 +59,11 @@ test.describe('PR Review Tree — URL state persistence', () => {
     await page.waitForLoadState('networkidle')
     expect(normalizeQuery(new URL(page.url()).search)).toBe(normalizeQuery(before))
 
-    // Diff mode restored → the detail panel is in its full-width (left-6) layout.
+    // Diff mode restored → the detail panel is in its full-width, flush-left
+    // (left-0, see "Let <main> run flush to the viewport edges" in
+    // detail-layout.md) layout.
     const panel = page.locator('[data-testid="detail-panel"]')
-    await expect(panel).toHaveClass(/left-6/)
+    await expect(panel).toHaveClass(/left-0/)
     expect(new URL(page.url()).searchParams.get('mode')).toBe('diff')
   })
 

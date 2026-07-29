@@ -114,10 +114,11 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await expect(panel).toHaveClass(/left-\[29rem\]/)
 
-    // → steps in: mode flips to diff, the panel expands to full width, and the
-    // first change is still highlighted.
+    // → steps in: mode flips to diff, the panel expands to full width (flush
+    // to the left edge — left-0, see "Let <main> run flush to the viewport
+    // edges" in detail-layout.md), and the first change is still highlighted.
     await page.keyboard.press('ArrowRight')
-    await expect(panel).toHaveClass(/left-6/)
+    await expect(panel).toHaveClass(/left-0/)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     // ← steps back out: the panel returns to the narrow list layout.

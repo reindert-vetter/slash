@@ -35,7 +35,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(rows.nth(1)).toContainText('Naar PR-overzicht')
     await expect(rows.nth(2)).toContainText('GitHub')
     await expect(rows.nth(3)).toContainText('Jira')
-    await expect(rows.nth(4)).toContainText("Controleer de hele PR op risico's")
+    await expect(rows.nth(4)).toContainText("Diepgravend onderzoek")
     await expect(rows.nth(5)).toContainText('Toon volledige omschrijving')
 
     await page.keyboard.press('Escape')
@@ -156,7 +156,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(rows.nth(1)).toContainText('Naar PR-overzicht')
     await expect(rows.nth(2)).toContainText('GitHub')
     await expect(rows.nth(3)).toContainText('Jira')
-    await expect(rows.nth(4)).toContainText("Controleer de hele PR op risico's")
+    await expect(rows.nth(4)).toContainText("Diepgravend onderzoek")
     await expect(rows.nth(5)).toContainText('Toon volledige omschrijving')
   })
 })
