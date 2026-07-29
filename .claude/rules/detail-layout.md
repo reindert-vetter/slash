@@ -600,6 +600,24 @@ therefore bumps a module-level `focusToken`, and a deferred focus only lands
 while the token still matches the value captured when it was requested. Test:
 `tests/place-comment-return-focus.spec.mjs`.
 
+**The same `focusToken` also guards `placeComment`'s/`createComment`'s own
+async tail (POST + comments reload), not just a deferred DOM focus.**
+`COMPOSE_COMMANDS`' `run()` is fired without being awaited (`runCommand`,
+`home.mjs`), so the reviewer gets the keyboard back immediately — well before
+that network round-trip settles. In that window they can navigate anywhere,
+including opening a DIFFERENT comment/composer/Onderliggende-code panel,
+possibly on a different block — `cs` is a module-level singleton, shared by
+every block. Without a guard, the stale tail's unconditional `cs.sel = …`
+(`createComment`) and `exitRelated()` (`placeComment`, which resets
+`cs.focus`/`cs.composing`) would clobber whatever the reviewer is now looking
+at. Both functions therefore snapshot `focusToken` before their `await` and
+only apply their own follow-up if it's still unchanged by the time it
+resolves. This means every function that sets `cs.focus`/`cs.composing`
+directly — `enterRelated`, `enterThread`, `startComment`, and the two direct
+branches in `applyRelRestore` — must also call `releaseFocus()` (not just
+`toNew`/`toComment`, which already did), so a genuine navigation-away is
+always visible to that guard. Test: `tests/comment-nav-race.spec.mjs`.
+
 **A placed comment immediately gives the keyboard back to the code it's
 attached to.** `placeComment` (`RelatedPanel.mjs`) — called by both
 `COMPOSE_COMMANDS` items in `home.mjs` ("Place comment" and "Only for

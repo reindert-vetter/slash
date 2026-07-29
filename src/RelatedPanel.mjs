@@ -355,8 +355,12 @@ export function focusedChipChain() {
 // on the first underlying-code child. Called by home.mjs on → from the diff
 // (only when the selected unit carries no comments, see hasVisibleComments/
 // enterCommentsHead below) and on ↓ falling through the last inline comment
-// conversation (see advanceFromComment).
+// conversation (see advanceFromComment). releaseFocus() bumps focusToken so a
+// STALE placeComment/createComment tail (see the guard there) recognizes that
+// the keyboard has moved on to a — possibly different block's — Onderliggende-
+// code panel in the meantime and skips its own now-irrelevant cleanup.
 export function enterRelated() {
+  releaseFocus()
   cs.composing = false
   cs.focus = 'code'
   cs.codeSel = 0
@@ -377,15 +381,24 @@ function exitRelated() {
 }
 export { exitRelated as leaveRelated }
 
-// focusToken counts every sidebar-focus transition. focusEl's deferred focus
-// (below) is only allowed to land while the token still matches the value at
-// request time — i.e. while the reviewer has not moved on since.
+// focusToken counts every sidebar-focus transition. Originally only guarded
+// focusEl's own deferred DOM focus (below): the request is only allowed to
+// land while the token still matches the value at request time — i.e. while
+// the reviewer has not moved on since. It now ALSO guards placeComment's/
+// createComment's async tail (see there): both capture the token before
+// their network round-trip and only apply their own follow-up state
+// (cs.sel / exitRelated's cs.focus reset) if it's still unchanged by the time
+// that await resolves — otherwise the reviewer has since moved the keyboard
+// to a different comment/composer/Onderliggende-code panel (possibly on a
+// different block entirely, since cs is a module-level singleton) and that
+// stale cleanup must not clobber it. See tests/place-comment-return-focus.spec.mjs
+// and the "async tail after navigating away" regression this addresses.
 let focusToken = 0
 
-// releaseFocus invalidates any focus request still in flight. Called by every
-// transition that means "this comment conversation no longer owns the
-// keyboard" or "the keyboard moved somewhere else within the inline comment
-// block".
+// releaseFocus invalidates any focus request/pending async tail still in
+// flight. Called by every transition that means "this comment conversation
+// (or composer/Onderliggende-code panel) no longer owns the keyboard" or "the
+// keyboard moved somewhere else within the inline comment block".
 function releaseFocus() {
   focusToken++
 }
@@ -606,6 +619,7 @@ function focusThread(focusInput = true) {
 // enterThread steps into the selected comment's thread, landing on the reply
 // field so the reviewer can type straight away (→ from a comment row).
 function enterThread() {
+  releaseFocus()
   cs.composing = false
   cs.focus = 'thread'
   cs.threadPos = 0
@@ -633,12 +647,17 @@ function applyRelRestore() {
   restorePending = null
   cs.codeSel = children ? Math.min(want.codeSel, children - 1) : 0
   cs.sel = comments ? Math.min(want.sel, comments - 1) : 0
+  // releaseFocus() on the two branches that set cs.focus directly (instead of
+  // through toNew()/toComment(), which already bump it themselves) — see the
+  // focusToken doc comment above for why every cs.focus transition must.
   if (want.focus === 'code') {
+    releaseFocus()
     cs.focus = 'code'
     scrollCodeIntoView()
   } else if (want.focus === 'new') {
     toNew()
   } else if (want.focus === 'thread') {
+    releaseFocus()
     cs.focus = 'thread'
     cs.threadPos = Math.min(want.threadPos, reactionCount())
     focusThread()
@@ -792,6 +811,7 @@ export function handleRelatedKey(key) {
 // can type immediately. Placing the comment still goes through the workflow
 // (placeComment), so the write-boundary is unchanged.
 export function startComment() {
+  releaseFocus()
   cs.composing = true
   cs.focus = 'new'
   focusEl('[data-testid=comment-compose]')
@@ -993,6 +1013,17 @@ function syncComments(pr) {
 // ("Maak hiermee een comment", which uses the typed text as the comment). It writes
 // only by starting the workflow (POST), so the write-boundary holds. On success it
 // reloads the read-model and selects the fresh comment.
+//
+// `runCommand` (home.mjs) fires a command's async `run()` without awaiting it
+// (see COMPOSE_COMMANDS), so the reviewer regains the keyboard immediately —
+// well before this function's own POST + GET round-trip settles. In that
+// window they can navigate anywhere, including opening a DIFFERENT comment/
+// composer/Onderliggende-code panel (cs is a module-level singleton, shared
+// across every block). The `cs.sel = ...` landing below is therefore only
+// meaningful if nothing else has taken over the keyboard since — guarded via
+// the same focusToken every cs.focus-owning transition bumps (see its doc
+// comment). A stale token means the reviewer moved on; skip the landing
+// rather than clobber whatever they're now looking at.
 export async function createComment({
   pr,
   file,
@@ -1011,6 +1042,7 @@ export async function createComment({
   segment,
 }) {
   if (pr == null || !file || !body) return
+  const token = focusToken
   cs.busy = true
   try {
     await fetch('/api/workflows/task_code_comment', {
@@ -1045,7 +1077,10 @@ export async function createComment({
     await loadComments(pr)
     // The fresh comment sits on the unit we just placed it on, so it's the last
     // entry of the (order-preserving) visible list — land the selection there.
-    cs.sel = Math.max(0, visibleComments().length - 1)
+    // Only while still relevant (see the doc comment above) — otherwise the
+    // reviewer has since focused a different comment/composer/panel, and
+    // `visibleComments()` would land this on THAT unrelated context.
+    if (token === focusToken) cs.sel = Math.max(0, visibleComments().length - 1)
   } finally {
     cs.busy = false
   }
@@ -1054,6 +1089,14 @@ export async function createComment({
 // placeComment submits the composer's text as a comment on the current unit.
 // Exported so the comment-kind menu (home.mjs COMPOSE_COMMANDS) can place a
 // private note via opts.local; the composer button routes through the menu too.
+// COMPOSE_COMMANDS' `run()` is fired without being awaited (home.mjs's
+// runCommand), so the menu closes and the reviewer gets the keyboard back
+// immediately — well before createComment's POST + GET round-trip below
+// settles. `token` snapshots focusToken before that await so the tail below
+// can tell whether the reviewer has since moved the keyboard elsewhere (a
+// different comment/composer/Onderliggende-code panel, possibly on a
+// different block — cs is a module-level singleton) — see the focusToken doc
+// comment. Regression test: tests/comment-nav-race.spec.mjs.
 export async function placeComment(state, commentTarget, opts = {}) {
   const b = state && state.blocks && state.blocks[state.selected]
   const el = document.querySelector('[data-testid=comment-compose]')
@@ -1065,6 +1108,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
   // in home.mjs), but guard here too rather than post a bogus, unanchored
   // comment if it somehow does.
   if (!b || b.kind === 'comment' || !body) return
+  const token = focusToken
   // Capture the exact unit the composer is previewing so the placed comment's
   // thread can show the same code (see composeTargetHint / the thread hint).
   // commentTarget() follows focusedBlock() (the column that currently owns the
@@ -1092,6 +1136,14 @@ export async function placeComment(state, commentTarget, opts = {}) {
     side: t ? t.side : 'RIGHT',
     segment: t ? t.segment : '',
   })
+  // Only while still relevant (see the doc comment above): if the token
+  // changed, the reviewer has already navigated the keyboard elsewhere since
+  // starting this comment, and both of the below would clobber that —
+  // clearing a composer textarea the reviewer may since be reusing for a
+  // fresh comment on a different unit, and forcing whatever now owns the
+  // keyboard (e.g. another block's Onderliggende-code panel) back to the
+  // diff via exitRelated()'s unconditional cs.focus/cs.composing reset.
+  if (token !== focusToken) return
   el.value = ''
   // The reviewer placed a comment tied to a piece of code — hand the keyboard
   // back to that code's diff instead of leaving it sitting on the composer.
