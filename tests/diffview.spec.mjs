@@ -4,18 +4,25 @@ import { test, expect } from './_fixtures.mjs'
 // keyboard-navigation.md "`a` — diff-weergave toggelen") through THREE stands
 // — split → unified → fit → split — everywhere a Block() card is visible. A
 // genuinely two-sided (modified) block collapses to a single "old (-) above
-// new (+)" column only in 'unified' (unifiedCodeDiff in Block.mjs); an
-// already one-sided (added/removed) block keeps its single pane in every
-// stand. The card WIDTH: 'unified' shrinks every visible card to a fixed 60%
-// regardless of singleSide (`narrowed` in Block.mjs) — modified, added and
-// removed alike; 'fit' instead sizes the card off its own code
-// (`fitWidthCls`), floored at that same 60% width but deliberately UNCAPPED
-// upward (a CSS `max(...)`, not `clamp(...)`) — on explicit reviewer
-// request, 'fit' must never cut off a genuinely long code line behind an
-// invisible horizontal scroll, even if that means growing past the full
-// split width. `codeMaxLineChars` (the TRUE longest non-comment line) drives
-// this, not `codeGrowthChars`'s 75th-percentile (which `relatedColumnWidthCls`
-// still uses, unaffected by this change).
+// new (+)" column only in 'unified' (unifiedCodeDiff in Block.mjs); 'fit'
+// instead HIDES the old pane entirely — on explicit reviewer request, a
+// two-sided block shows only its new/right pane in 'fit', exactly like an
+// already one-sided ADDED block (`fitOnly` in Block.mjs). The one deliberate
+// exception: a REMOVED block has no new side to prefer, so it keeps showing
+// its old/left pane in 'fit' too (there is nothing else to show). This keeps
+// the three stands functionally distinct: `'unified'` is the only stand that
+// still shows old code (stacked instead of side-by-side); `'fit'` is the only
+// stand with a content-driven width. The card WIDTH: 'unified' shrinks every
+// visible card to a fixed 60% regardless of singleSide (`narrowed` in
+// Block.mjs) — modified, added and removed alike; 'fit' instead sizes the
+// card off the one pane it actually shows (`fitWidthCls`), floored at that
+// same 60% width but deliberately UNCAPPED upward (a CSS `max(...)`, not
+// `clamp(...)`) — on explicit reviewer request, 'fit' must never cut off a
+// genuinely long code line behind an invisible horizontal scroll, even if
+// that means growing past the full split width. `codeMaxLineChars` (the TRUE
+// longest non-comment line) drives this, not `codeGrowthChars`'s
+// 75th-percentile (which `relatedColumnWidthCls` still uses, unaffected by
+// this change).
 test.describe('PR Review Tree — diff view toggle (`a`)', () => {
   // Direct-mount unit test: Block()'s viewMode opt controls whether codeDiff
   // renders a side-by-side split, or collapses a genuinely two-sided
@@ -79,15 +86,21 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await expect(panes.first().locator('span.text-rose-500')).toHaveCount(2)
     await expect(panes.first().locator('span.text-emerald-500')).toHaveCount(2)
 
-    // Flip to 'fit': BOTH panes come back side by side (unlike 'unified',
-    // 'fit' never restructures into a single column — see unifiedCodeDiff in
-    // Block.mjs), but the width class is no longer the fixed 70rem/82rem —
-    // it's a CSS max() driven by the code's own (short) content, so it
-    // should still sit at (or near) the 60% floor for this tiny fixture.
+    // Flip to 'fit': old code disappears entirely — only the new/right pane
+    // remains (unlike 'unified', which still shows old, just stacked) — and
+    // the width class is no longer the fixed 70rem/82rem, it's a CSS max()
+    // driven by the (now single) pane's own short content, so it should
+    // still sit at (or near) the 60% floor for this tiny fixture.
     await page.evaluate(() => {
       window.__vm.mode = 'fit'
     })
-    await expect(panes).toHaveCount(2)
+    await expect(panes).toHaveCount(1)
+    await expect(card.locator('[data-pane="old"]')).toHaveCount(0)
+    await expect(card.locator('[data-pane="new"]')).toHaveCount(1)
+    // The old code text is genuinely gone, not just visually hidden — the
+    // whole point of the request ("the 3rd option must not show old code").
+    await expect(panes.first()).not.toContainText('return 1;')
+    await expect(panes.first()).toContainText('return 2;')
     await expect(card).toHaveClass(/max\(42rem/)
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
     await expect(card).not.toHaveClass(/w-\[42rem\]/) // no longer the fixed 'unified' width either
@@ -100,11 +113,14 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await expect(card).toHaveClass(/w-\[70rem\]/)
   })
 
-  // Direct-mount unit test: in 'fit', a card with genuinely wide code lines
-  // grows past the 60% floor (but never past the full split ceiling) — proof
-  // that fitWidthCls actually reacts to the block's own content, not just a
-  // fixed clamp() that always resolves to its floor.
-  test('viewMode="fit" grows a card with wide code lines past the 60% floor', async ({
+  // Direct-mount unit test: in 'fit', a card with a genuinely wide NEW-side
+  // code line grows past the 60% floor (but never past the full split
+  // ceiling) — proof that fitWidthCls actually reacts to the (single, new)
+  // pane's own content, not just a fixed clamp() that always resolves to its
+  // floor. This block is genuinely two-sided (modified) — the OLD side stays
+  // short on purpose, so this also proves the width is no longer based on
+  // Math.max(old, new) doubled: only the visible new pane's content counts.
+  test('viewMode="fit" grows a card with a wide new-side code line past the 60% floor', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -113,11 +129,12 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
-      // 35 chars total on the line (incl. the 4-space indent) — probed to sit
-      // comfortably between the 60% floor and the full split ceiling (see the
-      // width assertions below), proving fitWidthCls actually scales with the
-      // content instead of just resolving to one of the two extremes.
-      const wideLine = 'return $this->fooBarValues($a);'
+      // Probed to sit comfortably between the 60% floor and the full split
+      // ceiling under the SINGLE-pane formula (see the width assertions
+      // below), proving fitWidthCls actually scales with the content
+      // instead of just resolving to one of the two extremes.
+      const wideLine =
+        'return $this->fooBarValuesFromRequestPayloadData($a, $b, $c, $d, $e, $f);'
       const b = reactive({
         category: 'ACTION',
         label: 'Foo::wide',
@@ -146,16 +163,19 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     // split ceiling (70rem = 1120px) — proves fitWidthCls is actually
     // proportional to the content, not just resolving to the floor.
     expect(width).toBeGreaterThan(700)
-    expect(width).toBeLessThan(1000)
+    expect(width).toBeLessThan(1120)
   })
 
   // Direct-mount unit test: the OTHER end of the spectrum — a genuinely very
-  // wide line now GROWS the card past the full split width instead of being
-  // capped there. This is a deliberate reversal (was: "caps ... at the full
-  // split width") — on explicit reviewer request, 'fit' must guarantee the
-  // single widest real code line is always fully visible (no wrap, no hidden
-  // horizontal scroll), even past what 'split' itself would show. See
-  // fitWidthCls's doc comment in Block.mjs.
+  // wide NEW-side line now GROWS the card past the full split width instead
+  // of being capped there. This is a deliberate reversal (was: "caps ... at
+  // the full split width") — on explicit reviewer request, 'fit' must
+  // guarantee the single widest real code line is always fully visible (no
+  // wrap, no hidden horizontal scroll), even past what 'split' itself would
+  // show. See fitWidthCls's doc comment in Block.mjs. Same single-pane
+  // basis as the previous test — this line only needs to be longer here
+  // because a single (not doubled) pane needs more characters to reach the
+  // same pixel width.
   test('viewMode="fit" grows a card past the full split width for an extremely wide line', async ({
     page,
   }) => {
@@ -166,7 +186,8 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
       const veryWideLine =
-        'return $this->veryLongMethodNameThatDescribesSomethingComplicated($argumentOne, $argumentTwo, $argumentThree);'
+        'return $this->veryLongMethodNameThatDescribesSomethingComplicated' +
+        '($argumentOne, $argumentTwo, $argumentThree, $argumentFour, $argumentFive);'
       const b = reactive({
         category: 'ACTION',
         label: 'Foo::verywide',
@@ -197,11 +218,15 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
   // Direct-mount unit test: a NON-PHP file (e.g. a markdown/config file) does
   // NOT get the uncapped, max-line-based 'fit' width above — it stays at the
-  // same bounded width 'split' uses (boundedWrapWidthCls in Block.mjs) and
-  // instead wraps the long line within that width (wrappedCodeDiff/
-  // pairedRowHTML), so an isolated long prose/config line can never balloon
-  // the card the way it can for PHP. See isPhpFile/fitWidthCls's doc comment.
-  test('viewMode="fit" bounds a non-PHP file at the split width and wraps its long line instead', async ({
+  // same narrow 60% width a one-sided block already uses in every other
+  // stand (boundedWrapWidthCls in Block.mjs) and instead wraps the long line
+  // within that width, so an isolated long prose/config line can never
+  // balloon the card the way it can for PHP. Like every other block in
+  // 'fit', this genuinely two-sided (modified) block also shows only its
+  // new/right pane — old code is gone, not just visually hidden — so there's
+  // only ONE (wrapping) pane to size/align, not the old two-pane
+  // row-alignment mechanism. See isPhpFile/fitWidthCls's doc comment.
+  test('viewMode="fit" bounds a non-PHP file at the narrow width, hides old code, and wraps its long line', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -210,9 +235,8 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await page.evaluate(async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
-      // A single, deliberately very long prose line (well past both the
-      // 60% floor and the full split width) — the markdown-bullet case
-      // reported in practice.
+      // A single, deliberately very long prose line (well past the narrow
+      // 60% width) — the markdown-bullet case reported in practice.
       const longLine =
         '- Structure every test body as `// Given` / `// When` / `// Then`. Separate the phases with a **blank line above each `// When` and `// Then` marker** whenever a previous phase precedes it. This keeps the three phases visually separated and readable at a glance.'
       const b = reactive({
@@ -225,8 +249,8 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
         class: '',
         approved: false,
         code: {
-          old: { start: 1, end: 3, text: '# Notes\nShort line.\n' },
-          new: { start: 1, end: 4, text: `# Notes\nShort line.\n${longLine}\n` },
+          old: { start: 1, end: 3, text: '# Notes\nOld short line.\n' },
+          new: { start: 1, end: 4, text: `# Notes\nNew short line.\n${longLine}\n` },
         },
       })
       const host = document.createElement('div')
@@ -236,13 +260,23 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     })
 
     const card = page.locator('#fit-nonphp-host article')
-    // Bounded at the full split width — NOT a content-based max()/clamp()
+    // Bounded at the narrow (60%) width — NOT a content-based max()/clamp()
     // formula (unlike the PHP case above).
-    await expect(card).toHaveClass(/w-\[70rem\]/)
+    await expect(card).toHaveClass(/w-\[42rem\]/)
+    await expect(card).toHaveClass(/2xl:w-\[49\.2rem\]/)
+    await expect(card).not.toHaveClass(/w-\[70rem\]/)
     await expect(card).not.toHaveClass(/max\(/)
     await expect(card).not.toHaveClass(/clamp\(/)
     const width = await card.evaluate((el) => el.getBoundingClientRect().width)
-    expect(width).toBeLessThanOrEqual(1120 + 1)
+    expect(width).toBeLessThanOrEqual(672 + 1)
+
+    // Only the single new pane renders — old code is gone entirely.
+    const panes = card.locator('code.language-php')
+    await expect(panes).toHaveCount(1)
+    await expect(card.locator('[data-pane="old"]')).toHaveCount(0)
+    await expect(card.locator('[data-pane="new"]')).toHaveCount(1)
+    await expect(panes.first()).not.toContainText('Old short line')
+    await expect(panes.first()).toContainText('New short line')
 
     // The long line's row wraps (whitespace-pre-wrap) instead of overflowing
     // horizontally — no hidden content behind an invisible scroll.
@@ -253,26 +287,15 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     }))
     expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1)
 
-    // The two sides of the aligned long-line row stay the same height (row
-    // alignment survives the wrap): find the tallest row-pair (the wrapped
-    // long line — its exact index isn't asserted, since trailing-newline
-    // alignment could shift it) and check its two cells (old/new, excluding
-    // the thin divider) share that same height, proving the shorter/filler
-    // side really did stretch to match instead of drifting out of alignment.
-    const heights = await card.evaluate((el) =>
-      Array.from(el.querySelectorAll('[data-row-pair]')).map((pair) =>
-        Array.from(pair.children)
-          .filter((c) => !c.classList.contains('w-px'))
-          .map((c) => c.getBoundingClientRect().height),
-      ),
-    )
-    const tallest = heights.reduce((a, b) => (Math.max(...b) > Math.max(...a) ? b : a))
-    expect(tallest.length).toBe(2)
     // The wrapped row is genuinely taller than a normal single line (~20px
     // at this font/line-height) — proves it actually wrapped onto multiple
-    // visual lines instead of just being a coincidentally-equal filler pair.
-    expect(Math.max(...tallest)).toBeGreaterThan(30)
-    expect(tallest[0]).toBeCloseTo(tallest[1], 0)
+    // visual lines instead of staying on one, clipped line.
+    const rowHeights = await card.evaluate((el) =>
+      Array.from(el.querySelectorAll('[data-row]')).map(
+        (row) => row.getBoundingClientRect().height,
+      ),
+    )
+    expect(Math.max(...rowHeights)).toBeGreaterThan(30)
   })
 
   // An already one-sided (added) block has no old pane to hide, so the toggle
@@ -395,6 +418,10 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     })
     // Same single-pane fit formula as the added-block case above (based on the
     // OLD side's text here, since that's the only side a removed block has).
+    // This is the deliberate scope EXCEPTION to "'fit' hides old code": a
+    // removed block has no new side to prefer, so its old/left pane keeps
+    // showing here too — hiding it would leave nothing to review (fitOnly in
+    // Block.mjs falls back to singleSide(b) first).
     await expect(panes).toHaveCount(1)
     await expect(card).toHaveClass(/max\(42rem/)
     await expect(card).not.toHaveClass(/w-\[70rem\]/)
@@ -440,14 +467,16 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
       .toBeLessThan(splitBox.width * 0.8)
 
     await page.keyboard.press('a') // unified → fit
-    // 'fit' brings BOTH panes back side by side (unlike 'unified'), sized off the block's own
-    // (real, non-trivial) code — at least the 60% floor, but deliberately
-    // UNCAPPED upward (no more full-split-width ceiling, see fitWidthCls):
-    // this real block (CreatePaymentAction::execute) happens to carry a line
-    // wide enough that 'fit' genuinely grows past 'split' itself here, which
-    // is exactly the intended behavior (a long line must never be hidden
+    // 'fit' shows only the NEW pane (old code is hidden, unlike 'unified'
+    // which still shows it stacked), sized off that pane's own (real,
+    // non-trivial) code — at least the 60% floor, but deliberately UNCAPPED
+    // upward (no more full-split-width ceiling, see fitWidthCls): this real
+    // block (CreatePaymentAction::execute) happens to carry a line wide
+    // enough that 'fit' genuinely grows past 'split' itself here, which is
+    // exactly the intended behavior (a long line must never be hidden
     // behind an invisible horizontal scroll).
-    await expect(panes).toHaveCount(2)
+    await expect(panes).toHaveCount(1)
+    await expect(diff.locator('[data-pane="old"]')).toHaveCount(0)
     await expect
       .poll(async () => {
         const box = await card.boundingBox()

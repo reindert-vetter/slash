@@ -80,6 +80,19 @@ export function singleSide(b) {
   return null
 }
 
+// fitOnly returns which single pane the `a` toggle's THIRD ('fit') stand
+// shows: on explicit reviewer request, 'fit' never shows the old/removed
+// code of a genuinely two-sided (modified) block anymore — it always
+// collapses to just the new/right pane, exactly like an already one-sided
+// ADDED block. A one-sided REMOVED block is the deliberate exception:
+// singleSide(b) wins first, so it keeps showing its old/left pane in 'fit'
+// too — that's the only code it has, hiding it would leave nothing to
+// review. Used by both codeDiff (which pane(s) render) and fitWidthCls
+// (which side's text drives the width) so the two stay in lockstep.
+function fitOnly(b) {
+  return singleSide(b) || 'right'
+}
+
 // narrowed reports whether the `a` toggle should shrink this card to its 60%
 // width. The reviewer wants EVERY visible card — modified, added, removed, a
 // preview/look-ahead card, or any drilled column — to shrink in lockstep
@@ -187,23 +200,25 @@ function codeMaxLineChars(code) {
 // isPhpFile above for why. Every other stand keeps the existing binary
 // choice (narrow 60% vs. full split width), unchanged for every file type.
 function widthCls(b, viewMode) {
-  if (viewMode() === 'fit') return isPhpFile(b) ? fitWidthCls(b) : boundedWrapWidthCls(b)
+  if (viewMode() === 'fit') return isPhpFile(b) ? fitWidthCls(b) : boundedWrapWidthCls()
   return narrowed(viewMode) || singleSide(b)
     ? 'w-[42rem] 2xl:w-[49.2rem] '
     : 'w-[70rem] 2xl:w-[82rem] '
 }
 
 // boundedWrapWidthCls — the 'fit' width for a NON-PHP file (see isPhpFile):
-// the same bounded width 'split' already uses (narrow 60% for a one-sided
-// added/removed block, full split width for a two-sided modified block) —
-// deliberately NOT content-based. Long lines are made to fit THIS width by
-// wrapping instead (wrappedCodeDiff/pairedRowHTML, and the `wrap` flag on
-// codePane/paneHTML for a one-sided block), so nothing needs to balloon the
-// card past what's actually necessary — the direct fix for "the 3rd stand
-// must not be wider than needed" for non-code (markdown/prose/config) text,
-// where a long line reads perfectly fine wrapped, unlike a PHP statement.
-function boundedWrapWidthCls(b) {
-  return singleSide(b) ? 'w-[42rem] 2xl:w-[49.2rem] ' : 'w-[70rem] 2xl:w-[82rem] '
+// the same narrow 60% width a one-sided added/removed block already uses in
+// every other stand — deliberately NOT content-based. 'fit' only ever shows
+// ONE pane now (fitOnly, above — old is never shown next to new anymore, not
+// even for a genuinely two-sided modified block), so there's no second,
+// full-split-width branch to account for any more. Long lines are made to
+// fit THIS width by wrapping instead (the `wrap` flag on codePane/paneHTML),
+// so nothing needs to balloon the card past what's actually necessary — the
+// direct fix for "the 3rd stand must not be wider than needed" for non-code
+// (markdown/prose/config) text, where a long line reads perfectly fine
+// wrapped, unlike a PHP statement.
+function boundedWrapWidthCls() {
+  return 'w-[42rem] 2xl:w-[49.2rem] '
 }
 
 // fitWidthCls — the card width for the `a` toggle's third ('fit') stand, for
@@ -234,31 +249,34 @@ function boundedWrapWidthCls(b) {
 // statement, which loses nothing by staying on one physical line but reads
 // terribly split mid-expression), so an isolated long prose line ballooned
 // the whole card (reported: 336 characters → ~6800px). Hence the PHP-only
-// scope: a non-PHP file gets boundedWrapWidthCls + wrapping instead
-// (wrappedCodeDiff/pairedRowHTML) — see there for the full mechanism,
-// including how row alignment between the old/new panes is kept intact once
-// a line wraps to multiple visual lines.
+// scope: a non-PHP file gets boundedWrapWidthCls + wrapping instead.
 //
 // Deliberately scoped to 'fit' + PHP ONLY — 'split' and 'unified' keep their
 // existing, fixed widths and can still clip a very long line exactly as
 // before, for every file type; this was an explicit, discussed choice (not a
 // guess), see keyboard-navigation.md ("`a` — cycling the diff view").
 //
-// 'fit' does NOT restructure into 'unified''s single-column layout — a
-// genuinely two-sided (modified) block keeps showing BOTH panes side by
-// side in 'fit', so the width must account for both: it's based on
-// whichever side needs more room (Math.max(old, new)) since the two panes
-// always render at equal width, doubled for the two panes plus a fixed
-// allowance for the gutter/padding between them (the same kind of fudge
-// constant as relatedColumnWidthCls's `+ 2rem`, just doubled for the second
-// pane).
-//
-// A block that's already one-sided (added/removed, singleSide(b) !== null)
-// only ever renders ONE pane regardless of viewMode (codeDiff's `only`
-// always wins, see below) — sizing it with the two-pane formula above would
-// make the card needlessly wide for content that's only shown once. Such a
-// block therefore gets the single-pane variant instead, based on just the
-// one side that's actually visible.
+// 'fit' never shows the old pane of a genuinely two-sided (modified) block
+// anymore (fitOnly, above — a deliberate change from the earlier "both
+// panes, doubled width" formula: the reviewer explicitly asked for 'fit' to
+// hide old code, mirroring how an already one-sided added block only ever
+// showed its one pane) — so this is now ALWAYS a single-pane calculation,
+// based on whichever side fitOnly(b) actually renders: the new/right text
+// for an added or modified block, the old/left text for a removed block
+// (the one deliberate exception — a removed block has no new side to prefer,
+// so its old pane stays visible in every stand, 'fit' included).
+function fitWidthCls(b) {
+  const c = b.code
+  const oldText = c && !c.error && c.old ? c.old.text : ''
+  const newText = c && !c.error && c.new ? c.new.text : ''
+  const only = fitOnly(b)
+  const chars = codeMaxLineChars(only === 'left' ? oldText : newText)
+  return (
+    `w-[max(42rem,calc(${chars}ch_+_2rem))] ` +
+    `2xl:w-[max(49.2rem,calc(${chars}ch_+_2rem))] `
+  )
+}
+
 // VIEW_MODE_META describes the three `a`-cycle stands (state.diffViewMode,
 // see DIFF_VIEW_CYCLE in home.mjs) for the compact status indicator in the
 // block-card header: a tooltip label and a small inline SVG glyph per
@@ -279,7 +297,7 @@ const VIEW_MODE_META = [
   },
   {
     mode: 'fit',
-    label: 'Breedte volgt de code',
+    label: 'Alleen nieuwe code, breedte volgt de code',
     svg: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="2" width="10" height="12" rx="1"/><path d="M1 8h1.6M14.4 8H16" stroke-linecap="round"/></svg>',
   },
 ]
@@ -318,25 +336,6 @@ function viewModeIndicator(viewModeFn, setViewMode) {
   `
 }
 
-function fitWidthCls(b) {
-  const c = b.code
-  const oldText = c && !c.error && c.old ? c.old.text : ''
-  const newText = c && !c.error && c.new ? c.new.text : ''
-  const only = singleSide(b)
-  if (only) {
-    const chars = codeMaxLineChars(only === 'left' ? oldText : newText)
-    return (
-      `w-[max(42rem,calc(${chars}ch_+_2rem))] ` +
-      `2xl:w-[max(49.2rem,calc(${chars}ch_+_2rem))] `
-    )
-  }
-  const chars = Math.max(codeMaxLineChars(oldText), codeMaxLineChars(newText))
-  return (
-    `w-[max(42rem,calc(${chars}ch_*_2_+_4.5rem))] ` +
-    `2xl:w-[max(49.2rem,calc(${chars}ch_*_2_+_4.5rem))] `
-  )
-}
-
 /**
  * @param {object} b - one block from state.blocks (reactive).
  * @param {object} [opts] - { preview: boolean } dims the look-ahead card.
@@ -346,11 +345,12 @@ export default function Block(b, opts = {}) {
   // viewMode — a function returning the global diff-view preference: 'split'
   // (default, both panes side by side, full width), 'unified' (a genuinely
   // two-sided block collapses to ONE column, old (-) directly above new (+)
-  // — see unifiedCodeDiff below — fixed 60% width), or 'fit' (both panes
-  // again like 'split', but the card width follows the block's own code
-  // instead of a fixed width — see widthCls/fitWidthCls above). Cycled
-  // everywhere with `a` (home.mjs). A function so codeDiff's own reactive
-  // slot picks up the change, mirroring activeGroup/hintsEnabled above.
+  // — see unifiedCodeDiff below — fixed 60% width), or 'fit' (only the
+  // new/right pane, old is never shown — see fitOnly above — the card width
+  // follows that pane's own code instead of a fixed width — see
+  // widthCls/fitWidthCls above). Cycled everywhere with `a` (home.mjs). A
+  // function so codeDiff's own reactive slot picks up the change, mirroring
+  // activeGroup/hintsEnabled above.
   const viewModeFn = opts.viewMode || (() => 'split')
   // setViewMode — called with a stand ('split'/'unified'/'fit') when the reviewer
   // clicks one of the three icons in viewModeIndicator below; home.mjs jumps
@@ -656,12 +656,23 @@ function codeDiff(
   // (+)), see the branch further down. A block that's already one-sided
   // (added/removed) has nothing to restructure — `only` (from singleSide)
   // still wins here, unaffected by viewMode.
-  const effectiveOnly = only
+  //
+  // 'fit', however, DOES force a single pane here — on explicit reviewer
+  // request, the third stand never shows old code next to new anymore, even
+  // for a genuinely two-sided (modified) block (fitOnly, above): it always
+  // collapses to just the new/right pane, exactly like an already one-sided
+  // added block. `only ||` keeps the removed-block exception intact (a
+  // removed block has no new side to fall back to, so its old/left pane
+  // stays visible in every stand, 'fit' included).
+  const effectiveOnly = only || (viewMode() === 'fit' ? 'right' : null)
   // A non-PHP file in 'fit' wraps its lines within a bounded width instead of
   // growing the card to fit the longest line (widthCls/boundedWrapWidthCls
   // pick the matching width; this flag makes the row rendering itself wrap
   // instead of overflowing on a single `whitespace-pre` line) — see
-  // isPhpFile/fitWidthCls's own doc comment for the full reasoning.
+  // isPhpFile/fitWidthCls's own doc comment for the full reasoning. Since
+  // 'fit' now always forces a single pane above, this only ever reaches the
+  // single-pane codePane branches below (effectiveOnly === 'right'/'left')
+  // — there is no two-pane wrapping path left to reach.
   const wrap = viewMode() === 'fit' && !isPhpFile(b)
   // A one-sided block (added/removed) renders at the card's full width in
   // every stand — the `a` toggle's narrower 60% width (`narrowed`, see above)
@@ -713,17 +724,11 @@ function codeDiff(
   }
   // Two-sided (old + new both shown) + the unified stand: one "old above
   // new" column instead of the side-by-side default below — see
-  // unifiedCodeDiff's own doc comment.
+  // unifiedCodeDiff's own doc comment. This is also the only remaining
+  // two-pane branch left in this function: 'fit' always forces
+  // effectiveOnly above, so it never reaches this point at all.
   if (viewMode() === 'unified') {
     return unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn, approvedCallsFn)
-  }
-  // Two-sided (old + new both shown): a wrapping non-PHP block needs the
-  // paired-row structure (wrappedCodeDiff) so the two sides of the same
-  // aligned row stay the same height even once one of them wraps onto
-  // multiple visual lines — see wrappedCodeDiff/pairedRowHTML's own doc
-  // comment for why that can't just reuse two independent codePane columns.
-  if (wrap) {
-    return wrappedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn)
   }
   return html`
     <div
@@ -839,12 +844,13 @@ function syncScroll(e) {
 // rows at the same line-height, so they line up vertically without any JS.
 // `wrap` (only ever true for a non-PHP file in 'fit', see isPhpFile/codeDiff)
 // switches every row from `whitespace-pre` to `whitespace-pre-wrap
-// break-words` — safe here because this is the SINGLE-pane path (a
-// one-sided added/removed block, in any stand): there's no second pane
-// whose row height needs to stay in lockstep. A genuinely two-sided
-// (modified) block never reaches this function any more in the unified
-// stand (see unifiedCodeDiff instead); the wrapping two-sided case uses
-// wrappedCodeDiff/pairedRowHTML — see there for why.
+// break-words` — safe here because this is the SINGLE-pane path: there's no
+// second pane whose row height needs to stay in lockstep. 'fit' forces a
+// single pane for every block (fitOnly/effectiveOnly in codeDiff), so this
+// function is now the ONLY render path 'fit' ever reaches; the unified
+// stand still never reaches it (see unifiedCodeDiff instead), since that
+// stand restructures a genuinely two-sided block into its own single
+// "old above new" column.
 function codePane(
   side,
   data,
@@ -872,14 +878,13 @@ function codePane(
 }
 
 // rowCellHTML builds the <div> for ONE (row, side) — the shared building
-// block behind paneHTML (below, the existing per-pane `whitespace-pre`
-// rendering used everywhere except a wrapping non-PHP 'fit' block),
-// pairedRowHTML (wrappedCodeDiff's per-row-pair renderer) and unifiedHTML
-// (the unified stand's single "old above new" column, further below).
-// `wrap` switches `whitespace-pre` → `whitespace-pre-wrap break-words`;
-// every other computation (active tint, checkmark, comment marker, call
-// underline) is identical between all three render paths, so extracting
-// this avoids duplicating that logic.
+// block behind paneHTML (below, the single-pane renderer every stand uses
+// except the unified stand's own restructured column) and unifiedHTML (the
+// unified stand's single "old above new" column, further below). `wrap`
+// switches `whitespace-pre` → `whitespace-pre-wrap break-words`; every
+// other computation (active tint, checkmark, comment marker, call
+// underline) is identical between both render paths, so extracting this
+// avoids duplicating that logic.
 //
 // `opts.gutter` (only ever true from unifiedHTML) prepends a leading
 // "- "/"+ "/"  " marker — mirrors Footer.mjs's own inline-diff gutter — and
@@ -1031,10 +1036,7 @@ function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Se
     // evaluate the exact same (row, approval-state) inputs, so they insert this
     // extra row at the same index on both sides and stay line-for-line aligned:
     // only the side that actually shows the segments draws the dots, the other
-    // gets a blank filler row of equal height. (Not used by the wrap path's
-    // pairedRowHTML — a call segment's monospace column position is only
-    // meaningful on an unwrapped line, and `call` granularity essentially
-    // never applies to a whole-file non-PHP block anyway.)
+    // gets a blank filler row of equal height.
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
     if (partial) {
       const text = sideKey === 'left' ? r.left : r.right
@@ -1045,75 +1047,6 @@ function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Se
     }
   }
   return parts.join('')
-}
-
-// pairedRowHTML builds the innerHTML for wrappedCodeDiff's single shared
-// scroll container: one row-wrapper `<div class="flex">` per aligned row,
-// containing the old cell and new cell as flex children side by side.
-// Unlike paneHTML (two INDEPENDENT per-pane `<code>` blocks — only ever
-// correct together because nothing there wraps, so every row is exactly one
-// line tall on both sides) pairing both cells inside ONE flex row guarantees
-// they share the same rendered height even once one (or both) sides wraps
-// onto multiple visual lines: flexbox's default `align-items: stretch`
-// stretches the shorter cell to match the taller one, so aligned row index i
-// always occupies the same vertical span on both sides. This is the
-// load-bearing reason a wrapping non-PHP 'fit' block needs a different
-// container shape instead of reusing codePane twice — two independent
-// scrolling columns have no way to coordinate a per-row height once wrapping
-// makes row heights variable. `min-w-0` on each cell is required for the
-// wrap to actually take effect (the classic flexbox min-width:auto trap that
-// would otherwise let the cell overflow instead of wrapping).
-//
-// Deliberately does NOT render the call-approval segment-dots row (see
-// paneHTML) — those assume a monospace column position that's only
-// meaningful on an unwrapped line, and this path is for non-PHP files where
-// `call`-granularity navigation essentially never applies.
-function pairedRowHTML(rows, group, approved, commented) {
-  const parts = []
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i]
-    const left = rowCellHTML(r, i, 'left', group, approved, commented, true)
-    const right = rowCellHTML(r, i, 'right', group, approved, commented, true)
-    parts.push(
-      `<div class="flex items-stretch" data-row-pair="${i}">` +
-        `<div class="w-1/2 min-w-0">${left}</div>` +
-        `<div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>` +
-        `<div class="w-1/2 min-w-0">${right}</div>` +
-        `</div>`,
-    )
-  }
-  return parts.join('')
-}
-
-// wrappedCodeDiff renders the two-sided ('modified') diff for a non-PHP file
-// in 'fit' — the wrap counterpart of the default two-codePane return at the
-// bottom of codeDiff. A SINGLE scrolling container (not two independently
-// scrolling, horizontally-synced panes — see syncScroll) holding
-// pairedRowHTML's row-pairs: since text now wraps to fit the bounded card
-// width (boundedWrapWidthCls), there's no horizontal overflow left to
-// scroll — only vertical, which this single container handles on its own,
-// so the old cross-pane scroll-sync machinery isn't needed here (though
-// `data-scrollsync`/`syncScroll` are still wired up for updateHints's sake,
-// which reads `[data-scrollsync]`/`[data-changed]` off whichever container
-// it finds — harmless to keep, and one less thing to special-case).
-function wrappedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn) {
-  return html`
-    <div
-      class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
-      data-testid="code-diff"
-      data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
-    >
-      <div class="no-scrollbar min-h-0 flex-1 overflow-auto" data-scrollsync @scroll="${syncScroll}">
-        <code
-          class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
-          .innerHTML="${() =>
-            pairedRowHTML(rows, activeGroup(), approvedFn(), commentedFn())}"
-        ></code>
-      </div>
-      ${scrollHint('up')}
-      ${scrollHint('down')}
-    </div>
-  `
 }
 
 // unifiedRowHTML renders one aligned row for the unified stand (`a`'s 2nd

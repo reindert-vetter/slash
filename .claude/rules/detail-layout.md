@@ -1553,12 +1553,21 @@ comment marker — `rowCellHTML`'s `opts.emitMeta`), so a `callArrows.mjs`/
 half of a pair.
 
 **`a` cycles through a THIRD stand, `'fit'`, between `'unified'` and back
-to `'split'`** (`DIFF_VIEW_CYCLE` in `home.mjs`): both panes come back side
-by side (like `'split'` — `'fit'` never restructures into `unifiedCodeDiff`'s
-single column), but the card's width changes — **differently for a PHP file
-than for anything else** (`isPhpFile(b)` in `Block.mjs`, a plain `.php`
-extension check on `b.file`; `widthCls(b, viewMode)` routes on it for
-`'fit'` only):
+to `'split'`** (`DIFF_VIEW_CYCLE` in `home.mjs`): unlike `'unified'` (which
+still shows old code, just stacked instead of side-by-side), `'fit'` **never
+shows old code at all** — on explicit reviewer request, a genuinely
+two-sided (`modified`) block collapses to just its new/right pane, exactly
+like an already one-sided ADDED block (`fitOnly(b)` in `Block.mjs`, folded
+into `codeDiff`'s `effectiveOnly` right next to `singleSide(b)`). **The one
+deliberate exception:** a REMOVED block has no new side to prefer, so it
+keeps showing its old/left pane in `'fit'` too — that's the only code it
+has, hiding it would leave nothing to review. This keeps the three stands
+functionally distinct: `'unified'` is the only stand that still shows old
+code; `'fit'` is the only stand with a content-driven width (below).
+
+The card's width changes — **differently for a PHP file than for anything
+else** (`isPhpFile(b)` in `Block.mjs`, a plain `.php` extension check on
+`b.file`; `widthCls(b, viewMode)` routes on it for `'fit'` only):
 
 - **A `.php` file** gets a **content-based**, uncapped width instead of the
   fixed `70rem`/`82rem`: `widthCls` delegates to `fitWidthCls(b)`. Floored
@@ -1574,38 +1583,32 @@ extension check on `b.file`; `widthCls(b, viewMode)` routes on it for
   not a percentile) via a CSS `max(floor, calc(...))` — no ceiling
   `clamp(...)`. `codeGrowthChars` (the 75th-percentile, non-ballooning
   technique) stays exactly as it was and is still used by
-  `RelatedPanel.mjs`'s `relatedColumnWidthCls`. A genuinely two-sided block
-  uses the wider of its old/new side, doubled (both panes render at equal
-  width) plus a fixed gutter allowance; an already one-sided block (only one
-  pane ever renders, regardless of `viewMode`) uses the single-pane variant
-  instead, based on just that one visible side. Purely a character-count
-  calculation on the already-loaded source text — no live DOM measurement
-  (`scrollWidth`/`getBoundingClientRect`), per the existing approach.
-- **Any other file** (markdown, JSON, config, …) gets the **same bounded
-  width `'split'` already uses** instead (`boundedWrapWidthCls(b)` — narrow
-  60% for a one-sided added/removed block, full split width for a two-sided
-  modified block), and its rows **wrap** (`whitespace-pre-wrap break-words`
-  instead of `whitespace-pre`) within that width rather than growing the
-  card. The PHP-only uncapped guarantee above backfired for prose/config
-  text: an isolated long markdown bullet (336 characters, no natural break
-  point for a PHP-style width formula) grew a card to ~6800px — prose reads
-  perfectly fine wrapped, unlike a PHP statement, so there is no reason to
-  balloon the card for it. A one-sided block reuses `codePane`/`paneHTML`
-  with a `wrap` flag (no cross-pane alignment concern, only one column); a
-  two-sided block uses **`wrappedCodeDiff`/`pairedRowHTML`** instead of two
-  independent `codePane` columns — a single scrolling container holding one
-  `<div class="flex items-stretch">` row-wrapper per aligned row, with the
-  old/new cells as its two flex children. This is load-bearing: two
-  independently-scrolling panes (the normal `codePane` shape) have no way to
-  keep a row's height in sync between them once wrapping makes row heights
-  variable, but flexbox's default `align-items: stretch` on a **shared** row
-  wrapper stretches the shorter cell to match the taller one automatically,
-  so the aligned row index always occupies the same vertical span on both
-  sides — no JS measurement needed. Does not render the call-approval
-  segment-dots row (`circleRowHTML`/`partialCallApproval` in `Block.mjs`) —
-  those assume a monospace column position only meaningful on an unwrapped
-  line, and `call`-granularity navigation essentially never applies to a
-  whole-file non-PHP block anyway.
+  `RelatedPanel.mjs`'s `relatedColumnWidthCls`. Always a **single-pane**
+  calculation now, based on whichever side `fitOnly(b)` actually renders
+  (the new/right text for an added/modified block, the old/left text for a
+  removed block) — there is no more two-pane/doubled-width branch, since
+  old is never shown next to new in this stand any more. Purely a
+  character-count calculation on the already-loaded source text — no live
+  DOM measurement (`scrollWidth`/`getBoundingClientRect`), per the existing
+  approach.
+- **Any other file** (markdown, JSON, config, …) gets the **same narrow
+  60% width** a one-sided added/removed block already uses in every other
+  stand (`boundedWrapWidthCls()` — not content-based, and since `'fit'`
+  only ever renders one pane now, no longer a two-way branch either), and
+  its rows **wrap** (`whitespace-pre-wrap break-words` instead of
+  `whitespace-pre`) within that width rather than growing the card, reusing
+  the ordinary single-pane `codePane`/`paneHTML` with a `wrap` flag. The
+  PHP-only uncapped guarantee above backfired for prose/config text: an
+  isolated long markdown bullet (336 characters, no natural break point for
+  a PHP-style width formula) grew a card to ~6800px — prose reads perfectly
+  fine wrapped, unlike a PHP statement, so there is no reason to balloon the
+  card for it. Since `'fit'` no longer ever shows two panes side by side,
+  the earlier `wrappedCodeDiff`/`pairedRowHTML` (a shared
+  `<div class="flex items-stretch">` row-wrapper that kept a modified
+  block's old/new cells the same height once wrapping made row heights
+  variable — flexbox's `align-items: stretch` stretching the shorter cell
+  to match) became unreachable and was removed as dead code, rather than
+  left behind with a doc comment describing behavior that no longer exists.
 
 See `.claude/rules/keyboard-navigation.md` ("`a` — cycling the diff view")
 for the full mechanism. Test: `tests/diffview.spec.mjs`.

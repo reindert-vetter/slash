@@ -362,10 +362,11 @@ const state = reactive({
   // (onKeydown, DIFF_VIEW_CYCLE below): 'split' (default, old+new side by
   // side, full width) → 'unified' (a genuinely two-sided block collapses to
   // ONE column, old (-) directly above new (+), fixed 60% width — see
-  // Block.mjs's unifiedCodeDiff) → 'fit' (both panes again like 'split', but
-  // the card's width follows the block's own code instead of a fixed width —
-  // see Block.mjs's widthCls/fitWidthCls) → back to 'split'. Read by every
-  // visible Block()
+  // Block.mjs's unifiedCodeDiff) → 'fit' (only the new/right pane — old code
+  // is never shown, even for a two-sided block, see Block.mjs's fitOnly —
+  // and the card's width follows that pane's own code instead of a fixed
+  // width, see Block.mjs's widthCls/fitWidthCls) → back to 'split'. Read by
+  // every visible Block()
   // card (the selected/preview cards and every open drilled column) via its
   // viewMode opt — see Block.mjs's codeDiff. Ephemeral UI state, not bound to
   // the URL, like showDescription/showApproved above.
@@ -405,8 +406,10 @@ const state = reactive({
 // DIFF_VIEW_CYCLE is the fixed order `a` steps through — see state.diffViewMode
 // above. 'unified' restructures a two-sided block into one "old above new"
 // column at a fixed 60% width (Block.mjs's unifiedCodeDiff/narrowed); 'fit'
-// keeps both panes (like 'split') but sizes the card off the block's own
-// code (Block.mjs's fitWidthCls) instead of a fixed width.
+// hides the old pane entirely (Block.mjs's fitOnly, unlike 'unified' which
+// still shows old code, just stacked) and sizes the card off the one
+// remaining pane's own code (Block.mjs's fitWidthCls) instead of a fixed
+// width.
 const DIFF_VIEW_CYCLE = ['split', 'unified', 'fit']
 
 // toggleDiffView steps state.diffViewMode to the next stand in DIFF_VIEW_CYCLE
@@ -5795,7 +5798,8 @@ function onKeydown(e) {
   // selected/preview cards and every open drilled column) through
   // DIFF_VIEW_CYCLE: full side-by-side (default) → unified (a two-sided
   // block collapses to one "old above new" column), fixed 60% width →
-  // 'fit' (side-by-side again, but sized to the block's own code) → back to
+  // 'fit' (new code only — old is never shown, even for a two-sided block
+  // — sized to that pane's own code) → back to
   // split. Placed alongside f/d/s so it's guarded by the same earlier
   // menu/search/related checks above — except
   // those key on cs.focus (relatedActive()), which stays null when the composer
