@@ -45,6 +45,8 @@ import RelatedPanel, {
   resolveFocusedComment,
   focusedCommentGithubId,
   commentRowSet,
+  commentActivitySummary,
+  commentListSnapshot,
   setCommentScope,
   setRelated,
   focusedRelatedChild,
@@ -307,6 +309,12 @@ const state = reactive({
   // same off-render watch that fills approvalSummaries (a plain snapshot, so the
   // header never co-subscribes to any block's b.code).
   approvalTotal: { done: 0, total: 0 },
+  // commentActivity — per state.blocks id → { count, last: {name, avatarUrl} }
+  // for every OPEN comment thread anchored on the block itself or anywhere in
+  // its PR-block subtree (see commentScopeKeys + the decoupled watch further
+  // down). Same off-render/wholesale-reassign shape as approvalSummaries, for
+  // the same reason — the sidebar must never co-subscribe to a block's b.code.
+  commentActivity: {},
   // blockTotals — per block id → the number of changed rows a reviewer must
   // approve (the "total"), computed server-side (GET /api/blockstats). Authoritative
   // and known immediately, so done/total is right before a block's code lazily
@@ -5077,6 +5085,65 @@ watch(
     }
     state.approvalSummaries = map
     state.approvalTotal = { done, total }
+  },
+)
+
+// commentScopeKeys returns the set of "file|label" anchor keys that count as
+// "underlying code" of a sidebar row b, for the comment-activity indicator
+// (state.commentActivity, watch below) — mirrors nestedPrBlocks/
+// subtreeApproveCount's own subtree definition exactly, so "there's a comment
+// in the underlying code" means the same tree as "there's still something to
+// approve in the underlying code": the block itself plus every PR block
+// nested under it (relation children, resolved-call definitions, resolved
+// covers targets, transitively). A test_class row (see testClassRowItem) has
+// no own file:label of its own — it's a union over every one of its
+// `.methods`, each with its own subtree, deduped via a single Set shared
+// across all methods (mirrors nestedPrBlocks's own cycle guard). A synthetic
+// comment-index item (kind:'comment') has no code of its own to roll up —
+// its own thread already shows directly, so it returns null (no indicator).
+function commentScopeKeys(b) {
+  if (!b || b.kind === 'comment') return null
+  const keyOf = (x) => x.file + '|' + x.label
+  if (b.kind === 'test_class') {
+    const seen = new Set()
+    const keys = new Set()
+    for (const m of b.methods || []) {
+      keys.add(keyOf(m))
+      for (const kid of nestedPrBlocks(m, seen)) keys.add(keyOf(kid))
+    }
+    return keys
+  }
+  return new Set([keyOf(b), ...nestedPrBlocks(b).map(keyOf)])
+}
+
+// Bridge comment + code state → per-row comment-activity summaries the
+// sidebar reads (state.commentActivity → BlockList.mjs's commentActivityPill).
+// Decoupled from the render for the same reason as approvalSummaries/
+// setRelated/setCommentScope: a plain snapshot instead of each block's
+// reactive b.code, so the sidebar never becomes a co-subscriber on the
+// selected block's b.code (the "stuck on loading" race, see conventions.md).
+// The getter lists its deps INLINE: the block/relation/call structure (which
+// blocks even exist to roll up) plus commentListSnapshot() (an unconditional
+// read of cs.list, RelatedPanel.mjs) — the actual per-row rollup happens in
+// the callback via commentScopeKeys + commentActivitySummary.
+watch(
+  () => [
+    state.blocks,
+    state.allBlocks,
+    state.underlyingIds,
+    state.relations,
+    state.callResolve,
+    state.testCovers,
+    commentListSnapshot(),
+  ],
+  () => {
+    const map = {}
+    for (const b of state.blocks) {
+      const keys = commentScopeKeys(b)
+      const summary = keys ? commentActivitySummary(keys) : null
+      if (summary) map[b.id] = summary
+    }
+    state.commentActivity = map
   },
 )
 

@@ -243,6 +243,56 @@ export function commentRowSet(b) {
   return set
 }
 
+// commentListSnapshot exposes cs.list itself (unconditionally, no early
+// return) so home.mjs's decoupled commentActivity watch can list it as an
+// inline dependency in its getter — the same "call an exported getter that
+// unconditionally reads the property" pattern the recomputeLeftList watch
+// already uses on prWideComments() (see detail-layout.md). Deliberately not
+// cs.list directly (module-private) — this keeps the comments state owned by
+// this module while still letting home.mjs subscribe to its changes.
+export function commentListSnapshot() {
+  return cs.list
+}
+
+// commentActivitySummary rolls up, over a set of "file|label" keys (a block's
+// own anchor plus every PR-block in its subtree, see commentScopeKeys in
+// home.mjs), how many OPEN comment THREADS anchor somewhere in that scope and
+// who posted the most recent message across them — the sidebar's "there's
+// something to look at in the underlying code" indicator
+// (state.commentActivity → BlockList.mjs's commentActivityPill). Mirrors
+// commentRowSet's own rule exactly: only an open comment counts (kind === '',
+// i.e. block-anchored — a PR-wide comment has no file:label anchor and is
+// never in scope anyway; status !== 'resolved') — once every thread in scope
+// is resolved, the indicator disappears, same as the 💬 row marker. "Multiple
+// comments" counts distinct THREADS, not individual messages within one
+// thread's reactions — a single thread with several replies still counts as
+// one. The "last person" is the author of the newest MESSAGE across all
+// matched threads (a thread's own last reaction, or the thread's own body if
+// it has no reactions yet — reactions already arrive in chronological order,
+// same assumption as lastReplyNote), resolved through identityOf so the
+// reviewer's own reply shows their own identity instead of the generic
+// in-app placeholder. Returns null when nothing matches (keys empty, or no
+// open thread in scope) so BlockList.mjs's nested slot can render '' — never
+// an object with count 0.
+export function commentActivitySummary(keys) {
+  if (!keys || !keys.size) return null
+  let count = 0
+  let lastMsg = null
+  for (const c of cs.list) {
+    if (c.kind) continue // PR-wide comment — no file:label anchor, can't be in scope
+    if (c.status === 'resolved') continue
+    if (!keys.has(c.file + '|' + c.label)) continue
+    count++
+    const reactions = c.reactions || []
+    const msg = reactions.length
+      ? reactions[reactions.length - 1]
+      : { source: c.source || 'ui', author: c.author, avatarUrl: c.avatarUrl, createdAt: c.createdAt }
+    if (!lastMsg || (msg.createdAt || '') > (lastMsg.createdAt || '')) lastMsg = msg
+  }
+  if (!count) return null
+  return { count, last: identityOf(lastMsg.source, lastMsg.author, lastMsg.avatarUrl) }
+}
+
 // ── Keyboard focus in the right-hand panel ────────────────────────────────────
 // home.mjs owns the single keydown listener and, once the reviewer steps into
 // this panel (→ from the diff), routes the arrows here via handleRelatedKey. The

@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 970500,
+    "file": "app/Actions/CommentActivityParentAction.php",
+    "class": "CommentActivityParentAction",
+    "name": "run",
+    "category": "ACTION",
+    "line": 10,
+    "endLine": 20,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 970500,
+    "file": "app/Listeners/CommentActivityChildListener.php",
+    "class": "CommentActivityChildListener",
+    "name": "handle",
+    "category": "LISTENER",
+    "line": 5,
+    "endLine": 15,
+    "status": "modified",
+    "side": "new"
+  }
+]

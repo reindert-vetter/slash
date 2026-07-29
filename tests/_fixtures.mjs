@@ -300,6 +300,28 @@ function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/testclassgroup-blocks.json'], {
     stdio: 'ignore',
   })
+  // Comment-activity fixture (PR 970500, underlying-comment-activity.spec.mjs):
+  // a parent action linked via an event_listener relation to a child listener
+  // — exercises the sidebar's "there's an open comment somewhere in the
+  // underlying code" indicator (state.commentActivity, commentActivityPill in
+  // BlockList.mjs), which rolls up a comment anchored on the CHILD onto the
+  // PARENT row (nestedPrBlocks). Its own PR number, per the
+  // APPROVAL_RESET_PRS note above: a spec that places/resolves comments needs
+  // a PR nobody else touches, so an exact count assertion never depends on
+  // scheduling order.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/commentactivity-blocks.json',
+      '-relations',
+      'tests/fixtures/commentactivity-relations.json',
+    ],
+    { stdio: 'ignore' },
+  )
 }
 
 function canConnect(port) {

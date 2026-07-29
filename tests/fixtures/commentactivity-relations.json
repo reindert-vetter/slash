@@ -1,0 +1,8 @@
+[
+  {
+    "pr": 970500,
+    "parentId": "970500:app/Actions/CommentActivityParentAction.php:CommentActivityParentAction::run",
+    "childId": "970500:app/Listeners/CommentActivityChildListener.php:CommentActivityChildListener::handle",
+    "kind": "event_listener"
+  }
+]

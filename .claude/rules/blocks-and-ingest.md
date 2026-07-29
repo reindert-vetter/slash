@@ -112,6 +112,34 @@ left as a navigable list.
   `total` still makes the review scope of the whole call tree visible.
   Schema: `.claude/templates/schema.sql` (in sync with the `schemaDDL` constant
   in `db.go`).
+- **Comment-activity indicator per tree (sidebar only), same subtree as the
+  approval rollup above:** a sidebar row (`data-testid=block-comment-activity`,
+  `BlockList.mjs`'s `commentActivityPill`) shows the avatar of whoever posted
+  the most recent message across every currently OPEN comment thread anchored
+  on the block itself or anywhere in its subtree, plus a text "+N" badge
+  (`data-testid=block-comment-activity-count`, deliberately text, never
+  color-only — see the colorblind note in `conventions.md`) once there's more
+  than one such thread. "Subtree" is exactly the same tree as the approval
+  rollup (`[b, ...nestedPrBlocks(b)]`; a `test_class` row is the union over all
+  of its `.methods`, each with its own subtree) — "there's a comment in the
+  underlying code" is deliberately the same tree shape as "there's still
+  something to approve in the underlying code". Computed by
+  `commentScopeKeys`/a dedicated decoupled `watch` in `home.mjs` (mirrors the
+  `approvalSummaries` watch immediately above it: inline deps in the getter,
+  the actual rollup in the callback, wholesale-reassigned into
+  `state.commentActivity`, id→`{count,last}` — never a co-subscriber on any
+  block's `b.code`) that calls `commentActivitySummary` (`RelatedPanel.mjs`,
+  exported) with the block's own subtree keys. **"+N" counts distinct open
+  THREADS, never individual messages** — a thread with several replies still
+  counts once; **a resolved thread stops counting (and showing) entirely** —
+  the exact same rule `commentRowSet`'s own 💬 row marker already uses ("once
+  resolved there's nothing left to look at"). A `kind:'comment'` sidebar item
+  (a PR-wide comment, see "Comment-index items" in `detail-layout.md`) never
+  gets this indicator — it already shows its own thread directly on
+  selection, there's no separate "underlying code" to roll up. Test:
+  `tests/underlying-comment-activity.spec.mjs` (PR 970500, own PR number per
+  the `APPROVAL_RESET_PRS` note in `_fixtures.mjs` — a spec that places/
+  resolves comments needs a PR nobody else's assertions depend on).
 - **Server-side `total` (`blockstats.go` + `GET /api/blockstats`):** the number
   of approvable changed-rows per block is computed **in the backend** so it's
   known immediately — even before a block has lazily loaded its code — and
