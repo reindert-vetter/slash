@@ -875,12 +875,24 @@ left as a navigable list.
   pr=? AND file IN (...)`) instead of `replacePRBlocks`'s full per-PR swap.
   Every other file's own blocks — and thus everything hanging off their
   **stable** block-id in the separate comments/approvals/callresolve read
-  models (no FK, so untouched anyway) — is left completely alone. See the
-  "Ingest refresh" section under `pr_status` in
-  `.claude/rules/tembed-workflows.md` for the full mechanism (the heartbeat
-  cadence, the base-SHA-changed fallback to the full pipeline, and why
-  relations/callresolve deliberately keep recomputing "fully" — over the PR's
-  full current block list, not delta-scoped).
+  models (no FK, so untouched anyway) — is left completely alone.
+  **For a file the refresh DID re-scan, "untouched" is not enough**, and this is
+  the one thing not to reason about from the block-id's stability: a comment's
+  `row_start`/`row_end` and an approval's approved row indices are positions in
+  the block's **aligned-row space**, and re-scanning the file rewrites that space.
+  The rows survive the refresh, their meaning doesn't — a stale index points at
+  whatever code took its place (the 💬 marker on the wrong line; the emerald ✓
+  inherited by a line inserted above an approved one). `prStatusWorkflow`
+  therefore runs a **re-anchor pass** (`reanchorAfterRefresh` + `reanchor.go`)
+  right after every non-skipped refresh, which moves each anchor onto the rows it
+  now belongs to (matching a comment's stored code snippet; rebuilding the
+  previous row space from the pre-refresh SHAs for approvals, which store no text)
+  or degrades it honestly — unpinned to `row_start -1`, or marked `anchor_state
+  'orphan'` when the symbol itself is gone. See the "Ingest refresh" section under
+  `pr_status` in `.claude/rules/tembed-workflows.md` for the full mechanism (the
+  heartbeat cadence, the base-SHA-changed fallback to the full pipeline, the
+  re-anchor pass itself, and why relations/callresolve deliberately keep
+  recomputing "fully" — over the PR's full current block list, not delta-scoped).
 - **Running:** `go run . ingest <pr> [-db data/graph.db]` starts the `ingest`
   workflow headlessly (builds a standalone engine without server runtime — no
   poller resume, no inbox fetch, see `newTasks(..., resumeRuntime)` in

@@ -425,6 +425,96 @@ code** and keeping the thread alive. Terminology follows Temporal — a
     keep-set, `relations.Replace`/`callresolve.Prune`/`UpsertGo` can never
     prune a valid row of an unchanged file, and `UpsertGo` never touches a
     `searching`/`found` row (LLM-owned) anyway.
+  - **Comment/approval anchors are RE-ANCHORED on every refresh
+    (`reanchorAfterRefresh` Activity + `reanchor.go`), before the relations
+    rebuild.** A comment's `row_start`/`row_end` and an approval's approved row
+    indices are positions in the **aligned-row space** of a block
+    (`blockAlignedRows`, `blockstats.go`), and a refresh rewrites exactly that
+    space for the files it re-scanned. Leaving those read-models untouched (which
+    `upsertPRFileBlocks` deliberately does — see `db.go`'s own note) therefore
+    preserved the *rows* but not their *meaning*: a comment kept pointing at an
+    index that now held different code (its 💬 marker landing on the wrong line,
+    and in diff mode it only resurfaced if the cursor happened to land on a unit
+    containing the stale range), and an approval re-applied its emerald ✓ to
+    whatever took that index — so a line inserted above an approved line silently
+    inherited its approval. Neither was recoverable by hand.
+    - **A comment carries its own snapshot** of the code it was placed on
+      (`comments.Code`, built from whole aligned rows by `commentTarget` in
+      `home.mjs` — the same side choice as `rowDisplayText`), so re-anchoring is a
+      search for that snippet in the new rows, **whitespace-insensitively** (via
+      the existing `wsKey`, matching how `diffLines` itself pairs lines, so a pure
+      re-indent still finds its row). Blank/filler rows are skipped inside a
+      multi-line match.
+    - **An approval stores no text**, only indices — which is exactly why the pass
+      needs the PREVIOUS sides. `refreshIngestDelta` therefore reports
+      `PrevBaseSHA`/`PrevHeadSHA`/`ChangedFiles` on its `ingestResult` (it already
+      computed all three; reading them back from `pr_ingest` afterwards is
+      impossible — the refresh has overwritten those rows — and wouldn't be
+      replay-safe either), and `planReanchor` materializes those two revisions of
+      just the touched paths into a throwaway **shadow worktree pair**
+      (`showFileAtSHA` → `git show <sha>:<path>`, stdout only — `runGit`'s
+      `CombinedOutput` would splice stderr into the file content) so
+      `blockAlignedRows` can be reused verbatim on a historical revision. The real
+      head worktree is no help: `updateWorktree` has by then checked it out to the
+      new SHA in place.
+    - **It degrades instead of guessing.** No match, or several (a snippet like a
+      bare `}` occurs all over the block) → the comment **unpins**: `row_start`
+      back to `-1`, i.e. the pre-existing "block known, row unknown" convention, so
+      it shows anywhere within its block and claims no 💬 row. The symbol gone
+      entirely (renamed/removed/file dropped) → **`AnchorOrphan`**, keeping the old
+      rows as a record of where it was. An approved row whose text can't be found
+      unambiguously is **dropped** — the reviewer did not approve what replaced it,
+      and that needs no new state (the row is simply unapproved again).
+    - **A `'call'` anchor** addresses character offsets *within* its row
+      (`segKey`'s `"r:<min>-<max>"`, `home.mjs`), so it only survives while that
+      row is **byte-identical**; otherwise it degrades to `gran: 'line'` with no
+      segment — still the line the reviewer picked, one granularity coarser. Note
+      `dedent4` is computed over the old/new **pair**, so the shared indent can
+      change between refreshes; that too shows up as a non-identical row and thus a
+      demotion. Deliberately accepted: safe degradation, not a wrong anchor.
+    - **An anchor that still resolves to the same rows produces no update at all**
+      (`appendAnchorChange` compares against what's stored), so a repeated refresh
+      costs no Signals and no writes — the common case for a commit touching files
+      nobody has commented on.
+    - **Write path:** planning is a read (the read-models, the blocks table, the
+      worktrees, `git show`); applying goes through the sanctioned paths only — a
+      new **`"reanchor"` action on the existing `reply` Signal**
+      (`ReactionSignal.Action`, alongside `""`/`"delete"`/`"avatar"`, carrying an
+      `Anchor` payload) to each comment's own Execution → the
+      **`saveCommentAnchor`** Activity → `comments.Module.SetAnchor`, and the
+      approve tracker's **existing `set` Signal** per remapped block (no new
+      signal needed there at all). So each moved anchor lands in its own comment's
+      replayable history. `SetAnchor` also rewrites the `codeRef` segment of the
+      comment's `Path` (rebuilt via `commentPath`, not string-patched, so the two
+      can't drift) — otherwise a prefix `Search` would address rows the anchor no
+      longer sits on.
+    - **Plan and apply share ONE Activity**, mirroring `supersedeFileWarnings`
+      (which likewise lists comments and signals each of them). Returning the plan
+      and looping in the workflow body would put a variable number of Signal sends
+      in the body — replay-safe only *because* it's driven off a recorded result;
+      one Activity is simply a fixed position in the history and needs no such
+      argument. Best-effort per anchor: a comment whose Execution already completed
+      can't be signalled again, and that must not sink the rest of the pass.
+    - **The full-fallback path is covered too** (base SHA moved → `replacePRBlocks`):
+      `ChangedFiles` is then every path of the PR, not just a delta.
+    - **`comments.anchor_state`** (`''` | `'unpinned'` | `'orphan'`, light
+      `ALTER TABLE … ADD COLUMN`) carries the outcome to the frontend as
+      `anchorState`. It is deliberately separate from `Kind`: an orphan is still a
+      block-scoped review comment, and flipping its `Kind` to a PR-wide one would
+      change how its replies mirror to GitHub (`isPRWide`). See "Comment-index
+      items" in `.claude/rules/detail-layout.md` for how an orphan surfaces as its
+      own navigable "Start" row instead of being lost.
+    - **The UI cannot move an anchor**, by design: the generic reply-signal handler
+      (`tasks_api.go`) decodes only `author`/`body`/`done` and drops
+      `action`/`anchor`. That also means a Playwright spec can't drive this state
+      through the API — hence `slash seed -comments <json>` (mirror of the four
+      existing seed paths), used by `tests/comment-orphan-anchor.spec.mjs`.
+    - Tests: `reanchor_test.go` (shift, no-op, edited-code → unpinned, ambiguous →
+      unpinned, re-indent → still pinned, symbol gone → orphan, renamed file
+      matched via `oldPath()`, call-segment preserved vs. demoted, approvals
+      remapped/dropped/left-alone, the `reanchor` Signal end to end),
+      `blockstats_test.go`'s `TestRowForLineSharesRowSpaceWithApproveTotal`, and
+      `tests/comment-orphan-anchor.spec.mjs`.
 - **`pr_inbox` workflow (per repo):** a third Workflow Type that owns the PR
   inbox — it's the **only one** that reads GitHub for the overview. A
   `refresh` Signal (from the UI on load and from `pollInbox` on the
