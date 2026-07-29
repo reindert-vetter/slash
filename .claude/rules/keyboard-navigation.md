@@ -795,6 +795,15 @@ the links fall back to the bare PR URL resp. the Jira base.
   block; green + inside = keep scrolling.
   At a file boundary (no same-file neighbor), the grey step chevron stays
   hidden.
+  **The same green, in-card chevron also appears on a TRANSLATION block's
+  per-key overview** once it has more changed keys than fit in the card — the
+  reviewer's own out-of-view scroll hint, reused verbatim (not a parallel
+  mechanism, see "Translation blocks" in `.claude/rules/blocks-and-ingest.md`
+  for the `data-scrollsync`/`data-changed`/`data-change-active` wiring that
+  makes this work). Both directions are distinguished purely by the
+  chevron's own shape (pointing up vs. down), not by color — the pill
+  background is the same green either way — so this already holds for a
+  colorblind reviewer without any change.
 
 In `'diff'` mode, **`→`** steps into the **Underlying-code card**
 (`enterRelated` in `RelatedPanel.mjs`, `cs.focus === 'code'`) — either

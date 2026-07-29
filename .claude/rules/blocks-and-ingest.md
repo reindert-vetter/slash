@@ -399,6 +399,52 @@ left as a navigable list.
   whatever it was on that render (the same "outer closure vs. nested
   reactive slot" distinction as the `stepChevronSlot` pitfall in
   `conventions.md`). Test: `tests/translation-navigation.spec.mjs`.
+  **A lang file with many changed keys scrolls out of view — and back into
+  view — exactly like a tall code diff, by reusing the SAME mechanism, not a
+  parallel one.** `translationBlockView`'s outer `[data-testid=
+  translation-overview]` div is the block's actual scroll container once its
+  rows overflow the card — this was already true before this paragraph was
+  added, but only as an **unintended side effect** of the sibling-locale
+  columns' own `overflow-x-auto` (see the "sibling columns" note above): the
+  CSS overflow spec says that if one axis is anything other than `visible`
+  and the other axis IS `visible`, the visible axis is computed as `auto`
+  too — so `overflow-x-auto` alone silently made this element scroll
+  vertically as well, with nothing to ever move that scroll position (↑/↓
+  only ever advanced `state.change`/the highlight, see above — nothing
+  scrolled the newly-active row into view, and there was no hint that more
+  keys existed off-screen). That's now made **deliberate**: the div carries
+  an explicit `overflow-auto` (both axes, `min-h-0 flex-1 no-scrollbar` to
+  actually shrink within its card, mirroring `codePane`'s own scrolling div)
+  plus the existing `data-scrollsync` attribute, `data-changed="1"` on every
+  row (a changes-only list — every visible row already IS a change), and a
+  reactive `data-change-active`/`data-change-active-end` on the currently
+  active row (both on the SAME row, since a key-unit always spans exactly
+  one row — mirrors a single-row `line`/`call` code unit). Those are
+  EXACTLY the attributes `home.mjs`'s existing `scrollChangeIntoView` (every
+  ↑/↓) and `Block.mjs`'s existing `updateHints`/`scrollHint` (the green
+  in-card chevrons, see keyboard-navigation.md) already look for — neither
+  function needed a single line of TRANSLATION-specific logic.
+  `Block.mjs`'s `translationSlot` wraps `translationBlockView`'s return value
+  in the SAME shell `codeDiff`'s own single-pane branches use
+  (`data-testid="code-diff"` + a reactive `data-hints`, driven by the same
+  `hintsEnabled` opt every card already gets) plus the two, unmodified
+  `scrollHint('up')`/`scrollHint('down')` chevrons, and threads a small
+  `onScroll` callback into `translationBlockView` (an `opts.onScroll`, the
+  same shape as `opts.activeIndex`/`opts.approvedRowSet` — keeps
+  `translationDiff.mjs` decoupled from `Block.mjs`, no circular import) that
+  calls the existing, unmodified `updateHints` on manual scroll. Reusing the
+  `code-diff` testid is doubly load-bearing, both for free: `home.mjs`'s
+  `refreshHints()` (window resize) already sweeps every `[data-testid=
+  "code-diff"]` on the page, so a TRANSLATION card's hints stay correct on
+  resize without touching that function; and `menuAnchor()`'s existing
+  `[data-change-active-end]` fallback now anchors the command palette on the
+  active key row itself instead of the whole card — checked that this can't
+  misbehave on a row with several wide sibling-locale columns:
+  `menuAnchor()`/`positionMenu()` only ever read that element's `top`/
+  `bottom` (the vertical anchor), never its `left`/`width` — the palette's
+  width/left instead comes from `menuRegion()`, which for a TRANSLATION card
+  already falls back to the whole block column (no `[data-pane]` exists in
+  this render), unaffected by how many sibling columns scroll off-screen.
 - **SVG blocks (`isSvgFile`/`svgSlot`, `Block.mjs`) — REPLACES the raw text
   diff with rendered old/new `<img>` previews, the same "replace, don't add
   alongside" precedent as `translationSlot` above.** A changed `.svg` file

@@ -331,11 +331,14 @@ function siblingColumnHTML(sib, key) {
 // (optional, array of `{locale, text}` — home.mjs's `state.langSiblings`,
 // however many locale dirs the lang root actually has) appends one read-only
 // column per sibling locale to EVERY row, next to the primary old/new value
-// — see siblingColumnHTML above.
+// — see siblingColumnHTML above. `opts.onScroll` (optional) is wired onto the
+// outer scrolling div's own `@scroll` — see the data-scrollsync/data-changed
+// note on that div below and Block.mjs's translationSlot, which supplies it.
 export function translationBlockView(units, opts = {}) {
   const activeIndex = opts.activeIndex || (() => null)
   const approvedRowSet = opts.approvedRowSet || (() => new Set())
   const siblings = opts.siblings || []
+  const onScroll = opts.onScroll || (() => {})
   const rows = units.map((u, i) => {
     // active/approved are read from within THIS row's OWN nested
     // ${() => ...} bindings below (never resolved once up front, as an
@@ -394,6 +397,9 @@ export function translationBlockView(units, opts = {}) {
       class="${() => translationRowCls(activeIndex() === i)}"
       data-testid="translation-row"
       data-active="${() => (activeIndex() === i ? '1' : '0')}"
+      data-changed="1"
+      data-change-active="${() => (activeIndex() === i ? '1' : false)}"
+      data-change-active-end="${() => (activeIndex() === i ? '1' : false)}"
     >
       <div class="min-w-[14rem] flex-1 px-4 py-2.5">
         <div class="flex items-baseline justify-between gap-2">
@@ -409,12 +415,33 @@ export function translationBlockView(units, opts = {}) {
   if (rows.length === 0) {
     rows.push(html`<p class="px-4 py-3 text-sm italic text-slate-400 dark:text-zinc-500">geen sleutelwijzigingen</p>`.key('none'))
   }
-  // overflow-x-auto — with several sibling-locale columns (opts.siblings can
-  // hold more than one), the row's total width can exceed the card's own
-  // (unchanged) width; this container scrolls internally instead of the card
-  // growing, the same "shrink-0 columns inside an overflow-x-auto body"
-  // pattern RelatedPanel.mjs's nested drill-hint chips already use.
-  return html`<div data-testid="translation-overview" class="flex flex-col divide-y divide-slate-100 overflow-x-auto dark:divide-zinc-800/60">${rows}</div>`
+  // This div is the block's ACTUAL scroll container for a lang file with many
+  // changed keys — `overflow-auto` (both axes) makes that deliberate/explicit
+  // instead of relying on the CSS spec's implicit "overflow-x non-visible +
+  // overflow-y visible -> overflow-y becomes auto too" rule that used to make
+  // this element scroll vertically as an unintended SIDE EFFECT of the
+  // sibling-locale columns' own horizontal `overflow-x-auto` (found while
+  // investigating why ↑/↓ through many keys scrolled the highlight out of
+  // view with nothing to bring it back — see below). `min-h-0 flex-1` let it
+  // actually shrink within Block.mjs's wrapping `code-diff` div (mirrors
+  // codePane's own scrolling div in Block.mjs); `no-scrollbar` hides the
+  // scrollbar chrome, same as every other scrolling pane in this app.
+  //
+  // `data-scrollsync` + `data-changed` (on every row above — a changes-only
+  // list, so every visible row IS a change) + the reactive
+  // `data-change-active`/`data-change-active-end` on the active row together
+  // let this div be found by the EXISTING, unmodified `scrollChangeIntoView`/
+  // `updateHints` in home.mjs/Block.mjs — no parallel scroll-into-view or
+  // hint mechanism needed, see Block.mjs's translationSlot (which wraps this
+  // return value in the matching `data-testid="code-diff"`/`data-hints`
+  // shell + the two green scrollHint chevrons) and
+  // .claude/rules/blocks-and-ingest.md ("Translation blocks").
+  return html`<div
+    data-testid="translation-overview"
+    data-scrollsync
+    class="no-scrollbar flex min-h-0 flex-1 flex-col divide-y divide-slate-100 overflow-auto dark:divide-zinc-800/60"
+    @scroll="${(e) => onScroll(e)}"
+  >${rows}</div>`
 }
 
 // translationValueView — mode 2: the current value of one resolved key in one

@@ -546,7 +546,7 @@ export default function Block(b, opts = {}) {
 
       ${() =>
         b.category === 'TRANSLATION'
-          ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn)
+          ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled)
           : isSvgFile(b)
           ? svgSlot(b)
           : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn)}
@@ -645,7 +645,11 @@ export function translationRowUnits(b) {
 // card node and never re-applies this function's freshly-returned (but
 // merely statically interpolated) template — the same keyed-node-reuse
 // pitfall the rest of that key already guards against for b.code/foc/unfoc.
-function translationSlot(b, activeGroup, approvedFn, langSiblingsFn) {
+// `hintsEnabled` (Block()'s own opt, see above — only true for the card that
+// currently owns the diff keyboard) gates the green out-of-view scroll hints
+// below, exactly like codeDiff's own `data-hints` — see the wrapper doc
+// comment further down.
+function translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled = () => false) {
   const c = b.code
   if (c === undefined || c === null) {
     return html`<p class="px-4 py-3 text-sm text-slate-400 dark:text-zinc-500">code laden…</p>`
@@ -659,7 +663,35 @@ function translationSlot(b, activeGroup, approvedFn, langSiblingsFn) {
     return g && g.idx != null ? g.idx : null
   }
   const siblings = langSiblingsFn ? langSiblingsFn() : []
-  return translationBlockView(units, { activeIndex, approvedRowSet: approvedFn, siblings })
+  // A lang file with many changed keys scrolls out of view exactly like a
+  // tall code diff — so this wraps translationBlockView's own scrolling
+  // `[data-scrollsync]`/`[data-changed]` div (see its doc comment in
+  // translationDiff.mjs) in the SAME shell codeDiff's single-pane branches
+  // use (`data-testid="code-diff"` + `data-hints`, the two green scrollHint
+  // chevrons) instead of a parallel scroll/hint mechanism: home.mjs's
+  // existing `scrollChangeIntoView` (on every ↑/↓) and `updateHints`/
+  // `refreshHints` (on scroll/resize) then work for a TRANSLATION card for
+  // free. See .claude/rules/blocks-and-ingest.md ("Translation blocks") and
+  // .claude/rules/keyboard-navigation.md (the green in-card scroll chevron).
+  return html`
+    <div
+      class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
+      data-testid="code-diff"
+      data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
+    >
+      ${translationBlockView(units, {
+        activeIndex,
+        approvedRowSet: approvedFn,
+        siblings,
+        onScroll: (e) => {
+          const container = e.target.closest('[data-testid="code-diff"]')
+          if (container) updateHints(container)
+        },
+      })}
+      ${scrollHint('up')}
+      ${scrollHint('down')}
+    </div>
+  `
 }
 
 // svgDataUri turns raw SVG source text into a `data:image/svg+xml;base64,...`

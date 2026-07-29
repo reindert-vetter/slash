@@ -200,6 +200,15 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Translation-scroll fixture (PR 111, translation-scroll.spec.mjs): its own
+  // lang block with 20 changed keys — dedicated PR number so it can grow
+  // without disturbing PR 107's exact 3-key content assertions above.
+  // Worktree materialized in _setup.mjs (materializeTranslationScrollWorktrees).
+  execFileSync(
+    BIN,
+    ['seed', '-db', db, '-from', 'tests/fixtures/translationscroll-blocks.json'],
+    { stdio: 'ignore' },
+  )
   // Deleted-file fixture (PR 98, removed-file.spec.mjs): one block whose whole
   // file was deleted by the PR (fileDeleted: true) plus a loose removed method
   // in a file that still exists — drives the "Verwijderd bestand"/"Verwijderd"

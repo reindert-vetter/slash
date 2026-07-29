@@ -48,6 +48,7 @@ export default function globalSetup() {
   materializePreviewWidthWorktrees()
   materializeDrillLineSkipWorktrees()
   materializeTranslationWorktrees()
+  materializeTranslationScrollWorktrees()
   materializeDefaultSelWorktrees()
   materializeSvgWorktrees()
   materializeTestClassGroupWorktrees()
@@ -470,6 +471,31 @@ class CheckoutRequest
     'app/Http/Requests/CheckoutRequest.php',
     caller("\n            'x' => trans('checkout.foo'),\n            'y' => __('checkout.only_nl'),\n        "),
   )
+}
+
+// materializeTranslationScrollWorktrees writes the synthetic PR 111 fixture
+// worktree for translation-scroll.spec.mjs — its own, DEDICATED lang file
+// (resources/lang/nl/big.php) with 20 changed keys, deliberately more than
+// fit in the block column's default height, so ↑/↓ through the per-key
+// overview genuinely scrolls the highlighted row out of view. A separate PR
+// number from materializeTranslationWorktrees' PR 107 above (whose 3-key
+// fixture several OTHER specs assert exact content/counts against) —
+// changing that one to grow it would break those. Test: this file's own
+// spec proves scrollChangeIntoView (home.mjs) now actually brings the active
+// key back into view on ArrowDown/ArrowUp, reusing the SAME mechanism a tall
+// code diff already had (see .claude/rules/blocks-and-ingest.md,
+// "Translation blocks").
+function materializeTranslationScrollWorktrees() {
+  const key = (i) => `k${String(i).padStart(2, '0')}`
+  const line = (i, val) => `    '${key(i)}' => '${val}${i}',`
+  const N = 20
+  const base = Array.from({ length: N }, (_, i) => line(i, 'oud')).join('\n')
+  const head = Array.from({ length: N }, (_, i) => line(i, 'nieuw')).join('\n')
+  const nlBase = `<?php\n\nreturn [\n${base}\n];\n`
+  const nlHead = `<?php\n\nreturn [\n${head}\n];\n`
+  const write = worktreeWriter(111)
+  write('base', 'resources/lang/nl/big.php', nlBase)
+  write('head', 'resources/lang/nl/big.php', nlHead)
 }
 
 // materializeTreeWorktrees writes the (gitignored, normally real-git-derived)
