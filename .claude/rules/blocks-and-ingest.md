@@ -325,6 +325,35 @@ left as a navigable list.
   whatever it was on that render (the same "outer closure vs. nested
   reactive slot" distinction as the `stepChevronSlot`/`companionCard`
   pitfalls in `conventions.md`). Test: `tests/translation-navigation.spec.mjs`.
+- **SVG blocks (`isSvgFile`/`svgSlot`, `Block.mjs`) — REPLACES the raw text
+  diff with rendered old/new `<img>` previews, the same "replace, don't add
+  alongside" precedent as `translationSlot` above.** A changed `.svg` file
+  has no PHP function to scan, so it's a whole-file `OTHER` block (the same
+  `ScanBlocks` whole-file fallback the TRANSLATION category also relies on).
+  Old + new always render side by side; a one-sided (`added`/`removed`)
+  block shows only the side it has (`singleSide(b)`, the same pane choice
+  `codeDiff` itself uses). Deliberately **unaffected by the `a`
+  split/unified/fit toggle** — that toggle exists to control how much CODE
+  TEXT is visible/how wide a line is, and this preview has no such
+  text-width concern, so `viewMode` is never read here; the card's own
+  width is untouched too (an `.svg` file is not a PHP file, so it already
+  gets the existing non-PHP width treatment, `boundedWrapWidthCls`, in
+  every stand). **Security — never render the SVG source via `.innerHTML`
+  (no inline `<svg>` in the DOM):** the content comes from the PR itself, so
+  it's untrusted and could carry a `<script>`, an `onload=`/`onerror=`
+  handler, or a `<foreignObject>`. `svgDataUri` instead turns the raw text
+  into a `data:image/svg+xml;base64,...` URI for a plain `<img>` — a
+  browser disables script execution/event handlers for an SVG rendered as
+  an image, so a hostile SVG can't do anything beyond rendering its shapes.
+  Returns `''` (→ a muted "geen preview" placeholder) for empty content or
+  anything that doesn't even look like an SVG document (no `<svg` tag).
+  **No raw-text fallback:** there is deliberately no toggle back to the
+  plain text diff for a changed `.svg` file (the source stays reachable via
+  `GET /api/code`/"Open on GitHub", just not surfaced in this card) — a
+  dedicated toggle would need new ephemeral (or URL) state for a narrow
+  case, out of scope for this change. Test: `tests/svg-preview.spec.mjs`
+  (fixture PR 109, `svg-blocks.json` + `materializeSvgWorktrees` — including
+  a hostile `<script>`/`onload=` payload that never fires).
 - **Hiding approved blocks (`BlockList.mjs`):** fully approved **top-level**
   blocks (the pill `done === total`, subtree) are hidden by default from the
   "Start" list; a button at the bottom (`data-testid=toggle-approved`, "Show N

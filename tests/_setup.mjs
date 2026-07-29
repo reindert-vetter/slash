@@ -49,6 +49,7 @@ export default function globalSetup() {
   materializeDrillLineSkipWorktrees()
   materializeTranslationWorktrees()
   materializeDefaultSelWorktrees()
+  materializeSvgWorktrees()
 }
 
 // materializeMainWorktrees writes the base/head worktrees for the suite's MAIN
@@ -778,4 +779,29 @@ class TreeChildAction2
   write('head', 'app/Actions/TreeParentAction2.php', parent(2))
   write('base', 'app/Actions/TreeChildAction2.php', child(1, 2))
   write('head', 'app/Actions/TreeChildAction2.php', child(10, 20))
+}
+
+// materializeSvgWorktrees writes the synthetic PR 109 fixture worktrees for
+// svg-preview.spec.mjs: a changed `.svg` file (whole-file OTHER block, no PHP
+// function to scan — see ScanBlocks' wholeFileBlock fallback in
+// phpscan.go) with a genuinely different old/new circle color, driving
+// Block.mjs's svgSlot rendered old/new <img> preview. A second `.svg` file
+// carries a hostile payload (`<script>`/`onload=`) in BOTH its old and new
+// content, to prove the preview never executes it (see svgDataUri's own doc
+// comment on why an <img>-rendered data URI is safe for untrusted SVG).
+function materializeSvgWorktrees() {
+  const icon = (color) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <circle cx="12" cy="12" r="10" fill="${color}"/>
+</svg>
+`
+  const evil = `<svg xmlns="http://www.w3.org/2000/svg" onload="window.__svgXssFired=true">
+  <script>window.__svgXssFired=true</script>
+  <rect width="10" height="10" fill="#00f"/>
+</svg>
+`
+  const write = worktreeWriter(109)
+  write('base', 'public/icons/logo.svg', icon('#f00'))
+  write('head', 'public/icons/logo.svg', icon('#0f0'))
+  write('base', 'public/icons/evil.svg', evil)
+  write('head', 'public/icons/evil.svg', evil)
 }

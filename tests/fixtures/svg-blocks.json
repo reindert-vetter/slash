@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 109,
+    "file": "public/icons/logo.svg",
+    "class": "",
+    "name": "logo.svg",
+    "category": "OTHER",
+    "line": 1,
+    "endLine": 3,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 109,
+    "file": "public/icons/evil.svg",
+    "class": "",
+    "name": "evil.svg",
+    "category": "OTHER",
+    "line": 1,
+    "endLine": 3,
+    "status": "modified",
+    "side": "new"
+  }
+]

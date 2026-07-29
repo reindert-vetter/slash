@@ -283,6 +283,14 @@ function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/defaultsel-blocks.json'], {
     stdio: 'ignore',
   })
+  // SVG-preview fixture (PR 109, svg-preview.spec.mjs): a changed `.svg` file
+  // (worktrees materialized in _setup.mjs, materializeSvgWorktrees) — drives
+  // Block.mjs's svgSlot, which renders old/new <img> previews INSTEAD of the
+  // raw text diff for an .svg block. A second block carries a hostile
+  // `<script>`/`onload=` payload to prove that preview never executes it.
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/svg-blocks.json'], {
+    stdio: 'ignore',
+  })
 }
 
 function canConnect(port) {

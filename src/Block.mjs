@@ -120,6 +120,16 @@ function isPhpFile(b) {
   return !!(b.file && b.file.toLowerCase().endsWith('.php'))
 }
 
+// isSvgFile — a plain `.svg` extension check on b.file, mirrors isPhpFile.
+// Used only to route the card's whole render (see the b.category/isSvgFile
+// dispatch in Block() below) to svgSlot instead of codeDiff — it does NOT
+// change widthCls: an .svg file is by construction never a PHP file, so it
+// already gets the existing non-PHP width treatment (boundedWrapWidthCls in
+// the 'fit' stand) for free, same as markdown/JSON.
+function isSvgFile(b) {
+  return !!(b.file && b.file.toLowerCase().endsWith('.svg'))
+}
+
 // nonCommentLineLengths — the shared scan behind codeGrowthChars and
 // codeMaxLineChars below: the character lengths of every non-blank,
 // non-comment line in `code` (a leading PHPDoc block, `//`/`#` line
@@ -507,7 +517,12 @@ export default function Block(b, opts = {}) {
         >
       </p>
 
-      ${() => (b.category === 'TRANSLATION' ? translationSlot(b, activeGroup, approvedFn) : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn))}
+      ${() =>
+        b.category === 'TRANSLATION'
+          ? translationSlot(b, activeGroup, approvedFn)
+          : isSvgFile(b)
+          ? svgSlot(b)
+          : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn)}
     </article>
   `
 }
@@ -606,6 +621,97 @@ function translationSlot(b, activeGroup, approvedFn) {
     return g && g.idx != null ? g.idx : null
   }
   return translationBlockView(units, { activeIndex, approvedRowSet: approvedFn })
+}
+
+// svgDataUri turns raw SVG source text into a `data:image/svg+xml;base64,...`
+// URI for a plain <img> — this is the ONLY way this file ever hands SVG
+// content to the DOM. Never render PR-supplied SVG source via .innerHTML (or
+// any other route that ends up as an inline <svg> element): the content
+// comes from the PR itself, so it's untrusted — an inline <svg> in the page
+// can carry a <script>, an `onload=`/`onerror=` handler, or a
+// <foreignObject> embedding arbitrary HTML, all of which WOULD execute. A
+// browser treats an <img>-rendered SVG purely as an image: per spec, script
+// execution (and event handlers) are disabled in that "image context", so a
+// hostile SVG can't do anything here beyond rendering (or failing to
+// render) its shapes. `unescape(encodeURIComponent(...))` is the standard
+// trick to let `btoa` (Latin1-only) encode arbitrary UTF-8 text. Returns ''
+// for empty text or anything that doesn't even look like an SVG document (no
+// `<svg` tag) — a defensive guard so a garbled/wrong-extension file never
+// produces a data URI at all; svgSlot then shows "geen preview" instead.
+function svgDataUri(text) {
+  if (!text || !/<svg[\s>]/i.test(text)) return ''
+  try {
+    return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(text)))
+  } catch {
+    return ''
+  }
+}
+
+// svgPreviewPane renders one labelled image slot (old or new) of the SVG
+// preview — a plain <img>, never an inline <svg> (see svgDataUri above).
+// `uri` empty (missing side, or content that didn't look like SVG) shows a
+// muted "geen preview" placeholder instead of a broken <img>.
+function svgPreviewPane(labelText, uri) {
+  return html`
+    <div class="flex min-w-0 flex-1 flex-col gap-1.5" data-testid="${'svg-pane-' + labelText}">
+      <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500"
+        >${labelText}</span
+      >
+      <div
+        class="flex min-h-[6rem] items-center justify-center rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 p-3"
+      >
+        ${() =>
+          uri
+            ? html`<img src="${uri}" alt="${labelText + ' svg'}" class="max-h-64 max-w-full" />`
+            : html`<span class="text-xs italic text-slate-400 dark:text-zinc-500">geen preview</span>`}
+      </div>
+    </div>
+  `
+}
+
+// svgSlot renders a changed .svg block as RENDERED old/new preview images
+// instead of a raw text diff — it REPLACES codeDiff entirely for an .svg
+// file (see the b.category/isSvgFile dispatch in Block() above), the same
+// "replace, don't add alongside" precedent as translationSlot right above.
+// Both images always render side by side; a one-sided (added/removed) block
+// shows only the side it actually has (singleSide(b), the same pane choice
+// codeDiff itself uses). Deliberately UNAFFECTED by the `a`
+// split/unified/fit toggle: unlike the text diff, this preview has no
+// text-WIDTH concern for 'fit' to solve (that stand exists to control how
+// much code TEXT is shown/how wide a line is) — there's nothing here that
+// needs to change across the three stands, so viewMode is not even read.
+// The card's own width (widthCls) is untouched too: an .svg file is not a
+// PHP file, so it already gets the existing non-PHP width treatment
+// (boundedWrapWidthCls) in every stand, exactly like markdown/JSON — two
+// small preview images simply share whatever width that already gives.
+//
+// No raw-text fallback: there is deliberately no toggle back to the plain
+// text diff for a changed .svg file. The raw SVG source stays reachable via
+// GET /api/code (not surfaced in this UI) and "Open on GitHub", but adding a
+// dedicated in-app toggle would need new ephemeral state (and, per the
+// convention in urlState.mjs, its own URL field to survive a refresh) for a
+// narrow case — out of scope for this change; flagged here rather than
+// silently built or silently dropped.
+function svgSlot(b) {
+  const c = b.code
+  if (c === undefined || c === null) {
+    return html`<p class="px-4 py-3 text-sm text-slate-400 dark:text-zinc-500">code laden…</p>`
+  }
+  if (c.error) {
+    return html`<p class="px-4 py-3 text-sm text-rose-500 dark:text-rose-400">${c.error}</p>`
+  }
+  const only = singleSide(b)
+  const oldUri = only === 'right' ? '' : svgDataUri(c.old && c.old.text)
+  const newUri = only === 'left' ? '' : svgDataUri(c.new && c.new.text)
+  return html`
+    <div
+      class="flex flex-wrap gap-4 border-t border-slate-100 dark:border-zinc-800/60 px-4 py-4"
+      data-testid="svg-diff"
+    >
+      ${() => (only === 'right' ? '' : svgPreviewPane('oud', oldUri))}
+      ${() => (only === 'left' ? '' : svgPreviewPane('nieuw', newUri))}
+    </div>
+  `
 }
 
 // codeDiff renders the old/new source side by side under the block info. Old on
