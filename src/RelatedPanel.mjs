@@ -1708,8 +1708,12 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
   // related-code fixes that: `overflow-auto`/`.markdown-body pre
   // {overflow-x:auto}` only actually clip+scroll once their ancestor has a
   // real (non-auto) width to clip against. See detail-layout.md.
+  // The `p-3` mirrors the p-3 on related-code's own inner scroll wrapper
+  // (below) — without it, a comment card sat flush against the shared
+  // column's left edge while a related-code card sat inset by that same
+  // 12px, so the two stacked sections' cards didn't line up vertically.
   return html`
-    <div class="${() => 'flex shrink-0 flex-col gap-2 ' + relatedColumnWidthCls()}" data-testid="inline-comments">
+    <div class="${() => 'flex shrink-0 flex-col gap-2 p-3 ' + relatedColumnWidthCls()}" data-testid="inline-comments">
       ${newCommentComposer(state, commentTarget, openCompose)}
       ${() => visibleComments().map((c, i) => commentCard(c, i, openCommentMenu).key('comment:' + c.id))}
     </div>
