@@ -545,16 +545,30 @@ separate component and deliberately keeps its existing `max-h-[70vh]` —
 that's already close to the full viewport height, so it wasn't the cause of
 the reported clipping.
 
-**Always-present "+ Nieuwe comment" trigger, deliberately OUTSIDE the
-arrow-key traversal.** `newCommentComposer` renders a "+ Nieuwe comment"
-button (`data-testid=new-comment`) for every unit, whether or not it already
-has comments — a click (or `Enter`/the command palette's "Comment op deze
-regel", `startComment`) opens the composer in that same slot
-(`data-testid=comment-composer` while open). This is a deliberate,
-self-contained design choice (not itself part of Reindert's ↓/→ rule): the
-rule governs how the reviewer walks through *existing* conversations with
-the keyboard, not where the "start a new one" affordance lives, so keeping
-it always clickable/`Enter`-reachable doesn't contradict it.
+**Always-present "+ Nieuwe comment" trigger — click/`Enter`-reachable
+regardless, and ALSO a genuine `↑`/`↓` stop.** `newCommentComposer` renders a
+"+ Nieuwe comment" button (`data-testid=new-comment`) for every unit,
+whether or not it already has comments — a click (or `Enter`/the command
+palette's "Comment op deze regel", `startComment`) opens the composer in
+that same slot (`data-testid=comment-composer` while open); this part is a
+deliberate, self-contained design choice (not itself part of Reindert's ↓/→
+rule): the rule governs how the reviewer walks through *existing*
+conversations with the keyboard, not where the "start a new one" affordance
+lives, so keeping it always clickable/`Enter`-reachable doesn't contradict
+it. **On top of that**, the trigger row is now also reachable purely by
+stepping `↑` through the stack (`cs.focus === 'trigger'` — SELECTED, not yet
+composing, distinct from `'new'` once the composer is actually open — see
+`enterTrigger`/`isTriggerFocused` in `RelatedPanel.mjs`): `↑` on the first
+comment conversation, or (when the unit has none) `↑` from Onderliggende
+code's **first** child, lands there instead of exiting straight to the diff.
+`Enter` on it opens the composer, exactly like a click (`isTriggerFocused()`
+in `home.mjs`'s `onKeydown`); from there `↓` re-enters whatever sits below
+it (the first comment, or straight to Onderliggende code — the same gate
+`enterCommentsHead`/`hasVisibleComments()` already use for `→` from the
+diff); `↑`/`←` on the trigger exit to the diff (there's nothing above it).
+**`→` still skips straight past the trigger** into the first comment/
+Onderliggende code, unchanged — only `↑` (stepping *up* through the stack)
+newly stops there.
 
 **Keyboard: the comment block is only a REACHABLE stop in the ←/→ chain when
 the unit actually has a comment; ↓ falls through instead of clamping.**
@@ -572,18 +586,27 @@ every entry into it:
   through to the Onderliggende-code card (`enterRelated()`) instead of
   clamping (`advanceFromComment()`, internal to `RelatedPanel.mjs`) — "↓
   loopt door naar het onderliggende-code-blok".
-- `↑` on the **first** conversation exits to the diff; on the Onderliggende
-  code card's **first** child, `↑` (and `←`, both mirror the same rule)
-  steps back onto the **last** conversation of the unit if one exists
-  (`enterCommentsTail()`, highlight-only — no reply-field focus-steal,
-  mirroring every other "step back into a populated stop" landing), else
-  straight to the diff.
+- `↑` on the **first** conversation now lands on the "+ Nieuwe comment"
+  trigger (`enterTrigger()`, see above) instead of exiting straight to the
+  diff — the still-open, EMPTY composer (`cs.focus==='new'`) keeps exiting
+  on `↑` unchanged, since it already occupies the trigger's own slot (there
+  is nothing further up from there either). On the Onderliggende code card's
+  **first** child, `↑` steps back onto the **last** conversation of the unit
+  if one exists (`enterCommentsTail()`, highlight-only — no reply-field
+  focus-steal, mirroring every other "step back into a populated stop"
+  landing), else onto the trigger (`enterTrigger()`) instead of straight to
+  the diff. **`←` on the Onderliggende code card keeps its own,
+  unconditional behaviour, at ANY child position, not just the first** —
+  `hasVisibleComments() ? enterCommentsTail() : exitRelated()` — so one `←`
+  still always fully leaves the panel when there are no comments, regardless
+  of where the cursor sits; only `↑` gained the extra trigger stop.
 - `→` on a conversation steps into its thread (`enterThread`, unchanged);
   `↑`/`↓` there walk the message history (`threadPos`, unchanged); `←` from
   the thread steps back **one stop** to the conversation level (not all the
   way to the diff) — mirrors the drill-hint chip path's "← climbs one level"
   precedent in this same file; `←` from the conversation level exits to the
-  diff.
+  diff (unchanged — only `↑` on the conversation level gained the trigger
+  stop, not `←`).
 
 **A DEFERRED focus must never land after the keyboard has moved on
 (`focusToken`/`releaseFocus` in `RelatedPanel.mjs`).** Every landing helper

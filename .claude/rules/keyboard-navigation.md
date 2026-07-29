@@ -83,11 +83,20 @@ required relative to the older per-mechanism behavior:
 - **Stop 3/4 ↔ 5 ↔ 6:** `→` from the diff lands on stop 5 (the first inline
   comment conversation) only when the selected unit has one
   (`hasVisibleComments()`/`enterCommentsHead()`), else it skips straight to
-  stop 6 (`enterRelated()`). `↓` on the last comment conversation (or the
-  bottom of an open thread) falls through to stop 6 instead of clamping;
-  `↑`/`←` on stop 6's first child step back onto stop 5's last conversation
-  if one exists, else to the diff. See "Inline comment blocks" in
-  `.claude/rules/detail-layout.md` for the full mechanism.
+  stop 6 (`enterRelated()`) — unchanged, `→` still never stops on the
+  "+ Nieuwe comment" trigger itself. `↓` on the last comment conversation (or
+  the bottom of an open thread) falls through to stop 6 instead of clamping;
+  `↑` on stop 6's first child steps back onto stop 5's last conversation if
+  one exists. **`↑` on stop 5's first conversation (or, with no comments,
+  stop 6's first child) now lands on the "+ Nieuwe comment" trigger itself**
+  (`cs.focus==='trigger'`, selected but not yet composing — `enterTrigger`/
+  `isTriggerFocused` in `RelatedPanel.mjs`) instead of exiting straight to
+  the diff: `Enter` there opens the composer (same as a click), `↓`
+  re-enters whatever sits below it, and `↑`/`←` exit to the diff. `←` on
+  stop 6 keeps its own, unconditional "leave the panel" behaviour at any
+  child position (not just the first) — only `↑` gained the trigger stop.
+  See "Inline comment blocks" in `.claude/rules/detail-layout.md` for the
+  full mechanism.
 - `state.showDescription` deliberately lives **outside** the URL (like
   `menu`/`ui.task` elsewhere) — ephemeral cursor state, not a navigation
   position a refresh needs to restore.
