@@ -16,7 +16,7 @@ import { translationValueView } from './translationDiff.mjs'
 import { statusInfo, categoryClass } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
-import { avatarHTML } from './avatar.mjs'
+import { avatarHTML, ensureMe, identityOf } from './avatar.mjs'
 
 // ── Real comments (task_code_comment workflow) ────────────────────────────────
 // This section IS wired to the API. Placing a comment starts a Workflow
@@ -909,6 +909,12 @@ export async function resolveFocusedComment() {
 async function loadComments(pr) {
   if (pr == null) return
   try {
+    // Who "I" am must be known BEFORE the first comment render: identityOf
+    // substitutes the local reviewer on own (ui-placed) messages, and `me` is a
+    // plain non-reactive object, so a later arrival would not repaint an
+    // already-keyed comment node (see avatar.mjs/ensureMe). Cached after the
+    // first call, so this is a no-op on every subsequent poll.
+    await ensureMe()
     const res = await fetch('/api/comments?pr=' + encodeURIComponent(pr))
     if (res.ok) {
       cs.list = await res.json()
@@ -1292,6 +1298,10 @@ function aiWarningBadge(c) {
 // only the opening one.
 function reactionBubble(r, i, total, isActive) {
   const mine = r.source === 'ui'
+  // An own message carries no GitHub author/avatar — identityOf fills in the
+  // local reviewer for it (see avatar.mjs), so the name and the picture always
+  // describe the same person.
+  const who = identityOf(r.source, r.author, r.avatarUrl)
   const active = isActive || (() => cs.focus === 'thread' && cs.threadPos === total - i)
   // Own (ui-placed) messages get a soft indigo tint instead of the earlier
   // saturated bg-indigo-500 + white text — markdown bodies (links, inline
@@ -1304,11 +1314,11 @@ function reactionBubble(r, i, total, isActive) {
   return html`
     <div class="${() => 'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}">
       <div class="flex items-center gap-2 py-0.5" data-testid="reaction-author-line">
-        ${avatarHTML(r.author, r.avatarUrl, 'h-5 w-5')}
+        ${avatarHTML(who.name, who.avatarUrl, 'h-5 w-5')}
         <span
           class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400"
           data-testid="reaction-author"
-          >${r.author || 'onbekend'}</span
+          >${who.name || 'onbekend'}</span
         >
       </div>
       <div
@@ -1347,6 +1357,7 @@ function reactionBubble(r, i, total, isActive) {
 // compactConversation — a collapsed one-line summary of a conversation that
 // isn't currently focused/expanded.
 function compactConversation(c, i) {
+  const who = identityOf(c.source, c.author, c.avatarUrl)
   return html`
     <button
       class="${() =>
@@ -1365,9 +1376,9 @@ function compactConversation(c, i) {
       ${() => commentStatusMark(c, 'mt-1')}
       <span class="flex min-w-0 flex-col gap-0.5">
         <span class="flex min-w-0 items-center gap-2" data-testid="comment-author-line">
-          ${avatarHTML(c.author, c.avatarUrl, 'h-5 w-5')}
+          ${avatarHTML(who.name, who.avatarUrl, 'h-5 w-5')}
           <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400" data-testid="comment-author"
-            >${c.author || 'onbekend'}</span
+            >${who.name || 'onbekend'}</span
           >
           ${() => sourceBadge(c)}
           ${() => aiWarningBadge(c)}
@@ -2583,6 +2594,8 @@ export async function resolvePrCommentItem(c) {
 // a synthetic comment item (b.kind === 'comment') — see detail-layout.md.
 export function commentDetailCard(c, opts) {
   if (!c) return html`<div class="hidden" data-testid="comment-detail-card"></div>`
+  // Own (ui-placed) comment → the local reviewer's name/avatar, see identityOf.
+  const detailWho = identityOf(c.source, c.author, c.avatarUrl)
   // preview dims the card exactly like Block()'s own preview prop does for the
   // look-ahead card — passed by home.mjs's DetailPanel when this isn't the
   // selected/focused sidebar item (i !== sel || not focusedHere).
@@ -2608,11 +2621,11 @@ export function commentDetailCard(c, opts) {
         data-testid="comment-detail-author-line"
       >
         ${() => commentStatusMark(c)}
-        ${avatarHTML(c.author, c.avatarUrl, 'h-6 w-6')}
+        ${avatarHTML(detailWho.name, detailWho.avatarUrl, 'h-6 w-6')}
         <span
           class="mr-0.5 whitespace-nowrap text-sm font-semibold leading-6 text-slate-800 dark:text-zinc-200"
           data-testid="comment-detail-author"
-          >${c.author || 'onbekend'}</span
+          >${detailWho.name || 'onbekend'}</span
         >
         <span
           class="rounded-full bg-slate-200/70 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-600 dark:text-zinc-400"

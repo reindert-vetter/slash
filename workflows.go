@@ -498,6 +498,14 @@ type TaskManager struct {
 	taskInboxRun string               // task_inbox Run ID (one per repo/process)
 	importPolled map[string]bool      // imported-thread Run ID → poller running (dedup, operational)
 	avatarTried  map[string]bool      // imported-thread Run ID → avatar backfill attempted (dedup, operational)
+
+	// meCache caches the authenticated GitHub user (see CurrentUser) for the
+	// process lifetime: it never changes while the server runs, so one `gh api
+	// user` is enough. Purely in-memory/operational, like lastBeat — it touches
+	// no read-model or workflow history.
+	meMu    sync.Mutex
+	meUser  github.Collaborator
+	meKnown bool
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
@@ -1738,6 +1746,37 @@ type ReviewerCandidate struct {
 	Login     string `json:"login"`
 	AvatarURL string `json:"avatarUrl"`
 	Count     int    `json:"count"`
+}
+
+// CurrentUser returns the authenticated GitHub user (the local reviewer), cached
+// for the process lifetime. Read-only — the github CurrentUser call mutates
+// nothing, so this is safe outside a workflow, and the cache is in-memory only
+// (the same operational carve-out as the heartbeat map / the avatar image cache,
+// see .claude/rules/workflows-write-boundary.md).
+//
+// It exists because a comment/reply written in this app carries no GitHub author
+// of its own — the UI posts a placeholder ("reviewer") and has no avatar — so
+// GET /api/me lets the frontend show who "I" am on those own messages.
+func (m *TaskManager) CurrentUser(ctx context.Context) (github.Collaborator, error) {
+	m.meMu.Lock()
+	if m.meKnown {
+		defer m.meMu.Unlock()
+		return m.meUser, nil
+	}
+	m.meMu.Unlock()
+
+	if m.gh == nil {
+		return github.Collaborator{}, fmt.Errorf("current user: no github client")
+	}
+	u, err := m.gh.CurrentUser(ctx)
+	if err != nil {
+		return github.Collaborator{}, err
+	}
+
+	m.meMu.Lock()
+	m.meUser, m.meKnown = u, true
+	m.meMu.Unlock()
+	return u, nil
 }
 
 // Reviewers returns the repo's collaborators as reviewer candidates, sorted

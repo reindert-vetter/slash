@@ -488,8 +488,31 @@
   already renders an `<img>` as soon as a URL is present. Deliberately the
   **real API field**, never a URL derived from the login — a GitHub App bot
   (`kilo-code-bot[bot]`) has no `github.com/<login>.png` shorthand, and those
-  bot avatars are exactly the ones a reviewer wants to recognize. A comment
-  placed in this app (or by the AI risk check) has no URL and keeps the
+  bot avatars are exactly the ones a reviewer wants to recognize.
+  **An own (`source: 'ui'`) comment/reply gets the local reviewer's identity at
+  DISPLAY time (`identityOf`/`ensureMe`, `avatar.mjs`), not from the read-model.**
+  The UI posts a placeholder author (`'reviewer'`) and no avatar for a message
+  written in this app, so such a bubble used to sit as a bare `RE` initials
+  circle next to real profile pictures. `avatar.mjs` therefore fetches the
+  authenticated user once from the read-only **`GET /api/me`**
+  (`handleMe` → `TaskManager.CurrentUser` → `github.Client.CurrentUser`, i.e.
+  `gh api user`, cached in-memory for the process lifetime — the same
+  operational carve-out as the heartbeat map/the avatar image cache, see
+  `workflows-write-boundary.md`) and `identityOf(source, author, avatarUrl)`
+  substitutes `{name, avatarUrl}` for `source === 'ui'` only; every other
+  message renders exactly what it carries. Call sites: `reactionBubble`,
+  `compactConversation` and `commentDetailCard` (`RelatedPanel.mjs`) — always
+  for **both** the avatar and the name text, so they never name different
+  people. Deliberately display-time instead of a write-time author/avatar
+  column: it also fixes every own comment/reply **already** stored with
+  `'reviewer'`, which a write-time fix could only repair through a per-thread
+  backfill Signal. **Timing is load-bearing:** `loadComments`
+  (`RelatedPanel.mjs`) `await ensureMe()`s before pushing `cs.list`, because
+  `me` is a plain non-reactive object and arrow.js reuses a keyed comment node
+  without re-running its bindings (see the keyed-node pitfall above) — a late
+  arrival would otherwise never repaint. A failed lookup (offline,
+  `SLASH_GITHUB=off` → `{ok:false}`) leaves `me` empty, which makes
+  `identityOf` a no-op, so an own comment then keeps the
   initials circle, as does every offline/`SLASH_GITHUB=off` test run. The
   author line itself is deliberately roomy (avatar `h-5 w-5`, name
   `text-[11px]`; `h-6 w-6`/`text-sm` on the PR-comment detail card) so a

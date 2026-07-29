@@ -127,6 +127,10 @@ type Client interface {
 	MarkReadyForReview(ctx context.Context, pr int) error
 	// RequestReviewers requests the given user logins as reviewers on pr.
 	RequestReviewers(ctx context.Context, pr int, logins []string) error
+	// CurrentUser returns the authenticated GitHub user (the local reviewer):
+	// their login and profile picture. Used to show "who am I" on the comments
+	// and replies written in this app, which carry no GitHub author of their own.
+	CurrentUser(ctx context.Context) (Collaborator, error)
 }
 
 // Collaborator is one repo collaborator — a candidate reviewer.
@@ -541,6 +545,20 @@ func (m *Module) SubmitReview(ctx context.Context, pr int, event, body string) e
 // reReviewerLogin restricts a reviewer login to GitHub's allowed username
 // charset before it reaches exec.CommandContext (input-validation rule).
 var reReviewerLogin = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
+
+// CurrentUser returns the authenticated user (`gh api user`) — login + avatar.
+// See the Client interface doc for why it exists.
+func (m *Module) CurrentUser(ctx context.Context) (Collaborator, error) {
+	out, err := m.api(ctx, "GET", "user")
+	if err != nil {
+		return Collaborator{}, err
+	}
+	var u ghUser
+	if err := json.Unmarshal(out, &u); err != nil {
+		return Collaborator{}, err
+	}
+	return Collaborator{Login: u.Login, AvatarURL: u.AvatarURL}, nil
+}
 
 // ListCollaborators returns the repo's collaborators as candidate reviewers.
 func (m *Module) ListCollaborators(ctx context.Context) ([]Collaborator, error) {

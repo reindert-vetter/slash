@@ -13,6 +13,48 @@ export function initialsOf(name) {
   return n ? n.slice(0, 2).toUpperCase() : '?'
 }
 
+// me is the authenticated GitHub user (login + avatar), fetched once from the
+// read-only /api/me (see handleMe). A comment/reply written in THIS app carries
+// no GitHub author of its own — the UI posts the placeholder author "reviewer"
+// and no avatar at all — so without this every own message rendered as a bare
+// initials circle next to real profile pictures from GitHub-imported ones.
+// Deliberately a display-time substitution (identityOf below) instead of a new
+// column: it also fixes every own comment/reply ALREADY stored with "reviewer",
+// which a write-time fix could only repair through a per-thread backfill Signal.
+const me = { login: '', avatarUrl: '' }
+let mePromise = null
+
+// ensureMe fetches /api/me at most once per page. Await it before the first
+// render that uses identityOf: a late arrival can otherwise never show up,
+// because arrow.js reuses a keyed node without re-running its bindings (see
+// conventions.md) and `me` is deliberately a plain, non-reactive object.
+// Failure (offline, SLASH_GITHUB=off, {ok:false}) leaves `me` empty, which makes
+// identityOf a no-op — never an error the caller has to handle.
+export function ensureMe() {
+  if (!mePromise) {
+    mePromise = fetch('/api/me')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && data.ok && data.login) {
+          me.login = data.login
+          me.avatarUrl = data.avatarUrl || ''
+        }
+      })
+      .catch(() => {})
+  }
+  return mePromise
+}
+
+// identityOf resolves who to show for one comment/reply: the local reviewer for
+// an own (`source: 'ui'`) message once /api/me is known, otherwise exactly what
+// the message itself carries (a GitHub-imported comment, a polled GitHub reply,
+// an AI finding). Returns `{name, avatarUrl}` for avatarHTML + the author line,
+// so both always name the same person.
+export function identityOf(source, author, avatarUrl) {
+  if (source === 'ui' && me.login) return { name: me.login, avatarUrl: me.avatarUrl }
+  return { name: author, avatarUrl }
+}
+
 const FALLBACK_CLS =
   'flex shrink-0 items-center justify-center rounded-full bg-slate-200 dark:bg-zinc-700 text-[10px] font-medium uppercase text-slate-700 dark:text-zinc-200 ring-1 ring-slate-200 dark:ring-zinc-700'
 
@@ -29,10 +71,11 @@ function proxiedAvatarUrl(avatarUrl) {
 // avatarHTML renders one avatar circle for `name` (the author/login shown as
 // the title + the initials fallback), sized by `sizeCls` (default h-6 w-6 —
 // the PR-list size). Pass a falsy `avatarUrl` to always get the initials
-// circle — a comment/reply written in this app has no GitHub avatar to show,
-// whereas a github-imported comment or a polled GitHub reply does: its author's
-// `user.avatar_url` is threaded through the fetch into the comments read-model
-// (see tembed-workflows.md), which covers bot accounts too — a "[bot]" login
+// circle — a github-imported comment or a polled GitHub reply carries its
+// author's `user.avatar_url` through the fetch into the comments read-model
+// (see tembed-workflows.md); a comment/reply written in this app carries none
+// and gets the local reviewer's own avatar via identityOf above. The stored
+// avatar_url covers bot accounts too — a "[bot]" login
 // has no github.com/<login>.png shorthand, so the real field is the only
 // source. When an avatarUrl IS present the <img> falls
 // back to the same initials circle via `onerror`, so an unreachable image

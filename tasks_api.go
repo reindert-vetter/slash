@@ -530,6 +530,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// (repo collaborators), most-used-first (read-only).
 	mux.HandleFunc("/api/workflows/ready_for_review", s.handleReadyForReview)
 	mux.HandleFunc("/api/reviewers", s.handleReviewers)
+	// GET /api/me → read-only: the authenticated GitHub user (login + avatar),
+	// so the UI can show who "I" am on the comments/replies written in this app
+	// (they carry no GitHub author of their own). See handleMe.
+	mux.HandleFunc("/api/me", s.handleMe)
 	// POST /api/workflows/code_warning {pr} → start an agentic Opus review of
 	// the whole PR for risks (the "/" menu's "Diepgravend onderzoek"). One
 	// Execution per manual run.
@@ -1369,6 +1373,26 @@ func (s *server) handleReviewers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reviewers": cands})
+}
+
+// handleMe returns the authenticated GitHub user — the local reviewer's login
+// and profile picture — so the UI can render own (ui-sourced) comments and
+// replies with a real name/avatar instead of the "reviewer" placeholder those
+// are stored with. Read-only, cached for the process lifetime (see
+// TaskManager.CurrentUser). A failing lookup (no gh, offline, SLASH_GITHUB=off)
+// answers {ok:false} with a 200: the frontend then simply keeps whatever the
+// comment itself carries, so this is never a hard error.
+func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	me, err := s.tasks.manager.CurrentUser(r.Context())
+	if err != nil || me.Login == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "login": me.Login, "avatarUrl": me.AvatarURL})
 }
 
 // handleCodeWarning starts a code_warning Workflow Execution (POST) — an

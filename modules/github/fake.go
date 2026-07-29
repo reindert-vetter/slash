@@ -31,9 +31,11 @@ type Fake struct {
 	lastReviewBody  string
 	reviewSubmitted int
 
-	collaborators []Collaborator
-	readyPRs      []int      // PRs flipped to ready-for-review, in order
-	requestedRevs [][]string // reviewer login sets requested, in order
+	collaborators    []Collaborator
+	currentUser      Collaborator // returned by CurrentUser (SetCurrentUser seeds it)
+	currentUserCalls int
+	readyPRs         []int      // PRs flipped to ready-for-review, in order
+	requestedRevs    [][]string // reviewer login sets requested, in order
 }
 
 func (f *Fake) PostReviewComment(_ context.Context, pr int, file string, startLine, endLine int, side, body string) (int64, error) {
@@ -296,6 +298,29 @@ func (f *Fake) ListCollaborators(_ context.Context) ([]Collaborator, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]Collaborator(nil), f.collaborators...), nil
+}
+
+func (f *Fake) CurrentUser(_ context.Context) (Collaborator, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.currentUserCalls++
+	return f.currentUser, nil
+}
+
+// SetCurrentUser seeds the authenticated user returned by CurrentUser (empty
+// by default, mirroring an offline run where nothing is known).
+func (f *Fake) SetCurrentUser(u Collaborator) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.currentUser = u
+}
+
+// CurrentUserCalls is how often CurrentUser was called — lets a test prove the
+// caller caches the lookup instead of shelling out per request.
+func (f *Fake) CurrentUserCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.currentUserCalls
 }
 
 // SetCollaborators seeds the collaborator list returned by ListCollaborators.
