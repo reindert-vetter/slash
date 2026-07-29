@@ -3198,11 +3198,11 @@ function animateScrollTop(container, to) {
 // `animate` glides only when the reviewer is actually navigating inside a block
 // (diff mode). When merely selecting blocks in the list, the block isn't active
 // yet, so we jump straight to its first change with no animation.
-function scrollChangeIntoView(animate = true, tries = 10) {
+function scrollChangeIntoView(animate = true, tries = 10, settle = true) {
   requestAnimationFrame(() => {
     const el = document.querySelector('[data-change-active]')
     if (!el) {
-      if (tries > 0) scrollChangeIntoView(animate, tries - 1)
+      if (tries > 0) scrollChangeIntoView(animate, tries - 1, settle)
       return
     }
     const container = el.closest('[data-scrollsync]')
@@ -3232,6 +3232,21 @@ function scrollChangeIntoView(animate = true, tries = 10) {
     // hints explicitly (a real scroll would have gone through syncScroll).
     refreshHints()
   })
+  // A non-animated recentre runs right after a focus-level change (closing a
+  // drilled column via ←, expanding a collapsed rail) — exactly the moments
+  // that can also flip <main>'s own bottom offset (the footer's reserved
+  // height, see detail-layout.md's footerVisible/footerExplain reservation)
+  // through its existing 200ms CSS transition (`duration-200`). The rAF above
+  // can measure the scrollsync container's clientHeight mid-transition (e.g.
+  // right as the footer/its AI explanation collapses or grows), landing the
+  // centred row a few px outside the pane once the transition actually
+  // settles — the same width-transition race `resettleCallArrows` already
+  // guards against for the `a` toggle (see conventions.md). One extra,
+  // harmless re-run once the transition has settled fixes it; `settle` guards
+  // against recursing forever (this follow-up call passes settle=false).
+  if (!animate && settle) {
+    setTimeout(() => scrollChangeIntoView(false, tries, false), 220)
+  }
 }
 
 // enterDiff steps from the sidebar into the selected block's diff, selecting its
