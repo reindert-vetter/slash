@@ -191,7 +191,10 @@ function recomputeView() {
   // below), never the block-scoped index. Exclude them here so they don't
   // leak into this list (esp. list-mode / null-scope, which would otherwise
   // show the whole list).
-  const anchored = cs.list.filter((c) => !c.kind)
+  // An orphan is excluded for the same reason: its block is gone, so it gets a
+  // "Start" row of its own (prWideComments below) and must not ALSO leak into the
+  // null-scope list-mode view, which would show it twice.
+  const anchored = cs.list.filter((c) => !c.kind && !isOrphanComment(c))
   const s = cs.scope
   if (!s) {
     cs.view = anchored
@@ -234,6 +237,11 @@ function selComment() {
 export function commentRowSet(b) {
   const set = new Set()
   if (!b) return set
+  // No bounds check against the block's row count is needed here: paneHTML walks
+  // the block's own rows and asks `commented.has(i)`, so an index past the end is
+  // structurally unrenderable. An index that is stale but still IN range would
+  // mark the wrong row, and no bound can catch that — that is what the re-anchor
+  // pass on every ingest refresh is for (reanchor.go).
   for (const c of cs.list) {
     if (c.file !== b.file || c.label !== b.label) continue
     if (c.status === 'resolved') continue
@@ -1626,6 +1634,28 @@ function aiWarningBadge(c) {
   >`
 }
 
+// staleAnchorBadge marks a comment whose code the PR has since moved out from
+// under it — either the whole symbol is gone ('orphan') or only the exact rows
+// could no longer be found ('unpinned'), see reanchor.go. Without it such a
+// comment reads as an ordinary one that just happens to sit somewhere odd, and
+// the reviewer has no way to tell that the thread's stored snippet is a record of
+// code that no longer exists in this shape.
+//
+// The word carries the meaning, not the colour (the amber tint is decoration on
+// top) — same rule as the ✓ status mark, see conventions.md.
+function staleAnchorBadge(c) {
+  if (!c) return ''
+  const label = c.anchorState === 'orphan' ? 'verouderd — code verdwenen' : ''
+  const unpinned = c.anchorState === 'unpinned' ? 'verouderd — regel gewijzigd' : ''
+  const text = label || unpinned
+  if (!text) return ''
+  return html`<span
+    class="inline-flex shrink-0 items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
+    data-testid="comment-stale-anchor"
+    >${text}</span
+  >`
+}
+
 // reactionBubble — one message in the thread. `i`/`total` let it light up when it
 // is the one the reviewer walked up to (cs.threadPos counts from the bottom).
 // `isActive`, when given, overrides that default check — used by
@@ -1730,6 +1760,7 @@ function compactConversation(c, i) {
           >
           ${() => sourceBadge(c)}
           ${() => aiWarningBadge(c)}
+          ${() => staleAnchorBadge(c)}
         </span>
         <span
           class="line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200"
@@ -1774,7 +1805,7 @@ function expandedConversation(c, openCommentMenu) {
       data-expanded="true"
     >
       <div class="flex items-center justify-end gap-2" data-testid="comment-meta-line">
-        ${() => sourceBadge(c)} ${() => aiWarningBadge(c)}
+        ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
         ${() => commentStatusMark(c)}
       </div>
       ${() => (c && c.code ? composeTargetHint({ gran: c.gran, label: c.label, code: c.code }) : '')}
@@ -2803,8 +2834,22 @@ function isKiloReview(body) {
 // index item (recomputeLeftList/commentBlockItem); cs.list is kept loaded/
 // polled by syncComments (called unconditionally by InlineComments below),
 // so this needs no separate fetch of its own.
+// An ORPHANED comment joins them: a new commit renamed or removed the symbol it
+// was anchored to (anchorState 'orphan', set by the re-anchor pass — see
+// reanchor.go), so recomputeView can never scope it to a block again and it would
+// otherwise be visible nowhere at all. Giving it a "Start" row of its own is the
+// same treatment a review comment that never mapped to a block already gets, and
+// deliberately does NOT touch its `kind` — that would flip isPRWide on the backend
+// and start mirroring its replies to GitHub as issue comments.
 export function prWideComments() {
-  return cs.list.filter((c) => c.kind && !isKiloReview(c.body))
+  return cs.list.filter((c) => (c.kind || c.anchorState === 'orphan') && !isKiloReview(c.body))
+}
+
+// isOrphanComment reports whether a comment lost the code it was anchored to. Used
+// for the "verouderd" pill and by the index-item label, so an orphan is
+// recognisable as such rather than looking like an ordinary PR-wide comment.
+export function isOrphanComment(c) {
+  return !!c && c.anchorState === 'orphan'
 }
 
 // COMMENT_KIND_LABEL names the kind badge on a comment-index item: issue/
@@ -3081,9 +3126,9 @@ export function commentDetailCard(c, opts) {
         <span
           class="rounded-full bg-slate-200/70 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-600 dark:text-zinc-400"
           data-testid="comment-detail-kind"
-          >${COMMENT_KIND_LABEL[c.kind] || c.kind}</span
+          >${COMMENT_KIND_LABEL[c.kind] || c.kind || 'Regelcomment'}</span
         >
-        ${() => sourceBadge(c)} ${() => aiWarningBadge(c)}
+        ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
         <span class="ml-auto shrink-0 text-[10px] text-slate-500 dark:text-zinc-500">${relTime(c.createdAt)}</span>
       </div>
       <div

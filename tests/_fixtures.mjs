@@ -111,6 +111,26 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Orphaned-anchor fixture (PR 970600, comment-orphan-anchor.spec.mjs): one
+  // block plus two seeded comments — one whose label no longer matches any block
+  // and is marked anchorState 'orphan' by the re-anchor pass (see reanchor.go),
+  // one still pinned to the surviving block. Seeded rather than driven through
+  // the API because anchor_state is deliberately unreachable from the UI (the
+  // reply signal handler drops action/anchor), and on its own 97xxxx PR number so
+  // its comment count can't disturb another spec's assertions.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/orphan-blocks.json',
+      '-comments',
+      'tests/fixtures/orphan-comments.json',
+    ],
+    { stdio: 'ignore' },
+  )
   // Empty-code fixture (PR 96, related-empty-code.spec.mjs): a resolved call
   // whose embedded childCode is empty — must render "geen code gevonden"
   // immediately, never "code laden…".

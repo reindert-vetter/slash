@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"slash/modules/callresolve"
+	"slash/modules/comments"
 	"slash/modules/explanations"
 	"slash/modules/relations"
 	"slash/modules/testcovers"
@@ -240,10 +241,11 @@ func runSeedCmd(args []string) {
 	crFrom := fs.String("callresolve", "", "optional path to a call-resolutions JSON fixture (seeded into callresolve.db)")
 	tcFrom := fs.String("testcovers", "", "optional path to a test-coverage JSON fixture (seeded into testcovers.db)")
 	exFrom := fs.String("explanations", "", "optional path to an AI-explanations JSON fixture (seeded into explanations.db)")
+	cmFrom := fs.String("comments", "", "optional path to a comments JSON fixture (seeded into comments.db)")
 	_ = fs.Parse(args)
 
 	if *from == "" {
-		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>] [-callresolve <callresolve.json>] [-testcovers <testcovers.json>] [-explanations <explanations.json>]")
+		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>] [-callresolve <callresolve.json>] [-testcovers <testcovers.json>] [-explanations <explanations.json>] [-comments <comments.json>]")
 	}
 	raw, err := os.ReadFile(*from)
 	if err != nil {
@@ -284,6 +286,51 @@ func runSeedCmd(args []string) {
 	if *exFrom != "" {
 		seedExplanations(dbPath(*dbFlag), *exFrom)
 	}
+	if *cmFrom != "" {
+		seedComments(dbPath(*dbFlag), *cmFrom)
+	}
+}
+
+// seedComments loads comments from a JSON fixture into the comments.db next to
+// the blocks DB. Mirror of the four seed paths above, added for the states a test
+// cannot reach through the API on purpose: anchor_state in particular is only ever
+// written by the re-anchor pass's own Activity (reanchor.go), never by a UI signal
+// — the reply handler deliberately drops action/anchor, so the UI can't move an
+// anchor even if it tried.
+//
+// It writes straight to the module rather than starting a task_code_comment
+// Execution, so a seeded comment has no workflow run behind it: fine for
+// rendering/navigation tests, but replying to one won't work (there is nothing to
+// signal), exactly like the other seed paths.
+func seedComments(dbPath, from string) {
+	raw, err := os.ReadFile(from)
+	if err != nil {
+		log.Fatalf("read comments fixture: %v", err)
+	}
+	var entries []comments.Comment
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		log.Fatalf("parse comments fixture: %v", err)
+	}
+	cs, err := comments.Open(filepath.Join(filepath.Dir(dbPath), "comments.db"))
+	if err != nil {
+		log.Fatalf("open comments db: %v", err)
+	}
+	defer cs.Close()
+
+	ctx := context.Background()
+	for _, c := range entries {
+		if err := cs.Save(ctx, c); err != nil {
+			log.Fatalf("seed comment %s: %v", c.ID, err)
+		}
+		// Save takes the anchor from the fixture but not anchor_state (it is not a
+		// placement-time property — see SetAnchor's own comment), so apply it here.
+		if c.AnchorState != "" {
+			if err := cs.SetAnchor(ctx, c.ID, c.RowStart, c.RowEnd, c.Seg, c.Gran, c.AnchorState, c.Path); err != nil {
+				log.Fatalf("seed comment anchor %s: %v", c.ID, err)
+			}
+		}
+	}
+	log.Printf("seeded %d comments from %s", len(entries), from)
 }
 
 // seedExplanations loads AI unit-explanations from a JSON fixture into the
