@@ -54,6 +54,11 @@ const cs = reactive({
   sel: 0,
   composing: false,
   busy: false,
+  // replySent is a brief, ephemeral confirmation flash (mirrors overview.mjs'
+  // ui.copiedFor) for the send-status icon next to the reaction "Stuur"
+  // button — see sendStatusIcon/sendReaction below. Reset by a timer, never
+  // bound to the URL.
+  replySent: false,
   focus: null,
   threadPos: 0,
   scope: null,
@@ -1123,24 +1128,91 @@ export function composeTargetHint(target) {
   `
 }
 
-async function sendReaction(done) {
+// sendReaction posts the typed text as a plain (non-resolving) reply — the
+// resolve variant (done:true) that used to live here moved to the
+// comment-scoped command menu's "Resolve comment" item (resolveFocusedComment
+// below), which always sends the fixed "/resolve" sentinel instead of
+// whatever happened to be typed — see the reaction-status button in
+// expandedConversation for how resolve stays mouse-reachable now.
+async function sendReaction() {
   const c = selComment()
   if (!c) return
   const el = document.querySelector('[data-testid=reaction-compose]')
-  const body = (el && el.value.trim()) || (done ? '/resolve' : '')
+  const body = el && el.value.trim()
   if (!body) return
   cs.busy = true
   try {
     await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ author: 'reviewer', body, done }),
+      body: JSON.stringify({ author: 'reviewer', body, done: false }),
     })
     if (el) el.value = ''
+    // Brief confirmation flash — unlike the composer/PR-wide reply (which
+    // both close their input on success, see placeComment/sendPrCommentReply),
+    // this thread stays open, so this is the one send-status spot where
+    // "sent" is actually visible.
+    cs.replySent = true
+    setTimeout(() => {
+      cs.replySent = false
+    }, 1200)
     await loadComments(cs.pr)
   } finally {
     cs.busy = false
   }
+}
+
+// sendStatusIcon renders the send-status glyph next to a "Stuur"/"Plaats…"
+// control: a draft (pencil) icon by default — covering both "nothing typed
+// yet" and "typed but not sent" (a reviewer who can't tell colors apart gets
+// nothing from a color change alone, and only 3 states were asked for, so
+// this deliberately doesn't add a 4th "has text" state) —, a spinning arc
+// while the send is in flight, and a circle-check right after it completes.
+// Distinguished from commentStatusMark's bare "✓" glyph below on purpose:
+// that mark is a PERSISTENT property of the comment thread itself (resolved
+// or not, shown in the meta line); this one is a TRANSIENT status of the
+// send control itself (an SVG circle-check, never a bare "✓" character) — a
+// reviewer must never read "sent my reply" as "this thread got resolved".
+// Shape-only, never color-only, since a reviewer using this app is
+// colorblind.
+function sendStatusIcon(status) {
+  if (status === 'sending') {
+    return html`<svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="h-3.5 w-3.5 shrink-0 animate-spin"
+      aria-hidden="true"
+      data-testid="send-status-sending"
+    ><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`
+  }
+  if (status === 'sent') {
+    return html`<svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="h-3.5 w-3.5 shrink-0"
+      aria-hidden="true"
+      data-testid="send-status-sent"
+    ><circle cx="12" cy="12" r="9"></circle><path d="m9 12 2 2 4-4"></path></svg>`
+  }
+  return html`<svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    class="h-3.5 w-3.5 shrink-0"
+    aria-hidden="true"
+    data-testid="send-status-draft"
+  ><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>`
 }
 
 // commentStatusMark is the colorblind-friendly replacement for the former
@@ -1324,7 +1396,16 @@ function compactConversation(c, i) {
 // removed, read as an almost-empty bar). The status mark itself is
 // commentStatusMark (see its own doc comment) — a colorblind-friendly ✓
 // instead of the former color-only dot.
-function expandedConversation(c) {
+// expandedConversation's second button (reaction-status, right of "Stuur")
+// used to double as the resolve action (sendReaction(true)). It's now a pure
+// send-status indicator (draft/sending/sent, see sendStatusIcon) — resolving
+// moved to the comment-scoped command menu's "Resolve comment" item, reached
+// by keyboard via Enter (see keyboard-navigation.md) and, so it stays
+// reachable with the mouse too, by a click on this very button
+// (openCommentMenu, threaded down from home.mjs's openMenu('comment') via
+// InlineComments/commentCard — mirrors how the composer's own "Plaats…"
+// button already opens its command menu via a click callback).
+function expandedConversation(c, openCommentMenu) {
   return html`
     <div
       class="${() =>
@@ -1346,21 +1427,29 @@ function expandedConversation(c) {
           class="flex-1 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
           placeholder="Reageer op deze comment…"
           data-testid="reaction-compose"
-          @keydown="${(e) => e.key === 'Enter' && sendReaction(false)}"
+          @keydown="${(e) => e.key === 'Enter' && sendReaction()}"
         />
         <button
-          class="shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600"
+          class="${() => 'shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' + (cs.busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-indigo-600')}"
           data-testid="reaction-send"
-          @click="${() => sendReaction(false)}"
+          disabled="${() => cs.busy}"
+          @click="${() => sendReaction()}"
         >
           Stuur
         </button>
         <button
-          class="shrink-0 rounded-lg border border-emerald-300 dark:border-emerald-500/40 px-2.5 py-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/15"
-          data-testid="reaction-resolve"
-          @click="${() => sendReaction(true)}"
+          type="button"
+          class="${() =>
+            'flex shrink-0 items-center justify-center rounded-lg border px-2.5 py-1.5 transition ' +
+            (cs.busy
+              ? 'cursor-not-allowed border-slate-200 text-slate-400 dark:border-zinc-800 dark:text-zinc-600'
+              : 'border-slate-200 text-slate-500 hover:border-indigo-300 hover:text-indigo-600 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-indigo-500/40 dark:hover:text-indigo-400')}"
+          data-testid="reaction-status"
+          title="Reactiestatus · resolve/verwijder via het menu"
+          disabled="${() => cs.busy}"
+          @click="${() => openCommentMenu && openCommentMenu()}"
         >
-          ✓
+          ${() => sendStatusIcon(cs.busy ? 'sending' : cs.replySent ? 'sent' : 'draft')}
         </button>
       </div>
     </div>
@@ -1373,10 +1462,13 @@ function expandedConversation(c) {
 // pitfall in conventions.md): the outer `.key('comment:'+c.id)` (see
 // InlineComments below) never needs to change on this toggle, the nested
 // `${() => …}` binding handles it.
-function commentCard(c, i) {
+function commentCard(c, i, openCommentMenu) {
   return html`
     <div class="contents">
-      ${() => (selI() === i && (cs.focus === 'comment' || cs.focus === 'thread') ? expandedConversation(c) : compactConversation(c, i))}
+      ${() =>
+        selI() === i && (cs.focus === 'comment' || cs.focus === 'thread')
+          ? expandedConversation(c, openCommentMenu)
+          : compactConversation(c, i)}
     </div>
   `
 }
@@ -1416,11 +1508,13 @@ function newCommentComposer(state, commentTarget, openCompose) {
                   </button>
                   <button
                     class="${() =>
-                      'rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
-                      (cs.busy ? 'opacity-50' : 'hover:bg-indigo-600')}"
+                      'flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
+                      (cs.busy ? 'cursor-not-allowed opacity-50' : 'hover:bg-indigo-600')}"
                     data-testid="comment-send"
+                    disabled="${() => cs.busy}"
                     @click="${() => (openCompose ? openCompose() : placeComment(state, commentTarget))}"
                   >
+                    ${() => sendStatusIcon(cs.busy ? 'sending' : 'draft')}
                     Plaats…
                   </button>
                 </div>
@@ -1447,7 +1541,7 @@ function newCommentComposer(state, commentTarget, openCompose) {
 // Onderliggende-code card (see DetailPanel): the always-present "+ Nieuwe
 // comment" trigger, then one card per conversation already scoped to the
 // selected unit (visibleComments()).
-export function InlineComments(state, commentTarget, openCompose) {
+export function InlineComments(state, commentTarget, openCompose, openCommentMenu) {
   syncComments(state ? state.pr : null)
   // Reuses relatedColumnWidthCls() (below) — the SAME clamp width as the
   // related-code section it stacks above in the shared flex-col column (see
@@ -1468,7 +1562,7 @@ export function InlineComments(state, commentTarget, openCompose) {
   return html`
     <div class="${() => 'flex shrink-0 flex-col gap-2 ' + relatedColumnWidthCls()}" data-testid="inline-comments">
       ${newCommentComposer(state, commentTarget, openCompose)}
-      ${() => visibleComments().map((c, i) => commentCard(c, i).key('comment:' + c.id))}
+      ${() => visibleComments().map((c, i) => commentCard(c, i, openCommentMenu).key('comment:' + c.id))}
     </div>
   `
 }
@@ -2415,7 +2509,12 @@ export function handlePrCommentThreadKey(c, key) {
 // item) is actually chosen — see keyboard-navigation.md ("Comment-index
 // items"). Not bound to the URL — ephemeral UI state, like cs.composing/menu
 // elsewhere.
-const picm = reactive({ replying: false, commentId: null })
+// sending is this reply's own in-flight flag (mirrors cs.busy for the
+// block-scoped thread) — drives the send-status icon on comment-detail-send.
+// No "sent" flash here: sendPrCommentReply calls cancelPrCommentReply() on
+// success, which hides this whole reply row immediately (see below), so a
+// transient "sent" state would never actually be visible.
+const picm = reactive({ replying: false, commentId: null, sending: false })
 
 // startPrCommentReply reveals the reply textarea in commentDetailCard (only
 // for the comment `c` it was opened for, see picm's own comment) and focuses
@@ -2445,13 +2544,18 @@ export function cancelPrCommentReply() {
 export async function sendPrCommentReply(c, body) {
   const text = (body || '').trim()
   if (!c || !c.runId || !text) return
-  await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ author: 'reviewer', body: text, done: false }),
-  })
-  cancelPrCommentReply()
-  await loadComments(cs.pr)
+  picm.sending = true
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ author: 'reviewer', body: text, done: false }),
+    })
+    cancelPrCommentReply()
+    await loadComments(cs.pr)
+  } finally {
+    picm.sending = false
+  }
 }
 
 // resolvePrCommentItem resolves the comment-index item's thread — the same
@@ -2550,13 +2654,20 @@ export function commentDetailCard(c, opts) {
                 ></textarea>
                 <button
                   type="button"
-                  class="shrink-0 rounded-lg bg-indigo-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-indigo-600"
+                  class="${() =>
+                    'flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-500 px-2.5 py-1.5 text-xs font-medium text-white ' +
+                    (picm.sending ? 'cursor-not-allowed opacity-60' : 'hover:bg-indigo-600')}"
                   data-testid="comment-detail-send"
+                  disabled="${() => picm.sending}"
                   @click="${(e) => {
-                    const el = e.target.parentElement.querySelector('[data-testid=comment-detail-reply]')
+                    // currentTarget, not target — a click can land on the icon
+                    // inside this button, whose parentElement is the button
+                    // itself, not the row that also holds the textarea.
+                    const el = e.currentTarget.parentElement.querySelector('[data-testid=comment-detail-reply]')
                     if (el) sendPrCommentReply(c, el.value)
                   }}"
                 >
+                  ${() => sendStatusIcon(picm.sending ? 'sending' : 'draft')}
                   Stuur
                 </button>
               </div>`

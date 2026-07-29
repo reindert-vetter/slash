@@ -6968,9 +6968,20 @@ function DetailPanel(state) {
       }}
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="comments-and-related">
         ${() =>
-          InlineComments(state, commentTarget, () => {
-            if (composeHasText()) openMenu('compose')
-          }).key('inline-comments')}
+          InlineComments(
+            state,
+            commentTarget,
+            () => {
+              if (composeHasText()) openMenu('compose')
+            },
+            // Mouse-only equivalent of Enter on a focused, empty-reply comment
+            // (isCommentFocused() && commentReplyEmpty(), see onKeydown below) —
+            // a click on the reply-status button next to "Stuur" opens the same
+            // comment-scoped menu (Resolve/Delete/Open op GitHub) without
+            // requiring the reply field to be empty first, since a direct click
+            // is an unambiguous request, unlike the overloaded Enter key.
+            () => openMenu('comment'),
+          ).key('inline-comments')}
         ${() =>
           RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
       </div>

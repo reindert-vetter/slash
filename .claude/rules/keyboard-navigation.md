@@ -508,7 +508,12 @@ reply field's own `keydown` wins (`sendReaction`), so "type a quick reply,
 press Enter" keeps working (`isCommentFocused`/`commentReplyEmpty` in
 `RelatedPanel.mjs` guard that distinction). `menuAnchor`/`menuRegion` anchor
 in that mode on the focused comment row resp. the thread pane instead of the
-diff. Choosing **"Delete comment"** calls `deleteFocusedComment`: that sends
+diff. **This same menu also opens with a plain mouse click**, on the
+send-status button next to "Stuur" (`reaction-status`, see the send-status
+indicator paragraph in `.claude/rules/detail-layout.md`) — that button used
+to resolve the comment directly on click; now it only shows the send status
+of the reply field (draft/sending/sent) and opens this menu instead, so
+resolve/delete stay reachable without touching the keyboard at all. Choosing **"Delete comment"** calls `deleteFocusedComment`: that sends
 a **`delete` Signal** (`POST /api/workflows/{runID}/signals/delete`) to the
 comment's Workflow Execution — the only write path, within the write
 boundary. The workflow (`taskCodeCommentWorkflow` in `workflows.go`) first

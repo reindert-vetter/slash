@@ -438,6 +438,47 @@ both states (only `expandedConversation`'s indigo focus border is
 untouched, since expanded always implies the keyboard is on it — that's an
 orthogonal focus cue, not a status color).
 
+**The button right of "Stuur" (`reaction-status`) is a send-status
+indicator, not a resolve shortcut anymore.** It used to fire
+`sendReaction(true)` directly (posting whatever was typed, or the `/resolve`
+sentinel if empty) — that's gone; resolving a comment now happens
+exclusively through the comment-scoped command menu's "Resolve comment"
+item (`resolveFocusedComment`, always the fixed `/resolve` sentinel — see
+"Enter — command palette" in `.claude/rules/keyboard-navigation.md`), which
+this button now simply **opens** on click (`openCommentMenu`, threaded down
+from `home.mjs`'s `openMenu('comment')` through
+`InlineComments`/`commentCard`/`expandedConversation` — mirrors how the
+composer's own "Plaats…" button already opens `openMenu('compose')` via a
+click callback). This keeps resolve/delete reachable **with the mouse
+alone**: before this change there was no click path into `openMenu('comment')`
+at all (only the keydown `Enter` branch in `home.mjs`), so removing the old
+direct-resolve click without adding this would have silently broken
+mouse-only resolving. Deliberately more permissive than the keyboard
+gate (`commentReplyEmpty()`) — a direct click always opens the menu,
+regardless of whether the reply field is empty, since a click is an
+unambiguous request (unlike `Enter`, which is overloaded with "send the
+typed reply" when the field isn't empty).
+`sendStatusIcon(status)` (`RelatedPanel.mjs`) renders the icon: a pencil
+("draft" — covers both "nothing typed" and "typed but not sent", since only
+3 states were asked for) by default, a spinning arc while `cs.busy`, and an
+SVG circle-check briefly (`cs.replySent`, a 1.2s flash, mirrors
+`overview.mjs`'s `ui.copiedFor`) right after a reply is actually sent — the
+one send-status spot where "sent" is visible at all, since the composer and
+the PR-wide reply (below) both close their input on success. **Deliberately
+a different shape/rendering technique than `commentStatusMark`'s bare "✓"
+text glyph above** — that glyph is a *persistent* property of the thread
+itself (resolved or not); this is a *transient* status of the send control.
+Both buttons (`reaction-send`/`reaction-status`) are also disabled while
+`cs.busy` — via a plain, undecorated `disabled="${() => cs.busy}"` attribute
+binding, **not** `?disabled=`/`.disabled=`, neither of which actually works
+in this vendored arrow.js for a boolean attribute like `disabled` (see the
+pitfall in `.claude/rules/conventions.md`). The composer's "Plaats…" button
+and the PR-wide reply's "Stuur" button (`commentDetailCard`) get the same
+icon treatment (draft/sending only — never "sent", for the reason above) as
+long as that stays small; the PR-wide reply gets its own `picm.sending` flag
+(it has no busy tracking of its own before this). Test:
+`tests/reaction-status-icon.spec.mjs`.
+
 **`expandedConversation` no longer has its own author+avatar header** — that
 duplicated the opening bubble `threadMessages()` already renders (the
 comment's own body as the first message, see `threadMessages`'s own doc

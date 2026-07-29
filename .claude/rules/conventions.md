@@ -38,6 +38,38 @@
   deep inside `vendor/arrow.js`'s template parser) — if you see that error,
   audit every attribute for a partial `${...}` interpolation, not just
   looking for stray `<!-- -->`.
+- **arrow.js — `?attr="${() => ...}"` and `.attr="${() => ...}"` do NOT reliably
+  toggle a boolean HTML attribute like `disabled` in this vendored build; use
+  the PLAIN attribute name instead (`disabled="${() => cond}"`, no leading `?`
+  or `.`).** lit-html's `?disabled=`/a bare property-assignment `.disabled=`
+  convention doesn't apply here: empirically (see the `Tt` patch-attribute
+  function in `vendor/arrow.js`), `?disabled=`/`.disabled=` on a `<button>`
+  leaves a dead, non-functional `?disabled="…"`/`.disabled="…"` attribute
+  behind (the raw internal placeholder marker as its string value) and never
+  actually sets `element.disabled` — three existing buttons in `overview.mjs`
+  (`generate-page`/`regenerate-page`/`ready-confirm`) use `?disabled=` and are
+  therefore **silently non-functional** (never actually disabled, just
+  visually dimmed via their own `class` ternary) — untested, so this went
+  unnoticed. **What DOES work:** a plain, undecorated attribute name with a
+  `${() => ...}` function binding — `disabled="${() => cs.busy}"` — because
+  arrow's reactive attribute effect removes the attribute entirely when the
+  bound function returns exactly `false` and calls `setAttribute` (any
+  truthy value) otherwise; since `disabled`/`checked` are HTML boolean
+  attributes (presence-based, not value-based), that's enough to reliably
+  toggle them — confirmed both via the DOM (`element.disabled` reflects
+  correctly) and visually. This is also why the existing, working
+  `checked="${() => blockApproved(b)}"` in `Block.mjs` uses no dot — bare
+  `checked` already works via this same generic path, not via the `Tt`
+  function's separate (and, empirically, less reliable) `e==="checked"`/
+  dot-prefix special-casing. `.indeterminate="${...}"` (also in `Block.mjs`)
+  is a **different** case that happens to still work: `indeterminate` has NO
+  HTML attribute reflection at all, so even though the same dead placeholder
+  attribute artifact appears, the underlying DOM *property* still gets set
+  correctly elsewhere in the reactive pipeline. `disabled`/`checked` DO have
+  attribute reflection, which is exactly where `?`/`.` breaks down for them.
+  See `tests/reaction-status-icon.spec.mjs` for a working example
+  (`disabled="${() => cs.busy}"` on `reaction-send`/`reaction-status`/
+  `comment-send`/`comment-detail-send`).
 - **arrow.js — a single `html`` `` tag can only ever have ONE root element.**
   `` html`<p>a</p><p>b</p>` `` (two sibling top-level tags in one tagged
   template) also throws "Invalid HTML position" — build an ARRAY of two
