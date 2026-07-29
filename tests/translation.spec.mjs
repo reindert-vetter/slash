@@ -2,14 +2,15 @@ import { test, expect } from './_fixtures.mjs'
 
 // PR 107 (tests/fixtures/translation-blocks.json + translation-callresolve.json,
 // worktrees in _setup.mjs). Covers the two translation render modes + the
-// companion card (see .claude/rules/blocks-and-ingest.md "Translation blocks"
-// and .claude/rules/tembed-workflows.md "Translation keys"):
+// sibling-locale columns (see .claude/rules/blocks-and-ingest.md "Translation
+// blocks" and .claude/rules/tembed-workflows.md "Translation keys"):
 //   1. A standalone TRANSLATION block renders a CHANGES-ONLY key overview, not
-//      raw code, plus a read-only companion card for the sibling (en) locale.
+//      raw code — each row also carrying a read-only column per sibling
+//      locale (en), inline in the SAME card (no separate companion card).
 //   2. A resolved trans()/__() child shows the current value per locale, with a
 //      "missing in <locale>" marker where the key is absent.
 test.describe('PR Review Tree — translation blocks & trans() children', () => {
-  test('a standalone lang block shows a changes-only overview + en companion', async ({ page }) => {
+  test('a standalone lang block shows a changes-only overview + an inline en column per row', async ({ page }) => {
     await page.goto('/pr/107?sel=' + encodeURIComponent('resources/lang/nl/checkout.php:1'))
 
     const overview = page.getByTestId('translation-overview')
@@ -21,14 +22,14 @@ test.describe('PR Review Tree — translation blocks & trans() children', () => 
     await expect(overview).toContainText('weg') // removed key
     await expect(overview).not.toContainText('bar')
 
-    // The read-only companion card for the sibling en locale: en's CURRENT
-    // values for exactly the keys changed in nl, and a "missing" marker where
-    // the key doesn't exist in en (weg / only_nl are absent from en).
-    const companion = page.getByTestId('translation-companion')
-    await expect(companion).toBeVisible()
-    await expect(companion).toHaveAttribute('data-locale', 'en')
-    await expect(companion).toContainText('new-en') // en's current value for foo
-    await expect(companion).toContainText('ontbreekt in en')
+    // The sibling (en) locale's CURRENT value renders as an extra, read-only
+    // column on the SAME row — no separate companion card anymore — with a
+    // "missing" marker where the key doesn't exist in en (weg is absent).
+    const row = (key) => page.getByTestId('translation-row').filter({ hasText: key })
+    const siblingCol = (key) => row(key).getByTestId('translation-sibling-col')
+    await expect(siblingCol('foo')).toHaveAttribute('data-locale', 'en')
+    await expect(siblingCol('foo')).toContainText('new-en') // en's current value for foo
+    await expect(siblingCol('weg')).toContainText('ontbreekt in en')
   })
 
   test('a resolved trans() key shows its current value per locale, missing marked', async ({ page }) => {

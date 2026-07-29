@@ -422,6 +422,15 @@ export default function Block(b, opts = {}) {
   // segment can show its per-segment progress before the whole row is signed
   // off. Defaults to nothing approved.
   const approvedCallsFn = opts.approvedCalls || (() => new Set())
+  // langSiblingsFn is a function returning, for a TRANSLATION block, the
+  // OTHER locale files of the same lang file (home.mjs's
+  // state.langSiblings[b.id], via ensureLangSiblings/GET /api/langsiblings)
+  // — read from translationSlot's own nested reactive slot below (never
+  // resolved here), so a fetch landing after the first render re-runs only
+  // that slot, not this whole Block() call. Defaults to none (every
+  // non-TRANSLATION block, and a TRANSLATION block before its siblings have
+  // loaded/without a lang-root sibling directory).
+  const langSiblingsFn = opts.langSiblings || (() => [])
   return html`
     <article
       class="${() =>
@@ -537,7 +546,7 @@ export default function Block(b, opts = {}) {
 
       ${() =>
         b.category === 'TRANSLATION'
-          ? translationSlot(b, activeGroup, approvedFn)
+          ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn)
           : isSvgFile(b)
           ? svgSlot(b)
           : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn)}
@@ -624,8 +633,19 @@ export function translationRowUnits(b) {
 // approvedFn is the existing Set of approved blockRows row indices — a
 // key's row is simply one more member of that same Set (see home.mjs's
 // approveTargetRows), so a per-key approve toggle needs no separate storage
-// either.
-function translationSlot(b, activeGroup, approvedFn) {
+// either. `langSiblingsFn` (Block()'s own opt, see above) is called directly
+// here, once per Block() call — that's fine dependency-wise (this whole
+// function is already invoked from within Block()'s own nested `${() =>
+// ...}` slot, so reading state here doesn't leak a dependency into anything
+// broader — see the "outer closure vs. nested reactive slot" distinction in
+// conventions.md). NOTE: that alone is NOT enough to get the sibling columns
+// on screen once the async GET /api/langsiblings fetch resolves — home.mjs's
+// own card-level `.key(...)` must ALSO fold in the fetched sibling count
+// (see `langSibKeyPart` there), otherwise arrow.js reuses the already-mounted
+// card node and never re-applies this function's freshly-returned (but
+// merely statically interpolated) template — the same keyed-node-reuse
+// pitfall the rest of that key already guards against for b.code/foc/unfoc.
+function translationSlot(b, activeGroup, approvedFn, langSiblingsFn) {
   const c = b.code
   if (c === undefined || c === null) {
     return html`<p class="px-4 py-3 text-sm text-slate-400 dark:text-zinc-500">code laden…</p>`
@@ -638,7 +658,8 @@ function translationSlot(b, activeGroup, approvedFn) {
     const g = activeGroup()
     return g && g.idx != null ? g.idx : null
   }
-  return translationBlockView(units, { activeIndex, approvedRowSet: approvedFn })
+  const siblings = langSiblingsFn ? langSiblingsFn() : []
+  return translationBlockView(units, { activeIndex, approvedRowSet: approvedFn, siblings })
 }
 
 // svgDataUri turns raw SVG source text into a `data:image/svg+xml;base64,...`

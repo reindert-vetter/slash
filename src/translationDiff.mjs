@@ -2,16 +2,21 @@
 // as a clean, human-readable overview instead of a raw code diff.
 //
 // Two render modes (see .claude/rules/blocks-and-ingest.md, "Translation blocks"):
-//   1. translationBlockView(old, new)  — a standalone changed lang file (a
+//   1. translationBlockView(units, opts) — a standalone changed lang file (a
 //      TRANSLATION block): a CHANGES-ONLY list (added / removed / changed keys,
-//      old → new), no unchanged keys.
+//      old → new), no unchanged keys. Every row additionally carries one
+//      column per SIBLING locale (opts.siblings — e.g. nl + en + de, however
+//      many the lang root actually has), showing that locale's CURRENT value
+//      for the same key (or a "missing in <locale>" marker) — this replaces
+//      the older, separate read-only companion card: those values are now
+//      extra columns inside this same card/row instead of a second card next
+//      to it. Navigation/approve/comment stay scoped to the SELECTED block's
+//      own rows (its own translationChangeUnits) — the sibling columns are
+//      purely additional, read-only context on each row, not a separate
+//      merged row list (no union/intersection across locales).
 //   2. translationValueView(code, key, locale) — a resolved trans() child: the
 //      CURRENT value of one key in one locale (nl/en/…), no diff; a locale where
 //      the key is absent renders a "missing in <locale>" marker.
-//   +  translationSiblingView(fileText, keys, locale) — the companion card next
-//      to a standalone block: the current values, in a SIBLING locale, of exactly
-//      the keys that changed in the primary block (so the reviewer sees whether
-//      that locale still needs updating).
 //
 // The parser is a small, tolerant, quote-aware scanner for `return [ ... ];`
 // arrays with 'key' => 'value' | 'key' => [ ...nested... ] entries. It is NOT a
@@ -219,13 +224,6 @@ export function translationChanges(oldText, newText) {
   return { added, removed, changed }
 }
 
-// changedKeysOf returns every key touched by a change (added, removed or
-// changed) — used to scope the companion sibling card.
-export function changedKeysOf(oldText, newText) {
-  const { added, removed, changed } = translationChanges(oldText, newText)
-  return [...changed.map((c) => c.key), ...added.map((a) => a.key), ...removed.map((r) => r.key)]
-}
-
 // translationChangeUnits is translationChanges' per-key NAVIGATION list: one
 // unit per changed/added/removed key, in the same order translationBlockView
 // renders them (changed, then added, then removed — so a caller's unit index
@@ -280,12 +278,45 @@ const KIND_BADGE_CLS = {
 // translationRowCls — the row's own class, reactive over whether it's the
 // unit the reviewer is currently navigated to (indigo ring, same idiom as
 // the diff's active-row highlight) — a whole-value function binding (see
-// conventions.md), not a partial interpolation.
+// conventions.md), not a partial interpolation. `items-stretch` (rather than
+// `items-center`) so a sibling-locale column (see siblingColumnHTML below)
+// stretches to the same height as the primary column, and no `px`/`gap` here
+// anymore — every column (primary + siblings) carries its own padding so the
+// highlight background/left bar span the FULL row width, including under a
+// sibling column that might be scrolled past the visible edge.
 function translationRowCls(active) {
-  return (
-    'flex items-center gap-3 px-4 py-2.5 ' +
-    (active ? 'bg-indigo-50 shadow-[inset_3px_0_0_#6366f1] dark:bg-indigo-500/10' : '')
-  )
+  return 'flex items-stretch ' + (active ? 'bg-indigo-50 shadow-[inset_3px_0_0_#6366f1] dark:bg-indigo-500/10' : '')
+}
+
+// SIBLING_LOCALE_BADGE_CLS — the small locale pill on a sibling column (see
+// siblingColumnHTML), same yellow tone the old, now-removed companion card
+// used for its own locale badge.
+const SIBLING_LOCALE_BADGE_CLS =
+  'rounded bg-yellow-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-300'
+
+// siblingColumnHTML — one extra, read-only column on a translation-overview
+// row: the CURRENT value of `key` in `sib`'s locale (or a "missing" marker),
+// replacing the old, separate companion card (see the module doc comment
+// above and .claude/rules/blocks-and-ingest.md, "Translation blocks"). A
+// fixed, non-growing width (`w-56 shrink-0`) — with N sibling locales this
+// makes the row wider than the card and lets the OUTER translation-overview
+// container (see translationBlockView below) scroll horizontally instead of
+// the card itself growing. No cursor/active state of its own: the whole row
+// (primary column + every sibling column) highlights together, since they
+// now live in the same row instead of a separately-tracked card.
+function siblingColumnHTML(sib, key) {
+  const map = parseLangFile(sib.text || '')
+  const has = map.has(key)
+  return html`<div
+    class="w-56 shrink-0 border-l border-slate-100 px-4 py-2.5 dark:border-zinc-800/60"
+    data-testid="translation-sibling-col"
+    data-locale="${sib.locale}"
+  >
+    <span class="${SIBLING_LOCALE_BADGE_CLS}">${sib.locale}</span>
+    ${has
+      ? html`<p class="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 dark:text-zinc-300">${map.get(key)}</p>`
+      : html`<p class="mt-1 text-sm font-medium text-rose-500 dark:text-rose-400">ontbreekt in ${sib.locale}</p>`}
+  </div>`.key(sib.locale)
 }
 
 // translationBlockView — mode 1: a changes-only, per-key NAVIGABLE overview of
@@ -296,10 +327,15 @@ function translationRowCls(active) {
 // highlights the current unit; `opts.approvedRowSet()` (the SAME Set
 // Block.mjs's approvedFn already produces for a normal code block) shows a
 // ✓ once a key's row is approved — per-key approve therefore rides entirely
-// on the existing row-approval plumbing, no separate state.
+// on the existing row-approval plumbing, no separate state. `opts.siblings`
+// (optional, array of `{locale, text}` — home.mjs's `state.langSiblings`,
+// however many locale dirs the lang root actually has) appends one read-only
+// column per sibling locale to EVERY row, next to the primary old/new value
+// — see siblingColumnHTML above.
 export function translationBlockView(units, opts = {}) {
   const activeIndex = opts.activeIndex || (() => null)
   const approvedRowSet = opts.approvedRowSet || (() => new Set())
+  const siblings = opts.siblings || []
   const rows = units.map((u, i) => {
     // active/approved are read from within THIS row's OWN nested
     // ${() => ...} bindings below (never resolved once up front, as an
@@ -309,8 +345,7 @@ export function translationBlockView(units, opts = {}) {
     // activeIndex()/approvedRowSet() here would freeze the highlight at
     // whatever it was on that one render and never move again on ↑/↓ — the
     // same "outer closure vs. nested reactive slot" distinction as
-    // codeDiff's own per-row highlight (see conventions.md) and
-    // home.mjs's companionCard/activeKeyFn just below.
+    // codeDiff's own per-row highlight (see conventions.md).
     const isApproved = () => u.row != null && approvedRowSet().has(u.row)
     // valueEls is an ARRAY of one or two <p> templates — a single `html`` ``
     // tag can only ever hold one root element (two sibling <p>s in one tag,
@@ -333,25 +368,53 @@ export function translationBlockView(units, opts = {}) {
               ${u.val}
             </p>`.key('val'),
           ]
+    // siblingCols — one column per locale in `opts.siblings`, keyed on the
+    // locale (see siblingColumnHTML) — a plain array, not a `${() => ...}`
+    // slot: siblings usually only arrives once (the langsiblings fetch), so
+    // there's no need for per-keystroke reactivity here, mirroring how
+    // `valueEls` above is also a plain array.
+    const siblingCols = siblings.map((sib) => siblingColumnHTML(sib, u.key))
+    // siblingLocaleSig — a signature of the sibling locales, folded into this
+    // row's OWN .key(...) below. Without it, the row's key would stay
+    // 'u:<kind>:<key>' whether or not `siblings` is empty, and arrow.js would
+    // REUSE the already-mounted row node (move+patch) once the async
+    // GET /api/langsiblings fetch resolves — which does NOT re-run this
+    // plain, non-reactive siblingCols interpolation (the exact "arrow.js
+    // reuses a keyed node without re-running its bindings" pitfall in
+    // conventions.md), leaving the sibling columns permanently empty even
+    // though translationBlockView itself is genuinely being called again
+    // with the fetched data (reproduced: the whole row tree from a fresh
+    // call had the right columns, but the mounted DOM never showed them).
+    // Folding the locale set into the key forces a FRESH row node exactly
+    // once, the moment the siblings actually arrive — the same "key encodes
+    // the async-loaded state" idiom the block card's own key uses for
+    // b.code.
+    const siblingLocaleSig = siblings.map((sib) => sib.locale).join(',')
     return html`<div
       class="${() => translationRowCls(activeIndex() === i)}"
       data-testid="translation-row"
       data-active="${() => (activeIndex() === i ? '1' : '0')}"
     >
-      <div class="min-w-0 flex-1">
+      <div class="min-w-[14rem] flex-1 px-4 py-2.5">
         <div class="flex items-baseline justify-between gap-2">
           <span class="block font-mono text-[11px] text-slate-500 dark:text-zinc-400">${u.key}</span>
           <span class="${'shrink-0 rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide ' + KIND_BADGE_CLS[u.kind]}">${KIND_BADGE[u.kind]}</span>
         </div>
         ${valueEls}
+        <span class="mt-1 block text-[11px] font-bold text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">${() => (isApproved() ? '✓' : '')}</span>
       </div>
-      <span class="shrink-0 text-[11px] font-bold text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">${() => (isApproved() ? '✓' : '')}</span>
-    </div>`.key('u:' + u.kind + ':' + u.key)
+      ${siblingCols}
+    </div>`.key('u:' + u.kind + ':' + u.key + ':' + siblingLocaleSig)
   })
   if (rows.length === 0) {
     rows.push(html`<p class="px-4 py-3 text-sm italic text-slate-400 dark:text-zinc-500">geen sleutelwijzigingen</p>`.key('none'))
   }
-  return html`<div data-testid="translation-overview" class="flex flex-col divide-y divide-slate-100 dark:divide-zinc-800/60">${rows}</div>`
+  // overflow-x-auto — with several sibling-locale columns (opts.siblings can
+  // hold more than one), the row's total width can exceed the card's own
+  // (unchanged) width; this container scrolls internally instead of the card
+  // growing, the same "shrink-0 columns inside an overflow-x-auto body"
+  // pattern RelatedPanel.mjs's nested drill-hint chips already use.
+  return html`<div data-testid="translation-overview" class="flex flex-col divide-y divide-slate-100 overflow-x-auto dark:divide-zinc-800/60">${rows}</div>`
 }
 
 // translationValueView — mode 2: the current value of one resolved key in one
@@ -382,40 +445,6 @@ export function translationValueView(code, key, locale) {
     )
   }
   return html`<div data-testid="translation-value" class="divide-y divide-slate-100 dark:divide-zinc-800/60">${rows}</div>`
-}
-
-// translationSiblingView — the companion card: for each key that changed in the
-// primary block, the current value in this sibling locale (or a "missing"
-// marker), so the reviewer sees whether the sibling still needs updating.
-// `activeKeyFn` (optional, a FUNCTION — the companion card is read-only and
-// has no cursor of its own, but mirrors the primary nl block's own cursor)
-// highlights the row for the SAME key currently selected there, purely as
-// visual context — see home.mjs's companionCard. It's read from within this
-// row's OWN nested ${() => ...} binding (not resolved once up front) so a
-// step only re-evaluates that one row's class/data-active, instead of
-// forcing home.mjs's outer DetailPanel closure — which calls this function —
-// to depend on the reviewer's navigation cursor (see the comment on
-// companionCard/activeKeyFn in home.mjs for why that matters).
-export function translationSiblingView(fileText, keys, locale, activeKeyFn = () => null) {
-  const map = parseLangFile(fileText)
-  const rows = keys.map((k) => {
-    const has = map.has(k)
-    const rowCls = (active) => (active ? 'bg-indigo-50 shadow-[inset_3px_0_0_#6366f1] dark:bg-indigo-500/10 ' : '') + 'px-4 py-2.5'
-    return html`<div
-      class="${() => rowCls(activeKeyFn() === k)}"
-      data-testid="translation-sibling-row"
-      data-active="${() => (activeKeyFn() === k ? '1' : '0')}"
-    >
-      <span class="block font-mono text-[11px] text-slate-500 dark:text-zinc-400">${k}</span>
-      ${has
-        ? html`<p class="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 dark:text-zinc-300">${map.get(k)}</p>`
-        : html`<p class="text-sm font-medium text-rose-500 dark:text-rose-400">ontbreekt in ${locale}</p>`}
-    </div>`.key(k)
-  })
-  if (rows.length === 0) {
-    rows.push(html`<p class="px-4 py-3 text-sm italic text-slate-400 dark:text-zinc-500">geen gewijzigde sleutels</p>`.key('none'))
-  }
-  return html`<div data-testid="translation-sibling" class="flex flex-col divide-y divide-slate-100 dark:divide-zinc-800/60">${rows}</div>`
 }
 
 // localeOf derives the locale segment from a lang file path

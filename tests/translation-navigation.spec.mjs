@@ -72,34 +72,43 @@ test.describe('TRANSLATION block — per-key navigation/approve/comment', () => 
     await expect(rows.nth(1)).toHaveAttribute('data-active', '1')
   })
 
-  // The companion card's own fetch (GET /api/langsiblings) + re-render has a
-  // separate, pre-existing timing gap (ensureLangSiblings/companionCard, see
+  // The sibling-locale column's own fetch (GET /api/langsiblings) has a
+  // separate, pre-existing timing gap (ensureLangSiblings, see
   // blocks-and-ingest.md) — occasionally slower to reflect than the rest of
   // this feature, unrelated to per-key navigation itself (which the test
   // above already covers on its own). Kept as its own test so that gap can
   // never flake the core per-key nav/approve/comment coverage.
-  test('the en companion card mirrors the same per-key highlight', async ({ page }) => {
+  //
+  // The en column used to live in a SEPARATE, independently-tracked
+  // companion card that had to mirror the primary row's highlight via its
+  // own activeKeyFn cursor (see blocks-and-ingest.md's "superseded design").
+  // Now that the sibling column is an extra column INSIDE the same
+  // translation-row, "mirrors the highlight" is true by construction — this
+  // test instead asserts the actual per-key content (which used to be the
+  // companion card's job) is correct for the row currently on screen.
+  test('the sibling en column shows the right value inline on each key row', async ({ page }) => {
     await page.goto('/pr/107?sel=' + encodeURIComponent('resources/lang/nl/checkout.php:1'))
     await enterDiffAndSettle(page)
 
     const rows = page.getByTestId('translation-row')
-    const companionRows = page.getByTestId('translation-sibling-row')
-    await expect(companionRows).toHaveCount(3)
-    const companionRow = (key) => companionRows.filter({ hasText: key })
-    await expect(companionRow('foo')).toHaveAttribute('data-active', '1')
-    await expect(companionRow('extra')).toHaveAttribute('data-active', '0')
+    const row = (key) => rows.filter({ hasText: key })
+    const siblingCol = (key) => row(key).getByTestId('translation-sibling-col')
 
-    await page.keyboard.press('ArrowDown')
-    await expect(rows.nth(1)).toHaveAttribute('data-active', '1')
-    await expect(companionRow('foo')).toHaveAttribute('data-active', '0')
-    await expect(companionRow('extra')).toHaveAttribute('data-active', '1')
+    // 'foo' (changed) and 'extra' (added) both exist in en too.
+    await expect(siblingCol('foo')).toContainText('new-en')
+    await expect(siblingCol('extra')).toContainText('added-en')
 
+    // 'weg' doesn't exist in en (it's an nl-only removal) — its row still
+    // shows the sibling column, with the "missing" marker instead of a value.
+    await expect(siblingCol('weg')).toContainText('ontbreekt in en')
+
+    // The row itself still highlights exactly as in the first test above —
+    // there is no second, independently-synced element to keep in step with
+    // anymore, since the sibling column lives in the same row.
+    await expect(row('foo')).toHaveAttribute('data-active', '1')
     await page.keyboard.press('ArrowDown')
-    await expect(rows.nth(2)).toHaveAttribute('data-active', '1')
-    await expect(companionRow('weg')).toHaveAttribute('data-active', '1')
-    // 'weg' doesn't exist in en (it's an nl-only removal) — the companion
-    // still shows the row, with the "missing" marker instead of a value.
-    await expect(companionRow('weg')).toContainText('ontbreekt in en')
+    await expect(row('extra')).toHaveAttribute('data-active', '1')
+    await expect(row('foo')).toHaveAttribute('data-active', '0')
   })
 
   test('approving the focused key closes exactly one unit of the existing approve counter', async ({ page }) => {

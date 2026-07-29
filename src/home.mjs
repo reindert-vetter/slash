@@ -70,7 +70,6 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
-import { changedKeysOf, translationSiblingView } from './translationDiff.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 
@@ -290,9 +289,11 @@ const state = reactive({
   codeVersion: 0,
   // langSiblings — per TRANSLATION block id → [{ locale, file, text }] of the
   // OTHER locale files of the same lang file (GET /api/langsiblings, read-only).
-  // Drives the read-only companion card next to a changed lang block, showing
-  // the sibling locale's current values for the keys that changed here.
-  // Reassigned wholesale so the block-column closure re-renders when it loads.
+  // Fed into Block.mjs's translationSlot as extra, read-only columns on every
+  // per-key row of the SELECTED translation block (see translationDiff.mjs's
+  // translationBlockView) — one column per sibling locale, showing that
+  // locale's current value for the same key. Reassigned wholesale so
+  // Block.mjs's own nested TRANSLATION slot re-renders when it loads.
   langSiblings: {},
   // approvalSummaries — per top-level block id → { done, total } combined
   // approval count of the block *and every PR block nested under it* (its
@@ -3309,22 +3310,24 @@ async function ensureCode(b) {
 // locales (outside reactive state — reading it must never create a dependency).
 const langSiblingRequested = new Set()
 
-// ensureLangSiblings lazily fetches, for a changed lang (TRANSLATION) block, the
-// OTHER locale files of the same lang file so a read-only companion card can
-// show whether those locales still need the same key changes. Best-effort:
-// GET /api/langsiblings is read-only (reads the head worktree, like /api/code),
-// a failure just leaves no companion. Reassigns state.langSiblings wholesale so
-// the block-column closure re-renders once the siblings arrive — but that
-// closure ALSO reads b.code (ensureCode/the card key), so it's already a
-// co-subscriber the same way the diff render itself is (see the "arrow.js
-// reuses a keyed node... drops the null→loaded update" pitfall in
-// conventions.md): the langSiblings reassignment alone intermittently never
-// triggered a re-render (reproduced: the companion card stayed on "geen
-// gewijzigde sleutels" indefinitely, well after the fetch had resolved).
-// Bumping state.codeVersion — the SAME counter ensureCode already bumps for
-// exactly this reason, which this closure explicitly subscribes to
-// (`void state.codeVersion`, see DetailPanel) — is the same, already
-// established fix.
+// ensureLangSiblings lazily fetches, for a changed lang (TRANSLATION) block,
+// the OTHER locale files of the same lang file, so Block.mjs's translationSlot
+// can show each locale's current value as an extra column on every per-key
+// row (see translationDiff.mjs's translationBlockView "siblings" opt) — this
+// used to feed a separate, read-only companion card next to the block; that
+// card is gone, the sibling values now render as columns inside the SAME
+// card/row instead (see .claude/rules/blocks-and-ingest.md, "Translation
+// blocks"). Best-effort: GET /api/langsiblings is read-only (reads the head
+// worktree, like /api/code), a failure just leaves no sibling columns.
+// Reassigns state.langSiblings wholesale, and ALSO bumps state.codeVersion:
+// Block.mjs's own nested TRANSLATION slot reads state.langSiblings directly
+// (not co-subscribed with anything else there), but the wholesale
+// reassignment alone has already been observed to intermittently not
+// re-trigger a dependent closure elsewhere in this file for the exact same
+// reason the "arrow.js reuses a keyed node... drops the null→loaded update"
+// pitfall describes (conventions.md) — bumping state.codeVersion is the
+// same, already-established, reliable fallback trigger every other
+// b.code-adjacent update in this file uses.
 async function ensureLangSiblings(b) {
   if (!b || b.category !== 'TRANSLATION' || langSiblingRequested.has(b.id)) return
   langSiblingRequested.add(b.id)
@@ -3336,46 +3339,8 @@ async function ensureLangSiblings(b) {
     state.langSiblings = { ...state.langSiblings, [b.id]: sibs }
     state.codeVersion++
   } catch (_) {
-    /* offline — no companion card */
+    /* offline — no sibling columns */
   }
-}
-
-// companionCard renders a read-only sibling-locale card next to a changed
-// TRANSLATION block: the sibling locale's CURRENT values for exactly the keys
-// that changed here (or a "missing" marker), so the reviewer sees whether that
-// locale still needs updating. No sidebar entry, no approval, not navigable —
-// but it DOES mirror the nl block's own per-key highlight (see
-// translationRowUnits/state.change): purely visual context, so the reviewer
-// sees the sibling's current value for exactly the key they're reviewing.
-function companionCard(b, sib) {
-  const keys = b.code && !b.code.error ? changedKeysOf((b.code.old && b.code.old.text) || '', (b.code.new && b.code.new.text) || '') : []
-  // activeKeyFn is a FUNCTION, deliberately not resolved here: companionCard
-  // itself is called synchronously from the OUTER, per-block DetailPanel
-  // array-building closure (not from Block's own per-card reactive binding
-  // like translationSlot above) — reading state.change directly in THIS
-  // function's body would make that whole outer closure depend on it and
-  // rebuild every card on every arrow-key step (the documented "outer
-  // closure depends on state.x" pitfall, see conventions.md). Passing a
-  // function down instead lets translationSiblingView read it from its OWN
-  // nested per-row ${() => ...} binding, so only that row's highlight
-  // re-evaluates on a step — mirrors how Block() itself is only ever handed
-  // activeGroup/approvedFn as functions, never their resolved values.
-  const activeKeyFn = () => {
-    const units = translationRowUnits(b)
-    const u = units[state.change]
-    return u ? u.key : null
-  }
-  return html`<div
-    data-testid="translation-companion"
-    data-locale="${sib.locale}"
-    class="flex min-h-0 w-[42rem] shrink-0 flex-col overflow-hidden rounded-xl border border-dashed border-slate-300 bg-white/70 dark:border-zinc-700 dark:bg-zinc-900/60 2xl:w-[49.2rem]"
-  >
-    <div class="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-zinc-800/60">
-      <span class="rounded bg-yellow-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-300">${sib.locale}</span>
-      <span class="text-xs text-slate-500 dark:text-zinc-500">huidige waarden van de gewijzigde sleutels</span>
-    </div>
-    ${translationSiblingView(sib.text || '', keys, sib.locale, activeKeyFn)}
-  </div>`
 }
 
 async function ingest() {
@@ -7476,6 +7441,18 @@ function DetailPanel(state) {
             // rows, so it's visible which units already hold a comment (however
             // many). Reads the comments read-model via RelatedPanel.
             commentedRows: () => commentRowSet(b),
+            // For a TRANSLATION block: the other locale files of the same lang
+            // file (see ensureLangSiblings below), rendered as extra, read-only
+            // columns on every per-key row (translationDiff.mjs's
+            // translationBlockView). void state.codeVersion is the same
+            // reliable trigger ensureLangSiblings itself bumps on arrival (see
+            // its own comment) — a plain state.langSiblings[b.id] read alone
+            // has been observed to not always re-notify a dependent closure.
+            // Every non-TRANSLATION block simply gets an always-empty array.
+            langSiblings: () => {
+              void state.codeVersion
+              return state.langSiblings[b.id] || []
+            },
             // Global diff-pane preference (see state.diffViewMode / the `a` key) —
             // read inside Block's own per-card slot, so toggling re-renders this
             // card's diff structure without touching this outer closure. The
@@ -7527,6 +7504,21 @@ function DetailPanel(state) {
             !!(drillReturnMarker && drillReturnMarker.level === 0 && drillReturnMarker.id === b.id)
           if (justReturned) drillReturnMarker = null
           const cardCls = 'contents' + (justReturned ? ' drill-return' : '')
+          // langSibKeyPart — for a TRANSLATION block, folds the number of
+          // fetched sibling locales into the card key too (besides the
+          // langSiblings opt Block() itself reads). `inner` is a plain,
+          // statically-interpolated value here (${inner}, not a
+          // `${() => ...}` binding) — when this whole card's key stays
+          // otherwise unchanged, arrow.js reuses the already-mounted node
+          // (move+patch) and never re-applies a static interpolation to a
+          // reused node (the same "keyed node reuse... does not re-run its
+          // [static] bindings" pitfall in conventions.md the rest of this key
+          // already guards against for b.code/foc/unfoc). Without this,
+          // ensureLangSiblings' fetch landing (state.langSiblings/codeVersion
+          // update) genuinely re-runs this whole closure and produces a
+          // fresh `inner` with the sibling columns — but the reused card node
+          // never shows it. '' for every non-TRANSLATION block (no-op there).
+          const langSibKeyPart = b.category === 'TRANSLATION' ? ':lsib=' + (state.langSiblings[b.id] || []).length : ''
           const card = html`<div class="${cardCls}" data-testid="detail-card">${inner}</div>`.key(
             'detail:' +
               (i === sel ? 'sel' : 'prev') +
@@ -7539,39 +7531,18 @@ function DetailPanel(state) {
               ':' +
               b.label +
               ':' +
-              b.side,
+              b.side +
+              langSibKeyPart,
           )
           out.push(card)
-          // A changed lang (TRANSLATION) block gets a read-only companion card
-          // per sibling locale directly next to it (option a, see
-          // .claude/rules/blocks-and-ingest.md) — only for the selected block,
-          // and only in list/diff of the top-level column (not a preview). The
-          // state.langSiblings read makes this closure re-run once the siblings
-          // load; a one-time event per block (not per keystroke).
+          // A changed lang (TRANSLATION) block's sibling locales (the other
+          // locale files of the same lang file) render as extra columns
+          // INSIDE this same card (see the langSiblings opt above and
+          // translationDiff.mjs's translationBlockView) — this only fetches
+          // them, only for the selected block (not a preview card), mirroring
+          // the old companion-card gating.
           if (i === sel && b.category === 'TRANSLATION') {
             ensureLangSiblings(b)
-            for (const sib of state.langSiblings[b.id] || []) {
-              // The key carries the block's CODE state, exactly like the block
-              // card's own key just above. companionCard derives its rows from
-              // b.code (changedKeysOf on the old/new text), and langSiblings
-              // can land BEFORE the code does — the first render then builds a
-              // legitimately empty card. Without the code state in the key,
-              // arrow.js reuses that node when the code finally arrives (move
-              // + patch, without re-running its bindings, see the keyed-node
-              // pitfall in conventions.md) and the companion stays empty
-              // forever. This is the "residual race in list mode" that
-              // blocks-and-ingest.md flagged as a known limitation.
-              out.push(
-                companionCard(b, sib).key(
-                  'lang-sib:' +
-                    b.id +
-                    ':' +
-                    sib.locale +
-                    ':' +
-                    (b.code && !b.code.error ? 'code' : b.code && b.code.error ? 'err' : 'load'),
-                ),
-              )
-            }
           }
         })
         return out

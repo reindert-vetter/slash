@@ -277,42 +277,84 @@ left as a navigable list.
   `array( ... )` and numeric/list arrays are out of v1 scope — plug-and-pay
   lang files use `[...]` with string keys). Values render as plain text
   (arrow.js escapes them), so HTML in a translation shows literally.
-  **Companion sibling card (option a — two separate cards, never merged):** a
-  changed lang block gets a **read-only** companion card per sibling locale
-  directly next to it in the block column (`companionCard`/`ensureLangSiblings`
-  in `home.mjs`, `data-testid=translation-companion`), showing that locale's
-  **current** values for exactly the keys that changed here — so the reviewer
-  sees whether e.g. `en` still needs the same change when only `nl` was
-  touched. The sibling files (the OTHER locales, excluding the file's own
-  locale and the `vendor/` namespace dir) come from the read-only
+  **Sibling locales as extra columns in the SAME card (superseded design —
+  see below for the "two separate cards" precedent this replaced):** every
+  OTHER locale that has the same lang filename gets its own read-only column,
+  appended to every per-key row of the block currently being reviewed —
+  `key | <own locale value(s)> | <sibling 1> | <sibling 2> | …`, one column
+  per locale actually present under the lang root (2 locales → 3 columns
+  incl. the key, 4 locales → 5, and so on — not capped at a fixed 2).
+  Deliberately **visual only, not a structural merge**: navigation, approve
+  and comment all keep working exactly as described in "Per-key navigation"
+  below, scoped to the SELECTED block's own rows (its own
+  `translationChangeUnits`) — a sibling column shows that locale's *current*
+  value for the same key (or a "missing" marker), it never gets its own
+  cursor/approve state, and the row list itself is never a union/intersection
+  merge across locales. Concretely this means: **the sidebar still shows one
+  row per lang file** (e.g. both `nl`/`checkout.php` and `en`/`checkout.php`
+  if both changed in this PR) — there is no combined sidebar entry, no new
+  `?sel=` scheme, and `recomputeLeftList`/`applyBlockRefRestore` are
+  unaffected; **approve stays keyed to the selected file's own block id** in
+  `approvals.db`, exactly as for any other block — selecting the `nl` row and
+  approving a row only ever touches the `nl` block's own `approvedRows`, the
+  `en` row (if it's also a changed PR block) keeps its own, separate
+  approve state, shown when *that* row is selected instead.
+  `translationBlockView` (`src/translationDiff.mjs`) renders the columns:
+  `opts.siblings` (an array of `{locale, text}`) is appended, per row, via
+  `siblingColumnHTML(sib, key)` — a fixed-width (`w-56`), non-shrinking column
+  per locale, so with several locales the ROW becomes wider than the card;
+  the `translation-overview` container scrolls **horizontally** in that case
+  (`overflow-x-auto`, the same "shrink-0 columns inside an overflow-x-auto
+  body" pattern `RelatedPanel.mjs`'s nested drill-hint chips already use) —
+  the card itself never grows to fit more locales.
+  The sibling files (the OTHER locales, excluding the file's own locale and
+  the `vendor/` namespace dir) come from the read-only
   `GET /api/langsiblings?pr=N&file=<lang file>` (`langsiblings.go`, reads the
-  head worktree like `/api/code`, within the write boundary). The companion has
-  no sidebar entry, no approval, and no cursor of its own — it only **mirrors**
-  the primary block's per-key highlight (see "Per-key navigation" just below).
-  See also "Resolving translation keys" in `.claude/rules/tembed-workflows.md`
-  for the resolved `trans()`-child render (the second render mode).
-  **`ensureLangSiblings`'s fetch-then-render must also bump `state.codeVersion`:**
-  the block-column closure that calls it also reads `b.code` (the existing
-  `codeVersion`-keyed card rebuild, see "Approval" above) — reassigning
-  `state.langSiblings` alone intermittently never re-triggered that closure
-  (reproduced: the companion card stayed on "geen gewijzigde sleutels"
-  indefinitely, well after the fetch had resolved), the exact same "multiple
-  reactive consumers of the same property" pitfall as `.claude/rules/conventions.md`
-  describes for the diff render itself. Bumping the SAME `state.codeVersion`
-  counter this closure already subscribes to (`void state.codeVersion`) fixes
-  it, mirroring `ensureCode`'s own fix.
-  **The residual half of that race — the companion card staying EMPTY (zero
-  sibling rows) — was a keyed-node reuse, and is fixed too:** the siblings
-  (`/api/langsiblings`) and the block's own code (`/api/code`) are independent
-  fetches, so the siblings can land FIRST; `companionCard` derives its rows
-  from `b.code` (`changedKeysOf` over the old/new text) and then legitimately
-  renders nothing. Its `.key(...)` did not encode the code state, so when the
-  code finally arrived arrow.js reused that node (move + patch, *without*
-  re-running its bindings — the keyed-node pitfall in `conventions.md`) and the
-  card stayed empty **forever**. The key now carries the same
-  `code`/`err`/`load` component as the block card's own key right above it.
-  Regression test: `tests/translation-navigation.spec.mjs` ("the en companion
-  card mirrors the same per-key highlight").
+  head worktree like `/api/code`, within the write boundary) — unchanged,
+  fetched by `ensureLangSiblings`/`home.mjs` regardless of whether that other
+  locale ALSO happens to be a changed PR block in this PR: it works whether
+  the other locale changed or not, exactly like the design it replaced. See
+  also "Resolving translation keys" in `.claude/rules/tembed-workflows.md`
+  for the resolved `trans()`-child render (the second render mode, untouched).
+  **The sibling columns landing after the initial render needed a SECOND,
+  card-level keyed-node-reuse fix, on top of the existing `state.codeVersion`
+  bump.** Bumping `state.codeVersion` does make `home.mjs`'s DetailPanel
+  closure re-run and `Block(b, {...})` genuinely get called again with the
+  freshly-fetched siblings — but `Block()`'s whole `<article>` output is
+  embedded into the block card via a plain, statically-interpolated `${inner}`
+  (not a `${() => ...}` binding), inside a node whose OWN `.key(...)` (in
+  `home.mjs`, right where the card is built) did not change across that
+  re-run — so arrow.js matched the card by its unchanged key and reused the
+  already-mounted node (move+patch), which never re-applies that static
+  interpolation (reproduced: `translationSlot` demonstrably ran again with a
+  non-empty sibling array, yet the DOM never showed the columns). The card's
+  `.key(...)` therefore also folds in, for a TRANSLATION block only,
+  `state.langSiblings[b.id].length` (`langSibKeyPart`) — the same "key
+  encodes the async-loaded state" idiom that key's other components
+  (`code`/`load`/`err`, `foc`/`unfoc`) already use for exactly this reason.
+  `translationBlockView`'s own per-row `.key(...)` additionally folds in a
+  signature of the sibling locales for the same reason, one level down — a
+  belt-and-braces defense in case a future change ever lets the ROWS get
+  patched without the whole card remounting.
+  **Previously (superseded): a separate companion card per sibling locale
+  (`companionCard`, `data-testid=translation-companion`), placed directly
+  next to the primary block in the block column — "option a: two separate
+  cards, never merged".** That was a deliberate choice at the time; it has
+  since been reversed on explicit request, in favor of the columns-in-one-card
+  design above. `companionCard` and `translationSiblingView`
+  (`translationDiff.mjs`) are removed;
+  `siblingColumnHTML` is their replacement. What carries over unchanged: the
+  data source (`ensureLangSiblings`/`GET /api/langsiblings`), the "missing in
+  `<locale>`" marker for a key absent in a sibling, and the requirement that
+  `ensureLangSiblings`'s fetch-then-render also bump `state.codeVersion` —
+  reassigning `state.langSiblings` alone has been observed to intermittently
+  not re-notify a dependent closure, the exact same "multiple reactive
+  consumers of the same property" pitfall `.claude/rules/conventions.md`
+  describes for the diff render itself; bumping the SAME `state.codeVersion`
+  counter every other `b.code`-adjacent update in `home.mjs` already relies on
+  is the same, already-established fallback trigger. Regression test:
+  `tests/translation-navigation.spec.mjs` (moved from asserting a separate
+  companion card to asserting the sibling column inline on each row).
   **Per-key navigation, approve and comment (`translationRowUnits`,
   `Block.mjs`):** the reviewer navigates a TRANSLATION block **per changed
   key** — `↑`/`↓` step through the key rows (highlighting one at a time, an
@@ -355,8 +397,8 @@ left as a navigable list.
   only re-invoked on a `codeVersion`/focus change, not on every `↑`/`↓`
   step, so a synchronous, one-shot computation would freeze the highlight at
   whatever it was on that render (the same "outer closure vs. nested
-  reactive slot" distinction as the `stepChevronSlot`/`companionCard`
-  pitfalls in `conventions.md`). Test: `tests/translation-navigation.spec.mjs`.
+  reactive slot" distinction as the `stepChevronSlot` pitfall in
+  `conventions.md`). Test: `tests/translation-navigation.spec.mjs`.
 - **SVG blocks (`isSvgFile`/`svgSlot`, `Block.mjs`) — REPLACES the raw text
   diff with rendered old/new `<img>` previews, the same "replace, don't add
   alongside" precedent as `translationSlot` above.** A changed `.svg` file
