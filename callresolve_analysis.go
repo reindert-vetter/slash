@@ -1183,11 +1183,24 @@ func resolveTranslations(dataDir string, pr int, blocks []Block) []callresolve.E
 
 // translationKeysIn scans a changed-lines excerpt for every recognized
 // translation-helper call and returns the captured (unescaped) key strings.
+//
+// A quoted first argument that is immediately followed by a `.`
+// (concatenation, e.g. `trans('includes.' . $this->value)`) is NOT a fully
+// static key — only its prefix is known, the rest is decided at runtime —
+// and is therefore skipped here, exactly like a call with no quoted literal
+// at all (`trans($dynamic)`). Without this check, such a call previously
+// still produced a (wrong) key made of just the static prefix, which
+// resolveTranslations then reported as "missing" in every locale — a false
+// positive, since the translation isn't missing, the key just can't be
+// determined statically.
 func translationKeysIn(scan string) []string {
 	var keys []string
 	push := func(re *regexp.Regexp, quote byte) {
-		for _, m := range re.FindAllStringSubmatch(scan, -1) {
-			keys = append(keys, unescapePHPQuoted(m[1], quote))
+		for _, m := range re.FindAllStringSubmatchIndex(scan, -1) {
+			if strings.HasPrefix(strings.TrimLeft(scan[m[1]:], " \t\r\n"), ".") {
+				continue // concatenation follows — key is dynamic, not fully static
+			}
+			keys = append(keys, unescapePHPQuoted(scan[m[2]:m[3]], quote))
 		}
 	}
 	push(reTransSingle, '\'')

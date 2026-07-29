@@ -1704,8 +1704,10 @@ return [
 // TestResolveTranslations: a trans()/__() call on a changed line resolves to
 // the lang-file value in every locale that has the file, one entry per
 // locale; a key missing in a locale still produces an entry with empty
-// ChildCode; a dynamic argument, a namespaced ("pkg::x.y") key and a bare
-// whole-file reference ("checkout") all produce no entry.
+// ChildCode; a dynamic argument, a namespaced ("pkg::x.y") key, a bare
+// whole-file reference ("checkout"), and a static-prefix-plus-concatenation
+// key (`'checkout.' . $suffix`, in both trans() and trans_choice() form —
+// same regex family) all produce no entry.
 func TestResolveTranslations(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 90
@@ -1728,6 +1730,8 @@ class CheckoutController {
         $dyn = trans($dynamic);
         $pkg = trans('pkg::x.y');
         $whole = trans('checkout');
+        $concat = trans('checkout.' . $suffix);
+        $concatChoice = trans_choice('checkout.' . $suffix, 1);
         return view('checkout.show');
     }
 }
@@ -1828,6 +1832,19 @@ return [
 		for _, e := range entries {
 			if strings.Contains(e.CallKey, ck) && !strings.Contains(e.CallKey, "checkout.foo") && !strings.Contains(e.CallKey, "checkout.bar.baz") {
 				t.Errorf("unexpected entry for decoy %q: %+v", ck, e)
+			}
+		}
+	}
+
+	// A static prefix followed by concatenation ('checkout.' . $suffix) is
+	// NOT a fully static key — it must be skipped entirely, never produce an
+	// entry with a truncated key like "translation:nl:checkout." (which would
+	// wrongly render as "missing in nl/en", the reported bug). Covers both
+	// trans() and trans_choice() — same regex family.
+	for _, ck := range []string{"translation:nl:checkout.", "translation:en:checkout."} {
+		for _, e := range entries {
+			if e.CallKey == ck {
+				t.Errorf("unexpected entry for truncated concatenated key %q: %+v", ck, e)
 			}
 		}
 	}
