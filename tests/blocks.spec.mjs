@@ -24,6 +24,17 @@ const EXPECTED_LABELS = [
   'GroupScopeChildB::run',
 ]
 
+// EXPECTED_ROW_LABELS mirrors EXPECTED_LABELS for the SIDEBAR row text only —
+// index 8 (AddressTypeTest::test_it_casts_type, a lone TEST-category block)
+// groups into a single test_class row labelled with the bare class name (see
+// testClassRowItem/recomputeLeftList in home.mjs and "Grouping test methods
+// per class" in .claude/rules/detail-layout.md); the diff/preview CARDS
+// still show the real method's own `Class::method` label (see
+// TestMethodsColumn/DetailPanel — the active method's own Block() card is
+// unaffected by grouping), so EXPECTED_LABELS itself stays unchanged for
+// that purpose.
+const EXPECTED_ROW_LABELS = EXPECTED_LABELS.map((l, i) => (i === 8 ? 'AddressTypeTest' : l))
+
 test.describe('PR Review Tree — block list', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/pr/12903')
@@ -35,8 +46,8 @@ test.describe('PR Review Tree — block list', () => {
     await expect(page.getByText(`${EXPECTED_LABELS.length} startpunten`)).toBeVisible()
 
     const rows = page.getByTestId('block-row')
-    for (let i = 0; i < EXPECTED_LABELS.length; i++) {
-      await expect(rows.nth(i)).toContainText(EXPECTED_LABELS[i])
+    for (let i = 0; i < EXPECTED_ROW_LABELS.length; i++) {
+      await expect(rows.nth(i)).toContainText(EXPECTED_ROW_LABELS[i])
     }
 
     // Category tags and status glyphs show up. The status is rendered as a mark

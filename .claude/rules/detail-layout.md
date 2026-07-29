@@ -385,6 +385,142 @@ the right of the index shows its thread instead of a diff.
   (`recomputeView`'s `!c.kind` filter); a comment-index item's thread lives
   exclusively in its own detail card now.
 
+## Grouping test methods per class (`test_class` rows + the methodes-kolom)
+
+Every TEST-category block (a PHP test method, or the `<class-header>`
+sentinel for a class's header content — see `phpscan.go`/`classify.go`) that
+shares the same `file + '::' + class` groups into **one synthetic sidebar
+row** instead of one row per method — `TriggersIndexTest` with a combined
+pill, not five separate `TriggersIndexTest::it_should_…` rows. This mirrors
+the existing `kind:'comment'` synthetic-row mechanism (`commentBlockItem`)
+closely, but inserts a **new, always-present column** between the pr-index
+and the diff instead of replacing the diff card outright.
+
+- **`testClassRowItem`/`groupTestClasses`** (`home.mjs`, called from
+  `recomputeLeftList`) build `{ id: 'testclass:'+file+'::'+class, kind:
+  'test_class', label: class || file's basename, methods: [...] }` — grouped
+  on `file + class` (never bare class name: two same-named classes in
+  different files must not merge), **always**, even for a class with a
+  single changed method (deliberate, discussed choice: a predictable flow,
+  no special-cased "just show the one row" exception). The member methods
+  disappear from `state.blocks` (the "Start" index) exactly the way a
+  resolved-call target already does (`hidden = resolvedCallTargetIds()`) —
+  but stay untouched in `state.allBlocks`, so every mechanism that reads
+  `state.allBlocks` directly (`coveredByChildren`, `resolvedTestCoverChildren`,
+  drilling via `blockId`) needs no changes at all. A `<class-header>`
+  sentinel method (see `phpscan.go`) is grouped in too and gets a readable
+  label in the methodes-kolom (`methodLabel` in `TestMethodsColumn.mjs`:
+  "Class-header", never the raw `<class-header>` name).
+- **`curBlock()` resolves through the active method** (`home.mjs`):
+  ```js
+  function curBlock() {
+    const row = curTestClassRow()
+    return row ? row.methods[state.classMethodSel] || null : state.blocks[state.selected]
+  }
+  ```
+  `state.classMethodSel` is the index into the selected row's `.methods`.
+  This is the single load-bearing abstraction that lets every existing
+  block-centric mechanism (`ensureCode`, approve, comments, drilling, the
+  footer, call-arrows, `findNextUnapproved`) keep working UNCHANGED on
+  whichever method is active — none of them had to learn that test classes
+  exist. Only the handful of functions that step **between** top-level
+  `state.blocks` entries (`sameFileNeighbour`/`stepBlock`, the sidebar's own
+  ↑/↓) still read `state.blocks[state.selected]` directly, on purpose — they
+  guard `kind === 'test_class'` (both sides) exactly like they already guard
+  `kind === 'comment'`, so a class row never gets a same-file connector to
+  an adjacent row (decision: two test classes in the same file get no
+  connector between each other either — that would be a third kind of
+  flow-through for a rare case, on top of the two that already exist).
+- **The methodes-kolom is stop 2b of the left→right nav chain** (see
+  `.claude/rules/keyboard-navigation.md`), rendered by
+  `TestMethodsColumn.mjs` directly in `<main>`'s column flow, to the LEFT of
+  the diff card — **always visible as soon as a `test_class` row is
+  selected**, in both list and diff mode, next to the existing diff preview
+  (decision: no separate reveal-on-`→` step, unlike drilling). The
+  look-ahead **preview** slot (the next sidebar row, dimmed) gets a small,
+  non-interactive summary card instead (`testClassPreviewCard`, `home.mjs`)
+  — the full, interactive column only ever renders for the row that's
+  **actually selected**. Each method row shows its own approve pill +
+  status mark (parity with the individual rows that disappeared — the
+  reviewer must not lose information) and highlights the active method
+  (`state.classMethodSel`); no search field of its own. `f`/`d`/`s`/`a` are
+  a deliberate no-op while this column owns the keyboard (`isTestColumnActive`)
+  — there's no diff context there to zoom/toggle, mirroring stop 1's own
+  no-op arrows.
+- **Keyboard:** `→` on a selected class row (pr-index, stop 2) first moves
+  focus onto the methodes-kolom (`state.testColumnFocused`) without
+  changing `state.mode` — a **second** `→` (or `Enter`) then steps into the
+  diff of the active method, exactly like `→` on an ordinary block does
+  from stop 2. `←` from that diff steps back onto the methodes-kolom (not
+  all the way to the pr-index — `state.testColumnFocused` simply survives
+  the `mode: 'diff' → 'list'` transition unchanged, since nothing resets it
+  along the way); a **second** `←` finally leaves the column. Within the
+  column, `↑`/`↓` walk the class's own methods and — decision: "doorlopen
+  mag" — flow on to the first/last method of the next/previous `test_class`
+  row once they run past this class's own methods (`stepTestMethod`,
+  mirroring `stepBlock`'s same-file flow-through, but scoped to test
+  classes instead of files). The same flow-through also applies **inside
+  the diff**: stepping past the last/first change of one method first tries
+  the next/previous method of the **same** class (`stepTestMethodChange`),
+  then the next/previous class row, before ever falling back to the coarser
+  same-file `stepBlock` path (which never applies to a `test_class` row
+  itself, only ever to its active method's own diff — and a test method's
+  file never has a *different top-level block* adjacent to it in
+  `state.blocks` in practice, since `sameFileNeighbour` excludes
+  `test_class` rows on both sides). Any keyboard action that deliberately
+  changes the top-level selection (a sidebar click, `stepListSelection`,
+  `setSearch`, `clampSelectedToVisible`) resets `state.classMethodSel`/
+  `testColumnFocused` back to their defaults via the shared `selectRow`
+  helper (`home.mjs`) — a stale "which method"/"is the column focused" from
+  a *previously* selected class row must never leak onto whatever gets
+  selected next. `findNextUnapproved`/`applyNextUnapproved` ("Ga door naar
+  volgende niet-goedgekeurde") got a matching `methodIdx` field on their
+  landing plan: a `test_class` candidate is searched method-by-method
+  (continuing through the REMAINING methods of the currently active class
+  before moving to a different top-level row — the tree-walk equivalent of
+  the same flow-through), and landing on a different method automatically
+  opens the column and selects it, exactly like "Ga door" already opens a
+  drilled column.
+- **Approve rollup — two DELIBERATELY different numbers, reconciled, not in
+  conflict** (`blockApproveCount`/`subtreeApproveCount`, `home.mjs`): the
+  class row's own **sidebar pill** (and the methodes-kolom's header pill)
+  sums only its methods' **own** changed rows
+  (`blockApproveCount`'s `test_class` branch: `Σ blockApproveCount(method)`,
+  no recursion into a method's own Onderliggende-code subtree) — a
+  deliberate product decision to keep that one pill narrow and simple. The
+  **PR-wide** "X/Y goedgekeurd" header (`state.approvalTotal`) must NOT lose
+  what a method's own subtree would have contributed before grouping (a
+  resolved-but-hidden method-call target, a `covers` child) — so
+  `subtreeApproveCount`'s `test_class` branch sums the FULL
+  `Σ subtreeApproveCount(method)` instead, mathematically identical to the
+  sum before grouping (each method was its own top-level row contributing
+  its own `subtreeApproveCount` — grouping only changes how the terms are
+  iterated, never what they add up to). The one watch that fills both
+  `state.approvalSummaries` (per-row pill display) and `state.approvalTotal`
+  (the PR-wide sum) therefore stores the **narrow** `blockApproveCount`
+  value into `approvalSummaries[row.id]` for display, while still adding the
+  **full** `subtreeApproveCount` value into the running `done`/`total` sum —
+  two different numbers computed side by side in the same loop iteration,
+  never at odds with each other. See `tests/test-class-grouping.spec.mjs`
+  ("approving a method rolls up into the class pill, and the PR-wide total
+  stays correct").
+- **URL state:** `?sel=testclass:<file>::<class>` mirrors the selected class
+  row (`state.blockRef`, exactly like `comment:<id>` does for a comment
+  item — `applyTestClassRefRestore`, `home.mjs`); a separate
+  `?tmethod=<file:line>` mirrors which method within it is active
+  (`state.testMethodRef`, resolved in the same restore call, analogous to
+  `drillGran`/`drillChange` mirroring the deepest drilled column's cursor).
+  Not found (stale/shared link) → the same silent not-found fallback as
+  every other restore path in this app.
+- **`openTask`** (a "Taken" row pointing at a comment placed on a test
+  method) searches every `test_class` row's own `.methods` too, once a
+  direct top-level match fails — a comment on a grouped method would
+  otherwise never be found at all.
+
+Test: `tests/test-class-grouping.spec.mjs` (grouping itself, the
+always-visible methodes-kolom in list mode, the `→`/`←`/`↓` mechanics
+above, a single-method class, and the approve-rollup reconciliation).
+
 ## Inline comment blocks
 
 Block-scoped comment threads (`kind === ''`, the `task_code_comment`

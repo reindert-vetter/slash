@@ -18,6 +18,19 @@ continuous chain of **stops**, from left to right across the whole layout:
 2. **PR block index** (`data-testid=pr-index`, the sidebar, `state.mode==='list'`)
    — physically shifts right as soon as stop 1 is open, so the description
    really sits to its left instead of after it (see `.claude/rules/detail-layout.md`).
+   - **Stop 2b — the methodes-kolom** (`data-testid=test-methods-column`,
+     `state.testColumnFocused`): a **conditional** stop, only inserted when
+     the selected row is a `test_class` row (grouped TEST-category methods,
+     see "Grouping test methods per class" in `.claude/rules/detail-layout.md`)
+     — deliberately NOT renumbered into the chain (stop 3 stays "stop 3"
+     etc.) to avoid touching every reference below. `→` from stop 2 on such
+     a row lands here first (instead of stepping straight into the diff); a
+     **second** `→`/`Enter` then steps into stop 3, of the ACTIVE method
+     (`state.classMethodSel`, via `curBlock()`). `←` from stop 3 comes back
+     here first (not all the way to stop 2); a second `←` leaves it. `↑`/`↓`
+     walk the class's own methods, flowing on to the next/previous
+     `test_class` row at the edges. `f`/`d`/`s`/`a` are a no-op here, same as
+     stop 1.
 3. **Block with diff** (`state.mode==='diff'`, `state.focusLevel===0`).
 4. **Drilled columns** (`state.drill`/`focusLevel>0`) — a **side branch**, not
    a strict stop: only reachable via Enter/click on an Underlying-code child

@@ -395,6 +395,12 @@ function row(state, b, i) {
         state.selected = i
         state.toggleFocused = false
         state.ignoreToggleFocused = false
+        // A stale "which method"/"is the methodes-kolom focused" from a
+        // PREVIOUSLY selected test_class row (see testClassRowItem in
+        // home.mjs) must never leak onto whatever gets clicked next — mirrors
+        // home.mjs's own selectRow helper for the keyboard paths.
+        state.classMethodSel = 0
+        state.testColumnFocused = false
       }}"
     >
       <span

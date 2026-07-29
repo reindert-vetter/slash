@@ -17,14 +17,19 @@ test.describe('PR Review Tree — test coverage', () => {
     // production method stay in the left list. The covered method is a changed,
     // primary reviewable block (unlike a call-target or listener from an
     // unchanged file), so a test must never make it vanish from the tree.
+    // OrderCoverageTest has a single changed method, so it groups into one
+    // test_class row labelled with the bare class name (see
+    // testClassRowItem/recomputeLeftList in home.mjs) — selecting it already
+    // resolves curBlock() to that one method (state.classMethodSel defaults
+    // to 0).
     const rows = page.getByTestId('block-row')
     await expect(rows).toHaveCount(2)
-    await expect(rows.filter({ hasText: 'OrderCoverageTest::testBillingAddress' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'OrderCoverageTest' })).toHaveCount(1)
     await expect(rows.filter({ hasText: 'Order::billingAddress' })).toHaveCount(1)
 
     // Direction 1 (test → geteste methode): with the test selected, the covered
     // method shows as underlying code, with a diff-stat (it's changed too).
-    await rows.filter({ hasText: 'OrderCoverageTest::testBillingAddress' }).click()
+    await rows.filter({ hasText: 'OrderCoverageTest' }).click()
     const child = page.getByTestId('related-item')
     await expect(child).toHaveCount(1)
     await expect(child).toContainText('Order::billingAddress')
@@ -56,11 +61,14 @@ test.describe('PR Review Tree — test coverage', () => {
     await expect(rows).toHaveCount(2)
     const warning = page.getByTestId('related-covers-warning')
 
-    await rows.filter({ hasText: 'UnannotatedTest::testSomethingWithoutCoverage' }).click()
+    // Both UnannotatedTest and NotfoundTest have a single changed method, so
+    // each groups into its own test_class row (bare class name — see
+    // testClassRowItem/recomputeLeftList).
+    await rows.filter({ hasText: 'UnannotatedTest' }).click()
     await expect(warning).toHaveCount(1)
     await expect(warning).toContainText('geen #[CoversMethod]/@covers gevonden')
 
-    await rows.filter({ hasText: 'NotfoundTest::testClassLevelOnly' }).click()
+    await rows.filter({ hasText: 'NotfoundTest' }).click()
     await expect(warning).toHaveCount(1)
     await expect(warning).toContainText('#[CoversClass] gevonden')
   })
@@ -71,7 +79,9 @@ test.describe('PR Review Tree — test coverage', () => {
   test('an LLM-found class-level coverage child shows the bron badge', async ({ page }) => {
     await page.goto('/pr/94')
 
-    await page.getByTestId('block-row').filter({ hasText: 'FoundTest::testFound' }).click()
+    // FoundTest has a single changed method, so it groups into one
+    // test_class row (bare class name — see testClassRowItem in home.mjs).
+    await page.getByTestId('block-row').filter({ hasText: 'FoundTest' }).click()
     const child = page.getByTestId('related-item')
     await expect(child).toHaveCount(1)
     await expect(child).toContainText('Invoice::total')

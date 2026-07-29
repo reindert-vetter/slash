@@ -50,6 +50,7 @@ export default function globalSetup() {
   materializeTranslationWorktrees()
   materializeDefaultSelWorktrees()
   materializeSvgWorktrees()
+  materializeTestClassGroupWorktrees()
 }
 
 // materializeMainWorktrees writes the base/head worktrees for the suite's MAIN
@@ -804,4 +805,49 @@ function materializeSvgWorktrees() {
   write('head', 'public/icons/logo.svg', icon('#0f0'))
   write('base', 'public/icons/evil.svg', evil)
   write('head', 'public/icons/evil.svg', evil)
+}
+
+// materializeTestClassGroupWorktrees writes the synthetic PR 110 fixture
+// worktrees for test-class-grouping.spec.mjs: two TEST-category classes —
+// TriggersIndexTest (two changed methods, tests/fixtures/
+// testclassgroup-blocks.json) and SettingsStoreTest (one changed method,
+// proving a class groups even with just a single method — see
+// testClassRowItem/recomputeLeftList in home.mjs) — each with exactly one
+// changed line (`$value = 1` → `$value = 2`) so the diff/approve mechanics
+// have something real to act on.
+function materializeTestClassGroupWorktrees() {
+  const triggersIndex = (value) => `<?php
+
+namespace Tests\\Feature;
+
+class TriggersIndexTest
+{
+    public function it_should_index_triggers()
+    {
+        $value = ${value};
+    }
+
+    public function it_should_filter_triggers()
+    {
+        $value = ${value};
+    }
+}
+`
+  const settingsStore = (value) => `<?php
+
+namespace Tests\\Feature;
+
+class SettingsStoreTest
+{
+    public function it_should_store_settings()
+    {
+        $value = ${value};
+    }
+}
+`
+  const write = worktreeWriter(110)
+  write('base', 'tests/Feature/TriggersIndexTest.php', triggersIndex(1))
+  write('head', 'tests/Feature/TriggersIndexTest.php', triggersIndex(2))
+  write('base', 'tests/Feature/SettingsStoreTest.php', settingsStore(1))
+  write('head', 'tests/Feature/SettingsStoreTest.php', settingsStore(2))
 }

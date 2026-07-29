@@ -1,0 +1,35 @@
+[
+  {
+    "pr": 110,
+    "file": "tests/Feature/TriggersIndexTest.php",
+    "class": "TriggersIndexTest",
+    "name": "it_should_index_triggers",
+    "category": "TEST",
+    "line": 7,
+    "endLine": 10,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 110,
+    "file": "tests/Feature/TriggersIndexTest.php",
+    "class": "TriggersIndexTest",
+    "name": "it_should_filter_triggers",
+    "category": "TEST",
+    "line": 12,
+    "endLine": 15,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 110,
+    "file": "tests/Feature/SettingsStoreTest.php",
+    "class": "SettingsStoreTest",
+    "name": "it_should_store_settings",
+    "category": "TEST",
+    "line": 7,
+    "endLine": 10,
+    "status": "modified",
+    "side": "new"
+  }
+]

@@ -38,7 +38,7 @@ const BIN = path.resolve('tests/.tmp/slash')
 // 102's Shift+range selection, 106's drilled line-skip, 107's translation
 // keys, 108's fresh-open default).
 // Add a PR here as soon as a new spec approves anything on it durably.
-const APPROVAL_RESET_PRS = [95, 102, 106, 107, 108, 12903]
+const APPROVAL_RESET_PRS = [95, 102, 106, 107, 108, 110, 12903]
 
 // seed replicates the seed passes the old webServer command ran: the main
 // blocks fixture (PR 12903), the relations/callresolve fixtures (PR 90/91),
@@ -289,6 +289,15 @@ function seed(db) {
   // raw text diff for an .svg block. A second block carries a hostile
   // `<script>`/`onload=` payload to prove that preview never executes it.
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/svg-blocks.json'], {
+    stdio: 'ignore',
+  })
+  // Test-class-grouping fixture (PR 110, test-class-grouping.spec.mjs): two
+  // TEST-category classes — TriggersIndexTest (two methods) and
+  // SettingsStoreTest (a single method, proving a class is grouped even with
+  // just one changed method — see testClassRowItem/recomputeLeftList in
+  // home.mjs) — worktrees materialized in _setup.mjs,
+  // materializeTestClassGroupWorktrees.
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/testclassgroup-blocks.json'], {
     stdio: 'ignore',
   })
 }

@@ -67,6 +67,7 @@ import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { changedKeysOf, translationSiblingView } from './translationDiff.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
+import TestMethodsColumn from './TestMethodsColumn.mjs'
 
 initTheme()
 
@@ -224,6 +225,29 @@ const state = reactive({
   // loadBlocks (RelatedPanel's own comment poll) and may not exist yet at the
   // usual blockRef-restore time.
   blockRef: '',
+  // classMethodSel — index into the ACTIVE test-class row's `.methods` array
+  // (see the "Grouping test methods per class" section in
+  // .claude/rules/detail-layout.md). Only meaningful while
+  // `state.blocks[state.selected]` is a synthetic `kind:'test_class'` row
+  // (see testClassRowItem/recomputeLeftList) — curBlock() resolves through
+  // this index so every existing block-centric mechanism (diff, approve,
+  // comments, drilling, footer) keeps working unchanged on whichever method
+  // is currently active, without needing to know about test classes at all.
+  classMethodSel: 0,
+  // testColumnFocused — whether the new "methodes"-kolom (stop 2b of the
+  // left→right nav chain, between the pr-index and the diff — see
+  // keyboard-navigation.md) currently owns ↑/↓/→/Enter, as opposed to the
+  // pr-index itself (stop 2). Only meaningful while the selected row is a
+  // test_class row and state.mode === 'list'. Ephemeral, like
+  // showDescription/toggleFocused — reset on every selection change.
+  testColumnFocused: false,
+  // testMethodRef — the URL-facing identity of the ACTIVE method within the
+  // selected test_class row (`${file}:${line}`, mirrors blockRef itself) —
+  // '' whenever the selection isn't a test_class row. Lets `?sel=testclass:…`
+  // restore not just which class but which method was open, the same
+  // "mirror by stable reference, not by array index" reasoning as blockRef/
+  // drillRef (see applyTestMethodRefRestore below).
+  testMethodRef: '',
   // mode: 'list' — up/down move between blocks in the sidebar; → steps into the
   // selected block's diff. 'diff' — up/down move between change groups inside the
   // block, and once past the last/first change they flow straight into the
@@ -527,6 +551,7 @@ bindUrlState(state, [
   { key: 'drillRef', param: 'drill', default: '' },
   { key: 'drillGran', param: 'dgran', default: 'group' },
   { key: 'drillChange', param: 'dchg', parse: num(0), default: 0 },
+  { key: 'testMethodRef', param: 'tmethod', default: '' },
 ])
 
 // restoredBlockRef snapshots whatever bindUrlState just restored into
@@ -550,6 +575,14 @@ let blockRefPending = state.blockRef || null
 // there directly would flip to false and wrongly let
 // applyDefaultUnapprovedSelection override the just-restored selection.
 const hadInitialSelParam = blockRefPending != null
+
+// testMethodRefPending mirrors blockRefPending for the active method within a
+// restored test_class row (`?tmethod=file:line`) — snapshotted before the
+// mirror watch below (added alongside the blockRef watch) recomputes it back
+// to '' against the still-empty state.blocks. Resolved synchronously inside
+// applyBlockRefRestore's own `testclass:` branch (methods are already part of
+// the loaded block, no separate async fetch needed, unlike a drilled child).
+let testMethodRefPending = state.testMethodRef || null
 
 // drillRefPending mirrors blockRefPending for the drill path restored from
 // `?drill=id1>id2>...` — snapshotted before the state.drill mirror watch below
@@ -579,12 +612,19 @@ let drillCursorPending =
 // see commentBlockItem) has no file:line — it mirrors its own stable `.id`
 // instead (`comment:<id>`, never colliding with a real block's `file:line`
 // shape), so navigating through PR-wide comments also survives a refresh
-// (see applyCommentRefRestore below for the restore side).
+// (see applyCommentRefRestore below for the restore side). A test_class row
+// (see testClassRowItem/recomputeLeftList) mirrors the same way, on its own
+// stable `.id` (`testclass:<file>::<class>`) — testMethodRef separately
+// mirrors WHICH method within it is active (curBlock(), via
+// state.classMethodSel), so both the class and the open method survive a
+// refresh (see applyTestMethodRefRestore below for the restore side).
 watch(
-  () => [state.selected, state.blocks],
+  () => [state.selected, state.blocks, state.classMethodSel],
   () => {
     const b = state.blocks[state.selected]
-    state.blockRef = b ? (b.kind === 'comment' ? b.id : `${b.file}:${b.line}`) : ''
+    state.blockRef = b ? (b.kind === 'comment' || b.kind === 'test_class' ? b.id : `${b.file}:${b.line}`) : ''
+    const m = b && b.kind === 'test_class' ? b.methods[state.classMethodSel] : null
+    state.testMethodRef = m ? `${m.file}:${m.line}` : ''
   },
 )
 
@@ -632,9 +672,35 @@ function applyBlockRefRestore() {
     applyCommentRefRestore()
     return
   }
+  if (ref.startsWith('testclass:')) {
+    applyTestClassRefRestore()
+    return
+  }
   blockRefPending = null
-  const idx = state.blocks.findIndex((b) => b.kind !== 'comment' && `${b.file}:${b.line}` === ref)
+  const idx = state.blocks.findIndex((b) => b.kind !== 'comment' && b.kind !== 'test_class' && `${b.file}:${b.line}` === ref)
   if (idx >= 0) state.selected = idx
+}
+
+// applyTestClassRefRestore resolves a `?sel=testclass:<file>::<class>`
+// restored at load time (see testClassRowItem/recomputeLeftList) — the class
+// row itself is a normal, synchronously-available part of state.blocks (no
+// separate async load, unlike a comment item), so unlike applyCommentRefRestore
+// this never needs a retry: not found (stale/shared link) simply leaves
+// blockRefPending set, mirroring applyBlockRefRestore's own not-found
+// fallback, and gives up silently. Once the class row is found, also
+// resolves testMethodRefPending (`?tmethod=file:line`) into
+// state.classMethodSel — not found/absent → defaults to the first method (0).
+function applyTestClassRefRestore() {
+  const idx = state.blocks.findIndex((b) => b.kind === 'test_class' && b.id === blockRefPending)
+  if (idx < 0) return
+  state.selected = idx
+  blockRefPending = null
+  const row = state.blocks[idx]
+  const mIdx = testMethodRefPending
+    ? row.methods.findIndex((m) => `${m.file}:${m.line}` === testMethodRefPending)
+    : -1
+  state.classMethodSel = mIdx >= 0 ? mIdx : 0
+  testMethodRefPending = null
 }
 
 // applyCommentRefRestore resolves a `?sel=comment:<id>` restored at load time
@@ -876,7 +942,7 @@ function clearRangeAnchor(level = state.focusLevel) {
 // range only has meaning within the granularity it was made at.
 function setGran(delta) {
   if (state.mode !== 'diff') return
-  const b = state.blocks[state.selected]
+  const b = curBlock()
   // A TRANSLATION block navigates per changed KEY only (see navUnitsOf) —
   // there is no group/line/call distinction to zoom through, so f/d/s are a
   // deliberate no-op here (see .claude/rules/blocks-and-ingest.md,
@@ -908,7 +974,7 @@ function setGran(delta) {
 // of a single block.
 function extendRange(delta) {
   if (state.mode !== 'diff' || !isRangeGran(state.gran)) return
-  const b = state.blocks[state.selected]
+  const b = curBlock()
   // Per-key navigation is deliberately single-key only (see setGran above) —
   // a TRANSLATION block never gets a Shift+arrow multi-key range either.
   if (b && b.category === 'TRANSLATION') return
@@ -930,7 +996,13 @@ function sameFileNeighbour(delta) {
   // A synthetic comment-index item (kind:'comment') has no `.file` at all —
   // without this guard two adjacent comment items would coincidentally match
   // on `undefined === undefined`. Neither side of a same-file step may be one.
-  if (cur.kind === 'comment' || nb.kind === 'comment') return false
+  // A test_class row (see testClassRowItem/recomputeLeftList) is excluded the
+  // same way, on purpose: two test classes in the same file deliberately get
+  // NO connector/flow-through between each other at this top level (the
+  // method-to-method flow now lives inside the class's own methods column —
+  // see stepTestMethod/stepTestMethodChange below, a separate mechanism).
+  if (cur.kind === 'comment' || nb.kind === 'comment' || cur.kind === 'test_class' || nb.kind === 'test_class')
+    return false
   return nb.file === cur.file
 }
 
@@ -967,14 +1039,67 @@ function stepBlock(delta) {
   return true
 }
 
+// stepTestMethod moves state.classMethodSel by `delta` within the SELECTED
+// test_class row's own methods (see testClassRowItem/recomputeLeftList). Once
+// it runs past the last/first method of this class, it flows on to the
+// first/last method of the next/previous test_class row anywhere further
+// down/up state.blocks — decision: "doorlopen mag", the class-scoped mirror
+// of stepBlock's own same-file flow-through above (deliberately a SEPARATE
+// mechanism — see sameFileNeighbour's own guard). Returns false at the very
+// end of the list (no further class row in that direction) — mirrors
+// stepBlock's own false-at-the-edges contract.
+function stepTestMethod(delta) {
+  const row = curTestClassRow()
+  if (!row) return false
+  const next = state.classMethodSel + delta
+  if (next >= 0 && next < row.methods.length) {
+    state.classMethodSel = next
+    return true
+  }
+  const dir = delta > 0 ? 1 : -1
+  let idx = state.selected + dir
+  while (idx >= 0 && idx < state.blocks.length && state.blocks[idx].kind !== 'test_class') idx += dir
+  if (idx < 0 || idx >= state.blocks.length) return false
+  const target = state.blocks[idx]
+  state.selected = idx
+  state.classMethodSel = dir > 0 ? 0 : target.methods.length - 1
+  return true
+}
+
+// stepTestMethodChange is stepTestMethod's diff-mode counterpart, mirroring
+// stepBlock exactly (change-group reset, pendingLast deferral, scrolling) but
+// for moving to a neighbouring test method instead of a neighbouring
+// top-level block.
+function stepTestMethodChange(delta) {
+  if (!stepTestMethod(delta)) return false
+  clearRangeAnchor(0)
+  const groups = unitsOf(curBlock())
+  if (delta < 0) {
+    if (groups.length) {
+      state.change = groups.length - 1
+    } else {
+      state.change = 0
+      pendingLast = true
+    }
+  } else {
+    state.change = 0
+  }
+  scrollSelectedIntoView()
+  scrollChangeIntoView()
+  return true
+}
+
 // nextChange / prevChange move to the next / previous navigation unit at the
 // current granularity, flowing into the neighbouring same-file block when we run
-// off the end / start of this one (see stepBlock). Shared by the ↓/↑ arrows and
-// by f/d on the 'call' level, so both walk the diff the same way.
+// off the end / start of this one (see stepBlock) — or, while a test_class row
+// is selected, into the neighbouring test method (see stepTestMethodChange).
+// Shared by the ↓/↑ arrows and by f/d on the 'call' level, so both walk the
+// diff the same way.
 function nextChange() {
-  const groups = unitsOf(state.blocks[state.selected])
+  const groups = unitsOf(curBlock())
   if (state.change >= groups.length - 1) {
-    stepBlock(1)
+    if (curTestClassRow()) stepTestMethodChange(1)
+    else stepBlock(1)
   } else {
     clearRangeAnchor(0)
     state.change = state.change + 1
@@ -984,7 +1109,8 @@ function nextChange() {
 
 function prevChange() {
   if (state.change <= 0) {
-    stepBlock(-1)
+    if (curTestClassRow()) stepTestMethodChange(-1)
+    else stepBlock(-1)
   } else {
     clearRangeAnchor(0)
     state.change = state.change - 1
@@ -1338,6 +1464,63 @@ function commentBlockItem(c) {
   }
 }
 
+// testClassRowItem turns every TEST-category block of one file+class into a
+// single, synthetic state.blocks item (see "Grouping test methods per class"
+// in .claude/rules/detail-layout.md): kind:'test_class' marks it (guarded
+// everywhere something assumes a real PR block, mirroring kind:'comment' —
+// see enterDiff/ensureCode/sameFileNeighbour/blockApproveCount/openTask/the
+// DetailPanel pair.forEach branch). `methods` keeps every real PR block that
+// belongs to this class, in ingest order — curBlock() resolves through
+// state.classMethodSel into this array, so every existing block-centric
+// mechanism keeps working on whichever method is active without knowing
+// about test classes at all. Grouped on `file + '::' + class` (not bare class
+// name) so two same-named classes in different files never merge — a real,
+// if rare, possibility. `label` is the bare class name (never `class + '::'
+// + method`, like a model_usage child — see blockLabel in Block.mjs); a
+// whole-file scanner-fallback block (unparseable file, Class === '') falls
+// back to the file's own basename so the row never shows an empty label.
+function testClassRowItem(file, className, methods) {
+  const label = className || file.split('/').pop()
+  return {
+    id: 'testclass:' + file + '::' + className,
+    kind: 'test_class',
+    label,
+    class: className,
+    file,
+    category: 'TEST',
+    status: '',
+    methods,
+  }
+}
+
+// groupTestClasses partitions `blocks` into ordinary (non-TEST) entries and
+// one testClassRowItem per distinct file+class among the TEST-category ones —
+// always grouped, even for a class with a single changed method (decision:
+// a predictable flow, no exception for the common "just one method changed"
+// case). Every group keeps its methods in the ORIGINAL relative order (stable
+// partition, mirrors categoryRank's own stable-sort reasoning) so the
+// existing same-file adjacency assumptions elsewhere are unaffected by this
+// step — grouping happens before the rank sort below, not instead of it.
+function groupTestClasses(blocks) {
+  const rest = []
+  const groups = new Map() // "file::class" -> methods[]
+  for (const b of blocks) {
+    if (b.category !== 'TEST') {
+      rest.push(b)
+      continue
+    }
+    const key = b.file + '::' + (b.class || '')
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(b)
+  }
+  const rows = [...groups.entries()].map(([key, methods]) => {
+    const file = methods[0].file
+    const className = methods[0].class || ''
+    return testClassRowItem(file, className, methods)
+  })
+  return [...rest, ...rows]
+}
+
 function recomputeLeftList() {
   // Only the resolved-call targets are hidden from the index (panel-only
   // reference code). Relation children STAY in state.blocks — fully navigable
@@ -1358,9 +1541,14 @@ function recomputeLeftList() {
   // like any other row.
   const rank = (b) => (b.kind === 'comment' ? -1 : childIds.has(b.id) ? 3 : categoryRank(b.category))
   const commentItems = prWideComments().map(commentBlockItem)
-  state.blocks = [...state.allBlocks, ...commentItems]
-    .filter((b) => b.kind === 'comment' || !hidden.has(b.id))
-    .filter((b) => !q || (b.label + ' ' + b.category).toLowerCase().includes(q))
+  const visibleBlocks = state.allBlocks.filter((b) => !hidden.has(b.id))
+  state.blocks = [...groupTestClasses(visibleBlocks), ...commentItems]
+    .filter(
+      (b) =>
+        !q ||
+        (b.label + ' ' + b.category).toLowerCase().includes(q) ||
+        (b.kind === 'test_class' && b.methods.some((m) => (m.label + ' ' + m.category).toLowerCase().includes(q))),
+    )
     .sort((a, b) => rank(a) - rank(b))
   const underlying = {}
   for (const b of state.blocks) if (childIds.has(b.id)) underlying[b.id] = true
@@ -1457,6 +1645,22 @@ function ignoreToggleRowVisible() {
   return state.blocks.some((b) => isIgnoredComment(state, b))
 }
 
+// selectRow sets state.selected to a NEW index chosen by the reviewer
+// (sidebar click, ↑/↓, search) — resetting state.classMethodSel/
+// testColumnFocused every time, so a stale "which method"/"is the column
+// focused" from a PREVIOUSLY selected test_class row never leaks onto
+// whatever gets selected next (mirrors the existing composer/reply reset on
+// every selection change just above). Deliberately NOT used by
+// openTask/applyNextUnapproved/applyTestClassRefRestore, which each set
+// classMethodSel/testColumnFocused explicitly to their OWN intended values
+// right after moving state.selected — resetting there first would just be
+// immediately overwritten, so those keep assigning state.selected directly.
+function selectRow(idx) {
+  state.selected = idx
+  state.classMethodSel = 0
+  state.testColumnFocused = false
+}
+
 // stepListSelection is the list-mode ↑/↓ step (dir=+1 down, -1 up) while the
 // keyboard cursor sits on an ordinary block or one of the two toggle rows —
 // NOT already inside the search box itself (see searchStepSelection for that
@@ -1490,7 +1694,7 @@ function stepListSelection(dir) {
       else activateSearch()
       return
     }
-    state.selected = next
+    selectRow(next)
     return
   }
   if (state.ignoreToggleFocused) {
@@ -1511,7 +1715,7 @@ function stepListSelection(dir) {
     activateSearch()
     return
   }
-  state.selected = prev
+  selectRow(prev)
 }
 
 // searchStepSelection is the ↑/↓ step while the search box already holds real
@@ -1544,7 +1748,7 @@ function searchStepSelection(dir) {
     exitSearch()
     if (dir > 0) {
       const first = firstVisibleIndex()
-      if (first >= 0) state.selected = first
+      if (first >= 0) selectRow(first)
       return
     }
     // Going up from search always lands on the last visible block underneath
@@ -1554,7 +1758,7 @@ function searchStepSelection(dir) {
     // via a full ↓ wrap-around (which resets state.selected to the FIRST
     // visible block), so it must be set explicitly on every branch below.
     const last = lastVisibleIndex()
-    if (last >= 0) state.selected = last
+    if (last >= 0) selectRow(last)
     if (ignoreToggleRowVisible()) {
       state.ignoreToggleFocused = true
       return
@@ -1572,7 +1776,7 @@ function searchStepSelection(dir) {
       state.toggleFocused = true
       return
     }
-    state.selected = next
+    selectRow(next)
     return
   }
   if (state.toggleFocused) {
@@ -1582,10 +1786,10 @@ function searchStepSelection(dir) {
   const prev = stepVisibleSelected(-1)
   if (prev === state.selected) {
     const last = lastVisibleIndex()
-    if (last >= 0) state.selected = last
+    if (last >= 0) selectRow(last)
     return
   }
-  state.selected = prev
+  selectRow(prev)
 }
 
 // revealSelectedIfHidden pins the restored selection visible when it points at
@@ -1706,7 +1910,7 @@ function clampSelectedToVisible() {
   if (state.showApproved || !isFullyApproved(state, b)) return
   const idx = state.blocks.findIndex((x) => !isFullyApproved(state, x))
   if (idx >= 0) {
-    state.selected = idx
+    selectRow(idx)
     scrollSelectedIntoView()
   }
 }
@@ -1717,6 +1921,8 @@ function setSearch(q) {
   state.search = q
   recomputeLeftList()
   state.selected = 0
+  state.classMethodSel = 0
+  state.testColumnFocused = false
   // Typing is a fresh navigation reset — never leave the keyboard cursor
   // parked on the toggle-approved row from a previous, now-irrelevant walk.
   state.toggleFocused = false
@@ -2854,6 +3060,25 @@ function blockApproveCount(b) {
     const resolved = !!(b.comment && b.comment.status === 'resolved')
     return { done: resolved ? 1 : 0, total: 1 }
   }
+  // A test_class row (see testClassRowItem/recomputeLeftList) sums its
+  // METHODS' OWN rows only — deliberately NOT their nested Onderliggende-code
+  // subtree (a resolved call target, a covers child, …). This is the pill
+  // the sidebar row itself shows; the PR-wide "X/Y goedgekeurd" total does
+  // NOT read this value — see subtreeApproveCount's own test_class branch
+  // below, which sums the FULL per-method subtree instead, so nothing is
+  // lost or double-counted there. See "Grouping test methods per class" in
+  // .claude/rules/detail-layout.md for why these two are deliberately
+  // different numbers.
+  if (b.kind === 'test_class') {
+    let done = 0
+    let total = 0
+    for (const m of b.methods) {
+      const c = blockApproveCount(m)
+      done += c.done
+      total += c.total
+    }
+    return { done, total }
+  }
   const backendTotal =
     state.blockTotals && typeof state.blockTotals[b.id] === 'number'
       ? state.blockTotals[b.id]
@@ -2875,6 +3100,26 @@ function subtreeApproveCount(b) {
   // A comment-index item has no nested PR blocks (nestedPrBlocks assumes a
   // real block id/relations entry) — just its own 0/1 or 1/1.
   if (b.kind === 'comment') return blockApproveCount(b)
+  // A test_class row: unlike blockApproveCount's own test_class branch above
+  // (methods-only, for the sidebar pill), the PR-wide total needs the FULL
+  // sum — each method's own subtreeApproveCount, including whatever hangs
+  // under it (a resolved-but-hidden call target, a covers child, …). This is
+  // mathematically identical to what the PR-wide total already summed
+  // before grouping, when each method was its own top-level state.blocks
+  // entry contributing its own subtreeApproveCount — grouping only changes
+  // how these terms are iterated, never what they add up to. See
+  // blockApproveCount's own comment for why the DISPLAY pill deliberately
+  // uses a narrower number than this.
+  if (b.kind === 'test_class') {
+    let done = 0
+    let total = 0
+    for (const m of b.methods) {
+      const c = subtreeApproveCount(m)
+      done += c.done
+      total += c.total
+    }
+    return { done, total }
+  }
   let done = 0
   let total = 0
   for (const x of [b, ...nestedPrBlocks(b)]) {
@@ -2961,10 +3206,13 @@ async function ensureCode(b) {
   // childCode); there's no stored PR block to fetch, so never hit /api/code for it
   // — that would clobber the inline code with null and hang on "loading".
   if (b.synthetic) return
-  // A synthetic comment-index item (kind:'comment', see commentBlockItem) has
-  // no source to fetch — it has no .file/.label at all, so /api/code would
-  // 404 uselessly.
-  if (b.kind === 'comment') return
+  // A synthetic comment-index item (kind:'comment', see commentBlockItem) or
+  // a synthetic test_class row (see testClassRowItem) has no source to fetch
+  // itself — neither has a real .file/.label/.side (a test_class row's own
+  // code lives entirely in its .methods, each fetched individually when it
+  // becomes the active method — see curBlock()), so /api/code would 404
+  // uselessly.
+  if (b.kind === 'comment' || b.kind === 'test_class') return
   const key = b.file + '|' + b.label + '|' + b.side
   if (codeRequested.has(key)) return
   codeRequested.add(key)
@@ -2994,7 +3242,9 @@ async function ensureCode(b) {
     // If this is the selected block, centre its active change now that the rows
     // (and their anchor) can be rendered — both when we've stepped into the diff
     // and when it's merely selected in the list (previewing the first change).
-    if (state.blocks[state.selected] === b) {
+    // curBlock() (not a raw state.blocks[state.selected] read) so this also
+    // fires for the ACTIVE method of a selected test_class row.
+    if (curBlock() === b) {
       const groups = unitsOf(b)
       // We stepped up into this block before its code loaded — now that its
       // change groups are known, land on the last one.
@@ -3272,6 +3522,20 @@ function enterDiff() {
   // no-op for any other caller (f, applyDefaultUnapprovedSelection's
   // scroll-only landing, …).
   if (!b || b.kind === 'comment') return
+  // A test_class row (see testClassRowItem/recomputeLeftList) has no diff of
+  // its OWN — → first opens the methodes-kolom (stop 2b of the left→right
+  // nav chain, see keyboard-navigation.md) instead of stepping straight into
+  // diff mode; only a SECOND → (the column already owning the keyboard —
+  // state.testColumnFocused) actually enters the diff, and then of the
+  // ACTIVE method (state.classMethodSel), not of the row itself.
+  if (b.kind === 'test_class') {
+    if (!state.testColumnFocused) {
+      state.testColumnFocused = true
+      if (state.classMethodSel >= b.methods.length) state.classMethodSel = 0
+      return
+    }
+    if (!b.methods.length) return
+  }
   state.mode = 'diff'
   // Stepping in from the list always starts at the coarsest granularity (a whole
   // change run); the reviewer refines from there with f.
@@ -3301,8 +3565,26 @@ function enterDiff() {
 async function openTask(run) {
   const c = run && run.comment
   if (!c) return
-  const idx = state.blocks.findIndex((b) => b.file === c.file && b.label === c.label)
-  if (idx < 0) return
+  // A comment on a test method no longer has its own top-level row (see
+  // testClassRowItem/recomputeLeftList) — if it's not found there directly,
+  // look inside every test_class row's own methods too.
+  let idx = state.blocks.findIndex((b) => b.kind !== 'test_class' && b.file === c.file && b.label === c.label)
+  let b
+  if (idx >= 0) {
+    state.classMethodSel = 0
+    state.testColumnFocused = false
+    b = state.blocks[idx]
+  } else {
+    idx = state.blocks.findIndex(
+      (row) => row.kind === 'test_class' && row.methods.some((m) => m.file === c.file && m.label === c.label),
+    )
+    if (idx < 0) return
+    const row = state.blocks[idx]
+    const mIdx = row.methods.findIndex((m) => m.file === c.file && m.label === c.label)
+    state.classMethodSel = mIdx
+    state.testColumnFocused = true
+    b = row.methods[mIdx]
+  }
   state.selected = idx
   state.mode = 'diff'
   state.drill = []
@@ -3310,7 +3592,6 @@ async function openTask(run) {
   state.focusLevel = 0
   state.rangeAnchor = null
   resetMainScroll()
-  const b = state.blocks[idx]
   await ensureCode(b)
   const rows = blockRows(b)
   const gran = c.gran || 'group'
@@ -3761,8 +4042,37 @@ function granNoun() {
   return g === 'line' ? 'regel' : g === 'call' ? 'call' : 'groep'
 }
 
+// curTestClassRow returns the selected test_class row (see
+// testClassRowItem/recomputeLeftList) — null for any other selection. The
+// single check every other test-class helper below builds on.
+function curTestClassRow() {
+  const b = state.blocks[state.selected]
+  return b && b.kind === 'test_class' ? b : null
+}
+
+// isTestColumnActive reports whether stop 2b of the left→right nav chain
+// (the methodes-kolom, see TestMethodsColumn.mjs) currently owns ↑/↓/→/Enter
+// — only meaningful in list mode, on a selected test_class row, once the
+// reviewer has actually stepped into the column (see enterDiff's own
+// test_class branch, which flips state.testColumnFocused on the FIRST →).
+function isTestColumnActive() {
+  return state.mode === 'list' && state.testColumnFocused && !!curTestClassRow()
+}
+
+// curBlock resolves the top-level selection to the block that actually owns
+// the diff/approve/comment machinery: for an ordinary row that's simply
+// state.blocks[state.selected], but for a test_class row (see
+// testClassRowItem/recomputeLeftList) it's the ACTIVE method within it
+// (state.classMethodSel) — a real PR block, so every existing block-centric
+// mechanism (ensureCode, blockRows, approve, comments, drilling, footer,
+// call-arrows) keeps working unchanged on whichever method is currently
+// selected, without any of those needing to know test classes exist. Only
+// the handful of functions that step BETWEEN top-level state.blocks entries
+// (sameFileNeighbour/stepBlock, the sidebar's own ↑/↓) still read
+// state.blocks[state.selected] directly, on purpose — see their own comments.
 function curBlock() {
-  return state.blocks[state.selected]
+  const row = curTestClassRow()
+  return row ? row.methods[state.classMethodSel] || null : state.blocks[state.selected]
 }
 
 // selectedComment returns the underlying comment object when the currently
@@ -4751,7 +5061,13 @@ watch(
     let total = 0
     for (const b of state.blocks) {
       const c = subtreeApproveCount(b)
-      map[b.id] = c
+      // The sidebar PILL of a test_class row deliberately shows a NARROWER
+      // number than what feeds the PR-wide total just below (methods' own
+      // rows only, not their nested subtree — see blockApproveCount's own
+      // comment) — map[b.id] is only ever read for per-row display
+      // (BlockList.mjs's approvalPill/isFullyApproved), never for a sum, so
+      // this divergence from `c` is safe and deliberate.
+      map[b.id] = b.kind === 'test_class' ? blockApproveCount(b) : c
       // A relation child ("Onderliggende code" index row) is already counted
       // inside its parent's subtree — skipping it here keeps the PR-wide
       // header count identical to when children weren't index rows at all.
@@ -5089,10 +5405,39 @@ async function findNextUnapproved() {
         }
       }
     }
+    // Continue through the REMAINING methods of the same test_class row (see
+    // testClassRowItem/recomputeLeftList) before falling through to a
+    // different top-level row below — decision: "doorlopen mag" (see
+    // keyboard-navigation.md). Only at the top level (level === 0): a
+    // drilled column can never itself be "inside" a class's methods column.
+    if (level === 0) {
+      const row = curTestClassRow()
+      if (row) {
+        for (let mi = state.classMethodSel + 1; mi < row.methods.length; mi++) {
+          const found = await firstUnapprovedInSubtree(row.methods[mi])
+          if (found) {
+            return { root: state.selected, methodIdx: mi, path: found.path, gran: found.gran, change: found.change }
+          }
+        }
+      }
+    }
   }
 
   for (let idx = state.selected + 1; idx < state.blocks.length; idx++) {
-    const found = await firstUnapprovedInSubtree(state.blocks[idx])
+    const candidate = state.blocks[idx]
+    // A test_class row has no own changed rows — search its methods in
+    // order instead of calling firstUnapprovedInSubtree on the row itself
+    // (which assumes a real PR block with its own blockRows/code).
+    if (candidate.kind === 'test_class') {
+      for (let mi = 0; mi < candidate.methods.length; mi++) {
+        const found = await firstUnapprovedInSubtree(candidate.methods[mi])
+        if (found) {
+          return { root: idx, methodIdx: mi, path: found.path, gran: found.gran, change: found.change }
+        }
+      }
+      continue
+    }
+    const found = await firstUnapprovedInSubtree(candidate)
     if (found) return { root: idx, path: found.path, gran: found.gran, change: found.change }
   }
   return null
@@ -5116,16 +5461,29 @@ async function findNextUnapproved() {
 function applyNextUnapproved(target) {
   if (target.keepList) {
     state.selected = target.root
+    if (target.methodIdx != null) {
+      state.classMethodSel = target.methodIdx
+      state.testColumnFocused = false
+    }
     scrollSelectedIntoView()
     return
   }
   const sameRoot = target.root === state.selected
-  if (!sameRoot) {
+  // A test_class plan (see testClassRowItem/recomputeLeftList) also carries
+  // WHICH method to land on — "same root" alone isn't enough to decide
+  // whether this is a genuine "stay put" vs. a fresh landing: moving to a
+  // different method within the SAME class row still needs a fresh drill
+  // stack (a different method's own Onderliggende-code tree), exactly like
+  // moving to a different root would.
+  const sameMethod = target.methodIdx == null || target.methodIdx === state.classMethodSel
+  if (!sameRoot || !sameMethod) {
     state.selected = target.root
+    if (target.methodIdx != null) state.classMethodSel = target.methodIdx
     state.drill = []
     state.drillCursor = []
     state.focusLevel = 0
   }
+  if (target.methodIdx != null) state.testColumnFocused = true
   let common = 0
   while (
     common < state.drill.length &&
@@ -5142,7 +5500,7 @@ function applyNextUnapproved(target) {
   // expandColumn above): mark it for the short entrance-from-the-left
   // animation. Only when staying on the same root: jumping to a brand-new
   // top-level block isn't "returning" to anything, it's a fresh selection.
-  if (sameRoot && common === target.path.length) markDrillReturn(common)
+  if (sameRoot && sameMethod && common === target.path.length) markDrillReturn(common)
   for (let i = common; i < target.path.length; i++) {
     const kid = target.path[i]
     drillIntoChild({ blockId: kid.id, id: kid.id, label: kid.label, file: kid.file, code: '', line: kid.line })
@@ -5245,9 +5603,15 @@ function afterApproveAction(approving, blockId) {
     // line with another unapproved line still ahead in the same drilled
     // block wrongly opened the postApprove menu instead of jumping straight
     // there (the reported gap for gedrilde kolommen).
+    // A test_class plan's own top-level "block" isn't the row itself (it has
+    // no rows of its own) but the ACTIVE METHOD (target.methodIdx) — see
+    // testClassRowItem/recomputeLeftList.
+    const rootBlock = state.blocks[target.root]
     const landingId = target.path.length
       ? target.path[target.path.length - 1].id
-      : state.blocks[target.root] && state.blocks[target.root].id
+      : target.methodIdx != null
+        ? rootBlock && rootBlock.methods[target.methodIdx] && rootBlock.methods[target.methodIdx].id
+        : rootBlock && rootBlock.id
     const sameBlock = !keepList && target.root === state.selected && landingId === blockId
     if (sameBlock || keepList) {
       // `applyNextUnapproved` reads `target.keepList` to decide whether to
@@ -5860,6 +6224,18 @@ function onKeydown(e) {
     return
   }
 
+  // Enter on the methodes-kolom (stop 2b, see isTestColumnActive/
+  // TestMethodsColumn.mjs) steps into the diff of the active method —
+  // mirrors → there (see the ArrowRight handling further below) — instead
+  // of opening the block palette, which has no meaning without a diff to
+  // act on. Checked before the generic Enter-opens-menu branch below, same
+  // precedence as the comment-item branch just above.
+  if (e.key === 'Enter' && isTestColumnActive()) {
+    e.preventDefault()
+    enterDiff()
+    return
+  }
+
   // Enter opens the palette at the next-block slot. Handled before the empty-blocks
   // guard so it works even while a PR is still loading. On stop 1 (the
   // PR-description column, state.showDescription) there's no block context, so
@@ -5887,6 +6263,16 @@ function onKeydown(e) {
     !isModifiedKey(e) &&
     ['f', 'd', 's', 'a', 'ArrowRight'].includes(e.key)
   ) {
+    e.preventDefault()
+    return
+  }
+
+  // The methodes-kolom (stop 2b, see isTestColumnActive) has no diff context
+  // of its own to zoom/toggle — f/d/s/a are a deliberate no-op there, same
+  // reasoning as the toggle-row guard just above. ↑/↓/→/← are handled in
+  // their own dedicated block further below, before the generic list-mode
+  // arrows.
+  if (isTestColumnActive() && !isModifiedKey(e) && ['f', 'd', 's', 'a'].includes(e.key)) {
     e.preventDefault()
     return
   }
@@ -5935,6 +6321,33 @@ function onKeydown(e) {
   if (e.key === 'a' && !isEditableFocused() && !isModifiedKey(e)) {
     e.preventDefault()
     toggleDiffView()
+    return
+  }
+
+  // Stop 2b of the left→right nav chain (the methodes-kolom, see
+  // isTestColumnActive/TestMethodsColumn.mjs): ↑/↓ walk the class's own
+  // methods, flowing on to the next/previous class row at the edges
+  // (stepTestMethod — decision: "doorlopen mag", see keyboard-navigation.md);
+  // →/Enter step into the diff of the active method (mirrors → from the
+  // pr-index into an ordinary block's diff); ← steps back out to the
+  // pr-index (stop 2). Checked before the generic list-mode arrows below so
+  // it wins whenever this column owns the keyboard.
+  if (isTestColumnActive()) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      stepTestMethod(1)
+      scrollSelectedIntoView()
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      stepTestMethod(-1)
+      scrollSelectedIntoView()
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      enterDiff()
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      state.testColumnFocused = false
+    }
     return
   }
 
@@ -6097,10 +6510,25 @@ function connector() {
 // for the grey step-chevron below/above the card (see stepChevron).
 function canStep(delta) {
   if (state.mode !== 'diff' || state.focusLevel > 0) return false
-  const groups = unitsOf(state.blocks[state.selected])
+  const groups = unitsOf(curBlock())
   if (!groups.length) return false
   const atEdge = delta > 0 ? state.change >= groups.length - 1 : state.change <= 0
-  return atEdge && sameFileNeighbour(delta)
+  if (!atEdge) return false
+  return curTestClassRow() ? canStepTestMethod(delta) : sameFileNeighbour(delta)
+}
+
+// canStepTestMethod is the non-mutating check behind canStep's grey chevron
+// while a test_class row is selected — mirrors stepTestMethod's own edge/
+// flow-through logic without moving anything.
+function canStepTestMethod(delta) {
+  const row = curTestClassRow()
+  if (!row) return false
+  const next = state.classMethodSel + delta
+  if (next >= 0 && next < row.methods.length) return true
+  const dir = delta > 0 ? 1 : -1
+  let idx = state.selected + dir
+  while (idx >= 0 && idx < state.blocks.length && state.blocks[idx].kind !== 'test_class') idx += dir
+  return idx >= 0 && idx < state.blocks.length
 }
 
 // stepChevron — the grey chevron that sits *outside* the block card (below it for
@@ -6711,6 +7139,38 @@ function PrInfoPanel(state) {
   `
 }
 
+// testClassPreviewCard is the DIMMED look-ahead preview of a test_class row
+// (see testClassRowItem/recomputeLeftList) that sits one below the current
+// selection — a compact summary (class name + the same methods-only approve
+// pill the sidebar row itself shows, see blockApproveCount's test_class
+// branch) instead of the full, interactive TestMethodsColumn — the full
+// column only ever renders for the row that's ACTUALLY selected (decision:
+// "zodra een class-rij geselecteerd is"). Mirrors commentDetailCard's own
+// preview variant for a comment-index item.
+function testClassPreviewCard(state, row) {
+  const s = state.approvalSummaries && state.approvalSummaries[row.id]
+  return html`
+    <div class="contents" data-testid="detail-card">
+      <div
+        class="flex min-h-0 w-64 shrink-0 flex-col gap-1 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white/60 dark:bg-zinc-900/60 px-3 py-2 opacity-60"
+        data-testid="test-class-preview"
+      >
+        <div class="flex items-center gap-2">
+          <span class="shrink-0 rounded bg-slate-200 dark:bg-zinc-700 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 dark:text-zinc-400"
+            >TEST</span
+          >
+          <span class="truncate text-sm font-medium text-slate-700 dark:text-zinc-300">${row.label}</span>
+        </div>
+        <p class="text-xs text-slate-400 dark:text-zinc-500">
+          ${row.methods.length} ${row.methods.length === 1 ? 'methode' : 'methodes'}${s && s.total
+            ? ` · ${s.done}/${s.total}`
+            : ''}
+        </p>
+      </div>
+    </div>
+  `
+}
+
 // DetailPanel — the area right of the fixed sidebar. It shows the block card for
 // the selected row, and the next row's card already (a look-ahead preview). When
 // both cards are from the same file, a dashed connector links them.
@@ -6786,7 +7246,9 @@ function DetailPanel(state) {
         // shows nothing the active card doesn't have — a genuinely two-sided
         // preview forced into 'unified' still shows its own old (-) lines,
         // just narrow and stacked instead of side by side. See detail-layout.md.
-        const activeSingleSided = !!singleSide(state.blocks[sel] || {})
+        // curBlock() (not a raw state.blocks[sel] read) so this resolves
+        // through a selected test_class row to its ACTIVE method.
+        const activeSingleSided = !!singleSide(curBlock() || {})
         // A step-up cue sits *above* the selected card when ↑ would flow into the
         // previous same-file block (which isn't rendered here — it's up the list).
         // canStep reads state.change/mode/focusLevel — calling it directly here
@@ -6817,11 +7279,45 @@ function DetailPanel(state) {
             out.push(card)
             return
           }
+          // A test_class row (see testClassRowItem/recomputeLeftList) has no
+          // diff of its own — its methodes-kolom (stop 2b of the left→right
+          // nav chain, see keyboard-navigation.md) renders directly to the
+          // left of the diff card, always visible once selected (both list
+          // and diff mode — decision: no separate reveal-on-→ step, unlike
+          // drilling). `b` is reassigned here to the ACTIVE method (state.
+          // classMethodSel) — every closure below this point that reads `b`
+          // therefore already operates on a real PR block, exactly like the
+          // ordinary path, with no further special-casing needed.
+          const wasTestClass = b.kind === 'test_class'
+          if (wasTestClass) {
+            // Only the ACTUALLY SELECTED row (i === sel, decision: "zodra een
+            // class-rij geselecteerd is") gets the full, interactive
+            // methodes-kolom + the active method's diff card. The
+            // look-ahead PREVIEW slot (i === sel + 1, the next sidebar row)
+            // instead gets a small, dimmed summary card — mirrors how an
+            // ordinary preview stays a compact Block() card rather than a
+            // fully interactive one.
+            if (i !== sel) {
+              out.push(testClassPreviewCard(state, b).key('detail:prev:test_class:' + b.id))
+              return
+            }
+            out.push(TestMethodsColumn(state, b).key('testmethods:' + b.id))
+            const activeMethod = b.methods[state.classMethodSel] || null
+            if (!activeMethod) return
+            b = activeMethod
+          }
           // A connector/step-down cue only makes sense between two ordinary
-          // same-file blocks — never next to a comment item, which has no
-          // .file (guarding both sides avoids an accidental
-          // undefined === undefined match between two adjacent comment items).
-          if (idx > 0 && pair[idx - 1].b.kind !== 'comment' && pair[idx - 1].b.file === b.file) {
+          // same-file blocks — never next to a comment item or a test_class
+          // row (see testClassRowItem — no connector between/into a class
+          // row, decision in detail-layout.md), neither of which has a
+          // meaningful shared `.file` at this level.
+          if (
+            idx > 0 &&
+            pair[idx - 1].b.kind !== 'comment' &&
+            pair[idx - 1].b.kind !== 'test_class' &&
+            !wasTestClass &&
+            pair[idx - 1].b.file === b.file
+          ) {
             // The step-down cue sits *below* the selected card, just above the
             // dashed connector to the next same-file block ↓ would flow into.
             out.push(stepChevronSlot(1, 'down').key('step-down'))

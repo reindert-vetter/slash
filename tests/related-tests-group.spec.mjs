@@ -61,9 +61,13 @@ test.describe('PR Review Tree — grouped covering tests (tests bar)', () => {
     await bar.click()
     await expect(page.getByTestId('related-item')).toHaveCount(3)
 
-    // Move to a test block: its panel shows the covered method as an ordinary
-    // `covers` card — no bar (only one child, nothing to group).
-    await rows.filter({ hasText: 'TgOrderBillingTest::testBilling' }).click()
+    // Move to the test block: TgOrderBillingTest has a single changed method,
+    // so it groups into one test_class row labelled with the bare class name
+    // (see testClassRowItem/recomputeLeftList in home.mjs) — selecting it
+    // already resolves curBlock() to that one method (state.classMethodSel
+    // defaults to 0), so the panel below shows the covered method as an
+    // ordinary `covers` card — no bar (only one child, nothing to group).
+    await rows.filter({ hasText: 'TgOrderBillingTest' }).click()
     await expect(page.getByTestId('related-tests-bar')).toHaveCount(0)
     await expect(page.getByTestId('related-item')).toContainText('TgOrder::billingAddress')
 
