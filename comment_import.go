@@ -111,14 +111,16 @@ func blockForLine(baseDir, headDir string, blocks []Block, file string, line int
 }
 
 // rowForLine maps a source line on side to its index in the block's aligned
-// rows (dedent4 → alignRows, the same space approvals/comments use). It walks the
-// rows tracking each side's running source-line number, which starts at the
-// block's un-dedented source Start on that side.
+// rows — the same space approvals/comments use, built by the one shared
+// blockAlignedRows (blockstats.go). It walks the rows tracking each side's running
+// source-line number, which starts at that side's post-transform Start.
+//
+// Going through blockAlignedRows is load-bearing, not just tidiness: this used to
+// read the raw extractBlockSource, so on a block with a leading PHPDoc it landed
+// an imported comment N rows off (N = the folded doc lines), since /api/code and
+// the approve total both count the post-fold rows.
 func rowForLine(baseDir, headDir string, b Block, line int, side string) (int, bool) {
-	oldSide := extractBlockSource(filepath.Join(baseDir, b.File), b.File, b.Class, b.Name)
-	newSide := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name)
-	oldText, newText := dedent4(oldSide.Text, newSide.Text)
-	rows := alignRows(oldText, newText)
+	rows, oldSide, newSide := blockAlignedRows(baseDir, headDir, b)
 
 	curOld := oldSide.Start
 	curNew := newSide.Start

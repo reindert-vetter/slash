@@ -19,42 +19,55 @@ import (
 // READ-only: it only reads worktree files (a side effect, but no mutation), so it
 // is free to run from a read-only HTTP handler per the write-boundary rule.
 
+// blockAlignedRows builds a block's aligned diff rows — the canonical row-index
+// space that /api/code's rendered diff, approvals.db's approved row indices and a
+// comment's row_start/row_end anchor all share. It is the single place that reads
+// the two sides and applies the display transform, so no consumer can drift out of
+// that space:
+//
+//   - The OLD side is read from the block's pre-rename path (b.oldPath()) so a
+//     moved file is diffed against where its source actually was in the base
+//     worktree; b.oldPath() == b.File for a non-renamed block.
+//   - Both sides go through enrichedCodeSide (code.go): fold a leading PHPDoc's
+//     @return/@param types into the signature, else drop the leading doc outright,
+//     then trim one wholly-blank trailing line. Exactly what /api/code applies for
+//     display, so a row index always means the row the reviewer actually sees —
+//     never a since-hidden docblock line.
+//
+// The returned sides are post-transform, so their Start is already corrected for
+// the removed doc lines: a caller converting between a row index and an absolute
+// source line (rowForLine) must count from these, not from the raw
+// extractBlockSource. dedent4 only strips a leading indent, never a line, so the
+// line counts still line up with Start.
+func blockAlignedRows(baseDir, headDir string, b Block) (rows []alignRow, oldSide, newSide codeSide) {
+	oldRel := b.oldPath()
+	oldSide = enrichedCodeSide(extractBlockSource(filepath.Join(baseDir, oldRel), oldRel, b.Class, b.Name))
+	newSide = enrichedCodeSide(extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name))
+	oldText, newText := dedent4(oldSide.Text, newSide.Text)
+	return alignRows(oldText, newText), oldSide, newSide
+}
+
+// rowDisplayText returns the text a reviewer actually sees on an aligned row: the
+// new/right side, or the old/left side when the row has no right side at all (a
+// pure deletion). The same side choice approveHere/commentedHere make on the
+// frontend. It deliberately keys off presence rather than rowHasContent's
+// rightMark == "ins" test: the two only disagree on a context row, where both
+// sides carry the same text modulo whitespace.
+func rowDisplayText(r alignRow) string {
+	if r.right != nil {
+		return *r.right
+	}
+	if r.left != nil {
+		return *r.left
+	}
+	return ""
+}
+
 // blockChangedRowCount returns the number of changed, non-ws-only aligned rows
 // for a block, read from the base/head worktrees. Mirrors changedRows(blockRows).
 func blockChangedRowCount(baseDir, headDir string, b Block) int {
-	// The old side is read from the block's pre-rename path (b.oldPath()) so a
-	// moved file's approve total counts against where its source actually was
-	// in the base worktree; b.oldPath() == b.File for a non-renamed block.
-	oldRel := b.oldPath()
-	oldText := extractBlockSource(filepath.Join(baseDir, oldRel), oldRel, b.Class, b.Name).Text
-	newText := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name).Text
-	// Fold a leading PHPDoc's @return/@param types into the signature and drop
-	// the doc lines — the exact same transform /api/code applies for display
-	// (codesig.go, code.go's enrichedCodeSide) — so the approve total counts
-	// the same rows the reviewer actually sees, never the (now-hidden) doc
-	// lines. enrichSignatureWithDocTypes is a no-op when there's no leading
-	// doc/types to fold, so an untouched block's count is unaffected.
-	oldText, oldFolded := enrichSignatureWithDocTypes(oldText)
-	newText, newFolded := enrichSignatureWithDocTypes(newText)
-	// When the fold left the text untouched (a free-text-only leading doc, or an
-	// unrewritable signature), the leading doc is dropped outright — the exact
-	// same Route B fallback /api/code applies via enrichedCodeSide. Keeps the
-	// approve total counting the same rows the reviewer sees, never the
-	// (now-hidden) doc lines.
-	if oldFolded == 0 {
-		oldText, _ = stripLeadingPhpDoc(oldText)
-	}
-	if newFolded == 0 {
-		newText, _ = stripLeadingPhpDoc(newText)
-	}
-	// Also drop a single wholly-blank trailing line (trimTrailingBlankLine,
-	// codesig.go) — the same tail-trim /api/code applies for display, kept
-	// here for Go/Go parity between the two call sites. In practice a no-op
-	// on the returned count: such a row is already excluded by rowHasContent
-	// below, since it's blank either way.
-	oldText, _ = trimTrailingBlankLine(oldText)
-	newText, _ = trimTrailingBlankLine(newText)
-	return changedRowCount(oldText, newText)
+	rows, _, _ := blockAlignedRows(baseDir, headDir, b)
+	return countChangedRows(rows)
 }
 
 // changedRowCount is the exact port of the frontend changedRows(blockRows(b)):
@@ -62,7 +75,11 @@ func blockChangedRowCount(baseDir, headDir string, b Block) int {
 // whitespace-only re-alignment, and aren't a blank line (rowHasContent).
 func changedRowCount(oldText, newText string) int {
 	oldText, newText = dedent4(oldText, newText)
-	rows := alignRows(oldText, newText)
+	return countChangedRows(alignRows(oldText, newText))
+}
+
+// countChangedRows counts the approvable rows of an already-aligned row list.
+func countChangedRows(rows []alignRow) int {
 	n := 0
 	for _, r := range rows {
 		if rowChanged(r) && rowHasContent(r) {
