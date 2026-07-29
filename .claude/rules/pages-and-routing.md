@@ -544,15 +544,30 @@ lives purely in memory, reset on every page load to the first visible row.
     rendered as **Markdown** (`renderMarkdown`, the same `snarkdown`-based
     helper as the PR-info column, see `.claude/rules/conventions.md`), and
     an **"Open in Jira"** link (`data-testid=task-open-jira`).
-- **Load/poll (mirrors `overview.mjs`):** on load, `init()` ensures both
-  trackers (`POST /api/workflows/task_inbox` and `…/task_snooze`, each
-  returning a Run ID), fires one `refresh` Signal on the task-inbox
-  tracker, then loads both read-models (`GET /api/tasks`,
-  `GET /api/tasksnoozes`). A 60s heartbeat (`sendHeartbeat`, only while the
-  tab is visible+focused — `activeTab()`, the existing heartbeat
-  convention) and a 15s reload of both read-models (only while the tab is
-  active) keep it current, mirroring the PR-overview's own
-  heartbeat/`reloadSnapshot` cadence.
+- **Load/poll (mirrors `overview.mjs`, including the fire-and-forget
+  refresh):** on load, `init()` ensures both trackers
+  (`POST /api/workflows/task_inbox` and `…/task_snooze`, each returning a Run
+  ID) and then immediately loads both read-models (`GET /api/tasks`,
+  `GET /api/tasksnoozes`) — showing whatever is already there. **The
+  `refresh` Signal on the task-inbox tracker is deliberately NOT awaited
+  before that load**: `tembed`'s `SignalWorkflow` runs the workflow's
+  Activities inline/blocking (`tembed/engine.go`'s `advance()`), and the
+  `task_inbox` aggregation includes a live Jira lookup (a real `acli`
+  subprocess, `modules/jira/jira.go`'s `AssignedToMe`) that can take several
+  seconds — or hang indefinitely if `acli` needs interactive re-auth with no
+  TTY available. Awaiting it first used to leave the whole page stuck on
+  "Laden…" for that entire time, which read as "the page is broken" even
+  though `GET /api/tasks`/`GET /api/tasksnoozes` worked fine on their own.
+  `refreshTaskInbox()` therefore runs in the background
+  (`.then(() => repollAfterRefresh())`), exactly mirroring `overview.mjs`'s
+  `sendRefresh()`/`repollAfterRefresh()`: a few extra reloads of both
+  read-models 1.5s apart right after the refresh lands, then settling into
+  the existing 60s heartbeat (`sendHeartbeat`, only while the tab is
+  visible+focused — `activeTab()`) + 15s reload (only while the tab is
+  active) cadence. Regression test: `tests/inbox-tasks.spec.mjs` ("shows the
+  existing task list without waiting for a slow refresh signal" — holds the
+  `signals/refresh` response open indefinitely via `page.route` and asserts
+  the task list still renders).
 - **Keyboard:** a plain `window` `keydown` listener (no command-palette/
   popover-focus machinery like `/pr/<id>`/`overview.mjs`) — `↑`/`↓`
   (`moveSelection`) walk `visibleTasks()` and scroll the row into view;

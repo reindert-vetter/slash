@@ -112,6 +112,35 @@ test.describe('Task inbox (/inbox)', () => {
     ).toBeVisible({ timeout: 15000 })
   })
 
+  // Regression for a bug where init() awaited the "refresh" Signal (which
+  // tembed runs INLINE/blocking — it can take several seconds for a live
+  // Jira lookup, see tembed-workflows.md's Recovery-priority section) before
+  // ever loading the already-available read-model, leaving the whole page
+  // stuck on "Laden…" for that entire time. init() must show whatever
+  // GET /api/tasks/GET /api/tasksnoozes already have right away and only
+  // refresh in the background (mirrors overview.mjs's
+  // sendRefresh()/repollAfterRefresh()) — this test proves that ordering by
+  // holding the refresh Signal open indefinitely and asserting the task list
+  // still renders anyway.
+  test('shows the existing task list without waiting for a slow refresh signal', async ({ page }) => {
+    let releaseRefresh
+    const refreshHeld = new Promise((resolve) => {
+      releaseRefresh = resolve
+    })
+    await page.route('**/signals/refresh', async (route) => {
+      await refreshHeld
+      await route.continue()
+    })
+
+    await page.goto('/inbox')
+
+    // The read-model already has data (seeded by an earlier POST/the fixture)
+    // and must render well before the held-open refresh signal ever resolves.
+    await expect(page.getByTestId('task-row').first()).toBeVisible({ timeout: 5000 })
+
+    releaseRefresh()
+  })
+
   test('reply and resolve on a comment_unread task use the existing reply signal', async ({ page }) => {
     const runId = await placeUnreadComment(page)
 

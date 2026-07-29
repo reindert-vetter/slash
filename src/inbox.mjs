@@ -226,6 +226,16 @@ function activeTab() {
   return document.visibilityState === 'visible' && document.hasFocus()
 }
 
+// refreshTaskInbox sends the "refresh" Signal — deliberately fire-and-forget
+// from the caller's perspective (see init() below). tembed's SignalWorkflow
+// runs the workflow's Activities INLINE/blocking (tembed/engine.go's advance()),
+// and the task_inbox aggregation includes a live Jira lookup (a real `acli`
+// subprocess, modules/jira/jira.go's AssignedToMe) that can take several
+// seconds — or hang indefinitely if `acli` needs interactive re-auth with no
+// TTY available. Awaiting this before showing the already-loaded read-model
+// would leave the whole page stuck on "Laden…" for that entire time, which
+// reads as "the page is broken" (the actual bug this fixed). Mirrors
+// overview.mjs's sendRefresh()/repollAfterRefresh() pattern exactly.
 async function refreshTaskInbox() {
   if (!state.taskInboxRunId) return
   try {
@@ -247,11 +257,33 @@ function sendHeartbeat() {
 const HEARTBEAT_MS = 60_000
 const RELOAD_MS = 15_000
 
+// repollAfterRefresh re-pulls the read-models a few times shortly after the
+// (possibly slow) background refresh, so the page picks up the freshly
+// aggregated data without the reviewer having to reload — same cadence idea
+// as overview.mjs's repollAfterRefresh.
+function repollAfterRefresh() {
+  let n = 0
+  const id = setInterval(() => {
+    n++
+    if (n > 4 || !activeTab()) {
+      clearInterval(id)
+      return
+    }
+    loadTasks()
+    loadSnoozes()
+  }, 1500)
+}
+
 async function init() {
   await ensureTaskInbox()
   await ensureTaskSnooze()
-  await refreshTaskInbox()
+  // Show whatever the read-model already has right away — don't block the
+  // page on the (possibly slow/unbounded) refresh Signal. The refresh itself
+  // still runs, just in the background.
   await Promise.all([loadTasks(), loadSnoozes()])
+  refreshTaskInbox().then(() => {
+    repollAfterRefresh()
+  })
   setInterval(sendHeartbeat, HEARTBEAT_MS)
   setInterval(() => {
     if (activeTab()) {
