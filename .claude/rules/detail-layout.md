@@ -563,14 +563,79 @@ threads can hang off the same unit; each gets its own card
 — source/AI-warning badge + the status mark, see below), `composeTargetHint`
 if the comment carries a code snippet, every message via the unchanged
 `threadMessages`/`reactionBubble`, and a working reply field) — every other
-conversation on that same unit stays a compact one-line summary
-(`compactConversation`: status mark, author + avatar, a truncated body
+conversation on that same unit stays a compact summary clamped to **3 lines**
+(`compactConversation`: status mark, author + avatar, a `line-clamp-3` body
 preview, `data-expanded=false` vs. `data-expanded=true` on the DOM node so a
-test can assert which one is open). The toggle between the two lives in a
+test can assert which one is open). This preview was a hard **1-line**
+`truncate` before — fine for a short human reply, but it cut off a
+multi-sentence AI-controle finding (`code_warning`, `source:'ai'`) after just
+a few words, hiding exactly the risk text the reviewer most needs without
+clicking every card open first; `line-clamp-3` keeps the space-saving
+"only the focused card is fully expanded" design (several threads can still
+hang off one unit) while giving a typical 2-4 sentence finding enough room to
+read in place — a genuinely long comment still ends in "…" and needs a click.
+The toggle between the two lives in a
 stable `<div class="contents">` root per card (`commentCard`) — not a bare
 toggling expression — per the "bare toggling expression" pitfall in
 `conventions.md`: the outer `.map()` key stays `'comment:' + c.id` regardless
 of expand/collapse, only the nested `${() => …}` binding swaps.
+
+**Converting an AI-controle finding into a real comment
+(`convertWarningToComment`, `RelatedPanel.mjs`).** An AI-authored finding
+(`code_warning`, `source:'ai'`, `Local:true` — see "AI risk check of the
+whole PR" in `tembed-workflows.md`) is a full `task_code_comment` Execution
+like any other comment, so it can be resolved/deleted like one — but a
+reviewer who agrees with the finding often wants to turn it into their OWN,
+editable, real (non-local) comment instead of leaving the AI's own wording
+standing. `commentCommandsFor`'s menu (`home.mjs`, Enter on a focused comment
+row with an empty reply field) therefore gets an extra item **"Comment
+hiervan maken"**, appended after "Resolve comment"/"Verwijder comment" (NOT
+the default — "Resolve comment" stays that), shown only when the focused
+comment's `source === 'ai'`. Choosing it opens the block's own "+ Nieuwe
+comment" composer (`newCommentComposer`), prefilled with the finding's body
+and — this is the load-bearing part — anchored on the **finding's own**
+`file`/`label`/`gran`/`rowStart`/`rowEnd`/`code`, not whatever the live
+navigation cursor happens to sit on (`commentTarget()`'s usual source): a
+module-level `warningOverride` (`{original, target}`) is set once by
+`convertWarningToComment(c)` and consumed by `placeComment` (both the
+composer header/`composeTargetHint` and the eventual `createComment` call
+prefer it over `commentTarget()`, and every ordinary composer-open entry
+point — `toNew`/`startComment`/the "Annuleer" button — clears it first, so a
+stale override never leaks into an unrelated, genuinely new comment). The
+reviewer can freely edit the prefilled text before choosing "Plaats
+comment"/"Alleen voor mijzelf" from the usual comment-kind menu (see
+`COMPOSE_COMMANDS` in `keyboard-navigation.md`) — nothing about that flow
+changes. **Only once the replacement is confirmed placed** (`createComment`
+now returns `res.ok`) does `placeComment` delete the original finding, via
+the exact same `delete` Signal `deleteFocusedComment` already uses
+(`deleteComment(c)`, factored out so it can target a specific comment rather
+than "whichever one is currently focused") — a failed placement leaves the
+finding standing rather than silently discarding it with nothing to replace
+it.
+
+A **PR-wide** finding (`kind:'ai_warning'`, no file/line anchor — see
+"Comment-index items" below) has no diff/block context to reuse, so
+`prCommentCommandsFor` gets the same menu item (again gated on
+`source === 'ai'`, placed after "Resolve comment") but wired to
+`convertPrWideWarningToComment`, which repurposes the item's own
+"Beantwoorden" reply field (`picm`, now carrying a `mode` — `'reply'` default
+or `'convert'`) instead of opening a second composer: `startPrCommentConvert`
+reveals that same field prefilled with the finding's body, and sending in
+`'convert'` mode (`sendConvertedPrWideComment`) posts a **brand-new**,
+unanchored PR-wide comment (`createComment({..., kind:'issue'})` — the same
+`Kind` an imported general PR comment gets, so it shows as an ordinary
+navigable "Start" row, not still badged as an AI finding) rather than a reply
+on the old thread, then deletes the original the same way, once placement is
+confirmed. `createComment`'s `kind` parameter (new) is what makes this
+possible at all — until this feature, nothing ever posted a **fresh**
+(non-imported, non-local) `Kind`-carrying comment, so the backend's own
+initial-post branch (`taskCodeCommentWorkflow`, `workflows.go`) needed a
+matching addition: a PR-wide comment posts as a new **issue** comment
+(`postGithubIssueComment`, best-effort — it never returns an error itself)
+instead of attempting a review-line comment (`postGithubComment`, which would
+often simply fail for a line no diff-anchor covers) — mirroring the reactions
+loop's own `isPRWide` branch, which already mirrored a *reply* on such a
+thread the same way.
 
 **Status mark is a colorblind-friendly ✓, not a color-only dot — and a
 resolved card is muted to the "Onderliggende code" style so it recedes.**

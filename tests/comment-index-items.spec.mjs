@@ -360,5 +360,14 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(card).toBeVisible()
     await expect(card.getByTestId('comment-ai-warning')).toBeVisible()
     await expect(card).toContainText('this call no longer matches')
+
+    // → steps into the thread exactly like it does for any other
+    // comment-index item (enterPrCommentThread/isPrCommentThreadFocused —
+    // the mechanism is generic over every kind, ai_warning included), not
+    // just an imported issue/review comment — see the "→ steps into the
+    // comment thread" test above for the same assertion on kind:'issue'.
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('command-menu')).toHaveCount(0)
+    await expect(card.getByTestId('comment-detail-thread')).toHaveClass(/ring-indigo-200/)
   })
 })

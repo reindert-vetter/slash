@@ -479,12 +479,41 @@ function focusEl(sel) {
   })
 }
 
+// prefillField is focusEl's sibling for the ONE case that also needs to seed
+// the field's value before focusing it (convertWarningToComment/
+// startPrCommentConvert, below) — same rAF + focusToken guard, so a stray
+// keyboard move in between (see focusEl's own doc comment) makes this a no-op
+// too instead of clobbering whatever now owns the keyboard. Places the caret
+// at the end of the seeded text (not the start), so the reviewer can keep
+// typing straight after the AI's own wording.
+function prefillField(sel, text) {
+  const want = focusToken
+  requestAnimationFrame(() => {
+    if (want !== focusToken) return
+    const el = document.querySelector(sel)
+    if (!el) return
+    el.value = text
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  })
+}
+
+// warningOverride, while set, forces the "+ Nieuwe comment" composer (below)
+// to anchor on an AI finding's OWN anchor instead of the live cursor — see
+// convertWarningToComment and placeComment's own doc comment. `original` is
+// the finding comment to delete once the replacement is confirmed placed.
+// Every ordinary "open the composer" entry point (toNew/startComment) clears
+// this first, so a stale override from an abandoned conversion never leaks
+// into a genuinely new, unrelated comment.
+let warningOverride = null
+
 // toNew / toComment land on an inline comment card. Landing already opens the
 // reply pane and drops the caret in it — the reviewer types straight away, no
 // → needed: 'new' shows an empty new-comment composer; a comment shows its
 // history with the reply field focused.
 function toNew() {
   releaseFocus()
+  warningOverride = null
   cs.composing = true
   cs.focus = 'new'
   focusEl('[data-testid=comment-compose]')
@@ -939,9 +968,44 @@ export function handleRelatedKey(key) {
 // (placeComment), so the write-boundary is unchanged.
 export function startComment() {
   releaseFocus()
+  warningOverride = null
   cs.composing = true
   cs.focus = 'new'
   focusEl('[data-testid=comment-compose]')
+}
+
+// convertWarningToComment opens the "+ Nieuwe comment" composer prefilled
+// with an ANCHORED (kind '') AI finding's own text, anchored on that
+// finding's own file/label/gran/rowStart/rowEnd/code — not the current
+// navigation cursor (see warningOverride/placeComment) — so the reviewer can
+// edit it before placing it as a real comment. Called by home.mjs's
+// commentCommandsFor (the "Comment hiervan maken" menu item), only for a
+// comment whose source is 'ai'. See convertPrWideWarningToComment for the
+// PR-wide (unanchored) equivalent, which has no diff/composer to reuse and
+// thus goes through a different UI (the PR-wide item's own reply field).
+export function convertWarningToComment(c) {
+  if (!c || c.source !== 'ai' || c.kind) return
+  releaseFocus()
+  warningOverride = {
+    original: c,
+    target: {
+      file: c.file,
+      line: c.line,
+      code: c.code || '',
+      gran: c.gran || '',
+      label: c.label || '',
+      rowStart: c.rowStart != null ? c.rowStart : -1,
+      rowEnd: c.rowEnd != null ? c.rowEnd : -1,
+      seg: c.seg || '',
+      startLine: 0,
+      endLine: 0,
+      side: 'RIGHT',
+      segment: '',
+    },
+  }
+  cs.composing = true
+  cs.focus = 'new'
+  prefillField('[data-testid=comment-compose]', c.body || '')
 }
 
 // isComposeOpen reports whether the new-comment composer is currently open, so
@@ -1011,6 +1075,32 @@ export function focusedCommentGithubId() {
   return null
 }
 
+// focusedComment returns the currently-focused block-scoped comment object
+// (or null) — exported so home.mjs's commentCommandsFor can inspect it (e.g.
+// c.source === 'ai') to decide which menu items apply, without duplicating
+// selComment/visibleComments' own scoping logic there.
+export function focusedComment() {
+  return selComment()
+}
+
+// deleteComment sends the "delete" signal for comment `c`'s own Workflow
+// Execution — the sanctioned write path (see deleteFocusedComment below,
+// which wraps this for the currently-focused comment). Exported separately
+// so convertWarningToComment/sendConvertedPrWideComment can delete a
+// SPECIFIC comment (the AI finding a new comment just replaced) that isn't
+// necessarily the one currently focused by the time the replacement has
+// landed — the reviewer may have kept typing/navigating in between. Reload
+// is the caller's responsibility (both callers batch it with their own
+// createComment reload).
+export async function deleteComment(c) {
+  if (!c || !c.runId) return
+  await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ author: 'reviewer' }),
+  })
+}
+
 // deleteFocusedComment sends the "delete" signal for the focused comment's
 // Workflow Execution. This is the only write path: the workflow first flips
 // the comment's status to "deleting", then removes it from GitHub and from
@@ -1020,11 +1110,7 @@ export async function deleteFocusedComment() {
   if (!c || !c.runId) return
   cs.busy = true
   try {
-    await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ author: 'reviewer' }),
-    })
+    await deleteComment(c)
     await loadComments(cs.pr)
   } finally {
     cs.busy = false
@@ -1136,10 +1222,24 @@ function syncComments(pr) {
 }
 
 // createComment starts a comment task (Workflow Execution) on the given line with
-// `body`. Shared by the composer (placeComment) and the command menu's fallback
-// ("Maak hiermee een comment", which uses the typed text as the comment). It writes
-// only by starting the workflow (POST), so the write-boundary holds. On success it
-// reloads the read-model and selects the fresh comment.
+// `body`. Shared by the composer (placeComment), the command menu's fallback
+// ("Maak hiermee een comment", which uses the typed text as the comment), and
+// convertPrWideWarningToComment (a brand-new, unanchored PR-wide comment). It
+// writes only by starting the workflow (POST), so the write-boundary holds. On
+// success it reloads the read-model and selects the fresh comment, and returns
+// `true` — callers that need to chain a follow-up write (e.g. deleting the AI
+// finding a new comment replaces, see convertWarningToComment/
+// sendConvertedPrWideComment) check this before doing so, so a failed POST
+// never discards the original without a replacement.
+//
+// `kind` classifies the comment's anchor exactly like the backend's
+// CodeCommentInput.Kind (workflows.go): omitted/'' for a normal, block-scoped
+// comment (every existing caller) — the one caller that needs a PR-wide one
+// (convertPrWideWarningToComment, no file/line to anchor to) passes 'issue',
+// the same Kind an imported general PR comment gets, so the result is an
+// ordinary navigable "Start" row (see commentBlockItem/prWideComments in
+// home.mjs), not tagged as an AI finding (that badge follows `source`, which
+// stays the default 'ui' here — the reviewer, not the AI, now owns this text).
 //
 // `runCommand` (home.mjs) fires a command's async `run()` without awaiting it
 // (see COMPOSE_COMMANDS), so the reviewer regains the keyboard immediately —
@@ -1167,12 +1267,13 @@ export async function createComment({
   endLine,
   side,
   segment,
+  kind,
 }) {
-  if (pr == null || !file || !body) return
+  if (pr == null || !file || !body) return false
   const token = focusToken
   cs.busy = true
   try {
-    await fetch('/api/workflows/task_code_comment', {
+    const res = await fetch('/api/workflows/task_code_comment', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1199,6 +1300,7 @@ export async function createComment({
         endLine: endLine || 0,
         side: side || 'RIGHT',
         segment: segment || '',
+        kind: kind || '',
       }),
     })
     await loadComments(pr)
@@ -1208,6 +1310,7 @@ export async function createComment({
     // reviewer has since focused a different comment/composer/panel, and
     // `visibleComments()` would land this on THAT unrelated context.
     if (token === focusToken) cs.sel = Math.max(0, visibleComments().length - 1)
+    return res.ok
   } finally {
     cs.busy = false
   }
@@ -1224,6 +1327,17 @@ export async function createComment({
 // different comment/composer/Onderliggende-code panel, possibly on a
 // different block — cs is a module-level singleton) — see the focusToken doc
 // comment. Regression test: tests/comment-nav-race.spec.mjs.
+//
+// `warningOverride`, if set (see convertWarningToComment), forces the anchor
+// to the AI finding's OWN file/label/gran/rowStart/rowEnd/code instead of
+// commentTarget()'s current-cursor unit — the reviewer may have navigated
+// elsewhere within the block since choosing "Comment hiervan maken", and the
+// replacement comment must land exactly where the finding itself was, not
+// wherever the cursor happens to sit now. It's consumed (nulled) right away,
+// before the async createComment call, mirroring every other "capture once,
+// before the await" convention in this file (token above, focusToken
+// elsewhere) — a second, unrelated "+ Nieuwe comment" started while this one
+// is still in flight must never see a stale override.
 export async function placeComment(state, commentTarget, opts = {}) {
   const b = state && state.blocks && state.blocks[state.selected]
   const el = document.querySelector('[data-testid=comment-compose]')
@@ -1236,14 +1350,16 @@ export async function placeComment(state, commentTarget, opts = {}) {
   // comment if it somehow does.
   if (!b || b.kind === 'comment' || !body) return
   const token = focusToken
+  const override = warningOverride
+  warningOverride = null
   // Capture the exact unit the composer is previewing so the placed comment's
   // thread can show the same code (see composeTargetHint / the thread hint).
   // commentTarget() follows focusedBlock() (the column that currently owns the
   // diff keyboard), which may be a drilled column rather than the top-level
   // selected block `b` — so t.file/t.startLine (not b.file/b.line) are the
   // ones that must anchor the comment when a drilled column is focused.
-  const t = (commentTarget && commentTarget()) || null
-  await createComment({
+  const t = override ? override.target : (commentTarget && commentTarget()) || null
+  const ok = await createComment({
     pr: state.pr,
     file: (t && t.file) || b.file,
     // Prefer the unit's real source line (see home.mjs' commentTarget/
@@ -1263,6 +1379,13 @@ export async function placeComment(state, commentTarget, opts = {}) {
     side: t ? t.side : 'RIGHT',
     segment: t ? t.segment : '',
   })
+  // Only delete the AI finding this comment replaces once the replacement
+  // itself is confirmed placed — a failed POST must never discard the
+  // finding without anything taking its place.
+  if (ok && override && override.original) {
+    await deleteComment(override.original)
+    await loadComments(state.pr)
+  }
   // Only while still relevant (see the doc comment above): if the token
   // changed, the reviewer has already navigated the keyboard elsewhere since
   // starting this comment, and both of the below would clobber that —
@@ -1533,8 +1656,18 @@ function reactionBubble(r, i, total, isActive) {
 // arrow-key traversal below (see hasVisibleComments/handleRelatedKey above),
 // which only ever walks EXISTING conversations.
 
-// compactConversation — a collapsed one-line summary of a conversation that
-// isn't currently focused/expanded.
+// compactConversation — a collapsed, clamped-to-3-lines summary of a
+// conversation that isn't currently focused/expanded (only the focused one
+// gets the unclamped expandedConversation below). A hard 1-line `truncate`
+// used to sit here — fine for a short human reply, but it cut off a
+// multi-sentence AI-controle finding (code_warning, source 'ai') after just a
+// few words, hiding exactly the risk text the reviewer most needs to read
+// without having to click every card open first. `line-clamp-3` keeps the
+// "only the focused card is fully expanded" space-saving design (several
+// threads can still hang off one unit, see InlineComments' own doc comment)
+// while giving a typical 2-4 sentence finding enough room to read in place;
+// a genuinely long comment still ends in "…" and needs a click to read in
+// full.
 function compactConversation(c, i) {
   const who = identityOf(c.source, c.author, c.avatarUrl)
   return html`
@@ -1563,7 +1696,7 @@ function compactConversation(c, i) {
           ${() => aiWarningBadge(c)}
         </span>
         <span
-          class="truncate [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200"
+          class="line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200"
           .innerHTML="${commentBody(c)}"
         ></span>
         <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
@@ -1671,8 +1804,17 @@ function commentCard(c, i, openCommentMenu) {
 // 'new'; among every other value (null/'code'/'comment'/'thread'/'trigger')
 // it stays on this same branch. Same stable-root pattern as commentCard.
 function newCommentComposer(state, commentTarget, openCompose) {
+  // effectiveTarget prefers warningOverride's own anchor (see
+  // convertWarningToComment/placeComment) over the live cursor's
+  // commentTarget() — the composer must show/post to the finding's own
+  // anchor, not wherever the reviewer has since navigated to. A plain
+  // (non-reactive) module `let` read here is fine: it's only ever set
+  // synchronously right before cs.focus flips to 'new' (which this whole
+  // slot already re-renders on), and cleared again before the next
+  // unrelated open — so a fresh read at render/mount time is never stale.
+  const effectiveTarget = () => (warningOverride ? warningOverride.target : commentTarget && commentTarget())
   const target = () => {
-    const t = commentTarget && commentTarget()
+    const t = effectiveTarget()
     if (t) return t.file + ':' + (t.startLine || t.line)
     const b = state && state.blocks && state.blocks[state.selected]
     return b ? b.file + ':' + b.line : 'geen regel geselecteerd'
@@ -1686,8 +1828,10 @@ function newCommentComposer(state, commentTarget, openCompose) {
                 class="flex flex-col gap-2 rounded-xl border border-indigo-300 dark:border-indigo-500/40 bg-white dark:bg-zinc-900 p-3 ring-1 ring-black/5"
                 data-testid="comment-composer"
               >
-                <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">Nieuwe comment · ${() => target()}</p>
-                ${() => composeTargetHint(commentTarget ? commentTarget() : null)}
+                <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">
+                  ${() => (warningOverride ? 'Comment van AI-controle' : 'Nieuwe comment') + ' · ' + target()}
+                </p>
+                ${() => composeTargetHint(effectiveTarget() || null)}
                 <textarea
                   class="min-h-20 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
                   placeholder="Je comment op deze regel…"
@@ -1696,7 +1840,10 @@ function newCommentComposer(state, commentTarget, openCompose) {
                 <div class="flex items-center justify-end gap-2">
                   <button
                     class="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"
-                    @click="${() => (cs.composing = false)}"
+                    @click="${() => {
+                      warningOverride = null
+                      cs.composing = false
+                    }}"
                   >
                     Annuleer
                   </button>
@@ -2729,7 +2876,15 @@ export function handlePrCommentThreadKey(c, key) {
 // No "sent" flash here: sendPrCommentReply calls cancelPrCommentReply() on
 // success, which hides this whole reply row immediately (see below), so a
 // transient "sent" state would never actually be visible.
-const picm = reactive({ replying: false, commentId: null, sending: false })
+// `mode` distinguishes what the SAME textarea+button slot in commentDetailCard
+// does with the typed text: 'reply' (default, startPrCommentReply) posts a
+// reaction on this thread; 'convert' (startPrCommentConvert, see
+// convertPrWideWarningToComment) instead starts a brand-new, unanchored
+// PR-wide comment and deletes this one once that succeeds — a PR-wide AI
+// finding has no diff/composer to reuse (unlike an anchored one, see
+// convertWarningToComment/warningOverride), so it repurposes this reply field
+// instead of duplicating a whole second composer UI.
+const picm = reactive({ replying: false, commentId: null, sending: false, mode: 'reply' })
 
 // startPrCommentReply reveals the reply textarea in commentDetailCard (only
 // for the comment `c` it was opened for, see picm's own comment) and focuses
@@ -2738,16 +2893,42 @@ const picm = reactive({ replying: false, commentId: null, sending: false })
 export function startPrCommentReply(c) {
   picm.replying = true
   picm.commentId = c ? c.id : null
+  picm.mode = 'reply'
   focusEl('[data-testid=comment-detail-reply]')
+}
+
+// startPrCommentConvert is startPrCommentReply's "convert" sibling — reveals
+// the SAME reply field, but prefilled with the AI finding's own text and in
+// 'convert' mode (see picm's own doc comment and sendConvertedPrWideComment).
+// Called by convertPrWideWarningToComment (home.mjs's prCommentCommandsFor,
+// "Comment hiervan maken" on a PR-wide, source:'ai' item).
+function startPrCommentConvert(c) {
+  picm.replying = true
+  picm.commentId = c ? c.id : null
+  picm.mode = 'convert'
+  prefillField('[data-testid=comment-detail-reply]', c && c.body ? c.body : '')
+}
+
+// convertPrWideWarningToComment is convertWarningToComment's PR-wide (kind
+// !== '', no file/line anchor) equivalent — an anchored finding reopens the
+// block's own "+ Nieuwe comment" composer (see convertWarningToComment), but
+// a PR-wide one has no diff/block context to reuse, so it repurposes this
+// item's own reply field instead (startPrCommentConvert).
+export function convertPrWideWarningToComment(c) {
+  if (!c || c.source !== 'ai' || !c.kind) return
+  startPrCommentConvert(c)
 }
 
 // cancelPrCommentReply hides the reply textarea again — called by home.mjs
 // whenever the sidebar selection moves off the comment item it belongs to
-// (a stray "Beantwoorden" state must not leak onto whatever gets selected
-// next), and by Escape/blur within the field itself.
+// (a stray "Beantwoorden"/"Comment hiervan maken" state must not leak onto
+// whatever gets selected next), and by Escape/blur within the field itself.
+// Resets `mode` back to its 'reply' default too, so a later ordinary
+// "Beantwoorden" on a DIFFERENT item never inherits a stale 'convert' mode.
 export function cancelPrCommentReply() {
   picm.replying = false
   picm.commentId = null
+  picm.mode = 'reply'
 }
 
 // sendPrCommentReply posts a real reply (done:false) via the exact same
@@ -2768,6 +2949,36 @@ export async function sendPrCommentReply(c, body) {
     })
     cancelPrCommentReply()
     await loadComments(cs.pr)
+  } finally {
+    picm.sending = false
+  }
+}
+
+// sendConvertedPrWideComment is sendPrCommentReply's 'convert'-mode sibling:
+// instead of replying on `c`'s own thread, it starts a genuinely NEW,
+// unanchored PR-wide comment (Kind "issue", the same Kind an imported
+// general PR comment gets — see createComment's own doc comment) with the
+// (possibly edited) text, and only once THAT is confirmed placed does it
+// delete `c` (the AI finding it replaces) — a failed placement must never
+// discard the finding without anything taking its place, mirroring
+// placeComment's own ordering for the anchored case.
+export async function sendConvertedPrWideComment(c, body) {
+  const text = (body || '').trim()
+  if (!c || !text) return
+  picm.sending = true
+  try {
+    const ok = await createComment({
+      pr: cs.pr,
+      file: c.file || '',
+      line: c.line || 0,
+      body: text,
+      kind: 'issue',
+    })
+    if (ok) {
+      await deleteComment(c)
+      await loadComments(cs.pr)
+      cancelPrCommentReply()
+    }
   } finally {
     picm.sending = false
   }
@@ -2858,12 +3069,13 @@ export function commentDetailCard(c, opts) {
             ? html`<div class="flex items-center gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-3">
                 <textarea
                   class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2 py-1 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
-                  placeholder="Reageer…"
+                  placeholder="${() => (picm.mode === 'convert' ? 'Nieuwe comment op basis van deze melding…' : 'Reageer…')}"
                   data-testid="comment-detail-reply"
                   @keydown="${(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()
-                      sendPrCommentReply(c, e.target.value)
+                      if (picm.mode === 'convert') sendConvertedPrWideComment(c, e.target.value)
+                      else sendPrCommentReply(c, e.target.value)
                     } else if (e.key === 'Escape') {
                       cancelPrCommentReply()
                     }
@@ -2881,11 +3093,13 @@ export function commentDetailCard(c, opts) {
                     // inside this button, whose parentElement is the button
                     // itself, not the row that also holds the textarea.
                     const el = e.currentTarget.parentElement.querySelector('[data-testid=comment-detail-reply]')
-                    if (el) sendPrCommentReply(c, el.value)
+                    if (!el) return
+                    if (picm.mode === 'convert') sendConvertedPrWideComment(c, el.value)
+                    else sendPrCommentReply(c, el.value)
                   }}"
                 >
                   ${() => sendStatusIcon(picm.sending ? 'sending' : 'draft')}
-                  Stuur
+                  ${() => (picm.mode === 'convert' ? 'Plaats' : 'Stuur')}
                 </button>
               </div>`
             : ''}

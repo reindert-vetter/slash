@@ -512,12 +512,23 @@ GitHub, GitHub replies get polled in), instead of read-only copies.
   `Line`/`EndLine` are head coordinates.
 - **Workflow branch (`taskCodeCommentWorkflow`):** `CodeCommentInput` got
   `ImportedRootID`/`Source`/`Kind`/`CreatedAt`. The posting choice is
-  input-driven (so replay-deterministic) in three cases: **imported**
-  (`ImportedRootID != 0`) → **skip `postGithubComment`** but set
+  input-driven (so replay-deterministic) in **four** cases: **imported**
+  (`ImportedRootID != 0`) → **skip posting** but set
   `posted.RootID = in.ImportedRootID` (the comment already exists on
   GitHub — never re-post), so the reply poller runs and UI replies do
   mirror to the real thread; **local** (private note) → `RootID 0`, all
-  GitHub calls no-op; **normal** → post + record `RootID`. `saveComment`
+  GitHub calls no-op; **PR-wide, freshly created** (`isPRWide(in.Kind)`, not
+  imported, not local — the case `convertPrWideWarningToComment` introduced,
+  see "Converting an AI-controle finding into a real comment" in
+  `detail-layout.md`) → post it as a new **issue** comment
+  (`postGithubIssueComment`, best-effort — it never returns a Go error
+  itself) instead of `postGithubComment`, since a PR-wide comment has no
+  reply thread on GitHub and, unlike a review-diff comment, no file:line
+  guaranteed to still sit on a line the current diff covers (a plain
+  `postGithubComment` attempt would often simply fail for it, which — unlike
+  the reactions loop's own best-effort mirrors below — would abort the whole
+  workflow); **normal** (block-scoped) → post as a review comment
+  (`postGithubComment`) + record `RootID`. `saveComment`
   stores `Source`/`Kind`/`CreatedAt`. Right after this switch, a further
   **`saveCommentGithubID`** Activity persists whatever `posted.RootID` ended
   up being into the comment's own `github_id` column (see the `github_id`

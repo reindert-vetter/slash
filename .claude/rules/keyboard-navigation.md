@@ -134,6 +134,9 @@ menu). `Enter` (`ms.mode = 'prComment'`, `prCommentCommandsFor` in
 `home.mjs`) — `selectedComment()` gates a dedicated branch checked **before**
 the generic Enter-opens-menu handling. The menu: **"Sluit menu"** (pinned) →
 **"Beantwoorden"** (the default-selected 2nd item) → **"Resolve comment"** →
+optionally **"Comment hiervan maken"** (only when the item's own
+`source === 'ai'` — a `code_warning` finding, see "Converting an AI-controle
+finding into a real comment" in `detail-layout.md`) →
 **"Ignore"** ("Ignore ongedaan maken" once already ignored —
 `toggleIgnoreComment`, an ephemeral, purely client-side sidebar-visibility
 flag, **not** a persisted Signal like reply/resolve/delete; see
@@ -513,10 +516,13 @@ payload) and the updated last test in `tests/postapprove-menu.spec.mjs`
 The same menu mechanism also serves a **comment-scoped** variant: if the
 keyboard is on a placed comment row in `RelatedPanel` (`cs.focus === 'comment'`,
 before stepping into the thread) and the reply field is still **empty**,
-`Enter` opens not the block palette but a menu with three or four rows —
+`Enter` opens not the block palette but a menu with three to five rows —
 **"Close menu"** (pinned at the top), **"Resolve comment"** (default, the 2nd
-item, where the selection opens), **"Delete comment"**, and — only when the
-focused comment actually has a GitHub anchor — a fourth, bottom item **"Open
+item, where the selection opens), **"Delete comment"**, optionally **"Comment
+hiervan maken"** (only when the comment's `source === 'ai'` — a
+`code_warning` finding, see "Converting an AI-controle finding into a real
+comment" in `detail-layout.md`), and — only when the
+focused comment actually has a GitHub anchor — a final, bottom item **"Open
 op GitHub"** (`menu.mode = 'comment'`, built by `commentCommandsFor()` in
 `home.mjs`, called fresh from `openMenu('comment')`/`rootCommandsFor` every
 time — unlike the other, static command lists, this one is data-conditional

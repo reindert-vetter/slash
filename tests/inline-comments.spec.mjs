@@ -191,4 +191,52 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     // The last message is fully visible without any scroll action.
     await expect(lastBubble).toBeInViewport()
   })
+
+  // compactConversation's preview used to hard-truncate at 1 line — fine for a
+  // short human reply, but it cut off a multi-sentence AI-controle finding
+  // (code_warning, source 'ai') after just a few words. It now clamps at 3
+  // lines instead (line-clamp-3), so a typical finding is readable without a
+  // click. See compactConversation's own doc comment in RelatedPanel.mjs.
+  test('an unfocused AI-controle finding clamps at 3 lines, not 1', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await ready(page)
+    const first = await ident(page)
+
+    const longBody =
+      'De hardening vervangt wel de interpolatie in de run-bodies, maar laat het grootste resterende injectiepad staan: ' +
+      'de volledige workflow-diff wordt met een vast delimiter naar de omgeving geschreven, waardoor een diff-regel die ' +
+      'toevallig dezelfde tekst bevat de heredoc vroegtijdig kan afsluiten en willekeurige variabelen kan overschrijven.'
+    const created = await page.request.post('/api/workflows/task_code_comment', {
+      data: {
+        pr: 12903,
+        file: first.file,
+        line: 1,
+        author: 'AI check',
+        body: longBody,
+        source: 'ai',
+        local: true,
+        label: first.label,
+        rowStart: -1,
+        rowEnd: -1,
+      },
+    })
+    expect(created.ok()).toBeTruthy()
+
+    await page.goto('/pr/12903?sel=' + encodeURIComponent(first.fileLine))
+    await waitBlock(page, first.label)
+
+    // Not focused (nothing was clicked) — stays compact.
+    const item = page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: 'De hardening vervangt' })
+    await expect(item).toHaveAttribute('data-expanded', 'false')
+    const preview = item.locator('span.line-clamp-3').first()
+    await expect(preview).toHaveClass(/line-clamp-3/)
+    await expect(preview).not.toHaveClass(/\btruncate\b/)
+    // line-clamp-3 (a webkit line-clamp) reports itself via the CSS box, not
+    // a class assertion alone — assert the actual computed style too, so a
+    // future accidental revert to `truncate` (1 line, no line-clamp) is
+    // caught even if some other class still happened to contain the string
+    // "line-clamp-3" as a substring.
+    const clamp = await preview.evaluate((el) => getComputedStyle(el).webkitLineClamp)
+    expect(clamp).toBe('3')
+  })
 })

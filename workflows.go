@@ -2325,18 +2325,38 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("save comment: %w", err)
 	}
 	// Decide the GitHub root comment ID this thread mirrors to, without ever
-	// posting twice. Three input-driven (so replay-deterministic) cases:
+	// posting twice. Four input-driven (so replay-deterministic) cases:
 	//   - Imported (ImportedRootID != 0): the comment already exists on GitHub —
-	//     skip postGithubComment but record its known RootID, so the poller runs
-	//     and UI replies still mirror to the real thread.
+	//     skip posting but record its known RootID, so the poller runs and UI
+	//     replies still mirror to the real thread.
 	//   - Local (private note): never touches GitHub — RootID stays 0, disabling
 	//     the poller and every reply/delete mirror via the existing RootID == 0 guard.
-	//   - Normal: post it and record the new RootID.
+	//   - PR-wide, freshly created (isPRWide(in.Kind), not imported, not local —
+	//     e.g. convertPrWideWarningToComment turning an unanchored code_warning
+	//     finding into a real comment, RelatedPanel.mjs): a PR-wide comment has
+	//     no reply thread on GitHub and, unlike a review-diff comment, no
+	//     file:line that's guaranteed to still sit on a line the current diff
+	//     covers — postGithubComment would often simply fail for it. Post it
+	//     instead as a new, top-level issue comment on the flat PR conversation
+	//     (postGithubIssueComment, the SAME best-effort Activity the reactions
+	//     loop's own isPRWide branch already uses to mirror a REPLY on such a
+	//     thread below) — it never returns an error itself (see its own doc
+	//     comment), so a GitHub hiccup here can't abort comment creation.
+	//   - Normal (a block-scoped comment): post it as a review comment and
+	//     record the new RootID.
 	var posted postResult
 	switch {
 	case in.ImportedRootID != 0:
 		posted.RootID = in.ImportedRootID
-	case !in.Local:
+	case in.Local:
+		// no GitHub post
+	case isPRWide(in.Kind):
+		if err := w.ExecuteActivity("postGithubIssueComment", map[string]any{
+			"pr": in.PR, "body": in.Body,
+		}, &posted); err != nil {
+			return nil, fmt.Errorf("post github issue comment: %w", err)
+		}
+	default:
 		if err := w.ExecuteActivity("postGithubComment", in, &posted); err != nil {
 			return nil, fmt.Errorf("post github comment: %w", err)
 		}

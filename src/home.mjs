@@ -44,6 +44,9 @@ import RelatedPanel, {
   deleteFocusedComment,
   resolveFocusedComment,
   focusedCommentGithubId,
+  focusedComment,
+  convertWarningToComment,
+  convertPrWideWarningToComment,
   commentRowSet,
   commentActivitySummary,
   commentListSnapshot,
@@ -3720,6 +3723,14 @@ function defaultSel(list) {
 // block-scoped comments (kind === '', see recomputeView's !c.kind filter in
 // RelatedPanel.mjs), which are always a GitHub review/diff comment — so the
 // anchor form is always "#discussion_r<id>", never "#issuecomment-<id>".
+//
+// "Comment hiervan maken" is appended right after Resolve/Delete — but only
+// for an AI-authored finding (focusedComment().source === 'ai', see
+// aiWarningBadge in RelatedPanel.mjs) — the code_warning workflow's own
+// finding text is often worth turning into a real, reviewer-owned comment
+// (editable before it's placed) rather than left as-is. Deliberately NOT the
+// default item (Resolve comment stays that, per keyboard-navigation.md) —
+// pushed after Resolve/Delete instead of unshifted to the front.
 function commentCommandsFor() {
   const items = [
     {
@@ -3735,6 +3746,15 @@ function commentCommandsFor() {
       run: () => deleteFocusedComment(),
     },
   ]
+  const c = focusedComment()
+  if (c && c.source === 'ai') {
+    items.push({
+      id: 'comment-from-warning',
+      label: 'Comment hiervan maken',
+      hint: 'convert',
+      run: () => convertWarningToComment(c),
+    })
+  }
   const githubId = focusedCommentGithubId()
   if (githubId) {
     items.push({
@@ -3759,8 +3779,18 @@ function commentCommandsFor() {
 // resolvePrCommentItem) — the same write path as the block-scoped "Resolve
 // comment" command above, just against this item's own comment instead of
 // cs's selected one.
+//
+// "Comment hiervan maken" — the PR-wide (unanchored) equivalent of
+// commentCommandsFor's own item above — only appears for an AI-authored
+// finding (source === 'ai'). It reveals the SAME reply field "Beantwoorden"
+// does, but in 'convert' mode (startPrCommentConvert/
+// convertPrWideWarningToComment, RelatedPanel.mjs): sending posts a brand-new
+// PR-wide comment (Kind "issue", no file/line — there is none to reuse for a
+// finding that couldn't be pinned to a block) and only then deletes this
+// finding. Placed right after "Resolve comment", not first — "Beantwoorden"
+// stays the default Enter action here too.
 function prCommentCommandsFor() {
-  return withClose([
+  const items = [
     {
       id: 'pr-comment-reply',
       label: 'Beantwoorden',
@@ -3776,16 +3806,26 @@ function prCommentCommandsFor() {
         if (c) resolvePrCommentItem(c)
       },
     },
-    {
-      id: 'pr-comment-ignore',
-      // Label is a function so it names the current state (resolveLabel/
-      // snapshotCommands read it ONCE, right now, when the menu opens — see
-      // that comment for why this must never become a live binding).
-      label: () => (isIgnoredComment(state, curBlock()) ? 'Ignore ongedaan maken' : 'Ignore'),
-      hint: 'ignore',
-      run: () => toggleIgnoreComment(selectedComment()),
-    },
-  ])
+  ]
+  const c = selectedComment()
+  if (c && c.source === 'ai') {
+    items.push({
+      id: 'pr-comment-from-warning',
+      label: 'Comment hiervan maken',
+      hint: 'convert',
+      run: () => convertPrWideWarningToComment(c),
+    })
+  }
+  items.push({
+    id: 'pr-comment-ignore',
+    // Label is a function so it names the current state (resolveLabel/
+    // snapshotCommands read it ONCE, right now, when the menu opens — see
+    // that comment for why this must never become a live binding).
+    label: () => (isIgnoredComment(state, curBlock()) ? 'Ignore ongedaan maken' : 'Ignore'),
+    hint: 'ignore',
+    run: () => toggleIgnoreComment(selectedComment()),
+  })
+  return withClose(items)
 }
 
 // toggleIgnoreComment flips whether a PR-comment index item (kind:'comment')
