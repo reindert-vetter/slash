@@ -194,6 +194,42 @@ left as a navigable list.
   restore remain unaffected: those look up by block **id**/`file:line`, not by
   index (see the URL-state section in `CLAUDE.md`), so a different order
   changes nothing about where a restored selection lands.
+- **Trait blocks (`TRAIT` category, keyword-based, not path-based).** A method
+  declared directly inside a PHP `trait` body classifies as **`TRAIT`**
+  instead of falling through to `OTHER`/whatever its directory would
+  otherwise suggest — mirrors the existing `INTERFACE` override exactly:
+  `phpscan.go`'s `scanPHP` already tracks each `classFrame`'s `kind`
+  (`class`/`trait`/`interface`/`enum`) while scanning, so it stamps
+  `Block.IsTrait` (transient, `json:"-"`, alongside `Block.IsInterface`) on
+  every method/header block declared inside a `trait`; `classifyFile`
+  (`classify.go`) overrides `Category` to `"TRAIT"` whenever that flag is
+  set, **regardless of the file's path**. This is deliberately
+  **keyword-based, not path-based**, unlike most other `categoryRules`
+  entries: a trait file isn't confined to one directory convention
+  (`app/Traits/`, `packages/*/Traits/`, or no dedicated directory at all)
+  and has no reliable filename-suffix convention either (unlike
+  `*Interface.php`), so a pure path rule would miss most real-world traits.
+  A narrow **path-based fallback** (`hasSeg(p, "Traits/")` in
+  `categoryRules`, placed early like the `*Interface.php` fallback) only
+  matters for the scanner's whole-file-fallback scenario (unparseable file,
+  so `Block.IsTrait` is never set) — the same two-layer shape as
+  `INTERFACE`. **Deliberately not** wired through
+  `callresolve_analysis.go`'s `scanTraits`/`idx.traits`: that's a separate,
+  whole-worktree regex scan used by the `build_relations` Activity to link
+  trait *usage* (`use HasIncludeLabel;`) to its declaration as an
+  Underlying-code child (see "Resolving (also unchanged) called … methods"
+  in `.claude/rules/tembed-workflows.md`) — a different life-cycle/input
+  than classifying an already-scanned `Block` during per-file ingest, and
+  `phpscan.go`'s own lexer already has the `kind` it needs. Frontend:
+  `CATEGORY_STYLE.TRAIT` in `src/BlockList.mjs` uses the separate "gray"
+  Tailwind family (distinct from `OTHER`'s `slate`/`zinc`) at a noticeably
+  darker/higher-contrast shade, so the pill reads apart from `OTHER`/`TEST`
+  by **lightness**, not hue — color-blind-safe; the pill's text label
+  ("TRAIT" vs "OTHER") still carries the meaning either way. Tests:
+  `TestTraitMethodIsFlaggedIsTrait`/`TestClassMethodIsNotFlaggedIsTrait`
+  (`phpscan_test.go`),
+  `TestTraitMethodClassifiesAsTraitRegardlessOfPath`/
+  `TestCategoryForTraitPathFallback` (`classify_test.go`).
 - **Translation blocks (`TRANSLATION` category + a clean key overview instead
   of raw code):** a PHP Laravel lang file (`resources/lang/<locale>/<name>.php`
   or `lang/<locale>/<name>.php`, a `/lang/` path segment) classifies as

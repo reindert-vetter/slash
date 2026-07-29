@@ -55,6 +55,11 @@ type Block struct {
 	// the file's path) — not needed by the frontend, hence json:"-".
 	// See .claude/rules/blocks-and-ingest.md.
 	IsInterface bool `json:"-"`
+	// IsTrait mirrors IsInterface for a method declared directly inside a
+	// `trait` body — classify.go overrides Category to "TRAIT" regardless
+	// of the file's path, since a trait file isn't confined to a `Traits/`
+	// directory. See .claude/rules/blocks-and-ingest.md.
+	IsTrait bool `json:"-"`
 }
 
 // ID is stable per (pr, file, symbol) so re-ingest is idempotent.

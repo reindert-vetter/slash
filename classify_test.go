@@ -545,6 +545,73 @@ func TestCategoryForInterfaceFilenameFallback(t *testing.T) {
 	}
 }
 
+// TestTraitMethodClassifiesAsTraitRegardlessOfPath proves the Block.IsTrait
+// override in classifyFile: a method declared inside a `trait` gets category
+// "TRAIT" even under a path that would otherwise match a completely
+// different category rule (here app/Services/, which would normally yield
+// "SERVICE") — mirrors TestInterfaceMethodClassifiesAsInterfaceRegardlessOfPath.
+// See .claude/rules/blocks-and-ingest.md.
+func TestTraitMethodClassifiesAsTraitRegardlessOfPath(t *testing.T) {
+	oldSrc := `<?php
+trait HasIncludeLabel {
+    public function getLabel(): string {
+        return $this->label;
+    }
+}
+`
+	newSrc := `<?php
+trait HasIncludeLabel {
+    public function getLabel(): string {
+        return $this->label;
+    }
+
+    public function getIncludeLabel(): string {
+        return $this->includeLabel;
+    }
+}
+`
+	file := "app/Services/HasIncludeLabel.php"
+	oldBlocks := ScanBlocks([]byte(oldSrc), file)
+	newBlocks := ScanBlocks([]byte(newSrc), file)
+
+	// A real unified diff would show the added "getIncludeLabel()" method only.
+	fd := &fileDiff{changedOld: lineSet{}, changedNew: lineSet{7: true, 8: true, 9: true}}
+
+	out := classifyFile(1, file, "", oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
+
+	var found *Block
+	for i := range out {
+		if out[i].symbol() == "HasIncludeLabel::getIncludeLabel" {
+			found = &out[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected HasIncludeLabel::getIncludeLabel to classify as added, got %v", symbols(out))
+	}
+	if found.Category != "TRAIT" {
+		t.Errorf("expected category %q for a trait method (path would otherwise give SERVICE), got %q", "TRAIT", found.Category)
+	}
+}
+
+// TestCategoryForTraitPathFallback proves the path-based `Traits/`
+// directory-convention fallback in categoryRules: it only matters for the
+// whole-file-scan fallback scenario (a file the scanner can't parse into
+// real blocks, so Block.IsTrait is never set) — a bare categoryFor(path)
+// call (no scan/classify) is the simplest way to exercise that rule
+// directly. Includes the exact path from the reported bug.
+func TestCategoryForTraitPathFallback(t *testing.T) {
+	cases := map[string]string{
+		"packages/plugandpay/Traits/HasIncludeLabel.php": "TRAIT",
+		"app/Traits/Sortable.php":                        "TRAIT",
+		"app/Services/Svc.php":                           "SERVICE",
+	}
+	for path, want := range cases {
+		if got := categoryFor(path); got != want {
+			t.Errorf("categoryFor(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
 func writeFileT(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

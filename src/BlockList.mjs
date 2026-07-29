@@ -32,6 +32,15 @@ const CATEGORY_STYLE = {
   ROUTE: 'bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300',
   TRANSLATION: 'bg-yellow-100 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-300',
   CONFIG: 'bg-stone-200 dark:bg-stone-500/20 text-stone-600 dark:text-stone-400',
+  // Every hue in the palette below is already claimed, and a color-blind
+  // user can't reliably tell TRAIT apart from OTHER/TEST by hue alone — so
+  // this deliberately uses the separate "gray" family (distinct from the
+  // slate/zinc/stone already in use) at a noticeably darker/higher-contrast
+  // shade than OTHER's very light slate-100/zinc-800 or TEST's slate-200/
+  // zinc-700, so the difference reads by LIGHTNESS, not hue. The word in
+  // the pill ("TRAIT" vs "OTHER") still carries the meaning — color only
+  // reinforces it.
+  TRAIT: 'bg-gray-300 dark:bg-gray-600/40 text-gray-900 dark:text-gray-100',
   OTHER: 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400',
   // Synthetic comment-index items (kind:'comment', see commentBlockItem in
   // home.mjs) — a PR-wide comment turned into a navigable "Start" row. `red`

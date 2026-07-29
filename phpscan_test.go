@@ -763,3 +763,64 @@ trait Helper {
 		t.Fatalf("expected Helper::assist NOT to be flagged IsInterface")
 	}
 }
+
+// TestTraitMethodIsFlaggedIsTrait: a method declared directly inside a
+// `trait` body gets Block.IsTrait=true, so classify.go can override its
+// category to "TRAIT" regardless of the file's path — mirrors
+// TestInterfaceMethodIsFlaggedIsInterface. See
+// .claude/rules/blocks-and-ingest.md.
+func TestTraitMethodIsFlaggedIsTrait(t *testing.T) {
+	src := `<?php
+trait Helper {
+    public function assist() {
+        return 1;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Helper.php")
+	b, ok := blockByName(got, "Helper::assist")
+	if !ok {
+		t.Fatalf("expected Helper::assist, got %v", symbols(got))
+	}
+	if !b.IsTrait {
+		t.Fatalf("expected Helper::assist to be flagged IsTrait")
+	}
+}
+
+// TestClassMethodIsNotFlaggedIsTrait: an ordinary class method must never get
+// IsTrait set.
+func TestClassMethodIsNotFlaggedIsTrait(t *testing.T) {
+	src := `<?php
+class Foo {
+    public function bar() {
+        return 1;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Foo.php")
+	b, ok := blockByName(got, "Foo::bar")
+	if !ok {
+		t.Fatalf("expected Foo::bar, got %v", symbols(got))
+	}
+	if b.IsTrait {
+		t.Fatalf("expected Foo::bar NOT to be flagged IsTrait")
+	}
+}
+
+// TestInterfaceMethodIsNotFlaggedIsTrait: an interface method must also stay
+// unflagged — only a real `trait` body sets IsTrait.
+func TestInterfaceMethodIsNotFlaggedIsTrait(t *testing.T) {
+	src := `<?php
+interface Repo {
+    public function find(int $id): ?Model;
+}
+`
+	got := ScanBlocks([]byte(src), "app/Services/Repo.php")
+	b, ok := blockByName(got, "Repo::find")
+	if !ok {
+		t.Fatalf("expected Repo::find, got %v", symbols(got))
+	}
+	if b.IsTrait {
+		t.Fatalf("expected Repo::find NOT to be flagged IsTrait")
+	}
+}

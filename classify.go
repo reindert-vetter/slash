@@ -200,6 +200,12 @@ func classifyFile(pr int, path, oldFile string, oldBlocks, newBlocks []Block, fd
 			// interface, regardless of which directory it happens to sit in.
 			nb.Category = "INTERFACE"
 		}
+		if nb.IsTrait {
+			// Same override for a `trait` body — a trait file isn't confined
+			// to a `Traits/` directory, so path alone isn't reliable here
+			// either. See .claude/rules/blocks-and-ingest.md.
+			nb.Category = "TRAIT"
+		}
 		nb.Side = SideNew
 		nb.OldFile = oldFile
 		sym := nb.symbol()
@@ -237,6 +243,9 @@ func classifyFile(pr int, path, oldFile string, oldBlocks, newBlocks []Block, fd
 		ob.Category = category
 		if ob.IsInterface {
 			ob.Category = "INTERFACE"
+		}
+		if ob.IsTrait {
+			ob.Category = "TRAIT"
 		}
 		ob.Side = SideOld
 		ob.OldFile = oldFile
@@ -291,6 +300,16 @@ var categoryRules = []categoryRule{
 	// already stamped "INTERFACE" on its blocks before this path-based
 	// fallback would apply.
 	{func(p string) bool { return strings.HasSuffix(p, "Interface.php") }, "INTERFACE"},
+	// Fallback directory-convention rule for a trait file, placed early for
+	// the same reason as the INTERFACE fallback above. Unlike an interface, a
+	// trait has no reliable filename suffix convention (a trait can just be
+	// `HasIncludeLabel.php`), so this keys on the `Traits/` directory segment
+	// instead (e.g. `app/Traits/`, `packages/plugandpay/Traits/`). Like the
+	// INTERFACE fallback, this only actually matters for the scanner's
+	// whole-file-fallback scenario — a reliably-parsed trait method already
+	// gets "TRAIT" from classifyFile's Block.IsTrait override, regardless of
+	// path. See .claude/rules/blocks-and-ingest.md.
+	{func(p string) bool { return hasSeg(p, "Traits/") }, "TRAIT"},
 	{func(p string) bool { return hasSeg(p, "database/migrations/") }, "MIGRATION"},
 	{func(p string) bool { return hasSeg(p, "database/factories/") }, "FACTORY"},
 	{func(p string) bool { return hasSeg(p, "app/Actions/") }, "ACTION"},

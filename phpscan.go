@@ -128,6 +128,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 					Name:    classHeaderSentinel,
 					Line:    top.headerLine,
 					EndLine: line - 1,
+					IsTrait: top.kind == "trait",
 				})
 			}
 			classes = classes[:len(classes)-1]
@@ -310,11 +311,13 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 				b, next, isDecl := scanFunction(s, end, &line, filename, currentClass(), declLine)
 				if isDecl {
 					b.Description = doc
-					// A method declared directly inside an `interface` body gets
-					// flagged so classify.go can override its category to
-					// "INTERFACE" regardless of the file's path (see
+					// A method declared directly inside an `interface` (resp.
+					// `trait`) body gets flagged so classify.go can override
+					// its category to "INTERFACE" (resp. "TRAIT") regardless
+					// of the file's path (see
 					// .claude/rules/blocks-and-ingest.md).
 					b.IsInterface = currentClassKind() == "interface"
+					b.IsTrait = currentClassKind() == "trait"
 					blocks = append(blocks, b)
 					if headerFrame != nil {
 						headerFrame.headerClosed = true
@@ -325,6 +328,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 								Name:    classHeaderSentinel,
 								Line:    headerFrame.headerLine,
 								EndLine: declLine - 1,
+								IsTrait: headerFrame.kind == "trait",
 							})
 						}
 					}
