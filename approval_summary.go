@@ -6,7 +6,9 @@ import (
 )
 
 // approval_summary.go serves the PR-overview approval badge:
-//   GET /api/approvalsummary?prs=12,13 — per PR a {done,total} reviewer-approval
+//
+//	GET /api/approvalsummary?prs=12,13 — per PR a {done,total} reviewer-approval
+//
 // rollup over the WHOLE PR (every block once): total = the number of approvable
 // changed rows across all blocks of the PR (the same server-side count as
 // /api/blockstats, blockstats.go), done = how many of those a reviewer has
