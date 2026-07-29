@@ -43,21 +43,29 @@ test.describe('PR description truncate/expand (C1)', () => {
     const body = page.getByTestId('pr-info-body')
     await expect(body).toBeVisible()
 
-    const clip = page.getByTestId('pr-info-body-wrap').locator('.markdown-body')
+    const wrap = page.getByTestId('pr-info-body-wrap')
+    const clip = wrap.locator('.markdown-body')
     const toggle = page.getByTestId('pr-info-body-toggle')
 
-    // Collapsed: clipped (max-h-40) and the affordance reads "meer…".
-    await expect(clip).toHaveClass(/max-h-40/)
+    // Collapsed: clipped (fills the available column height via flex/h-full,
+    // not a fixed pixel cap — see the "Description truncation" section in
+    // detail-layout.md) and the affordance reads "meer…".
+    await expect(clip).toHaveClass(/overflow-hidden/)
     await expect(toggle).toHaveText(/meer/)
+    // Regression guard for the actual bug this fixes: the collapsed wrap must
+    // fill (most of) the column's available height instead of the old fixed
+    // 160px (max-h-40) that left a large unused gap above the status pills.
+    const wrapBox = await wrap.boundingBox()
+    expect(wrapBox.height).toBeGreaterThan(250)
 
     // Click expands: no longer clipped, affordance flips to "Inklappen".
     await toggle.click()
-    await expect(clip).not.toHaveClass(/max-h-40/)
+    await expect(clip).not.toHaveClass(/overflow-hidden/)
     await expect(toggle).toHaveText(/Inklappen/)
 
     // Click collapses again.
     await toggle.click()
-    await expect(clip).toHaveClass(/max-h-40/)
+    await expect(clip).toHaveClass(/overflow-hidden/)
     await expect(toggle).toHaveText(/meer/)
   })
 
@@ -70,7 +78,7 @@ test.describe('PR description truncate/expand (C1)', () => {
 
     // Open the description column first so the wrap exists to assert against.
     await page.keyboard.press('ArrowLeft')
-    await expect(clip).toHaveClass(/max-h-40/)
+    await expect(clip).toHaveClass(/overflow-hidden/)
 
     // Open the PR-wide menu and run the expand item.
     await page.keyboard.press('/')
@@ -78,6 +86,6 @@ test.describe('PR description truncate/expand (C1)', () => {
     await page.getByTestId('command-input').fill('volledige')
     await page.keyboard.press('Enter')
 
-    await expect(clip).not.toHaveClass(/max-h-40/)
+    await expect(clip).not.toHaveClass(/overflow-hidden/)
   })
 })

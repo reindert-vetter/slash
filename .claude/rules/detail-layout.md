@@ -69,19 +69,43 @@ full pattern. A white card with title + Jira badge, a meta line (author,
 (Claude text), a **Description** section (PR body + optionally a Jira box),
 and review/CI pills at the bottom.
 **Description truncation (`state.descriptionExpanded`, ephemeral):** a **long**
-PR body (> `DESC_TRUNCATE_AT` = 280 characters) is truncated by default
-(`max-h-40 overflow-hidden`) with a clickable fade affordance at the bottom
-(`data-testid=pr-info-body-toggle`, "more…") that expands the body fully; once
-open it becomes a plain "Collapse" link. A **short** body always renders in
-full (no misleading toggle — purely based on character length, so
-deterministic, no DOM measurement). The same flag is also toggled by the
-PR menu item **"Show full description" / "Collapse description"**
-(`PR_COMMANDS`, `/` menu, see `.claude/rules/keyboard-navigation.md`), so the
-in-card click and the menu stay in lockstep. `state.descriptionExpanded`
-(default `false`) lives **outside the URL** (ephemeral, just like
-`showDescription`). The class strings of the body + toggle are **whole-value**
-function bindings (no partial interpolation — arrow.js pitfall in
-`conventions.md`). The review/CI pills are styled like the dark-zinc pills in
+PR body (> `DESC_TRUNCATE_AT` = 280 characters) is truncated by default with a
+clickable fade affordance at the bottom (`data-testid=pr-info-body-toggle`,
+"more…") that expands the body fully; once open it becomes a plain "Collapse"
+link. `DESC_TRUNCATE_AT` only gates whether that affordance **exists** at all
+— a **short** body always renders in full (no misleading toggle). The
+collapsed **height** itself, however, is deliberately **not** a fixed pixel
+value (it used to be `max-h-40`, 160px) — `pr-info-body` becomes a
+`flex flex-col` box that turns `flex-1` exactly while collapsing something
+(long body, not expanded), so it fills whatever room is actually left in the
+column above the status pills instead of a fixed cap that, on a typical PR
+with a short title/meta/no Jira box, left a large unused gap there (the
+reported bug). The wrap itself (`pr-info-body-wrap`) mirrors that
+`flex-1`/natural-size split, with a `min-h-[4rem]` floor so an oversized Jira
+description below it (`shrink-0`, unbounded) can never squeeze it away
+entirely; its inner `.markdown-body` swaps `h-full overflow-hidden` for no
+height constraint at all once expanded (the card itself scrolls then, as
+before). **Deliberate choice:** this still needs no DOM measurement —
+`DESC_TRUNCATE_AT`'s character count remains the sole, deterministic decision
+for "does the affordance exist", while the browser's own flex layout (not a
+`scrollHeight`/`ResizeObserver` read) decides how tall the collapsed box
+actually is. Consequence: in the rare case where a body just over 280
+characters happens to fully fit within the (now much roomier, layout-
+dependent) collapsed height, the "meer…" toggle can still appear without
+there being anything left to reveal — an edge case that already existed with
+the old fixed 160px cap and isn't made worse by this change, deliberately
+accepted over adding real overflow detection for a marginal gain. The same
+flag is also toggled by the PR menu item **"Show full description" /
+"Collapse description"** (`PR_COMMANDS`, `/` menu, see
+`.claude/rules/keyboard-navigation.md`), so the in-card click and the menu
+stay in lockstep. `state.descriptionExpanded` (default `false`) lives
+**outside the URL** (ephemeral, just like `showDescription`). The class
+strings of the body + toggle (and of `pr-info-body`/`pr-info-body-wrap`) are
+**whole-value** function bindings (no partial interpolation — arrow.js
+pitfall in `conventions.md`). Test: `tests/pr-description-expand.spec.mjs`
+(also asserts the collapsed wrap's bounding-box height, as a regression
+guard against reverting to a fixed pixel cap). The review/CI pills are
+styled like the dark-zinc pills in
 `overview.mjs` but in the light card theme (`bg-emerald-50`/`bg-rose-50`/
 `bg-amber-50` instead of `bg-emerald-500/15` etc.). The card reads
 **exclusively** `state.prMeta`/`state.pr`/`state.prUrl`/`state.jiraKey` —

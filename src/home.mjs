@@ -6411,10 +6411,14 @@ function prStatusSlot(meta) {
   return pills.filter(Boolean)
 }
 
-// DESC_TRUNCATE_AT is the character length past which the PR description is
-// truncated (with a "meer…" affordance) in the PR-info column. A short body
-// renders in full — no misleading toggle. Character-count is deliberate: it's
-// deterministic and needs no DOM measurement (no reactive layout read).
+// DESC_TRUNCATE_AT is the character length past which the PR description gets
+// a "meer…" affordance in the PR-info column. A short body renders in full —
+// no misleading toggle. Character-count is deliberate: it's deterministic and
+// needs no DOM measurement (no reactive layout read). It only gates whether
+// the affordance EXISTS — the collapsed height itself is no longer a fixed
+// pixel value but CSS/flex-driven (see pr-info-body below), so it always
+// fills whatever room is actually left in the column instead of a fixed,
+// often-too-short 160px that left unused space above the status pills.
 const DESC_TRUNCATE_AT = 280
 
 function prInfoCard(state) {
@@ -6498,21 +6502,39 @@ function prInfoCard(state) {
               ></div>`
             : html`<p class="text-[13px] italic text-slate-400 dark:text-zinc-500">samenvatting genereren…</p>`}
       </div>
-      <div data-testid="pr-info-body">
-        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Omschrijving</div>
+      <div
+        class="${() =>
+          'flex min-h-0 flex-col ' +
+          // Only claim the card's leftover vertical space while there's
+          // actually something being collapsed — a short/empty body, or an
+          // already-expanded long one, stays at its natural content height
+          // (unchanged from before), so it never steals room from the Jira
+          // box/pills that isn't needed. See DESC_TRUNCATE_AT above.
+          (state.prMeta.body && state.prMeta.body.length > DESC_TRUNCATE_AT && !state.descriptionExpanded ? 'flex-1' : '')}"
+        data-testid="pr-info-body"
+      >
+        <div class="mb-1 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Omschrijving</div>
         ${() =>
           state.prMeta.body
             ? state.prMeta.body.length > DESC_TRUNCATE_AT
               ? // Long body: truncate with a fade + clickable "meer…" affordance
                 // that toggles state.descriptionExpanded (same flag the PR-menu
-                // item drives). The class strings are whole-value function
-                // bindings (no partial interpolation — see the arrow.js
-                // class-binding pitfall in conventions.md).
-                html`<div class="relative" data-testid="pr-info-body-wrap">
+                // item drives). Collapsed, the wrap grows (flex-1) to fill
+                // whatever's left of the column instead of a fixed pixel
+                // height — min-h-[4rem] is a floor so an oversized Jira
+                // description below it (shrink-0, unbounded) can't squeeze it
+                // away entirely. Expanded, it reverts to natural sizing (the
+                // card itself scrolls, as before). The class strings are
+                // whole-value function bindings (no partial interpolation —
+                // see the arrow.js class-binding pitfall in conventions.md).
+                html`<div
+                  class="${() => 'relative ' + (state.descriptionExpanded ? '' : 'min-h-[4rem] flex-1')}"
+                  data-testid="pr-info-body-wrap"
+                >
                   <div
                     class="${() =>
                       'markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300 ' +
-                      (state.descriptionExpanded ? '' : 'max-h-40 overflow-hidden')}"
+                      (state.descriptionExpanded ? '' : 'h-full overflow-hidden')}"
                     .innerHTML="${() => renderMarkdown(state.prMeta.body)}"
                   ></div>
                   <button
@@ -6528,13 +6550,13 @@ function prInfoCard(state) {
                   </button>
                 </div>`
               : html`<div
-                  class="markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
+                  class="shrink-0 markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
                   .innerHTML="${() => renderMarkdown(state.prMeta.body)}"
                 ></div>`
-            : html`<p class="text-[13px] text-slate-400 dark:text-zinc-500">geen omschrijving</p>`}
+            : html`<p class="shrink-0 text-[13px] text-slate-400 dark:text-zinc-500">geen omschrijving</p>`}
         ${() =>
           state.prMeta.jiraTitle
-            ? html`<div class="mt-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 p-2.5" data-testid="pr-info-jira">
+            ? html`<div class="mt-2 shrink-0 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 p-2.5" data-testid="pr-info-jira">
                 <div class="text-[12px] font-medium text-slate-700 dark:text-zinc-300">Jira: ${state.prMeta.jiraTitle}</div>
                 ${state.prMeta.jiraDesc
                   ? html`<div
