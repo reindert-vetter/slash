@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -459,6 +460,56 @@ func TestReanchorSignalMovesStoredAnchor(t *testing.T) {
 		got, _ := cs.List(ctx, pr)
 		return len(got) == 1 && got[0].ReactionCount == 1
 	})
+}
+
+// Both workflow paths that own a block swap — the ingest workflow (a full
+// replacePRBlocks, i.e. "Regenereren"/`slash ingest`) and pr_status's delta
+// refresh — call the re-anchor Activity by NAME. A typo there would only surface
+// at runtime, on a real PR, as a failed workflow: neither call site has a test
+// that runs without a reachable git/gh (see ingest_delta_test.go's skips). This
+// pins the name and the no-op guard by driving the Activity through a throwaway
+// workflow, with no changed files — the shape a first ingest passes.
+func TestReanchorActivityIsRegistered(t *testing.T) {
+	dir := t.TempDir()
+	cs, err := comments.Open(filepath.Join(dir, "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	engine := tembed.New(tembed.NewMemoryStore())
+	NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t),
+		nil, nil, nil, nil, nil, nil, nil, nil, dir, "test/repo")
+
+	// A stand-in for the two real call sites, passing the identical argument shape.
+	engine.RegisterWorkflow("test_reanchor_probe", func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		var out reanchorResult
+		if err := w.ExecuteActivity("reanchorAfterRefresh", map[string]any{
+			"pr": 940017, "prevBaseSHA": "", "prevHeadSHA": "", "changedFiles": []string{},
+		}, &out); err != nil {
+			return nil, err
+		}
+		return json.Marshal(out)
+	})
+
+	runID, err := engine.StartWorkflow("test_reanchor_probe", map[string]any{})
+	if err != nil {
+		t.Fatalf("reanchorAfterRefresh is not registered under that name: %v", err)
+	}
+	status, err := engine.Status(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != tembed.StatusCompleted {
+		t.Fatalf("probe status = %v, want completed — the Activity failed", status)
+	}
+	var got reanchorResult
+	if err := engine.Result(runID, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Comments != 0 || got.Approvals != 0 {
+		t.Errorf("result = %+v, want a no-op for an empty changed-file set", got)
+	}
 }
 
 // An orphan mark round-trips through the read model and reaches the API shape the

@@ -126,6 +126,27 @@ func scanAndStoreIngestBlocks(ctx context.Context, db *sql.DB, dataDir string, p
 func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir string, pr int, shas worktreeSHAs) (*ingestResult, error) {
 	res := &ingestResult{PR: pr, ByStatus: map[string]int{}}
 
+	// Read the SHAs the blocks table currently holds BEFORE replacing it, so the
+	// re-anchor pass can rebuild the aligned-row space every stored comment/
+	// approval anchor was written in (see reanchor.go). Without this a manual
+	// re-ingest ("Regenereren", or `slash ingest`) after new commits landed would
+	// swap in a fresh row space and leave every anchor of a changed file pointing
+	// at whatever code took its index — and worse, saveIngestSHAs below then makes
+	// the delta poller report Skipped for that same delta, so the refresh path
+	// would never repair it either.
+	//
+	// Absent (no prior ingest) is the normal first-ingest case: nothing can be
+	// stale yet, and the empty SHAs make the approval remap a no-op.
+	prevBase, prevHead, _, err := loadIngestSHAs(db, pr)
+	if err != nil {
+		return nil, fmt.Errorf("load previous ingest state: %w", err)
+	}
+	res.PrevBaseSHA, res.PrevHeadSHA = prevBase, prevHead
+	// A full swap re-scans everything, so every path of the PR may hold a stale
+	// anchor — not just a delta. That also makes one re-ingest repair anchors that
+	// went stale before this pass existed.
+	res.ChangedFiles = shas.Paths
+
 	baseDir, headDir := worktreeDirs(dataDir, pr)
 
 	// Detect git renames (default -M threshold) so a moved file is scanned as
@@ -234,11 +255,10 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 		if err != nil {
 			return nil, fmt.Errorf("full ingest fallback: scan and store: %w", err)
 		}
+		// PrevBaseSHA/PrevHeadSHA/ChangedFiles are filled by
+		// scanAndStoreIngestBlocksLocked itself (it reads the pre-swap SHAs), so
+		// the re-anchor pass covers this path exactly like a delta refresh.
 		full.FullFallback = true
-		full.PrevBaseSHA, full.PrevHeadSHA = prevBase, prevHead
-		// A full swap re-scans everything, so every path of the PR may hold a
-		// stale anchor — not just the delta.
-		full.ChangedFiles = shas.Paths
 		return full, nil
 	}
 

@@ -1671,6 +1671,23 @@ func ingestWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	if err := w.ExecuteActivity("scanAndStoreBlocks", arg, &res); err != nil {
 		return nil, fmt.Errorf("scan and store blocks: %w", err)
 	}
+	// A full ingest swaps in an entirely fresh row space for every file of the PR,
+	// so every stored comment/approval anchor of a re-ingested PR has to be
+	// re-derived against it — exactly like the delta-refresh path does (see
+	// reanchor.go). Without this, clicking "Regenereren" after new commits landed
+	// broke every anchor of a changed file AND closed the repair window: the
+	// ingest records the new SHAs, so the delta poller then reports Skipped and
+	// never runs the pass for that delta either.
+	//
+	// A first ingest has no previous SHAs and nothing stored to move, so the
+	// Activity is a cheap no-op there. Deliberately after the blocks are stored:
+	// the matcher resolves each anchor against the PR's CURRENT blocks.
+	if err := w.ExecuteActivity("reanchorAfterRefresh", map[string]any{
+		"pr": in.PR, "prevBaseSHA": res.PrevBaseSHA,
+		"prevHeadSHA": res.PrevHeadSHA, "changedFiles": res.ChangedFiles,
+	}, nil); err != nil {
+		return nil, fmt.Errorf("reanchor after ingest: %w", err)
+	}
 	return json.Marshal(res)
 }
 

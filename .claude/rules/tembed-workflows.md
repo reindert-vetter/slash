@@ -495,8 +495,27 @@ code** and keeping the thread alive. Terminology follows Temporal — a
       one Activity is simply a fixed position in the history and needs no such
       argument. Best-effort per anchor: a comment whose Execution already completed
       can't be signalled again, and that must not sink the rest of the pass.
-    - **The full-fallback path is covered too** (base SHA moved → `replacePRBlocks`):
-      `ChangedFiles` is then every path of the PR, not just a delta.
+    - **Every path that swaps blocks runs the pass, not just the delta refresh.**
+      `scanAndStoreIngestBlocksLocked` reads the pre-swap SHAs itself (a
+      `loadIngestSHAs` before `replacePRBlocks`) and reports them on its own
+      `ingestResult` with `ChangedFiles` = every path of the PR, and
+      **`ingestWorkflow`** calls `reanchorAfterRefresh` after storing the blocks.
+      That covers the base-SHA-moved full fallback inside `refreshIngestDelta`
+      **and** a manual full re-ingest — `POST /api/ingest` ("Regenereren" in the PR
+      overview) and `slash ingest <pr>`, neither of which goes through
+      `prStatusWorkflow` at all. Load-bearing, not just symmetry: a manual
+      re-ingest after new commits landed used to break every anchor of a changed
+      file **and close the repair window**, because it records the new SHAs and the
+      delta poller then reports `Skipped` for that same delta — so the refresh path
+      never got to repair it either, until some later commit happened to touch the
+      same file again. As a side effect one re-ingest also repairs anchors that went
+      stale before this pass existed. A first ingest has no previous SHAs and
+      nothing stored to move, so the Activity is a cheap no-op there.
+    - **Both call sites invoke the Activity by NAME, and neither has a test that
+      runs without a reachable git/gh** (`ingest_delta_test.go` skips itself), so a
+      typo would only surface on a real PR as a failed workflow.
+      `TestReanchorActivityIsRegistered` pins the name (and the empty-`ChangedFiles`
+      no-op) by driving the Activity through a throwaway workflow.
     - **`comments.anchor_state`** (`''` | `'unpinned'` | `'orphan'`, light
       `ALTER TABLE … ADD COLUMN`) carries the outcome to the frontend as
       `anchorState`. It is deliberately separate from `Kind`: an orphan is still a

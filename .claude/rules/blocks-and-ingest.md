@@ -882,9 +882,11 @@ left as a navigable list.
   the block's **aligned-row space**, and re-scanning the file rewrites that space.
   The rows survive the refresh, their meaning doesn't — a stale index points at
   whatever code took its place (the 💬 marker on the wrong line; the emerald ✓
-  inherited by a line inserted above an approved one). `prStatusWorkflow`
-  therefore runs a **re-anchor pass** (`reanchorAfterRefresh` + `reanchor.go`)
-  right after every non-skipped refresh, which moves each anchor onto the rows it
+  inherited by a line inserted above an approved one). **Every** path that swaps
+  blocks — `prStatusWorkflow` after a non-skipped refresh, and `ingestWorkflow`
+  after a full ingest, so also "Regenereren"/`slash ingest`, which never touch
+  `pr_status` — therefore runs a **re-anchor pass** (`reanchorAfterRefresh` +
+  `reanchor.go`), which moves each anchor onto the rows it
   now belongs to (matching a comment's stored code snippet; rebuilding the
   previous row space from the pre-refresh SHAs for approvals, which store no text)
   or degrades it honestly — unpinned to `row_start -1`, or marked `anchor_state
