@@ -473,10 +473,11 @@ class PermissionTest {
 // app file keeps its existing category (no accidental overlap).
 func TestCategoryForTranslation(t *testing.T) {
 	cases := map[string]string{
-		"resources/lang/nl/checkout.php":           "TRANSLATION",
-		"lang/en/cart.php":                         "TRANSLATION",
-		"app/Http/Controllers/OrderController.php": "CONTROLLER",
-		"app/Models/Order.php":                     "MODEL",
+		"resources/lang/nl/checkout.php":                    "TRANSLATION",
+		"lang/en/cart.php":                                  "TRANSLATION",
+		"modules/Affiliates/Resources/lang/en/includes.php": "TRANSLATION",
+		"app/Http/Controllers/OrderController.php":          "CONTROLLER",
+		"app/Models/Order.php":                              "MODEL",
 	}
 	for path, want := range cases {
 		if got := categoryFor(path); got != want {

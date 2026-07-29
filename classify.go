@@ -325,15 +325,17 @@ var categoryRules = []categoryRule{
 	{func(p string) bool { return hasSeg(p, "app/Services/") }, "SERVICE"},
 	{func(p string) bool { return hasSeg(p, "app/Repository/") || hasSeg(p, "app/Repositories/") }, "REPOSITORY"},
 	{func(p string) bool { return hasSeg(p, "app/Builders/") }, "BUILDER"},
-	{func(p string) bool { return hasSeg(p, "modules/") }, "MODULE"},
-	{func(p string) bool { return hasSeg(p, "routes/") }, "ROUTE"},
-	{func(p string) bool { return strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml") }, "CONFIG"},
-	// Laravel translation files: resources/lang/<locale>/<file>.php (or the
-	// older top-level lang/<locale>/<file>.php). Not under app/, so this never
-	// clashes with any rule above.
+	// Laravel translation files: resources/lang/<locale>/<file>.php, the older
+	// top-level lang/<locale>/<file>.php, or a module's own
+	// modules/<Name>/Resources/lang/<locale>/<file>.php. Must come before the
+	// MODULE rule below: a module's lang file also contains "modules/" and
+	// would otherwise be misclassified as MODULE instead of TRANSLATION.
 	{func(p string) bool {
 		return strings.HasSuffix(p, ".php") && (hasSeg(p, "/lang/") || strings.HasPrefix(p, "lang/"))
 	}, "TRANSLATION"},
+	{func(p string) bool { return hasSeg(p, "modules/") }, "MODULE"},
+	{func(p string) bool { return hasSeg(p, "routes/") }, "ROUTE"},
+	{func(p string) bool { return strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml") }, "CONFIG"},
 }
 
 // categoryFor derives a category tag from the file path.

@@ -231,10 +231,14 @@ left as a navigable list.
   `TestTraitMethodClassifiesAsTraitRegardlessOfPath`/
   `TestCategoryForTraitPathFallback` (`classify_test.go`).
 - **Translation blocks (`TRANSLATION` category + a clean key overview instead
-  of raw code):** a PHP Laravel lang file (`resources/lang/<locale>/<name>.php`
-  or `lang/<locale>/<name>.php`, a `/lang/` path segment) classifies as
-  **`TRANSLATION`** (`classify.go`, `categoryRules` — before the `OTHER`
-  fallback) instead of `OTHER`, with its own yellow `CATEGORY_STYLE` badge.
+  of raw code):** a PHP Laravel lang file (`resources/lang/<locale>/<name>.php`,
+  `lang/<locale>/<name>.php`, or a module's own
+  `modules/<Name>/Resources/lang/<locale>/<name>.php` — any `.php` path with a
+  `/lang/` segment) classifies as **`TRANSLATION`** (`classify.go`,
+  `categoryRules` — before the `MODULE` rule, so a module's own lang file
+  doesn't get swallowed by the broader `modules/` path match, and before the
+  `OTHER` fallback) instead of `MODULE`/`OTHER`, with its own yellow
+  `CATEGORY_STYLE` badge.
   Such a file has no functions, so it stays one whole-file block. Instead of
   the line-based `codeDiff`, `Block.mjs` renders it (via `translationSlot` →
   `translationBlockView`, `src/translationDiff.mjs`) as a **changes-only key
