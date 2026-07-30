@@ -1635,14 +1635,16 @@ block on the right — see the layout paragraph above):
   Any child that is itself a PR block (relation child or a method call
   whose definition changes in the PR) carries an **approval badge**
   (`data-testid=related-approval`, `done/total`, green + ✓ when fully
-  approved), and the card header shows a **rollup** over the shown children
-  (`data-testid=related-approval-total`, "… · X/Y approved"). A call to an
-  unchanged file has no approval concept and thus no badge. The counts come
-  along in the child descriptor (`approve`, filled by
-  `relatedChildren`/`resolvedCallChildren` in `home.mjs` via
-  `blockApproveCount`); the same rollup appears as a combined pill on the
-  sidebar row — see the combined-approval explanation in
-  `.claude/rules/blocks-and-ingest.md`.
+  approved) — this is a per-CHILD badge, rendered in that child's own card
+  header (`approvalBadge` in `RelatedPanel.mjs`); there is no separate
+  panel-header rollup element (no `related-approval-total` testid — an
+  earlier version of this doc claimed one, but no such element exists in
+  the code). A call to an unchanged file has no approval concept and thus
+  no badge. The counts come along in the child descriptor (`approve`,
+  filled by `relatedChildren`/`resolvedCallChildren` in `home.mjs` via
+  `blockApproveCount`); the same underlying `{done,total}` also feeds a
+  combined pill on the sidebar row — see the combined-approval explanation
+  in `.claude/rules/blocks-and-ingest.md`.
   **Drill hint chips (dash to the right, recursive mini-tree growing
   RIGHTWARD):** any child whose block **itself** still has changed
   underlying code shows a short **dotted dash** to the right of its card
@@ -1935,10 +1937,23 @@ block on the right — see the layout paragraph above):
   unresolved set of the block (not scoped to the selected unit), so you
   never need to navigate anywhere. While searching, the card shows
   "searching…" (`data-testid=related-searching`, also as long as there's
-  still `unresolved` in the queue). A child found by an LLM carries a
-  **`source: haiku/sonnet`** badge (`source`); Go-resolved children show no
-  source. See `.claude/rules/tembed-workflows.md` (section "Resolving
-  called … methods").
+  still `unresolved` in the queue) — a small pill, `position:absolute
+  right-2 top-2 z-10` on the `<section data-testid=related-code>` itself,
+  so it floats above the (scrollable) child list rather than taking up
+  flow space. **The scrollable child-list wrapper reserves top padding
+  (`pt-9`) for exactly as long as that pill is shown** (`searching() ||
+  pending() > 0`, a reactive whole-value class binding — see the
+  arrow.js class-attribute pitfall in `conventions.md`): without it, the
+  pill sat directly on top of the first child card's own right-aligned
+  header badges (`diffStatBadge`/`approvalBadge`, see above) — reported as
+  the "zoeken…" pill visually overlapping/obscuring a card's "+A −R"/
+  `done/total` text. The padding only applies while the pill is visible
+  (a deliberate trade-off: no permanent empty strip at the top of the card
+  once nothing is searching, at the cost of the list shifting down/up by a
+  few pixels exactly when a search starts/finishes). A child found by an
+  LLM carries a **`source: haiku/sonnet`** badge (`source`); Go-resolved
+  children show no source. See `.claude/rules/tembed-workflows.md` (section
+  "Resolving called … methods").
 - **Tasks** — this was once a placeholder column with a dummy task list +
   chat (`ui.task`, `data-testid=task-list`/`chat`/`chat-bubble`/`new-task`).
   That placeholder no longer exists: the "Tasks" card is now the real,

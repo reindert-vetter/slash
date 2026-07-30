@@ -2857,7 +2857,11 @@ export default function RelatedPanel(state, commentTarget, search) {
               >zoeken…</span
             >`
           : ''}
-      <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
+      <div
+        class="${() =>
+          'no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3 ' +
+          (searching() || pending() > 0 ? 'pt-9' : '')}"
+      >
         ${() => coversWarning()}
         ${() => {
           // All children render as one flat vertical list, full width, in order.
