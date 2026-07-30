@@ -465,10 +465,13 @@ function approvalPill(state, b) {
 // filled by home.mjs's decoupled watch — see nestedPrBlocks/
 // commentScopeKeys): the avatar of whoever posted the most recent message
 // across those threads, plus a "+N" text badge (never color-only — the
-// reviewer is colorblind, see conventions.md) for the total number of open
-// threads once there's more than one. Hidden entirely once nothing is open
-// (a resolved thread stops counting — see commentActivitySummary), same
-// disappear-once-done behavior as the 💬 row marker in the diff. Same
+// reviewer is colorblind, see conventions.md) for how many OTHER open
+// threads exist besides the one the avatar already represents
+// (s.count - 1) — the avatar itself already visually stands for one thread,
+// so the badge must count the rest, not the total (a total would read as
+// "avatar plus N more" and overcount by one). Hidden entirely once nothing
+// is open (a resolved thread stops counting — see commentActivitySummary),
+// same disappear-once-done behavior as the 💬 row marker in the diff. Same
 // nested-slot shape as removedPill/approvalPill above — a whole template, no
 // partial interpolation, so no keyed-list pitfall (conventions.md).
 function commentActivityPill(state, b) {
@@ -478,7 +481,7 @@ function commentActivityPill(state, b) {
     <span
       class="shrink-0 flex items-center gap-0.5"
       data-testid="block-comment-activity"
-      title="${s.count + (s.count === 1 ? ' open reactie' : ' open reacties') + ' in onderliggende code'}"
+      title="${s.count + (s.count === 1 ? ' open reactie' : ' open reacties') + ' (dit block + onderliggende code)'}"
     >
       ${avatarHTML(s.last.name, s.last.avatarUrl, 'h-4 w-4')}
       ${() =>
@@ -486,7 +489,7 @@ function commentActivityPill(state, b) {
           ? html`<span
               data-testid="block-comment-activity-count"
               class="text-[9px] font-semibold text-slate-500 dark:text-zinc-500"
-              >+${s.count}</span
+              >+${s.count - 1}</span
             >`
           : ''}
     </span>

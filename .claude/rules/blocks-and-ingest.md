@@ -112,34 +112,58 @@ left as a navigable list.
   `total` still makes the review scope of the whole call tree visible.
   Schema: `.claude/templates/schema.sql` (in sync with the `schemaDDL` constant
   in `db.go`).
-- **Comment-activity indicator per tree (sidebar only), same subtree as the
-  approval rollup above:** a sidebar row (`data-testid=block-comment-activity`,
-  `BlockList.mjs`'s `commentActivityPill`) shows the avatar of whoever posted
-  the most recent message across every currently OPEN comment thread anchored
-  on the block itself or anywhere in its subtree, plus a text "+N" badge
-  (`data-testid=block-comment-activity-count`, deliberately text, never
-  color-only — see the colorblind note in `conventions.md`) once there's more
-  than one such thread. "Subtree" is exactly the same tree as the approval
-  rollup (`[b, ...nestedPrBlocks(b)]`; a `test_class` row is the union over all
-  of its `.methods`, each with its own subtree) — "there's a comment in the
-  underlying code" is deliberately the same tree shape as "there's still
-  something to approve in the underlying code". Computed by
-  `commentScopeKeys`/a dedicated decoupled `watch` in `home.mjs` (mirrors the
-  `approvalSummaries` watch immediately above it: inline deps in the getter,
-  the actual rollup in the callback, wholesale-reassigned into
-  `state.commentActivity`, id→`{count,last}` — never a co-subscriber on any
-  block's `b.code`) that calls `commentActivitySummary` (`RelatedPanel.mjs`,
-  exported) with the block's own subtree keys. **"+N" counts distinct open
-  THREADS, never individual messages** — a thread with several replies still
-  counts once; **a resolved thread stops counting (and showing) entirely** —
-  the exact same rule `commentRowSet`'s own 💬 row marker already uses ("once
+- **Comment-activity indicator per tree (sidebar AND every Onderliggende-code
+  child card), same subtree as the approval rollup above:** a sidebar row
+  (`data-testid=block-comment-activity`, `BlockList.mjs`'s
+  `commentActivityPill`) — and, identically, a child card in the "Onderliggende
+  code" panel (`data-testid=related-comment-activity`, `RelatedPanel.mjs`'s
+  `commentActivityBadge`) — shows the avatar of whoever posted the most recent
+  message across every currently OPEN comment thread anchored on the block
+  itself or anywhere in its subtree, plus a text "+N" badge
+  (`data-testid=block-comment-activity-count` resp.
+  `related-comment-activity-count`, deliberately text, never color-only — see
+  the colorblind note in `conventions.md`) once there's more than one such
+  thread. **"+N" counts the OTHER open threads besides the one the avatar
+  already represents (total − 1), not the raw total** — the avatar itself
+  already visually stands for one thread, so showing the full total next to it
+  would read as "avatar plus N more" and overcount by one (a real, reported
+  confusion: seeing "+2" next to one avatar while only one thread was visible
+  in the currently open view). "Subtree" is exactly the same tree as the
+  approval rollup (`[b, ...nestedPrBlocks(b)]`; a `test_class` row is the union
+  over all of its `.methods`, each with its own subtree) — "there's a comment
+  in the underlying code" is deliberately the same tree shape as "there's
+  still something to approve in the underlying code", which is also why the
+  count can legitimately include a thread that isn't otherwise visible in the
+  currently open diff/panel (it sits on a descendant block instead) — the
+  tooltip says "(dit block + onderliggende code)" rather than implying every
+  counted thread lives in the underlying code specifically. Computed by
+  `commentScopeKeys`/a dedicated decoupled `watch` in `home.mjs` for the
+  sidebar rows (mirrors the `approvalSummaries` watch immediately above it:
+  inline deps in the getter, the actual rollup in the callback,
+  wholesale-reassigned into `state.commentActivity`, id→`{count,last}` — never
+  a co-subscriber on any block's `b.code`); for a child descriptor in the
+  Onderliggende-code panel, the same `commentScopeKeys`/`commentActivitySummary`
+  pair is instead called directly per child inside `relatedChildren`/
+  `resolvedCallChildren`/`resolvedTestCoverChildren`/`coveredByChildren` (right
+  next to that child's own `approve: blockApproveCount(...)` field) — safe
+  there for the same reason `approve` already is: those functions only ever
+  run inside the decoupled `setRelated` watch callback, never a render
+  binding. Both read `commentActivitySummary` (`RelatedPanel.mjs`, exported)
+  with the block's own subtree keys. **"+N" counts distinct open THREADS,
+  never individual messages** — a thread with several replies still counts
+  once; **a resolved thread stops counting (and showing) entirely** — the
+  exact same rule `commentRowSet`'s own 💬 row marker already uses ("once
   resolved there's nothing left to look at"). A `kind:'comment'` sidebar item
   (a PR-wide comment, see "Comment-index items" in `detail-layout.md`) never
   gets this indicator — it already shows its own thread directly on
-  selection, there's no separate "underlying code" to roll up. Test:
-  `tests/underlying-comment-activity.spec.mjs` (PR 970500, own PR number per
-  the `APPROVAL_RESET_PRS` note in `_fixtures.mjs` — a spec that places/
-  resolves comments needs a PR nobody else's assertions depend on).
+  selection, there's no separate "underlying code" to roll up; likewise, a
+  translation child or a call/covers target into an unchanged file (no PR
+  block, so no subtree) gets `commentActivity: null`, mirroring `approve` for
+  the same targets. Test: `tests/underlying-comment-activity.spec.mjs` (PR
+  970500, own PR number per the `APPROVAL_RESET_PRS` note in `_fixtures.mjs` —
+  a spec that places/resolves comments needs a PR nobody else's assertions
+  depend on; covers both the sidebar pill and the child card in the
+  Onderliggende-code panel).
 - **Server-side `total` (`blockstats.go` + `GET /api/blockstats`):** the number
   of approvable changed-rows per block is computed **in the backend** so it's
   known immediately — even before a block has lazily loaded its code — and

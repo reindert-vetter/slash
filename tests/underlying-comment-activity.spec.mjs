@@ -15,9 +15,13 @@ import { test, expect } from './_fixtures.mjs'
 // PARENT row (nestedPrBlocks — the same subtree approvalPill already uses),
 // the avatar always names whoever posted the most recent MESSAGE across every
 // open thread in scope (not just the most recently opened thread), "+N"
-// counts distinct THREADS rather than individual messages (a thread with a
-// reply still counts once), and a resolved thread stops counting entirely —
-// mirroring commentRowSet's own 💬-marker rule.
+// counts OTHER open threads besides the one the avatar already represents
+// (total minus one — a thread with a reply still counts once), and a
+// resolved thread stops counting entirely — mirroring commentRowSet's own
+// 💬-marker rule. Also verifies the same indicator on the child's own card
+// in the "Onderliggende code" panel (RelatedPanel.mjs's
+// commentActivityBadge), fed by the same commentScopeKeys/
+// commentActivitySummary computed per child in home.mjs's relatedChildren.
 test('sidebar rows show an activity indicator for open comments in their underlying-code subtree', async ({
   page,
 }) => {
@@ -70,10 +74,22 @@ test('sidebar rows show an activity indicator for open comments in their underly
   await page.reload()
 
   await expect(parentRow.getByTestId('block-comment-activity').getByTestId('avatar-fallback')).toHaveText('CA')
-  await expect(parentRow.getByTestId('block-comment-activity-count')).toHaveText('+2')
+  // Two open threads total (child + parent's own) — the avatar already
+  // represents one of them, so the "+N" badge shows the ONE other thread,
+  // not the total of two.
+  await expect(parentRow.getByTestId('block-comment-activity-count')).toHaveText('+1')
   // The child's own scope never sees the parent's comment — only its own.
   await expect(childRow.getByTestId('block-comment-activity').getByTestId('avatar-fallback')).toHaveText('AL')
   await expect(childRow.getByTestId('block-comment-activity-count')).toHaveCount(0)
+
+  // The same indicator also shows on the child's own card in the parent's
+  // "Onderliggende code" panel — only the avatar (one open thread on the
+  // child itself), no "+N" badge.
+  await parentRow.click()
+  const relatedChild = page.getByTestId('related-code').getByTestId('related-item')
+  await expect(relatedChild.getByTestId('related-comment-activity')).toBeVisible()
+  await expect(relatedChild.getByTestId('related-comment-activity').getByTestId('avatar-fallback')).toHaveText('AL')
+  await expect(relatedChild.getByTestId('related-comment-activity-count')).toHaveCount(0)
 
   // Resolving the child's thread (the sanctioned "/resolve" sentinel Signal)
   // removes it from the rollup entirely — same rule as the diff's 💬 marker.
@@ -86,4 +102,8 @@ test('sidebar rows show an activity indicator for open comments in their underly
   await expect(childRow.getByTestId('block-comment-activity')).toHaveCount(0)
   await expect(parentRow.getByTestId('block-comment-activity').getByTestId('avatar-fallback')).toHaveText('CA')
   await expect(parentRow.getByTestId('block-comment-activity-count')).toHaveCount(0)
+
+  // Same disappear-once-resolved behavior on the child's own related-item card.
+  await parentRow.click()
+  await expect(page.getByTestId('related-code').getByTestId('related-item').getByTestId('related-comment-activity')).toHaveCount(0)
 })

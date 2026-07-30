@@ -2114,6 +2114,37 @@ function approvalBadge(a) {
   `
 }
 
+// commentActivityBadge mirrors BlockList.mjs's commentActivityPill (same
+// avatar + "+N-1" text badge, never color-only — the reviewer is
+// colorblind, see conventions.md), but for a child card in the
+// Onderliggende-code panel instead of a sidebar row: `s` is the same
+// {count, last} summary (home.mjs computes it per child via
+// commentScopeKeys/commentActivitySummary, right next to that child's own
+// `approve` field), or null when the child has no open thread anywhere in
+// its own subtree. The "+N" badge counts OTHER open threads besides the
+// one the avatar already represents (s.count - 1), same reasoning as the
+// sidebar pill.
+function commentActivityBadge(s) {
+  if (!s) return ''
+  return html`
+    <span
+      class="shrink-0 flex items-center gap-0.5"
+      data-testid="related-comment-activity"
+      title="${s.count + (s.count === 1 ? ' open reactie' : ' open reacties') + ' (dit block + onderliggende code)'}"
+    >
+      ${avatarHTML(s.last.name, s.last.avatarUrl, 'h-4 w-4')}
+      ${() =>
+        s.count > 1
+          ? html`<span
+              data-testid="related-comment-activity-count"
+              class="text-[9px] font-semibold text-slate-500 dark:text-zinc-500"
+              >+${s.count - 1}</span
+            >`
+          : ''}
+    </span>
+  `
+}
+
 // NESTED_CHIP_CAP caps how many drill-hint chips render next to a child card
 // (or under a chip, recursively) at any one level; anything beyond it
 // collapses into a "+N meer" line so a fan-out child can't blow up the
@@ -2389,6 +2420,7 @@ function relatedCard(r, i, drill) {
               : ''}
           ${() => diffStatBadge(r)}
           ${() => approvalBadge(r.approve)}
+          ${() => commentActivityBadge(r.commentActivity)}
         </div>
         <span class="block truncate font-mono text-[10px] text-slate-400 dark:text-zinc-500" title="${() => r.file + ':' + r.line}"
           >${r.file}:${r.line}</span

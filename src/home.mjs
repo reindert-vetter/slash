@@ -2455,6 +2455,12 @@ function relatedChildren(b) {
           size: codeSize(code),
           prio: 0,
           approve: blockApproveCount(kid),
+          // Same "open comment somewhere in this block's own subtree"
+          // indicator as the sidebar pill (commentActivityPill,
+          // BlockList.mjs), now also surfaced per Onderliggende-code child —
+          // a relation child is by definition a real PR block, so its own
+          // subtree can be rolled up exactly like a top-level row's.
+          commentActivity: commentActivitySummary(commentScopeKeys(kid)),
           groupTier: range ? (inRange(siteLine) ? 0 : 1) : 0,
           nested,
           nestedSig: nestedSigOf(nested),
@@ -2574,6 +2580,7 @@ function resolvedCallChildren(b) {
           size: codeSize(r.childCode || ''),
           source: '',
           approve: null,
+          commentActivity: null,
           diff: null,
           prio: 2,
           groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
@@ -2625,6 +2632,10 @@ function resolvedCallChildren(b) {
         // Approval count only for a call whose definition is itself a PR block
         // (it has changed rows to approve); a call into an unchanged file has none.
         approve: prBlock ? blockApproveCount(prBlock) : null,
+        // Same subtree rollup as the sidebar's commentActivityPill, only for a
+        // call whose definition is itself a PR block — an unchanged/synthetic
+        // target has no subtree to roll up.
+        commentActivity: prBlock ? commentActivitySummary(commentScopeKeys(prBlock)) : null,
         // Added/removed line counts of the called definition, shown instead of an
         // "aanroep" badge. null → the call targets an unchanged file (no diff) →
         // renders a grey "Ongewijzigd" badge. Fills in as prBlock's code loads.
@@ -2771,6 +2782,7 @@ function resolvedTestCoverChildren(b, range) {
       size: codeSize(r.coveredCode || ''),
       source: r.status === 'found' ? r.model : '',
       approve: prBlock ? blockApproveCount(prBlock) : null,
+      commentActivity: prBlock ? commentActivitySummary(commentScopeKeys(prBlock)) : null,
       diff: prBlock ? diffStat(blockRows(prBlock)) : null,
       // A covered method isn't tied to a specific diff line the way a method
       // call is (the annotation covers the whole test), so there's no
@@ -2828,6 +2840,7 @@ function coveredByChildren(b, range) {
       size: codeSize(code),
       source: r.status === 'found' ? r.model : '',
       approve: blockApproveCount(test),
+      commentActivity: commentActivitySummary(commentScopeKeys(test)),
       diff: diffStat(blockRows(test)),
       prio: 0,
       // No site within b to compare against range — always "not in scope" at
