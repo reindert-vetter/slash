@@ -32,8 +32,6 @@ import RelatedPanel, {
   placeComment,
   isComposeOpen,
   composeHasText,
-  openComposer,
-  isTriggerFocused,
   relatedActive,
   enterRelated,
   leaveRelated,
@@ -6391,14 +6389,6 @@ function onKeydown(e) {
       // panel navigation scrolls <main> horizontally via scrollIntoView, and
       // without this the diff card would stay clipped off-screen to the left.
       if (!relatedActive()) scrollFocusIntoView()
-      return
-    }
-    // Enter on the "+ Nieuwe comment" trigger (selected, not yet composing —
-    // see isTriggerFocused/enterTrigger in RelatedPanel.mjs) opens the
-    // composer, exactly like a click on it.
-    if (e.key === 'Enter' && isTriggerFocused()) {
-      e.preventDefault()
-      openComposer(commentTarget)
       return
     }
     // Enter on a focused comment card (reply field empty — see commentReplyEmpty)

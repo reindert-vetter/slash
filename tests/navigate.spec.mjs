@@ -180,11 +180,10 @@ test.describe('PR Review Tree — change navigation', () => {
   })
 
   // Comments are the task_code_comment workflow; seeding one is the only write
-  // path (POST /api/workflows/task_code_comment). A "+ Comment op deze regel"
-  // trigger is always present; clicking a comment card expands its thread. See
-  // RelatedPanel (InlineComments). The server runs with SLASH_GITHUB=off so
-  // seeding never touches a real repo.
-  test('the new-comment button leads the list; clicking a comment opens its thread', async ({
+  // path (POST /api/workflows/task_code_comment). Clicking a comment card
+  // expands its thread. See RelatedPanel (InlineComments). The server runs
+  // with SLASH_GITHUB=off so seeding never touches a real repo.
+  test('seeded comments show inline as a list; clicking one opens its thread', async ({
     page,
     request,
   }) => {
@@ -216,9 +215,7 @@ test.describe('PR Review Tree — change navigation', () => {
     const panel = page.getByTestId('inline-comments')
     const items = panel.getByTestId('comment-item')
 
-    // The new-comment trigger is always present, and both seeded comments
-    // show as inline cards right away — no sidebar to open.
-    await expect(panel.getByTestId('new-comment')).toBeVisible()
+    // Both seeded comments show as inline cards right away — no sidebar to open.
     await expect(items).toHaveCount(2)
 
     // Clicking a comment expands it and its thread follows; a comment with a

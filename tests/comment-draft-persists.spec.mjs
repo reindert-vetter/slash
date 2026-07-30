@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
 
 // Regression test for: "als ik een comment aan het typen ben ... en ik ga
 // weg van de comment (bijvoorbeeld naar links), dan wil ik dat hetzelfde
@@ -19,7 +19,7 @@ test.describe('typed but not yet sent comment text survives leaving and returnin
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list -> diff
 
-    await page.getByTestId('new-comment').click()
+    await openNewComment(page)
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeFocused()
     await composer.type('this is my draft')
@@ -32,7 +32,7 @@ test.describe('typed but not yet sent comment text survives leaving and returnin
     await expect(composer).toHaveCount(0)
 
     // Re-opening the composer on the SAME unit restores the draft.
-    await page.getByTestId('new-comment').click()
+    await openNewComment(page)
     const restored = page.getByTestId('comment-compose')
     await expect(restored).toBeFocused()
     await expect(restored).toHaveValue('this is my draft')
@@ -49,17 +49,27 @@ test.describe('typed but not yet sent comment text survives leaving and returnin
     await page.keyboard.press('ArrowLeft') // diff -> block index
     await page.keyboard.press('ArrowDown') // block 1 -> the next block
     await page.keyboard.press('ArrowRight') // list -> diff
-    await page.getByTestId('new-comment').click()
+    await openNewComment(page)
     await expect(page.getByTestId('comment-compose')).toHaveValue('')
 
     // Cancelling explicitly discards the draft on THIS (fresh) block — and
     // going back to the FIRST block's composer still remembers its own draft.
     await page.getByTestId('comment-compose').fill('discard me')
     await page.getByText('Annuleer').click()
+    // Annuleer only clears cs.composing, not cs.focus — the panel itself
+    // still owns the keyboard afterwards (unaffected by this task's removal
+    // of the trigger row/stop). openNewComment presses Enter to reach the
+    // block-scoped command palette, which only exists while the DIFF itself
+    // (not the comment/Onderliggende-code panel) owns the keyboard — unlike
+    // the removed trigger button, which was reachable by a mouse click
+    // regardless of the panel's own focus state. Escape unconditionally
+    // exits the panel back to the diff first, so this reflects how a
+    // reviewer actually reaches "Comment op deze regel" now.
+    await page.keyboard.press('Escape') // panel -> diff
     await page.keyboard.press('ArrowLeft') // diff -> block index
     await page.keyboard.press('ArrowUp') // back to the original block
     await page.keyboard.press('ArrowRight') // list -> diff
-    await page.getByTestId('new-comment').click()
+    await openNewComment(page)
     await expect(page.getByTestId('comment-compose')).toHaveValue('this is my draft — continued')
   })
 

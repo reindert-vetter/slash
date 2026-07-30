@@ -1,10 +1,11 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, openNewComment } from './_fixtures.mjs'
 
-// Comments render inline, next to the diff; the "+ Comment op deze regel"
-// trigger is always present, no sidebar to open first.
+// Comments render inline, next to the diff; a new one is started via the
+// command palette's "Comment op deze regel" (there is no dedicated trigger
+// row any more, see openNewComment), no sidebar to open first.
 async function place(page, body) {
   if ((await page.getByTestId('comment-compose').count()) === 0) {
-    await page.getByTestId('new-comment').click()
+    await openNewComment(page)
   }
   await page.getByTestId('comment-compose').fill(body)
   await page.getByTestId('comment-send').click()

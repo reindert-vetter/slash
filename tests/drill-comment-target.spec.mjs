@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, openNewComment } from './_fixtures.mjs'
 
 // Repro for: placing a comment while a drilled column (Onderliggende code
 // opened as its own diff column) is focused must reference *that* column's
@@ -57,7 +57,7 @@ test('composing a comment while a drilled column is focused targets that column,
   await drillIntoAddress(page)
 
   if ((await page.getByTestId('comment-compose').count()) === 0) {
-    await page.getByTestId('new-comment').click()
+    await openNewComment(page)
   }
   const composer = page.getByTestId('comment-composer')
 

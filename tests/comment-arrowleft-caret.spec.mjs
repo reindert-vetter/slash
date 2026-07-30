@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
 
 // Regression test for: "option naar links, moet niet uit comment input gaan" —
 // ArrowLeft (and Option/Alt+ArrowLeft, the Mac word-jump) inside a genuinely
@@ -21,7 +21,7 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list -> diff
 
-    await page.getByTestId('new-comment').click()
+    await openNewComment(page)
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeFocused()
 

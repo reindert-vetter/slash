@@ -148,18 +148,18 @@ required relative to the older per-mechanism behavior:
 - **Stop 3/4 ↔ 5 ↔ 6:** `→` from the diff lands on stop 5 (the first inline
   comment conversation) only when the selected unit has one
   (`hasVisibleComments()`/`enterCommentsHead()`), else it skips straight to
-  stop 6 (`enterRelated()`) — unchanged, `→` still never stops on the
-  "+ Nieuwe comment" trigger itself. `↓` on the last comment conversation (or
+  stop 6 (`enterRelated()`). `↓` on the last comment conversation (or
   the bottom of an open thread) falls through to stop 6 instead of clamping;
   `↑` on stop 6's first child steps back onto stop 5's last conversation if
-  one exists. **`↑` on stop 5's first conversation (or, with no comments,
-  stop 6's first child) now lands on the "+ Nieuwe comment" trigger itself**
-  (`cs.focus==='trigger'`, selected but not yet composing — `enterTrigger`/
-  `isTriggerFocused` in `RelatedPanel.mjs`) instead of exiting straight to
-  the diff: `Enter` there opens the composer (same as a click), `↓`
-  re-enters whatever sits below it, and `↑`/`←` exit to the diff. `←` on
+  one exists, else exits straight to the diff. `↑` on stop 5's first
+  conversation likewise exits straight to the diff — there is no dedicated
+  "+ Nieuwe comment" trigger row/nav-stop any more (removed:
+  `cs.focus==='trigger'`/`enterTrigger`/`isTriggerFocused` in
+  `RelatedPanel.mjs`); starting a new comment goes exclusively through the
+  command palette's "Comment op deze regel" (`startComment`), reachable with
+  `Enter` from the diff at any time — not via arrow browsing. `←` on
   stop 6 keeps its own, unconditional "leave the panel" behaviour at any
-  child position (not just the first) — only `↑` gained the trigger stop.
+  child position (not just the first).
   See "Inline comment blocks" in `.claude/rules/detail-layout.md` for the
   full mechanism.
 - `state.showDescription` deliberately lives **outside** the URL (like
@@ -1353,9 +1353,10 @@ any key not explicitly matched there (letters, `/`, unmatched
 Enter variants) simply flows through to the focused field. But that safety
 net
 only works if `cs.focus` is actually kept in lockstep with the real
-DOM focus. One concrete spot where that wasn't the case: the "+ Comment on
-this
-line" button (`data-testid=new-comment`, `RelatedPanel.mjs`) used to open
+DOM focus. One concrete spot where that wasn't the case, historically: the
+always-present "+ Comment on this line" trigger row (`data-testid=new-comment`,
+`RelatedPanel.mjs` — since removed entirely, see "Inline comment blocks" in
+`.claude/rules/detail-layout.md`; the composer itself lives on) used to open
 the composer with a bare
 `cs.composing = !cs.composing` toggle, without setting `cs.focus` —
 clicking it while `cs.focus` didn't already happen to be `'new'` would
@@ -1363,10 +1364,10 @@ then open
 a focused text field while `relatedActive()` stayed `false`. `onKeydown`
 then had no signal at all that an editable field had DOM focus, and
 `s`/`d`/`f`/arrows/`/` were caught as global shortcuts instead of
-landing in the field (the reviewer could no longer type). Fixed by having
-the button
-open via `openComposer()` (`toNew()`) — exactly the same route as
-every other path to this composer (`toNew`/`startComment`), which
+landing in the field (the reviewer could no longer type). Fixed, at the
+time, by having the button
+open via `toNew()` — exactly the same route every remaining path to this
+composer (`toNew`/`startComment`) still uses, which
 always sets `cs.focus` and
 `cs.composing` together.
 

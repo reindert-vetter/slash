@@ -22,9 +22,16 @@ test('delayed code load + seeded comments: arrow orphan + list update', async ({
     await page.waitForTimeout(400) // comments load; code still pending
     await page.keyboard.press('ArrowRight')
     await page.waitForTimeout(1200) // code arrives late -> re-render
-    // now place a comment live — comments render inline, next to the diff; the
-    // "+ Comment op deze regel" trigger is always present.
-    await page.getByTestId('new-comment').click().catch(() => {})
+    // now place a comment live — comments render inline, next to the diff;
+    // opened via the command palette's "Comment op deze regel" (there is no
+    // dedicated trigger row any more — see openNewComment in _fixtures.mjs;
+    // inlined here, tolerantly, to match this repro's own .catch() style).
+    await page.keyboard.press('Enter').catch(() => {})
+    await page
+      .getByTestId('command-row')
+      .filter({ hasText: 'Comment op deze regel' })
+      .click()
+      .catch(() => {})
     const body = 'late ' + i
     await page.getByTestId('comment-compose').fill(body).catch(() => {})
     await page.getByTestId('comment-send').click().catch(() => {})

@@ -1,9 +1,10 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, openNewComment } from './_fixtures.mjs'
 
-// Comments render inline, next to the diff; the "+ Comment op deze regel"
-// trigger is always present and clickable directly.
+// Comments render inline, next to the diff; a new one is started via the
+// command palette's "Comment op deze regel" (openNewComment) — there is no
+// dedicated trigger row any more.
 async function placeVia(page, body) {
-  await page.getByTestId('new-comment').click()
+  await openNewComment(page)
   await page.getByTestId('comment-compose').fill(body)
   await page.getByTestId('comment-send').click()
   await page.waitForTimeout(200)

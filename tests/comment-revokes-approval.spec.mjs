@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
 
 // "Als iemand een comment plaatst, dan wil ik dat de bijbehorende regel niet
 // meer approved is" — placing a comment on an already-approved unit signals
@@ -77,7 +77,7 @@ async function approveCurrentUnit(page) {
 }
 
 async function placeComment(page, text) {
-  await page.getByTestId('new-comment').click() // open + focus the composer
+  await openNewComment(page) // open + focus the composer
   const composer = page.getByTestId('comment-compose')
   await expect(composer).toBeFocused()
   await composer.fill(text)

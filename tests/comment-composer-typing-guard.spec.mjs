@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
 
 // Regression test for: "ik kan niet <-, ->, s, d of f typen in de comment" — the
 // composer's own focus-tracking (cs.focus) has to stay in lockstep with real DOM
@@ -6,12 +6,21 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // keystroke instead of letting it flow into the textarea. See the "Generieke
 // input-focus-guard" section in .claude/rules/keyboard-navigation.md.
 //
-// The "+ Comment op deze regel" trigger is always present, inline next to the
-// diff — clicking it directly (not via Enter/the command palette) must
-// exercise the fixed click handler (openComposer() instead of a bare
-// cs.composing toggle) so cs.focus stays in lockstep with real DOM focus.
+// This used to open the composer via a direct click on the always-present
+// "+ Comment op deze regel" trigger row, specifically to exercise a fixed
+// click handler (openComposer()/toNew(), as opposed to an earlier, buggy bare
+// cs.composing toggle that left cs.focus out of sync with real DOM focus).
+// That trigger row has since been removed entirely (see "Inline comment
+// blocks" in .claude/rules/detail-layout.md) — the composer now opens
+// exclusively through the command palette's "Comment op deze regel" item
+// (startComment), which has always routed through the same toNew() and thus
+// never had this bug to begin with. The regression this test actually
+// guards — typing s/d/f/a lands as text instead of firing a shortcut, and
+// Escape reliably exits — is independent of *how* the composer was opened,
+// so it's kept, just opened via the palette (openNewComment) instead of a
+// now-nonexistent click target.
 test.describe('PR Review Tree — composer typing guard', () => {
-  test('typing s/d/f/a in the composer (opened by a direct click) lands in the field, not as a shortcut, and Escape gets you out', async ({
+  test('typing s/d/f/a in the composer (opened via the command palette) lands in the field, not as a shortcut, and Escape gets you out', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -26,11 +35,9 @@ test.describe('PR Review Tree — composer typing guard', () => {
     const granOf = () => new URL(page.url()).searchParams.get('gran')
     const granBeforeOpen = granOf()
 
-    // Click the "+ Comment op deze regel" trigger directly — not via Enter/the
-    // command palette — to exercise the fixed click handler (openComposer()
-    // instead of a bare cs.composing toggle).
+    // Open via the command palette's "Comment op deze regel" item.
     const composer = page.getByTestId('comment-compose')
-    await page.getByTestId('new-comment').click()
+    await openNewComment(page)
     await expect(composer).toBeFocused()
 
     // Letters that double as global shortcuts (f/d/s zoom, `a` diff-view toggle)
@@ -45,7 +52,6 @@ test.describe('PR Review Tree — composer typing guard', () => {
     // reached because cs.focus is in sync) and DOM focus leaves the textarea.
     await page.keyboard.press('Escape')
     await expect(composer).toHaveCount(0)
-    await expect(page.getByTestId('new-comment')).not.toHaveClass(/ring-indigo-300/)
 
     // Global shortcuts resume once the field no longer holds DOM focus: `f`
     // should now zoom the diff in (from 'group', the default) instead of typing

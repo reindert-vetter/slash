@@ -27,12 +27,10 @@ import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin }
 // focus/threadPos drive the keyboard navigation of the inline comment block
 // (see home.mjs → onKeydown). focus is which region owns the arrows: null (the
 // diff/list has the keyboard), 'code' (the related-code block, light-blue
-// border), 'trigger' (the "+ Nieuwe comment" row itself, SELECTED but not yet
-// composing — reached via ↑ from the first comment conversation, or from
-// Onderliggende code's first child when the unit has no comments; Enter opens
-// the composer from here, ← exits to the diff, ↓ re-enters whatever sits
-// below it), 'new' (the composer actually OPEN/composing — reached by Enter
-// on 'trigger', a click, or the command palette's `startComment`), 'comment'
+// border), 'new' (the composer actually OPEN/composing — reached only via the
+// command palette's `startComment` (or convertWarningToComment for an AI
+// finding) — there is no dedicated trigger row/stop for it any more, see the
+// removed enterTrigger/isTriggerFocused), 'comment'
 // (an existing conversation, cs.sel — walked with ↓/↑, only entered when at
 // least one exists on the selected unit), or 'thread' (inside that
 // conversation's message history). threadPos indexes the thread bottom-up: 0 =
@@ -568,7 +566,7 @@ let warningOverride = null
 // composer (e.g. ← at caret position 0, see editableCaretCanMoveLeft in
 // keyboard-navigation.md) discards whatever was typed: the textarea is an
 // otherwise uncontrolled DOM element that gets fully unmounted on close, and
-// re-opening (toNew/startComment/openComposer/convertWarningToComment) always
+// re-opening (toNew/startComment/convertWarningToComment) always
 // mounted a brand-new, empty one. Re-opening on the SAME unit now restores it
 // (via prefillField, the existing "set value once the field has mounted"
 // helper — deliberately NOT a reactive `.value="${...}"` binding: there is no
@@ -638,12 +636,7 @@ function toComment(focusInput = true) {
 // hasVisibleComments reports whether the currently selected unit carries at
 // least one comment conversation — the gate home.mjs' → (from the diff) uses
 // before entering the inline comment block: it's only a REACHABLE stop via →
-// when it actually has something to show (see keyboard-navigation.md). The
-// always-present "+ Nieuwe comment" trigger sits ABOVE that gate — it's
-// reachable via ↑ regardless of hasVisibleComments() (see enterTrigger below,
-// and handleRelatedKey's 'code'/'comment' ArrowUp branches) — just never via
-// →, which still skips straight past it into the first comment/Onderliggende
-// code.
+// when it actually has something to show (see keyboard-navigation.md).
 export function hasVisibleComments() {
   return visibleComments().length > 0
 }
@@ -664,33 +657,6 @@ export function enterCommentsHead() {
 export function enterCommentsTail() {
   cs.sel = Math.max(0, visibleComments().length - 1)
   toComment(false)
-}
-
-// enterTrigger lands the keyboard on the always-present "+ Nieuwe comment"
-// row itself — SELECTED but not yet composing, distinct from 'new' (the
-// composer actually open, see the cs.focus doc comment above the reactive).
-// Reached via ↑ from the first comment conversation (cs.focus === 'comment')
-// or, when the unit has no comments, from Onderliggende code's first child
-// (see handleRelatedKey) — never via →, which keeps skipping straight past
-// it (hasVisibleComments' own doc comment). Highlight-only, mirroring
-// enterCommentsTail: no DOM focus is stolen until Enter actually opens the
-// composer (isTriggerFocused/openComposer, wired up in home.mjs).
-// releaseFocus() invalidates a still-in-flight deferred focus request from
-// whatever the keyboard just left (a reply field, a comment's own focusEl
-// call) — see the focusToken doc comment below.
-export function enterTrigger() {
-  releaseFocus()
-  cs.composing = false
-  cs.focus = 'trigger'
-  scrollTriggerIntoView()
-}
-
-// isTriggerFocused reports whether the "+ Nieuwe comment" trigger itself
-// (selected, not yet composing) currently owns the keyboard — home.mjs reads
-// this to route Enter to opening the composer (mirrors isCodeFocused/
-// isCommentFocused).
-export function isTriggerFocused() {
-  return cs.focus === 'trigger'
 }
 
 // advanceFromComment steps ↓ from the currently focused comment conversation
@@ -784,15 +750,6 @@ function scrollCommentIntoView() {
   })
 }
 
-// scrollTriggerIntoView keeps the "+ Nieuwe comment" trigger in view once
-// enterTrigger() selects it (mirrors scrollCommentIntoView/scrollCodeIntoView).
-function scrollTriggerIntoView() {
-  requestAnimationFrame(() => {
-    const el = document.querySelector('[data-testid=new-comment]')
-    if (el) el.scrollIntoView({ block: 'nearest' })
-  })
-}
-
 // scrollCodeIntoView keeps the selected underlying-code child in view while
 // walking the card with the arrows (deferred a frame so the DOM has the active
 // highlight first), mirroring scrollCommentIntoView.
@@ -864,7 +821,7 @@ function applyRelRestore() {
   if (!want) return
   const children = rc.children.length
   const comments = visibleComments().length
-  // Wait for the data the wanted focus points at; 'new'/'trigger'/null need none.
+  // Wait for the data the wanted focus points at; 'new'/null need none.
   if (want.focus === 'code' && children === 0) return
   if ((want.focus === 'comment' || want.focus === 'thread') && comments === 0) return
   restorePending = null
@@ -877,8 +834,6 @@ function applyRelRestore() {
     releaseFocus()
     cs.focus = 'code'
     scrollCodeIntoView()
-  } else if (want.focus === 'trigger') {
-    enterTrigger()
   } else if (want.focus === 'new') {
     toNew()
   } else if (want.focus === 'thread') {
@@ -893,29 +848,21 @@ function applyRelRestore() {
 }
 
 // handleRelatedKey drives the panel for one arrow/Escape press and returns 'exit'
-// when focus leaves the panel back to the diff (else true). It serves four
+// when focus leaves the panel back to the diff (else true). It serves three
 // independent regions that share the same cs.focus enum:
-//  - the always-present "+ Nieuwe comment" trigger ('trigger', selected but
-//    not composing — reached by ↑ from the first comment conversation or, when
-//    there are none, from Onderliggende code's first child, see enterTrigger)
-//    — ↓ enters whatever sits below it (the first comment, or straight to
-//    Onderliggende code); ↑/← exit to the diff (there's nothing above it);
-//    Enter (handled in home.mjs, see isTriggerFocused) opens the composer.
 //  - the inline Onderliggende-code card ('code', reached by → from the diff
 //    when the unit has no comments, or by ↓ falling through the last comment
-//    conversation — see advanceFromComment/enterRelated) — unchanged: ↓/↑
-//    walk its children, ← exits to the diff (or back into comments, see
-//    below); ↑ from the FIRST child now lands on the trigger instead of
-//    exiting when the unit has no comments (← from the first child keeps its
-//    existing, unconditional "leave the panel" behaviour — see
-//    keyboard-navigation.md).
+//    conversation — see advanceFromComment/enterRelated) — ↓/↑ walk its
+//    children, ← exits to the diff (or back into comments, see below); ↑
+//    from the FIRST child steps back onto the last comment conversation if
+//    one exists, else exits to the diff (there is no trigger stop above it
+//    any more — see the removed enterTrigger).
 //  - an inline comment conversation ('new'/'comment', reached by → from the
 //    diff only when hasVisibleComments() is true — see enterCommentsHead) —
 //    ↓ walks to the next conversation, falling through to the
 //    Onderliggende-code panel once there is no next one (advanceFromComment);
-//    ↑ at the first EXISTING conversation ('comment') now lands on the
-//    trigger instead of exiting — the still-open, empty composer ('new')
-//    keeps exiting, since it already occupies the trigger's own slot; →
+//    ↑ at the first conversation ('new' or 'comment') exits to the diff (there
+//    is no trigger stop above it any more); →
 //    steps into the conversation's message history ('thread'); ← exits to
 //    the diff.
 //  - that conversation's own message history ('thread') — ↑/↓ walk older/
@@ -985,12 +932,16 @@ export function handleRelatedKey(key) {
         }
       } else if (cs.codeSel === 0) {
         // Nothing further up in this list — step back to the last comment
-        // conversation of the unit, if there is one, else land on the
-        // "+ Nieuwe comment" trigger (not straight out to the diff — see
-        // enterTrigger/the function comment above). ← (below) keeps its own,
-        // unconditional "leave the panel" behaviour regardless of codeSel.
-        if (hasVisibleComments()) enterCommentsTail()
-        else enterTrigger()
+        // conversation of the unit, if there is one, else leave the panel
+        // entirely (there's no trigger stop above it any more — see the
+        // removed enterTrigger). ← (below) keeps its own, unconditional
+        // "leave the panel" behaviour regardless of codeSel.
+        if (hasVisibleComments()) {
+          enterCommentsTail()
+        } else {
+          exitRelated()
+          return 'exit'
+        }
       } else {
         cs.codeSel -= 1
         scrollCodeIntoView()
@@ -1014,37 +965,18 @@ export function handleRelatedKey(key) {
     }
     return true
   }
-  if (cs.focus === 'trigger') {
-    // The trigger sits topmost in the stack — nothing above it, so ↑/← both
-    // exit; ↓ enters whatever comes below it, exactly what → from the diff
-    // would land on (mirrors enterCommentsHead's own gating). → has no
-    // meaningful target here (unlike a comment row's → into its thread).
-    if (key === 'ArrowDown') {
-      if (hasVisibleComments()) enterCommentsHead()
-      else enterRelated()
-    } else if (key === 'ArrowUp' || key === 'ArrowLeft') {
-      exitRelated()
-      return 'exit'
-    }
-    return true
-  }
   // cs.focus is 'new' or 'comment' here — an inline comment conversation (or
   // the still-empty composer). ↓ advances to the next conversation, falling
   // through to Onderliggende code once there's no next one (advanceFromComment);
-  // ↑ at the first EXISTING conversation ('comment') lands on the "+ Nieuwe
-  // comment" trigger instead of exiting (enterTrigger) — the still-open, empty
-  // composer ('new') keeps exiting, since it already occupies the trigger's
-  // own slot, so there's nothing further up from there either; ← always
-  // exits to the diff.
+  // ↑ at the first conversation ('new' or 'comment') exits to the diff (there
+  // is no trigger stop above it any more — see the removed enterTrigger); ←
+  // always exits to the diff.
   if (key === 'ArrowDown') {
     advanceFromComment()
   } else if (key === 'ArrowUp') {
     if (selI() === 0) {
-      if (cs.focus === 'comment') enterTrigger()
-      else {
-        exitRelated()
-        return 'exit'
-      }
+      exitRelated()
+      return 'exit'
     } else {
       cs.sel -= 1
       toComment()
@@ -1063,9 +995,10 @@ export function handleRelatedKey(key) {
 
 // startComment opens the "new comment on this line" composer — the command menu
 // (home.mjs) calls it so the reviewer can start a comment task from `/`, and it
-// is also the only way the composer opens: it's an explicit trigger (a click on
-// "+ Nieuwe comment", Enter/the command palette), never reached via arrow
-// browsing (see hasVisibleComments/handleRelatedKey above). Mirrors toNew():
+// is also the only way the composer opens (besides convertWarningToComment,
+// for an AI finding): never reached via arrow browsing (see
+// hasVisibleComments/handleRelatedKey above — there is no dedicated trigger
+// row/stop for it). Mirrors toNew():
 // hands the keyboard focus to 'new' and focuses the textarea so the reviewer
 // can type immediately. Placing the comment still goes through the workflow
 // (placeComment), so the write-boundary is unchanged. `commentTargetFn`
@@ -1126,14 +1059,6 @@ export function isComposeOpen() {
 export function composeHasText() {
   const el = document.querySelector('[data-testid=comment-compose]')
   return !!el && el.value.trim() !== ''
-}
-
-// openComposer actually opens the composer (composing=true) and focuses its
-// textarea — the same landing toNew()/startComment() have always done.
-// Exported so the always-present "+ Nieuwe comment" trigger's own click
-// handler can call it (see the new-comment button below).
-export function openComposer(commentTargetFn) {
-  toNew(commentTargetFn)
 }
 
 // isCommentFocused reports whether a placed comment's row currently owns the
@@ -1803,9 +1728,9 @@ function reactionBubble(r, i, total, isActive) {
 // above). Only the currently focused conversation renders expanded (full
 // thread + reply field); every other one on the same unit stays a compact,
 // clickable one-line summary — several threads on one line thus don't all
-// compete for space at once. The "+ Nieuwe comment" trigger is always
-// present (click, Enter, or the command palette), regardless of whether the
-// unit already has comments — it is deliberately NOT part of the ↓/→
+// compete for space at once. A new comment is started via the command
+// palette's "Comment op deze regel" (startComment) — there is no dedicated
+// always-present trigger row any more, and never was it part of the ↓/→
 // arrow-key traversal below (see hasVisibleComments/handleRelatedKey above),
 // which only ever walks EXISTING conversations.
 
@@ -1951,13 +1876,15 @@ function commentCard(c, i, openCommentMenu) {
   `
 }
 
-// newCommentComposer — the always-present "+ Nieuwe comment" trigger; once
-// open (cs.focus === 'new') the same slot shows the composer fields instead
-// of the button. The closed button itself shows a selected ring/border while
-// cs.focus === 'trigger' (reached via ↑, see enterTrigger) — a nested
-// reactive class binding, since the outer ternary here only toggles on
-// 'new'; among every other value (null/'code'/'comment'/'thread'/'trigger')
-// it stays on this same branch. Same stable-root pattern as commentCard.
+// newCommentComposer — the new-comment composer, shown inline only while
+// it's actually open (cs.focus === 'new', reached via startComment/the
+// command palette's "Comment op deze regel" — never via a dedicated
+// click/nav-stop trigger any more, see the removed enterTrigger/
+// isTriggerFocused and the always-present "+ Nieuwe comment" row they used
+// to belong to). Renders nothing while closed — the stable `<div
+// class="contents">` root is still needed for the toggle itself (see the
+// "bare toggling expression" pitfall in conventions.md), it just has no
+// closed-state button to show any more.
 function newCommentComposer(state, commentTarget, openCompose) {
   // effectiveTarget prefers warningOverride's own anchor (see
   // convertWarningToComment/placeComment) over the live cursor's
@@ -2018,32 +1945,16 @@ function newCommentComposer(state, commentTarget, openCompose) {
                 </div>
               </div>
             `
-          : html`
-              <button
-                type="button"
-                class="${() =>
-                  'flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left transition ' +
-                  (cs.focus === 'trigger'
-                    ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30 text-indigo-500 dark:text-indigo-400'
-                    : 'border-dashed border-slate-200 dark:border-zinc-800 text-slate-400 dark:text-zinc-500 hover:border-indigo-200 dark:hover:border-indigo-500/40 hover:text-indigo-500 dark:hover:text-indigo-400')}"
-                data-testid="new-comment"
-                data-active="${() => (cs.focus === 'trigger' ? 'true' : 'false')}"
-                @click="${() => openComposer(commentTarget)}"
-              >
-                <span class="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-current text-[11px] leading-none"
-                  >+</span
-                >
-                <span class="text-xs font-medium">Comment op deze regel</span>
-              </button>
-            `}
+          : ''}
     </div>
   `
 }
 
 // InlineComments — the exported block home.mjs mounts directly above the
-// Onderliggende-code card (see DetailPanel): the always-present "+ Nieuwe
-// comment" trigger, then one card per conversation already scoped to the
-// selected unit (visibleComments()).
+// Onderliggende-code card (see DetailPanel): the new-comment composer, once
+// opened via the command palette (see newCommentComposer above), then one
+// card per conversation already scoped to the selected unit
+// (visibleComments()).
 export function InlineComments(state, commentTarget, openCompose, openCommentMenu) {
   syncComments(state ? state.pr : null)
   // Reuses relatedColumnWidthCls() (below) — the SAME clamp width as the

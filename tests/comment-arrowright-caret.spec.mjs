@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
 
 // Regression test for: "in een comment kan ik niet met pijltjestoets naar
 // rechts (eerst naar links in de input met een zin, en dan naar rechts)" —
@@ -20,7 +20,7 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list -> diff
 
-    await page.getByTestId('new-comment').click()
+    await openNewComment(page)
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeFocused()
 
