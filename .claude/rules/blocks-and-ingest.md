@@ -1033,6 +1033,32 @@ left as a navigable list.
   lives in a module-level `WeakMap`, not as a field on `b`, so it doesn't
   trigger an arrow.js reactive-proxy notify on something that's never read
   reactively anyway (the same pattern as `codeRequested` in `home.mjs`).
+- **Huge blocks: `diffLines` prefix/suffix trim + context collapsing
+  (`collapsePlan`/`collapsedRunHTML` in `Block.mjs`).** Two performance
+  measures for a whole-file fallback block of thousands of lines (PR 13166's
+  9179-line locale JSONs, ~7 changed lines — sidebar steps took 0.3–2.2s):
+  (1) `diffLines` trims the common prefix/suffix (whitespace-insensitively,
+  the same `key` as its DP) before building the O(n·m) LCS table, so the
+  one-time first-contact spike collapses to the changed middle; and
+  (2) blocks over **`COLLAPSE_MIN_ROWS` (300 rows)** collapse runs of ≥
+  `COLLAPSE_MIN_RUN` (10) unchanged rows into one **clickable** "⋯ N
+  ongewijzigde regels" spacer (`data-testid=collapsed-run`) — smaller blocks
+  render byte-identically to before. The plan is a pure function of
+  (rows, commented set, expanded runs), deliberately **not** of the active
+  cursor: ↑/↓ never changes which rows exist in the DOM, and both panes
+  collapse identically (row-for-row alignment). Changed rows +
+  `COLLAPSE_CONTEXT` (3) context rows and commented rows are always kept, so
+  every metadata-carrying row (`data-change-active`, ✓, 💬, `data-changed`,
+  call-site `data-row`) is by construction rendered — navigation/approve/
+  comments/`scrollChangeIntoView`/`updateHints`/`callArrows` needed no
+  changes. Expanding goes via click delegation on the pane's `<code>`
+  (`onPaneClick` — the spacer lives in an `.innerHTML` string, so it can't
+  carry an arrow.js binding): the run lands in `expandedRunsByRows` (a
+  non-reactive `WeakMap` keyed on the memoized `rows` array, ephemeral —
+  resets on a code reload) and a reactive `collapseUi.v` bump re-renders
+  exactly the subscribed big-block panes (a small block's `collapsePlan`
+  early-returns before that read, so it never subscribes). Test:
+  `tests/diff-trim-collapse.spec.mjs`.
 - **Char diff: line background only, no word background.** A truly changed
   line (paired del/ins, not `wsOnly`) gets its red/green line background
   (pane tint), but the **individual changed characters/words within that

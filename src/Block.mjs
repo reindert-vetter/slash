@@ -3,7 +3,7 @@
 // and returns an arrow.js template. It mirrors the sidebar row but with the full
 // header, file:line and the approve toggle. Code goes underneath later.
 
-import { html } from './vendor/arrow.js'
+import { html, reactive } from './vendor/arrow.js'
 import { categoryClass } from './BlockList.mjs'
 import { translationBlockView, translationChangeUnits } from './translationDiff.mjs'
 import { avatarHtmlString } from './avatar.mjs'
@@ -1058,6 +1058,7 @@ function codePane(
       <div class="no-scrollbar min-h-0 flex-1 overflow-auto" data-scrollsync @scroll="${syncScroll}">
         <code
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
+          @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() =>
             paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, lineSummaryFn())}"
         ></code>
@@ -1270,12 +1271,133 @@ function gutterSpan(mark, approvedMark) {
   )
 }
 
+// ── Context collapsing for huge blocks ──────────────────────────────────────
+// A whole-file fallback block (a multi-thousand-line locale JSON, see
+// blocks-and-ingest.md) renders thousands of UNCHANGED context rows around a
+// handful of changed lines. That full render (Prism over every line ×2 panes,
+// one giant innerHTML string, ~2× rows DOM nodes + layout) repeats on every
+// navigation step that re-keys the card (preview↔selected role flips, every
+// codeVersion bump — see conventions.md's key-encoding pitfall), which is
+// what made sidebar ↑/↓ take 250-850ms per step around such a block
+// (measured on PR 13166's 9179-line nl.json/en.json). Blocks above
+// COLLAPSE_MIN_ROWS therefore collapse long runs of unchanged rows into one
+// clickable "⋯ N ongewijzigde regels" spacer row; everything at or below the
+// threshold renders exactly as before (an ordinary PHP method is unaffected).
+//
+// The plan is a pure function of (rows, commented set, expanded runs) —
+// deliberately NOT of the active group/cursor, so an ↑/↓ step never changes
+// WHICH rows exist in the DOM (no scroll jumps, no churn), and both panes
+// (fed the same inputs) always collapse identically, keeping the split view's
+// row-for-row alignment. Changed rows (plus COLLAPSE_CONTEXT rows around
+// them) and commented rows are always kept — every row that can carry an
+// active highlight/anchor (`data-change-active`), an approve ✓, a 💬 marker,
+// a line-summary badge, a call arrow (`data-row` of a call site — always a
+// changed line) or the updateHints `data-changed` flag is by construction a
+// kept row, so navigation/approve/comments/scrollChangeIntoView/updateHints/
+// callArrows keep working on unchanged aligned-row indices. A comment's
+// row range CAN cover unchanged rows (a Shift-range spanning a gap), hence
+// the explicit `commented` keep.
+//
+// Expanding: a click on a spacer (event delegation on the pane's <code>, the
+// spacer itself lives in an .innerHTML string so it can't carry an arrow.js
+// binding) records the run in `expandedRunsByRows` — a plain, non-reactive
+// WeakMap keyed on the memoized `rows` array identity (stable per b.code,
+// see blockRowsCache; a code reload resets the expansions, ephemeral like
+// state.testsExpanded) — and bumps the reactive `collapseUi.v`, which every
+// big-block pane's innerHTML binding reads via collapsePlan, so exactly those
+// panes re-render with the run expanded. A small block's collapsePlan
+// early-returns BEFORE that read, so its binding never subscribes to it (its
+// dependency set is stable across runs — rows.length doesn't change within
+// one b.code — so the watch-getter crystallisation pitfall doesn't apply).
+const COLLAPSE_MIN_ROWS = 300
+const COLLAPSE_CONTEXT = 3
+const COLLAPSE_MIN_RUN = 10
+const collapseUi = reactive({ v: 0 })
+const expandedRunsByRows = new WeakMap()
+
+function expandCollapsedRun(rows, runKey) {
+  let set = expandedRunsByRows.get(rows)
+  if (!set) {
+    set = new Set()
+    expandedRunsByRows.set(rows, set)
+  }
+  set.add(runKey)
+  collapseUi.v++
+}
+
+// onPaneClick is the delegated click handler on each pane's <code> — the only
+// interactive thing inside the innerHTML-rendered rows is a collapsed-run
+// spacer, so anything else falls through untouched.
+function onPaneClick(rows, e) {
+  const el = e.target && e.target.closest && e.target.closest('[data-collapsed-run]')
+  if (!el) return
+  e.stopPropagation()
+  expandCollapsedRun(rows, el.getAttribute('data-collapsed-run'))
+}
+
+// collapsePlan returns null (render every row — the small-block fast path,
+// byte-identical behaviour to before this feature) or a list of segments
+// `{skip, start, end}` covering rows exactly once, in order: skip:false →
+// render those rows as usual, skip:true → render one collapsedRunHTML spacer
+// in their place. Hidden candidates shorter than COLLAPSE_MIN_RUN render
+// normally (a "⋯ 3 regels" spacer saves nothing and only adds a click).
+function collapsePlan(rows, commented) {
+  if (rows.length <= COLLAPSE_MIN_ROWS) return null
+  void collapseUi.v // reactive read: expanding a run re-renders this pane
+  const expanded = expandedRunsByRows.get(rows)
+  const keep = new Uint8Array(rows.length)
+  for (let i = 0; i < rows.length; i++) {
+    if (!rowChanged(rows[i])) continue
+    const s = Math.max(0, i - COLLAPSE_CONTEXT)
+    const e = Math.min(rows.length - 1, i + COLLAPSE_CONTEXT)
+    for (let j = s; j <= e; j++) keep[j] = 1
+  }
+  if (commented) for (const i of commented) if (i >= 0 && i < keep.length) keep[i] = 1
+  if (expanded)
+    for (const k of expanded) {
+      const d = k.indexOf('-')
+      const s = Math.max(0, +k.slice(0, d) || 0)
+      const e = Math.min(rows.length - 1, +k.slice(d + 1) || 0)
+      for (let j = s; j <= e; j++) keep[j] = 1
+    }
+  const segs = []
+  let collapsedAny = false
+  let i = 0
+  while (i < rows.length) {
+    let j = i
+    while (j + 1 < rows.length && keep[j + 1] === keep[i]) j++
+    if (!keep[i] && j - i + 1 >= COLLAPSE_MIN_RUN) {
+      segs.push({ skip: true, start: i, end: j })
+      collapsedAny = true
+    } else {
+      segs.push({ skip: false, start: i, end: j })
+    }
+    i = j + 1
+  }
+  return collapsedAny ? segs : null
+}
+
+// collapsedRunHTML renders the spacer for one hidden run of unchanged rows.
+// The word + count carry the meaning (never colour alone — colorblind rule);
+// the ⋯ glyph and muted tint are decoration on top. Clicking expands the run
+// in place (see onPaneClick above).
+function collapsedRunHTML(start, end) {
+  const n = end - start + 1
+  return (
+    `<div class="block cursor-pointer select-none whitespace-pre border-y border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 text-center text-[10px] leading-relaxed text-slate-400 dark:text-zinc-500 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-zinc-800/70 dark:hover:text-zinc-300"` +
+    ` data-collapsed-run="${start}-${end}" data-testid="collapsed-run" title="Klik om deze regels te tonen">` +
+    `⋯ ${n} ongewijzigde regels</div>`
+  )
+}
+
 // paneHTML builds the innerHTML string of one pane's <code>: one <div> per
 // aligned row (via rowCellHTML), plus the call-approval segment-dots row
 // where applicable. Present lines are Prism-highlighted (which escapes the
 // text); blank/filler lines get a non-breaking space so the row keeps its
 // height. The only unescaped bits are our own static class strings, so the
-// result is safe to hand to the .innerHTML binding.
+// result is safe to hand to the .innerHTML binding. A huge block renders
+// through collapsePlan (see above): long unchanged runs become one clickable
+// spacer row instead — identical in both panes, so they stay aligned.
 function paneHTML(
   rows,
   sideKey,
@@ -1287,7 +1409,7 @@ function paneHTML(
   lineSummaries = null,
 ) {
   const parts = []
-  for (let i = 0; i < rows.length; i++) {
+  const pushRow = (i) => {
     const r = rows[i]
     parts.push(rowCellHTML(r, i, sideKey, group, approved, commented, wrap, {}, lineSummaries))
 
@@ -1305,6 +1427,15 @@ function paneHTML(
       parts.push(
         approveHere ? circleRowHTML(text, partial.segs, partial.approvedStarts) : BLANK_MARK_ROW,
       )
+    }
+  }
+  const plan = collapsePlan(rows, commented)
+  if (!plan) {
+    for (let i = 0; i < rows.length; i++) pushRow(i)
+  } else {
+    for (const seg of plan) {
+      if (seg.skip) parts.push(collapsedRunHTML(seg.start, seg.end))
+      else for (let i = seg.start; i <= seg.end; i++) pushRow(i)
     }
   }
   return parts.join('')
@@ -1360,10 +1491,19 @@ function unifiedHTML(
   lineSummaries = null,
 ) {
   const parts = []
-  for (let i = 0; i < rows.length; i++) {
+  const pushRow = (i) => {
     parts.push(unifiedRowHTML(rows[i], i, group, approved, commented, lineSummaries))
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
     if (partial) parts.push(circleRowHTML(unifiedCallText(rows[i]), partial.segs, partial.approvedStarts))
+  }
+  const plan = collapsePlan(rows, commented)
+  if (!plan) {
+    for (let i = 0; i < rows.length; i++) pushRow(i)
+  } else {
+    for (const seg of plan) {
+      if (seg.skip) parts.push(collapsedRunHTML(seg.start, seg.end))
+      else for (let i = seg.start; i <= seg.end; i++) pushRow(i)
+    }
   }
   return parts.join('')
 }
@@ -1385,6 +1525,7 @@ function unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedF
       <div class="no-scrollbar min-h-0 flex-1 overflow-auto" data-pane="new" data-scrollsync @scroll="${syncScroll}">
         <code
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
+          @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() =>
             unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), lineSummaryFn())}"
         ></code>
@@ -2167,17 +2308,38 @@ function alignRows(oldText, newText) {
 // diffLines is a classic LCS line diff: it returns a sequence of ops that turn
 // `a` into `b` — { op: 'eq', left, right } for a shared line, { op: 'del', left }
 // for a line only in `a`, { op: 'ins', right } for a line only in `b`. Blocks are
-// function-sized, so the O(n·m) table is cheap. Lines are matched
-// whitespace-insensitively (via `key`, à la `git diff -w`): a line that only got
-// re-indented still pairs with its counterpart and comes back as an `eq` op whose
-// `left`/`right` differ only in whitespace, so alignRows can show it as a soft
-// re-alignment instead of drifting into the positional del/ins pairing.
+// function-sized, so the O(n·m) table is cheap — EXCEPT for a whole-file
+// fallback block (a multi-thousand-line locale JSON, see blocks-and-ingest.md):
+// there the untrimmed table is tens of millions of cells (measured: 0.8–2.2s
+// per file on a 9179-line locale JSON with 7 changed lines). The common
+// prefix/suffix trim below cuts the DP down to just the changed middle, which
+// makes that first-contact spike ~free for the typical "huge file, tiny diff"
+// case, while leaving the op sequence a valid LCS alignment either way. Lines
+// are matched whitespace-insensitively (via `key`, à la `git diff -w`): a line
+// that only got re-indented still pairs with its counterpart and comes back as
+// an `eq` op whose `left`/`right` differ only in whitespace, so alignRows can
+// show it as a soft re-alignment instead of drifting into the positional
+// del/ins pairing — which is also why the trim compares `key(...)`, not the
+// raw lines: a re-indented prefix line must keep trimming (it was an `eq` op
+// in the untrimmed DP too).
 function diffLines(a, b) {
-  const n = a.length
-  const m = b.length
   const key = (s) => s.replace(/\s+/g, '')
-  const ka = a.map(key)
-  const kb = b.map(key)
+  const n0 = a.length
+  const m0 = b.length
+  // Common prefix/suffix (whitespace-insensitive, same equality as the DP).
+  let pre = 0
+  while (pre < n0 && pre < m0 && key(a[pre]) === key(b[pre])) pre++
+  let suf = 0
+  while (suf < n0 - pre && suf < m0 - pre && key(a[n0 - 1 - suf]) === key(b[m0 - 1 - suf])) suf++
+  const ops = []
+  for (let p = 0; p < pre; p++) ops.push({ op: 'eq', left: a[p], right: b[p] })
+  // O(n·m) LCS on the trimmed middle only.
+  const n = n0 - pre - suf
+  const m = m0 - pre - suf
+  const ka = []
+  const kb = []
+  for (let p = 0; p < n; p++) ka.push(key(a[pre + p]))
+  for (let p = 0; p < m; p++) kb.push(key(b[pre + p]))
   const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1))
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
@@ -2185,23 +2347,23 @@ function diffLines(a, b) {
         ka[i] === kb[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
     }
   }
-  const ops = []
   let i = 0
   let j = 0
   while (i < n && j < m) {
     if (ka[i] === kb[j]) {
-      ops.push({ op: 'eq', left: a[i], right: b[j] })
+      ops.push({ op: 'eq', left: a[pre + i], right: b[pre + j] })
       i++
       j++
     } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      ops.push({ op: 'del', left: a[i] })
+      ops.push({ op: 'del', left: a[pre + i] })
       i++
     } else {
-      ops.push({ op: 'ins', right: b[j] })
+      ops.push({ op: 'ins', right: b[pre + j] })
       j++
     }
   }
-  while (i < n) ops.push({ op: 'del', left: a[i++] })
-  while (j < m) ops.push({ op: 'ins', right: b[j++] })
+  while (i < n) ops.push({ op: 'del', left: a[pre + i++] })
+  while (j < m) ops.push({ op: 'ins', right: b[pre + j++] })
+  for (let p = suf; p > 0; p--) ops.push({ op: 'eq', left: a[n0 - p], right: b[m0 - p] })
   return ops
 }
