@@ -108,7 +108,7 @@ test.describe('PR Review Tree — Shift+arrow line/group-range selection', () =>
     // follow-up open regularly wins the race against. Asserting that
     // transient frame made this spec flaky; wait for the follow-up menu's own
     // content instead, which is the actually meaningful end state.
-    const nextItem = page.getByTestId('command-row').filter({ hasText: 'Ga door naar de volgende' })
+    const nextItem = page.getByTestId('command-row').filter({ hasText: 'Ga door' })
     await expect(nextItem).toBeVisible()
 
     await expect

@@ -1,7 +1,7 @@
 import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
-// The postApprove follow-up menu ("Ga door naar de volgende niet-goedgekeurde
-// code") walks the review TREE depth-first, not just the flat sidebar list:
+// The postApprove follow-up menu ("Ga door") walks the review TREE
+// depth-first, not just the flat sidebar list:
 // once the currently-focused block/column has nothing left to approve, it
 // descends into that block's Onderliggende-code children before moving on to
 // the next top-level block. See findNextUnapproved/firstUnapprovedInSubtree/
@@ -39,7 +39,7 @@ test.describe('PR Review Tree — postApprove follow-up menu walks the tree', ()
 
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
-    await expect(menu).toContainText('Ga door naar de volgende niet-goedgekeurde code')
+    await expect(menu).toContainText('Ga door')
     await page.getByTestId('command-row').filter({ hasText: 'Ga door' }).click()
     await expect(menu).not.toBeVisible()
 

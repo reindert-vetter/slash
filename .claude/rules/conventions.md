@@ -878,7 +878,7 @@
   `keyboard-navigation.md`). How long the closed frame lasts is purely how
   fast `findNextUnapproved`'s awaited `ensureCode` fetch resolves, and the
   reopen regularly won that race. Fix: wait for the follow-up menu's own
-  identifying content ("Ga door naar de volgende…") instead. Rule of thumb —
+  identifying content ("Ga door") instead. Rule of thumb —
   before asserting that something is gone/closed/absent, check whether the
   same user action also starts an async follow-up that brings it back; if so,
   assert what distinguishes the follow-up instead.

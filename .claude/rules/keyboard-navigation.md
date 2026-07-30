@@ -479,12 +479,12 @@ drill), so even when the found plan would run through an Underlying-code
 child, an index-approve stays at the plain list step — drilling only makes
 sense once you're in the diff. A **diff-mode** approve (`!keepList`) that
 lands on a *different* block still opens the `postApprove` menu as before
-("Sluit menu" / "Ga door naar de volgende niet-goedgekeurde code") — only the
+("Sluit menu" / "Ga door") — only the
 list-mode case is now menu-less. Because the `postApprove` menu can therefore
 never open with `keepList` true anymore, its `postapprove-next` item
 (`POSTAPPROVE_COMMANDS`, the 2nd item after the pinned "Close menu" — see
-above) is a plain string again ("Ga door naar de volgende niet-goedgekeurde
-code") instead of the earlier keepList-aware label function.
+above) is a plain string again ("Ga door") instead of the earlier
+keepList-aware label function.
 
 **The postApprove follow-up menu opens at the SAME spot as the menu you
 approved with, even if the approved row has meanwhile disappeared from the

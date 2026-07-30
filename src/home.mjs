@@ -4103,7 +4103,7 @@ const POSTAPPROVE_COMMANDS = withClose(
       // always jumps straight to the next unapproved block itself (see
       // afterApproveAction's EXCEPTION 2) — so this label only ever needs the
       // diff-mode wording now.
-      label: 'Ga door naar de volgende niet-goedgekeurde code',
+      label: 'Ga door',
       hint: 'volgende',
       run: () => {
         if (postApproveTarget) applyNextUnapproved(postApproveTarget)

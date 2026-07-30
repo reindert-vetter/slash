@@ -2,9 +2,9 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The postApprove follow-up menu: approving via the command palette (not the
 // top checkbox — that stays a direct toggle) opens a small follow-up menu when
-// there's a next not-yet-approved unit still ahead: "Ga door naar de volgende
-// niet-goedgekeurde code" or "Sluit menu". See afterApproveAction /
-// findNextUnapproved / POSTAPPROVE_COMMANDS in home.mjs.
+// there's a next not-yet-approved unit still ahead: "Ga door" or "Sluit
+// menu". See afterApproveAction / findNextUnapproved / POSTAPPROVE_COMMANDS
+// in home.mjs.
 //
 // The seeded PR 12903 fixture (tests/fixtures/blocks.json) only carries a real
 // diff on two of its nine blocks: CreatePaymentAction::execute (one
@@ -83,7 +83,7 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     const rows = page.getByTestId('command-row')
     await expect(rows).toHaveCount(2)
     await expect(rows.nth(0)).toContainText('Sluit menu')
-    await expect(rows.nth(1)).toContainText('Ga door naar de volgende niet-goedgekeurde code')
+    await expect(rows.nth(1)).toContainText('Ga door')
 
     // Choosing "Sluit menu" just closes it — no navigation.
     await rows.filter({ hasText: 'Sluit menu' }).click()
