@@ -10,6 +10,7 @@
 import { reactive, html, watch } from './vendor/arrow.js'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { avatarHTML, avatarUrlOf, displayNameOf, ensureNames, fullNameOf } from './avatar.mjs'
+import { labelForWorkflow } from './workflowLabels.mjs'
 
 initTheme()
 
@@ -41,6 +42,18 @@ const state = reactive({
   activePreset: null,
   presetLoading: false,
   presetResults: [],
+  // "Mislukte taken" drawer (GET /api/problems): work that went wrong out of
+  // sight. problemsOpen: expanded. failedRuns: workflow runs that ended in
+  // status `failed` (durable, repo-wide). logErrors: the mirrored glue log
+  // lines — poller/startup errors that are no workflow run of their own, kept
+  // in an in-memory server-side ring buffer, so they reset on a server
+  // restart (see run_errors.go). Loaded on page load — not lazily on open,
+  // unlike "Recent gegenereerd" — because the count shows on the closed
+  // button.
+  problemsOpen: false,
+  problemsLoaded: false,
+  failedRuns: [],
+  logErrors: [],
 })
 
 // ui is separate from state so opening/closing a popover doesn't touch the
@@ -1375,11 +1388,124 @@ function recentDrawer() {
   `
 }
 
+// ── "Mislukte taken" drawer ────────────────────────────────────────────────
+// Background work can fail without the reviewer ever noticing: a workflow run
+// that ends in status `failed`, or a poller/startup error that only reached the
+// terminal log. Both land here (GET /api/problems, read-only).
+//
+// Two deliberate properties:
+//  * Always present, collapsed, with the count in the button — a block that
+//    only appears when something is wrong is not findable when you want to
+//    check that nothing IS wrong.
+//  * The rows carry no data-nav-row, so they stay out of the overview's
+//    keyboard navigation (currentRows/paintSelection would otherwise try to
+//    put the selection ring on a failure line).
+
+function problemCount() {
+  return state.failedRuns.length + state.logErrors.length
+}
+
+// problemsToggleText — the closed button always says what it holds, in words
+// (never colour alone: the count and the word carry the meaning).
+function problemsToggleText() {
+  const n = problemCount()
+  if (!state.problemsLoaded) return 'Mislukte taken'
+  if (n === 0) return 'Mislukte taken · geen'
+  return 'Mislukte taken · ' + n
+}
+
+// problemMark — the shared "this went wrong" marker: a ⚠ glyph plus a word, so
+// it reads without colour perception. The rose tint is decoration on top.
+function problemMark(word) {
+  return html`<span class="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-rose-700 dark:text-rose-300"
+    ><span aria-hidden="true">⚠</span><span>${word}</span></span
+  >`
+}
+
+const PROBLEM_ROW_CLASS =
+  'flex items-start gap-3 border-b border-slate-100 dark:border-zinc-800/70 px-4 py-3 last:border-b-0'
+
+// problemRunRow — one workflow run that ended in `failed`.
+function problemRunRow(run) {
+  return html`
+    <div data-testid="problem-run" class="${PROBLEM_ROW_CLASS}">
+      ${problemMark('mislukt')}
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2">
+          <span class="truncate text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${labelForWorkflow(run.workflow)}</span>
+          ${() => (run.pr ? html`<span class="shrink-0 text-[12px] text-slate-500 dark:text-zinc-500">#${run.pr}</span>` : '')}
+          <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-600">${relativeTime(run.updatedAt)}</span>
+        </div>
+        <p class="line-clamp-2 text-[12px] text-slate-500 dark:text-zinc-500" title="${run.error || ''}">${run.error || 'geen foutmelding vastgelegd'}</p>
+      </div>
+    </div>
+  `.key('problem-run:' + run.runId)
+}
+
+// problemLogRow — one mirrored log line. `scope` is the subsystem prefix the
+// line itself carries ("import comments", "pr_status", …); "overgeslagen"
+// because every such line reports work that was skipped, not a hard failure.
+function problemLogRow(entry, i) {
+  return html`
+    <div data-testid="problem-log" class="${PROBLEM_ROW_CLASS}">
+      ${problemMark('overgeslagen')}
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2">
+          <span class="truncate text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${entry.scope || 'Achtergrondtaak'}</span>
+          ${() => (entry.pr ? html`<span class="shrink-0 text-[12px] text-slate-500 dark:text-zinc-500">#${entry.pr}</span>` : '')}
+          <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-600">${relativeTime(entry.at)}</span>
+        </div>
+        <p class="line-clamp-2 text-[12px] text-slate-500 dark:text-zinc-500" title="${entry.message || ''}">${entry.message || ''}</p>
+      </div>
+    </div>
+  `.key('problem-log:' + i + ':' + (entry.at || '') + ':' + (entry.message || '').slice(0, 40))
+}
+
+function problemsDrawer() {
+  return html`
+    <div class="mt-4">
+      <button
+        data-testid="problems-drawer"
+        class="group flex w-full cursor-pointer items-center gap-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-3 text-left transition-colors hover:bg-slate-100 dark:hover:bg-zinc-800/40"
+        @click="${() => (state.problemsOpen = !state.problemsOpen)}"
+      >
+        <span class="${() => 'inline-flex shrink-0 transition-transform ' + (state.problemsOpen ? 'rotate-90' : '')}"
+          >${chevronFilled('h-4 w-4 text-slate-500 dark:text-zinc-500')}</span
+        >
+        <span data-testid="problems-count" class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${() => problemsToggleText()}</span>
+      </button>
+      ${() => {
+        // Every branch returns a keyed array with its own key, so the slot's
+        // shape stays a stable keyed array and a branch flip always mounts
+        // fresh nodes (the single↔array + reused-keyed-node pitfalls, see
+        // conventions.md — recentDrawer above has the same shape for the same
+        // reason).
+        if (!state.problemsOpen) return [html`<span class="hidden"></span>`.key('problems:closed')]
+        if (!state.problemsLoaded) return [html`<div class="mt-2">${loadingSkeletonList()}</div>`.key('problems:loading')]
+        if (problemCount() === 0)
+          return [
+            html`<div
+              data-testid="problems-empty"
+              class="mt-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-3 text-[12px] text-slate-500 dark:text-zinc-500"
+            >
+              Geen mislukte taken sinds de server startte.
+            </div>`.key('problems:empty'),
+          ]
+        return [
+          html`<div class="mt-2 overflow-hidden rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
+            ${state.failedRuns.map((run) => problemRunRow(run))} ${state.logErrors.map((entry, i) => problemLogRow(entry, i))}
+          </div>`.key('problems:list'),
+        ]
+      }}
+    </div>
+  `
+}
+
 function App() {
   return html`
     <div class="mx-auto max-w-7xl px-6 py-8" data-testid="inbox">
       ${headerBlock()} ${searchBox()}
-      ${() => currentView()} ${filterDrawer()} ${recentDrawer()}
+      ${() => currentView()} ${filterDrawer()} ${recentDrawer()} ${problemsDrawer()}
     </div>
   `
 }
@@ -2072,6 +2198,14 @@ watch(
       state.activePreset,
       state.presetLoading,
       state.presetResults.length,
+      // The "Mislukte taken" drawer adds no navigable rows, but expanding it
+      // (or a row arriving in it) still changes the document height — exactly
+      // the scroll-clamp case scheduleRepaint's own comment describes, where a
+      // row can slide under a parked cursor. Repainting disarms hoverEnabled
+      // for that frame, same as the recent drawer above.
+      state.problemsOpen,
+      state.failedRuns.length,
+      state.logErrors.length,
     ]),
   () => scheduleRepaint(),
 )
@@ -2151,6 +2285,28 @@ function repollAfterRefresh() {
   }, 1500)
 }
 
+// loadProblems pulls the failure list (GET /api/problems, read-only).
+// Deliberately its own fetch, NOT folded into loadInbox/reloadSnapshot: those
+// await primeAuthorNames before pushing rows into state (see the ensureNames
+// timing note in avatar.mjs), and a failure list has no author names to
+// resolve — chaining it there would only make both slower and couple two
+// unrelated endpoints. Both arrays are reassigned wholesale so arrow.js
+// re-renders.
+async function loadProblems() {
+  try {
+    const res = await fetch('/api/problems')
+    if (!res.ok) return
+    const body = await res.json()
+    if (!body || !body.ok) return
+    state.failedRuns = Array.isArray(body.failedRuns) ? body.failedRuns : []
+    state.logErrors = Array.isArray(body.logErrors) ? body.logErrors : []
+    state.problemsLoaded = true
+  } catch (e) {
+    // keep whatever we already showed — a transient failure here must never
+    // blank out the list (or the page).
+  }
+}
+
 function startLiveSync() {
   if (liveSyncStarted || !state.inboxRunId) return
   liveSyncStarted = true
@@ -2160,11 +2316,16 @@ function startLiveSync() {
   })
   setInterval(sendHeartbeat, HEARTBEAT_MS)
   setInterval(() => {
-    if (activeTab()) reloadSnapshot()
+    if (activeTab()) {
+      reloadSnapshot()
+      // Rides along on the existing cadence — no timer of its own.
+      loadProblems()
+    }
   }, RELOAD_MS)
   document.addEventListener('visibilitychange', sendHeartbeat)
 }
 
 App()(document.getElementById('app'))
 loadInbox()
+loadProblems()
 scheduleRepaint()

@@ -17,6 +17,7 @@ import { statusInfo, categoryClass } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin } from './avatar.mjs'
+import { labelForWorkflow } from './workflowLabels.mjs'
 
 // ── Real comments (task_code_comment workflow) ────────────────────────────────
 // This section IS wired to the API. Placing a comment starts a Workflow
@@ -2505,19 +2506,9 @@ function testsBar(r, i, drill) {
 // (see pollWorkflows); this section just renders that snapshot. It never writes
 // anything itself.
 
-// WORKFLOW_LABELS maps a Workflow Type to the Dutch label shown in the list;
-// an unknown type falls back to its raw name.
-const WORKFLOW_LABELS = {
-  task_code_comment: 'Comment',
-  pr_status: 'PR-status',
-  build_relations: 'Relaties',
-  resolve_call: 'Call zoeken',
-  resolve_test_covers: 'Testdekking',
-  explain_code: 'AI-omschrijving',
-  approve: 'Goedkeuring',
-  pr_inbox: 'Inbox',
-  code_warning: 'Risicocontrole',
-}
+// The Workflow-Type → label map lives in workflowLabels.mjs (shared with the
+// "Mislukte taken" block on /pr-overview); labelForWorkflow falls back to the
+// raw type name for an unknown type.
 
 // STATUS_BADGES maps a run status to its Dutch label + badge colour classes.
 const STATUS_BADGES = {
@@ -2671,7 +2662,7 @@ function workflowRow(run, openTask, state) {
     >
       <div class="flex items-center gap-2">
         <span class="min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-zinc-300" data-testid="workflow-label"
-          >${WORKFLOW_LABELS[run.workflow] || run.workflow}</span
+          >${labelForWorkflow(run.workflow)}</span
         >
         <span
           class="${'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ' + badge.cls}"

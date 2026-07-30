@@ -2293,6 +2293,55 @@ combines it with the `task_snooze` read-model above to hide snoozed tasks.
   under `SLASH_JIRA_ASSIGNED`, see `tests/_fixtures.mjs`).
 
 
+## Surfacing failures (`run_errors.go` + `GET /api/problems`)
+
+Background work here fails quietly by design: nearly every Activity that talks
+to GitHub/Claude/Jira is **best-effort** (it logs "skipped" and carries on, so a
+transient hiccup never sinks a long-lived tracker), and the pollers/startup glue
+around them aren't workflow runs at all. Both therefore used to be visible only
+in the terminal the server was started from. `run_errors.go` collects the two
+kinds and serves them to the read-only **`GET /api/problems`**, behind the
+"Mislukte taken" block on `/pr-overview` (see
+`.claude/rules/pages-and-routing.md` for the UI side).
+
+- **`TaskManager.FailedRuns(limit)`** — a workflow run that ended in
+  `tembed.StatusFailed` is durable, so this is a pure read of
+  `engine.Runs()` + `Input()` (for the run's own `pr`, `0` for a per-repo
+  tracker) + `Result()`. Note `Engine.Result` reports a failed run's recorded
+  failure message **as its returned error** — that is the only readable form of
+  it, so `FailedRuns` deliberately keeps `err.Error()` as the row's text.
+  Read-only: it never starts or signals anything. Repo-wide, unlike
+  `RunsForPR`, which filters on the input's `pr` and can therefore never report
+  a `pr_inbox`/`task_inbox`/`task_snooze` failure. Capped at `failedRunCap`
+  (50), newest-updated first.
+- **The log mirror** — an **in-memory ring buffer** (`problemLogCap`, 100
+  lines, newest wins) that `mirrorManagerLogs` feeds by wrapping
+  **`TaskManager.logf`**. That field is the single funnel every glue-level error
+  in `workflows.go` already goes through (~40 call sites), so one wrapper covers
+  them all and a future call site is mirrored for free — no per-site change.
+  `problemMirrorLogger()` does the same for the engine's own lines via the
+  existing `tembed.WithLogger` option (e.g. `run X uses unregistered workflow`,
+  which only appears during `Recover`). Both are wired in `newTasks`. Each entry
+  keeps the full line plus two parsed hints: the subsystem prefix before the
+  first `:` (`import comments`, `pr_status`, `tembed`) and the PR number from a
+  `pr=<n>` fragment.
+- **It is a log MIRROR, not an error classifier.** Every `logf` call site
+  reports something that was skipped, so all of them go in and none is judged
+  more/less important — deliberately no severity filter, because that would be
+  guessing which failure the reviewer cares about.
+- **Write boundary:** the buffer touches no module, read-model or workflow
+  history and is lost on restart, so it falls under the same operational
+  carve-out as the heartbeat map and `ingest_progress.go` (see
+  `.claude/rules/workflows-write-boundary.md`). Anything that should genuinely
+  survive a restart would have to be written by a workflow — a deliberate
+  boundary, not an oversight: these are transient operational observations, not
+  reviewer decisions.
+- Tests: `run_errors_test.go` (scope/`pr=` parsing incl. the two real-world
+  line shapes, newest-first order, the ring-buffer cap, that the wrapper still
+  reaches the original log function, and that `FailedRuns` reports a failed run
+  with its PR + error while skipping a completed one and including a repo-wide
+  run as `pr: 0`); `tests/overview-problems.spec.mjs` for the rendering.
+
 ## Daily data cleanup (`cleanup` + per-module `Purge`)
 
 A tenth Workflow Type, **`cleanup`**, purges **all** data of a PR once it has

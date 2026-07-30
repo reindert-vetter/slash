@@ -66,7 +66,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		sq.Close()
 		return nil, nil, err
 	}
-	engine := tembed.New(tembed.NewMultiStore(sq, jl))
+	// The engine's own log lines (e.g. an unregistered workflow found during
+	// recovery) are mirrored into the in-memory problem buffer so they reach
+	// GET /api/problems instead of only the terminal — see run_errors.go.
+	engine := tembed.New(tembed.NewMultiStore(sq, jl), problemMirrorLogger())
 
 	cs, err := comments.Open(dataDir + "/comments.db")
 	if err != nil {
@@ -226,6 +229,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// Same pattern for the task-inbox read-model: a nil store makes
 	// refreshTasks a no-op.
 	mgr.taskinbox = ti
+	// Mirror every glue-level log line (poller/startup errors that are not a
+	// workflow run of their own) into the in-memory problem buffer behind
+	// GET /api/problems — see run_errors.go.
+	mirrorManagerLogs(mgr)
 	// Record the server-lifetime context + whether background pollers may run,
 	// so ensurePRStatus's fresh-poller spawn uses a context that outlives the
 	// HTTP request that triggered it (see TaskManager.baseCtx).
@@ -564,6 +571,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// cleanup pass (purges all data of PRs merged more than 7 days ago). Runs
 	// automatically once a day too — see StartCleanupScheduler.
 	mux.HandleFunc("/api/workflows/cleanup", s.handleCleanup)
+	// GET /api/problems → read-only: work that went wrong out of sight — failed
+	// workflow runs (repo-wide) + the mirrored glue log lines. Feeds the
+	// "Mislukte taken" block at the bottom of /pr-overview. See run_errors.go.
+	mux.HandleFunc("/api/problems", s.handleProblems)
 	// GET /api/prs/filter?preset=<key> → live gh-search for a fixed, allow-listed
 	// preset query (never raw UI text — see handleFilter).
 	mux.HandleFunc("/api/prs/filter", s.handleFilter)
@@ -644,6 +655,27 @@ func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
 		runs = []WorkflowRunView{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": runs})
+}
+
+// handleProblems serves GET /api/problems — the read-only "what went wrong out
+// of sight" list behind the "Mislukte taken" block on /pr-overview: failed
+// workflow runs (repo-wide, from the tembed store) plus the mirrored glue log
+// lines (in-memory, lost on restart). Both slices are always non-nil so the
+// client never has to guard for null.
+func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	failed := s.tasks.manager.FailedRuns(failedRunCap)
+	if failed == nil {
+		failed = []FailedRun{}
+	}
+	logs := loggedProblems()
+	if logs == nil {
+		logs = []LogProblem{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "failedRuns": failed, "logErrors": logs})
 }
 
 // handleWorkflows routes /api/workflows/{runID} (GET status) and

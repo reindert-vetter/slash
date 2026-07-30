@@ -162,6 +162,77 @@ three are a flat list. Offline (`SLASH_GITHUB=off`), `handleFilter` only
 honors the `draft:` qualifier of the fixture rows. Test:
 `tests/overview-filter-presets.spec.mjs`.
 
+### "Mislukte taken" block (failures that would otherwise only reach the log)
+
+Below `recentDrawer` sits a third expandable block, **"Mislukte taken"**
+(`problemsDrawer`, `data-testid=problems-drawer`, mal of `recentDrawer`), fed by
+the read-only **`GET /api/problems`** (`handleProblems` → `run_errors.go`).
+Motivation: background work can fail without the reviewer ever noticing —
+the failures were visible only in the terminal the server was started from.
+Two categories, deliberately both shown:
+
+- **A workflow run that ended in `failed`** (`data-testid=problem-run`) —
+  durable, in the tembed store, so `TaskManager.FailedRuns(limit)` is a pure
+  read of `engine.Runs()`/`Input()`/`Result()` (a failed run's recorded error
+  message is only reachable *as* the error `Result` returns). Deliberately
+  **repo-wide**, which is exactly why `RunsForPR`/`GET /api/workflows?pr=N`
+  couldn't be reused: that filters on the run input's `pr`, so a per-repo
+  tracker (`pr_inbox`/`task_inbox`/`task_snooze`) structurally never appears
+  there; here such a run shows with `pr: 0`.
+- **An error that only ever reached the log** (`data-testid=problem-log`) —
+  poller/startup glue that is no workflow run at all (e.g. `import comments:
+  fetch review comments pr=970099: … exit status 1`). Nothing recorded those,
+  so `run_errors.go` keeps an **in-memory ring buffer** that mirrors them; see
+  the "Surfacing failures" section in `.claude/rules/tembed-workflows.md` for
+  the buffer itself and why it may live outside a workflow.
+
+Frontend properties that are load-bearing rather than cosmetic:
+
+- **Always present, collapsed, with the count in the button**
+  (`data-testid=problems-count`: "Mislukte taken · 2" / "· geen"). A block that
+  only appears when something is wrong is not findable when you want to check
+  that nothing *is* wrong — hence also loaded on page load (`loadProblems()`
+  next to `loadInbox()`), not lazily on open like "Recent gegenereerd".
+- **`loadProblems` is its own fetch**, deliberately not folded into
+  `loadInbox`/`applyLive`/`applyCached`/`reloadSnapshot`: those `await`
+  `primeAuthorNames` before pushing rows into state (see the `ensureNames`
+  timing note in `avatar.mjs`) and a failure list has no author names to
+  resolve. It rides along on the existing `RELOAD_MS` interval — no timer of
+  its own.
+- **The rows carry no `data-nav-row`**, so they never join the overview's
+  keyboard navigation: `paintSelection()` iterates every `[data-nav-row]` and
+  would otherwise happily put the indigo selection ring (and its
+  `row-select-mark` chevron) on a failure line. Expanding the drawer *is*
+  added to the row-set `watch` that drives `scheduleRepaint()` though — it
+  changes the document height, which is precisely the scroll-clamp case where
+  a row slides under a parked cursor (see the `hoverEnabled` paragraphs
+  below).
+- **The failure is carried by a word + a `⚠` glyph** (`problemMark`:
+  "mislukt" for a failed run, "overgeslagen" for a mirrored log line, since
+  every `logf` call site reports work that was skipped) — the rose tint is
+  decoration on top, never the sole carrier (colourblind rule, see
+  `conventions.md`).
+- Every branch of the content slot returns a **keyed array with its own key**
+  (`problems:closed`/`:loading`/`:empty`/`:list`), the same single↔array +
+  reused-keyed-node discipline `recentDrawer` already documents.
+- The Workflow-Type → Dutch label map moved to a small shared
+  **`src/workflowLabels.mjs`** (`WORKFLOW_LABELS`/`labelForWorkflow`), imported
+  by both this page and `RelatedPanel.mjs`'s "Taken" card — the overview must
+  not import `RelatedPanel.mjs` itself (that module carries the whole
+  review-tree state: comment cursors, url-state bindings, watches).
+  `STATUS_BADGES`/`WORKFLOW_STATUS_NOTE` stayed behind: they describe runs
+  still in progress, while this block only ever shows runs that already failed.
+
+**Not in v1, deliberately:** the rows aren't clickable (a click target would
+make them navigation elements, with the keyboard/popover consequences above),
+and there is no dismiss/retry — dismissing a log line is meaningless when a
+restart already clears the buffer, and "retry" means something different per
+workflow type. Test: `tests/overview-problems.spec.mjs` (the populated
+rendering is driven through `page.route`: every reachable failure path is
+either best-effort or depends on a live gh hiccup, so provoking a real one in a
+worker isn't deterministic — what the backend reports is covered by
+`run_errors_test.go` instead).
+
 ### GitHub access runs through a workflow (never direct)
 
 **The page never calls GitHub itself.** The PR list is fetched and managed by
@@ -225,6 +296,7 @@ call) as before.
 | `GET /api/reviewers` | Read-only candidate reviewers → `{ok, reviewers:[{login,avatarUrl,count}]}` — repo collaborators sorted most-used-first (local usage counts). |
 | `GET /api/names?logins=a,b` | Read-only: the human name + avatar behind a GitHub login → `{ok, names:{login:{name,avatarUrl}}}`. See "Real names instead of logins" below. |
 | `POST /api/workflows/ready_for_review` | `{pr, reviewers?}` → flip a draft PR to ready + request reviewers (the sanctioned write path). 400 on an invalid pr/login. |
+| `GET /api/problems` | Read-only → `{ok, failedRuns:[{runId,workflow,pr,updatedAt,error}], logErrors:[{at,scope,pr,message}]}` — failed workflow runs (repo-wide, from the tembed store) + the mirrored glue log lines (in-memory, reset on restart). Feeds the "Mislukte taken" block. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 
 ### Real names instead of logins (`/api/names` + the row's author column)

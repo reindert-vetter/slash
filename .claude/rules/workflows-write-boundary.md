@@ -46,6 +46,15 @@ for the "Generate review tree"/"Regenerate" button (`src/overview.mjs`,
 polled while `POST /api/ingest` is in flight) and is lost on a restart, just
 like the heartbeat timing.
 
+Third example: the failure buffer behind `GET /api/problems`
+(`run_errors.go`) — an in-memory ring buffer that mirrors the glue log lines
+(`TaskManager.logf`, the tembed engine's own logger) so a poller/startup error
+reaches the UI instead of only the terminal. No module, no read-model, no
+workflow-history write, and it resets on a restart. The other half of that same
+endpoint — the failed **workflow runs** — is a plain read of the tembed store,
+so it needs no carve-out at all. Making either of them durable would have to go
+through a workflow.
+
 ## Why
 
 The workflow event history is the **source of truth**: durable, replayable,
