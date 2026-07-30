@@ -786,6 +786,34 @@
   Related rule of thumb: **give a spec that seeds comments its own synthetic
   PR number** (the `97xxxx` range) rather than sharing one — a shared number
   makes any exact comment-count assertion order-dependent.
+- **The `97xxxx` range (and the small single-digit/90-109 fixture PR numbers)
+  is reserved for Playwright fixtures — never reuse one for manual/ad-hoc
+  testing against the live server** (`./slash-bin`/`.claude/scripts/
+  restart-server.sh`, which deliberately runs with no `-db`/`-data` override
+  and therefore reads/writes the real `data/` tree). Two synthetic PRs
+  (`970099`, `970001`) once ended up there this way: `970099` via real
+  `POST /api/workflows/...` calls made straight against the live server while
+  reproducing a comment-thread scenario, `970001` via a bare
+  `slash seed -comments <fixture>` run from the repo root without `-db`
+  (falling back to the default `data/graph.db`, see `dbPath` in `main.go`).
+  Neither PR exists on GitHub, so every subsequent server start logged
+  repeated `gh api .../pulls/970099/comments: exit status 1`-style noise from
+  `pr_status`'s ingest-refresh check and the comment importer, forever. Fixed
+  once via `slash cleanup -force 970099,970001` (see "Daily data cleanup" in
+  `tembed-workflows.md`); prevented going forward by requiring `slash seed`'s
+  `-db` flag (no silent fallback to the live tree — see below) — but a
+  manual `curl`/browser session against the live server can still start a
+  real workflow for any PR number you type in, so: **use a number nobody else
+  is depending on and that is obviously not a real PR** when reproducing
+  something by hand, not one already claimed by a fixture.
+- **`slash seed` requires `-db` explicitly — no silent fallback to
+  `SLASH_DB`/the default `data/graph.db`.** `seed` is a test/fixture-only
+  tool (every legitimate call site, `tests/_fixtures.mjs`, already passes
+  `-db <worker-db>`); running it bare from the repo root used to silently
+  write straight into the live tree (see the `970001` incident above). `slash
+  ingest`/`slash relations`/the server itself keep their existing
+  `-db`-optional-with-a-default behavior unchanged — only `seed` was
+  tightened, since defaulting to live data is never actually intended there.
 - **The harness always forces offline, regardless of the shell environment:**
   the worker fixture (`tests/_fixtures.mjs`) starts every server with
   **both `SLASH_GITHUB=off` and `SLASH_CLAUDE=off`** hardcoded in the

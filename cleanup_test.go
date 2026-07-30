@@ -97,6 +97,45 @@ func TestResolveCleanupTargets(t *testing.T) {
 	}
 }
 
+// ForcePRs bypasses the GitHub-merged/age gate entirely for the named PRs —
+// needed for a PR that can never pass it at all (no real GitHub PR to look
+// up, e.g. a synthetic/test PR number), while ordinary candidates still go
+// through the normal gate, and a PR that's both a forced target AND an
+// ordinary candidate is never added twice.
+func TestResolveCleanupTargetsForcePRs(t *testing.T) {
+	dataDir := t.TempDir()
+	db := seedGraphDB(t, 1)
+	gh := &github.Fake{}
+	now := time.Date(2024, 1, 20, 0, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-cleanupMergedAge)
+	// PR 1: merged well before the cutoff -> would be eligible via the
+	// ordinary gate too, and is also force-named — must still only appear
+	// once. PR 970099: no real GitHub PR at all (the Fake reports the
+	// zero-value Meta{}, i.e. "never merged" — mirroring a real gh lookup
+	// that would simply fail), so it can never pass the ordinary gate.
+	gh.SetPRMetaFor(1, github.Meta{MergedAt: cutoff.Add(-48 * time.Hour).Format(time.RFC3339)})
+
+	targets, err := resolveCleanupTargets(context.Background(), gh, db, dataDir, CleanupInput{
+		Cutoff: cutoff, ForcePRs: []int{1, 970099},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int]int{}
+	for _, target := range targets.Targets {
+		seen[target.PR]++
+	}
+	if seen[1] != 1 {
+		t.Fatalf("pr 1 appears %d times, want exactly 1 (forced + ordinary candidate must not double up)", seen[1])
+	}
+	if seen[970099] != 1 {
+		t.Fatalf("pr 970099 appears %d times, want exactly 1 (forced despite failing the ordinary gate)", seen[970099])
+	}
+	if len(targets.Targets) != 2 {
+		t.Fatalf("targets = %+v, want exactly 2", targets.Targets)
+	}
+}
+
 // cleanupTestManager builds a TaskManager with every module the cleanup
 // workflow touches wired up (all backed by throwaway on-disk SQLite files, so
 // Purge's real DELETE statements run against a real schema).

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"slash/modules/callresolve"
 	"slash/modules/comments"
@@ -29,6 +31,9 @@ func main() {
 			return
 		case "relations":
 			runRelationsCmd(os.Args[2:])
+			return
+		case "cleanup":
+			runCleanupCmd(os.Args[2:])
 			return
 		}
 	}
@@ -231,6 +236,65 @@ func runRelationsCmd(args []string) {
 	}
 }
 
+// runCleanupCmd runs the cleanup workflow headless:
+// `slash cleanup [-db path] [-force pr1,pr2,...]`. Without -force it's exactly
+// the same, ordinary pass the daily scheduler already runs (only really
+// merged, >cleanupMergedAge-old PRs). With -force it purges each named PR's
+// data unconditionally (see CleanupInput.ForcePRs) — the one-off maintenance
+// tool for a PR whose data can never satisfy the GitHub-merged gate at all
+// (e.g. a synthetic/test PR number that accidentally landed in a live data
+// tree via a manual/ad-hoc write outside the Playwright harness — see
+// "Playwright test infra" in .claude/rules/conventions.md).
+func runCleanupCmd(args []string) {
+	fs := flag.NewFlagSet("cleanup", flag.ExitOnError)
+	dbFlag := fs.String("db", "", "path to the SQLite DB (or SLASH_DB env)")
+	forceFlag := fs.String("force", "", "comma-separated PR numbers to purge unconditionally, bypassing the GitHub-merged check")
+	_ = fs.Parse(args)
+
+	var forcePRs []int
+	if *forceFlag != "" {
+		for _, s := range strings.Split(*forceFlag, ",") {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			pr, err := strconv.Atoi(s)
+			if err != nil || pr <= 0 {
+				log.Fatalf("invalid -force pr: %q", s)
+			}
+			forcePRs = append(forcePRs, pr)
+		}
+	}
+
+	ensureEnvSetup()
+	resolvedDB := dbPath(*dbFlag)
+	db, err := openDB(resolvedDB)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	dataDir := filepath.Dir(resolvedDB)
+	tk, closeTasks, err := newTasks(context.Background(), db, dataDir, repoSlug, false)
+	if err != nil {
+		log.Fatalf("init workflows: %v", err)
+	}
+	defer closeTasks()
+
+	ctx := context.Background()
+	var res *CleanupResult
+	if len(forcePRs) > 0 {
+		res, err = tk.manager.StartCleanupForce(ctx, forcePRs)
+	} else {
+		res, err = tk.manager.StartCleanup(ctx)
+	}
+	if err != nil {
+		log.Fatalf("cleanup: %v", err)
+	}
+	out, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Println(string(out))
+}
+
 // runSeedCmd loads blocks from a JSON fixture into a DB (no network) for tests:
 // `slash seed -db <path> -from <blocks.json>`.
 func runSeedCmd(args []string) {
@@ -244,6 +308,14 @@ func runSeedCmd(args []string) {
 	cmFrom := fs.String("comments", "", "optional path to a comments JSON fixture (seeded into comments.db)")
 	_ = fs.Parse(args)
 
+	// -db is deliberately required (not merely documented) — seed is a
+	// test/fixture-only tool, and silently falling back to SLASH_DB/the
+	// default data/graph.db would write test data straight into the live
+	// tree. This is exactly how a synthetic PR (970001) once ended up there:
+	// see "Playwright test infra" in .claude/rules/conventions.md.
+	if *dbFlag == "" {
+		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>] [-callresolve <callresolve.json>] [-testcovers <testcovers.json>] [-explanations <explanations.json>] [-comments <comments.json>] (-db is required)")
+	}
 	if *from == "" {
 		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>] [-callresolve <callresolve.json>] [-testcovers <testcovers.json>] [-explanations <explanations.json>] [-comments <comments.json>]")
 	}

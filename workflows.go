@@ -1785,7 +1785,21 @@ func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 // POST /api/workflows/cleanup endpoint and the daily scheduler (see
 // StartCleanupScheduler in tasks_api.go).
 func (m *TaskManager) StartCleanup(ctx context.Context) (*CleanupResult, error) {
-	runID, err := m.engine.StartWorkflow(WorkflowCleanup, CleanupInput{})
+	return m.startCleanup(ctx, CleanupInput{})
+}
+
+// StartCleanupForce runs the cleanup Workflow Execution with an explicit
+// ForcePRs override (see CleanupInput.ForcePRs) — purging each named PR's
+// data unconditionally, regardless of what GitHub reports (or whether the PR
+// exists on GitHub at all). Used only by the `slash cleanup -force <pr,...>`
+// CLI command: deliberately not reachable via POST /api/workflows/cleanup, so
+// there is no standing HTTP endpoint that can force-purge an arbitrary PR.
+func (m *TaskManager) StartCleanupForce(ctx context.Context, forcePRs []int) (*CleanupResult, error) {
+	return m.startCleanup(ctx, CleanupInput{ForcePRs: forcePRs})
+}
+
+func (m *TaskManager) startCleanup(ctx context.Context, in CleanupInput) (*CleanupResult, error) {
+	runID, err := m.engine.StartWorkflow(WorkflowCleanup, in)
 	if err != nil {
 		return nil, err
 	}
@@ -3351,11 +3365,25 @@ func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
 			m.avatarTried[runID] = true
 			m.mu.Unlock()
 			if !tried && in.AvatarURL != "" && avatarMissing[runID] {
-				if err := m.Signal(runID, ReactionSignal{
-					ID: "sys-" + newUIReactionID(), Source: "github",
-					Action: "avatar", AvatarURL: in.AvatarURL,
-				}); err != nil {
-					m.logf("import comments: avatar backfill run=%s: %v", runID, err)
+				// A terminal (failed/completed) run can never accept a Signal
+				// again (see engine.SignalWorkflow's own "already failed/
+				// completed" check) — check the status first instead of
+				// discovering that the hard way and logging the same
+				// deterministic error on every server restart forever
+				// (avatarTried above only dedups within one process, so it
+				// doesn't survive a restart on its own).
+				switch status, err := m.engine.Status(runID); {
+				case err != nil:
+					m.logf("import comments: avatar backfill run=%s: status: %v", runID, err)
+				case status == tembed.StatusFailed || status == tembed.StatusCompleted:
+					// Nothing to do — not an error, just permanently unreachable.
+				default:
+					if err := m.Signal(runID, ReactionSignal{
+						ID: "sys-" + newUIReactionID(), Source: "github",
+						Action: "avatar", AvatarURL: in.AvatarURL,
+					}); err != nil {
+						m.logf("import comments: avatar backfill run=%s: %v", runID, err)
+					}
 				}
 			}
 			continue

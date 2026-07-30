@@ -76,6 +76,16 @@ var retiredWorkflowTypes = map[string]bool{
 // explicitly (e.g. by a test) to pin a specific point in time.
 type CleanupInput struct {
 	Cutoff time.Time `json:"cutoff"`
+	// ForcePRs is a deliberate, explicitly-named override: each of these PR
+	// numbers is purged unconditionally, bypassing the GitHub-merged/age gate
+	// resolveCleanupTargets otherwise applies. Needed for a PR that can never
+	// pass that gate at all — e.g. a synthetic/test PR number (no real PR to
+	// look up, so gh.PRMeta always fails) that accidentally ended up in a live
+	// data tree. Never populated automatically (the daily scheduler always
+	// starts a bare CleanupInput{}) — only via the `slash cleanup -force
+	// <pr,...>` CLI command, deliberately not exposed over HTTP, so there is
+	// no standing endpoint that can force-purge an arbitrary PR.
+	ForcePRs []int `json:"forcePRs,omitempty"`
 }
 
 // CleanupTarget is one PR the cleanup workflow decided to purge: merged, and
@@ -193,11 +203,27 @@ func cleanupCandidatePRs(db *sql.DB, dataDir string) ([]int, error) {
 // it's certain about.
 func resolveCleanupTargets(ctx context.Context, gh github.Client, db *sql.DB, dataDir string, in CleanupInput) (CleanupTargets, error) {
 	res := CleanupTargets{Cutoff: in.Cutoff}
+
+	// Forced PRs are added unconditionally, before the ordinary candidates are
+	// even looked up — no gh.PRMeta call for them at all (a synthetic PR number
+	// has no real GitHub PR to look up, so that call would just fail anyway).
+	forced := map[int]bool{}
+	for _, pr := range in.ForcePRs {
+		if pr <= 0 || forced[pr] {
+			continue
+		}
+		forced[pr] = true
+		res.Targets = append(res.Targets, CleanupTarget{PR: pr})
+	}
+
 	prs, err := cleanupCandidatePRs(db, dataDir)
 	if err != nil {
 		return res, fmt.Errorf("candidate prs: %w", err)
 	}
 	for _, pr := range prs {
+		if forced[pr] {
+			continue // already added above, unconditionally
+		}
 		meta, err := gh.PRMeta(ctx, pr)
 		if err != nil {
 			log.Printf("cleanup: pr %d: PRMeta failed, skipping: %v", pr, err)

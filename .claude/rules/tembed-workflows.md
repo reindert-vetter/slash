@@ -769,6 +769,19 @@ GitHub, GitHub replies get polled in), instead of read-only copies.
   count"). Restart → poller re-signals all replies → no double counting.
   This same contract makes the `StartWorkflowID` dedup and the `seen`
   reset together restart-safe; keep it intact.
+- **The avatar-backfill glue (`importPRComments`, the "Comments already in
+  the read-model whose avatar column is still empty" branch) checks the
+  run's `engine.Status` BEFORE attempting the "avatar" Signal, and skips
+  silently once it's `failed`/`completed`.** A terminal run can never accept
+  a Signal again (`engine.SignalWorkflow`'s own `"already failed"`/
+  `"already completed"` error) — without this check, a thread whose
+  Execution had permanently failed (e.g. a `SQLITE_BUSY` hit during an
+  earlier `saveReaction`) kept being retried on every server restart
+  forever, logging the same deterministic `import comments: avatar
+  backfill run=...: tembed: run ... already failed` line each time
+  (`avatarTried` only dedups **within one process** — it's reset on every
+  restart, so it never actually stopped this). Test:
+  `TestImportSkipsAvatarBackfillOnFailedRun` (`comment_import_test.go`).
 - **Read model & frontend:** `comments.Comment` got `Source` (`ui`/`github`)
   + `Kind` columns (light `migrate`, `ALTER TABLE … ADD COLUMN`). `GET
   /api/comments?pr=N` serves the imported comments automatically — no new
@@ -2417,16 +2430,44 @@ mirroring `WorkflowIngest`/`WorkflowSubmitReview`.
 - **Endpoint:** `POST /api/workflows/cleanup` → `{cutoff, purged:[{pr,
   worktreesRemoved, workflowRunsDeleted, rowsDeleted}], retiredRunsDeleted}`
   (`handleCleanup`, added to the reserved-names guard in `handleWorkflows`
-  alongside the other signal-less Workflow Types).
+  alongside the other signal-less Workflow Types). This endpoint never
+  accepts a request body — see the CLI-only force-purge override below for
+  why.
+- **`CleanupInput.ForcePRs []int` — a deliberate, CLI-only override to purge
+  specific PR numbers unconditionally, bypassing the GitHub-merged/age gate
+  entirely for them.** Motivation: a PR that can never pass
+  `resolveCleanupTargets`'s gate at all — there is no real GitHub PR to look
+  up, so `gh.PRMeta` simply fails (or, offline, reports "never merged") —
+  would otherwise sit in the live tree forever, e.g. a synthetic/test PR
+  number that accidentally landed there via a manual/ad-hoc write outside the
+  Playwright harness (see "Playwright test infra" in
+  `.claude/rules/conventions.md` for exactly how `970099`/`970001` got there
+  once). `resolveCleanupTargets` adds each `ForcePRs` entry directly to
+  `CleanupTargets.Targets` (`CleanupTarget{PR: n}`, no `MergedAt` — never
+  even calling `gh.PRMeta` for it) **before** walking the ordinary
+  `cleanupCandidatePRs` list, and skips a forced PR there too so it's never
+  added twice even if it also happens to be a genuine candidate.
+  `TaskManager.StartCleanupForce(ctx, forcePRs)` (a thin wrapper around the
+  same internal `startCleanup` helper `StartCleanup` itself now calls) is
+  the only way to set it — **deliberately not exposed over HTTP**, only via
+  the CLI: `slash cleanup [-db path] -force <pr1,pr2,...>` (`runCleanupCmd`,
+  `main.go` — without `-force` it's the exact same ordinary pass the daily
+  scheduler already runs). This keeps the sanctioned write path (the
+  `cleanup` workflow's existing `purgePR`/`purgeRetiredWorkflowRuns`
+  Activities, entirely unchanged) while never adding a standing, always-
+  reachable HTTP endpoint that can force-purge an arbitrary PR's data on a
+  whim.
 - Tests: `cleanup_test.go` (`TestResolveCleanupTargets` — candidate
   discovery via the blocks table *and* bare worktree dirs, and the four
   eligibility branches: merged-old/merged-recent/open/unparsable;
-  `TestPurgePRRemovesEverything` — seeds one row in every read-model plus a
-  worktree pair plus a per-PR **and** a per-repo workflow run, then asserts
-  everything PR-scoped is gone and the per-repo tracker survives;
-  `TestCleanupSkipsRecentMerge`; `TestCleanupNeverTouchesOpenPR`;
-  `TestCleanupIdempotent` — a second same-day run is a no-op;
-  `TestCleanupPurgesRetiredWorkflowRuns` — a simulated orphaned `"ignore"`
-  run is deleted and its count reported, while a current per-repo tracker
-  survives the same pass). Entirely offline (`github.Fake`), no real
-  gh/network call.
+  `TestResolveCleanupTargetsForcePRs` — a forced PR with no real GitHub PR
+  is included despite failing the ordinary gate, an ordinary candidate that
+  is ALSO forced is never added twice; `TestPurgePRRemovesEverything` —
+  seeds one row in every read-model plus a worktree pair plus a per-PR
+  **and** a per-repo workflow run, then asserts everything PR-scoped is gone
+  and the per-repo tracker survives; `TestCleanupSkipsRecentMerge`;
+  `TestCleanupNeverTouchesOpenPR`; `TestCleanupIdempotent` — a second
+  same-day run is a no-op; `TestCleanupPurgesRetiredWorkflowRuns` — a
+  simulated orphaned `"ignore"` run is deleted and its count reported, while
+  a current per-repo tracker survives the same pass). Entirely offline
+  (`github.Fake`), no real gh/network call.

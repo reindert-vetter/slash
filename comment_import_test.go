@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -431,4 +433,68 @@ func TestResumePollingImportedThread(t *testing.T) {
 		l, _ := cs.List(ctx, 42)
 		return len(l) == 1 && l[0].ID == runID && l[0].ReactionCount == 1
 	})
+}
+
+// A thread whose Execution has permanently failed (e.g. a SQLITE_BUSY hit
+// during an earlier saveReaction — see the cleanup section in
+// .claude/rules/tembed-workflows.md) can never accept a Signal again
+// (engine.SignalWorkflow's own "already failed" check). importPRComments'
+// avatar-backfill glue must check the run's status BEFORE attempting the
+// Signal instead of discovering that the hard way and logging the same
+// deterministic error on every poll/server restart forever.
+func TestImportSkipsAvatarBackfillOnFailedRun(t *testing.T) {
+	t.Setenv("SLASH_GITHUB", "off")
+	store := tembed.NewMemoryStore()
+	cs, err := comments.Open(filepath.Join(t.TempDir(), "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	gh := &github.Fake{}
+	engine := tembed.New(store)
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m.interval = 3 * time.Millisecond
+	m.idle = 3 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+	const humanAvatar = "https://avatars.githubusercontent.com/u/9999?v=4"
+
+	in := CodeCommentInput{
+		PR: pr, File: "src/Order.php", Line: 10, Label: "Order::total", Gran: "line",
+		Author: "colleague", Body: "imported root", Side: "RIGHT",
+		RowStart: 1, RowEnd: 1, Source: "github", ImportedRootID: 700,
+	}
+	runID, err := m.engine.StartWorkflowID(importedRunID(700), WorkflowTaskCodeComment, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force the run into the same terminal state a real SQLITE_BUSY failure
+	// during a later saveReaction leaves behind.
+	if err := store.SetStatus(runID, tembed.StatusFailed, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs []string
+	m.logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+
+	// The stored comment's avatar column is still empty (never threaded
+	// through at import time) and the live GitHub comment now carries one —
+	// exactly the combination that used to trigger the backfill Signal.
+	gh.SetGeneralComments([]github.GeneralComment{
+		{ID: 700, Author: "colleague", AvatarURL: humanAvatar, Body: "imported root", Kind: "issue"},
+	})
+	m.importPRComments(ctx, pr)
+
+	for _, l := range logs {
+		if strings.Contains(l, "avatar backfill") {
+			t.Fatalf("expected no avatar-backfill log noise for a terminal run, got: %q", l)
+		}
+	}
+	list, _ := cs.List(ctx, pr)
+	for _, c := range list {
+		if c.ID == runID && c.AvatarURL == humanAvatar {
+			t.Fatalf("avatar was backfilled onto a permanently-failed run, want left untouched")
+		}
+	}
 }
