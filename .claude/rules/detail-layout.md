@@ -342,9 +342,27 @@ bound can catch — only re-anchoring can. Same reasoning applies to
   dedicated branch in `onKeydown`, checked **before** the generic
   block-palette Enter handling — a comment item has no diff, so Enter should
   never reach the block `COMMANDS`. Enter opens: **"Sluit menu"**
-  (pinned, per the `withClose` convention) then **"Beantwoorden"** (the
-  first real item, thus default-selected via `defaultSel`) then **"Resolve
-  comment"** then **"Ignore"**. Because selection alone already shows the detail card/thread
+  (pinned, per the `withClose` convention) then **"Beantwoorden"** and
+  **"Resolve comment"**, in an order that depends on `isOwnComment(c)`
+  (`home.mjs`) — for the reviewer's **own** comment (placed in this app, i.e.
+  `!c.source || c.source === 'ui'` — an in-app comment stores no explicit
+  Source at all, see `CodeCommentInput`'s own doc comment in `workflows.go`
+  and the `c.source || 'ui'` normalization elsewhere in this file — or
+  placed by the reviewer directly on GitHub and later imported,
+  `c.source === 'github'` + `c.author === meLogin()`, see `avatar.mjs`)
+  **"Resolve comment"** comes first and is thus the default-selected item
+  (`defaultSel`); for anyone else's comment **"Beantwoorden"** stays
+  first/default, as before. Both items are always present, only the
+  order/default changes — this can never collide with the "Comment hiervan
+  maken" branch below, since an AI finding (`source === 'ai'`) is never "own".
+  `isOwnComment`'s github+`meLogin()` branch has no Playwright coverage: the
+  offline harness has no seed hook for the current user (`GET /api/me` always
+  answers `{ok:false}` there), so `meLogin()` is always `''` in every test run
+  — a separate, small task if that coverage is ever needed. Then, optionally,
+  **"Comment hiervan maken"** (only for an AI-authored finding, see
+  "Converting an AI-controle finding into a real comment" further above) and
+  finally **"Ignore"**.
+  Because selection alone already shows the detail card/thread
   in the block column (previous bullet), "the menu appears with the thread
   above it" is simply a consequence of anchoring the menu there
   (`menuAnchor`/`menuRegion`'s new `ms.mode === 'prComment'` branches target

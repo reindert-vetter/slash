@@ -185,10 +185,18 @@ be the case; changed on explicit request so `→` on a comment item mirrors
 menu). `Enter` (`ms.mode = 'prComment'`, `prCommentCommandsFor` in
 `home.mjs`) — `selectedComment()` gates a dedicated branch checked **before**
 the generic Enter-opens-menu handling. The menu: **"Sluit menu"** (pinned) →
-**"Beantwoorden"** (the default-selected 2nd item) → **"Resolve comment"** →
-optionally **"Comment hiervan maken"** (only when the item's own
-`source === 'ai'` — a `code_warning` finding, see "Converting an AI-controle
-finding into a real comment" in `detail-layout.md`) →
+then **"Beantwoorden"** and **"Resolve comment"**, in an order that depends on
+`isOwnComment(c)` (`home.mjs`): for the reviewer's **own** comment — placed in
+this app (`!c.source || c.source === 'ui'`), or placed by the reviewer
+directly on GitHub and later imported (`c.source === 'github'` +
+`c.author === meLogin()`, see `avatar.mjs`) — **"Resolve comment"** comes
+first (thus the default-selected 2nd item); for anyone else's comment
+**"Beantwoorden"** stays first/default, as before. Both items are **always**
+present, only their order (and thus the default) changes → optionally
+**"Comment hiervan maken"** (only when the item's own `source === 'ai'` — a
+`code_warning` finding, see "Converting an AI-controle finding into a real
+comment" in `detail-layout.md` — never true at the same time as "own", so this
+never collides with the reordering above) →
 **"Ignore"** ("Ignore ongedaan maken" once already ignored —
 `toggleIgnoreComment`, an ephemeral, purely client-side sidebar-visibility
 flag, **not** a persisted Signal like reply/resolve/delete; see

@@ -72,6 +72,7 @@ import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
+import { meLogin } from './avatar.mjs'
 
 initTheme()
 
@@ -3831,7 +3832,12 @@ function defaultSel(list) {
 // (RelatedPanel.mjs) and the reply-loop's resolveGithubThread Activity
 // (workflows.go). "Sluit menu" is pinned first (withClose); the menu opens on
 // the 2nd item (defaultSel), so "Resolve comment" stays the default Enter
-// action.
+// action. This is already true regardless of who wrote the comment — unlike
+// prCommentCommandsFor below, this menu has no "Beantwoorden" item to reorder
+// (a block-scoped comment's reply field is always visible and typed into
+// directly; this menu only ever opens once that field is empty, see
+// commentReplyEmpty/isCommentFocused in RelatedPanel.mjs), so isOwnComment
+// (see prCommentCommandsFor) doesn't apply here.
 //
 // "Open op GitHub" is appended at the bottom, ONLY when the focused comment
 // actually has a GitHub anchor (focusedCommentGithubId() — a local/private
@@ -3889,18 +3895,54 @@ function commentCommandsFor() {
   return withClose(items)
 }
 
+// isOwnComment reports whether `c` (a raw comment row, e.g. selectedComment()
+// or focusedComment()) was written by the current reviewer — either placed IN
+// THIS APP (an in-app comment stores no explicit Source at all: createComment
+// in RelatedPanel.mjs sends no `source` field, so it's stored as the Go
+// zero-value "" and then OMITTED from the JSON response entirely via
+// `json:"source,omitempty"` on comments.Comment — so `c.source` is `undefined`
+// for a normal own comment, not the string 'ui'; this mirrors the `c.source ||
+// 'ui'` normalization already used elsewhere, e.g. threadMessages/
+// commentActivitySummary in RelatedPanel.mjs) OR placed BY THE REVIEWER
+// DIRECTLY ON GITHUB and later imported (source 'github' + author ===
+// meLogin(), see avatar.mjs). meLogin() is '' until ensureMe() resolves
+// (awaited before cs.list is ever populated, see loadComments in
+// RelatedPanel.mjs) — until then a github-sourced comment simply counts as
+// "not mine", same as any other unresolved/offline lookup. Deliberately
+// excludes `source === 'ai'` (a code_warning finding, author "AI check") —
+// that's disjoint from both cases above, so there's no overlap with the
+// "Comment hiervan maken" branch below.
+//
+// NOTE for whoever tests this: the github+meLogin() branch can't currently be
+// exercised in the Playwright harness — there is no seed hook (unlike e.g.
+// SLASH_JIRA_ASSIGNED for jira.Fake) to give the offline github.Fake a
+// current user, so GET /api/me always answers {ok:false} there and meLogin()
+// is always ''. Adding such a hook is a separate, small task if ever needed;
+// this branch is exercised by reasoning/code review, not by an automated
+// test.
+function isOwnComment(c) {
+  if (!c) return false
+  if (!c.source || c.source === 'ui') return true
+  return c.source === 'github' && !!meLogin() && c.author === meLogin()
+}
+
 // prCommentCommandsFor builds the small action menu for a selected
 // comment-index item (Enter on a sidebar row with kind:'comment' — see
 // selectedComment/recomputeLeftList; → instead steps into the item's own
-// thread, see enterPrCommentThread in RelatedPanel.mjs). "Beantwoorden" is deliberately the
-// FIRST real item (default-selected, see defaultSel/withClose) — it only
-// reveals the reply textarea in the detail card to the right of the index
-// (startPrCommentReply, RelatedPanel.mjs); the reviewer then types and sends
-// from there, not from this menu. "Resolve comment" resolves the thread via
-// the existing reply Signal (done:true, RelatedPanel.mjs's
-// resolvePrCommentItem) — the same write path as the block-scoped "Resolve
-// comment" command above, just against this item's own comment instead of
-// cs's selected one.
+// thread, see enterPrCommentThread in RelatedPanel.mjs). The order of the two
+// core items — "Beantwoorden" and "Resolve comment" — depends on
+// isOwnComment(c): for the reviewer's OWN comment, "Resolve comment" comes
+// first (and is thus the default-selected item, see defaultSel/withClose) —
+// on your own comment, resolving is the more likely first action; for
+// anyone else's comment "Beantwoorden" stays first/default, as before. Both
+// items are ALWAYS present regardless of ownership, just reordered.
+// "Beantwoorden" only reveals the reply textarea in the detail card to the
+// right of the index (startPrCommentReply, RelatedPanel.mjs); the reviewer
+// then types and sends from there, not from this menu. "Resolve comment"
+// resolves the thread via the existing reply Signal (done:true,
+// RelatedPanel.mjs's resolvePrCommentItem) — the same write path as the
+// block-scoped "Resolve comment" command above, just against this item's own
+// comment instead of cs's selected one.
 //
 // "Comment hiervan maken" — the PR-wide (unanchored) equivalent of
 // commentCommandsFor's own item above — only appears for an AI-authored
@@ -3909,27 +3951,27 @@ function commentCommandsFor() {
 // convertPrWideWarningToComment, RelatedPanel.mjs): sending posts a brand-new
 // PR-wide comment (Kind "issue", no file/line — there is none to reuse for a
 // finding that couldn't be pinned to a block) and only then deletes this
-// finding. Placed right after "Resolve comment", not first — "Beantwoorden"
-// stays the default Enter action here too.
+// finding. Placed right after the two core items (never first) — an AI
+// finding is never "own" (isOwnComment excludes source 'ai'), so this can
+// never collide with the reordering above.
 function prCommentCommandsFor() {
-  const items = [
-    {
-      id: 'pr-comment-reply',
-      label: 'Beantwoorden',
-      hint: 'reply',
-      run: () => startPrCommentReply(selectedComment()),
-    },
-    {
-      id: 'pr-comment-resolve',
-      label: 'Resolve comment',
-      hint: 'resolve',
-      run: () => {
-        const c = selectedComment()
-        if (c) resolvePrCommentItem(c)
-      },
-    },
-  ]
   const c = selectedComment()
+  const replyItem = {
+    id: 'pr-comment-reply',
+    label: 'Beantwoorden',
+    hint: 'reply',
+    run: () => startPrCommentReply(selectedComment()),
+  }
+  const resolveItem = {
+    id: 'pr-comment-resolve',
+    label: 'Resolve comment',
+    hint: 'resolve',
+    run: () => {
+      const c = selectedComment()
+      if (c) resolvePrCommentItem(c)
+    },
+  }
+  const items = isOwnComment(c) ? [resolveItem, replyItem] : [replyItem, resolveItem]
   if (c && c.source === 'ai') {
     items.push({
       id: 'pr-comment-from-warning',

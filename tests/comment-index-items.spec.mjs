@@ -147,6 +147,60 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(menu).toHaveCount(0)
   })
 
+  // On the reviewer's OWN comment — placed in this app, so it carries no
+  // explicit `source` at all (a real in-app comment is never posted with
+  // `source: 'ui'`, see isOwnComment/CodeCommentInput's own doc comment) —
+  // "Resolve comment" becomes the default-selected FIRST real item instead of
+  // "Beantwoorden", while "Beantwoorden" stays in the menu (just second). See
+  // isOwnComment/prCommentCommandsFor (home.mjs) and detail-layout.md
+  // ("Comment-index items").
+  test('Enter on my OWN comment default-selects "Resolve comment" first; "Beantwoorden" stays available', async ({
+    page,
+  }) => {
+    const now = new Date().toISOString()
+    await page.route('**/api/comments?*', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'own-1',
+            runId: 'run-own-1',
+            pr: 12903,
+            file: '',
+            line: 0,
+            author: 'reviewer',
+            body: 'a note I left myself on the whole PR',
+            createdAt: now,
+            reactionCount: 0,
+            status: 'open',
+            // No `source` field at all — an in-app comment stores none (see
+            // isOwnComment's doc comment in home.mjs).
+            kind: 'issue',
+            reactions: [],
+            rowStart: -1,
+            rowEnd: -1,
+          },
+        ]),
+      }),
+    )
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    const rows = menu.getByTestId('command-row')
+    // "Sluit menu", "Resolve comment" (now default, index 1), "Beantwoorden"
+    // (still present, index 2), "Ignore".
+    await expect(rows.nth(1)).toContainText('Resolve comment')
+    await expect(rows.nth(2)).toContainText('Beantwoorden')
+    await expect(rows.nth(1)).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+  })
+
   // → used to open the same action menu as Enter; changed on explicit request
   // so → mirrors an ordinary block (steps you INTO it) instead of opening a
   // menu — see enterPrCommentThread/isPrCommentThreadFocused/
