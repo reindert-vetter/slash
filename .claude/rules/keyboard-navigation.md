@@ -24,10 +24,17 @@ continuous chain of **stops**, from left to right across the whole layout:
      see "Grouping test methods per class" in `.claude/rules/detail-layout.md`)
      — deliberately NOT renumbered into the chain (stop 3 stays "stop 3"
      etc.) to avoid touching every reference below. `→` from stop 2 on such
-     a row lands here first (instead of stepping straight into the diff); a
+     a row lands here first (instead of stepping straight into the diff) and
+     **slides the pr-index away** (the same translate treatment as diff mode
+     — `BlockList.mjs`'s ternary checks `state.testColumnFocused` next to
+     `mode==='diff'`, and `<main>` shifts to `left-0` in lockstep); a
      **second** `→`/`Enter` then steps into stop 3, of the ACTIVE method
-     (`state.classMethodSel`, via `curBlock()`). `←` from stop 3 comes back
-     here first (not all the way to stop 2); a second `←` leaves it. `↑`/`↓`
+     (`state.classMethodSel`, via `curBlock()`) — the methodes-kolom itself
+     is **hidden in diff mode** (the render slot in `home.mjs` bails on
+     `state.mode === 'diff'`). `←` from stop 3 comes back
+     here first (not all the way to stop 2 — the column reappears, the
+     pr-index stays hidden); a second `←` leaves it (pr-index slides back,
+     the column stays visible as long as the class row is selected). `↑`/`↓`
      walk the class's own methods, flowing on to the next/previous
      `test_class` row at the edges. `f`/`d`/`s`/`a` are a no-op here, same as
      stop 1.

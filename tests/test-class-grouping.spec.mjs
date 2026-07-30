@@ -78,6 +78,41 @@ test.describe('test methods group per class', () => {
     await expect(page.getByTestId('pr-index')).toHaveClass(/border-indigo-300|dark:border-indigo-500/)
   })
 
+  test('→ slides the pr-index away; a second → hides the methodes-kolom; ← reverses both', async ({
+    page,
+  }) => {
+    await page.goto(`/pr/${PR}`)
+    await page.getByTestId('block-row').filter({ hasText: 'TriggersIndexTest' }).click()
+    const index = page.getByTestId('pr-index')
+    const column = page.getByTestId('test-methods-column')
+    await expect(index).not.toHaveClass(/pointer-events-none/)
+
+    // First →: focus onto the methodes-kolom — the pr-index slides fully away
+    // (same translate/opacity treatment as diff mode), while mode stays list.
+    await page.keyboard.press('ArrowRight')
+    await expect(page).not.toHaveURL(/mode=diff/)
+    await expect(index).toHaveClass(/pointer-events-none/)
+    await expect(column).toBeVisible()
+
+    // Second →: the active method's diff — the methodes-kolom disappears too.
+    await page.keyboard.press('ArrowRight')
+    await expect(page).toHaveURL(/mode=diff/)
+    await expect(column).toHaveCount(0)
+    await expect(index).toHaveClass(/pointer-events-none/)
+
+    // ← back from the diff: the methodes-kolom returns, the pr-index stays
+    // hidden (testColumnFocused survives the diff→list transition).
+    await page.keyboard.press('ArrowLeft')
+    await expect(page).not.toHaveURL(/mode=diff/)
+    await expect(column).toBeVisible()
+    await expect(index).toHaveClass(/pointer-events-none/)
+
+    // A second ← leaves the column: the pr-index slides back in.
+    await page.keyboard.press('ArrowLeft')
+    await expect(index).not.toHaveClass(/pointer-events-none/)
+    await expect(column).toBeVisible()
+  })
+
   test('↓ past the last method flows to the first method of the next class row', async ({ page }) => {
     await page.goto(`/pr/${PR}`)
     // SettingsStoreTest has exactly one method — the very first ↓ inside its

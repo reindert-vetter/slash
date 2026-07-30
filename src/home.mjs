@@ -7460,9 +7460,12 @@ function DetailPanel(state) {
         // scrollable width. Deliberately asymmetric with every other panel
         // (sidebar/footer/PrInfoPanel), which keep their own 1.5rem edge.
         'right-0 ' +
-        (state.mode === 'diff'
+        (state.mode === 'diff' || state.testColumnFocused
           ? // Flush to the left edge too, for the same reason — in diff mode
             // there's no sidebar to clear, so no reason to reserve a margin.
+            // Same while the methodes-kolom (stop 2b) owns the keyboard: the
+            // pr-index slides away then too (see BlockList.mjs's matching
+            // testColumnFocused branch), so <main> reclaims its space.
             'left-0'
           : // showDescription (list-mode only) pushes PrInfoPanel to left-6 and
             // slides the pr-index right by one column-width (40.5rem, see
@@ -7490,8 +7493,14 @@ function DetailPanel(state) {
         void state.focusLevel
         void state.classMethodSel
         void state.testColumnFocused
+        void state.mode
         const row = curTestClassRow()
-        if (!row || state.focusLevel !== 0) return []
+        // Hidden in diff mode: once → steps from the methodes-kolom into the
+        // active method's diff, this column slides out of the layout exactly
+        // like the pr-index does (testColumnFocused survives the transition,
+        // so ← from that diff brings it straight back — see
+        // keyboard-navigation.md, stop 2b).
+        if (!row || state.focusLevel !== 0 || state.mode === 'diff') return []
         return [TestMethodsColumn(state, row).key('testmethods:' + row.id)]
       }}
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="block-column">

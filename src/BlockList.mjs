@@ -82,8 +82,14 @@ export default function BlockList(state) {
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-200 dark:border-zinc-800 ring-1 ring-black/5') +
         ' ' +
-        (state.mode === 'diff'
-          ? '-translate-x-[28rem] opacity-0 pointer-events-none'
+        (state.mode === 'diff' || state.testColumnFocused
+          ? // Slides fully away in diff mode, and equally once the
+            // methodes-kolom (stop 2b) owns the keyboard in list mode —
+            // stepping right past this index hides it either way;
+            // testColumnFocused survives the diff→list transition, so ←
+            // from a method's diff lands on the methodes-kolom with this
+            // index still hidden, and only a second ← brings it back.
+            '-translate-x-[28rem] opacity-0 pointer-events-none'
           : // showDescription (stop 1, list-mode only) slides this pr-index one
             // column-width right so the PR-description panel can take its usual
             // left-6 spot instead of appearing after it — see PrInfoPanel/

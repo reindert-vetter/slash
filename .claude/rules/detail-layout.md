@@ -469,9 +469,17 @@ and the diff instead of replacing the diff card outright.
 - **The methodes-kolom is stop 2b of the left→right nav chain** (see
   `.claude/rules/keyboard-navigation.md`), rendered by
   `TestMethodsColumn.mjs` directly in `<main>`'s column flow, to the LEFT of
-  the diff card — **always visible as soon as a `test_class` row is
-  selected**, in both list and diff mode, next to the existing diff preview
-  (decision: no separate reveal-on-`→` step, unlike drilling). The
+  the diff card — **always visible in list mode as soon as a `test_class`
+  row is selected**, next to the existing diff preview (decision: no
+  separate reveal-on-`→` step, unlike drilling), but **hidden in diff
+  mode**: stepping `→` into the active method's diff removes the column
+  from the layout exactly like the pr-index slides away, and `←` from that
+  diff brings it straight back (`state.testColumnFocused` survives the
+  transition). Focusing the column with the first `→` also slides the
+  **pr-index** itself away (`BlockList.mjs`'s translate ternary gained a
+  `state.testColumnFocused` branch next to `mode==='diff'`, and `<main>`'s
+  left ternary in `home.mjs` moves to `left-0` in lockstep) — stepping
+  right past a column hides it, `←` reverses that one stop at a time. The
   look-ahead **preview** slot (the next sidebar row, dimmed) gets a small,
   non-interactive summary card instead (`testClassPreviewCard`, `home.mjs`)
   — the full, interactive column only ever renders for the row that's
