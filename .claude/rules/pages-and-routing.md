@@ -121,10 +121,14 @@ for the 60s poll. The ready-flow state lives on `ui` (`readyFor`/`reviewers`/
 `togglePopover`/`closePopover`. See the `ready_for_review` workflow +
 `modules/reviewerusage` in `.claude/rules/tembed-workflows.md`.
 
-Below both branches sit, unchanged, *Open on GitHub* / *Open Jira ticket*,
-followed by **"Copy GitHub URL"** (`data-testid=copy-url`,
-`navigator.clipboard.writeText(pr.url)` with brief "Copied!" feedback via the
-ephemeral `ui.copiedFor`).
+Below both branches sit, unchanged, *Open on GitHub* / *Open Jira ticket*
+(both with the `external-link` icon), followed by **"Copy GitHub URL"**
+(`data-testid=copy-url`, `navigator.clipboard.writeText(pr.url)` with brief
+"Copied!" feedback via the ephemeral `ui.copiedFor`) — this one gets its own
+**`copy`** icon (a distinct clipboard glyph, `ICON_PATHS.copy`) instead of
+reusing `external-link`, since it doesn't navigate anywhere; once copied, the
+icon itself also flips to a `check` alongside the "Gekopieerd!" text, mirroring
+`ingestIcon`'s own reactive icon swap.
 Because there's now never an `<a href="/pr/<id>">` in the row anymore — the
 navigation to the tree always runs through the menu choice "Open review
 tree" — there's also no separate hover-only regenerate button
@@ -570,19 +574,25 @@ call `paintSelection()` at all — the CSS-only `hover:bg-slate-100 …` tint on
 the colour of the *keyboard-style* selection ring a hover can trigger changed
 from emerald to indigo, via the exact same code path as an arrow-key step.
 
-**Colourblind-safe shape cue: an always-present `›` chevron (`selectMark()`),
-toggled between invisible and indigo — never added/removed — alongside the
-ring (`SELECT_MARK_ON`/`SELECT_MARK_OFF` in `paintSelection()`).** The
-ring+background tint alone is a colour-only signal; per the project's
-colourblind rule (never let colour alone carry state), every navigable row
-gets a fixed-width `data-testid=row-select-mark` glyph at its left edge
-(`rowInner`, right after the stack `connectorMark` and before `authorMark`
-for `prRow`; right before the sparkles icon for `recentItem`) that starts
-`text-transparent` and only gains `text-indigo-500 dark:text-indigo-400`
-once selected — mirrors `BlockList.mjs`'s own row `›` marker (same
-transparent↔coloured technique, same reasoning). Because the glyph is always
-in the DOM (only its text colour toggles, never its presence), row height
-never shifts between the wel/niet-geselecteerd states.
+**The earlier colourblind-safe shape cue — an always-present `›` chevron
+(`selectMark()`, toggled between invisible and indigo alongside the ring via
+`SELECT_MARK_ON`/`SELECT_MARK_OFF` in `paintSelection()`) has been REMOVED on
+explicit (Reindert's own) request.** It existed for exactly the reason the
+project's colourblind rule asks for (never let colour alone carry state):
+the ring+background tint alone is a colour-only signal, so every navigable
+row used to also carry a fixed-width `data-testid=row-select-mark` glyph at
+its left edge (`rowInner`, right after the stack `connectorMark` and before
+`authorMark` for `prRow`; right before the sparkles icon for `recentItem`)
+that started `text-transparent` and only gained
+`text-indigo-500 dark:text-indigo-400` once selected — mirroring
+`BlockList.mjs`'s own row `›` marker. **Consequence, stated explicitly so
+this stays a conscious trade-off and not a silent regression:** the selected
+row on `/pr-overview` now has **only** the indigo ring/background tint
+(`SELECT_RING_CLS`) as its selection signal — no non-colour shape cue remains
+here. `/pr/<id>`'s own sidebar (`BlockList.mjs`'s row `›` marker) is
+untouched and still carries its shape cue; this removal is scoped to the
+overview page only, and was a deliberate choice by the colourblind user
+himself, not something to reintroduce without asking first.
 
 The search box (`searchBox()`) got the same indigo `focus:` treatment
 (`focus:border-indigo-300 dark:focus:border-indigo-500 focus:ring-1

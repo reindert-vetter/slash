@@ -72,9 +72,14 @@ const state = reactive({
 // reviewersLoading/reviewersError: fetch state; selectedReviewers: a login→true
 // map of the checked reviewers (reassigned wholesale so arrow.js re-renders);
 // readySubmitting: a ready_for_review POST in flight.
+// popoverAbove: whether the currently open popover should render ABOVE its row
+// instead of below — measured once right after it mounts (see
+// positionPopover below), so a row near the bottom of the viewport never opens
+// a popover that's clipped off-screen.
 const ui = reactive({
   openPopover: null, ingesting: null, ingestStage: '', ingestError: null, ingestErrorFor: null, copiedFor: null,
   readyFor: null, reviewers: [], reviewersLoading: false, reviewersError: null, selectedReviewers: {}, readySubmitting: false,
+  popoverAbove: false,
 })
 
 // INGEST_STAGE_LABELS — Dutch labels for the busy button while /api/ingest is
@@ -104,6 +109,7 @@ const ICON_PATHS = {
   'external-link':
     '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   loader: '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
 }
 
 // icon renders one outline SVG (24x24 viewBox, stroke=currentColor). The path
@@ -198,17 +204,24 @@ function reviewChip(pr, status) {
   return chip('Wacht op review', 'bg-red-500/15 text-red-700 dark:text-red-300 ring-red-500/30', 'review-chip', 'clock')
 }
 
+// checksChip deliberately does NOT show a count anymore — GitHub's rollup
+// only gives a total + an overall state, no per-check pass/fail breakdown,
+// so a number like "76 checks" read as "76 passed" while it was really just
+// the total (see the checksPassed doc note in tembed-workflows.md). On
+// explicit request the pill now only answers the one question that matters:
+// did something fail, or did everything pass (or is it still running)? The
+// word ("Gefaald"/"Geslaagd"/"Bezig") carries the meaning per the colourblind
+// rule — the icon + tint are decoration on top, never the sole signal.
 function checksChip(status) {
   if (!status.checksTotal) return null
-  const n = status.checksTotal
   const s = status.checksState
   if (s === 'FAILURE' || s === 'ERROR')
-    return chip(n + ' checks', 'bg-rose-500/10 text-rose-700 dark:text-rose-300 ring-rose-500/30', 'checks-chip', 'x')
+    return chip('Checks gefaald', 'bg-rose-500/10 text-rose-700 dark:text-rose-300 ring-rose-500/30', 'checks-chip', 'x')
   if (s === 'PENDING' || s === 'EXPECTED')
-    return chip(n + ' bezig', 'bg-red-500/10 text-red-700 dark:text-red-300 ring-red-500/30', 'checks-chip', 'clock')
+    return chip('Checks bezig', 'bg-red-500/10 text-red-700 dark:text-red-300 ring-red-500/30', 'checks-chip', 'clock')
   if (s === 'SUCCESS')
-    return chip(n + ' checks', 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'checks-chip', 'check')
-  return chip(n + ' checks', 'bg-slate-100 dark:bg-zinc-500/10 text-slate-500 dark:text-zinc-400 ring-slate-300/50 dark:ring-zinc-500/30', 'checks-chip', 'clock')
+    return chip('Checks geslaagd', 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'checks-chip', 'check')
+  return chip('Checks', 'bg-slate-100 dark:bg-zinc-500/10 text-slate-500 dark:text-zinc-400 ring-slate-300/50 dark:ring-zinc-500/30', 'checks-chip', 'clock')
 }
 
 function reviewerAvatar(r) {
@@ -341,24 +354,24 @@ function commentsBit(pr) {
 
 // ── rows ─────────────────────────────────────────────────────────────────
 
+// diffStatFragment — no leading separator anymore (it now sits on its own
+// line, see rowMeta below, so a bullet in front of it would dangle at the
+// start of that line).
 function diffStatFragment(pr) {
   const add = Number(pr.additions) || 0
   const del = Number(pr.deletions) || 0
   const files = Number(pr.changedFiles) || 0
   if (!add && !del && !files) return null
   return html`
-    <span class="flex items-center gap-1.5">
-      <span class="text-slate-300 dark:text-zinc-700">·</span>
-      <span class="inline-flex items-center gap-1.5 text-[11.5px]">
-        <span class="font-medium text-emerald-600 dark:text-emerald-400">+${add}</span>
-        <span class="font-medium text-rose-600 dark:text-rose-400">−${del}</span>
-        ${files
-          ? html`<span class="flex items-center gap-1"
-              ><span class="text-slate-400 dark:text-zinc-600">·</span
-              ><span class="text-slate-500 dark:text-zinc-500">${files} file${files === 1 ? '' : 's'}</span></span
-            >`
-          : null}
-      </span>
+    <span class="inline-flex items-center gap-1.5 text-[11.5px]">
+      <span class="font-medium text-emerald-600 dark:text-emerald-400">+${add}</span>
+      <span class="font-medium text-rose-600 dark:text-rose-400">−${del}</span>
+      ${files
+        ? html`<span class="flex items-center gap-1"
+            ><span class="text-slate-400 dark:text-zinc-600">·</span
+            ><span class="text-slate-500 dark:text-zinc-500">${files} file${files === 1 ? '' : 's'}</span></span
+          >`
+        : null}
     </span>
   `
 }
@@ -366,29 +379,49 @@ function diffStatFragment(pr) {
 // The PR's own (current) branch — shown in the same sky color on every row so
 // you can spot which branch a PR lives on at a glance. Deliberately no target
 // branch here (even inside a stack): the stack indentation already conveys
-// the merge order.
+// the merge order. No leading separator, same reason as diffStatFragment
+// above — rowMeta inserts one between the two only when both are present.
 function branchFragment(pr) {
   if (!pr.headRefName) return null
   return html`
-    <span class="flex items-center gap-1">
-      <span class="text-slate-300 dark:text-zinc-700">·</span>
-      <span
-        class="inline-flex min-w-0 items-center gap-1 font-mono text-[11px] text-sky-600/90 dark:text-sky-400/90"
-        title="Huidige branch"
-      >
-        ${icon('git-branch', 'h-3 w-3')}<span class="truncate">${pr.headRefName}</span>
-      </span>
+    <span
+      class="inline-flex min-w-0 items-center gap-1 font-mono text-[11px] text-sky-600/90 dark:text-sky-400/90"
+      title="Huidige branch"
+    >
+      ${icon('git-branch', 'h-3 w-3')}<span class="truncate">${pr.headRefName}</span>
     </span>
   `
 }
 
+// rowMeta stacks in a FIXED, predictable 2-line layout — "Bijgewerkt … geleden"
+// on its own line, then the diff stats + branch on the line below — instead of
+// one long `flex-wrap` row that used to wrap wherever it ran out of width.
+// That single wrapping row broke unpredictably per row: the middle (title +
+// meta) column is `flex-1`, so its available width shrinks with however many
+// review-avatar/status pills the RIGHT column happens to carry (more
+// reviewers/pills => less room here) — a row with a long title and many
+// reviewers could wrap its meta line one line earlier than a plainer row,
+// so `+1472 −35 · 17 files · feature/TOOL-412` landed on a 3rd line while
+// every other row stopped at 2, and nothing lined up between rows anymore.
+// Forcing two explicit block-level lines makes the stacking identical on
+// every row regardless of how much room the right-hand pills take — each
+// line may still wrap internally on a very narrow viewport, but always
+// starts at the same predictable vertical spot.
 function rowMeta(pr) {
+  const stat = diffStatFragment(pr)
+  const branch = branchFragment(pr)
   return html`
-    <div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px] text-slate-500 dark:text-zinc-500">
-      <span class="font-mono">${() => state.repo || ''}#${pr.number}</span>
-      <span class="text-slate-300 dark:text-zinc-700">·</span>
-      <span title="${pr.updatedAt || ''}">Bijgewerkt ${relativeTime(pr.updatedAt)}</span>
-      ${diffStatFragment(pr)} ${branchFragment(pr)}
+    <div class="mt-0.5 text-[11.5px] text-slate-500 dark:text-zinc-500">
+      <div class="flex items-center gap-2">
+        <span class="font-mono">${() => state.repo || ''}#${pr.number}</span>
+        <span class="text-slate-300 dark:text-zinc-700">·</span>
+        <span title="${pr.updatedAt || ''}">Bijgewerkt ${relativeTime(pr.updatedAt)}</span>
+      </div>
+      ${stat || branch
+        ? html`<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            ${stat} ${stat && branch ? html`<span class="text-slate-300 dark:text-zinc-700">·</span>` : null} ${branch}
+          </div>`
+        : null}
     </div>
   `
 }
@@ -403,13 +436,17 @@ function rowMeta(pr) {
 // The name comes from ensureNames (see avatar.mjs) and falls back to the bare
 // login when GitHub/names.json know no real name; the title always carries the
 // full name plus the login, so the account behind a first name stays findable.
+// The avatar is 2x the original size (h-6 -> h-12) — on explicit request, to
+// make the author more prominent at the left edge of the row; the wrapper
+// width grows along (w-14 -> w-20) so the bigger circle still has breathing
+// room next to the name underneath it.
 function authorMark(pr) {
   const login = pr.author || ''
   const full = fullNameOf(login)
   const title = full ? full + ' (' + login + ')' : login
   return html`
-    <span class="flex w-14 shrink-0 flex-col items-center gap-1" data-testid="row-author" data-author="${login}" title="${title}">
-      ${avatarHTML(full || login, avatarUrlOf(login), 'h-6 w-6')}
+    <span class="flex w-20 shrink-0 flex-col items-center gap-1" data-testid="row-author" data-author="${login}" title="${title}">
+      ${avatarHTML(full || login, avatarUrlOf(login), 'h-12 w-12')}
       <span class="max-w-full truncate text-[10.5px] leading-none text-slate-500 dark:text-zinc-500">${displayNameOf(login)}</span>
     </span>
   `
@@ -425,20 +462,6 @@ function sectionBadge(label) {
   >`
 }
 
-// selectMark — a fixed-width, ALWAYS-present glyph at the left edge of every
-// navigable row (prRow/recentItem): the shape half of the wel/niet-geselecteerd
-// signal (see SELECT_MARK_ON/OFF in paintSelection below) — transparent by
-// default, toggled to a visible indigo chevron on the selected row, purely via
-// classList (never re-mounted), so the row's height/layout never shifts
-// between the two states. Mirrors BlockList.mjs's own row() marker, which
-// does the identical transparent↔coloured toggle for the same colourblind
-// reason (see .claude/rules/pages-and-routing.md).
-function selectMark() {
-  return html`<span data-testid="row-select-mark" class="shrink-0 select-none text-transparent" aria-hidden="true"
-    >›</span
-  >`
-}
-
 // connectorMark — the little └ that links a stacked row to the one above it.
 function connectorMark() {
   return html`<span class="-ml-4 shrink-0 select-none font-mono text-[13px] leading-none text-slate-400 dark:text-zinc-600" aria-hidden="true"
@@ -449,7 +472,6 @@ function connectorMark() {
 function rowInner(pr, opts) {
   return [
     opts.depth ? connectorMark() : null,
-    selectMark(),
     authorMark(pr),
     html`
       <div class="min-w-0 flex-1">
@@ -479,6 +501,7 @@ function togglePopover(number) {
   ui.openPopover = opening ? number : null
   ui.ingestError = null
   ui.ingestErrorFor = null
+  ui.popoverAbove = false
   // Collapse any ready-for-review picker from a previous row so it never bleeds
   // into a different PR's menu.
   ui.readyFor = null
@@ -487,7 +510,28 @@ function togglePopover(number) {
   // "Sluit menu" item (see popover() below) always sits first so a stray
   // Enter never merely closes the menu; focusPopoverItem clamps, so a
   // popover with only that one item still focuses it.
-  if (opening) requestAnimationFrame(() => focusPopoverItem(1))
+  if (opening)
+    requestAnimationFrame(() => {
+      positionPopover(number)
+      focusPopoverItem(1)
+    })
+}
+
+// positionPopover measures the just-mounted popover of row `number` (it's
+// still rendered top-full/below the row at this point, see popoverPanelCls
+// below) against the viewport: if it would run off the bottom of the screen,
+// ui.popoverAbove flips it to render above the row instead. This is a plain,
+// one-shot measurement at open time (no resize/scroll listener like
+// home.mjs's positionMenu) — a row's own position on this page doesn't move
+// while its popover is open, unlike the always-fixed command palette.
+function positionPopover(number) {
+  const row = document.querySelector('[data-testid="pr-row"][data-pr="' + number + '"]')
+  const pop = row && row.querySelector('[data-testid="pr-popover"]')
+  if (!row || !pop) return
+  const rowRect = row.getBoundingClientRect()
+  const popRect = pop.getBoundingClientRect()
+  const fitsBelow = rowRect.bottom + popRect.height <= window.innerHeight
+  ui.popoverAbove = !fitsBelow
 }
 
 // generatePage runs the existing ingest workflow endpoint (the sanctioned
@@ -847,7 +891,12 @@ function readyForReviewSection(pr) {
 // in light mode) background plus a strong shadow + ring: it necessarily
 // overlaps the status pills of the row below, and with a near-page-background
 // tint that overlap read as the pill's text being cut off instead of a
-// floating menu covering it.
+// floating menu covering it. It normally opens below the row (`top-full`) but
+// flips above it (`bottom-full`, see popoverPanelCls/positionPopover) when the
+// row sits close enough to the bottom of the viewport that opening downward
+// would run the popover off-screen — a real, reproducible case now that rows
+// are taller (the 2x avatar, see authorMark), not just a short "Ready to
+// merge" section on a short viewport in the test suite.
 //
 // Visually this now deliberately mirrors CommandMenu.mjs's palette (rounded-xl,
 // an indigo border/ring instead of a neutral one, text-sm/py-2 rows, the same
@@ -858,11 +907,22 @@ function readyForReviewSection(pr) {
 // shared `menu`/`ms` state. "Sluit menu" is no longer dimmed — it's a plain
 // row with a grey hint badge on the right ("esc"), the same shape commandRow
 // gives its own pinned "Sluit menu" item (withClose, home.mjs).
+// popoverPanelCls — a whole-value reactive class binding (the arrow.js
+// "entire attribute value" rule) so a flip of ui.popoverAbove (see
+// positionPopover above) re-renders the panel's own vertical anchor without
+// touching anything else about it.
+function popoverPanelCls() {
+  return (
+    'absolute right-0 z-20 w-64 rounded-xl border border-indigo-300 dark:border-indigo-500 bg-white dark:bg-zinc-900 p-1 shadow-2xl ring-1 ring-indigo-500/20 ' +
+    (ui.popoverAbove ? 'bottom-full mb-1' : 'top-full mt-1')
+  )
+}
+
 function popover(pr) {
   const m = (pr.title || '').match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
   return html`
     <div
-      class="absolute right-0 top-full z-20 mt-1 w-64 rounded-xl border border-indigo-300 dark:border-indigo-500 bg-white dark:bg-zinc-900 p-1 shadow-2xl ring-1 ring-indigo-500/20"
+      class="${() => popoverPanelCls()}"
       data-testid="pr-popover"
       @click="${(e) => e.stopPropagation()}"
     >
@@ -891,7 +951,8 @@ function popover(pr) {
         ${icon('external-link', 'h-3.5 w-3.5')} Open op GitHub
       </a>
       <button type="button" data-testid="copy-url" class="${popoverRowCls()}" @click="${() => copyGithubUrl(pr)}">
-        ${icon('external-link', 'h-3.5 w-3.5')} ${() => (ui.copiedFor === pr.number ? 'Gekopieerd!' : 'Kopieer GitHub URL')}
+        ${() => (ui.copiedFor === pr.number ? icon('check', 'h-3.5 w-3.5') : icon('copy', 'h-3.5 w-3.5'))}
+        ${() => (ui.copiedFor === pr.number ? 'Gekopieerd!' : 'Kopieer GitHub URL')}
       </button>
       ${() =>
         m
@@ -1336,7 +1397,6 @@ function recentItem(r) {
       data-nav-key="${'recent:' + r.pr}"
       class="${ROW_CLASS}"
     >
-      ${selectMark()}
       <span class="shrink-0 text-emerald-600 dark:text-emerald-400">${icon('sparkles', 'h-4 w-4')}</span>
       <div class="min-w-0 flex-1">
         <h3 class="truncate text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">${r.title || '#' + r.pr}</h3>
@@ -1919,25 +1979,19 @@ function reanchorSelection(rows) {
   selIndex = rows.findIndex((el) => el.dataset.navKey === selKey)
 }
 
-// SELECT_RING_CLS / SELECT_MARK_ON / SELECT_MARK_OFF — the wel/niet-geselecteerd
-// classes paintSelection() toggles, in the same indigo tone /pr/<id> uses for
-// its own "selected/focused" convention (see the "Focus highlight per stop"
-// section in .claude/rules/keyboard-navigation.md and BlockList.mjs's own
-// rowFocused ring) — was emerald before this change, which had no meaning tied
-// to it elsewhere in the app. Kept WITHOUT a separate dark: ring/bg variant,
+// SELECT_RING_CLS — the wel/niet-geselecteerd classes paintSelection() toggles,
+// in the same indigo tone /pr/<id> uses for its own "selected/focused"
+// convention (see the "Focus highlight per stop" section in
+// .claude/rules/keyboard-navigation.md and BlockList.mjs's own rowFocused
+// ring) — was emerald before this change, which had no meaning tied to it
+// elsewhere in the app. Kept WITHOUT a separate dark: ring/bg variant,
 // mirroring the emerald set it replaces: a semi-transparent ring/tint reads
 // fine on both a white and a zinc-900 background, so this intentionally
-// doesn't grow the toggle set.
+// doesn't grow the toggle set. This ring+background tint is now the ONLY
+// selection signal on this page — the earlier always-present `›` chevron
+// (selectMark()/SELECT_MARK_ON/OFF, a deliberate colourblind-safe shape cue)
+// was removed on explicit request; see .claude/rules/pages-and-routing.md.
 const SELECT_RING_CLS = ['ring-1', 'ring-indigo-500/50', 'rounded-lg', 'z-10', 'bg-indigo-500/10']
-// The ring/bg tint alone is colour-only. SELECT_MARK_ON/OFF instead toggle a
-// small, ALWAYS-PRESENT glyph (see selectMark() below) between invisible and a
-// visible indigo chevron — the same transparent↔coloured "shape" cue
-// BlockList.mjs's own row() marker uses, so the selected row also carries a
-// non-colour signal for a colourblind reviewer (see the colorblind rule in
-// MEMORY.md). Row height never changes: only the glyph's own text colour
-// flips, never its presence.
-const SELECT_MARK_ON = ['text-indigo-500', 'dark:text-indigo-400']
-const SELECT_MARK_OFF = ['text-transparent']
 
 function paintSelection() {
   const rows = currentRows()
@@ -1959,19 +2013,10 @@ function paintSelection() {
     // every row), leaving the popover positioned relative to <body> instead
     // of its own row. `z-10` still gets a stacking context from the row's
     // own always-on `relative`, so nothing here relied on toggling it.
-    const mark = el.querySelector('[data-testid="row-select-mark"]')
     if (i === selIndex) {
       el.classList.add(...SELECT_RING_CLS)
-      if (mark) {
-        mark.classList.remove(...SELECT_MARK_OFF)
-        mark.classList.add(...SELECT_MARK_ON)
-      }
     } else {
       el.classList.remove(...SELECT_RING_CLS)
-      if (mark) {
-        mark.classList.remove(...SELECT_MARK_ON)
-        mark.classList.add(...SELECT_MARK_OFF)
-      }
     }
   })
   if (selIndex >= 0 && rows[selIndex]) rows[selIndex].scrollIntoView({ block: 'nearest' })
