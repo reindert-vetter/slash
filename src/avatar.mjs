@@ -46,13 +46,27 @@ export function ensureMe() {
 }
 
 // identityOf resolves who to show for one comment/reply: the local reviewer for
-// an own (`source: 'ui'`) message once /api/me is known, otherwise exactly what
-// the message itself carries (a GitHub-imported comment, a polled GitHub reply,
-// an AI finding). Returns `{name, avatarUrl}` for avatarHTML + the author line,
-// so both always name the same person.
+// an own (`source: 'ui'`) message once /api/me is known, otherwise whoever the
+// message itself carries (a GitHub-imported comment, a polled GitHub reply, an
+// AI finding). Returns `{name, avatarUrl}` for avatarHTML + the author line, so
+// both always name the same person.
+//
+// Both branches run their login through displayNameOf, so every comment author
+// in the app reads as a real first name ("Dennis") once one is known, falling
+// back to the login otherwise — including "AI check" and the "reviewer"
+// sentinel, which resolve to nothing and are therefore shown verbatim. The
+// avatar falls back to the one behind the login (a comment stored before the
+// avatar_url column existed carries none of its own).
 export function identityOf(source, author, avatarUrl) {
-  if (source === 'ui' && me.login) return { name: me.login, avatarUrl: me.avatarUrl }
-  return { name: author, avatarUrl }
+  if (source === 'ui' && me.login) return { name: displayNameOf(me.login), avatarUrl: me.avatarUrl }
+  return { name: displayNameOf(author), avatarUrl: avatarUrl || avatarUrlOf(author) }
+}
+
+// meLogin is the authenticated reviewer's login once ensureMe has resolved it,
+// '' otherwise — so a caller collecting logins to resolve (see ensureNames) can
+// include "me" without reaching into the module's own state.
+export function meLogin() {
+  return me.login
 }
 
 // ── real names behind a GitHub login ───────────────────────────────────────

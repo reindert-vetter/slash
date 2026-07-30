@@ -91,3 +91,45 @@ test('comment-index item detail card shows author + avatar', async ({ page }) =>
   await expect(card.getByTestId('comment-detail-author')).toHaveText('octocat')
   await expect(card.getByTestId('comment-detail-author-line').getByTestId('avatar-fallback')).toHaveText('OC')
 })
+
+// Real first names instead of logins: every author line in the review tree runs
+// through identityOf, which resolves a login to the name behind it (GET
+// /api/names → the local names.json override, then the GitHub profile name; see
+// "Real names instead of logins" in pages-and-routing.md). The harness runs with
+// SLASH_GITHUB=off, so the real endpoint resolves nothing — which is exactly why
+// the two tests above still expect bare logins — and this one stubs it to cover
+// the resolved path plus a login nobody knows a name for.
+test('comment row and thread bubbles show the author\'s real first name once known', async ({ page }) => {
+  await page.route('**/api/names**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      // octocat resolves; "reviewer" is the in-app sentinel and never does.
+      body: JSON.stringify({ ok: true, names: { octocat: { name: 'Octavia Cat', avatarUrl: '' } } }),
+    }),
+  )
+
+  const pr = 970010
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: { pr, file: 'test.php', line: 1, author: 'octocat', body: 'root comment', gran: 'line', label: 'Order::total' },
+  })
+  const runId = (await start.json()).runId
+  expect(runId).toBeTruthy()
+  await page.request.post('/api/workflows/' + runId + '/signals/reply', {
+    data: { author: 'someoneelse', body: 'a reply', done: false },
+  })
+
+  await page.goto('/pr/' + pr)
+  await page.keyboard.press('Escape')
+
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  // First token only — never the full name, and never the login.
+  await expect(item.getByTestId('comment-author')).toHaveText('Octavia')
+
+  await item.click()
+  const authors = page.getByTestId('reaction-author')
+  await expect(authors.nth(0)).toHaveText('Octavia')
+  // An unresolved login stays exactly as stored — no invented name.
+  await expect(authors.nth(1)).toHaveText('someoneelse')
+})

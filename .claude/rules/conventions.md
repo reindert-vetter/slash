@@ -561,6 +561,28 @@
   `names` is likewise a plain non-reactive `Map`. Full mechanism (precedence,
   caching, skip-list, the write-boundary carve-out): "Real names instead of
   logins" in `.claude/rules/pages-and-routing.md`.
+  **`identityOf` itself resolves the name, so every existing call site got real
+  first names for free** — the comment/reply bubbles, the compact conversation,
+  the PR-comment detail card (`RelatedPanel.mjs`), the comment-activity avatars
+  in `BlockList.mjs` and `Block.mjs`, and the task-inbox thread
+  (`src/inbox.mjs`). Only the places that read a raw `author` field instead of
+  going through `identityOf` needed touching: `BlockList.mjs`'s
+  `categoryOrAvatar` (the comment-index row), `RelatedPanel.mjs`'s
+  `lastReplyNote`, and `inbox.mjs`'s thread message + `pr_review` meta line.
+  `identityOf` also falls back to `avatarUrlOf(author)` when the message carries
+  no avatar of its own, so a comment stored before the `avatar_url` column
+  existed — and the task-inbox thread, whose stored messages have no avatar
+  field at all — now shows a real picture. The **await** lives in
+  `loadComments` (`RelatedPanel.mjs`, right after the existing `await
+  ensureMe()`, over `commentAuthors(list)`) and in `loadTasks` (`inbox.mjs`,
+  over `taskAuthors(tasks)`) — one batched request per list, cached after that,
+  so the comment poll costs nothing extra. An author that is not a GitHub login
+  at all (`AI check`, the `reviewer` sentinel) resolves to nothing and is
+  therefore shown verbatim, unchanged.
+  **`Block.mjs` stays on `avatarHtmlString`** (its pane HTML is a plain string
+  assigned via `.innerHTML`, so an arrow.js template would leak as text — see
+  the pitfall above); it needed no change, because the name reaching it is
+  already a plain string from `identityOf`.
 - **Theme: system/light/dark, with a manual cycle button
   (`src/theme.mjs`).** The theme once followed **exclusively** the system
   setting (`prefers-color-scheme`, Tailwind `darkMode:'media'`, no own

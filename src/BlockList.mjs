@@ -4,7 +4,7 @@
 
 import { html } from './vendor/arrow.js'
 import { removedLabel } from './Block.mjs'
-import { avatarHTML } from './avatar.mjs'
+import { avatarHTML, identityOf } from './avatar.mjs'
 
 // Tailwind classes per category tag, so the pills read like the screenshot.
 const CATEGORY_STYLE = {
@@ -383,7 +383,11 @@ function rowFocused(state, i) {
 function categoryOrAvatar(b) {
   if (b.kind === 'comment') {
     const c = b.comment || {}
-    return avatarHTML(c.author, c.avatarUrl, 'h-5 w-5')
+    // Through identityOf, like every other author avatar: an own (ui-placed)
+    // comment shows the local reviewer, and a GitHub author shows their real
+    // first name in the title (see avatar.mjs).
+    const who = identityOf(c.source, c.author, c.avatarUrl)
+    return avatarHTML(who.name, who.avatarUrl, 'h-5 w-5')
   }
   return html`
     <span

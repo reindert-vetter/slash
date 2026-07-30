@@ -255,6 +255,12 @@ inbox's first paint, `ensureNames` races its own fetch against a short
 still lands in the `Map` for the next render (the overview re-polls its snapshot
 anyway). Test: `tests/overview-author-name.spec.mjs`.
 
+The same resolver also feeds the **review tree** and the **task inbox**, via
+`identityOf` — see the "Shared avatar helper" bullet in
+`.claude/rules/conventions.md` for which call sites that covers automatically and
+which read a raw `author` field and had to be pointed at `identityOf`. Test:
+the last case in `tests/comment-author-avatar.spec.mjs`.
+
 ### Offline / test mode
 
 Under **`SLASH_GITHUB=off`** nothing touches the network:

@@ -13,7 +13,7 @@
 
 import { reactive, html, watch } from './vendor/arrow.js'
 import { initTheme, themeToggleButton } from './theme.mjs'
-import { avatarHTML } from './avatar.mjs'
+import { avatarHTML, displayNameOf, ensureNames, identityOf } from './avatar.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { highlight } from './Block.mjs'
 import { composeTargetHint, commentBody } from './RelatedPanel.mjs'
@@ -43,6 +43,18 @@ function pointNotesOf(t) {
   } catch (e) {
     return []
   }
+}
+
+// taskAuthors collects every login the task list can show: a pr_review's PR
+// author and each message author of an unread comment thread.
+function taskAuthors(tasks) {
+  const out = []
+  for (const t of tasks || []) {
+    const d = detailOf(t)
+    if (d.author) out.push(d.author)
+    for (const m of d.messages || []) out.push(m.author)
+  }
+  return out
 }
 
 function detailOf(t) {
@@ -198,7 +210,12 @@ async function loadTasks() {
     if (!res.ok) return
     const body = await res.json()
     if (body && body.ok) {
-      state.tasks = Array.isArray(body.tasks) ? body.tasks : []
+      const tasks = Array.isArray(body.tasks) ? body.tasks : []
+      // Resolve the real names behind every author these tasks show BEFORE
+      // pushing them — `names` is a plain non-reactive Map, so a late arrival
+      // could not repaint an already-keyed row (see ensureNames in avatar.mjs).
+      await ensureNames(taskAuthors(tasks))
+      state.tasks = tasks
       if (state.selectedId == null) {
         const rows = visibleTasks()
         if (rows.length) state.selectedId = rows[0].id
@@ -546,7 +563,7 @@ function prReviewDetail(t) {
       <div>
         <h2 class="text-lg font-semibold text-slate-900 dark:text-zinc-100">${d.title || t.title}</h2>
         <p class="mt-0.5 text-sm text-slate-500 dark:text-zinc-400">
-          PR #${t.pr} · ${d.author || ''} ·
+          PR #${t.pr} · ${displayNameOf(d.author || '')} ·
           <span class="text-emerald-600 dark:text-emerald-400">+${d.additions || 0}</span>
           <span class="text-rose-600 dark:text-rose-400">−${d.deletions || 0}</span>
         </p>
@@ -596,12 +613,17 @@ function prReviewDetail(t) {
 // ── detail: comment_unread ───────────────────────────────────────────────
 
 function commentThreadMessage(m, i) {
+  // Through identityOf, like every comment author elsewhere in the app: a real
+  // first name + profile picture once known, the stored author otherwise (see
+  // avatar.mjs). The avatar was always an initials circle here before, since a
+  // task's stored thread carries no avatar of its own.
+  const who = identityOf(m.source, m.author, m.avatarUrl)
   return html`
     <div data-testid="task-comment-message" class="flex items-start gap-2">
-      ${avatarHTML(m.author, '', 'h-5 w-5')}
+      ${avatarHTML(who.name, who.avatarUrl, 'h-5 w-5')}
       <div class="min-w-0 flex-1 rounded-lg bg-slate-100 px-2.5 py-1.5 text-sm dark:bg-zinc-800">
         <div class="mb-0.5 flex items-baseline gap-1.5 text-[11px] text-slate-500 dark:text-zinc-400">
-          <span class="font-medium text-slate-700 dark:text-zinc-200">${m.author}</span>
+          <span class="font-medium text-slate-700 dark:text-zinc-200">${who.name}</span>
           <span>${relTime(new Date(m.createdAt).getTime())}</span>
         </div>
         <div class="[overflow-wrap:anywhere] text-slate-800 dark:text-zinc-100" .innerHTML="${commentBody(m)}"></div>

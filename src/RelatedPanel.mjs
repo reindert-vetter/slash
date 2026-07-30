@@ -16,7 +16,7 @@ import { translationValueView } from './translationDiff.mjs'
 import { statusInfo, categoryClass } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
-import { avatarHTML, ensureMe, identityOf } from './avatar.mjs'
+import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin } from './avatar.mjs'
 
 // ── Real comments (task_code_comment workflow) ────────────────────────────────
 // This section IS wired to the API. Placing a comment starts a Workflow
@@ -763,7 +763,9 @@ function lastReplyNote(c) {
   const msgs = threadMessages(c)
   const last = msgs[msgs.length - 1]
   if (!last || !last.author || last.author === 'reviewer') return ''
-  return ' · ' + last.author + ' reageerde'
+  // Their real first name once known, the login otherwise — same rule as every
+  // other author line (see identityOf/displayNameOf in avatar.mjs).
+  return ' · ' + displayNameOf(last.author) + ' reageerde'
 }
 
 // reactionCount is the number of bubbles the thread renders (opening + reactions)
@@ -1242,6 +1244,18 @@ export async function resolveFocusedComment() {
   }
 }
 
+// commentAuthors collects every login a comment list can show: the thread roots
+// plus each reaction, plus the local reviewer (own messages resolve through
+// identityOf to `me`, whose own first name we want too).
+function commentAuthors(list) {
+  const out = [meLogin()]
+  for (const c of list || []) {
+    out.push(c.author)
+    for (const r of c.reactions || []) out.push(r.author)
+  }
+  return out
+}
+
 async function loadComments(pr) {
   if (pr == null) return
   try {
@@ -1253,7 +1267,15 @@ async function loadComments(pr) {
     await ensureMe()
     const res = await fetch('/api/comments?pr=' + encodeURIComponent(pr))
     if (res.ok) {
-      cs.list = await res.json()
+      const list = await res.json()
+      // Same rule, same reason, for the real names behind those authors: resolve
+      // every login in the batch BEFORE pushing the list, since `names` is a
+      // plain non-reactive Map too (see ensureNames in avatar.mjs). Covers the
+      // thread bubbles here as well as the comment-activity avatars in
+      // BlockList.mjs/Block.mjs, which all read the same cs.list through
+      // identityOf. Cached, so a poll that brings nothing new costs no request.
+      await ensureNames(commentAuthors(list))
+      cs.list = list
       recomputeView()
       // A delete (or a shrinking list generally) can leave cs.sel pointing past
       // the end, or the focused/threaded row can vanish entirely — clamp back
