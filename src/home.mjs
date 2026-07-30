@@ -3256,10 +3256,26 @@ function lineChildSummaries(b) {
     if (row != null) addTo(row, kid)
   }
 
+  // A comment placed directly ON this block's OWN row — not on an
+  // underlying-code child — also counts toward this line's avatar+N badge
+  // (Reindert, 2026-07-30: "a comment on the line itself should show the
+  // avatar too", not only underlying-code activity). commentRowSet(b) is the
+  // SAME row-presence Set the 💬 marker already uses (Block.mjs's
+  // commentedFn) — reused here rather than re-scanning comments, so a row
+  // without any comment never even gets an anchor entry for this reason.
+  // Every such row rolls up onto its group's FIRST row exactly like a child
+  // would (anchorOf), so a comment anywhere within an active group shows the
+  // badge on the same line a child there would.
+  const bKey = b.file + '|' + b.label
+  for (const row of commentRowSet(b)) {
+    const anchor = anchorOf(row)
+    if (!buckets.has(anchor)) buckets.set(anchor, new Map())
+  }
+
   for (const [anchor, kidsById] of buckets) {
     let done = 0
     let total = 0
-    const keys = new Set()
+    const keys = new Set([bKey])
     for (const kid of kidsById.values()) {
       const c = subtreeApproveCount(kid)
       done += c.done
@@ -3267,7 +3283,14 @@ function lineChildSummaries(b) {
       const ks = commentScopeKeys(kid)
       if (ks) for (const k of ks) keys.add(k)
     }
-    const commentActivity = keys.size ? commentActivitySummary(keys) : null
+    // A child's own comments count regardless of which row WITHIN the child
+    // they sit on (a child is a separate block — its rowStart lives in its
+    // OWN aligned-row space, unrelated to b's). Only b's OWN comments (bKey)
+    // are restricted to the rows that actually roll up onto THIS anchor, via
+    // commentActivitySummary's optional row filter — otherwise a comment on
+    // one line of b would bleed onto every other line's badge too.
+    const rowFilter = (c) => c.file + '|' + c.label !== bKey || anchorOf(c.rowStart) === anchor
+    const commentActivity = commentActivitySummary(keys, rowFilter)
     if (total > 0 || commentActivity) map.set(anchor, { approve: { done, total }, commentActivity })
   }
   return map

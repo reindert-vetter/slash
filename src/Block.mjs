@@ -556,7 +556,7 @@ export default function Block(b, opts = {}) {
 
       ${() =>
         b.category === 'TRANSLATION'
-          ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled)
+          ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled, commentedFn, lineSummaryFn)
           : isSvgFile(b)
           ? svgSlot(b)
           : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn)}
@@ -658,8 +658,27 @@ export function translationRowUnits(b) {
 // `hintsEnabled` (Block()'s own opt, see above — only true for the card that
 // currently owns the diff keyboard) gates the green out-of-view scroll hints
 // below, exactly like codeDiff's own `data-hints` — see the wrapper doc
-// comment further down.
-function translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled = () => false) {
+// comment further down. `commentedFn`/`lineSummaryFn` are the SAME opts
+// Block() already threads into codeDiff (see above) — a TRANSLATION block's
+// per-key rows can carry an open comment (💬) and an "onderliggende code"
+// avatar+N/approve badge exactly like an ordinary code row; both were
+// missing entirely on this render path until now (reported: a comment on a
+// TRANSLATION key showed no indicator at all, unlike a comment on ordinary
+// PHP code). Passed down to translationBlockView as small callbacks
+// (`commentMarkerFor`/`lineSummaryFor`, mirroring the existing `onScroll`
+// callback) rather than the raw Sets/Map themselves, so translationDiff.mjs
+// stays decoupled from Block.mjs's own markup functions (commentMarkerHtml/
+// translationLineSummaryHtml) — no circular import, same reasoning as
+// `onScroll` above.
+function translationSlot(
+  b,
+  activeGroup,
+  approvedFn,
+  langSiblingsFn,
+  hintsEnabled = () => false,
+  commentedFn = () => new Set(),
+  lineSummaryFn = () => new Map(),
+) {
   const c = b.code
   if (c === undefined || c === null) {
     return html`<p class="px-4 py-3 text-sm text-slate-400 dark:text-zinc-500">code laden…</p>`
@@ -697,6 +716,8 @@ function translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnable
           const container = e.target.closest('[data-testid="code-diff"]')
           if (container) updateHints(container)
         },
+        commentMarkerFor: (row) => (row != null && commentedFn().has(row) ? commentMarkerHtml() : ''),
+        lineSummaryFor: (row) => (row != null ? translationLineSummaryHtml(lineSummaryFn().get(row)) : ''),
       })}
       ${scrollHint('up')}
       ${scrollHint('down')}
@@ -1067,6 +1088,17 @@ function codePane(
   `
 }
 
+// commentMarkerHtml renders the 💬 span that marks a row/key carrying an open
+// comment (presence only — the count doesn't matter). Shared by rowCellHTML
+// (an ordinary code row, appended after the line's own text) and
+// translationSlot (a TRANSLATION per-key row has no single code line to
+// append to, so it renders the same marker inline in its key header instead
+// — see translationBlockView's commentMarkerFor opt) — one source of markup
+// so the two never drift apart.
+function commentMarkerHtml() {
+  return '<span class="select-none opacity-60" data-comment="1" title="Er zit een comment op deze regel">💬</span>'
+}
+
 // rowCellHTML builds the <div> for ONE (row, side) — the shared building
 // block behind paneHTML (below, the single-pane renderer every stand uses
 // except the unified stand's own restructured column) and unifiedHTML (the
@@ -1145,12 +1177,13 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, opts = {},
   // doesn't matter). Shown once per row: on the new (right) pane for a normal
   // row, on the old (left) pane only for a pure deletion (no right side), so a
   // modified row doesn't get the marker twice. Appended after the code so it
-  // trails the line and scrolls with it.
+  // trails the line and scrolls with it. commentMarkerHtml() below is shared
+  // with translationSlot's per-key rows (a TRANSLATION block has no ordinary
+  // code line to append this to, so it renders the same marker inline in its
+  // key header instead — see translationSlot/translationBlockView).
   const commentedHere =
     emitMeta && text !== null && commented.has(i) && (sideKey === 'right' || r.right == null)
-  const marker = commentedHere
-    ? ' <span class="select-none opacity-60" data-comment="1" title="Er zit een comment op deze regel">💬</span>'
-    : ''
+  const marker = commentedHere ? ' ' + commentMarkerHtml() : ''
   // Anchor the first row of the active group so home.mjs can scroll it to
   // the vertical centre of the diff viewport. Suppressed on the decorative
   // OLD half of a unified pair (emitMeta false) — see the doc comment above.
@@ -1198,25 +1231,21 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, opts = {},
   return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}>${check}${gutterHtml}${body}${marker}${lineSummaryHtml}</div>`
 }
 
-// lineSummaryBadge renders the small "onderliggende code" pill for one diff
-// row: an avatar+"+N" comment-activity indicator (mirrors
-// commentActivityPill/commentActivityBadge in BlockList.mjs/RelatedPanel.mjs
-// — the same avatar+N shape, now surfaced a third time, directly on the
-// line the underlying code is anchored to) plus a done/total approve
-// fraction, so a reviewer can tell at a glance how much of the underlying
-// code linked from THIS line still needs approval — without opening the
-// Onderliggende-code panel. A leading "✓ " (never color alone — see the
-// colorblind rule in CLAUDE.md) marks a fully approved fraction; the
-// numbers themselves already carry the meaning either way. Absolutely
-// positioned at the right edge of the row (mirrors the left-edge checkmark
-// overlay above) on a small pill background so it stays legible over code.
-// `summary` is one entry of home.mjs's lineChildSummaries Map, or
-// undefined/null when this row has nothing to show.
-function lineSummaryBadge(summary) {
-  if (!summary) return ''
+// lineSummaryParts builds the shared INNER content (avatar+"+N"
+// comment-activity indicator + a done/total approve fraction) and title for
+// the "onderliggende code" per-line indicator — factored out of
+// lineSummaryBadge so translationLineSummaryHtml below (a TRANSLATION
+// per-key row, which has no single code line to absolutely-position an
+// overlay on top of) can reuse the exact same content/count logic with a
+// different, inline wrapper instead of duplicating it. `commentActivity` on
+// `summary` counts EVERY open comment thread in scope — including one placed
+// directly on this row/key itself, not only underlying-code children — see
+// home.mjs's lineChildSummaries. Returns null when there's nothing to show.
+function lineSummaryParts(summary) {
+  if (!summary) return null
   const { approve, commentActivity } = summary
   const hasApprove = approve && approve.total > 0
-  if (!hasApprove && !commentActivity) return ''
+  if (!hasApprove && !commentActivity) return null
   const parts = []
   if (commentActivity) {
     parts.push(
@@ -1240,9 +1269,32 @@ function lineSummaryBadge(summary) {
     (commentActivity
       ? ' — ' + commentActivity.count + (commentActivity.count === 1 ? ' open reactie' : ' open reacties')
       : '')
-  return ` <span class="select-none absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 rounded bg-white/90 dark:bg-zinc-900/90 px-1 py-0.5 ring-1 ring-slate-200 dark:ring-zinc-700 shadow-sm" data-testid="line-underlying-summary" title="${title}">${parts.join(
-    '',
-  )}</span>`
+  return { html: parts.join(''), title }
+}
+
+// lineSummaryBadge renders the small "onderliggende code" pill for one diff
+// row, absolutely positioned at the right edge of the row (mirrors the
+// left-edge checkmark overlay above) on a small pill background so it stays
+// legible over code. A leading "✓ " (never color alone — see the colorblind
+// rule in CLAUDE.md) marks a fully approved fraction; the numbers themselves
+// already carry the meaning either way. `summary` is one entry of
+// home.mjs's lineChildSummaries Map, or undefined/null when this row has
+// nothing to show.
+function lineSummaryBadge(summary) {
+  const p = lineSummaryParts(summary)
+  if (!p) return ''
+  return ` <span class="select-none absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 rounded bg-white/90 dark:bg-zinc-900/90 px-1 py-0.5 ring-1 ring-slate-200 dark:ring-zinc-700 shadow-sm" data-testid="line-underlying-summary" title="${p.title}">${p.html}</span>`
+}
+
+// translationLineSummaryHtml is lineSummaryBadge's sibling for a TRANSLATION
+// per-key row (translationSlot's lineSummaryFor callback, passed into
+// translationBlockView): same content (lineSummaryParts), but rendered
+// INLINE in the key header instead of absolutely positioned — a per-key row
+// has no single code line whose right edge it could float over.
+function translationLineSummaryHtml(summary) {
+  const p = lineSummaryParts(summary)
+  if (!p) return ''
+  return `<span class="select-none inline-flex items-center gap-1 rounded bg-slate-100 dark:bg-zinc-800 px-1 py-0.5" data-testid="line-underlying-summary" title="${p.title}">${p.html}</span>`
 }
 
 // gutterSpan renders the leading "- "/"+ "/"  " marker for the unified

@@ -339,11 +339,20 @@ function siblingColumnHTML(sib, key) {
 // columns. `opts.onScroll` (optional) is wired onto the
 // outer scrolling div's own `@scroll` — see the data-scrollsync/data-changed
 // note on that div below and Block.mjs's translationSlot, which supplies it.
+// `opts.commentMarkerFor(row)`/`opts.lineSummaryFor(row)` (optional, called
+// with a unit's own `u.row`) return a raw HTML string (possibly empty) for
+// the 💬 comment marker resp. the "onderliggende code" avatar+N/approve
+// badge — mirrors an ordinary code row's commentedFn/lineSummaries, see
+// Block.mjs's rowCellHTML. Passed in as callbacks (like onScroll) rather
+// than the raw Set/Map, so this module never needs to import anything from
+// Block.mjs (its own markup functions stay there) — no circular import.
 export function translationBlockView(units, opts = {}) {
   const activeIndex = opts.activeIndex || (() => null)
   const approvedRowSet = opts.approvedRowSet || (() => new Set())
   const siblings = opts.siblings || []
   const onScroll = opts.onScroll || (() => {})
+  const commentMarkerFor = opts.commentMarkerFor || (() => '')
+  const lineSummaryFor = opts.lineSummaryFor || (() => '')
   const rows = units.map((u, i) => {
     // active/approved are read from within THIS row's OWN nested
     // ${() => ...} bindings below (never resolved once up front, as an
@@ -409,7 +418,11 @@ export function translationBlockView(units, opts = {}) {
       <div class="min-w-0 flex-1 px-4 py-2.5" data-testid="translation-primary-col">
         <div class="flex items-baseline justify-between gap-2">
           <span class="block font-mono text-[11px] text-slate-500 dark:text-zinc-400">${u.key}</span>
-          <span class="${'shrink-0 rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide ' + KIND_BADGE_CLS[u.kind]}">${KIND_BADGE[u.kind]}</span>
+          <span class="flex shrink-0 items-center gap-1">
+            <span .innerHTML="${() => commentMarkerFor(u.row)}"></span>
+            <span .innerHTML="${() => lineSummaryFor(u.row)}"></span>
+            <span class="${'shrink-0 rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide ' + KIND_BADGE_CLS[u.kind]}">${KIND_BADGE[u.kind]}</span>
+          </span>
         </div>
         ${valueEls}
         <span class="mt-1 block text-[11px] font-bold text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">${() => (isApproved() ? '✓' : '')}</span>

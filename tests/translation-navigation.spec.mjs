@@ -177,5 +177,15 @@ test.describe('TRANSLATION block — per-key navigation/approve/comment', () => 
     expect(posted.startLine).toBeGreaterThan(0)
     expect(posted.startLine).toBe(posted.endLine)
     expect(posted.code).toContain('extra')
+
+    // Regression: a comment on a TRANSLATION per-key row used to show NO
+    // indicator at all (translationSlot never threaded commentedFn/
+    // lineSummaryFn through to translationBlockView) — the key row now shows
+    // the same 💬 marker an ordinary code row gets, plus the "onderliggende
+    // code" avatar+N badge (Reindert's explicit choice: a comment on the
+    // line itself counts too, not only underlying-code-children activity).
+    const row = page.getByTestId('translation-row').nth(1)
+    await expect(row.locator('[data-comment="1"]')).toBeVisible()
+    await expect(row.getByTestId('line-underlying-summary')).toBeVisible()
   })
 })

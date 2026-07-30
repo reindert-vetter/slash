@@ -282,7 +282,16 @@ export function commentListSnapshot() {
 // in-app placeholder. Returns null when nothing matches (keys empty, or no
 // open thread in scope) so BlockList.mjs's nested slot can render '' — never
 // an object with count 0.
-export function commentActivitySummary(keys) {
+//
+// `matchesRow` (optional) additionally restricts which matched comments
+// count — home.mjs's lineChildSummaries uses this to fold a comment placed
+// directly on the block's OWN row into its per-line avatar+N badge (not just
+// underlying-code-children activity, per Reindert's explicit choice): a
+// child's own comments still count regardless of row (no restriction needed
+// there — the child is a separate block), but the block's OWN comments must
+// only count on the one anchor row they actually roll up onto, or every row
+// of the block would show the same combined badge.
+export function commentActivitySummary(keys, matchesRow) {
   if (!keys || !keys.size) return null
   let count = 0
   let lastMsg = null
@@ -290,6 +299,7 @@ export function commentActivitySummary(keys) {
     if (c.kind) continue // PR-wide comment — no file:label anchor, can't be in scope
     if (c.status === 'resolved') continue
     if (!keys.has(c.file + '|' + c.label)) continue
+    if (matchesRow && !matchesRow(c)) continue
     count++
     const reactions = c.reactions || []
     const msg = reactions.length

@@ -211,14 +211,47 @@ left as a navigable list.
   `avatarHtmlString` was added to `avatar.mjs` with its own attribute
   escaping — reusing `avatarHTML`'s template there would have leaked the
   template function itself as text (see the "leaks the template function as
-  text" pitfall in `conventions.md`). Out of scope: the TRANSLATION per-key
-  view and the SVG preview (no "children per line" concept there). Test:
+  text" pitfall in `conventions.md`). Out of scope: the SVG preview (no
+  "children per line" concept there). Test:
   `tests/line-underlying-summary.spec.mjs` (PR 100, reusing the existing
   call-arrow fixture — `ArrowCallerAction::execute`'s call to
   `ArrowHelperService::arrowHelper`, itself calling
   `ArrowNestedService::arrowNested` — proves the badge shows "0/3" on the
   call-site line before either is approved, and "✓ 3/3" once both are, via
   drilling in and approving each with the command palette).
+  **The `commentActivity` half also counts a comment placed directly on the
+  row itself, not only underlying-code-children activity** (Reindert,
+  2026-07-30: seeing a comment on a TRANSLATION key with no indicator at all
+  — see below — surfaced that the badge only ever rolled up children;
+  explicit choice: "avatar+N ook voor de regel zelf", everywhere in the app,
+  not just TRANSLATION). `lineChildSummaries` adds an anchor bucket for
+  every row `commentRowSet(b)` already marks as commented (the same
+  row-presence Set the 💬 marker uses) and always includes `b`'s own
+  `file|label` key in that anchor's `commentActivitySummary` call —
+  `commentActivitySummary` grew an optional second `matchesRow` predicate for
+  this (`RelatedPanel.mjs`): a child's own comments still count regardless of
+  row (a child is a separate block — its `rowStart` lives in the child's OWN
+  aligned-row space), only `b`'s own comments are restricted to the rows
+  that actually roll up onto that one anchor, so a comment on one line never
+  bleeds onto every other line's badge.
+  **TRANSLATION per-key rows now get both markers too** (previously entirely
+  missing on this render path — a comment on a lang-file key showed no 💬 and
+  no avatar+N at all, unlike ordinary PHP code): `Block.mjs`'s `translationSlot`
+  threads `commentedFn`/`lineSummaryFn` into `translationBlockView` as two
+  small callbacks (`commentMarkerFor`/`lineSummaryFor`, mirroring the
+  existing `onScroll` callback) instead of the raw Set/Map, so
+  `translationDiff.mjs` stays decoupled from `Block.mjs` (no circular
+  import) — the callbacks reuse `commentMarkerHtml`/`translationLineSummaryHtml`
+  (the latter shares `lineSummaryParts`, the content logic extracted out of
+  `lineSummaryBadge`, with a plain inline wrapper instead of `lineSummaryBadge`'s
+  own absolute positioning — a per-key row has no single code line whose
+  right edge it could float over). Rendered inline in the key header, next
+  to the existing kind pill, keyed by the unit's own `u.row` (the same
+  aligned-row index `translationRowUnits` already maps every key onto).
+  Tests: `tests/translation-navigation.spec.mjs` (💬 marker after placing a
+  comment on a key) and `tests/underlying-comment-activity.spec.mjs` (the
+  avatar+N badge now also firing for a comment on the block's own row, no
+  children involved).
 - **Server-side `total` (`blockstats.go` + `GET /api/blockstats`):** the number
   of approvable changed-rows per block is computed **in the backend** so it's
   known immediately — even before a block has lazily loaded its code — and
