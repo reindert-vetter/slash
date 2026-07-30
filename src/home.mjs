@@ -5889,7 +5889,7 @@ const COMMANDS = withClose([
     id: 'comment',
     label: 'Comment op deze regel',
     hint: 'task',
-    run: () => startComment(),
+    run: () => startComment(commentTarget),
   },
   {
     id: 'github',
@@ -5948,7 +5948,7 @@ const PR_COMMANDS = withClose([
         id: 'pr-github-comment',
         label: 'Comment plaatsen',
         hint: 'comment',
-        run: () => startComment(),
+        run: () => startComment(commentTarget),
       },
     ]),
   },
@@ -6142,7 +6142,7 @@ function resolveCommands(query) {
         label: 'Maak hiermee een comment',
         hint: 'comment',
         run: () => {
-          startComment()
+          startComment(commentTarget)
           requestAnimationFrame(() => {
             const el = document.querySelector('[data-testid=comment-compose]')
             if (el) {
@@ -6372,7 +6372,7 @@ function onKeydown(e) {
     // composer, exactly like a click on it.
     if (e.key === 'Enter' && isTriggerFocused()) {
       e.preventDefault()
-      openComposer()
+      openComposer(commentTarget)
       return
     }
     // Enter on a focused comment card (reply field empty — see commentReplyEmpty)

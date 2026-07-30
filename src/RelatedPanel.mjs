@@ -551,16 +551,55 @@ function prefillField(sel, text) {
 // into a genuinely new, unrelated comment.
 let warningOverride = null
 
+// composeDrafts / composeDraftKey — an in-memory (per session, never
+// persisted) draft of the new-comment composer's typed text, keyed by the
+// unit it's anchored to (file/label/gran/row-range/seg — the same identity
+// commentTarget() itself carries, see home.mjs). Without this, leaving the
+// composer (e.g. ← at caret position 0, see editableCaretCanMoveLeft in
+// keyboard-navigation.md) discards whatever was typed: the textarea is an
+// otherwise uncontrolled DOM element that gets fully unmounted on close, and
+// re-opening (toNew/startComment/openComposer/convertWarningToComment) always
+// mounted a brand-new, empty one. Re-opening on the SAME unit now restores it
+// (via prefillField, the existing "set value once the field has mounted"
+// helper — deliberately NOT a reactive `.value="${...}"` binding: there is no
+// such binding anywhere else in this codebase, and re-evaluating it on an
+// unrelated rerender while composing would reset the live DOM value/caret,
+// see the "outer closure depends on navigation state" pitfall in
+// conventions.md) so the reviewer can continue typing instead of starting
+// over. `replyDrafts` mirrors this for an existing thread's reply field
+// (reaction-compose, see toComment/sendReaction below) — keyed simply by the
+// comment's own stable id, since a placed comment already has one.
+const composeDrafts = new Map()
+let composeDraftKey = null
+const replyDrafts = new Map()
+
+// draftKeyFor mirrors the same anchor identity commentPath/commentTarget()
+// use server-side (file + label + gran + row-range + seg) — stable across
+// leaving and returning to the SAME unit, distinct across different units. A
+// null target (no navigable unit yet) falls back to one shared key — a rare
+// edge case that at worst shares a draft across two such units, never a
+// crash.
+function draftKeyFor(t) {
+  if (!t) return '__none__'
+  return (t.file || '') + '|' + (t.label || '') + '|' + (t.gran || '') + '|' + t.rowStart + '-' + t.rowEnd + '|' + (t.seg || '')
+}
+
 // toNew / toComment land on an inline comment card. Landing already opens the
 // reply pane and drops the caret in it — the reviewer types straight away, no
 // → needed: 'new' shows an empty new-comment composer; a comment shows its
-// history with the reply field focused.
-function toNew() {
+// history with the reply field focused. `commentTargetFn` (optional) is the
+// same commentTarget() callback the composer itself renders against — used
+// only to compute/restore the draft key above; every caller already has it
+// in scope (see home.mjs's own commentTarget and RelatedPanel's own params).
+function toNew(commentTargetFn) {
   releaseFocus()
   warningOverride = null
   cs.composing = true
   cs.focus = 'new'
+  composeDraftKey = draftKeyFor(commentTargetFn ? commentTargetFn() : null)
   focusEl('[data-testid=comment-compose]')
+  const draft = composeDrafts.get(composeDraftKey)
+  if (draft) prefillField('[data-testid=comment-compose]', draft)
 }
 
 // `focusInput` defaults to true for every existing caller (a click or an
@@ -575,7 +614,15 @@ function toComment(focusInput = true) {
   cs.composing = false
   cs.focus = 'comment'
   scrollCommentIntoView()
-  if (focusInput) focusEl('[data-testid=reaction-compose]')
+  if (focusInput) {
+    focusEl('[data-testid=reaction-compose]')
+    // Restore whatever reply the reviewer was mid-typing on THIS comment
+    // before navigating away (see replyDrafts above) — same mechanism/
+    // reasoning as the new-comment composer's own composeDrafts.
+    const c = selComment()
+    const draft = c && replyDrafts.get(c.id)
+    if (draft) prefillField('[data-testid=reaction-compose]', draft)
+  }
 }
 
 // hasVisibleComments reports whether the currently selected unit carries at
@@ -1009,13 +1056,11 @@ export function handleRelatedKey(key) {
 // browsing (see hasVisibleComments/handleRelatedKey above). Mirrors toNew():
 // hands the keyboard focus to 'new' and focuses the textarea so the reviewer
 // can type immediately. Placing the comment still goes through the workflow
-// (placeComment), so the write-boundary is unchanged.
-export function startComment() {
-  releaseFocus()
-  warningOverride = null
-  cs.composing = true
-  cs.focus = 'new'
-  focusEl('[data-testid=comment-compose]')
+// (placeComment), so the write-boundary is unchanged. `commentTargetFn`
+// (optional) is threaded through to toNew() to key/restore a draft — see
+// composeDrafts above.
+export function startComment(commentTargetFn) {
+  toNew(commentTargetFn)
 }
 
 // convertWarningToComment opens the "+ Nieuwe comment" composer prefilled
@@ -1049,7 +1094,11 @@ export function convertWarningToComment(c) {
   }
   cs.composing = true
   cs.focus = 'new'
-  prefillField('[data-testid=comment-compose]', c.body || '')
+  composeDraftKey = draftKeyFor(warningOverride.target)
+  // Prefer a draft the reviewer already started editing (e.g. left and came
+  // back to the SAME conversion via the menu again) over the finding's
+  // original body — see composeDrafts above.
+  prefillField('[data-testid=comment-compose]', composeDrafts.get(composeDraftKey) || c.body || '')
 }
 
 // isComposeOpen reports whether the new-comment composer is currently open, so
@@ -1071,8 +1120,8 @@ export function composeHasText() {
 // textarea — the same landing toNew()/startComment() have always done.
 // Exported so the always-present "+ Nieuwe comment" trigger's own click
 // handler can call it (see the new-comment button below).
-export function openComposer() {
-  toNew()
+export function openComposer(commentTargetFn) {
+  toNew(commentTargetFn)
 }
 
 // isCommentFocused reports whether a placed comment's row currently owns the
@@ -1423,6 +1472,9 @@ export async function placeComment(state, commentTarget, opts = {}) {
     side: t ? t.side : 'RIGHT',
     segment: t ? t.segment : '',
   })
+  // The typed text just became a real, placed comment — the draft that was
+  // standing in for it (see composeDrafts above) has nothing left to hold.
+  if (ok) composeDrafts.delete(draftKeyFor(t))
   // Only delete the AI finding this comment replaces once the replacement
   // itself is confirmed placed — a failed POST must never discard the
   // finding without anything taking its place.
@@ -1500,6 +1552,9 @@ async function sendReaction() {
       body: JSON.stringify({ author: 'reviewer', body, done: false }),
     })
     if (el) el.value = ''
+    // The typed reply just went out — the draft standing in for it (see
+    // replyDrafts above) has nothing left to hold.
+    replyDrafts.delete(c.id)
     // Brief confirmation flash — unlike the composer/PR-wide reply (which
     // both close their input on success, see placeComment/sendPrCommentReply),
     // this thread stays open, so this is the one send-status spot where
@@ -1818,6 +1873,7 @@ function expandedConversation(c, openCommentMenu) {
           placeholder="Reageer op deze comment…"
           data-testid="reaction-compose"
           @keydown="${(e) => e.key === 'Enter' && sendReaction()}"
+          @input="${(e) => c && replyDrafts.set(c.id, e.target.value)}"
         />
         <button
           class="${() => 'shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' + (cs.busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-indigo-600')}"
@@ -1903,12 +1959,14 @@ function newCommentComposer(state, commentTarget, openCompose) {
                   class="min-h-20 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
                   placeholder="Je comment op deze regel…"
                   data-testid="comment-compose"
+                  @input="${(e) => composeDrafts.set(composeDraftKey, e.target.value)}"
                 ></textarea>
                 <div class="flex items-center justify-end gap-2">
                   <button
                     class="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"
                     @click="${() => {
                       warningOverride = null
+                      composeDrafts.delete(composeDraftKey)
                       cs.composing = false
                     }}"
                   >
@@ -1938,7 +1996,7 @@ function newCommentComposer(state, commentTarget, openCompose) {
                     : 'border-dashed border-slate-200 dark:border-zinc-800 text-slate-400 dark:text-zinc-500 hover:border-indigo-200 dark:hover:border-indigo-500/40 hover:text-indigo-500 dark:hover:text-indigo-400')}"
                 data-testid="new-comment"
                 data-active="${() => (cs.focus === 'trigger' ? 'true' : 'false')}"
-                @click="${() => openComposer()}"
+                @click="${() => openComposer(commentTarget)}"
               >
                 <span class="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-current text-[11px] leading-none"
                   >+</span

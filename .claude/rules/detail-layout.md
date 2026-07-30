@@ -806,6 +806,38 @@ diff); `↑`/`←` on the trigger exit to the diff (there's nothing above it).
 Onderliggende code, unchanged — only `↑` (stepping *up* through the stack)
 newly stops there.
 
+**Leaving mid-type restores the draft on return (`composeDrafts`/
+`replyDrafts`, `RelatedPanel.mjs`) — both the new-comment composer and an
+existing thread's reply field.** Both textareas/inputs
+(`comment-compose`/`reaction-compose`) are otherwise fully uncontrolled DOM
+elements: closing the composer/thread (e.g. `←` at caret position 0 — see
+`editableCaretCanMoveLeft` in `keyboard-navigation.md`) unmounts the node
+entirely, so without this a reviewer who types a comment, steps away, and
+comes back found it empty and had to start over. `composeDrafts`
+(`Map`, keyed by the same anchor identity `commentTarget()`/`commentPath`
+already use — file + label + gran + row-range + seg, via `draftKeyFor`) and
+`replyDrafts` (`Map`, keyed simply by the placed comment's own stable id)
+are plain, non-reactive, session-only caches — never persisted, reset on a
+page reload. An `@input` handler on each field keeps the map in sync on
+every keystroke; `toNew`/`startComment`/`openComposer`/`convertWarningToComment`
+(new composer) and `toComment` (reply field) restore a stored draft via the
+existing `prefillField` helper (the same "set the value once the field has
+actually mounted" mechanism already used for the AI-finding-conversion
+prefill) as soon as the field reopens on the SAME anchor. **Deliberately not
+a reactive `.value="${...}"` template binding** — there is no such binding
+anywhere else in this codebase (every text field here is imperatively
+read/written via `document.querySelector(...)`, see `conventions.md`), and a
+reactive read of a plain `Map` registers no dependency at all (arrow.js only
+subscribes to actual reactive-proxy reads), so `prefillField`'s one-shot,
+imperative set is both simpler and avoids any risk of an unrelated rerender
+clobbering live typing/caret position. A draft is deleted once it's actually
+consumed: on successful placement (`placeComment`) or send (`sendReaction`),
+and on an explicit "Annuleer" for the new-comment composer — so a draft never
+lingers once its text has become a real comment/reply, but a stray abandoned
+draft on a unit nobody ever placed/cancelled just stays around for the rest
+of the session (bounded by how many distinct units the reviewer actually
+typed on). Test: `tests/comment-draft-persists.spec.mjs`.
+
 **Keyboard: the comment block is only a REACHABLE stop in the ←/→ chain when
 the unit actually has a comment; ↓ falls through instead of clamping.**
 `hasVisibleComments()` (exported, `visibleComments().length > 0`) gates
