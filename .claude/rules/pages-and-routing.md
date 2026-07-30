@@ -215,10 +215,11 @@ seeded PR (12903) shows "Open review tree" in its popover, pointing to
 
 ### `?pr=<id>` auto-selects the row you came from
 
-From `/pr/<id>`, both the **`←` nav-chain exit** (stop 1,
-`state.showDescription`, see `.claude/rules/keyboard-navigation.md`) and the
-**`/`-menu item "To PR overview"** (`PR_COMMANDS` in `home.mjs`) link to
-`/pr-overview?pr=<state.pr>` — not the bare `/pr-overview`. `overview.mjs`
+From `/pr/<id>`, the **`←` nav-chain exit** (stop 1,
+`state.showDescription`, see `.claude/rules/keyboard-navigation.md`) links to
+`/pr-overview?pr=<state.pr>` — not the bare `/pr-overview`. (An earlier
+`/`-menu item "To PR overview" used to link there too; it was removed since
+the `←` exit already covers the same destination.) `overview.mjs`
 reads that param **once** at module load
 (`new URLSearchParams(location.search).get('pr')` → `pendingSelectPr`,
 mirroring `home.mjs`'s `prFromPath()` — no `bindUrlState`, this is a
@@ -264,8 +265,7 @@ shareable navigation position for a refresh/shared link, this simply reuses
 it across the round trip via `/pr-overview`.
 
 - **Outgoing (`home.mjs`):** `overviewExitUrl()` builds the destination for
-  **both** exits to `/pr-overview` (the `←` nav-chain exit at stop 1, and the
-  `/`-menu item "To PR overview") — `/pr-overview?pr=<state.pr>`, plus
+  the `←` nav-chain exit at stop 1 — `/pr-overview?pr=<state.pr>`, plus
   `&sel=<encodeURIComponent(state.blockRef)>` whenever there's a selection
   (`state.blockRef` empty → no `sel` param, e.g. right after loading).
 - **Incoming (`overview.mjs`):** two **never-nulled** module `let`s,

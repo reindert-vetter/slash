@@ -1,9 +1,8 @@
 import { test, expect } from './_fixtures.mjs'
 
-// Coverage for the `?pr=` auto-select: the ← nav-chain exit and the
-// "Naar PR-overzicht" command in home.mjs both link to /pr-overview?pr=<id>
-// so the reviewer lands back on the row they just came from (see
-// trySelectPendingPr/pendingSelectPr in overview.mjs).
+// Coverage for the `?pr=` auto-select: the ← nav-chain exit (home.mjs) links
+// to /pr-overview?pr=<id> so the reviewer lands back on the row they just
+// came from (see trySelectPendingPr/pendingSelectPr in overview.mjs).
 test.describe('PR overview — ?pr= auto-selects the row we came from', () => {
   test('a PR in the main sections gets the keyboard ring, no drawer needed', async ({ page }) => {
     await page.goto('/pr-overview?pr=12903')

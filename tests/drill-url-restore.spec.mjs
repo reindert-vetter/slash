@@ -124,14 +124,22 @@ test.describe('PR Review Tree — drilled column URL state', () => {
 
     await expect.poll(() => new URL(page.url()).searchParams.get('drill')).toContain('Order.php')
 
-    // "Naar PR-overzicht" (the `/` PR-wide menu) reads overviewExitUrl() at the
-    // moment it runs — unlike repeated ←, it doesn't require first popping the
-    // drilled column back out, so it's the only reachable way to leave while
-    // still drilled (see the round-trip note in pages-and-routing.md).
-    await page.keyboard.press('/')
-    // "Naar PR-overzicht" is the default item — the 2nd row, right after the
-    // pinned "Sluit menu".
-    await page.getByTestId('command-row').nth(1).click()
+    // The former "Naar PR-overzicht" `/`-menu item used to read
+    // overviewExitUrl() to leave straight to /pr-overview while still
+    // drilled, without first popping the drilled column back out via
+    // repeated ← (which clears state.drill before mode ever reaches 'list',
+    // see "Column navigation" in detail-layout.md) — that item has been
+    // removed (see keyboard-navigation.md). The only remaining way to reach
+    // /pr-overview while a column is still drilled is thus a direct
+    // navigation (bookmark/browser-history) carrying the same
+    // sel/mode/drill/dgran/dchg params the app itself already mirrors into
+    // the URL — build that destination straight from the current URL, so
+    // this test keeps covering the RESTORE side (applyDrillRefRestore) end
+    // to end.
+    const drilledUrl = new URL(page.url())
+    drilledUrl.pathname = '/pr-overview'
+    drilledUrl.searchParams.set('pr', '12903')
+    await page.goto(drilledUrl.toString())
     await expect(page).toHaveURL(/\/pr-overview/)
     expect(page.url()).toContain('drill=')
     expect(page.url()).toContain('Order.php')

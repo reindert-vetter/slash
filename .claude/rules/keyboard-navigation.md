@@ -683,14 +683,15 @@ with the fresh-`ms` state split, see `.claude/rules/conventions.md`.
 
 **`/`** opens a **general, PR-wide tree menu** (`menu.mode = 'pr'`,
 `PR_COMMANDS` in `home.mjs`) — the same `CommandMenu` overlay as `Enter`, but
-instead of block actions these are actions on the **whole PR**. Six root
+instead of block actions these are actions on the **whole PR**. Five root
 items: **"Close
 menu"** (pinned at the top, where the selection has recently always opened
-on the item after it), **"To PR overview"** (navigates to
-`/pr-overview`, and thus the default item where the selection opens),
-**"GitHub"** and **"Jira"** (as a **submenu** via the existing `children`
-mechanism — each submenu itself also gets such a pinned "Close menu"),
-**"Diepgravend onderzoek"** ("in-depth investigation", starts
+on the item after it), **"GitHub"** and **"Jira"** (as a **submenu** via the
+existing `children` mechanism — each submenu itself also gets such a pinned
+"Close menu"; "GitHub" is thus the default item where the selection opens —
+a submenu, not a direct action, but deliberately left as-is rather than
+reordering the list around it), **"Diepgravend onderzoek"** ("in-depth
+investigation", starts
 `code_warning` on Opus, see `checkPRWarnings`/`.claude/rules/tembed-workflows.md`), and
 **"Show full description" / "Collapse description"** (the last item,
 a label function that toggles `state.descriptionExpanded` — the same

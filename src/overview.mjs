@@ -1403,9 +1403,9 @@ function applyCached(body) {
 }
 
 // ── auto-select a PR coming back from /pr/<id> ──────────────────────────────
-// The ← nav-chain exit and the "Naar PR-overzicht" command (both in home.mjs)
-// link here with `?pr=<id>` so the reviewer lands back on the row they just
-// came from, instead of an unselected list. Read once at load; applied (and
+// The ← nav-chain exit (home.mjs) links here with `?pr=<id>` so the reviewer
+// lands back on the row they just came from, instead of an unselected list.
+// Read once at load; applied (and
 // cleared) the first time the target PR turns up in either the main sections
 // or the lazily-loaded "Recent gegenereerd" drawer — mirrors the
 // restore-then-clear pattern of applyRelRestore/applyBlockRefRestore. A PR

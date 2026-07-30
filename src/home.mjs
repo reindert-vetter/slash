@@ -807,9 +807,9 @@ function applyDrillCursorRestore(b) {
   )
 }
 
-// overviewExitUrl — shared by both nav-chain exits to /pr-overview (the ←
-// handler in onKeydown and the "Naar PR-overzicht" PR_COMMANDS item below).
-// Carries `sel` alongside `pr` so /pr-overview can hand the same block
+// overviewExitUrl — used by the ← handler in onKeydown (stop 1 of the nav
+// chain, state.showDescription) to exit to /pr-overview. Carries `sel`
+// alongside `pr` so /pr-overview can hand the same block
 // reference back when the reviewer returns to this PR (see the
 // originPr/originSel round-trip in overview.mjs, and the "?pr=<id> auto-
 // selecteert…" section in .claude/rules/pages-and-routing.md). Only appended
@@ -5945,22 +5945,20 @@ const COMMANDS = withClose([
 
 // PR_COMMANDS — the general, PR-wide tree menu opened with `/` (menu mode 'pr').
 // Unlike COMMANDS (which acts on the selected block/diff), these are actions on
-// the whole PR: jump to the overview, and GitHub/Jira with their own submenus.
-// The Jira comment + subtask items are placeholders for now (no Jira write
-// integration yet). GitHub "comment plaatsen" reuses the line-comment composer
-// (startComment), same as the block menu. See the `/` handler in onKeydown.
-// "Sluit menu" is pinned first (withClose); the menu opens on the 2nd item
-// (defaultSel), so "Naar PR-overzicht" stays the default Enter action.
+// the whole PR: GitHub/Jira with their own submenus, the code_warning risk
+// check, and the description toggle. The Jira comment + subtask items are
+// placeholders for now (no Jira write integration yet). GitHub "comment
+// plaatsen" reuses the line-comment composer (startComment), same as the
+// block menu. See the `/` handler in onKeydown. "Sluit menu" is pinned first
+// (withClose); the menu opens on the 2nd item (defaultSel), so "GitHub" stays
+// the default Enter action (which opens its own submenu rather than running
+// an action directly — deliberate, see the "Naar PR-overzicht" removal note
+// in git history: no reordering to keep a direct-action default).
+// A separate "Naar PR-overzicht" item used to sit here (jumping straight to
+// /pr-overview via overviewExitUrl); it was removed since the ← nav-chain
+// exit (stop 1, state.showDescription) already reaches the same destination
+// with the same params — see overviewExitUrl above.
 const PR_COMMANDS = withClose([
-  {
-    id: 'pr-overview',
-    label: 'Naar PR-overzicht',
-    hint: 'overzicht',
-    // `?pr=`/`?sel=` let /pr-overview auto-select this PR — and hand back the
-    // same block reference when we return (see overviewExitUrl above) — same
-    // destination + params as the ← nav-chain exit below.
-    run: () => window.location.assign(overviewExitUrl()),
-  },
   {
     id: 'pr-github',
     label: 'GitHub',
