@@ -222,7 +222,7 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     const rows = page.getByTestId('command-row')
     await expect(rows).toHaveCount(3)
     await expect(rows.nth(0)).toContainText('Sluit menu')
-    await expect(rows.nth(1)).toContainText('Keur de PR goed')
+    await expect(rows.nth(1)).toContainText('Keur de HELE PR goed')
     await expect(rows.nth(2)).toContainText('Wijs de PR af')
 
     await rows.filter({ hasText: 'Sluit menu' }).click()

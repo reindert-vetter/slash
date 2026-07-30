@@ -54,7 +54,7 @@ test.describe('PR Review Tree — approving inside a drilled Onderliggende-code 
     // OTHER children to try next — see afterApproveAction/findNextUnapproved
     // in home.mjs), even though the PARENT's own line is still un-approved —
     // so the PR overall isn't fully approved yet: this opens the
-    // 'reviewChoice' follow-up (Keur de PR goed / Wijs de PR af / Sluit
+    // 'reviewChoice' follow-up (Keur de HELE PR goed / Wijs de PR af / Sluit
     // menu), not a plain close. Dismiss it before checking the approvals API.
     await expect(menu).toBeVisible()
     await expect(page.getByTestId('command-row')).toHaveCount(3)

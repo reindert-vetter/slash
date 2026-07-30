@@ -7,19 +7,24 @@ import { test, expect } from './_fixtures.mjs'
 // something ahead" case). Two variants, both driven by state.approvalTotal
 // (the PR-wide combined-approval count):
 //   - fully approved (REVIEW_APPROVE_COMMANDS, menu mode 'reviewApprove'):
-//     "Sluit menu" (pinned first) / "Keur de PR goed" (the default, 2nd item).
+//     "Sluit menu" (pinned first) / "Keur de HELE PR goed" (the default, 2nd
+//     item).
 //   - not yet fully approved (REVIEW_CHOICE_COMMANDS, menu mode
-//     'reviewChoice'): "Sluit menu" (pinned first) / "Keur de PR goed"
+//     'reviewChoice'): "Sluit menu" (pinned first) / "Keur de HELE PR goed"
 //     (default, 2nd item) / "Wijs de PR af" —
 //     the not-fully-approved half of this is also covered by
 //     postapprove-menu.spec.mjs's own "nothing left ahead" test; this file
 //     focuses on what actually gets POSTed to /api/workflows/submit_review.
 //
-// Both "Keur de PR goed" and (after typing a reason) "Wijs de PR af" call the
-// real submit_review endpoint — SLASH_GITHUB=off (forced by the test harness,
-// see _fixtures.mjs) means the backend's github.Fake accepts it without
-// touching the network, so no mocking is needed; we only intercept the
-// request here to assert exactly what was sent.
+// Approving the whole PR is a deliberate TWO-STEP choice: "Keur de HELE PR
+// goed" no longer submits directly — it has `children` (the ordinary submenu
+// mechanism, like "Open GitHub") that opens a one-item confirm step
+// ("Sluit menu" / "Ja, keur de hele PR goed"); only THAT item actually calls
+// submit_review. Both "Ja, keur de hele PR goed" and (after typing a reason)
+// "Wijs de PR af" call the real submit_review endpoint — SLASH_GITHUB=off
+// (forced by the test harness, see _fixtures.mjs) means the backend's
+// github.Fake accepts it without touching the network, so no mocking is
+// needed; we only intercept the request here to assert exactly what was sent.
 //
 // Same PR 12903 fixture as postapprove-menu.spec.mjs: only block 1
 // (CreatePaymentAction::execute, index 1) and block 6 (Order::address, index
@@ -69,8 +74,8 @@ async function approveViaPalette(page) {
   await page.getByTestId('command-row').first().click()
 }
 
-test.describe('PR Review Tree — review-submit follow-up (Keur de PR goed / Wijs de PR af)', () => {
-  test('PR fully approved: "Keur de PR goed" POSTs event APPROVE with an empty body', async ({
+test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed / Wijs de PR af)', () => {
+  test('PR fully approved: "Keur de HELE PR goed" opens a confirm step before it POSTs event APPROVE', async ({
     page,
   }) => {
     await clearBlockApproval(page, BLOCK1_ID)
@@ -102,11 +107,22 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de PR goed / Wij
     const rows = page.getByTestId('command-row')
     await expect(rows).toHaveCount(2)
     await expect(rows.nth(0)).toContainText('Sluit menu')
-    await expect(rows.nth(1)).toContainText('Keur de PR goed')
+    await expect(rows.nth(1)).toContainText('Keur de HELE PR goed')
+    // Colorblind rule: shape + text carry the meaning, the emerald tint is
+    // decoration only — the icon must be present regardless.
+    await expect(rows.nth(1).getByTestId('command-icon-approve-pr')).toBeVisible()
+
+    // Choosing it must NOT submit yet — it opens the confirm submenu instead.
+    await rows.filter({ hasText: 'Keur de HELE PR goed' }).click()
+    await expect(menu).toBeVisible()
+    await expect(rows).toHaveCount(2)
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Ja, keur de hele PR goed')
+    await expect(rows.nth(1).getByTestId('command-icon-approve-pr')).toBeVisible()
 
     const [request] = await Promise.all([
       page.waitForRequest('**/api/workflows/submit_review'),
-      rows.filter({ hasText: 'Keur de PR goed' }).click(),
+      rows.filter({ hasText: 'Ja, keur de hele PR goed' }).click(),
     ])
     expect(request.method()).toBe('POST')
     expect(request.postDataJSON()).toEqual({ pr: 12903, event: 'APPROVE', body: '' })
@@ -135,7 +151,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de PR goed / Wij
     const rows = page.getByTestId('command-row')
     await expect(rows).toHaveCount(3)
     await expect(rows.nth(0)).toContainText('Sluit menu')
-    await expect(rows.nth(1)).toContainText('Keur de PR goed')
+    await expect(rows.nth(1)).toContainText('Keur de HELE PR goed')
     await expect(rows.nth(2)).toContainText('Wijs de PR af')
     await rows.filter({ hasText: 'Wijs de PR af' }).click()
 

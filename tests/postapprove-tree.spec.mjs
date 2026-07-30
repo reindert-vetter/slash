@@ -54,7 +54,7 @@ test.describe('PR Review Tree — postApprove follow-up menu walks the tree', ()
     // The child's own diff now owns the keyboard — approving its group leaves
     // NOTHING left anywhere in the tree, and (parent + child both fully
     // approved) the whole PR is now fully approved too: this opens the
-    // 'reviewApprove' follow-up ("Keur de PR goed"/"Sluit menu"), not the
+    // 'reviewApprove' follow-up ("Keur de HELE PR goed"/"Sluit menu"), not the
     // plain "Ga door"/"Sluit menu" postApprove pair — see afterApproveAction/
     // REVIEW_APPROVE_COMMANDS in home.mjs, and
     // tests/review-submit-menu.spec.mjs for the actual submit_review call.
@@ -65,9 +65,9 @@ test.describe('PR Review Tree — postApprove follow-up menu walks the tree', ()
     const rows = page.getByTestId('command-row')
     await expect(rows).toHaveCount(2)
     // "Sluit menu" is pinned at the top of every palette (withClose, home.mjs);
-    // the default selection opens on the 2nd item, "Keur de PR goed".
+    // the default selection opens on the 2nd item, "Keur de HELE PR goed".
     await expect(rows.nth(0)).toContainText('Sluit menu')
-    await expect(rows.nth(1)).toContainText('Keur de PR goed')
+    await expect(rows.nth(1)).toContainText('Keur de HELE PR goed')
     await rows.filter({ hasText: 'Sluit menu' }).click()
     await expect(menu).not.toBeVisible()
   })

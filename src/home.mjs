@@ -4113,19 +4113,48 @@ async function checkPRWarnings() {
   }
 }
 
+// REVIEW_APPROVE_CONFIRM_COMMANDS — the one-more-step confirmation opened by
+// choosing "Keur de HELE PR goed" below (via the ordinary `children`
+// submenu mechanism runCommand already uses for e.g. "Open GitHub" — no new
+// menu mode needed). This exists because approving the whole PR (a real
+// GitHub review, submitReview('APPROVE')) used to fire on that single first
+// choice — reported as "too easy to approve the whole PR by accident".
+// "Sluit menu" is pinned first (withClose); the menu opens on the 2nd item
+// (defaultSel), so a reviewer who really means it can still confirm with one
+// more Enter — but it is a genuinely separate keypress/click from the one
+// that opened this submenu, not the same one.
+const REVIEW_APPROVE_CONFIRM_COMMANDS = withClose([
+  {
+    id: 'review-approve-confirm',
+    label: 'Ja, keur de hele PR goed',
+    hint: 'bevestig',
+    icon: 'approve-pr',
+    run: () => submitReview('APPROVE'),
+  },
+])
+
 // REVIEW_APPROVE_COMMANDS — shown right after a palette approve action leaves
 // the WHOLE PR fully approved (state.approvalTotal.done === total, over every
 // top-level block plus its nested/drilled PR-block children — see
 // afterApproveAction): there's nothing left to review anywhere, so offer to
-// submit a real "approve" GitHub review, or just close. "Sluit menu" is
-// pinned first (withClose); the menu opens on the 2nd item (defaultSel), so
-// "Keur de PR goed" stays the default Enter action.
+// submit a real "approve" GitHub review, or just close. Choosing "Keur de
+// HELE PR goed" does NOT submit directly (see REVIEW_APPROVE_CONFIRM_COMMANDS
+// above) — it opens a one-item confirm submenu instead, so approving the
+// whole PR always takes two deliberate choices. The item also carries a
+// small check-in-circle icon (commandIcon in CommandMenu.mjs) as an extra,
+// non-color cue that this action's scope is the WHOLE PR — the icon's SHAPE
+// plus the label text carry that meaning, the emerald tint is decoration on
+// top only (colorblind rule). "Sluit menu" is pinned first (withClose); the
+// menu opens on the 2nd item (defaultSel), so "Keur de HELE PR goed" stays
+// the default Enter action (which now opens the confirm submenu, not the
+// review itself).
 const REVIEW_APPROVE_COMMANDS = withClose([
   {
     id: 'review-approve-pr',
-    label: 'Keur de PR goed',
+    label: 'Keur de HELE PR goed',
     hint: 'approve',
-    run: () => submitReview('APPROVE'),
+    icon: 'approve-pr',
+    children: REVIEW_APPROVE_CONFIRM_COMMANDS,
   },
 ])
 
@@ -4133,18 +4162,22 @@ const REVIEW_APPROVE_COMMANDS = withClose([
 // nothing ahead to navigate to (findNextUnapproved()===null — the reviewer
 // just approved the last unit reachable from here) while the PR is NOT yet
 // fully approved overall (something else — earlier, or elsewhere in the tree
-// — is still open). Offers the same "Keur de PR goed" as above, or "Wijs de
-// PR af": that doesn't submit straight away (a REQUEST_CHANGES review needs a
-// non-empty reason, see submitReview) but opens the dedicated free-text
-// follow-up step instead (menu mode 'reviewReject' below). "Sluit menu" is
-// pinned first (withClose); the menu opens on the 2nd item (defaultSel), so
-// "Keur de PR goed" stays the default Enter action.
+// — is still open). Offers the same "Keur de HELE PR goed" as above (also
+// via the REVIEW_APPROVE_CONFIRM_COMMANDS submenu, not a direct submit — see
+// its doc comment), or "Wijs de PR af": that doesn't submit straight away (a
+// REQUEST_CHANGES review needs a non-empty reason, see submitReview) but
+// opens the dedicated free-text follow-up step instead (menu mode
+// 'reviewReject' below) — that mandatory-reason step already is its own
+// deliberate extra action, so it needed no additional confirm layer here.
+// "Sluit menu" is pinned first (withClose); the menu opens on the 2nd item
+// (defaultSel), so "Keur de HELE PR goed" stays the default Enter action.
 const REVIEW_CHOICE_COMMANDS = withClose([
   {
     id: 'review-choice-approve',
-    label: 'Keur de PR goed',
+    label: 'Keur de HELE PR goed',
     hint: 'approve',
-    run: () => submitReview('APPROVE'),
+    icon: 'approve-pr',
+    children: REVIEW_APPROVE_CONFIRM_COMMANDS,
   },
   {
     id: 'review-choice-reject',
@@ -5747,7 +5780,7 @@ let postApproveTarget = null
 // spot the forward walk never reached) — the reviewer just approved the last
 // unit reachable from here, but "alles" isn't done yet. Either way, offer to
 // submit a real GitHub PR-level review (see submitReview/REVIEW_APPROVE_
-// COMMANDS/REVIEW_CHOICE_COMMANDS): fully done → just "Keur de PR goed"; not
+// COMMANDS/REVIEW_CHOICE_COMMANDS): fully done → just "Keur de HELE PR goed"; not
 // yet fully done → the extra choice "Wijs de PR af" (which itself needs a
 // non-empty reason, see the 'reviewReject' menu mode).
 // `keepList` and `blockId` are both captured synchronously, right here (resp.
@@ -6044,6 +6077,15 @@ function rootCommandsFor(mode) {
 // continue typing ("Maak hiermee een comment"). Shared by the menu render and
 // the keyboard handler so both walk the same list.
 function resolveCommands(query) {
+  // A submenu (ms.sub, set by enterSubmenu when a command has `children` —
+  // e.g. "Open GitHub", or REVIEW_APPROVE_CONFIRM_COMMANDS opened from
+  // "Keur de HELE PR goed" below) always wins, regardless of ms.mode: mode
+  // itself doesn't change while a submenu is open (it only ever describes the
+  // ROOT list), so this must be checked before any mode-specific early return
+  // below — otherwise a mode whose root list contains a `children` command
+  // (like reviewApprove/reviewChoice, once REVIEW_APPROVE_CONFIRM_COMMANDS was
+  // added) would keep re-showing its own root list instead of the submenu.
+  if (ms.sub) return filterCommands(ms.sub, query)
   // The comment-scoped menu (Enter on a focused comment row) is just its own
   // small list — no submenu, no make-a-comment fallback.
   if (ms.mode === 'comment') return filterCommands(ms.commands, query)
@@ -6056,8 +6098,10 @@ function resolveCommands(query) {
   // make-a-comment fallback.
   if (ms.mode === 'postApprove') return filterCommands(ms.commands, query)
   // The two review-submit follow-ups (opened right after an approve action
-  // finds NOTHING left ahead — see afterApproveAction): same shape as
-  // postApprove, a plain list, no submenu, no make-a-comment fallback.
+  // finds NOTHING left ahead — see afterApproveAction): a plain list, no
+  // make-a-comment fallback — but "Keur de HELE PR goed" DOES carry
+  // `children` (REVIEW_APPROVE_CONFIRM_COMMANDS, the one-more-step confirm),
+  // handled by the ms.sub check above, not here.
   if (ms.mode === 'reviewApprove') return filterCommands(ms.commands, query)
   if (ms.mode === 'reviewChoice') return filterCommands(ms.commands, query)
   // reviewReject — the free-text rejection-reason step opened by "Wijs de PR
@@ -6081,10 +6125,7 @@ function resolveCommands(query) {
       },
     ]
   }
-  // In a submenu we only show (and filter) that parent's already-snapshotted
-  // children — no make-a-comment fallback, since the submenu is a plain
-  // choice list.
-  if (ms.sub) return filterCommands(ms.sub, query)
+  // (ms.sub itself is handled once, at the top of this function.)
   // The PR-wide tree menu (opened with `/`) is a plain command list too — no
   // block actions, no comment fallback.
   if (ms.mode === 'pr') return filterCommands(ms.commands, query)

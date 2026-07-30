@@ -469,16 +469,34 @@ the `approvalSummaries`/`approvalTotal` watch is decoupled and only fills as
 a microtask, not synchronously with the just-reassigned `b.approvedRows`):
 - **Everything approved** (`approvalTotal.done === total`, `total > 0`) →
   `menu.mode = 'reviewApprove'` (`REVIEW_APPROVE_COMMANDS`): **"Close menu"**
-  (pinned at the top) / **"Approve the PR"** (default, the 2nd item) — there
-  is nothing left to reject, everything has already been reviewed.
+  (pinned at the top) / **"Approve the whole PR"** (default, the 2nd item) —
+  there is nothing left to reject, everything has already been reviewed.
 - **Not everything yet** (something is still open, somewhere outside the
   scope of the forward search — e.g. an earlier block the reviewer hasn't
   reached yet) → `menu.mode = 'reviewChoice'` (`REVIEW_CHOICE_COMMANDS`):
-  **"Close menu"** (pinned at the top) / **"Approve the PR"** (default, the
-  2nd item) / **"Reject the PR"** — the reviewer explicitly decides here
+  **"Close menu"** (pinned at the top) / **"Approve the whole PR"** (default,
+  the 2nd item) / **"Reject the PR"** — the reviewer explicitly decides here
   whether to submit the PR despite the remaining open items, or request
   changes first.
-Both "Approve the PR" items call **`submitReview('APPROVE')`** — a real
+**Approving the whole PR is deliberately a TWO-STEP choice, not a single
+Enter** (reported: submitting a real GitHub review on the whole PR was "too
+easy to hit by accident"). Neither "Approve the whole PR" item carries a
+`run` anymore — both instead carry `children: REVIEW_APPROVE_CONFIRM_COMMANDS`,
+so choosing it opens a one-item confirmation submenu via the **same, ordinary
+`children` mechanism** `runCommand`/`enterSubmenu` already use for e.g. "Open
+GitHub" (no new menu mode). That submenu is itself built with `withClose`
+(so it too opens with a pinned "Close menu" first, and its one real item,
+"Yes, approve the whole PR", is default-selected as the 2nd item) — only
+choosing *that* item actually calls `submitReview('APPROVE')`. The item also
+carries a small check-in-circle icon (`c.icon`, `commandIcon` in
+`CommandMenu.mjs`) next to its label, both on the first choice and on the
+confirm item — the icon's **shape** (a check inside a circle) plus the label
+text ("Approve the whole PR" / "Yes, approve the whole PR") carry the
+"this affects the entire PR" meaning; the emerald color is decoration on
+top only, never the sole carrier (colorblind rule, see `conventions.md`).
+"Reject the PR" got no matching confirm step — its own mandatory free-text
+reason (below) already is a deliberate extra action.
+Both eventually call **`submitReview('APPROVE')`** — a real
 GitHub PR-level review, via `POST /api/workflows/submit_review {pr,
 event, body}` (the sanctioned write path, see `workflows-write-boundary.md`;
 the workflow/Activity/the endpoint itself do not live in `home.mjs`, only
