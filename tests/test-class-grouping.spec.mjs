@@ -80,6 +80,32 @@ test.describe('test methods group per class', () => {
     await expect(page.getByTestId('pr-index')).toHaveClass(/border-indigo-300|dark:border-indigo-500/)
   })
 
+  test('Enter on the methodes-kolom opens the command menu instead of stepping into the diff; → still steps in', async ({
+    page,
+  }) => {
+    await page.goto(`/pr/${PR}`)
+    await page.getByTestId('block-row').filter({ hasText: 'TriggersIndexTest' }).click()
+
+    // First →: focus moves onto the methodes-kolom (stop 2b), stays in list mode.
+    await page.keyboard.press('ArrowRight')
+    await expect(page).not.toHaveURL(/mode=diff/)
+
+    // Enter here opens the ordinary block-scoped command palette — the same
+    // one that already opens on Enter when the test_class row itself is
+    // selected, before ever stepping right — instead of mirroring →.
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await expect(page).not.toHaveURL(/mode=diff/)
+
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
+
+    // → still steps into the diff of the active (first) method, unchanged.
+    await page.keyboard.press('ArrowRight')
+    await expect(page).toHaveURL(/mode=diff/)
+    await expect(page.getByTestId('detail-card')).toContainText('it_should_index_triggers')
+  })
+
   test('→ slides the pr-index away; a second → hides the methodes-kolom; ← reverses both', async ({
     page,
   }) => {

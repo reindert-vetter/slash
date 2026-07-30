@@ -28,10 +28,16 @@ continuous chain of **stops**, from left to right across the whole layout:
      **slides the pr-index away** (the same translate treatment as diff mode
      — `BlockList.mjs`'s ternary checks `state.testColumnFocused` next to
      `mode==='diff'`, and `<main>` shifts to `left-0` in lockstep); a
-     **second** `→`/`Enter` then steps into stop 3, of the ACTIVE method
+     **second** `→` then steps into stop 3, of the ACTIVE method
      (`state.classMethodSel`, via `curBlock()`) — the methodes-kolom itself
      is **hidden in diff mode** (the render slot in `home.mjs` bails on
-     `state.mode === 'diff'`). `←` from stop 3 comes back
+     `state.mode === 'diff'`). **`Enter` here does NOT step into the diff** —
+     it opens the ordinary block-scoped command palette (`Enter — command
+     palette` below), exactly the one that already opens when the
+     `test_class` row itself is selected (before ever stepping right):
+     `curBlock()` already resolves to the active method regardless of
+     `testColumnFocused`, so the same palette naturally targets it. Only `→`
+     steps into the diff. `←` from stop 3 comes back
      here first (not all the way to stop 2 — the column reappears, the
      pr-index stays hidden); a second `←` leaves it (pr-index slides back,
      the column stays visible as long as the class row is selected). `↑`/`↓`

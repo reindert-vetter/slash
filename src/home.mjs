@@ -6496,24 +6496,19 @@ function onKeydown(e) {
     return
   }
 
-  // Enter on the methodes-kolom (stop 2b, see isTestColumnActive/
-  // TestMethodsColumn.mjs) steps into the diff of the active method —
-  // mirrors → there (see the ArrowRight handling further below) — instead
-  // of opening the block palette, which has no meaning without a diff to
-  // act on. Checked before the generic Enter-opens-menu branch below, same
-  // precedence as the comment-item branch just above.
-  if (e.key === 'Enter' && isTestColumnActive()) {
-    e.preventDefault()
-    enterDiff()
-    return
-  }
-
   // Enter opens the palette at the next-block slot. Handled before the empty-blocks
   // guard so it works even while a PR is still loading. On stop 1 (the
   // PR-description column, state.showDescription) there's no block context, so
   // it opens the same PR-wide menu as `/` instead of the block-scoped palette —
   // block 0 in the list is a different stop (showDescription is false there)
-  // and keeps the normal block palette.
+  // and keeps the normal block palette. This also covers stop 2b (the
+  // methodes-kolom, see isTestColumnActive): curBlock() already resolves to
+  // the active method there (state.classMethodSel, see "Grouping test
+  // methods per class" in detail-layout.md), so the same block-scoped
+  // COMMANDS palette naturally targets it — exactly the menu that already
+  // appears when the test_class row itself is selected, before ever
+  // stepping right. Only → (handled further below, isTestColumnActive's own
+  // ArrowRight branch) keeps stepping into that method's diff.
   if (e.key === 'Enter') {
     e.preventDefault()
     openMenu(state.showDescription ? 'pr' : 'block')

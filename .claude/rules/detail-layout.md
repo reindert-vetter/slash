@@ -499,9 +499,19 @@ and the diff instead of replacing the diff card outright.
   no-op arrows.
 - **Keyboard:** `→` on a selected class row (pr-index, stop 2) first moves
   focus onto the methodes-kolom (`state.testColumnFocused`) without
-  changing `state.mode` — a **second** `→` (or `Enter`) then steps into the
-  diff of the active method, exactly like `→` on an ordinary block does
-  from stop 2. `←` from that diff steps back onto the methodes-kolom (not
+  changing `state.mode` — a **second** `→` then steps into the diff of the
+  active method, exactly like `→` on an ordinary block does from stop 2.
+  **`Enter` on the methodes-kolom does NOT mirror `→` anymore** — it opens
+  the ordinary block-scoped command palette instead (see "Enter — command
+  palette" in `.claude/rules/keyboard-navigation.md`), the very same one
+  that already opens on `Enter` when the `test_class` row itself is
+  selected (before ever stepping right into the column): `curBlock()`
+  already resolves to the active method (`state.classMethodSel`) regardless
+  of `testColumnFocused`, so no test-column-specific menu handling is
+  needed — the generic `openMenu('block')` branch in `onKeydown` simply
+  falls through to it once the earlier, now-removed Enter-specific
+  early-return is gone. Only `→` keeps stepping into the diff.
+  `←` from that diff steps back onto the methodes-kolom (not
   all the way to the pr-index — `state.testColumnFocused` simply survives
   the `mode: 'diff' → 'list'` transition unchanged, since nothing resets it
   along the way); a **second** `←` finally leaves the column. Within the
