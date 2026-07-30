@@ -41,6 +41,31 @@ close-popover`, mirrors the CommandMenu's own `withClose` pattern in
 never merely closes the menu; `↑`/`↓` (`movePopover`) cycle through every
 item including the pinned one, wrapping at both ends.
 
+**The popover deliberately shares its visual palette with `CommandMenu.mjs`'s
+command palette (the review-tree's `/`/Enter menu) — LOOK only, not the
+component or its keyboard model.** `popoverRowCls`/`POPOVER_ROW_SHAPE`/
+`POPOVER_FOCUS_CLS` (`src/overview.mjs`) mirror `commandRow`'s row shape
+(`rounded-md`, `text-sm`, `py-2`) and its indigo selected-row highlight
+(`bg-indigo-50`/`ring-indigo-200` etc.), and the popover container itself got
+the same `rounded-xl` + indigo border/ring `CommandMenu`'s own container uses
+(`w-64`, wider than the original `w-56`, since the larger `text-sm` labels
+need a bit more room) instead of the earlier neutral `rounded-lg`/
+`border-slate-200`/`ring-black/5`. Because `movePopover`/`focusPopoverItem`
+already move real DOM focus between the popover's buttons/links, adding the
+same `focus:` classes as `commandRow`'s reactive `menu.sel` highlight lights
+up the identical indigo highlight for free — no new reactive state needed.
+"Sluit menu" is no longer dimmed (it used to render in a muted
+`text-slate-500`) — it's a plain row with a grey, monospace hint badge on the
+right ("esc"), the same shape `commandRow` gives its own pinned "Sluit menu"
+item (`withClose`, `home.mjs`). **What's deliberately NOT shared:** the
+popover keeps its own, independent, focus-based keyboard model
+(`handlePopoverKey`/`movePopover`/`focusPopoverItem`) — no `CommandMenu`
+component reuse, no search/filter field, no fuzzy matching, no submenu
+(`children`) mechanism, no shared `menu`/`ms` reactive state. Keep both in
+sync by hand if one of the two palettes changes — there is no shared
+constant between `overview.mjs` and `CommandMenu.mjs` themselves, only the
+same Tailwind values chosen independently in each.
+
 - **`pr.hasGraph === false`** (not yet ingested, `generateAction(pr)`):
   as the first **action** (2nd item overall, right after "Sluit menu"),
   **"Generate review tree"** (`data-testid=

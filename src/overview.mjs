@@ -559,6 +559,34 @@ function ingestIcon(pr) {
   return ingestBusy(pr) ? icon('loader', 'h-3.5 w-3.5 animate-spin') : icon('sparkles', 'h-3.5 w-3.5')
 }
 
+// Shared Tailwind building blocks for every popover row/link (close button,
+// generate/ingested actions, GitHub/Jira links, ready-for-review controls
+// below) — mirrors CommandMenu.mjs's commandRow: the same row shape
+// (rounded-md, text-sm, py-2) and the same indigo focus-highlight commandRow
+// shows for its reactively-selected row (menu.sel). This popover keeps its
+// own, independent focus-based keyboard model (handlePopoverKey/movePopover/
+// focusPopoverItem, see below) — only the Tailwind classes are shared here,
+// so ↑/↓ moving real DOM focus lights up the identical indigo highlight
+// without any new reactive state. Composed into one string per row before it
+// reaches the template — an attribute value with ANY ${...} interpolation
+// must be the whole value, never mixed literal+dynamic text (the arrow.js
+// pitfall in .claude/rules/conventions.md).
+const POPOVER_ROW_SHAPE = 'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm'
+const POPOVER_FOCUS_CLS =
+  'focus:outline-none focus:bg-indigo-50 dark:focus:bg-indigo-500/15 focus:text-indigo-700 dark:focus:text-indigo-300 ' +
+  'focus:ring-1 focus:ring-indigo-200 dark:focus:ring-indigo-500/30'
+
+// popoverRowCls — the common case: default row text color + hover tint, plus
+// any per-row extra classes (disabled/opacity state, …).
+function popoverRowCls(extra = '') {
+  return (
+    POPOVER_ROW_SHAPE +
+    ' text-slate-700 dark:text-zinc-200 hover:bg-slate-50 dark:hover:bg-zinc-800/60 ' +
+    POPOVER_FOCUS_CLS +
+    (extra ? ' ' + extra : '')
+  )
+}
+
 // generateAction — the not-yet-ingested case: "Genereer review-boom" runs the
 // ingest workflow (generatePage above) and redirects into /pr/<id> on success.
 function generateAction(pr) {
@@ -567,9 +595,7 @@ function generateAction(pr) {
       type="button"
       data-testid="generate-page"
       disabled="${() => ingestBusy(pr)}"
-      class="${() =>
-        'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700 ' +
-        (ingestBusy(pr) ? 'cursor-not-allowed opacity-60' : '')}"
+      class="${() => popoverRowCls(ingestBusy(pr) ? 'cursor-not-allowed opacity-60' : '')}"
       @click="${() => generatePage(pr)}"
     >
       ${() => ingestIcon(pr)} ${() => ingestLabel(pr, 'Genereer review-boom')}
@@ -590,7 +616,7 @@ function ingestedActions(pr) {
     <button
       type="button"
       data-testid="open-tree"
-      class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
+      class="${popoverRowCls()}"
       @click="${() => (location.href = treeUrl(pr))}"
     >
       ${icon('sparkles', 'h-3.5 w-3.5')} Open review-boom
@@ -599,9 +625,7 @@ function ingestedActions(pr) {
       type="button"
       data-testid="regenerate-page"
       disabled="${() => ingestBusy(pr)}"
-      class="${() =>
-        'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700 ' +
-        (ingestBusy(pr) ? 'cursor-not-allowed opacity-60' : '')}"
+      class="${() => popoverRowCls(ingestBusy(pr) ? 'cursor-not-allowed opacity-60' : '')}"
       @click="${() => generatePage(pr, { redirect: false })}"
     >
       ${() => ingestIcon(pr)} ${() => ingestLabel(pr, 'Opnieuw genereren')}
@@ -730,7 +754,7 @@ function readyForReviewSection(pr) {
           html`<button
             type="button"
             data-testid="ready-for-review"
-            class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
+            class="${popoverRowCls()}"
             @click="${() => openReadyPicker(pr)}"
           >
             ${icon('git-pull-request', 'h-3.5 w-3.5')} Klaar voor review
@@ -750,7 +774,10 @@ function readyForReviewSection(pr) {
                     type="button"
                     data-testid="${'reviewer-' + rv.login}"
                     class="${() =>
-                      'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-slate-100 dark:hover:bg-zinc-700 ' +
+                      POPOVER_ROW_SHAPE +
+                      ' hover:bg-slate-50 dark:hover:bg-zinc-800/60 ' +
+                      POPOVER_FOCUS_CLS +
+                      ' ' +
                       (ui.selectedReviewers[rv.login] ? 'text-slate-900 dark:text-zinc-50' : 'text-slate-600 dark:text-zinc-300')}"
                     @click="${() => toggleReviewer(rv.login)}"
                   >
@@ -765,7 +792,11 @@ function readyForReviewSection(pr) {
             data-testid="ready-confirm"
             disabled="${() => ui.readySubmitting}"
             class="${() =>
-              'mt-1 flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-500/15 ' +
+              'mt-1 ' +
+              POPOVER_ROW_SHAPE +
+              ' font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-500/15 ' +
+              POPOVER_FOCUS_CLS +
+              ' ' +
               (ui.readySubmitting ? 'cursor-not-allowed opacity-60' : '')}"
             @click="${() => submitReady(pr)}"
           >
@@ -789,18 +820,28 @@ function readyForReviewSection(pr) {
 // overlaps the status pills of the row below, and with a near-page-background
 // tint that overlap read as the pill's text being cut off instead of a
 // floating menu covering it.
+//
+// Visually this now deliberately mirrors CommandMenu.mjs's palette (rounded-xl,
+// an indigo border/ring instead of a neutral one, text-sm/py-2 rows, the same
+// indigo focus-highlight) — see .claude/rules/pages-and-routing.md. That's a
+// shared LOOK only: this popover keeps its own, independent, focus-based
+// keyboard model (handlePopoverKey/movePopover/focusPopoverItem below) — no
+// CommandMenu component reuse, no search field, no submenu mechanism, no
+// shared `menu`/`ms` state. "Sluit menu" is no longer dimmed — it's a plain
+// row with a grey hint badge on the right ("esc"), the same shape commandRow
+// gives its own pinned "Sluit menu" item (withClose, home.mjs).
 function popover(pr) {
   const m = (pr.title || '').match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
   return html`
     <div
-      class="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-1 shadow-2xl ring-1 ring-black/5"
+      class="absolute right-0 top-full z-20 mt-1 w-64 rounded-xl border border-indigo-300 dark:border-indigo-500 bg-white dark:bg-zinc-900 p-1 shadow-2xl ring-1 ring-indigo-500/20"
       data-testid="pr-popover"
       @click="${(e) => e.stopPropagation()}"
     >
       <button
         type="button"
         data-testid="close-popover"
-        class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-500 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-700"
+        class="${popoverRowCls()}"
         @click="${(e) => {
           // Stop propagation FIRST, before closePopover() removes the
           // popover from the DOM (and thus its own stopPropagation
@@ -812,33 +853,21 @@ function popover(pr) {
           closePopover()
         }}"
       >
-        ${icon('x', 'h-3.5 w-3.5')} Sluit menu
+        ${icon('x', 'h-3.5 w-3.5')}<span class="flex-1 truncate">Sluit menu</span
+        ><span class="shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400 dark:text-zinc-500"
+          >esc</span
+        >
       </button>
       ${pr.hasGraph ? ingestedActions(pr) : generateAction(pr)}
-      <a
-        href="${pr.url}"
-        target="_blank"
-        rel="noreferrer"
-        class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
-      >
+      <a href="${pr.url}" target="_blank" rel="noreferrer" class="${popoverRowCls()}">
         ${icon('external-link', 'h-3.5 w-3.5')} Open op GitHub
       </a>
-      <button
-        type="button"
-        data-testid="copy-url"
-        class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
-        @click="${() => copyGithubUrl(pr)}"
-      >
+      <button type="button" data-testid="copy-url" class="${popoverRowCls()}" @click="${() => copyGithubUrl(pr)}">
         ${icon('external-link', 'h-3.5 w-3.5')} ${() => (ui.copiedFor === pr.number ? 'Gekopieerd!' : 'Kopieer GitHub URL')}
       </button>
       ${() =>
         m
-          ? html`<a
-              href="${JIRA_BASE + m[1]}"
-              target="_blank"
-              rel="noreferrer"
-              class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700"
-            >
+          ? html`<a href="${JIRA_BASE + m[1]}" target="_blank" rel="noreferrer" class="${popoverRowCls()}">
               ${icon('external-link', 'h-3.5 w-3.5')} Open Jira-ticket
             </a>`
           : ''}
