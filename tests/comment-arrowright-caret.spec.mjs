@@ -1,7 +1,7 @@
 import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
 
-// Regression test for: "in een comment kan ik niet met pijltjestoets naar
-// rechts (eerst naar links in de input met een zin, en dan naar rechts)" —
+// Regression test for: "in a comment I can't use the right arrow key
+// (first left in the input with a sentence, and then right)" —
 // the mirror image of comment-arrowleft-caret.spec.mjs. ArrowRight (and
 // Option/Alt+ArrowRight, the Mac word-jump) inside a genuinely DOM-focused
 // comment/reply textarea must move the caret, not jump into the comment's

@@ -1,8 +1,8 @@
 import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
 
-// Regression test for: "als ik een comment aan het typen ben ... en ik ga
-// weg van de comment (bijvoorbeeld naar links), dan wil ik dat hetzelfde
-// bericht daar weer zichtbaar is" — leaving the new-comment composer (or an
+// Regression test for: "if I'm typing a comment ... and I navigate away
+// from the comment (e.g. to the left), then I want that same message to be
+// visible there again" — leaving the new-comment composer (or an
 // existing thread's reply field) via ArrowLeft at caret position 0 used to
 // unmount the field and discard whatever was typed, since both are otherwise
 // uncontrolled DOM elements. See composeDrafts/replyDrafts in

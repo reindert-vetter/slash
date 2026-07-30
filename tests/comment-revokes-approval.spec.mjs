@@ -1,7 +1,7 @@
 import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
 
-// "Als iemand een comment plaatst, dan wil ik dat de bijbehorende regel niet
-// meer approved is" — placing a comment on an already-approved unit signals
+// "If someone places a comment, then I want the corresponding line to no
+// longer be approved" — placing a comment on an already-approved unit signals
 // the reviewer that the code isn't OK after all, so its approval is retracted
 // (revokeApprovalForComment, home.mjs), through the existing `set` Signal
 // (persistApproval) — never a direct write. See blocks-and-ingest.md /

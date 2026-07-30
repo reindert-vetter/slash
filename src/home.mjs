@@ -5552,8 +5552,8 @@ function toggleCallApprove(b, change = state.change) {
 }
 
 // revokeApprovalForComment retracts approval for the row(s)/call segment a
-// freshly placed comment anchors on: "als iemand een comment plaatst, dan is
-// de bijbehorende regel niet meer approved" — placing a comment signals the
+// freshly placed comment anchors on: "if someone places a comment, then the
+// corresponding line is no longer approved" — placing a comment signals the
 // reviewer that the code isn't OK after all. `t` is the exact commentTarget()
 // snapshot the caller captured BEFORE the async placeComment call (so a
 // concurrent navigation step can't shift the anchor out from under us); `b`

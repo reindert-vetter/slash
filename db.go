@@ -29,8 +29,8 @@ CREATE TABLE IF NOT EXISTS blocks (
   side       TEXT NOT NULL DEFAULT 'new',
   pr         INTEGER NOT NULL DEFAULT 0,
   approved   INTEGER NOT NULL DEFAULT 0,
-  description TEXT NOT NULL DEFAULT ''    -- vrije tekst uit een PHPDoc /** ... */ direct boven
-                                           -- de declaratie (@tags gestript); deterministisch, geen AI
+  description TEXT NOT NULL DEFAULT ''    -- free text from a PHPDoc /** ... */ directly above
+                                           -- the declaration (@tags stripped); deterministic, no AI
 );
 
 CREATE TABLE IF NOT EXISTS edges (

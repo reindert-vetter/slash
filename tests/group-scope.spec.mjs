@@ -14,10 +14,10 @@ import { test, expect } from './_fixtures.mjs'
 const DEEP_LINK = '/pr/12903?mode=diff&sel=app%2FActions%2FCreatePaymentAction.php%3A26'
 
 test.describe('PR Review Tree — line/call hide vs group reorder scoping', () => {
-  // "Als ik een group selecteer" (the default granularity on entering a diff):
+  // "If I select a group" (the default granularity on entering a diff):
   // a relation child outside the selected group's line range is NOT dropped
-  // from the panel — it just sorts below the in-scope one ("group blokken
-  // bovenaan, en dan daaronder wat niet in de blok zit").
+  // from the panel — it just sorts below the in-scope one ("group blocks
+  // on top, and below that whatever isn't in the block").
   test('group granularity reorders in-scope relation children above out-of-scope ones (does not hide)', async ({
     page,
   }) => {
@@ -33,8 +33,8 @@ test.describe('PR Review Tree — line/call hide vs group reorder scoping', () =
     await expect(items.nth(1)).toContainText('GroupScopeChildB')
   })
 
-  // "Als ik een line selecteer, dan wil ik alleen onderliggende code zien van
-  // die line" — at 'line' granularity a relation child is HIDDEN outright
+  // "If I select a line, then I only want to see underlying code of
+  // that line" — at 'line' granularity a relation child is HIDDEN outright
   // (relatedChildren's `scoped` flag), regardless of how close its own
   // relation line sits to the selected line. Only method-call children can
   // ever show at this fine a level.
