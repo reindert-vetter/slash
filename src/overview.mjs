@@ -193,6 +193,17 @@ const STATE_LABEL = {
   COMMENTED: 'reactie geplaatst',
   DISMISSED: 'afgewezen',
   PENDING: 'in afwachting',
+  // UNKNOWN: the backend's per-reviewer fold (inbox.go's mergeReviewers)
+  // couldn't tell whether this reviewer's status is up to date — an
+  // extremely active PR exceeded the reviews(first: N) pagination cap and
+  // this author's true latest review may have been cut off. Deliberately a
+  // distinct label from "in afwachting" (which means "genuinely awaiting a
+  // first review") — this reviewer HAS reviewed, we just can't say for
+  // certain what their current status is. reviewerAvatar already renders it
+  // as the same dimmed placeholder as PENDING (anything outside
+  // {APPROVED,CHANGES_REQUESTED,COMMENTED} falls into that bucket) — only the
+  // tooltip differs.
+  UNKNOWN: 'onduidelijk — te veel reviews om zeker te zijn',
 }
 
 function reviewChip(pr, status) {

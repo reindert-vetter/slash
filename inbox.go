@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // inbox.go is the read-only GitHub bridge behind the /pr-overview inbox. It
@@ -31,7 +33,7 @@ import (
 type reviewer struct {
 	Login     string `json:"login"`
 	AvatarURL string `json:"avatarUrl"`
-	State     string `json:"state"` // APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED|PENDING
+	State     string `json:"state"` // APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED|PENDING|UNKNOWN
 	Team      bool   `json:"team"`
 }
 
@@ -214,6 +216,16 @@ type ghPRNode struct {
 			} `json:"author"`
 		} `json:"nodes"`
 	} `json:"latestReviews"`
+	// Reviews is the FULL review history (capped at reviewsPerPRCap), used to
+	// fold each reviewer's DECISIVE state (see mergeReviewers) instead of
+	// just their literal latest review. PageInfo.HasNextPage signals that
+	// the PR has more review submissions than we fetched.
+	Reviews struct {
+		PageInfo struct {
+			HasNextPage bool `json:"hasNextPage"`
+		} `json:"pageInfo"`
+		Nodes []reviewNode `json:"nodes"`
+	} `json:"reviews"`
 	Commits struct {
 		Nodes []struct {
 			Commit struct {
@@ -232,13 +244,43 @@ const lightFields = `
 	number title url updatedAt createdAt isDraft state baseRefName headRefName
 	additions deletions changedFiles author { login } comments { totalCount }`
 
-const heavyFields = `
+// reviewsPerPRCap is the `first:` cap on the `reviews` connection below.
+// statusesFor batches EVERY inbox PR into one aliased query, so this cap
+// multiplies directly by however many PRs are in view — deliberately kept
+// modest (matching the existing reviewRequests/latestReviews cap of 30,
+// bumped up a bit since a PR's review-submission COUNT churns faster than
+// its reviewer count: one reviewer commonly submits several rounds). See
+// mergeReviewers' own doc comment for what happens once a PR exceeds it.
+const reviewsPerPRCap = 50
+
+// stateUnknown marks a reviewer whose decisive state we could not reliably
+// determine because their review history was truncated by reviewsPerPRCap
+// (see mergeReviewers). reviewerAvatar (src/overview.mjs) doesn't special-case
+// it — it already renders any state outside {APPROVED,CHANGES_REQUESTED,
+// COMMENTED} as a plain, dimmed placeholder, which is exactly the "we don't
+// know" visual this deserves. Only its label (STATE_LABEL) needed a line.
+const stateUnknown = "UNKNOWN"
+
+// reviewNode is one entry of the `reviews` connection — the raw event that
+// foldReviewerStates walks per author, in submission order.
+type reviewNode struct {
+	State       string `json:"state"`
+	SubmittedAt string `json:"submittedAt"`
+	Author      struct {
+		Login     string `json:"login"`
+		AvatarURL string `json:"avatarUrl"`
+	} `json:"author"`
+}
+
+var heavyFields = fmt.Sprintf(`
 	mergeable reviewDecision
 	reviewRequests(first: 30) { nodes { requestedReviewer {
 		__typename ... on User { login avatarUrl } ... on Team { name } } } }
 	latestReviews(first: 30) { nodes { state author { login ... on User { avatarUrl } } } }
+	reviews(first: %d) { pageInfo { hasNextPage } nodes {
+		state submittedAt author { login ... on User { avatarUrl } } } }
 	commits(last: 1) { nodes { commit { statusCheckRollup {
-		state contexts { totalCount } } } } }`
+		state contexts { totalCount } } } } }`, reviewsPerPRCap)
 
 // ghGraphQL runs a gh GraphQL query with -f/-F variables and returns the raw
 // data body. Variables are passed as separate args (no shell interpolation).
@@ -349,10 +391,116 @@ func statusFromNode(n ghPRNode) prStatus {
 	return st
 }
 
-// mergeReviewers starts from who gave a latest review (state = their review),
-// then overwrites with open review requests → PENDING (a re-request wins over an
-// old review). A reviewer with only a team name is a team.
+// reviewerFold is the outcome of folding one author's reviews (in submission
+// order) into a single status: `decisive` is the last APPROVED/
+// CHANGES_REQUESTED seen (cleared by a DISMISSED — see foldReviewerStates),
+// `lastSeenRaw` is the literal state of the very last review we saw for that
+// author in our (possibly truncated) window, whatever its type. `lastSeenRaw`
+// exists only for the truncation cross-check in mergeReviewers, never shown
+// directly.
+type reviewerFold struct {
+	decisive    string
+	lastSeenRaw string
+}
+
+// effective is the state actually shown for a reviewer once the fold is
+// trusted: the decisive state if we ever saw one, otherwise whatever their
+// last (non-decisive, e.g. COMMENTED) review was.
+func (f reviewerFold) effective() string {
+	if f.decisive != "" {
+		return f.decisive
+	}
+	return f.lastSeenRaw
+}
+
+// foldReviewerStates walks a PR's review nodes in submission order and folds
+// them into one reviewerFold per author.
+//
+// GitHub's own reviewDecision (and the PR sidebar's per-reviewer checkmark)
+// never treats a COMMENTED review as revoking an earlier APPROVED/
+// CHANGES_REQUESTED — only a later APPROVED, CHANGES_REQUESTED, or an
+// explicit DISMISSED does that:
+//   - APPROVED / CHANGES_REQUESTED replace the tracked decisive state.
+//   - DISMISSED clears it. This is directly visible in the data, not
+//     something we have to infer from a separate "dismissal event": GitHub
+//     literally flips a dismissed review's own `state` field to DISMISSED (it
+//     doesn't delete the review or hide it from `reviews`) — confirmed
+//     against the live GraphQL schema (PullRequestReviewState.DISMISSED,
+//     "A review that has been dismissed."). So a DISMISSED node in this same
+//     list is exactly the dismissal signal, at whatever point in the
+//     timeline it occurred.
+//   - COMMENTED (or anything else, e.g. a stray PENDING) never changes the
+//     decisive state, but still updates `lastSeenRaw` — needed by the
+//     truncation cross-check in mergeReviewers.
+//
+// The nodes are sorted defensively by `submittedAt` rather than trusted to
+// already arrive in that order — the GraphQL schema documents no explicit
+// ordering guarantee for this connection, even though it has been observed
+// to return oldest-first in practice. An unparsable timestamp (shouldn't
+// happen for a real API response) leaves that pair's relative order
+// untouched (stable sort).
+func foldReviewerStates(nodes []reviewNode) map[string]reviewerFold {
+	sorted := make([]reviewNode, len(nodes))
+	copy(sorted, nodes)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ti, ei := time.Parse(time.RFC3339, sorted[i].SubmittedAt)
+		tj, ej := time.Parse(time.RFC3339, sorted[j].SubmittedAt)
+		if ei != nil || ej != nil {
+			return false
+		}
+		return ti.Before(tj)
+	})
+	out := map[string]reviewerFold{}
+	for _, rv := range sorted {
+		login := rv.Author.Login
+		if login == "" {
+			continue
+		}
+		f := out[login]
+		switch rv.State {
+		case "APPROVED", "CHANGES_REQUESTED":
+			f.decisive = rv.State
+		case "DISMISSED":
+			f.decisive = ""
+		}
+		f.lastSeenRaw = rv.State
+		out[login] = f
+	}
+	return out
+}
+
+// mergeReviewers starts from who gave a latest review — folded to their
+// DECISIVE state via foldReviewerStates, not their literal latest review —
+// then overwrites with open review requests → PENDING (a re-request wins over
+// an old review). A reviewer with only a team name is a team.
+//
+// Why folding instead of just `latestReviews[i].State` (the previous
+// implementation): `latestReviews` returns literally "the very last review
+// submitted, whatever its type" — so a reviewer who approved and then left
+// one more plain comment showed up as merely "commented", even though GitHub
+// itself (reviewDecision, the PR sidebar's checkmark) still counted them as
+// approved. Reproduced live against plug-and-pay PR 13168: reindert-vetter
+// APPROVED at 09:19, then COMMENTED at 09:24 — GitHub kept showing him as
+// approved, we didn't.
+//
+// Pagination truncation (reviewsPerPRCap, see its own doc comment): `reviews`
+// is fetched oldest-first, so once a PR has more submissions than the cap,
+// exactly the NEWEST reviews — the ones a fold needs most — are the ones
+// missing. Rather than risk silently showing a stale approval (or a stale
+// non-approval, if a later CHANGES_REQUESTED/DISMISSED got cut off), each
+// author's fold is cross-checked against `latestReviews` — a SEPARATE field
+// GitHub computes for us as an aggregate, unaffected by our own `reviews`
+// pagination cap: if the last review we actually saw for that author matches
+// their true latest review, our window captured everything relevant to them
+// and the fold is trusted; if it doesn't match (or we have no fold data for
+// them at all), our window is missing something and we show `stateUnknown`
+// instead of a guess. This can only ever fire when `reviews.pageInfo.
+// hasNextPage` is true — the ground truth is used unconditionally when the
+// whole PR's review history fit within the cap.
 func mergeReviewers(n ghPRNode) []reviewer {
+	fold := foldReviewerStates(n.Reviews.Nodes)
+	truncated := n.Reviews.PageInfo.HasNextPage
+
 	byKey := map[string]reviewer{}
 	order := []string{}
 	put := func(rv reviewer) {
@@ -369,7 +517,26 @@ func mergeReviewers(n ghPRNode) []reviewer {
 		if lr.Author.Login == "" {
 			continue
 		}
-		put(reviewer{Login: lr.Author.Login, AvatarURL: lr.Author.AvatarURL, State: lr.State})
+		state := lr.State
+		f, ok := fold[lr.Author.Login]
+		switch {
+		case !truncated:
+			// Complete data: trust the fold outright — it's strictly more
+			// informative than the raw latest-review state we're replacing.
+			if ok {
+				state = f.effective()
+			}
+		case ok && f.lastSeenRaw == lr.State:
+			// Truncated overall, but nothing was cut off for THIS author —
+			// their true latest review is the one our window also saw last.
+			state = f.effective()
+		default:
+			// Truncated, and this author's window disagrees with (or is
+			// missing from) the ground truth: we can't tell whether a
+			// decisive event beyond our cap changed their status.
+			state = stateUnknown
+		}
+		put(reviewer{Login: lr.Author.Login, AvatarURL: lr.Author.AvatarURL, State: state})
 	}
 	for _, rr := range n.ReviewRequests.Nodes {
 		rq := rr.RequestedReviewer
