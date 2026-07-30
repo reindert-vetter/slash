@@ -871,9 +871,29 @@ class SettingsStoreTest
     }
 }
 `
+  // StoreHelper is a plain NON-test (OTHER) block in the same PR: because
+  // groupTestClasses appends every test_class row after the non-test rest,
+  // it lands as the FIRST sidebar row — the "one row further, also a
+  // non-test row" landing spot for ↑ from SettingsStoreTest's methodes-kolom
+  // edge (the old stepTestMethod flow-through skipped straight over it to
+  // another test_class row / clamped — see test-class-grouping.spec.mjs).
+  const storeHelper = (value) => `<?php
+
+namespace Tests\\Feature;
+
+class StoreHelper
+{
+    public function buildPayload()
+    {
+        $value = ${value};
+    }
+}
+`
   const write = worktreeWriter(110)
   write('base', 'tests/Feature/TriggersIndexTest.php', triggersIndex(1))
   write('head', 'tests/Feature/TriggersIndexTest.php', triggersIndex(2))
   write('base', 'tests/Feature/SettingsStoreTest.php', settingsStore(1))
   write('head', 'tests/Feature/SettingsStoreTest.php', settingsStore(2))
+  write('base', 'tests/Feature/StoreHelper.php', storeHelper(1))
+  write('head', 'tests/Feature/StoreHelper.php', storeHelper(2))
 }

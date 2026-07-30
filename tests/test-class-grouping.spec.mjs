@@ -16,7 +16,9 @@ test.describe('test methods group per class', () => {
   test('the sidebar shows one row per class, not one per method', async ({ page }) => {
     await page.goto(`/pr/${PR}`)
     const rows = page.getByTestId('block-row')
-    await expect(rows).toHaveCount(2)
+    // 3 rows: the non-test StoreHelper block plus one row per test class
+    // (groupTestClasses appends class rows after the non-test rest).
+    await expect(rows).toHaveCount(3)
     const triggersRow = rows.filter({ hasText: 'TriggersIndexTest' })
     await expect(triggersRow).toHaveCount(1)
     await expect(triggersRow).not.toContainText('it_should_index_triggers')
@@ -113,21 +115,68 @@ test.describe('test methods group per class', () => {
     await expect(column).toBeVisible()
   })
 
-  test('↓ past the last method flows to the first method of the next class row', async ({ page }) => {
+  // Sidebar order (groupTestClasses appends class rows after the non-test
+  // rest): StoreHelper (non-test), SettingsStoreTest, TriggersIndexTest. The
+  // old stepTestMethod flow-through walked per METHOD across class rows and
+  // skipped every non-test row along the way; on explicit request the
+  // methodes-kolom's ↑/↓ now exit at the class edges back to the index and
+  // step exactly ONE row — index navigation is always per row/class. (The
+  // diff-mode flow-through, stepTestMethodChange, deliberately keeps the old
+  // behaviour.)
+  test('↓ past the last method exits to the index, one row further — never into the next class column', async ({
+    page,
+  }) => {
     await page.goto(`/pr/${PR}`)
     // SettingsStoreTest has exactly one method — the very first ↓ inside its
-    // (one-item) methodes-kolom already runs off the end, so it must flow
-    // straight to the first method of the OTHER class row (TriggersIndexTest).
+    // (one-item) methodes-kolom already runs off the class edge.
     await page.getByTestId('block-row').filter({ hasText: 'SettingsStoreTest' }).click()
     await page.keyboard.press('ArrowRight') // focus the methodes-kolom
-    await page.keyboard.press('ArrowDown') // flows on to the other class row
+    await page.keyboard.press('ArrowDown') // class edge: exit to the index, ONE row down
 
+    // Lands on the next index row (TriggersIndexTest) as an ordinary stop-2
+    // selection: the pr-index owns the keyboard again (slid back in, focus
+    // border), NOT the class's methodes-kolom.
     await expect(
       page.getByTestId('block-row').filter({ hasText: 'TriggersIndexTest' }),
     ).toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
-    const methodRows = page.getByTestId('test-method-row')
-    await expect(methodRows).toHaveCount(2)
-    await expect(methodRows.nth(0)).toContainText('it_should_index_triggers')
+    const index = page.getByTestId('pr-index')
+    await expect(index).not.toHaveClass(/pointer-events-none/)
+    await expect(index).toHaveClass(/border-indigo-300|dark:border-indigo-500/)
+    await expect(page.getByTestId('test-methods-column')).not.toHaveClass(
+      /border-indigo-300|dark:border-indigo-500/,
+    )
+
+    // Clamp at the very end: TriggersIndexTest is the last row — walk its
+    // column to the last method, then one more ↓ does nothing (column keeps
+    // the keyboard, no fall-through into the toggle-rows/search loop).
+    await page.keyboard.press('ArrowRight') // focus TriggersIndexTest's methodes-kolom
+    await page.keyboard.press('ArrowDown') // method 2 of 2
+    await page.keyboard.press('ArrowDown') // past the last method of the last row: clamp
+    await expect(page.getByTestId('test-methods-column')).toHaveClass(
+      /border-indigo-300|dark:border-indigo-500/,
+    )
+    await expect(page.getByTestId('test-method-row').nth(1)).toHaveClass(
+      /bg-indigo-50|dark:bg-indigo-500\/15/,
+    )
+  })
+
+  test('↑ past the first method exits to the previous index row — also a non-test row', async ({
+    page,
+  }) => {
+    await page.goto(`/pr/${PR}`)
+    await page.getByTestId('block-row').filter({ hasText: 'SettingsStoreTest' }).click()
+    await page.keyboard.press('ArrowRight') // focus the methodes-kolom
+    await page.keyboard.press('ArrowUp') // class edge: exit to the index, ONE row up
+
+    // Lands on the plain non-test StoreHelper block right above it — the old
+    // flow-through could never reach it (it only ever scanned for other
+    // test_class rows and clamped here).
+    await expect(page.getByTestId('block-row').filter({ hasText: 'StoreHelper' })).toHaveClass(
+      /bg-indigo-50|dark:bg-indigo-500\/15/,
+    )
+    await expect(page.getByTestId('pr-index')).toHaveClass(
+      /border-indigo-300|dark:border-indigo-500/,
+    )
   })
 
   test('a class with a single changed method still groups into its own row + column', async ({

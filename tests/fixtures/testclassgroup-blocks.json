@@ -31,5 +31,16 @@
     "endLine": 10,
     "status": "modified",
     "side": "new"
+  },
+  {
+    "pr": 110,
+    "file": "tests/Feature/StoreHelper.php",
+    "class": "StoreHelper",
+    "name": "buildPayload",
+    "category": "OTHER",
+    "line": 7,
+    "endLine": 10,
+    "status": "modified",
+    "side": "new"
   }
 ]

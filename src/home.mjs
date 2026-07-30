@@ -1057,11 +1057,16 @@ function stepBlock(delta) {
 // test_class row's own methods (see testClassRowItem/recomputeLeftList). Once
 // it runs past the last/first method of this class, it flows on to the
 // first/last method of the next/previous test_class row anywhere further
-// down/up state.blocks — decision: "doorlopen mag", the class-scoped mirror
-// of stepBlock's own same-file flow-through above (deliberately a SEPARATE
-// mechanism — see sameFileNeighbour's own guard). Returns false at the very
-// end of the list (no further class row in that direction) — mirrors
-// stepBlock's own false-at-the-edges contract.
+// down/up state.blocks — decision: "doorlopen mag" INSIDE THE DIFF, the
+// class-scoped mirror of stepBlock's own same-file flow-through above
+// (deliberately a SEPARATE mechanism — see sameFileNeighbour's own guard).
+// Returns false at the very end of the list (no further class row in that
+// direction) — mirrors stepBlock's own false-at-the-edges contract.
+// Only used by stepTestMethodChange (diff mode) now: the LIST-mode
+// methodes-kolom deliberately does NOT flow across class rows anymore — at
+// the class edges its ↑/↓ exit back to the index and step exactly one row
+// (see onKeydown's isTestColumnActive() branch), on explicit request:
+// index navigation is per row/class, never per method.
 function stepTestMethod(delta) {
   const row = curTestClassRow()
   if (!row) return false
@@ -6593,21 +6598,36 @@ function onKeydown(e) {
 
   // Stop 2b of the left→right nav chain (the methodes-kolom, see
   // isTestColumnActive/TestMethodsColumn.mjs): ↑/↓ walk the class's own
-  // methods, flowing on to the next/previous class row at the edges
-  // (stepTestMethod — decision: "doorlopen mag", see keyboard-navigation.md);
+  // methods; at the class edges (past the last/first method) they exit back
+  // to the index and step exactly ONE row further (the next/previous visible
+  // row, ALSO a non-test row — never skipping ahead to the next test_class
+  // row, which the old stepTestMethod flow-through did; that flow-through is
+  // now diff-mode-only, see stepTestMethodChange). No further row in that
+  // direction → clamp: keep the column focus, do nothing (never fall through
+  // into the toggle-rows/search-box loop — that's stop 2's own behaviour).
   // →/Enter step into the diff of the active method (mirrors → from the
   // pr-index into an ordinary block's diff); ← steps back out to the
   // pr-index (stop 2). Checked before the generic list-mode arrows below so
   // it wins whenever this column owns the keyboard.
   if (isTestColumnActive()) {
-    if (e.key === 'ArrowDown') {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
-      stepTestMethod(1)
-      scrollSelectedIntoView()
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      stepTestMethod(-1)
-      scrollSelectedIntoView()
+      const dir = e.key === 'ArrowDown' ? 1 : -1
+      const row = curTestClassRow()
+      const nextMethod = state.classMethodSel + dir
+      if (row && nextMethod >= 0 && nextMethod < row.methods.length) {
+        state.classMethodSel = nextMethod
+        scrollSelectedIntoView()
+      } else {
+        const next = stepVisibleSelected(dir)
+        if (next !== state.selected) {
+          // selectRow resets classMethodSel/testColumnFocused, so the index
+          // (stop 2) owns the keyboard again after landing.
+          selectRow(next)
+          scrollSelectedIntoView()
+          scrollChangeIntoView(false)
+        }
+      }
     } else if (e.key === 'ArrowRight') {
       e.preventDefault()
       enterDiff()

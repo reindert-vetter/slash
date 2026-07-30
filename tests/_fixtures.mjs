@@ -324,8 +324,9 @@ function seed(db) {
   // TEST-category classes — TriggersIndexTest (two methods) and
   // SettingsStoreTest (a single method, proving a class is grouped even with
   // just one changed method — see testClassRowItem/recomputeLeftList in
-  // home.mjs) — worktrees materialized in _setup.mjs,
-  // materializeTestClassGroupWorktrees.
+  // home.mjs) — plus a plain non-test StoreHelper block (the methodes-kolom's
+  // class-edge ↑/↓ exit lands on it, one row further in the index) —
+  // worktrees materialized in _setup.mjs, materializeTestClassGroupWorktrees.
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/testclassgroup-blocks.json'], {
     stdio: 'ignore',
   })

@@ -35,9 +35,13 @@ continuous chain of **stops**, from left to right across the whole layout:
      here first (not all the way to stop 2 — the column reappears, the
      pr-index stays hidden); a second `←` leaves it (pr-index slides back,
      the column stays visible as long as the class row is selected). `↑`/`↓`
-     walk the class's own methods, flowing on to the next/previous
-     `test_class` row at the edges. `f`/`d`/`s`/`a` are a no-op here, same as
-     stop 1.
+     walk the class's own methods; at the class edges they exit back to the
+     index and step exactly ONE row further (the next/previous visible row,
+     also a non-test row — never the old jump to the next `test_class` row's
+     methods), clamped when no further row exists. Only the diff-mode
+     doorloop (`stepTestMethodChange`) still flows across class rows — see
+     "Grouping test methods per class" in `.claude/rules/detail-layout.md`.
+     `f`/`d`/`s`/`a` are a no-op here, same as stop 1.
 3. **Block with diff** (`state.mode==='diff'`, `state.focusLevel===0`).
 4. **Drilled columns** (`state.drill`/`focusLevel>0`) — a **side branch**, not
    a strict stop: only reachable via Enter/click on an Underlying-code child

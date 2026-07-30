@@ -505,12 +505,21 @@ and the diff instead of replacing the diff card outright.
   all the way to the pr-index — `state.testColumnFocused` simply survives
   the `mode: 'diff' → 'list'` transition unchanged, since nothing resets it
   along the way); a **second** `←` finally leaves the column. Within the
-  column, `↑`/`↓` walk the class's own methods and — decision: "doorlopen
-  mag" — flow on to the first/last method of the next/previous `test_class`
-  row once they run past this class's own methods (`stepTestMethod`,
-  mirroring `stepBlock`'s same-file flow-through, but scoped to test
-  classes instead of files). The same flow-through also applies **inside
-  the diff**: stepping past the last/first change of one method first tries
+  column, `↑`/`↓` walk the class's own methods; at the class edges (past
+  the last/first method) they **exit back to the index and step exactly
+  ONE row** further — the next/previous visible row, **also a non-test
+  row**, via `stepVisibleSelected` + `selectRow` in `onKeydown`'s
+  `isTestColumnActive()` branch, so the index (stop 2) owns the keyboard
+  again after landing. No further row in that direction → clamp (nothing
+  happens, the column keeps the keyboard — never a fall-through into the
+  toggle-rows/search-box loop). This replaced, on explicit request, the
+  earlier "doorlopen mag" list-mode flow-through that jumped straight to
+  the first/last method of the next/previous `test_class` row and thereby
+  skipped every non-test row in between — index navigation is per
+  row/class, never per method. The cross-class flow-through **does still
+  apply inside the diff** (`stepTestMethod`, now only called by
+  `stepTestMethodChange`): stepping past the last/first change of one
+  method first tries
   the next/previous method of the **same** class (`stepTestMethodChange`),
   then the next/previous class row, before ever falling back to the coarser
   same-file `stepBlock` path (which never applies to a `test_class` row
