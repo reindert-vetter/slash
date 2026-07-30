@@ -463,8 +463,70 @@ code** and keeping the thread alive. Terminology follows Temporal — a
       it shows anywhere within its block and claims no 💬 row. The symbol gone
       entirely (renamed/removed/file dropped) → **`AnchorOrphan`**, keeping the old
       rows as a record of where it was. An approved row whose text can't be found
-      unambiguously is **dropped** — the reviewer did not approve what replaced it,
-      and that needs no new state (the row is simply unapproved again).
+      unambiguously by the strict, block-wide match (`uniqueRowIndex`/`remapRows`
+      in `reanchor.go`) is **dropped** — the reviewer did not approve what replaced
+      it, and that needs no new state (the row is simply unapproved again).
+    - **A narrower second pass, `contextRemap`, recovers a subset of those dropped
+      approval rows: a row whose text repeats within the block, but whose own
+      immediate neighbour(s) still corroborate it.** Found via a real bug report:
+      a block shaped like a try/catch with two structurally similar `return [...]`
+      arrays (the motivating case was
+      `BugsnagActivityInboundInterceptor::metadata` — `return [`, a repeated
+      `'source' => 'activity',`, and the closing `];`/`}` all occur twice) made
+      the strict pass drop over half the block's rows on every refresh, even when
+      none of that specific code had actually changed — the reviewer had to
+      manually re-approve rows they'd already reviewed, every time. `contextRemap`
+      only ever runs on rows the strict pass left unresolved (it never re-decides
+      an already-placed row) and only accepts a candidate when the row's own
+      position is corroborated by its neighbour(s), never by content alone:
+      - An **interior** row (not the block's first or last) must agree with the
+        candidate on **both** the previous and the next row's text (`wsKey`, same
+        whitespace-insensitive comparison as everywhere else in this file). An
+        **edge** row (the block's very first or very last row) only has one
+        neighbour to begin with, so only that one is required. A **single-row
+        block** has neither and can therefore never be disambiguated this way —
+        it stays dropped, same as before this pass existed.
+      - A required neighbour that doesn't exist on the **candidate's** side (the
+        old row sits in the interior, but the candidate sits at the very edge of
+        the new rows) counts as a **mismatch**, not a pass — that asymmetry is
+        itself a sign the candidate is a different occurrence.
+      - A **blank source line** (`wsKey == ""` — a literal empty code line, never
+        a nil/filler `alignRow` field; `rowDisplayText` always falls back to
+        whichever side does carry text) is compared like any other text, so
+        `"" == ""` still counts as agreement — a deliberate, documented residual
+        weak spot rather than a special case: two blank neighbours carry weaker
+        evidence than two matching lines of real code, but the repeated-
+        boilerplate shapes this pass targets (`}`/`];`/mirrored array literals)
+        always have real code immediately next to them in practice, so this never
+        actually comes up for them.
+      - A candidate is only accepted if it's the **unique** surviving one among
+        every same-text position that (a) isn't already claimed by a
+        higher-confidence mapping and (b) passes its neighbour check — more than
+        one surviving candidate is exactly the same ambiguity the strict pass
+        already refuses to guess at, so it's dropped here too, never picked
+        arbitrarily. Rows are resolved in ascending old-row order and a claimed
+        new-row target is removed from consideration for every later row in the
+        same pass, so two duplicate old rows can never collapse onto the same new
+        row.
+      - **Deliberately NOT a full LCS/positional diff** between the old and new
+        row texts (the same technique `alignRows` itself already uses for
+        old-vs-new *source*) — an LCS resolves duplicate lines by relative
+        **order**, which is exactly the wrong tool here: a genuine reordering
+        (the two `return` blocks swapped, or a duplicated block moved elsewhere
+        in the function) looks to an LCS exactly like "the Nth occurrence maps to
+        the Nth occurrence", and would silently reattach an old approval to code
+        the reviewer never actually reviewed in its new place. This narrower,
+        neighbour-anchored approach was chosen explicitly **over** that for that
+        reason: a wrong ✓ on code the reviewer never saw is worse than a dropped
+        approval they have to redo. Tests:
+        `TestRemapRowsDuplicateRowSurvivesViaContext` (the win — a duplicated row
+        survives an unrelated edit elsewhere that shifts the whole block, proven
+        against the same fixture that the strict pass alone cannot resolve),
+        `TestRemapRowsDuplicateGenuinelyChangedRowDropped` (the safety net — the
+        try branch's own array is edited, so its context matches nothing, and it
+        is dropped rather than silently reattached to its still-unedited sibling),
+        `TestRemapRowsDuplicateFullyAmbiguousDropped` (both occurrences remain
+        mutually indistinguishable after the edit, so neither is picked).
     - **A `'call'` anchor** addresses character offsets *within* its row
       (`segKey`'s `"r:<min>-<max>"`, `home.mjs`), so it only survives while that
       row is **byte-identical**; otherwise it degrades to `gran: 'line'` with no

@@ -342,6 +342,196 @@ func TestReanchorApprovalsKeepsUnreadableOldSide(t *testing.T) {
 	}
 }
 
+// metadataPHP mirrors the real BugsnagActivityInboundInterceptor::metadata shape
+// that motivated contextRemap (see its doc comment): a try/catch whose two return
+// arrays each open with `return [` / `'source' => 'x',` and close with `];` — the
+// exact repeated boilerplate that made every one of those rows fail remapRows's
+// strict, block-wide uniqueness test in the reported bug. tryNext/catchNext are
+// the one line that otherwise tells the two arrays apart; filler is an optional
+// extra line inserted right after `class Foo {`, used to simulate an unrelated
+// edit elsewhere in the file that forces a re-scan without touching either array.
+func metadataPHP(tryNext, catchNext, filler string) string {
+	return "<?php\n" +
+		"class Foo {\n" +
+		filler +
+		"    public function metadata() {\n" +
+		"        try {\n" +
+		"            return [\n" +
+		"                'source' => 'x',\n" +
+		"                " + tryNext + "\n" +
+		"            ];\n" +
+		"        } catch (Exception $e) {\n" +
+		"            return [\n" +
+		"                'source' => 'x',\n" +
+		"                " + catchNext + "\n" +
+		"            ];\n" +
+		"        }\n" +
+		"    }\n" +
+		"}\n"
+}
+
+func metadataBlock(pr int) Block {
+	return Block{PR: pr, File: "Foo.php", Class: "Foo", Name: "metadata",
+		Label: "Foo::metadata", Status: "modified", Side: "new"}
+}
+
+// rowIndexOf returns the index of the (occurrence+1)'th row whose displayed text
+// equals want under wsKey — so a test can locate "the try branch's own `source`
+// row" by its logical position instead of a brittle hardcoded row number.
+func rowIndexOf(rows []alignRow, want string, occurrence int) int {
+	n := 0
+	for i, r := range rows {
+		if wsKey(rowDisplayText(r)) == wsKey(want) {
+			if n == occurrence {
+				return i
+			}
+			n++
+		}
+	}
+	return -1
+}
+
+// The win: a row whose text repeats within the block (the mirrored try/catch
+// `'source' => 'x',` lines) still survives an unrelated edit elsewhere in the
+// same block that shifts every row down by one — contextRemap recovers BOTH
+// occurrences via their own, still-unchanged next line, even though remapRows's
+// strict pass has to drop both as ambiguous (proven explicitly below, so this
+// test would fail loudly if the fixture ever stopped exercising the duplicate
+// case it's meant to).
+func TestRemapRowsDuplicateRowSurvivesViaContext(t *testing.T) {
+	dir, pr := t.TempDir(), 940014
+	prevSrc := metadataPHP("'first' => 1,", "'second' => 2,", "")
+	newSrc := metadataPHP("'first' => 1,", "'second' => 2,", "    const X = 1;\n")
+	writeWorktreeFile(t, dir, pr, "Foo.php", prevSrc, newSrc)
+	oldBase, oldHead := t.TempDir(), t.TempDir()
+	writeFileT(t, filepath.Join(oldBase, "Foo.php"), prevSrc)
+	writeFileT(t, filepath.Join(oldHead, "Foo.php"), prevSrc)
+
+	b := metadataBlock(pr)
+	oldRows, _, _ := blockAlignedRows(oldBase, oldHead, b)
+	baseDir, headDir := worktreeDirs(dir, pr)
+	newRows, _, _ := blockAlignedRows(baseDir, headDir, b)
+
+	tryOld := rowIndexOf(oldRows, "'source' => 'x',", 0)
+	catchOld := rowIndexOf(oldRows, "'source' => 'x',", 1)
+	if tryOld < 0 || catchOld < 0 {
+		t.Fatalf("fixture setup: couldn't locate the two 'source' rows in oldRows")
+	}
+
+	// Confirm the strict pass alone drops both — otherwise this test would prove
+	// nothing about the fallback.
+	strict := map[int]int{}
+	oldAt, newAt := uniqueRowIndex(oldRows), uniqueRowIndex(newRows)
+	for key, from := range oldAt {
+		if to, ok := newAt[key]; ok {
+			strict[from] = to
+		}
+	}
+	if _, ok := strict[tryOld]; ok {
+		t.Fatalf("strict pass alone already resolved the try row — fixture no longer exercises the duplicate case")
+	}
+	if _, ok := strict[catchOld]; ok {
+		t.Fatalf("strict pass alone already resolved the catch row — fixture no longer exercises the duplicate case")
+	}
+
+	moved := remapRows(oldRows, newRows)
+	tryNew, ok := moved[tryOld]
+	if !ok {
+		t.Fatalf("the try branch's duplicated 'source' row was dropped instead of recovered via context")
+	}
+	if got, want := rowDisplayText(newRows[tryNew-1]), "return ["; wsKey(got) != wsKey(want) {
+		t.Errorf("mapped to the wrong row: previous row is %q, want %q", got, want)
+	}
+	if got, want := rowDisplayText(newRows[tryNew+1]), "'first' => 1,"; wsKey(got) != wsKey(want) {
+		t.Errorf("mapped to the wrong occurrence: next row is %q, want %q", got, want)
+	}
+
+	catchNew, ok := moved[catchOld]
+	if !ok {
+		t.Fatalf("the catch branch's duplicated 'source' row was dropped instead of recovered via context")
+	}
+	if got, want := rowDisplayText(newRows[catchNew+1]), "'second' => 2,"; wsKey(got) != wsKey(want) {
+		t.Errorf("mapped to the wrong occurrence: next row is %q, want %q", got, want)
+	}
+	if tryNew == catchNew {
+		t.Fatalf("try and catch rows collapsed onto the same new row: %d", tryNew)
+	}
+}
+
+// The safety net (1): a duplicated row whose own identifying neighbour genuinely
+// changes — not just shifted, but different text — must be DROPPED, never
+// silently reattached to its sibling occurrence. This is exactly the false
+// positive a plain LCS/positional remap would risk (see contextRemap's doc
+// comment for why that was rejected in favor of this narrower, neighbour-anchored
+// approach): the try branch's array is edited, so its context no longer matches
+// ANY occurrence — including its own unedited sibling.
+func TestRemapRowsDuplicateGenuinelyChangedRowDropped(t *testing.T) {
+	dir, pr := t.TempDir(), 940015
+	prevSrc := metadataPHP("'first' => 1,", "'second' => 2,", "")
+	newSrc := metadataPHP("'renamed' => 1,", "'second' => 2,", "")
+	writeWorktreeFile(t, dir, pr, "Foo.php", prevSrc, newSrc)
+	oldBase, oldHead := t.TempDir(), t.TempDir()
+	writeFileT(t, filepath.Join(oldBase, "Foo.php"), prevSrc)
+	writeFileT(t, filepath.Join(oldHead, "Foo.php"), prevSrc)
+
+	b := metadataBlock(pr)
+	oldRows, _, _ := blockAlignedRows(oldBase, oldHead, b)
+	baseDir, headDir := worktreeDirs(dir, pr)
+	newRows, _, _ := blockAlignedRows(baseDir, headDir, b)
+
+	tryOld := rowIndexOf(oldRows, "'source' => 'x',", 0)
+	catchOld := rowIndexOf(oldRows, "'source' => 'x',", 1)
+	if tryOld < 0 || catchOld < 0 {
+		t.Fatalf("fixture setup: couldn't locate the two 'source' rows in oldRows")
+	}
+
+	moved := remapRows(oldRows, newRows)
+	if to, ok := moved[tryOld]; ok {
+		t.Fatalf("try row was mapped to new row %d instead of dropped — its own next line "+
+			"('first'=>1) genuinely changed, so no candidate should have passed the neighbour check", to)
+	}
+	// The catch branch's own context is untouched, so it must still survive — proof
+	// that the try row's drop is really about ITS OWN changed context, not the
+	// whole block having become unresolvable.
+	catchNew, ok := moved[catchOld]
+	if !ok {
+		t.Fatalf("the untouched catch row was unexpectedly dropped too")
+	}
+	if got, want := rowDisplayText(newRows[catchNew+1]), "'second' => 2,"; wsKey(got) != wsKey(want) {
+		t.Errorf("catch row mapped to the wrong occurrence: next row is %q, want %q", got, want)
+	}
+}
+
+// The safety net (2): when BOTH occurrences of a duplicated row remain mutually
+// indistinguishable after the edit (their neighbours are identical to each other
+// too, not just to themselves), context cannot break the tie either — dropped as
+// ambiguous, exactly like the strict pass already does for a duplicate with no
+// distinguishing neighbour at all. Never picked arbitrarily.
+func TestRemapRowsDuplicateFullyAmbiguousDropped(t *testing.T) {
+	dir, pr := t.TempDir(), 940016
+	prevSrc := metadataPHP("'note' => 'same',", "'note' => 'same',", "")
+	newSrc := metadataPHP("'note' => 'same',", "'note' => 'same',", "    const X = 1;\n")
+	writeWorktreeFile(t, dir, pr, "Foo.php", prevSrc, newSrc)
+	oldBase, oldHead := t.TempDir(), t.TempDir()
+	writeFileT(t, filepath.Join(oldBase, "Foo.php"), prevSrc)
+	writeFileT(t, filepath.Join(oldHead, "Foo.php"), prevSrc)
+
+	b := metadataBlock(pr)
+	oldRows, _, _ := blockAlignedRows(oldBase, oldHead, b)
+	baseDir, headDir := worktreeDirs(dir, pr)
+	newRows, _, _ := blockAlignedRows(baseDir, headDir, b)
+
+	tryOld := rowIndexOf(oldRows, "'source' => 'x',", 0)
+	if tryOld < 0 {
+		t.Fatalf("fixture setup: couldn't locate the try branch's 'source' row")
+	}
+
+	moved := remapRows(oldRows, newRows)
+	if to, ok := moved[tryOld]; ok {
+		t.Fatalf("fully ambiguous duplicate row was mapped to %d instead of dropped", to)
+	}
+}
+
 // SetAnchor moves the stored anchor and its Path's codeRef together, so a prefix
 // Search keeps finding the comment under the unit it now actually hangs on.
 func TestSetAnchorRoundTrip(t *testing.T) {

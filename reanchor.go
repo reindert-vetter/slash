@@ -332,6 +332,11 @@ func planApprovalRemap(baseDir, headDir, oldBaseDir, oldHeadDir string, aps []ap
 // unambiguous pairs: a text that occurs exactly once on each side. Anything else
 // (a line that was duplicated, removed, or occurs several times to begin with) is
 // left out, so its approval is dropped rather than guessed at.
+//
+// A second, narrower pass (contextRemap) then recovers a subset of the rows this
+// strict pass had to drop purely because their text repeats within the block — see
+// contextRemap's own doc comment for why and how. It never overrides or competes
+// with a row this pass already placed.
 func remapRows(oldRows, newRows []alignRow) map[int]int {
 	oldAt := uniqueRowIndex(oldRows)
 	newAt := uniqueRowIndex(newRows)
@@ -341,7 +346,146 @@ func remapRows(oldRows, newRows []alignRow) map[int]int {
 			moved[from] = to
 		}
 	}
+	for from, to := range contextRemap(oldRows, newRows, moved) {
+		moved[from] = to
+	}
 	return moved
+}
+
+// contextRemap is the "option 3" fallback discussed for the reported bug (see the
+// "Comment/approval anchors are RE-ANCHORED" section in tembed-workflows.md): a
+// block whose changed code is a repeated shape — the mirrored try/catch
+// `return [...]` arrays and the repeated `];`/`}` lines that motivated this — makes
+// every one of those lines fail remapRows's strict, block-wide uniqueness test,
+// even when that specific occurrence never actually changed. This pass recovers
+// exactly those rows, but ONLY when the row's own position is corroborated by its
+// immediate neighbour(s) — never by its content alone, and never for a row
+// remapRows already placed (it only fills gaps, it never re-decides an already
+// resolved row).
+//
+// Deliberately NOT a full LCS/positional diff between oldRows and newRows (the
+// same technique alignRows itself already uses for old-vs-new source): an LCS
+// resolves duplicate lines by relative ORDER, which is exactly the wrong tool
+// here — a genuine reordering (the two return blocks swapped, or a duplicated
+// block moved elsewhere in the function) looks to an LCS exactly like "the Nth
+// occurrence maps to the Nth occurrence", and would silently reattach an old
+// approval to code the reviewer never actually reviewed in its new place. The
+// coordinator explicitly chose this narrower, context-anchored approach over that
+// one for that reason: a wrong ✓ on unreviewed code is worse than a dropped
+// approval the reviewer has to redo. See TestRemapRowsDuplicateReorderedRowDropped.
+//
+// Neighbour requirement (rowContextMatches):
+//   - An INTERIOR row (not the block's first or last row) must agree with the
+//     candidate on BOTH the previous and the next row.
+//   - An EDGE row (the block's very first or very last row) only has one
+//     neighbour to begin with, so only that one is required.
+//   - A block of a single row has neither neighbour and can therefore never be
+//     disambiguated this way — such a row simply stays dropped, same as before.
+//   - The comparison is the same whitespace-insensitive wsKey text this whole
+//     file already keys on. A required neighbour that doesn't exist on the
+//     CANDIDATE's side (e.g. the old row sits in the interior but the candidate
+//     sits at the very edge of the new rows) counts as a mismatch, not a pass —
+//     that asymmetry is itself a sign the candidate is a different occurrence.
+//   - A blank source line (wsKey == "" — a literal empty code line, never a
+//     nil/filler alignRow field: rowDisplayText always falls back to whichever
+//     side does have text) is compared like any other text, so "" == "" still
+//     counts as agreement. This is a DELIBERATE, documented residual weak spot
+//     rather than a special case: two blank neighbours carry weaker evidence
+//     than two matching lines of real code, but the repeated-boilerplate shapes
+//     this pass targets (`}`/`];`/mirrored array literals) always have real code
+//     immediately next to them, so in practice this never comes up for them —
+//     accepted rather than adding a third neighbour tier for a case that doesn't
+//     occur in the motivating scenario.
+//   - A candidate is only accepted if it is the UNIQUE surviving candidate among
+//     every same-text position that (a) isn't already the target of a
+//     higher-confidence mapping and (b) passes its neighbour check. More than
+//     one surviving candidate is exactly the same ambiguity remapRows's strict
+//     pass already refuses to guess at, so it's dropped here too — never picked
+//     arbitrarily. Rows are resolved in ascending old-row order, and a claimed
+//     new-row target is removed from consideration for every later row in this
+//     same pass, so two duplicate old rows can never both land on the same new
+//     row.
+func contextRemap(oldRows, newRows []alignRow, already map[int]int) map[int]int {
+	newGroups := groupRowsByKey(newRows)
+	used := make(map[int]bool, len(already))
+	for _, to := range already {
+		used[to] = true
+	}
+
+	moved := map[int]int{}
+	for oldIdx := range oldRows {
+		if _, ok := already[oldIdx]; ok {
+			continue
+		}
+		key := wsKey(rowDisplayText(oldRows[oldIdx]))
+		if key == "" {
+			continue
+		}
+		match := -1
+		ambiguous := false
+		for _, newIdx := range newGroups[key] {
+			if used[newIdx] {
+				continue
+			}
+			if !rowContextMatches(oldRows, newRows, oldIdx, newIdx) {
+				continue
+			}
+			if match != -1 {
+				ambiguous = true
+				break
+			}
+			match = newIdx
+		}
+		if ambiguous || match == -1 {
+			continue
+		}
+		moved[oldIdx] = match
+		used[match] = true
+	}
+	return moved
+}
+
+// rowContextMatches checks whether newIdx's neighbour(s) corroborate that it is
+// the same row as oldIdx — see contextRemap's doc comment for the exact rule.
+func rowContextMatches(oldRows, newRows []alignRow, oldIdx, newIdx int) bool {
+	needPrev := oldIdx > 0
+	needNext := oldIdx < len(oldRows)-1
+	if !needPrev && !needNext {
+		// A single-row block: no neighbour exists on either side to corroborate
+		// with, so this row can never be disambiguated from its duplicates.
+		return false
+	}
+	if needPrev {
+		if newIdx == 0 {
+			return false
+		}
+		if wsKey(rowDisplayText(oldRows[oldIdx-1])) != wsKey(rowDisplayText(newRows[newIdx-1])) {
+			return false
+		}
+	}
+	if needNext {
+		if newIdx >= len(newRows)-1 {
+			return false
+		}
+		if wsKey(rowDisplayText(oldRows[oldIdx+1])) != wsKey(rowDisplayText(newRows[newIdx+1])) {
+			return false
+		}
+	}
+	return true
+}
+
+// groupRowsByKey indexes every non-blank row by its whitespace-insensitive text,
+// keeping every occurrence (unlike uniqueRowIndex, which keeps only the unique
+// ones) — contextRemap needs the full candidate list to disambiguate via
+// neighbours.
+func groupRowsByKey(rows []alignRow) map[string][]int {
+	g := map[string][]int{}
+	for i, r := range rows {
+		if key := wsKey(rowDisplayText(r)); key != "" {
+			g[key] = append(g[key], i)
+		}
+	}
+	return g
 }
 
 // uniqueRowIndex indexes non-blank rows by their whitespace-insensitive text,
