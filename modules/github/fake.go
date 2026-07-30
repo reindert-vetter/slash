@@ -36,6 +36,10 @@ type Fake struct {
 	currentUserCalls int
 	readyPRs         []int      // PRs flipped to ready-for-review, in order
 	requestedRevs    [][]string // reviewer login sets requested, in order
+
+	users          map[string]User // seeded by SetUser, returned by UsersByLogin
+	userLookups    int             // how often UsersByLogin was called
+	userLoginsSeen []string        // every login UsersByLogin was asked for, in order
 }
 
 func (f *Fake) PostReviewComment(_ context.Context, pr int, file string, startLine, endLine int, side, body string) (int64, error) {
@@ -321,6 +325,48 @@ func (f *Fake) CurrentUserCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.currentUserCalls
+}
+
+// UsersByLogin returns the seeded users for the asked logins; an unseeded login
+// is simply absent, mirroring a real lookup of a deleted account or a bot.
+func (f *Fake) UsersByLogin(_ context.Context, logins []string) (map[string]User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.userLookups++
+	out := map[string]User{}
+	for _, l := range logins {
+		f.userLoginsSeen = append(f.userLoginsSeen, l)
+		if u, ok := f.users[l]; ok {
+			out[l] = u
+		}
+	}
+	return out, nil
+}
+
+// SetUser seeds one profile returned by UsersByLogin (keyed on u.Login).
+func (f *Fake) SetUser(u User) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.users == nil {
+		f.users = map[string]User{}
+	}
+	f.users[u.Login] = u
+}
+
+// UserLookups is how often UsersByLogin was called — lets a test prove the
+// caller batches and caches instead of shelling out per login.
+func (f *Fake) UserLookups() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.userLookups
+}
+
+// UserLoginsSeen is every login UsersByLogin was asked to resolve, in order —
+// lets a test prove a cached or skipped login is never looked up again.
+func (f *Fake) UserLoginsSeen() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.userLoginsSeen...)
 }
 
 // SetCollaborators seeds the collaborator list returned by ListCollaborators.

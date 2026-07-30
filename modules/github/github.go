@@ -147,11 +147,26 @@ type Client interface {
 	// their login and profile picture. Used to show "who am I" on the comments
 	// and replies written in this app, which carry no GitHub author of their own.
 	CurrentUser(ctx context.Context) (Collaborator, error)
+	// UsersByLogin resolves a batch of user logins to their GitHub profile name
+	// + avatar, keyed by login. A login that no longer exists, or that isn't a
+	// User at all (a bot, a team), is simply absent from the result — never an
+	// error, since one bad login must not sink the whole batch.
+	UsersByLogin(ctx context.Context, logins []string) (map[string]User, error)
 }
 
 // Collaborator is one repo collaborator — a candidate reviewer.
 type Collaborator struct {
 	Login     string `json:"login"`
+	AvatarURL string `json:"avatarUrl"`
+}
+
+// User is a GitHub user's public profile as far as the UI needs it: the login
+// it was looked up by, the profile `name` (the real name — often "Firstname
+// Lastname", but freely editable and frequently EMPTY, so never assume it's
+// set) and the avatar.
+type User struct {
+	Login     string `json:"login"`
+	Name      string `json:"name"`
 	AvatarURL string `json:"avatarUrl"`
 }
 
@@ -580,6 +595,62 @@ func (m *Module) CurrentUser(ctx context.Context) (Collaborator, error) {
 		return Collaborator{}, err
 	}
 	return Collaborator{Login: u.Login, AvatarURL: u.AvatarURL}, nil
+}
+
+// reUserLogin restricts a user login to GitHub's allowed username charset
+// before it reaches exec.CommandContext (input-validation rule). Same shape as
+// reReviewerLogin; kept separate so neither call site's meaning depends on the
+// other's.
+var reUserLogin = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
+
+// UsersByLogin resolves several logins in ONE `gh api graphql` call, via one
+// aliased `user(login:)` field per login (u0, u1, …). Logins are passed as -f
+// string variables, never interpolated into the query, and each is validated
+// against reUserLogin first — an invalid one is skipped rather than shelled out.
+//
+// A login that doesn't resolve (deleted account, a bot, a team name) comes back
+// as a null field PLUS a GraphQL error, which makes `gh` exit non-zero even
+// though the other aliases resolved fine. stdout still carries that partial
+// data, so we parse it regardless and only surface the error when nothing at
+// all could be read.
+func (m *Module) UsersByLogin(ctx context.Context, logins []string) (map[string]User, error) {
+	out := map[string]User{}
+	var decl, fields strings.Builder
+	args := []string{"api", "graphql"}
+	n := 0
+	for _, login := range logins {
+		if !reUserLogin.MatchString(login) {
+			continue
+		}
+		fmt.Fprintf(&decl, "$l%d:String!,", n)
+		fmt.Fprintf(&fields, "u%d: user(login:$l%d){login name avatarUrl} ", n, n)
+		args = append(args, "-f", fmt.Sprintf("l%d=%s", n, login))
+		n++
+	}
+	if n == 0 {
+		return out, nil
+	}
+	query := fmt.Sprintf("query(%s){%s}", strings.TrimSuffix(decl.String(), ","), fields.String())
+	args = append(args, "-f", "query="+query)
+
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout) // see cliTimeout doc
+	defer cancel()
+	raw, execErr := exec.CommandContext(ctx, "gh", args...).Output()
+	var res struct {
+		Data map[string]*User `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		if execErr != nil {
+			return nil, fmt.Errorf("gh api graphql users: %w", execErr)
+		}
+		return nil, fmt.Errorf("parse users: %w", err)
+	}
+	for _, u := range res.Data {
+		if u != nil && u.Login != "" {
+			out[u.Login] = *u
+		}
+	}
+	return out, nil
 }
 
 // ListCollaborators returns the repo's collaborators as candidate reviewers.

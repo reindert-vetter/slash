@@ -551,6 +551,16 @@
   `tests/comment-author-avatar.spec.mjs`, plus `TestAvatarURLRoundTrip`
   (`modules/comments`) and `TestImportCarriesAuthorAvatars`
   (`comment_import_test.go`) for the backend chain.
+  **The same module also resolves a login to a REAL NAME** (`ensureNames`/
+  `fullNameOf`/`firstNameOf`/`displayNameOf`/`avatarUrlOf`) so the UI can say
+  "Dennis" instead of "dennissloove", fed by the read-only `GET /api/names`
+  (local `names.json` override → GitHub profile `name` → the bare login). It
+  lives here rather than in a module of its own because it is the same "who is
+  this" question `identityOf` already answers, and it shares `ensureMe`'s exact
+  timing rule: **await it before pushing the rows that render the name**, since
+  `names` is likewise a plain non-reactive `Map`. Full mechanism (precedence,
+  caching, skip-list, the write-boundary carve-out): "Real names instead of
+  logins" in `.claude/rules/pages-and-routing.md`.
 - **Theme: system/light/dark, with a manual cycle button
   (`src/theme.mjs`).** The theme once followed **exclusively** the system
   setting (`prefers-color-scheme`, Tailwind `darkMode:'media'`, no own

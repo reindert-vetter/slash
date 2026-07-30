@@ -9,7 +9,7 @@
 
 import { reactive, html, watch } from './vendor/arrow.js'
 import { initTheme, themeToggleButton } from './theme.mjs'
-import { avatarHTML } from './avatar.mjs'
+import { avatarHTML, avatarUrlOf, displayNameOf, ensureNames, fullNameOf } from './avatar.mjs'
 
 initTheme()
 
@@ -207,11 +207,13 @@ function reviewerAvatar(r) {
   // did before this circle was extracted into the shared avatarHTML helper.
   const extra = pending ? (r.avatarUrl ? 'opacity-50 grayscale' : 'opacity-60') : ''
   // avatarHTML derives initials from just the first two characters, so
-  // passing "login — label" as the name keeps the same tooltip text the
-  // reviewer strip had before, without a separate title param.
+  // passing "name — label" as the name keeps the same tooltip shape the
+  // reviewer strip had before, without a separate title param. The name is the
+  // reviewer's real first name once known (see ensureNames in avatar.mjs),
+  // falling back to the login — same rule as the row's own author column.
   return html`
     <span class="relative inline-block">
-      ${avatarHTML(login + ' — ' + label, r.avatarUrl, 'h-6 w-6', extra)}
+      ${avatarHTML(displayNameOf(login) + ' — ' + label, r.avatarUrl, 'h-6 w-6', extra)}
       ${r.state === 'APPROVED'
         ? html`<span
             class="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-white ring-2 ring-white dark:ring-zinc-900"
@@ -372,18 +374,32 @@ function rowMeta(pr) {
     <div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px] text-slate-500 dark:text-zinc-500">
       <span class="font-mono">${() => state.repo || ''}#${pr.number}</span>
       <span class="text-slate-300 dark:text-zinc-700">·</span>
-      <span>${pr.author}</span>
-      <span class="text-slate-300 dark:text-zinc-700">·</span>
       <span title="${pr.updatedAt || ''}">Bijgewerkt ${relativeTime(pr.updatedAt)}</span>
       ${diffStatFragment(pr)} ${branchFragment(pr)}
     </div>
   `
 }
 
-function prIcon(pr) {
-  return html`<span class="${'mt-0.5 shrink-0 ' + (pr.isDraft ? 'text-slate-500 dark:text-zinc-500' : 'text-emerald-600 dark:text-emerald-400')}"
-    >${icon('git-pull-request', 'h-4 w-4')}</span
-  >`
+// authorMark — who wrote this PR, at the head of the row: the avatar with the
+// first name right under it. It replaces the git-pull-request glyph that used to
+// sit here; that glyph only distinguished draft from open by COLOUR (grey vs
+// green), which carries no meaning for a colourblind reviewer — draft is still
+// spelled out in words by statusArea's own "Concept" chip and by the "Your
+// drafts" section heading, so nothing is lost by dropping it.
+//
+// The name comes from ensureNames (see avatar.mjs) and falls back to the bare
+// login when GitHub/names.json know no real name; the title always carries the
+// full name plus the login, so the account behind a first name stays findable.
+function authorMark(pr) {
+  const login = pr.author || ''
+  const full = fullNameOf(login)
+  const title = full ? full + ' (' + login + ')' : login
+  return html`
+    <span class="flex w-14 shrink-0 flex-col items-center gap-1" data-testid="row-author" data-author="${login}" title="${title}">
+      ${avatarHTML(full || login, avatarUrlOf(login), 'h-6 w-6')}
+      <span class="max-w-full truncate text-[10.5px] leading-none text-slate-500 dark:text-zinc-500">${displayNameOf(login)}</span>
+    </span>
+  `
 }
 
 // sectionBadge — inside a stack we lift PRs out of their normal buckets, so a
@@ -406,7 +422,7 @@ function connectorMark() {
 function rowInner(pr, opts) {
   return [
     opts.depth ? connectorMark() : null,
-    prIcon(pr),
+    authorMark(pr),
     html`
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
@@ -628,7 +644,10 @@ async function runPreset(key) {
     }
     const body = await res.json()
     if (seq !== presetSeq) return
-    state.presetResults = body && body.ok && Array.isArray(body.prs) ? body.prs : []
+    const rows = body && body.ok && Array.isArray(body.prs) ? body.prs : []
+    await primeAuthorNames(rows) // real names before the rows mount (see avatar.mjs)
+    if (seq !== presetSeq) return
+    state.presetResults = rows
   } catch (e) {
     if (seq === presetSeq) state.presetResults = []
   } finally {
@@ -1122,9 +1141,9 @@ function authorGroups(rows) {
 function authorGroupBlock(group) {
   return html`
     <div class="mb-6" data-testid="author-group" data-author="${group.author}">
-      <div class="mb-2 flex items-center gap-2">
-        ${avatarHTML(group.author, '', 'h-5 w-5')}
-        <h3 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${group.author}</h3>
+      <div class="mb-2 flex items-center gap-2" title="${fullNameOf(group.author) || group.author}">
+        ${avatarHTML(fullNameOf(group.author) || group.author, avatarUrlOf(group.author), 'h-5 w-5')}
+        <h3 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${displayNameOf(group.author)}</h3>
         <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2 py-0.5 text-[11px] text-slate-500 dark:text-zinc-400">${group.prs.length}</span>
       </div>
       ${listBox(group.prs.map((pr) => ({ pr })))}
@@ -1344,7 +1363,7 @@ async function loadInbox() {
       const body = await res.json()
       if (gen !== loadGen) return
       if (body && body.ok && body.live) {
-        applyLive(body)
+        await applyLive(body)
         kickOffStatuses(gen)
         kickOffApprovals(gen)
         return
@@ -1359,7 +1378,7 @@ async function loadInbox() {
     if (res2.ok) {
       const body2 = await res2.json()
       if (gen !== loadGen) return
-      applyCached(body2)
+      await applyCached(body2)
       return
     }
   } catch (e) {
@@ -1378,11 +1397,26 @@ function normalizeSections(sections) {
   return sections.map((s) => ({ ...s, prs: Array.isArray(s.prs) ? s.prs : [] }))
 }
 
-function applyLive(body) {
+// primeAuthorNames resolves the real names behind the author logins of these
+// rows BEFORE they are pushed into reactive state — see the timing note on
+// ensureNames in avatar.mjs (a late arrival can never repaint a keyed row).
+// Always awaited, never awaited-on-error: ensureNames swallows its own failures.
+function primeAuthorNames(rows) {
+  return ensureNames(rows.map((pr) => pr.author))
+}
+
+// primeSectionNames is primeAuthorNames over a whole section list.
+function primeSectionNames(sections) {
+  return primeAuthorNames(sections.flatMap((s) => s.prs))
+}
+
+async function applyLive(body) {
   state.repo = body.repo || ''
   state.generatedFor = body.generatedFor || ''
   state.inboxRunId = body.runId || ''
-  state.sections = normalizeSections(body.sections)
+  const sections = normalizeSections(body.sections)
+  await primeSectionNames(sections)
+  state.sections = sections
   state.cached = false
   state.loading = false
   // The list comes from the pr_inbox workflow's read-model, never a direct
@@ -1392,11 +1426,12 @@ function applyLive(body) {
   trySelectPendingPr()
 }
 
-function applyCached(body) {
+async function applyCached(body) {
   state.repo = body.repo || ''
   state.generatedFor = body.generatedFor || ''
   state.cached = true
   const prs = Array.isArray(body.prs) ? body.prs : []
+  await primeAuthorNames(prs)
   state.sections = prs.length ? [{ title: 'Needs your review', prs }] : []
   state.loading = false
   trySelectPendingPr()
@@ -1511,6 +1546,13 @@ async function kickOffStatuses(gen) {
     const body = await res.json()
     if (gen !== loadGen) return // page moved on (reloaded / re-fetched) — drop this response
     if (body && body.ok && body.statuses) {
+      // The reviewer avatars name their reviewer in the tooltip, so resolve
+      // those logins before the strip mounts — same timing rule as the rows'
+      // own author column (see ensureNames in avatar.mjs).
+      const logins = []
+      Object.values(body.statuses).forEach((st) => (st.reviewers || []).forEach((r) => !r.team && logins.push(r.login)))
+      await ensureNames(logins)
+      if (gen !== loadGen) return
       Object.keys(body.statuses).forEach((k) => {
         state.statuses[k] = body.statuses[k]
       })
@@ -1557,7 +1599,10 @@ async function runSearch(q) {
     }
     const body = await res.json()
     if (seq !== searchSeq) return // a newer query has already landed
-    state.searchResults = body && body.ok && Array.isArray(body.prs) ? body.prs : []
+    const rows = body && body.ok && Array.isArray(body.prs) ? body.prs : []
+    await primeAuthorNames(rows) // real names before the rows mount (see avatar.mjs)
+    if (seq !== searchSeq) return
+    state.searchResults = rows
   } catch (e) {
     if (seq === searchSeq) state.searchResults = []
   } finally {
@@ -2005,7 +2050,10 @@ async function reloadSnapshot() {
       state.repo = body.repo || state.repo
       state.generatedFor = body.generatedFor || state.generatedFor
       state.inboxRunId = body.runId || state.inboxRunId
-      state.sections = normalizeSections(body.sections)
+      const sections = normalizeSections(body.sections)
+      await primeSectionNames(sections)
+      if (gen !== loadGen) return
+      state.sections = sections
       state.cached = false
       kickOffStatuses(gen)
       kickOffApprovals(gen)

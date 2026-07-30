@@ -534,6 +534,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// so the UI can show who "I" am on the comments/replies written in this app
 	// (they carry no GitHub author of their own). See handleMe.
 	mux.HandleFunc("/api/me", s.handleMe)
+	// GET /api/names?logins=a,b,c → read-only: the human name + avatar behind a
+	// GitHub login, so the UI can show "Dennis" instead of "dennissloove". See
+	// handleNames / usernames.go.
+	mux.HandleFunc("/api/names", s.handleNames)
 	// POST /api/workflows/code_warning {pr} → start an agentic Opus review of
 	// the whole PR for risks (the "/" menu's "Diepgravend onderzoek"). One
 	// Execution per manual run.
@@ -1393,6 +1397,34 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "login": me.Login, "avatarUrl": me.AvatarURL})
+}
+
+// handleNames resolves a comma-separated list of GitHub logins to their human
+// name + avatar (see usernames.go: the local names.json override first, then the
+// GitHub profile name). Read-only and cached for the process lifetime, so a page
+// that asks for the same logins again costs nothing.
+//
+// Never a hard error: an unresolvable login just comes back with an empty name,
+// and the frontend then shows the bare login — the same "always answer 200"
+// contract as handleMe.
+func (s *server) handleNames(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	logins := []string{}
+	for _, part := range strings.Split(r.URL.Query().Get("logins"), ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			logins = append(logins, p)
+		}
+		if len(logins) >= nameLookupCap {
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":    true,
+		"names": s.tasks.manager.DisplayNames(r.Context(), logins),
+	})
 }
 
 // handleCodeWarning starts a code_warning Workflow Execution (POST) — an

@@ -55,6 +55,76 @@ export function identityOf(source, author, avatarUrl) {
   return { name: author, avatarUrl }
 }
 
+// ── real names behind a GitHub login ───────────────────────────────────────
+// A login ("dennissloove") is not what a reviewer calls a colleague ("Dennis").
+// GET /api/names resolves a batch of logins to {name, avatarUrl} — the local
+// names.json override first, then the GitHub profile name (see usernames.go) —
+// and the result is cached for the page's lifetime here, exactly like `me`
+// above. An unresolved login keeps an entry with an empty name so we never ask
+// for it twice; displayNameOf then falls back to the bare login.
+const names = new Map() // login -> {name, avatarUrl}
+const namesPending = new Set() // logins already requested, response not in yet
+
+// NAMES_WAIT_MS bounds how long ensureNames makes its caller wait. The lookup is
+// a `gh api graphql` call server-side, so it is normally fast (and cached for
+// the server's lifetime) but not guaranteed to be — and this runs on the inbox's
+// first paint. Past this deadline the caller renders with whatever is known
+// (logins, then), while the response still lands in `names` for the next render
+// — the overview re-renders on its own snapshot poll.
+const NAMES_WAIT_MS = 1500
+
+// ensureNames resolves every not-yet-known login in ONE request. Await it BEFORE
+// pushing the rows that render those names into reactive state: `names` is a
+// plain, non-reactive Map, and arrow.js reuses a keyed node without re-running
+// its bindings (see conventions.md), so a late arrival can never repaint the row
+// that was already mounted. A login that is already in flight is not requested
+// again, so overlapping callers never duplicate a lookup.
+export function ensureNames(logins) {
+  const todo = [...new Set((logins || []).filter((l) => l && !names.has(l) && !namesPending.has(l)))]
+  todo.forEach((l) => namesPending.add(l))
+  const done = todo.length
+    ? fetch('/api/names?logins=' + encodeURIComponent(todo.join(',')))
+        .then((res) => (res.ok ? res.json() : null))
+        .catch(() => null)
+        .then((data) => {
+          const got = data && data.ok && data.names ? data.names : {}
+          // Cache the misses too (an empty name), so a polling page stops asking.
+          for (const login of todo) {
+            const u = got[login] || {}
+            names.set(login, { name: u.name || '', avatarUrl: u.avatarUrl || '' })
+            namesPending.delete(login)
+          }
+        })
+    : Promise.resolve()
+  return Promise.race([done, new Promise((resolve) => setTimeout(resolve, NAMES_WAIT_MS))])
+}
+
+// fullNameOf is the resolved full name ("Dennis Sloove"), or '' when unknown.
+export function fullNameOf(login) {
+  const u = names.get(login)
+  return (u && u.name) || ''
+}
+
+// firstNameOf cuts a full name down to its first whitespace-separated token.
+// Casing is left exactly as GitHub/names.json gives it — never forced.
+export function firstNameOf(name) {
+  return (name || '').trim().split(/\s+/)[0] || ''
+}
+
+// displayNameOf is what to show for a login: their first name when known,
+// otherwise the login itself, unmodified (no forced capitalisation — an
+// invented-looking name is worse than an honest username).
+export function displayNameOf(login) {
+  return firstNameOf(fullNameOf(login)) || login || ''
+}
+
+// avatarUrlOf is the profile picture behind a login, '' when unknown — pass it
+// to avatarHTML, which then renders the initials circle instead.
+export function avatarUrlOf(login) {
+  const u = names.get(login)
+  return (u && u.avatarUrl) || ''
+}
+
 const FALLBACK_CLS =
   'flex shrink-0 items-center justify-center rounded-full bg-slate-200 dark:bg-zinc-700 text-[10px] font-medium uppercase text-slate-700 dark:text-zinc-200 ring-1 ring-slate-200 dark:ring-zinc-700'
 

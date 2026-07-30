@@ -198,8 +198,62 @@ call) as before.
 | `GET /api/prs/search?q=…` | **Still a direct** live gh `search` (`inbox_api.go`) — an ephemeral, parameterized read, not a persistent list. A bare number → `<n> in:title`. |
 | `GET /api/prs/filter?preset=<key>` | Live gh `search` for a **fixed, allow-listed** preset query (`filterPresets` in `inbox_api.go`) — never raw UI text to gh (`exec` input validation). See "Filter drawer" below. |
 | `GET /api/reviewers` | Read-only candidate reviewers → `{ok, reviewers:[{login,avatarUrl,count}]}` — repo collaborators sorted most-used-first (local usage counts). |
+| `GET /api/names?logins=a,b` | Read-only: the human name + avatar behind a GitHub login → `{ok, names:{login:{name,avatarUrl}}}`. See "Real names instead of logins" below. |
 | `POST /api/workflows/ready_for_review` | `{pr, reviewers?}` → flip a draft PR to ready + request reviewers (the sanctioned write path). 400 on an invalid pr/login. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
+
+### Real names instead of logins (`/api/names` + the row's author column)
+
+Every inbox row **starts** with who wrote the PR: the author's avatar with their
+**first name** right under it (`authorMark`, `data-testid=row-author`,
+`data-author` = the login). That replaced the `git-pull-request` glyph that used
+to sit there — which distinguished draft from open **by colour only** (grey vs
+green), meaningless for a colourblind reviewer; draft is still spelled out in
+words by `statusArea`'s own "Concept" chip and by the "Your drafts" section
+heading, so **no draft marker was added in its place** (deliberate). The login
+is no longer repeated in `rowMeta`. The same first name feeds the reviewer-avatar
+tooltips and the per-author group headers of the "ouder dan 3 dagen" preset
+(whose `data-author` stays the **login**, since that is its grouping identity).
+
+The name comes from read-only **`GET /api/names?logins=a,b`** (`handleNames` →
+`TaskManager.DisplayNames`, `usernames.go`), with this precedence:
+
+1. **`<dataDir>/names.json`** — a hand-maintained `{"login": "Full Name"}` map.
+   It wins, because a GitHub profile name is freely editable, often empty, and
+   sometimes just the username again; this file is where a team corrects that
+   without touching code. Missing or unparsable → empty map (never an error),
+   read once per data dir, so editing it takes a restart.
+2. The **GitHub profile `name`**, resolved via one batched `gh api graphql` call
+   (`github.Client.UsersByLogin`: one aliased `user(login:)` field per login,
+   logins validated + passed as `-f` variables, a non-resolving login parsed out
+   of the partial response rather than failing the batch).
+3. Neither → the name stays **empty** and the frontend shows the **bare login**,
+   unmodified (no forced capitalisation).
+
+The **read-model stores the full name**; cutting it down to the first token
+happens in the frontend (`firstNameOf`/`displayNameOf`, `src/avatar.mjs`), so a
+later caller can show the full name with no backend change. Casing is whatever
+GitHub/`names.json` gives.
+
+**Write boundary:** this is a pure read plus a **process-lifetime, in-memory**
+cache (including negative caching, so a bot/deleted login is never re-queried),
+so it is allowed outside a workflow — the same operational carve-out as
+`/api/me`'s `CurrentUser` and the avatar image cache (see
+`workflows-write-boundary.md`). The cache is deliberately package-level rather
+than a `TaskManager` field, mirroring `ingest_progress.go`. Skip-list, never sent
+to GitHub: the empty string, the `reviewer` sentinel the UI stores as its own
+comments' author, and any `[bot]` login (`user(login:)` only resolves Users).
+
+**Frontend timing rule:** `ensureNames(logins)` must be **awaited before** the
+rows that render those names are pushed into reactive state (`primeAuthorNames`/
+`primeSectionNames` in `overview.mjs`, and before `state.statuses` for the
+reviewer strip) — `names` is a plain non-reactive `Map` and arrow.js reuses a
+keyed row without re-running its bindings, so a late arrival could never repaint
+it (the same reason `loadComments` awaits `ensureMe`). Because this sits on the
+inbox's first paint, `ensureNames` races its own fetch against a short
+`NAMES_WAIT_MS` deadline: past that the rows render with logins and the response
+still lands in the `Map` for the next render (the overview re-polls its snapshot
+anyway). Test: `tests/overview-author-name.spec.mjs`.
 
 ### Offline / test mode
 
