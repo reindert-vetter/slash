@@ -5321,6 +5321,27 @@ function commentScopeKeys(b) {
 // blocks even exist to roll up) plus commentListSnapshot() (an unconditional
 // read of cs.list, RelatedPanel.mjs) — the actual per-row rollup happens in
 // the callback via commentScopeKeys + commentActivitySummary.
+//
+// Alongside the existing per-ROW entry (state.blocks id → summary), a
+// test_class row (see testClassRowItem/recomputeLeftList) ALSO gets one
+// entry per individual METHOD (method.id → summary) — TestMethodsColumn.mjs
+// reuses BlockList.mjs's own commentActivityPill per method row, and that
+// needs a per-method summary, not the row-wide union commentScopeKeys(b)
+// already returns for the test_class row itself. commentScopeKeys(m) works
+// unchanged for this: a method is an ordinary PR block (no .kind), so it
+// falls into commentScopeKeys' generic branch (its own anchor + its own
+// nestedPrBlocks subtree) — exactly the same subtree shape as any other
+// top-level block's own entry, just scoped to one method instead of the
+// whole class. No second `matchesRow` argument is passed here (unlike
+// lineChildSummaries' per-DIFF-LINE use of that param): this is a per-BLOCK
+// summary like every other state.commentActivity entry, not a per-row-within-
+// a-block one, so there's nothing to restrict — the whole method's own
+// comments + its subtree's comments should count, exactly like the class
+// row's own union already includes all of them.
+// No new reactive dependency: nestedPrBlocks/directChildBlocks only read
+// state.allBlocks/state.relations/callRows(→state.callResolve)/
+// testCoverRows(→state.testCovers) — all already inline above — and never a
+// block's own b.code, so this can't introduce the "stuck on loading" race.
 watch(
   () => [
     state.blocks,
@@ -5337,6 +5358,13 @@ watch(
       const keys = commentScopeKeys(b)
       const summary = keys ? commentActivitySummary(keys) : null
       if (summary) map[b.id] = summary
+      if (b.kind === 'test_class') {
+        for (const m of b.methods || []) {
+          const mKeys = commentScopeKeys(m)
+          const mSummary = mKeys ? commentActivitySummary(mKeys) : null
+          if (mSummary) map[m.id] = mSummary
+        }
+      }
     }
     state.commentActivity = map
   },

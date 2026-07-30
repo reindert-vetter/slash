@@ -496,8 +496,12 @@ function approvalPill(state, b) {
 // is open (a resolved thread stops counting — see commentActivitySummary),
 // same disappear-once-done behavior as the 💬 row marker in the diff. Same
 // nested-slot shape as removedPill/approvalPill above — a whole template, no
-// partial interpolation, so no keyed-list pitfall (conventions.md).
-function commentActivityPill(state, b) {
+// partial interpolation, so no keyed-list pitfall (conventions.md). Exported
+// so TestMethodsColumn.mjs can reuse it verbatim for a per-method row instead
+// of a parallel implementation (state.commentActivity is keyed by both a
+// state.blocks row's own id AND, for a test_class row, each of its methods'
+// own id — see the commentScopeKeys/watch in home.mjs).
+export function commentActivityPill(state, b) {
   const s = state.commentActivity && state.commentActivity[b.id]
   if (!s) return ''
   return html`

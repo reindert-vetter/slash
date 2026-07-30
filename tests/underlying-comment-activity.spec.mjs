@@ -1,12 +1,17 @@
 import { test, expect } from './_fixtures.mjs'
 
 // PR 970500 (tests/fixtures/commentactivity-blocks.json + -relations.json) has
-// two blocks: CommentActivityParentAction::run (parent) and
+// two "real" leaf blocks: CommentActivityParentAction::run (parent) and
 // CommentActivityChildListener::handle, linked as an event_listener CHILD of
 // the parent (the same relation shape as PR 90's dispatcher/listener pair in
-// relations.spec.mjs). Own PR number so comment placement never collides with
-// another spec's exact-count assertion (see the APPROVAL_RESET_PRS note in
-// _fixtures.mjs).
+// relations.spec.mjs) — plus a two-method TEST class
+// (CommentActivityMethodTest, grouped into one test_class row, see
+// testClassRowItem/recomputeLeftList) used by the last test below to verify
+// the methodes-kolom's per-method indicator. 3 sidebar rows in total: the
+// parent action, the child listener (a relation child — stays in the index,
+// sorted under "Onderliggende code"), and the grouped test-class row. Own PR
+// number so comment placement never collides with another spec's exact-count
+// assertion (see the APPROVAL_RESET_PRS note in _fixtures.mjs).
 //
 // Verifies the sidebar's "there's an open comment somewhere in the
 // underlying code" indicator (state.commentActivity, home.mjs's
@@ -21,7 +26,11 @@ import { test, expect } from './_fixtures.mjs'
 // 💬-marker rule. Also verifies the same indicator on the child's own card
 // in the "Onderliggende code" panel (RelatedPanel.mjs's
 // commentActivityBadge), fed by the same commentScopeKeys/
-// commentActivitySummary computed per child in home.mjs's relatedChildren.
+// commentActivitySummary computed per child in home.mjs's relatedChildren —
+// and, in the last test, on an individual method row of the test-methodes-
+// kolom (TestMethodsColumn.mjs's methodRow, reusing commentActivityPill
+// verbatim), fed by the SAME watch's per-method entries (commentScopeKeys(m)
+// for each method of a test_class row).
 test('sidebar rows show an activity indicator for open comments in their underlying-code subtree', async ({
   page,
 }) => {
@@ -33,7 +42,7 @@ test('sidebar rows show an activity indicator for open comments in their underly
 
   await page.goto('/pr/' + pr)
   const rows = page.getByTestId('block-row')
-  await expect(rows).toHaveCount(2)
+  await expect(rows).toHaveCount(3)
   const parentRow = rows.filter({ hasText: parentLabel })
   const childRow = rows.filter({ hasText: childLabel })
 
@@ -106,4 +115,60 @@ test('sidebar rows show an activity indicator for open comments in their underly
   // Same disappear-once-resolved behavior on the child's own related-item card.
   await parentRow.click()
   await expect(page.getByTestId('related-code').getByTestId('related-item').getByTestId('related-comment-activity')).toHaveCount(0)
+})
+
+// The test-methodes-kolom (TestMethodsColumn.mjs's methodRow) shows the same
+// avatar+"+N" indicator per individual method row — fed by the SAME
+// commentActivity watch (home.mjs), which fills a per-method entry
+// (commentScopeKeys(m)) alongside the row-wide union it already computed for
+// the test_class row itself.
+test('a test-class method row shows the same comment-activity indicator as a sidebar row', async ({ page }) => {
+  const pr = 970500
+  const classLabel = 'CommentActivityMethodTest'
+  const methodFile = 'tests/CommentActivityMethodTest.php'
+  const methodLabel = 'CommentActivityMethodTest::it_should_do_something'
+
+  await page.goto('/pr/' + pr)
+  await page.getByTestId('block-row').filter({ hasText: classLabel }).click()
+
+  const methodRows = page.getByTestId('test-method-row')
+  await expect(methodRows).toHaveCount(2)
+  // groupTestClasses keeps the ORIGINAL relative order of the fixture's two
+  // methods (a stable partition, see its own doc comment in home.mjs), so
+  // nth(0)/nth(1) reliably picks "it_should_do_something" resp.
+  // "..._else" without a hasText filter matching both (the second name is a
+  // superstring of the first).
+  const methodRow = methodRows.nth(0)
+  const otherRow = methodRows.nth(1)
+  await expect(methodRow).toContainText('it_should_do_something')
+  await expect(methodRow).not.toContainText('it_should_do_something_else')
+  await expect(otherRow).toContainText('it_should_do_something_else')
+
+  // Nothing anchored yet — no indicator on either method row.
+  await expect(page.getByTestId('test-method-row').getByTestId('block-comment-activity')).toHaveCount(0)
+
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: { pr, file: methodFile, line: 30, gran: 'line', label: methodLabel, author: 'dave', body: 'method issue' },
+  })
+  const runId = (await start.json()).runId
+  expect(runId).toBeTruthy()
+
+  await page.reload()
+  await page.getByTestId('block-row').filter({ hasText: classLabel }).click()
+
+  // Only the commented-on method's own row gets the indicator — its sibling
+  // method (same class, different anchor) stays untouched.
+  await expect(methodRow.getByTestId('block-comment-activity')).toBeVisible()
+  await expect(methodRow.getByTestId('block-comment-activity').getByTestId('avatar-fallback')).toHaveText('DA')
+  await expect(methodRow.getByTestId('block-comment-activity-count')).toHaveCount(0)
+  await expect(otherRow.getByTestId('block-comment-activity')).toHaveCount(0)
+
+  // Resolving removes it, same disappear-once-resolved rule as everywhere else.
+  await page.request.post('/api/workflows/' + runId + '/signals/reply', {
+    data: { author: 'reviewer', body: '/resolve', done: true },
+  })
+
+  await page.reload()
+  await page.getByTestId('block-row').filter({ hasText: classLabel }).click()
+  await expect(page.getByTestId('test-method-row').getByTestId('block-comment-activity')).toHaveCount(0)
 })

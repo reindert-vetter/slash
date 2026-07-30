@@ -15,7 +15,7 @@
 
 import { html } from './vendor/arrow.js'
 import { blockRows, changedRows, approvedRowSet } from './Block.mjs'
-import { categoryClass, statusInfo } from './BlockList.mjs'
+import { categoryClass, statusInfo, commentActivityPill } from './BlockList.mjs'
 
 // methodApproveCount mirrors home.mjs's blockApproveCount for a single real
 // PR block (own changed rows only, no nested subtree — a method row's pill
@@ -58,6 +58,13 @@ function approvePillCls(done, total) {
   )
 }
 
+// methodRow shows, besides its own approve pill, the same avatar+"+N"
+// comment-activity indicator the sidebar rows show (BlockList.mjs's exported
+// commentActivityPill, reused as-is — not a parallel implementation), fed by
+// state.commentActivity[m.id]: home.mjs's decoupled commentActivity watch
+// fills a per-method entry for every method of a test_class row, alongside
+// its existing per-row entry, via commentScopeKeys(m) (which works unchanged
+// for a single real PR block).
 function methodRow(state, row, m, idx) {
   const active = idx === state.classMethodSel
   const c = methodApproveCount(state, m)
@@ -88,6 +95,7 @@ function methodRow(state, row, m, idx) {
         title="${methodLabel(m)}"
         >${methodLabel(m)}</span
       >
+      ${() => commentActivityPill(state, m)}
       <span class="${() => approvePillCls(c.done, c.total)}"
         >${c.done === c.total && c.total ? '✓ ' : ''}${c.done}/${c.total}</span
       >

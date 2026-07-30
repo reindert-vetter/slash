@@ -112,11 +112,14 @@ left as a navigable list.
   `total` still makes the review scope of the whole call tree visible.
   Schema: `.claude/templates/schema.sql` (in sync with the `schemaDDL` constant
   in `db.go`).
-- **Comment-activity indicator per tree (sidebar AND every Onderliggende-code
-  child card), same subtree as the approval rollup above:** a sidebar row
-  (`data-testid=block-comment-activity`, `BlockList.mjs`'s
-  `commentActivityPill`) — and, identically, a child card in the "Onderliggende
-  code" panel (`data-testid=related-comment-activity`, `RelatedPanel.mjs`'s
+- **Comment-activity indicator per tree (sidebar, the test-methodes-kolom AND
+  every Onderliggende-code child card), same subtree as the approval rollup
+  above:** a sidebar row (`data-testid=block-comment-activity`,
+  `BlockList.mjs`'s exported `commentActivityPill`) — a method row in the
+  test-methodes-kolom (`TestMethodsColumn.mjs`'s `methodRow`, reusing that
+  same `commentActivityPill` verbatim, not a parallel implementation) — and,
+  identically, a child card in the "Onderliggende code" panel
+  (`data-testid=related-comment-activity`, `RelatedPanel.mjs`'s
   `commentActivityBadge`) — shows the avatar of whoever posted the most recent
   message across every currently OPEN comment thread anchored on the block
   itself or anywhere in its subtree, plus a text "+N" badge
@@ -141,7 +144,21 @@ left as a navigable list.
   sidebar rows (mirrors the `approvalSummaries` watch immediately above it:
   inline deps in the getter, the actual rollup in the callback,
   wholesale-reassigned into `state.commentActivity`, id→`{count,last}` — never
-  a co-subscriber on any block's `b.code`); for a child descriptor in the
+  a co-subscriber on any block's `b.code`). **That same watch ALSO fills one
+  entry per individual METHOD of a `test_class` row** (method id →
+  `{count,last}`, alongside the row's own union entry): `commentScopeKeys(m)`
+  works unchanged for a single method — a method carries no `.kind`, so it
+  falls into `commentScopeKeys`'s generic branch (its own anchor + its own
+  `nestedPrBlocks` subtree), exactly the shape any other top-level block's own
+  entry already gets, just scoped to that one method instead of the whole
+  class. No `matchesRow` argument is passed here (unlike `lineChildSummaries`'
+  per-diff-line use of that parameter, see below) — this is a per-BLOCK
+  summary like every other `state.commentActivity` entry, so there's nothing
+  to restrict. No new reactive dependency either: `nestedPrBlocks`/
+  `directChildBlocks` only read `state.allBlocks`/`state.relations`/
+  `callRows`(→`state.callResolve`)/`testCoverRows`(→`state.testCovers`) —
+  already inline in the same watch's getter — and never a block's own
+  `b.code`, so this can't introduce the "stuck on loading" race; for a child descriptor in the
   Onderliggende-code panel, the same `commentScopeKeys`/`commentActivitySummary`
   pair is instead called directly per child inside `relatedChildren`/
   `resolvedCallChildren`/`resolvedTestCoverChildren`/`coveredByChildren` (right
@@ -162,8 +179,9 @@ left as a navigable list.
   the same targets. Test: `tests/underlying-comment-activity.spec.mjs` (PR
   970500, own PR number per the `APPROVAL_RESET_PRS` note in `_fixtures.mjs` —
   a spec that places/resolves comments needs a PR nobody else's assertions
-  depend on; covers both the sidebar pill and the child card in the
-  Onderliggende-code panel).
+  depend on; covers the sidebar pill, a `test_class` row's own method rows in
+  the test-methodes-kolom, and the child card in the Onderliggende-code
+  panel).
 - **A THIRD place the same avatar+N badge appears: directly on the diff line
   itself (`data-testid=line-underlying-summary`, `Block.mjs`'s
   `lineSummaryBadge`), plus a NEW done/total approve fraction next to it —**

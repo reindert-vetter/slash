@@ -20,5 +20,27 @@
     "endLine": 15,
     "status": "modified",
     "side": "new"
+  },
+  {
+    "pr": 970500,
+    "file": "tests/CommentActivityMethodTest.php",
+    "class": "CommentActivityMethodTest",
+    "name": "it_should_do_something",
+    "category": "TEST",
+    "line": 30,
+    "endLine": 40,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 970500,
+    "file": "tests/CommentActivityMethodTest.php",
+    "class": "CommentActivityMethodTest",
+    "name": "it_should_do_something_else",
+    "category": "TEST",
+    "line": 45,
+    "endLine": 55,
+    "status": "modified",
+    "side": "new"
   }
 ]
