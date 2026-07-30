@@ -454,7 +454,7 @@ export default function Block(b, opts = {}) {
         // own, content-based width instead — see widthCls.
         widthCls(b, viewModeFn) +
         (preview
-          ? 'max-h-72 border-slate-200 dark:border-zinc-800 opacity-50'
+          ? 'max-h-72 border-slate-300 dark:border-zinc-700 opacity-50'
           : diffActive()
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"

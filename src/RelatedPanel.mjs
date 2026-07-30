@@ -1804,7 +1804,7 @@ function compactConversation(c, i) {
   return html`
     <button
       class="${() =>
-        'flex w-full items-start gap-2 rounded-md border border-slate-200 dark:border-zinc-800 px-2.5 py-2 text-left transition ' +
+        'flex w-full items-start gap-2 rounded-md border border-slate-300 dark:border-zinc-700 px-2.5 py-2 text-left transition ' +
         (c.status === 'resolved'
           ? 'bg-slate-50/60 dark:bg-zinc-800/40 hover:border-indigo-200 dark:hover:border-indigo-500/40'
           : 'bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
@@ -2315,7 +2315,7 @@ function nestedChip(ancestors, k, drill, path, cardIdx) {
         'w-72 shrink-0 rounded-md border bg-slate-50/60 dark:bg-zinc-800/40 px-1.5 py-1 text-left hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
         (focused()
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
-          : 'border-slate-200 dark:border-zinc-800')}"
+          : 'border-slate-300 dark:border-zinc-700')}"
       data-testid="related-nested-chip"
       data-active="${() => (focused() ? 'true' : 'false')}"
       title="${blockLabel(k) + ' · ' + k.file}"
@@ -2447,20 +2447,21 @@ function relatedCard(r, i, drill) {
   // its drill-hint chips (cs.chipPath, see nestedChip/handleRelatedKey) — only
   // one thing in the code panel is ever visually "active" at a time.
   const selected = () => cs.focus === 'code' && i === cs.codeSel && cs.chipPath.length === 0
-  // An unchanged call/covered-method target (into a file this PR doesn't touch)
-  // has no diff to review, so its selection highlight is grey rather than indigo.
-  const unchanged = DIFFSTAT_KINDS.has(r.kind) && !r.diff
   const nested = Array.isArray(r.nested) ? r.nested : []
   return html`
     <div class="flex items-start">
     <div
       class="${() =>
+        // Every block/card uses the same indigo-when-selected / slate-300-
+        // when-not border, no exceptions — an unchanged call/covered-method
+        // target used to get a grey ring here even when selected (there's
+        // nothing to review), but that distinction is still fully carried by
+        // the separate "Unchanged" text badge (diffStatBadge) elsewhere in
+        // this card, so dropping it here loses no colourblind-relevant signal.
         'min-w-0 flex-1 cursor-pointer rounded-lg border bg-slate-50/60 dark:bg-zinc-800/40 hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
         (selected()
-          ? unchanged
-            ? 'border-slate-300 dark:border-zinc-700 ring-1 ring-slate-200 dark:ring-zinc-800'
-            : 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
-          : 'border-slate-200 dark:border-zinc-800')}"
+          ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+          : 'border-slate-300 dark:border-zinc-700')}"
       data-testid="related-item"
       data-child-id="${r.id}"
       data-active="${() => (selected() ? 'true' : 'false')}"
@@ -2535,7 +2536,7 @@ function testsBar(r, i, drill) {
         'flex cursor-pointer items-center gap-2 overflow-hidden rounded-lg border bg-slate-50/60 dark:bg-zinc-800/40 px-3 py-2 hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
         (selected()
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
-          : 'border-slate-200 dark:border-zinc-800')}"
+          : 'border-slate-300 dark:border-zinc-700')}"
       data-testid="related-tests-bar"
       data-active="${() => (selected() ? 'true' : 'false')}"
       data-expanded="${r.expanded ? 'true' : 'false'}"
@@ -3207,9 +3208,18 @@ export function commentDetailCard(c, opts) {
   return html`
     <div
       class="${() =>
-        'flex w-[42rem] shrink-0 flex-col gap-3 rounded-2xl border border-slate-200 dark:border-zinc-800 p-4 shadow-sm ' +
-        (c.status === 'resolved' ? 'bg-slate-50/60 dark:bg-zinc-800/40 ' : 'bg-white dark:bg-zinc-900 ') +
-        (preview ? 'opacity-60' : '')}"
+        // The same on/off indigo/slate border every Block() diff card gets
+        // (see Block.mjs's diffActive) — this card, after all, replaces a
+        // Block() card in the same column position for a comment-index item
+        // (see detail-layout.md). Unlike a real block there's no further
+        // "stop" (drilled column / Onderliggende code) the keyboard can step
+        // into that would steal this border away, so non-preview here is
+        // simply the whole of the selected/focused state.
+        'flex w-[42rem] shrink-0 flex-col gap-3 rounded-2xl border p-4 shadow-sm ' +
+        (preview
+          ? 'border-slate-300 dark:border-zinc-700 opacity-60 '
+          : 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30 ') +
+        (c.status === 'resolved' ? 'bg-slate-50/60 dark:bg-zinc-800/40 ' : 'bg-white dark:bg-zinc-900 ')}"
       data-testid="comment-detail-card"
     >
       <div

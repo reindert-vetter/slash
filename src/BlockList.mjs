@@ -80,7 +80,7 @@ export default function BlockList(state) {
         // and the stop-1 border above, so all three stops highlight the same way.
         (state.mode === 'list' && !state.showDescription
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
-          : 'border-slate-200 dark:border-zinc-800 ring-1 ring-black/5') +
+          : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5') +
         ' ' +
         (state.mode === 'diff' || state.testColumnFocused
           ? // Slides fully away in diff mode, and equally once the
@@ -130,7 +130,7 @@ export default function BlockList(state) {
             'mt-2 w-full rounded-lg border bg-slate-50 dark:bg-zinc-800/60 px-3 py-1.5 text-sm text-slate-800 dark:text-zinc-200 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none ' +
             (state.searchActive
               ? 'border-indigo-300 dark:border-indigo-500 bg-white dark:bg-zinc-900 ring-2 ring-indigo-200 dark:ring-indigo-500/30'
-              : 'border-slate-200 dark:border-zinc-800 hover:border-slate-300 dark:hover:border-zinc-700')}"
+              : 'border-slate-300 dark:border-zinc-700 hover:border-slate-400 dark:hover:border-zinc-600')}"
           @input="${(e) => state.onSearch && state.onSearch(e.target.value)}"
           @focus="${() => {
             state.searchActive = true
@@ -281,10 +281,16 @@ function toggleRow(state, count) {
     <button
       data-testid="toggle-approved"
       class="${() =>
-        'w-full border-t border-slate-100 dark:border-zinc-800/60 px-3 py-2 text-left text-xs font-medium ' +
+        // A full border (always present at 1px, in both branches, so toggling
+        // focus never shifts the row height — only its colour changes) mirrors
+        // the same indigo/slate border logic every other block/card uses;
+        // the existing bg-indigo-50 + ring-inset stays as an extra signal on
+        // top, since ~30 Playwright specs already assert bg-indigo-50 on a
+        // selected row (see block-row assertions across the suite).
+        'w-full border px-3 py-2 text-left text-xs font-medium ' +
         (state.toggleFocused
-          ? 'bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/40 text-indigo-700 dark:text-indigo-300'
-          : 'text-slate-500 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
+          ? 'border-indigo-300 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30 text-indigo-700 dark:text-indigo-300'
+          : 'border-slate-300 dark:border-zinc-700 text-slate-500 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       @click="${() => {
         state.showApproved = !state.showApproved
         state.toggleFocused = true
@@ -309,10 +315,11 @@ function ignoreToggleRow(state, count) {
     <button
       data-testid="toggle-ignored"
       class="${() =>
-        'w-full border-t border-slate-100 dark:border-zinc-800/60 px-3 py-2 text-left text-xs font-medium ' +
+        // Same full-border treatment as toggleRow above (see its comment).
+        'w-full border px-3 py-2 text-left text-xs font-medium ' +
         (state.ignoreToggleFocused
-          ? 'bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/40 text-indigo-700 dark:text-indigo-300'
-          : 'text-slate-500 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
+          ? 'border-indigo-300 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30 text-indigo-700 dark:text-indigo-300'
+          : 'border-slate-300 dark:border-zinc-700 text-slate-500 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       @click="${() => {
         state.showIgnored = !state.showIgnored
         state.ignoreToggleFocused = true
@@ -393,10 +400,16 @@ function row(state, b, i) {
       data-idx="${i}"
       data-testid="block-row"
       class="${() =>
-        'flex cursor-default items-center gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2 text-sm ' +
+        // A full border (always present at 1px in both branches, so selecting
+        // a row never shifts its height) mirrors the same indigo/slate border
+        // logic every other block/card uses — replacing the previous
+        // border-b-only hairline divider. The existing bg-indigo-50 + ring
+        // stays as an extra signal on a selected row, since a large chunk of
+        // the Playwright suite already asserts bg-indigo-50 there.
+        'flex cursor-default items-center gap-2 border px-3 py-2 text-sm ' +
         (rowFocused(state, i)
-          ? 'bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/40'
-          : 'hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
+          ? 'border-indigo-300 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30'
+          : 'border-slate-300 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       @click="${() => {
         state.selected = i
         state.toggleFocused = false

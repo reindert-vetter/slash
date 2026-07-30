@@ -317,7 +317,14 @@ bound can catch — only re-anchoring can. Same reasoning applies to
   card, keyed on `'detail:'+role+':comment:'+id+':'+status` (a resolve thus
   forces a fresh node, same rekey-on-status-change reasoning as the ordinary
   block-card key). `preview` (`i !== sel || !focusedHere`) dims the
-  look-ahead card exactly like `Block()`'s own `preview` prop — **load-bearing
+  look-ahead card exactly like `Block()`'s own `preview` prop — and, since
+  this card replaces a `Block()` card in the same column slot, it also gets
+  the same on/off indigo/gray border (`border-slate-300` while `preview`,
+  `border-indigo-300` otherwise — see "Focus highlight per stop" in
+  `.claude/rules/keyboard-navigation.md`): unlike a real block there's no
+  further stop (a drilled column, Onderliggende code) the keyboard can step
+  into that would take the border away again, so non-preview here simply
+  *is* the whole selected/focused state. **Load-bearing
   distinction:** the reply-composer state `picm` (below) is a **single,
   module-level** reactive object shared by every `commentDetailCard` call, so
   it's scoped by `commentId`, not just a bare boolean — otherwise opening the
@@ -701,7 +708,7 @@ background from `bg-white`/`bg-zinc-900` to the muted
 (`relatedCard`) already uses for an unselected item — a resolved
 conversation is done, so it should recede visually like already-reviewed
 reference code instead of continuing to stand out as an active card; the
-border stays the same neutral `border-slate-200 dark:border-zinc-800` in
+border stays the same neutral `border-slate-300 dark:border-zinc-700` in
 both states (only `expandedConversation`'s indigo focus border is
 untouched, since expanded always implies the keyboard is on it — that's an
 orthogonal focus cue, not a status color).
@@ -1457,8 +1464,15 @@ block on the right — see the layout paragraph above):
   the number of added/removed lines of the called definition, counted with
   `diffStat` in `Block.mjs`, git-`--stat` style), or a gray **`Unchanged`**
   badge if the call points to a file the PR doesn't change (no diff → `r.diff`
-  is `null`). Such an unchanged child also gets a **gray** ring instead of
-  the indigo ring when selected — there's nothing to review.
+  is `null`). Selecting such an unchanged child gets the same indigo border
+  as any other selected item in this card — an earlier version instead gave
+  it a gray ring even while selected ("there's nothing to review"), but that
+  exception has since been dropped: every block/card in the app now shares
+  one, single blue-selected/gray-unselected border rule with no per-kind
+  exceptions (see "Focus highlight per stop" in
+  `.claude/rules/keyboard-navigation.md`), and the "nothing to review" signal
+  is still fully carried by the `Unchanged` text badge right above it — so
+  dropping the ring exception loses no colorblind-relevant information.
   Fed from the relations read-model via `GET /api/relations?pr=N`;
   `home.mjs` (`childrenOf`/`relatedChildren`) pulls the children from
   `state.allBlocks` and lazily loads their code. A **relation child** stays

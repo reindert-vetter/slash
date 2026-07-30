@@ -54,22 +54,57 @@ continuous chain of **stops**, from left to right across the whole layout:
 Tasks no longer has its own keyboard stop at all — it's click-only, under
 stop 1 (see `.claude/rules/detail-layout.md`).
 
-**Focus highlight per stop:** stops 1-3 show the *same* on/off indigo
-focus border (`border-indigo-300 ring-1 ring-indigo-200`, otherwise the
-neutral grey border) exactly while that stop owns the keyboard, mirroring the
-`diffActive` pattern of the block-diff card (`Block.mjs`): the description card
-(`prInfoCard`, `data-testid=pr-info-card`) while `state.showDescription` is
-true, the pr-index (`data-testid=pr-index`) while `state.mode==='list' &&
-!state.showDescription`, and the block-diff card (stop 3, and each drilled
+**Focus highlight per stop — now one single, app-wide border rule, no
+per-block exceptions:** every block/card/row uses exactly the same two
+states — `border-indigo-300 dark:border-indigo-500 ring-1
+ring-indigo-200 dark:ring-indigo-500/30` while it's selected/focused,
+`border-slate-300 dark:border-zinc-700` (plus `ring-1 ring-black/5` on an
+otherwise-idle card, mirroring the block-diff card's own rest state)
+otherwise — never a bespoke lighter/darker gray or a color-only exception
+per component. This mirrors the `diffActive` pattern of the block-diff card
+(`Block.mjs`): the description card (`prInfoCard`,
+`data-testid=pr-info-card`) while `state.showDescription` is true, the
+pr-index (`data-testid=pr-index`) while `state.mode==='list' &&
+!state.showDescription`, the methodes-kolom (`TestMethodsColumn.mjs`) while
+`state.testColumnFocused`, and the block-diff card (stop 3, and each drilled
 column, stop 4) while it owns `focusLevel`. Both `prInfoCard` and the pr-index
 `<aside>` build this into their existing top-level `class="${() => …}"`
 function binding (not a keyed list item), so it just re-evaluates reactively on
 `state.showDescription`/`state.mode` — no arrow.js keyed-node pitfall applies
 here (that pitfall only bites keyed array items like the `Block()` cards, see
 `.claude/rules/conventions.md`). Stop 5 (Underlying code) deliberately has
-**no** outer focus border — that was removed on purpose (see the "Underlying
-code" section in `.claude/rules/detail-layout.md`), so the chain isn't
-uniformly bordered end-to-end, only stops 1-4.
+**no** outer focus border of its own — that was removed on purpose (see the
+"Underlying code" section in `.claude/rules/detail-layout.md`) — but every
+individual child card/chip/tests-bar inside it (`relatedCard`/`nestedChip`/
+`testsBar`, `RelatedPanel.mjs`) follows the same two-state border as any
+other item, so the chain isn't uniformly bordered end-to-end at the
+column/stop level, only within it.
+
+**The same rule also applies to list rows** — the sidebar block row
+(`BlockList.mjs`'s `row`), the search box, `toggleRow`/`ignoreToggleRow`, and
+the methodes-kolom's own method row (`TestMethodsColumn.mjs`'s `methodRow`) —
+not just the four card-level stops above. A selected/focused row keeps its
+existing `bg-indigo-50 dark:bg-indigo-500/15` + `ring-1 ring-inset
+ring-indigo-200 dark:ring-indigo-500/30` tint as the **primary** selection
+signal (deliberately kept, rather than dropped in favor of the border alone
+— a large chunk of the Playwright suite already asserts `bg-indigo-50` for
+"this row is selected", and rows sit flush against each other with no gap,
+so the background tint reads more reliably there than a border would on its
+own); the indigo/gray border is added **on top** of that, for the same
+"every block looks the same" consistency, not as a replacement. Every row's
+border is always present at a constant 1px in both states (only the
+*color* toggles, never the width) so selecting a row never shifts its
+height. **Visible, deliberate side effect:** because a full border (not
+just a `border-b`) now runs around every row, the previous subtle, light
+`border-slate-100` hairline divider *between* two unselected rows has been
+replaced by the same, slightly darker `border-slate-300 dark:border-zinc-700`
+card-rest tint every other block/card uses — the row list therefore now
+reads a bit more like a bordered table than a hairline-separated list. This
+was a conscious trade-off for full border consistency, not an oversight; if
+that reads as too heavy in practice it's an easy, localized revert (back to
+`border-b border-slate-100 dark:border-zinc-800/60`, dropping the
+`border-slate-300`/`border-indigo-300` idle/focused pair on the row itself)
+without touching the rest of this rule.
 
 `→` moves one stop to the right, `←` one stop to the left — this is
 **on top of**, not instead of, the existing per-stop `↑`/`↓` navigation

@@ -4539,7 +4539,7 @@ function collapsedColumnHTML(b, level, testid, drillIdx = null) {
   return html`
     <button
       type="button"
-      class="flex h-full w-14 shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
+      class="flex h-full w-14 shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
       data-testid="${testid}"
       data-drill-idx="${drillIdx === null ? '' : drillIdx}"
       title="${b.label || ''}"
@@ -7240,7 +7240,7 @@ function prInfoCard(state) {
         // the binding stays reactive) — mirrors diffActive on the block-diff card.
         (state.showDescription
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
-          : 'border-slate-200 dark:border-zinc-800')}"
+          : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"
       data-testid="pr-info-card"
     >
       <div>
@@ -7420,7 +7420,7 @@ function testClassPreviewCard(state, row) {
   return html`
     <div class="contents" data-testid="detail-card">
       <div
-        class="flex min-h-0 w-64 shrink-0 flex-col gap-1 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white/60 dark:bg-zinc-900/60 px-3 py-2 opacity-60"
+        class="flex min-h-0 w-64 shrink-0 flex-col gap-1 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white/60 dark:bg-zinc-900/60 px-3 py-2 opacity-60"
         data-testid="test-class-preview"
       >
         <div class="flex items-center gap-2">

@@ -67,10 +67,13 @@ function methodRow(state, row, m, idx) {
       data-testid="test-method-row"
       data-idx="${idx}"
       class="${() =>
-        'flex cursor-default items-center gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-sm ' +
+        // Same full-border treatment (always 1px, colour-only toggle) as
+        // BlockList.mjs's sidebar row — see its comment for why the
+        // bg-indigo-50 + ring stays alongside the border.
+        'flex cursor-default items-center gap-2 border px-3 py-1.5 text-sm ' +
         (active
-          ? 'bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/40'
-          : 'hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
+          ? 'border-indigo-300 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30'
+          : 'border-slate-300 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       @click="${() => {
         state.classMethodSel = idx
         state.testColumnFocused = true
@@ -108,7 +111,7 @@ export default function TestMethodsColumn(state, row) {
         // toggle — see home.mjs's DetailPanel).
         (state.testColumnFocused
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
-          : 'border-slate-200 dark:border-zinc-800 ring-1 ring-black/5')}"
+          : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"
       data-testid="test-methods-column"
     >
       <header class="shrink-0 border-b border-slate-200 dark:border-zinc-800 px-3 py-2">
