@@ -246,7 +246,7 @@ type CodeCommentInput struct {
 // be delivered as a distinguishable reply rather than a signal of its own.
 type ReactionSignal struct {
 	ID     string `json:"id"`
-	Source string `json:"source"` // ui | github
+	Source string `json:"source"` // ui | github | ai (an automated reply, e.g. comment_autoresolve.go)
 	Author string `json:"author"`
 	// AvatarURL is the reply author's GitHub profile picture, filled by the reply
 	// poller for a github-sourced reply; empty for a UI reply. With Action
@@ -860,22 +860,26 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 
 	// Activity: move every stored comment/approval anchor the refresh just
 	// invalidated onto the rows it now belongs to (reanchor.go works out what those
-	// are; this applies them).
+	// are; this applies them), and — for a comment that just became orphaned —
+	// consider auto-resolving it (comment_autoresolve.go) when it was asking for
+	// exactly that code to be removed.
 	//
 	// Planning is a read — the read-models, the blocks table, the worktrees and
 	// `git show` — and applying goes exclusively through the sanctioned write
-	// paths: a "reanchor" Signal to each comment's own Execution, and the approve
-	// tracker's existing "set" Signal per remapped block. So the write boundary
-	// holds, and each moved anchor lands in its own comment's replayable history.
+	// paths: a "reanchor" Signal to each comment's own Execution, an ordinary
+	// resolving reply Signal for an auto-resolved one, and the approve tracker's
+	// existing "set" Signal per remapped block. So the write boundary holds, and
+	// each change lands in its own comment's replayable history.
 	//
 	// Plan and apply live in ONE Activity, mirroring supersedeFileWarnings (which
 	// likewise lists comments and signals each of them): the alternative — return
 	// the plan and let the workflow body loop over it — would put a variable number
-	// of Signal sends in the body, which only stays replay-deterministic because
-	// it's driven off a recorded result. One Activity is simply a fixed position in
-	// the history and needs no such argument. Best-effort per anchor: a comment
-	// whose Execution has already completed can't be signalled again, and that must
-	// not sink the rest of the pass.
+	// of Signal sends (and, for auto-resolve, a variable number of LLM calls) in the
+	// body, which only stays replay-deterministic because it's driven off a
+	// recorded result. One Activity is simply a fixed position in the history and
+	// needs no such argument. Best-effort per anchor: a comment whose Execution has
+	// already completed can't be signalled again, and that must not sink the rest
+	// of the pass.
 	engine.RegisterActivity("reanchorAfterRefresh", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
 			PR           int      `json:"pr"`
@@ -909,6 +913,14 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return json.Marshal(reanchorResult{})
 		}
 
+		// Looked up by RunID (== comment ID) below, once, for the auto-resolve
+		// check — it needs the comment's own Body/Code/Status/Reactions, none of
+		// which commentAnchorUpdate carries.
+		byRunID := make(map[string]comments.Comment, len(cmts))
+		for _, c := range cmts {
+			byRunID[c.RunID] = c
+		}
+
 		res := reanchorResult{}
 		for _, u := range plan.Comments {
 			anchor := u
@@ -920,6 +932,25 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				continue
 			}
 			res.Comments++
+
+			// A comment whose anchor just became orphan (its symbol is entirely gone
+			// from the PR) may have been asking for exactly that — auto-resolve it
+			// once shouldConsiderAutoResolve's guardrails hold AND a cheap model
+			// confidently agrees. See comment_autoresolve.go for the full guardrails
+			// and why resolving is irreversible.
+			if u.AnchorState == comments.AnchorOrphan {
+				if orig, ok := byRunID[u.RunID]; ok && shouldConsiderAutoResolve(orig) &&
+					classifyRemovalRequest(ctx, m.claude, orig.Body, orig.Code) {
+					if err := m.Signal(u.RunID, ReactionSignal{
+						ID: "sys-" + newUIReactionID(), Source: "ai",
+						Author: autoResolveAuthor, Body: autoResolveNote, Done: true,
+					}); err != nil {
+						m.logf("reanchor: auto-resolve %s skipped: %v", u.RunID, err)
+					} else {
+						res.AutoResolved++
+					}
+				}
+			}
 		}
 		if len(plan.Approvals) > 0 {
 			runID, err := m.EnsureApprovals(arg.PR)
@@ -937,8 +968,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				}
 			}
 		}
-		log.Printf("reanchor pr %d: moved %d comment anchor(s), %d approval set(s)",
-			arg.PR, res.Comments, res.Approvals)
+		log.Printf("reanchor pr %d: moved %d comment anchor(s), %d approval set(s), auto-resolved %d comment(s)",
+			arg.PR, res.Comments, res.Approvals, res.AutoResolved)
 		return json.Marshal(res)
 	})
 

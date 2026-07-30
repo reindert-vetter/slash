@@ -77,10 +77,14 @@ type reanchorPlan struct {
 func (p reanchorPlan) empty() bool { return len(p.Comments) == 0 && len(p.Approvals) == 0 }
 
 // reanchorResult is what the reanchorAfterRefresh Activity records in the workflow
-// history: how many anchors actually moved. Zero is the common case.
+// history: how many anchors actually moved, plus how many comments were
+// auto-resolved along the way (see comment_autoresolve.go — a comment whose
+// anchor just became orphan, asking to remove exactly that code). Zero is the
+// common case.
 type reanchorResult struct {
-	Comments  int `json:"comments"`
-	Approvals int `json:"approvals"`
+	Comments     int `json:"comments"`
+	Approvals    int `json:"approvals"`
+	AutoResolved int `json:"autoResolved"`
 }
 
 // blockForAnchor finds the block a stored anchor belongs to: same symbol

@@ -590,11 +590,73 @@ code** and keeping the thread alive. Terminology follows Temporal — a
       `action`/`anchor`. That also means a Playwright spec can't drive this state
       through the API — hence `slash seed -comments <json>` (mirror of the four
       existing seed paths), used by `tests/comment-orphan-anchor.spec.mjs`.
+    - **An orphaned comment that was asking to remove that exact code gets
+      AUTO-RESOLVED, via a cheap Haiku check (`comment_autoresolve.go`) run
+      right inside `reanchorAfterRefresh`.** The moment a comment's anchor
+      transitions to `AnchorOrphan` (the symbol it hung on is genuinely gone —
+      renamed, deleted, or the whole file dropped), a review comment like
+      "haal deze test weg" has effectively already been acted on: the code it
+      asked to remove is no longer there. `classifyRemovalRequest` asks Haiku
+      (context-only, the comment's `Body` + its stored `Code` snippet — free,
+      already-stored context) whether the comment was unambiguously asking for
+      a removal, via the same bool+`high`/`low`-confidence contract
+      `resolve_call.go`'s `llmAnswer` already uses (`modules/claude/prompts/
+      comment_removal.md`, embedded as `claude.CommentRemovalSystemPrompt`
+      following the established `//go:embed` convention). Only an explicit
+      `removeCode:true` **and** `confidence:"high"` triggers anything; any
+      failure — no `claude` client at all (`SLASH_CLAUDE=off`), a CLI error,
+      empty or unparseable output — degrades to "do nothing", mirroring
+      `resolveCallsWithModel`'s "a model/CLI failure never blocks the
+      workflow" style.
+      - **Replay-safety of running this — and an extra LLM call — live inside
+        an Activity:** `taskCodeCommentWorkflow`'s own body is completely
+        unchanged. Resolving a thread already happens via an ordinary `reply`
+        Signal with `Done:true` (exactly what "Resolve comment" already
+        sends) — auto-resolve is simply another caller of that same Signal,
+        decided from inside `reanchorAfterRefresh`'s existing per-comment
+        loop (which already does variable-count, live Signal sends from one
+        Activity function body, the same shape as `supersedeFileWarnings`).
+      - **Hard guardrails, checked BEFORE the Haiku call (`shouldConsiderAutoResolve`)**
+        so a comment that fails them never costs an LLM call at all: only
+        `AnchorState == AnchorOrphan` (never `AnchorUnpinned` — that only means
+        the anchored line moved/was edited, not that the symbol is gone); only
+        `Status == "open"` (an already resolved/deleting/deleted comment's
+        Execution has very likely already completed — signalling it again
+        would just fail); only `Kind == ""` (true by construction already,
+        checked explicitly anyway); only **zero existing replies**, from
+        anyone, for any reason — any reply at all means there's an active
+        conversation an automated pass must never silently close. Because
+        `reanchorAfterRefresh`'s `plan.Comments` (via `appendAnchorChange`)
+        only ever contains genuine anchor-state **transitions**, this also
+        means the check runs exactly once per comment, the moment it becomes
+        orphan — never repeatedly on a later refresh, and never retroactively
+        for a comment that was already orphan before this feature shipped
+        (deliberately forward-only; no backfill).
+      - **Irreversible, and the reviewer explicitly accepted that.** Resolving
+        a thread completes its Workflow Execution — there is no "reopen"
+        Signal anywhere in this codebase, so once auto-resolved, a human can
+        no longer signal that Execution at all. The reply this posts
+        (`Source:"ai"`, author `"AI-controle"` — the same branding as the
+        `code_warning` risk check, see below) is therefore the **only** trace
+        of this ever having happened, and its text is written to explain
+        itself on its own, months later, without depending on any other UI
+        state: it states **both** that this was resolved automatically **and**
+        why (the code the comment was about is no longer present in the PR).
+        No extra visual badge in v1 — the reply bubble (author + body) is
+        considered enough; a dedicated badge is a possible, non-blocking
+        follow-up.
     - Tests: `reanchor_test.go` (shift, no-op, edited-code → unpinned, ambiguous →
       unpinned, re-indent → still pinned, symbol gone → orphan, renamed file
       matched via `oldPath()`, call-segment preserved vs. demoted, approvals
       remapped/dropped/left-alone, the `reanchor` Signal end to end),
-      `blockstats_test.go`'s `TestRowForLineSharesRowSpaceWithApproveTotal`, and
+      `blockstats_test.go`'s `TestRowForLineSharesRowSpaceWithApproveTotal`,
+      `comment_autoresolve_test.go` (the classifier in isolation — high/low
+      confidence, empty/garbage/no-client output; `shouldConsiderAutoResolve`'s
+      guardrails; and end to end through `reanchorAfterRefresh` — a genuine
+      orphan+removal-request resolves the comment with a self-explanatory
+      reply, while an existing reply / an already-resolved comment / an
+      `AnchorUnpinned` transition / no claude client all leave it untouched,
+      the LLM never even called for the guardrail cases), and
       `tests/comment-orphan-anchor.spec.mjs`.
 - **`pr_inbox` workflow (per repo):** a third Workflow Type that owns the PR
   inbox — it's the **only one** that reads GitHub for the overview. A

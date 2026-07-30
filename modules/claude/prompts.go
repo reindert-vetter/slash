@@ -35,3 +35,12 @@ var PRSummarySystemPrompt string
 //
 //go:embed prompts/code_warning.md
 var CodeWarningSystemPrompt string
+
+// CommentRemovalSystemPrompt is the static instruction block for the
+// auto-resolve check that runs when a comment's row anchor becomes orphaned
+// (the symbol it was placed on is gone from the PR — see reanchor.go's doc
+// comment and workflows.go's reanchorAfterRefresh): a context-only Haiku call
+// decides whether the comment's own text was asking for exactly that removal.
+//
+//go:embed prompts/comment_removal.md
+var CommentRemovalSystemPrompt string

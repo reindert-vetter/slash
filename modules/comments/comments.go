@@ -142,7 +142,7 @@ type Comment struct {
 type Reaction struct {
 	ID        string `json:"id"`
 	CommentID string `json:"commentId"`
-	Source    string `json:"source"` // ui | github
+	Source    string `json:"source"` // ui | github | ai (an automated reply, e.g. comment_autoresolve.go)
 	Author    string `json:"author"`
 	// AvatarURL is the reply author's GitHub profile picture (see
 	// Comment.AvatarURL) — empty for a reply written in this app.
