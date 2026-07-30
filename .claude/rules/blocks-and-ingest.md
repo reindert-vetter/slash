@@ -164,6 +164,61 @@ left as a navigable list.
   a spec that places/resolves comments needs a PR nobody else's assertions
   depend on; covers both the sidebar pill and the child card in the
   Onderliggende-code panel).
+- **A THIRD place the same avatar+N badge appears: directly on the diff line
+  itself (`data-testid=line-underlying-summary`, `Block.mjs`'s
+  `lineSummaryBadge`), plus a NEW done/total approve fraction next to it —**
+  so a reviewer can tell, without opening the Onderliggende-code panel, how
+  much of the underlying code hanging off a specific call site is still
+  unapproved (e.g. "2/12"). Absolutely positioned at the right edge of the
+  row (mirrors the left-edge checkmark overlay), on the same canonical side
+  as the existing 💬 marker/checkmark (`approveHere` — new/right pane, or
+  old/left only for a pure deletion). A leading "✓ " marks a fully approved
+  fraction — never colour alone, per the colorblind rule; the numbers
+  themselves already carry the meaning either way.
+  **Deliberately GRAN-INDEPENDENT** (unlike the Onderliggende-code panel's own
+  `relatedChildren`, which hides/reorders by the current cursor): the badge
+  is always visible for every visible diff card (top-level selected/preview,
+  or any drilled column), based purely on the block's own STRUCTURAL
+  change-groups (`changeGroups(rows)` — the same grouping `'group'`
+  navigation uses, just independent here of what's currently selected), not
+  on navigation state. `home.mjs`'s `lineChildSummaries(b)` builds a
+  `Map<rowIndex, {approve, commentActivity}>`: it reuses `directChildBlocks`'s
+  three row-attribution sources directly (a relation child's own `line`, a
+  resolved method call's site via `findCallSites`, a resolved `covers`
+  target's annotation `line` when `b` is the test) — a child with no
+  locatable site (an event-listener/relation without a `line`, or a
+  block-level synthetic callKey like `resource:`/`migration_model:`/
+  `data_provider:`) is simply skipped here, it still shows in the panel, just
+  not pinned to one line; a `covered_by` child never qualifies either (its
+  annotation lives in the covering test's own file, not `b`'s). **If a call
+  site sits inside one of `b`'s own change-groups, every child anchored
+  anywhere within that group rolls up onto the group's FIRST row instead of
+  its own** — "if it's on a group, show it on the group's first line" — a
+  site on an ordinary (non-grouped) row keeps that row as its own anchor (the
+  default, one-badge-per-line placement). The rollup itself reuses
+  `subtreeApproveCount`/`commentScopeKeys`/`commentActivitySummary` verbatim
+  (summed/unioned over every distinct child anchored at that row), so it's
+  mathematically the same numbers the sidebar pill and the panel already
+  show — just presented per line instead of per block. Threaded as a
+  `lineSummaries` opt through `Block()` → `codeDiff`/`unifiedCodeDiff` →
+  `codePane`/`paneHTML`/`unifiedHTML` → `rowCellHTML`/`unifiedRowHTML`,
+  exactly like the existing `approvedRows`/`commentedRows` opts (a function
+  re-evaluated inside the pane's own `.innerHTML` binding, so it re-renders
+  on any approve/comment change without a new reactive slot). Since
+  `avatarHTML` (`avatar.mjs`) returns an arrow.js `html`` ` template and
+  `paneHTML`/`rowCellHTML` build plain HTML STRINGS (assigned via
+  `.innerHTML`, not mounted as an arrow.js template), a raw-string sibling
+  `avatarHtmlString` was added to `avatar.mjs` with its own attribute
+  escaping — reusing `avatarHTML`'s template there would have leaked the
+  template function itself as text (see the "leaks the template function as
+  text" pitfall in `conventions.md`). Out of scope: the TRANSLATION per-key
+  view and the SVG preview (no "children per line" concept there). Test:
+  `tests/line-underlying-summary.spec.mjs` (PR 100, reusing the existing
+  call-arrow fixture — `ArrowCallerAction::execute`'s call to
+  `ArrowHelperService::arrowHelper`, itself calling
+  `ArrowNestedService::arrowNested` — proves the badge shows "0/3" on the
+  call-site line before either is approved, and "✓ 3/3" once both are, via
+  drilling in and approving each with the command palette).
 - **Server-side `total` (`blockstats.go` + `GET /api/blockstats`):** the number
   of approvable changed-rows per block is computed **in the backend** so it's
   known immediately — even before a block has lazily loaded its code — and

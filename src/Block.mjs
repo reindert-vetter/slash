@@ -6,6 +6,7 @@
 import { html } from './vendor/arrow.js'
 import { categoryClass } from './BlockList.mjs'
 import { translationBlockView, translationChangeUnits } from './translationDiff.mjs'
+import { avatarHtmlString } from './avatar.mjs'
 import Prism from './vendor/prism.js'
 
 // highlight turns raw PHP source into Prism-tokenised HTML (keywords, strings,
@@ -422,6 +423,15 @@ export default function Block(b, opts = {}) {
   // segment can show its per-segment progress before the whole row is signed
   // off. Defaults to nothing approved.
   const approvedCallsFn = opts.approvedCalls || (() => new Set())
+  // lineSummaryFn is a function returning a Map<rowIndex, { approve, commentActivity }>
+  // — the "onderliggende code" rollup per diff line (home.mjs's
+  // lineChildSummaries): an avatar+N comment-activity indicator plus a
+  // done/total approve fraction, rendered at the right edge of the line the
+  // underlying code (a resolved method call, relation child, or covers
+  // target) is anchored to — see rowCellHTML's lineSummaryBadge. A function
+  // so the pane's .innerHTML binding re-runs as approvals/comments change,
+  // mirroring approvedFn/commentedFn above. Defaults to nothing to show.
+  const lineSummaryFn = opts.lineSummaries || (() => new Map())
   // langSiblingsFn is a function returning, for a TRANSLATION block, the
   // OTHER locale files of the same lang file (home.mjs's
   // state.langSiblings[b.id], via ensureLangSiblings/GET /api/langsiblings)
@@ -549,7 +559,7 @@ export default function Block(b, opts = {}) {
           ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled)
           : isSvgFile(b)
           ? svgSlot(b)
-          : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn)}
+          : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn)}
     </article>
   `
 }
@@ -806,6 +816,7 @@ function codeDiff(
   commentedFn = () => new Set(),
   approvedCallsFn = () => new Set(),
   viewMode = () => 'split',
+  lineSummaryFn = () => new Map(),
 ) {
   const c = b.code
   if (c === undefined) return ''
@@ -864,7 +875,7 @@ function codeDiff(
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap)}
+        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn)}
         ${scrollHint('up')}
         ${scrollHint('down')}
       </div>
@@ -892,7 +903,7 @@ function codeDiff(
               : 'Verwijderd — deze code bestaat niet meer'}
         </div>
         <div class="relative flex min-h-0 flex-1 overflow-hidden">
-          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap)}
+          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn)}
           ${scrollHint('up')}
           ${scrollHint('down')}
         </div>
@@ -905,7 +916,7 @@ function codeDiff(
   // two-pane branch left in this function: 'fit' always forces
   // effectiveOnly above, so it never reaches this point at all.
   if (viewMode() === 'unified') {
-    return unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn, approvedCallsFn)
+    return unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn, approvedCallsFn, lineSummaryFn)
   }
   return html`
     <div
@@ -913,9 +924,9 @@ function codeDiff(
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
-      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn)}
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn)}
       <div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>
-      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn)}
+      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn)}
       ${scrollHint('up')}
       ${scrollHint('down')}
     </div>
@@ -1040,6 +1051,7 @@ function codePane(
   commentedFn = () => new Set(),
   approvedCallsFn = () => new Set(),
   wrap = false,
+  lineSummaryFn = () => new Map(),
 ) {
   return html`
     <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}" data-pane="${side}">
@@ -1047,7 +1059,7 @@ function codePane(
         <code
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           .innerHTML="${() =>
-            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap)}"
+            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, lineSummaryFn())}"
         ></code>
       </div>
     </div>
@@ -1077,7 +1089,7 @@ function codePane(
 // index ambiguous. Exactly one line per row keeps carrying metadata: the
 // same canonical side approveHere/commentedHere below already single out
 // (the new/right side, or the old/left side when there's no right at all).
-function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, opts = {}) {
+function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, opts = {}, lineSummaries = null) {
   const { gutter = false, emitMeta = true } = opts
   const text = sideKey === 'left' ? r.left : r.right
   const mark = sideKey === 'left' ? r.leftMark : r.rightMark
@@ -1155,6 +1167,14 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, opts = {})
   // the new (right) pane normally, and on the old (left) pane only for a pure
   // deletion (no right side) — so a modified row never gets it twice.
   const approveHere = emitMeta && (sideKey === 'right' || r.right == null)
+  // lineSummaryHtml: the "onderliggende code" per-line badge (avatar+N
+  // comment activity, plus a done/total approve fraction) — see
+  // lineSummaryBadge below and home.mjs's lineChildSummaries, which builds
+  // the lineSummaries Map keyed by the SAME row index rowCellHTML is
+  // rendering here (already resolved onto a change-group's first row where
+  // applicable). Same canonical side as commentedHere/approveHere — a
+  // modified row never gets it twice.
+  const lineSummaryHtml = approveHere && lineSummaries ? lineSummaryBadge(lineSummaries.get(i)) : ''
   // gutterHtml (unified stand only, opts.gutter): the leading "- "/"+ "/"  "
   // marker plus an inline, fixed-width checkmark slot — see the doc comment
   // above for why the checkmark can't stay an absolute overlay here.
@@ -1174,7 +1194,54 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, opts = {})
   // call-arrow overlay (src/callArrows.mjs) to anchor an arrow on the exact
   // call-site row. Suppressed when emitMeta is false, see above.
   const dataRow = emitMeta ? ` data-row="${i}"` : ''
-  return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}>${check}${gutterHtml}${body}${marker}</div>`
+  return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}>${check}${gutterHtml}${body}${marker}${lineSummaryHtml}</div>`
+}
+
+// lineSummaryBadge renders the small "onderliggende code" pill for one diff
+// row: an avatar+"+N" comment-activity indicator (mirrors
+// commentActivityPill/commentActivityBadge in BlockList.mjs/RelatedPanel.mjs
+// — the same avatar+N shape, now surfaced a third time, directly on the
+// line the underlying code is anchored to) plus a done/total approve
+// fraction, so a reviewer can tell at a glance how much of the underlying
+// code linked from THIS line still needs approval — without opening the
+// Onderliggende-code panel. A leading "✓ " (never color alone — see the
+// colorblind rule in CLAUDE.md) marks a fully approved fraction; the
+// numbers themselves already carry the meaning either way. Absolutely
+// positioned at the right edge of the row (mirrors the left-edge checkmark
+// overlay above) on a small pill background so it stays legible over code.
+// `summary` is one entry of home.mjs's lineChildSummaries Map, or
+// undefined/null when this row has nothing to show.
+function lineSummaryBadge(summary) {
+  if (!summary) return ''
+  const { approve, commentActivity } = summary
+  const hasApprove = approve && approve.total > 0
+  if (!hasApprove && !commentActivity) return ''
+  const parts = []
+  if (commentActivity) {
+    parts.push(
+      avatarHtmlString(commentActivity.last.name, commentActivity.last.avatarUrl, 'h-3 w-3') +
+        (commentActivity.count > 1
+          ? `<span class="text-[9px] font-semibold text-slate-500 dark:text-zinc-500">+${commentActivity.count - 1}</span>`
+          : ''),
+    )
+  }
+  if (hasApprove) {
+    const done = approve.done === approve.total
+    parts.push(
+      `<span class="text-[9px] font-semibold tabular-nums ${
+        done ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-zinc-500'
+      }">${done ? '✓ ' : ''}${approve.done}/${approve.total}</span>`,
+    )
+  }
+  const title =
+    'Onderliggende code' +
+    (hasApprove ? ' — ' + approve.done + '/' + approve.total + ' regels goedgekeurd' : '') +
+    (commentActivity
+      ? ' — ' + commentActivity.count + (commentActivity.count === 1 ? ' open reactie' : ' open reacties')
+      : '')
+  return ` <span class="select-none absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 rounded bg-white/90 dark:bg-zinc-900/90 px-1 py-0.5 ring-1 ring-slate-200 dark:ring-zinc-700 shadow-sm" data-testid="line-underlying-summary" title="${title}">${parts.join(
+    '',
+  )}</span>`
 }
 
 // gutterSpan renders the leading "- "/"+ "/"  " marker for the unified
@@ -1209,11 +1276,20 @@ function gutterSpan(mark, approvedMark) {
 // text); blank/filler lines get a non-breaking space so the row keeps its
 // height. The only unescaped bits are our own static class strings, so the
 // result is safe to hand to the .innerHTML binding.
-function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Set(), approvedCalls = new Set(), wrap = false) {
+function paneHTML(
+  rows,
+  sideKey,
+  group,
+  approved = new Set(),
+  commented = new Set(),
+  approvedCalls = new Set(),
+  wrap = false,
+  lineSummaries = null,
+) {
   const parts = []
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]
-    parts.push(rowCellHTML(r, i, sideKey, group, approved, commented, wrap))
+    parts.push(rowCellHTML(r, i, sideKey, group, approved, commented, wrap, {}, lineSummaries))
 
     // Partial call approval: once at least one — but not all — of this row's
     // call segments is approved, an open circle marks every segment still
@@ -1244,19 +1320,19 @@ function paneHTML(rows, sideKey, group, approved = new Set(), commented = new Se
 // whitespace-only re-alignment, see wsOnly) renders both lines. See
 // rowCellHTML's own doc comment for why exactly one of the two lines (the
 // canonical, metadata-carrying one) ever gets `data-row`/etc.
-function unifiedRowHTML(r, i, group, approved, commented) {
+function unifiedRowHTML(r, i, group, approved, commented, lineSummaries = null) {
   const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
   if (paired) {
     return (
-      rowCellHTML(r, i, 'left', group, approved, commented, false, { gutter: true, emitMeta: false }) +
-      rowCellHTML(r, i, 'right', group, approved, commented, false, { gutter: true, emitMeta: true })
+      rowCellHTML(r, i, 'left', group, approved, commented, false, { gutter: true, emitMeta: false }, lineSummaries) +
+      rowCellHTML(r, i, 'right', group, approved, commented, false, { gutter: true, emitMeta: true }, lineSummaries)
     )
   }
   if (r.right != null) {
-    return rowCellHTML(r, i, 'right', group, approved, commented, false, { gutter: true, emitMeta: true })
+    return rowCellHTML(r, i, 'right', group, approved, commented, false, { gutter: true, emitMeta: true }, lineSummaries)
   }
   if (r.left != null) {
-    return rowCellHTML(r, i, 'left', group, approved, commented, false, { gutter: true, emitMeta: true })
+    return rowCellHTML(r, i, 'left', group, approved, commented, false, { gutter: true, emitMeta: true }, lineSummaries)
   }
   return ''
 }
@@ -1275,10 +1351,17 @@ function unifiedCallText(r) {
 // simpler than paneHTML's two-pane version above, since there's only one
 // column to keep aligned (no blank filler row needed for "the other pane
 // didn't draw it").
-function unifiedHTML(rows, group, approved = new Set(), commented = new Set(), approvedCalls = new Set()) {
+function unifiedHTML(
+  rows,
+  group,
+  approved = new Set(),
+  commented = new Set(),
+  approvedCalls = new Set(),
+  lineSummaries = null,
+) {
   const parts = []
   for (let i = 0; i < rows.length; i++) {
-    parts.push(unifiedRowHTML(rows[i], i, group, approved, commented))
+    parts.push(unifiedRowHTML(rows[i], i, group, approved, commented, lineSummaries))
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
     if (partial) parts.push(circleRowHTML(unifiedCallText(rows[i]), partial.segs, partial.approvedStarts))
   }
@@ -1292,7 +1375,7 @@ function unifiedHTML(rows, group, approved = new Set(), commented = new Set(), a
 // already carries on the ordinary new/right codePane — the side the call
 // site actually lives on) so the call-arrow overlay
 // (callArrows.mjs's `[data-pane="new"]` query) still finds it.
-function unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn, approvedCallsFn) {
+function unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn, approvedCallsFn, lineSummaryFn = () => new Map()) {
   return html`
     <div
       class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
@@ -1303,7 +1386,7 @@ function unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedF
         <code
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           .innerHTML="${() =>
-            unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn())}"
+            unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), lineSummaryFn())}"
         ></code>
       </div>
       ${scrollHint('up')}

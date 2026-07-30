@@ -8,6 +8,7 @@ import Footer from './Footer.mjs'
 import Block, {
   blockRows,
   changedRows,
+  changeGroups,
   diffStat,
   approvedRowSet,
   approvedCallSet,
@@ -3163,6 +3164,113 @@ function subtreeApproveCount(b) {
     total += c.total
   }
   return { done, total }
+}
+
+// newLineToRowOf converts a 1-based NEW-side source line to its blockRows
+// index — the same technique translationRowUnits (Block.mjs) builds locally
+// for its own per-key rows, inlined here for a relation/testcover child's
+// stored absolute line (childrenOf's `line`, testCoverRows' `r.line` — both
+// documented as "the absolute source line within the [parent/test]'s own
+// text", i.e. counted against the current head worktree = the new side).
+function newLineToRowOf(rows, line) {
+  if (!line) return null
+  let seen = 0
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].right != null) {
+      seen++
+      if (seen === line) return i
+    }
+  }
+  return null
+}
+
+// lineChildSummaries groups block b's directChildBlocks (relation children +
+// resolved method calls + resolved test-covers targets) by the diff row
+// they're anchored to, for the per-line "onderliggende code" badge rendered
+// directly in the diff (Block.mjs's rowCellHTML/lineSummaryBadge, threaded
+// via the lineSummaries opt) — an avatar+N comment-activity indicator plus a
+// done/total approve fraction, right at the line the underlying code hangs
+// off, so a reviewer doesn't have to open the Onderliggende-code panel to
+// see there's still unapproved code (or an open comment) behind a call.
+//
+// Deliberately GRAN-INDEPENDENT, unlike relatedChildren/callScopeMethods:
+// this must work identically for ANY visible diff card (the top-level
+// selected/preview block, or any drilled column — see the Block(...) call
+// sites in home.mjs), so it reuses directChildBlocks' own row-attribution
+// sources directly instead of the cursor-scoped panel machinery.
+//
+// A child's anchor row is: for a relation child, its own `line` (childrenOf,
+// counted against b's OWN text); for a resolved method call, the first
+// call-site row findCallSites finds; for a resolved `covers` target (only
+// when b is the covering test), its own annotation `line`. A child with no
+// locatable site at all (an event-listener/relation without a `line`, or a
+// block-level synthetic callKey like resource:/migration_model:/
+// data_provider: — see isBlockLevelCallKey) is skipped here: it still shows
+// in the Onderliggende-code panel, just not pinned to one diff line. A
+// `covered_by` child (the test that covers b) is never included either — its
+// annotation lives in the TEST's own file, not b's, so there is no site
+// within b to anchor on (mirrors relatedChildren's own reasoning there).
+//
+// If that row sits inside one of the block's own STRUCTURAL change-groups
+// (changeGroups(rows) — the same grouping 'group'-granularity navigation
+// uses, but here independent of the current cursor/selection: the badge is
+// always visible, not only while that group happens to be selected), every
+// child anchored anywhere within that group rolls up onto the group's FIRST
+// row instead of its own row — "if it sits on a group, show it on the
+// group's first line". A site on an ordinary (non-grouped) row keeps that
+// row as its own anchor — the default, per-line placement.
+function lineChildSummaries(b) {
+  const map = new Map()
+  if (!b || !b.code || b.code.error) return map
+  const rows = blockRows(b)
+  const groups = changeGroups(rows)
+  const groupStartOf = new Map()
+  for (const g of groups) for (let i = g.start; i <= g.end; i++) groupStartOf.set(i, g.start)
+  const anchorOf = (row) => (groupStartOf.has(row) ? groupStartOf.get(row) : row)
+
+  const buckets = new Map() // anchor row -> Map(childId -> childBlock)
+  const addTo = (row, kid) => {
+    if (row == null || row < 0) return
+    const anchor = anchorOf(row)
+    if (!buckets.has(anchor)) buckets.set(anchor, new Map())
+    buckets.get(anchor).set(kid.id, kid)
+  }
+
+  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+
+  for (const { block: kid, line } of childrenOf(b)) {
+    const row = newLineToRowOf(rows, line)
+    if (row != null) addTo(row, kid)
+  }
+  for (const r of callRows(b)) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    const kid = byId.get(callChildId(r))
+    if (!kid) continue
+    for (const site of findCallSites(rows, r.callKey)) addTo(site.row, kid)
+  }
+  for (const r of testCoverRows(b)) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    const kid = byId.get(coveredChildId(r))
+    if (!kid) continue
+    const row = newLineToRowOf(rows, r.line)
+    if (row != null) addTo(row, kid)
+  }
+
+  for (const [anchor, kidsById] of buckets) {
+    let done = 0
+    let total = 0
+    const keys = new Set()
+    for (const kid of kidsById.values()) {
+      const c = subtreeApproveCount(kid)
+      done += c.done
+      total += c.total
+      const ks = commentScopeKeys(kid)
+      if (ks) for (const k of ks) keys.add(k)
+    }
+    const commentActivity = keys.size ? commentActivitySummary(keys) : null
+    if (total > 0 || commentActivity) map.set(anchor, { approve: { done, total }, commentActivity })
+  }
+  return map
 }
 
 // unresolvedCalls returns the selected block's calls the Go resolver could not
@@ -6751,6 +6859,7 @@ function drillPreviewColumns() {
           approvedCalls: () => approvedCallSet(previewBlock),
           onApprove: (blk) => persistApproval(blk),
           commentedRows: () => commentRowSet(previewBlock),
+          lineSummaries: () => lineChildSummaries(previewBlock),
           viewMode: () => (activeSingleSided ? 'unified' : state.diffViewMode),
         })}
       </div>
@@ -7464,6 +7573,11 @@ function DetailPanel(state) {
             // rows, so it's visible which units already hold a comment (however
             // many). Reads the comments read-model via RelatedPanel.
             commentedRows: () => commentRowSet(b),
+            // Per-line "onderliggende code" rollup (avatar+N comment activity +
+            // done/total approve fraction) — see lineChildSummaries' own doc
+            // comment. Gran-independent, unlike the panel's own children, so
+            // it shows regardless of the current cursor/selection.
+            lineSummaries: () => lineChildSummaries(b),
             // For a TRANSLATION block: the other locale files of the same lang
             // file (see ensureLangSiblings below), rendered as extra, read-only
             // columns on every per-key row (translationDiff.mjs's
@@ -7684,6 +7798,7 @@ function DetailPanel(state) {
                   approvedCalls: () => approvedCallSet(b),
                   onApprove: (blk) => persistApproval(blk),
                   commentedRows: () => commentRowSet(b),
+                  lineSummaries: () => lineChildSummaries(b),
                   viewMode: () => state.diffViewMode,
                   setViewMode: setDiffViewMode,
                 })}

@@ -104,3 +104,35 @@ export function avatarHTML(name, avatarUrl, sizeCls = 'h-6 w-6', extraCls = '') 
     >
   </span>`
 }
+
+// escapeAttr is a minimal HTML-attribute escape for avatarHtmlString below —
+// its output is a plain string spliced into a larger plain-string template
+// (Block.mjs's paneHTML/rowCellHTML), not an arrow.js html`` template, so
+// nothing escapes it automatically the way arrow.js's own template compiler
+// would.
+function escapeAttr(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+// avatarHtmlString is the raw-HTML-STRING sibling of avatarHTML, for a caller
+// that builds plain HTML strings instead of arrow.js html`` templates —
+// Block.mjs's paneHTML/rowCellHTML assign their result via a `.innerHTML`
+// binding rather than mounting an arrow.js template, and avatarHTML's own
+// html`` template can't be embedded there (it would stringify to the
+// template function itself, e.g. "i=>je(n,i)" — see the "leaks the template
+// function as text" pitfall in conventions.md). Same look/behavior (a
+// proxied <img> with an initials-circle onerror fallback) as avatarHTML,
+// just built with an ordinary template literal and its own attribute
+// escaping instead of relying on arrow.js's.
+export function avatarHtmlString(name, avatarUrl, sizeCls = 'h-6 w-6', extraCls = '') {
+  const initials = escapeAttr(initialsOf(name))
+  const title = escapeAttr(name || 'onbekend')
+  if (!avatarUrl) {
+    return `<span class="${FALLBACK_CLS + ' ' + sizeCls + ' ' + extraCls}" title="${title}" data-testid="avatar-fallback">${initials}</span>`
+  }
+  return `<span class="relative inline-flex shrink-0 ${sizeCls}" title="${title}" data-testid="avatar"><img src="${escapeAttr(proxiedAvatarUrl(avatarUrl))}" alt="" loading="lazy" class="${sizeCls} rounded-full object-cover ring-1 ring-slate-200 dark:ring-zinc-700 ${extraCls}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'" /><span class="hidden absolute inset-0 ${FALLBACK_CLS}" data-testid="avatar-fallback">${initials}</span></span>`
+}
