@@ -380,12 +380,15 @@ left as a navigable list.
   approve state, shown when *that* row is selected instead.
   `translationBlockView` (`src/translationDiff.mjs`) renders the columns:
   `opts.siblings` (an array of `{locale, text}`) is appended, per row, via
-  `siblingColumnHTML(sib, key)` — a fixed-width (`w-56`), non-shrinking column
-  per locale, so with several locales the ROW becomes wider than the card;
-  the `translation-overview` container scrolls **horizontally** in that case
-  (`overflow-x-auto`, the same "shrink-0 columns inside an overflow-x-auto
-  body" pattern `RelatedPanel.mjs`'s nested drill-hint chips already use) —
-  the card itself never grows to fit more locales.
+  `siblingColumnHTML(sib, key)` — the primary column (key + value(s), see
+  `translation-primary-col`) and every sibling column share the row's width
+  **equally** (each `min-w-0 flex-1`, the same flex-grow share): 1 sibling
+  locale gives 50/50, 2 give 33/33/33, and so on. The row therefore always
+  fills **exactly** the card's own width, never wider and never leaving the
+  primary column disproportionately wide next to a narrow sibling column
+  (the reported bug this replaced a fixed `w-56 shrink-0` sibling column
+  with) — the card itself never grows to fit more locales, and no horizontal
+  scroll is needed for the column count itself.
   The sibling files (the OTHER locales, excluding the file's own locale and
   the `vendor/` namespace dir) come from the read-only
   `GET /api/langsiblings?pr=N&file=<lang file>` (`langsiblings.go`, reads the

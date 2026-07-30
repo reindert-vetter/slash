@@ -102,6 +102,15 @@ test.describe('TRANSLATION block — per-key navigation/approve/comment', () => 
     // shows the sibling column, with the "missing" marker instead of a value.
     await expect(siblingCol('weg')).toContainText('ontbreekt in en')
 
+    // The primary column and the (single) sibling column split the row width
+    // EQUALLY (50/50 with exactly one sibling locale, see translationDiff.mjs)
+    // — a regression guard against the primary column growing arbitrarily
+    // wide (flex-1) next to a fixed-width sibling column, which is what the
+    // reported bug looked like.
+    const primaryBox = await row('foo').getByTestId('translation-primary-col').boundingBox()
+    const siblingBox = await siblingCol('foo').boundingBox()
+    expect(Math.abs(primaryBox.width - siblingBox.width)).toBeLessThan(2)
+
     // The row itself still highlights exactly as in the first test above —
     // there is no second, independently-synced element to keep in step with
     // anymore, since the sibling column lives in the same row.

@@ -297,18 +297,19 @@ const SIBLING_LOCALE_BADGE_CLS =
 // siblingColumnHTML — one extra, read-only column on a translation-overview
 // row: the CURRENT value of `key` in `sib`'s locale (or a "missing" marker),
 // replacing the old, separate companion card (see the module doc comment
-// above and .claude/rules/blocks-and-ingest.md, "Translation blocks"). A
-// fixed, non-growing width (`w-56 shrink-0`) — with N sibling locales this
-// makes the row wider than the card and lets the OUTER translation-overview
-// container (see translationBlockView below) scroll horizontally instead of
-// the card itself growing. No cursor/active state of its own: the whole row
-// (primary column + every sibling column) highlights together, since they
-// now live in the same row instead of a separately-tracked card.
+// above and .claude/rules/blocks-and-ingest.md, "Translation blocks"). Shares
+// the row's width EQUALLY with the primary column (`min-w-0 flex-1` — the
+// exact same flex-grow share as translation-primary-col below), so the row
+// always fills exactly the card's width — never wider, regardless of how
+// many sibling locales there are (1 sibling → 50/50, 2 → 33/33/33, …). No
+// cursor/active state of its own: the whole row (primary column + every
+// sibling column) highlights together, since they now live in the same row
+// instead of a separately-tracked card.
 function siblingColumnHTML(sib, key) {
   const map = parseLangFile(sib.text || '')
   const has = map.has(key)
   return html`<div
-    class="w-56 shrink-0 border-l border-slate-100 px-4 py-2.5 dark:border-zinc-800/60"
+    class="min-w-0 flex-1 border-l border-slate-100 px-4 py-2.5 dark:border-zinc-800/60"
     data-testid="translation-sibling-col"
     data-locale="${sib.locale}"
   >
@@ -331,7 +332,11 @@ function siblingColumnHTML(sib, key) {
 // (optional, array of `{locale, text}` — home.mjs's `state.langSiblings`,
 // however many locale dirs the lang root actually has) appends one read-only
 // column per sibling locale to EVERY row, next to the primary old/new value
-// — see siblingColumnHTML above. `opts.onScroll` (optional) is wired onto the
+// — see siblingColumnHTML above. The primary column and every sibling column
+// share the row's width EQUALLY (each `min-w-0 flex-1` — 1 sibling → 50/50,
+// 2 → 33/33/33, …), so the row always fills exactly the card's width instead
+// of the primary column growing arbitrarily wide next to fixed-width sibling
+// columns. `opts.onScroll` (optional) is wired onto the
 // outer scrolling div's own `@scroll` — see the data-scrollsync/data-changed
 // note on that div below and Block.mjs's translationSlot, which supplies it.
 export function translationBlockView(units, opts = {}) {
@@ -401,7 +406,7 @@ export function translationBlockView(units, opts = {}) {
       data-change-active="${() => (activeIndex() === i ? '1' : false)}"
       data-change-active-end="${() => (activeIndex() === i ? '1' : false)}"
     >
-      <div class="min-w-[14rem] flex-1 px-4 py-2.5">
+      <div class="min-w-0 flex-1 px-4 py-2.5" data-testid="translation-primary-col">
         <div class="flex items-baseline justify-between gap-2">
           <span class="block font-mono text-[11px] text-slate-500 dark:text-zinc-400">${u.key}</span>
           <span class="${'shrink-0 rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide ' + KIND_BADGE_CLS[u.kind]}">${KIND_BADGE[u.kind]}</span>
