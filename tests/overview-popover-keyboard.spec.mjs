@@ -71,8 +71,8 @@ test.describe('PR Review Tree — popover keyboard navigation', () => {
 
     // The underlying row-list keyboard nav is suspended: none of these ↑/↓
     // presses reached move()/moveTo(), so the row itself never picked up the
-    // keyboard-selection ring (paintSelection's ring-1/ring-emerald classes).
-    await expect(row).not.toHaveClass(/ring-emerald-500/)
+    // keyboard-selection ring (paintSelection's ring-1/ring-indigo classes).
+    await expect(row).not.toHaveClass(/ring-indigo-500/)
 
     // Step forward once more, back onto the pinned "Sluit menu" item (from the
     // last item, wrapping), then Enter closes the popover.

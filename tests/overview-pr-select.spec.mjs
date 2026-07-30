@@ -9,7 +9,7 @@ test.describe('PR overview — ?pr= auto-selects the row we came from', () => {
     await page.waitForLoadState('networkidle')
 
     const row = page.locator('[data-testid="pr-row"][data-pr="12903"]')
-    await expect.poll(() => row.evaluate((el) => el.classList.contains('ring-emerald-500/50'))).toBe(true)
+    await expect.poll(() => row.evaluate((el) => el.classList.contains('ring-indigo-500/50'))).toBe(true)
     await expect(page.locator('[data-testid="recent-item"]')).toHaveCount(0)
   })
 
@@ -21,7 +21,7 @@ test.describe('PR overview — ?pr= auto-selects the row we came from', () => {
 
     const item = page.locator('[data-testid="recent-item"][data-pr="90"]')
     await expect(item).toBeVisible()
-    await expect.poll(() => item.evaluate((el) => el.classList.contains('ring-emerald-500/50'))).toBe(true)
+    await expect.poll(() => item.evaluate((el) => el.classList.contains('ring-indigo-500/50'))).toBe(true)
   })
 
   test('a PR that appears nowhere is a silent no-op', async ({ page }) => {
@@ -30,7 +30,7 @@ test.describe('PR overview — ?pr= auto-selects the row we came from', () => {
 
     const anySelected = await page
       .locator('[data-nav-row]')
-      .evaluateAll((els) => els.some((el) => el.classList.contains('ring-emerald-500/50')))
+      .evaluateAll((els) => els.some((el) => el.classList.contains('ring-indigo-500/50')))
     expect(anySelected).toBe(false)
   })
 })

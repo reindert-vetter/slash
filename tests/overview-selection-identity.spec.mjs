@@ -26,7 +26,7 @@ test.describe('PR overview — keyboard selection tracks identity, not position'
     const rows = page.locator('[data-nav-row]')
     await expect(rows).toHaveCount(4)
 
-    const isSelected = (loc) => loc.evaluate((el) => el.classList.contains('ring-emerald-500/50'))
+    const isSelected = (loc) => loc.evaluate((el) => el.classList.contains('ring-indigo-500/50'))
 
     // Select the very first row in DOM order — the fixture's stack root,
     // PR 12903 (see tests/fixtures/inbox.json: the 12903→12904 stack renders
@@ -76,7 +76,7 @@ test.describe('PR overview — keyboard selection tracks identity, not position'
     await expect(rows).toHaveCount(4)
     await page.keyboard.press('ArrowDown')
     await expect
-      .poll(() => rows.first().evaluate((el) => el.classList.contains('ring-emerald-500/50')))
+      .poll(() => rows.first().evaluate((el) => el.classList.contains('ring-indigo-500/50')))
       .toBe(true)
   })
 
@@ -100,7 +100,7 @@ test.describe('PR overview — keyboard selection tracks identity, not position'
     for (let i = 0; i < totalRows - 1; i++) await page.keyboard.press('ArrowDown')
     const lastRow = page.locator('[data-nav-row]').last()
     await expect(lastRow).toHaveAttribute('data-testid', 'recent-item')
-    await expect.poll(() => lastRow.evaluate((el) => el.classList.contains('ring-emerald-500/50'))).toBe(true)
+    await expect.poll(() => lastRow.evaluate((el) => el.classList.contains('ring-indigo-500/50'))).toBe(true)
 
     // Closing the drawer removes that row from the DOM entirely — identity
     // reanchoring must release the selection (no ring anywhere), never
@@ -110,7 +110,7 @@ test.describe('PR overview — keyboard selection tracks identity, not position'
     await expect(page.locator('[data-testid="recent-item"]')).toHaveCount(0)
     const anySelected = await page
       .locator('[data-nav-row]')
-      .evaluateAll((els) => els.some((el) => el.classList.contains('ring-emerald-500/50')))
+      .evaluateAll((els) => els.some((el) => el.classList.contains('ring-indigo-500/50')))
     expect(anySelected).toBe(false)
   })
 })

@@ -22,7 +22,7 @@ test.describe('PR overview — ArrowDown escapes the search box', () => {
 
     // … and the first row is now the keyboard selection.
     const firstRow = page.locator('[data-testid="pr-row"]').first()
-    await expect(firstRow).toHaveClass(/ring-emerald-500\/50/)
+    await expect(firstRow).toHaveClass(/ring-indigo-500\/50/)
   })
 
   test('ArrowDown then ArrowUp then ArrowDown is not a dead end', async ({ page }) => {
@@ -37,6 +37,6 @@ test.describe('PR overview — ArrowDown escapes the search box', () => {
     await page.keyboard.press('ArrowDown') // back down → first row again
     const focused = await page.evaluate(() => document.activeElement?.tagName)
     expect(focused).not.toBe('INPUT')
-    await expect(page.locator('[data-testid="pr-row"]').first()).toHaveClass(/ring-emerald-500\/50/)
+    await expect(page.locator('[data-testid="pr-row"]').first()).toHaveClass(/ring-indigo-500\/50/)
   })
 })

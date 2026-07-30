@@ -412,6 +412,20 @@ function sectionBadge(label) {
   >`
 }
 
+// selectMark — a fixed-width, ALWAYS-present glyph at the left edge of every
+// navigable row (prRow/recentItem): the shape half of the wel/niet-geselecteerd
+// signal (see SELECT_MARK_ON/OFF in paintSelection below) — transparent by
+// default, toggled to a visible indigo chevron on the selected row, purely via
+// classList (never re-mounted), so the row's height/layout never shifts
+// between the two states. Mirrors BlockList.mjs's own row() marker, which
+// does the identical transparent↔coloured toggle for the same colourblind
+// reason (see .claude/rules/pages-and-routing.md).
+function selectMark() {
+  return html`<span data-testid="row-select-mark" class="shrink-0 select-none text-transparent" aria-hidden="true"
+    >›</span
+  >`
+}
+
 // connectorMark — the little └ that links a stacked row to the one above it.
 function connectorMark() {
   return html`<span class="-ml-4 shrink-0 select-none font-mono text-[13px] leading-none text-slate-400 dark:text-zinc-600" aria-hidden="true"
@@ -422,6 +436,7 @@ function connectorMark() {
 function rowInner(pr, opts) {
   return [
     opts.depth ? connectorMark() : null,
+    selectMark(),
     authorMark(pr),
     html`
       <div class="min-w-0 flex-1">
@@ -1100,7 +1115,7 @@ function searchBox() {
         autocomplete="off"
         spellcheck="false"
         placeholder="${() => `Zoek in alle open PR's van ${state.repo || ''}… (titel, nummer of auteur)`}"
-        class="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 py-2.5 pl-9 pr-3 text-[13px] text-slate-900 dark:text-zinc-100 outline-none placeholder:text-slate-400 dark:placeholder:text-zinc-600 focus:border-slate-400 dark:focus:border-zinc-600"
+        class="w-full rounded-lg border border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-900/60 py-2.5 pl-9 pr-3 text-[13px] text-slate-900 dark:text-zinc-100 outline-none placeholder:text-slate-400 dark:placeholder:text-zinc-600 hover:border-slate-400 dark:hover:border-zinc-600 focus:border-indigo-300 dark:focus:border-indigo-500 focus:ring-1 focus:ring-indigo-200 dark:focus:ring-indigo-500/30"
         @input="${onSearchInput}"
         @keydown="${onSearchKeydown}"
       />
@@ -1308,6 +1323,7 @@ function recentItem(r) {
       data-nav-key="${'recent:' + r.pr}"
       class="${ROW_CLASS}"
     >
+      ${selectMark()}
       <span class="shrink-0 text-emerald-600 dark:text-emerald-400">${icon('sparkles', 'h-4 w-4')}</span>
       <div class="min-w-0 flex-1">
         <h3 class="truncate text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">${r.title || '#' + r.pr}</h3>
@@ -1777,6 +1793,26 @@ function reanchorSelection(rows) {
   selIndex = rows.findIndex((el) => el.dataset.navKey === selKey)
 }
 
+// SELECT_RING_CLS / SELECT_MARK_ON / SELECT_MARK_OFF — the wel/niet-geselecteerd
+// classes paintSelection() toggles, in the same indigo tone /pr/<id> uses for
+// its own "selected/focused" convention (see the "Focus highlight per stop"
+// section in .claude/rules/keyboard-navigation.md and BlockList.mjs's own
+// rowFocused ring) — was emerald before this change, which had no meaning tied
+// to it elsewhere in the app. Kept WITHOUT a separate dark: ring/bg variant,
+// mirroring the emerald set it replaces: a semi-transparent ring/tint reads
+// fine on both a white and a zinc-900 background, so this intentionally
+// doesn't grow the toggle set.
+const SELECT_RING_CLS = ['ring-1', 'ring-indigo-500/50', 'rounded-lg', 'z-10', 'bg-indigo-500/10']
+// The ring/bg tint alone is colour-only. SELECT_MARK_ON/OFF instead toggle a
+// small, ALWAYS-PRESENT glyph (see selectMark() below) between invisible and a
+// visible indigo chevron — the same transparent↔coloured "shape" cue
+// BlockList.mjs's own row() marker uses, so the selected row also carries a
+// non-colour signal for a colourblind reviewer (see the colorblind rule in
+// MEMORY.md). Row height never changes: only the glyph's own text colour
+// flips, never its presence.
+const SELECT_MARK_ON = ['text-indigo-500', 'dark:text-indigo-400']
+const SELECT_MARK_OFF = ['text-transparent']
+
 function paintSelection() {
   const rows = currentRows()
   reanchorSelection(rows)
@@ -1797,10 +1833,19 @@ function paintSelection() {
     // every row), leaving the popover positioned relative to <body> instead
     // of its own row. `z-10` still gets a stacking context from the row's
     // own always-on `relative`, so nothing here relied on toggling it.
+    const mark = el.querySelector('[data-testid="row-select-mark"]')
     if (i === selIndex) {
-      el.classList.add('ring-1', 'ring-emerald-500/50', 'rounded-lg', 'z-10', 'bg-emerald-500/10')
+      el.classList.add(...SELECT_RING_CLS)
+      if (mark) {
+        mark.classList.remove(...SELECT_MARK_OFF)
+        mark.classList.add(...SELECT_MARK_ON)
+      }
     } else {
-      el.classList.remove('ring-1', 'ring-emerald-500/50', 'rounded-lg', 'z-10', 'bg-emerald-500/10')
+      el.classList.remove(...SELECT_RING_CLS)
+      if (mark) {
+        mark.classList.remove(...SELECT_MARK_ON)
+        mark.classList.add(...SELECT_MARK_OFF)
+      }
     }
   })
   if (selIndex >= 0 && rows[selIndex]) rows[selIndex].scrollIntoView({ block: 'nearest' })

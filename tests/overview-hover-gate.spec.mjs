@@ -31,7 +31,7 @@ test.describe('PR overview — keyboard nav is not hijacked by a same-position m
     await expect(rows).toHaveCount(4)
 
     const isSelected = (i) =>
-      rows.nth(i).evaluate((el) => el.classList.contains('ring-emerald-500/50'))
+      rows.nth(i).evaluate((el) => el.classList.contains('ring-indigo-500/50'))
 
     // Land the keyboard selection on row 0.
     await page.keyboard.press('Home')
@@ -92,7 +92,7 @@ test.describe('PR overview — keyboard nav is not hijacked by a same-position m
     const rows = page.locator('[data-nav-row]')
     await expect(rows).toHaveCount(4)
     const isSelected = (i) =>
-      rows.nth(i).evaluate((el) => el.classList.contains('ring-emerald-500/50'))
+      rows.nth(i).evaluate((el) => el.classList.contains('ring-indigo-500/50'))
 
     // Arm hover with a genuine mouse move and select row 1 by hovering it, so
     // hover is demonstrably live at these coordinates.

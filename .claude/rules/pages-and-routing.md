@@ -472,6 +472,57 @@ and how far the page had scrolled (thus whether a row landed under the
 cursor) depended on the drawer's height. Covered by the second test in
 `tests/overview-hover-gate.spec.mjs`.
 
+**The selected-row highlight matches `/pr/<id>`'s app-wide indigo
+selected/focused convention (see "Focus highlight per stop" in
+`.claude/rules/keyboard-navigation.md` and `BlockList.mjs`'s own `rowFocused`
+ring) instead of the earlier, unrelated emerald tone.** `paintSelection()`
+(`src/overview.mjs`) toggles the ring/bg purely **imperatively**
+(`classList.add`/`remove` on the already-mounted `[data-nav-row]` element,
+via the shared `SELECT_RING_CLS` array) — this was already true before this
+change and stays that way on purpose: selection here isn't driven by
+`state`/a reactive template binding at all (the row's own `class` attribute
+is a static string, set once at mount), it's a plain DOM read of whichever
+element currently matches `selKey`/`hoverEnabled`, so there is no arrow.js
+keyed-node/whole-value pitfall to route around — extending the existing
+`classList` toggle is simpler and more consistent than introducing a
+reactive class binding for something arrow.js never owned in the first
+place. Deliberately kept **without** a separate `dark:` ring/bg variant,
+mirroring the emerald set it replaces: a semi-transparent indigo ring/tint
+reads fine on both a white and a `zinc-900` background. Applies identically
+to `prRow` **and** `recentItem` (`recentDrawer`'s items) — both carry
+`data-nav-row` and are painted by the very same `rows.forEach` loop, so
+there's no separate code path to keep in sync. Hover is unaffected: the
+`hoverEnabled` gate (above) still decides only whether a `mouseenter` may
+call `paintSelection()` at all — the CSS-only `hover:bg-slate-100 …` tint on
+`ROW_CLASS` remains a completely separate, always-active affordance; only
+the colour of the *keyboard-style* selection ring a hover can trigger changed
+from emerald to indigo, via the exact same code path as an arrow-key step.
+
+**Colourblind-safe shape cue: an always-present `›` chevron (`selectMark()`),
+toggled between invisible and indigo — never added/removed — alongside the
+ring (`SELECT_MARK_ON`/`SELECT_MARK_OFF` in `paintSelection()`).** The
+ring+background tint alone is a colour-only signal; per the project's
+colourblind rule (never let colour alone carry state), every navigable row
+gets a fixed-width `data-testid=row-select-mark` glyph at its left edge
+(`rowInner`, right after the stack `connectorMark` and before `authorMark`
+for `prRow`; right before the sparkles icon for `recentItem`) that starts
+`text-transparent` and only gains `text-indigo-500 dark:text-indigo-400`
+once selected — mirrors `BlockList.mjs`'s own row `›` marker (same
+transparent↔coloured technique, same reasoning). Because the glyph is always
+in the DOM (only its text colour toggles, never its presence), row height
+never shifts between the wel/niet-geselecteerd states.
+
+The search box (`searchBox()`) got the same indigo `focus:` treatment
+(`focus:border-indigo-300 dark:focus:border-indigo-500 focus:ring-1
+focus:ring-indigo-200 dark:focus:ring-indigo-500/30`, plus a neutral
+`hover:border-slate-400 dark:hover:border-zinc-600` and a base
+`border-slate-300 dark:border-zinc-700` instead of the lighter
+`border-slate-200`) — purely native `:focus`/`:hover` CSS on an already
+fully static class string (no `${...}` in it before or after this change),
+so no new JS state was needed: unlike `BlockList.mjs`'s own search field,
+`/pr-overview` has no scenario where the box is "active" without holding
+real DOM focus.
+
 **Keyboard selection follows identity (`selKey`/`data-nav-key`), not just an
 array position (`selIndex`).** Every navigable row (`prRow` and
 `recentItem`) carries, alongside `data-nav-row`/`data-pr`, a stable
