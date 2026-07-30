@@ -7409,6 +7409,27 @@ function DetailPanel(state) {
             : 'left-[29rem]')}"
       data-testid="detail-panel"
     >
+      ${() => {
+        // Stop 2b of the left→right nav chain (the methodes-kolom, see
+        // TestMethodsColumn.mjs / "Grouping test methods per class" in
+        // detail-layout.md): rendered as its OWN sibling column, directly
+        // to the LEFT of the block-column below — not nested inside its
+        // flex-col (that stacked it ABOVE the diff card instead of beside
+        // it, a positioning bug; the doc always described it as a separate
+        // column). Explicit deps (not just an incidental codeVersion-bump
+        // coupling) so the highlight/border/pill stay correct on their own:
+        // classMethodSel (which method is active) and testColumnFocused
+        // (the on/off focus border) both need their own rerun trigger here,
+        // since TestMethodsColumn/methodRow don't track them internally for
+        // every value they use (see TestMethodsColumn.mjs's own comments).
+        void state.selected
+        void state.focusLevel
+        void state.classMethodSel
+        void state.testColumnFocused
+        const row = curTestClassRow()
+        if (!row || state.focusLevel !== 0) return []
+        return [TestMethodsColumn(state, row).key('testmethods:' + row.id)]
+      }}
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="block-column">
       ${() => {
         const sel = state.selected
@@ -7485,13 +7506,13 @@ function DetailPanel(state) {
           }
           // A test_class row (see testClassRowItem/recomputeLeftList) has no
           // diff of its own — its methodes-kolom (stop 2b of the left→right
-          // nav chain, see keyboard-navigation.md) renders directly to the
-          // left of the diff card, always visible once selected (both list
-          // and diff mode — decision: no separate reveal-on-→ step, unlike
-          // drilling). `b` is reassigned here to the ACTIVE method (state.
-          // classMethodSel) — every closure below this point that reads `b`
-          // therefore already operates on a real PR block, exactly like the
-          // ordinary path, with no further special-casing needed.
+          // nav chain, see keyboard-navigation.md) renders as its own sibling
+          // column, directly to the left of the block-column (see the
+          // dedicated slot right above this div). `b` is reassigned here to
+          // the ACTIVE method (state.classMethodSel) — every closure below
+          // this point that reads `b` therefore already operates on a real
+          // PR block, exactly like the ordinary path, with no further
+          // special-casing needed.
           const wasTestClass = b.kind === 'test_class'
           if (wasTestClass) {
             // Only the ACTUALLY SELECTED row (i === sel, decision: "zodra een
@@ -7505,7 +7526,6 @@ function DetailPanel(state) {
               out.push(testClassPreviewCard(state, b).key('detail:prev:test_class:' + b.id))
               return
             }
-            out.push(TestMethodsColumn(state, b).key('testmethods:' + b.id))
             const activeMethod = b.methods[state.classMethodSel] || null
             if (!activeMethod) return
             b = activeMethod
