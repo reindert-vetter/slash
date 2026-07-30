@@ -989,6 +989,26 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			if err := m.callresolve.Prune(ctx, input.PR, calls); err != nil {
 				return nil, fmt.Errorf("build_relations: prune calls: %w", err)
 			}
+			// Automatically start an LLM search for every call the Go resolver
+			// just marked unresolved that hasn't already been attempted (see
+			// autoStartResolveCall/groupUnresolvedCalls) — the server-side
+			// counterpart of the frontend's own automatic trigger
+			// (startCallSearch, home.mjs). Grouped per caller, one Execution per
+			// group, started in its own goroutine so this Activity — and thus
+			// ingest/EnsureRelations/prStatusWorkflow's delta-refresh — never
+			// waits on a live claude call. StartResolveCall's own deterministic
+			// Run ID makes a repeat request for an unchanged unresolved set an
+			// idempotent no-op, and autoStartResolveCall itself only considers a
+			// call that has never appeared in a resolve_call Execution's input
+			// before (via the durable workflow history, not the callresolve
+			// read-model's own status — which UpsertGo resets from notfound back
+			// to unresolved on every rebuild, so it alone can't tell "already
+			// attempted" apart from "genuinely new" past the very next rebuild).
+			// The frontend trigger stays in place as a safety net — e.g. for a PR
+			// whose relations were only ever refreshed headlessly via
+			// `slash relations`, which never runs this Activity at all (see
+			// .claude/rules/tembed-workflows.md).
+			go m.autoStartResolveCall(input.PR, calls, blocks)
 		}
 		// Also detect test-coverage annotations statically (resolved/unannotated/
 		// unresolved) into the testcovers read-model. UpsertGo preserves LLM-owned
@@ -2122,10 +2142,71 @@ func resolveCallWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	return json.Marshal(map[string]int{"found": found})
 }
 
-// StartResolveCall launches a resolve_call Execution and returns its Run ID.
-// Starting an Execution is the sanctioned UI write path.
+// StartResolveCall starts (or idempotently reuses) a resolve_call Execution for
+// the given caller + call keys, under a deterministic Run ID (resolveCallRunID)
+// — a repeated request for the same not-yet-searched set is a no-op reuse
+// instead of a second LLM call, whether it comes from the UI's own "Zoek"
+// trigger or the automatic server-side trigger (autoStartResolveCall, called
+// from the buildRelations Activity). Starting an Execution is the sanctioned
+// write path.
 func (m *TaskManager) StartResolveCall(in ResolveCallInput) (string, error) {
-	return m.engine.StartWorkflow(WorkflowResolveCall, in)
+	return m.engine.StartWorkflowID(resolveCallRunID(in), WorkflowResolveCall, in)
+}
+
+// autoStartResolveCall is the server-side counterpart of the frontend's
+// automatic "Zoek" trigger (startCallSearch, home.mjs): it groups every
+// currently unresolved-and-never-yet-attempted call of pr per caller
+// (groupUnresolvedCalls, using resolveCallAttempted's durable "ever
+// submitted" set) and starts a resolve_call Execution for each. Called as its
+// own goroutine from the buildRelations Activity, so it never blocks
+// ingest/EnsureRelations/prStatusWorkflow's delta-refresh on a live claude
+// call. Best-effort: a failed start is logged, never surfaced — this is a
+// convenience trigger, not a required step (the frontend's own trigger still
+// covers the gap if this one fails or never ran, e.g. for a PR whose relations
+// were only ever refreshed headlessly via `slash relations`).
+func (m *TaskManager) autoStartResolveCall(pr int, calls []callresolve.Entry, blocks []Block) {
+	attempted := m.resolveCallAttempted(pr)
+	for _, in := range groupUnresolvedCalls(pr, calls, attempted, blocks) {
+		if _, err := m.StartResolveCall(in); err != nil {
+			m.logf("resolve_call: auto-search start pr=%d caller=%s: %v", pr, in.CallerID, err)
+		}
+	}
+}
+
+// resolveCallAttempted returns every (callerId, callKey) pair that has EVER
+// been submitted to a resolve_call Execution for pr, regardless of that
+// Execution's current status — durable, since it reads the workflow event
+// history (via engine.Runs()/Input()), not the callresolve read-model's own
+// status column. That distinction is load-bearing: UpsertGo resets a
+// 'notfound' row back to 'unresolved' on every rebuild that doesn't touch
+// that call (it only protects 'searching'/'found', see its own doc comment),
+// so a snapshot of the DB's status would only tell "already attempted" apart
+// from "genuinely new" for the very next rebuild — not for one further down
+// the line, since nothing writes the DB row back to 'notfound' in between.
+// Mirrors RunsForPR's own "decode every run's stored input" pattern.
+func (m *TaskManager) resolveCallAttempted(pr int) map[string]bool {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return nil
+	}
+	attempted := map[string]bool{}
+	for _, r := range runs {
+		if r.Workflow != WorkflowResolveCall {
+			continue
+		}
+		raw, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var in ResolveCallInput
+		if json.Unmarshal(raw, &in) != nil || in.PR != pr {
+			continue
+		}
+		for _, c := range in.Calls {
+			attempted[in.CallerID+"\x1f"+c] = true
+		}
+	}
+	return attempted
 }
 
 // explainCodeWorkflow generates the footer's AI description of a unit's

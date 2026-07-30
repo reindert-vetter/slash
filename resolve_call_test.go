@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/callresolve"
@@ -285,4 +287,192 @@ func onlyEntry(t *testing.T, cr *callresolve.Module, pr int) callresolve.Entry {
 		t.Fatalf("callresolve has %d rows, want 1: %+v", len(list), list)
 	}
 	return list[0]
+}
+
+func mustCallresolveList(t *testing.T, cr *callresolve.Module, pr int) []callresolve.Entry {
+	t.Helper()
+	list, err := cr.List(context.Background(), pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return list
+}
+
+// --- groupUnresolvedCalls (pure, no engine/goroutine) ---
+
+// One start per caller: a resolved call is excluded (not Unresolved), a call
+// whose caller block isn't in blocks is skipped, and a call already submitted
+// to a resolve_call Execution before (via attempted — a durable, ever-tried
+// set, see resolveCallAttempted) is skipped too — a rebuild must never
+// resubmit a call the LLM already attempted.
+func TestGroupUnresolvedCalls(t *testing.T) {
+	callerA := Block{PR: 1, File: "app/Services/A.php", Class: "A", Name: "run"}
+	callerB := Block{PR: 1, File: "app/Services/B.php", Class: "B", Name: "go"}
+	blocks := []Block{callerA, callerB}
+
+	calls := []callresolve.Entry{
+		{PR: 1, CallerID: callerA.ID(), CallKey: "y", Status: callresolve.StatusUnresolved},
+		{PR: 1, CallerID: callerA.ID(), CallKey: "x", Status: callresolve.StatusUnresolved},
+		{PR: 1, CallerID: callerA.ID(), CallKey: "z", Status: callresolve.StatusResolved}, // resolved: excluded
+		{PR: 1, CallerID: callerB.ID(), CallKey: "w", Status: callresolve.StatusUnresolved},
+		// No block for this caller id — must be skipped defensively.
+		{PR: 1, CallerID: "1:app/Ghost.php:Ghost::boo", CallKey: "gone", Status: callresolve.StatusUnresolved},
+	}
+	attempted := map[string]bool{
+		callerB.ID() + "\x1f" + "w": true, // already tried before — skip
+	}
+
+	got := groupUnresolvedCalls(1, calls, attempted, blocks)
+	if len(got) != 1 {
+		t.Fatalf("groupUnresolvedCalls returned %d group(s), want 1: %+v", len(got), got)
+	}
+	g := got[0]
+	if g.CallerID != callerA.ID() || g.CallerFile != callerA.File || g.CallerClass != callerA.Class || g.CallerName != callerA.Name {
+		t.Fatalf("group caller fields = %+v, want caller A's fields", g)
+	}
+	if len(g.Calls) != 2 || g.Calls[0] != "x" || g.Calls[1] != "y" {
+		t.Fatalf("group.Calls = %v, want sorted [x y]", g.Calls)
+	}
+}
+
+// A call that was never attempted before (absent from attempted) stays
+// eligible, even if it's the only call for its caller.
+func TestGroupUnresolvedCallsKeepsNeverAttemptedCall(t *testing.T) {
+	caller := Block{PR: 1, File: "app/Services/A.php", Class: "A", Name: "run"}
+	calls := []callresolve.Entry{
+		{PR: 1, CallerID: caller.ID(), CallKey: "x", Status: callresolve.StatusUnresolved},
+	}
+
+	got := groupUnresolvedCalls(1, calls, map[string]bool{}, []Block{caller})
+	if len(got) != 1 || len(got[0].Calls) != 1 || got[0].Calls[0] != "x" {
+		t.Fatalf("groupUnresolvedCalls = %+v, want one group with call x", got)
+	}
+}
+
+// resolveCallRunID: sorting Calls makes the ID independent of build order
+// (a Go map iteration, or whatever order a caller happened to send), while a
+// genuinely different Calls set (a new unresolved call) yields a fresh ID.
+func TestResolveCallRunIDStableAndSensitive(t *testing.T) {
+	a := ResolveCallInput{PR: 1, CallerID: "c", Calls: []string{"a", "b"}}
+	b := ResolveCallInput{PR: 1, CallerID: "c", Calls: []string{"b", "a"}}
+	if resolveCallRunID(a) != resolveCallRunID(b) {
+		t.Fatalf("resolveCallRunID depends on Calls order: %s != %s", resolveCallRunID(a), resolveCallRunID(b))
+	}
+	c := ResolveCallInput{PR: 1, CallerID: "c", Calls: []string{"a", "b", "new"}}
+	if resolveCallRunID(a) == resolveCallRunID(c) {
+		t.Fatal("resolveCallRunID does not change for a different Calls set")
+	}
+}
+
+// --- The automatic server-side trigger, end to end via buildRelations ---
+
+// autoResolveCallManager wires a TaskManager with a real DB (so blocksByPR
+// works inside the buildRelations Activity), relations + callresolve modules,
+// and a claude Fake — everything the automatic resolve_call trigger needs.
+func autoResolveCallManager(t *testing.T, dataDir string, fake *claude.Fake) (*TaskManager, *sql.DB, *callresolve.Module) {
+	t.Helper()
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	cr, err := callresolve.Open(filepath.Join(dataDir, "callresolve.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cr.Close() })
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), cr, nil, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
+	return m, db, cr
+}
+
+// (a) EnsureRelations (the buildRelations Activity) starts a search for a
+// Go-unresolved call automatically, without the frontend ever calling
+// POST /api/workflows/resolve_call. (b) A rebuild with nothing changed never
+// re-spends an LLM call — even though the call ended up "notfound" and
+// UpsertGo resets a notfound row back to "unresolved" on that very rebuild;
+// resolveCallAttempted's durable, history-based set (not the callresolve
+// read-model's own fluctuating status) is what prevents the resubmit, and it
+// keeps holding across further rebuilds too, not just the one right after a
+// search. (c) A genuinely new unresolved call that appears after an edit gets
+// its own fresh search, while the already-searched calls are left alone.
+//
+// writeCallFixtureRepo's OrderService::build has TWO Go-unresolved calls
+// ("fetch" — ambiguous between RepoA/RepoB — and "query", Order::query(), a
+// vendor Eloquent method never defined in the app worktree), grouped into ONE
+// resolve_call Execution for that one caller; resolveCallsWithModel asks the
+// (fake) LLM once per call key, so the Fake's call count tracks 2 per fresh
+// caller-level search, not 1.
+func TestAutoStartResolveCallOnBuildRelations(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 210
+	writeCallFixtureRepo(t, dataDir, pr)
+	caller := Block{PR: pr, File: "app/Services/OrderService.php", Class: "OrderService", Name: "build", Side: SideNew, Status: StatusModified}
+
+	fake := claude.NewFake() // no programmed output → every search ends in "notfound"
+	m, db, cr := autoResolveCallManager(t, dataDir, fake)
+	if err := replacePRBlocks(db, pr, []Block{caller}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	m.EnsureRelations(ctx, pr) // must return without waiting for the auto-search
+
+	waitFor(t, func() bool {
+		e, ok := findEntry(mustCallresolveList(t, cr, pr), "fetch")
+		return ok && e.Status == callresolve.StatusNotfound
+	})
+	if e, ok := findEntry(mustCallresolveList(t, cr, pr), "fetch"); !ok || e.Status != callresolve.StatusNotfound {
+		t.Fatalf("fetch entry = %+v, want notfound", e)
+	}
+	if e, ok := findEntry(mustCallresolveList(t, cr, pr), "query"); !ok || e.Status != callresolve.StatusNotfound {
+		t.Fatalf("query entry = %+v, want notfound", e)
+	}
+	if n := fake.CallCount(); n != 2 {
+		t.Fatalf("claude called %d time(s) after the first build, want 2 (fetch + query)", n)
+	}
+
+	// Rebuild with nothing changed: the Go rescan still emits "fetch"/"query"
+	// as unresolved (it doesn't know about the DB's LLM state) and UpsertGo
+	// resets both notfound rows back to unresolved — but the auto-trigger
+	// must not search either one again.
+	m.EnsureRelations(ctx, pr)
+	// Nothing SHOULD happen here (both calls were already attempted), so there
+	// is no positive condition to poll for — give any (wrongly re-triggered)
+	// background search a moment to run before asserting the count didn't grow.
+	time.Sleep(50 * time.Millisecond)
+	if n := fake.CallCount(); n != 2 {
+		t.Fatalf("claude called %d time(s) after a no-op rebuild, want still 2 (no duplicate search)", n)
+	}
+
+	// A genuinely new unresolved call appears in the same caller.
+	_, headDir := worktreeDirs(dataDir, pr)
+	callerFile := filepath.Join(headDir, "app/Services/OrderService.php")
+	body, err := os.ReadFile(callerFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(body), "$this->repo->fetch();",
+		"$this->repo->fetch();\n        $this->repo->fetchNew();", 1)
+	if updated == string(body) {
+		t.Fatal("fixture line not found, test setup is stale")
+	}
+	if err := os.WriteFile(callerFile, []byte(updated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m.EnsureRelations(ctx, pr)
+	waitFor(t, func() bool {
+		e, ok := findEntry(mustCallresolveList(t, cr, pr), "fetchNew")
+		return ok && e.Status == callresolve.StatusNotfound
+	})
+	// Exactly one more claude call — for "fetchNew" only. "fetch"/"query"
+	// legitimately show "unresolved" again in the read-model at this point
+	// (this build's own UpsertGo just reset them, same as after the no-op
+	// rebuild above) — that's cosmetic, pre-existing UpsertGo behavior; the
+	// actual guarantee under test is that they were NOT resubmitted to the
+	// LLM, which the call count below proves.
+	if n := fake.CallCount(); n != 3 {
+		t.Fatalf("claude called %d time(s) after the new call appeared, want 3 (only the new call searched)", n)
+	}
 }

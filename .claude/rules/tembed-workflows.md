@@ -1252,6 +1252,62 @@ as fallback.
   `buildRelations`, also `resolveCalls` + `UpsertGo`/`Prune`, so a re-run
   without a full re-ingest refreshes the Underlying Code read model
   (handy after a resolver change).
+- **The search also starts automatically SERVER-SIDE — not only from the
+  frontend's own trigger below.** Right after the `buildRelations`
+  Activity's `UpsertGo`/`Prune` calls (see "Relations between blocks"
+  above — the same Activity both the `build_relations` workflow, i.e.
+  ingest/`EnsureRelations`, **and** `prStatusWorkflow`'s delta-refresh
+  branch call, so both routes get this for free), `autoStartResolveCall`
+  (`workflows.go`) groups every currently `unresolved` row from
+  `resolveCalls`' own fresh scan **per caller** and starts one
+  `resolve_call` Execution per group — the reviewer never has to open a
+  block first for the search to begin. **Fire-and-forget:** started as its
+  own goroutine, so ingest/`EnsureRelations`/the delta-refresh never wait
+  on a live claude call (the same "operational background goroutine"
+  shape as `StartCleanupScheduler`/`pollIngestRefresh`, not a durable
+  workflow step). **`StartResolveCall` itself is now idempotent:**
+  `resolveCallRunID` (`resolve_call.go`, mirrors `explainRunID`) derives a
+  deterministic Run ID from `pr|callerId|sorted(calls)` — `StartWorkflowID`
+  then no-op-reuses an existing Execution for the identical request,
+  whether it comes from this automatic trigger or the frontend's own
+  `startCallSearch` safety net (still in place, unchanged — e.g. for a PR
+  whose relations were only ever refreshed headlessly, see below), so
+  neither route can ever spend a second LLM call on the same request.
+  **Never re-submits a call that was already attempted, across any number
+  of later rebuilds — not just the very next one:** `groupUnresolvedCalls`
+  (`resolve_call.go`, pure/unit-testable) only includes a call that is
+  both currently `unresolved` **and** absent from
+  `resolveCallAttempted(pr)` — the durable set of every `(callerId,
+  callKey)` pair that has *ever* appeared in a `resolve_call` Execution's
+  input for this PR, read straight from the workflow event history
+  (`engine.Runs()`/`Input()`), not from the callresolve read-model's own
+  status column. That distinction is load-bearing: `UpsertGo` resets a
+  `notfound` row back to `unresolved` on *every* rebuild that doesn't
+  touch that call (it only protects `searching`/`found`, see its own doc
+  comment) — a snapshot of the DB's status would tell "already attempted"
+  apart from "genuinely new" only for the one rebuild right after a
+  search, not for a later one, since nothing writes the row back to
+  `notfound` in between. The event history never forgets, so
+  `resolveCallAttempted` holds regardless of how many such rebuilds pass.
+  One practical, accepted consequence: an already-attempted call's DB
+  `status` can keep cosmetically flipping back to `unresolved` on a
+  rebuild that doesn't re-search it (pre-existing `UpsertGo` behavior,
+  unrelated to this feature) — the guarantee this mechanism actually gives
+  is "never a second LLM call for the same call", not "the read-model
+  status always reflects that it was tried". **Deliberately server-only:**
+  the headless CLI twin **`slash relations <pr>`** (above) stays a
+  dev/debug tool that calls `resolveCalls`/`UpsertGo`/`Prune` directly,
+  bypassing the `TaskManager`/engine entirely — it does not start any
+  search; a PR whose relations were only ever refreshed that way still
+  relies purely on the frontend's own trigger once the reviewer opens it
+  in a running server. Tests: `TestGroupUnresolvedCalls`/
+  `TestGroupUnresolvedCallsKeepsNeverAttemptedCall`/
+  `TestResolveCallRunIDStableAndSensitive` (pure, `resolve_call_test.go`)
+  and `TestAutoStartResolveCallOnBuildRelations` (end to end via
+  `EnsureRelations`: one search per caller, a no-op rebuild spends no
+  extra LLM call even though the row shows `unresolved` again, and a
+  genuinely new unresolved call gets its own fresh search without
+  re-submitting the rest).
 - **Frontend:** `home.mjs` loads `state.callResolve` (`loadCallResolve`),
   adds `resolved`/`found` rows as `method_call` children
   (`relatedChildren`), and starts the LLM search for `unresolved` calls

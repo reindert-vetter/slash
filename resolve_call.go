@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"slash/modules/callresolve"
@@ -204,4 +207,78 @@ func clip(s string, n int) string {
 		return s
 	}
 	return s[:n] + "\n… (truncated)"
+}
+
+// resolveCallRunID derives a deterministic, filename-safe Run ID from the
+// caller + the exact set of calls being searched (mirrors explainRunID).
+// StartWorkflowID then dedups repeated starts for the identical request —
+// whether it comes from the frontend's own "Zoek" trigger (startCallSearch,
+// home.mjs) or from the automatic server-side trigger (autoStartResolveCall,
+// workflows.go) — while a genuinely different Calls set (a new unresolved call
+// surfaced by a rebuild) always yields a fresh Run ID/Execution. Calls is
+// sorted before hashing so the ID doesn't depend on the order the caller
+// happened to build the slice in (a Go map iteration, or whatever order a
+// client sent). The raw key contains slashes/colons (a caller ID embeds a file
+// path), so it's hashed rather than embedded — Run IDs double as JSONL store
+// filenames.
+func resolveCallRunID(in ResolveCallInput) string {
+	calls := append([]string(nil), in.Calls...)
+	sort.Strings(calls)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%s", in.PR, in.CallerID, strings.Join(calls, ","))))
+	return "rslv-" + hex.EncodeToString(sum[:12])
+}
+
+// groupUnresolvedCalls turns the Go resolver's freshly scanned entries into one
+// ResolveCallInput per caller — the payload the automatic server-side search
+// trigger (autoStartResolveCall, workflows.go) starts a resolve_call Execution
+// for. Only a call that is currently Unresolved AND was never submitted to a
+// resolve_call Execution before is included: attempted is the set of every
+// (callerId, callKey) pair that has EVER appeared in a resolve_call
+// Execution's input for this PR (resolveCallAttempted, workflows.go — reads
+// the durable workflow event history, not the callresolve read-model's own
+// status column). That distinction matters because UpsertGo resets a
+// notfound row back to unresolved on every rebuild that doesn't touch that
+// call (it only protects searching/found, see its own doc comment) — a
+// snapshot of the DB's OWN status would only catch the very next rebuild
+// after a search, not one further down the line, since nothing writes it back
+// to notfound in between. The event history never forgets, so this holds
+// across any number of rebuilds. A caller whose block id isn't in blocks
+// (defensive — should not happen, Prune keeps callresolve's callers in
+// lockstep with the PR's blocks) is skipped. Pure and deterministic, so it's
+// directly unit-testable without the engine/goroutine.
+func groupUnresolvedCalls(pr int, calls []callresolve.Entry, attempted map[string]bool, blocks []Block) []ResolveCallInput {
+	byID := make(map[string]Block, len(blocks))
+	for _, b := range blocks {
+		byID[b.ID()] = b
+	}
+
+	callsByCaller := map[string][]string{}
+	var order []string
+	for _, e := range calls {
+		if e.Status != callresolve.StatusUnresolved {
+			continue
+		}
+		if attempted[e.CallerID+"\x1f"+e.CallKey] {
+			continue // already submitted to a resolve_call Execution before — don't resubmit
+		}
+		if _, ok := callsByCaller[e.CallerID]; !ok {
+			order = append(order, e.CallerID)
+		}
+		callsByCaller[e.CallerID] = append(callsByCaller[e.CallerID], e.CallKey)
+	}
+
+	out := make([]ResolveCallInput, 0, len(order))
+	for _, callerID := range order {
+		b, ok := byID[callerID]
+		if !ok {
+			continue
+		}
+		cs := callsByCaller[callerID]
+		sort.Strings(cs)
+		out = append(out, ResolveCallInput{
+			PR: pr, CallerID: callerID, CallerFile: b.File,
+			CallerClass: b.Class, CallerName: b.Name, Calls: cs,
+		})
+	}
+	return out
 }
