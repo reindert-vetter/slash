@@ -18,7 +18,12 @@ import (
 //
 // A method-level annotation (names both class and method) resolves without
 // AI: #[CoversMethod(Class::class, 'method')], "@covers Class::method", or a
-// bare "@covers ::method" combined with the file's "@coversDefaultClass". A
+// bare "@covers ::method" combined with the file's "@coversDefaultClass".
+// #[CoversMethod(...)] always names both class and method regardless of
+// WHERE it's placed — including directly above the class declaration itself
+// (a common "this whole test class covers this one method" shape) — so it
+// resolves statically for every test method of that class, not only for one
+// it sits directly above; see the classZoneText fallback in coverTargets. A
 // class-level-only annotation (names only a class — #[CoversClass], bare
 // "@covers Class") cannot be resolved statically; it becomes "unresolved" and
 // is offered to the resolve_test_covers LLM workflow. No annotation at all is
@@ -33,6 +38,8 @@ var (
 	// reCoversMethodAttr matches #[CoversMethod(Class::class, 'method')] — both
 	// class and method are always named, so this always resolves statically
 	// regardless of whether it sits above a test method or the whole class.
+	// coverTargets matches it against both the method's own zone and (as a
+	// fallback, mirroring the class-only annotations) the file's classZone.
 	reCoversMethodAttr = regexp.MustCompile(`#\[\s*CoversMethod\(\s*([\\A-Za-z0-9_]+)::class\s*,\s*['"]([A-Za-z0-9_]+)['"]\s*\)\s*\]`)
 	// reCoversClassAttr matches #[CoversClass(Class::class)] — names only a
 	// class, so which method it covers needs the LLM.
@@ -224,9 +231,16 @@ func isTestMethod(name string, hasTestAttr bool) bool {
 // "@coversDefaultClass"), then any class-wide annotation — checked in the
 // method's own zone first, falling back to the file's class zone only when
 // the method named nothing at all (a per-method annotation always wins over
-// the file-wide default). zoneFrom/classZoneFrom are the absolute file lines
-// zone/classZoneText each start at (see methodZone/classZoneFromLine), used
-// to anchor each target's line via matchLine.
+// the file-wide default). The classZone fallback also re-checks
+// reCoversMethodAttr (not only reCoversClassAttr/bare "@covers Class"): a
+// #[CoversMethod(Class::class, 'method')] placed directly above the class
+// declaration names both class and method just as precisely as one placed
+// above a single test method, so it resolves statically too — and, since
+// every test method's own zone falls through to this same fallback, it
+// applies to every test method of that class, not only one. zoneFrom/
+// classZoneFrom are the absolute file lines zone/classZoneText each start at
+// (see methodZone/classZoneFromLine), used to anchor each target's line via
+// matchLine.
 func coverTargets(zone, classZoneText string, zoneFrom, classZoneFrom int) []coverTarget {
 	var targets []coverTarget
 
@@ -251,6 +265,9 @@ func coverTargets(zone, classZoneText string, zoneFrom, classZoneFrom int) []cov
 	}
 
 	if len(targets) == 0 {
+		for _, m := range reCoversMethodAttr.FindAllStringSubmatch(classZoneText, -1) {
+			targets = append(targets, coverTarget{class: m[1], method: m[2], annotation: "CoversMethod", line: matchLine(classZoneText, m[0], classZoneFrom)})
+		}
 		for _, m := range reCoversClassAttr.FindAllStringSubmatch(classZoneText, -1) {
 			targets = append(targets, coverTarget{class: m[1], annotation: "CoversClass", line: matchLine(classZoneText, m[0], classZoneFrom)})
 		}

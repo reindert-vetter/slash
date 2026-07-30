@@ -282,6 +282,82 @@ func TestScanTestCoversBareClassFallback(t *testing.T) {
 	}
 }
 
+// TestScanTestCoversClassLevelCoversMethod proves that #[CoversMethod(...)]
+// placed directly above the CLASS declaration (not above one test method)
+// resolves statically too, and applies to EVERY test method of that class —
+// reproduces the real-world PR-13148 case (ProductGroupUpdateTest.php),
+// where one #[CoversMethod(ProductGroupController::class, 'update')] sits
+// above the class and every test method only carries a bare #[Test].
+func TestScanTestCoversClassLevelCoversMethod(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 13
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Http/Controllers/Api/ProductGroupController.php": `<?php
+namespace App\Http\Controllers\Api;
+class ProductGroupController {
+    public function update() {}
+}
+`,
+		"tests/Http/ProductGroups/ProductGroupUpdateTest.php": `<?php
+namespace Tests\Http\ProductGroups;
+
+use App\Http\Controllers\Api\ProductGroupController;
+use PHPUnit\Framework\Attributes\CoversMethod;
+use PHPUnit\Framework\Attributes\Test;
+use Tests\Http\HttpTestCase;
+
+#[CoversMethod(ProductGroupController::class, 'update')]
+final class ProductGroupUpdateTest extends HttpTestCase
+{
+    #[Test]
+    public function it_should_update_the_product_group_when_valid(): void
+    {
+        $this->assertTrue(true);
+    }
+
+    #[Test]
+    public function it_should_move_a_product_from_another_group_when_it_is_coupled(): void
+    {
+        $this->assertTrue(true);
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	blocks := testCoversBlocks(t, dataDir, pr, "tests/Http/ProductGroups/ProductGroupUpdateTest.php")
+	entries := scanTestCovers(dataDir, pr, blocks)
+
+	testID := func(method string) string {
+		for _, b := range blocks {
+			if b.Name == method {
+				return b.ID()
+			}
+		}
+		t.Fatalf("no block named %s", method)
+		return ""
+	}
+
+	for _, method := range []string{
+		"it_should_update_the_product_group_when_valid",
+		"it_should_move_a_product_from_another_group_when_it_is_coupled",
+	} {
+		e, ok := findCoverEntry(entries, testID(method), "method:ProductGroupController::update")
+		if !ok || e.Status != testcovers.StatusResolved || e.Annotation != "CoversMethod" {
+			t.Fatalf("%s: class-level CoversMethod entry = %+v, ok=%v", method, e, ok)
+		}
+	}
+}
+
 // A non-TEST-category block, and the old (removed) side of a changed test
 // block, never produce a test-coverage entry.
 func TestScanTestCoversSkipsNonTestBlocks(t *testing.T) {

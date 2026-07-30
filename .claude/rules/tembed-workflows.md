@@ -1452,7 +1452,20 @@ only for one specific case.
     (`#[CoversMethod(Class::class, 'method')]`, `@covers Class::method`,
     or `@coversDefaultClass` + `@covers ::method`) **always** names both
     class and method, so this resolves **statically, without AI**,
-    verified against the worktree.
+    verified against the worktree. **`#[CoversMethod(...)]` names both class
+    and method regardless of WHERE it's placed** — including directly above
+    the class declaration itself (one attribute standing in for "this whole
+    test class covers this one method", instead of repeating it above every
+    test method) — so `coverTargets` (`testcovers_analysis.go`) matches it
+    against the class zone too (the same fallback tier as `#[CoversClass]`/
+    bare `@covers Class` below, only reached when a test method's own zone
+    named nothing), and it then resolves **for every test method of that
+    class**, each producing its own `resolved` row for the same
+    `method:Class::method` target. This is the opposite of `#[CoversClass]`
+    right below: that one only ever names a class (never a method, wherever
+    it's placed), so it stays `unresolved`/LLM territory regardless of
+    position — `#[CoversMethod]` at class level is precise enough to skip
+    the LLM entirely, `#[CoversClass]` never is.
   - **`unannotated`** — no annotation found at all → **permanent warning,
     never AI**.
   - **`unresolved`** — a **class-level-only** annotation
