@@ -5194,7 +5194,7 @@ const explainRequested = new Set()
 
 // EXPLAIN_DEBOUNCE_MS delays the explain request until the cursor rests on the
 // unit, so arrowing through a block doesn't fire a request per stop.
-const EXPLAIN_DEBOUNCE_MS = 3000
+const EXPLAIN_DEBOUNCE_MS = 600
 let explainTimer = null
 let explainPendingKey = ''
 

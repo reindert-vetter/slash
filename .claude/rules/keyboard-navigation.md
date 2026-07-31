@@ -1596,7 +1596,7 @@ when the branch runs. That comes from the `explanations` read model
 workflow
 (Haiku, context-only — see `.claude/rules/tembed-workflows.md`).
 Generation
-starts **automatically** with a debounce (`EXPLAIN_DEBOUNCE_MS`, 3s —
+starts **automatically** with a debounce (`EXPLAIN_DEBOUNCE_MS`, 600ms —
 navigating through with arrows doesn't trigger anything) via
 `POST /api/workflows/explain_code`, client-side
 deduped (`explainRequested`) and server-side idempotent (a deterministic
