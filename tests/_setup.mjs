@@ -549,8 +549,16 @@ class ${name}
 // covering tests (tests/fixtures/testsgroup-testcovers.json) group into the
 // horizontal tests bar next to a seeded resolved call
 // (tests/fixtures/testsgroup-callresolve.json, the "other" non-test child).
+// The production method's HEAD version also makes a real call to
+// AddressFormatter::formatAddress, right below its one changed line (so both
+// rows land in the SAME, default change group) — needed since 'group'
+// granularity now hard-filters an Onderliggende-code child whose call site
+// doesn't sit inside the selected group (see group-scope.spec.mjs): without a
+// genuine, on-a-changed-line call here, the seeded callresolve row would never
+// actually be "in scope" and this fixture's "tests bar + one other child"
+// premise (see related-tests-group.spec.mjs) would silently stop holding.
 function materializeTestsGroupWorktrees() {
-  const file = (ns, name, method, value) => `<?php
+  const testFile = (ns, name, method, value) => `<?php
 
 namespace ${ns};
 
@@ -563,13 +571,27 @@ class ${name}
     }
 }
 `
+  const production = (value) => `<?php
+
+namespace App\\Models;
+
+class TgOrder
+{
+    public function billingAddress()
+    {
+        $value = ${value};
+        $formatted = (new AddressFormatter())->formatAddress();
+        return $value;
+    }
+}
+`
   const write = worktreeWriter(99)
-  write('base', 'app/Models/TgOrder.php', file('App\\Models', 'TgOrder', 'billingAddress', 1))
-  write('head', 'app/Models/TgOrder.php', file('App\\Models', 'TgOrder', 'billingAddress', 2))
-  write('base', 'tests/Feature/TgOrderBillingTest.php', file('Tests\\Feature', 'TgOrderBillingTest', 'testBilling', 1))
-  write('head', 'tests/Feature/TgOrderBillingTest.php', file('Tests\\Feature', 'TgOrderBillingTest', 'testBilling', 2))
-  write('base', 'tests/Feature/TgOrderShippingTest.php', file('Tests\\Feature', 'TgOrderShippingTest', 'testShipping', 1))
-  write('head', 'tests/Feature/TgOrderShippingTest.php', file('Tests\\Feature', 'TgOrderShippingTest', 'testShipping', 2))
+  write('base', 'app/Models/TgOrder.php', testFile('App\\Models', 'TgOrder', 'billingAddress', 1))
+  write('head', 'app/Models/TgOrder.php', production(2))
+  write('base', 'tests/Feature/TgOrderBillingTest.php', testFile('Tests\\Feature', 'TgOrderBillingTest', 'testBilling', 1))
+  write('head', 'tests/Feature/TgOrderBillingTest.php', testFile('Tests\\Feature', 'TgOrderBillingTest', 'testBilling', 2))
+  write('base', 'tests/Feature/TgOrderShippingTest.php', testFile('Tests\\Feature', 'TgOrderShippingTest', 'testShipping', 1))
+  write('head', 'tests/Feature/TgOrderShippingTest.php', testFile('Tests\\Feature', 'TgOrderShippingTest', 'testShipping', 2))
 }
 
 // materializeArrowWorktrees writes the synthetic PR 100 fixture worktrees for

@@ -33,15 +33,21 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
     await expect(arrows).toHaveCount(0)
 
     // Enter the diff (group granularity): the DEFAULT active group is the
-    // unrelated $flag/$note pair — it doesn't cover either call site. At
-    // 'group' the panel does NOT hide an out-of-active-unit call child (only
-    // reorders it, see relatedChildren/resolvedCallChildren), so the
-    // arrowHelper child card is still shown here — and the arrow must reach
-    // it too (this is the reported bug: card visible, no arrow).
+    // unrelated $flag/$note pair — it doesn't cover either call site. 'group'
+    // now HIDES an out-of-active-unit call child outright, same as line/call
+    // (see relatedChildren/resolvedCallChildren/groupTierForLine), so the
+    // arrowHelper child card is not shown yet — and thus no arrow either.
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     const arrowHelperItem = page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]')
+    await expect(arrowHelperItem).toHaveCount(0)
+    await expect(arrows).toHaveCount(0)
+
+    // Step down to the second group (the actual call lines): the arrowHelper
+    // child now becomes visible (its call site sits inside this group) and
+    // the arrow reaches it.
+    await page.keyboard.press('ArrowDown')
     await expect(arrowHelperItem).toBeVisible()
     await expect(arrows).toHaveCount(1)
 
@@ -49,11 +55,6 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
     // arrow-blocks.json) as a badge LEFT of the title, mirroring the
     // top-level block card's left-hand type badge.
     await expect(arrowHelperItem).toContainText('ACTION')
-
-    // Step down to the second group (the actual call lines): still one arrow,
-    // now anchored on the in-scope call site.
-    await page.keyboard.press('ArrowDown')
-    await expect(arrows).toHaveCount(1)
 
     // Refine to line granularity: lands on the first changed line (the
     // arrowHelper call) → still one arrow.
@@ -129,6 +130,10 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // caller's diff
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    // The DEFAULT group (the unrelated $flag/$note pair) doesn't cover
+    // arrowHelper's call site, and 'group' now hides an out-of-scope child
+    // outright (see group-scope.spec.mjs) — step to the second group first.
+    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('ArrowRight') // → Onderliggende code
 
     const arrows = page.locator('[data-testid=call-arrow]')
@@ -191,6 +196,9 @@ test.describe('PR Review Tree — call-arrow overlay', () => {
     await expect(page.getByTestId('block-row')).toHaveCount(1)
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // caller's diff
+    // Same step as the previous test: the default group doesn't cover
+    // arrowHelper's call site, and 'group' now hides an out-of-scope child.
+    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('ArrowRight') // → Onderliggende code
 
     const helperChild = page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]')

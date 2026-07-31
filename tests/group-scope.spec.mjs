@@ -5,32 +5,32 @@ import { test, expect } from './_fixtures.mjs'
 // line (see conventions.md's "Data-kanttekening"). tests/fixtures/blocks.json
 // seeds two extra, otherwise-unused child blocks under this PR
 // (GroupScopeChildA/B); tests/fixtures/relations.json links both as
-// event_listener children of `execute`, one (`A`) anchored (via the new
-// `line` field, see relations.go's matchLine) on that one real changed line,
-// the other (`B`) on an unrelated line elsewhere in the block's body. Both
-// also sit at the bottom of the left list under the "Onderliggende code"
-// heading (relation children stay navigable index rows, see recomputeLeftList
-// in home.mjs); blocks.spec.mjs's fixture-order list includes them.
+// event_listener children of `execute`, one (`A`) anchored (via the `line`
+// field, see relations.go's matchLine) on that one real changed line, the
+// other (`B`) on an unrelated line elsewhere in the block's body. Both also
+// sit at the bottom of the left list under the "Onderliggende code" heading
+// (relation children stay navigable index rows, see recomputeLeftList in
+// home.mjs); blocks.spec.mjs's fixture-order list includes them.
 const DEEP_LINK = '/pr/12903?mode=diff&sel=app%2FActions%2FCreatePaymentAction.php%3A26'
 
-test.describe('PR Review Tree — line/call hide vs group reorder scoping', () => {
+test.describe('PR Review Tree — group/line/call all hide out-of-scope relation children', () => {
   // "If I select a group" (the default granularity on entering a diff):
-  // a relation child outside the selected group's line range is NOT dropped
-  // from the panel — it just sorts below the in-scope one ("group blocks
-  // on top, and below that whatever isn't in the block").
-  test('group granularity reorders in-scope relation children above out-of-scope ones (does not hide)', async ({
+  // a relation child outside the selected group's line range is now HIDDEN
+  // outright — the same hard filter as line/call, no longer merely sorted
+  // below the in-scope one (see groupTierForLine/relatedChildren in home.mjs
+  // and "Onderliggende-code scoping" in detail-layout.md).
+  test('group granularity hides out-of-scope relation children outright, like line/call', async ({
     page,
   }) => {
     await page.goto(DEEP_LINK) // default gran is 'group', default chg is 0
     await expect(page.getByTestId('block-column')).toBeVisible()
 
     const items = page.getByTestId('related-item')
-    await expect(items).toHaveCount(2)
     // ChildA's relation line (67) sits inside the selected group's line range
-    // (the block's one real changed line) → groupTier 0, sorts first. ChildB
-    // (line 30, elsewhere in the block) is not hidden, only reordered below it.
+    // (the block's one real changed line) → groupTier 0, stays visible.
+    // ChildB (line 30, elsewhere in the block) is now hidden entirely.
+    await expect(items).toHaveCount(1)
     await expect(items.nth(0)).toContainText('GroupScopeChildA')
-    await expect(items.nth(1)).toContainText('GroupScopeChildB')
   })
 
   // "If I select a line, then I only want to see underlying code of

@@ -1861,20 +1861,13 @@ block on the right — see the layout paragraph above):
   remaining `[data-pane]` block — that of the column holding the keyboard,
   at any depth.
   The scope mirrors the panel's **visibility** exactly
-  (`resolvedCallChildren`'s `hideOutOfScope`), not merely
-  `callScopeMethods`' bare unit-range check at every granularity: at
-  `call`/`line` the panel really **hides** a child outside the active unit
-  (see below), so there the arrow only points to the one active
-  segment/row. At **`group` the panel hides nothing** — every
-  changed-target call child stays visible, only reordered (`groupTier`) —
-  so there `callArrowPairs` points to **every** such child, not only the
-  children whose call site happens to fall within the active group: first
-  a site within the active unit (keeps the arrow close to the cursor when
-  possible), otherwise the first known call site of that child anywhere in
-  the block, so a groupTier-1 card (outside the active group, but shown by
-  the panel anyway) still gets an arrow. Without this fallback a visible
-  card sometimes ended up without an arrow when the active group didn't
-  contain the call site. **Deliberately an imperative drawing layer**, not
+  (`resolvedCallChildren`'s `hideOutOfScope`) at **every** granularity,
+  `group` included: `call`/`line`/`group` all **hide** a child outside the
+  active unit (see below — `group` used to only reorder, not hide; that
+  changed, see "Onderliggende-code scoping" further down), so there's no
+  fallback to "the child's first known call site anywhere in the block"
+  anymore — a card the panel doesn't show must never still receive an
+  arrow. **Deliberately an imperative drawing layer**, not
   a reactive template (the `updateHints`/`positionMenu` model):
   `callArrowPairs` in `home.mjs` computes the pairs in the **callback** of
   the existing `setRelated` watch (untracked — no new reactive `b.code`
@@ -1921,29 +1914,72 @@ block on the right — see the layout paragraph above):
   in `home.mjs`, exactly what "if I select a line/call I want only the
   underlying code of that line/call" asks for). Only in **list mode** (no
   diff) does it show **all** resolved calls of the block.
-  **At `gran==='group'`, nothing is hidden but reordered:** a group often
-  spans multiple lines/calls, so a relation/`covers`/`method_call` child
-  that isn't exactly on the selected line(s) doesn't disappear — it only
-  sinks below the children that are. Every relation/annotation for this
-  purpose carries an **absolute source line** (recorded server-side by the
-  detector that found it — `relations.Relation.Line` resp.
-  `testcovers.Entry.Line`, see `.claude/rules/tembed-workflows.md`);
-  `groupLineRange(b, rows)` in `home.mjs` converts the selected group unit
-  to that same absolute line range (`unitLineRange`, reused unchanged) and
-  `relatedChildren` sorts first on that **`groupTier`** (0 = within the
-  group, 1 = outside it) before the existing `prio`/`size` sort — so within
-  each tier the ordering below still applies as usual. A `covered_by` child
-  (the test covering a production method) has **no** anchor point within
-  the viewed block — the annotation lives in the test file, not the
-  production code — and thus always sits in tier 1; its own `prio 0` still
-  keeps it above a `prio 2` (unchanged) call within that tier: "at the
-  bottom, but above unchanged". An LLM `found` `covers` row that escalated
-  from a class-only annotation also carries no `Line` for the same reason
-  (`resolve_test_covers.go` deliberately doesn't thread it through) and thus
-  degrades to that same tier 1. Outside `gran==='group'` (list mode, or at
-  line/call where the filter already only leaves in-scope items),
-  `groupTier` is `0` everywhere — a no-op, the ordering is then exactly as
-  before this reordering.
+  **At `gran==='group'` a child outside the selected group's line range is
+  now HIDDEN too — the same hard filter as `line`/`call`, not merely
+  reordered below the in-scope ones.** This reverses an earlier, deliberate
+  design choice ("a group often spans multiple lines, so a child shouldn't
+  just disappear") — reversed on explicit request once it turned out to
+  produce exactly the confusing screenshot this paragraph used to warn
+  about: several Onderliggende-code cards shown next to a selected group,
+  only some of which actually belong to it, with no visual distinction
+  between them. Every relation/annotation for this purpose carries an
+  **absolute source line** (recorded server-side by the detector that found
+  it — `relations.Relation.Line` resp. `testcovers.Entry.Line`, see
+  `.claude/rules/tembed-workflows.md`); `groupLineRange(b, rows)` in
+  `home.mjs` converts the selected group unit to that same absolute line
+  range (`unitLineRange`, reused unchanged), and **`groupTierForLine(range,
+  line)`** (`home.mjs`) is the one function every group-scoping decision in
+  this file goes through: it scores a child's own recorded line against
+  that range into a `groupTier` of `0` (kept) or `1` (out of scope, now
+  filtered out by `relatedChildren` rather than merely sorted last).
+  **The load-bearing rule behind `groupTierForLine`, and thus behind every
+  exemption below: hide only what can be PROVEN to sit outside the
+  selected group — missing scope information is never itself a reason to
+  hide something.** Concretely, `groupTierForLine` returns tier `0` (kept)
+  whenever there is no active range at all (list mode, or a granularity
+  other than `group`) **or** the child's own `line` is falsy — a relation
+  recorded before the `line` field existed (`relations.Relation.Line`'s own
+  "0 = legacy row" convention) or a test fixture that simply never set one
+  are treated as "nothing to compare", not as "line 0, presumably out of
+  range". Three concrete exemptions fall out of that one rule:
+  1. **A block-level synthetic callKey**
+     (`resource:`/`migration_model:`/`data_provider:`/`trait_usage:`, see
+     `isBlockLevelCallKey` in `home.mjs`) has no site to compare at all —
+     always kept, exactly as at `line`/`call`. `trait_usage:` was added to
+     this list *because* of this change: before `group` hard-filtered too,
+     `findCallSites` silently finding no site for it was harmless (it only
+     mattered at the rarely-visited `line`/`call` levels); once `group` —
+     the **default** granularity on entering a diff — started hard
+     filtering, the same gap would have made a trait-usage child disappear
+     almost always.
+  2. **A `covered_by` child** (the covering test, direction 2 —
+     `coveredByChildren` in `home.mjs`) never carries a site of its own at
+     all: the annotation lives in the *test's* own file, never in the
+     viewed block's. Reindert chose explicitly to keep this one **always**
+     visible regardless of the selected group — a hard filter here would
+     make "covered by TestX::testY" disappear almost every time the
+     reviewer is in diff mode (since `group` is the default granularity),
+     which is too much loss for too little gain. `coveredByChildren` no
+     longer even takes a `range` parameter — its `groupTier` is
+     unconditionally `0`.
+  3. **A relation/`covers` child with no recorded `line` at all** (see
+     `groupTierForLine`'s own rule above) — kept, never treated as "line 0
+     is out of range". This is also what keeps several existing Playwright
+     fixtures correct: a number of them seed a relation with no `line`
+     field at all.
+  **`translation:` children are NOT exempt** — that callKey couples to a
+  real string-literal site (the quoted key inside a `trans()`/`__()`/
+  `@lang()` call, see `isBlockLevelCallKey`'s own doc comment), so it stays
+  properly, hard-scoped to the line it's actually used on, like an ordinary
+  method call. Outside `gran==='group'` (list mode, or at line/call where
+  the filter already only leaves in-scope items), `groupTierForLine`'s own
+  `!range` guard keeps every `groupTier` at `0` — a no-op, so the ordering
+  below applies exactly as before this change.
+  **Inline comment blocks are unaffected by any of this** —
+  `InlineComments`/`commentUnder` (`RelatedPanel.mjs`) already hard-filter
+  by aligned-row range at *every* granularity, `group` included; they never
+  had the "reorder instead of hide" exception this section describes, so
+  nothing about the comment scoping needed to change.
   The shown calls are (within their tier) **ordered**: first a call whose
   definition itself changes in this PR (a real child block, `prio 0`), then
   calls on a recently changed line (`prio 1`), then the rest (`prio 2`).

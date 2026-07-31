@@ -49,7 +49,13 @@ test.describe('PR Review Tree — per-line onderliggende-code badge', () => {
 
     // Drill into arrowHelper (Onderliggende code → first child, prio 0 since
     // its own definition is a changed PR block) and approve its one group
-    // (both its changed rows) via the command palette.
+    // (both its changed rows) via the command palette. The DEFAULT group
+    // (the unrelated $flag/$note pair, see call-arrows.spec.mjs) doesn't cover
+    // arrowHelper's own call site, and 'group' now hides an out-of-scope
+    // Onderliggende-code child outright (see group-scope.spec.mjs) — step to
+    // the second group first (the per-line badge itself, checked above, is
+    // gran-independent and was already visible regardless).
+    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('ArrowRight') // → related panel
     const arrowHelperItem = page.getByTestId('related-item').first()
     await expect(arrowHelperItem).toContainText('arrowHelper')

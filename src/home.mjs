@@ -2322,17 +2322,24 @@ function childrenOf(b) {
 // isBlockLevelCallKey recognizes the synthetic, colon-containing callKey
 // prefixes emitted by callresolve rules that deliberately have NO single line
 // in the caller to anchor to (see the callresolve_analysis.go doc comments
-// for resolveMigrationModels/resolveDataProviders and rule 7 "Resource
-// usage" in tembed-workflows.md — all three explicitly note their key
-// "never matches a real call-site literal"). Such a child is block-level
-// knowledge, not tied to one line/call, and must never be scoped away by
-// callScopeMethods/hideOutOfScope just because findCallSites can't (and
-// isn't meant to) find a literal site for it. `translation:` is NOT included
+// for resolveMigrationModels/resolveDataProviders/scanTraits (rule 8, "trait
+// usage") and rule 7 "Resource usage" in tembed-workflows.md — all four
+// explicitly note their key "never matches a real call-site literal"). Such a
+// child is block-level knowledge, not tied to one line/call, and must never
+// be scoped away by callScopeMethods/hideOutOfScope just because
+// findCallSites can't (and isn't meant to) find a literal site for it —
+// including at 'group' granularity, now that that also hard-filters (see
+// relatedChildren's own scoping doc): `trait_usage` was added here for
+// exactly that reason — before 'group' hid anything, findCallSites silently
+// returning no sites for it was harmless (it only ever mattered at 'line'/
+// 'call', rarely visited); once 'group' — the DEFAULT granularity on entering
+// a diff — started hard-filtering too, that same gap would have made a
+// trait-usage child disappear almost always. `translation:` is NOT included
 // here — that prefix DOES have a real literal site (the quoted key string
 // inside a trans()/__()/@lang() call, matched separately below), so it stays
 // properly scoped to the line it's actually used on.
 function isBlockLevelCallKey(name) {
-  return /^(resource|migration_model|data_provider):/.test(name)
+  return /^(resource|migration_model|data_provider|trait_usage):/.test(name)
 }
 
 // findCallSites locates, in a block's aligned diff rows, every place method
@@ -2437,7 +2444,7 @@ function callScopeMethods(b, rows) {
 
 // groupLineRange returns the absolute new-side source line range the
 // reviewer's currently selected *group* unit covers, or null when group-level
-// reordering doesn't apply (not diff mode, the focused cursor isn't on gran
+// scoping doesn't apply (not diff mode, the focused cursor isn't on gran
 // 'group', a non-focused block, or the unit/code isn't available yet —
 // mirrors callScopeMethods' own guards, incl. using focusedGranCursor so a
 // focused DRILLED column's own gran/change is what's checked, not always the
@@ -2460,6 +2467,25 @@ function groupLineRange(b, rows) {
   return { startLine, endLine }
 }
 
+// groupTierForLine is the one rule every group-scoping decision in this file
+// follows: HIDE ONLY WHAT WE CAN PROVE SITS OUTSIDE THE SELECTED GROUP —
+// missing scope information is never itself a reason to hide something. `line`
+// is a child's own recorded source line (childrenOf's site line / a `covers`
+// row's testcovers.Entry.Line); `range` is groupLineRange's result. Returns 1
+// (out of scope, filtered out by relatedChildren) only when BOTH a range is
+// active AND the child carries a real (truthy) line that falls outside it;
+// returns 0 (kept) in every other case — no active range (list mode, or not
+// 'group' granularity), or no line at all. A falsy `line` covers two distinct
+// but equally "we don't know" situations: a relation recorded before the
+// `line` field existed (relations.Relation.Line's own "0 = legacy row" doc
+// comment) and a plain test fixture that never set one (several specs in this
+// suite seed a relation with no `line` at all) — both must stay visible rather
+// than being read as "line 0, almost certainly outside the range".
+function groupTierForLine(range, line) {
+  if (!range || !line) return 0
+  return line >= range.startLine && line <= range.endLine ? 0 : 1
+}
+
 // relatedChildren describes the selected block's children for the RelatedPanel:
 // the resolved method calls it makes (coupled to the call in the diff) plus the
 // event listeners it is linked to. It lazily loads any child block's code and
@@ -2467,25 +2493,43 @@ function groupLineRange(b, rows) {
 // gran/change/relations/callResolve + each child's code — so the panel follows
 // the cursor and re-renders as child code arrives.
 //
-// Scoping/ordering by the reviewer's current selection, from finest to
-// coarsest granularity:
-//  - 'call'/'line': HIDDEN outright — only children whose site sits under the
-//    active call/line remain (see callScopeMethods for method-call children;
-//    a relation/covers child has no site *within* that fine a unit at all, so
-//    it drops out entirely — "onderliggende code van die line/call", not the
-//    whole block's).
-//  - 'group': NOT hidden, only REORDERED — a child whose site (childrenOf's
-//    line / a `covers` row's testcovers.Entry.Line) falls inside the selected
-//    group's line range sorts first (groupTier 0); everything else (out of
-//    range, or with no site to compare at all — `covered_by`, which the test
-//    file itself carries the annotation for, and a `found` covers row that
-//    didn't carry a Line forward, see testcovers.Entry.Line) keeps its
-//    existing prio-based order below that (groupTier 1) — "onderaan, maar
-//    boven ongewijzigd" for `covered_by` falls out for free, since its prio 0
-//    already outranks an unchanged (prio 2) call within that tier.
-//  - 'group' in list mode, or no active unit: groupTier is a uniform 0 for
-//    everyone (groupLineRange returns null), so ordering is unaffected — the
-//    existing prio/size sort, exactly as before this feature.
+// Scoping by the reviewer's current selection, from finest to coarsest
+// granularity — 'call'/'line'/'group' now all HIDE a child outright that
+// falls outside the active unit, per groupTierForLine's rule above:
+//  - 'call'/'line': only children whose site sits under the active call/line
+//    remain (see callScopeMethods for method-call children; a relation/covers
+//    child has no site *within* that fine a unit at all, so it drops out
+//    entirely — "onderliggende code van die line/call", not the whole
+//    block's).
+//  - 'group': a child whose site (childrenOf's line / a `covers` row's
+//    testcovers.Entry.Line) falls inside the selected group's line range is
+//    kept (groupTier 0); one that falls OUTSIDE it is now HIDDEN too
+//    (groupTier 1, filtered below) — no longer merely sorted last. THREE
+//    deliberate exemptions, all following from groupTierForLine's "no
+//    information ⇒ don't hide" rule:
+//      1. a block-level synthetic callKey (resource:/migration_model:/
+//         data_provider:/trait_usage:, see isBlockLevelCallKey) has no site to
+//         compare at all — always kept, exactly as at line/call.
+//      2. `covered_by` (the covering test — direction 2, see
+//         coveredByChildren) never carries a site of its own: the annotation
+//         lives in the TEST's file, not b's. Reindert chose explicitly to
+//         keep it exempt (always shown, regardless of the selected group) —
+//         a hard filter here would make "covered by TestX::testY" disappear
+//         almost every time the reviewer is in diff mode (group is the
+//         default granularity), which is too much loss for too little gain.
+//      3. a relation/covers child with no recorded line at all (see
+//         groupTierForLine's own doc comment) — kept, never treated as "line
+//         0 is out of range".
+//    `translation:` children are NOT exempt — that callKey couples to a real
+//    string-literal site (see isBlockLevelCallKey's own doc comment), so it
+//    stays properly, hard-scoped to the line it's actually used on, like an
+//    ordinary method call.
+//  - No active unit (list mode, or gran isn't 'group'/'line'/'call'): nothing
+//    is filtered — groupLineRange/callScopeMethods return null, so
+//    groupTierForLine's own `!range` guard keeps everyone at tier 0.
+// Comment threads (InlineComments/commentUnder, RelatedPanel.mjs) already hard
+// -filter by row range at every granularity, including 'group' — they needed
+// no change for this.
 // codeSize counts the non-blank lines of a child's source — a rough "how much
 // code changed here" measure used to order same-priority children in the
 // Onderliggende-code panel (substantial methods above one-line accessors).
@@ -2495,8 +2539,8 @@ function codeSize(code) {
 }
 
 function relatedChildren(b) {
-  // Both the hide (line/call) and the reorder (group) scoping only apply to
-  // whichever column currently owns the keyboard — the top-level selected
+  // The hide-scoping at every granularity (line/call/group alike) only applies
+  // to whichever column currently owns the keyboard — the top-level selected
   // block OR the focused drilled column, using ITS OWN drillCursor entry
   // (focusedGranCursor) — never a block that isn't focused right now (see
   // callScopeMethods/groupLineRange, which resolve the same cursor).
@@ -2505,7 +2549,6 @@ function relatedChildren(b) {
     isFocusedCursor && state.mode === 'diff' && (focusedGranCursor().gran === 'call' || focusedGranCursor().gran === 'line')
   const rows = blockRows(b)
   const range = isFocusedCursor ? groupLineRange(b, rows) : null
-  const inRange = (line) => range != null && line != null && line >= range.startLine && line <= range.endLine
   const evt = scoped
     ? []
     : childrenOf(b).map(({ block: kid, kind, line: siteLine }) => {
@@ -2545,7 +2588,7 @@ function relatedChildren(b) {
           // a relation child is by definition a real PR block, so its own
           // subtree can be rolled up exactly like a top-level row's.
           commentActivity: commentActivitySummary(commentScopeKeys(kid)),
-          groupTier: range ? (inRange(siteLine) ? 0 : 1) : 0,
+          groupTier: groupTierForLine(range, siteLine),
           nested,
           nestedSig: nestedSigOf(nested),
         }
@@ -2558,22 +2601,27 @@ function relatedChildren(b) {
   // listeners: b → the method(s) it covers (if b is a test), and the test(s)
   // that cover b (if b is a production method).
   const covers = scoped ? [] : resolvedTestCoverChildren(b, range)
-  const coveredBy = scoped ? [] : coveredByChildren(b, range)
-  // Sort by groupTier first (see the scoping doc above — a no-op 0 for
-  // everyone outside 'group' diff-mode), then priority (0 = also-changed
-  // child block, 1 = call on a changed line, 2 = unchanged call), then —
-  // within a priority — biggest child first, so the substantial modified code
-  // the reviewer cares about leads while trivial one-liners (e.g. Eloquent
-  // relation accessors, which are also `added` PR blocks and thus tie at prio
-  // 0) drop below it. `size` is the child's line count (embedded childCode
-  // for calls, loaded code for listeners); a child whose code hasn't arrived
-  // yet is size 0 and sinks until it loads. Ties keep the resolver-emit
-  // (source) order (Array.prototype.sort is stable).
-  const sorted = evt
+  const coveredBy = scoped ? [] : coveredByChildren(b)
+  // Sort by groupTier first (see the scoping doc above), then priority
+  // (0 = also-changed child block, 1 = call on a changed line, 2 = unchanged
+  // call), then — within a priority — biggest child first, so the substantial
+  // modified code the reviewer cares about leads while trivial one-liners
+  // (e.g. Eloquent relation accessors, which are also `added` PR blocks and
+  // thus tie at prio 0) drop below it. `size` is the child's line count
+  // (embedded childCode for calls, loaded code for listeners); a child whose
+  // code hasn't arrived yet is size 0 and sinks until it loads. Ties keep the
+  // resolver-emit (source) order (Array.prototype.sort is stable).
+  let sorted = evt
     .concat(covers)
     .concat(coveredBy)
     .concat(calls)
     .sort((x, y) => (x.groupTier || 0) - (y.groupTier || 0) || x.prio - y.prio || y.size - x.size)
+  // 'group'-diff-mode HARD FILTER: drop anything groupTierForLine scored as
+  // out-of-range (see relatedChildren's own scoping doc above). Only applies
+  // while `range` is actually active — outside that (list mode, or a
+  // non-'group' granularity, where the call/line hiding above already ran)
+  // every groupTier is a no-op 0, so this filter is itself a no-op there.
+  if (range) sorted = sorted.filter((c) => (c.groupTier || 0) === 0)
   return groupTestChildren(b, sorted)
 }
 
@@ -2615,27 +2663,25 @@ function groupTestChildren(b, sorted) {
 
 // resolvedCallChildren maps the caller block's resolved/found call rows to child
 // descriptors for the Onderliggende-code panel — tagged with an ordering
-// priority, and scoped to the reviewer's current selection: HIDDEN outright at
-// 'line'/'call' (only the calls under the active line/call segment remain —
-// see callScopeMethods), REORDERED (not hidden) at 'group' — an in-scope call
-// sorts first (groupTier 0 via relatedChildren's sort), the rest keep their
-// existing prio-based order below it (groupTier 1). `source` names the LLM
-// model when it was resolved by one (status found); Go-resolved rows leave it
-// empty.
+// priority, and HIDDEN outright at every diff granularity ('call'/'line'/
+// 'group' alike, see callScopeMethods) whose active unit doesn't cover the
+// call's own site — `groupTier` below is now purely cosmetic tie-breaking for
+// the (already-filtered) survivors, not a hide/show decision. `source` names
+// the LLM model when it was resolved by one (status found); Go-resolved rows
+// leave it empty.
 function resolvedCallChildren(b) {
   if (!b) return []
   const resolved = callRows(b).filter((r) => r.status === 'resolved' || r.status === 'found')
   if (resolved.length === 0) return []
   const rows = blockRows(b)
   const scope = callScopeMethods(b, rows)
-  // callScopeMethods scopes at every diff granularity (group/line/call) — only
-  // hide outright at line/call; at group, keep everything and let groupTier
-  // (below) reorder instead. Reads the FOCUSED cursor's own gran (top-level or
-  // a drilled column's drillCursor entry, see focusedGranCursor) rather than
-  // always state.gran — scope is only ever non-null when b === focusedBlock()
-  // anyway (callScopeMethods' own guard), so this only matters in exactly the
-  // case where it needs to.
-  const hideOutOfScope = state.mode === 'diff' && focusedGranCursor().gran !== 'group'
+  // callScopeMethods scopes at every diff granularity (group/line/call) — see
+  // its own doc comment. scope is only ever non-null when b === focusedBlock()
+  // and a unit resolves (callScopeMethods' own guards), so hideOutOfScope is
+  // effectively "was a scope actually computed" — kept as its own named flag
+  // for readability at the two call sites below, not because it can now ever
+  // differ from `state.mode === 'diff'`.
+  const hideOutOfScope = state.mode === 'diff'
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
   const changed = new Set(changedRows(rows))
   return resolved
@@ -2728,10 +2774,10 @@ function resolvedCallChildren(b) {
         // 1 = the call sits on a changed line, 2 = an unchanged call. Drives the
         // panel ordering (see relatedChildren).
         prio: prBlock ? 0 : onChangedLine ? 1 : 2,
-        // 0 = this call's site sits inside the reviewer's selected group (see
-        // relatedChildren's sort); a no-op 0 outside group-diff-mode (scope is
-        // null in list mode, or the filter above already dropped anything out
-        // of scope at line/call).
+        // Purely cosmetic tie-breaking at this point — the `.filter` above
+        // already dropped any out-of-scope call at every granularity, so a
+        // surviving row here is always tier 0 (scope.has(r.callKey) is true
+        // whenever hideOutOfScope actually applied).
         groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
         nested,
         nestedSig: nestedSigOf(nested),
@@ -2743,31 +2789,27 @@ function resolvedCallChildren(b) {
 // (src/callArrows.mjs): one flowing arrow per *changed* method_call child (its
 // definition is itself a PR block — an unchanged "Ongewijzigd" target never
 // gets one). Scope mirrors the panel's own VISIBILITY exactly
-// (resolvedCallChildren's hideOutOfScope), not callScopeMethods' raw unit-range
-// check for every granularity: at 'call'/'line' the panel HIDES an
-// out-of-active-unit child outright, so the arrow only draws for the one
-// segment/row under the cursor. At 'group' the panel does NOT hide anything —
-// every changed-target call stays visible, just reordered (groupTier) — so an
-// arrow must reach every one of them, not only the ones inside the active
-// group: prefer a site inside the active unit (keeps the arrow anchored near
-// the cursor when possible), falling back to the child's first known call
-// site anywhere in the block so an out-of-group (groupTier-1) card that the
-// panel still shows gets an arrow too. One pair per child, diff mode only,
-// for whichever column currently owns the keyboard — the top-level selected
-// block (focusLevel 0) OR the focused drilled column (focusLevel > 0, using
-// ITS OWN state.drillCursor[level-1] cursor, not the top-level state.gran/
-// change) — mirroring approveContext()'s own top-level/drilled split. Every
-// drilled column is a full navigable diff with its own cursor (see
-// "Kolom-navigatie" in detail-layout.md), so there's no reason for the arrow
-// to go dark just because the reviewer drilled in; callArrows.mjs' DOM lookup
-// (main.querySelector('[data-pane="new"]')/panel.querySelector('[data-child-
-// id]')) already resolves to whichever column is focused — a non-focused
-// column (top-level or drilled) always collapses to a railless rail with no
-// [data-pane] — so no change is needed there. Called from the setRelated
-// watch CALLBACK (untracked) — never from a render binding, so it can't
-// co-subscribe on b.code with the diff render (conventions.md); b is always
-// focusedBlock() (the watch's own `b`), so the guard below is a defensive
-// self-check, not a new dependency.
+// (resolvedCallChildren's hideOutOfScope) at EVERY granularity, including
+// 'group' — the panel now hides an out-of-active-unit call child there too
+// (see relatedChildren's own scoping doc), so the arrow must do the same: no
+// fallback to "the child's first known call site anywhere in the block" for a
+// group whose actual call site sits elsewhere — a card the panel no longer
+// shows must never still receive an arrow. One pair per child, diff mode
+// only, for whichever column currently owns the keyboard — the top-level
+// selected block (focusLevel 0) OR the focused drilled column (focusLevel > 0,
+// using ITS OWN state.drillCursor[level-1] cursor, not the top-level
+// state.gran/change) — mirroring approveContext()'s own top-level/drilled
+// split. Every drilled column is a full navigable diff with its own cursor
+// (see "Kolom-navigatie" in detail-layout.md), so there's no reason for the
+// arrow to go dark just because the reviewer drilled in; callArrows.mjs' DOM
+// lookup (main.querySelector('[data-pane="new"]')/panel.querySelector('[data-
+// child-id]')) already resolves to whichever column is focused — a
+// non-focused column (top-level or drilled) always collapses to a railless
+// rail with no [data-pane] — so no change is needed there. Called from the
+// setRelated watch CALLBACK (untracked) — never from a render binding, so it
+// can't co-subscribe on b.code with the diff render (conventions.md); b is
+// always focusedBlock() (the watch's own `b`), so the guard below is a
+// defensive self-check, not a new dependency.
 function callArrowPairs(b) {
   if (!b || state.mode !== 'diff' || b !== focusedBlock()) return []
   const level = state.focusLevel
@@ -2784,9 +2826,7 @@ function callArrowPairs(b) {
     const site =
       cur.gran === 'call'
         ? sites.find((s) => s.row === unit.start && s.segStart === unit.segStart)
-        : cur.gran === 'group'
-          ? sites.find((s) => s.row >= unit.start && s.row <= unit.end) || sites[0]
-          : sites.find((s) => s.row >= unit.start && s.row <= unit.end)
+        : sites.find((s) => s.row >= unit.start && s.row <= unit.end)
     if (!site) continue
     // childId matches relatedCard's data-child-id (the caller-scoped panel
     // descriptor id, see resolvedCallChildren).
@@ -2832,12 +2872,13 @@ function coveredChildId(r) {
 // the covering test. Its code + descriptor ride along in the testcovers row
 // (unchanged file → no /api/code fetch), mirroring resolvedCallChildren.
 // range (relatedChildren's groupLineRange result, or null outside group-diff
-// mode) scores each row's groupTier: r.line is the absolute line — within b's
-// own test file — the annotation sits on (testcovers.Entry.Line, only ever
-// set on a Go-resolved row, see modules/testcovers/testcovers.go); an
-// LLM-`found` row that escalated from a class-level-only annotation never
-// carries a Line, so it falls through to groupTier 1 like anything else with
-// no site to compare.
+// mode) scores each row's groupTier via groupTierForLine: r.line is the
+// absolute line — within b's own test file — the annotation sits on
+// (testcovers.Entry.Line, only ever set on a Go-resolved row, see
+// modules/testcovers/testcovers.go); an LLM-`found` row that escalated from a
+// class-level-only annotation never carries a Line, so — per
+// groupTierForLine's "no information ⇒ don't hide" rule — it's exempt from
+// group scoping (always tier 0) rather than filtered out.
 function resolvedTestCoverChildren(b, range) {
   if (!b) return []
   const resolved = testCoverRows(b).filter((r) => r.status === 'resolved' || r.status === 'found')
@@ -2872,7 +2913,7 @@ function resolvedTestCoverChildren(b, range) {
       // call is (the annotation covers the whole test), so there's no
       // "on a changed line" middle tier — just changed-in-this-PR (0) or not (2).
       prio: prBlock ? 0 : 2,
-      groupTier: range && r.line ? (r.line >= range.startLine && r.line <= range.endLine ? 0 : 1) : 0,
+      groupTier: groupTierForLine(range, r.line),
       nested,
       nestedSig: nestedSigOf(nested),
     }
@@ -2885,12 +2926,15 @@ function resolvedTestCoverChildren(b, range) {
 // PR block (guaranteed: a test_covers row only exists for a test the PR
 // changed). Always prio 0 — the test is by definition a changed block.
 // The annotation lives in the *test's* own file, never in b's, so there is no
-// site within b to compare against range at all — a covered_by child always
-// sorts into the "not in scope" groupTier 1 at 'group' granularity, same as
-// any other child with nothing to anchor on. Its prio 0 still keeps it above
-// an unchanged (prio 2) call within that shared tier ("onderaan, maar boven
-// ongewijzigd" — see relatedChildren's scoping doc).
-function coveredByChildren(b, range) {
+// site within b to compare against a group's line range at all — per
+// groupTierForLine's "no information ⇒ don't hide" rule this would already be
+// exempt (groupTier 0) for lack of a `line`. It's made explicit here rather
+// than threading `range` through: Reindert chose deliberately to keep
+// "covered by TestX::testY" ALWAYS visible, regardless of which group is
+// selected — a hard filter here would make it disappear almost every time the
+// reviewer is in diff mode (since 'group' is the default granularity on
+// entering a diff), which is too much loss for too little gain.
+function coveredByChildren(b) {
   if (!b || !state.testCovers) return []
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
   const seen = new Set()
@@ -2927,10 +2971,10 @@ function coveredByChildren(b, range) {
       commentActivity: commentActivitySummary(commentScopeKeys(test)),
       diff: diffStat(blockRows(test)),
       prio: 0,
-      // No site within b to compare against range — always "not in scope" at
-      // 'group' granularity (a no-op 0 outside it, when range is null). See
-      // this function's doc comment.
-      groupTier: range ? 1 : 0,
+      // No site within b to compare against a group's line range at all —
+      // deliberately exempt from group scoping, always tier 0. See this
+      // function's own doc comment.
+      groupTier: 0,
       nested,
       nestedSig: nestedSigOf(nested),
     })

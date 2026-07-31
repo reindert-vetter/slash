@@ -31,6 +31,11 @@ test.describe('PR Review Tree — Onderliggende-code scoping in a focused drille
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // caller's diff
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    // The DEFAULT group (the unrelated $flag/$note pair, see call-arrows.spec.mjs)
+    // doesn't cover arrowHelper's call site, and 'group' now hides an
+    // out-of-scope child outright (see group-scope.spec.mjs) — step to the
+    // second group first.
+    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('ArrowRight') // → Onderliggende code
 
     const helperChild = page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]')

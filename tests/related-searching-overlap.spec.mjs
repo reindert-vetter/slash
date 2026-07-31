@@ -44,6 +44,11 @@ test('the "zoeken…" indicator does not overlap the top card\'s header badges',
   await page.goto('/pr/100')
   await leaveSearchBox(page)
   await page.keyboard.press('ArrowRight') // step into the diff
+  // The DEFAULT group (the unrelated $flag/$note pair, see call-arrows.spec.mjs)
+  // doesn't cover arrowHelper's call site, and 'group' now hides an
+  // out-of-scope Onderliggende-code child outright (see group-scope.spec.mjs)
+  // — step to the second group first.
+  await page.keyboard.press('ArrowDown')
 
   const helperChild = page.getByTestId('related-item').first()
   await expect(helperChild).toContainText('arrowHelper')
