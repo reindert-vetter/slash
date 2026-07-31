@@ -18,6 +18,7 @@ import (
 	"slash/modules/approvals"
 	"slash/modules/callresolve"
 	"slash/modules/claude"
+	"slash/modules/commentignore"
 	"slash/modules/comments"
 	"slash/modules/explanations"
 	"slash/modules/github"
@@ -46,6 +47,7 @@ type tasks struct {
 	explain       *explanations.Module
 	reviewerusage *reviewerusage.Module
 	tasksnooze    *tasksnooze.Module
+	commentignore *commentignore.Module
 	taskinbox     *taskinbox.Module
 }
 
@@ -166,6 +168,21 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ru.Close()
 		return nil, nil, err
 	}
+	ci, err := commentignore.Open(dataDir + "/commentignore.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		ts.Close()
+		return nil, nil, err
+	}
 	ti, err := taskinbox.Open(dataDir + "/taskinbox.db")
 	if err != nil {
 		sq.Close()
@@ -179,6 +196,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ex.Close()
 		ru.Close()
 		ts.Close()
+		ci.Close()
 		return nil, nil, err
 	}
 
@@ -229,6 +247,9 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// Same pattern for the task-inbox read-model: a nil store makes
 	// refreshTasks a no-op.
 	mgr.taskinbox = ti
+	// Same pattern for the ignore-comment read-model: a nil store makes
+	// saveCommentIgnore a no-op.
+	mgr.commentignore = ci
 	// Mirror every glue-level log line (poller/startup errors that are not a
 	// workflow run of their own) into the in-memory problem buffer behind
 	// GET /api/problems — see run_errors.go.
@@ -276,9 +297,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = ru.Close()
 		_ = ts.Close()
 		_ = ti.Close()
+		_ = ci.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, tasksnooze: ts, taskinbox: ti}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, tasksnooze: ts, taskinbox: ti, commentignore: ci}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -552,6 +574,13 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/approvals?pr=N → read-only approval read-model (per block: the
 	// approved changed rows + call segments) for refresh-restore.
 	mux.HandleFunc("/api/approvals", s.handleApprovals)
+	// POST /api/workflows/ignore_comment {pr} → ensure the per-PR
+	// ignore-comment tracker; the UI then signals ignore/un-ignore to its Run
+	// ID via .../signals/ignore.
+	mux.HandleFunc("/api/workflows/ignore_comment", s.handleIgnoreCommentStart)
+	// GET /api/commentignores?pr=N → read-only ignore-comment read-model (which
+	// PR-wide comments are hidden from the block index) for refresh-restore.
+	mux.HandleFunc("/api/commentignores", s.handleCommentIgnores)
 	// POST /api/workflows/task_snooze {repo?} → ensure the per-repo task-snooze
 	// tracker; the UI then signals snooze/un-snooze to its Run ID via
 	// .../signals/snooze.
@@ -682,7 +711,7 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" || rest == "task_inbox" || rest == "cleanup" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" {
 		http.NotFound(w, r)
 		return
 	}
@@ -772,6 +801,22 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "snoozed"})
+			return
+		}
+		// The ignore signal carries one comment id + the desired flag to the
+		// per-PR ignore-comment tracker — the UI write path for hiding/showing
+		// a PR-wide comment in the block index.
+		if parts[2] == SignalIgnore {
+			var body IgnoreCommentSignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.CommentID == "" {
+				http.Error(w, "invalid ignore", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalIgnore, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
 			return
 		}
 		// The delete signal carries no comment body — it just asks the workflow
@@ -1098,6 +1143,57 @@ func (s *server) handleApprovals(w http.ResponseWriter, r *http.Request) {
 		list = []approvals.Approval{}
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// handleIgnoreCommentStart starts (or reuses) the per-PR ignore-comment tracker
+// and returns its Run ID. Starting an Execution is the sanctioned UI write path;
+// the UI then signals ignore/un-ignore to this Run ID via .../signals/ignore.
+// Mirrors handleApproveStart.
+func (s *server) handleIgnoreCommentStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		PR int `json:"pr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 {
+		http.Error(w, "invalid pr", http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.EnsureIgnoreComment(in.PR)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleCommentIgnores serves GET /api/commentignores?pr=N — the read-only
+// ignore-comment read-model (the ids of the PR-wide comments hidden from the
+// block index) the UI restores on load.
+func (s *server) handleCommentIgnores(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr := 0
+	if v := r.URL.Query().Get("pr"); v != "" {
+		pr, _ = strconv.Atoi(v)
+	}
+	if pr <= 0 {
+		http.Error(w, "missing pr", http.StatusBadRequest)
+		return
+	}
+	list, err := s.tasks.commentignore.List(r.Context(), pr)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": list})
 }
 
 // handleTaskSnoozeStart starts (or reuses) the per-repo task-snooze tracker and

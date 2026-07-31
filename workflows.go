@@ -17,6 +17,7 @@ import (
 	"slash/modules/approvals"
 	"slash/modules/callresolve"
 	"slash/modules/claude"
+	"slash/modules/commentignore"
 	"slash/modules/comments"
 	"slash/modules/explanations"
 	"slash/modules/github"
@@ -118,6 +119,15 @@ const (
 	// a long-lived per-repo tracker. Task-level successor of the removed
 	// per-PR ignore feature.
 	WorkflowTaskSnooze = "task_snooze"
+	// WorkflowIgnoreComment is the Workflow Type that persists which PR-wide
+	// comments the reviewer chose to ignore (hide from the block index): one
+	// Execution per PR, mirroring WorkflowApprove. Each "ignore" Signal carries
+	// one comment id + the desired flag, which one Activity writes into the
+	// commentignore read-model. It never completes — a long-lived per-PR
+	// tracker. Per PR rather than per repo (unlike task_snooze) so the cleanup
+	// workflow's Purge(ctx, pr) sweep picks these rows up for free; see the
+	// package doc of modules/commentignore.
+	WorkflowIgnoreComment = "ignore_comment"
 	// WorkflowTaskInbox is the Workflow Type that owns the task inbox: one
 	// Execution per repo, mirroring WorkflowPRInbox exactly. Each "refresh"
 	// Signal drives an Activity that aggregates the three task sources (PR
@@ -157,6 +167,9 @@ const (
 	// workflow (from the UI, on "snooze" / un-snooze). It carries an absolute
 	// expiry timestamp the UI computed, so the workflow body needs no clock.
 	SignalSnooze = "snooze"
+	// SignalIgnore delivers one comment's ignored state to the ignore_comment
+	// tracker (from the UI, on the "Ignore"/"Ignore ongedaan maken" action).
+	SignalIgnore = "ignore"
 
 	// pollInterval is the fast cadence the GitHub poller uses while the reviewer
 	// is actively viewing the thread (a heartbeat arrived within heartbeatWindow).
@@ -350,6 +363,21 @@ type SnoozeSignal struct {
 	Clear  bool   `json:"clear"`
 }
 
+// IgnoreCommentInput starts an ignore_comment Execution — one tracker per PR.
+type IgnoreCommentInput struct {
+	PR int `json:"pr"`
+}
+
+// IgnoreCommentSignal carries one comment's ignored state into the
+// ignore_comment tracker (delivered under SignalIgnore). Ignored = false
+// un-ignores it again. Deliberately a plain flag with no expiry: "ignored"
+// belongs with "resolved"/"approved" (reviewer decisions that never lapse),
+// not with SnoozeSignal's temporary Until.
+type IgnoreCommentSignal struct {
+	CommentID string `json:"commentId"`
+	Ignored   bool   `json:"ignored"`
+}
+
 // ResolveCallInput starts a resolve_call Execution: it asks the LLM to resolve
 // the given (Go-unresolved) call keys made by one caller block.
 type ResolveCallInput struct {
@@ -475,14 +503,20 @@ type TaskManager struct {
 	// avoid churning every existing test call site; a nil store makes
 	// refreshTasks a no-op, like the other module-guarded activities.
 	taskinbox *taskinbox.Module
-	claude    claude.Client
-	jira      jira.Client
-	db        *sql.DB
-	dataDir   string
-	repo      string
-	interval  time.Duration // fast cadence (reviewer active)
-	idle      time.Duration // slow cadence + PR-state check (reviewer idle)
-	logf      func(string, ...any)
+	// commentignore records which PR-wide comments are hidden from the block
+	// index. Set post-construction in newTasks (like reviewerusage/taskinbox)
+	// rather than as a NewTaskManager param, to avoid churning every existing
+	// test call site; a nil store makes saveCommentIgnore a no-op, like the
+	// other module-guarded activities.
+	commentignore *commentignore.Module
+	claude        claude.Client
+	jira          jira.Client
+	db            *sql.DB
+	dataDir       string
+	repo          string
+	interval      time.Duration // fast cadence (reviewer active)
+	idle          time.Duration // slow cadence + PR-state check (reviewer idle)
+	logf          func(string, ...any)
 
 	// baseCtx is the server-lifetime context background pollers spawned outside
 	// a request (e.g. ensurePRStatus's fresh-poller spawn) run under — a
@@ -492,11 +526,12 @@ type TaskManager struct {
 	baseCtx      context.Context
 	runtimeReady bool
 
-	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + inboxRun + snoozeRun + taskInboxRun + importPolled
+	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + ignRuns + inboxRun + snoozeRun + taskInboxRun + importPolled
 	lastBeat     map[string]time.Time // code-comment/inbox Run ID → last heartbeat
 	prRuns       map[int]string       // PR → pr_status Run ID
 	relRuns      map[int]string       // PR → build_relations Run ID
 	apprRuns     map[int]string       // PR → approve Run ID
+	ignRuns      map[int]string       // PR → ignore_comment Run ID
 	inboxRun     string               // pr_inbox Run ID (one per repo/process)
 	snoozeRun    string               // task_snooze Run ID (one per repo/process)
 	taskInboxRun string               // task_inbox Run ID (one per repo/process)
@@ -517,7 +552,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	m := &TaskManager{
 		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, tasksnooze: ts, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
-		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{},
+		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{}, ignRuns: map[int]string{},
 		importPolled: map[string]bool{},
 		avatarTried:  map[string]bool{},
 		logf:         log.Printf,
@@ -1364,6 +1399,24 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.tasksnooze.Set(ctx, arg.TaskID, arg.Until)
 	})
 
+	// Activity: store one comment's ignored state (write, workflow-driven —
+	// the commentignore module is the only writer of that read-model). Set is
+	// idempotent in both directions, so a replay is safe.
+	engine.RegisterActivity("saveCommentIgnore", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR        int    `json:"pr"`
+			CommentID string `json:"commentId"`
+			Ignored   bool   `json:"ignored"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.commentignore == nil {
+			return nil, nil
+		}
+		return nil, m.commentignore.Set(ctx, arg.PR, arg.CommentID, arg.Ignored)
+	})
+
 	// Activity: mark/unmark a file's GitHub "Viewed" checkbox (write,
 	// workflow-driven — the only place that talks to GitHub for this).
 	engine.RegisterActivity("setFileViewed", func(ctx context.Context, in []byte) ([]byte, error) {
@@ -1565,6 +1618,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			engine: m.engine, db: m.db, dataDir: m.dataDir,
 			comments: m.comments, approvals: m.approvals, relations: m.relations,
 			callresolve: m.callresolve, testcovers: m.testcovers, prmeta: m.prmeta, explain: m.explain,
+			commentignore: m.commentignore,
 		}
 		res, err := purgePR(ctx, deps, t.PR)
 		if err != nil {
@@ -1596,6 +1650,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowReadyForReview, readyForReviewWorkflow)
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
 	engine.RegisterWorkflow(WorkflowTaskSnooze, taskSnoozeWorkflow)
+	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowTaskInbox, taskInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
 
@@ -2132,6 +2187,31 @@ func taskSnoozeWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}{TaskID: sig.TaskID, Until: until}
 		if err := w.ExecuteActivity("saveTaskSnooze", arg, nil); err != nil {
 			return nil, fmt.Errorf("save task snooze: %w", err)
+		}
+	}
+}
+
+// ignoreCommentWorkflow persists which PR-wide comments the reviewer hid from
+// the block index, for one PR. It is deterministic: the only side effect (the
+// read-model write) is an Activity, the number of Activities is exactly the
+// number of "ignore" Signals in the history, and nothing in the body reads a
+// clock or any live state. It never completes — a long-lived per-PR tracker,
+// mirroring approveWorkflow.
+func ignoreCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in IgnoreCommentInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	for {
+		var sig IgnoreCommentSignal
+		w.WaitSignal(SignalIgnore, &sig)
+		arg := struct {
+			PR        int    `json:"pr"`
+			CommentID string `json:"commentId"`
+			Ignored   bool   `json:"ignored"`
+		}{PR: in.PR, CommentID: sig.CommentID, Ignored: sig.Ignored}
+		if err := w.ExecuteActivity("saveCommentIgnore", arg, nil); err != nil {
+			return nil, fmt.Errorf("save comment ignore: %w", err)
 		}
 	}
 }
@@ -2936,6 +3016,55 @@ func (m *TaskManager) EnsureApprovals(pr int) (string, error) {
 	}
 	m.apprRuns[pr] = id
 	return id, nil
+}
+
+// EnsureIgnoreComment ensures an ignore_comment tracker exists for pr (starting
+// one if none is live) and returns its Run ID. The UI calls this on page load so
+// it has a Run ID to signal ignore/un-ignore to; the tracker is reused across
+// restarts (its waiting Execution is re-driven by engine.Recover). Starting/
+// reusing an Execution is the sanctioned UI write path. Mirrors EnsureApprovals.
+func (m *TaskManager) EnsureIgnoreComment(pr int) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if id, ok := m.ignRuns[pr]; ok {
+		return id, nil
+	}
+	if id := m.findIgnoreCommentLocked(pr); id != "" {
+		m.ignRuns[pr] = id
+		return id, nil
+	}
+	id, err := m.engine.StartWorkflow(WorkflowIgnoreComment, IgnoreCommentInput{PR: pr})
+	if err != nil {
+		return "", err
+	}
+	m.ignRuns[pr] = id
+	return id, nil
+}
+
+// findIgnoreCommentLocked scans for a running/waiting ignore_comment tracker for
+// pr. It reads only the engine, so it is safe to call while holding m.mu.
+func (m *TaskManager) findIgnoreCommentLocked(pr int) string {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowIgnoreComment {
+			continue
+		}
+		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var pin IgnoreCommentInput
+		if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
+			return r.ID
+		}
+	}
+	return ""
 }
 
 // findApproveLocked scans for a running/waiting approve tracker for pr. It reads

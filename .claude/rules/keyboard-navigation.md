@@ -198,10 +198,10 @@ present, only their order (and thus the default) changes → optionally
 comment" in `detail-layout.md` — never true at the same time as "own", so this
 never collides with the reordering above) →
 **"Ignore"** ("Ignore ongedaan maken" once already ignored —
-`toggleIgnoreComment`, an ephemeral, purely client-side sidebar-visibility
-flag, **not** a persisted Signal like reply/resolve/delete; see
-"Comment-index items" in `.claude/rules/detail-layout.md` for the full
-mechanism and the deliberate not-persisted trade-off). Because the detail
+`toggleIgnoreComment`, a durable sidebar-visibility flag written through the
+per-PR `ignore_comment` tracker's own Signal, just like reply/resolve/delete;
+see "Comment-index items" in `.claude/rules/detail-layout.md` for the full
+mechanism, including why it was ephemeral at first). Because the detail
 card already shows on selection (independent of Enter/→), the menu simply
 opens anchored on/below that card — "the thread shows above the menu" is a
 consequence of that anchoring (`menuAnchor`/`menuRegion`'s `'prComment'`

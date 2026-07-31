@@ -12,6 +12,7 @@ import (
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/approvals"
 	"slash/modules/callresolve"
+	"slash/modules/commentignore"
 	"slash/modules/comments"
 	"slash/modules/explanations"
 	"slash/modules/github"
@@ -151,6 +152,8 @@ type cleanupTestManager struct {
 	testcovers  *testcovers.Module
 	prmeta      *prmeta.Module
 	explain     *explanations.Module
+
+	commentignore *commentignore.Module
 }
 
 func newCleanupTestManager(t *testing.T) *cleanupTestManager {
@@ -199,6 +202,12 @@ func newCleanupTestManager(t *testing.T) *cleanupTestManager {
 	}
 	t.Cleanup(func() { ex.Close() })
 
+	ci, err := commentignore.Open(filepath.Join(dataDir, "commentignore.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ci.Close() })
+
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
 	mgr := NewTaskManager(engine, gh, cs, testInbox(t), rel, pm, cr, tc, ap, ex, nil, nil, nil, graphDB, dataDir, "test/repo")
@@ -206,6 +215,7 @@ func newCleanupTestManager(t *testing.T) *cleanupTestManager {
 	return &cleanupTestManager{
 		mgr: mgr, gh: gh, dataDir: dataDir, graphDB: graphDB,
 		comments: cs, approvals: ap, relations: rel, callresolve: cr, testcovers: tc, prmeta: pm, explain: ex,
+		commentignore: ci,
 	}
 }
 
@@ -258,6 +268,9 @@ func (ctm *cleanupTestManager) seedAllPRData(t *testing.T, pr int) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := ctm.commentignore.Set(ctx, pr, "comment-1", true); err != nil {
+		t.Fatal(err)
+	}
 
 	// One workflow run that belongs to this PR (approve tracker) ...
 	if _, err := ctm.mgr.engine.StartWorkflow(WorkflowApprove, struct {
@@ -288,6 +301,7 @@ func TestPurgePRRemovesEverything(t *testing.T) {
 		engine: ctm.mgr.engine, db: ctm.graphDB, dataDir: ctm.dataDir,
 		comments: ctm.comments, approvals: ctm.approvals, relations: ctm.relations,
 		callresolve: ctm.callresolve, testcovers: ctm.testcovers, prmeta: ctm.prmeta, explain: ctm.explain,
+		commentignore: ctm.commentignore,
 	}
 	res, err := purgePR(context.Background(), deps, pr)
 	if err != nil {
@@ -302,7 +316,7 @@ func TestPurgePRRemovesEverything(t *testing.T) {
 	if res.WorkflowRunsDeleted != 1 {
 		t.Fatalf("WorkflowRunsDeleted = %d, want 1", res.WorkflowRunsDeleted)
 	}
-	for _, table := range []string{"blocks", "comments", "approvals", "relations", "callresolve", "testcovers", "prmeta", "explanations"} {
+	for _, table := range []string{"blocks", "comments", "approvals", "relations", "callresolve", "testcovers", "prmeta", "explanations", "commentignore"} {
 		if n := res.RowsDeleted[table]; n < 1 {
 			t.Fatalf("RowsDeleted[%q] = %d, want >= 1", table, n)
 		}
@@ -333,6 +347,9 @@ func TestPurgePRRemovesEverything(t *testing.T) {
 	}
 	if exs, _ := ctm.explain.List(context.Background(), pr); len(exs) != 0 {
 		t.Fatalf("explanations after purge = %+v", exs)
+	}
+	if cis, _ := ctm.commentignore.List(context.Background(), pr); len(cis) != 0 {
+		t.Fatalf("commentignore after purge = %+v", cis)
 	}
 
 	// The PR-scoped run is gone ...

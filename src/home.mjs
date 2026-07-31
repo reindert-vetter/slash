@@ -357,11 +357,18 @@ const state = reactive({
   // in prCommentCommandsFor. Hidden by default from the "PR-comments" section,
   // revealed by their own "Toon N verborgen comments" toggle — a SEPARATE section
   // from the approved-blocks one above (a comment can be ignored without being
-  // resolved, and vice versa). Ephemeral, not bound to the URL: a refresh always
-  // starts with nothing ignored (see .claude/rules/detail-layout.md for the
-  // deliberate trade-off vs. a persisted flag). Reassigned wholesale so arrow.js
-  // re-renders.
+  // resolved, and vice versa). DURABLE, not ephemeral: restored on load by
+  // loadIgnoredComments and written through the ignore_comment workflow by
+  // toggleIgnoreComment (see .claude/rules/tembed-workflows.md). Not bound to
+  // the URL either way — it's a reviewer decision, not a navigation position.
+  // Reassigned wholesale so arrow.js re-renders.
   ignoredComments: {},
+  // ignoreRunId — the Run ID of this PR's `ignore_comment` workflow (the
+  // durable ignored-comments tracker), filled by loadIgnoredComments via
+  // POST /api/workflows/ignore_comment. Every Ignore toggle signals to it;
+  // empty (offline) makes persistIgnoredComment a no-op, so ignoring then
+  // degrades to the session-only behaviour this feature replaced.
+  ignoreRunId: '',
   // showIgnored — mirrors showApproved above, but for the ignoredComments section.
   showIgnored: false,
   ingesting: false,
@@ -1268,7 +1275,7 @@ async function loadBlocks() {
   // open with no sel at all — and only if nothing already moved the selection
   // in the meantime — land on the first not-yet-approved item instead
   // (applyDefaultUnapprovedSelection) — see its own doc comment below.
-  await Promise.all([loadApprovals(), loadBlockStats()])
+  await Promise.all([loadApprovals(), loadBlockStats(), loadIgnoredComments()])
   await Promise.resolve()
   await Promise.resolve()
   const curSelectedId = state.blocks[state.selected] ? state.blocks[state.selected].id : null
@@ -1348,6 +1355,59 @@ async function loadApprovals() {
   } catch (_) {
     /* offline — keep whatever we have */
   }
+}
+
+// loadIgnoredComments ensures the per-PR `ignore_comment` tracker is running
+// (its Run ID is what every Ignore toggle signals to) and restores which
+// PR-comment index items are hidden, from the read-model into
+// state.ignoredComments. Both steps are best-effort — offline, ignoreRunId
+// stays empty and ignoring stays session-only (the behaviour this feature
+// replaced). Mirrors loadApprovals exactly, including living outside every
+// render binding: it's called from loadBlocks, so the wholesale reassign below
+// can never race a watch that rewrites the same state (see the co-subscriber
+// pitfall in .claude/rules/conventions.md).
+//
+// The stored ids are raw comment ids; the 'comment:' prefix is the frontend's
+// own index-item id shape (commentBlockItem), so it is added here rather than
+// stored in the read-model.
+async function loadIgnoredComments() {
+  try {
+    const res = await fetch('/api/workflows/ignore_comment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr: state.pr }),
+    })
+    if (res.ok) {
+      const { runId } = await res.json()
+      if (runId) state.ignoreRunId = runId
+    }
+  } catch (_) {
+    /* offline — ignoring stays session-only */
+  }
+  try {
+    const res = await fetch(`/api/commentignores?pr=${state.pr}`)
+    if (!res.ok) return
+    const data = await res.json()
+    if (!data || !Array.isArray(data.ignored)) return
+    const next = {}
+    for (const id of data.ignored) next['comment:' + id] = true
+    state.ignoredComments = next
+  } catch (_) {
+    /* offline — keep whatever we have */
+  }
+}
+
+// persistIgnoredComment signals one comment's ignored state to the durable
+// ignore_comment tracker — the ONLY write path (the UI never writes a
+// read-model directly). A no-op until ignoreRunId is known (offline);
+// fire-and-forget, best-effort, mirroring persistApproval.
+function persistIgnoredComment(commentId, ignored) {
+  if (!commentId || !state.ignoreRunId) return
+  fetch(`/api/workflows/${state.ignoreRunId}/signals/ignore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commentId, ignored }),
+  }).catch(() => {})
 }
 
 // persistApproval signals a block's full approved state to the durable approve
@@ -4041,21 +4101,24 @@ function prCommentCommandsFor() {
 }
 
 // toggleIgnoreComment flips whether a PR-comment index item (kind:'comment')
-// is hidden from the "PR-comments" section — a SEPARATE, ephemeral flag from
-// "resolved" (which already folds a comment into the *approved* section, see
-// blockApproveCount/isFullyApproved's comment-item branch). Deliberately not
-// persisted (not bound to a workflow/Signal, unlike resolve/delete/reply) —
-// see the "Comment-index items" section in detail-layout.md for the
-// trade-off: a refresh always shows an ignored comment again. Reassigns
-// state.ignoredComments wholesale so arrow.js re-renders (never mutated in
-// place, per the arrow.js reactivity rule).
+// is hidden from the "PR-comments" section — a SEPARATE flag from "resolved"
+// (which already folds a comment into the *approved* section, see
+// blockApproveCount/isFullyApproved's comment-item branch). Durable, like
+// resolve/delete/reply: the local map is reassigned first so the row
+// disappears immediately (optimistic), and the decision is then written
+// through the ignore_comment tracker's Signal — the sanctioned write path.
+// Offline (no ignoreRunId) that Signal is a no-op and the toggle degrades to
+// session-only. Reassigns state.ignoredComments wholesale so arrow.js
+// re-renders (never mutated in place, per the arrow.js reactivity rule).
 function toggleIgnoreComment(c) {
   if (!c) return
   const id = 'comment:' + c.id
   const next = { ...state.ignoredComments }
-  if (next[id]) delete next[id]
-  else next[id] = true
+  const ignored = !next[id]
+  if (ignored) next[id] = true
+  else delete next[id]
   state.ignoredComments = next
+  persistIgnoredComment(c.id, ignored)
 }
 
 // COMPOSE_COMMANDS — shown when Enter (or the composer button) is pressed on a

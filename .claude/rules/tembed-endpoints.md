@@ -24,6 +24,7 @@ which the UI then signals. A **one-shot** type runs synchronously to completion
 | `/api/workflows/pr_status` | `{pr}` | tracker | Returns as soon as stage 1 (basics) is recorded — the summary/statuses drain in the background (`StartWorkflowDeferLow`). |
 | `/api/workflows/approve` | `{pr}` | tracker | Returns `runId`; the UI signals `set`. |
 | `/api/workflows/task_snooze` | — | tracker (per repo) | Returns `runId`; the UI signals `snooze`. |
+| `/api/workflows/ignore_comment` | `{pr}` | tracker (per PR) | Returns `runId`; the UI signals `ignore`. Per PR, not per repo, so `cleanup`'s `Purge` sweeps it. |
 | `/api/workflows/task_inbox` | — | tracker (per repo) | Only re-ensures when no Run ID exists yet (ensuring spawns a poller goroutine). |
 | `/api/workflows/resolve_call` | `{pr, callerId, callerFile, callerClass, callerName, calls}` | one-shot | Idempotent Run ID per request. |
 | `/api/workflows/resolve_test_covers` | `{pr, testId, testFile, testClass, testName, classes}` | one-shot | |
@@ -52,6 +53,7 @@ than as their own signal names.
 | `delete` | `{author?}` | `task_code_comment` | Handler builds a `ReactionSignal{Action:"delete"}` — i.e. it *is* the reply signal underneath. |
 | `set` | `ApprovalSignal{blockId, rows, calls}` | `approve` | `{file, viewed}` instead = GitHub "Viewed" checkbox (`Viewed != nil`). |
 | `snooze` | `{taskId, until}` or `{taskId, clear}` | `task_snooze` | `until` is an absolute ms expiry computed client-side (keeps the workflow clock-free). |
+| `ignore` | `{commentId, ignored}` | `ignore_comment` | A plain on/off flag — deliberately no expiry, unlike `snooze`. |
 | `refresh` | — | `pr_inbox` / `task_inbox` | |
 | `rebuild` | — | `build_relations` | |
 
@@ -88,6 +90,7 @@ Both are carve-outs from the write boundary because they touch nothing durable
 | `GET /api/pr?pr=N` | `prmeta` (title/url/body/author/diffstat/headRef/summary/jira*/reviewDecision/checks*/reviewers). `{ok:false}` until stage 1 ran; a field of a not-yet-run stage is at its zero value. |
 | `GET /api/tasks` | Task-inbox read model. |
 | `GET /api/tasksnoozes` | `{taskId, until}` — expiry is checked client-side, `List` does not filter. |
+| `GET /api/commentignores?pr=N` | `{ok, ignored}` — the ids of the PR-wide comments hidden from the block index. |
 | `GET /api/problems` | `{failedRuns, logErrors}` — failed runs (repo-wide) + mirrored glue log lines. |
 | `GET /api/me` | The authenticated GitHub user (`gh api user`, cached for the process lifetime). |
 | `GET /api/names?logins=a,b` | Login → real name + avatar. See `.claude/rules/pages-and-routing.md`. |

@@ -16,6 +16,7 @@ import (
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/approvals"
 	"slash/modules/callresolve"
+	"slash/modules/commentignore"
 	"slash/modules/comments"
 	"slash/modules/explanations"
 	"slash/modules/github"
@@ -260,6 +261,10 @@ type purgeDeps struct {
 	testcovers  *testcovers.Module
 	prmeta      *prmeta.Module
 	explain     *explanations.Module
+	// commentignore holds which PR-wide comments the reviewer hid from the
+	// block index — keyed per PR precisely so this sweep picks it up; see the
+	// package doc of modules/commentignore.
+	commentignore *commentignore.Module
 }
 
 // purgePR removes every trace of one PR's data: its worktrees, its workflow
@@ -342,6 +347,13 @@ func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, erro
 			return res, fmt.Errorf("purge explanations: %w", err)
 		}
 		res.RowsDeleted["explanations"] = int(n)
+	}
+	if d.commentignore != nil {
+		n, err := d.commentignore.Purge(ctx, pr)
+		if err != nil {
+			return res, fmt.Errorf("purge commentignore: %w", err)
+		}
+		res.RowsDeleted["commentignore"] = int(n)
 	}
 
 	log.Printf("cleanup pr %d: worktrees=%d workflow_runs=%d rows=%v",

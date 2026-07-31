@@ -416,12 +416,20 @@ bound can catch — only re-anchoring can. Same reasoning applies to
   **"Ignore"** (`toggleIgnoreComment`, label a function that flips to "Ignore
   ongedaan maken" once already ignored — resolved once by `snapshotCommands`
   at open time, same pattern as the approve label) is a **separate,
-  ephemeral, purely client-side** flag (`state.ignoredComments`, a plain
-  `{blockId: true}` map, mirrors `state.showApproved`/`pinnedApprovedId`/
-  `toggleFocused` — deliberately **not bound to a workflow/Signal**, unlike
-  reply/resolve/delete: the ask was a sidebar grouping/toggle, not a
-  persisted reviewer decision, so a refresh always starts with nothing
-  ignored). It's independent of "resolved" — a comment can be ignored
+  **durable** flag (`state.ignoredComments`, a plain `{blockId: true}` map),
+  bound — like reply/resolve/delete — to its own workflow Signal: the map is
+  reassigned locally first so the row disappears instantly (optimistic), and
+  `persistIgnoredComment` then fire-and-forgets the decision to the per-PR
+  `ignore_comment` tracker, which `loadIgnoredComments` restores from
+  `GET /api/commentignores?pr=N` on the next load (see "Ignoring a PR-wide
+  comment" in `.claude/rules/tembed-workflows.md`). **This was deliberately
+  NOT persisted at first** — the original ask read as a sidebar
+  grouping/toggle rather than a reviewer decision, so a refresh always
+  started with nothing ignored; that turned out to be the wrong call in
+  practice (an ignored comment came straight back on every refresh) and was
+  reversed. Offline (no `state.ignoreRunId`, e.g. a failed ensure) the Signal
+  is a no-op and the toggle silently degrades to exactly that earlier
+  session-only behaviour. It's independent of "resolved" — a comment can be ignored
   without being resolved and vice versa; being ignored **only affects
   sidebar visibility**, not the `blockApproveCount`/`isFullyApproved`
   approval mapping described above. `BlockList.mjs`'s `renderList` hides an
