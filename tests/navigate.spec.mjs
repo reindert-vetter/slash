@@ -193,7 +193,12 @@ test.describe('PR Review Tree — change navigation', () => {
     // not the diff, so it needs no ingested blocks. The first comment carries a
     // code snippet so we can assert the thread shows it (like the composer
     // preview) — a comment without code shows no hint.
-    const pr = 970010
+    // Own number (970013), not 970010: that one is comment-author-avatar.spec.mjs's
+    // own sequential 970009/970010/970011 slot, and this test's exact
+    // toHaveCount(2) below depended on scheduling order whenever both specs
+    // landed on the same worker (see the APPROVAL_RESET_PRS note in
+    // _fixtures.mjs / "Playwright test infra" in conventions.md).
+    const pr = 970013
     const seeds = [
       {
         body: 'first review comment',
