@@ -102,4 +102,40 @@ test.describe('PR Review Tree — bracket-only row auto-approve sweep', () => {
     expect(results.stopsAtUnchangedGap).toEqual([0])
     expect(results.emptyTarget).toEqual([])
   })
+
+  test('sweepBracketOnlyForward also chains through a blank changed row, mixed with bracket-only rows, and stops at real content', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await page.waitForLoadState('networkidle')
+    const results = await evaluateSettled(page, async () => {
+      const { sweepBracketOnlyForward } = await import('/src/Block.mjs')
+      const changed = (right) => ({ left: null, right, leftMark: null, rightMark: 'ins' })
+      const unchanged = (text) => ({ left: text, right: text, leftMark: null, rightMark: null })
+
+      // Row 0: real content just approved. Row 1: a blank added line right
+      // after it (the reported case). Row 2: real content again — must NOT
+      // be swept in.
+      const blankOnly = [changed('$pageData[\'pageBlocks\'] = $page->pageBlocks;'), changed(''), changed('if ($reducePayload) {')]
+      const blankSwept = sweepBracketOnlyForward(blankOnly, [0])
+
+      // Mixed chain: blank line, then a bracket-only closer, then real
+      // content — both filler rows sweep, the chain stops at the real line.
+      const mixed = [changed('foo();'), changed('   '), changed('});'), changed('bar();')]
+      const mixedSwept = sweepBracketOnlyForward(mixed, [0])
+
+      // A blank row does NOT sweep across an unchanged (real) gap either —
+      // same rule as a bracket-only row.
+      const blankStopsAtGap = sweepBracketOnlyForward(
+        [changed('foo();'), unchanged(''), changed('')],
+        [0],
+      )
+
+      return { blankSwept, mixedSwept, blankStopsAtGap }
+    })
+
+    expect(results.blankSwept).toEqual([0, 1])
+    expect(results.mixedSwept).toEqual([0, 1, 2])
+    expect(results.blankStopsAtGap).toEqual([0])
+  })
 })

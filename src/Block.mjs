@@ -1996,22 +1996,61 @@ export function changedRows(rows) {
   return out
 }
 
+// isSweepableFillerRow reports whether a changed row is "filler" that
+// sweepBracketOnlyForward may silently pull along after an approve action —
+// either bracket/punctuation-only (isBracketOnlyRow) OR a completely BLANK
+// changed row (rowChanged but !rowHasContent, e.g. a blank line the PR
+// inserted between two statements). Both share the same reasoning: there is
+// nothing on the row for the reviewer to actually judge, so requiring a
+// separate approve step for it is pure friction. Reported case (screenshot):
+// approving `$pageData['pageBlocks'] = ...;` left the blank `+` line right
+// below it without its own ✓, even though there's nothing to review on that
+// blank line either.
+//
+// This does NOT change what counts toward changedRows/the approve total — a
+// bracket-only row already counted before this row was added to the sweep,
+// and a blank row is EXCLUDED from changedRows by rowHasContent (see its own
+// doc comment) and stays excluded: blockApproved/approveSummary/the server-side
+// `total` (blockstats.go) only ever check membership of `changedRows(rows)` in
+// `b.approvedRows`, so an extra index that isn't in `changedRows` is simply
+// ignored by their `.every()`/`.filter()` calls — it can never make the
+// counter or the total run ahead. The ONLY visible effect of sweeping a blank
+// row is that its own left-margin checkmark appears (rowCellHTML's
+// `isApproved` is purely `changed && approved.has(i)`, it never re-checks
+// rowHasContent) — exactly the reported "it should look approved too".
+//
+// No Go port needed for this reason: blockstats.go's changedRowCount already
+// mirrors changedRows/rowHasContent for the TOTAL (and must keep doing so —
+// see its own doc comment), but the SWEEP itself only decides which specific
+// row indices end up in the client-only b.approvedRows array; it never
+// changes what the total counts or how the total is computed, so there is no
+// corresponding Go concept to keep in lockstep with (same reasoning
+// isBracketOnlyRow's own doc comment already gives).
+function isSweepableFillerRow(r) {
+  return isBracketOnlyRow(r) || (rowChanged(r) && !rowHasContent(r))
+}
+
 // sweepBracketOnlyForward extends a set of just-approved row indices with the
 // run of directly FOLLOWING (forward only — never backward, a deliberate
-// scope choice) changed rows whose content is nothing but closing punctuation
-// (isBracketOnlyRow): approving a line/group also approves the `});`/`},`/
-// etc. line(s) right after it, so the reviewer never has to approve those
-// separately. One-way: only meant to be applied on the ADD path of an
-// approve toggle (see toggleApprove in home.mjs) — retracting an approval
-// never un-approves an already-swept neighbor, so there is no shared-row
-// edge case (a bracket-only row sitting between two independently-approved
-// lines) to resolve. `target` must be non-empty; returns it unchanged
-// otherwise.
+// scope choice) changed rows that are pure filler (isSweepableFillerRow: a
+// bracket/punctuation-only row like `});`/`},`, OR a completely blank changed
+// row) — approving a line/group also approves the filler row(s) right after
+// it, so the reviewer never has to approve those separately. The chain may
+// freely MIX both kinds in any order (a blank line followed by a bracket-only
+// closer, or vice versa) — isSweepableFillerRow is checked per row, so a run
+// of consecutive filler rows of either kind is swept as one, and the chain
+// only stops at the first row that is either unchanged (a real gap) or
+// carries actual content to review. One-way: only meant to be applied on the
+// ADD path of an approve toggle (see toggleApprove in home.mjs) — retracting
+// an approval never un-approves an already-swept neighbor, so there is no
+// shared-row edge case (a filler row sitting between two independently-
+// approved lines) to resolve. `target` must be non-empty; returns it
+// unchanged otherwise.
 export function sweepBracketOnlyForward(rows, target) {
   if (!target.length) return target
   const set = new Set(target)
   const hi = Math.max(...target)
-  for (let j = hi + 1; j < rows.length && isBracketOnlyRow(rows[j]); j++) set.add(j)
+  for (let j = hi + 1; j < rows.length && isSweepableFillerRow(rows[j]); j++) set.add(j)
   return [...set].sort((a, b) => a - b)
 }
 

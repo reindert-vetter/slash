@@ -317,27 +317,55 @@ left as a navigable list.
   own countability/landability is suppressed, not its place in a broader
   group highlight (no visual jump in a group's diff highlighting). See also
   `changeLines`/`changeCalls` in `.claude/rules/keyboard-navigation.md`.
-- **Approving a line/group also sweeps in a directly-FOLLOWING bracket/
-  punctuation-only row — `isBracketOnlyRow`/`sweepBracketOnlyForward`
-  (`Block.mjs`), frontend-only, no Go port.** A changed row whose display
-  text (same side-selection as `rowHasContent`) is, after `trim()`, nothing
-  but `)` `}` `;` `,` `]` `{` (combinations count too, e.g. a lone `});`
-  closing a callback) still counts toward `changedRows`/the approve
-  `total` like any other row (that part is unchanged — this is NOT another
-  `rowHasContent`-style exclusion), but the reviewer no longer has to
-  approve it separately: `toggleApprove` (`home.mjs`, `gran==='group'`/
-  `'line'` only — **not** `'call'`, `toggleCallApprove` is untouched) sweeps
-  it into `b.approvedRows` automatically the moment the line/group right
-  before it gets approved. Deliberately **one-way and forward-only**: the
-  sweep only runs on the ADD path (`allIn` — whether this action approves
-  or retracts — is computed on the RAW, un-swept target first, so the sweep
-  itself can never flip that decision), never on retract, and only looks at
-  rows AFTER the approved unit, never before. That sidesteps the edge case
-  of a bracket-only row sitting between two independently-approved
-  neighbors (retracting one side would otherwise have to decide whether to
-  un-sweep a row the other side still relies on) — once swept in, a
-  bracket-only row simply stays approved regardless of what happens next to
-  a neighboring line.
+- **Approving a line/group also sweeps in a directly-FOLLOWING filler row —
+  bracket/punctuation-only OR completely blank — `isBracketOnlyRow`/
+  `isSweepableFillerRow`/`sweepBracketOnlyForward` (`Block.mjs`),
+  frontend-only, no Go port.** A changed row whose display text (same
+  side-selection as `rowHasContent`) is, after `trim()`, nothing but `)` `}`
+  `;` `,` `]` `{` (combinations count too, e.g. a lone `});` closing a
+  callback) still counts toward `changedRows`/the approve `total` like any
+  other row (that part is unchanged — this is NOT another
+  `rowHasContent`-style exclusion). A **completely blank** changed row (the
+  one `rowHasContent` DOES exclude from `changedRows`/the total, see above —
+  e.g. a blank line the PR inserted between two statements) sweeps along for
+  a different, purely cosmetic reason: reported — approving the line right
+  above such a blank `+` line left it visibly without its own ✓, which read
+  as "did that not get approved too?" even though there was nothing on it to
+  review either way. `isSweepableFillerRow` is the single predicate the sweep
+  loop checks (`isBracketOnlyRow(r) || (rowChanged(r) && !rowHasContent(r))`),
+  so the reviewer no longer has to separately act on either kind of filler
+  row: `toggleApprove` (`home.mjs`, `gran==='group'`/`'line'` only — **not**
+  `'call'`, `toggleCallApprove` is untouched) sweeps it into `b.approvedRows`
+  automatically the moment the line/group right before it gets approved.
+  **The chain freely mixes both kinds, in any order** (a blank line followed
+  by a bracket-only closer, or vice versa) — `isSweepableFillerRow` is
+  re-checked per row, so a run of consecutive filler rows of either kind
+  sweeps as one; the chain only stops at the first row that's either
+  unchanged (a real gap) or carries actual content. Deliberately **one-way
+  and forward-only**: the sweep only runs on the ADD path (`allIn` — whether
+  this action approves or retracts — is computed on the RAW, un-swept target
+  first, so the sweep itself can never flip that decision), never on
+  retract, and only looks at rows AFTER the approved unit, never before.
+  That sidesteps the edge case of a filler row sitting between two
+  independently-approved neighbors (retracting one side would otherwise have
+  to decide whether to un-sweep a row the other side still relies on) — once
+  swept in, a filler row simply stays approved regardless of what happens
+  next to a neighboring line.
+  **Why sweeping a blank row needs no Go port either, even though
+  `rowHasContent`/the `total` themselves DO have one (`blockstats.go`'s
+  `changedRowCount`, which must stay in lockstep — see its own section
+  above):** the sweep never changes what counts toward the total or how the
+  total is computed — it only decides which extra row indices land in the
+  client-only `b.approvedRows` array. `blockApproved`/`approveSummary`/the
+  server-side `total` all only ever check membership of `changedRows(rows)`
+  (which still excludes every blank row, unchanged) against
+  `b.approvedRows` — an index that isn't in `changedRows` is simply ignored
+  by their `.every()`/`.filter()` calls, so a swept-in blank row can never
+  make the counter or the total run ahead. The only visible effect is
+  `rowCellHTML`'s left-margin ✓ (`isApproved = changed && approved.has(i)`,
+  which never re-checks `rowHasContent`) now also lighting up on the blank
+  row — exactly the reported "it should look approved too", and still a
+  shape signal (the ✓ glyph), never colour-only.
 - **Sort order of the left list (`categoryRank` in `recomputeLeftList`,
   `home.mjs`):** the left list is not simply ingest/source order — it sorts by
   category priority: **ROUTE** first (the root of the
