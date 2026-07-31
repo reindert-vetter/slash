@@ -567,7 +567,18 @@ and the diff instead of replacing the diff card outright.
   before moving to a different top-level row — the tree-walk equivalent of
   the same flow-through), and landing on a different method automatically
   opens the column and selects it, exactly like "Ga door" already opens a
-  drilled column.
+  drilled column. **This "remaining methods" search runs regardless of
+  whether the reviewer ever stepped into the active method's diff** — it
+  used to be nested inside `findNextUnapproved`'s own `inDiff` gate (true
+  only once `state.mode==='diff'` or a column is drilled), which meant
+  approving a method straight from the list (no `→` at all — the ordinary
+  way to review a small, freshly ADDED test method) silently never looked at
+  its siblings, incorrectly reporting nothing left to approve even with
+  further methods sitting at `0/N` right below. See "`findNextUnapproved()`'s
+  'descend into children / walk sideways' steps run regardless of `inDiff`"
+  in `.claude/rules/keyboard-navigation.md` for the fix (which also covers
+  the analogous gap for an ordinary block's Onderliggende-code children) and
+  `tests/findnextunapproved-list-mode.spec.mjs`.
 - **Approve rollup — two DELIBERATELY different numbers, reconciled, not in
   conflict** (`blockApproveCount`/`subtreeApproveCount`, `home.mjs`): the
   class row's own **sidebar pill** (and the methodes-kolom's header pill)

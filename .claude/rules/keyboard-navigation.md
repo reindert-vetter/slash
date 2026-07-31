@@ -591,6 +591,44 @@ reject-reason flow, incl. the exact `POST /api/workflows/submit_review`
 payload) and the updated last test in `tests/postapprove-menu.spec.mjs`
 ("nothing left ahead, PR not fully approved").
 
+**`findNextUnapproved()`'s "descend into children / walk sideways" steps run
+regardless of `inDiff` — only step 1 (resuming a diff cursor) is genuinely
+diff-only.** `findNextUnapproved` (`home.mjs`) walks: 1. forward within the
+focused column's own diff cursor, 2. down into its Onderliggende-code
+children, 3. up through the drill stack's siblings, 3b. (top level only)
+the remaining methods of the current `test_class` row (see "Grouping test
+methods per class" in `detail-layout.md`), 4. across the rest of the
+sidebar. Steps 2/3/3b used to sit nested inside the same `if (focused &&
+inDiff)` gate as step 1 — but `inDiff` (`level > 0 || state.mode ===
+'diff'`) is **false** in plain list mode, exactly the state a reviewer is in
+when they select a block/test method and approve it via the palette
+**without ever pressing → into its diff** (the ordinary way to review a
+small, single-group change or a freshly ADDED test method). That silently
+skipped steps 2/3/3b whenever the approve action ran from the list, so
+`findNextUnapproved()` returned `null` despite clearly remaining unapproved
+content — reported symptom: "Keur de HELE PR goed / Wijs de PR af" offered
+while a sibling test method still showed `0/N`, or while a block's own
+resolved-call child (see "Resolving (also unchanged) called … methods" in
+`tembed-workflows.md`) — hidden from the flat sidebar entirely
+(`resolvedCallTargetIds`, only reachable via the Onderliggende-code walk,
+never via step 4's flat scan) — still had unapproved rows of its own. Only
+step 1 genuinely needs a diff cursor to resume from
+(`state.gran`/`state.change`, or a drilled column's own `drillCursor`): in
+list mode there is no cursor within the block to search forward from —
+approving "the whole block" from the list already covers every one of its
+own changed rows in one pass, so step 1 staying a no-op there is correct,
+not merely skipped. Steps 2/3/3b are about the currently selected block's
+own children/siblings, which can have unapproved rows whether or not the
+reviewer ever stepped into its diff, so they were moved out from under the
+`inDiff` gate — see `findNextUnapproved`'s own doc comment in `home.mjs` for
+the exact split. Because approving from the list also always skips the
+`postApprove` follow-up menu (`keepList`, see above), the fix is only
+observable as "no follow-up menu opens at all and the selection quietly
+lands on the next open item" — not as a different menu. Test:
+`tests/findnextunapproved-list-mode.spec.mjs` (both shapes: a test_class
+row's remaining methods, PR 110; an ordinary block's resolved-call child
+hidden from the sidebar, PR 112).
+
 The same menu mechanism also serves a **comment-scoped** variant: if the
 keyboard is on a placed comment row in `RelatedPanel` (`cs.focus === 'comment'`,
 before stepping into the thread) and the reply field is still **empty**,

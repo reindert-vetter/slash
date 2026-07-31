@@ -5681,6 +5681,8 @@ async function firstUnapprovedInSubtree(b, seen = new Set()) {
 //  3. Failing that (the focused column's whole subtree is exhausted), UP
 //     through the current drill stack's ancestors, trying each one's next
 //     not-yet-tried sibling child.
+//  3b. Failing that, and only at the top level, the REMAINING methods of the
+//     current test_class row (see testClassRowItem/recomputeLeftList).
 //  4. Failing that (the entire current top-level block's subtree is done, or
 //     we weren't even in its diff), ACROSS the rest of state.blocks in
 //     sidebar order — subtree-aware too (firstUnapprovedInSubtree), so a
@@ -5692,6 +5694,25 @@ async function firstUnapprovedInSubtree(b, seen = new Set()) {
 // top-level block itself) — or null once nothing not-yet-approved remains
 // ahead anywhere in the tree. Async because a not-yet-visited block's code
 // may still need fetching.
+//
+// Steps 2, 3 and 3b deliberately do NOT require `inDiff` (unlike step 1) —
+// this used to be a real bug: approving a whole block/test-method straight
+// from the "Start" list (never having pressed → into its diff at all — the
+// realistic way to review a freshly ADDED, single-shot test method) skipped
+// this entire function's "descend into Onderliggende code" / "walk the rest
+// of this test class's methods" logic, because all of it sat nested inside
+// one `if (focused && inDiff)` gate. The reviewer then landed on "Keur de
+// HELE PR goed / Wijs de PR af" (see openMenu below) while sibling methods
+// with 0/N approved rows sat right there in the same methods column — see
+// the "No more 'next'" section in keyboard-navigation.md. Only step 1
+// genuinely needs a diff cursor to resume from (state.gran/state.change, or
+// a drilled column's own drillCursor): in list mode there IS no cursor
+// within the block to search forward from — approving "the whole block"
+// from the list already covers every one of its own changed rows in one go,
+// so step 1 is correctly a no-op there, not merely skipped. Steps 2/3/3b are
+// about the currently selected block's own children/siblings, which exist
+// (and can be missing approval) whether or not the reviewer ever stepped
+// into its diff.
 async function findNextUnapproved() {
   const level = state.focusLevel
   const focused = level > 0 ? state.drill[level - 1] : curBlock()
@@ -5703,6 +5724,9 @@ async function findNextUnapproved() {
     if (change !== null) {
       return { root: state.selected, path: state.drill.slice(0, level), gran: cur.gran, change }
     }
+  }
+
+  if (focused) {
     for (const kid of orderedChildBlocks(focused)) {
       const found = await firstUnapprovedInSubtree(kid)
       if (found) {
@@ -5714,6 +5738,11 @@ async function findNextUnapproved() {
         }
       }
     }
+    // Only meaningful at level > 0 (a drilled column has ancestors to walk
+    // sideways through) — at level === 0 this loop is a no-op by construction
+    // (the `lvl > 0` condition never holds), so pulling it out of the
+    // `inDiff` gate above changes nothing for the list-mode case; a drilled
+    // column always implies inDiff anyway (level > 0 ⇒ inDiff).
     for (let lvl = level; lvl > 0; lvl--) {
       const parent = lvl > 1 ? state.drill[lvl - 2] : curBlock()
       const current = state.drill[lvl - 1]
@@ -5731,19 +5760,21 @@ async function findNextUnapproved() {
         }
       }
     }
-    // Continue through the REMAINING methods of the same test_class row (see
-    // testClassRowItem/recomputeLeftList) before falling through to a
-    // different top-level row below — decision: "doorlopen mag" (see
-    // keyboard-navigation.md). Only at the top level (level === 0): a
-    // drilled column can never itself be "inside" a class's methods column.
-    if (level === 0) {
-      const row = curTestClassRow()
-      if (row) {
-        for (let mi = state.classMethodSel + 1; mi < row.methods.length; mi++) {
-          const found = await firstUnapprovedInSubtree(row.methods[mi])
-          if (found) {
-            return { root: state.selected, methodIdx: mi, path: found.path, gran: found.gran, change: found.change }
-          }
+  }
+
+  // Continue through the REMAINING methods of the same test_class row (see
+  // testClassRowItem/recomputeLeftList) before falling through to a
+  // different top-level row below — decision: "doorlopen mag" (see
+  // keyboard-navigation.md). Only at the top level (level === 0): a
+  // drilled column can never itself be "inside" a class's methods column.
+  // Independent of `focused`/`inDiff` for the same reason as steps 2/3 above.
+  if (level === 0) {
+    const row = curTestClassRow()
+    if (row) {
+      for (let mi = state.classMethodSel + 1; mi < row.methods.length; mi++) {
+        const found = await firstUnapprovedInSubtree(row.methods[mi])
+        if (found) {
+          return { root: state.selected, methodIdx: mi, path: found.path, gran: found.gran, change: found.change }
         }
       }
     }
