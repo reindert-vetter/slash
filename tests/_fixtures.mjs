@@ -184,6 +184,25 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Line-summary per-line-anchoring fixture (PR 112,
+  // line-underlying-summary.spec.mjs): a caller whose one change-group spans
+  // two adjacent call lines, each resolving to a DIFFERENT changed PR block
+  // — proves the two calls get their own independent per-line badge instead
+  // of collapsing onto the group's first line. Worktrees materialized in
+  // _setup.mjs (materializeLineSummaryWorktrees).
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/linesummary-blocks.json',
+      '-callresolve',
+      'tests/fixtures/linesummary-callresolve.json',
+    ],
+    { stdio: 'ignore' },
+  )
   // Migration→model / model-usage fixture (PR 101, migration-model.spec.mjs): one
   // caller with two class-level callresolve children (kind model_usage and
   // migration_model) — both must render a bare model-name label ("ProductGroup",

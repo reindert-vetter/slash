@@ -1,0 +1,35 @@
+[
+  {
+    "pr": 112,
+    "file": "app/Actions/LineSummaryCallerAction.php",
+    "class": "LineSummaryCallerAction",
+    "name": "execute",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 112,
+    "file": "app/Services/LineSummaryFirstService.php",
+    "class": "LineSummaryFirstService",
+    "name": "lineSummaryFirst",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 10,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 112,
+    "file": "app/Services/LineSummarySecondService.php",
+    "class": "LineSummarySecondService",
+    "name": "lineSummarySecond",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  }
+]

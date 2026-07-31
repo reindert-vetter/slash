@@ -196,10 +196,8 @@ left as a navigable list.
   **Deliberately GRAN-INDEPENDENT** (unlike the Onderliggende-code panel's own
   `relatedChildren`, which hides/reorders by the current cursor): the badge
   is always visible for every visible diff card (top-level selected/preview,
-  or any drilled column), based purely on the block's own STRUCTURAL
-  change-groups (`changeGroups(rows)` — the same grouping `'group'`
-  navigation uses, just independent here of what's currently selected), not
-  on navigation state. `home.mjs`'s `lineChildSummaries(b)` builds a
+  or any drilled column), based purely on each child's own anchor row, not on
+  navigation state. `home.mjs`'s `lineChildSummaries(b)` builds a
   `Map<rowIndex, {approve, commentActivity}>`: it reuses `directChildBlocks`'s
   three row-attribution sources directly (a relation child's own `line`, a
   resolved method call's site via `findCallSites`, a resolved `covers`
@@ -208,16 +206,24 @@ left as a navigable list.
   block-level synthetic callKey like `resource:`/`migration_model:`/
   `data_provider:`) is simply skipped here, it still shows in the panel, just
   not pinned to one line; a `covered_by` child never qualifies either (its
-  annotation lives in the covering test's own file, not `b`'s). **If a call
-  site sits inside one of `b`'s own change-groups, every child anchored
-  anywhere within that group rolls up onto the group's FIRST row instead of
-  its own** — "if it's on a group, show it on the group's first line" — a
-  site on an ordinary (non-grouped) row keeps that row as its own anchor (the
-  default, one-badge-per-line placement). The rollup itself reuses
-  `subtreeApproveCount`/`commentScopeKeys`/`commentActivitySummary` verbatim
-  (summed/unioned over every distinct child anchored at that row), so it's
-  mathematically the same numbers the sidebar pill and the panel already
-  show — just presented per line instead of per block. Threaded as a
+  annotation lives in the covering test's own file, not `b`'s). **Every child
+  is anchored on its OWN exact row — deliberately NOT rolled up onto a wider
+  structural change-group.** An earlier version (2026-07-30, the same commit
+  that introduced this whole badge) rolled every child anchored anywhere
+  within one of `b`'s own `changeGroups(rows)` runs up onto that group's
+  FIRST row ("if it's on a group, show it on the group's first line"); that
+  was reported as a bug (Reindert, 2026-07-31) as soon as a group contained
+  several stacked, unrelated calls (e.g. three separate `requestCss(...)`
+  calls in one group) — they all collapsed onto the first call's line,
+  hiding that the other two calls even had underlying code of their own. Each
+  bucket in `lineChildSummaries` is now keyed on the raw row directly, so N
+  calls stacked in one structural group show N independent badges, one per
+  line, each with its own done/total fraction. The per-bucket rollup itself
+  still reuses `subtreeApproveCount`/`commentScopeKeys`/
+  `commentActivitySummary` verbatim (summed/unioned over every distinct
+  child anchored at that one row), so it's mathematically the same numbers
+  the sidebar pill and the panel already show — just presented per line
+  instead of per block. Threaded as a
   `lineSummaries` opt through `Block()` → `codeDiff`/`unifiedCodeDiff` →
   `codePane`/`paneHTML`/`unifiedHTML` → `rowCellHTML`/`unifiedRowHTML`,
   exactly like the existing `approvedRows`/`commentedRows` opts (a function

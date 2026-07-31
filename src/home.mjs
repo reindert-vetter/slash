@@ -3215,29 +3215,25 @@ function newLineToRowOf(rows, line) {
 // annotation lives in the TEST's own file, not b's, so there is no site
 // within b to anchor on (mirrors relatedChildren's own reasoning there).
 //
-// If that row sits inside one of the block's own STRUCTURAL change-groups
-// (changeGroups(rows) — the same grouping 'group'-granularity navigation
-// uses, but here independent of the current cursor/selection: the badge is
-// always visible, not only while that group happens to be selected), every
-// child anchored anywhere within that group rolls up onto the group's FIRST
-// row instead of its own row — "if it sits on a group, show it on the
-// group's first line". A site on an ordinary (non-grouped) row keeps that
-// row as its own anchor — the default, per-line placement.
+// Deliberately ANCHORED ON ITS OWN ROW, never rolled up onto a wider
+// STRUCTURAL change-group (Reindert, 2026-07-31: an earlier version rolled
+// every child anchored anywhere within a multi-line changeGroups(rows) run
+// up onto that group's FIRST row — "if it's on a group, show it on the
+// group's first line" — which combined several stacked, unrelated calls
+// (e.g. three separate requestCss(...) calls in one group) into a single
+// badge on the first call's line, hiding that the other two calls even had
+// their own underlying code. Every child now keeps its own exact row, so N
+// calls stacked in one group show N independent badges, one per line.
 function lineChildSummaries(b) {
   const map = new Map()
   if (!b || !b.code || b.code.error) return map
   const rows = blockRows(b)
-  const groups = changeGroups(rows)
-  const groupStartOf = new Map()
-  for (const g of groups) for (let i = g.start; i <= g.end; i++) groupStartOf.set(i, g.start)
-  const anchorOf = (row) => (groupStartOf.has(row) ? groupStartOf.get(row) : row)
 
-  const buckets = new Map() // anchor row -> Map(childId -> childBlock)
+  const buckets = new Map() // row -> Map(childId -> childBlock)
   const addTo = (row, kid) => {
     if (row == null || row < 0) return
-    const anchor = anchorOf(row)
-    if (!buckets.has(anchor)) buckets.set(anchor, new Map())
-    buckets.get(anchor).set(kid.id, kid)
+    if (!buckets.has(row)) buckets.set(row, new Map())
+    buckets.get(row).set(kid.id, kid)
   }
 
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
@@ -3266,17 +3262,15 @@ function lineChildSummaries(b) {
   // avatar too", not only underlying-code activity). commentRowSet(b) is the
   // SAME row-presence Set the 💬 marker already uses (Block.mjs's
   // commentedFn) — reused here rather than re-scanning comments, so a row
-  // without any comment never even gets an anchor entry for this reason.
-  // Every such row rolls up onto its group's FIRST row exactly like a child
-  // would (anchorOf), so a comment anywhere within an active group shows the
-  // badge on the same line a child there would.
+  // without any comment never even gets a bucket entry for this reason.
+  // Each such row is its own bucket, on its own line, exactly like a child's
+  // anchor row above.
   const bKey = b.file + '|' + b.label
   for (const row of commentRowSet(b)) {
-    const anchor = anchorOf(row)
-    if (!buckets.has(anchor)) buckets.set(anchor, new Map())
+    if (!buckets.has(row)) buckets.set(row, new Map())
   }
 
-  for (const [anchor, kidsById] of buckets) {
+  for (const [row, kidsById] of buckets) {
     let done = 0
     let total = 0
     const keys = new Set([bKey])
@@ -3290,12 +3284,12 @@ function lineChildSummaries(b) {
     // A child's own comments count regardless of which row WITHIN the child
     // they sit on (a child is a separate block — its rowStart lives in its
     // OWN aligned-row space, unrelated to b's). Only b's OWN comments (bKey)
-    // are restricted to the rows that actually roll up onto THIS anchor, via
-    // commentActivitySummary's optional row filter — otherwise a comment on
-    // one line of b would bleed onto every other line's badge too.
-    const rowFilter = (c) => c.file + '|' + c.label !== bKey || anchorOf(c.rowStart) === anchor
+    // are restricted to the row itself, via commentActivitySummary's
+    // optional row filter — otherwise a comment on one line of b would bleed
+    // onto every other line's badge too.
+    const rowFilter = (c) => c.file + '|' + c.label !== bKey || c.rowStart === row
     const commentActivity = commentActivitySummary(keys, rowFilter)
-    if (total > 0 || commentActivity) map.set(anchor, { approve: { done, total }, commentActivity })
+    if (total > 0 || commentActivity) map.set(row, { approve: { done, total }, commentActivity })
   }
   return map
 }

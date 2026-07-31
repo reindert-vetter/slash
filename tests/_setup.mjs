@@ -52,6 +52,7 @@ export default function globalSetup() {
   materializeDefaultSelWorktrees()
   materializeSvgWorktrees()
   materializeTestClassGroupWorktrees()
+  materializeLineSummaryWorktrees()
 }
 
 // materializeMainWorktrees writes the base/head worktrees for the suite's MAIN
@@ -896,4 +897,67 @@ class StoreHelper
   write('head', 'tests/Feature/SettingsStoreTest.php', settingsStore(2))
   write('base', 'tests/Feature/StoreHelper.php', storeHelper(1))
   write('head', 'tests/Feature/StoreHelper.php', storeHelper(2))
+}
+
+// materializeLineSummaryWorktrees writes the synthetic PR 112 fixture
+// worktrees for line-underlying-summary.spec.mjs's "per-line anchoring"
+// regression: a caller whose ONE structural change-group spans TWO adjacent
+// call lines (lineSummaryFirst then lineSummarySecond), each resolving to a
+// DIFFERENT changed PR block (unlike PR 100's arrow fixture, where the
+// second call deliberately resolves to an unchanged file for a separate
+// test) — so both call sites are real, PR-block-backed lineChildSummaries
+// entries. lineSummaryFirst has 1 changed row of its own, lineSummarySecond
+// has 2, so each line's badge shows a distinct, independently-computed
+// fraction ("0/1" resp. "0/2") — proving the two calls no longer collapse
+// onto the group's first line ("0/3" combined) the way an earlier version of
+// lineChildSummaries did.
+function materializeLineSummaryWorktrees() {
+  const caller = (a, b) => `<?php
+
+namespace App\\Actions;
+
+class LineSummaryCallerAction
+{
+    public function execute()
+    {
+        $first = $this->svc->lineSummaryFirst(${a});
+        $second = $this->svc->lineSummarySecond(${b});
+        return $first + $second;
+    }
+}
+`
+  const first = (value) => `<?php
+
+namespace App\\Services;
+
+class LineSummaryFirstService
+{
+    public function lineSummaryFirst()
+    {
+        $value = ${value};
+        return $value;
+    }
+}
+`
+  const second = (x, y) => `<?php
+
+namespace App\\Services;
+
+class LineSummarySecondService
+{
+    public function lineSummarySecond()
+    {
+        $x = ${x};
+        $y = ${y};
+        return $x + $y;
+    }
+}
+`
+  const write = worktreeWriter(112)
+  write('base', 'app/Actions/LineSummaryCallerAction.php', caller(1, 1))
+  write('head', 'app/Actions/LineSummaryCallerAction.php', caller(2, 2))
+  write('base', 'app/Services/LineSummaryFirstService.php', first(1))
+  write('head', 'app/Services/LineSummaryFirstService.php', first(2))
+  write('base', 'app/Services/LineSummarySecondService.php', second(1, 2))
+  write('head', 'app/Services/LineSummarySecondService.php', second(10, 20))
 }

@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 112,
+    "callerId": "112:app/Actions/LineSummaryCallerAction.php:LineSummaryCallerAction::execute",
+    "callKey": "lineSummaryFirst",
+    "status": "resolved",
+    "childFile": "app/Services/LineSummaryFirstService.php",
+    "childClass": "LineSummaryFirstService",
+    "childMethod": "lineSummaryFirst",
+    "childLine": 7,
+    "childCode": "public function lineSummaryFirst()\n{\n    $value = 2;\n    return $value;\n}"
+  },
+  {
+    "pr": 112,
+    "callerId": "112:app/Actions/LineSummaryCallerAction.php:LineSummaryCallerAction::execute",
+    "callKey": "lineSummarySecond",
+    "status": "resolved",
+    "childFile": "app/Services/LineSummarySecondService.php",
+    "childClass": "LineSummarySecondService",
+    "childMethod": "lineSummarySecond",
+    "childLine": 7,
+    "childCode": "public function lineSummarySecond()\n{\n    $x = 10;\n    $y = 20;\n    return $x + $y;\n}"
+  }
+]

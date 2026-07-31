@@ -3,8 +3,15 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // The per-line "onderliggende code" badge (Block.mjs's lineSummaryBadge, fed
 // by home.mjs's lineChildSummaries — an avatar+N comment-activity indicator
 // plus a done/total approve fraction, rendered at the right edge of the diff
-// line the underlying code is anchored to). Reuses PR 100's existing
-// call-arrow fixture (tests/fixtures/arrow-blocks.json + arrow-callresolve.json,
+// line the underlying code is anchored to). Every child is anchored on its
+// OWN exact call-site row (2026-07-31: an earlier version rolled every child
+// anchored within one of the block's own structural change-groups up onto
+// that group's FIRST row, which combined several stacked, unrelated calls
+// into one badge on the first call's line — see the "line-summary per-line
+// anchoring" describe block below for the regression test proving the fix;
+// this first block predates that fix and never actually exercised the
+// rollup, see its own note). Reuses PR 100's existing call-arrow fixture
+// (tests/fixtures/arrow-blocks.json + arrow-callresolve.json,
 // materializeArrowWorktrees in tests/_setup.mjs — real worktrees on disk):
 // ArrowCallerAction::execute calls ArrowHelperService::arrowHelper on a
 // changed line; arrowHelper itself calls ArrowNestedService::arrowNested on
@@ -30,7 +37,12 @@ test.describe('PR Review Tree — per-line onderliggende-code badge', () => {
     // Not yet approved: no checkmark, 0 of 3 underlying rows done.
     await expect(badge).toContainText('0/3')
     await expect(badge).not.toContainText('✓')
-    // Anchored on the actual call-site row, not some other row.
+    // Anchored on the actual call-site row, not some other row. NOTE: in this
+    // fixture arrowHelper's own call site already happens to be the FIRST
+    // row of its 2-line change-group (arrowHelper/arrowPlain), so this
+    // assertion alone can't distinguish per-line anchoring from the old
+    // group-rollup — see the dedicated "line-summary per-line anchoring"
+    // describe block below for that.
     const row = page.locator('[data-row]').filter({ has: badge })
     await expect(row).toHaveCount(1)
     await expect(row).toContainText('arrowHelper')
@@ -83,7 +95,10 @@ test.describe('PR Review Tree — per-line onderliggende-code badge', () => {
   // for "there's an open comment here". Reindert's explicit choice: a
   // comment on the line itself now counts too (home.mjs's
   // lineChildSummaries + commentRowSet, RelatedPanel.mjs's
-  // commentActivitySummary(keys, matchesRow)).
+  // commentActivitySummary(keys, matchesRow)). NOTE: the comment below lands
+  // on $flag, which is already the FIRST row of its own ($flag/$note)
+  // change-group, so this test likewise doesn't exercise the group-rollup
+  // fix below — it only proves comment-only rows get a badge at all.
   test('a comment placed directly on a line with no underlying-code child also shows the avatar+N badge', async ({
     page,
   }) => {
@@ -108,5 +123,45 @@ test.describe('PR Review Tree — per-line onderliggende-code badge', () => {
     // No underlying code here, so no done/total fraction — only the avatar.
     await expect(badge).not.toContainText('/')
     await expect(badge.getByTestId('avatar-fallback')).toBeVisible()
+  })
+})
+
+// Regression (2026-07-31, Reindert): the badge used to roll every child
+// anchored anywhere within one of the block's own structural change-groups
+// up onto that group's FIRST row — reported as a bug once a group contained
+// several stacked, unrelated calls (e.g. three separate requestCss(...)
+// calls in one group): they all combined onto the first call's line,
+// hiding that the other calls had underlying code of their own too. Fixed
+// by anchoring every child on its own exact row (home.mjs's
+// lineChildSummaries no longer rolls up via changeGroups at all).
+//
+// PR 112's caller (tests/fixtures/linesummary-blocks.json +
+// linesummary-callresolve.json, materializeLineSummaryWorktrees in
+// tests/_setup.mjs) has exactly ONE change-group spanning TWO adjacent call
+// lines — lineSummaryFirst() then lineSummarySecond() — each resolving to a
+// DIFFERENT, changed PR block: lineSummaryFirst has 1 changed row of its
+// own, lineSummarySecond has 2. Before the fix both calls would have shown a
+// single combined "0/3" on the first (lineSummaryFirst) line only; the fix
+// must show two independent badges, "0/1" on lineSummaryFirst's own line and
+// "0/2" on lineSummarySecond's own line.
+test.describe('PR Review Tree — per-line onderliggende-code badge — per-line anchoring', () => {
+  test('two calls stacked in the same change-group each get their own independent badge', async ({ page }) => {
+    await page.goto('/pr/112')
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowRight') // step into the diff
+
+    const badges = page.getByTestId('line-underlying-summary')
+    await expect(badges).toHaveCount(2)
+
+    // The badge only ever renders on the canonical (new/right) side of a
+    // row (see approveHere in Block.mjs), so filtering rows BY the badge
+    // itself — rather than by the call text, which also appears unchanged
+    // on the old/left side of the same row — uniquely picks out each line.
+    const firstRow = page.locator('[data-row]').filter({ has: badges.filter({ hasText: '0/1' }) })
+    const secondRow = page.locator('[data-row]').filter({ has: badges.filter({ hasText: '0/2' }) })
+    await expect(firstRow).toHaveCount(1)
+    await expect(secondRow).toHaveCount(1)
+    await expect(firstRow).toContainText('lineSummaryFirst')
+    await expect(secondRow).toContainText('lineSummarySecond')
   })
 })
