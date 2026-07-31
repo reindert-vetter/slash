@@ -2173,3 +2173,102 @@ active" rule holds deterministically; `'fit'`'s content-based width could
 in principle exceed the active card's width even for a one-sided active
 block, which would defeat the whole point of this override. Test:
 `tests/preview-matches-active-width.spec.mjs`.
+
+**`<main>` already clips/scrolls a too-tall column instead of ever rendering
+behind the footer — this is a space-ALLOCATION question, not a clipping bug.**
+`<main>`'s own class list sets `overflow-x-auto` but never an explicit
+`overflow-y` — per the CSS overflow-resolution rule (the same one already
+documented for the TRANSLATION card's own scroll container in
+`blocks-and-ingest.md`: one axis non-`visible` forces the OTHER, otherwise
+`visible`, axis to also compute as `auto`), the browser resolves `<main>`'s
+own `overflow-y` to `auto` too — confirmed with `getComputedStyle` during this
+work. So a block-column whose content (the active card + connector + preview)
+is taller than `<main>`'s own (`top`/`bottom`-defined) box already just
+scrolls/clips cleanly within that box; nothing ever silently renders behind
+the footer (`z-20`, above `<main>`'s `z-10`) or off past the visible page.
+That means the actual complaint behind "give the block below less room, my
+diff doesn't fit" is a **space-allocation** question — the reviewer having to
+scroll `<main>` to see the rest of a tall active diff, while the preview card
+below it still claims its own (often unnecessary) height — not a bug where
+content disappears.
+
+**The look-ahead preview collapses to just its header (no description, no
+diff body) once the ACTIVE card next to/above it doesn't fit the available
+height on its own — `Block()`'s `collapsed` opt + `previewTooTallForActive`
+(`home.mjs`).** `Block()` gained a `collapsed` opt (a function, like
+`activeGroup`/`hintsEnabled` — defaults to never collapsing): when true it
+hides BOTH the description paragraph and the diff body (`translationSlot`/
+`svgSlot`/`codeDiff`), leaving only the header row (category/title/status)
+and the meta row (file:line + approve pill) — nested `${() => collapsedFn()
+? '' : ...}` toggles inside the already-stable `<article>` root, exactly the
+"leaks the template function as text"/"bare toggling expression" precautions
+this file's own conventions already describe (never applies here: neither
+toggle is the sole content of a keyed list item). Only ever passed truthy for
+the **preview** role (`i !== sel` in `pair.forEach`; always for
+`drillPreviewColumns()`'s one card) — the active/selected card never
+collapses.
+
+`previewTooTallForActive(activeBlock)` decides "does the active card's own
+diff actually fit the screen" — the literal ask — from already-known counts,
+never a DOM measurement of either card (which would race this same render):
+`blockRows(activeBlock).length` (a stable content fact once code has loaded)
+times a fixed per-row px estimate, plus a fixed chrome allowance for the
+active card's own header/meta/description, compared against the available
+height — `state.viewportH` (the real, live window height, kept in sync via a
+`resize` listener, the same module-level-listener shape as
+`refreshHints`/`repositionMenu`) minus `<main>`'s own top offset, minus the
+footer's current reservation, minus a fixed allowance for the preview card's
+own collapsed header + the connector/step-chevron between the two cards. This
+was an explicit, deliberate choice over a fixed row-count threshold alone
+(discussed and decided): the reviewer's own ask ("if it doesn't fit the
+**screen**") is inherently viewport-size-dependent, so the decision reads the
+real window height, not just a size-independent guess.
+
+**Both call sites — `pair.forEach` and `drillPreviewColumns()` — pass a
+`() => previewTooTallForActive(...)` FUNCTION into `collapsed`, never a
+pre-resolved boolean.** `Block()` invokes it from its own nested `${() =>
+...}` slot, exactly like `activeGroup`/`hintsEnabled` already do — this is
+load-bearing, not a style choice: the AVAILABLE side of the comparison
+depends on `state.viewportH` (resize-driven) and the footer's own height
+(which — since it also varies with the focused unit, see "Footer" in
+`.claude/rules/keyboard-navigation.md` — changes on every navigation step).
+Resolving the decision eagerly inside either outer array-building closure
+(which only re-run on `codeVersion`/`focusLevel`) would couple that WHOLE
+closure — every `Block()` card in it — to that fast-changing state, exactly
+the "outer closure vs. nested reactive slot" pitfall in `conventions.md`.
+
+**A second, WORSE pitfall than that one, discovered and fixed while building
+this: `previewTooTallForActive` must never read `state.footerUnit`/
+`footerExplain`/`footerVisible` directly (nor a reactive state property
+merely DERIVED from them in the same watch callback) — only a PLAIN,
+non-reactive module-level snapshot variable, `footerReservePxSnapshot`
+(`home.mjs`, updated by a plain assignment inside `updateFooter()` itself, via
+`footerBoxPx(state)`).** The look-ahead preview card is not a permanent
+fixture — it's torn down and rebuilt mid-navigation (e.g. `drillToSibling`
+replacing a drilled column with its promoted sibling). Reading
+`footerUnit`/`footerExplain`/`footerVisible` (or a reactive property derived
+from them in the SAME watch callback that reassigns them) from inside that
+card's own nested slot made it a co-subscriber racing `updateFooter()`'s own
+writes to those exact properties — worse than the "silently drops an update"
+co-subscriber pitfall in `conventions.md`: it crashed arrow.js outright
+(`"f[d] is not a function"`, reproduced deterministically via
+`drillToSibling` → `drillNextChange`, the same LOCAL PATCH class of
+use-after-free described in `vendor/arrow.js`'s header, but in a code path
+none of the existing LOCAL PATCHes cover). A plain variable — mirroring
+`codeRequested`/`blockRowsCache`/`expandedRunsByRows` elsewhere in this
+codebase, kept outside reactive state for the same reason — can never be a
+reactive dependency of anything, so it can't race a watch's writes; the
+trade-off is a small staleness window (the preview-collapse decision only
+re-evaluates when something ELSE already re-runs that slot — a resize, or the
+card rebuilding for an unrelated reason), accepted given this is already a
+rough estimate, not a pixel-exact fit check. See `previewTooTallForActive`'s
+and `footerReservePxSnapshot`'s own doc comments in `home.mjs` for the full
+account. Test: `tests/preview-collapse-when-active-tall.spec.mjs`.
+
+**Deliberately no manual expand affordance, connector/step-chevron unchanged,
+width unchanged.** A collapsed preview card cannot be manually re-expanded —
+purely automatic, driven only by whether the active card fits; the dashed
+same-file connector and the grey step-chevron between the two cards still
+render exactly as before, regardless of whether the card below them is
+collapsed; and the card's own WIDTH is untouched (`widthCls`) — only its
+height/content changes.

@@ -28,19 +28,28 @@ test.describe('PR Review Tree — footer AI description for if-units', () => {
     const description = footer.getByTestId('footer-description')
     await expect(description).toBeVisible()
     await expect(description).toContainText('Deze groep introduceert een if-statement')
-    // The footer grows (90px → 140px) while the description shows.
-    await expect(footer).toHaveClass(/h-\[140px\]/)
+    // The footer's own height is content-driven (footerBoxPx in Footer.mjs) —
+    // no longer a fixed 90/140px tier: it grows with the description shown
+    // AND with how many '-'/'+' rows the multi-row group actually has (this
+    // fixture's group renders 4 such rows), clamped at the unchanged 140px
+    // ceiling. See the "Footer" section in keyboard-navigation.md.
+    await expect(footer).toHaveClass(/h-\[138px\]/)
 
     // Refine to 'line': the first changed line is the if-line itself (line-2)
-    // — the footer swaps to that unit's own description.
+    // — the footer swaps to that unit's own description. A single changed
+    // line here is a real old→new pair (2 rendered rows), so the box is
+    // smaller than the group's (fewer diff rows), still with the description.
     await page.keyboard.press('f')
     await expect(description).toContainText('Deze conditie controleert of de waarde positief is')
+    await expect(footer).toHaveClass(/h-\[102px\]/)
 
     // The next changed line ($value = 2;) has no if — the description hides
-    // and the footer shrinks back to its normal height.
+    // and the footer shrinks to just its one diff row (the content-driven
+    // floor, FOOTER_MIN_PX — smaller than the old fixed 90px tier, since
+    // there's no longer any AI description reserved for this unit).
     await page.keyboard.press('ArrowDown')
     await expect(description).toBeHidden()
-    await expect(footer).toHaveClass(/h-\[90px\]/)
+    await expect(footer).toHaveClass(/h-\[56px\]/)
 
     // Back up onto the if-line: the description returns (cached read-model,
     // no re-request).
@@ -110,9 +119,12 @@ test.describe('PR Review Tree — footer AI description for if-units', () => {
     await expect(footerDiff).toContainText('$value = 2;')
     await expect(footerDiff).toContainText('$extra = 3;')
 
-    // Reserved bottom strip: just the 90px inline-diff floor, no description
-    // so no 140px.
-    await expect(page.getByTestId('detail-panel')).toHaveClass(/bottom-\[90px\]/)
+    // Reserved bottom strip matches the footer's own content-driven height
+    // exactly (footerBoxPx: padding + 3 diff lines, no description reserved):
+    // well under the old fixed 90px tier, and <main>'s own reservation is the
+    // identical figure (the single-source-of-truth guarantee — see the
+    // "Footer" section in keyboard-navigation.md).
+    await expect(page.getByTestId('detail-panel')).toHaveClass(/bottom-\[74px\]/)
     await expect(page.getByTestId('detail-panel')).not.toHaveClass(/bottom-\[140px\]/)
     await expect(page.getByTestId('detail-panel')).not.toHaveClass(/bottom-6\b/)
   })

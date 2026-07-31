@@ -4,7 +4,7 @@
 
 import { reactive, html, watch } from './vendor/arrow.js'
 import BlockList, { isFullyApproved, isIgnoredComment } from './BlockList.mjs'
-import Footer from './Footer.mjs'
+import Footer, { footerBoxPx } from './Footer.mjs'
 import Block, {
   blockRows,
   changedRows,
@@ -440,6 +440,25 @@ const state = reactive({
   // rail) read this instead of state.mode, so the bar + its reserved space
   // disappear entirely rather than showing an empty balk.
   footerVisible: false,
+  // viewportH — the window's own inner height, kept in sync via the resize
+  // listener right below. Read by the look-ahead preview's "does the active
+  // card's own diff actually fit" decision (see previewTooTallForActive
+  // further down) — genuinely needs the real, current viewport height, unlike
+  // e.g. blockRows(b) (a stable content fact): a browser resize can change
+  // the answer without anything about the block itself changing. Reading it
+  // via a reactive state field (rather than a bare window.innerHeight call)
+  // means a resize re-triggers whichever nested `${() => ...}` binding reads
+  // it — never the outer array-building closures, which only ever read it
+  // *inside* a passed-in function opt (see previewTooTallForActive's own
+  // call sites) so a resize can't force those to rebuild every Block() card.
+  viewportH: window.innerHeight,
+})
+
+// Keeps state.viewportH in sync with the real window size — same module-level
+// resize-listener shape as refreshHints()/repositionMenu() elsewhere in this
+// file.
+window.addEventListener('resize', () => {
+  state.viewportH = window.innerHeight
 })
 
 // DIFF_VIEW_CYCLE is the fixed order `a` steps through — see state.diffViewMode
@@ -5248,9 +5267,37 @@ async function requestExplain(req) {
 // reserved space disappear entirely once neither snapshot has anything to
 // show (no unit at all — e.g. list mode, or a unit with zero rows), rather
 // than staying visible-but-empty for the whole diff-mode session as before.
+// footerReservePxSnapshot — footerBoxPx(state)'s last computed value, kept as
+// a PLAIN module-level variable (never a `state.*` reactive property, unlike
+// e.g. state.viewportH). previewTooTallForActive (further down) reads this,
+// not state.footerUnit/footerExplain/footerVisible (nor a reactive
+// state.footerReservePx wrapping footerBoxPx) directly: this function runs
+// from inside a look-ahead preview card's own nested reactive slot, and such
+// a card can be torn down and rebuilt mid-navigation (e.g. drillToSibling
+// replacing a drilled column). A first attempt DID store this as a reactive
+// state.footerReservePx, set right here in updateFooter() (itself a watch
+// callback that fires reentrantly, synchronously, as part of the very same
+// cascade drillToSibling triggers) — subscribing to it from the preview
+// card's slot crashed arrow.js outright ("f[d] is not a function", the LOCAL
+// PATCH class of use-after-free in vendor/arrow.js), reproduced and bisected
+// while building this feature; a PLAIN variable can never be a reactive
+// dependency of anything (nothing subscribes to it, exactly like
+// codeRequested/blockRowsCache/expandedRunsByRows elsewhere in this
+// codebase, kept outside reactive state for the same reason), so it can't
+// race this watch's own writes. Trade-off: reading a plain variable from
+// Block()'s slot registers no dependency of its own, so the preview-collapse
+// decision only actually RE-EVALUATES when something else already re-runs
+// that slot (state.viewportH changing on resize, or the card rebuilding for
+// an unrelated reason — code arriving, a focus switch) — a few navigation
+// steps can therefore see a footer-height figure that's a step stale. Given
+// this is already a rough estimate (not a pixel-exact fit check), that lag is
+// an accepted trade-off for not touching this fragile area of arrow.js again.
+let footerReservePxSnapshot = 0
+
 function updateFooter() {
   computeFooterSnapshots()
   state.footerVisible = !!(state.footerUnit || state.footerExplain)
+  footerReservePxSnapshot = footerBoxPx(state)
 }
 
 function computeFooterSnapshots() {
@@ -6989,6 +7036,63 @@ function stepChevronSlot(delta, dir) {
   return html`<div class="contents">${() => (canStep(delta) ? stepChevron(dir) : '')}</div>`
 }
 
+// previewTooTallForActive decides whether the look-ahead preview card stacked
+// below/next to the ACTIVE (selected/focused) card should collapse to just its
+// header (see Block()'s own `collapsed` opt) — "does the active card's own
+// diff actually fit the screen" (the literal ask). Estimated from already-known
+// counts, never a DOM measurement of either card (which would race this same
+// render — see .claude/rules/conventions.md): PREVIEW_ROW_PX mirrors Footer.mjs's
+// own per-code-row estimate (text-[11px] leading-relaxed); ACTIVE_CARD_CHROME_PX
+// is a rough allowance for the active card's own header/meta/description rows
+// (everything above its code-diff body); PREVIEW_HEADER_RESERVE_PX is the room
+// that must stay available for the preview card's OWN header+meta rows (plus
+// the connector/step-chevron between the two cards) once it collapses — this
+// function decides whether the active card needs that room more.
+//
+// Unlike blockRows(b) (a content fact of the block itself, stable while
+// navigating within it), the AVAILABLE side of this comparison genuinely
+// depends on the live window size and the footer's own current height, which
+// — since it also varies with the focused unit (see updateFooter) — changes
+// on every navigation step. Calling this directly inside the outer
+// array-building closures (DetailPanel's pair.forEach, the drilled-columns
+// .map()) would therefore couple the WHOLE closure (every Block() card in it)
+// to that fast-changing state — the "outer closure vs. nested reactive slot"
+// pitfall in conventions.md. Both call sites therefore only ever pass a
+// `() => previewTooTallForActive(...)` FUNCTION into Block()'s `collapsed`
+// opt — Block() invokes it from its own nested `${() => ...}` slot (exactly
+// like activeGroup/hintsEnabled already do), so only that one small slot
+// re-evaluates on a resize/footer-height change, never the surrounding
+// closure.
+//
+// Deliberately reads footerReservePxSnapshot (a PLAIN module-level variable,
+// see its own doc comment right above updateFooter), NEVER state.footerVisible/
+// footerUnit/footerExplain, nor a reactive state property wrapping
+// footerBoxPx(state) — a worse co-subscriber pitfall than the "silently drops
+// an update" one in conventions.md: this function runs from inside a
+// look-ahead preview card's own nested reactive slot, and such a card can be
+// torn down and rebuilt mid-navigation (e.g. drillToSibling replacing a
+// drilled column). Reading footerUnit/footerExplain/footerVisible straight
+// from there — or even a reactive state.footerReservePx merely DERIVED from
+// them in the same watch callback — raced updateFooter()'s own writes to
+// those properties (a SEPARATE effect, elsewhere, reassigning them on every
+// step, reentrantly, as part of the very cascade drillToSibling triggers) and
+// crashed arrow.js outright ("f[d] is not a function", the LOCAL PATCH class
+// of use-after-free in vendor/arrow.js) instead of merely missing an update —
+// reproduced and bisected while building this feature. A plain variable can
+// never be a reactive dependency of anything, so it sidesteps the race
+// entirely — at the cost of the small staleness window documented on
+// footerReservePxSnapshot itself.
+const PREVIEW_ROW_PX = 18
+const ACTIVE_CARD_CHROME_PX = 150
+const PREVIEW_HEADER_RESERVE_PX = 110
+const MAIN_TOP_PX = 24 // <main>'s own top-6 offset
+function previewTooTallForActive(activeBlock) {
+  if (!activeBlock || !activeBlock.code) return false
+  const neededPx = ACTIVE_CARD_CHROME_PX + blockRows(activeBlock).length * PREVIEW_ROW_PX
+  const availablePx = state.viewportH - MAIN_TOP_PX - footerReservePxSnapshot - PREVIEW_HEADER_RESERVE_PX
+  return neededPx > availablePx
+}
+
 // drillPreviewColumns builds the (0 or 2) keyed items for a look-ahead preview
 // of the NEXT Onderliggende-code sibling, stacked BELOW the currently focused
 // drilled column's own card (always the rightmost — state.focusLevel ===
@@ -7058,6 +7162,14 @@ function drillPreviewColumns() {
           commentedRows: () => commentRowSet(previewBlock),
           lineSummaries: () => lineChildSummaries(previewBlock),
           viewMode: () => (activeSingleSided ? 'unified' : state.diffViewMode),
+          // A plain closure, never invoked here — Block() reads it from its
+          // OWN nested reactive slot (see previewTooTallForActive's own doc
+          // comment), so a resize/footer-height change re-evaluates only that
+          // one small slot, never this already-independent drillPreviewColumns
+          // binding (which would otherwise rebuild this card's Prism
+          // highlighting on every navigation step, since footerBoxPx changes
+          // then too).
+          collapsed: () => previewTooTallForActive(focusedBlock() || {}),
         })}
       </div>
     `.key('drill-preview:' + previewBlock.id + ':' + codeState),
@@ -7580,12 +7692,18 @@ function DetailPanel(state) {
     <main
       class="${() =>
         'fixed top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto no-scrollbar transition-all duration-200 ease-out ' +
-        // Reserve a bottom strip matching the footer's own visibility/height
-        // (state.footerVisible/state.footerExplain, see Footer.mjs): none when
-        // the footer has nothing to show, 90px for just the inline diff, 140px
-        // while it also shows an AI unit description — so the columns never
-        // slide in behind it, but don't leave dead space once it's gone either.
-        (!state.footerVisible ? 'bottom-6 ' : state.footerExplain ? 'bottom-[140px] ' : 'bottom-[90px] ') +
+        // Reserve a bottom strip matching the footer's own real, content-driven
+        // height — footerBoxPx(state), the exact same function Footer.mjs's
+        // own height class calls (imported here), so the two can never drift
+        // apart: none when the footer has nothing to show, otherwise exactly
+        // as tall as the footer's own box (see the "Footer" section in
+        // keyboard-navigation.md) — so the columns never slide in behind it,
+        // but don't leave dead space once it's smaller/gone either. Also see
+        // <main>'s implicit overflow-y:auto note below the column bindings —
+        // this reservation is what keeps a too-tall active card's own diff
+        // clipped/scrollable within this box instead of ever rendering behind
+        // the footer.
+        (!state.footerVisible ? 'bottom-6 ' : `bottom-[${footerBoxPx(state)}px] `) +
         // No 1.5rem margin on the right anymore — the far edge is where the
         // last column's own content clipped (hidden by no-scrollbar) before
         // it was fully scrolled into view, so <main> now runs flush to the
@@ -7828,6 +7946,14 @@ function DetailPanel(state) {
             // the preview card) jumps state.diffViewMode straight to that
             // stand — see applyDiffViewMode/setDiffViewMode.
             setViewMode: setDiffViewMode,
+            // Only the look-ahead PREVIEW card (i !== sel) can ever collapse to
+            // just its header — never the selected/active card itself. A plain
+            // closure (undefined for the active card, so Block()'s own default
+            // no-op applies there): Block() invokes it from its OWN nested
+            // reactive slot, so a resize/footer-height change re-evaluates only
+            // that slot, never this outer pair.forEach closure that builds every
+            // card here (see previewTooTallForActive's own doc comment).
+            collapsed: i !== sel ? () => previewTooTallForActive(curBlock() || {}) : undefined,
             // The key encodes (a) whether this card is the *selected* one or the
             // look-ahead *preview*, (b) whether its code has loaded yet, and (c)
             // whether the keyboard is actually focused on it (vs. a drilled

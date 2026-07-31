@@ -10,12 +10,33 @@
 // a one-liner). A unit with neither (blank/whitespace-only, and — in practice
 // never, every navigable unit has at least one row) hides the bar entirely,
 // rather than showing an empty balk for the whole diff-mode session as
-// before. The panels above reserve 0/90/140px to match (0 when
-// !footerVisible, 90 with just the inline diff, 140 while a description also
-// shows — the reactive bottom-[…] bindings in home.mjs/RelatedPanel.mjs), so
-// nothing is reserved when the footer itself is gone. A multi-row group's
-// rows scroll inside the existing no-scrollbar/overflow-auto code area below
-// (see data-testid=footer-diff) rather than growing the fixed 90/140px bar.
+// before.
+//
+// The bar's own height is NOT a fixed 90/140px tier anymore — footerBoxPx(state)
+// (exported below) sizes it to what its actual content needs (a small chrome
+// allowance + one line per rendered '-'/'+' row +, while an AI description
+// shows, room for up to its line-clamp-2 cap), clamped between FOOTER_MIN_PX
+// and FOOTER_MAX_PX. This is a deliberate character/line-COUNT estimate, not a
+// DOM measurement (no ResizeObserver/scrollHeight read that could race with
+// this same render) — the same technique Block.mjs's widthCls/fitWidthCls and
+// RelatedPanel.mjs's relatedColumnWidthCls already use for WIDTH, just applied
+// to height: a fixed per-line px constant times a known row/line count. Two
+// deliberately accepted approximations: (1) the description's actual line
+// count (1 vs. 2) isn't known without measuring text-wrap, so a visible
+// description ALWAYS reserves room for its full line-clamp-2 cap (2 lines),
+// even when the text only needs 1 — a residual, minor over-reservation, still
+// far closer to reality than the previous flat +50px (90→140) jump regardless
+// of how many diff rows were shown alongside it. (2) FOOTER_MAX_PX (140) keeps
+// the same ceiling the old, bigger tier already had — a very long multi-row
+// group still scrolls inside the existing no-scrollbar/overflow-auto code area
+// (data-testid=footer-diff) rather than growing the bar past it.
+//
+// footerBoxPx(state) is THE single source of truth for this height — home.mjs's
+// <main> bottom-reservation reads the exact same function (imported from here),
+// so the footer's own box and the space the panels above it reserve can never
+// drift apart (see "Footer" in keyboard-navigation.md and the look-ahead
+// preview-collapse mechanism in detail-layout.md, which also reads this value
+// to know how much room is actually left for the active card).
 //
 // The theme toggle (system/light/dark) used to live in this footer's top-right
 // corner, then in its own always-visible fixed corner element — it now lives
@@ -57,6 +78,48 @@ function line(mark, text, underline) {
 // so they can't drift apart.
 const WIDE_AT = 110
 
+// footerBoxPx constants — a per-line px estimate, not a measurement (see the
+// module doc comment above). FOOTER_PADDING_PX is the bar's own py-2.5 top+
+// bottom padding; FOOTER_GAP_PX is the gap-1.5 between the description line
+// and the diff block, only counted while BOTH are present; FOOTER_DIFF_LINE_PX
+// is one code row at the pane's own text-[11px] leading-relaxed (≈11×1.625);
+// FOOTER_EXPLAIN_LINES_PX reserves for the description's line-clamp-2 ceiling
+// (2 lines at text-xs leading-relaxed, ≈12×1.625 each) — always the full 2,
+// see the accepted-imprecision note above. FOOTER_MIN_PX/FOOTER_MAX_PX floor
+// and cap the result — MAX is unchanged from the previous larger (140px) tier.
+const FOOTER_PADDING_PX = 20
+const FOOTER_GAP_PX = 6
+const FOOTER_DIFF_LINE_PX = 18
+const FOOTER_EXPLAIN_LINES_PX = 40
+const FOOTER_MIN_PX = 56
+const FOOTER_MAX_PX = 140
+
+// footerBoxPx — the footer's own visible box height in px, derived purely from
+// already-known counts (state.footerUnit's row shape, state.footerExplain's
+// presence): never a DOM measurement, so it can't race this same render (see
+// the module doc comment). Exported so home.mjs's <main> bottom-reservation
+// (and the look-ahead preview-collapse decision, see detail-layout.md) read
+// the EXACT same number — the single source of truth that keeps the footer's
+// own height and the space reserved for it from ever drifting apart. Returns
+// 0 while the footer itself is hidden (state.footerVisible false), so a
+// caller can use it directly as a reservation/availability figure too.
+export function footerBoxPx(state) {
+  if (!state.footerVisible) return 0
+  let diffLines = 0
+  const rows = state.footerUnit
+  if (rows)
+    for (const r of rows) {
+      if (r.left !== null && r.left !== undefined) diffLines++
+      if (r.right !== null && r.right !== undefined) diffLines++
+    }
+  const hasExplain = !!state.footerExplain
+  let px = FOOTER_PADDING_PX
+  if (diffLines > 0 && hasExplain) px += FOOTER_GAP_PX
+  px += diffLines * FOOTER_DIFF_LINE_PX
+  if (hasExplain) px += FOOTER_EXPLAIN_LINES_PX
+  return Math.max(FOOTER_MIN_PX, Math.min(FOOTER_MAX_PX, px))
+}
+
 // wrapClass picks the inner column width: centred (max-w-5xl) for short lines so
 // it stays aligned with the panels above, full width once any row of the active
 // unit is long (a multi-row group takes the longest line across all its rows).
@@ -81,16 +144,17 @@ function explainText(state) {
 export default function Footer(state) {
   // Only reveal the footer once state.footerVisible is true — there is
   // nothing to preview otherwise (list mode, or a unit with no code). The
-  // footer grows to 140px while the description shows so
-  // 1-2 full sentences fit above the inline diff. Every class string is one
-  // reactive function binding (arrow.js requires the full attribute value in
-  // a single binding, see .claude/rules/conventions.md); the `hidden` toggle
-  // just adds/removes `display:none` on this stable <footer> root, so no
-  // keyed-node pitfall applies.
+  // footer's own height is footerBoxPx(state) — content-driven (see the
+  // module doc comment above), not a fixed 90/140px tier — so it only takes
+  // as much room as its actual content needs, clamped at FOOTER_MAX_PX. Every
+  // class string is one reactive function binding (arrow.js requires the full
+  // attribute value in a single binding, see .claude/rules/conventions.md);
+  // the `hidden` toggle just adds/removes `display:none` on this stable
+  // <footer> root, so no keyed-node pitfall applies.
   return html`
     <footer
       class="${() =>
-        `fixed bottom-0 left-0 right-0 z-20 ${state.footerVisible ? 'flex' : 'hidden'} ${state.footerExplain ? 'h-[140px]' : 'h-[90px]'} justify-center border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-2.5`}"
+        `fixed bottom-0 left-0 right-0 z-20 ${state.footerVisible ? 'flex' : 'hidden'} h-[${footerBoxPx(state)}px] justify-center border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-2.5`}"
       data-testid="footer"
     >
       <div class="${() => wrapClass(state)}">

@@ -1509,19 +1509,49 @@ function binding, so no keyed-node pitfall, see
 `state.mode==='diff'`,
 so `footerVisible` is always `false` in list mode.
 
-**Space reservation follows the same flag, 3-way instead of the old fixed
-90/140px floor:** `DetailPanel`/`<main>` (`home.mjs`) and the comments/tasks
-sidebar + collapsed hint rail (`RelatedPanel.mjs`) reserve `bottom-6` (no
-reservation) as soon as `!state.footerVisible`, `bottom-[90px]` as soon as
-just the inline diff shows, and `bottom-[140px]` as soon as the AI
-description also shows — the reserved space now disappears along with the
-bar itself, instead of always leaving at least 90px empty. The pr-index
-(`BlockList.mjs`) and the
-PR info column (`PrInfoPanel`, `home.mjs`) no longer reserve
-anything at all for the footer as of this change (`bottom-6`, was a fixed,
-never-reactive
-`bottom-[90px]`) — both are only visible in list mode, where the footer
-never shows anyway, so that reservation was already dead space.
+**The bar's own height is content-driven (`footerBoxPx`, exported from
+`Footer.mjs`), not a fixed 90/140px tier anymore.** `footerBoxPx(state)`
+derives a px figure purely from already-known counts — never a DOM
+measurement, so it can't race this same render (the same technique
+`Block.mjs`'s `widthCls`/`fitWidthCls` and `RelatedPanel.mjs`'s
+`relatedColumnWidthCls` already use for WIDTH, just applied to height): a
+small chrome allowance (the bar's own padding) + one `FOOTER_DIFF_LINE_PX`
+per rendered `-`/`+` row in `state.footerUnit`, plus, while an AI description
+shows, a fixed `FOOTER_EXPLAIN_LINES_PX` reserve for its `line-clamp-2`
+ceiling — clamped between `FOOTER_MIN_PX` (56) and `FOOTER_MAX_PX` (140, the
+unchanged ceiling the old, larger tier already had). **Deliberately accepted
+imprecision:** a visible description always reserves room for the FULL
+2-line cap, even when the actual text only needs 1 line — knowing which
+without measuring text-wrap isn't possible without a DOM read, and this is
+still a large improvement over the old flat +50px (90→140) jump regardless of
+how many diff rows were shown alongside it.
+
+**`footerBoxPx(state)` is the single source of truth for this height —
+`DetailPanel`/`<main>` (`home.mjs`) reads the EXACT same function (imported
+from `Footer.mjs`) for its own bottom reservation, so the footer's real box
+and the space reserved for it can never drift apart:** `bottom-6` (no
+reservation) as soon as `!state.footerVisible`, otherwise
+`` bottom-[${footerBoxPx(state)}px] `` — always precisely as tall as the
+footer itself, never a separate guess. The pr-index (`BlockList.mjs`) and the
+PR info column (`PrInfoPanel`, `home.mjs`) reserve nothing at all for the
+footer (`bottom-6`, was a fixed, never-reactive `bottom-[90px]`) — both are
+only visible in list mode, where the footer never shows anyway, so that
+reservation was already dead space.
+
+**`<main>`'s own `overflow-y` already resolves to `auto`, even though the
+class list only ever sets `overflow-x-auto`** — confirmed with
+`getComputedStyle` while building the preview-collapse mechanism below: per
+the CSS rule that one non-`visible` axis forces the OTHER axis to also
+compute as `auto` (the same rule already documented for the TRANSLATION
+card's own scroll container in `blocks-and-ingest.md`), a block-column taller
+than `<main>`'s own box already just scrolls/clips cleanly within it. Nothing
+in this app ever silently renders BEHIND the footer (`z-20`, above `<main>`'s
+`z-10`) — a too-tall active diff is a **space-allocation** question (the
+reviewer has to scroll `<main>` to see the rest, while the look-ahead preview
+below still claims its own height), never a clipping bug. See "The look-ahead
+preview collapses…" in `.claude/rules/detail-layout.md` for the feature this
+observation motivated, and `tests/footer-height-fits-content.spec.mjs` +
+`tests/footer-explanation.spec.mjs` for the height itself.
 
 The theme toggle is not in the footer — see "Theme" in
 `.claude/rules/conventions.md` (a narrow row in `prInfoCard`, above the
@@ -1539,11 +1569,10 @@ changes**
 one del/ins line pair per aligned row the group spans (up to
 `MAX_GROUP`,
 5 lines — `Block.mjs`), stacked, within the existing scrollable
-`footer-diff` column (`no-scrollbar overflow-auto`) — the fixed 90/140px
-height
-of the bar itself stays unchanged, a long group scrolls internally
-instead of the
-bar growing.
+`footer-diff` column (`no-scrollbar overflow-auto`) — the bar itself now
+DOES grow with the row count (see `footerBoxPx` above), up to the unchanged
+`FOOTER_MAX_PX` (140) ceiling; only past that ceiling does a long group
+scroll internally instead of growing the bar further.
 This inline diff content follows the **focused column and its current
 granularity/cursor** — the top-level block (`state.gran`/`state.change`) at
 `focusLevel 0`, or a drilled column's own

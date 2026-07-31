@@ -367,7 +367,9 @@ function viewModeIndicator(viewModeFn, setViewMode) {
 
 /**
  * @param {object} b - one block from state.blocks (reactive).
- * @param {object} [opts] - { preview: boolean } dims the look-ahead card.
+ * @param {object} [opts] - { preview: boolean } dims the look-ahead card;
+ *   { collapsed: () => boolean } additionally shrinks it to just its header
+ *   (see collapsedFn below) — only ever meaningful together with preview.
  * @returns arrow.js template — call with a mount target to render.
  */
 export default function Block(b, opts = {}) {
@@ -389,6 +391,19 @@ export default function Block(b, opts = {}) {
   // false there) doesn't need to wire it up.
   const setViewMode = opts.setViewMode || (() => {})
   const preview = !!opts.preview
+  // collapsedFn is a function returning whether this card should shrink to just
+  // its header + meta row (category/title/status, file:line + approve pill) —
+  // no description, no diff body. Only ever passed truthy for a look-ahead
+  // PREVIEW card, when the ACTIVE card next to/above it doesn't fully fit the
+  // screen on its own (see previewTooTallForActive in home.mjs) — freeing the
+  // preview's usual space for the active card instead. A function (not a
+  // value), read from this card's own nested `${() => ...}` slot below
+  // (mirrors activeGroup/hintsEnabled) — home.mjs's callers must NOT resolve
+  // it eagerly in their outer array-building closures (see
+  // previewTooTallForActive's own doc comment): it depends on the live window
+  // size and the footer's own current height, both of which change far more
+  // often than this card's own content does. Defaults to never collapsing.
+  const collapsedFn = opts.collapsed || (() => false)
   // activeGroup is a function returning the currently-navigated change group
   // ({ start, end } row indices) for this block, or null. It's a function (not a
   // value) so the pane's .innerHTML binding re-runs when the navigation state it
@@ -548,14 +563,30 @@ export default function Block(b, opts = {}) {
               </label>`}
       </div>
 
-      <p class="border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-sm leading-relaxed">
-        <span class="${() => (b.description ? 'text-slate-600 dark:text-zinc-400' : 'italic text-slate-400 dark:text-zinc-500')}"
-          >${() => b.description || 'nog geen omschrijving'}</span
-        >
-      </p>
-
       ${() =>
-        b.category === 'TRANSLATION'
+        // Collapsed (see collapsedFn's own doc comment above): skip the
+        // description AND the diff body entirely, leaving just the header +
+        // meta rows above (category/title/status, file:line + approve pill) —
+        // exactly the "only show the head" ask. A `${() => ...}` toggle
+        // between a template and '' (never a bare/static ternary — see the
+        // "leaks the template function as text" pitfall in conventions.md);
+        // nested inside this already-stable <article> root, not itself the
+        // sole content of a keyed list item, so the "bare toggling
+        // expression" pitfall doesn't apply here either (same reasoning as
+        // the b.tests/b.author/checkbox toggles above).
+        collapsedFn()
+          ? ''
+          : html`<p class="border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-sm leading-relaxed">
+              <span
+                class="${() =>
+                  b.description ? 'text-slate-600 dark:text-zinc-400' : 'italic text-slate-400 dark:text-zinc-500'}"
+                >${() => b.description || 'nog geen omschrijving'}</span
+              >
+            </p>`}
+      ${() =>
+        collapsedFn()
+          ? ''
+          : b.category === 'TRANSLATION'
           ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled, commentedFn, lineSummaryFn)
           : isSvgFile(b)
           ? svgSlot(b)
