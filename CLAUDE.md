@@ -74,7 +74,8 @@ only loaded when the topic is relevant. Update the details there, not here.
   `approve`, which durably persists reviewer approval, and `cleanup`, which
   daily purges all data — worktrees, workflow runs, read-model rows — of
   PRs merged more than 7 days ago). See
-  `.claude/rules/tembed-workflows.md` and the hard rules
+  `.claude/rules/tembed-workflows.md`, the endpoint surface in
+  `.claude/rules/tembed-endpoints.md`, and the hard rules
   `.claude/rules/workflow-determinism.md` /
   `.claude/rules/workflows-write-boundary.md`.
 - **Task inbox** — the `/inbox` page: a personal, scored to-do list across PR
