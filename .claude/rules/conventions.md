@@ -530,8 +530,23 @@
   `gh api user`, cached in-memory for the process lifetime — the same
   operational carve-out as the heartbeat map/the avatar image cache, see
   `workflows-write-boundary.md`) and `identityOf(source, author, avatarUrl)`
-  substitutes `{name, avatarUrl}` for `source === 'ui'` only; every other
-  message renders exactly what it carries. Call sites: `reactionBubble`,
+  substitutes `{name, avatarUrl}` for `source === 'ui'` (or missing) only;
+  every other message renders exactly what it carries.
+  **`identityOf` treats a missing `source` the same as `'ui'`
+  (`(source || 'ui') === 'ui'`), because a genuinely in-app-placed comment's
+  own `Source` field is stored empty and Go's `json:"source,omitempty"` then
+  drops it from the API response entirely — so the raw value reaching
+  `identityOf` for such a comment is `undefined`, not the literal string
+  `'ui'`.** A bare `source === 'ui'` check therefore never matched a placed
+  comment's own root message and it kept showing the bare `RE`
+  initials-circle + the literal name `"reviewer"` instead of the reviewer's
+  real avatar/first name — every OTHER call site in the codebase that reads
+  a comment's `source` already normalizes this the same way
+  (`c.source || 'ui'`, see `threadMessages`'s synthetic opening message and
+  `commentActivitySummary` in `RelatedPanel.mjs`); `identityOf` itself had
+  been overlooked. A genuinely foreign message (`github`/`ai`) always
+  carries a real, non-empty `source`, so this normalization can never
+  misclassify one as an own message. Call sites: `reactionBubble`,
   `compactConversation` and `commentDetailCard` (`RelatedPanel.mjs`) — always
   for **both** the avatar and the name text, so they never name different
   people. Deliberately display-time instead of a write-time author/avatar

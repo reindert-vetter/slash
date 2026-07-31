@@ -678,6 +678,34 @@ toggling expression — per the "bare toggling expression" pitfall in
 `conventions.md`: the outer `.map()` key stays `'comment:' + c.id` regardless
 of expand/collapse, only the nested `${() => …}` binding swaps.
 
+**Deleting a comment hands the keyboard back to its own diff row
+(`deleteCommentAndSelectRow`, `home.mjs`).** Choosing "Verwijder comment"
+(`commentCommandsFor`'s `delete-comment` item) used to call
+`deleteFocusedComment` directly, which only sends the `delete` Signal and
+reloads the comment list — it never touched `cs.focus` or the diff cursor.
+Once the deleted comment (and thus its thread) was gone, `cs.focus` stayed
+stuck on `'comment'`/`'thread'` pointing at nothing: `relatedActive()` kept
+returning `true`, so every further arrow key kept being routed into the now-
+empty comment panel instead of the diff — the keyboard looked "dead" right
+after a delete. `deleteCommentAndSelectRow` wraps `deleteFocusedComment`:
+it snapshots the deleted comment's own anchor (`c.gran`/`c.rowStart`, from
+`focusedComment()`) and the currently focused column (`focusedBlock()`)
+**before** the `await` (`deleteFocusedComment`'s reload can itself already
+touch `cs.focus`/`cs.sel` via its own shrinking-list clamp — this function's
+own landing must win regardless), then re-anchors the diff cursor onto the
+unit that covered the deleted comment's row — `state.gran`/`state.change` at
+`focusLevel === 0`, or the focused column's own `state.drillCursor` entry
+otherwise (mirrors `setGran`/`setDrillGran`'s own level branch) — and calls
+`leaveRelated()` (the exported `exitRelated`) to release `cs.focus` back to
+`null`. An unpinned/never-anchored comment (`rowStart < 0`, see the
+re-anchor-pass section in `tembed-workflows.md`) falls back to row 0 — the
+same fallback `openTask` already uses for exactly that case, not a new
+judgment call. Since the inline comment panel only ever shows a comment
+anchored on the column that currently owns the keyboard (`focusedBlock()`,
+see "Inline comment blocks" above), the target block is always the one
+already focused — no cross-block jump is ever needed here. Test:
+`tests/comment-delete-selects-row.spec.mjs`.
+
 **Converting an AI-controle finding into a real comment
 (`convertWarningToComment`, `RelatedPanel.mjs`).** An AI-authored finding
 (`code_warning`, `source:'ai'`, `Local:true` — see "AI risk check of the

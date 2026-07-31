@@ -133,3 +133,49 @@ test('comment row and thread bubbles show the author\'s real first name once kno
   // An unresolved login stays exactly as stored — no invented name.
   await expect(authors.nth(1)).toHaveText('someoneelse')
 })
+
+// Regression: a comment PLACED IN THIS APP (author 'reviewer', no `source` —
+// exactly what RelatedPanel.mjs's createComment sends) must show the local
+// reviewer's real avatar + first name, not the bare 'RE' initials circle next
+// to the literal sentinel text "reviewer". identityOf's `source === 'ui'`
+// check used to never match here: the comment's own Source is stored empty
+// (Go's `json:"source,omitempty"` then drops it from the API response
+// entirely), so the raw value reaching identityOf was `undefined`, not the
+// literal string 'ui' — see the identityOf paragraph in conventions.md.
+test('an own, in-app-placed comment shows the reviewer\'s real identity, not the "reviewer" sentinel', async ({ page }) => {
+  await page.route('**/api/me', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, login: 'reindert-vetter', avatarUrl: '' }),
+    }),
+  )
+  await page.route('**/api/names**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, names: { 'reindert-vetter': { name: 'Reindert Vetter', avatarUrl: '' } } }),
+    }),
+  )
+
+  const pr = 970011
+  // No `source` in the payload at all — mirrors createComment, which never
+  // sends one, so the backend stores Source: "" for the root comment.
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: { pr, file: 'test.php', line: 1, author: 'reviewer', body: 'my own note', gran: 'line', label: 'Order::total' },
+  })
+  const runId = (await start.json()).runId
+  expect(runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await page.keyboard.press('Escape')
+
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await expect(item.getByTestId('comment-author')).toHaveText('Reindert')
+
+  await item.click()
+  const authors = page.getByTestId('reaction-author')
+  await expect(authors.first()).toHaveText('Reindert')
+  await expect(authors.first()).not.toHaveText('reviewer')
+})

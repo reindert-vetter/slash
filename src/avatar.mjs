@@ -58,7 +58,12 @@ export function ensureMe() {
 // avatar falls back to the one behind the login (a comment stored before the
 // avatar_url column existed carries none of its own).
 export function identityOf(source, author, avatarUrl) {
-  if (source === 'ui' && me.login) return { name: displayNameOf(me.login), avatarUrl: me.avatarUrl }
+  // A comment/reply placed IN THIS APP stores no `source` at all (Go's
+  // `json:"source,omitempty"` drops the empty string from the API response),
+  // so an in-app message here is either "ui" or missing entirely — normalize
+  // like every other call site in the codebase (threadMessages,
+  // commentActivitySummary) already does.
+  if ((source || 'ui') === 'ui' && me.login) return { name: displayNameOf(me.login), avatarUrl: me.avatarUrl }
   return { name: displayNameOf(author), avatarUrl: avatarUrl || avatarUrlOf(author) }
 }
 

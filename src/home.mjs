@@ -3817,6 +3817,41 @@ function defaultSel(list) {
   return Math.min(1, Math.max(0, list.length - 1))
 }
 
+// deleteCommentAndSelectRow deletes the focused comment and then moves the
+// keyboard cursor onto the diff row/unit it was anchored to — "after removing
+// a comment on a line, I want that line selected" (reported). The inline
+// comment panel only ever shows a comment anchored on the column that
+// currently owns the keyboard (focusedBlock(), see hasVisibleComments/
+// InlineComments in detail-layout.md), so the target unit is always within
+// THAT block — no cross-block jump is ever needed here. Snapshots the
+// comment's own anchor (gran/rowStart) and the focused block BEFORE the
+// await, since deleteFocusedComment's reload can (via the existing
+// cs.list.length===0 clamp) itself already touch cs.focus/cs.sel — this
+// function's own cursor move must win regardless of that clamp's outcome.
+// Falls back to row 0 for an unpinned/never-anchored comment (rowStart < 0,
+// see the re-anchor-pass doc in tembed-workflows.md) — the same fallback
+// openTask already uses for exactly that case, not a new judgment call.
+async function deleteCommentAndSelectRow() {
+  const c = focusedComment()
+  const b = focusedBlock()
+  await deleteFocusedComment()
+  if (!c || !b) return
+  const rows = blockRows(b)
+  const gran = c.gran || 'group'
+  const units = navUnitsOf(b, rows, gran)
+  const anchorRow = c.rowStart >= 0 ? c.rowStart : 0
+  const change = units.length ? unitAtRow(units, anchorRow) : 0
+  clearRangeAnchor()
+  if (state.focusLevel > 0) {
+    state.drillCursor = state.drillCursor.map((cur, i) => (i === state.focusLevel - 1 ? { gran, change } : cur))
+  } else {
+    state.gran = gran
+    state.change = change
+  }
+  leaveRelated()
+  scrollChangeIntoView()
+}
+
 // commentCommandsFor builds COMMENT_COMMANDS freshly every time (called from
 // openMenu('comment'), plain non-reactive code — see rootCommandsFor): Enter on
 // a focused comment row (not mid-reply) offers resolving or deleting it. Kept
@@ -3865,7 +3900,7 @@ function commentCommandsFor() {
       id: 'delete-comment',
       label: 'Verwijder comment',
       hint: 'delete',
-      run: () => deleteFocusedComment(),
+      run: () => deleteCommentAndSelectRow(),
     },
   ]
   const c = focusedComment()
