@@ -360,6 +360,22 @@ func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
 	return res.RowsAffected()
 }
 
+// Get returns the single comment matching id, with its reactions. The second
+// return value is false when no such comment exists (never an error in that
+// case) — READ, safe for the UI and for a workflow Activity that needs to
+// validate a comment before acting on it (see applyChatCommentAction in
+// chat_workflow.go, "claude_chat"'s opt-in influence on a comment thread).
+func (m *Module) Get(ctx context.Context, id string) (Comment, bool, error) {
+	list, err := m.query(ctx, `WHERE id = ?`, id)
+	if err != nil {
+		return Comment{}, false, err
+	}
+	if len(list) == 0 {
+		return Comment{}, false, nil
+	}
+	return list[0], true, nil
+}
+
 // List returns the comments of one PR (or all PRs if pr <= 0), each with its
 // reactions. READ — safe for the UI.
 func (m *Module) List(ctx context.Context, pr int) ([]Comment, error) {

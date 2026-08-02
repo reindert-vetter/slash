@@ -56,6 +56,13 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_pr ON chat_messages(pr);
 const (
 	KindQuestion = "question" // an assistant turn asking the reviewer to pick (or type) an answer
 	KindError    = "error"    // an assistant turn reporting a failed Claude call
+	// KindAction marks the confirmation turn shown after Claude — on the
+	// reviewer's explicit request — successfully replied to or resolved the
+	// comment thread this conversation hangs on (see chat_workflow.go's
+	// applyChatCommentAction, the "claude_chat" opt-in influence path). A
+	// FAILED attempt is stored as KindError instead, never KindAction, so the
+	// Kind alone tells the reviewer whether it actually happened.
+	KindAction = "action"
 )
 
 // Message is one turn in a conversation.

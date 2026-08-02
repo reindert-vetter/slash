@@ -125,22 +125,33 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			return nil, fmt.Errorf("save chat user message: %w", err)
 		}
 
-		var assistant chat.Message
+		var result chatTurnResult
 		if err := w.ExecuteActivity("runClaudeTurn", chatTurnInput{
 			PR: in.PR, ConversationID: in.CommentID, Body: sig.Body, Action: sig.Action,
-		}, &assistant); err != nil {
+		}, &result); err != nil {
 			return nil, fmt.Errorf("run claude turn: %w", err)
 		}
-		if assistant.Kind == chat.KindQuestion {
-			pendingQuestionID = assistant.ID
+		if result.Message.Kind == chat.KindQuestion {
+			pendingQuestionID = result.Message.ID
 		}
 
-		// Phase 4 (not built yet, see .claude/rules/tembed-workflows.md): if the
-		// reviewer explicitly asked Claude to reply in/resolve the left comment
-		// thread, an influence directive parsed here would signal that thread's
-		// own task_code_comment Execution via its existing "reply" Signal
-		// (Source "ai") — never a direct write. No such parsing happens yet, so
-		// this conversation can currently never affect the comment thread.
+		// Phase 4: only when the reviewer explicitly asked for it, the assistant's
+		// turn may carry a comment_action directive (parsed by parseAssistantTurn,
+		// returned instead of a saved message by runOneClaudeTurn — see
+		// chatTurnResult). Whether this Activity runs at all is decided purely by
+		// the STORED result of the Activity just above (result.Action != nil),
+		// mirroring the pendingQuestionID branch: deterministic under replay, never
+		// dependent on live state. applyChatCommentAction is the only thing that
+		// signals the comment thread's own task_code_comment Execution — via its
+		// existing "reply" Signal (Source "ai"), never a direct write — and it also
+		// records the one visible outcome turn (success or KindError).
+		if result.Action != nil {
+			if err := w.ExecuteActivity("applyChatCommentAction", chatCommentActionInput{
+				PR: in.PR, ConversationID: in.CommentID, Directive: *result.Action,
+			}, nil); err != nil {
+				return nil, fmt.Errorf("apply chat comment action: %w", err)
+			}
+		}
 	}
 }
 
@@ -164,14 +175,51 @@ type chatCommitInput struct {
 	ConversationID string `json:"conversationId"`
 }
 
+// chatTurnResult is runClaudeTurn's own Activity return shape: the saved
+// chat.Message (or, for a comment_action turn, a zero Message — see below)
+// plus, only when the assistant's reply was a validated comment_action
+// directive, the parsed action for the workflow to apply next via
+// applyChatCommentAction. Kept separate from chat.Message itself (whose
+// chat_messages persistence writes an explicit column list, never full-struct
+// reflection — see modules/chat.SaveMessage) so this workflow-only handoff
+// never leaks into modules/chat, which knows nothing about
+// task_code_comment/ReactionSignal addressing.
+type chatTurnResult struct {
+	Message chat.Message            `json:"message"`
+	Action  *commentActionDirective `json:"action,omitempty"`
+}
+
+// commentActionDirective is the parsed, but NOT YET validated, shape of a
+// reviewer-requested {"type":"comment_action",...} assistant directive.
+// CommentID is re-validated by applyChatCommentAction against the
+// conversation's own thread before anything is signalled — see
+// parseAssistantTurn and .claude/rules/workflows-comments.md ("claude_chat").
+type commentActionDirective struct {
+	CommentID string `json:"commentId"`
+	Action    string `json:"action"` // "reply" | "resolve"
+	Body      string `json:"body"`   // required for "reply", ignored for "resolve"
+}
+
+// chatCommentActionInput is applyChatCommentAction's own Activity input.
+type chatCommentActionInput struct {
+	PR             int                    `json:"pr"`
+	ConversationID string                 `json:"conversationId"`
+	Directive      commentActionDirective `json:"directive"`
+}
+
 // assistantDirective is the strict JSON shape claude.ChatSystemPrompt asks
-// the model to use for a clarifying question with a few choices — the only
-// directive type parsed today. Anything that doesn't parse as this shape is
-// treated as a plain text turn.
+// the model to use — a clarifying question with a few choices ("question"),
+// or, only on the reviewer's explicit request, an action to apply to the left
+// comment thread ("comment_action", Phase 4). Anything that doesn't parse as
+// one of these two recognized shapes is treated as a plain text turn.
 type assistantDirective struct {
-	Type     string   `json:"type"` // only "question" is recognized
+	Type     string   `json:"type"` // "question" | "comment_action"
 	Question string   `json:"question"`
 	Options  []string `json:"options"`
+	// The following three fields are comment_action-only.
+	Action    string `json:"action"` // "reply" | "resolve"
+	CommentID string `json:"commentId"`
+	Body      string `json:"body"`
 }
 
 // maxChatQuestionOptions caps how many choices a question turn offers,
@@ -193,7 +241,13 @@ const maxChatQuestionOptions = 3
 // shadow worktree (ensureChatShadowWorktree, chat_shadow.go) with the Edit
 // tool enabled, instead of the default read-only, tool-less completion — see
 // .claude/rules/tembed-workflows.md ("claude_chat").
-func runOneClaudeTurn(ctx context.Context, cm *chat.Module, cl claude.Client, dataDir string, arg chatTurnInput) chat.Message {
+//
+// A comment_action directive is deliberately NOT saved here as a message —
+// applyChatCommentAction (called by the workflow right after this Activity,
+// only when the returned action is non-nil) is the sole place that records the
+// one visible outcome turn, so the reviewer only ever sees "it happened" or
+// "it failed", never an optimistic message that turns out wrong.
+func runOneClaudeTurn(ctx context.Context, cm *chat.Module, cl claude.Client, dataDir string, arg chatTurnInput) (chat.Message, *commentActionDirective) {
 	sessionID, _ := cm.GetSession(ctx, arg.ConversationID)
 	req := claude.RunRequest{
 		Model:        claude.ModelSonnet,
@@ -210,12 +264,19 @@ func runOneClaudeTurn(ctx context.Context, cm *chat.Module, cl claude.Client, da
 				Body: "Kon geen werkkopie voor Claude klaarzetten om in te bewerken. Probeer het opnieuw.",
 			}
 			_ = cm.SaveMessage(ctx, msg)
-			return msg
+			return msg, nil
 		}
 		req.WorkDir = dir
 		req.Tools = []string{"Read", "Grep", "Glob", "Edit"}
 		req.SystemPrompt = claude.ChatEditSystemPrompt
 	}
+	// The embedded prompt files are static, call-independent text (see
+	// modules/claude/prompts.go), so the conversation's own comment id — which
+	// chat.md's comment_action directive needs to echo back as "commentId" —
+	// is appended here in Go, the same "static block + dynamic call-specific
+	// content" split every other prompt already uses. Harmless for a turn that
+	// never uses the directive.
+	req.SystemPrompt += "\n\nHet id van DEZE comment-thread (gebruik dit exact als \"commentId\" in het comment_action-format): " + arg.ConversationID
 	result, err := cl.RunChat(ctx, req)
 	if err != nil {
 		msg := chat.Message{
@@ -224,46 +285,147 @@ func runOneClaudeTurn(ctx context.Context, cm *chat.Module, cl claude.Client, da
 			Body: "Er ging iets mis bij het praten met Claude. Probeer het opnieuw.",
 		}
 		_ = cm.SaveMessage(ctx, msg)
-		return msg
+		return msg, nil
 	}
 	if err := cm.SetSession(ctx, arg.ConversationID, result.SessionID); err != nil {
 		// Best-effort: losing the session id only means the NEXT turn starts a
 		// fresh session instead of resuming this one — degraded, not broken.
 		_ = err
 	}
-	msg := parseAssistantTurn(arg.PR, arg.ConversationID, result.Text)
-	_ = cm.SaveMessage(ctx, msg)
-	return msg
+	msg, action := parseAssistantTurn(arg.PR, arg.ConversationID, result.Text)
+	if action == nil {
+		_ = cm.SaveMessage(ctx, msg)
+	}
+	return msg, action
 }
 
 // parseAssistantTurn turns the model's raw text into a chat.Message: a
-// KindQuestion turn when the text is exactly the strict assistantDirective
-// JSON the system prompt asks for, otherwise a plain text turn (the raw text
-// verbatim — including when it happens to start with "{" but doesn't parse as
-// a recognized directive, so a stray/malformed directive degrades to plain
-// text rather than vanishing).
-func parseAssistantTurn(pr int, conversationID, text string) chat.Message {
+// KindQuestion turn when the text is exactly the strict "question"
+// assistantDirective JSON, a (nil chat.Message, non-nil directive) pair when
+// it is a validated "comment_action" directive, otherwise a plain text turn
+// (the raw text verbatim — including when it happens to start with "{" but
+// doesn't parse as a recognized directive, so a stray/malformed directive
+// degrades to plain text rather than vanishing).
+func parseAssistantTurn(pr int, conversationID, text string) (chat.Message, *commentActionDirective) {
 	msg := chat.Message{
 		ID: "asst-" + newUIReactionID(), ConversationID: conversationID, PR: pr,
 		Role: "assistant", Body: text,
 	}
 	trimmed := strings.TrimSpace(text)
 	if !strings.HasPrefix(trimmed, "{") {
-		return msg
+		return msg, nil
 	}
 	var d assistantDirective
 	if err := json.Unmarshal([]byte(trimmed), &d); err != nil {
-		return msg
+		return msg, nil
 	}
-	if d.Type != "question" || strings.TrimSpace(d.Question) == "" {
-		return msg
+	switch d.Type {
+	case "question":
+		if strings.TrimSpace(d.Question) == "" {
+			return msg, nil
+		}
+		opts := d.Options
+		if len(opts) > maxChatQuestionOptions {
+			opts = opts[:maxChatQuestionOptions]
+		}
+		msg.Kind = chat.KindQuestion
+		msg.Body = d.Question
+		msg.Options = opts
+		return msg, nil
+	case "comment_action":
+		if d.Action != "reply" && d.Action != "resolve" {
+			return msg, nil // malformed -> degrade to plain text, per the rule above
+		}
+		if d.Action == "reply" && strings.TrimSpace(d.Body) == "" {
+			return msg, nil
+		}
+		if strings.TrimSpace(d.CommentID) == "" {
+			return msg, nil
+		}
+		return chat.Message{}, &commentActionDirective{CommentID: d.CommentID, Action: d.Action, Body: d.Body}
+	default:
+		return msg, nil
 	}
-	opts := d.Options
-	if len(opts) > maxChatQuestionOptions {
-		opts = opts[:maxChatQuestionOptions]
+}
+
+// applyChatCommentAction is the applyChatCommentAction Activity's body (a
+// plain, testable function, mirroring runOneClaudeTurn): validates a
+// comment_action directive and, only if it passes every check, signals the
+// target comment thread's own task_code_comment Execution via the EXISTING
+// "reply" Signal (Source "ai") — never a direct write, the same sanctioned
+// path an AI code_warning finding already uses. Exactly one outcome message
+// (KindAction on success, KindError otherwise) is recorded either way, so the
+// reviewer always sees what happened. Every failure is also logged via
+// tm.logf, per .claude/rules/workflows-write-boundary.md's best-effort
+// convention — never a Go error that would fail the whole workflow.
+func applyChatCommentAction(ctx context.Context, tm *TaskManager, arg chatCommentActionInput) {
+	d := arg.Directive
+
+	// The directive must target the conversation's OWN thread — a chat has no
+	// context about any other comment of the PR, so any other id can only be a
+	// hallucination/mistake, never a legitimate cross-thread request. Rejected
+	// silently from the reviewer's point of view except for the log line + the
+	// KindError turn below; never signalled.
+	if d.CommentID != arg.ConversationID {
+		tm.logf("claude_chat: comment_action ignored — directive commentId=%q does not match conversation=%q (pr=%d)",
+			d.CommentID, arg.ConversationID, arg.PR)
+		saveChatActionOutcome(ctx, tm.chat, arg, "Kon niet worden toegepast — ongeldige comment-referentie.")
+		return
 	}
-	msg.Kind = chat.KindQuestion
-	msg.Body = d.Question
-	msg.Options = opts
-	return msg
+	if d.Action != "reply" && d.Action != "resolve" {
+		tm.logf("claude_chat: comment_action ignored — unknown action=%q (pr=%d conversation=%s)", d.Action, arg.PR, arg.ConversationID)
+		saveChatActionOutcome(ctx, tm.chat, arg, "Kon niet worden toegepast — onbekende actie.")
+		return
+	}
+	if tm.comments == nil {
+		saveChatActionOutcome(ctx, tm.chat, arg, "De comment-thread is niet beschikbaar.")
+		return
+	}
+	c, ok, err := tm.comments.Get(ctx, arg.ConversationID)
+	if err != nil || !ok || c.Status == "deleting" || c.Status == "deleted" {
+		tm.logf("claude_chat: comment_action skipped — comment %s not found/deleted (pr=%d, err=%v)", arg.ConversationID, arg.PR, err)
+		saveChatActionOutcome(ctx, tm.chat, arg, "De comment-thread bestaat niet meer.")
+		return
+	}
+	// A completed/failed Execution can no longer receive a Signal — check
+	// BEFORE signalling rather than relying on Signal's own error, so the
+	// reviewer-facing message can name the real reason (mirrors the avatar-
+	// backfill glue's own Status check in comment_import.go).
+	status, err := tm.engine.Status(c.RunID)
+	if err != nil || status == tembed.StatusCompleted || status == tembed.StatusFailed {
+		tm.logf("claude_chat: comment_action skipped — thread %s not signallable (status=%q, err=%v)", c.RunID, status, err)
+		saveChatActionOutcome(ctx, tm.chat, arg, "De comment-thread kan niet meer worden bijgewerkt.")
+		return
+	}
+
+	sig := ReactionSignal{ID: "sys-" + newUIReactionID(), Source: "ai", Author: "Claude", Body: d.Body}
+	successText := "✓ Reactie geplaatst op de comment-thread."
+	if d.Action == "resolve" {
+		sig.Body = "/resolve"
+		sig.Done = true
+		successText = "✓ Comment-thread opgelost."
+	}
+	if err := tm.Signal(c.RunID, sig); err != nil {
+		tm.logf("claude_chat: comment_action signal failed for %s: %v", c.RunID, err)
+		saveChatActionOutcome(ctx, tm.chat, arg, "Kon de comment-thread niet bijwerken. Probeer het opnieuw.")
+		return
+	}
+	saveChatActionOutcome(ctx, tm.chat, arg, successText)
+}
+
+// saveChatActionOutcome records the single visible turn for a comment_action
+// attempt: KindAction for a text starting with "✓" (the success texts built
+// above), KindError for anything else — see chat.KindAction's own doc comment.
+func saveChatActionOutcome(ctx context.Context, cm *chat.Module, arg chatCommentActionInput, text string) {
+	if cm == nil {
+		return
+	}
+	kind := chat.KindError
+	if strings.HasPrefix(text, "✓") {
+		kind = chat.KindAction
+	}
+	_ = cm.SaveMessage(ctx, chat.Message{
+		ID: "asst-" + newUIReactionID(), ConversationID: arg.ConversationID, PR: arg.PR,
+		Role: "assistant", Kind: kind, Body: text,
+	})
 }

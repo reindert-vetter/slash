@@ -1707,10 +1707,28 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, err
 		}
 		if m.chat == nil || m.claude == nil {
-			return json.Marshal(chat.Message{})
+			return json.Marshal(chatTurnResult{})
 		}
-		msg := runOneClaudeTurn(ctx, m.chat, m.claude, m.dataDir, arg)
-		return json.Marshal(msg)
+		msg, action := runOneClaudeTurn(ctx, m.chat, m.claude, m.dataDir, arg)
+		return json.Marshal(chatTurnResult{Message: msg, Action: action})
+	})
+	// Activity (Phase 4): apply a validated comment_action directive — reply to
+	// or resolve the comment thread this conversation hangs on, ONLY on the
+	// reviewer's own explicit request in the conversation — by signalling that
+	// thread's own task_code_comment Execution via the EXISTING "reply" Signal
+	// (Source "ai"), never a direct write. See chat_workflow.go
+	// (applyChatCommentAction) and .claude/rules/workflows-comments.md
+	// ("claude_chat").
+	engine.RegisterActivity("applyChatCommentAction", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatCommentActionInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil {
+			return nil, nil
+		}
+		applyChatCommentAction(ctx, m, arg)
+		return nil, nil
 	})
 	// Activity: commit + fast-forward-push a conversation's shadow-worktree
 	// edits onto the PR's real head branch (write: git commit/push, guarded by

@@ -203,9 +203,10 @@ not read-only copies.
 
 An embedded, multi-turn Claude conversation next to a review comment thread —
 the reviewer can ask Claude about the code/comment without leaving the review
-tree. **Phases 1-3 built** (backbone, frontend panel, agentic tool access +
-committing edits); **phase 4 (influencing the left comment thread) is still
-not built** — called out explicitly below.
+tree. **All four phases built**: backbone, frontend panel, agentic tool access
++ committing edits, and — on the reviewer's own explicit request only —
+influencing the left comment thread (see "Opt-in influence on the left comment
+thread (Phase 4)" below).
 
 ### Scope: one conversation per comment thread
 
@@ -411,21 +412,85 @@ flow.
   bare-repo-as-"origin" (`chat_shadow_test.go`, `t.Setenv("SLASH_REPO_DIR",
   ...)`) — no `gh`/network call at all.
 
-### Not yet built (phase 4)
+### Opt-in influence on the left comment thread (Phase 4)
 
-- **No influence on the left comment thread yet** — Claude may never post to
-  or resolve the comment thread on its own initiative. A later phase parses an
-  **opt-in** directive (only emitted when the reviewer explicitly asks for it
-  in the conversation) and signals the thread's own `task_code_comment`
-  Execution via its existing `reply` Signal (`Source: "ai"`) — the exact same
-  sanctioned write path an AI `code_warning` finding already uses, never a new
-  one.
-- **No UI trigger yet for `chatActionEdit`/`chatActionCommit`** — the frontend
-  panel (`.claude/rules/claude-chat-panel.md`) only ever sends a plain
-  (`Action: ""`) turn today; a later pass needs to add the composer
-  action(s)/button(s) that set `action: "edit"` or `"commit"` on the
-  `POST .../signals/message` call. The backend contract (this section) is
-  ready for it.
+Claude may **never** post to or resolve the comment thread on its own
+initiative — only on the reviewer's **explicit** request, spelled out within
+the conversation itself (e.g. "zet dit als reactie op de comment", "los deze
+comment op"). There is no button/tool for this yet (see the open UI-trigger
+point below) — it is entirely driven by the model choosing to emit a second
+strict JSON directive, parsed by the same `parseAssistantTurn` that already
+recognizes the `question` shape:
+
+```
+{"type":"comment_action","action":"reply","commentId":"<id>","body":"<text>"}
+{"type":"comment_action","action":"resolve","commentId":"<id>"}
+```
+
+- **The system prompt (`modules/claude/prompts/chat.md`) states the "only on
+  explicit request, never on your own initiative" rule directly next to the
+  format**, mirroring how the `question` directive is introduced. This is a
+  correctness aid, not the actual guard — see below for what really prevents
+  misuse.
+- **The conversation's own comment id is injected into the system prompt in
+  Go** (`runOneClaudeTurn`, appended after `claude.ChatSystemPrompt`/
+  `claude.ChatEditSystemPrompt`, both of which stay static embedded files) so
+  the model can echo the right `commentId` back — the embedded prompt files
+  are call-independent text, the same "static block + dynamic call-specific
+  content" split every other prompt (`resolvePrompt`/`explainPrompt`/…)
+  already uses.
+- **`parseAssistantTurn` returns `(chat.Message, *commentActionDirective)`
+  instead of just a message.** A validated `comment_action` directive (a
+  recognized `action` of `"reply"`/`"resolve"`, a non-empty `body` for
+  `"reply"`, a non-empty `commentId`) yields `(chat.Message{}, &directive)` —
+  deliberately **not saved as a message here**: the raw JSON must never appear
+  in the transcript, and whether the attempt actually succeeds is only known
+  after the validation below runs. A malformed shape (any of those checks
+  failing) degrades to a plain text turn, exactly like a malformed `question`
+  directive — the raw text shows verbatim rather than vanishing.
+- **`runClaudeTurn`'s own Activity result grew a matching `Action` field**
+  (`chatTurnResult{Message, Action}`) so this workflow-only handoff travels
+  through the *existing* Activity boundary without leaking into
+  `modules/chat`, which knows nothing about `task_code_comment`/
+  `ReactionSignal` addressing.
+- **The workflow body's decision to run a second Activity is purely a
+  function of that stored result** (`result.Action != nil`), exactly mirroring
+  the existing `pendingQuestionID` branch — deterministic under replay, no
+  live-state dependency.
+- **`applyChatCommentAction`** (its own registered Activity, plain testable
+  function) is the only thing that signals anything, and only after every
+  check passes, in order:
+  1. **`directive.CommentID` must equal the conversation's own thread**
+     (`arg.ConversationID`) — a chat has no context about any other comment of
+     the PR, so a mismatch can only be a mistake/hallucination, never a
+     legitimate cross-thread request. Never signalled; logged via `logf` and
+     surfaced as a `KindError` turn.
+  2. **The comment must still exist and not be `deleting`/`deleted`**
+     (`comments.Module.Get`, a new read method — `WHERE id = ?`, mirrors
+     `List`/`Search`'s shared `query`).
+  3. **The target Execution must still be signallable**
+     (`engine.Status(c.RunID)` not `completed`/`failed`) — a completed/failed
+     run can never receive a Signal again; checked **before** signalling
+     (mirrors the avatar-backfill glue's own `Status` check in
+     `comment_import.go`) so the reviewer-facing message can name the real
+     reason instead of a bare error.
+  4. Only then: **the existing `reply` Signal** (`ReactionSignal{Source: "ai",
+     Author: "Claude", Body, Done}` — `Done: true` + the `"/resolve"` sentinel
+     body for `"resolve"`) via `TaskManager.Signal` — the exact same sanctioned
+     write path an AI `code_warning` finding already uses, never a new one.
+  A failed `Signal` call itself is also caught (best-effort, never a Go error
+  that would fail the whole `claude_chat` workflow) and surfaced the same way.
+- **Exactly one visible outcome turn is recorded either way**
+  (`saveChatActionOutcome`): `Kind: chat.KindAction` with a `"✓ …"` confirmation
+  text on success, `Kind: chat.KindError` with a concrete reason on any
+  failure — so the reviewer always sees what happened, never an optimistic
+  message that turns out wrong. `chat.KindAction` is a new `Message.Kind` value
+  alongside `KindQuestion`/`KindError`.
+- **No UI trigger yet for `chatActionEdit`/`chatActionCommit`** (unrelated to
+  Phase 4) — the frontend panel only ever sends a plain (`Action: ""`) turn
+  today; a later pass needs to add the composer action(s)/button(s) that set
+  `action: "edit"` or `"commit"` on the `POST .../signals/message` call. The
+  backend contract (this section) is ready for it.
 
 ### Endpoints
 
@@ -440,8 +505,14 @@ transcript. Full table: `.claude/rules/tembed-endpoints.md`.
 `modules/chat/chat_test.go` (round-trip, question+answer on one row, per-PR
 purge — all offline, no `claude`), `chat_workflow_test.go` (end-to-end via
 `claude.Fake`: idempotent start, the reviewer/assistant turn cycle + session
-id reuse, a question turn's answer landing on the same row, and a failed turn
-degrading to a `KindError` message), `chat_shadow_test.go` (the
+id reuse, a question turn's answer landing on the same row, a failed turn
+degrading to a `KindError` message, a valid `comment_action` reply/resolve
+directive landing on the target thread's own `task_code_comment` Execution
+with `Source: "ai"` plus a `KindAction` confirmation turn, a directive whose
+`commentId` doesn't match the conversation being rejected without touching any
+thread, a directive targeting a forced-`completed` Execution degrading to
+`KindError`, and a malformed directive degrading to plain text),
+`chat_shadow_test.go` (the
 `...At`-suffixed git-plumbing bodies against a throwaway local bare-repo
 "origin": worktree creation on a real branch, refresh-when-clean,
 never-discarding a pending/dirty edit, a fast-forward push actually landing on

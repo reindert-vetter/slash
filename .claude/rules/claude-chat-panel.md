@@ -97,9 +97,10 @@ The "Embedded Claude conversation" section owns:
   `cs.focus === 'claude'`. Not strictly required for the reviewer's own
   sends (already covered by the inline-Activity await above), kept as the
   agreed transport (fetch + polling, explicitly no SSE/websocket) for
-  anything else that might move the conversation along later (the
-  `chat_workflow.go` "Phase 4" note about an opt-in influence path back into
-  the left comment thread).
+  anything else that might move the conversation along without the reviewer's
+  own send being the trigger — e.g. a `KindAction`/`KindError` outcome turn
+  from the opt-in comment-thread influence path (see "Opt-in influence on the
+  left comment thread (Phase 4)" in `.claude/rules/workflows-comments.md`).
 - **`claudeChatVisible()`** — `hasVisibleComments() || cs.focus === 'claude'`.
 - **`ClaudeChatPanel(state, commentTarget)`** — the exported component
   `home.mjs` mounts as its own **sibling column** next to
@@ -226,7 +227,7 @@ off-screen at a narrow viewport — expected pre-existing scroll behaviour
 something this spec (which guards against *additional* scroll from chip
 navigation specifically) needs to re-assert.
 
-## Open (Phase 4, and one Phase-3 frontend gap)
+## Open (frontend gaps — Phase 4's backend is now built)
 
 - **Phase 3's backend is built** (a per-conversation shadow worktree + a
   fast-forward-only commit/push — see "claude_chat" → "Agentic edits" in
@@ -235,10 +236,19 @@ navigation specifically) needs to re-assert.
   A later pass needs to add the composer action(s) that set
   `action: "edit"`/`"commit"` on the `POST .../signals/message` call — no
   backend change needed, only this file's send path.
-- No opt-in mechanism yet for the conversation to influence/reply into the
-  left comment thread itself, despite the Run ID already being derived from
-  that thread's own id for exactly this future purpose (Phase 4 — see
-  `chat_workflow.go`'s own note).
+- **Phase 4's backend is now built** — on the reviewer's explicit request,
+  `chat_workflow.go`'s `applyChatCommentAction` signals the left comment
+  thread's own `task_code_comment` Execution (`Source: "ai"`) and records a
+  `Kind: chat.KindAction` (success) or `Kind: chat.KindError` (failure)
+  confirmation turn — see "Opt-in influence on the left comment thread
+  (Phase 4)" in `.claude/rules/workflows-comments.md`. **`ClaudeChat.mjs` does
+  not style `KindAction` distinctly yet** — `msg.kind === 'action'` isn't
+  checked anywhere in this file, so such a turn currently renders as a plain
+  bubble (readable, since its text is a human sentence, just visually
+  identical to an ordinary reply). A later pass should give it its own small
+  marker (mirroring `isError`'s `msg.kind === 'error'` check) so a successful
+  comment-thread action is visually distinguishable, per the app-wide
+  never-colour-only rule.
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat
   composer — a page navigation away loses an unsent, half-typed message. Not
   requested; flagging as a known gap mirroring the existing comment
