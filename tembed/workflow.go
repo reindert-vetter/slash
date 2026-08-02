@@ -20,10 +20,12 @@ type Workflow struct {
 	runID   string
 	history []Event
 
-	actIdx   int            // activity results consumed
-	timerIdx int            // timers consumed
-	sideIdx  int            // side effects consumed
-	sigIdx   map[string]int // per-name signals consumed
+	actIdx      int            // activity results consumed
+	timerIdx    int            // timers consumed
+	sideIdx     int            // side effects consumed
+	sigIdx      map[string]int // per-name signals consumed
+	asyncActIdx int            // async activities scheduled (correlation index)
+	childIdx    int            // child workflows started
 
 	// deferLowActivities is set only while a run is being recovered
 	// synchronously (Recover's high/normal phase). It makes a live (unrecorded)
@@ -80,6 +82,60 @@ func (w *Workflow) ExecuteActivity(name string, input, result any) error {
 	}
 	w.record(Event{Type: EventActivityCompleted, Name: name, Payload: out})
 	return decode(out, result)
+}
+
+// Future is a handle to an activity started with ExecuteActivityAsync. Get
+// blocks the workflow until the activity's result (or error) is recorded.
+type Future struct {
+	w   *Workflow
+	key string
+}
+
+// Get decodes the async activity's result into result (which may be nil),
+// blocking (yielding the workflow) until it is available. A failed activity
+// returns an error.
+func (f *Future) Get(result any) error {
+	if ev, ok := f.w.firstNamed(f.key, EventAsyncActivityCompleted, EventAsyncActivityFailed); ok {
+		if ev.Type == EventAsyncActivityFailed {
+			return errors.New(ev.Error)
+		}
+		return decode(ev.Payload, result)
+	}
+	panic(blocked{kind: "signal"})
+}
+
+// ExecuteActivityAsync starts the registered activity name with input without
+// blocking the workflow; call Future.Get to wait for (and decode) its result.
+// Multiple calls started before their Futures are awaited run concurrently —
+// unlike ExecuteActivity, which blocks until its single activity completes.
+//
+// Each call site gets a unique correlation key ("name#idx") because
+// completion events do not necessarily arrive in call-site order (a later
+// call can finish before an earlier one), so they cannot be matched
+// positionally like synchronous activities.
+func (w *Workflow) ExecuteActivityAsync(name string, input any) *Future {
+	idx := w.asyncActIdx
+	w.asyncActIdx++
+	key := fmt.Sprintf("%s#%d", name, idx)
+
+	if _, ok := w.firstNamed(key, EventActivityScheduled); ok {
+		// Already scheduled (this run or an earlier replay) — do not relaunch.
+		return &Future{w: w, key: key}
+	}
+
+	in, err := json.Marshal(input)
+	if err != nil {
+		// Record the marshal failure as an immediate activity failure so
+		// Future.Get surfaces it instead of hanging forever.
+		w.record(Event{Type: EventActivityScheduled, Name: key})
+		w.record(Event{Type: EventAsyncActivityFailed, Name: key, Error: fmt.Sprintf("tembed: marshal activity input: %v", err)})
+		return &Future{w: w, key: key}
+	}
+	// The input is recorded on the Scheduled event itself so a later Recover
+	// can relaunch a still-pending async activity with its original input.
+	w.record(Event{Type: EventActivityScheduled, Name: key, Payload: in})
+	w.engine.launchAsyncActivity(w.runID, key, name, in)
+	return &Future{w: w, key: key}
 }
 
 // WaitSignal blocks the workflow until a signal named signal has been
@@ -180,6 +236,24 @@ func (w *Workflow) nthOf(k int, types ...EventType) (Event, bool) {
 			return ev, true
 		}
 		count++
+	}
+	return Event{}, false
+}
+
+// firstNamed returns the first history event of one of types whose Name
+// equals name. Used for correlation-key lookups (async activities, child
+// workflows) where matching by position doesn't work because completions
+// don't necessarily arrive in call-site order.
+func (w *Workflow) firstNamed(name string, types ...EventType) (Event, bool) {
+	for _, ev := range w.history {
+		if ev.Name != name {
+			continue
+		}
+		for _, t := range types {
+			if ev.Type == t {
+				return ev, true
+			}
+		}
 	}
 	return Event{}, false
 }

@@ -450,6 +450,103 @@ func (e *Engine) fireTimer(runID string) {
 	e.advance(runID)
 }
 
+// launchAsyncActivity runs the named activity for an ExecuteActivityAsync call
+// in its own goroutine (tracked by e.wg, like a timer callback) and records its
+// result under key once it finishes. An unknown activity name is completed as
+// an immediate failure without spawning a goroutine.
+func (e *Engine) launchAsyncActivity(runID, key, name string, input []byte) {
+	e.mu.Lock()
+	fn := e.activities[name]
+	e.mu.Unlock()
+	if fn == nil {
+		e.completeAsyncActivity(runID, key, nil, fmt.Errorf("tembed: unknown activity %q", name))
+		return
+	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		out, aerr := fn(context.Background(), input)
+		e.completeAsyncActivity(runID, key, out, aerr)
+	}()
+}
+
+// completeAsyncActivity records the outcome of an async activity started by
+// launchAsyncActivity and re-drives the run. It takes the run's lock, so it
+// is safe to call from the activity's own goroutine, independent of whatever
+// else is currently advancing that run. A run that has already finished (or a
+// duplicate completion — e.g. a repeated Recover) is silently ignored.
+func (e *Engine) completeAsyncActivity(runID, key string, out []byte, aerr error) {
+	l := e.runLock(runID)
+	l.Lock()
+	defer l.Unlock()
+
+	rec, hist, err := e.store.LoadRun(runID)
+	if err != nil {
+		e.logf("tembed: completeAsyncActivity load %s: %v", runID, err)
+		return
+	}
+	if rec.Status == StatusCompleted || rec.Status == StatusFailed {
+		return
+	}
+	// Already recorded (e.g. this completion raced a duplicate launch) — nothing to do.
+	for _, ev := range hist {
+		if ev.Name == key && (ev.Type == EventAsyncActivityCompleted || ev.Type == EventAsyncActivityFailed) {
+			return
+		}
+	}
+	ev := Event{Seq: len(hist), Name: key, Time: e.now()}
+	if aerr != nil {
+		ev.Type = EventAsyncActivityFailed
+		ev.Error = aerr.Error()
+	} else {
+		ev.Type = EventAsyncActivityCompleted
+		ev.Payload = out
+	}
+	if err := e.store.AppendEvent(runID, ev); err != nil {
+		if errors.Is(err, ErrDuplicateEvent) {
+			// Some other writer already recorded this run's next event —
+			// benign race, same tolerance as Workflow.record.
+			return
+		}
+		e.logf("tembed: completeAsyncActivity append %s: %v", runID, err)
+		return
+	}
+	e.advance(runID)
+}
+
+// resumePendingAsync re-launches every async activity that was scheduled
+// (EventActivityScheduled) but has no matching completion event yet — i.e. it
+// was still in flight when the process last stopped. Called once per run
+// during Recover, under that run's lock, before the run is (re)driven.
+func (e *Engine) resumePendingAsync(runID string, hist []Event) {
+	done := map[string]bool{}
+	for _, ev := range hist {
+		if ev.Type == EventAsyncActivityCompleted || ev.Type == EventAsyncActivityFailed {
+			done[ev.Name] = true
+		}
+	}
+	for _, ev := range hist {
+		if ev.Type != EventActivityScheduled || done[ev.Name] {
+			continue
+		}
+		name := ev.Name
+		if i := lastIndexByte(name, '#'); i >= 0 {
+			name = name[:i]
+		}
+		e.launchAsyncActivity(runID, ev.Name, name, ev.Payload)
+	}
+}
+
+// lastIndexByte returns the index of the last occurrence of b in s, or -1.
+func lastIndexByte(s string, b byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
 // Recover re-drives every run that was mid-flight (running or waiting) when the
 // process last stopped: it replays their histories, reschedules pending timers,
 // and re-blocks on unfulfilled signals. Call it once at startup.
@@ -478,6 +575,20 @@ func (e *Engine) Recover() error {
 		} else {
 			immediate = append(immediate, r)
 		}
+	}
+	// Re-launch any async activity (ExecuteActivityAsync) that was still in
+	// flight when the process last stopped, for every mid-flight run — a pass
+	// of its own, independent of the immediate/deferred priority split above,
+	// because this does not drive the workflow function itself: it only makes
+	// sure the eventual completion event gets recorded (which, via
+	// completeAsyncActivity, re-drives the run on its own).
+	for _, r := range append(append([]RunRecord{}, immediate...), deferred...) {
+		l := e.runLock(r.ID)
+		l.Lock()
+		if _, hist, err := e.store.LoadRun(r.ID); err == nil {
+			e.resumePendingAsync(r.ID, hist)
+		}
+		l.Unlock()
 	}
 	// Higher priority first; stable so equal-priority runs keep ListRuns order.
 	sort.SliceStable(immediate, func(i, j int) bool {

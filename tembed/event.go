@@ -32,6 +32,28 @@ const (
 	EventWorkflowCompleted EventType = "WorkflowCompleted"
 	// EventWorkflowFailed is the terminal failure event; Error holds the reason.
 	EventWorkflowFailed EventType = "WorkflowFailed"
+
+	// EventActivityScheduled records that an async activity (ExecuteActivityAsync)
+	// was launched; Name holds its correlation key ("activityName#idx"). A
+	// separate pool from EventActivityCompleted/Failed so sync and async calls
+	// never contend for the same positional counter.
+	EventActivityScheduled EventType = "ActivityScheduled"
+	// EventAsyncActivityCompleted records an async activity's result; Name holds
+	// the same correlation key as its EventActivityScheduled.
+	EventAsyncActivityCompleted EventType = "AsyncActivityCompleted"
+	// EventAsyncActivityFailed records that an async activity returned an error;
+	// Name holds the same correlation key as its EventActivityScheduled.
+	EventAsyncActivityFailed EventType = "AsyncActivityFailed"
+
+	// EventChildWorkflowStarted records that a child workflow (ExecuteChildWorkflow)
+	// was started; Name holds the deterministic child run ID.
+	EventChildWorkflowStarted EventType = "ChildWorkflowStarted"
+	// EventChildWorkflowCompleted records a child workflow's result; Name holds
+	// the child run ID.
+	EventChildWorkflowCompleted EventType = "ChildWorkflowCompleted"
+	// EventChildWorkflowFailed records that a child workflow failed; Name holds
+	// the child run ID.
+	EventChildWorkflowFailed EventType = "ChildWorkflowFailed"
 )
 
 // Event is one entry in a run's durable history.
