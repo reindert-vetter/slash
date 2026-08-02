@@ -43,3 +43,6 @@ tests/.tmp/
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Local scratch notes
+/todo.md
