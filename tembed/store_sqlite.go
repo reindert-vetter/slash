@@ -16,11 +16,12 @@ PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS runs (
-  id         TEXT PRIMARY KEY,
-  workflow   TEXT NOT NULL,
-  status     TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  id            TEXT PRIMARY KEY,
+  workflow      TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  parent_run_id TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -61,6 +62,7 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("tembed: apply schema: %w", err)
 	}
+	migrateSQLite(db)
 	return &SQLiteStore{db: db}, nil
 }
 
@@ -70,16 +72,25 @@ func NewSQLiteStoreDB(db *sql.DB) (*SQLiteStore, error) {
 	if _, err := db.Exec(sqliteDDL); err != nil {
 		return nil, fmt.Errorf("tembed: apply schema: %w", err)
 	}
+	migrateSQLite(db)
 	return &SQLiteStore{db: db}, nil
+}
+
+// migrateSQLite adds columns introduced after the first schema so an existing
+// tembed DB picks them up. CREATE TABLE IF NOT EXISTS never alters an existing
+// table, so parent_run_id needs an explicit ADD; a duplicate-column error just
+// means the DB is already up to date.
+func migrateSQLite(db *sql.DB) {
+	_, _ = db.Exec(`ALTER TABLE runs ADD COLUMN parent_run_id TEXT NOT NULL DEFAULT ''`) // ignore "duplicate column name"
 }
 
 const tsLayout = time.RFC3339Nano
 
 func (s *SQLiteStore) CreateRun(r RunRecord) error {
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO runs (id, workflow, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		r.ID, r.Workflow, r.Status, r.CreatedAt.Format(tsLayout), r.UpdatedAt.Format(tsLayout))
+		`INSERT OR REPLACE INTO runs (id, workflow, status, created_at, updated_at, parent_run_id)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		r.ID, r.Workflow, r.Status, r.CreatedAt.Format(tsLayout), r.UpdatedAt.Format(tsLayout), r.ParentRunID)
 	return err
 }
 
@@ -114,8 +125,8 @@ func (s *SQLiteStore) LoadRun(runID string) (RunRecord, []Event, error) {
 	var r RunRecord
 	var created, updated string
 	err := s.db.QueryRow(
-		`SELECT id, workflow, status, created_at, updated_at FROM runs WHERE id = ?`, runID).
-		Scan(&r.ID, &r.Workflow, &r.Status, &created, &updated)
+		`SELECT id, workflow, status, created_at, updated_at, parent_run_id FROM runs WHERE id = ?`, runID).
+		Scan(&r.ID, &r.Workflow, &r.Status, &created, &updated, &r.ParentRunID)
 	if err == sql.ErrNoRows {
 		return RunRecord{}, nil, fmt.Errorf("tembed: run %s not found", runID)
 	}
@@ -150,7 +161,7 @@ func (s *SQLiteStore) LoadRun(runID string) (RunRecord, []Event, error) {
 
 func (s *SQLiteStore) ListRuns() ([]RunRecord, error) {
 	rows, err := s.db.Query(
-		`SELECT id, workflow, status, created_at, updated_at FROM runs ORDER BY created_at`)
+		`SELECT id, workflow, status, created_at, updated_at, parent_run_id FROM runs ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +170,7 @@ func (s *SQLiteStore) ListRuns() ([]RunRecord, error) {
 	for rows.Next() {
 		var r RunRecord
 		var created, updated string
-		if err := rows.Scan(&r.ID, &r.Workflow, &r.Status, &created, &updated); err != nil {
+		if err := rows.Scan(&r.ID, &r.Workflow, &r.Status, &created, &updated, &r.ParentRunID); err != nil {
 			return nil, err
 		}
 		r.CreatedAt, _ = time.Parse(tsLayout, created)

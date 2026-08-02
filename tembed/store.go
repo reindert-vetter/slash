@@ -32,6 +32,9 @@ type RunRecord struct {
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// ParentRunID is the run ID of the parent workflow that started this run
+	// via ExecuteChildWorkflow, or "" for a top-level run.
+	ParentRunID string `json:"parentRunId,omitempty"`
 }
 
 // Store is the durable backend for runs and their event histories. tembed

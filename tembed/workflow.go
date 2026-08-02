@@ -218,6 +218,45 @@ func (w *Workflow) record(e Event) {
 	}
 }
 
+// ExecuteChildWorkflow starts a new run of the named workflow with input,
+// returning its (deterministically derived) run ID without waiting for it to
+// finish. Call WaitChildWorkflow to block until it completes. Starting
+// several children back to back before waiting on any of them lets them
+// progress independently rather than one at a time.
+func (w *Workflow) ExecuteChildWorkflow(name string, input any) (string, error) {
+	idx := w.childIdx
+	w.childIdx++
+	childID := fmt.Sprintf("%s/child-%d", w.runID, idx)
+
+	if _, ok := w.firstNamed(childID, EventChildWorkflowStarted); ok {
+		// Already started (this run or an earlier replay) — do not restart it.
+		return childID, nil
+	}
+
+	in, err := json.Marshal(input)
+	if err != nil {
+		return "", fmt.Errorf("tembed: marshal child workflow input: %w", err)
+	}
+	w.record(Event{Type: EventChildWorkflowStarted, Name: childID, Payload: in})
+	if err := w.engine.startChildWorkflow(w.runID, childID, name, in); err != nil {
+		return childID, err
+	}
+	return childID, nil
+}
+
+// WaitChildWorkflow blocks the workflow until the child run started by
+// ExecuteChildWorkflow (identified by childRunID) has completed, decoding its
+// result into result (which may be nil). A failed child returns an error.
+func (w *Workflow) WaitChildWorkflow(childRunID string, result any) error {
+	if ev, ok := w.firstNamed(childRunID, EventChildWorkflowCompleted, EventChildWorkflowFailed); ok {
+		if ev.Type == EventChildWorkflowFailed {
+			return errors.New(ev.Error)
+		}
+		return decode(ev.Payload, result)
+	}
+	panic(blocked{kind: "signal"})
+}
+
 // nthOf returns the k-th history event whose type is one of types.
 func (w *Workflow) nthOf(k int, types ...EventType) (Event, bool) {
 	count := 0

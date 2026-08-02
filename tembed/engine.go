@@ -171,7 +171,7 @@ func newRunID() string {
 // StartWorkflow creates a new run of the named workflow with input (JSON-
 // encoded) and drives it until it blocks or completes. It returns the run ID.
 func (e *Engine) StartWorkflow(name string, input any) (string, error) {
-	return e.startWorkflowID(newRunID(), name, input, false)
+	return e.startWorkflowID(newRunID(), name, input, false, "")
 }
 
 // StartWorkflowDeferLow is StartWorkflow but yields to the background at the
@@ -183,7 +183,7 @@ func (e *Engine) StartWorkflow(name string, input any) (string, error) {
 // each step. If the workflow has no live low-priority activity, it behaves like
 // StartWorkflow (runs synchronously until it blocks/completes).
 func (e *Engine) StartWorkflowDeferLow(name string, input any) (string, error) {
-	return e.startWorkflowID(newRunID(), name, input, true)
+	return e.startWorkflowID(newRunID(), name, input, true, "")
 }
 
 // StartWorkflowID is StartWorkflow with a caller-supplied run ID, making the
@@ -195,10 +195,20 @@ func (e *Engine) StartWorkflowDeferLow(name string, input any) (string, error) {
 // Execution. The existence check + create is done under the run lock so two
 // concurrent starts of the same id can't both create.
 func (e *Engine) StartWorkflowID(id, name string, input any) (string, error) {
-	return e.startWorkflowID(id, name, input, false)
+	return e.startWorkflowID(id, name, input, false, "")
 }
 
-func (e *Engine) startWorkflowID(id, name string, input any, deferLow bool) (string, error) {
+// startChildWorkflow starts a run with the given (deterministically derived)
+// childID, recording parentID as its ParentRunID so the run's terminal event
+// can later be propagated back (see advanceMode). Like StartWorkflowID it is
+// idempotent: replaying ExecuteChildWorkflow's already-recorded start is a
+// no-op reuse of the existing child run.
+func (e *Engine) startChildWorkflow(parentID, childID, name string, input json.RawMessage) error {
+	_, err := e.startWorkflowID(childID, name, input, false, parentID)
+	return err
+}
+
+func (e *Engine) startWorkflowID(id, name string, input any, deferLow bool, parentRunID string) (string, error) {
 	e.mu.Lock()
 	_, ok := e.workflows[name]
 	e.mu.Unlock()
@@ -220,7 +230,7 @@ func (e *Engine) startWorkflowID(id, name string, input any, deferLow bool) (str
 	}
 
 	now := e.now()
-	rec := RunRecord{ID: id, Workflow: name, Status: StatusRunning, CreatedAt: now, UpdatedAt: now}
+	rec := RunRecord{ID: id, Workflow: name, Status: StatusRunning, CreatedAt: now, UpdatedAt: now, ParentRunID: parentRunID}
 	if err := e.store.CreateRun(rec); err != nil {
 		l.Unlock()
 		return "", err
@@ -363,20 +373,75 @@ func (e *Engine) advanceMode(runID string, deferLow bool) (deferred bool) {
 			return
 		}
 		e.setStatus(runID, StatusFailed)
+		e.propagateToParent(rec.ParentRunID, runID, fmt.Errorf("panic: %v", panicked), nil)
 	case done && wErr != nil:
 		if safeRecord(w, Event{Type: EventWorkflowFailed, Error: wErr.Error()}) {
 			e.logf("tembed: concurrent advance for run %s, will retry", runID)
 			return
 		}
 		e.setStatus(runID, StatusFailed)
+		e.propagateToParent(rec.ParentRunID, runID, wErr, nil)
 	case done:
 		if safeRecord(w, Event{Type: EventWorkflowCompleted, Payload: result, Time: now}) {
 			e.logf("tembed: concurrent advance for run %s, will retry", runID)
 			return
 		}
 		e.setStatus(runID, StatusCompleted)
+		e.propagateToParent(rec.ParentRunID, runID, nil, result)
 	}
 	return deferred
+}
+
+// propagateToParent records a child workflow's outcome (childID, the child's
+// own runID) on its parent run and re-drives the parent — mirroring how
+// fireTimer re-drives a run after recording a TimerFired event. A no-op if
+// parentRunID is empty (a top-level run has no parent).
+//
+// Runs in its own goroutine (tracked by e.wg, like a timer callback or an
+// async activity): the caller (advanceMode) may still hold the CHILD's own
+// run lock, and — when a child finishes fully synchronously during its own
+// start, nested inside ExecuteChildWorkflow — that call is itself nested
+// inside the PARENT's advanceMode, which already holds the parent's run lock
+// on this very goroutine. Taking the parent's lock synchronously here would
+// then self-deadlock; a fresh goroutine simply waits for that lock to free up
+// once the parent's current run finishes, exactly as any other concurrent
+// caller of the parent's lock would.
+func (e *Engine) propagateToParent(parentRunID, childID string, childErr error, childResult []byte) {
+	if parentRunID == "" {
+		return
+	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		l := e.runLock(parentRunID)
+		l.Lock()
+		defer l.Unlock()
+
+		rec, hist, err := e.store.LoadRun(parentRunID)
+		if err != nil {
+			e.logf("tembed: propagateToParent load %s: %v", parentRunID, err)
+			return
+		}
+		if rec.Status == StatusCompleted || rec.Status == StatusFailed {
+			return
+		}
+		ev := Event{Seq: len(hist), Name: childID, Time: e.now()}
+		if childErr != nil {
+			ev.Type = EventChildWorkflowFailed
+			ev.Error = childErr.Error()
+		} else {
+			ev.Type = EventChildWorkflowCompleted
+			ev.Payload = childResult
+		}
+		if err := e.store.AppendEvent(parentRunID, ev); err != nil {
+			if errors.Is(err, ErrDuplicateEvent) {
+				return
+			}
+			e.logf("tembed: propagateToParent append %s: %v", parentRunID, err)
+			return
+		}
+		e.advance(parentRunID)
+	}()
 }
 
 // safeRecord records e on w, tolerating the case where some other writer

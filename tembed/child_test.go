@@ -1,0 +1,171 @@
+package tembed
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+	"time"
+)
+
+// TestChildWorkflowsRunConcurrently proves that starting several children back
+// to back and only then waiting on them lets those children progress
+// independently rather than one at a time: two children each sleep 20ms: if
+// the engine ran them one after another (only starting the second once the
+// first had fully finished), the parent would need ~40ms; started
+// concurrently it needs ~20ms.
+func TestChildWorkflowsRunConcurrently(t *testing.T) {
+	e := New(NewMemoryStore())
+
+	e.RegisterWorkflow("napChild", func(w *Workflow, _ []byte) ([]byte, error) {
+		w.Sleep(20 * time.Millisecond)
+		return json.Marshal("awake")
+	})
+	e.RegisterWorkflow("parent", func(w *Workflow, _ []byte) ([]byte, error) {
+		id1, err := w.ExecuteChildWorkflow("napChild", nil)
+		if err != nil {
+			return nil, err
+		}
+		id2, err := w.ExecuteChildWorkflow("napChild", nil)
+		if err != nil {
+			return nil, err
+		}
+		var r1, r2 string
+		if err := w.WaitChildWorkflow(id1, &r1); err != nil {
+			return nil, err
+		}
+		if err := w.WaitChildWorkflow(id2, &r2); err != nil {
+			return nil, err
+		}
+		return json.Marshal(r1 + "+" + r2)
+	})
+
+	start := time.Now()
+	id, err := e.StartWorkflow("parent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+	elapsed := time.Since(start)
+
+	if s, _ := e.Status(id); s != StatusCompleted {
+		t.Fatalf("status = %s, want completed", s)
+	}
+	var got string
+	if err := e.Result(id, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "awake+awake" {
+		t.Fatalf("result = %q, want %q", got, "awake+awake")
+	}
+	// Sequential children would take ~40ms; concurrent ones ~20ms. A generous
+	// margin keeps this robust against scheduling jitter while still failing
+	// clearly if the children were serialized.
+	if elapsed >= 35*time.Millisecond {
+		t.Fatalf("elapsed = %v, want < 35ms (children must run concurrently, not sequentially)", elapsed)
+	}
+}
+
+// TestChildWorkflowFailurePropagates checks that a failing child's error comes
+// back through WaitChildWorkflow and fails the parent with that message. The
+// child fails synchronously during its own start (no Sleep/signal), which
+// exercises the nested-lock path in Engine.propagateToParent.
+func TestChildWorkflowFailurePropagates(t *testing.T) {
+	e := New(NewMemoryStore())
+
+	e.RegisterActivity("boom", func(context.Context, []byte) ([]byte, error) {
+		return nil, errors.New("child kaboom")
+	})
+	e.RegisterWorkflow("failChild", func(w *Workflow, _ []byte) ([]byte, error) {
+		return nil, w.ExecuteActivity("boom", nil, nil)
+	})
+	e.RegisterWorkflow("parent", func(w *Workflow, _ []byte) ([]byte, error) {
+		id, err := w.ExecuteChildWorkflow("failChild", nil)
+		if err != nil {
+			return nil, err
+		}
+		return nil, w.WaitChildWorkflow(id, nil)
+	})
+
+	id, err := e.StartWorkflow("parent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+
+	if s, _ := e.Status(id); s != StatusFailed {
+		t.Fatalf("status = %s, want failed", s)
+	}
+	if err := e.Result(id, nil); err == nil || err.Error() != "tembed: workflow failed: child kaboom" {
+		t.Fatalf("result err = %v, want it to mention %q", err, "child kaboom")
+	}
+}
+
+// TestRecoverResumesParentWaitingOnChild reproduces a crash while the parent
+// is durably waiting on a child that hasn't completed yet: a fresh Engine
+// recovering both runs from a store must still let the parent complete once
+// the child's (also recovered) timer fires.
+func TestRecoverResumesParentWaitingOnChild(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Now()
+	const parentID = "parent-1"
+	childID := parentID + "/child-0"
+
+	if err := store.CreateRun(RunRecord{ID: parentID, Workflow: "parent", Status: StatusWaiting, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendEvent(parentID, Event{Seq: 0, Type: EventWorkflowStarted, Time: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendEvent(parentID, Event{Seq: 1, Type: EventChildWorkflowStarted, Name: childID, Time: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.CreateRun(RunRecord{ID: childID, Workflow: "napChild", Status: StatusWaiting, CreatedAt: now, UpdatedAt: now, ParentRunID: parentID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendEvent(childID, Event{Seq: 0, Type: EventWorkflowStarted, Time: now}); err != nil {
+		t.Fatal(err)
+	}
+	fireAt := now.Add(10 * time.Millisecond)
+	pl, _ := json.Marshal(fireAt)
+	if err := store.AppendEvent(childID, Event{Seq: 1, Type: EventTimerStarted, Payload: pl, Time: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := New(store)
+	e.RegisterWorkflow("napChild", func(w *Workflow, _ []byte) ([]byte, error) {
+		w.Sleep(10 * time.Millisecond)
+		return json.Marshal("awake")
+	})
+	e.RegisterWorkflow("parent", func(w *Workflow, _ []byte) ([]byte, error) {
+		id, err := w.ExecuteChildWorkflow("napChild", nil)
+		if err != nil {
+			return nil, err
+		}
+		var res string
+		if err := w.WaitChildWorkflow(id, &res); err != nil {
+			return nil, err
+		}
+		return json.Marshal(res)
+	})
+
+	if err := e.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+
+	if s, _ := e.Status(childID); s != StatusCompleted {
+		t.Fatalf("child status = %s, want completed", s)
+	}
+	if s, _ := e.Status(parentID); s != StatusCompleted {
+		t.Fatalf("parent status = %s, want completed", s)
+	}
+	var got string
+	if err := e.Result(parentID, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "awake" {
+		t.Fatalf("parent result = %q, want %q", got, "awake")
+	}
+}
