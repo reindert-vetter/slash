@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/reindert-vetter/tembed"
@@ -121,9 +122,15 @@ type CleanupResult struct {
 	RetiredRunsDeleted int `json:"retiredRunsDeleted"`
 }
 
-// reWorktreeDir extracts a PR number from a worktrees dir name
-// ("pr-<n>-base" / "pr-<n>-head").
-var reWorktreeDir = regexp.MustCompile(`^pr-(\d+)-(base|head)$`)
+// reWorktreeDir extracts a PR number from a worktrees dir name: "pr-<n>-base"
+// / "pr-<n>-head", or "pr-<n>-chatshadow-<conversationId>" — the per-
+// conversation claude_chat edit worktree (chat_shadow.go). Including the
+// latter here means a PR whose only remaining disk trace is a leftover,
+// never-pushed chat shadow (normally reclaimed immediately after a successful
+// push — see commitChatShadowEdits) still gets picked up as a cleanup
+// candidate, the same self-healing reasoning cleanupCandidatePRs already
+// documents for base/head.
+var reWorktreeDir = regexp.MustCompile(`^pr-(\d+)-(base|head|chatshadow-.+)$`)
 
 // cleanupCandidatePRs returns every PR number that currently has data on disk
 // — a union of the blocks table, the pr_ingest table, and any worktree dir
@@ -391,6 +398,36 @@ func removePRWorktrees(ctx context.Context, dataDir string, pr int) (int, error)
 		}
 		n++
 	}
+
+	// Any per-conversation claude_chat shadow worktree still on disk for this
+	// PR (chat_shadow.go) — normally already reclaimed right after a
+	// successful push, so this only matters for a conversation whose edits
+	// were never committed/pushed, or whose own reclaim step failed. Unlike
+	// base/head there can be any number of these, one per conversation, so a
+	// prefix scan is needed instead of a fixed pair of paths.
+	root, err := filepath.Abs(dataDir)
+	if err != nil {
+		root = dataDir
+	}
+	wtRoot := filepath.Join(root, "worktrees")
+	entries, _ := os.ReadDir(wtRoot) // missing dir is fine (best-effort)
+	prefix := fmt.Sprintf("pr-%d-chatshadow-", pr)
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
+			continue
+		}
+		dir := filepath.Join(wtRoot, e.Name())
+		_, _ = runGit(ctx, "worktree", "remove", "--force", dir)
+		if err := os.RemoveAll(dir); err != nil {
+			return n, fmt.Errorf("remove %s: %w", dir, err)
+		}
+		// Best-effort: also drop the shadow's own local branch (chat/<id> —
+		// see chatShadowBranch), otherwise it dangles in the shared clone
+		// forever for a conversation that never committed/pushed.
+		_, _ = runGit(ctx, "branch", "-D", "chat/"+strings.TrimPrefix(e.Name(), prefix))
+		n++
+	}
+
 	// Best-effort: clean up any leftover worktree admin entries in the main repo.
 	_, _ = runGit(ctx, "worktree", "prune")
 	return n, nil

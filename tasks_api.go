@@ -888,17 +888,36 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		}
 		// The message signal carries one reviewer turn to a claude_chat
 		// conversation — the UI write path for the embedded Claude panel.
+		// action ("" | "edit" | "commit") is validated here, BEFORE it ever
+		// reaches the workflow/git-plumbing, per the validate-before-exec rule —
+		// see ChatMessageSignal's own doc comment for what each value means.
 		if parts[2] == SignalMessage {
 			var body struct {
 				Author string `json:"author"`
 				Body   string `json:"body"`
+				Action string `json:"action"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Body) == "" {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid message", http.StatusBadRequest)
 				return
 			}
+			switch body.Action {
+			case "", chatActionEdit:
+				// A plain question or an edit instruction both need real text —
+				// only "commit" (below) needs none.
+				if strings.TrimSpace(body.Body) == "" {
+					http.Error(w, "invalid message", http.StatusBadRequest)
+					return
+				}
+			case chatActionCommit:
+				// No text required — this action pushes whatever Claude already
+				// changed, it doesn't ask it anything new.
+			default:
+				http.Error(w, "invalid action", http.StatusBadRequest)
+				return
+			}
 			sig := ChatMessageSignal{
-				ID: "msg-" + newUIReactionID(), Author: body.Author, Body: body.Body,
+				ID: "msg-" + newUIReactionID(), Author: body.Author, Body: body.Body, Action: body.Action,
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalMessage, sig); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})

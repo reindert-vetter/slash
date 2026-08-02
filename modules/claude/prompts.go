@@ -53,3 +53,15 @@ var CommentRemovalSystemPrompt string
 //
 //go:embed prompts/chat.md
 var ChatSystemPrompt string
+
+// ChatEditSystemPrompt is ChatSystemPrompt's sibling for a chatActionEdit turn
+// (chat_workflow.go/chat_shadow.go): the same assistant framing and question
+// contract, plus an explicit note that the Edit tool is available THIS turn,
+// scoped to the conversation's own disposable shadow worktree, and that
+// nothing is pushed to the real PR until the reviewer explicitly commits it.
+// A full replacement of ChatSystemPrompt rather than a second
+// --append-system-prompt (the CLI only takes one), used only for turns whose
+// RunRequest.Tools includes "Edit".
+//
+//go:embed prompts/chat_edit.md
+var ChatEditSystemPrompt string

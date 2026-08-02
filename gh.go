@@ -59,6 +59,12 @@ type prMeta struct {
 	BaseRefOid  string   `json:"baseRefOid"`
 	HeadRefOid  string   `json:"headRefOid"`
 	BaseRefName string   `json:"baseRefName"`
+	// HeadRefName is the PR's real head branch name (e.g. "feature/x") — used
+	// by the claude_chat edit path (chat_shadow.go) to check out its
+	// per-conversation shadow worktree on a real branch (not detached) and to
+	// know which branch to fast-forward-push a commit onto. Not used by the
+	// ingest pipeline itself, which pins base/head worktrees to an exact SHA.
+	HeadRefName string `json:"headRefName"`
 }
 
 // runGit runs a git command in repoDir with separate args + context timeout.
@@ -75,7 +81,7 @@ func runGit(ctx context.Context, args ...string) ([]byte, error) {
 // fetchPRMeta retrieves the PR metadata via gh.
 func fetchPRMeta(ctx context.Context, pr int) (*prMeta, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "view", strconv.Itoa(pr),
-		"--repo", repoSlug, "--json", "files,baseRefOid,headRefOid,baseRefName")
+		"--repo", repoSlug, "--json", "files,baseRefOid,headRefOid,baseRefName,headRefName")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh pr view %d: %w", pr, err)

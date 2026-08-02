@@ -226,9 +226,15 @@ off-screen at a narrow viewport — expected pre-existing scroll behaviour
 something this spec (which guards against *additional* scroll from chip
 navigation specifically) needs to re-assert.
 
-## Open (Phase 3/4, not built)
+## Open (Phase 4, and one Phase-3 frontend gap)
 
-- No tool access for Claude within the conversation (Phase 3).
+- **Phase 3's backend is built** (a per-conversation shadow worktree + a
+  fast-forward-only commit/push — see "claude_chat" → "Agentic edits" in
+  `.claude/rules/workflows-comments.md`), but **this panel has no UI yet to
+  trigger it**: `sendClaudeMessage` always sends a plain (`action: ""`) turn.
+  A later pass needs to add the composer action(s) that set
+  `action: "edit"`/`"commit"` on the `POST .../signals/message` call — no
+  backend change needed, only this file's send path.
 - No opt-in mechanism yet for the conversation to influence/reply into the
   left comment thread itself, despite the Run ID already being derived from
   that thread's own id for exactly this future purpose (Phase 4 — see

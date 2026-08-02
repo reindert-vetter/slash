@@ -1709,7 +1709,22 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.chat == nil || m.claude == nil {
 			return json.Marshal(chat.Message{})
 		}
-		msg := runOneClaudeTurn(ctx, m.chat, m.claude, arg)
+		msg := runOneClaudeTurn(ctx, m.chat, m.claude, m.dataDir, arg)
+		return json.Marshal(msg)
+	})
+	// Activity: commit + fast-forward-push a conversation's shadow-worktree
+	// edits onto the PR's real head branch (write: git commit/push, guarded by
+	// ingestMu around the plumbing that touches the shared clone — see
+	// chat_shadow.go and .claude/rules/tembed-workflows.md, "claude_chat").
+	engine.RegisterActivity("commitChatShadowEdits", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatCommitInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil {
+			return json.Marshal(chat.Message{})
+		}
+		msg := commitChatShadowEdits(ctx, m.chat, m.dataDir, arg.PR, arg.ConversationID)
 		return json.Marshal(msg)
 	})
 
