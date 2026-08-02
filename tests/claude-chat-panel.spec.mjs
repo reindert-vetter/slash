@@ -1,4 +1,4 @@
-import { test, expect, seededPr } from './_fixtures.mjs'
+import { test, expect, seededPr, evaluateSettled } from './_fixtures.mjs'
 
 // Verifies the embedded Claude conversation column (claude_chat workflow,
 // see .claude/rules/comments-panel.md's "Embedded Claude chat" section):
@@ -72,4 +72,76 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   // a time, mirroring 'thread' -> 'comment'.
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByTestId('reaction-compose')).toBeFocused()
+})
+
+// A message with `kind: 'action'` (chat.KindAction — Claude placed/resolved a
+// comment on the left thread on the reviewer's request, Phase 4, see
+// chat_workflow.go's applyChatCommentAction) and `kind: 'error'` (that same
+// attempt failing, chat.KindError) each need their own word+glyph marking —
+// per the colourblind rule, never colour alone (see chatKindBadge in
+// ClaudeChat.mjs). Driving this through a real comment_action directive would
+// require a commentId known ahead of the fixture file being loaded (the
+// comment's run id is only assigned once the server starts, see the fake's
+// SetChatTurns doc comment); the KindAction/KindError decision itself is
+// already covered end-to-end on the backend (chat_workflow_test.go). This is
+// therefore a direct-mount unit test of the render, mirroring diffview.spec.mjs.
+test('Claude chat: an action turn and an error turn each get their own badge, not just a colour', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  // Settle the app's own load before mounting a second component into the
+  // live page (the cold-start mount race in conventions.md) — waiting for the
+  // sidebar to render is enough here; evaluateSettled itself retries on the
+  // "Execution context was destroyed" race the load-time history.replaceState
+  // burst can still cause.
+  await expect(page.getByTestId('pr-index')).toBeVisible()
+
+  await evaluateSettled(page, async () => {
+    const { claudeChatColumn } = await import('/src/ClaudeChat.mjs')
+    const messages = [
+      { id: 'm1', role: 'assistant', kind: 'action', body: '✓ Comment-thread opgelost.' },
+      { id: 'm2', role: 'assistant', kind: 'error', body: 'Kon de comment-thread niet bijwerken.' },
+    ]
+    const view = {
+      messages: () => messages,
+      status: () => 'ready',
+      busy: () => false,
+      progress: () => null,
+      elapsed: () => 0,
+      claudePos: () => 0,
+    }
+    const host = document.createElement('div')
+    host.id = 'claude-chat-badge-host'
+    document.body.appendChild(host)
+    claudeChatColumn(view, { onSend: () => {} })(host)
+  })
+
+  const host = page.locator('#claude-chat-badge-host')
+  const actionBadge = host.getByTestId('claude-message-action')
+  await expect(actionBadge).toBeVisible()
+  await expect(actionBadge).toContainText('actie in commentthread')
+  const errorBadge = host.getByTestId('claude-message-error')
+  await expect(errorBadge).toBeVisible()
+  await expect(errorBadge).toContainText('foutmelding')
+
+  // Neither badge is present on a plain assistant turn.
+  await evaluateSettled(page, async () => {
+    const { claudeChatColumn } = await import('/src/ClaudeChat.mjs')
+    const messages = [{ id: 'm3', role: 'assistant', body: 'Gewoon een antwoord.' }]
+    const view = {
+      messages: () => messages,
+      status: () => 'ready',
+      busy: () => false,
+      progress: () => null,
+      elapsed: () => 0,
+      claudePos: () => 0,
+    }
+    const host = document.createElement('div')
+    host.id = 'claude-chat-plain-host'
+    document.body.appendChild(host)
+    claudeChatColumn(view, { onSend: () => {} })(host)
+  })
+  const plainHost = page.locator('#claude-chat-plain-host')
+  await expect(plainHost.getByTestId('claude-message-action')).toHaveCount(0)
+  await expect(plainHost.getByTestId('claude-message-error')).toHaveCount(0)
 })

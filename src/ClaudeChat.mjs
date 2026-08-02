@@ -122,13 +122,70 @@ function claudePartialBubble(view) {
   `
 }
 
+// chatKindBadge marks a message whose `kind` carries meaning beyond an
+// ordinary reply: 'action' (chat.KindAction — Claude placed/resolved a
+// comment on the left thread on the reviewer's request, see "Opt-in
+// influence on the left comment thread (Phase 4)" in workflows-comments.md)
+// or 'error' (chat.KindError — that same attempt failed). Mirrors
+// RelatedPanel.mjs's aiWarningBadge/staleAnchorBadge: a small pill carrying a
+// WORD (+ a shape glyph), the tint decoration on top — never colour alone,
+// per the colourblind rule. `kind` is set once at message creation and never
+// mutated afterward (unlike `answer`), so — like `mine`/`isError` below — this
+// needs no `${() => ...}` getter wrapper of its own; it can't go stale on a
+// later re-render of the same keyed bubble. Returns '' for a plain turn.
+function chatKindBadge(msg) {
+  if (msg.kind === 'action') {
+    return html`<span
+      class="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+      data-testid="claude-message-action"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-2.5 w-2.5"
+      >
+        <path d="M20 6 9 17l-5-5"></path>
+      </svg>
+      actie in commentthread</span
+    >`
+  }
+  if (msg.kind === 'error') {
+    return html`<span
+      class="inline-flex shrink-0 items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[9px] font-medium text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+      data-testid="claude-message-error"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-2.5 w-2.5"
+      >
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path>
+        <line x1="12" y1="9" x2="12" y2="13"></line>
+        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+      </svg>
+      foutmelding</span
+    >`
+  }
+  return ''
+}
+
 // claudeBubble — one turn. `claudePos`/`busy` are getters; `active` marks the
 // bubble the cursor currently points at (mirrors reactionBubble's own
 // active-highlight rule, counting from the bottom the same way). A `kind:
 // 'error'` turn (a failed Claude call, see chat_workflow.go's
 // runOneClaudeTurn) gets a rose tint instead of the ordinary assistant/own
-// tint — the word in the bubble already says so, this is decoration on top,
-// per the colorblind rule.
+// tint, plus chatKindBadge's word+glyph — the tint alone never carries the
+// meaning, per the colorblind rule.
 function claudeBubble(msg, i, total, claudePos, onSend, busy) {
   const mine = msg.role === 'user'
   const isError = msg.kind === 'error'
@@ -139,6 +196,7 @@ function claudeBubble(msg, i, total, claudePos, onSend, busy) {
         <span class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">
           ${mine ? 'Jij' : CLAUDE_NAME}
         </span>
+        ${chatKindBadge(msg)}
       </div>
       <div
         class="${() => {

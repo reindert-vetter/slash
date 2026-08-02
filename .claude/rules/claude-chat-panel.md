@@ -303,14 +303,23 @@ navigation specifically) needs to re-assert.
   thread's own `task_code_comment` Execution (`Source: "ai"`) and records a
   `Kind: chat.KindAction` (success) or `Kind: chat.KindError` (failure)
   confirmation turn — see "Opt-in influence on the left comment thread
-  (Phase 4)" in `.claude/rules/workflows-comments.md`. **`ClaudeChat.mjs` does
-  not style `KindAction` distinctly yet** — `msg.kind === 'action'` isn't
-  checked anywhere in this file, so such a turn currently renders as a plain
-  bubble (readable, since its text is a human sentence, just visually
-  identical to an ordinary reply). A later pass should give it its own small
-  marker (mirroring `isError`'s `msg.kind === 'error'` check) so a successful
-  comment-thread action is visually distinguishable, per the app-wide
-  never-colour-only rule.
+  (Phase 4)" in `.claude/rules/workflows-comments.md`. `ClaudeChat.mjs`'s
+  `chatKindBadge(msg)` now marks both kinds distinctly, mirroring
+  `RelatedPanel.mjs`'s `aiWarningBadge`/`staleAnchorBadge`: a small pill with a
+  word + a shape glyph (a checkmark for `'action'`, the same warning-triangle
+  SVG as `aiWarningBadge`/`related-covers-warning` for `'error'`) — the tint
+  (emerald resp. rose) is decoration on top, never the sole carrier, per the
+  colourblind rule. `msg.kind` is fixed at message creation (unlike `answer`,
+  which fills in later on the same row), so the badge needs no `${() => ...}`
+  getter wrapper of its own — same reasoning as the existing `isError`/`mine`
+  locals just below it. Testids `claude-message-action`/`claude-message-error`.
+  Test: the "action turn and an error turn each get their own badge" case in
+  `tests/claude-chat-panel.spec.mjs` (a direct-mount unit test of
+  `claudeChatColumn`, since driving a real `comment_action` directive through
+  the Playwright fixture would need the comment's run id known before the
+  fixture file loads — see the test's own comment; the backend's
+  KindAction/KindError decision is already covered end-to-end by
+  `chat_workflow_test.go`).
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat
   composer — a page navigation away loses an unsent, half-typed message. Not
   requested; flagging as a known gap mirroring the existing comment
