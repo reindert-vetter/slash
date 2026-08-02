@@ -237,7 +237,23 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// .claude/rules/tembed-workflows.md.
 	var cl claude.Client = claude.New(filepath.Join(os.TempDir(), "slash-llm-cwd"))
 	if os.Getenv("SLASH_CLAUDE") == "off" {
-		cl = claude.NewFake()
+		fake := claude.NewFake()
+		// SLASH_CLAUDE_CHAT_TURNS optionally points at a JSON fixture
+		// ([]string) that programs the Fake's RunChat replies deterministically
+		// — mirrors SLASH_JIRA_ASSIGNED below. Needed so a Playwright spec can
+		// exercise the embedded Claude chat's "question with choices" turn
+		// end-to-end (see the "Embedded Claude chat" section of
+		// comments-panel.md): without it every RunChat call returns "" (see
+		// Fake.RunChat's own doc comment).
+		if path := os.Getenv("SLASH_CLAUDE_CHAT_TURNS"); path != "" {
+			if raw, err := os.ReadFile(path); err == nil {
+				var turns []string
+				if json.Unmarshal(raw, &turns) == nil {
+					fake.SetChatTurns(turns...)
+				}
+			}
+		}
+		cl = fake
 	}
 	// Under SLASH_JIRA=off the Jira bridge never shells out (offline/tests): an
 	// empty Fake reports no linked issue for every key. SLASH_JIRA_ASSIGNED

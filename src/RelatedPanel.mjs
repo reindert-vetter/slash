@@ -18,6 +18,7 @@ import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin } from './avatar.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
+import { claudeChatColumn } from './ClaudeChat.mjs'
 
 // ── Real comments (task_code_comment workflow) ────────────────────────────────
 // This section IS wired to the API. Placing a comment starts a Workflow
@@ -64,6 +65,10 @@ const cs = reactive({
   replySent: false,
   focus: null,
   threadPos: 0,
+  // claudePos is threadPos's twin for the embedded Claude conversation
+  // ('claude', see the "Embedded Claude conversation" section below): 0 = the
+  // composer (typing), 1..n = the n-th turn from the bottom.
+  claudePos: 0,
   scope: null,
   scopeSig: '',
   codeSel: 0,
@@ -94,6 +99,7 @@ bindUrlState(
     { key: 'codeSel', param: 'code', parse: num(0), default: 0 },
     { key: 'sel', param: 'csel', parse: num(0), default: 0 },
     { key: 'threadPos', param: 'thr', parse: num(0), default: 0 },
+    { key: 'claudePos', param: 'cpos', parse: num(0), default: 0 },
   ],
   { ns: 'rel' },
 )
@@ -106,8 +112,8 @@ bindUrlState(
 // hijacks later navigation. Null when the URL carried no rel.* param — nothing to
 // restore, and the mirror-watch is then free to keep the URL canonical.
 let restorePending =
-  cs.focus !== null || cs.codeSel !== 0 || cs.sel !== 0 || cs.threadPos !== 0
-    ? { focus: cs.focus, codeSel: cs.codeSel, sel: cs.sel, threadPos: cs.threadPos }
+  cs.focus !== null || cs.codeSel !== 0 || cs.sel !== 0 || cs.threadPos !== 0 || cs.claudePos !== 0
+    ? { focus: cs.focus, codeSel: cs.codeSel, sel: cs.sel, threadPos: cs.threadPos, claudePos: cs.claudePos }
     : null
 
 // ── Underlying code, pushed from home.mjs ─────────────────────────────────────
@@ -807,6 +813,291 @@ function enterThread() {
   focusThread()
 }
 
+// ── Embedded Claude conversation (claude_chat workflow) ──────────────────────
+// A Claude conversation always hangs off an existing comment thread (product
+// decision — see the "Embedded Claude chat" section of comments-panel.md).
+// The column is reached the same way the comment thread itself is: → deepens
+// one level further (comment → thread → claude), and it is ALSO reachable
+// directly from the diff when the selected unit has no comment thread at all
+// yet — the first entry then silently creates an empty, private (never
+// posted to GitHub) comment to hang the conversation on, so the panel is
+// unconditionally reachable, exactly like "net zo'n blok als het
+// comments-blok" was asked for — it just starts out empty. `cc` is this
+// module's own reactive chat state for whichever ONE conversation is
+// currently in view — mirrors `cs`/`rc`. The actual template is a pure
+// function in ClaudeChat.mjs, fed a plain snapshot + callbacks (never
+// `cc`/`cs` directly), so that file never needs to import this one back —
+// the same split translationDiff.mjs already has with Block.mjs.
+const cc = reactive({
+  commentId: null,
+  runId: null,
+  messages: [],
+  // 'idle' | 'loading' | 'error' — a state of the PANEL itself (ensuring the
+  // workflow / fetching the transcript). A genuinely failed Claude TURN is a
+  // normal message with kind 'error' (see chat_workflow.go), not this field.
+  status: 'idle',
+  busy: false, // a message/turn is currently in flight (POST .../signals/message)
+})
+
+// CLAUDE_PLACEHOLDER_BODY is the body of the empty private comment created to
+// hang a fresh conversation on when the selected unit has no comment thread
+// yet. Never posted to GitHub (local: true) — see createComment.
+const CLAUDE_PLACEHOLDER_BODY = '(Aangemaakt voor een Claude-gesprek.)'
+
+// currentCommentTarget is the commentTarget() callback home.mjs passes to
+// ClaudeChatPanel on every mount (a stable function reference, like the one
+// InlineComments/RelatedPanel already receive) — stashed here so
+// handleRelatedKey's 'thread' → ArrowRight branch (which only receives the
+// key, not home.mjs' state) can start a conversation on the live cursor's
+// unit. Plain module `let`, not reactive: it's only ever read synchronously
+// right when a key is handled, mirroring warningOverride's own "read once,
+// right when needed" shape above.
+let currentCommentTarget = null
+
+// claudeAnchorArgs builds createComment's anchor fields from the live cursor
+// (commentTarget()), for the "no comment thread yet" auto-create path.
+// commentTarget() (home.mjs) always returns a full descriptor (file/label/
+// line/code/gran/rowStart/rowEnd/seg/startLine/endLine/side/segment) unless
+// the selected item is itself a synthetic comment-index row (kind:'comment'),
+// which has nothing to anchor a NEW comment to — same guard placeComment uses.
+function claudeAnchorArgs() {
+  const t = (currentCommentTarget && currentCommentTarget()) || null
+  if (!t) return null
+  return {
+    file: t.file,
+    line: t.startLine || t.line,
+    code: t.code,
+    gran: t.gran,
+    label: t.label,
+    rowStart: t.rowStart,
+    rowEnd: t.rowEnd,
+    seg: t.seg,
+    startLine: t.startLine,
+    endLine: t.endLine,
+    side: t.side,
+    segment: t.segment,
+  }
+}
+
+// ensureAndLoadChat ensures the claude_chat Execution for `commentId` exists
+// (idempotent server-side via StartWorkflowID) and loads its transcript.
+// Switching to a DIFFERENT comment resets cc's transcript first, so a stale
+// message from the previous conversation never flashes under the new one.
+async function ensureAndLoadChat(pr, commentId) {
+  if (cc.commentId !== commentId) {
+    cc.commentId = commentId
+    cc.messages = []
+    cc.runId = null
+  }
+  cc.status = 'loading'
+  try {
+    const res = await fetch('/api/workflows/claude_chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr, commentId }),
+    })
+    if (!res.ok) {
+      cc.status = 'error'
+      return
+    }
+    const json = await res.json()
+    cc.runId = json.runId
+    await loadChatMessages(commentId)
+  } catch (_) {
+    cc.status = 'error'
+  }
+}
+
+// loadChatMessages re-fetches the transcript (read-only GET, safe to poll).
+// Guards against a stale response landing after the reviewer has since
+// switched to a different comment's conversation.
+async function loadChatMessages(commentId) {
+  try {
+    const res = await fetch('/api/chat?commentId=' + encodeURIComponent(commentId))
+    if (!res.ok) return
+    const json = await res.json()
+    if (cc.commentId !== commentId) return // stale — a later switch already won
+    cc.messages = json.messages || []
+    cc.status = 'idle'
+  } catch (_) {
+    // keep the last good transcript on a transient error
+  }
+}
+
+// sendClaudeMessage sends the reviewer's turn (free text, or the text of a
+// clicked question option — see claudeChatColumn's onSend, the same callback
+// either way). The Signal round-trip runs the Activities (incl. the real
+// claude subprocess call) INLINE — see tembed-workflows.md — so this await
+// genuinely spans "Claude thinking", and once it resolves the fresh turn is
+// already in the store; a plain refetch is enough, no streaming needed.
+async function sendClaudeMessage(text) {
+  if (!cc.runId || !text || !text.trim()) return
+  cc.busy = true
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(cc.runId) + '/signals/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ author: 'reviewer', body: text.trim() }),
+    })
+    await loadChatMessages(cc.commentId)
+  } finally {
+    cc.busy = false
+  }
+}
+
+// enterClaudeChat is the single entry point for the → chain: called both from
+// home.mjs (→ from the diff when the selected unit has no comment yet) and
+// from handleRelatedKey's 'thread' ArrowRight branch (an existing thread
+// already focused, commentTargetFn omitted — currentCommentTarget already
+// holds the right callback from the last ClaudeChatPanel mount). `pr` mirrors
+// cs.pr (home.mjs' state.pr).
+export async function enterClaudeChat(pr, commentTargetFn) {
+  if (commentTargetFn) currentCommentTarget = commentTargetFn
+  releaseFocus()
+  const token = focusToken
+  cs.focus = 'claude'
+  cs.claudePos = 0
+  let c = selComment()
+  if (!c) {
+    const anchor = claudeAnchorArgs()
+    if (!anchor) {
+      cc.status = 'error'
+      return
+    }
+    cc.status = 'loading'
+    const ok = await createComment({ pr, ...anchor, body: CLAUDE_PLACEHOLDER_BODY, local: true })
+    // The reviewer may have navigated elsewhere while this POST was in
+    // flight (a different comment/composer/panel, possibly a different
+    // block — cs is a module-level singleton) — same focusToken discipline
+    // as createComment/placeComment's own async tails above.
+    if (token !== focusToken) return
+    if (!ok) {
+      cc.status = 'error'
+      return
+    }
+    // createComment already landed cs.sel on the fresh comment (see its own
+    // doc comment) — re-read it now that the list has reloaded.
+    c = selComment()
+  }
+  if (!c) {
+    cc.status = 'error'
+    return
+  }
+  await ensureAndLoadChat(pr, c.id)
+  if (token !== focusToken) return
+  ensureChatPoll()
+  focusClaudeComposer()
+}
+
+// isClaudeChatFocused/claudeChatVisible are the two questions home.mjs/this
+// panel's own render need: whether the KEYBOARD is on the chat column, and
+// whether the column should be VISIBLE at all. Visible whenever an ordinary
+// comment thread already shows (hasVisibleComments(), mirroring "net zo'n
+// blok als het comments-blok, zichtbaar zodra er al comments zijn") OR while
+// actually focused — the latter covers the brief async gap right after →
+// auto-creates the backing comment, before it shows up in visibleComments().
+export function isClaudeChatFocused() {
+  return cs.focus === 'claude'
+}
+export function claudeChatVisible() {
+  return hasVisibleComments() || cs.focus === 'claude'
+}
+
+// focusClaudeComposer/scrollClaudeMessageIntoView mirror focusThread/
+// scrollReactionIntoView exactly, over cc.messages instead of the comment's
+// reactions, and cs.claudePos instead of cs.threadPos.
+function scrollClaudeMessageIntoView() {
+  requestAnimationFrame(() => {
+    const j = cc.messages.length - cs.claudePos
+    const el = document.querySelectorAll('[data-testid=claude-message]')[j]
+    if (el) scrollIntoViewVertical(el)
+  })
+}
+function focusClaudeComposer() {
+  releaseFocus()
+  const want = focusToken
+  requestAnimationFrame(() => {
+    if (want !== focusToken) return
+    const input = document.querySelector('[data-testid=claude-chat-compose]')
+    if (cs.claudePos === 0) {
+      if (input) input.focus()
+    } else {
+      if (input && document.activeElement === input) input.blur()
+      scrollClaudeMessageIntoView()
+    }
+  })
+}
+
+// ensureChatPoll starts a light refresh loop while the panel is mounted — it
+// only actually fetches while the chat column owns the keyboard
+// (cs.focus === 'claude'), mirroring InlineComments' own syncComments
+// interval. Not strictly required for the reviewer's OWN turns (the message
+// Signal's Activities — including the real claude call — run inline, so
+// sendClaudeMessage's own await already carries the fresh reply), but kept as
+// the agreed transport (fetch + polling, no SSE/websocket).
+let chatPollTimer = null
+function ensureChatPoll() {
+  if (chatPollTimer) return
+  chatPollTimer = setInterval(() => {
+    if (cs.focus === 'claude' && cc.commentId) loadChatMessages(cc.commentId)
+  }, 4000)
+}
+
+// claudeChatView/claudeChatCallbacks build the getters + callbacks the pure
+// template in ClaudeChat.mjs renders from — GETTER FUNCTIONS (`() =>
+// cc.messages`, not the array itself), never `cc`/`cs` imported directly, so
+// that file stays free of this one's reactive machinery (and of a circular
+// import back to it) — the same split translationDiff.mjs has with
+// Block.mjs. Load-bearing that these are functions, not a one-off snapshot:
+// once a nested template of a given shape is mounted, arrow.js's chunk reuse
+// re-patches it via the STATIC path (only attribute slots and slots whose
+// value is itself a function get re-applied; a plain array/string
+// interpolation computed once is never revisited) — see the "keyed node
+// reused without re-running its bindings" pitfall. So every place in
+// ClaudeChat.mjs that can change over time must read through one of these
+// getters from inside its OWN `${() => ...}` binding, exactly like
+// reactionBubble's own `active`/class bindings do.
+function claudeChatView() {
+  return {
+    messages: () => cc.messages,
+    status: () => cc.status,
+    busy: () => cc.busy,
+    claudePos: () => cs.claudePos,
+  }
+}
+function claudeChatCallbacks() {
+  return {
+    onSend: (text) => sendClaudeMessage(text),
+  }
+}
+
+// ClaudeChatPanel is the exported component home.mjs mounts next to
+// InlineComments/RelatedPanel, as its own sibling column in <main>'s flex-row
+// (see detail-layout.md). `state`/`commentTarget` mirror InlineComments' own
+// params exactly. Wrapped in a stable `contents` root — not a bare toggling
+// expression — so the visibility (empty ↔ template) toggle never corrupts
+// arrow.js's keyed reconcile (the same pitfall newCommentComposer/commentCard
+// guard against). Everything that can change AFTER this column first mounts
+// lives behind claudeChatView()'s getters, read from inside ClaudeChat.mjs's
+// own `${() => ...}` bindings — see claudeChatView's doc comment for why a
+// plain snapshot isn't enough here.
+export function ClaudeChatPanel(state, commentTarget) {
+  currentCommentTarget = commentTarget
+  ensureChatPoll()
+  const view = claudeChatView()
+  const callbacks = claudeChatCallbacks()
+  return html`
+    <div class="contents">
+      ${() =>
+        claudeChatVisible()
+          ? html`<div class="${() => 'shrink-0 p-3 ' + relatedColumnWidthCls()}" data-testid="claude-chat-column">
+              ${claudeChatColumn(view, callbacks)}
+            </div>`
+          : ''}
+    </div>
+  `
+}
+
 // applyRelRestore re-applies the URL-restored panel cursor (restorePending, set at
 // module load) once the data it points at has actually loaded — children arrive via
 // setRelated, comments via loadComments, and either can win the race. It gates on
@@ -823,12 +1114,17 @@ function applyRelRestore() {
   const children = rc.children.length
   const comments = visibleComments().length
   // Wait for the data the wanted focus points at; 'new'/null need none.
+  // 'claude' also needs a comment to hang the conversation on — it can only
+  // ever be restored onto an EXISTING one (see the branch below); restoring
+  // it must never itself trigger the "no comment yet → auto-create" path
+  // enterClaudeChat has, so it waits on `comments` exactly like
+  // 'comment'/'thread' do.
   if (want.focus === 'code' && children === 0) return
-  if ((want.focus === 'comment' || want.focus === 'thread') && comments === 0) return
+  if ((want.focus === 'comment' || want.focus === 'thread' || want.focus === 'claude') && comments === 0) return
   restorePending = null
   cs.codeSel = children ? Math.min(want.codeSel, children - 1) : 0
   cs.sel = comments ? Math.min(want.sel, comments - 1) : 0
-  // releaseFocus() on the two branches that set cs.focus directly (instead of
+  // releaseFocus() on the branches that set cs.focus directly (instead of
   // through toNew()/toComment(), which already bump it themselves) — see the
   // focusToken doc comment above for why every cs.focus transition must.
   if (want.focus === 'code') {
@@ -844,6 +1140,20 @@ function applyRelRestore() {
     focusThread()
   } else if (want.focus === 'comment') {
     toComment()
+  } else if (want.focus === 'claude') {
+    // A comment now definitely exists (the guard above waited for it) — never
+    // auto-create here, restoring a position must not itself have a write
+    // side effect. cs.claudePos isn't re-clamped against cc.messages' real
+    // length yet at this point (it hasn't loaded); at worst it's briefly out
+    // of range until the next ↑/↓, which clamp against the live length.
+    const c = selComment()
+    if (c) {
+      releaseFocus()
+      cs.focus = 'claude'
+      cs.claudePos = want.claudePos
+      ensureAndLoadChat(cs.pr, c.id)
+      focusClaudeComposer()
+    }
   }
   // else (focus null): leave the diff with the keyboard, indices restored silently.
 }
@@ -871,11 +1181,40 @@ function applyRelRestore() {
 //    conversation (or the Onderliggende-code panel), same as the 'comment'
 //    case; ← steps back to the 'comment' level (one stop back, not all the
 //    way to the diff — mirrors the chip-path "← climbs one level" pattern
-//    just below).
+//    just below); → steps ONE level further, into the embedded Claude
+//    conversation attached to this same comment thread ('claude', see
+//    enterClaudeChat).
+//  - the embedded Claude conversation ('claude') — ↑/↓ walk older/newer
+//    turns exactly like 'thread' does (its own claudePos cursor); ↓ at the
+//    bottom falls through to the Onderliggende-code panel (mirroring
+//    advanceFromComment, since there's nothing further right of it); ←
+//    steps back to the comment thread's own 'thread' level (mirrors
+//    'thread'.ArrowLeft stepping back to 'comment'). → and ↑/↓ elsewhere in
+//    the chain reach 'claude' via enterClaudeChat, not via a case here — see
+//    its own doc comment for the "no comment thread yet" auto-create path.
 export function handleRelatedKey(key) {
   if (key === 'Escape') {
     exitRelated()
     return 'exit'
+  }
+  if (cs.focus === 'claude') {
+    if (key === 'ArrowUp') {
+      cs.claudePos = Math.min(cs.claudePos + 1, cc.messages.length)
+      focusClaudeComposer()
+    } else if (key === 'ArrowDown') {
+      if (cs.claudePos === 0) {
+        enterRelated()
+      } else {
+        cs.claudePos -= 1
+        focusClaudeComposer()
+      }
+    } else if (key === 'ArrowLeft') {
+      releaseFocus()
+      cs.focus = 'thread'
+      cs.threadPos = 0
+      focusThread()
+    }
+    return true
   }
   if (cs.focus === 'thread') {
     if (key === 'ArrowUp') {
@@ -890,6 +1229,11 @@ export function handleRelatedKey(key) {
       }
     } else if (key === 'ArrowLeft') {
       toComment(false)
+    } else if (key === 'ArrowRight') {
+      // currentCommentTarget already holds the right callback (stashed by
+      // the last ClaudeChatPanel mount) — an existing thread never needs the
+      // auto-create path, so commentTargetFn is omitted here.
+      enterClaudeChat(cs.pr)
     }
     return true
   }

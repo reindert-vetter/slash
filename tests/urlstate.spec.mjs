@@ -89,7 +89,11 @@ test.describe('PR Review Tree — URL state persistence', () => {
 // panel — not just which block/diff-line. See RelatedPanel.mjs (bindUrlState +
 // applyRelRestore) and .claude/rules/keyboard-navigation.md.
 test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
-  // intoRelated: list → diff → hand the keyboard to the panel (focus 'code').
+  // intoRelated: list → diff → → (whatever the unit's own → chain currently
+  // leads to — 'comment' if it already has a thread, else the embedded Claude
+  // chat, see the "Embedded Claude chat" section of comments-panel.md). Each
+  // caller below presses further keys of its own to land on the specific
+  // stop it wants to test.
   async function intoRelated(page) {
     await page.goto('/pr/12903')
     // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
@@ -98,14 +102,19 @@ test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
     await page.locator('[data-idx="1"]').click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await page.keyboard.press('ArrowRight') // list → diff
-    await page.keyboard.press('ArrowRight') // diff → related panel
+    await page.keyboard.press('ArrowRight') // diff → whatever → currently leads to
   }
 
   test('stepping into the related-code card writes rel.foc and survives a reload', async ({ page }) => {
     await intoRelated(page)
-    // The related-code card has no outer focus border anymore (removed so its
-    // children read as loose blocks); the code stop owning the keyboard shows as
-    // cs.focus === 'code', mirrored to the URL as rel.foc.
+    // No comment thread on this unit, so the previous → landed on the
+    // embedded Claude chat (unconditionally reachable, auto-creating an empty
+    // private comment); ArrowDown with nothing to walk there falls through to
+    // the related panel. The related-code card has no outer focus border
+    // anymore (removed so its children read as loose blocks); the code stop
+    // owning the keyboard shows as cs.focus === 'code', mirrored to the URL
+    // as rel.foc.
+    await page.keyboard.press('ArrowDown')
     await expect.poll(() => new URL(page.url()).searchParams.get('rel.foc')).toBe('code')
 
     // Reload from the exact URL — rel.foc must still be there and the panel must
@@ -122,8 +131,16 @@ test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
 
   test('leaving the panel clears rel.foc again (canonical URL)', async ({ page }) => {
     await intoRelated(page)
+    // No comment thread on this unit, so the previous → landed on the
+    // embedded Claude chat, which auto-created an empty private comment to
+    // hang the conversation on — ArrowDown falls through to the related
+    // panel, exactly like the "stepping into the related-code card" test.
+    await page.keyboard.press('ArrowDown')
     await expect.poll(() => new URL(page.url()).searchParams.get('rel.foc')).toBe('code')
-    await page.keyboard.press('ArrowLeft') // related → back to diff (focus null)
+    // ← now steps back into that (auto-created) comment's own row first —
+    // there IS a thread now — before a second ← clears focus entirely.
+    await page.keyboard.press('ArrowLeft') // related → the comment thread
+    await page.keyboard.press('ArrowLeft') // comment → back to diff (focus null)
     await expect.poll(() => new URL(page.url()).searchParams.get('rel.foc')).toBeNull()
   })
 

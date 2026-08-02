@@ -88,7 +88,13 @@ test.describe('PR Review Tree — grouped covering tests (tests bar)', () => {
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list → diff
-    await page.keyboard.press('ArrowRight') // diff → related panel, first row
+    // No comment thread on this unit yet, so → first reaches the embedded
+    // Claude chat (unconditionally reachable, auto-creating an empty private
+    // comment — see the "Embedded Claude chat" section of comments-panel.md);
+    // ArrowDown with nothing to walk there falls through to the related
+    // panel, first row.
+    await page.keyboard.press('ArrowRight') // diff → embedded Claude chat
+    await page.keyboard.press('ArrowDown') // claude → related panel
 
     // The covering tests sort first (prio 0, ahead of the call child), so the
     // bar owns the first cursor slot.

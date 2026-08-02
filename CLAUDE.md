@@ -74,11 +74,12 @@ only loaded when the topic is relevant. Update the details there, not here.
   `approve`, which durably persists reviewer approval, `cleanup`, which
   daily purges all data — worktrees, workflow runs, read-model rows — of
   PRs merged more than 7 days ago, and `claude_chat`, the embedded
-  multi-turn Claude conversation next to a comment thread (backbone only so
-  far — no frontend panel yet, see the workflow's own section)). See
-  `.claude/rules/tembed-workflows.md`, the endpoint surface in
-  `.claude/rules/tembed-endpoints.md`, and the hard rules
-  `.claude/rules/workflow-determinism.md` /
+  multi-turn Claude conversation next to a comment thread — backend in the
+  workflow's own section, frontend panel (the `→` chain, the embedded
+  transcript, a "question with choices" turn) in
+  `.claude/rules/claude-chat-panel.md`). See `.claude/rules/tembed-workflows.md`,
+  the endpoint surface in `.claude/rules/tembed-endpoints.md`, and the hard
+  rules `.claude/rules/workflow-determinism.md` /
   `.claude/rules/workflows-write-boundary.md`.
 - **Task inbox** — the `/inbox` page: a personal, scored to-do list across PR
   reviews, unread comments on your own PRs, and Jira tickets assigned to you

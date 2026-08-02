@@ -92,7 +92,7 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     await expect.poll(relFoc).toBe(null)
   })
 
-  test('→ from the diff goes straight to Onderliggende code when the selected unit has no comments', async ({
+  test('→ from the diff reaches the embedded Claude chat when the selected unit has no comments, ↓ falls through to Onderliggende code', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -103,9 +103,18 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list → diff
-    await page.keyboard.press('ArrowRight') // diff → related-code (no comments here)
+    await page.keyboard.press('ArrowRight') // diff → embedded Claude chat (no
+    // comment thread yet — unconditionally reachable via →, auto-creating an
+    // empty private comment to hang the conversation on, see the "Embedded
+    // Claude chat" section of comments-panel.md)
 
     const relFoc = () => new URL(page.url()).searchParams.get('rel.foc')
+    await expect.poll(relFoc).toBe('claude')
+
+    // ArrowDown with nothing to walk in the still-empty chat falls through to
+    // Onderliggende code, exactly like it would at the bottom of an existing
+    // comment thread.
+    await page.keyboard.press('ArrowDown')
     await expect.poll(relFoc).toBe('code')
   })
 })

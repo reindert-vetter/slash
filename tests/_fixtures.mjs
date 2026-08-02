@@ -424,6 +424,13 @@ export const test = base.extend({
           // (see tasks_api.go).
           SLASH_JIRA: 'off',
           SLASH_JIRA_ASSIGNED: 'tests/fixtures/jira-assigned.json',
+          // Embedded Claude chat (claude_chat workflow): programs the Fake's
+          // RunChat replies so tests/claude-chat-panel.spec.mjs can exercise a
+          // plain reply and a "question with choices" turn deterministically.
+          // A worker-wide FIFO (see claude.Fake.SetChatTurns) — safe because
+          // no other workflow in this app calls RunChat (only Run), so only
+          // that one spec's own sends ever consume from it.
+          SLASH_CLAUDE_CHAT_TURNS: 'tests/fixtures/claude-chat-turns.json',
         },
         stdio: 'ignore',
       })

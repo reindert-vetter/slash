@@ -24,6 +24,8 @@ import Block, {
 } from './Block.mjs'
 import RelatedPanel, {
   InlineComments,
+  ClaudeChatPanel,
+  enterClaudeChat,
   TasksPanel,
   hasVisibleComments,
   enterCommentsHead,
@@ -33,7 +35,6 @@ import RelatedPanel, {
   isComposeOpen,
   composeHasText,
   relatedActive,
-  enterRelated,
   leaveRelated,
   handleRelatedKey,
   isCodeFocused,
@@ -6966,10 +6967,15 @@ function onKeydown(e) {
       // supersedes one (see clearRangeAnchor). Lands on the first inline
       // comment conversation of the selected unit if there is one (see
       // hasVisibleComments/enterCommentsHead in RelatedPanel.mjs); otherwise
-      // it goes straight to the Onderliggende-code panel, exactly as before.
+      // it goes straight into the embedded Claude chat (enterClaudeChat),
+      // which — per product decision — is unconditionally reachable via →
+      // and auto-creates an empty private comment to hang the conversation
+      // on the first time it's entered this way. → no longer falls straight
+      // through to the Onderliggende-code panel; that's now one step further
+      // (↓ with nothing left in the chat, or the comment thread's own →).
       clearRangeAnchor()
       if (hasVisibleComments()) enterCommentsHead()
-      else enterRelated()
+      else enterClaudeChat(state.pr, commentTarget)
     }
     return
   }
@@ -8311,6 +8317,7 @@ function DetailPanel(state) {
         ${() =>
           RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
       </div>
+      ${() => ClaudeChatPanel(state, commentTarget).key('claude-chat')}
     </main>
   `
 }

@@ -68,14 +68,26 @@ test('walking deeper into the Onderliggende-code chip tree never scrolls <main> 
 
   await page.keyboard.press('ArrowRight') // enter diff
   await page.waitForTimeout(200)
-  await page.keyboard.press('ArrowRight') // enter related panel (codeSel 0 = findOrCreateCustomer)
+  // No comment thread on this unit yet, so → first reaches the embedded
+  // Claude chat (unconditionally reachable, auto-creating an empty private
+  // comment — see the "Embedded Claude chat" section of comments-panel.md);
+  // ArrowDown with nothing to walk there falls through to the related panel
+  // (codeSel 0 = findOrCreateCustomer).
+  await page.keyboard.press('ArrowRight') // enter embedded Claude chat
+  await page.waitForTimeout(200)
+  await page.keyboard.press('ArrowDown') // fall through to the related panel
   await page.waitForTimeout(200)
 
   const scrollLeftBefore = await main.evaluate((el) => el.scrollLeft)
-  const focusedLeftBefore = await blockArticle.evaluate((el) => el.getBoundingClientRect().left)
-  const mainLeftBefore = await main.evaluate((el) => el.getBoundingClientRect().left)
-  // Sanity: the focused diff column starts out fully in view.
-  expect(focusedLeftBefore).toBeGreaterThanOrEqual(mainLeftBefore - 1)
+  // No "focused column still fully in view" sanity check here anymore: the
+  // embedded Claude chat column (just entered/fallen through above) sits
+  // between the diff and the related panel, so scrollFocusIntoView's own
+  // left-alignment of that intermediate stop already scrolls the original
+  // diff column partway out of view at this narrow viewport — expected,
+  // pre-existing behaviour (see "Unfocused columns collapse into a narrow
+  // rail" in drilling.md), not what this test guards. What DOES matter here —
+  // and is checked below — is that walking DEEPER into the chip tree causes
+  // no ADDITIONAL horizontal scroll.
 
   // Descend two chip levels (→ → ): handle, then its own billingAddress
   // sub-chip. Each step used to risk an implicit horizontal 'nearest' scroll
@@ -88,23 +100,21 @@ test('walking deeper into the Onderliggende-code chip tree never scrolls <main> 
   const scrollLeftDeep = await main.evaluate((el) => el.scrollLeft)
   expect(scrollLeftDeep).toBe(scrollLeftBefore)
 
-  // The originally-focused diff column (top-level block, focusLevel still 0 —
-  // we never drilled, just navigated the panel) must still be fully in view.
-  const focusedLeftDeep = await blockArticle.evaluate((el) => el.getBoundingClientRect().left)
-  const mainLeftDeep = await main.evaluate((el) => el.getBoundingClientRect().left)
-  expect(focusedLeftDeep).toBeGreaterThanOrEqual(mainLeftDeep - 1)
-
-  // Climb back out of the chips (← ←) and finally out of the panel entirely
-  // (←) — the diff column must still be exactly where it started, and own
-  // the keyboard again.
+  // Climb back out of the chips (← ←), back through the (now-existing, from
+  // the auto-create above) empty comment thread's own two stops, and finally
+  // out of the panel entirely — the diff column must still be exactly where
+  // it started, and own the keyboard again.
   await page.keyboard.press('ArrowLeft')
   await page.waitForTimeout(150)
   await page.keyboard.press('ArrowLeft')
   await page.waitForTimeout(150)
-  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft') // code -> the auto-created comment's own row
+  await page.waitForTimeout(200)
+  await page.keyboard.press('ArrowLeft') // comment -> diff
   await page.waitForTimeout(200)
 
   await expect(blockArticle).toHaveClass(/border-indigo-300/)
   const focusedLeftAfter = await blockArticle.evaluate((el) => el.getBoundingClientRect().left)
-  expect(focusedLeftAfter).toBeGreaterThanOrEqual(mainLeftDeep - 1)
+  const mainLeftAfter = await main.evaluate((el) => el.getBoundingClientRect().left)
+  expect(focusedLeftAfter).toBeGreaterThanOrEqual(mainLeftAfter - 1)
 })
