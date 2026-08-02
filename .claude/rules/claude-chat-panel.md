@@ -289,37 +289,101 @@ off-screen at a narrow viewport — expected pre-existing scroll behaviour
 something this spec (which guards against *additional* scroll from chip
 navigation specifically) needs to re-assert.
 
-## Open (frontend gaps — Phase 4's backend is now built)
+## Triggering the two agentic actions (`edit` / `commit`)
 
-- **Phase 3's backend is built** (a per-conversation shadow worktree + a
-  fast-forward-only commit/push — see "claude_chat" → "Agentic edits" in
-  `.claude/rules/workflows-comments.md`), but **this panel has no UI yet to
-  trigger it**: `sendClaudeMessage` always sends a plain (`action: ""`) turn.
-  A later pass needs to add the composer action(s) that set
-  `action: "edit"`/`"commit"` on the `POST .../signals/message` call — no
-  backend change needed, only this file's send path.
-- **Phase 4's backend is now built** — on the reviewer's explicit request,
-  `chat_workflow.go`'s `applyChatCommentAction` signals the left comment
-  thread's own `task_code_comment` Execution (`Source: "ai"`) and records a
-  `Kind: chat.KindAction` (success) or `Kind: chat.KindError` (failure)
-  confirmation turn — see "Opt-in influence on the left comment thread
-  (Phase 4)" in `.claude/rules/workflows-comments.md`. `ClaudeChat.mjs`'s
-  `chatKindBadge(msg)` now marks both kinds distinctly, mirroring
-  `RelatedPanel.mjs`'s `aiWarningBadge`/`staleAnchorBadge`: a small pill with a
-  word + a shape glyph (a checkmark for `'action'`, the same warning-triangle
-  SVG as `aiWarningBadge`/`related-covers-warning` for `'error'`) — the tint
-  (emerald resp. rose) is decoration on top, never the sole carrier, per the
-  colourblind rule. `msg.kind` is fixed at message creation (unlike `answer`,
-  which fills in later on the same row), so the badge needs no `${() => ...}`
-  getter wrapper of its own — same reasoning as the existing `isError`/`mine`
-  locals just below it. Testids `claude-message-action`/`claude-message-error`.
-  Test: the "action turn and an error turn each get their own badge" case in
-  `tests/claude-chat-panel.spec.mjs` (a direct-mount unit test of
-  `claudeChatColumn`, since driving a real `comment_action` directive through
-  the Playwright fixture would need the comment's run id known before the
-  fixture file loads — see the test's own comment; the backend's
-  KindAction/KindError decision is already covered end-to-end by
-  `chat_workflow_test.go`).
+Phase 3's backend (a per-conversation shadow worktree + a fast-forward-only
+commit/push — see "claude_chat" → "Agentic edits" in
+`.claude/rules/workflows-comments.md`) is reached from this panel via two
+plain, native `<button>`s below the composer (`data-testid=claude-chat-actions`,
+`ClaudeChat.mjs`), next to the existing "Stuur":
+
+- **"Bewerk code"** (`data-testid=claude-chat-send-edit`) sends the SAME typed
+  composer text as "Stuur", but as an `action: "edit"` turn
+  (`callbacks.onSendEdit` → `sendClaudeMessage(text, 'edit')`,
+  `RelatedPanel.mjs`) — Claude may then use its Edit tool against the
+  conversation's own throwaway shadow worktree. **No confirm step**: nothing
+  real (the PR's actual branch) is touched yet, so this is exactly as
+  low-friction as an ordinary plain turn.
+- **"Commit wijziging"** (`data-testid=claude-chat-commit`) needs no typed
+  text at all (`sendClaudeMessage`'s own guard skips the "needs real text"
+  check only for `action === 'commit'`, mirroring the backend's identical
+  validation in `tasks_api.go`) and genuinely fast-forward-pushes onto the
+  PR's real head branch (`chat_shadow.go`/`chat_merge.go`), so it does **not**
+  act on a single click: it only opens a confirm menu
+  (`CLAUDE_COMMIT_CONFIRM_COMMANDS`, `home.mjs`, mode `'claudeCommit'`) —
+  "Sluit menu" pinned, "Ja, commit en push naar de PR-branch" the default 2nd
+  item — mirroring the two-step "Approve the whole PR" confirm
+  (`REVIEW_APPROVE_CONFIRM_COMMANDS`, see `.claude/rules/command-palette.md`).
+  Confirming calls the exported `commitClaudeChange()`
+  (`RelatedPanel.mjs`), which is the only thing that actually sends the
+  `action: "commit"` Signal. The eventual outcome (pushed / nothing to commit
+  / a merge conflict) is **never** returned synchronously from either the
+  button or the confirm — it lands later as its own assistant chat message
+  once the PR's `chat_merge` queue processes the request, exactly like any
+  other turn's reply arrives (see "Live progress" above).
+
+**Keyboard reachability is free, by construction — no new global shortcut.**
+Both are ordinary `<button>` elements (like "Stuur" itself), so Tab-focusing
+one and pressing Enter/Space fires the exact same `@click` handler a mouse
+click would — no parallel implementation (mouse-navigation.md's rule 1). The
+existing plain-Enter-sends-a-message behaviour in the composer's own
+`@keydown` is deliberately **untouched**: overloading Enter to open a
+choose-an-action menu (the way `COMPOSE_COMMANDS` does for a brand-new
+comment) would have turned every ordinary conversational turn — still the
+overwhelmingly common case — into a two-Enter flow, which is not the
+"continuing a conversation" weight this send already has (mirrors why a
+thread **reply** field sends directly while a **new** comment composer opens
+a menu — see `.claude/rules/comments-panel.md`).
+
+`ClaudeChatPanel(state, commentTarget, openCommit)` gained a third param
+(mirrors `InlineComments`' own `openCompose`/`openCommentMenu` props) purely
+to reach `home.mjs`'s `openMenu` — `RelatedPanel.mjs`/`ClaudeChat.mjs` have no
+access to it directly, same reason `InlineComments` needs those two callbacks.
+`menuAnchor()`/`menuRegion()` gained a `'claudeCommit'` branch anchoring on
+`[data-testid=claude-chat-card]`/`-column]`.
+
+**Test coverage is deliberately end-to-end for the Signal, not for the git
+outcome.** `tests/claude-chat-panel.spec.mjs` clicks both buttons on its
+existing seeded conversation: "Bewerk code" really sends an `action: "edit"`
+Signal, which then needs a per-conversation shadow worktree
+(`ensureChatShadowWorktree`, `chat_shadow.go`) — that in turn needs a REAL PR
+head branch from `gh`, which a synthetic `seededPr` number doesn't have even
+under the offline Fake, so it deterministically reports the "no worktree"
+`KindError` turn instead of a normal reply. That failure message is exactly
+what the test asserts on: it still proves the button reaches the workflow
+with the right action, without needing a real git remote. "Commit wijziging"
+is asserted only up to opening/closing the confirm menu — actually confirming
+would push to a real remote. The real success/conflict git plumbing for both
+actions is covered offline at the Go level
+(`chat_shadow_test.go`/`chat_merge_test.go`).
+
+## Opt-in influence on the left comment thread (Phase 4)
+
+Phase 4's backend is built — on the reviewer's explicit request,
+`chat_workflow.go`'s `applyChatCommentAction` signals the left comment
+thread's own `task_code_comment` Execution (`Source: "ai"`) and records a
+`Kind: chat.KindAction` (success) or `Kind: chat.KindError` (failure)
+confirmation turn — see "Opt-in influence on the left comment thread
+(Phase 4)" in `.claude/rules/workflows-comments.md`. `ClaudeChat.mjs`'s
+`chatKindBadge(msg)` now marks both kinds distinctly, mirroring
+`RelatedPanel.mjs`'s `aiWarningBadge`/`staleAnchorBadge`: a small pill with a
+word + a shape glyph (a checkmark for `'action'`, the same warning-triangle
+SVG as `aiWarningBadge`/`related-covers-warning` for `'error'`) — the tint
+(emerald resp. rose) is decoration on top, never the sole carrier, per the
+colourblind rule. `msg.kind` is fixed at message creation (unlike `answer`,
+which fills in later on the same row), so the badge needs no `${() => ...}`
+getter wrapper of its own — same reasoning as the existing `isError`/`mine`
+locals just below it. Testids `claude-message-action`/`claude-message-error`.
+Test: the "action turn and an error turn each get their own badge" case in
+`tests/claude-chat-panel.spec.mjs` (a direct-mount unit test of
+`claudeChatColumn`, since driving a real `comment_action` directive through
+the Playwright fixture would need the comment's run id known before the
+fixture file loads — see the test's own comment; the backend's
+KindAction/KindError decision is already covered end-to-end by
+`chat_workflow_test.go`).
+
+## Open (frontend gaps)
+
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat
   composer — a page navigation away loses an unsent, half-typed message. Not
   requested; flagging as a known gap mirroring the existing comment

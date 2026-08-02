@@ -66,6 +66,7 @@ import RelatedPanel, {
   exitPrCommentThread,
   handlePrCommentThreadKey,
   scrollIntoViewVertical,
+  commitClaudeChange,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
@@ -4411,6 +4412,32 @@ const REVIEW_CHOICE_COMMANDS = withClose([
   },
 ])
 
+// CLAUDE_COMMIT_CONFIRM_COMMANDS — the confirm step for the embedded Claude
+// chat panel's "Commit wijziging" button (see claude-chat-panel.md and
+// ClaudeChatPanel's openCommit prop, RelatedPanel.mjs): choosing it opens
+// this menu (mode 'claudeCommit', see openMenu below) instead of pushing
+// straight away, mirroring REVIEW_APPROVE_CONFIRM_COMMANDS above — a commit
+// here genuinely fast-forward-pushes Claude's shadow-worktree edits onto the
+// PR's real head branch (chat_shadow.go/chat_merge.go), so it gets the same
+// "not on a single click" caution as approving the whole PR. Unlike that
+// submenu this IS the root list of its own mode (the button already IS the
+// first, unambiguous choice — there's no coarser "Keur de HELE PR goed"-style
+// item to drill through first). "Sluit menu" is pinned first (withClose); the
+// menu opens on the 2nd item (defaultSel), so a reviewer who means it
+// confirms with one more, genuinely separate Enter/click. The eventual
+// outcome (pushed / nothing to commit / a merge conflict) is NOT returned
+// here — it arrives asynchronously as its own chat message once the PR's
+// chat_merge queue processes the request (see commitClaudeChange's own doc
+// comment).
+const CLAUDE_COMMIT_CONFIRM_COMMANDS = withClose([
+  {
+    id: 'claude-commit-confirm',
+    label: 'Ja, commit en push naar de PR-branch',
+    hint: 'commit',
+    run: () => commitClaudeChange(),
+  },
+])
+
 // resolveLabel/snapshotCommands materialize a command list's labels into plain
 // strings, calling any function label RIGHT NOW instead of leaving it as a live
 // `${() => labelOf(c)}` binding inside CommandMenu's tree. This must run from
@@ -6370,6 +6397,7 @@ function rootCommandsFor(mode) {
   if (mode === 'postApprove') return POSTAPPROVE_COMMANDS
   if (mode === 'reviewApprove') return REVIEW_APPROVE_COMMANDS
   if (mode === 'reviewChoice') return REVIEW_CHOICE_COMMANDS
+  if (mode === 'claudeCommit') return CLAUDE_COMMIT_CONFIRM_COMMANDS
   // reviewReject has no static list — resolveCommands builds its one command
   // straight from the typed reason (see there); nothing to snapshot up front.
   if (mode === 'reviewReject') return []
@@ -6413,6 +6441,10 @@ function resolveCommands(query) {
   // handled by the ms.sub check above, not here.
   if (ms.mode === 'reviewApprove') return filterCommands(ms.commands, query)
   if (ms.mode === 'reviewChoice') return filterCommands(ms.commands, query)
+  // The embedded Claude chat's commit confirm (opened by the "Commit
+  // wijziging" button, see CLAUDE_COMMIT_CONFIRM_COMMANDS): just its own
+  // small list, no submenu, no make-a-comment fallback.
+  if (ms.mode === 'claudeCommit') return filterCommands(ms.commands, query)
   // reviewReject — the free-text rejection-reason step opened by "Wijs de PR
   // af" above. GitHub (and the backend) reject an empty REQUEST_CHANGES body,
   // so this mode has no static command list: build ONE command straight from
@@ -7389,6 +7421,15 @@ function menuAnchor() {
       document.querySelector('[data-testid="pr-info-column"]')
     )
   }
+  // The Claude chat commit confirm ('claudeCommit', opened by the chat
+  // card's own "Commit wijziging" button) anchors on that card, wherever it
+  // currently sits in <main>'s column flow.
+  if (ms.mode === 'claudeCommit') {
+    return (
+      document.querySelector('[data-testid="claude-chat-card"]') ||
+      document.querySelector('[data-testid="claude-chat-column"]')
+    )
+  }
   return (
     // The last row of the active unit, so a multi-row selection (group unit
     // or a Shift-extended range) gets the menu below its bottom instead of
@@ -7439,6 +7480,14 @@ function menuRegion() {
   // (39rem) — mirror of how the index menu takes the whole sidebar.
   if (isDescriptionMenu()) {
     return document.querySelector('[data-testid="pr-info-column"]')
+  }
+  // The Claude chat commit confirm sits over the chat column itself, the same
+  // width relatedColumnWidthCls() already gives it (see claude-chat-panel.md).
+  if (ms.mode === 'claudeCommit') {
+    return (
+      document.querySelector('[data-testid="claude-chat-column"]') ||
+      document.querySelector('[data-testid="detail-panel"]')
+    )
   }
   const scope = document.querySelector('[data-testid="detail-panel"]')
   if (!scope) return null
@@ -8317,7 +8366,17 @@ function DetailPanel(state) {
         ${() =>
           RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
       </div>
-      ${() => ClaudeChatPanel(state, commentTarget).key('claude-chat')}
+      ${() =>
+        ClaudeChatPanel(
+          state,
+          commentTarget,
+          // The "Commit wijziging" button (ClaudeChat.mjs) is a plain native
+          // <button>, so Tab+Enter/Space already reaches this callback with
+          // no extra keyboard wiring here — see claudeChatColumn's own doc
+          // comment and "Triggering the two agentic actions" in
+          // claude-chat-panel.md.
+          () => openMenu('claudeCommit'),
+        ).key('claude-chat')}
     </main>
   `
 }

@@ -967,26 +967,53 @@ function applyChatProgress(p) {
 
 // sendClaudeMessage sends the reviewer's turn (free text, or the text of a
 // clicked question option — see claudeChatColumn's onSend, the same callback
-// either way). The Signal round-trip runs the Activities (incl. the real
-// claude subprocess call) INLINE — see tembed-workflows.md — so this await
-// genuinely spans the whole turn. That await is no longer what makes the reply
-// appear, though: the live progress (streamed tokens, current tool) arrives
-// meanwhile over SSE, and the finished transcript over chat.message. This is
-// only the belt-and-braces refetch for the reviewer's OWN send.
-async function sendClaudeMessage(text) {
-  if (!cc.runId || !text || !text.trim()) return
+// either way) — or, for `action === 'commit'`, the empty-body "commit this
+// change" turn (see chat_workflow.go's ChatMessageSignal.Action). The Signal
+// round-trip runs the Activities (incl. the real claude subprocess call, or —
+// for 'commit' — the enqueue onto the PR's chat_merge queue) INLINE — see
+// tembed-workflows.md — so this await genuinely spans that step. That await is
+// no longer what makes an ordinary turn's reply appear, though: the live
+// progress (streamed tokens, current tool) arrives meanwhile over SSE, and the
+// finished transcript over chat.message. This is only the belt-and-braces
+// refetch for the reviewer's OWN send. A 'commit' request's own OUTCOME
+// (pushed / nothing to commit / conflict) is never returned synchronously
+// here either — it lands later as its own chat message once the shared queue
+// gets to it (see chat_merge.go), same as any other assistant turn.
+//
+// `action` is '' (plain, read-only turn), 'edit' (let Claude use its Edit tool
+// against the conversation's shadow worktree) or 'commit' (push that shadow's
+// edits — no Body needed, the ONLY case allowed to send with empty text; see
+// tasks_api.go's validation of the exact same three values).
+async function sendClaudeMessage(text, action = '') {
+  const trimmed = (text || '').trim()
+  const isCommit = action === 'commit'
+  if (!cc.runId) return
+  if (!isCommit && !trimmed) return
   cc.busy = true
   try {
     await fetch('/api/workflows/' + encodeURIComponent(cc.runId) + '/signals/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ author: 'reviewer', body: text.trim() }),
+      body: JSON.stringify({ author: 'reviewer', body: trimmed, action: action || undefined }),
     })
     await loadChatMessages(cc.commentId)
     clearFinishedChatProgress()
   } finally {
     cc.busy = false
   }
+}
+
+// commitClaudeChange sends the 'commit' turn after the reviewer confirms via
+// CLAUDE_COMMIT_CONFIRM_COMMANDS (home.mjs, opened by the chat card's own
+// "Commit" button — see ClaudeChatPanel's openCommit callback below). A
+// dedicated confirm step because this genuinely fast-forward-pushes Claude's
+// shadow-worktree edits onto the PR's real head branch — the same "don't act
+// on a single click" caution as the two-step "Approve the whole PR" menu (see
+// command-palette.md), unlike 'edit' (below), which only ever touches the
+// conversation's own throwaway shadow worktree and is therefore a plain,
+// unconfirmed send like any other turn.
+export async function commitClaudeChange() {
+  await sendClaudeMessage('', 'commit')
 }
 
 // clearFinishedChatProgress drops the volatile snapshot once its turn is over.
@@ -1167,27 +1194,44 @@ function claudeChatView() {
     },
   }
 }
-function claudeChatCallbacks() {
+// `openCommit` is the one callback ClaudeChatPanel receives from home.mjs
+// (mirrors InlineComments' own openCompose/openCommentMenu props): a click on
+// the card's "Commit" button opens CLAUDE_COMMIT_CONFIRM_COMMANDS via the
+// existing command-palette machinery — this file has no access to
+// home.mjs's openMenu/ms directly, exactly like it has none for
+// openMenu('compose')/openMenu('comment').
+function claudeChatCallbacks(openCommit) {
   return {
     onSend: (text) => sendClaudeMessage(text),
+    // "Bewerk code": the SAME typed text, but as an 'edit'-action turn (Claude
+    // may use its Edit tool against the shadow worktree) — a plain send, no
+    // confirm step, since it never touches the real PR branch. See
+    // sendClaudeMessage's own doc comment for why only 'commit' skips the
+    // "needs real text" requirement.
+    onSendEdit: (text) => sendClaudeMessage(text, 'edit'),
+    onCommitClick: () => {
+      if (openCommit) openCommit()
+    },
   }
 }
 
 // ClaudeChatPanel is the exported component home.mjs mounts next to
 // InlineComments/RelatedPanel, as its own sibling column in <main>'s flex-row
 // (see detail-layout.md). `state`/`commentTarget` mirror InlineComments' own
-// params exactly. Wrapped in a stable `contents` root — not a bare toggling
-// expression — so the visibility (empty ↔ template) toggle never corrupts
-// arrow.js's keyed reconcile (the same pitfall newCommentComposer/commentCard
-// guard against). Everything that can change AFTER this column first mounts
-// lives behind claudeChatView()'s getters, read from inside ClaudeChat.mjs's
-// own `${() => ...}` bindings — see claudeChatView's doc comment for why a
-// plain snapshot isn't enough here.
-export function ClaudeChatPanel(state, commentTarget) {
+// params exactly; `openCommit` mirrors InlineComments' openCompose/
+// openCommentMenu (see claudeChatCallbacks above). Wrapped in a stable
+// `contents` root — not a bare toggling expression — so the visibility (empty
+// ↔ template) toggle never corrupts arrow.js's keyed reconcile (the same
+// pitfall newCommentComposer/commentCard guard against). Everything that can
+// change AFTER this column first mounts lives behind claudeChatView()'s
+// getters, read from inside ClaudeChat.mjs's own `${() => ...}` bindings —
+// see claudeChatView's doc comment for why a plain snapshot isn't enough
+// here.
+export function ClaudeChatPanel(state, commentTarget, openCommit) {
   currentCommentTarget = commentTarget
   ensureChatEvents(state.pr)
   const view = claudeChatView()
-  const callbacks = claudeChatCallbacks()
+  const callbacks = claudeChatCallbacks(openCommit)
   return html`
     <div class="contents">
       ${() =>
