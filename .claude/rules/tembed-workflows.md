@@ -61,7 +61,9 @@ knows nothing about LLMs):
   synchronously (High first); **Low** runs drain on a **single** background
   goroutine (serially, to avoid a herd of subprocess calls), covered by `Wait()`.
   slash marks the pure-LLM types Low: `resolve_call`, `resolve_test_covers`,
-  `explain_code`, `code_warning`.
+  `explain_code`, `code_warning`, plus `claude_chat` (every turn is a real
+  `claude` subprocess call) and `chat_merge` (its Activity can run one on a
+  conflict).
 - **`SetActivityPriority(name, p)`** — for a workflow that is otherwise fast but
   has one slow LLM step: during synchronous recovery, a Normal/High run that
   replays into a **live** `PriorityLow` activity yields to the background at

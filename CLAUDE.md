@@ -62,8 +62,9 @@ only loaded when the topic is relevant. Update the details there, not here.
   list/diff modes and selection granularity (`f`/`d`/`s`, group/line/call),
   plus the footer inline preview. See `.claude/rules/keyboard-navigation.md`.
 - **Detail layout & related panel** — the column layout next to the sidebar
-  (block card + `RelatedPanel` with underlying code and a tasks/chat
-  placeholder). See `.claude/rules/detail-layout.md`.
+  (block card, then the shared column with the inline comment threads above
+  `RelatedPanel`'s underlying code, then the embedded Claude chat column). See
+  `.claude/rules/detail-layout.md` and `.claude/rules/claude-chat-panel.md`.
 - **Pages, routing & PR inbox** — the two static shells (`/pr/<id>`,
   `/pr-overview`) and the read-only GitHub inbox that runs through the
   `pr_inbox` workflow. See `.claude/rules/pages-and-routing.md`.
@@ -144,8 +145,9 @@ Every **extra window/panel** gets its own `ns` so its params sit alongside the
 main navigation in the same URL without colliding. `RelatedPanel` really uses
 this: `bindUrlState(cs, …, { ns: 'rel' })` binds the **panel cursor**
 (`focus`→`rel.foc`, `codeSel`→`rel.code`, `sel`→`rel.csel`,
-`threadPos`→`rel.thr`) so a refresh puts you back on the same Underlying-code
-child / the same comment thread. Restored values that fall out of range due
+`threadPos`→`rel.thr`, `claudePos`→`rel.cpos`) so a refresh puts you back on the
+same Underlying-code child / the same comment thread / the same turn of the
+embedded Claude conversation. Restored values that fall out of range due
 to async loading are clamped (`loadBlocks` clamps `selected`, `ensureCode`
 clamps `change` and falls back to `mode:'list'` for a block without changes —
 but only from the rest position (`focusLevel === 0`, no open `state.drill`),

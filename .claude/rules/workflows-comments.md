@@ -667,9 +667,14 @@ recognizes the `question` shape:
 
 `POST /api/workflows/claude_chat {pr, commentId}` → `StartClaudeChat`
 (validates `commentId` names an existing comment of `pr` before starting);
-`POST /api/workflows/{runID}/signals/message {author, body}` → the generic
-signal route (the reviewer turn); `GET /api/chat?commentId=X` → the read-only
-transcript. Full table: `.claude/rules/tembed-endpoints.md`.
+`POST /api/workflows/{runID}/signals/message {author, body, action?}` → the
+generic signal route (the reviewer turn; `action` is `""`/`"edit"`/`"commit"`
+and is validated in the handler before it ever reaches the workflow);
+`GET /api/chat?commentId=X` → the read-only transcript;
+`GET /api/chat/progress?commentId=X` → the in-memory snapshot of a running
+turn, which is the resync read for the SSE stream `GET /api/events` pushes the
+live progress over (`.claude/rules/server-events.md`). Full table:
+`.claude/rules/tembed-endpoints.md`.
 
 ### Tests
 

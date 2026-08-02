@@ -816,7 +816,7 @@ function enterThread() {
 
 // ── Embedded Claude conversation (claude_chat workflow) ──────────────────────
 // A Claude conversation always hangs off an existing comment thread (product
-// decision — see the "Embedded Claude chat" section of comments-panel.md).
+// decision — see .claude/rules/claude-chat-panel.md).
 // The column is reached the same way the comment thread itself is: → deepens
 // one level further (comment → thread → claude), and it is ALSO reachable
 // directly from the diff when the selected unit has no comment thread at all

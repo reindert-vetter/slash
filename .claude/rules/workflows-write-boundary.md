@@ -64,6 +64,14 @@ endpoint — the failed **workflow runs** — is a plain read of the tembed stor
 so it needs no carve-out at all. Making either of them durable would have to go
 through a workflow.
 
+Fourth example: the **event bus** behind `GET /api/events` (`eventbus.go`) and
+the in-memory progress snapshot of a running Claude chat turn
+(`chat_progress.go`, read via `GET /api/chat/progress`). An Activity publishes
+into the hub while it runs, but nothing is stored: no module, no read model, no
+workflow history, and the hub is empty again after a restart. That is exactly
+why an event may never be the source of truth — every consumer refetches the
+ordinary read-only `GET` — see `.claude/rules/server-events.md`.
+
 ## Why
 
 The workflow event history is the **source of truth**: durable, replayable,
