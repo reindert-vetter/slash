@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, leaveSearchBox, seededPr } from './_fixtures.mjs'
 
 // Change navigation: from the sidebar (list mode) → steps into the selected
 // block's diff and selects the first changed line; ↑/↓ then walk the change
@@ -186,19 +186,18 @@ test.describe('PR Review Tree — change navigation', () => {
   test('seeded comments show inline as a list; clicking one opens its thread', async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     // Seed two comments on a PR of this test's own (the comments read-model is
     // shared across the parallel run, so seeding the default 12903 would collide
     // with the other comment specs). This test only exercises the comment panel,
     // not the diff, so it needs no ingested blocks. The first comment carries a
     // code snippet so we can assert the thread shows it (like the composer
     // preview) — a comment without code shows no hint.
-    // Own number (970013), not 970010: that one is comment-author-avatar.spec.mjs's
-    // own sequential 970009/970010/970011 slot, and this test's exact
-    // toHaveCount(2) below depended on scheduling order whenever both specs
-    // landed on the same worker (see the APPROVAL_RESET_PRS note in
-    // _fixtures.mjs / "Playwright test infra" in conventions.md).
-    const pr = 970013
+    // Its own allocated number (seededPr), not a hand-picked literal: this
+    // test's exact toHaveCount(2) below used to depend on scheduling order
+    // whenever it shared a number with another seeding spec on the same worker
+    // (see seededPr's own comment in _fixtures.mjs).
+    const pr = seededPr(testInfo)
     const seeds = [
       {
         body: 'first review comment',

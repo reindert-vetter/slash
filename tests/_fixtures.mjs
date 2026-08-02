@@ -529,6 +529,51 @@ export const test = base.extend({
 
 export { expect }
 
+// SEEDED_PR_BASE — the start of the dynamically allocated synthetic PR range.
+// Deliberately above every hardcoded fixture number in use (the small 90-112
+// worktree fixtures, the shared anchor 12903, and the handful of block-backed
+// 97xxxx fixtures listed in SEED_PR_LITERAL_ALLOWLIST below), and far enough
+// below them in spirit that a reader can tell at a glance that a 971xxx number
+// was handed out by seededPr() rather than typed by hand.
+const SEEDED_PR_BASE = 971000
+
+// seededPrs maps "this exact test attempt (+ slot)" to the number it was given.
+// Module-level and therefore PER WORKER PROCESS, which is exactly the scope
+// that matters: a worker owns its own SQLite DB and its own server (see the
+// worker fixture above), so two workers handing out the same number can never
+// see each other's rows. Within a worker the tests run sequentially, so a plain
+// insertion counter is already collision-free — no hashing, no registry.
+const seededPrs = new Map()
+
+// seededPr hands a test its own synthetic PR number for data it SEEDS at
+// runtime (a placed comment, a started workflow) rather than reads from a
+// pre-seeded fixture.
+//
+// Why this exists instead of a hand-picked literal: the worker DB lives for the
+// whole worker, and comments have no reset hook (`_cleanApprovals` only wipes
+// the shared anchor 12903 — see its own comment for why). So a number typed
+// into two different spec files silently leaks one spec's comments into the
+// other's exact count assertions, depending purely on which one the scheduler
+// ran first on that worker. That is not a hypothetical: 970010 was shared by
+// comment-author-avatar.spec.mjs and a navigate.spec.mjs test, and 970011 by
+// comment-author-avatar.spec.mjs and comment-last-reply.spec.mjs. The
+// convention "give a seeding spec its own number" was already written down and
+// still got broken twice, because nothing enforced it — hence an allocator
+// instead of a rule. tests/seeded-pr-literals.spec.mjs keeps new literals out.
+//
+// The RETRY is part of the key for the same reason: a retry reuses the same
+// worker DB, so reusing the number would leave the second attempt looking at
+// the first attempt's leftovers and failing every exact count.
+//
+// `slot` is for a single test that genuinely needs two isolated PRs at once
+// (e.g. an anchored and a PR-wide comment side by side); leave it at 0 for the
+// ordinary one-PR case.
+export function seededPr(testInfo, slot = 0) {
+  const key = `${testInfo.testId}:${testInfo.retry}:${slot}`
+  if (!seededPrs.has(key)) seededPrs.set(key, SEEDED_PR_BASE + seededPrs.size)
+  return seededPrs.get(key)
+}
+
 // leaveSearchBox replaces the `await page.keyboard.press('Escape') // leave the
 // auto-focused starting-points search box` idiom that ~70 spec sites open with.
 // That bare press is a race: home.mjs focuses the search box from a

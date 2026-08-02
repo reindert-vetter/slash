@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, openNewComment, seededPr } from './_fixtures.mjs'
 
 // Regression test for: "in a comment I can't use the right arrow key
 // (first left in the input with a sentence, and then right)" —
@@ -57,8 +57,8 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
 
   test('block-scoped reply thread: ArrowRight moves the caret, entering the thread only fires once the caret is at the end', async ({
     page,
-  }) => {
-    const pr = 970004
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
     const start = await page.request.post('/api/workflows/task_code_comment', {
       data: {
         pr,

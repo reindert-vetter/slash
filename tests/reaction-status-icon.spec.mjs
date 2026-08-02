@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 
 // The button to the right of "Stuur" in an expanded comment thread
 // (reaction-status) used to double as the resolve action (a plain click sent
@@ -11,24 +11,23 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // button now opens that same menu on click instead of resolving directly), and
 // (2) the status icon actually reflects draft/sending/sent.
 test.describe('reaction-status: send-status icon + mouse-only resolve', () => {
-  // Own PR, unseeded — mirrors comment-delete.spec.mjs's isolation reasoning
-  // (comments read-model, no ingested blocks needed for this flow).
-  const PR = 970021
-
-  async function seedComment(page, body) {
+  // Own PR per test, from seededPr — mirrors comment-delete.spec.mjs's
+  // isolation reasoning (comments read-model, no ingested blocks needed here).
+  async function seedComment(page, pr, body) {
     const start = await page.request.post('/api/workflows/task_code_comment', {
-      data: { pr: PR, file: 'test.php', line: 1, author: 'reviewer', body },
+      data: { pr, file: 'test.php', line: 1, author: 'reviewer', body },
     })
     const runId = (await start.json()).runId
     expect(runId).toBeTruthy()
     return runId
   }
 
-  test('clicking the status button opens the resolve/delete menu — no keyboard needed', async ({ page }) => {
+  test('clicking the status button opens the resolve/delete menu — no keyboard needed', async ({ page }, testInfo) => {
+    const pr = seededPr(testInfo)
     const body = 'mouse-only-resolve ' + Math.random().toString(36).slice(2)
-    const runId = await seedComment(page, body)
+    const runId = await seedComment(page, pr, body)
 
-    await page.goto('/pr/' + PR)
+    await page.goto('/pr/' + pr)
     await leaveSearchBox(page)
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
@@ -56,16 +55,17 @@ test.describe('reaction-status: send-status icon + mouse-only resolve', () => {
 
     await expect
       .poll(async () => {
-        const list = await (await page.request.get('/api/comments?pr=' + PR)).json()
+        const list = await (await page.request.get('/api/comments?pr=' + pr)).json()
         const c = list.find((x) => x.id === runId)
         return c && c.status
       })
       .toBe('resolved')
   })
 
-  test('the status icon shows a spinner while sending and disables both buttons', async ({ page }) => {
+  test('the status icon shows a spinner while sending and disables both buttons', async ({ page }, testInfo) => {
+    const pr = seededPr(testInfo)
     const body = 'status-icon-spinner ' + Math.random().toString(36).slice(2)
-    await seedComment(page, body)
+    await seedComment(page, pr, body)
 
     // Delay the reply Signal so the "sending" state is observable instead of
     // resolving before Playwright can assert on it.
@@ -76,7 +76,7 @@ test.describe('reaction-status: send-status icon + mouse-only resolve', () => {
       await route.continue()
     })
 
-    await page.goto('/pr/' + PR)
+    await page.goto('/pr/' + pr)
     await page.keyboard.press('Escape')
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()

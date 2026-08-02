@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, seededPr } from './_fixtures.mjs'
 
 // Verifies: every comment row and every reply/thread bubble shows its author
 // (name) plus an avatar — an image when a URL is known, otherwise the
@@ -7,8 +7,8 @@ import { test, expect } from './_fixtures.mjs'
 // login but no avatarUrl today (see detail-layout.md's datamodel note), so
 // this always exercises the initials-fallback path — which is also what a
 // SLASH_GITHUB=off/offline run needs to look right.
-test('comment row, reply bubble, and PR-wide item all show author + avatar', async ({ page }) => {
-  const pr = 970009
+test('comment row, reply bubble, and PR-wide item all show author + avatar', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
   const start = await page.request.post('/api/workflows/task_code_comment', {
     data: {
       pr,
@@ -99,7 +99,7 @@ test('comment-index item detail card shows author + avatar', async ({ page }) =>
 // SLASH_GITHUB=off, so the real endpoint resolves nothing — which is exactly why
 // the two tests above still expect bare logins — and this one stubs it to cover
 // the resolved path plus a login nobody knows a name for.
-test('comment row and thread bubbles show the author\'s real first name once known', async ({ page }) => {
+test('comment row and thread bubbles show the author\'s real first name once known', async ({ page }, testInfo) => {
   await page.route('**/api/names**', (route) =>
     route.fulfill({
       status: 200,
@@ -109,7 +109,7 @@ test('comment row and thread bubbles show the author\'s real first name once kno
     }),
   )
 
-  const pr = 970010
+  const pr = seededPr(testInfo)
   const start = await page.request.post('/api/workflows/task_code_comment', {
     data: { pr, file: 'test.php', line: 1, author: 'octocat', body: 'root comment', gran: 'line', label: 'Order::total' },
   })
@@ -142,7 +142,7 @@ test('comment row and thread bubbles show the author\'s real first name once kno
 // (Go's `json:"source,omitempty"` then drops it from the API response
 // entirely), so the raw value reaching identityOf was `undefined`, not the
 // literal string 'ui' — see the identityOf paragraph in conventions.md.
-test('an own, in-app-placed comment shows the reviewer\'s real identity, not the "reviewer" sentinel', async ({ page }) => {
+test('an own, in-app-placed comment shows the reviewer\'s real identity, not the "reviewer" sentinel', async ({ page }, testInfo) => {
   await page.route('**/api/me', (route) =>
     route.fulfill({
       status: 200,
@@ -158,7 +158,7 @@ test('an own, in-app-placed comment shows the reviewer\'s real identity, not the
     }),
   )
 
-  const pr = 970011
+  const pr = seededPr(testInfo)
   // No `source` in the payload at all — mirrors createComment, which never
   // sends one, so the backend stores Source: "" for the root comment.
   const start = await page.request.post('/api/workflows/task_code_comment', {

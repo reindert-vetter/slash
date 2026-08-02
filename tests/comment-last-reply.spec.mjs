@@ -1,11 +1,11 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, seededPr } from './_fixtures.mjs'
 
 // Verifies: compactConversation's meta line names who sent the LAST message
 // of the thread (lastReplyNote in RelatedPanel.mjs) — not just the root
 // author + reaction count, which never change once someone replies. See the
 // "Inline comment blocks" section in detail-layout.md.
-test('compact comment row shows who replied last, unless it was me', async ({ page }) => {
-  const pr = 970011
+test('compact comment row shows who replied last, unless it was me', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
   const start = await page.request.post('/api/workflows/task_code_comment', {
     data: {
       pr,

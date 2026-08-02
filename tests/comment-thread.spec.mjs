@@ -1,11 +1,11 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 
 // Verifies: a placed comment shows its code snippet in the thread (feature 1)
 // and its original body as the first chat bubble (feature 2).
-test('placed comment shows code snippet + original body as first message', async ({ page }) => {
-  // Use a PR of its own so this doesn't share the comments read-model with the
-  // other comment spec (the test DB is shared across the parallel run).
-  const pr = 970001
+test('placed comment shows code snippet + original body as first message', async ({ page }, testInfo) => {
+  // Its own synthetic PR (and its own again on a retry), so the comments this
+  // seeds can never be counted by another spec sharing this worker's DB.
+  const pr = seededPr(testInfo)
   const start = await page.request.post('/api/workflows/task_code_comment', {
     data: {
       pr,

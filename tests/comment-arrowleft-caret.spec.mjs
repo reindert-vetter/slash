@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, openNewComment, seededPr } from './_fixtures.mjs'
 
 // Regression test for: "option naar links, moet niet uit comment input gaan" —
 // ArrowLeft (and Option/Alt+ArrowLeft, the Mac word-jump) inside a genuinely
@@ -49,8 +49,8 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
     await expect(composer).toHaveCount(0)
   })
 
-  test('block-scoped reply thread: ArrowLeft/Alt+ArrowLeft move the caret, thread stays open', async ({ page }) => {
-    const pr = 970002
+  test('block-scoped reply thread: ArrowLeft/Alt+ArrowLeft move the caret, thread stays open', async ({ page }, testInfo) => {
+    const pr = seededPr(testInfo)
     const start = await page.request.post('/api/workflows/task_code_comment', {
       data: {
         pr,
@@ -155,7 +155,7 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
 
   test('ArrowLeft still navigates normally when a comment conversation is highlighted (caret at the start)', async ({
     page,
-  }) => {
+  }, testInfo) => {
     // Reaching a comment conversation always focuses its reply field
     // immediately (toComment, RelatedPanel.mjs) — there is no longer a
     // "highlighted but unfocused" composer state reachable via arrow keys
@@ -165,7 +165,7 @@ test.describe('ArrowLeft caret guard in comment inputs', () => {
     // empty reply field's caret is already at position 0, so ArrowLeft must
     // still peel back to the diff rather than being swallowed as a caret
     // move (see editableCaretCanMoveLeft in home.mjs).
-    const pr = 970003
+    const pr = seededPr(testInfo)
     const start = await page.request.post('/api/workflows/task_code_comment', {
       data: { pr, file: 'test.php', line: 1, author: 'reviewer', body: 'origineel', rowStart: -1, rowEnd: -1 },
     })

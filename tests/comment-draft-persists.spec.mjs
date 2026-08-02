@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, openNewComment, seededPr } from './_fixtures.mjs'
 
 // Regression test for: "if I'm typing a comment ... and I navigate away
 // from the comment (e.g. to the left), then I want that same message to be
@@ -73,8 +73,8 @@ test.describe('typed but not yet sent comment text survives leaving and returnin
     await expect(page.getByTestId('comment-compose')).toHaveValue('this is my draft — continued')
   })
 
-  test('existing thread reply field: restores the draft after leaving and coming back', async ({ page }) => {
-    const pr = 970200
+  test('existing thread reply field: restores the draft after leaving and coming back', async ({ page }, testInfo) => {
+    const pr = seededPr(testInfo)
     const start = await page.request.post('/api/workflows/task_code_comment', {
       data: {
         pr,

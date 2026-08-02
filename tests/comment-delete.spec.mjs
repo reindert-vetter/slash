@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 
 // Enter on a focused comment row (reply field empty) opens a small menu with a
 // "Verwijder comment" option. Choosing it signals the task_code_comment
@@ -9,17 +9,14 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // (isCommentFocused/commentReplyEmpty/deleteFocusedComment) and home.mjs
 // (onKeydown's relatedActive branch, menu.mode 'comment', COMMENT_COMMANDS).
 test.describe('PR Review Tree — delete a comment', () => {
-  // Use a PR of its own (unseeded, no ingested blocks) so this doesn't share the
-  // comments read-model with other specs seeding on their own dedicated PRs
-  // (970006 in comment-thread.spec.mjs, 970007 in navigate.spec.mjs — tests run
-  // fully parallel). The delete flow doesn't need real blocks: clicking a
-  // comment row focuses it (relatedActive() becomes true) independently of the
-  // block sidebar.
-  const PR = 970008
-
-  async function seedComment(page, body) {
+  // Every test gets a PR of its own from seededPr (unseeded, no ingested
+  // blocks) so it never shares the comments read-model with another spec — or
+  // with its own earlier retry — on the same worker. The delete flow needs no
+  // real blocks: clicking a comment row focuses it (relatedActive() becomes
+  // true) independently of the block sidebar.
+  async function seedComment(page, pr, body) {
     const start = await page.request.post('/api/workflows/task_code_comment', {
-      data: { pr: PR, file: 'test.php', line: 1, author: 'reviewer', body },
+      data: { pr, file: 'test.php', line: 1, author: 'reviewer', body },
     })
     const runId = (await start.json()).runId
     expect(runId).toBeTruthy()
@@ -28,11 +25,12 @@ test.describe('PR Review Tree — delete a comment', () => {
 
   test('Enter opens a menu with "Verwijder comment"; running it deletes the comment', async ({
     page,
-  }) => {
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
     const body = 'verwijder-mij ' + Math.random().toString(36).slice(2)
-    await seedComment(page, body)
+    await seedComment(page, pr, body)
 
-    await page.goto('/pr/' + PR)
+    await page.goto('/pr/' + pr)
     await leaveSearchBox(page)
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
@@ -69,7 +67,7 @@ test.describe('PR Review Tree — delete a comment', () => {
     await expect(page.getByTestId('comment-item').filter({ hasText: body })).toHaveCount(0)
     await expect
       .poll(async () => {
-        const list = await (await page.request.get('/api/comments?pr=' + PR)).json()
+        const list = await (await page.request.get('/api/comments?pr=' + pr)).json()
         return list.some((c) => c.body === body)
       })
       .toBe(false)
@@ -77,11 +75,12 @@ test.describe('PR Review Tree — delete a comment', () => {
 
   test('Enter with a typed reply sends the reply instead of opening the delete menu', async ({
     page,
-  }) => {
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
     const body = 'niet-verwijderen ' + Math.random().toString(36).slice(2)
-    const runId = await seedComment(page, body)
+    const runId = await seedComment(page, pr, body)
 
-    await page.goto('/pr/' + PR)
+    await page.goto('/pr/' + pr)
     await leaveSearchBox(page)
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
@@ -97,18 +96,19 @@ test.describe('PR Review Tree — delete a comment', () => {
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await expect
       .poll(async () => {
-        const list = await (await page.request.get('/api/comments?pr=' + PR)).json()
+        const list = await (await page.request.get('/api/comments?pr=' + pr)).json()
         const c = list.find((x) => x.id === runId)
         return c && c.reactionCount
       })
       .toBe(1)
   })
 
-  test('choosing "Resolve comment" resolves the comment (status resolved)', async ({ page }) => {
+  test('choosing "Resolve comment" resolves the comment (status resolved)', async ({ page }, testInfo) => {
+    const pr = seededPr(testInfo)
     const body = 'resolve-mij ' + Math.random().toString(36).slice(2)
-    const runId = await seedComment(page, body)
+    const runId = await seedComment(page, pr, body)
 
-    await page.goto('/pr/' + PR)
+    await page.goto('/pr/' + pr)
     await leaveSearchBox(page)
     const row = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
@@ -128,7 +128,7 @@ test.describe('PR Review Tree — delete a comment', () => {
 
     await expect
       .poll(async () => {
-        const list = await (await page.request.get('/api/comments?pr=' + PR)).json()
+        const list = await (await page.request.get('/api/comments?pr=' + pr)).json()
         const c = list.find((x) => x.id === runId)
         return c && c.status
       })

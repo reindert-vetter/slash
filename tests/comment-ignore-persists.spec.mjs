@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 
 // "Ignore" on a PR-comment index item used to be a purely client-side flag
 // (state.ignoredComments), so a refresh brought every ignored comment straight
@@ -16,16 +16,10 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // Nothing is mocked — the ignore genuinely round-trips through the workflow
 // and its read-model, which is the whole point of the test.
 //
-// prFor gives every test AND every retry its own PR number, because both
-// place a comment and neither can take it back: comments have no reset hook
-// in _cleanApprovals (only 12903's are wiped), and a retry reuses the same
-// worker DB, so a shared number would leave the second attempt looking at two
-// comments and break every exact count below. The offsets stay inside this
-// spec's own 9707xx slot, which no other fixture claims (970600 is
-// comment-orphan-anchor.spec.mjs's).
-function prFor(testInfo, slot) {
-  return 970700 + slot * 10 + testInfo.retry
-}
+// The PR numbers come from seededPr (_fixtures.mjs), which hands every test —
+// and every retry — its own: both tests place a comment and neither can take it
+// back, so a shared number would leave the second attempt looking at two
+// comments and break every exact count below.
 
 // placePRWideComment posts a real, unanchored PR-wide comment (kind 'issue',
 // the same Kind an imported general PR comment gets) through the ordinary
@@ -63,7 +57,7 @@ async function expectIgnoredCount(page, pr, n) {
 }
 
 test('an ignored PR-comment stays hidden after a reload', async ({ page }, testInfo) => {
-  const pr = prFor(testInfo, 0)
+  const pr = seededPr(testInfo)
   await placePRWideComment(page, pr, 'this one can wait until later')
 
   await page.goto('/pr/' + pr)
@@ -102,7 +96,7 @@ test('an ignored PR-comment stays hidden after a reload', async ({ page }, testI
 })
 
 test('un-ignoring a comment also survives a reload', async ({ page }, testInfo) => {
-  const pr = prFor(testInfo, 1)
+  const pr = seededPr(testInfo)
   await placePRWideComment(page, pr, 'second opinion needed here')
 
   await page.goto('/pr/' + pr)

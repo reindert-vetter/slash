@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 
 // "Comment hiervan maken" turns an AI-authored finding (code_warning,
 // source:'ai') into a real, reviewer-owned comment the reviewer can edit
@@ -114,12 +114,13 @@ test.describe('Convert an AI-controle finding into a real comment', () => {
   // instead of the block composer, and the replacement becomes a brand-new,
   // unanchored PR-wide comment (Kind "issue") rather than a reply on the old
   // thread. No real PR blocks are needed for this: PR-wide comment-index
-  // items render independently of state.blocks (recomputeLeftList).
-  const PR_WIDE = 970012
-
+  // items render independently of state.blocks (recomputeLeftList). Its own
+  // allocated PR (seededPr) so the exact comment counts below can never see
+  // another spec's — or an earlier retry's — leftovers.
   test('a PR-wide finding: converting posts a brand-new PR-wide comment and removes the finding', async ({
     page,
-  }) => {
+  }, testInfo) => {
+    const PR_WIDE = seededPr(testInfo)
     const aiBody = 'deze workflow schrijft ongevalideerde input naar de omgevingsvariabelen'
     const seeded = await page.request.post('/api/workflows/task_code_comment', {
       data: {
