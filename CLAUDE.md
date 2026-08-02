@@ -81,6 +81,12 @@ only loaded when the topic is relevant. Update the details there, not here.
   the endpoint surface in `.claude/rules/tembed-endpoints.md`, and the hard
   rules `.claude/rules/workflow-determinism.md` /
   `.claude/rules/workflows-write-boundary.md`.
+- **Server-sent events** — one multiplexed `EventSource` per browser tab
+  (`GET /api/events`, `eventbus.go`, `src/events.mjs`) for live progress:
+  an event is never the source of truth (every consumer refetches its ordinary
+  read-only `GET` on reconnect), which is why it sits outside the write
+  boundary. Only the embedded Claude chat uses it so far; the existing pollers
+  can migrate one at a time. See `.claude/rules/server-events.md`.
 - **Task inbox** — the `/inbox` page: a personal, scored to-do list across PR
   reviews, unread comments on your own PRs, and Jira tickets assigned to you
   (`task_inbox`/`modules/taskinbox`), with per-task snoozing

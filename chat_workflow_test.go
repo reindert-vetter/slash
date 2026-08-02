@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -395,7 +396,7 @@ func TestClaudeChatCommentActionSkipsTerminalRun(t *testing.T) {
 // degrade rule, unchanged by Phase 4.
 func TestParseAssistantTurnIgnoresMalformedCommentAction(t *testing.T) {
 	raw := `{"type":"comment_action","action":"reply","commentId":"c1"}`
-	msg, action := parseAssistantTurn(1, "c1", raw)
+	msg, action := parseAssistantTurn(1, "c1", "turn-1", raw)
 	if action != nil {
 		t.Fatalf("expected no action for a directive missing body, got %+v", action)
 	}
@@ -480,5 +481,108 @@ func TestClaudeChatFailedTurnStoresErrorMessage(t *testing.T) {
 	list, _ := cm.List(ctx, commentID)
 	if list[1].Kind != chat.KindError || list[1].Body == "" {
 		t.Fatalf("expected an error turn, got %+v", list[1])
+	}
+}
+
+// A re-executed Activity must OVERWRITE its assistant turn, never append a
+// second one. An Activity's side effects land before its result is recorded,
+// so a process killed in that window re-runs the whole Activity on recovery —
+// with the old random message id that produced a duplicate, orphaned turn.
+// Every message id a turn writes is now derived from the reviewer Signal's own
+// id (chatMessageID), which is part of the recorded input and therefore
+// identical on every replay.
+func TestChatTurnMessageIDsAreDerivedFromTheTurn(t *testing.T) {
+	_, _, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970710, "comment-idem"
+
+	fake.SetChatTurns("Eerste antwoord", "Tweede poging")
+	arg := chatTurnInput{PR: pr, ConversationID: commentID, Body: "Hoi", TurnID: "msg-42"}
+
+	first, _ := runOneClaudeTurn(ctx, cm, fake, t.TempDir(), arg)
+	second, _ := runOneClaudeTurn(ctx, cm, fake, t.TempDir(), arg) // the replay
+	if first.ID != second.ID || first.ID != "asst-msg-42" {
+		t.Fatalf("ids differ across replay: %q vs %q", first.ID, second.ID)
+	}
+	list, err := cm.List(ctx, commentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("replay produced %d rows, want 1: %+v", len(list), list)
+	}
+	if list[0].Body != "Tweede poging" {
+		t.Fatalf("the replay should have overwritten the row, got %q", list[0].Body)
+	}
+	// An input recorded before TurnID existed keeps the old random-id
+	// behaviour rather than colliding on a shared fallback id.
+	if a, b := chatMessageID("", ""), chatMessageID("", ""); a == b {
+		t.Fatalf("empty turn id must fall back to a random id, got %q twice", a)
+	}
+}
+
+// The live-progress side of a turn: while the Activity runs, the streamed
+// fragments go out over the event bus, and once it returns nothing volatile is
+// left — while the DURABLE message is exactly the CLI's final result, byte for
+// byte the same as it would be without any listener. That split is what keeps
+// the transcript reproducible under replay: fragments are throwaway, the saved
+// row is a pure function of the recorded input.
+func TestChatTurnPublishesProgressButPersistsOnlyTheResult(t *testing.T) {
+	resetChatProgress()
+	defer resetChatProgress()
+	_, _, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970711, "comment-progress"
+
+	id, sub := events.subscribe(pr)
+	defer events.unsubscribe(id)
+
+	fake.SetChatTurns("Hallo daar")
+	fake.SetChatEvents(
+		claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read", Detail: "src/Foo.php"},
+		claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "Hallo "},
+	)
+
+	msg, action := runOneClaudeTurn(ctx, cm, fake, t.TempDir(), chatTurnInput{
+		PR: pr, ConversationID: commentID, Body: "Hoi", TurnID: "msg-7",
+	})
+	if action != nil {
+		t.Fatalf("unexpected directive: %+v", action)
+	}
+
+	var sawTool, sawPartial, sawFinished bool
+	for len(sub.ch) > 0 {
+		ev := <-sub.ch
+		if ev.Type != eventChatProgress || ev.Key != commentID {
+			continue
+		}
+		var p chatProgress
+		if err := json.Unmarshal(ev.Data, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Tool == "Read" && p.Detail == "src/Foo.php" {
+			sawTool = true
+		}
+		if p.Partial == "Hallo " {
+			sawPartial = true
+		}
+		if !p.Running {
+			sawFinished = true
+		}
+	}
+	if !sawTool || !sawPartial || !sawFinished {
+		t.Fatalf("expected tool + partial + finished frames (got %v/%v/%v)", sawTool, sawPartial, sawFinished)
+	}
+	if _, ok := chatProgressFor(commentID); ok {
+		t.Fatal("progress must be forgotten once the turn returned")
+	}
+
+	// Only ONE row, holding the CLI's final result — never the fragments.
+	if msg.Body != "Hallo daar" {
+		t.Fatalf("returned body = %q", msg.Body)
+	}
+	list, _ := cm.List(ctx, commentID)
+	if len(list) != 1 || list[0].Body != "Hallo daar" {
+		t.Fatalf("transcript = %+v, want exactly the final result", list)
 	}
 }

@@ -15,11 +15,13 @@
 package claude
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -76,7 +78,46 @@ type RunRequest struct {
 	// --resume, so the CLI/backend keeps the prior turns' context without this
 	// module having to resend the whole transcript itself.
 	SessionID string
+	// OnEvent, when non-nil, is called by RunChat for every interesting frame
+	// the CLI streams while the turn is still running (see ChatEvent). It is
+	// PURELY OBSERVATIONAL: it can never change what RunChat returns, and it is
+	// deliberately a Go func rather than data, so it is structurally impossible
+	// for it to end up in a workflow Activity's recorded input — the durable
+	// result of a turn stays a pure function of that input, per
+	// .claude/rules/workflow-determinism.md. Calls are made serially from
+	// RunChat's own single reading goroutine, so a callback needs no locking of
+	// its own for state it alone touches.
+	OnEvent func(ChatEvent)
 }
+
+// ChatEventKind labels what a streamed ChatEvent reports. Deliberately a tiny,
+// UI-shaped vocabulary rather than a 1-to-1 mirror of the CLI's own frame
+// zoo — everything this app wants to say is "Claude is thinking / writing /
+// using tool X", plus the growing answer text.
+type ChatEventKind string
+
+const (
+	ChatEventStatus   ChatEventKind = "status"   // the turn started (session initialised)
+	ChatEventThinking ChatEventKind = "thinking" // extended-thinking tokens (content deliberately NOT forwarded)
+	ChatEventText     ChatEventKind = "text"     // one delta of the visible answer (TextDelta)
+	ChatEventTool     ChatEventKind = "tool"     // the model invoked a tool (Tool, plus a short Detail)
+)
+
+// ChatEvent is one observation about a turn that is still running. Never
+// persisted anywhere: it feeds the in-memory chat-progress snapshot + SSE push
+// (chat_progress.go / eventbus.go in package main), both of which are lost on
+// restart by design.
+type ChatEvent struct {
+	Kind      ChatEventKind
+	Tool      string // ChatEventTool: the tool name, e.g. "Read"
+	Detail    string // ChatEventTool: a short, already-truncated argument hint (a path, a pattern)
+	TextDelta string // ChatEventText: the newly produced piece of visible answer text
+}
+
+// maxEventDetail truncates a tool argument hint — it goes straight into a
+// one-line status label, so an enormous Bash command or Edit payload must
+// never travel along in full.
+const maxEventDetail = 120
 
 // ChatResult is what RunChat returns: the model's final text for this turn,
 // plus the session id to pass as RunRequest.SessionID on the next turn (it
@@ -180,16 +221,29 @@ func (m *Module) Run(ctx context.Context, req RunRequest) (string, error) {
 }
 
 // RunChat is Run's conversational sibling: it invokes
-// `claude -p <prompt> --model <model> --output-format json` plus either
-// `--session-id <uuid>` (fresh session, req.SessionID == "") or
+// `claude -p <prompt> --model <model> --output-format stream-json --verbose`
+// plus either `--session-id <uuid>` (fresh session, req.SessionID == "") or
 // `--resume <req.SessionID>` (continue an existing one) — confirmed against
 // the real CLI (--session-id must be a valid UUID; --resume with the same id
-// keeps prior turns in context; the JSON output's "session_id" stays the same
-// id across turns, it never rotates). Reads the "result"/"session_id" fields
-// from the JSON output instead of the bare text Run reads, since the plain
-// stdout the model produces is what RunChat returns as ChatResult.Text.
+// keeps prior turns in context; the streamed output's "session_id" stays the
+// same id across turns, it never rotates).
+//
+// stream-json rather than the plain `json` format because the turn is long
+// (a real subprocess call, minutes for an agentic edit) and the reviewer must
+// be able to SEE it progress: the CLI emits one JSON object per line while it
+// works, which readChatStream turns into ChatEvents for req.OnEvent. The
+// return value is unchanged either way — the final `{"type":"result",...}`
+// line carries exactly the same "result"/"session_id" fields the old
+// non-streaming format returned as a single object, so a caller that sets no
+// OnEvent sees no behavioural difference at all. --verbose is mandatory for
+// stream-json under --print; --include-partial-messages (which is what makes
+// the answer arrive token by token instead of one block at a time) is only
+// asked for when someone is actually listening.
 func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) {
-	args := []string{"-p", req.Prompt, "--model", req.Model, "--output-format", "json"}
+	args := []string{"-p", req.Prompt, "--model", req.Model, "--output-format", "stream-json", "--verbose"}
+	if req.OnEvent != nil {
+		args = append(args, "--include-partial-messages")
+	}
 	if len(req.Tools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(req.Tools, ","),
 			"--permission-mode", "acceptEdits")
@@ -219,24 +273,155 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 	case m.scratchDir != "":
 		cmd.Dir = m.scratchDir
 	}
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
-		return ChatResult{}, fmt.Errorf("claude -p --resume/--session-id (%s): %w", req.Model, err)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return ChatResult{}, fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, err)
 	}
-	var parsed struct {
-		Result    string `json:"result"`
-		SessionID string `json:"session_id"`
+	if err := cmd.Start(); err != nil {
+		return ChatResult{}, fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, err)
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
-		return ChatResult{}, fmt.Errorf("claude -p --resume/--session-id (%s): parse json output: %w", req.Model, err)
+	// Read to EOF first, then Wait — a Wait before the pipe is drained would
+	// close it out from under the reader.
+	res, parseErr := readChatStream(stdout, req.OnEvent)
+	if err := cmd.Wait(); err != nil {
+		return ChatResult{}, fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, err)
 	}
-	if parsed.SessionID == "" {
+	if parseErr != nil {
+		return ChatResult{}, fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, parseErr)
+	}
+	if res.SessionID == "" {
 		// Shouldn't happen (the CLI always echoes session_id), but never drop the
 		// session id we ourselves picked/were given.
-		parsed.SessionID = sessionID
+		res.SessionID = sessionID
 	}
-	return ChatResult{Text: strings.TrimSpace(parsed.Result), SessionID: parsed.SessionID}, nil
+	res.Text = strings.TrimSpace(res.Text)
+	return res, nil
+}
+
+// chatStreamLine is the subset of one stream-json line this module cares
+// about. Every unknown type/field is ignored on purpose: the CLI emits a lot
+// more (hook lifecycle, token estimates, rate-limit info) and a new frame type
+// must never break a turn.
+type chatStreamLine struct {
+	Type      string `json:"type"`
+	Subtype   string `json:"subtype"`
+	Result    string `json:"result"`
+	SessionID string `json:"session_id"`
+	Event     *struct {
+		Type  string `json:"type"`
+		Delta *struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
+		} `json:"delta"`
+		ContentBlock *struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		} `json:"content_block"`
+	} `json:"event"`
+	Message *struct {
+		Content []struct {
+			Type  string         `json:"type"`
+			Name  string         `json:"name"`
+			Input map[string]any `json:"input"`
+		} `json:"content"`
+	} `json:"message"`
+}
+
+// readChatStream consumes the CLI's newline-delimited JSON output, forwarding
+// each interesting frame to onEvent (when non-nil) and returning the final
+// `result` frame's payload. A line that doesn't parse is skipped rather than
+// fatal — only a stream that never produced a result frame is an error.
+//
+// bufio.Reader, not bufio.Scanner: a single line can be very large (the init
+// frame lists every tool, a thinking signature is a long base64 blob, a tool
+// result can be a whole file) and Scanner has a hard token limit.
+func readChatStream(r io.Reader, onEvent func(ChatEvent)) (ChatResult, error) {
+	br := bufio.NewReader(r)
+	var res ChatResult
+	seenResult := false
+	for {
+		line, err := br.ReadString('\n')
+		if s := strings.TrimSpace(line); s != "" {
+			var l chatStreamLine
+			if json.Unmarshal([]byte(s), &l) == nil {
+				if l.Type == "result" {
+					res.Text, res.SessionID, seenResult = l.Result, l.SessionID, true
+				} else if onEvent != nil {
+					emitChatEvents(l, onEvent)
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	if !seenResult {
+		return ChatResult{}, fmt.Errorf("no result frame in stream output")
+	}
+	return res, nil
+}
+
+// emitChatEvents maps one parsed non-result frame onto zero or more
+// ChatEvents. Thinking deltas deliberately forward NO text: what the reviewer
+// wants from them is the fact that Claude is thinking, not a transcript of it.
+func emitChatEvents(l chatStreamLine, onEvent func(ChatEvent)) {
+	switch l.Type {
+	case "system":
+		if l.Subtype == "init" {
+			onEvent(ChatEvent{Kind: ChatEventStatus})
+		}
+	case "stream_event":
+		if l.Event == nil {
+			return
+		}
+		switch l.Event.Type {
+		case "content_block_delta":
+			if l.Event.Delta == nil {
+				return
+			}
+			switch l.Event.Delta.Type {
+			case "text_delta":
+				if l.Event.Delta.Text != "" {
+					onEvent(ChatEvent{Kind: ChatEventText, TextDelta: l.Event.Delta.Text})
+				}
+			case "thinking_delta":
+				onEvent(ChatEvent{Kind: ChatEventThinking})
+			}
+		case "content_block_start":
+			// The tool name is known here; its arguments only stream in
+			// afterwards, so the richer Detail comes from the "assistant" frame
+			// below (which repeats the block with its input filled in).
+			if l.Event.ContentBlock != nil && l.Event.ContentBlock.Type == "tool_use" {
+				onEvent(ChatEvent{Kind: ChatEventTool, Tool: l.Event.ContentBlock.Name})
+			}
+		}
+	case "assistant":
+		if l.Message == nil {
+			return
+		}
+		for _, block := range l.Message.Content {
+			if block.Type == "tool_use" {
+				onEvent(ChatEvent{Kind: ChatEventTool, Tool: block.Name, Detail: toolInputHint(block.Input)})
+			}
+		}
+	}
+}
+
+// toolInputHint picks the one argument worth showing next to a tool name, in
+// a fixed order so the same tool always reports the same field (never map
+// iteration order, which would make the label flicker between runs).
+func toolInputHint(input map[string]any) string {
+	for _, key := range []string{"file_path", "path", "pattern", "command", "query", "url", "prompt"} {
+		if s, ok := input[key].(string); ok && strings.TrimSpace(s) != "" {
+			s = strings.TrimSpace(s)
+			if len(s) > maxEventDetail {
+				s = s[:maxEventDetail] + "…"
+			}
+			return strings.ReplaceAll(s, "\n", " ")
+		}
+	}
+	return ""
 }
 
 // newSessionID returns a random UUID v4, the shape `claude --session-id`
@@ -266,6 +451,11 @@ type Fake struct {
 	chatQueue []string
 	chatErr   error
 	chatSeq   int
+	// chatEvents are replayed to req.OnEvent (when set) before each RunChat
+	// call returns, so a test can drive the progress/streaming path without a
+	// real subprocess. Programmed once and reused for every call — a test that
+	// cares about progress drives one turn at a time.
+	chatEvents []ChatEvent
 }
 
 // NewFake returns an empty Fake.
@@ -318,6 +508,15 @@ func (f *Fake) SetChatTurns(texts ...string) {
 	f.chatQueue = append([]string(nil), texts...)
 }
 
+// SetChatEvents programs the ChatEvents every RunChat call replays to
+// req.OnEvent before returning its text (a no-op when the caller set no
+// OnEvent), so a test can exercise the live-progress path offline.
+func (f *Fake) SetChatEvents(evs ...ChatEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatEvents = append([]ChatEvent(nil), evs...)
+}
+
 // SetChatError makes every RunChat call fail with err until reset (pass nil).
 func (f *Fake) SetChatError(err error) {
 	f.mu.Lock()
@@ -335,6 +534,11 @@ func (f *Fake) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, req)
+	if req.OnEvent != nil {
+		for _, ev := range f.chatEvents {
+			req.OnEvent(ev)
+		}
+	}
 	if f.chatErr != nil {
 		return ChatResult{}, f.chatErr
 	}

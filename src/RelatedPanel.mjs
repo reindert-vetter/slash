@@ -19,6 +19,7 @@ import { renderMarkdown } from './markdown.mjs'
 import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin } from './avatar.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
 import { claudeChatColumn } from './ClaudeChat.mjs'
+import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 
 // ── Real comments (task_code_comment workflow) ────────────────────────────────
 // This section IS wired to the API. Placing a comment starts a Workflow
@@ -837,6 +838,15 @@ const cc = reactive({
   // normal message with kind 'error' (see chat_workflow.go), not this field.
   status: 'idle',
   busy: false, // a message/turn is currently in flight (POST .../signals/message)
+  // progress is the VOLATILE snapshot of a turn Claude is running right now
+  // (chat_progress.go): which phase/tool, plus the answer text produced so
+  // far. Pushed over SSE (chat.progress) and refetched on (re)connect from
+  // GET /api/chat/progress; never persisted anywhere, so it is null whenever
+  // no turn is running. The saved transcript (cc.messages) stays the truth.
+  progress: null,
+  // tick exists purely so the "Claude denkt… 12s" counter re-renders once a
+  // second while a turn runs — a reactive heartbeat, not data.
+  tick: 0,
 })
 
 // CLAUDE_PLACEHOLDER_BODY is the body of the empty private comment created to
@@ -924,12 +934,45 @@ async function loadChatMessages(commentId) {
   }
 }
 
+// loadChatProgress is the RESYNC read for the live-progress channel: a tab
+// that opens (or reconnects) halfway through a turn has missed every
+// chat.progress event so far and catches up with this one call. Not a poll —
+// it runs on (re)connect and when a conversation is opened, nothing else.
+async function loadChatProgress(commentId) {
+  const startedAt = Date.now()
+  try {
+    const res = await fetch('/api/chat/progress?commentId=' + encodeURIComponent(commentId))
+    if (!res.ok) return
+    const json = await res.json()
+    if (cc.commentId !== commentId) return // stale — a later switch already won
+    // A pushed event that landed WHILE this request was in flight is newer than
+    // what the response describes, so it must win — otherwise a resync (which
+    // runs on every reconnect, right next to the events it is catching up on)
+    // could wipe a fresher snapshot and freeze the status line.
+    if (lastProgressAt > startedAt) return
+    applyChatProgress(json.running && json.progress ? json.progress : null)
+  } catch (_) {
+    // a missing snapshot just means "no live turn known" — the transcript stands
+  }
+}
+
+// applyChatProgress is the single writer of cc.progress, so "when did we last
+// learn something about the live turn" is tracked in exactly one place.
+let lastProgressAt = 0
+function applyChatProgress(p) {
+  cc.progress = p
+  lastProgressAt = Date.now()
+  syncChatTicker()
+}
+
 // sendClaudeMessage sends the reviewer's turn (free text, or the text of a
 // clicked question option — see claudeChatColumn's onSend, the same callback
 // either way). The Signal round-trip runs the Activities (incl. the real
 // claude subprocess call) INLINE — see tembed-workflows.md — so this await
-// genuinely spans "Claude thinking", and once it resolves the fresh turn is
-// already in the store; a plain refetch is enough, no streaming needed.
+// genuinely spans the whole turn. That await is no longer what makes the reply
+// appear, though: the live progress (streamed tokens, current tool) arrives
+// meanwhile over SSE, and the finished transcript over chat.message. This is
+// only the belt-and-braces refetch for the reviewer's OWN send.
 async function sendClaudeMessage(text) {
   if (!cc.runId || !text || !text.trim()) return
   cc.busy = true
@@ -940,8 +983,32 @@ async function sendClaudeMessage(text) {
       body: JSON.stringify({ author: 'reviewer', body: text.trim() }),
     })
     await loadChatMessages(cc.commentId)
+    clearFinishedChatProgress()
   } finally {
     cc.busy = false
+  }
+}
+
+// clearFinishedChatProgress drops the volatile snapshot once its turn is over.
+// Deliberately only when the turn is NOT running: a chat.message also fires for
+// the reviewer's own message at the very start of a turn, and clearing there
+// would blink the status line away again a moment after it appeared.
+function clearFinishedChatProgress() {
+  if (cc.progress && !cc.progress.running) applyChatProgress(null)
+}
+
+// syncChatTicker runs a 1s heartbeat only while a turn is actually running, so
+// the elapsed-seconds counter advances without a permanent timer on the page.
+let chatTickTimer = null
+function syncChatTicker() {
+  const running = !!(cc.progress && cc.progress.running)
+  if (running && !chatTickTimer) {
+    chatTickTimer = setInterval(() => {
+      cc.tick = Date.now()
+    }, 1000)
+  } else if (!running && chatTickTimer) {
+    clearInterval(chatTickTimer)
+    chatTickTimer = null
   }
 }
 
@@ -985,7 +1052,8 @@ export async function enterClaudeChat(pr, commentTargetFn) {
   }
   await ensureAndLoadChat(pr, c.id)
   if (token !== focusToken) return
-  ensureChatPoll()
+  ensureChatEvents(pr)
+  loadChatProgress(c.id)
   focusClaudeComposer()
 }
 
@@ -1028,19 +1096,42 @@ function focusClaudeComposer() {
   })
 }
 
-// ensureChatPoll starts a light refresh loop while the panel is mounted — it
-// only actually fetches while the chat column owns the keyboard
-// (cs.focus === 'claude'), mirroring InlineComments' own syncComments
-// interval. Not strictly required for the reviewer's OWN turns (the message
-// Signal's Activities — including the real claude call — run inline, so
-// sendClaudeMessage's own await already carries the fresh reply), but kept as
-// the agreed transport (fetch + polling, no SSE/websocket).
-let chatPollTimer = null
-function ensureChatPoll() {
-  if (chatPollTimer) return
-  chatPollTimer = setInterval(() => {
-    if (cs.focus === 'claude' && cc.commentId) loadChatMessages(cc.commentId)
-  }, 4000)
+// ensureChatEvents subscribes this module to the tab's single SSE connection
+// (src/events.mjs) — once per page, never per mount. It REPLACED a pair of
+// polling timers (a 4s transcript refetch, and a planned sub-second progress
+// poll): a turn is a minutes-long subprocess call whose interesting output is
+// produced continuously, which is precisely what polling is bad at.
+//
+// Both handlers obey the "an event is never the source of truth" rule: a
+// transcript change triggers a refetch of GET /api/chat rather than trusting a
+// pushed message, and the progress payload — the one thing that IS carried in
+// the event — is volatile by definition, with GET /api/chat/progress as its
+// resync read.
+let chatEventsBound = false
+function ensureChatEvents(pr) {
+  ensureEvents(pr)
+  if (chatEventsBound) return
+  chatEventsBound = true
+  onEvent('chat.progress', (ev) => {
+    if (!cc.commentId || ev.key !== cc.commentId) return
+    applyChatProgress(ev.data || null)
+    if (cc.progress && !cc.progress.running) {
+      // The turn ended. Keep the partial visible for a moment so the bubble
+      // doesn't blink out before the real message has been refetched — the
+      // chat.message right behind this normally clears it within one fetch;
+      // this timer is only the safety net for when that never arrives.
+      setTimeout(clearFinishedChatProgress, 4000)
+    }
+  })
+  onEvent('chat.message', (ev) => {
+    if (!cc.commentId || ev.key !== cc.commentId) return
+    loadChatMessages(cc.commentId).then(clearFinishedChatProgress)
+  })
+  onEventsResync(() => {
+    if (!cc.commentId) return
+    loadChatMessages(cc.commentId)
+    loadChatProgress(cc.commentId)
+  })
 }
 
 // claudeChatView/claudeChatCallbacks build the getters + callbacks the pure
@@ -1063,6 +1154,17 @@ function claudeChatView() {
     status: () => cc.status,
     busy: () => cc.busy,
     claudePos: () => cs.claudePos,
+    // The live turn: null when nothing is running. See cc.progress.
+    progress: () => cc.progress,
+    // Seconds since the running turn started. cc.tick is read purely to
+    // register the reactive dependency that makes this re-render every second
+    // (the value itself is irrelevant — the real number comes from the clock).
+    elapsed: () => {
+      const p = cc.progress
+      if (!p || !p.startedAt) return 0
+      void cc.tick
+      return Math.max(0, Math.round((Date.now() - p.startedAt) / 1000))
+    },
   }
 }
 function claudeChatCallbacks() {
@@ -1083,7 +1185,7 @@ function claudeChatCallbacks() {
 // plain snapshot isn't enough here.
 export function ClaudeChatPanel(state, commentTarget) {
   currentCommentTarget = commentTarget
-  ensureChatPoll()
+  ensureChatEvents(state.pr)
   const view = claudeChatView()
   const callbacks = claudeChatCallbacks()
   return html`
@@ -1152,6 +1254,10 @@ function applyRelRestore() {
       cs.focus = 'claude'
       cs.claudePos = want.claudePos
       ensureAndLoadChat(cs.pr, c.id)
+      // A refresh may land mid-turn (the Activity keeps running server-side,
+      // it has no idea a tab went away), so catch up on the live progress too.
+      ensureChatEvents(cs.pr)
+      loadChatProgress(c.id)
       focusClaudeComposer()
     }
   }

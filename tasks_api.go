@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -645,6 +646,13 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// (see modules/chat; the conversation id IS the comment thread's id, so pr
 	// isn't needed to scope the read).
 	mux.HandleFunc("/api/chat", s.handleChat)
+	// GET /api/chat/progress?commentId=X → the volatile snapshot of a RUNNING
+	// turn (chat_progress.go): the resync read for the SSE stream below, not a
+	// poll target.
+	mux.HandleFunc("/api/chat/progress", s.handleChatProgress)
+	// GET /api/events?pr=N → the one multiplexed SSE stream per browser tab
+	// (eventbus.go). Read-only and non-durable, like the heartbeat ping.
+	mux.HandleFunc("/api/events", s.handleEvents)
 	// POST /api/workflows/cleanup → manually trigger the daily data-retention
 	// cleanup pass (purges all data of PRs merged more than 7 days ago). Runs
 	// automatically once a day too — see StartCleanupScheduler.
@@ -1427,6 +1435,115 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 		list = []chat.Message{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": list})
+}
+
+// handleChatProgress serves GET /api/chat/progress?commentId=X — the volatile
+// "what is Claude doing right now" snapshot of a running turn (chat_progress.go).
+// It is the RESYNC read for the SSE stream, not a poll target: a tab that opens
+// or reconnects mid-turn has missed every chat.progress event so far and catches
+// up with this one call. No running turn → {ok:true, running:false}, so the
+// caller needs no 404 special case.
+func (s *server) handleChatProgress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	commentID := r.URL.Query().Get("commentId")
+	if commentID == "" {
+		http.Error(w, "commentId required", http.StatusBadRequest)
+		return
+	}
+	p, ok := chatProgressFor(commentID)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": true, "progress": p})
+}
+
+// sseKeepAlive is how often an idle stream writes a comment frame. Without it a
+// connection that says nothing for minutes (the normal state) can be reaped by
+// the browser or an intermediary; a bare ":" line is ignored by EventSource.
+const sseKeepAlive = 20 * time.Second
+
+// handleEvents serves GET /api/events?pr=N — ONE server-sent-events stream per
+// browser tab, over which every subject is multiplexed (see eventbus.go and
+// .claude/rules/server-events.md). Read-only and stateless: it starts nothing,
+// writes nothing durable, and only forwards volatile notifications, so it falls
+// under the same operational carve-out as the heartbeat ping.
+//
+// The optional ?pr= narrows the stream to one PR (plus PR-less events); the
+// finer "which conversation/block" filtering happens client-side on the event's
+// Key. EventSource cannot renegotiate after connecting, so a scope change is
+// simply a reconnect — which keeps this handler free of any subscription
+// protocol of its own.
+func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	pr, _ := strconv.Atoi(r.URL.Query().Get("pr"))
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("Connection", "keep-alive")
+	// Belt and braces for any proxy that would otherwise buffer the stream.
+	h.Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	// A generous reconnect delay: the browser reconnects on its own after any
+	// drop, and this is a convenience channel — never a fast retry storm.
+	fmt.Fprint(w, "retry: 3000\n\n")
+	flusher.Flush()
+
+	id, sub := events.subscribe(pr)
+	defer events.unsubscribe(id)
+
+	ticker := time.NewTicker(sseKeepAlive)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case ev, open := <-sub.ch:
+			if !open {
+				return
+			}
+			if sub.dropped.Swap(false) {
+				// This connection fell behind and lost at least one event; tell it
+				// to refetch instead of pretending the stream was complete.
+				writeSSE(w, busEvent{Type: eventResync})
+			}
+			writeSSE(w, ev)
+			flusher.Flush()
+		case <-ticker.C:
+			if sub.dropped.Swap(false) {
+				writeSSE(w, busEvent{Type: eventResync})
+			}
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+// writeSSE emits one frame. Deliberately no `event:` line — the type lives in
+// the JSON payload so a single EventSource.onmessage can fan every subject out
+// client-side (see eventbus.go's own comment on that choice). The payload is
+// one JSON object, which can never contain a raw newline, so a single
+// "data:" line is always enough.
+func writeSSE(w io.Writer, ev busEvent) {
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	if ev.Seq > 0 {
+		fmt.Fprintf(w, "id: %d\n", ev.Seq)
+	}
+	fmt.Fprintf(w, "data: %s\n\n", b)
 }
 
 // filterPresets maps an allow-listed preset key to its fixed GitHub search

@@ -46,7 +46,16 @@ for the "Generate review tree"/"Regenerate" button (`src/overview.mjs`,
 polled while `POST /api/ingest` is in flight) and is lost on a restart, just
 like the heartbeat timing.
 
-Third example: the failure buffer behind `GET /api/problems`
+Third example: the event bus behind `GET /api/events` (`eventbus.go`) and the
+running-turn snapshot behind `GET /api/chat/progress` (`chat_progress.go`) —
+an in-memory hub plus a per-conversation map that carry "what is happening
+right now" to the browser. No module, no read-model, no workflow-history
+write, and both are empty again after a restart. Safe **because an event is
+never the source of truth**: a consumer treats it as "refetch me" and re-reads
+the ordinary read-only `GET` on every (re)connect, so a dropped event costs a
+refetch, never correctness. See `.claude/rules/server-events.md`.
+
+Fourth example: the failure buffer behind `GET /api/problems`
 (`run_errors.go`) — an in-memory ring buffer that mirrors the glue log lines
 (`TaskManager.logf`, the tembed engine's own logger) so a poller/startup error
 reaches the UI instead of only the terminal. No module, no read-model, no

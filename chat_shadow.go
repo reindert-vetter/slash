@@ -145,18 +145,18 @@ func chatShadowPendingState(ctx context.Context, dir, headRefName string) (dirty
 // unexpected git/gh failure would be, and even those are reported to the
 // reviewer as a message rather than failing the workflow (mirrors
 // runOneClaudeTurn's own failed-claude-call handling).
-func commitChatShadowEdits(ctx context.Context, cm *chat.Module, dataDir string, pr int, conversationID string) chat.Message {
+func commitChatShadowEdits(ctx context.Context, cm *chat.Module, dataDir string, pr int, conversationID, turnID string) chat.Message {
 	meta, err := fetchPRMeta(ctx, pr)
 	if err != nil || meta.HeadRefName == "" {
 		msg := chat.Message{
-			ID: "asst-" + newUIReactionID(), ConversationID: conversationID, PR: pr,
+			ID: chatMessageID(turnID, ""), ConversationID: conversationID, PR: pr,
 			Role: "assistant", Kind: chat.KindError,
 			Body: "Kon de PR-branch niet bepalen om naartoe te pushen.",
 		}
 		_ = cm.SaveMessage(ctx, msg)
 		return msg
 	}
-	return commitChatShadowEditsAt(ctx, cm, dataDir, pr, conversationID, meta.HeadRefName)
+	return commitChatShadowEditsAt(ctx, cm, dataDir, pr, conversationID, turnID, meta.HeadRefName)
 }
 
 // commitChatShadowEditsAt is commitChatShadowEdits's body once the PR's head
@@ -165,14 +165,14 @@ func commitChatShadowEdits(ctx context.Context, cm *chat.Module, dataDir string,
 // git plumbing, so a test can exercise the real commit/fetch/ahead-check/push
 // mechanics (including the fast-forward-only conflict path) against a
 // throwaway local repo.
-func commitChatShadowEditsAt(ctx context.Context, cm *chat.Module, dataDir string, pr int, conversationID, headRefName string) chat.Message {
+func commitChatShadowEditsAt(ctx context.Context, cm *chat.Module, dataDir string, pr int, conversationID, turnID, headRefName string) chat.Message {
 	newMsg := func(body string, isErr bool) chat.Message {
 		kind := ""
 		if isErr {
 			kind = chat.KindError
 		}
 		msg := chat.Message{
-			ID: "asst-" + newUIReactionID(), ConversationID: conversationID, PR: pr,
+			ID: chatMessageID(turnID, ""), ConversationID: conversationID, PR: pr,
 			Role: "assistant", Kind: kind, Body: body,
 		}
 		_ = cm.SaveMessage(ctx, msg)

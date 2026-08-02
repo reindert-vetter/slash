@@ -1671,6 +1671,12 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// reviewer's own message and — from runClaudeTurn — the assistant's reply,
 	// so every write to chat_messages goes through this one path plus
 	// runClaudeTurn's own save.
+	//
+	// Every chat Activity that changes the transcript ends with
+	// publishChatChanged: a volatile "refetch me" nudge over the SSE stream
+	// (chat_progress.go/eventbus.go), never the new content itself — the read
+	// model stays the only source of truth, so a tab that missed the push is
+	// at most one refetch behind, never wrong.
 	engine.RegisterActivity("saveChatMessage", func(ctx context.Context, in []byte) ([]byte, error) {
 		var msg chat.Message
 		if err := json.Unmarshal(in, &msg); err != nil {
@@ -1679,7 +1685,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.chat == nil {
 			return nil, nil
 		}
-		return nil, m.chat.SaveMessage(ctx, msg)
+		if err := m.chat.SaveMessage(ctx, msg); err != nil {
+			return nil, err
+		}
+		publishChatChanged(msg.PR, msg.ConversationID)
+		return nil, nil
 	})
 	// Activity: record the reviewer's answer to a pending question turn (write,
 	// workflow-driven).
@@ -1710,6 +1720,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return json.Marshal(chatTurnResult{})
 		}
 		msg, action := runOneClaudeTurn(ctx, m.chat, m.claude, m.dataDir, arg)
+		publishChatChanged(arg.PR, arg.ConversationID)
 		return json.Marshal(chatTurnResult{Message: msg, Action: action})
 	})
 	// Activity (Phase 4): apply a validated comment_action directive — reply to
@@ -1728,6 +1739,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, nil
 		}
 		applyChatCommentAction(ctx, m, arg)
+		publishChatChanged(arg.PR, arg.ConversationID)
 		return nil, nil
 	})
 	// Activity: commit + fast-forward-push a conversation's shadow-worktree
@@ -1742,7 +1754,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.chat == nil {
 			return json.Marshal(chat.Message{})
 		}
-		msg := commitChatShadowEdits(ctx, m.chat, m.dataDir, arg.PR, arg.ConversationID)
+		msg := commitChatShadowEdits(ctx, m.chat, m.dataDir, arg.PR, arg.ConversationID, arg.TurnID)
+		publishChatChanged(arg.PR, arg.ConversationID)
 		return json.Marshal(msg)
 	})
 

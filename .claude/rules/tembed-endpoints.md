@@ -73,6 +73,8 @@ through the API; use `slash seed -comments <json>`.
 |---|---|
 | `POST /api/workflows/{runID}/heartbeat` | Marks a run as actively viewed → fast poll cadence. In-memory only, lost on restart. |
 | `GET /api/ingest/progress?pr=N` | In-memory ingest stage (`worktrees`/`scan`/`relations`) for the generate button. |
+| `GET /api/chat/progress?commentId=X` | In-memory snapshot of a RUNNING `claude_chat` turn (phase/tool/partial answer). The resync read for the stream below, not a poll target. |
+| `GET /api/events?pr=N` | The one multiplexed SSE stream per browser tab (`eventbus.go`). Pushes volatile notifications only; every consumer refetches its ordinary `GET` on (re)connect. See `.claude/rules/server-events.md`. |
 
 Both are carve-outs from the write boundary because they touch nothing durable
 — see `.claude/rules/workflows-write-boundary.md`.

@@ -62,6 +62,66 @@ function claudeQuestionOptions(msg, onSend, busy) {
   `
 }
 
+// PHASE_LABEL/TOOL_VERB turn the volatile progress snapshot (chat_progress.go)
+// into one Dutch sentence — "wat is Claude nú aan het doen". Deliberately
+// words, never a colour or a bare spinner: a long turn must say what it is
+// busy with, and the meaning may not depend on colour (see the colourblind
+// rule in .claude/rules/conventions.md).
+const PHASE_LABEL = {
+  starting: 'Claude start…',
+  thinking: 'Claude denkt na…',
+  writing: 'Claude schrijft…',
+}
+const TOOL_VERB = {
+  Read: 'leest',
+  Grep: 'zoekt in',
+  Glob: 'zoekt bestanden',
+  Edit: 'bewerkt',
+  Write: 'schrijft',
+  Bash: 'draait',
+}
+
+// claudeStatusText — the one status line. `p` is null while a turn is in
+// flight but no event has landed yet (the very first moment after sending),
+// hence the plain fallback.
+function claudeStatusText(p, elapsed) {
+  if (!p) return 'Claude denkt…'
+  let base
+  if (p.phase === 'tool' && p.tool) {
+    const verb = TOOL_VERB[p.tool] || ('gebruikt ' + p.tool)
+    base = 'Claude ' + verb + (p.detail ? ' ' + p.detail : '')
+  } else {
+    base = PHASE_LABEL[p.phase] || 'Claude denkt…'
+  }
+  if (!p.running) base = 'Claude is klaar — bezig met opslaan…'
+  return elapsed > 0 ? base + ' · ' + elapsed + 's' : base
+}
+
+// claudePartialBubble — the answer as it is still being written. A THROWAWAY
+// render of throwaway data: it disappears the moment the real, stored message
+// arrives (RelatedPanel.mjs clears cc.progress after refetching the
+// transcript), so it deliberately carries no id/key of its own and is never
+// part of the message list.
+function claudePartialBubble(view) {
+  const p = view.progress()
+  if (!p || !p.partial) return ''
+  return html`
+    <div class="flex flex-col items-start gap-0.5" data-testid="claude-partial">
+      <div class="flex items-center gap-2 py-0.5">
+        ${avatarHTML(CLAUDE_NAME, '', 'h-5 w-5')}
+        <span class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">
+          ${CLAUDE_NAME}
+        </span>
+      </div>
+      <div
+        class="markdown-body max-w-[92%] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-700 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-300"
+        data-testid="claude-partial-body"
+        .innerHTML="${() => renderMarkdown(p.partial)}"
+      ></div>
+    </div>
+  `
+}
+
 // claudeBubble — one turn. `claudePos`/`busy` are getters; `active` marks the
 // bubble the cursor currently points at (mirrors reactionBubble's own
 // active-highlight rule, counting from the bottom the same way). A `kind:
@@ -139,11 +199,18 @@ export function claudeChatColumn(view, callbacks) {
             claudeBubble(m, i, total, view.claudePos, callbacks.onSend, view.busy).key('claude-msg:' + m.id),
           )
         }}
+        ${() => claudePartialBubble(view)}
       </div>
       ${() =>
-        view.busy()
-          ? html`<p class="text-[11px] italic text-slate-500 dark:text-zinc-500" data-testid="claude-chat-thinking">
-              Claude denkt…
+        view.busy() || view.progress()
+          ? html`<p
+              class="flex items-center gap-1.5 text-[11px] italic text-slate-500 dark:text-zinc-500"
+              data-testid="claude-chat-thinking"
+            >
+              <span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"></span>
+              <span class="truncate" data-testid="claude-chat-status">
+                ${() => claudeStatusText(view.progress(), view.elapsed())}
+              </span>
             </p>`
           : ''}
       <div class="flex items-center gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">

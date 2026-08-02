@@ -187,7 +187,7 @@ func TestCommitChatShadowEditsPushesFastForward(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1004, "conv-d", "feature/x")
+	msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1004, "conv-d", "turn-conv-d", "feature/x")
 	if msg.Kind == chat.KindError {
 		t.Fatalf("commit reported an error: %+v", msg)
 	}
@@ -228,7 +228,7 @@ func TestCommitChatShadowEditsRefusesNonFastForward(t *testing.T) {
 	// must never silently force through.
 	pushToBare(t, bareDir, "feature/x", "someone else's commit\n")
 
-	msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1005, "conv-e", "feature/x")
+	msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1005, "conv-e", "turn-conv-e", "feature/x")
 	if msg.Kind != chat.KindError {
 		t.Fatalf("expected an error message on a non-fast-forward push, got: %+v", msg)
 	}
@@ -251,7 +251,7 @@ func TestCommitChatShadowEditsNothingToCommit(t *testing.T) {
 
 	// No ensureChatShadowWorktreeAt call at all — no shadow ever existed for
 	// this conversation.
-	msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1006, "conv-f", "feature/x")
+	msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1006, "conv-f", "turn-conv-f", "feature/x")
 	if msg.Kind != chat.KindError {
 		t.Fatalf("expected an informational error for a never-created shadow, got: %+v", msg)
 	}

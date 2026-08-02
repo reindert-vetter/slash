@@ -6,7 +6,7 @@ comment thread — the `claude_chat` workflow (backend: `modules/claude`'s
 `.claude/rules/tembed-workflows.md`/`workflows-comments.md`; this file covers
 the review-tree panel that talks to it: `src/ClaudeChat.mjs` (pure template)
 and the "Embedded Claude conversation" section of `src/RelatedPanel.mjs`
-(state machine, polling, focusToken discipline).
+(state machine, the SSE subscriptions, focusToken discipline).
 
 ## Product decision: always reachable via `→`, one hop past the comment thread
 
@@ -67,7 +67,8 @@ The "Embedded Claude conversation" section owns:
 
 - **`cc`** — this module's own `reactive()` chat state for whichever ONE
   conversation is currently in view: `{ commentId, runId, messages, status,
-  busy }`. `status` is the PANEL's own loading/error state (ensuring the
+  busy, progress, tick }` (the last two are the live turn, see "Live
+  progress"). `status` is the PANEL's own loading/error state (ensuring the
   workflow, fetching the transcript) — a genuinely **failed Claude turn** is
   a normal message with `kind: 'error'` (see `chat_workflow.go`'s
   `runOneClaudeTurn`), not this field.
@@ -89,18 +90,10 @@ The "Embedded Claude conversation" section owns:
   the Signal round-trip runs the Activities (including the real `claude`
   subprocess call) **inline** — see "Hard rule: only workflows mutate state"
   and the `SignalWorkflow`/`advance()` mechanics in `tembed-workflows.md` —
-  so `sendClaudeMessage`'s own `await` genuinely spans "Claude thinking", and
-  a plain refetch once it resolves is enough. No token streaming, per
-  product decision — "Claude denkt…" (`cc.busy`) is the only status shown
-  mid-turn.
-- **`ensureChatPoll`** — a light `setInterval` (4s), fetching only while
-  `cs.focus === 'claude'`. Not strictly required for the reviewer's own
-  sends (already covered by the inline-Activity await above), kept as the
-  agreed transport (fetch + polling, explicitly no SSE/websocket) for
-  anything else that might move the conversation along without the reviewer's
-  own send being the trigger — e.g. a `KindAction`/`KindError` outcome turn
-  from the opt-in comment-thread influence path (see "Opt-in influence on the
-  left comment thread (Phase 4)" in `.claude/rules/workflows-comments.md`).
+  so `sendClaudeMessage`'s own `await` genuinely spans the whole turn — but
+  that await is no longer what makes the reply appear (see "Live progress"
+  below); it is the belt-and-braces refetch for the reviewer's own send.
+- **`ensureChatEvents`/`loadChatProgress`** — the live channel, see below.
 - **`claudeChatVisible()`** — `hasVisibleComments() || cs.focus === 'claude'`.
 - **`ClaudeChatPanel(state, commentTarget)`** — the exported component
   `home.mjs` mounts as its own **sibling column** next to
@@ -109,6 +102,65 @@ The "Embedded Claude conversation" section owns:
   excerpt). Width reuses the exported `relatedColumnWidthCls()` verbatim —
   same clamp as `InlineComments`/`related-code`, for visual symmetry across
   all three columns, not a new content-driven computation.
+
+## Live progress: what Claude is doing, and the answer as it is written
+
+A turn is a real `claude` subprocess call that can run for minutes, so the
+panel must show **what** it is busy with and let the answer **stream in** —
+originally there was neither, only a static "Claude denkt…" (the "geen token-
+streaming"-decision this replaced; don't reintroduce that).
+
+**Transport is SSE**, over the tab's one shared `EventSource`
+(`src/events.mjs`, `GET /api/events`) — see `.claude/rules/server-events.md`
+for the channel itself and its two hard rules. Neither polling loop survived:
+`ensureChatEvents(pr)` subscribes once per page to
+
+- **`chat.progress`** — the volatile snapshot of the running turn
+  (`{running, phase, tool, detail, partial, startedAt}`), keyed on the
+  conversation id. Applied to `cc.progress`.
+- **`chat.message`** — "this conversation's transcript changed"; the handler
+  refetches `GET /api/chat` (never trusts a pushed body) and then clears a
+  finished progress snapshot.
+- **the resync** — refetch the transcript **and** `GET /api/chat/progress`,
+  which is the snapshot read for a tab that opened or reconnected **mid-turn**
+  (a refresh at that moment is the normal case: the Activity keeps running
+  server-side, it has no idea a tab went away). Not a poll target.
+
+Three details are load-bearing:
+
+- **`applyChatProgress` is the single writer of `cc.progress`** and stamps
+  `lastProgressAt`. `loadChatProgress` compares that against the time its own
+  request started and **yields to a newer pushed event** — a resync runs right
+  next to the events it is catching up on, so without this it could wipe a
+  fresher snapshot and freeze the status line.
+- **A `chat.message` only clears the progress when the turn is NOT running**
+  (`clearFinishedChatProgress`). That event also fires for the reviewer's *own*
+  message at the very start of a turn, and clearing there would blink the
+  status line away a moment after it appeared. A 4s timer after a
+  `running:false` frame is the safety net for a transcript event that never
+  arrives.
+- **`cc.tick`** is a 1s heartbeat that only runs while a turn is running
+  (`syncChatTicker`), purely so "Claude denkt… 12s" advances; the number itself
+  comes from the clock, `cc.tick` is read only to register the reactive
+  dependency.
+
+Rendering (`ClaudeChat.mjs`): one **status line**
+(`data-testid=claude-chat-status`) in words — "Claude denkt na…", "Claude leest
+`src/Order.php`", "Claude schrijft… · 12s" (`PHASE_LABEL`/`TOOL_VERB`) — plus a
+**provisional bubble** (`data-testid=claude-partial`) rendering `progress.partial`
+through the same `renderMarkdown`. The word carries the meaning; the pulsing dot
+is decoration (colourblind rule). The bubble is throwaway by construction: no
+id, no key, never part of the message list, gone as soon as the stored message
+is refetched.
+
+**The durable side is untouched by all of this.** Fragments live only in memory
+(`chat_progress.go`) and the callback that produces them is a Go func on
+`RunRequest`, structurally unable to reach an Activity's recorded input — so the
+one saved `chat.Message` stays a pure function of that input
+(`.claude/rules/workflow-determinism.md`). Backend details, including the
+`stream-json` parsing and the `TurnID`-derived message ids that make a replayed
+turn overwrite instead of duplicate, are in the `claude_chat` section of
+`.claude/rules/workflows-comments.md`.
 
 ## `src/ClaudeChat.mjs`: pure template, fed getters
 
@@ -192,7 +244,17 @@ consume from it. Wired in `tests/_fixtures.mjs`'s worker-scoped server
 fixture → `tests/fixtures/claude-chat-turns.json` (a plain-text reply, then a
 strict `{"type":"question",...}` directive, then a follow-up reply).
 
-## Test: `tests/claude-chat-panel.spec.mjs`
+## Tests: `tests/claude-chat-panel.spec.mjs` + `tests/claude-chat-progress.spec.mjs`
+
+`claude-chat-progress.spec.mjs` covers the live half: it fulfils
+`GET /api/events` with hand-written SSE frames (and makes the resync read
+report no running turn, so anything the panel shows can only have come from the
+push) and asserts the status line + the provisional bubble. The injected
+progress stays `running` for the whole spec — a **steady** state, not a
+transient one, per `.claude/rules/testing-playwright.md`. Note the first
+connection deliberately carries only a `retry:` hint: the tab's `EventSource`
+opens at page load, before the chat column is entered, and an event for a
+conversation that isn't open yet is dropped by design.
 
 Seeds an ordinary comment via the API (mirrors `comment-thread.spec.mjs`,
 its own PR via `seededPr`), clicks the comment row, and drives the whole
