@@ -24,7 +24,7 @@ import (
 // onderzoek" ("in-depth investigation") PR-wide menu item, deliberately the
 // strongest available model since it's a manually-triggered, low-frequency
 // action rather than something run on every navigation step.
-// See the "AI-risicocontrole" decision in .claude/rules/tembed-workflows.md.
+// See the "AI-risicocontrole" decision in .claude/docs/tembed-workflows.md.
 
 // warningReviewArg is the payload of the runAgenticReview Activity.
 type warningReviewArg struct {

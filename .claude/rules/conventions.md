@@ -12,7 +12,7 @@ git worktrees.
   the LOCAL PATCH 1/2/2b notes for `src/vendor/arrow.js`, the `scrollIntoView`
   axis rule and the nested `@click`/`stopPropagation` rule. **Read it before
   writing any arrow.js template.**
-- **`.claude/rules/testing-playwright.md`** — the Playwright harness: per-worker
+- **`.claude/docs/testing-playwright.md`** — the Playwright harness: per-worker
   server/DB isolation, the hand-written worktree fixtures, `seededPr` and the
   reserved PR numbers, and the spec-writing rules (`evaluateSettled`,
   `leaveSearchBox`, never assert a transient state).
@@ -182,7 +182,7 @@ of "dennissloove", fed by the read-only `GET /api/names` (local `names.json`
 override → GitHub profile `name` → the bare login). It lives here because it
 answers the same "who is this" question as `identityOf`. Full mechanism
 (precedence, caching, skip-list, write-boundary carve-out): "Real names instead
-of logins" in `.claude/rules/pages-and-routing.md`.
+of logins" in `.claude/docs/pages-and-routing.md`.
 
 `identityOf` resolves the name itself, so every existing call site got real
 first names for free — the comment/reply bubbles, the compact conversation, the
@@ -256,9 +256,9 @@ used by both pages.
   `data-testid=pr-info-summary`. The earlier always-visible fixed corner element
   (`ThemeToggleCorner`, `bottom-6 left-6 z-30`) has been **removed**, and it is
   deliberately **not** in `Footer.mjs` (that footer only shows when there's
-  something to preview, see `.claude/rules/footer.md`). Accepted consequence,
+  something to preview, see `.claude/docs/footer.md`). Accepted consequence,
   explicitly agreed: `prInfoCard` only exists while `state.showDescription` is
-  true (stop 1 of the nav chain, see `.claude/rules/detail-layout.md`), so the
+  true (stop 1 of the nav chain, see `.claude/docs/detail-layout.md`), so the
   button is **not** visible by default — `tests/theme.spec.mjs` presses `←` to
   stop 1 first. On `/pr-overview` it stays in the overview header
   (`overview.mjs`'s `headerBlock`, next to the PR-count pill); that page has no
@@ -289,7 +289,7 @@ sit *on* the page or card background need per-mode shading.
 
 **Diff-row backgrounds** (`Block.mjs`, `paneHTML`) are arbitrary-value hex
 classes (`bg-[#fed7dc]` etc., "20% toward white" mixed with the Tailwind
-rose/emerald shade — see `.claude/rules/diff-render.md`); those got a
+rose/emerald shade — see `.claude/docs/diff-render.md`); those got a
 `dark:bg-{color}-500/{opacity}` counterpart (e.g. `dark:bg-rose-500/25` for the
 active del row, `dark:bg-rose-500/10` for the filler tint) instead of a second
 hardcoded hex.
@@ -332,4 +332,4 @@ subprocess.**
 isolated or in parallel (e.g. the Agent tool with `isolation: worktree`). An
 earlier agreement forbade this; that is withdrawn. Not to be confused with the
 **app's own** base/head worktrees under `data/worktrees/` from the ingest
-pipeline — those stay as described in `.claude/rules/blocks-and-ingest.md`.
+pipeline — those stay as described in `.claude/docs/blocks-and-ingest.md`.

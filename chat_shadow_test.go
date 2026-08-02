@@ -112,7 +112,7 @@ func TestEnsureChatShadowWorktreeCreatesOnFirstUse(t *testing.T) {
 	}
 
 	// The worktree is on its own branch, not detached — the whole point of this
-	// feature (see .claude/rules/tembed-workflows.md, "claude_chat").
+	// feature (see .claude/docs/tembed-workflows.md, "claude_chat").
 	out, err := exec.Command("git", "-C", dir, "symbolic-ref", "--short", "HEAD").CombinedOutput()
 	if err != nil {
 		t.Fatalf("symbolic-ref: %v: %s", err, out)

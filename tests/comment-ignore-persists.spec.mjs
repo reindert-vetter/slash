@@ -6,8 +6,8 @@ import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 // ignore_comment tracker (POST /api/workflows/{runId}/signals/ignore — the
 // sanctioned write path) and loadIgnoredComments restores the set from
 // GET /api/commentignores?pr=N on load. See "Comment-index items" in
-// .claude/rules/detail-layout.md and "Ignoring a comment" in
-// .claude/rules/tembed-workflows.md.
+// .claude/docs/detail-layout.md and "Ignoring a comment" in
+// .claude/docs/tembed-workflows.md.
 //
 // Own PR number in the 97xxxx fixture range and no seeded blocks at all: the
 // only sidebar row this spec needs is the synthetic comment item itself

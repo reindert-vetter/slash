@@ -911,7 +911,7 @@ function readyForReviewSection(pr) {
 //
 // Visually this now deliberately mirrors CommandMenu.mjs's palette (rounded-xl,
 // an indigo border/ring instead of a neutral one, text-sm/py-2 rows, the same
-// indigo focus-highlight) — see .claude/rules/pages-and-routing.md. That's a
+// indigo focus-highlight) — see .claude/docs/pages-and-routing.md. That's a
 // shared LOOK only: this popover keeps its own, independent, focus-based
 // keyboard model (handlePopoverKey/movePopover/focusPopoverItem below) — no
 // CommandMenu component reuse, no search field, no submenu mechanism, no
@@ -1718,7 +1718,7 @@ const originDrillChange = new URLSearchParams(location.search).get('dchg') || nu
 // the block reference we left from (originSel) so the reviewer lands on the
 // same block instead of the default first one — see the ← nav-chain exit /
 // overviewExitUrl in home.mjs, and the "?pr=<id> auto-selecteert…" section in
-// .claude/rules/pages-and-routing.md. Also hands back a drilled column
+// .claude/docs/pages-and-routing.md. Also hands back a drilled column
 // (originDrill/originDrillGran/originDrillChange), so leaving a drilled
 // Onderliggende-code column open and returning via "Open review-boom" lands
 // back in that same column instead of just the top-level block — this also
@@ -1993,7 +1993,7 @@ function reanchorSelection(rows) {
 // SELECT_RING_CLS — the wel/niet-geselecteerd classes paintSelection() toggles,
 // in the same indigo tone /pr/<id> uses for its own "selected/focused"
 // convention (see the "Focus highlight per stop" section in
-// .claude/rules/keyboard-navigation.md and BlockList.mjs's own rowFocused
+// .claude/docs/keyboard-navigation.md and BlockList.mjs's own rowFocused
 // ring) — was emerald before this change, which had no meaning tied to it
 // elsewhere in the app. Kept WITHOUT a separate dark: ring/bg variant,
 // mirroring the emerald set it replaces: a semi-transparent ring/tint reads
@@ -2001,7 +2001,7 @@ function reanchorSelection(rows) {
 // doesn't grow the toggle set. This ring+background tint is now the ONLY
 // selection signal on this page — the earlier always-present `›` chevron
 // (selectMark()/SELECT_MARK_ON/OFF, a deliberate colourblind-safe shape cue)
-// was removed on explicit request; see .claude/rules/pages-and-routing.md.
+// was removed on explicit request; see .claude/docs/pages-and-routing.md.
 const SELECT_RING_CLS = ['ring-1', 'ring-indigo-500/50', 'rounded-lg', 'z-10', 'bg-indigo-500/10']
 
 function paintSelection() {

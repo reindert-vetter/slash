@@ -3,7 +3,7 @@
 The engine itself — the replay model, storage, recovery, and the hard rule that
 only workflows write. What each individual workflow *does* lives in the three
 files indexed at the bottom; how each is *reached* (endpoints, signals, read
-models) lives in `.claude/rules/tembed-endpoints.md`.
+models) lives in `.claude/docs/tembed-endpoints.md`.
 
 `tembed/` is an **embeddable durable-workflow engine** — "Temporal, but a Go
 package". It lives as a **git subtree** (prefix `tembed/`) and is at the same
@@ -97,26 +97,26 @@ See `.claude/rules/workflows-write-boundary.md` and
 
 | Workflow Type | Documented in |
 |---|---|
-| `task_code_comment` (+ GitHub comment import) | `.claude/rules/workflows-comments.md` |
-| `claude_chat` (embedded Claude conversation panel) | `.claude/rules/workflows-comments.md` |
-| `chat_merge` (serializes concurrent "commit deze wijziging" pushes per PR) | `.claude/rules/workflows-comments.md` |
-| `build_relations` | `.claude/rules/workflows-analysis.md` |
-| `resolve_call` | `.claude/rules/workflows-analysis.md` |
-| `resolve_test_covers` | `.claude/rules/workflows-analysis.md` |
-| `explain_code` | `.claude/rules/workflows-analysis.md` |
-| `code_warning` | `.claude/rules/workflows-analysis.md` |
-| `pr_status` (metadata, merge detection, ingest refresh, re-anchor pass) | `.claude/rules/workflows-trackers.md` |
-| `pr_inbox` | `.claude/rules/workflows-trackers.md` |
-| `approve` | `.claude/rules/workflows-trackers.md` |
-| `ignore_comment` | `.claude/rules/workflows-trackers.md` |
-| `task_snooze` | `.claude/rules/workflows-trackers.md` |
-| `task_inbox` | `.claude/rules/workflows-trackers.md` |
-| `ingest` | `.claude/rules/workflows-trackers.md` |
-| `submit_review` | `.claude/rules/workflows-trackers.md` |
-| `ready_for_review` | `.claude/rules/workflows-trackers.md` |
-| `cleanup` | `.claude/rules/workflows-trackers.md` |
+| `task_code_comment` (+ GitHub comment import) | `.claude/docs/workflows-comments.md` |
+| `claude_chat` (embedded Claude conversation panel) | `.claude/docs/workflows-comments.md` |
+| `chat_merge` (serializes concurrent "commit deze wijziging" pushes per PR) | `.claude/docs/workflows-comments.md` |
+| `build_relations` | `.claude/docs/workflows-analysis.md` |
+| `resolve_call` | `.claude/docs/workflows-analysis.md` |
+| `resolve_test_covers` | `.claude/docs/workflows-analysis.md` |
+| `explain_code` | `.claude/docs/workflows-analysis.md` |
+| `code_warning` | `.claude/docs/workflows-analysis.md` |
+| `pr_status` (metadata, merge detection, ingest refresh, re-anchor pass) | `.claude/docs/workflows-trackers.md` |
+| `pr_inbox` | `.claude/docs/workflows-trackers.md` |
+| `approve` | `.claude/docs/workflows-trackers.md` |
+| `ignore_comment` | `.claude/docs/workflows-trackers.md` |
+| `task_snooze` | `.claude/docs/workflows-trackers.md` |
+| `task_inbox` | `.claude/docs/workflows-trackers.md` |
+| `ingest` | `.claude/docs/workflows-trackers.md` |
+| `submit_review` | `.claude/docs/workflows-trackers.md` |
+| `ready_for_review` | `.claude/docs/workflows-trackers.md` |
+| `cleanup` | `.claude/docs/workflows-trackers.md` |
 
-Also in `.claude/rules/workflows-trackers.md`: "Surfacing failures"
+Also in `.claude/docs/workflows-trackers.md`: "Surfacing failures"
 (`run_errors.go` + `GET /api/problems`) — how a best-effort Activity's silent
 failure still reaches the UI.
 

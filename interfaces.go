@@ -32,10 +32,10 @@ import (
 //      to MaxInterfaceImplementations concrete implementations of that
 //      method — possibly entirely UNCHANGED code — as its own children, so
 //      the interface method (which then simply stays a top-level start
-//      point, see .claude/rules/detail-layout.md) still shows what
+//      point, see .claude/docs/detail-layout.md) still shows what
 //      implements it.
 //
-// See .claude/rules/tembed-workflows.md ("Interface methods as underlying
+// See .claude/docs/tembed-workflows.md ("Interface methods as underlying
 // code").
 
 // MaxInterfaceImplementations caps how many concrete implementations
@@ -136,7 +136,7 @@ func dedupClasses(impls []implClass) []string {
 // single natural match location within either block's own text (unlike e.g.
 // a dispatch call), so Line is recorded as 0 — the same graceful degradation
 // documented for a testcovers `covered_by` row without a Line (see
-// .claude/rules/tembed-workflows.md, "Linking test coverage": it simply
+// .claude/docs/tembed-workflows.md, "Linking test coverage": it simply
 // sorts into groupTier 1 at the frontend instead of being reordered to the
 // top of the selected group).
 func interfaceImplementationDetector(headDir string, pr int, blocks []Block) []relations.Relation {

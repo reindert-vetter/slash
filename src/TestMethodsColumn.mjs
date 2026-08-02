@@ -1,5 +1,5 @@
 // TestMethodsColumn — stop 2b of the left→right nav chain (see
-// .claude/rules/keyboard-navigation.md), between the pr-index (stop 2) and
+// .claude/docs/keyboard-navigation.md), between the pr-index (stop 2) and
 // the block-with-diff (stop 3): the list of test methods belonging to the
 // currently selected test_class row (see testClassRowItem/recomputeLeftList
 // in home.mjs). Rendered directly in <main>'s column flow, to the LEFT of

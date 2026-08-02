@@ -4,7 +4,7 @@ import { test, expect } from './_fixtures.mjs'
 // methodes-kolom (stop 2b of the left→right nav chain) between the pr-index
 // and the diff — see testClassRowItem/recomputeLeftList and
 // TestMethodsColumn.mjs in home.mjs, and "Grouping test methods per class" in
-// .claude/rules/detail-layout.md.
+// .claude/docs/detail-layout.md.
 //
 // Fixture: PR 110 (tests/fixtures/testclassgroup-blocks.json, worktrees
 // materialized in _setup.mjs via materializeTestClassGroupWorktrees) —

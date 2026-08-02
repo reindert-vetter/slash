@@ -377,7 +377,7 @@ func TestScanTestCoversSkipsNonTestBlocks(t *testing.T) {
 // TestFuncDeclLineIgnoresFunctionWordInDocProse proves that funcDeclLine
 // still finds the REAL `function` keyword line even when the method's own
 // PHPDoc — now folded into its Block.Line/EndLine span, see
-// .claude/rules/blocks-and-ingest.md — contains the bare word "function" in
+// .claude/docs/blocks-and-ingest.md — contains the bare word "function" in
 // its prose. A naive `\bfunction\b` search (the pre-hardening regex) would
 // false-match the docblock line instead of the actual declaration below it.
 func TestFuncDeclLineIgnoresFunctionWordInDocProse(t *testing.T) {
@@ -458,7 +458,7 @@ func TestBuildRelationsWorkflowFillsTestCovers(t *testing.T) {
 // (the tested method) whose definition carries a leading PHPDoc gets the same
 // @return/@param signature fold applied to its embedded CoveredCode that an
 // active (changed) block's diff gets via /api/code — see
-// codesig.go/enrichedCodeSide and .claude/rules/blocks-and-ingest.md
+// codesig.go/enrichedCodeSide and .claude/docs/blocks-and-ingest.md
 // ("PHPDoc-types in de signatuur vouwen"). CoveredLine must shift by the same
 // removed-line count as the doc.
 func TestScanTestCoversFoldsLeadingPHPDocInCoveredCode(t *testing.T) {

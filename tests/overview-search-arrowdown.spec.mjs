@@ -4,7 +4,7 @@ import { test, expect } from './_fixtures.mjs'
 // first row focuses the search box" test: ArrowDown from the search box must
 // hand the keyboard back to the row list — a one-way trap here was the root
 // cause of "I can't navigate down with the arrow keys" (see
-// .claude/rules/pages-and-routing.md, "Client" section).
+// .claude/docs/pages-and-routing.md, "Client" section).
 test.describe('PR overview — ArrowDown escapes the search box', () => {
   test('clicking the search box, then ArrowDown selects the first row and drops focus', async ({ page }) => {
     await page.goto('/pr-overview')

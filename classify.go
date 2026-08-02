@@ -117,7 +117,7 @@ var reBareTestAttribute = regexp.MustCompile(`^#\[\s*Test\s*\]$`)
 // isBareTestAttributeOnlyChange reports whether every changed line
 // intersecting old block ob / new block nb is a bare `#[Test]` attribute line
 // within that block's leading-attribute prefix (see phpscan.go's
-// pendingAttrLine / .claude/rules/blocks-and-ingest.md) — i.e. the block only
+// pendingAttrLine / .claude/docs/blocks-and-ingest.md) — i.e. the block only
 // picked up "modified" because a `#[Test]` was added, removed, or otherwise
 // touched, with nothing else in the method changed.
 //
@@ -203,7 +203,7 @@ func classifyFile(pr int, path, oldFile string, oldBlocks, newBlocks []Block, fd
 		if nb.IsTrait {
 			// Same override for a `trait` body — a trait file isn't confined
 			// to a `Traits/` directory, so path alone isn't reliable here
-			// either. See .claude/rules/blocks-and-ingest.md.
+			// either. See .claude/docs/blocks-and-ingest.md.
 			nb.Category = "TRAIT"
 		}
 		nb.Side = SideNew
@@ -308,7 +308,7 @@ var categoryRules = []categoryRule{
 	// INTERFACE fallback, this only actually matters for the scanner's
 	// whole-file-fallback scenario — a reliably-parsed trait method already
 	// gets "TRAIT" from classifyFile's Block.IsTrait override, regardless of
-	// path. See .claude/rules/blocks-and-ingest.md.
+	// path. See .claude/docs/blocks-and-ingest.md.
 	{func(p string) bool { return hasSeg(p, "Traits/") }, "TRAIT"},
 	{func(p string) bool { return hasSeg(p, "database/migrations/") }, "MIGRATION"},
 	{func(p string) bool { return hasSeg(p, "database/factories/") }, "FACTORY"},

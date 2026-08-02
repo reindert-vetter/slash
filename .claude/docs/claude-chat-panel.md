@@ -3,7 +3,7 @@
 The frontend half of the embedded, multi-turn Claude conversation next to a
 comment thread — the `claude_chat` workflow (backend: `modules/claude`'s
 `RunChat`, `modules/chat`, `chat_workflow.go`) is documented in
-`.claude/rules/tembed-workflows.md`/`workflows-comments.md`; this file covers
+`.claude/docs/tembed-workflows.md`/`workflows-comments.md`; this file covers
 the review-tree panel that talks to it: `src/ClaudeChat.mjs` (pure template)
 and the "Embedded Claude conversation" section of `src/RelatedPanel.mjs`
 (state machine, the SSE subscriptions, focusToken discipline).
@@ -111,7 +111,7 @@ originally there was neither, only a static "Claude denkt…" (the "geen token-
 streaming"-decision this replaced; don't reintroduce that).
 
 **Transport is SSE**, over the tab's one shared `EventSource`
-(`src/events.mjs`, `GET /api/events`) — see `.claude/rules/server-events.md`
+(`src/events.mjs`, `GET /api/events`) — see `.claude/docs/server-events.md`
 for the channel itself and its two hard rules. Neither polling loop survived:
 `ensureChatEvents(pr)` subscribes once per page to
 
@@ -160,7 +160,7 @@ one saved `chat.Message` stays a pure function of that input
 (`.claude/rules/workflow-determinism.md`). Backend details, including the
 `stream-json` parsing and the `TurnID`-derived message ids that make a replayed
 turn overwrite instead of duplicate, are in the `claude_chat` section of
-`.claude/rules/workflows-comments.md`.
+`.claude/docs/workflows-comments.md`.
 
 ## `src/ClaudeChat.mjs`: pure template, fed getters
 
@@ -251,7 +251,7 @@ strict `{"type":"question",...}` directive, then a follow-up reply).
 report no running turn, so anything the panel shows can only have come from the
 push) and asserts the status line + the provisional bubble. The injected
 progress stays `running` for the whole spec — a **steady** state, not a
-transient one, per `.claude/rules/testing-playwright.md`. Note the first
+transient one, per `.claude/docs/testing-playwright.md`. Note the first
 connection deliberately carries only a `retry:` hint: the tab's `EventSource`
 opens at page load, before the chat column is entered, and an event for a
 conversation that isn't open yet is dropped by design.
@@ -265,7 +265,7 @@ recorded `claude-question-answer` and the next programmed reply, then `←`
 back into the thread. Deliberately does **not** assert on the transient
 "Claude denkt…" line (the Fake resolves near-instantly, and asserting a
 transient state is explicitly disallowed — see
-`.claude/rules/testing-playwright.md`).
+`.claude/docs/testing-playwright.md`).
 
 ## Ripple: every existing "→ from the diff enters the related panel directly"
 ## test needed an extra hop
@@ -293,7 +293,7 @@ navigation specifically) needs to re-assert.
 
 Phase 3's backend (a per-conversation shadow worktree + a fast-forward-only
 commit/push — see "claude_chat" → "Agentic edits" in
-`.claude/rules/workflows-comments.md`) is reached from this panel via two
+`.claude/docs/workflows-comments.md`) is reached from this panel via two
 plain, native `<button>`s below the composer (`data-testid=claude-chat-actions`,
 `ClaudeChat.mjs`), next to the existing "Stuur":
 
@@ -313,7 +313,7 @@ plain, native `<button>`s below the composer (`data-testid=claude-chat-actions`,
   (`CLAUDE_COMMIT_CONFIRM_COMMANDS`, `home.mjs`, mode `'claudeCommit'`) —
   "Sluit menu" pinned, "Ja, commit en push naar de PR-branch" the default 2nd
   item — mirroring the two-step "Approve the whole PR" confirm
-  (`REVIEW_APPROVE_CONFIRM_COMMANDS`, see `.claude/rules/command-palette.md`).
+  (`REVIEW_APPROVE_CONFIRM_COMMANDS`, see `.claude/docs/command-palette.md`).
   Confirming calls the exported `commitClaudeChange()`
   (`RelatedPanel.mjs`), which is the only thing that actually sends the
   `action: "commit"` Signal. The eventual outcome (pushed / nothing to commit
@@ -333,7 +333,7 @@ comment) would have turned every ordinary conversational turn — still the
 overwhelmingly common case — into a two-Enter flow, which is not the
 "continuing a conversation" weight this send already has (mirrors why a
 thread **reply** field sends directly while a **new** comment composer opens
-a menu — see `.claude/rules/comments-panel.md`).
+a menu — see `.claude/docs/comments-panel.md`).
 
 `ClaudeChatPanel(state, commentTarget, openCommit)` gained a third param
 (mirrors `InlineComments`' own `openCompose`/`openCommentMenu` props) purely
@@ -364,7 +364,7 @@ Phase 4's backend is built — on the reviewer's explicit request,
 thread's own `task_code_comment` Execution (`Source: "ai"`) and records a
 `Kind: chat.KindAction` (success) or `Kind: chat.KindError` (failure)
 confirmation turn — see "Opt-in influence on the left comment thread
-(Phase 4)" in `.claude/rules/workflows-comments.md`. `ClaudeChat.mjs`'s
+(Phase 4)" in `.claude/docs/workflows-comments.md`. `ClaudeChat.mjs`'s
 `chatKindBadge(msg)` now marks both kinds distinctly, mirroring
 `RelatedPanel.mjs`'s `aiWarningBadge`/`staleAnchorBadge`: a small pill with a
 word + a shape glyph (a checkmark for `'action'`, the same warning-triangle

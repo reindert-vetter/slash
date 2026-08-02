@@ -681,7 +681,7 @@ export async function evaluateSettled(page, fn, arg, attempts = 4) {
 // way left to open it. The always-present "+ Nieuwe comment" trigger row
 // (`data-testid=new-comment`) that many specs used to `.click()` directly
 // has been removed entirely (see "Inline comment blocks" in
-// .claude/rules/detail-layout.md) — a comment is now started exclusively
+// .claude/docs/detail-layout.md) — a comment is now started exclusively
 // through Enter → the palette (or, for an AI finding,
 // convertWarningToComment's own menu item). Assumes the diff already has the
 // keyboard (i.e. Enter opens the block-scoped palette, not some other menu).

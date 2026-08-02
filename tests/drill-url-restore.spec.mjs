@@ -4,7 +4,7 @@ import { test, expect } from './_fixtures.mjs'
 // `?drill=`/`?dgran=`/`?dchg=` (home.mjs, alongside `sel`/`mode`/`chg`/`gran`)
 // so a refresh — or a round trip through /pr-overview — restores the same
 // drilled column, at the same f/d/s granularity and change index, not just the
-// top-level block. See "Drillen" in .claude/rules/detail-layout.md.
+// top-level block. See "Drillen" in .claude/docs/detail-layout.md.
 //
 // Uses PR 12903 with a synthetic relation (mocked /api/relations, no seed
 // change needed) nesting Order::address as a child of

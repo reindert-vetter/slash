@@ -34,7 +34,7 @@ a **Run ID**), **Activity** (side-effect work), **Signal** (external input).
      interrupted run doesn't block server startup on recovery. A
      fire-and-forget start whose slow step should run in the background uses
      `engine.StartWorkflowDeferLow(...)`. See "Recovery priority" in
-     `.claude/rules/tembed-workflows.md`.
+     `.claude/docs/tembed-workflows.md`.
 6. **Endpoints** (`tasks_api.go`, see skill `add-api-endpoint` for the server
    conventions):
    - `POST /api/workflows/<type>` → `StartWorkflow` → `{ "runId": ... }`.

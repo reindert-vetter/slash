@@ -22,7 +22,7 @@ import (
 // This is display-only: it does NOT touch extractBlockSource/blockSource
 // themselves (relations.go / callresolve_analysis.go / testcovers_analysis.go
 // still read the raw, line-accurate source for their own regex/offset work —
-// see .claude/rules/blocks-and-ingest.md). It's applied, via code.go's
+// see .claude/docs/blocks-and-ingest.md). It's applied, via code.go's
 // enrichedCodeSide wrapper, at every place a block's source becomes something
 // a reviewer actually reads:
 //   - api.go's handleCode (what /api/code returns, i.e. what Block.mjs renders)
@@ -43,7 +43,7 @@ import (
 // all is touched and the PHPDoc stays visible exactly like before. There is no
 // partially-mangled middle state.
 //
-// Known, accepted v1 limitations (see .claude/rules/blocks-and-ingest.md):
+// Known, accepted v1 limitations (see .claude/docs/blocks-and-ingest.md):
 //   - The PHPDoc must be the very first thing in the sliced block text — an
 //     attribute run BEFORE the PHPDoc (`#[Foo]` then `/** */` then `function`)
 //     is not supported; such a block is left untouched (doc stays visible).

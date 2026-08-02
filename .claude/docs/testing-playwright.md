@@ -137,7 +137,7 @@ is baked into the JSON): such a spec must clean up after itself in-test, the way
   `gh api .../pulls/970099/comments: exit status 1`-style noise from
   `pr_status`'s ingest-refresh check and the comment importer, forever. Cleaned
   up with `slash cleanup -force 970099,970001` (see "Daily data cleanup" in
-  `.claude/rules/workflows-trackers.md`). A manual `curl`/browser session
+  `.claude/docs/workflows-trackers.md`). A manual `curl`/browser session
   against the live server can still start a real workflow for any number you
   type, so **use a number nobody depends on and that is obviously not a real
   PR** when reproducing something by hand.
@@ -184,7 +184,7 @@ is baked into the JSON): such a spec must clean up after itself in-test, the way
   then asserted `expect(menu).not.toBeVisible()`; `runCommand` (`home.mjs`) does
   close the menu first, but that approve finishes the block so
   `afterApproveAction` immediately reopens it as the postApprove follow-up menu
-  (see "Enter — command palette" in `.claude/rules/command-palette.md`). How
+  (see "Enter — command palette" in `.claude/docs/command-palette.md`). How
   long the closed frame lasts is just how fast `findNextUnapproved`'s awaited
   `ensureCode` resolves, and the reopen regularly won. Fix: wait for the
   follow-up menu's own content ("Ga door"). Rule of thumb — before asserting
@@ -196,7 +196,7 @@ is baked into the JSON): such a spec must clean up after itself in-test, the way
   hoverable element under it behaves exactly like a real hover — which bit
   `tests/overview-selection-identity.spec.mjs` (see the
   `scheduleRepaint`/`hoverEnabled` paragraphs in
-  `.claude/rules/pr-overview.md` for the app-side fix). Whether it triggers
+  `.claude/docs/pr-overview.md` for the app-side fix). Whether it triggers
   depends on scroll position, so it presents as order-dependent flakiness. When
   a spec's subject is *not* hover, prefer `dispatchEvent('click')` (drives the
   handler without moving the pointer) over `.click()`.

@@ -200,7 +200,7 @@ func TestFileDeletedMigration(t *testing.T) {
 
 // TestAttributeOnlyChangeClassifiesAsModified proves the latent classify.go
 // gap that leading-attribute inclusion (phpscan.go, see
-// .claude/rules/blocks-and-ingest.md) fixes: before that scanner change, a
+// .claude/docs/blocks-and-ingest.md) fixes: before that scanner change, a
 // method's Block.Line started at the `function` keyword, so a diff that only
 // touches the line(s) above it (a newly added #[DataProvider(...)]) never
 // intersected the block's [Line, EndLine] span and the method silently never
@@ -491,7 +491,7 @@ func TestCategoryForTranslation(t *testing.T) {
 // `interface` gets category "INTERFACE" even under a path that would
 // otherwise match a completely different category rule (here
 // app/Services/, which would normally yield "SERVICE"). See
-// .claude/rules/blocks-and-ingest.md.
+// .claude/docs/blocks-and-ingest.md.
 func TestInterfaceMethodClassifiesAsInterfaceRegardlessOfPath(t *testing.T) {
 	oldSrc := `<?php
 interface Repo {
@@ -551,7 +551,7 @@ func TestCategoryForInterfaceFilenameFallback(t *testing.T) {
 // "TRAIT" even under a path that would otherwise match a completely
 // different category rule (here app/Services/, which would normally yield
 // "SERVICE") — mirrors TestInterfaceMethodClassifiesAsInterfaceRegardlessOfPath.
-// See .claude/rules/blocks-and-ingest.md.
+// See .claude/docs/blocks-and-ingest.md.
 func TestTraitMethodClassifiesAsTraitRegardlessOfPath(t *testing.T) {
 	oldSrc := `<?php
 trait HasIncludeLabel {

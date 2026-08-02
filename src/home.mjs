@@ -234,7 +234,7 @@ const state = reactive({
   blockRef: '',
   // classMethodSel — index into the ACTIVE test-class row's `.methods` array
   // (see the "Grouping test methods per class" section in
-  // .claude/rules/detail-layout.md). Only meaningful while
+  // .claude/docs/detail-layout.md). Only meaningful while
   // `state.blocks[state.selected]` is a synthetic `kind:'test_class'` row
   // (see testClassRowItem/recomputeLeftList) — curBlock() resolves through
   // this index so every existing block-centric mechanism (diff, approve,
@@ -361,7 +361,7 @@ const state = reactive({
   // from the approved-blocks one above (a comment can be ignored without being
   // resolved, and vice versa). DURABLE, not ephemeral: restored on load by
   // loadIgnoredComments and written through the ignore_comment workflow by
-  // toggleIgnoreComment (see .claude/rules/tembed-workflows.md). Not bound to
+  // toggleIgnoreComment (see .claude/docs/tembed-workflows.md). Not bound to
   // the URL either way — it's a reviewer decision, not a navigation position.
   // Reassigned wholesale so arrow.js re-renders.
   ignoredComments: {},
@@ -839,7 +839,7 @@ function applyDrillCursorRestore(b) {
 // alongside `pr` so /pr-overview can hand the same block
 // reference back when the reviewer returns to this PR (see the
 // originPr/originSel round-trip in overview.mjs, and the "?pr=<id> auto-
-// selecteert…" section in .claude/rules/pages-and-routing.md). Only appended
+// selecteert…" section in .claude/docs/pages-and-routing.md). Only appended
 // when there's a current selection to remember — a block-less PR (still
 // loading) shouldn't force an empty `sel=` onto the URL. `drill`/`dgran`/`dchg`
 // piggyback on the same round-trip, only when there's an actual drilled
@@ -894,7 +894,7 @@ function translationNavUnits(b) {
 // keeps state.gran pinned at 'group' there). Shared by unitsOf/groupsFor
 // (navigation + list-mode preview), commentTarget and approveTargetRows so
 // per-key navigation, approve-targeting and comment-anchoring all agree on
-// the exact same unit list — see .claude/rules/blocks-and-ingest.md
+// the exact same unit list — see .claude/docs/blocks-and-ingest.md
 // ("Translation blocks — per-key navigation").
 function navUnitsOf(b, rows, gran) {
   if (b && b.category === 'TRANSLATION') return translationNavUnits(b)
@@ -986,7 +986,7 @@ function setGran(delta) {
   const b = curBlock()
   // A TRANSLATION block navigates per changed KEY only (see navUnitsOf) —
   // there is no group/line/call distinction to zoom through, so f/d/s are a
-  // deliberate no-op here (see .claude/rules/blocks-and-ingest.md,
+  // deliberate no-op here (see .claude/docs/blocks-and-ingest.md,
   // "Translation blocks — per-key navigation").
   if (b && b.category === 'TRANSLATION') return
   const rows = blockRows(b)
@@ -1574,7 +1574,7 @@ function commentBlockItem(c) {
 
 // testClassRowItem turns every TEST-category block of one file+class into a
 // single, synthetic state.blocks item (see "Grouping test methods per class"
-// in .claude/rules/detail-layout.md): kind:'test_class' marks it (guarded
+// in .claude/docs/detail-layout.md): kind:'test_class' marks it (guarded
 // everywhere something assumes a real PR block, mirroring kind:'comment' —
 // see enterDiff/ensureCode/sameFileNeighbour/blockApproveCount/openTask/the
 // DetailPanel pair.forEach branch). `methods` keeps every real PR block that
@@ -2741,7 +2741,7 @@ function resolvedCallChildren(b) {
         // A class-level resolution (model_usage/migration_model — childMethod
         // empty, the whole class is the child, never one of its methods) shows
         // the bare model name, not the "Class::" produced by the method-call
-        // template below (see .claude/rules/tembed-workflows.md).
+        // template below (see .claude/docs/tembed-workflows.md).
         label: r.childMethod
           ? `${r.childClass}::${r.childMethod}`
           : r.childClass || r.callKey,
@@ -3232,7 +3232,7 @@ function blockApproveCount(b) {
   // NOT read this value — see subtreeApproveCount's own test_class branch
   // below, which sums the FULL per-method subtree instead, so nothing is
   // lost or double-counted there. See "Grouping test methods per class" in
-  // .claude/rules/detail-layout.md for why these two are deliberately
+  // .claude/docs/detail-layout.md for why these two are deliberately
   // different numbers.
   if (b.kind === 'test_class') {
     let done = 0
@@ -3593,7 +3593,7 @@ const langSiblingRequested = new Set()
 // row (see translationDiff.mjs's translationBlockView "siblings" opt) — this
 // used to feed a separate, read-only companion card next to the block; that
 // card is gone, the sibling values now render as columns inside the SAME
-// card/row instead (see .claude/rules/blocks-and-ingest.md, "Translation
+// card/row instead (see .claude/docs/blocks-and-ingest.md, "Translation
 // blocks"). Best-effort: GET /api/langsiblings is read-only (reads the head
 // worktree, like /api/code), a failure just leaves no sibling columns.
 // Reassigns state.langSiblings wholesale, and ALSO bumps state.codeVersion:
@@ -4314,7 +4314,7 @@ async function submitReview(event, body = '') {
 // review of every changed file in the whole PR for risks (security/style/
 // consistency with connected code — callers, callees, tests, listeners),
 // creating one AI-authored comment per finding (block-scoped when it anchors
-// to a line, PR-wide otherwise — see .claude/rules/tembed-workflows.md).
+// to a line, PR-wide otherwise — see .claude/docs/tembed-workflows.md).
 // POST /api/workflows/code_warning is the sanctioned write path (starting an
 // Execution); this is only the call site. Files is omitted — a full baseline
 // run. Same minimal error handling as submitReview (no toast convention in
@@ -4533,7 +4533,7 @@ function focusedBlock() {
 // approveContext's level-branch; callScopeMethods/groupLineRange/
 // relatedChildren/resolvedCallChildren use it so the Onderliggende-code panel
 // scopes/reorders on whichever column is actually focused, not always the
-// top-level block (see .claude/rules/detail-layout.md, "Kolom-navigatie").
+// top-level block (see .claude/docs/detail-layout.md, "Kolom-navigatie").
 function focusedGranCursor() {
   const level = state.focusLevel
   if (level > 0) return state.drillCursor[level - 1] || { change: 0, gran: 'group' }
@@ -7399,7 +7399,7 @@ function menuAnchor() {
   }
   // Enter from the blokken-index (list mode): anchor on the selected row
   // itself, not the list-mode diff preview beneath it (see
-  // .claude/rules/keyboard-navigation.md).
+  // .claude/docs/keyboard-navigation.md).
   if (isIndexMenu()) {
     const row = document.querySelector(`[data-idx="${state.selected}"]`)
     if (row) {

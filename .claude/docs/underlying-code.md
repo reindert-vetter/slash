@@ -3,9 +3,9 @@
 `RelatedPanel.mjs`'s default export, `data-testid=related-code`: the child blocks
 of the currently focused column — relation children, resolved method calls, and
 test-coverage links — as small Prism-highlighted excerpts. Sits directly right of
-the block column in `<main>`'s flow (see `.claude/rules/detail-layout.md`);
+the block column in `<main>`'s flow (see `.claude/docs/detail-layout.md`);
 `Enter`/click on a child drills it open as its own column
-(`.claude/rules/drilling.md`).
+(`.claude/docs/drilling.md`).
 
 ## The children and their badges
 
@@ -17,7 +17,7 @@ Each child is one card (`data-testid=related-item`). It follows
   model via `GET /api/relations?pr=N`. `home.mjs`
   (`childrenOf`/`relatedChildren`) pulls the children from `state.allBlocks` and
   lazily loads their code. See "Relations between blocks" in
-  `.claude/rules/workflows-analysis.md`.
+  `.claude/docs/workflows-analysis.md`.
 - A **method call** (`kind=method_call`, from `GET /api/callresolve` — code +
   descriptor sit in the row, so no extra fetch) has no word badge but a **diff
   stat** (`data-testid=related-diffstat`): `+A −R` (green/red, added/removed lines
@@ -26,7 +26,7 @@ Each child is one card (`data-testid=related-item`). It follows
   change (`r.diff` is `null`). Only calls on **lines the PR changed** get a row;
   **enum cases** (`AddressType::BILLING`) resolve to their enum declaration. See
   "Resolving (also unchanged) called methods" in
-  `.claude/rules/workflows-analysis.md`.
+  `.claude/docs/workflows-analysis.md`.
 - **Test coverage**, both directions, from `GET /api/testcovers`: `kind=covers`
   (a test block shows the tested method, same diff stat/`Unchanged` badge as
   `method_call`) and `kind=covered_by` (a tested production method shows "covered
@@ -35,7 +35,7 @@ Each child is one card (`data-testid=related-item`). It follows
   annotation shows a **warning** in the card header instead of a child
   (`data-testid=related-covers-warning`, custom inline SVG + explanation — never
   an AI guess). See "Linking test coverage" in
-  `.claude/rules/workflows-analysis.md`.
+  `.claude/docs/workflows-analysis.md`.
 - An **approval badge** (`data-testid=related-approval`, `done/total`, green + ✓
   when fully approved) on any child that is itself a PR block, rendered in that
   child's own header (`approvalBadge`). Per-child only — there is **no**
@@ -44,14 +44,14 @@ Each child is one card (`data-testid=related-item`). It follows
   concept and no badge. Counts ride along on the descriptor (`approve`, filled by
   `relatedChildren`/`resolvedCallChildren` via `blockApproveCount`); the same
   `{done,total}` also feeds the sidebar pill — see
-  `.claude/rules/approval.md`.
+  `.claude/docs/approval.md`.
 - A child found by an LLM carries a **`source: haiku/sonnet`** badge;
   Go-resolved children show none.
 - Selecting an `Unchanged` child gets the same indigo border as any other selected
   item. An earlier version gave it a gray ring even while selected ("nothing to
   review"); that exception was dropped — the app has one single
   blue-selected/gray-unselected border rule (see "Focus highlight per stop" in
-  `.claude/rules/keyboard-navigation.md`), and the `Unchanged` **text** badge
+  `.claude/docs/keyboard-navigation.md`), and the `Unchanged` **text** badge
   still carries that signal.
 
 In the card header the **title (`class::method`) is always visible** (gets the
@@ -95,14 +95,14 @@ completes empty).
 ## List navigation
 
 `↓` falling through whatever sits before this card — the last inline comment
-conversation (see `.claude/rules/comments-panel.md`) or the embedded Claude chat
-(`.claude/rules/claude-chat-panel.md`), which is where a bare `→` from the diff
+conversation (see `.claude/docs/comments-panel.md`) or the embedded Claude chat
+(`.claude/docs/claude-chat-panel.md`), which is where a bare `→` from the diff
 now lands — selects the **first** item (`cs.codeSel=0`); `↓`/`↑` move through them (clamping at the last — `↑` on the
 first steps back onto the last inline comment conversation if the unit has one,
 else out to the diff, via `hasVisibleComments`/`enterCommentsTail`); `←` steps back
 the same way from any position. The selected item gets an indigo ring
 (`data-active=true`). All items stack **vertically** at full width. Full chain:
-`.claude/rules/keyboard-navigation.md`.
+`.claude/docs/keyboard-navigation.md`.
 
 The card has **no fixed height cap**: it grows with its content up to the block
 column's full height and then scrolls internally (`min-h-0`, body
@@ -133,7 +133,7 @@ count** — no live DOM measurement (`scrollWidth`/`getBoundingClientRect`) that
 could race a layout pass.
 
 - `min` = the default floor `42rem`/`49.2rem` (matching a one-sided/`a`-narrowed
-  block, see `.claude/rules/detail-layout.md`).
+  block, see `.claude/docs/detail-layout.md`).
 - `max` = `56rem`/`65rem` — deliberately **below** the block column's own
   `70rem`/`82rem`, so one long line can't grow this card to half the screen.
 - `clamp()` handles "no code" and "everything shorter than the floor" for free.
@@ -155,7 +155,7 @@ symmetry with the neighbouring column is a **default**, not a guarantee. Test:
 `tests/related-code-grow.spec.mjs`.
 
 `InlineComments` reuses this exact class — see
-`.claude/rules/comments-panel.md`.
+`.claude/docs/comments-panel.md`.
 
 ### Narrow viewport (< 1400px)
 
@@ -177,7 +177,7 @@ alongside a base class wins below 1400px with no specificity conflict; at/above
   narrow-60%/`singleSide` tier had above 1400px, which in turn drops further,
   keeping roughly the same ~60% ratio so the `a` toggle still visibly differs.
   Deliberately scoped to `widthCls`'s own two tiers: `fit`'s content-driven width
-  (`fitWidthCls`/`boundedWrapWidthCls`, `.claude/rules/diff-card.md`) is
+  (`fitWidthCls`/`boundedWrapWidthCls`, `.claude/docs/diff-card.md`) is
   untouched — it's an opt-in stand that is uncapped upward by design and was never
   going to reliably fit at 1378px.
 - **The sum at the common floor:** `42rem` + `1rem` (`gap-4`) + `40rem` = `83rem`
@@ -187,7 +187,7 @@ alongside a base class wins below 1400px with no specificity conflict; at/above
   doesn't guarantee every combination fits.
 
 The Playwright default viewport (1280×720, see
-`.claude/rules/testing-playwright.md`) is itself below 1400px, so effectively the
+`.claude/docs/testing-playwright.md`) is itself below 1400px, so effectively the
 whole suite exercises the narrow widths — `related-code-grow.spec.mjs`'s ceiling
 assertion reflects 768px.
 
@@ -383,7 +383,7 @@ of which belonged to it, with no visual distinction. Don't reintroduce.
 
 Every relation/annotation carries an **absolute source line** recorded server-side
 by the detector that found it (`relations.Relation.Line` resp.
-`testcovers.Entry.Line`, see `.claude/rules/workflows-analysis.md`).
+`testcovers.Entry.Line`, see `.claude/docs/workflows-analysis.md`).
 `groupLineRange(b, rows)` converts the selected group unit to that same absolute
 range (reusing `unitLineRange`), and **`groupTierForLine(range, line)`** is the one
 function every group-scoping decision goes through: it scores a child's recorded
@@ -478,4 +478,4 @@ once nothing is searching, at the cost of the list shifting a few pixels when a
 search starts/finishes.
 
 See "Resolving (also unchanged) called methods" in
-`.claude/rules/workflows-analysis.md`.
+`.claude/docs/workflows-analysis.md`.

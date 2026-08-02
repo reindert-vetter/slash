@@ -6,11 +6,11 @@ changes of a block).
 
 ## Split out of this file
 
-- **`.claude/rules/command-palette.md`** — every menu: the `Enter` block
+- **`.claude/docs/command-palette.md`** — every menu: the `Enter` block
   palette, the `/` PR-wide menu, `withClose`/`defaultSel`, the postApprove
   follow-up + `findNextUnapproved`, the review-submit menus, the comment-scoped
   and compose menus.
-- **`.claude/rules/footer.md`** — the footer: inline diff preview of the active
+- **`.claude/docs/footer.md`** — the footer: inline diff preview of the active
   unit, `footerBoxPx`/height reservation, the AI description.
 
 ## The left→right navigation chain (`←`/`→` through the whole layout)
@@ -22,15 +22,15 @@ code).
 
 1. **Description** (`prInfoCard`/`state.showDescription`) — PR title/summary/
    description plus the **Taken** block stacked below it (see
-   `.claude/rules/detail-layout.md`). **Hidden by default** (the column then
+   `.claude/docs/detail-layout.md`). **Hidden by default** (the column then
    takes up no width at all) and the leftmost stop.
 2. **PR block index** (`data-testid=pr-index`, the sidebar,
    `state.mode==='list'`) — shifts right as soon as stop 1 is open, so the
-   description really sits to its left (see `.claude/rules/detail-layout.md`).
+   description really sits to its left (see `.claude/docs/detail-layout.md`).
    - **Stop 2b — the methodes-kolom** (`data-testid=test-methods-column`,
      `state.testColumnFocused`): a **conditional** stop, only inserted when the
      selected row is a `test_class` row (see
-     `.claude/rules/test-class-grouping.md`). Deliberately NOT renumbered into
+     `.claude/docs/test-class-grouping.md`). Deliberately NOT renumbered into
      the chain, so every "stop 3" reference below stays valid. Details in that
      file; keyboard summary: `→` from stop 2 lands here first and slides the
      pr-index away, a **second** `→` steps into stop 3 of the ACTIVE method
@@ -44,12 +44,12 @@ code).
 3. **Block with diff** (`state.mode==='diff'`, `state.focusLevel===0`).
 4. **Drilled columns** (`state.drill`/`focusLevel>0`) — a **side branch**, not a
    strict stop: reachable only via Enter/click on an Underlying-code child (see
-   `.claude/rules/drilling.md`), never via `→`. `←` does peel them back one by
+   `.claude/docs/drilling.md`), never via `→`. `←` does peel them back one by
    one like any other stop.
 5. **Inline comment block(s)** (`cs.focus` one of `'new'`/`'comment'`/
    `'thread'`) — **conditional**: only reachable when the selected unit actually
    has a comment (`hasVisibleComments()`, see
-   `.claude/rules/comments-panel.md`); otherwise `→` skips straight past it.
+   `.claude/docs/comments-panel.md`); otherwise `→` skips straight past it.
    - **Stop 5b — the embedded Claude chat** (`data-testid=claude-chat-column`,
      `cs.focus==='claude'`): reached with `→` from stop 5's `'thread'` level,
      **or straight from the diff** when the unit has no comment at all — unlike
@@ -57,7 +57,7 @@ code).
      auto-creates the empty private comment the conversation hangs on
      (`enterClaudeChat`, `RelatedPanel.mjs`). Deliberately NOT renumbered into
      the chain, so every "stop 6" reference below stays valid. Details in
-     `.claude/rules/claude-chat-panel.md`; keyboard summary: `↑`/`↓` walk the
+     `.claude/docs/claude-chat-panel.md`; keyboard summary: `↑`/`↓` walk the
      transcript on its own `cs.claudePos` cursor (exactly as `'thread'` walks
      reactions on `cs.threadPos` — 0 = the composer, 1..n = the n-th turn from
      the bottom, clamped at the oldest); `↓` at `claudePos === 0` falls through
@@ -66,7 +66,7 @@ code).
 6. **Underlying code** (`RelatedPanel`, `cs.focus==='code'`) — the last stop of
    the chain: `→` there leaves the card nowhere to go. Note that "last" is
    about the chain, not the screen — the stop-5b Claude column renders to the
-   *right* of it (see `.claude/rules/detail-layout.md`), and `↓` out of the
+   *right* of it (see `.claude/docs/detail-layout.md`), and `↓` out of the
    chat therefore steps leftwards on screen.
 
 Tasks has no keyboard stop at all — it is click-only, under stop 1.
@@ -85,9 +85,9 @@ Transitions, and how they differ from the older per-mechanism behaviour:
 - **Before stop 1 (the end of the chain):** `←` while `state.showDescription`
   navigates away to the PR inbox (`location.href = '/pr-overview'`). What
   travels along and comes back (`?pr=`/`?sel=`/drill) is described in
-  `.claude/rules/pages-and-routing.md`.
+  `.claude/docs/pages-and-routing.md`.
 - **Stop 2 ↔ 3 / 3 ↔ 4:** see the `'list'`/`'diff'` sections below resp.
-  "Column navigation" in `.claude/rules/drilling.md`.
+  "Column navigation" in `.claude/docs/drilling.md`.
 - **Stop 3/4 ↔ 5 ↔ 5b ↔ 6:** `→` from the diff lands on stop 5 (the first
   conversation) when the unit has one (`enterCommentsHead()`), else straight on
   to **stop 5b**, the embedded Claude chat (`enterClaudeChat()`) — it no longer
@@ -101,7 +101,7 @@ Transitions, and how they differ from the older per-mechanism behaviour:
   `cs.focus==='trigger'` stop were removed; starting a comment goes exclusively
   through the palette's "Comment op deze regel" (`startComment`). `←` on stop 6
   keeps its unconditional "leave the panel" behaviour at any child position.
-  Full mechanism: `.claude/rules/comments-panel.md`.
+  Full mechanism: `.claude/docs/comments-panel.md`.
 - `state.showDescription` deliberately lives **outside** the URL — ephemeral
   cursor state, not a navigation position worth restoring.
 
@@ -124,7 +124,7 @@ so no arrow.js keyed-node pitfall applies here.
 
 Stop 5/6 (Underlying code) deliberately has **no outer** focus border of its
 own, but every child card/chip/tests-bar inside it follows the same two-state
-border (see `.claude/rules/underlying-code.md`).
+border (see `.claude/docs/underlying-code.md`).
 
 **The same rule applies to list rows** — the sidebar row (`BlockList.mjs`'s
 `row`), the search box, `toggleRow`/`ignoreToggleRow`, and
@@ -149,17 +149,17 @@ PR-wide comments have no keyboard cursor of their own — a comment
 (`stepVisibleSelected`/`stepListSelection` are generic over it), and selection
 alone reveals its thread in the block column — no hover, no separate cursor.
 The row synthesis, approval mapping (`0/1`→`1/1`) and detail card live in
-`.claude/rules/comments-panel.md`.
+`.claude/docs/comments-panel.md`.
 
 **`Enter` opens a small action menu; `→` instead steps into the item's own
 thread** — deliberately NOT the same action (changed on request so `→` mirrors
 `→` on an ordinary block: it steps you *into* something). The menu itself is
-`prCommentCommandsFor` — see `.claude/rules/command-palette.md`.
+`prCommentCommandsFor` — see `.claude/docs/command-palette.md`.
 
 `→` (`enterPrCommentThread`, `RelatedPanel.mjs`) reuses the same
 `threadMessages`/`reactionBubble` rendering as the block-scoped thread, on its
 own ephemeral, non-URL-bound cursor (`pct`, see
-`.claude/rules/comments-panel.md`):
+`.claude/docs/comments-panel.md`):
 
 - `↑` walks up the messages and **clamps** at the oldest one.
 - `↓` walks down and, once already at the newest, **falls through**: it leaves
@@ -187,7 +187,7 @@ combination is a deliberately reachable state now, at any `focusLevel`. Tests:
 Fully approved top-level blocks are **hidden** by default (a button at the
 bottom expands them) and the "Start" heading shows a PR-wide approval counter —
 see "Hiding approved blocks" and "Server-side `total`" in
-`.claude/rules/approval.md`.
+`.claude/docs/approval.md`.
 
 ### Hidden (approved) blocks: skip, reveal, clamp
 
@@ -294,7 +294,7 @@ rows are known.
 - **Green, _inside_ the card** (`scrollHint`/`updateHints`, `Block.mjs`):
   "there are changes off-screen — keep scrolling within THIS block". Also used
   verbatim by a TRANSLATION block's per-key overview (see
-  `.claude/rules/diff-render.md` for the `data-scrollsync`/`data-changed`/
+  `.claude/docs/diff-render.md` for the `data-scrollsync`/`data-changed`/
   `data-change-active` wiring). Up vs. down is carried by the chevron's own
   shape, not colour, so it already works for a colourblind reviewer.
 
@@ -326,7 +326,7 @@ lands, see the chain above) — and lands on the **first** child
 child `↑`/`←` step back onto the last conversation of the unit if one exists
 (`enterCommentsTail()`), else to the diff (`exitRelated`). There is no `→` that
 leaves the card. The selected child gets an indigo ring (`data-active=true`).
-The card itself: `.claude/rules/underlying-code.md`.
+The card itself: `.claude/docs/underlying-code.md`.
 
 The panel cursor (`cs.focus`/`codeSel`/`sel`/`threadPos`/`claudePos`) lives in
 the **URL** under its own `rel` namespace
@@ -352,7 +352,7 @@ list). Repeated `←` peels back level by level to the top-level block, where a
 further `←` exits the diff session and clears the drill state. An unfocused
 column collapses to a narrow rail; clicking a rail is a shortcut for repeated
 `←` (`expandColumn`) and discards anything drilled deeper. Full `state.focusLevel`
-mechanism: `.claude/rules/drilling.md`.
+mechanism: `.claude/docs/drilling.md`.
 
 `←`/`Escape` from the panel's first position (`cs.codeSel === 0`) steps back
 onto the last conversation of the unit if one exists, else gives focus back to
@@ -401,7 +401,7 @@ is `rowChanged` but has nothing to read or judge, so `changedRows`/`changeLines`
 `ins` row, otherwise `left`). `changeGroups` is deliberately **unchanged**: the
 blank row just rides along inside its group run (like a brackets-only line), so
 a group's highlighted range never jumps around it — only its own
-countability/landability is suppressed. See `.claude/rules/approval.md` for the
+countability/landability is suppressed. See `.claude/docs/approval.md` for the
 counter side (incl. the Go port in `blockstats.go`).
 
 All diff navigation goes through `unitsFor(rows, gran)` (exported from
@@ -443,13 +443,13 @@ the last (resp. first) unit steps sideways to the next/previous child of the
 any granularity. Only with no sibling left does `f`/`d` still zoom back to
 `'line'`. Full mechanism (`drillSiblingContext`/`drillToSibling`, the `↑`
 symmetry landing on the sibling's **last** unit, the adjusted `dKey` guard):
-`.claude/rules/drilling.md`.
+`.claude/docs/drilling.md`.
 
 The call underline rides on `markChars` (a per-character class function):
 `paneHTML` passes the active segment's underline set to `highlightChanges`,
 which renders it into the Prism-highlighted HTML. Changed **characters** no
 longer get their own background (see "Char diff" in
-`.claude/rules/diff-render.md`) — the red/green line background marks a change
+`.claude/docs/diff-render.md`) — the red/green line background marks a change
 at line level only. An empty added line has no characters and thus no
 underline.
 
@@ -504,7 +504,7 @@ selected/preview card and every open drilled column) through `DIFF_VIEW_CYCLE`
 - **`'split'`** — side by side, old + new (default).
 - **`'unified'`** — a genuinely two-sided block collapses into ONE column, the
   old (`-`) line directly above the new (`+`) line, mirroring the footer's own
-  inline-diff gutter convention (see `.claude/rules/footer.md`). The only stand
+  inline-diff gutter convention (see `.claude/docs/footer.md`). The only stand
   that still shows old code.
 - **`'fit'`** — only the new/right pane; old code is never shown, even for a
   two-sided block (`fitOnly(b)` in `Block.mjs`, folded into `codeDiff`'s
@@ -515,7 +515,7 @@ selected/preview card and every open drilled column) through `DIFF_VIEW_CYCLE`
 `state.diffViewMode` is ephemeral, no URL binding (like
 `showDescription`/`showApproved`). The **widths** each stand produces, and
 `fitWidthCls`/`boundedWrapWidthCls`/`narrowed`, live in
-`.claude/rules/diff-card.md`.
+`.claude/docs/diff-card.md`.
 
 **`'unified'` hides nothing — it restructures.** For an aligned row that is a
 real del+ins pair (or a whitespace-only re-alignment, `wsOnly`),

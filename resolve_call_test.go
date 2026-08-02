@@ -65,7 +65,7 @@ func TestResolveCallHaikuConfident(t *testing.T) {
 // definition carries a leading PHPDoc gets the same @return/@param signature
 // fold applied to its embedded ChildCode (via verifyDefinition ->
 // enrichedCodeSide) that an active (changed) block's diff gets via /api/code
-// — see codesig.go and .claude/rules/blocks-and-ingest.md ("PHPDoc-types in
+// — see codesig.go and .claude/docs/blocks-and-ingest.md ("PHPDoc-types in
 // de signatuur vouwen"). ChildLine must shift by the same removed-line count.
 func TestResolveCallHaikuFoundFoldsLeadingPHPDoc(t *testing.T) {
 	dataDir := t.TempDir()

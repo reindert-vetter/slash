@@ -73,7 +73,7 @@ The deepest cursor is applied only once its rows are known
 a synthetic frame, otherwise once `ensureCode`'s fetch completes. All three fields
 also travel along in the `/pr-overview` round trip
 (`overviewExitUrl()`/`treeUrl()`, see "`?sel=` travels along…" in
-`.claude/rules/pages-and-routing.md`).
+`.claude/docs/pages-and-routing.md`).
 
 ## Column navigation: `state.focusLevel`
 
@@ -127,7 +127,7 @@ check. See `tests/drill-sibling-walk.spec.mjs`.
 `approveContext()` (`home.mjs`): without it, "Approve …" would invisibly approve
 the TOP-LEVEL block/cursor while a drilled column held the keyboard (the reported
 "I can't approve anything in underlying code"). See "Enter — command palette" in
-`.claude/rules/command-palette.md` and `tests/drill-approve.spec.mjs`.
+`.claude/docs/command-palette.md` and `tests/drill-approve.spec.mjs`.
 
 ### Entering, leaving, and what may not happen
 
@@ -143,7 +143,7 @@ the TOP-LEVEL block/cursor while a drilled column held the keyboard (the reporte
   `scrollChangeIntoView(false)` for the cached case, and `ensureCode` does the
   same as soon as a not-previously-loaded drilled/focused child's code arrives
   (`state.drill[state.focusLevel - 1] === b`). `scrollChangeIntoView` itself:
-  `.claude/rules/keyboard-navigation.md`.
+  `.claude/docs/keyboard-navigation.md`.
 - **`←` closes the focused drilled column** and returns focus to the diff of the
   **parent** column (the previous drilled column, or from level 1 the top-level
   block). The closed child reappears in that parent's Underlying-code list on its
@@ -346,7 +346,7 @@ separate top-level item in `state.drill.map(...)`'s array. Doubly load-bearing:
    the same keyed-node-reuse pitfall.
 
 Test: `tests/drill-preview.spec.mjs`. The preview's own width/collapse rules live
-in `.claude/rules/diff-card.md`.
+in `.claude/docs/diff-card.md`.
 
 ## Unfocused columns collapse into a narrow rail
 

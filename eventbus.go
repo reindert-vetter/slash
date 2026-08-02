@@ -1,6 +1,6 @@
 // eventbus.go — the process-wide, in-memory push channel behind
 // GET /api/events (the browser's native EventSource; see
-// .claude/rules/server-events.md). One tab holds one SSE connection, over
+// .claude/docs/server-events.md). One tab holds one SSE connection, over
 // which EVERY subject is multiplexed; a subscriber tells the subjects apart by
 // the event's own Type field.
 //

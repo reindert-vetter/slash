@@ -67,7 +67,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 	// uninterrupted run of attributes/modifier-keywords directly above the next
 	// `function` declaration (0 = none pending). It lets a function's Block.Line
 	// start at its leading attribute(s) instead of at the `function` keyword —
-	// see the "function" case below and .claude/rules/blocks-and-ingest.md.
+	// see the "function" case below and .claude/docs/blocks-and-ingest.md.
 	// Reset to 0 whenever a token appears that is neither an attribute, a
 	// modifier keyword, nor `function` itself (so it never leaks onto an
 	// unrelated declaration, e.g. a property that happens to carry its own
@@ -84,7 +84,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 	// so the "function" case below adopts the EARLIEST of pendingAttrLine/
 	// pendingDocLine as the block's Line — a PHPDoc belongs to the function's
 	// block just like a leading attribute does (see
-	// .claude/rules/blocks-and-ingest.md).
+	// .claude/docs/blocks-and-ingest.md).
 	pendingDocLine := 0
 	// pendingDocText is the extracted description from the most recent `/**
 	// ... */` PHPDoc comment (see phpDocDescription), pending adoption by the
@@ -108,7 +108,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 	// currentClassKind returns the kind ("class"/"trait"/"interface"/"enum")
 	// of the top frame, or "" if there is none — used to stamp
 	// Block.IsInterface on a method declared directly inside an `interface`
-	// (see classify.go's category override; .claude/rules/blocks-and-ingest.md).
+	// (see classify.go's category override; .claude/docs/blocks-and-ingest.md).
 	currentClassKind := func() string {
 		if len(classes) == 0 {
 			return ""
@@ -285,7 +285,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 				// `#[`/block-comment cases above) pulls it back to the EARLIEST of
 				// the two — either can sit above the other, and both are
 				// conceptually part of this method's block
-				// (.claude/rules/blocks-and-ingest.md).
+				// (.claude/docs/blocks-and-ingest.md).
 				declLine := line
 				earliestPending := 0
 				if pendingAttrLine > 0 {
@@ -315,7 +315,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 					// `trait`) body gets flagged so classify.go can override
 					// its category to "INTERFACE" (resp. "TRAIT") regardless
 					// of the file's path (see
-					// .claude/rules/blocks-and-ingest.md).
+					// .claude/docs/blocks-and-ingest.md).
 					b.IsInterface = currentClassKind() == "interface"
 					b.IsTrait = currentClassKind() == "trait"
 					blocks = append(blocks, b)
@@ -362,7 +362,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 // Line should start at — normally the `function` keyword's own line, but the
 // caller passes back the line of a directly-preceding `#[...]` attribute run
 // instead, so the attribute is treated as part of this function's block (see
-// scanPHP's pendingAttrLine and .claude/rules/blocks-and-ingest.md).
+// scanPHP's pendingAttrLine and .claude/docs/blocks-and-ingest.md).
 func scanFunction(s string, from int, line *int, filename, class string, declLine int) (Block, int, bool) {
 	i := skipSpacesNL(s, from, line)
 	// reference-return: `function &name`
@@ -488,7 +488,7 @@ func skipBody(s string, open int, line *int) (endLine, next int) {
 // is empty or starts with `@` (a tag: `@param`, `@return`, `@var`, ...) is
 // dropped. The remaining lines are joined with a single space into one
 // paragraph. Returns "" for a tags-only or empty doc. Deterministic, plain
-// text extraction — no AI (.claude/rules/blocks-and-ingest.md).
+// text extraction — no AI (.claude/docs/blocks-and-ingest.md).
 func phpDocDescription(raw string) string {
 	body := strings.TrimSuffix(strings.TrimPrefix(raw, "/**"), "*/")
 	var parts []string

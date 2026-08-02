@@ -235,7 +235,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// inside this repo (dataDir is normally "data/" under the repo root)
 	// would still find and load this project's own CLAUDE.md/.claude/rules —
 	// confirmed empirically, see the resolve_call section of
-	// .claude/rules/tembed-workflows.md.
+	// .claude/docs/tembed-workflows.md.
 	var cl claude.Client = claude.New(filepath.Join(os.TempDir(), "slash-llm-cwd"))
 	if os.Getenv("SLASH_CLAUDE") == "off" {
 		fake := claude.NewFake()
@@ -261,7 +261,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// optionally points at a JSON fixture ([]jira.Issue) that seeds the Fake's
 	// AssignedToMe result deterministically — mirrors SLASH_INBOX for the
 	// task_inbox workflow's "jira" task source (see
-	// .claude/rules/tembed-workflows.md, task_inbox).
+	// .claude/docs/tembed-workflows.md, task_inbox).
 	var jr jira.Client = jira.New()
 	if os.Getenv("SLASH_JIRA") == "off" {
 		fake := &jira.Fake{}
@@ -1468,7 +1468,7 @@ const sseKeepAlive = 20 * time.Second
 
 // handleEvents serves GET /api/events?pr=N — ONE server-sent-events stream per
 // browser tab, over which every subject is multiplexed (see eventbus.go and
-// .claude/rules/server-events.md). Read-only and stateless: it starts nothing,
+// .claude/docs/server-events.md). Read-only and stateless: it starts nothing,
 // writes nothing durable, and only forwards volatile notifications, so it falls
 // under the same operational carve-out as the heartbeat ping.
 //

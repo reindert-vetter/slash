@@ -1,14 +1,14 @@
 import { test, expect, seededPr, evaluateSettled } from './_fixtures.mjs'
 
 // Verifies the embedded Claude conversation column (claude_chat workflow,
-// see .claude/rules/comments-panel.md's "Embedded Claude chat" section):
+// see .claude/docs/comments-panel.md's "Embedded Claude chat" section):
 // it renders as its own column next to the comment thread, → deepens one
 // level further from an existing thread into it, a plain message round-trips
 // through the fake claude backend (SLASH_CLAUDE_CHAT_TURNS, see
 // _fixtures.mjs), a "question with choices" turn renders its option buttons,
 // choosing one both records the answer and continues the conversation, and
 // the two agentic action buttons ("Bewerk code"/"Commit wijziging", see
-// .claude/rules/claude-chat-panel.md) are wired to a real send resp. a
+// .claude/docs/claude-chat-panel.md) are wired to a real send resp. a
 // confirm-before-push menu.
 test('embedded Claude chat: enter via →, send a message, answer a question', async ({ page }, testInfo) => {
   // Its own synthetic PR (and its own again on a retry) — comments have no

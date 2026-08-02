@@ -5,13 +5,13 @@ review tree and the PR overview.
 
 ## Split out of this file
 
-- `.claude/rules/pr-overview.md` — the whole `/pr-overview` page: inbox
+- `.claude/docs/pr-overview.md` — the whole `/pr-overview` page: inbox
   sections, the per-row popover (generate/regenerate, the draft reviewer
   picker, copy URL), the filter drawer, the "Mislukte taken" block, the
   workflow-backed GitHub access, its endpoint table, offline/test mode, and the
   client (`src/overview.mjs`: stacks, the `hoverEnabled` gate, selection
   identity, keyboard).
-- `.claude/rules/task-inbox-page.md` — the `/inbox` page in full.
+- `.claude/docs/task-inbox-page.md` — the `/inbox` page in full.
 
 ## The three routes
 
@@ -24,7 +24,7 @@ All three are static HTML shells with no build step; the Go server (`api.go`,
   `home.mjs` does a `location.replace('/pr-overview')`.
 - **`/pr-overview`** — the **PR inbox**: a live GitHub dashboard of PRs that
   need your attention (`overview.html` → `src/overview.mjs`), see
-  `.claude/rules/pr-overview.md`. Every row opens a popover menu on click; an
+  `.claude/docs/pr-overview.md`. Every row opens a popover menu on click; an
   ingested PR (`hasGraph`) reaches `/pr/<id>` via the menu choice "Open review
   tree". The read-only "recently generated" drawer feeds from
   **`GET /api/prs`** (`handlePRs` → `listPRs`, block/file counts per PR from
@@ -32,14 +32,14 @@ All three are static HTML shells with no build step; the Go server (`api.go`,
 - **`/inbox`** — the **task inbox**: a personal, scored to-do list across PR
   reviews, unread comments on your own PRs, and Jira tickets assigned to you
   (`inbox.html` → `src/inbox.mjs`), see
-  `.claude/rules/task-inbox-page.md`.
+  `.claude/docs/task-inbox-page.md`.
 - **`/`** redirects (302) to `/pr-overview`; every other path (`/src/*`,
   `/overview.html`, …) is served statically by the `http.FileServer`.
 
 ## `?pr=<id>` auto-selects the row you came from
 
 From `/pr/<id>`, the **`←` nav-chain exit** (stop 1, `state.showDescription`,
-see `.claude/rules/keyboard-navigation.md`) links to
+see `.claude/docs/keyboard-navigation.md`) links to
 `/pr-overview?pr=<state.pr>`, not the bare `/pr-overview`. (An earlier `/`-menu
 item "To PR overview" was removed — the `←` exit covers the same destination.)
 `overview.mjs` reads the param **once** at module load
@@ -52,7 +52,7 @@ restore-then-clear pattern):
 
 - PR in `state.sections` → set the module-level `selKey` to `'row:' + pr` (the
   same identity `paintSelection`/`reanchorSelection` use, see "Selection
-  identity" in `.claude/rules/pr-overview.md`); the existing `sections.length`
+  identity" in `.claude/docs/pr-overview.md`); the existing `sections.length`
   watch triggers the next `scheduleRepaint()`, which sets the ring + scrolls.
 - Otherwise the "Recently generated" drawer is checked: `ensureRecentPrs()`
   (the shared `GET /api/prs` fetch, same `recentLoading` guard as
@@ -98,7 +98,7 @@ the canonical shareable navigation position.
   behaviour as an expired/shared `?sel=` link, no extra edge-case code.
 - **`?drill=`/`?dgran=`/`?dchg=` travel along with `?sel=`** — an open drilled
   Underlying-code column is also a navigation position (see
-  `.claude/rules/drilling.md`), so `overviewExitUrl()` appends them whenever
+  `.claude/docs/drilling.md`), so `overviewExitUrl()` appends them whenever
   `state.drillRef` isn't empty, **only together with `sel`** (drilling has no
   meaning without a selected block). `overview.mjs` reads them in the same step
   as `originSel` (`originDrill`/`originDrillGran`/`originDrillChange`, three

@@ -2,8 +2,8 @@ import { test, expect } from './_fixtures.mjs'
 
 // PR 107 (tests/fixtures/translation-blocks.json + translation-callresolve.json,
 // worktrees in _setup.mjs). Covers the two translation render modes + the
-// sibling-locale columns (see .claude/rules/blocks-and-ingest.md "Translation
-// blocks" and .claude/rules/tembed-workflows.md "Translation keys"):
+// sibling-locale columns (see .claude/docs/blocks-and-ingest.md "Translation
+// blocks" and .claude/docs/tembed-workflows.md "Translation keys"):
 //   1. A standalone TRANSLATION block renders a CHANGES-ONLY key overview, not
 //      raw code — each row also carrying a read-only column per sibling
 //      locale (en), inline in the SAME card (no separate companion card).

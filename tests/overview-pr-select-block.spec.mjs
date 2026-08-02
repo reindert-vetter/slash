@@ -1,7 +1,7 @@
 import { test, expect } from './_fixtures.mjs'
 
 // Coverage for the `?sel=` round-trip through /pr-overview (see "?sel= reist
-// mee in dezelfde round-trip" in .claude/rules/pages-and-routing.md): leaving
+// mee in dezelfde round-trip" in .claude/docs/pages-and-routing.md): leaving
 // a non-default block selected via the ← nav-chain exit, then returning via
 // "Open review-boom", must land back on that same block — not the default
 // first one.

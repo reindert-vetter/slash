@@ -2,7 +2,7 @@
 
 How wide a block-diff card gets and why. The **keyboard** side of the `a` cycle
 (the guards, the `viewModeIndicator` clicks, what `unified` restructures) lives
-in "`a` — cycling the diff view" in `.claude/rules/keyboard-navigation.md`; this
+in "`a` — cycling the diff view" in `.claude/docs/keyboard-navigation.md`; this
 file is the **width and render** side: `widthCls`/`fitWidthCls`/
 `boundedWrapWidthCls`/`narrowed` (`Block.mjs`), the `narrow:` breakpoint, and the
 two rules that keep the look-ahead preview card subordinate to the active one
@@ -35,7 +35,7 @@ that are easy to forget and both load-bearing:
   `state.selected`/`mode`/`gran`/`change`, so the `setRelated` watch that
   normally drives the call-arrow overlay never fires while the geometry it drew
   against has changed underneath it. See "Call-arrow overlay" in
-  `.claude/rules/underlying-code.md`.
+  `.claude/docs/underlying-code.md`.
 
 `applyDiffViewMode` early-returns on an unknown stand and on the stand already
 being active, so a repeated click is genuinely free.
@@ -131,7 +131,7 @@ An **SVG** block needs nothing of its own here: `svgSlot` replaces the text diff
 with rendered `<img>` previews and never reads `viewMode`, and an `.svg` file is
 by construction not a PHP file, so it already gets `boundedWrapWidthCls` in the
 `fit` stand exactly like markdown/JSON (see "SVG blocks" in
-`.claude/rules/diff-render.md`).
+`.claude/docs/diff-render.md`).
 
 ## Narrow viewport (`narrow:`, < 1400px)
 
@@ -155,7 +155,7 @@ was never going to reliably fit at ~1378px regardless, and narrowing its floor
 would only put the many `fit`-specific assertions at risk for no product gain.
 The matching shrink on the neighbouring column, and the width budget the numbers
 were measured against, live in "Narrow viewport (< 1400px)" in
-`.claude/rules/underlying-code.md`.
+`.claude/docs/underlying-code.md`.
 
 Note that Playwright's default viewport (1280×720) is itself below 1400px, so
 effectively the whole suite exercises the narrow tiers.
@@ -199,7 +199,7 @@ The selected/active card itself is never given this override. Test:
 
 `<main>` already scrolls and clips cleanly, so a too-tall active diff is never a
 clipping bug — it is a **space-allocation** question (see
-`.claude/rules/detail-layout.md` and `.claude/rules/footer.md`). The answer is to
+`.claude/docs/detail-layout.md` and `.claude/docs/footer.md`). The answer is to
 take the space back from the preview: when the active card's own diff doesn't fit
 the available height, the preview shrinks to just its header + meta row
 (category/title/status, `file:line` + approve pill) — no description, no diff

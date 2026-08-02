@@ -2,8 +2,8 @@
 
 The workflows that derive the review *tree* — which block hangs under which, what
 a call points at, what a test covers — plus the two LLM-backed description/risk
-passes. Engine mechanics live in `.claude/rules/tembed-workflows.md`, endpoints
-in `.claude/rules/tembed-endpoints.md`.
+passes. Engine mechanics live in `.claude/docs/tembed-workflows.md`, endpoints
+in `.claude/docs/tembed-endpoints.md`.
 
 ## Relations between blocks (`build_relations` + `modules/relations`)
 
@@ -328,7 +328,7 @@ in list mode. Ordering: definition changed in this PR → call on a changed line
 rest. A `found` child shows a **`source: haiku`** badge; Go-resolved shows none.
 The list is computed in a watch and pushed via `setRelated`, never in a render
 binding (that races with the diff over `b.code`). See
-`.claude/rules/underlying-code.md`.
+`.claude/docs/underlying-code.md`.
 
 Tests: `callresolve_analysis_test.go`, `resolve_call_test.go`,
 `modules/callresolve/callresolve_test.go`; frontend via
@@ -420,7 +420,7 @@ likewise carries the full child descriptor + code text.
 ## AI description of a code unit (`explain_code` + `modules/explanations`)
 
 Generates the **footer description**: a short Dutch Opus explanation of the
-focused `line`/`group` unit (see `.claude/rules/footer.md`) — **every** such
+focused `line`/`group` unit (see `.claude/docs/footer.md`) — **every** such
 unit with real code, not only one containing an if-statement (that earlier
 frontend gate was lifted with "Diepgravend onderzoek"). One Execution per
 **unit + code hash**, no Signals.
@@ -468,7 +468,7 @@ the old form, a listener not handling a new payload field). Opus because this is
 a manually triggered, low-frequency action.
 
 - **Trigger: manual, PR-wide** — the `/` menu item **"Diepgravend onderzoek"**
-  (see `.claude/rules/command-palette.md`). No automatic trigger (unlike
+  (see `.claude/docs/command-palette.md`). No automatic trigger (unlike
   `explain_code`'s debounce or `resolve_call`'s auto-search): a PR-wide agentic
   pass with a judgment-based goal is too expensive and too noise-sensitive to
   run silently on every navigation step. **Re-running it is a deliberate

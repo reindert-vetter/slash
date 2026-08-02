@@ -1,7 +1,7 @@
 // translationDiff — parse PHP Laravel translation (lang) files and render them
 // as a clean, human-readable overview instead of a raw code diff.
 //
-// Two render modes (see .claude/rules/blocks-and-ingest.md, "Translation blocks"):
+// Two render modes (see .claude/docs/blocks-and-ingest.md, "Translation blocks"):
 //   1. translationBlockView(units, opts) — a standalone changed lang file (a
 //      TRANSLATION block): a CHANGES-ONLY list (added / removed / changed keys,
 //      old → new), no unchanged keys. Every row additionally carries one
@@ -297,7 +297,7 @@ const SIBLING_LOCALE_BADGE_CLS =
 // siblingColumnHTML — one extra, read-only column on a translation-overview
 // row: the CURRENT value of `key` in `sib`'s locale (or a "missing" marker),
 // replacing the old, separate companion card (see the module doc comment
-// above and .claude/rules/blocks-and-ingest.md, "Translation blocks"). Shares
+// above and .claude/docs/blocks-and-ingest.md, "Translation blocks"). Shares
 // the row's width EQUALLY with the primary column (`min-w-0 flex-1` — the
 // exact same flex-grow share as translation-primary-col below), so the row
 // always fills exactly the card's width — never wider, regardless of how
@@ -453,7 +453,7 @@ export function translationBlockView(units, opts = {}) {
   // hint mechanism needed, see Block.mjs's translationSlot (which wraps this
   // return value in the matching `data-testid="code-diff"`/`data-hints`
   // shell + the two green scrollHint chevrons) and
-  // .claude/rules/blocks-and-ingest.md ("Translation blocks").
+  // .claude/docs/blocks-and-ingest.md ("Translation blocks").
   return html`<div
     data-testid="translation-overview"
     data-scrollsync

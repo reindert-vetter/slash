@@ -4,8 +4,8 @@ The long-lived per-PR/per-repo trackers (`pr_status`, `pr_inbox`, `approve`,
 `ignore_comment`, `task_snooze`, `task_inbox`) plus the one-shot operational
 workflows (`ingest`, `submit_review`, `ready_for_review`, `cleanup`) and how a
 silent background failure still reaches the UI. Engine mechanics live in
-`.claude/rules/tembed-workflows.md`, endpoints in
-`.claude/rules/tembed-endpoints.md`.
+`.claude/docs/tembed-workflows.md`, endpoints in
+`.claude/docs/tembed-endpoints.md`.
 
 ## `pr_status` (per PR): metadata, merge detection, ingest refresh
 
@@ -16,7 +16,7 @@ a restart.
 
 **On start** it runs three Activities in sequence, each with its own targeted
 read-model write, so the UI can render **progressively** instead of waiting for
-everything (see "Progressive loading" in `.claude/rules/detail-layout.md`):
+everything (see "Progressive loading" in `.claude/docs/detail-layout.md`):
 
 1. **`fetchPRBasics`** — `PRMeta` (title/URL/body/author/diff-stats/head-ref,
    best-effort), derives a Jira key from the title (`\b([A-Z][A-Z0-9]+-\d+)\b`,
@@ -161,7 +161,7 @@ run **before** the relations rebuild.
   to the frontend. Deliberately separate from `Kind`: an orphan is still a
   block-scoped review comment, and flipping its `Kind` would change how its
   replies mirror to GitHub (`isPRWide`). See "Comment-index items" in
-  `.claude/rules/comments-panel.md` for how an orphan stays reachable.
+  `.claude/docs/comments-panel.md` for how an orphan stays reachable.
 - Tests: `reanchor_test.go`, `blockstats_test.go`'s
   `TestRowForLineSharesRowSpaceWithApproveTotal`,
   `tests/comment-orphan-anchor.spec.mjs`.
@@ -173,7 +173,7 @@ The **only** workflow that reads GitHub for the overview: a `refresh` Signal
 `refreshInbox` Activity, which fetches the inbox and writes it into the `inbox`
 read model, returning only a small summary so the endlessly-refreshing history
 stays compact. `EnsureInbox` starts/reuses one per repo and does a synchronous
-first refresh at startup. See `.claude/rules/pr-overview.md`.
+first refresh at startup. See `.claude/docs/pr-overview.md`.
 
 ## Persisting reviewer approval (`approve` + `modules/approvals`)
 
@@ -190,7 +190,7 @@ One Execution per PR, making approval durable across a refresh.
 - **Frontend:** `loadApprovals` ensures the tracker and restores per block id;
   every mutation sends the **complete** set for that block as a `set` Signal
   (`persistApproval`). The UI never writes directly. See
-  `.claude/rules/approval.md`.
+  `.claude/docs/approval.md`.
 - **Keeping the GitHub "Viewed" checkbox in sync:** a viewed request rides along
   on the same `set` Signal (`ApprovalSignal.File` + `Viewed *bool`; `nil` = a
   normal approval set, non-`nil` = mark/unmark, with `BlockID`/`Rows`/`Calls`
@@ -233,7 +233,7 @@ network, so no `SLASH_*=off` gating.
   ignoring degrades to the session-only behaviour this replaced. The stored ids
   are raw comment ids; the `comment:` prefix is the frontend's own index-item
   id shape (`commentBlockItem`) and is added on read. See "Comment-index items"
-  in `.claude/rules/comments-panel.md`.
+  in `.claude/docs/comments-panel.md`.
 - **Known, accepted gap:** ignoring a comment that is deleted afterwards leaves
   an orphan row until the PR is purged. It is invisible (the frontend only
   matches these ids against comments it actually loaded), and cleaning it up
@@ -261,7 +261,7 @@ the removed per-PR `ignore` feature this is keyed on a generic **task id**
   never reads `w.Now()`. Never completes. `EnsureTaskSnooze()` starts/reuses it
   at startup; unlike the inbox trackers it has **no poller** — it only ever
   reacts to UI signals.
-- **Frontend:** see `.claude/rules/task-inbox-page.md`.
+- **Frontend:** see `.claude/docs/task-inbox-page.md`.
 - Tests: `modules/tasksnooze/tasksnooze_test.go`, `task_snooze_test.go`.
 
 ## The task inbox: `task_inbox` + `modules/taskinbox` (aggregation)
@@ -317,7 +317,7 @@ read model to hide snoozed tasks.
   Still open for a differently-configured `acli`: whether the default
   `order by updated desc` and the `--limit 100` cap need tuning. No test depends
   on live `acli`.
-- **Frontend:** see `.claude/rules/task-inbox-page.md`.
+- **Frontend:** see `.claude/docs/task-inbox-page.md`.
 - Tests: `modules/jira/jira_test.go`, `modules/taskinbox/taskinbox_test.go`,
   `taskinbox_analysis_test.go`, `workflows_test.go`'s
   `TestTaskInboxRefreshPopulatesReadModel`, `tests/inbox-tasks.spec.mjs` — all
@@ -348,13 +348,13 @@ so it runs its two Activities and completes.
   flow.
 - `ingestMu` still serialises concurrent ingests of the same PR at the worktree
   level, now inside each Activity instead of around the old unsplit `ingestPR`.
-- See `.claude/rules/blocks-and-ingest.md`; `ingest_test.go` skips itself when
+- See `.claude/docs/blocks-and-ingest.md`; `ingest_test.go` skips itself when
   gh is unreachable.
 
 ## Actually approving/rejecting a PR on GitHub (`submit_review`)
 
 Submits a **real GitHub PR-level review**, for the menu after approving the last
-blocks (see `.claude/rules/command-palette.md`). Signal-less, one Execution per
+blocks (see `.claude/docs/command-palette.md`). Signal-less, one Execution per
 request.
 
 - **`Module.SubmitReview`** validates `event` against a fixed allowlist before
@@ -373,7 +373,7 @@ request.
 ## Draft → ready for review + reviewer picker (`ready_for_review` + `modules/reviewerusage`)
 
 Flips a **draft** PR to ready and optionally requests reviewers, driven from the
-PR-overview popover (see `.claude/rules/pr-overview.md`). Signal-less.
+PR-overview popover (see `.claude/docs/pr-overview.md`). Signal-less.
 
 - **`modules/github`** got `ListCollaborators` (the candidate reviewers),
   `MarkReadyForReview` (GraphQL, via the existing `prNodeID`) and
@@ -426,7 +426,7 @@ server was started from. Two categories, both surfaced:
   would have to be written by a workflow — a deliberate boundary, not an
   oversight.
 - Tests: `run_errors_test.go`; rendering in `tests/overview-problems.spec.mjs`
-  (see "Mislukte taken" in `.claude/rules/pr-overview.md`).
+  (see "Mislukte taken" in `.claude/docs/pr-overview.md`).
 
 ## Daily data cleanup (`cleanup` + per-module `Purge`)
 
@@ -445,7 +445,7 @@ Signal-less, one Execution per run.
     name — not just the blocks table. That makes a half-finished previous pass
     (worktree gone but a stray row left, or vice versa) self-healing; it also
     covers a leftover `pr-<n>-chatshadow-<conversationId>` directory (see
-    "claude_chat" in `.claude/rules/workflows-comments.md`) via the same
+    "claude_chat" in `.claude/docs/workflows-comments.md`) via the same
     `reWorktreeDir` regex.
   - **Eligibility** uses `PRMeta`'s **`MergedAt`** (empty when not merged): a PR
     is a target only if that is non-empty **and** parses **and** falls before
@@ -502,7 +502,7 @@ Signal-less, one Execution per run.
   specific PR numbers unconditionally, bypassing the merged/age gate, for a PR
   that can never pass the gate at all (no real GitHub PR to look up, e.g. a
   synthetic test number that landed in the live tree via an ad-hoc write — see
-  "Playwright test infra" in `.claude/rules/testing-playwright.md`). Forced PRs
+  "Playwright test infra" in `.claude/docs/testing-playwright.md`). Forced PRs
   are added straight to the target list without calling `PRMeta`, and skipped in
   the ordinary candidate walk so they're never added twice. Set only via
   `StartCleanupForce` → `slash cleanup -force <pr1,pr2>` — **deliberately not

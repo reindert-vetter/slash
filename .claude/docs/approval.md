@@ -3,13 +3,13 @@
 Everything about approving code and the numbers derived from it: the granular
 row/call-segment model, how it is persisted, how it rolls up over the review
 tree, and the indicators that show it. Split out of
-`.claude/rules/blocks-and-ingest.md`.
+`.claude/docs/blocks-and-ingest.md`.
 
 ## Granular model: `approvedRows` + `approvedCalls`
 
 Approval is **not** a single block flag. `b.approvedRows` is an array of row
 indices in `blockRows(b)` (see "Old/new line alignment" in
-`.claude/rules/diff-render.md`); every granularity reduces to that (a group
+`.claude/docs/diff-render.md`); every granularity reduces to that (a group
 approves all its rows, a `line`/`call` the one row it's on), so "is the whole
 block approved?" is simply "are *all* changed rows approved?"
 (`blockApproved`/`blockPartlyApproved`/`changedRows`/`approvedRowSet` in
@@ -55,7 +55,7 @@ restores every block's arrays from `GET /api/approvals?pr=N`. Every mutation
 for that block as a Signal (`POST /api/workflows/{runId}/signals/set {blockId,
 rows, calls}`, `persistApproval`). The UI never writes directly — only this
 Signal, within the write boundary. See "Persisting reviewer approval" in
-`.claude/rules/workflows-trackers.md`.
+`.claude/docs/workflows-trackers.md`.
 
 ## Placing a comment retracts the approval it hangs on
 
@@ -70,7 +70,7 @@ existing thread (`sendReaction`) retracts nothing.
 Both call sites capture `focusedBlock()` + `commentTarget()` **before** the
 `await placeComment(...)`, so the revoke targets the block/unit the comment was
 actually anchored to — including a drilled column, mirroring `approveContext()`'s
-own `focusLevel` handling (see `.claude/rules/command-palette.md`).
+own `focusLevel` handling (see `.claude/docs/command-palette.md`).
 
 - `gran !== 'call'` (group/line, or a TRANSLATION per-key unit — same aligned-row
   range): every row in `[t.rowStart, t.rowEnd]` drops from `b.approvedRows`, plus
@@ -107,7 +107,7 @@ diff's "stuck on loading" race (see `.claude/rules/arrowjs-pitfalls.md`).
 `done === total`, otherwise neutral; hidden only at `total === 0`.
 
 The same `{done,total}` hangs off each child in the Underlying-code card
-(`data-testid=related-approval`) — see `.claude/rules/underlying-code.md`.
+(`data-testid=related-approval`) — see `.claude/docs/underlying-code.md`.
 Caveat: child blocks are not individually approvable yet (they're not in the
 navigable `state.blocks`), so their `done` is 0; `total` still shows the review
 scope of the whole call tree. Schema: `.claude/templates/schema.sql`, in sync
@@ -151,7 +151,7 @@ filter on it. **Deliberately NOT applied to `changeGroups`/`rowChanged`
 itself** — an empty line still flows along inside the group run it falls in (like
 a brackets-only line via `hasLetter`); only its own countability/landability is
 suppressed, so a group's highlight never jumps around it. See
-`changeLines`/`changeCalls` in `.claude/rules/keyboard-navigation.md`.
+`changeLines`/`changeCalls` in `.claude/docs/keyboard-navigation.md`.
 
 ## Filler-row sweep on approve
 
@@ -197,7 +197,7 @@ Same subtree as the approval rollup. Three render sites, one shared meaning:
   exported `commentActivityPill`);
 - a method row in the test-methodes-kolom (`TestMethodsColumn.mjs`'s
   `methodRow`, reusing that same `commentActivityPill` verbatim — see
-  `.claude/rules/test-class-grouping.md`);
+  `.claude/docs/test-class-grouping.md`);
 - an Onderliggende-code child card (`data-testid=related-comment-activity`,
   `RelatedPanel.mjs`'s `commentActivityBadge`).
 
@@ -243,13 +243,13 @@ binding. `commentActivitySummary` is exported from `RelatedPanel.mjs`.
 
 **No indicator** for a `kind:'comment'` sidebar item (a PR-wide comment already
 shows its own thread on selection, see "Comment-index items" in
-`.claude/rules/comments-panel.md`), nor for a translation child or a call/covers
+`.claude/docs/comments-panel.md`), nor for a translation child or a call/covers
 target into an unchanged file (no PR block → no subtree → `commentActivity:
 null`, mirroring `approve`).
 
 Test: `tests/underlying-comment-activity.spec.mjs` (PR 970500 — a spec that
 places/resolves comments needs its own PR number, see the `APPROVAL_RESET_PRS`
-note in `.claude/rules/testing-playwright.md`).
+note in `.claude/docs/testing-playwright.md`).
 
 ## Per-diff-line underlying summary badge
 
@@ -340,4 +340,4 @@ avoid the arrow.js single↔array slot pitfall (see
 `.claude/rules/arrowjs-pitfalls.md`). One per-row exception: the block
 `state.pinnedApprovedId` names stays visible while it is also the current
 selection — see "Load/refresh-restore → reveal" in
-`.claude/rules/keyboard-navigation.md`.
+`.claude/docs/keyboard-navigation.md`.

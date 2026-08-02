@@ -64,7 +64,7 @@ var (
 	// span — see funcDeclLine. Attribute lines never contain the bare word
 	// "function" in practice, but since phpscan.go also folds a leading
 	// `/** ... */` PHPDoc into a block's own span (see
-	// .claude/rules/blocks-and-ingest.md), a docblock's free-text prose CAN
+	// .claude/docs/blocks-and-ingest.md), a docblock's free-text prose CAN
 	// plausibly mention the word "function" (e.g. "This function creates an
 	// order."). A bare `\bfunction\b` would then false-match that prose line
 	// instead of the real declaration below it. Requiring an opening `(` to
@@ -79,7 +79,7 @@ var (
 // where its `function` keyword actually sits. Usually that is simply b.Line —
 // but since phpscan.go pulls a block's Line back to its first leading
 // `#[...]` attribute and/or `/** ... */` PHPDoc (see
-// .claude/rules/blocks-and-ingest.md), a block with one or both now starts one
+// .claude/docs/blocks-and-ingest.md), a block with one or both now starts one
 // or more lines before its `function` keyword. methodZone needs the real
 // declaration line (not the attribute/doc line) as the upper bound of the
 // "zone above the method" it scans for docblock-style annotations —
@@ -113,7 +113,7 @@ type coverTarget struct {
 	// this annotation sits (see matchLine in relations.go) — carried onto
 	// testcovers.Entry.Line so the frontend can scope/reorder the
 	// "Onderliggende code" panel by the reviewer's selected group/line (see
-	// .claude/rules/detail-layout.md, "Group-herordening").
+	// .claude/docs/detail-layout.md, "Group-herordening").
 	line int
 }
 
@@ -183,7 +183,7 @@ func classZone(src string) string {
 // methodZone returns the raw source text immediately above block b's actual
 // `function` keyword — its docblock, plus (since phpscan.go now folds a
 // method's leading `#[...]` attribute(s) into its own Block.Line/EndLine span,
-// see .claude/rules/blocks-and-ingest.md) any attributes that are technically
+// see .claude/docs/blocks-and-ingest.md) any attributes that are technically
 // already part of b's own span, from b.Line up to that keyword. Bounded by the
 // previous same-file block's end line (or a 40-line cap for the first method
 // in a class, when no clean boundary is nearby), the absolute file line that

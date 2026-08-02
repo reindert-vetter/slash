@@ -150,7 +150,7 @@ type Module struct {
 	// pass, explain_code, pr_status's summary). It deliberately holds no
 	// CLAUDE.md/.claude/ tree, so `claude`'s automatic project-memory
 	// discovery finds nothing to load there — see "Context-only Haiku calls
-	// run from a neutral scratch cwd" in .claude/rules/tembed-workflows.md.
+	// run from a neutral scratch cwd" in .claude/docs/tembed-workflows.md.
 	// Left "" it falls back to the previous behaviour (inherit the caller's
 	// own cwd), which is what tests that don't care about this use.
 	// Agentic runs are never affected: a non-empty RunRequest.WorkDir (a

@@ -8,7 +8,7 @@ import { test, expect } from './_fixtures.mjs'
 // home.mjs's EXISTING scrollChangeIntoView now finds the active key row
 // (data-change-active, added to translationBlockView) and brings it back
 // into view within translation-overview's own scrollport — see the
-// "Translation blocks" section in .claude/rules/blocks-and-ingest.md.
+// "Translation blocks" section in .claude/docs/blocks-and-ingest.md.
 async function enterDiffAndSettle(page) {
   await expect(page.getByTestId('translation-row').first()).toBeVisible()
   await page.keyboard.press('Escape')

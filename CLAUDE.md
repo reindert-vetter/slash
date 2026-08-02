@@ -48,54 +48,90 @@ smaller solution.
 - **Playwright** (`@playwright/test`) — the only real npm dependency, lives in
   `devDependencies`. Only for tests, never in production.
 
-## Topics (deeper explanations in `.claude/rules/`)
+## Two documentation directories, and the difference matters
 
-This file is always loaded fully into context; the rest of the architecture
-therefore lives in separate reference files under `.claude/rules/` that are
-only loaded when the topic is relevant. Update the details there, not here.
+- **`.claude/rules/`** is **auto-loaded** into every session, in full, whatever
+  the task is. Four files only, deliberately — the hard rules you cannot afford
+  to miss because you didn't think to look them up:
+  `arrowjs-pitfalls.md` (read it before writing any arrow.js template),
+  `conventions.md`, `workflow-determinism.md`, `workflows-write-boundary.md`.
+- **`.claude/docs/`** is **NOT auto-loaded**. It holds the architecture
+  reference per topic. **Read the matching file below before touching that
+  area** — the index here is intentionally just a pointer, never the full
+  story, and the file is where the reasoning and the "don't reintroduce this"
+  notes live. Update the details there, not here.
 
-- **Blocks & ingest** — a PR is turned into **blocks** (function/method level)
-  with granular reviewer approval (block/group/line/call) and a
-  worktree-based ingest pipeline (`gh` → `git diff` → PHP scanner →
-  classify → SQLite). See `.claude/rules/blocks-and-ingest.md`.
-- **Keyboard navigation** — command palette (`Enter`), PR-wide menu (`/`),
-  list/diff modes and selection granularity (`f`/`d`/`s`, group/line/call),
-  plus the footer inline preview. See `.claude/rules/keyboard-navigation.md`.
-- **Detail layout & related panel** — the column layout next to the sidebar
-  (block card, then the shared column with the inline comment threads above
-  `RelatedPanel`'s underlying code, then the embedded Claude chat column). See
-  `.claude/rules/detail-layout.md` and `.claude/rules/claude-chat-panel.md`.
-- **Pages, routing & PR inbox** — the two static shells (`/pr/<id>`,
-  `/pr-overview`) and the read-only GitHub inbox that runs through the
-  `pr_inbox` workflow. See `.claude/rules/pages-and-routing.md`.
-- **Tembed: durable workflows** — the embeddable workflow engine (`tembed/`),
-  the write-boundary rule, and the concrete workflows (`task_code_comment`,
-  `pr_status`, `pr_inbox`, `build_relations`, `resolve_call` — which resolves
-  method calls to their definition, Go-static with an LLM fallback —, and
-  `approve`, which durably persists reviewer approval, `cleanup`, which
-  daily purges all data — worktrees, workflow runs, read-model rows — of
-  PRs merged more than 7 days ago, and `claude_chat`, the embedded
-  multi-turn Claude conversation next to a comment thread — backend in the
-  workflow's own section, frontend panel (the `→` chain, the embedded
-  transcript, a "question with choices" turn) in
-  `.claude/rules/claude-chat-panel.md`). See `.claude/rules/tembed-workflows.md`,
-  the endpoint surface in `.claude/rules/tembed-endpoints.md`, and the hard
-  rules `.claude/rules/workflow-determinism.md` /
-  `.claude/rules/workflows-write-boundary.md`.
-- **Server-sent events** — one multiplexed `EventSource` per browser tab
-  (`GET /api/events`, `eventbus.go`, `src/events.mjs`) for live progress:
-  an event is never the source of truth (every consumer refetches its ordinary
-  read-only `GET` on reconnect), which is why it sits outside the write
-  boundary. Only the embedded Claude chat uses it so far; the existing pollers
-  can migrate one at a time. See `.claude/rules/server-events.md`.
-- **Task inbox** — the `/inbox` page: a personal, scored to-do list across PR
-  reviews, unread comments on your own PRs, and Jira tickets assigned to you
-  (`task_inbox`/`modules/taskinbox`), with per-task snoozing
-  (`task_snooze`/`modules/tasksnooze`). See the task-inbox sections in
-  `.claude/rules/tembed-workflows.md` and `.claude/rules/pages-and-routing.md`.
-- **Conventions** — file naming conventions, arrow.js pitfalls, Prism
-  vendoring, Go conventions, language choice. See
-  `.claude/rules/conventions.md`.
+Adding a rule to `.claude/rules/` costs every future session its tokens, so
+that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
+
+### Index of `.claude/docs/`
+
+**Review-tree UI** (`src/`, arrow.js)
+
+- `keyboard-navigation.md` — the left→right nav chain of stops, list/diff
+  modes, selection granularity (`f`/`d`/`s`: group/line/call), Shift+↑/↓
+  ranges, the `a` diff-view cycle. Start here for any keyboard change.
+- `mouse-navigation.md` — the app-wide rules for click/hover: a click runs the
+  same function a key runs, hover carries no state.
+- `command-palette.md` — every menu (`Enter` block palette, `/` PR menu, the
+  comment/compose/postApprove/review-submit follow-ups) and
+  `findNextUnapproved`'s walk through the review tree.
+- `detail-layout.md` — `<main>`'s horizontally scrolling column flow, the
+  PR-info column (stop 1), the "Taken" block.
+- `diff-card.md` — how wide a diff card gets: the `split`/`unified`/`fit`
+  stands, the `narrow:` breakpoint, the look-ahead preview's width/collapse
+  rules.
+- `diff-render.md` — old/new line alignment, huge-block trim/collapse, char
+  diff, and the two categories that replace the text diff (TRANSLATION, SVG).
+- `drilling.md` — opening an Underlying-code child as its own column
+  (`state.drill`/`focusLevel`), rails, the enter/return animations.
+- `underlying-code.md` — the `RelatedPanel` card: which children it shows, the
+  cursor scoping, drill-hint chips, the call-arrow overlay, its column width.
+- `comments-panel.md` — PR-wide comments as navigable sidebar rows, the inline
+  comment threads, composer, drafts, the focus-token discipline.
+- `claude-chat-panel.md` — the embedded Claude conversation column (stop 5b):
+  its state machine, SSE-driven live progress, and its render contract.
+- `footer.md` — the inline preview of the active unit, its content-driven
+  height, and the AI description.
+- `approval.md` — reviewer approval: the granular row/call model, persistence,
+  the tree rollup and its counters/indicators.
+- `test-class-grouping.md` — grouping TEST blocks per class (`test_class` rows
+  and the methods column, stop 2b).
+
+**Pages & routing**
+
+- `pages-and-routing.md` — the three routes and their static shells, plus the
+  state that travels between the review tree and the PR overview.
+- `pr-overview.md` — the `/pr-overview` GitHub inbox in full (sections, the
+  per-row popover, filters, failed tasks, its client).
+- `task-inbox-page.md` — the `/inbox` personal scored to-do list.
+
+**Go backend**
+
+- `blocks-and-ingest.md` — a PR becomes **blocks** (function/method level) via
+  the worktree-based pipeline (`gh` → `git diff` → PHP scanner → classify →
+  SQLite), plus the display transforms on a block's source.
+- `tembed-workflows.md` — the durable-workflow engine (`tembed/`): replay,
+  storage, recovery priority, and which workflow is documented where.
+- `tembed-endpoints.md` — the endpoint surface: starting an Execution,
+  Signals, the operational carve-outs, and every read model.
+- `workflows-comments.md` — `task_code_comment`, the GitHub comment import,
+  and `claude_chat`/`chat_merge` (the embedded conversation, its agentic
+  edits and their serialized commits).
+- `workflows-analysis.md` — the workflows deriving the review tree
+  (`build_relations`, `resolve_call`, `resolve_test_covers`) and the two
+  LLM passes (`explain_code`, `code_warning`).
+- `workflows-trackers.md` — the long-lived trackers (`pr_status` incl. ingest
+  refresh + the re-anchor pass, `pr_inbox`, `approve`, the inbox/snooze
+  trackers) and the one-shot operational ones (`ingest`, `cleanup`, …).
+- `server-events.md` — the one multiplexed SSE stream per tab: an event is
+  never the source of truth, which is why it sits outside the write boundary.
+
+**Tests**
+
+- `testing-playwright.md` — the harness contract: per-worker server/DB
+  isolation, the hand-written worktree fixtures, `seededPr`, and the
+  spec-writing rules. Read it before adding or debugging a spec.
 
 ## URL state (refresh-restore & deep links)
 
@@ -107,7 +143,7 @@ the URL into the reactive `state` and afterwards writes back every change via
 binds the main navigation (`blockRef`→`sel`, `mode`, `change`→`chg`,
 `gran`→`gran`, `drillRef`→`drill`, `drillGran`→`dgran`, `drillChange`→`dchg`);
 the **PR lives in the path** (`/pr/<id>`, see
-`.claude/rules/pages-and-routing.md`), not in the query. A `default` value is
+`.claude/docs/pages-and-routing.md`), not in the query. A `default` value is
 omitted from the URL so it stays short/canonical (so `gran` only appears for
 `line`/`call`, not for the default `group`; `drill`/`dgran`/`dchg` only while
 something is actually drilled into).
@@ -128,9 +164,9 @@ the URL as soon as the PR is loaded. That same `sel` also travels along in the
 `/pr-overview` round trip (`←`/"Back to PR overview" →
 "Open review tree"/`→`), so you land on the same block when you return — see
 "`?sel=` travels along in the same round trip" in
-`.claude/rules/pages-and-routing.md`.
+`.claude/docs/pages-and-routing.md`.
 An open **drilled Underlying-code column** (`state.drill`/`drillCursor`, see
-"Drilling" in `.claude/rules/detail-layout.md`) survives a refresh the same
+"Drilling" in `.claude/docs/detail-layout.md`) survives a refresh the same
 way: `drillRef` mirrors each entry's stable `.id` (joined with `>`),
 `drillGran`/`drillChange` mirror only the cursor (`{gran, change}`) of the
 deepest (focused) column — every ancestor column collapses to a rail anyway,
@@ -152,7 +188,7 @@ to async loading are clamped (`loadBlocks` clamps `selected`, `ensureCode`
 clamps `change` and falls back to `mode:'list'` for a block without changes —
 but only from the rest position (`focusLevel === 0`, no open `state.drill`),
 never while a drilled column is open, see
-`.claude/rules/detail-layout.md`; the panel cursor is reapplied once after the
+`.claude/docs/detail-layout.md`; the panel cursor is reapplied once after the
 data push, see `RelatedPanel.applyRelRestore`).
 See skill `url-state`.
 
@@ -170,10 +206,13 @@ isolated copy), so cleanup is part of wrapping up.
 
 ## Keeping `.claude/` up to date
 
-This `.claude/` directory (rules, templates, skills, agents) is part of the
-project and must **grow along with it**. Whenever a new rule, convention,
-architecture explanation, or recurring task comes up: update the
-corresponding file under `.claude/rules/` (hard rules and descriptive
-architecture references live there together), or create a new skill/
-template/agent, in the same change. Don't leave conventions behind in chat
-only.
+This `.claude/` directory (rules, docs, templates, skills, agents) is part of
+the project and must **grow along with it**. Whenever a new rule, convention,
+architecture explanation, or recurring task comes up: update the corresponding
+file under `.claude/docs/` (the architecture reference) or `.claude/rules/`
+(only for a hard rule that must hold in every session — see the two-directory
+split above), or create a new skill/template/agent, in the same change. Don't
+leave conventions behind in chat only.
+
+A **new** `.claude/docs/` file also needs one line in the index above —
+otherwise it is unreachable: nothing auto-loads it and nothing points at it.

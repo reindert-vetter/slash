@@ -437,7 +437,7 @@ func TestResumePollingImportedThread(t *testing.T) {
 
 // A thread whose Execution has permanently failed (e.g. a SQLITE_BUSY hit
 // during an earlier saveReaction — see the cleanup section in
-// .claude/rules/tembed-workflows.md) can never accept a Signal again
+// .claude/docs/tembed-workflows.md) can never accept a Signal again
 // (engine.SignalWorkflow's own "already failed" check). importPRComments'
 // avatar-backfill glue must check the run's status BEFORE attempting the
 // Signal instead of discovering that the hard way and logging the same

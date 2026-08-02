@@ -356,7 +356,7 @@ test.describe('PR Review Tree — PR inbox', () => {
   })
 
   // ArrowRight deliberately diverges from Enter: it's the "act now" key
-  // (mirrors the → convention on /pr/<id>, see .claude/rules/keyboard-
+  // (mirrors the → convention on /pr/<id>, see .claude/docs/keyboard-
   // navigation.md), not "open the menu". On an already-generated row it
   // jumps straight into the tree — no popover ever shows.
   test('ArrowRight navigates straight into an already-generated row, no popover', async ({ page }) => {

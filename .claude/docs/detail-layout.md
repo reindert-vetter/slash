@@ -6,21 +6,21 @@ column's own width, and the "Taken" block.
 
 ## Split out of this file
 
-- `.claude/rules/comments-panel.md` — PR-wide comments as navigable "Start"
+- `.claude/docs/comments-panel.md` — PR-wide comments as navigable "Start"
   rows (comment-index items) + the inline comment blocks (threads, composer,
   drafts, focus tokens).
-- `.claude/rules/test-class-grouping.md` — grouping TEST blocks per class
+- `.claude/docs/test-class-grouping.md` — grouping TEST blocks per class
   (`test_class` rows + the methodes-kolom, stop 2b).
-- `.claude/rules/drilling.md` — `state.drill`/`state.focusLevel`: a drilled
+- `.claude/docs/drilling.md` — `state.drill`/`state.focusLevel`: a drilled
   Underlying-code column as a full diff, rails/`expandColumn`, the
   enter/return animations, the sibling look-ahead preview, card `.key()` rules.
-- `.claude/rules/underlying-code.md` — the `RelatedPanel` "Underlying code"
+- `.claude/docs/underlying-code.md` — the `RelatedPanel` "Underlying code"
   card: children, scoping/ordering, nested chips, call-arrow overlay, tests
   bar, column width.
-- `.claude/rules/claude-chat-panel.md` — the embedded Claude conversation
+- `.claude/docs/claude-chat-panel.md` — the embedded Claude conversation
   column (stop 5b): its state machine, the SSE-driven live progress, and the
   getter-based render contract of `src/ClaudeChat.mjs`.
-- `.claude/rules/diff-card.md` — the `a`-toggle widths
+- `.claude/docs/diff-card.md` — the `a`-toggle widths
   (`split`/`unified`/`fit`), `fitWidthCls`, "preview never wider than active",
   the preview-collapse mechanism.
 
@@ -42,16 +42,16 @@ column back to `focusLevel===0` resp. leave the diff session
 **It deliberately does not fight back while drilled:** as long as
 `focusLevel > 0`, `scrollFocusIntoView`'s intentional scroll-to-the-right wins
 (see "Unfocused columns collapse into a narrow rail" in
-`.claude/rules/drilling.md`). Test: `tests/main-scroll-rest-left.spec.mjs`.
+`.claude/docs/drilling.md`). Test: `tests/main-scroll-rest-left.spec.mjs`.
 
 **`<main>`'s own `overflow-y` already resolves to `auto`** even though the class
 list only sets `overflow-x-auto` — per the CSS rule that one non-`visible` axis
 forces the other to compute as `auto` too (same rule as the TRANSLATION card's
-scroll container, `.claude/rules/diff-render.md`). So a too-tall block column
+scroll container, `.claude/docs/diff-render.md`). So a too-tall block column
 scrolls/clips cleanly inside `<main>`'s box; nothing ever renders behind the
 footer (`z-20`, above `<main>`'s `z-10`). "My diff doesn't fit" is therefore a
 space-**allocation** question, not a clipping bug — see the preview-collapse
-mechanism in `.claude/rules/diff-card.md`.
+mechanism in `.claude/docs/diff-card.md`.
 
 ## PR-info column (stop 1, hidden by default)
 
@@ -59,7 +59,7 @@ mechanism in `.claude/rules/diff-card.md`.
 title/summary/description/Jira box truncate less quickly), rendered by
 `prInfoCard(state)` inside its own `PrInfoPanel(state)` component (`home.mjs`).
 It is the leftmost stop of the left→right nav chain (see
-`.claude/rules/keyboard-navigation.md`) **and** visually the leftmost thing on
+`.claude/docs/keyboard-navigation.md`) **and** visually the leftmost thing on
 screen — as its own `position:fixed` panel, a sibling of `<aside>` (the
 pr-index, `BlockList.mjs`) and `<main>`, mounted before both. Reason: `<aside>`
 is itself `position:fixed` and sits outside `<main>`'s flex flow, so a
@@ -87,7 +87,7 @@ Reached from the pr-index (stop 2) with `←`; `→` closes it. While open,
 `onKeydown` ignores `↑`/`↓` (no internal cursor). Both this card and the
 pr-index `<aside>` carry the same on/off indigo focus border as the block-diff
 card — see "Focus highlight per stop" in
-`.claude/rules/keyboard-navigation.md`.
+`.claude/docs/keyboard-navigation.md`.
 
 Contents: a white card with title + Jira badge, a meta line (author,
 `+add −del`, file count, branch, "on GitHub ›"), a **Summary** section (Claude
@@ -124,7 +124,7 @@ nothing to reveal — pre-existing, not worth real overflow detection.
 
 The same flag is toggled by the PR menu item **"Show full description" /
 "Collapse description"** (`PR_COMMANDS`, see
-`.claude/rules/command-palette.md`), so click and menu stay in lockstep. The
+`.claude/docs/command-palette.md`), so click and menu stay in lockstep. The
 class strings of the body/toggle (and of `pr-info-body`/`pr-info-body-wrap`) are
 **whole-value** function bindings. Test: `tests/pr-description-expand.spec.mjs`
 (also asserts the collapsed wrap's bounding-box height, guarding against a
@@ -141,7 +141,7 @@ summary…" pulsing skeleton pill until then). `loadPRMeta` fires
 `POST /api/workflows/pr_status` **fire-and-forget** and immediately starts
 polling; the endpoint itself returns as soon as stage 1 is recorded
 (`ensurePRStatus` uses `StartWorkflowDeferLow`, see "Recovery priority" in
-`.claude/rules/tembed-workflows.md`). All of this loads regardless of whether
+`.claude/docs/tembed-workflows.md`). All of this loads regardless of whether
 the column is currently visible.
 
 ### No separate PR-wide-comments card
@@ -151,7 +151,7 @@ findings (`kind !== ''`) used to live in their own `PrWideComments` card under
 `prInfoCard`, with its own cursor (`pw`/`handlePrWideKey`/`isPrWideFocused`).
 All of that is **removed**; each such comment is now a synthetic
 `state.blocks` item in the sidebar — see "Comment-index items" in
-`.claude/rules/comments-panel.md`. `prInfoCard` is therefore the only card in
+`.claude/docs/comments-panel.md`. `prInfoCard` is therefore the only card in
 the column and simply takes its full height (`flex-1`, no ratio logic).
 
 ## The block column and its neighbour
@@ -165,7 +165,7 @@ added/removed** block shows only one pane (`singleSide` in `Block.mjs`) and gets
 the same narrow 60% width `w-[42rem] 2xl:w-[49.2rem]` as the `a` toggle —
 one-sided is always narrow regardless of `a`, since there's nothing to show next
 to it. Full width mechanics (the `a` cycle, `fit`, narrow viewport) live in
-`.claude/rules/diff-card.md`.
+`.claude/docs/diff-card.md`.
 
 **Directly next to it** (not at the right screen edge) sits the **Underlying
 code** card (`RelatedPanel.mjs`'s default export, `data-testid=related-code`,
@@ -176,7 +176,7 @@ matches the column next to it for short excerpts (it was
 `w-[34rem] 2xl:w-[41rem]`, which read as two unequal columns) — and capped
 **below** the block column at `w-[56rem] 2xl:w-[65rem]`, so one long line can't
 grow it to half the screen. That symmetry is thus a default, not a guarantee.
-See "Column width" in `.claude/rules/underlying-code.md`.
+See "Column width" in `.claude/docs/underlying-code.md`.
 
 Both of those live in **one shared wrapper column**
 (`data-testid=comments-and-related`, a `flex min-h-0 shrink-0 flex-col gap-3`):
@@ -184,7 +184,7 @@ the inline comment blocks (`data-testid=inline-comments`) stacked directly above
 the Underlying-code card, each carrying its own copy of the **same**
 `relatedColumnWidthCls()` clamp (a flex-col only stretches a child whose own
 width is `auto`, and `related-code` sets an explicit one — see
-`.claude/rules/comments-panel.md`).
+`.claude/docs/comments-panel.md`).
 
 Tasks is **no longer** in this column flow either: it sits under the PR-info
 column (below).
@@ -210,8 +210,8 @@ Underlying-code card down as the conversation grows.
 - Keyboard-wise it is stop **5b**, entered from the comment thread's `→` (or
   straight from the diff on an uncommented unit), so the chain's last stop —
   Underlying code — sits to its *left* on screen. See
-  `.claude/rules/keyboard-navigation.md` and, for everything the panel itself
-  does, `.claude/rules/claude-chat-panel.md`.
+  `.claude/docs/keyboard-navigation.md` and, for everything the panel itself
+  does, `.claude/docs/claude-chat-panel.md`.
 
 ## `<main>`'s own offsets
 
@@ -222,7 +222,7 @@ asymmetric** with every other panel (sidebar/footer/`PrInfoPanel` keep their
 1.5rem edge): the far edge is exactly where a wide last column's content used to
 get clipped before it was scrolled fully into view, so that margin was traded
 for usable scroll width. The bottom offset tracks the footer's real height —
-see `.claude/rules/footer.md`.
+see `.claude/docs/footer.md`.
 
 ## Tasks: a block under the PR-description column
 
@@ -253,7 +253,7 @@ selects the comment via `selectComment(runId)` (exported from
 `await Promise.resolve()` ticks — see the watch-timing note in
 `.claude/rules/arrowjs-pitfalls.md`). A run without a `comment` ref is purely
 informational. `openTask` also searches every `test_class` row's `.methods` —
-see `.claude/rules/test-class-grouping.md`.
+see `.claude/docs/test-class-grouping.md`.
 
 Each row shows, below the label + status badge, a short **description**
 (`data-testid=workflow-note`, gray, `line-clamp-2`, `workflowNote` in

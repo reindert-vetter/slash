@@ -49,7 +49,7 @@ const (
 	// when both blocks are changed blocks of this PR). The parent is the higher
 	// level, the child the lower one, so the frontend nests them route → controller
 	// → request/resource/model and request → policy. See relations.go for the
-	// detectors and .claude/rules/tembed-workflows.md.
+	// detectors and .claude/docs/tembed-workflows.md.
 	KindRouteController    = "route_controller"    // route file → controller method it dispatches to
 	KindControllerRequest  = "controller_request"  // controller method → its FormRequest (type-hinted param)
 	KindControllerResource = "controller_resource" // controller method → an API Resource it returns/builds
@@ -61,7 +61,7 @@ const (
 	// concrete implementing method, child = the interface's own method
 	// declaration — "interface = onderliggende code van het concrete blok").
 	// See interfaces.go's interfaceImplementationDetector and
-	// .claude/rules/tembed-workflows.md ("Interface methods as underlying
+	// .claude/docs/tembed-workflows.md ("Interface methods as underlying
 	// code").
 	KindInterfaceMethod = "interface_method"
 )

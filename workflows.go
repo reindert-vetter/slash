@@ -110,7 +110,7 @@ const (
 	// supersedes (deletes, via the existing delete Signal) the AI warnings of
 	// every file in scope before creating fresh ones. No signal — it runs its
 	// Activities sequentially and completes. See
-	// .claude/rules/tembed-workflows.md ("AI-risicocontrole").
+	// .claude/docs/tembed-workflows.md ("AI-risicocontrole").
 	WorkflowCodeWarning = "code_warning"
 	// WorkflowTaskSnooze is the Workflow Type that persists which tasks the
 	// reviewer chose to snooze (hide from the tasks inbox until a given time):
@@ -153,7 +153,7 @@ const (
 	// (a reviewer turn) drives one runClaudeTurn Activity and stores both
 	// turns; it never completes — a long-lived per-conversation tracker, mould
 	// of WorkflowTaskCodeComment's reactions loop. See
-	// .claude/rules/tembed-workflows.md.
+	// .claude/docs/tembed-workflows.md.
 	WorkflowClaudeChat = "claude_chat"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
@@ -1048,9 +1048,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// callresolve read-model. UpsertGo preserves LLM-owned rows. A changed
 		// migration's Schema::create/table → model mapping (resolveMigrationModels)
 		// and a test's #[DataProvider(...)]/@dataProvider annotation
-		// (resolveDataProviders, see .claude/rules/tembed-workflows.md, "PHPUnit
+		// (resolveDataProviders, see .claude/docs/tembed-workflows.md, "PHPUnit
 		// data providers") ride the same read-model/keep-set (see
-		// .claude/rules/tembed-workflows.md, "migration → model") so their rows
+		// .claude/docs/tembed-workflows.md, "migration → model") so their rows
 		// are never pruned as stale.
 		calls := resolveCalls(m.dataDir, input.PR, blocks)
 		calls = append(calls, resolveMigrationModels(m.dataDir, input.PR, blocks)...)
@@ -1091,7 +1091,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			// The frontend trigger stays in place as a safety net — e.g. for a PR
 			// whose relations were only ever refreshed headlessly via
 			// `slash relations`, which never runs this Activity at all (see
-			// .claude/rules/tembed-workflows.md).
+			// .claude/docs/tembed-workflows.md).
 			go m.autoStartResolveCall(input.PR, calls, blocks)
 		}
 		// Also detect test-coverage annotations statically (resolved/unannotated/
@@ -1728,7 +1728,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// reviewer's own explicit request in the conversation — by signalling that
 	// thread's own task_code_comment Execution via the EXISTING "reply" Signal
 	// (Source "ai"), never a direct write. See chat_workflow.go
-	// (applyChatCommentAction) and .claude/rules/workflows-comments.md
+	// (applyChatCommentAction) and .claude/docs/workflows-comments.md
 	// ("claude_chat").
 	engine.RegisterActivity("applyChatCommentAction", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg chatCommentActionInput
@@ -1747,7 +1747,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// Workflow Execution — the same cross-workflow Ensure+Signal shape
 	// reanchorAfterRefresh already uses for the approve tracker). No git/claude
 	// work happens here at all — see chat_merge.go (enqueueChatMerge) and
-	// .claude/rules/tembed-workflows.md ("chat_merge").
+	// .claude/docs/tembed-workflows.md ("chat_merge").
 	engine.RegisterActivity("enqueueChatMerge", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg chatCommitInput
 		if err := json.Unmarshal(in, &arg); err != nil {
@@ -1799,7 +1799,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// activities re-execute live on Recover — so recovering them synchronously
 	// would block server startup (and the fast, important workflows) for minutes.
 	// Mark them PriorityLow so Recover drains them in the background instead. See
-	// .claude/rules/tembed-workflows.md ("Recovery priority").
+	// .claude/docs/tembed-workflows.md ("Recovery priority").
 	engine.SetWorkflowPriority(WorkflowResolveCall, tembed.PriorityLow)
 	engine.SetWorkflowPriority(WorkflowResolveTestCovers, tembed.PriorityLow)
 	engine.SetWorkflowPriority(WorkflowExplainCode, tembed.PriorityLow)
@@ -2368,7 +2368,7 @@ func ignoreCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 // Sonnet escalation. The generic Sonnet/agentic machinery in resolve_call.go
 // still exists (resolveArg.Model, the agentic prompt branch) but this workflow
 // never invokes it; see the "alleen Haiku" decision in
-// .claude/rules/tembed-workflows.md.
+// .claude/docs/tembed-workflows.md.
 func resolveCallWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in ResolveCallInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -2532,7 +2532,7 @@ func (m *TaskManager) StartExplainCode(in ExplainCodeInput) (string, error) {
 // class to completion. It uses ONLY Haiku (context-only) — no automatic Sonnet
 // escalation. The generic Sonnet/agentic machinery in resolve_test_covers.go
 // still exists but this workflow never invokes it; see the "alleen Haiku"
-// decision in .claude/rules/tembed-workflows.md.
+// decision in .claude/docs/tembed-workflows.md.
 //
 // Before asking Haiku, it checks whether a sibling test (same PR + same test
 // file) already resolved the same covered class — see reuseSiblingCovers.

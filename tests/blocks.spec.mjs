@@ -28,7 +28,7 @@ const EXPECTED_LABELS = [
 // index 8 (AddressTypeTest::test_it_casts_type, a lone TEST-category block)
 // groups into a single test_class row labelled with the bare class name (see
 // testClassRowItem/recomputeLeftList in home.mjs and "Grouping test methods
-// per class" in .claude/rules/detail-layout.md); the diff/preview CARDS
+// per class" in .claude/docs/detail-layout.md); the diff/preview CARDS
 // still show the real method's own `Class::method` label (see
 // TestMethodsColumn/DetailPanel — the active method's own Block() card is
 // unaffected by grouping), so EXPECTED_LABELS itself stays unchanged for

@@ -3,8 +3,8 @@
 How the old/new source of a block becomes the rows the reviewer sees: line
 alignment, performance measures for huge blocks, char-level marking, and the two
 categories that **replace** the text diff entirely (TRANSLATION, SVG). Split out
-of `.claude/rules/blocks-and-ingest.md`. For the card's width/`a`-toggle stands
-see `.claude/rules/diff-card.md`.
+of `.claude/docs/blocks-and-ingest.md`. For the card's width/`a`-toggle stands
+see `.claude/docs/diff-card.md`.
 
 ## Old/new line alignment (`blockRows`/`alignRows`/`diffLines`)
 
@@ -136,7 +136,7 @@ Data comes from the read-only `GET /api/langsiblings?pr=N&file=<lang file>`
 (`langsiblings.go`, reads the head worktree like `/api/code`, within the write
 boundary), fetched by `ensureLangSiblings` (`home.mjs`) regardless of whether that
 other locale is itself a changed PR block. See also "Resolving translation keys"
-in `.claude/rules/workflows-analysis.md` for the resolved `trans()`-child render
+in `.claude/docs/workflows-analysis.md` for the resolved `trans()`-child render
 (the second, untouched render mode).
 
 **Superseded design:** a separate companion card per sibling locale
@@ -237,7 +237,7 @@ palette on the active key row instead of the whole card. Safe with wide sibling
 columns: `menuAnchor()`/`positionMenu()` only read `top`/`bottom`, never
 `left`/`width` — the palette's width/left comes from `menuRegion()`, which for a
 TRANSLATION card falls back to the whole block column (no `[data-pane]` exists in
-this render). See `.claude/rules/command-palette.md`.
+this render). See `.claude/docs/command-palette.md`.
 
 ## SVG blocks
 
@@ -253,7 +253,7 @@ the side it has (`singleSide(b)`, the same pane choice `codeDiff` uses).
 controls how much code TEXT is visible and how wide a line is, which this preview
 has no stake in, so `viewMode` is never read here. The card width is untouched
 too: an `.svg` file is not a PHP file, so it already gets the non-PHP treatment
-(`boundedWrapWidthCls`) in every stand — see `.claude/rules/diff-card.md`.
+(`boundedWrapWidthCls`) in every stand — see `.claude/docs/diff-card.md`.
 
 **Security — never render the SVG source via `.innerHTML` (no inline `<svg>` in
 the DOM).** The content comes from the PR, so it is untrusted and could carry a

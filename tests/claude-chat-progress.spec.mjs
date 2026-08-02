@@ -2,8 +2,8 @@ import { test, expect, seededPr } from './_fixtures.mjs'
 
 // Verifies the live half of the embedded Claude conversation: while a turn is
 // running the panel says WHAT Claude is doing and shows the answer as it is
-// still being written (see .claude/rules/server-events.md and the
-// "Live progress" section of .claude/rules/claude-chat-panel.md).
+// still being written (see .claude/docs/server-events.md and the
+// "Live progress" section of .claude/docs/claude-chat-panel.md).
 //
 // Both are driven entirely through mocked network: the SSE stream
 // (GET /api/events) is fulfilled with hand-written frames, so nothing here

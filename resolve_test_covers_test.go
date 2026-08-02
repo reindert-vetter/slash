@@ -66,7 +66,7 @@ func TestResolveTestCoversHaikuConfident(t *testing.T) {
 // @return/@param signature fold applied to its embedded CoveredCode (via
 // resolveTestCoversWithModel -> enrichedCodeSide) that an active (changed)
 // block's diff gets via /api/code — see codesig.go and
-// .claude/rules/blocks-and-ingest.md ("PHPDoc-types in de signatuur vouwen").
+// .claude/docs/blocks-and-ingest.md ("PHPDoc-types in de signatuur vouwen").
 // CoveredLine must shift by the same removed-line count.
 func TestResolveTestCoversHaikuFoundFoldsLeadingPHPDoc(t *testing.T) {
 	dataDir := t.TempDir()

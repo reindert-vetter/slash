@@ -187,7 +187,7 @@ func TestProcessChatMergeSerializesTwoConversationsInArrivalOrder(t *testing.T) 
 // dedicated conflict-failure message shown) — never a forced/partial push.
 //
 // KNOWN TEST BOUNDARY, same category as chatActionEdit's own (see
-// .claude/rules/workflows-comments.md, "Agentic edits" — chat_shadow_test.go's
+// .claude/docs/workflows-comments.md, "Agentic edits" — chat_shadow_test.go's
 // header comment): a real Claude CLI call that actually edits the conflicted
 // file and clears the markers is not exercisable offline, so the "Claude truly
 // resolves it" success path is not covered here — only manually/interactively.

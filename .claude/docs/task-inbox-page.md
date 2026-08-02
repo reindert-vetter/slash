@@ -4,7 +4,7 @@ A personal, scored to-do list — distinct from the PR-centric `/pr-overview`
 inbox — over the derived **task** list from `GET /api/tasks` (the `task_inbox`
 workflow's aggregation of PR reviews, unread comments on your own PRs, and Jira
 tickets assigned to you; see "The task inbox" in
-`.claude/rules/workflows-trackers.md` for the backend/scoring side).
+`.claude/docs/workflows-trackers.md` for the backend/scoring side).
 `inbox.html` → `src/inbox.mjs`, registered in `api.go`'s `routes` next to
 `/pr-overview`, same static-shell pattern. **Not yet linked from either other
 page** — reached only by navigating to `/inbox` directly.
@@ -39,7 +39,7 @@ on the next `loadSnoozes()` poll), and the choice is sent as a `SnoozeSignal`
 to the per-repo `task_snooze` tracker
 (`POST /api/workflows/{taskSnoozeRunId}/signals/snooze {taskId, until}` — the
 sanctioned write path, see "Snoozing a task" in
-`.claude/rules/workflows-trackers.md`).
+`.claude/docs/workflows-trackers.md`).
 
 Below the row list a **"Show/Hide N snoozed tasks"** toggle
 (`data-testid=task-snoozed-toggle`) expands a compact list of currently-snoozed
@@ -61,7 +61,7 @@ generalized here to template↔template) plus a shared **points breakdown**
 (`pointsBreakdown`, `data-testid=task-points-breakdown`: the total plus one
 `data-testid=task-point-note` row per `PointNote` the backend computed —
 "basis" first, always present, then each matching bonus rule; scoring table in
-`.claude/rules/workflows-trackers.md`).
+`.claude/docs/workflows-trackers.md`).
 
 - **`pr_review`** (`prReviewDetail`): title, author, `+adds −dels`,
   review-decision pill, a CI-status pill (`CHECKS_STYLE`), and action links —
@@ -81,7 +81,7 @@ generalized here to template↔template) plus a shared **points breakdown**
   `RelatedPanel.mjs` already uses — no new write path: a `comment_unread`
   task's id is `"comment:" + runId` (`commentRunId(t)` strips the prefix) and a
   comment's `RunID` **is** its id (see `modules/comments` in
-  `.claude/rules/workflows-comments.md`), so the same Signal target resolves it.
+  `.claude/docs/workflows-comments.md`), so the same Signal target resolves it.
 - **`jira`** (`jiraDetail`): title, ticket key + status, the description
   rendered as **Markdown** (`renderMarkdown`, the same `snarkdown`-based helper
   as the PR-info column, see `.claude/rules/conventions.md`), and an **"Open in

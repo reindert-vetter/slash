@@ -4,14 +4,14 @@ import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
 // composer's own focus-tracking (cs.focus) has to stay in lockstep with real DOM
 // focus, otherwise onKeydown's global shortcuts (s/d/f/a/arrows) steal the
 // keystroke instead of letting it flow into the textarea. See the "Generieke
-// input-focus-guard" section in .claude/rules/keyboard-navigation.md.
+// input-focus-guard" section in .claude/docs/keyboard-navigation.md.
 //
 // This used to open the composer via a direct click on the always-present
 // "+ Comment op deze regel" trigger row, specifically to exercise a fixed
 // click handler (openComposer()/toNew(), as opposed to an earlier, buggy bare
 // cs.composing toggle that left cs.focus out of sync with real DOM focus).
 // That trigger row has since been removed entirely (see "Inline comment
-// blocks" in .claude/rules/detail-layout.md) — the composer now opens
+// blocks" in .claude/docs/detail-layout.md) — the composer now opens
 // exclusively through the command palette's "Comment op deze regel" item
 // (startComment), which has always routed through the same toNew() and thus
 // never had this bug to begin with. The regression this test actually

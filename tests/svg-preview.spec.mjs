@@ -5,7 +5,7 @@ import { test, expect } from './_fixtures.mjs'
 // scan — it's a whole-file OTHER block (ScanBlocks' wholeFileBlock
 // fallback, phpscan.go) — and Block.mjs's svgSlot renders it as rendered
 // old/new <img> previews INSTEAD OF the raw text diff (the translationSlot
-// precedent: replace, not add alongside — see .claude/rules/blocks-and-ingest.md
+// precedent: replace, not add alongside — see .claude/docs/blocks-and-ingest.md
 // "Translation blocks" for the sibling precedent, and Block.mjs's own
 // svgSlot doc comment for why there's deliberately no raw-text fallback).
 //

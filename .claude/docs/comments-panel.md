@@ -14,7 +14,7 @@ block-scoped comments index (`RelatedPanel.mjs`'s `recomputeView` excludes
 navigable item in the "Start" sidebar** — selected with `↑`/`↓`/click exactly
 like an ordinary PR block, and the block column to the right of the index shows
 its thread instead of a diff. (This replaced the removed `PrWideComments` card,
-see `.claude/rules/detail-layout.md`.)
+see `.claude/docs/detail-layout.md`.)
 
 ### An orphaned block comment joins them
 
@@ -26,7 +26,7 @@ again and it would be visible **nowhere at all**. `prWideComments()` and
 can't also leak into the null-scope list-mode view (which would show it twice).
 Deliberately **not** by flipping its `kind` to a PR-wide one — that would change
 how its replies mirror to GitHub (`isPRWide`, see
-`.claude/rules/workflows-comments.md`); the orphan stays a block-scoped review
+`.claude/docs/workflows-comments.md`); the orphan stays a block-scoped review
 comment that merely lost its block. Its fallback label (empty body) names the
 block it *used* to hang on, and its kind badge falls back to "Regelcomment".
 
@@ -37,7 +37,7 @@ for an `unpinned` one — so the reviewer can tell the stored snippet is a recor
 of code that no longer exists in this shape. Per the colorblind rule the **word**
 carries the meaning; the amber tint is decoration. Who sets `anchorState` is the
 re-anchor pass — see "Comment/approval anchors are RE-ANCHORED on every refresh"
-under `pr_status` in `.claude/rules/workflows-trackers.md`. Test:
+under `pr_status` in `.claude/docs/workflows-trackers.md`. Test:
 `tests/comment-orphan-anchor.spec.mjs`.
 
 **`commentRowSet` deliberately has NO bounds check** against the block's row
@@ -89,7 +89,7 @@ item has no relation children). Both are only called from the existing
 Effect: unresolved shows `0/1` inline; once resolved it folds into the same
 "Toon N goedgekeurde blocks" section as any fully-approved block (`renderList`'s
 existing hide check) and counts toward the PR-wide `X/Y goedgekeurd` header —
-see `.claude/rules/approval.md`. This also makes
+see `.claude/docs/approval.md`. This also makes
 `applyDefaultUnapprovedSelection` work generically over comment items for free,
 which is exactly why the mapping was pushed into `blockApproveCount` instead of a
 bespoke `isFullyApproved` branch.
@@ -142,7 +142,7 @@ time, markdown body via the shared `commentBody`, every reaction via the shared
 own `preview` prop, and since this card replaces a `Block()` card in the same
 slot it gets the same on/off border (`border-slate-300` while `preview`,
 `border-indigo-300` otherwise — "Focus highlight per stop" in
-`.claude/rules/keyboard-navigation.md`): unlike a real block there's no further
+`.claude/docs/keyboard-navigation.md`): unlike a real block there's no further
 stop to step into, so non-preview here simply *is* the selected/focused state.
 
 **Load-bearing:** the reply-composer state `picm` is a **single, module-level**
@@ -214,7 +214,7 @@ change also resets it, mirroring how the same watch resets
 - **"Resolve comment"** (`resolvePrCommentItem`) sends the same `"/resolve"`
   sentinel + `done:true` reply Signal as `resolveFocusedComment` — local-only for
   a PR-wide thread, GitHub-resolved for a review-diff thread, see
-  `.claude/rules/workflows-comments.md`. Both reply and resolve go through the
+  `.claude/docs/workflows-comments.md`. Both reply and resolve go through the
   existing `POST /api/workflows/{runId}/signals/reply` — no new write path.
 - **"Ignore"** (`toggleIgnoreComment`, label flips to "Ignore ongedaan maken"
   once ignored — resolved once by `snapshotCommands` at open time) is a
@@ -223,7 +223,7 @@ change also resets it, mirroring how the same watch resets
   instantly (optimistic), and `persistIgnoredComment` fire-and-forgets to the
   per-PR `ignore_comment` tracker, restored by `loadIgnoredComments` from
   `GET /api/commentignores?pr=N` (see "Ignoring a PR-wide comment" in
-  `.claude/rules/workflows-trackers.md`). It was **session-only at first and that
+  `.claude/docs/workflows-trackers.md`). It was **session-only at first and that
   was reversed** — an ignored comment came back on every refresh; don't
   reintroduce. Offline (no `state.ignoreRunId`) the Signal is a no-op and the
   toggle silently degrades to that session-only behaviour.
@@ -239,7 +239,7 @@ change also resets it, mirroring how the same watch resets
   hidden-and-ignored row for `↑`/`↓`, and `ignoreToggleRow` is itself a stop of
   the sidebar's `↑`/`↓` loop (`state.ignoreToggleFocused`, mirroring
   `state.toggleFocused`) — see "The sidebar's `↑`/`↓` cursor forms one circular
-  loop" in `.claude/rules/keyboard-navigation.md`.
+  loop" in `.claude/docs/keyboard-navigation.md`.
 
 A comment-index item's thread lives exclusively in its own detail card; it is
 never part of the inline comment blocks below (those only ever show
@@ -337,7 +337,7 @@ cue, not a status colour).
 It used to fire `sendReaction(true)` directly (a resolve shortcut) — gone.
 Resolving now happens exclusively via the comment-scoped command menu's "Resolve
 comment" (`resolveFocusedComment`, always the fixed `/resolve` sentinel — see
-`.claude/rules/command-palette.md`), which this button **opens** on click
+`.claude/docs/command-palette.md`), which this button **opens** on click
 (`openCommentMenu`, threaded from `home.mjs`'s `openMenu('comment')` through
 `InlineComments`/`commentCard`/`expandedConversation`, mirroring how the
 composer's "Plaats…" button opens `openMenu('compose')`). That click path is what
@@ -385,7 +385,7 @@ comments anchored on it), so no cross-block jump is needed. Test:
 ### Converting an AI-controle finding into a real comment
 
 An AI finding (`code_warning`, `source:'ai'`, `Local:true` — see "AI risk check
-of the whole PR" in `.claude/rules/workflows-analysis.md`) is a full
+of the whole PR" in `.claude/docs/workflows-analysis.md`) is a full
 `task_code_comment` Execution, so it can be resolved/deleted like any comment —
 but a reviewer who agrees often wants their OWN, editable, non-local comment
 instead of the AI's wording.
@@ -403,7 +403,7 @@ over `commentTarget()`). Every ordinary composer-open entry point
 (`toNew`/`startComment`/"Annuleer") clears it first, so a stale override can't
 leak into an unrelated comment. The reviewer edits freely, then picks "Plaats
 comment"/"Alleen voor mijzelf" from the usual comment-kind menu
-(`COMPOSE_COMMANDS`, `.claude/rules/command-palette.md`). **Only once the
+(`COMPOSE_COMMANDS`, `.claude/docs/command-palette.md`). **Only once the
 replacement is confirmed placed** (`createComment` returns `res.ok`) does
 `placeComment` delete the original via the same `delete` Signal
 (`deleteComment(c)`, factored out to target a specific comment) — a failed
@@ -421,7 +421,7 @@ unanchored PR-wide comment (`createComment({..., kind:'issue'})` — the same
 the original once placement is confirmed. `createComment`'s `kind` parameter is
 what makes this possible; the backend's initial-post branch needed a matching
 addition (a PR-wide comment posts as a new issue comment) — see
-`.claude/rules/workflows-comments.md`.
+`.claude/docs/workflows-comments.md`.
 
 ### The "+ Nieuwe comment" trigger row is gone
 
@@ -444,7 +444,7 @@ straight to the diff. `→` from the diff is unaffected.
 `composeDrafts`/`replyDrafts` (`RelatedPanel.mjs`). Both fields
 (`comment-compose`/`reaction-compose`) are uncontrolled DOM elements, so closing
 the composer/thread (e.g. `←` at caret position 0 — see
-`editableCaretCanMoveLeft` in `.claude/rules/keyboard-navigation.md`) unmounts
+`editableCaretCanMoveLeft` in `.claude/docs/keyboard-navigation.md`) unmounts
 the node and would lose the text.
 
 `composeDrafts` is a `Map` keyed by the same anchor identity
@@ -475,7 +475,7 @@ entry:
   (`enterClaudeChat()`, stop 5b — which auto-creates the empty private comment
   it hangs on), **not** the Onderliggende-code card. That card is now only
   reached by a `↓` falling through the end of the comments resp. the chat. See
-  `.claude/rules/claude-chat-panel.md`.
+  `.claude/docs/claude-chat-panel.md`.
 - **`↓`** on a conversation (`cs.focus==='comment'`) or at the bottom of an open
   thread (`cs.focus==='thread' && threadPos===0`) advances to the next
   conversation on the same unit; if there isn't one it **falls through** to
@@ -548,4 +548,4 @@ reviewer ready to continue with `↑`/`↓`/`f`/`d`/`s`. Test:
 `tests/place-comment-return-focus.spec.mjs`.
 
 Placing a comment also **retracts the approval of the unit it hangs on** — see
-`.claude/rules/approval.md`.
+`.claude/docs/approval.md`.

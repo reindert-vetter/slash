@@ -1,6 +1,6 @@
 // chat_workflow.go — the claude_chat workflow: an embedded, multi-turn Claude
 // conversation next to one existing review comment thread (see
-// .claude/rules/tembed-workflows.md). One Execution per conversation; its
+// .claude/docs/tembed-workflows.md). One Execution per conversation; its
 // Run ID is derived from the comment thread's own id, so starting it twice
 // for the same comment is an idempotent no-op (StartWorkflowID) and the
 // frontend never has to remember a separate chat Run ID of its own.
@@ -236,7 +236,7 @@ type chatTurnResult struct {
 // reviewer-requested {"type":"comment_action",...} assistant directive.
 // CommentID is re-validated by applyChatCommentAction against the
 // conversation's own thread before anything is signalled — see
-// parseAssistantTurn and .claude/rules/workflows-comments.md ("claude_chat").
+// parseAssistantTurn and .claude/docs/workflows-comments.md ("claude_chat").
 type commentActionDirective struct {
 	CommentID string `json:"commentId"`
 	Action    string `json:"action"` // "reply" | "resolve"
@@ -284,7 +284,7 @@ const maxChatQuestionOptions = 3
 // arg.Action == chatActionEdit routes the call through the conversation's own
 // shadow worktree (ensureChatShadowWorktree, chat_shadow.go) with the Edit
 // tool enabled, instead of the default read-only, tool-less completion — see
-// .claude/rules/tembed-workflows.md ("claude_chat").
+// .claude/docs/tembed-workflows.md ("claude_chat").
 //
 // A comment_action directive is deliberately NOT saved here as a message —
 // applyChatCommentAction (called by the workflow right after this Activity,

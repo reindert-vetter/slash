@@ -816,7 +816,7 @@ function enterThread() {
 
 // ── Embedded Claude conversation (claude_chat workflow) ──────────────────────
 // A Claude conversation always hangs off an existing comment thread (product
-// decision — see .claude/rules/claude-chat-panel.md).
+// decision — see .claude/docs/claude-chat-panel.md).
 // The column is reached the same way the comment thread itself is: → deepens
 // one level further (comment → thread → claude), and it is ALSO reachable
 // directly from the diff when the selected unit has no comment thread at all
@@ -2500,22 +2500,22 @@ const KIND_LABEL = {
   controller_model: 'model',
   request_policy: 'policy',
   // Class-level callresolve children — the whole model as a child, not one of
-  // its methods (see .claude/rules/tembed-workflows.md, "migration → model").
+  // its methods (see .claude/docs/tembed-workflows.md, "migration → model").
   model_usage: 'model',
   migration_model: 'model',
   // A test's #[DataProvider('m')]/@dataProvider m → the provider method (see
-  // .claude/rules/tembed-workflows.md, "PHPUnit data providers").
+  // .claude/docs/tembed-workflows.md, "PHPUnit data providers").
   data_provider: 'provider',
   // A class's `use TraitName;` → the trait as a whole (see
-  // .claude/rules/tembed-workflows.md, "Resolving trait usage").
+  // .claude/docs/tembed-workflows.md, "Resolving trait usage").
   trait_usage: 'trait',
   // A trans()/__()/@lang()/trans_choice() call → the lang file's key, one child
-  // per locale (see .claude/rules/tembed-workflows.md, "Resolving translation
+  // per locale (see .claude/docs/tembed-workflows.md, "Resolving translation
   // keys"). Shows the current value, not a diff.
   translation: 'vertaling',
   // A concrete method that both implements an interface method AND changed
   // together with it in this PR (relations.KindInterfaceMethod, "A2" — see
-  // .claude/rules/tembed-workflows.md, "Interface methods as underlying
+  // .claude/docs/tembed-workflows.md, "Interface methods as underlying
   // code"). No diffstat here — like event_listener/route_controller/etc.,
   // this is always a real, both-changed PR block, so a plain role badge is
   // enough.

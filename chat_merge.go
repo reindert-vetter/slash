@@ -2,7 +2,7 @@
 // "commit deze wijziging" pushes across every claude_chat conversation of one
 // PR, so two conversations landing changes around the same time are merged
 // ONE AFTER ANOTHER instead of racing each other's fast-forward-only push (see
-// chat_shadow.go and .claude/rules/tembed-workflows.md, "chat_merge").
+// chat_shadow.go and .claude/docs/tembed-workflows.md, "chat_merge").
 //
 // Serialization is not custom queue code: one Execution per PR, looping on a
 // "merge" Signal, reuses tembed's own per-Run-ID mutex (Engine.SignalWorkflow

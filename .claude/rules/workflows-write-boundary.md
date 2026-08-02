@@ -53,7 +53,7 @@ right now" to the browser. No module, no read-model, no workflow-history
 write, and both are empty again after a restart. Safe **because an event is
 never the source of truth**: a consumer treats it as "refetch me" and re-reads
 the ordinary read-only `GET` on every (re)connect, so a dropped event costs a
-refetch, never correctness. See `.claude/rules/server-events.md`.
+refetch, never correctness. See `.claude/docs/server-events.md`.
 
 Fourth example: the failure buffer behind `GET /api/problems`
 (`run_errors.go`) — an in-memory ring buffer that mirrors the glue log lines
@@ -70,7 +70,7 @@ the in-memory progress snapshot of a running Claude chat turn
 into the hub while it runs, but nothing is stored: no module, no read model, no
 workflow history, and the hub is empty again after a restart. That is exactly
 why an event may never be the source of truth — every consumer refetches the
-ordinary read-only `GET` — see `.claude/rules/server-events.md`.
+ordinary read-only `GET` — see `.claude/docs/server-events.md`.
 
 ## Why
 

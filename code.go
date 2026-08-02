@@ -95,7 +95,7 @@ func blockSource(root string, def Block) codeSide {
 //     by the same amount. Nothing reads codeSide.End for line-anchoring
 //     (comment_import.go's blockForLine/rowForLine use the raw,
 //     un-enriched extractBlockSource, and the frontend only ever counts off
-//     .start — see .claude/rules/blocks-and-ingest.md), so this is purely for
+//     .start — see .claude/docs/blocks-and-ingest.md), so this is purely for
 //     internal Start/End/Text consistency.
 //
 // A block affected by neither — or one enrichSignature couldn't confidently

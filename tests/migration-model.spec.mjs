@@ -4,7 +4,7 @@ import { test, expect } from './_fixtures.mjs'
 // seeds a single caller with two class-level callresolve children: one
 // "model_usage" (a controller using an Eloquent model via new/static) and one
 // "migration_model" (a changed migration's Schema::create/table mapped to its
-// model — see .claude/rules/tembed-workflows.md, "migration → model"). Both
+// model — see .claude/docs/tembed-workflows.md, "migration → model"). Both
 // point at the WHOLE model class (childMethod == ""), so the panel must show a
 // bare model-name label ("ProductGroup"/"Order") and a "model" badge — never
 // the "Class::" template a regular method_call child gets (resolvedCallChildren

@@ -7,12 +7,12 @@ scanner/classifier and the display transforms applied to a block's source.
 
 ## Split out of this file
 
-- `.claude/rules/approval.md` — reviewer approval and its counters: the granular
+- `.claude/docs/approval.md` — reviewer approval and its counters: the granular
   `approvedRows`/`approvedCalls` model, durable persistence, the tree rollup,
   server-side `total` (`blockstats.go`), `rowHasContent`, the filler-row sweep,
   the comment-activity indicator, the per-line underlying summary, and hiding
   approved blocks.
-- `.claude/rules/diff-render.md` — how a block body is rendered: line alignment
+- `.claude/docs/diff-render.md` — how a block body is rendered: line alignment
   (`blockRows`/`alignRows`/`diffLines`) and its memoization, huge-block
   trim/collapse, char diff, TRANSLATION blocks, SVG blocks.
 
@@ -21,7 +21,7 @@ scanner/classifier and the display transforms applied to a block's source.
 The `blocks` table *is* the `nodes`/function table from the graph, renamed +
 extended with `class/category/end_line/status/side/pr`. The `approved` column
 (0/1) is legacy — real approval state is granular and lives in the `approvals`
-read model, see `.claude/rules/approval.md`. `edges` remains for the later call
+read model, see `.claude/docs/approval.md`. `edges` remains for the later call
 graph. Schema: `.claude/templates/schema.sql`, in sync with `schemaDDL` in
 `db.go`.
 
@@ -79,7 +79,7 @@ non-skipped refresh, and `ingestWorkflow` after a full ingest, so also
 (heartbeat cadence, the base-SHA-changed fallback to the full pipeline, the
 re-anchor pass, and why relations/callresolve keep recomputing over the PR's full
 current block list rather than delta-scoped): see the "Ingest refresh" section
-under `pr_status` in `.claude/rules/workflows-trackers.md`.
+under `pr_status` in `.claude/docs/workflows-trackers.md`.
 
 ## Running
 
@@ -96,14 +96,14 @@ under `pr_status` in `.claude/rules/workflows-trackers.md`.
   via **`SLASH_DATA`**, default `"data"` (`dataDirPath` in `main.go`, mirroring
   `dbPath`). It is configurable so the Playwright harness can point every worker
   server at its own throwaway fixture tree and never touch the live `data/` tree
-  — see `.claude/rules/testing-playwright.md`.
+  — see `.claude/docs/testing-playwright.md`.
 - **The local clone** where all git/worktree operations run (`repoDir()` in
   `gh.go`) comes from **`SLASH_REPO_DIR`**, default `~/dev/plug-and-pay`; a
   leading `~` is expanded via `os.UserHomeDir()`.
 - **Serve:** `GET /api/blocks?pr=N` (delta) and
   `GET /api/code?pr=N&file=..&class=..&name=..` (the old + new source of one
   block; `file` must be a stored block of that PR). How that source is aligned and
-  rendered: `.claude/rules/diff-render.md`.
+  rendered: `.claude/docs/diff-render.md`.
 
 ## `phpscan.go`: what belongs to a block
 
@@ -254,7 +254,7 @@ lines from `c.new.start`/`c.old.start`) would shift a GitHub comment anchor or a
 **Also applied to embedded "Underlying code" children** — a `method_call`/`covers`
 child whose code is embedded in its callresolve/testcovers row (an unchanged file,
 captured via `blockSource` at analysis time, see
-`.claude/rules/workflows-analysis.md`). `ChildCode`/`CoveredCode` go through the
+`.claude/docs/workflows-analysis.md`). `ChildCode`/`CoveredCode` go through the
 same `enrichedCodeSide(blockSource(…))` in `callresolve_analysis.go` (`method_call`
 rules 1-5b/2c via `emitKind`, the enum-case rule 6, `resolveMigrationModels`,
 `resolveDataProviders`), `testcovers_analysis.go` (`coverEntriesForTest`) and the
@@ -324,12 +324,12 @@ category priority — **ROUTE** first (the root of the
 route→controller→request/resource/model hierarchy), then **CONTROLLER**, then
 everything else, and **relation children after everything** (the "Onderliggende
 code" section at the bottom, see `recomputeLeftList`/`state.underlyingIds` in
-`.claude/rules/underlying-code.md`).
+`.claude/docs/underlying-code.md`).
 
 The sort happens **after** the existing filters (resolved-call targets, search
 term) and is a **stable** sort, so within a rank the original order stays intact.
 That is what makes it safe for `sameFileNeighbour`/`stepBlock` (the same-file
-connector + `↑`/`↓` flow-through, see `.claude/rules/keyboard-navigation.md`):
+connector + `↑`/`↓` flow-through, see `.claude/docs/keyboard-navigation.md`):
 those look only at the direct index neighbour in `state.blocks`, and since
 `classify.go` derives the category from the file path, all blocks from one file
 share a category and thus a rank — the stable sort keeps them together.
@@ -358,7 +358,7 @@ two-layer shape as `INTERFACE`.
 `scanTraits`/`idx.traits`: that is a separate whole-worktree regex scan used by
 `build_relations` to link trait *usage* (`use HasIncludeLabel;`) to its
 declaration as an Underlying-code child (see
-`.claude/rules/workflows-analysis.md`) — a different life-cycle/input than
+`.claude/docs/workflows-analysis.md`) — a different life-cycle/input than
 classifying an already-scanned `Block` during per-file ingest, and `phpscan.go`'s
 lexer already has the `kind` it needs.
 
@@ -371,7 +371,7 @@ colourblind-safe; the text label carries the meaning regardless. Tests:
 `TestCategoryForTraitPathFallback` (`classify_test.go`).
 
 The `TRANSLATION` category and its render live in
-`.claude/rules/diff-render.md`.
+`.claude/docs/diff-render.md`.
 
 ### A bare `#[Test]`-only change does NOT count as "modified"
 

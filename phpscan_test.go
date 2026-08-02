@@ -115,7 +115,7 @@ func blockByName(bs []Block, sym string) (Block, bool) {
 
 // TestLeadingAttributeIncludedInBlock: a method's leading #[...] attribute is
 // part of its block — Block.Line starts at the attribute line, not the
-// `function` keyword's own line (see .claude/rules/blocks-and-ingest.md,
+// `function` keyword's own line (see .claude/docs/blocks-and-ingest.md,
 // "Leidende attributen").
 func TestLeadingAttributeIncludedInBlock(t *testing.T) {
 	src := `<?php
@@ -313,7 +313,7 @@ interface Repo {
 // PHPDoc must still get an EndLine that spans all the way to the actual
 // signature line (where the `;` sits) — NOT collapse to the PHPDoc's own
 // opening line. Regression test for the bug where such a block rendered as
-// literally just "/**" (see .claude/rules/blocks-and-ingest.md, "PHPDoc
+// literally just "/**" (see .claude/docs/blocks-and-ingest.md, "PHPDoc
 // description as block description").
 func TestInterfaceMethodWithLeadingDocSpansFullSignature(t *testing.T) {
 	src := `<?php
@@ -707,7 +707,7 @@ class Svc {
 // TestInterfaceMethodIsFlaggedIsInterface: a method declared directly inside
 // an `interface` body gets Block.IsInterface=true, so classify.go can
 // override its category to "INTERFACE" regardless of the file's path — see
-// .claude/rules/blocks-and-ingest.md.
+// .claude/docs/blocks-and-ingest.md.
 func TestInterfaceMethodIsFlaggedIsInterface(t *testing.T) {
 	src := `<?php
 interface Repo {
@@ -768,7 +768,7 @@ trait Helper {
 // `trait` body gets Block.IsTrait=true, so classify.go can override its
 // category to "TRAIT" regardless of the file's path — mirrors
 // TestInterfaceMethodIsFlaggedIsInterface. See
-// .claude/rules/blocks-and-ingest.md.
+// .claude/docs/blocks-and-ingest.md.
 func TestTraitMethodIsFlaggedIsTrait(t *testing.T) {
 	src := `<?php
 trait Helper {

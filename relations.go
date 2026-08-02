@@ -382,7 +382,7 @@ func blockText(headDir string, b Block) codeSide {
 // line, by counting the newlines up to the first occurrence of match. This
 // anchors a detector's regex match to a concrete line so the frontend can
 // scope/reorder the "Onderliggende code" panel by the reviewer's selected
-// group/line (see .claude/rules/detail-layout.md, "Group-herordening").
+// group/line (see .claude/docs/detail-layout.md, "Group-herordening").
 // Anchoring on the first occurrence of the literal matched text is
 // approximate for a byte-identical repeated match — harmless here, since Line
 // is a soft ordering/scoping hint, not an identity key.

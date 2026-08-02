@@ -4,7 +4,7 @@ The landing page: a **GitHub inbox**, rebuilt on top of GitHub's own
 `github.com/pulls` dashboard — the same sections and language ("Ready to merge",
 "Needs your review", …), with per-row review status, CI checks, reviewers and
 diff stats. `overview.html` → `src/overview.mjs`. Routing/shells live in
-`.claude/rules/pages-and-routing.md`.
+`.claude/docs/pages-and-routing.md`.
 
 It is **fully read-only** in the sense that it never writes directly to a
 module/table (per `.claude/rules/workflows-write-boundary.md`).
@@ -41,7 +41,7 @@ in sync by hand.
 - **`pr.hasGraph === false`** (`generateAction(pr)`): the first **action** (2nd
   item overall) is **"Generate review tree"** (`data-testid=generate-page`),
   which POSTs **`/api/ingest {"pr":N}`** — the sanctioned write path (starting
-  a Workflow Execution), see `.claude/rules/blocks-and-ingest.md`. While it
+  a Workflow Execution), see `.claude/docs/blocks-and-ingest.md`. While it
   runs, the button shows a spinner + the **actual pipeline stage** ("Preparing
   worktrees…" / "Scanning blocks…" / "Building relations…",
   `INGEST_STAGE_LABELS`, fallback "Generating…") and is `disabled`
@@ -79,7 +79,7 @@ usage count) and on success closes the popover and calls `reloadSnapshot()` so
 the row leaves "Your drafts" without waiting for the 60s poll. The flow state
 lives on `ui` (`readyFor`/`reviewers`/`selectedReviewers`/…, ephemeral) and
 resets on every `togglePopover`/`closePopover`. See `ready_for_review` +
-`modules/reviewerusage` in `.claude/rules/workflows-trackers.md`.
+`modules/reviewerusage` in `.claude/docs/workflows-trackers.md`.
 
 ### The remaining items
 
@@ -140,7 +140,7 @@ deliberately both shown:
   here it shows with `pr: 0`.
 - **An error that only ever reached the log** (`data-testid=problem-log`) —
   poller/startup glue that is no workflow run at all. See "Surfacing failures"
-  in `.claude/rules/workflows-trackers.md` for the in-memory ring buffer and
+  in `.claude/docs/workflows-trackers.md` for the in-memory ring buffer and
   why it may live outside a workflow.
 
 Load-bearing frontend properties:
@@ -188,7 +188,7 @@ so it isn't deterministic in a worker (backend side: `run_errors_test.go`).
 
 **The page never calls GitHub itself.** The PR list is fetched and managed by
 the **`pr_inbox` workflow** (one Execution per repo, see
-`.claude/rules/workflows-trackers.md`), which writes into the **`inbox`
+`.claude/docs/workflows-trackers.md`), which writes into the **`inbox`
 module** (a read model); the HTTP handlers only read that. Canonical
 write-boundary shape: only a workflow talks to GitHub and mutates state.
 
@@ -240,7 +240,7 @@ inside the Activity — no new write path.
 | `GET /api/prs/search?q=…` | **Still a direct** live gh `search` (`inbox_api.go`) — an ephemeral, parameterized read, not a persistent list. A bare number → `<n> in:title`. |
 | `GET /api/prs/filter?preset=<key>` | Live gh `search` for a **fixed, allow-listed** preset query (`filterPresets`) — never raw UI text to gh. See "Filter drawer". |
 | `GET /api/reviewers` | Read-only candidate reviewers → `{ok, reviewers:[{login,avatarUrl,count}]}`, most-used-first. |
-| `GET /api/names?logins=a,b` | Login → real name + avatar. See "Real names instead of logins" in `.claude/rules/pages-and-routing.md`. |
+| `GET /api/names?logins=a,b` | Login → real name + avatar. See "Real names instead of logins" in `.claude/docs/pages-and-routing.md`. |
 | `POST /api/workflows/ready_for_review` | `{pr, reviewers?}` → flip a draft to ready + request reviewers. 400 on an invalid pr/login. |
 | `GET /api/problems` | Read-only → `{ok, failedRuns:[{runId,workflow,pr,updatedAt,error}], logErrors:[{at,scope,pr,message}]}`. Feeds "Mislukte taken". |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
@@ -338,7 +338,7 @@ the recent drawer — with a bare positional `selIndex` the ring would stick to
 ### The selected-row highlight
 
 Matches `/pr/<id>`'s app-wide indigo selected/focused convention (see "Focus
-highlight per stop" in `.claude/rules/keyboard-navigation.md`), replacing an
+highlight per stop" in `.claude/docs/keyboard-navigation.md`), replacing an
 earlier unrelated emerald tone. `paintSelection()` toggles the ring/bg purely
 **imperatively** (`classList.add`/`remove` on the mounted `[data-nav-row]`, via
 the shared `SELECT_RING_CLS` array) and stays that way on purpose: selection here

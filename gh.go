@@ -196,7 +196,7 @@ func diffBetweenSHAs(ctx context.Context, baseSHA, headSHA string, files []strin
 // via `git diff --find-renames --name-status`. A move git does NOT recognize
 // as a rename (too much content changed) is absent here and stays a plain
 // delete+add — the accepted "als dat even kan" boundary
-// (.claude/rules/blocks-and-ingest.md). Best-effort caller: on error the full
+// (.claude/docs/blocks-and-ingest.md). Best-effort caller: on error the full
 // ingest just proceeds with no rename pairing.
 func detectRenames(ctx context.Context, baseSHA, headSHA string) (map[string]string, error) {
 	out, err := runGit(ctx, "diff", "--find-renames", "--name-status", baseSHA, headSHA)

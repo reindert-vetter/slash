@@ -2,8 +2,8 @@
 
 The comment-thread half of the workflow layer: placing a comment on a line of
 code and keeping the thread alive, plus pulling in threads that were placed
-outside the app. Engine mechanics live in `.claude/rules/tembed-workflows.md`,
-endpoints in `.claude/rules/tembed-endpoints.md`.
+outside the app. Engine mechanics live in `.claude/docs/tembed-workflows.md`,
+endpoints in `.claude/docs/tembed-endpoints.md`.
 
 ## `task_code_comment` (`workflows.go` + `modules/`)
 
@@ -195,7 +195,7 @@ not read-only copies.
 - **Read model:** `Source` (`ui`/`github`) + `Kind` columns; `GET /api/comments`
   serves imported comments automatically, no new endpoint. The frontend badges
   `source: github` and renders PR-wide comments as their own navigable index
-  rows (see "Comment-index items" in `.claude/rules/comments-panel.md`).
+  rows (see "Comment-index items" in `.claude/docs/comments-panel.md`).
 - Tests: `comment_import_test.go`, `modules/comments/comments_test.go`,
   `tembed/engine_test.go` (`StartWorkflowID` idempotency).
 
@@ -301,7 +301,7 @@ behaviour, never a shared constant that would collide. Test:
 
 A turn is a minutes-long subprocess call, so the reviewer must see what it is
 doing and read the answer as it is produced (see "Live progress" in
-`.claude/rules/claude-chat-panel.md` for the UI half). `RunChat` runs with
+`.claude/docs/claude-chat-panel.md` for the UI half). `RunChat` runs with
 `--output-format stream-json --verbose` (plus `--include-partial-messages`
 only when someone is listening) and parses the CLI's newline-delimited frames
 in `readChatStream`:
@@ -465,7 +465,7 @@ flow.
   to also discover/sweep any `pr-<n>-chatshadow-*` directory (plus its
   `chat/<conversationId>` branch) once the PR itself is purged — covers a
   conversation whose edits were never committed/pushed. See "Daily data
-  cleanup" in `.claude/rules/workflows-trackers.md`.
+  cleanup" in `.claude/docs/workflows-trackers.md`.
 - **Known test boundary:** `fetchPRMeta` (gh.go) has no offline Fake (same as
   every other ingest.go caller of it), so `ensureChatShadowWorktree`/
   `commitChatShadowEdits` themselves are untested; the git-plumbing bodies once
@@ -673,8 +673,8 @@ and is validated in the handler before it ever reaches the workflow);
 `GET /api/chat?commentId=X` → the read-only transcript;
 `GET /api/chat/progress?commentId=X` → the in-memory snapshot of a running
 turn, which is the resync read for the SSE stream `GET /api/events` pushes the
-live progress over (`.claude/rules/server-events.md`). Full table:
-`.claude/rules/tembed-endpoints.md`.
+live progress over (`.claude/docs/server-events.md`). Full table:
+`.claude/docs/tembed-endpoints.md`.
 
 ### Tests
 

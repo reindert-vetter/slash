@@ -8,7 +8,7 @@ receives `menu`, a `resolve(query)` function and `onRun`, and contains no
 filter or navigation logic.
 
 Arrow-key navigation of the tree itself lives in
-`.claude/rules/keyboard-navigation.md`.
+`.claude/docs/keyboard-navigation.md`.
 
 ## Modes
 
@@ -145,7 +145,7 @@ different stop (`showDescription` is `false`) and keeps the block palette.
 group/line/call in diff mode — it approves exactly the rows of that unit, or
 retracts them if already approved. At `gran==='group'`/`'line'` (not `'call'`)
 it additionally sweeps a directly-following filler row along, one-way — see
-"the filler-row sweep" in `.claude/rules/approval.md`.
+"the filler-row sweep" in `.claude/docs/approval.md`.
 
 **`focusLevel`/`drillCursor`-aware:** a drilled column has its own block plus
 its own `change`/`gran` cursor, so `approveContext()` (`home.mjs`) resolves
@@ -155,12 +155,12 @@ its own `change`/`gran` cursor, so `approveContext()` (`home.mjs`) resolves
 `COMMANDS` label take that context instead of reading `curBlock()`/`state.gran`/
 `state.change`. Without it, `Enter` → "Approve …" invisibly approves the
 top-level block while a drilled column owns the keyboard. See "Column
-navigation" in `.claude/rules/drilling.md` and `tests/drill-approve.spec.mjs`.
+navigation" in `.claude/docs/drilling.md` and `tests/drill-approve.spec.mjs`.
 
 The label is a function so it names the live unit (`approveNoun`): "Approve
 this block" (list), "Approve these lines" (group), "Approve this line" (line),
 "Approve this call" (call), and "Retract approval of …" when already approved.
-See `.claude/rules/approval.md`.
+See `.claude/docs/approval.md`.
 
 **Open GitHub** has two children: *Line in Files changed* (`openGithubLine` —
 the anchor `#diff-<sha256(path)><R|L><line>`, line = the `start` of the code
@@ -216,12 +216,12 @@ A diff-mode approve landing on a *different* block still opens the menu.
    order the panel shows, excluding `covered_by` to avoid the method↔test
    cycle), depth-first per child (`firstUnapprovedInSubtree`, cycle-safe via a
    `seen` set): the child itself from its first `'group'` unit, otherwise its
-   own children, and so on. See `.claude/rules/underlying-code.md`.
+   own children, and so on. See `.claude/docs/underlying-code.md`.
 3. **Up** through the drill stack: back to the parent (an earlier drilled
    column, or the top-level block) and its **next, not-yet-tried** sibling
    child, repeated upward.
    3b. (top level only) the **remaining methods** of the current `test_class`
-   row — see `.claude/rules/test-class-grouping.md`.
+   row — see `.claude/docs/test-class-grouping.md`.
 4. **Across `state.blocks`** in sidebar order, also subtree-aware
    (`firstUnapprovedInSubtree` per candidate), so a top-level block that only
    has an Underlying-code child still open is not skipped.
@@ -257,7 +257,7 @@ block from the list already covered all of its own rows. Test:
 `isIndexMenu()` counts `postApprove` too, so `menuAnchor()` tries
 `[data-idx="${state.selected}"]` for both menus. But a fully approved block's
 row disappears from the sidebar immediately (see "Hiding approved blocks" in
-`.claude/rules/approval.md`), and that happens *before* the follow-up menu
+`.claude/docs/approval.md`), and that happens *before* the follow-up menu
 opens — `menuAnchor()` would then fall back to the whole `[data-testid="pr-index"]`
 aside, whose much taller rect throws `positionMenu()`'s flip-above calculation
 to the top of the viewport.
@@ -275,7 +275,7 @@ modes), so a stale position never leaks into an unrelated session. Test:
 
 When `findNextUnapproved()` returns `null`, `afterApproveAction` opens one of
 two follow-ups based on `state.approvalTotal` (the PR-wide combined counter —
-see "Combined approval per tree" in `.claude/rules/approval.md`), read after a
+see "Combined approval per tree" in `.claude/docs/approval.md`), read after a
 few `await Promise.resolve()` ticks (the `approvalSummaries`/`approvalTotal`
 watch is decoupled and only fills as a microtask):
 
@@ -301,7 +301,7 @@ mandatory free-text reason already is one.
 
 `submitReview` posts `POST /api/workflows/submit_review {pr, event, body}` (the
 sanctioned write path, see `.claude/rules/workflows-write-boundary.md` and
-`submit_review` in `.claude/rules/workflows-trackers.md`). Error handling is
+`submit_review` in `.claude/docs/workflows-trackers.md`). Error handling is
 deliberately minimal (`console.error`) — this app has no toast convention. A
 successful submit is a fresh workflow run, so `submitReview` calls
 `pollWorkflows()` so it shows in "Taken" before the next `WORKFLOWS_POLL_MS`
@@ -334,7 +334,7 @@ to five rows:
 3. **"Verwijder comment"**.
 4. **"Comment hiervan maken"** — only when `source === 'ai'` (a `code_warning`
    finding; see "Converting an AI-controle finding into a real comment" in
-   `.claude/rules/comments-panel.md`).
+   `.claude/docs/comments-panel.md`).
 5. **"Open op GitHub"** — only when the comment actually has a GitHub anchor.
 
 `commentCommandsFor()` is built fresh on every open (unlike the static lists it
@@ -353,7 +353,7 @@ wins (`sendReaction`), so "type a quick reply, press Enter" keeps working
 **Mouse path:** the send-status button next to "Stuur" (`reaction-status`)
 opens this same menu on click, so resolve/delete stay reachable without the
 keyboard. See the send-status paragraph in
-`.claude/rules/comments-panel.md`.
+`.claude/docs/comments-panel.md`.
 
 - **"Verwijder comment"** → `deleteCommentAndSelectRow`/`deleteFocusedComment`
   sends a **`delete` Signal** (`POST /api/workflows/{runID}/signals/delete`) to
@@ -362,20 +362,20 @@ keyboard. See the send-status paragraph in
   model. The request rides along on the same `reply` Signal as a reaction
   (`ReactionSignal.Action`) because a workflow can only `WaitSignal` on one name
   at a time. Where the keyboard lands afterwards: see
-  `.claude/rules/comments-panel.md`.
+  `.claude/docs/comments-panel.md`.
 - **"Resolve comment"** → `resolveFocusedComment` sends a **`reply` Signal**
   with `done:true` and the sentinel body `"/resolve"` (never posted as text).
   The workflow sets the status to `resolved` and, for a review-diff thread,
   resolves the conversation on GitHub too; a PR-wide thread has no GitHub
   resolve concept, so it stays local. See
-  `.claude/rules/workflows-comments.md`.
+  `.claude/docs/workflows-comments.md`.
 
 ## The comment-index item menu (`prComment`, `prCommentCommandsFor`)
 
 `Enter` on a comment-index row (a PR-wide comment as an ordinary "Start" row)
 opens this; `→` deliberately does something else (steps into the thread) — see
-"Comment-index items" in `.claude/rules/keyboard-navigation.md` for the arrow
-side and `.claude/rules/comments-panel.md` for the row/detail card itself.
+"Comment-index items" in `.claude/docs/keyboard-navigation.md` for the arrow
+side and `.claude/docs/comments-panel.md` for the row/detail card itself.
 `selectedComment()` gates a branch checked **before** the generic
 Enter-opens-menu handling.
 
@@ -413,11 +413,11 @@ placeholders).
 **"Plaats comment"** → `placeComment(state, commentTarget)` posts a normal
 public comment; **"Alleen voor mijzelf"** → `placeComment(…, { local: true })`
 stores a private note that never reaches GitHub (see the `local` flag in
-`.claude/rules/workflows-comments.md`). Both `run`s are `async` and call
+`.claude/docs/workflows-comments.md`). Both `run`s are `async` and call
 `pollWorkflows()` after a successful place, so the new `task_code_comment` run
 shows in the "Taken" card immediately instead of at the next
 `WORKFLOWS_POLL_MS` tick. Placing a comment also retracts the approval of the
-unit it hangs on — see `.claude/rules/approval.md`.
+unit it hangs on — see `.claude/docs/approval.md`.
 
 The Enter branch sits in `onKeydown` **before** the `relatedActive()` branch
 (`isComposeOpen()` + `composeHasText()`), so it works whether the composer was
@@ -437,10 +437,10 @@ The same overlay, with actions on the **whole PR**. Five root items:
 3. **"Jira"** (submenu): *Open in new tab* (deep link), plus *Place comment* and
    *Create subtask* as **placeholders** (no Jira write integration yet).
 4. **"Diepgravend onderzoek"** — starts `code_warning` on Opus
-   (`checkPRWarnings`, see `.claude/rules/workflows-analysis.md`).
+   (`checkPRWarnings`, see `.claude/docs/workflows-analysis.md`).
 5. **"Show full description" / "Collapse description"** — a label function
    toggling `state.descriptionExpanded`, the same ephemeral flag as the in-card
-   "more…" affordance (see `.claude/rules/detail-layout.md`). The label is
+   "more…" affordance (see `.claude/docs/detail-layout.md`). The label is
    snapshotted at open time by `snapshotCommands`, so no reactive binding leaks
    into the `CommandMenu` tree.
 
@@ -451,6 +451,6 @@ field.
 The Jira/GitHub links need **PR metadata** (title + URL, and the `KEY-123`
 ticket key derived from the title) from the `prmeta` read model via
 `GET /api/pr?pr=N`, filled by `pr_status` (see
-`.claude/rules/workflows-trackers.md`). `home.mjs` (`loadPRMeta`) ensures the
+`.claude/docs/workflows-trackers.md`). `home.mjs` (`loadPRMeta`) ensures the
 tracker on load; missing metadata falls back to the bare PR URL resp. the Jira
 base.

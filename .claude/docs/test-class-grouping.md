@@ -4,7 +4,7 @@ Every TEST-category block (a PHP test method, or the `<class-header>` sentinel �
 see `phpscan.go`/`classify.go`) sharing the same `file + '::' + class` groups into
 **one synthetic sidebar row**: `TriggersIndexTest` with a combined pill, not five
 separate `TriggersIndexTest::it_should_…` rows. This mirrors the `kind:'comment'`
-synthetic-row mechanism (`.claude/rules/comments-panel.md`) but inserts a **new,
+synthetic-row mechanism (`.claude/docs/comments-panel.md`) but inserts a **new,
 always-present column** between the pr-index and the diff instead of replacing
 the diff card.
 
@@ -54,7 +54,7 @@ either — a third kind of flow-through for a rare case isn't worth it.
 Rendered by `TestMethodsColumn.mjs` directly in `<main>`'s column flow, to the
 **left** of the diff card (`data-testid=test-methods-column`,
 `state.testColumnFocused`). Stop 2b of the left→right nav chain (see
-`.claude/rules/keyboard-navigation.md`).
+`.claude/docs/keyboard-navigation.md`).
 
 - **Always visible in list mode** as soon as a `test_class` row is selected, next
   to the existing diff preview (decision: no separate reveal-on-`→` step, unlike
@@ -76,7 +76,7 @@ Rendered by `TestMethodsColumn.mjs` directly in `<main>`'s column flow, to the
   (`isTestColumnActive`) — no diff context to zoom/toggle, mirroring stop 1.
 - The column and its method rows follow the app-wide indigo focus border /
   selected-row tint — see "Focus highlight per stop" in
-  `.claude/rules/keyboard-navigation.md`.
+  `.claude/docs/keyboard-navigation.md`.
 
 ## Keyboard
 
@@ -84,7 +84,7 @@ Rendered by `TestMethodsColumn.mjs` directly in `<main>`'s column flow, to the
   methodes-kolom without changing `state.mode`; a **second** `→` steps into the
   diff of the active method, exactly like `→` on an ordinary block from stop 2.
 - **`Enter` does NOT mirror `→`** — it opens the ordinary block-scoped command
-  palette (see `.claude/rules/command-palette.md`), the same one that opens on
+  palette (see `.claude/docs/command-palette.md`), the same one that opens on
   `Enter` when the `test_class` row itself is selected: `curBlock()` already
   resolves to the active method regardless of `testColumnFocused`, so the generic
   `openMenu('block')` branch just falls through. Only `→` steps into the diff.
@@ -128,7 +128,7 @@ stepped into the active method's diff.** It used to sit inside
 (the ordinary way to review a small freshly-ADDED test method) never looked at its
 siblings and wrongly reported nothing left to approve. See
 "`findNextUnapproved()`'s 'descend into children / walk sideways' steps run
-regardless of `inDiff`" in `.claude/rules/command-palette.md` and
+regardless of `inDiff`" in `.claude/docs/command-palette.md` and
 `tests/findnextunapproved-list-mode.spec.mjs`.
 
 ## Approve rollup — two deliberately different numbers
@@ -149,7 +149,7 @@ conflict:
 The one watch that fills both stores the **narrow** value into
 `approvalSummaries[row.id]` for display while adding the **full** value into the
 running `done`/`total` sum — two numbers computed side by side in the same loop
-iteration. See `.claude/rules/approval.md` for the generic rollup and
+iteration. See `.claude/docs/approval.md` for the generic rollup and
 `tests/test-class-grouping.spec.mjs` ("approving a method rolls up into the class
 pill, and the PR-wide total stays correct").
 

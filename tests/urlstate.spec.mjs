@@ -87,7 +87,7 @@ test.describe('PR Review Tree — URL state persistence', () => {
 // The right-hand RelatedPanel binds its own cursor (cs.focus/codeSel/sel/threadPos)
 // under the `rel` namespace, so a refresh restores where the cursor sat in the
 // panel — not just which block/diff-line. See RelatedPanel.mjs (bindUrlState +
-// applyRelRestore) and .claude/rules/keyboard-navigation.md.
+// applyRelRestore) and .claude/docs/keyboard-navigation.md.
 test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
   // intoRelated: list → diff → → (whatever the unit's own → chain currently
   // leads to — 'comment' if it already has a thread, else the embedded Claude

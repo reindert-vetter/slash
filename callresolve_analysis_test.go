@@ -882,7 +882,7 @@ func findCallresolveEntry(entries []callresolve.Entry, callerID, callKey string)
 // TestResolveMigrationModelsConvention: a changed migration's Schema::create
 // resolves to the model via the Eloquent naming convention (no explicit
 // $table override) — the common case described in
-// .claude/rules/tembed-workflows.md, "migration → model": the model itself is
+// .claude/docs/tembed-workflows.md, "migration → model": the model itself is
 // NOT changed by this PR, so it must still surface as underlying code.
 func TestResolveMigrationModelsConvention(t *testing.T) {
 	dataDir := t.TempDir()
@@ -1187,7 +1187,7 @@ class PermissionTest extends TestCase
 // whose definition carries a leading PHPDoc gets the same @return/@param
 // signature fold applied to its embedded ChildCode that an active (changed)
 // block's diff gets via /api/code — see codesig.go/enrichedCodeSide and
-// .claude/rules/blocks-and-ingest.md ("PHPDoc-types in de signatuur vouwen").
+// .claude/docs/blocks-and-ingest.md ("PHPDoc-types in de signatuur vouwen").
 // ChildLine must shift by the same removed-line count as the doc.
 func TestResolveCallsFoldsLeadingPHPDocInChildCode(t *testing.T) {
 	dataDir := t.TempDir()

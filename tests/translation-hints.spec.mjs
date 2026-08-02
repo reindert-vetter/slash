@@ -3,7 +3,7 @@ import { test, expect, evaluateSettled } from './_fixtures.mjs'
 // A TRANSLATION block's per-key overview reuses the EXACT SAME green
 // out-of-view scroll hint (scrollHint/updateHints, Block.mjs) as an ordinary
 // code diff — see the "Translation blocks" section in
-// .claude/rules/blocks-and-ingest.md for the data-scrollsync/data-changed/
+// .claude/docs/blocks-and-ingest.md for the data-scrollsync/data-changed/
 // data-change-active wiring that makes this work with zero new logic.
 // Mirrors tests/hints.spec.mjs's own mount pattern: no fixture PR needed,
 // just a synthetic TRANSLATION block mounted directly in a short host div so

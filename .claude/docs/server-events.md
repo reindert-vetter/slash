@@ -7,7 +7,7 @@ push travels. Native `EventSource` — no dependency, no build step, and the
 browser reconnects by itself.
 
 Today exactly **one** feature is on it (the embedded Claude chat, see
-`.claude/rules/claude-chat-panel.md`); the channel is generic from day one so
+`.claude/docs/claude-chat-panel.md`); the channel is generic from day one so
 the existing pollers can move over one at a time (below).
 
 ## The two rules that make this safe

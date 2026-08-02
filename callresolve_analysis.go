@@ -475,7 +475,7 @@ var (
 	// class's header region (classHeaderSentinel) — resolveCalls rule 8. Only
 	// the plain form ending directly in `;` is matched; a trait-adaptation
 	// block (`use A, B { A::foo insteadof B; }`) is deliberately out of scope
-	// (v1) — see .claude/rules/tembed-workflows.md.
+	// (v1) — see .claude/docs/tembed-workflows.md.
 	reTraitUse = regexp.MustCompile(`(?m)^\s*use\s+((?:\\?[A-Za-z_][\w\\]*\s*,\s*)*\\?[A-Za-z_][\w\\]*)\s*;`)
 	// reStaticRef matches Foo::name — with or without a call; a trailing `(`
 	// (a static call, rule 3's territory) is filtered by inspecting the char
@@ -546,7 +546,7 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 	// current block's own body), since a constructor-PROMOTED property's type
 	// hint sits in __construct's signature while it is typically USED via
 	// $this->prop in other methods of the same class (see interfaces.go /
-	// .claude/rules/tembed-workflows.md, "Interface methods as underlying
+	// .claude/docs/tembed-workflows.md, "Interface methods as underlying
 	// code"). Cached like diffByFile below, so a class with several changed
 	// methods only re-reads/re-scans its own file once.
 	interfaceVarsByFile := map[string]map[string]string{}
@@ -698,7 +698,7 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		// would give up as ambiguous/"unresolved" — exactly what left a
 		// changed interface method stranded as an orphan top-level start
 		// point instead of underlying code of its caller (see
-		// .claude/rules/tembed-workflows.md, "Interface methods as
+		// .claude/docs/tembed-workflows.md, "Interface methods as
 		// underlying code"). An explicit interface type hint is a stronger
 		// signal than 3b's bare receiver-NAME guess, hence it runs first and
 		// its matches are marked `seen` so 3b/4 never re-process the same
@@ -965,7 +965,7 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 // "Onderliggende code" even when it was NOT itself changed by this PR (the
 // common case: a migration adds a column to an already-existing model). This
 // is deliberately a callresolve rule, not a both-changed relations detector —
-// see .claude/rules/tembed-workflows.md ("migration → model"). Go-only, no LLM
+// see .claude/docs/tembed-workflows.md ("migration → model"). Go-only, no LLM
 // fallback: a migration whose table can't be mapped to a known model just
 // produces no child (silent), never an "unresolved" row.
 func resolveMigrationModels(dataDir string, pr int, blocks []Block) []callresolve.Entry {
@@ -1016,7 +1016,7 @@ func resolveMigrationModels(dataDir string, pr int, blocks []Block) []callresolv
 // "Onderliggende code" even when it is NOT itself changed by this PR (the
 // common case: an existing provider feeding a newly added/changed test). This
 // is deliberately a callresolve rule, not a both-changed relations detector
-// (mirrors resolveMigrationModels) — see .claude/rules/tembed-workflows.md,
+// (mirrors resolveMigrationModels) — see .claude/docs/tembed-workflows.md,
 // "PHPUnit data providers". Fully deterministic, no LLM fallback: PHPUnit's
 // plain #[DataProvider(...)]/@dataProvider always names a method on the
 // test's OWN class (no ambiguity to resolve), so a name that doesn't match a
@@ -1026,7 +1026,7 @@ func resolveMigrationModels(dataDir string, pr int, blocks []Block) []callresolv
 // docblock text directly above (and, since phpscan.go folds a leading
 // #[...] attribute into its own block, now partly INSIDE) the test method's
 // own span — see funcDeclLine/methodZone's doc comments and
-// .claude/rules/blocks-and-ingest.md.
+// .claude/docs/blocks-and-ingest.md.
 func resolveDataProviders(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 	_, headDir := worktreeDirs(dataDir, pr)
 	idx := buildSymbolIndex(headDir)

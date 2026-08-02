@@ -129,8 +129,9 @@ derived read-model an Activity keeps up to date.
 Navigation position lives in the URL query string, so a refresh or a shared link
 reopens the exact same spot.
 
-The deeper architecture docs live under [`.claude/rules/`](.claude/rules/) and in
-[`CLAUDE.md`](CLAUDE.md) (in Dutch — this README is the outward-facing summary).
+The deeper architecture docs live under [`.claude/docs/`](.claude/docs/), the
+hard rules under [`.claude/rules/`](.claude/rules/), indexed from
+[`CLAUDE.md`](CLAUDE.md) (this README is the outward-facing summary).
 
 ## Testing
 
@@ -149,5 +150,5 @@ The deeper architecture docs live under [`.claude/rules/`](.claude/rules/) and i
 | `src/vendor/` | Vendored arrow.js and Prism |
 | `index.html` / `overview.html` | The two static page shells (review page, PR inbox) |
 | `data/` | SQLite DBs and the base/head worktrees (gitignored) |
-| `.claude/` | Architecture rules, skills, templates (Dutch) |
+| `.claude/` | `docs/` architecture reference, `rules/` hard rules, plus skills, templates, agents |
 | `tests/` | Playwright specs and fixtures |

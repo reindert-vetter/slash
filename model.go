@@ -37,7 +37,7 @@ type Block struct {
 	// (a git-detected rename, `git diff --find-renames`), "" otherwise. File
 	// stays the NEW path (so the block id/diff key live on the head path); the
 	// old source is read from OldFile in the base worktree (/api/code,
-	// blockstats). See .claude/rules/blocks-and-ingest.md.
+	// blockstats). See .claude/docs/blocks-and-ingest.md.
 	OldFile  string `json:"oldFile"`
 	Side     string `json:"side"`     // new|old
 	Approved bool   `json:"approved"` // approved by the reviewer?
@@ -46,19 +46,19 @@ type Block struct {
 	// (`/** ... */`, tag lines like @param/@return stripped) directly above
 	// the function/method declaration — deterministic, no AI. "" if there was
 	// no such PHPDoc. See phpscan.go's phpDocDescription and
-	// .claude/rules/blocks-and-ingest.md.
+	// .claude/docs/blocks-and-ingest.md.
 	Description string `json:"description"`
 	// IsInterface marks a method declared directly inside an `interface`
 	// body (set by phpscan.go's scanPHP, via the enclosing classFrame's
 	// kind). It's a transient classification signal consumed by
 	// classify.go (which overrides Category to "INTERFACE" regardless of
 	// the file's path) — not needed by the frontend, hence json:"-".
-	// See .claude/rules/blocks-and-ingest.md.
+	// See .claude/docs/blocks-and-ingest.md.
 	IsInterface bool `json:"-"`
 	// IsTrait mirrors IsInterface for a method declared directly inside a
 	// `trait` body — classify.go overrides Category to "TRAIT" regardless
 	// of the file's path, since a trait file isn't confined to a `Traits/`
-	// directory. See .claude/rules/blocks-and-ingest.md.
+	// directory. See .claude/docs/blocks-and-ingest.md.
 	IsTrait bool `json:"-"`
 }
 

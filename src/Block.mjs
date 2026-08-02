@@ -731,8 +731,8 @@ function translationSlot(
   // chevrons) instead of a parallel scroll/hint mechanism: home.mjs's
   // existing `scrollChangeIntoView` (on every ↑/↓) and `updateHints`/
   // `refreshHints` (on scroll/resize) then work for a TRANSLATION card for
-  // free. See .claude/rules/blocks-and-ingest.md ("Translation blocks") and
-  // .claude/rules/keyboard-navigation.md (the green in-card scroll chevron).
+  // free. See .claude/docs/blocks-and-ingest.md ("Translation blocks") and
+  // .claude/docs/keyboard-navigation.md (the green in-card scroll chevron).
   return html`
     <div
       class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"

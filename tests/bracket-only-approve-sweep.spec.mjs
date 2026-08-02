@@ -4,7 +4,7 @@ import { test, expect, evaluateSettled } from './_fixtures.mjs'
 // punctuation-only row (a lone `});`/`},`/etc.) so the reviewer doesn't have
 // to approve it separately — see isBracketOnlyRow/sweepBracketOnlyForward
 // (Block.mjs) and toggleApprove (home.mjs), plus the design notes in
-// .claude/rules/blocks-and-ingest.md. These are pure functions, so — mirroring
+// .claude/docs/blocks-and-ingest.md. These are pure functions, so — mirroring
 // the changeGroups tests in navigate.spec.mjs — we import the already-loaded
 // page module and call them directly with synthetic row data.
 test.describe('PR Review Tree — bracket-only row auto-approve sweep', () => {

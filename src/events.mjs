@@ -1,6 +1,6 @@
 // events.mjs — ONE server-sent-events connection per browser tab, over which
 // every subject the server pushes is multiplexed (see eventbus.go and
-// .claude/rules/server-events.md). A shared pure utility like urlState.mjs /
+// .claude/docs/server-events.md). A shared pure utility like urlState.mjs /
 // theme.mjs: no reactive() state of its own, no component imports, so any
 // module can subscribe without dragging in another's machinery.
 //

@@ -1,6 +1,6 @@
 // Package chat is the claude_chat module/service: a SQLite read-model of the
 // embedded Claude conversation panel next to a review comment thread (see the
-// claude_chat workflow in workflows.go and .claude/rules/tembed-workflows.md).
+// claude_chat workflow in workflows.go and .claude/docs/tembed-workflows.md).
 //
 // One conversation hangs on exactly one existing comment thread (a
 // task_code_comment Execution) — the conversation id IS that comment's id.

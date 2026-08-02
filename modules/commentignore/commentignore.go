@@ -11,7 +11,7 @@
 // long-merged PR by calling Purge(ctx, pr) on every module with a pr column,
 // and a repo-wide key would leave every ignored comment of every purged PR
 // behind forever with no way to find it again. See "Snoozing a task" in
-// .claude/rules/tembed-workflows.md for the per-repo sibling (task_snooze),
+// .claude/docs/tembed-workflows.md for the per-repo sibling (task_snooze),
 // which has no such cleanup hook.
 //
 // Deliberately a plain on/off flag with no expiry, unlike tasksnooze's Until:

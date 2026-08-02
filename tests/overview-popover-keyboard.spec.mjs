@@ -5,7 +5,7 @@ import { test, expect } from './_fixtures.mjs'
 // wrap-around, Enter activates, Escape closes) instead of shifting the
 // underlying row-list selection. See src/overview.mjs (handlePopoverKey/
 // movePopover/focusPopoverItem) and the "Zodra een popover open is…" section
-// in .claude/rules/pages-and-routing.md.
+// in .claude/docs/pages-and-routing.md.
 //
 // A pinned "Sluit menu" is always the FIRST item (mirrors the CommandMenu's
 // withClose pattern in home.mjs), but opening the popover default-focuses the

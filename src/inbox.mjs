@@ -1,7 +1,7 @@
 // inbox.mjs — the /inbox page (Fase 3 of the task-inbox design): a left
 // index + right detail panel over the derived, scored task list from
 // GET /api/tasks (the task_inbox workflow, see
-// .claude/rules/tembed-workflows.md). Read-only except for two sanctioned
+// .claude/docs/tembed-workflows.md). Read-only except for two sanctioned
 // write paths: snoozing a task (task_snooze workflow, signals/snooze) and
 // replying/resolving a comment_unread task's thread (the *existing*
 // task_code_comment reply Signal — a comment's task id IS its runId, see

@@ -125,7 +125,7 @@ re-subscribing and stops firing. So list the state literally
 That is how `setCommentScope`/`setRelated` in `home.mjs` do it; an earlier
 `setRelated` that did not froze the related panel on whichever block was
 selected at load time (see "Reactivity" in
-`.claude/rules/underlying-code.md`).
+`.claude/docs/underlying-code.md`).
 
 ## A slot that switches between a single element and a keyed array freezes
 
@@ -220,7 +220,7 @@ re-runs and flips the key. The `setCommentScope`/`setRelated` watches still read
 `curBlock().code` (they must, to follow the cursor) — their co-subscription is
 exactly why the diff binding can miss the update, hence rebuilding via the key
 rather than adding another `b.code` reader. See the card `.key()` rules in
-`.claude/rules/drilling.md`.
+`.claude/docs/drilling.md`.
 
 ## A `state.x` read inside an outer array-building closure couples the WHOLE closure
 
@@ -241,7 +241,7 @@ card that read as the entire card flickering, not just the highlight moving.
 `${() => menu.open ? menuOverlay() : ''}`) so only that small slot reacts to
 navigation state; the outer closure stays limited to the deps it names
 (`selected`/`codeVersion`/`focusLevel`). See `stepChevronSlot` in `home.mjs`
-and "No flicker on a gran/change step" in `.claude/rules/drilling.md`.
+and "No flicker on a gran/change step" in `.claude/docs/drilling.md`.
 
 ## Orphan bindings of a dropped subtree: crash, then leak — and the `ms` swap
 
@@ -266,7 +266,7 @@ which is never touched again, so they never fire. `closeMenu` only sets
 `menu.open=false` and deliberately leaves `ms` alone. (Always-mounted +
 CSS-hiding does **not** work: `CommandMenu` would render at page load, before a
 block is selected, and the label functions reading `curBlock()` would throw and
-corrupt the slot pool.) See `.claude/rules/command-palette.md`.
+corrupt the slot pool.) See `.claude/docs/command-palette.md`.
 
 **Leak, which the `ms` swap does NOT fix:** the detached subtree stays alive
 forever. That is a slow per-open leak on its own, but becomes **actively

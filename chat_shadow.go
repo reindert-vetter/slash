@@ -1,7 +1,7 @@
 // chat_shadow.go — the per-conversation "shadow worktree" the claude_chat
 // edit path uses: a real, non-detached git checkout on its own local branch
 // chat/<conversationId>, based on the PR's live head branch. See
-// .claude/rules/tembed-workflows.md ("claude_chat").
+// .claude/docs/tembed-workflows.md ("claude_chat").
 //
 // Deliberately NOT the shared base/head worktrees ingest.go owns
 // (worktreeDirs) — those are pinned to an exact SHA and read by /api/code,
@@ -104,7 +104,7 @@ func ensureChatShadowWorktreeAt(ctx context.Context, dataDir string, pr int, con
 	// pushed, must never be silently discarded/rebased; leave it exactly as is
 	// and let the next turn/commit attempt degrade instead of guessing (the same
 	// "degrade rather than guess" rule the re-anchor pass follows — see the
-	// pr_status section of .claude/rules/workflows-trackers.md).
+	// pr_status section of .claude/docs/workflows-trackers.md).
 	dirty, ahead, err := chatShadowPendingState(ctx, dir, headRefName)
 	if err != nil {
 		// Can't tell — be conservative and leave the worktree untouched.

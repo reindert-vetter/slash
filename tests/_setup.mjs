@@ -484,7 +484,7 @@ class CheckoutRequest
 // changing that one to grow it would break those. Test: this file's own
 // spec proves scrollChangeIntoView (home.mjs) now actually brings the active
 // key back into view on ArrowDown/ArrowUp, reusing the SAME mechanism a tall
-// code diff already had (see .claude/rules/blocks-and-ingest.md,
+// code diff already had (see .claude/docs/blocks-and-ingest.md,
 // "Translation blocks").
 function materializeTranslationScrollWorktrees() {
   const key = (i) => `k${String(i).padStart(2, '0')}`

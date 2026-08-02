@@ -34,7 +34,7 @@ import (
 //
 // What gets removed for a PR whose merge is older than the cutoff:
 //  1. Its worktrees (data/worktrees/pr-<n>-{base,head}) — by far the biggest
-//     disk win (see the storage breakdown in .claude/rules/tembed-workflows.md).
+//     disk win (see the storage breakdown in .claude/docs/tembed-workflows.md).
 //  2. Its workflow runs (the .events.jsonl/.meta.jsonl files + the rows in
 //     workflows.db) — every run whose stored input carries this pr, found the
 //     same way RunsForPR does. A per-repo tracker (pr_inbox/task_inbox/
@@ -70,7 +70,7 @@ const cleanupMergedAge = 7 * 24 * time.Hour
 var retiredWorkflowTypes = map[string]bool{
 	// The old per-PR "ignore" feature (a workflow + modules/ignore) was
 	// replaced by the per-repo task_snooze workflow — see "Snoozing a task"
-	// in .claude/rules/tembed-workflows.md. modules/ignore no longer exists.
+	// in .claude/docs/tembed-workflows.md. modules/ignore no longer exists.
 	"ignore": true,
 }
 

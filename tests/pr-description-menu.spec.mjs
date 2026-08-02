@@ -6,7 +6,7 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // menuRegion in home.mjs have a stop-1 exception (isDescriptionMenu) that
 // anchors the palette on the pr-info-card and gives it the full left+width of
 // the pr-info-column (mirror of the blokken-index exception). See
-// .claude/rules/keyboard-navigation.md.
+// .claude/docs/keyboard-navigation.md.
 test.describe('PR Review Tree — PR-wide menu on the description column (stop 1)', () => {
   test('Enter on stop 1 opens the PR-wide menu positioned over the description column', async ({ page }) => {
     await page.goto('/pr/12903')
