@@ -41,6 +41,14 @@ guard** in `handleWorkflows` (`tasks_api.go`) — that handler owns
 `/api/workflows/`, so without the guard `/api/workflows/<newtype>` would be
 parsed as a Run ID.
 
+**`chat_merge` deliberately has NO endpoint here.** It is a per-PR tracker
+(`WorkflowChatMerge`) like the others in this table, but it is never
+started/signalled from the UI or any HTTP handler — only from
+*inside* the `claude_chat` workflow's own `chatActionCommit` Activity
+(`enqueueChatMerge`, `chat_merge.go`), the same cross-workflow Ensure+Signal
+shape `reanchorAfterRefresh` uses for the `approve` tracker. See "Serializing
+concurrent commits (`chat_merge`)" in `.claude/rules/workflows-comments.md`.
+
 ## Signals
 
 All through one generic route, `POST /api/workflows/{runID}/signals/<name>`.

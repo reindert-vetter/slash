@@ -65,3 +65,15 @@ var ChatSystemPrompt string
 //
 //go:embed prompts/chat_edit.md
 var ChatEditSystemPrompt string
+
+// ChatConflictSystemPrompt is the static instruction block for chat_merge's
+// one begrensde Claude attempt when an automatic `git merge` of two chat
+// conversations' shadow-worktree edits leaves real conflicts. A one-shot,
+// non-conversational agentic call (Run, not RunChat — no session, this is a
+// mechanical fix, not a turn in the reviewer's own conversation), scoped to
+// that conversation's own disposable shadow worktree with the Edit tool,
+// asked to remove every conflict marker without touching unrelated files. See
+// chat_merge.go (resolveConflictWithClaude).
+//
+//go:embed prompts/chat_conflict.md
+var ChatConflictSystemPrompt string

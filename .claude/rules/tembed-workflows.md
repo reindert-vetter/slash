@@ -97,6 +97,7 @@ See `.claude/rules/workflows-write-boundary.md` and
 |---|---|
 | `task_code_comment` (+ GitHub comment import) | `.claude/rules/workflows-comments.md` |
 | `claude_chat` (embedded Claude conversation panel) | `.claude/rules/workflows-comments.md` |
+| `chat_merge` (serializes concurrent "commit deze wijziging" pushes per PR) | `.claude/rules/workflows-comments.md` |
 | `build_relations` | `.claude/rules/workflows-analysis.md` |
 | `resolve_call` | `.claude/rules/workflows-analysis.md` |
 | `resolve_test_covers` | `.claude/rules/workflows-analysis.md` |

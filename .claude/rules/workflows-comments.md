@@ -444,7 +444,8 @@ flow.
   conversation's own exclusive directory/branch touch no shared clone state (a
   different conversation has a different branch ref), so unrelated
   conversations' edit turns still run fully concurrently.
-- **"Commit deze wijziging" (`chatActionCommit` → `commitChatShadowEdits` →
+- **"Commit deze wijziging" (`chatActionCommit` → `enqueueChatMerge` →
+  the PR's own `chat_merge` queue → `processChatMerge` →
   `commitChatShadowEditsAt`):** stage+commit whatever changed in the shadow,
   then **fast-forward-push only** onto the PR's real head branch via an
   explicit refspec (`chat/<id>:<headRef>`) — **never a force-push**. A
@@ -457,7 +458,9 @@ flow.
   re-materializes it lazily. A pushed commit is picked up like any other new
   commit: the existing `pr_status` ingest-refresh poller notices the head SHA
   moved and does its normal delta refresh + re-anchor pass — no new
-  integration needed.
+  integration needed. **This is no longer called directly from
+  `claudeChatWorkflow`** — see "Serializing concurrent commits (`chat_merge`)"
+  below for what wraps it and why.
 - **Cleanup:** `cleanup.go`'s `reWorktreeDir`/`removePRWorktrees` were extended
   to also discover/sweep any `pr-<n>-chatshadow-*` directory (plus its
   `chat/<conversationId>` branch) once the PR itself is purged — covers a
@@ -471,6 +474,114 @@ flow.
   specifically so they're testable offline against a throwaway local
   bare-repo-as-"origin" (`chat_shadow_test.go`, `t.Setenv("SLASH_REPO_DIR",
   ...)`) — no `gh`/network call at all.
+
+### Serializing concurrent commits (`chat_merge`)
+
+Every `claude_chat` conversation is its **own** Workflow Execution with its
+**own** shadow branch, so two conversations on the same PR asking to "commit
+deze wijziging" around the same time used to race each other's
+fast-forward-only push directly: `commitChatShadowEditsAt` (above) has no
+shared state across Executions, so both could fetch/ahead-check at nearly the
+same moment, one wins the push, and the other simply fails with "de branch is
+intussen verder" — a manual retry the reviewer had to trigger by hand, with no
+guarantee *which* conversation's edit landed first.
+
+`chat_merge.go` adds one more Workflow Type, **`chat_merge`**, whose only job
+is to make that "several commits at once" case land **one after another,
+each automatically merged against whatever the previous one just pushed**,
+instead of racing.
+
+- **One Execution per PR** (`chatMergeQueueRunID(pr)`, `StartWorkflowID` —
+  deterministic, like `chatConversationRunID`, so ensuring it needs no
+  in-memory cache/mutex the way `EnsureApprovals`/`EnsureIgnoreComment` still
+  do for their older random-Run-ID convention), looping on a **`"merge"`**
+  Signal (`ChatMergeRequest{ConversationID, TurnID}`). Never started directly
+  from the UI/HTTP — only ensured+signalled from **inside**
+  `claudeChatWorkflow`'s own `chatActionCommit` Activity
+  (`enqueueChatMerge`), the exact cross-workflow Ensure+Signal shape
+  `reanchorAfterRefresh` already uses to hand approvals to the `approve`
+  tracker from a *different* workflow's Activity.
+- **Why a dedicated Workflow Type rather than a lock in `chat_shadow.go`:**
+  `ingestMu` already serializes the shared-clone git plumbing itself (worktree
+  add/fetch/push), but that only prevents the git *commands* from corrupting
+  each other — it does nothing about the *outcome* (two conversations still
+  each get their own fetch/ahead-check/push attempt and the loser still just
+  fails). Resolving that properly needs a queue: hold one commit request while
+  the previous one's git-merge-and-possibly-Claude-conflict-resolution runs to
+  completion. That is exactly what a Workflow Execution's own per-Run-ID mutex
+  already gives for free — a bespoke Go-level lock held for the whole duration
+  of a possibly-slow Claude call would also have to block every *unrelated*
+  ingest/worktree operation sharing `ingestMu`, which is a much bigger lock
+  scope than this feature needs.
+- **Serialization comes from tembed itself, not custom queue code.**
+  `Engine.SignalWorkflow` appends the Signal event and then drives the run's
+  Activities **inline, under that run's own mutex**
+  (`Engine.runLock`/`advance`) — so two `SignalWorkflow` calls on the SAME
+  `chat_merge` Run ID are naturally serialized: the second one's append+replay
+  can only start once the first has fully finished processing (including its
+  own Activity), and by then it already sees the first commit as part of
+  history. `chatMergeQueueWorkflow`'s body calls **exactly one** Activity
+  (`processChatMerge`) per `"merge"` Signal — the Activity count is a pure
+  function of the Signal count, never of what that Activity discovers live
+  (fast-forward possible? merge needed? a real conflict?) — per
+  `.claude/rules/workflow-determinism.md`.
+- **`processChatMerge` (→ `processChatMergeAt` once the head branch name is
+  known, same testability split as `commitChatShadowEditsAt`):**
+  1. Try the plain, unchanged `commitChatShadowEditsAt` first. Success, or any
+     failure OTHER than "the branch moved on" (no shadow, couldn't determine
+     the branch, the push itself failed) → return as-is, nothing more to try.
+  2. **Only** on "branch moved on" (`chatShadowBranchMovedOnMsg`, a named
+     constant shared between the two files so detecting this one specific
+     outcome never string-matches an inline literal in two places): attempt an
+     ordinary **`git merge origin/<headRef>`** in the conversation's own
+     shadow. Non-overlapping edits (different files/regions) merge cleanly
+     with **no AI involved at all** — by far the common case for "several
+     conversations changed different things".
+  3. **Only on a genuine conflict** (`chatShadowConflictedPaths`, git's own
+     `--diff-filter=U` list — never inferred from the merge command's exit
+     code alone): **one begrensde Claude attempt** — a one-shot, non-session
+     `claude.Client.Run` (not `RunChat`; this is a mechanical fix, not a turn
+     in the reviewer's own conversation) scoped to that conversation's shadow
+     worktree with the Edit tool, using the new
+     `claude.ChatConflictSystemPrompt`
+     (`modules/claude/prompts/chat_conflict.md`). The result is **never
+     trusted on the model's own say-so** — `chatShadowConflictedPaths` is
+     re-checked afterwards; only a genuinely clean tree gets `git add -A` +
+     `git commit --no-edit` + the push.
+  4. **Bounded to exactly one merge/resolve attempt, no internal loop.** Any
+     failure at any step — the merge command itself failing for a non-conflict
+     reason, an unresolved conflict, a push that fails again after a
+     successful resolve — **aborts the merge** (`git merge --abort`, so the
+     shadow is left clean, never mid-conflict) and degrades to a
+     reviewer-facing message. The reviewer's own next "commit" click enqueues
+     a brand new request, which starts over against whatever the branch looks
+     like by then — this is what keeps the Activity a bounded, deterministic
+     sequence of steps regardless of how much the branch thrashes, rather than
+     a retry loop that could run indefinitely.
+- **Every outcome is ONE `chat.Message`, written under the SAME deterministic
+  id** `commitChatShadowEditsAt` already used
+  (`chatMessageID(turnId, "")`) — `processChatMergeAt`'s own follow-up
+  `SaveMessage` calls simply overwrite that row (transient intermediate
+  "branch moved on" text, if it was ever briefly written, is never shown to
+  the reviewer) rather than adding a second message, and the Activity
+  registration's own `publishChatChanged` fires exactly once, after the whole
+  attempt settles — never per intermediate step.
+- **`pushAndReclaimChatShadow`** (`chat_shadow.go`) is the ONE place that ever
+  pushes a chat shadow onto the real PR branch — extracted out of
+  `commitChatShadowEditsAt`'s own tail so both the plain fast-forward path and
+  chat_merge's merge/conflict-resolved path share it, instead of two copies of
+  the same push+reclaim logic. `ingestMu`-guarded, same reasoning as
+  `ensureChatShadowWorktreeAt`.
+- **`PriorityLow`** (same reasoning as `claude_chat` itself): a conflict
+  resolution is a real `claude` subprocess call, so an interrupted
+  `processChatMerge` must not block server startup on recovery.
+- **Known test boundary, same category as the agentic-edit path above:**
+  `claude.Fake` never actually edits a file (it only returns programmed
+  text), so the "Claude genuinely clears a real conflict" success path isn't
+  exercisable offline — only the detection→invoke→still-conflicted→abort
+  path is. Every deterministic git-plumbing path (fast-forward, clean
+  auto-merge of non-overlapping edits, two requests processed in arrival
+  order) IS fully covered offline.
 
 ### Opt-in influence on the left comment thread (Phase 4)
 
@@ -577,5 +688,14 @@ thread, a directive targeting a forced-`completed` Execution degrading to
 "origin": worktree creation on a real branch, refresh-when-clean,
 never-discarding a pending/dirty edit, a fast-forward push actually landing on
 the remote + the shadow being reclaimed afterwards, a non-fast-forward push
-being refused without touching the remote, and the "nothing to commit" case)
-— all offline, no live `claude`/`gh`/network call.
+being refused without touching the remote, and the "nothing to commit" case),
+and `chat_merge_test.go` (`processChatMergeAt` against the same kind of
+throwaway bare repo: a clean auto-merge of two conversations' non-overlapping
+edits with zero `claude.Fake` calls, two requests processed back-to-back in
+arrival order both landing on the real branch, and a genuine same-line
+conflict where the one begrensde Claude attempt — via `claude.Fake`, which
+never really edits a file — is invoked exactly once, fails to clear the
+conflict, and the merge is aborted without touching the remote; plus
+`chatMergeQueueWorkflow`'s own ordering guarantee against a bare tembed engine
+with a stub Activity, and `EnsureChatMergeQueue`'s idempotency) — all offline,
+no live `claude`/`gh`/network call.

@@ -135,6 +135,57 @@ func chatShadowPendingState(ctx context.Context, dir, headRefName string) (dirty
 	return dirty, n, nil
 }
 
+// chatShadowBranchMovedOnMsg is the exact reviewer-facing text
+// commitChatShadowEditsAt reports when the PR's real branch has moved on since
+// the shadow was based (a non-fast-forward push). Named so chat_merge.go can
+// detect this SPECIFIC outcome (as opposed to "no shadow exists"/"couldn't
+// determine the PR branch"/a genuine push failure) without string-matching an
+// inline literal in two places — a shared constant can't drift out of sync.
+const chatShadowBranchMovedOnMsg = "De PR-branch is intussen verder; jouw wijziging kon niet worden gepusht. Ververs en probeer opnieuw."
+
+// pushAndReclaimChatShadow pushes dir's own conversation branch onto
+// origin/<headRefName> via the explicit refspec chat/<id>:<headRef> — never
+// --force, git itself refuses a non-fast-forward push on top of whatever
+// ahead-check the caller already did — and, only once that succeeds, reclaims
+// the now-superfluous shadow worktree + branch (best-effort; a leftover is
+// still swept by cleanup.go once the PR is purged). Shared by
+// commitChatShadowEditsAt's own fast-forward path and chat_merge.go's merge/
+// conflict-resolution path, so there is exactly one place that ever pushes a
+// chat shadow onto the real PR branch.
+//
+// ingestMu-guarded: push/worktree-remove/branch-delete all touch the shared
+// clone's own remote-tracking refs and worktree registry — the same reason
+// ensureChatShadowWorktreeAt takes this lock.
+func pushAndReclaimChatShadow(ctx context.Context, dir, conversationID, headRefName string) error {
+	ingestMu.Lock()
+	defer ingestMu.Unlock()
+	branch := chatShadowBranch(conversationID)
+	refspec := branch + ":" + headRefName
+	if _, err := runGitIn(ctx, dir, "push", "origin", refspec); err != nil {
+		return err
+	}
+	_, _ = runGit(ctx, "worktree", "remove", "--force", dir)
+	_, _ = runGit(ctx, "branch", "-D", branch)
+	return nil
+}
+
+// chatShadowConflictedPaths reports the paths git still considers unmerged in
+// dir (non-empty only right after a `git merge`/`git rebase` left conflict
+// markers) — the authoritative "is this really a conflict" check, used both to
+// decide whether an automatic `git merge` needs Claude's help and, afterwards,
+// to verify Claude actually resolved it rather than trusting its own claim.
+func chatShadowConflictedPaths(ctx context.Context, dir string) ([]string, error) {
+	out, err := runGitIn(ctx, dir, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return nil, nil
+	}
+	return strings.Split(trimmed, "\n"), nil
+}
+
 // commitChatShadowEdits is the "commit deze wijziging" Activity body: commit
 // whatever Claude changed in the conversation's shadow worktree and
 // fast-forward-push it straight onto the PR's real head branch via an
@@ -199,36 +250,29 @@ func commitChatShadowEditsAt(ctx context.Context, cm *chat.Module, dataDir strin
 	// Else: nothing new to stage — but an earlier attempt may already have
 	// committed locally without managing to push, so it's still worth trying.
 
-	// git fetch + push touch the shared clone's remote-tracking refs — the same
-	// reason ensureChatShadowWorktree takes ingestMu.
+	// git fetch touches the shared clone's remote-tracking refs — the same
+	// reason ensureChatShadowWorktree takes ingestMu. Scoped to JUST the fetch +
+	// ahead-check: the push itself takes the same lock again, on its own, inside
+	// pushAndReclaimChatShadow — a plain sync.Mutex isn't reentrant, so it must
+	// be released here first rather than deferred.
 	ingestMu.Lock()
-	defer ingestMu.Unlock()
-
-	if _, err := runGit(ctx, "fetch", "origin", headRefName); err != nil {
+	_, fetchErr := runGit(ctx, "fetch", "origin", headRefName)
+	if fetchErr != nil {
+		ingestMu.Unlock()
 		return newMsg("Kon de laatste stand van de branch niet ophalen.", true)
 	}
 	aheadOut, err := runGitIn(ctx, dir, "rev-list", "--count", "HEAD..origin/"+headRefName)
+	ingestMu.Unlock()
 	if err != nil {
 		return newMsg("Kon niet controleren of de branch intussen is doorgelopen.", true)
 	}
 	if strings.TrimSpace(string(aheadOut)) != "0" {
-		return newMsg("De PR-branch is intussen verder; jouw wijziging kon niet worden gepusht. Ververs en probeer opnieuw.", true)
+		return newMsg(chatShadowBranchMovedOnMsg, true)
 	}
 
-	branch := chatShadowBranch(conversationID)
-	refspec := branch + ":" + headRefName
-	// No --force anywhere here: git itself refuses a non-fast-forward push, on
-	// top of the ahead-check above.
-	if _, err := runGitIn(ctx, dir, "push", "origin", refspec); err != nil {
+	if err := pushAndReclaimChatShadow(ctx, dir, conversationID, headRefName); err != nil {
 		return newMsg("Pushen naar de PR-branch is mislukt.", true)
 	}
-
-	// Reclaim: nothing is left to represent now that the shadow matches the new
-	// head — a future edit turn re-materializes it lazily from the (now
-	// updated) head. Best-effort; a leftover directory/branch is still swept by
-	// cleanup.go once the PR itself is purged.
-	_, _ = runGit(ctx, "worktree", "remove", "--force", dir)
-	_, _ = runGit(ctx, "branch", "-D", branch)
 
 	return newMsg(fmt.Sprintf("Wijziging gepusht naar `%s`.", headRefName), false)
 }

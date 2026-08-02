@@ -94,17 +94,20 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		var sig ChatMessageSignal
 		w.WaitSignal(SignalMessage, &sig)
 
-		// "commit deze wijziging": push the conversation's own shadow-worktree
-		// edits onto the PR's real head branch. No Claude call and no user/
-		// assistant text turn beyond the status message the Activity itself
-		// saves (see commitChatShadowEdits, chat_shadow.go). This branch is
-		// decided purely by sig.Action, part of the Signal's own recorded input —
-		// deterministic under replay.
+		// "commit deze wijziging": hand this conversation's shadow-worktree edits
+		// to the PR's own chat_merge queue, which serializes every conversation's
+		// commit request for this PR so two of them landing around the same time
+		// are merged one after another instead of racing each other's
+		// fast-forward-only push (see chat_merge.go). No Claude call and no
+		// user/assistant text turn here — the eventual outcome message is
+		// recorded by processChatMerge, on the queue's OWN Execution, once it
+		// gets to this request. This branch is decided purely by sig.Action, part
+		// of the Signal's own recorded input — deterministic under replay.
 		if sig.Action == chatActionCommit {
-			if err := w.ExecuteActivity("commitChatShadowEdits", chatCommitInput{
+			if err := w.ExecuteActivity("enqueueChatMerge", chatCommitInput{
 				PR: in.PR, ConversationID: in.CommentID, TurnID: sig.ID,
 			}, nil); err != nil {
-				return nil, fmt.Errorf("commit chat shadow edits: %w", err)
+				return nil, fmt.Errorf("enqueue chat merge: %w", err)
 			}
 			continue
 		}

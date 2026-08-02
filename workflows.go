@@ -1742,19 +1742,34 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		publishChatChanged(arg.PR, arg.ConversationID)
 		return nil, nil
 	})
-	// Activity: commit + fast-forward-push a conversation's shadow-worktree
-	// edits onto the PR's real head branch (write: git commit/push, guarded by
-	// ingestMu around the plumbing that touches the shared clone — see
-	// chat_shadow.go and .claude/rules/tembed-workflows.md, "claude_chat").
-	engine.RegisterActivity("commitChatShadowEdits", func(ctx context.Context, in []byte) ([]byte, error) {
+	// Activity: hand one conversation's "commit deze wijziging" request off to
+	// the PR's own chat_merge queue (write: ensures + signals a DIFFERENT
+	// Workflow Execution — the same cross-workflow Ensure+Signal shape
+	// reanchorAfterRefresh already uses for the approve tracker). No git/claude
+	// work happens here at all — see chat_merge.go (enqueueChatMerge) and
+	// .claude/rules/tembed-workflows.md ("chat_merge").
+	engine.RegisterActivity("enqueueChatMerge", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg chatCommitInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		enqueueChatMerge(m, arg)
+		return nil, nil
+	})
+	// Activity: the chat_merge queue's own per-request work — attempt the
+	// conversation's shadow-worktree push, escalating to an automatic git merge
+	// and, only for a real conflict, one begrensde Claude attempt (write: git
+	// commit/merge/push guarded by ingestMu around the plumbing that touches the
+	// shared clone — see chat_merge.go/chat_shadow.go).
+	engine.RegisterActivity("processChatMerge", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatMergeInput
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
 		if m.chat == nil {
 			return json.Marshal(chat.Message{})
 		}
-		msg := commitChatShadowEdits(ctx, m.chat, m.dataDir, arg.PR, arg.ConversationID, arg.TurnID)
+		msg := processChatMerge(ctx, m.chat, m.claude, m.dataDir, arg)
 		publishChatChanged(arg.PR, arg.ConversationID)
 		return json.Marshal(msg)
 	})
@@ -1776,6 +1791,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowTaskInbox, taskInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
 	engine.RegisterWorkflow(WorkflowClaudeChat, claudeChatWorkflow)
+	engine.RegisterWorkflow(WorkflowChatMerge, chatMergeQueueWorkflow)
 
 	// The LLM-heavy workflows make many/long claude calls (resolve_call runs one
 	// claude call per unresolved call in the block; code_warning a whole agentic
@@ -1792,6 +1808,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// runOneClaudeTurn) — same reasoning as the LLM-heavy workflows above: an
 	// interrupted turn must not block server startup on recovery.
 	engine.SetWorkflowPriority(WorkflowClaudeChat, tembed.PriorityLow)
+	// chat_merge's own processChatMerge Activity can, on a real conflict, run one
+	// claude subprocess call (resolveConflictWithClaude) — same reasoning.
+	engine.SetWorkflowPriority(WorkflowChatMerge, tembed.PriorityLow)
 
 	// pr_status itself is important (merge/close detection + ingest refresh) and
 	// stays Normal — but its one slow LLM step, generatePRSummary (a Haiku call),
