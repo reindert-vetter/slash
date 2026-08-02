@@ -23,7 +23,11 @@ read/write the SQLite call graph.
    (method, required fields, numeric ranges, allowed values).
 5. Respond with JSON; set `Content-Type: application/json`. Serve deltas, not
    the whole graph.
-6. Add a Playwright test that hits the endpoint via the UI flow.
+6. Add a Playwright test that hits the endpoint via the UI flow. If it **seeds**
+   anything (places a comment, starts a workflow), take its PR number from
+   `seededPr(testInfo)` (`tests/_fixtures.mjs`) — never a hardcoded one; a
+   guard spec fails the run otherwise. See "Playwright test infra" in
+   `.claude/rules/conventions.md`.
 7. **Restart the server** and verify the endpoint (see below). A browser
    refresh alone doesn't load the new route.
 

@@ -1,1650 +1,616 @@
 # Keyboard navigation (two modes)
 
 The keyboard flow lives in `home.mjs` (`onKeydown`) and has two modes via
-`state.mode`.
+`state.mode`: `'list'` (choose a block in the sidebar) and `'diff'` (walk the
+changes of a block).
+
+## Split out of this file
+
+- **`.claude/rules/command-palette.md`** — every menu: the `Enter` block
+  palette, the `/` PR-wide menu, `withClose`/`defaultSel`, the postApprove
+  follow-up + `findNextUnapproved`, the review-submit menus, the comment-scoped
+  and compose menus.
+- **`.claude/rules/footer.md`** — the footer: inline diff preview of the active
+  unit, `footerBoxPx`/height reservation, the AI description.
 
 ## The left→right navigation chain (`←`/`→` through the whole layout)
 
-Separate from the individual mechanisms below, `←`/`→` together form one
-continuous chain of **stops**, from left to right across the whole layout:
+`←`/`→` form one continuous chain of **stops**, left to right across the
+layout. This is **on top of**, not instead of, the per-stop `↑`/`↓` navigation
+(block selection in the index, change group in the diff, child in Underlying
+code).
 
-1. **Description** (`prInfoCard`/`state.showDescription`) — the PR title/
-   summary/description, plus (stacked below it) the **Taken** block — see
-   "Tasks: a block under the PR-description column" in
-   `.claude/rules/detail-layout.md`. **Hidden by default** (takes up no width
-   then — the column disappears entirely) and the leftmost stop. `←` here
-   leaves the whole chain to `/pr-overview` (see below) — there is nothing to
-   the left of stop 1.
-2. **PR block index** (`data-testid=pr-index`, the sidebar, `state.mode==='list'`)
-   — physically shifts right as soon as stop 1 is open, so the description
-   really sits to its left instead of after it (see `.claude/rules/detail-layout.md`).
+1. **Description** (`prInfoCard`/`state.showDescription`) — PR title/summary/
+   description plus the **Taken** block stacked below it (see
+   `.claude/rules/detail-layout.md`). **Hidden by default** (the column then
+   takes up no width at all) and the leftmost stop.
+2. **PR block index** (`data-testid=pr-index`, the sidebar,
+   `state.mode==='list'`) — shifts right as soon as stop 1 is open, so the
+   description really sits to its left (see `.claude/rules/detail-layout.md`).
    - **Stop 2b — the methodes-kolom** (`data-testid=test-methods-column`,
-     `state.testColumnFocused`): a **conditional** stop, only inserted when
-     the selected row is a `test_class` row (grouped TEST-category methods,
-     see "Grouping test methods per class" in `.claude/rules/detail-layout.md`)
-     — deliberately NOT renumbered into the chain (stop 3 stays "stop 3"
-     etc.) to avoid touching every reference below. `→` from stop 2 on such
-     a row lands here first (instead of stepping straight into the diff) and
-     **slides the pr-index away** (the same translate treatment as diff mode
-     — `BlockList.mjs`'s ternary checks `state.testColumnFocused` next to
-     `mode==='diff'`, and `<main>` shifts to `left-0` in lockstep); a
-     **second** `→` then steps into stop 3, of the ACTIVE method
-     (`state.classMethodSel`, via `curBlock()`) — the methodes-kolom itself
-     is **hidden in diff mode** (the render slot in `home.mjs` bails on
-     `state.mode === 'diff'`). **`Enter` here does NOT step into the diff** —
-     it opens the ordinary block-scoped command palette (`Enter — command
-     palette` below), exactly the one that already opens when the
-     `test_class` row itself is selected (before ever stepping right):
-     `curBlock()` already resolves to the active method regardless of
-     `testColumnFocused`, so the same palette naturally targets it. Only `→`
-     steps into the diff. `←` from stop 3 comes back
-     here first (not all the way to stop 2 — the column reappears, the
-     pr-index stays hidden); a second `←` leaves it (pr-index slides back,
-     the column stays visible as long as the class row is selected). `↑`/`↓`
-     walk the class's own methods; at the class edges they exit back to the
-     index and step exactly ONE row further (the next/previous visible row,
-     also a non-test row — never the old jump to the next `test_class` row's
-     methods), clamped when no further row exists. Only the diff-mode
-     doorloop (`stepTestMethodChange`) still flows across class rows — see
-     "Grouping test methods per class" in `.claude/rules/detail-layout.md`.
-     `f`/`d`/`s`/`a` are a no-op here, same as stop 1.
+     `state.testColumnFocused`): a **conditional** stop, only inserted when the
+     selected row is a `test_class` row (see
+     `.claude/rules/test-class-grouping.md`). Deliberately NOT renumbered into
+     the chain, so every "stop 3" reference below stays valid. Details in that
+     file; keyboard summary: `→` from stop 2 lands here first and slides the
+     pr-index away, a **second** `→` steps into stop 3 of the ACTIVE method
+     (`state.classMethodSel`, via `curBlock()`); the column is hidden in diff
+     mode; `←` from stop 3 comes back here first, a second `←` leaves it;
+     `↑`/`↓` walk the class's own methods and at the class edges exit to the
+     index and step exactly ONE visible row further (clamped when there is
+     none); `Enter` opens the ordinary block palette (not the diff — only `→`
+     does that), since `curBlock()` already resolves to the active method;
+     `f`/`d`/`s`/`a` are a no-op, same as stop 1.
 3. **Block with diff** (`state.mode==='diff'`, `state.focusLevel===0`).
-4. **Drilled columns** (`state.drill`/`focusLevel>0`) — a **side branch**, not
-   a strict stop: only reachable via Enter/click on an Underlying-code child
-   (see "Drilling" in `.claude/rules/detail-layout.md`), not via `→`. `←` does
-   peel them back one by one, just like the other stops.
+4. **Drilled columns** (`state.drill`/`focusLevel>0`) — a **side branch**, not a
+   strict stop: reachable only via Enter/click on an Underlying-code child (see
+   `.claude/rules/drilling.md`), never via `→`. `←` does peel them back one by
+   one like any other stop.
 5. **Inline comment block(s)** (`cs.focus` one of `'new'`/`'comment'`/
-   `'thread'`) — a **conditional** stop: only reachable via `→` (or `↓`
-   falling through from Onderliggende code) when the selected unit actually
-   has a comment (`hasVisibleComments()`, see "Inline comment blocks" in
-   `.claude/rules/detail-layout.md`); otherwise `→` skips straight past it.
-6. **Underlying code** (`RelatedPanel`, `cs.focus==='code'`) — the rightmost
-   stop of this chain; there is no `→`/`←` stop after it.
+   `'thread'`) — **conditional**: only reachable when the selected unit actually
+   has a comment (`hasVisibleComments()`, see
+   `.claude/rules/comments-panel.md`); otherwise `→` skips straight past it.
+   - **Stop 5b — the embedded Claude chat** (`data-testid=claude-chat-column`,
+     `cs.focus==='claude'`): reached with `→` from stop 5's `'thread'` level,
+     **or straight from the diff** when the unit has no comment at all — unlike
+     stop 5 it is **unconditional**, and entering it that way silently
+     auto-creates the empty private comment the conversation hangs on
+     (`enterClaudeChat`, `RelatedPanel.mjs`). Deliberately NOT renumbered into
+     the chain, so every "stop 6" reference below stays valid. Details in
+     `.claude/rules/claude-chat-panel.md`; keyboard summary: `↑`/`↓` walk the
+     transcript on its own `cs.claudePos` cursor (exactly as `'thread'` walks
+     reactions on `cs.threadPos` — 0 = the composer, 1..n = the n-th turn from
+     the bottom, clamped at the oldest); `↓` at `claudePos === 0` falls through
+     to stop 6 (`enterRelated()`); `←` steps back one stop to `'thread'`, never
+     straight to the diff; `→` does nothing (there is no stop past it).
+6. **Underlying code** (`RelatedPanel`, `cs.focus==='code'`) — the last stop of
+   the chain: `→` there leaves the card nowhere to go. Note that "last" is
+   about the chain, not the screen — the stop-5b Claude column renders to the
+   *right* of it (see `.claude/rules/detail-layout.md`), and `↓` out of the
+   chat therefore steps leftwards on screen.
 
-Tasks no longer has its own keyboard stop at all — it's click-only, under
-stop 1 (see `.claude/rules/detail-layout.md`).
+Tasks has no keyboard stop at all — it is click-only, under stop 1.
 
-**Focus highlight per stop — now one single, app-wide border rule, no
-per-block exceptions:** every block/card/row uses exactly the same two
-states — `border-indigo-300 dark:border-indigo-500 ring-1
-ring-indigo-200 dark:ring-indigo-500/30` while it's selected/focused,
-`border-slate-300 dark:border-zinc-700` (plus `ring-1 ring-black/5` on an
-otherwise-idle card, mirroring the block-diff card's own rest state)
-otherwise — never a bespoke lighter/darker gray or a color-only exception
-per component. This mirrors the `diffActive` pattern of the block-diff card
-(`Block.mjs`): the description card (`prInfoCard`,
-`data-testid=pr-info-card`) while `state.showDescription` is true, the
-pr-index (`data-testid=pr-index`) while `state.mode==='list' &&
-!state.showDescription`, the methodes-kolom (`TestMethodsColumn.mjs`) while
-`state.testColumnFocused`, and the block-diff card (stop 3, and each drilled
-column, stop 4) while it owns `focusLevel`. Both `prInfoCard` and the pr-index
-`<aside>` build this into their existing top-level `class="${() => …}"`
-function binding (not a keyed list item), so it just re-evaluates reactively on
-`state.showDescription`/`state.mode` — no arrow.js keyed-node pitfall applies
-here (that pitfall only bites keyed array items like the `Block()` cards, see
-`.claude/rules/conventions.md`). Stop 5 (Underlying code) deliberately has
-**no** outer focus border of its own — that was removed on purpose (see the
-"Underlying code" section in `.claude/rules/detail-layout.md`) — but every
-individual child card/chip/tests-bar inside it (`relatedCard`/`nestedChip`/
-`testsBar`, `RelatedPanel.mjs`) follows the same two-state border as any
-other item, so the chain isn't uniformly bordered end-to-end at the
-column/stop level, only within it.
+Transitions, and how they differ from the older per-mechanism behaviour:
 
-**The same rule also applies to list rows** — the sidebar block row
-(`BlockList.mjs`'s `row`), the search box, `toggleRow`/`ignoreToggleRow`, and
-the methodes-kolom's own method row (`TestMethodsColumn.mjs`'s `methodRow`) —
-not just the four card-level stops above. A selected/focused row keeps its
-existing `bg-indigo-50 dark:bg-indigo-500/15` + `ring-1 ring-inset
-ring-indigo-200 dark:ring-indigo-500/30` tint as the **primary** selection
-signal (deliberately kept, rather than dropped in favor of the border alone
-— a large chunk of the Playwright suite already asserts `bg-indigo-50` for
-"this row is selected", and rows sit flush against each other with no gap,
-so the background tint reads more reliably there than a border would on its
-own); the indigo/gray border is added **on top** of that, for the same
-"every block looks the same" consistency, not as a replacement. Every row's
-border is always present at a constant 1px in both states (only the
-*color* toggles, never the width) so selecting a row never shifts its
-height. **Visible, deliberate side effect:** because a full border (not
-just a `border-b`) now runs around every row, the previous subtle, light
-`border-slate-100` hairline divider *between* two unselected rows has been
-replaced by the same, slightly darker `border-slate-300 dark:border-zinc-700`
-card-rest tint every other block/card uses — the row list therefore now
-reads a bit more like a bordered table than a hairline-separated list. This
-was a conscious trade-off for full border consistency, not an oversight; if
-that reads as too heavy in practice it's an easy, localized revert (back to
-`border-b border-slate-100 dark:border-zinc-800/60`, dropping the
-`border-slate-300`/`border-indigo-300` idle/focused pair on the row itself)
-without touching the rest of this rule.
+- **Stop 1 ↔ 2:** `←` in `'list'` mode (outside the search box) opens the
+  description (`state.showDescription = true`); it used to open the search box
+  (`activateSearch()`). `→` closes it again and hands the keyboard back to the
+  index. While it is open `↑`/`↓` are both no-ops (PR-wide comments live in the
+  index itself now, see below). **The search box is not its own stop** — it
+  belongs to stop 2 and is no longer reachable via `←`; a mouse click (or
+  native Tab) still gets you there and typing filters as always. If it already
+  has focus (`state.searchActive`), `←` goes to stop 1 via `exitSearch()`
+  instead of the old no-op.
+- **Before stop 1 (the end of the chain):** `←` while `state.showDescription`
+  navigates away to the PR inbox (`location.href = '/pr-overview'`). What
+  travels along and comes back (`?pr=`/`?sel=`/drill) is described in
+  `.claude/rules/pages-and-routing.md`.
+- **Stop 2 ↔ 3 / 3 ↔ 4:** see the `'list'`/`'diff'` sections below resp.
+  "Column navigation" in `.claude/rules/drilling.md`.
+- **Stop 3/4 ↔ 5 ↔ 5b ↔ 6:** `→` from the diff lands on stop 5 (the first
+  conversation) when the unit has one (`enterCommentsHead()`), else straight on
+  to **stop 5b**, the embedded Claude chat (`enterClaudeChat()`) — it no longer
+  goes to stop 6 from here. `↓` on the last conversation (or at the bottom of an
+  open thread) falls through to stop 6 instead of clamping, and so does `↓` at
+  the bottom of stop 5b; `↑` on stop 6's first child steps back onto stop 5's
+  last conversation if one exists, else straight to the diff — stop 5b is
+  **not** on that way back, it is only ever entered by `→`/the diff-with-no-
+  comment path. `↑` on stop 5's first conversation likewise
+  exits straight to the diff — the "+ Nieuwe comment" trigger row and its
+  `cs.focus==='trigger'` stop were removed; starting a comment goes exclusively
+  through the palette's "Comment op deze regel" (`startComment`). `←` on stop 6
+  keeps its unconditional "leave the panel" behaviour at any child position.
+  Full mechanism: `.claude/rules/comments-panel.md`.
+- `state.showDescription` deliberately lives **outside** the URL — ephemeral
+  cursor state, not a navigation position worth restoring.
 
-`→` moves one stop to the right, `←` one stop to the left — this is
-**on top of**, not instead of, the existing per-stop `↑`/`↓` navigation
-(which still moves within a stop: block selection in the index, change group
-in the diff, child in Underlying code). Concretely, with the adjustments this
-required relative to the older per-mechanism behavior:
+### Focus highlight per stop
 
-- **Stop 1 ↔ 2:** `←` in `'list'` mode (outside the search box) used to open
-  the search box (`activateSearch()`); it now **opens the description**
-  (`state.showDescription = true`). `→` from the description closes it again
-  (`state.showDescription = false`) and gives the block index the keyboard
-  back. While the description is open, `↑`/`↓` are both no-ops — PR-wide
-  comments no longer live under the description card (see "Comment-index
-  items" in `.claude/rules/detail-layout.md`: they're navigable rows in the
-  block index itself now, stop 2, selected the ordinary way).
-  **The search box is not its own stop** — it belongs to stop 2 and is no
-  longer reachable via `←` (that was its only keyboard entry); it remains
-  reachable via a mouse click (and native Tab), and typing filters as always
-  once it has focus. If the search box was already focused via a click
-  (`state.searchActive`), `←` now does the same thing there (to stop 1, with
-  `exitSearch()` to cleanly release DOM focus) instead of the old no-op
-  ("already the leftmost stop").
-- **Before stop 1 (end of the chain):** `←` while `state.showDescription` is
-  open (there is no stop 0) navigates away from the PR to the **PR inbox**
-  (`location.href = '/pr-overview'`, see `.claude/rules/pages-and-routing.md`).
-  Choosing a PR there lands you on `/pr/<id>` without a `sel` param in the
-  URL, so `state.selected` sits at its default (`0`) — the **first block** is
-  immediately selected, not whatever was selected earlier on that PR.
-- **Stop 2 ↔ 3 / stop 3 ↔ 4:** unchanged — see the `'list'`/`'diff'` sections
-  below resp. "Column navigation" in `.claude/rules/detail-layout.md`.
-- **Stop 3/4 ↔ 5 ↔ 6:** `→` from the diff lands on stop 5 (the first inline
-  comment conversation) only when the selected unit has one
-  (`hasVisibleComments()`/`enterCommentsHead()`), else it skips straight to
-  stop 6 (`enterRelated()`). `↓` on the last comment conversation (or
-  the bottom of an open thread) falls through to stop 6 instead of clamping;
-  `↑` on stop 6's first child steps back onto stop 5's last conversation if
-  one exists, else exits straight to the diff. `↑` on stop 5's first
-  conversation likewise exits straight to the diff — there is no dedicated
-  "+ Nieuwe comment" trigger row/nav-stop any more (removed:
-  `cs.focus==='trigger'`/`enterTrigger`/`isTriggerFocused` in
-  `RelatedPanel.mjs`); starting a new comment goes exclusively through the
-  command palette's "Comment op deze regel" (`startComment`), reachable with
-  `Enter` from the diff at any time — not via arrow browsing. `←` on
-  stop 6 keeps its own, unconditional "leave the panel" behaviour at any
-  child position (not just the first).
-  See "Inline comment blocks" in `.claude/rules/detail-layout.md` for the
-  full mechanism.
-- `state.showDescription` deliberately lives **outside** the URL (like
-  `menu`/`ui.task` elsewhere) — ephemeral cursor state, not a navigation
-  position a refresh needs to restore.
+**One single, app-wide border rule, no per-block exceptions:** every
+block/card/row uses the same two states — `border-indigo-300
+dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30` while
+selected/focused, `border-slate-300 dark:border-zinc-700` (plus `ring-1
+ring-black/5` on an otherwise-idle card) otherwise. Never a bespoke gray or a
+colour-only exception per component. This mirrors the `diffActive` pattern of
+the block-diff card (`Block.mjs`) and applies to: `prInfoCard`
+(`data-testid=pr-info-card`) while `state.showDescription`; the pr-index
+(`data-testid=pr-index`) while `state.mode==='list' && !state.showDescription`;
+the methodes-kolom (`TestMethodsColumn.mjs`) while `state.testColumnFocused`;
+and the block-diff card (stop 3, and each drilled column at stop 4) while it
+owns `focusLevel`. Both `prInfoCard` and the pr-index `<aside>` build it into
+their existing top-level `class="${() => …}"` binding — not a keyed list item,
+so no arrow.js keyed-node pitfall applies here.
+
+Stop 5/6 (Underlying code) deliberately has **no outer** focus border of its
+own, but every child card/chip/tests-bar inside it follows the same two-state
+border (see `.claude/rules/underlying-code.md`).
+
+**The same rule applies to list rows** — the sidebar row (`BlockList.mjs`'s
+`row`), the search box, `toggleRow`/`ignoreToggleRow`, and
+`TestMethodsColumn.mjs`'s `methodRow`. A selected row keeps its existing
+`bg-indigo-50 dark:bg-indigo-500/15` + `ring-1 ring-inset ring-indigo-200
+dark:ring-indigo-500/30` tint as the **primary** signal (deliberately kept: a
+large part of the Playwright suite asserts `bg-indigo-50` for "selected", and
+rows sit flush with no gap, so a tint reads more reliably there than a border);
+the border is added on top. Every row's border is always 1px in both states
+(only the *colour* toggles), so selecting never shifts row height. Deliberate
+side effect: the old light `border-slate-100` hairline between rows is now the
+same `border-slate-300 dark:border-zinc-700` card-rest tint, so the list reads
+more like a bordered table — a conscious trade-off, revertible locally (back to
+`border-b border-slate-100 dark:border-zinc-800/60`) without touching the rest
+of this rule.
 
 ### Comment-index items (PR-wide comments as ordinary "Start" rows)
 
-PR-wide comments no longer have their own keyboard cursor/stop — a comment
+PR-wide comments have no keyboard cursor of their own — a comment
 (`kind !== ''`) is a synthetic, ordinary row in the block index (stop 2,
-`kind:'comment'`, see "Comment-index items" in `.claude/rules/detail-layout.md`
-for the full mechanism: the `0/1`→`1/1` approval mapping, the detail card
-that replaces a diff card in the block column, and how it's synthesized).
-`↑`/`↓`/click select it exactly like an ordinary PR block
-(`stepVisibleSelected`/`stepListSelection` are generic over it); selection
-alone reveals its thread (body + reactions) in the block column to the right
-of the index — no hover, no separate cursor.
+`kind:'comment'`). `↑`/`↓`/click select it exactly like a PR block
+(`stepVisibleSelected`/`stepListSelection` are generic over it), and selection
+alone reveals its thread in the block column — no hover, no separate cursor.
+The row synthesis, approval mapping (`0/1`→`1/1`) and detail card live in
+`.claude/rules/comments-panel.md`.
 
 **`Enter` opens a small action menu; `→` instead steps into the item's own
-thread history — the two are deliberately NOT identical here** (this used to
-be the case; changed on explicit request so `→` on a comment item mirrors
-`→` on an ordinary block, which steps you "into" it instead of opening a
-menu). `Enter` (`ms.mode = 'prComment'`, `prCommentCommandsFor` in
-`home.mjs`) — `selectedComment()` gates a dedicated branch checked **before**
-the generic Enter-opens-menu handling. The menu: **"Sluit menu"** (pinned) →
-then **"Beantwoorden"** and **"Resolve comment"**, in an order that depends on
-`isOwnComment(c)` (`home.mjs`): for the reviewer's **own** comment — placed in
-this app (`!c.source || c.source === 'ui'`), or placed by the reviewer
-directly on GitHub and later imported (`c.source === 'github'` +
-`c.author === meLogin()`, see `avatar.mjs`) — **"Resolve comment"** comes
-first (thus the default-selected 2nd item); for anyone else's comment
-**"Beantwoorden"** stays first/default, as before. Both items are **always**
-present, only their order (and thus the default) changes → optionally
-**"Comment hiervan maken"** (only when the item's own `source === 'ai'` — a
-`code_warning` finding, see "Converting an AI-controle finding into a real
-comment" in `detail-layout.md` — never true at the same time as "own", so this
-never collides with the reordering above) →
-**"Ignore"** ("Ignore ongedaan maken" once already ignored —
-`toggleIgnoreComment`, a durable sidebar-visibility flag written through the
-per-PR `ignore_comment` tracker's own Signal, just like reply/resolve/delete;
-see "Comment-index items" in `.claude/rules/detail-layout.md` for the full
-mechanism, including why it was ephemeral at first). Because the detail
-card already shows on selection (independent of Enter/→), the menu simply
-opens anchored on/below that card — "the thread shows above the menu" is a
-consequence of that anchoring (`menuAnchor`/`menuRegion`'s `'prComment'`
-branches), not a distinct menu variant. `→` (`enterPrCommentThread`,
-`RelatedPanel.mjs`) instead steps the keyboard into the comment's own thread
-history, reusing the same `threadMessages`/`reactionBubble` rendering the
-block-scoped inline-comment thread already uses (see "Comment-index items"
-in `detail-layout.md` for the cursor itself, `pct`, and why it's a separate,
-non-URL-bound reactive rather than that panel's own `cs.focus`/
-`cs.threadPos`); `↑` walks up the messages and clamps at the oldest one (no
-fall-through there). `↓` walks down towards the newest message, but once
-already there it FALLS THROUGH — leaves the thread and advances the sidebar
-cursor to the next comment/block (the ordinary `stepListSelection(1)`,
-`home.mjs`) instead of clamping, mirroring the block-scoped panel's own
-`advanceFromComment` "↓ loopt door" convention — a comment-index item has no
-Onderliggende-code panel to fall through to, so it falls through to the next
-**index row** instead. `←` steps back out to the index (same row). `Enter`
-still always opens the menu, regardless of whether the thread is currently
-focused. **"Beantwoorden"** only reveals the reply textarea in the
-detail card (`startPrCommentReply`) and focuses it — typing + `Enter` (or
-the send button) is what actually sends, via the same
-`POST /api/workflows/{runId}/signals/reply` Signal the block-scoped comments
-panel uses (`done:false`). **"Resolve comment"** sends the same Signal with
-the `"/resolve"` sentinel + `done:true` (`resolvePrCommentItem`) — see
-"Persisting reviewer approval"/"The first slash task" in
-`.claude/rules/tembed-workflows.md` for the underlying mechanism; no new
-write path either way.
+thread** — deliberately NOT the same action (changed on request so `→` mirrors
+`→` on an ordinary block: it steps you *into* something). The menu itself is
+`prCommentCommandsFor` — see `.claude/rules/command-palette.md`.
 
-**`Enter`** opens a **command palette** (`src/CommandMenu.mjs`,
-`data-testid=command-menu`): a searchable command menu that appears as a
-**floating popover just below the current selection**, over the rest of the
-page — anywhere in the tree, in whichever block. At **stop 1** (the PR
-description column, `state.showDescription`, see "The left→right navigation
-chain" above) there is no block context to act on, so `Enter` there opens the
-same **PR-wide** menu as `/` (`openMenu(state.showDescription ? 'pr' : 'block')`
-in `onKeydown`) instead of the block-scoped palette — block 0 in the list is a
-different stop (`showDescription` is `false` there) and simply keeps the
-block palette. `home.mjs` (`menuOverlay`) renders it once at `<main>`
-level as a `position:fixed` element (`data-testid=
-command-anchor`) with a full-screen catch layer (`data-testid=command-overlay`)
-that closes on a click outside the menu. `positionMenu` anchors it just
-**below** the selection and gives it the **width of the right (NEW) pane** —
-so **half width, over the right side** (the new code you're reviewing). The
-vertical position comes from `menuAnchor()` (the **last** row of the active
-change unit, `[data-change-active-end]` — present in both list preview and
-diff mode; otherwise the block card, otherwise the sidebar row). This is the
-**last**, not the first, row on purpose: for a multi-row `group` unit or an
-extended Shift+↑/↓ range (`rangeUnit`, see "Shift+↑/↓" further below), the
-menu must float below the *bottom* of the selection instead of covering it by
-anchoring on its top — `[data-change-active]` (`Block.mjs`) itself keeps
-marking only the **first** row of the active unit and stays reserved for
-`scrollChangeIntoView`, which centres the viewport on the top of the
-selection; for a single-row unit both attributes land on the same row, so
-nothing changes there. The width + left edge come from
-`menuRegion()` (the `[data-pane="new"]` pane of the selected block; falls
-back to `[data-pane="old"]` for a removed block, then the whole block column
-— the `data-pane` hook sits on `codePane` in `Block.mjs`). **From the block
-index** (`state.mode==='list'`, for the `'block'` and
-`'postApprove'` palettes — `isIndexMenu()` in `home.mjs`) the menu instead
-anchors on the **selected sidebar row** (`[data-idx="${state.selected}"]`)
-and takes the **full sidebar width** (`[data-testid="pr-index"]`) — not the
-list-mode diff preview in `<main>`, which does also carry a
-`[data-change-active]` but is not where the reviewer just pressed. So `Enter`
-from the index opens the menu **at that row**, not somewhere else on the
-screen. **At stop 1** (the PR-wide `'pr'` menu while `state.showDescription`
-is true — `isDescriptionMenu()` in `home.mjs`, applies to both `Enter` and
-`/` there) the menu anchors on the **description card**
-(`[data-testid="pr-info-card"]`) and takes the **full width of the
-description column** (`[data-testid="pr-info-column"]`, 26rem) — mirroring
-the block-index exception; because the card is tall, the menu there usually
-flips above/over the column (the existing flip+clamp), but it always sits
-next to the description instead of in the diff region to the right. Outside
-stop 1 the `'pr'` menu (`/`) keeps the default diff positioning. Test:
-`tests/pr-description-menu.spec.mjs`. **If it doesn't fit below the screen,
-it flips above** (and is clamped within the viewport regardless). It starts
-`visibility:hidden` until `positionMenu` has placed it (no flash top-left),
-and repositions on resize, scroll (capture, also inner scrollers), after
-every keystroke (the filter list changes height) and 220ms after opening
-(the panel width animates 200ms when stepping into the diff). The menu lives
-in a separate `reactive({ open, query, sel })` in `home.mjs` (deliberately
-**not** in the URL — ephemeral, so outside `bindUrlState`). While it is open,
-the menu **owns the keyboard**: `onKeydown` handles `↑`/`↓` (selection),
-`Enter` (execute via `runCommand`, which closes first and then runs the
-action), `Esc` (close), and block navigation is suspended; typed characters
-flow into the focused input (`data-testid=command-input`, two-way bound to
-`menu.query`). Filtering uses a **subsequence fuzzy match**
-(`filterCommands`, exported from `CommandMenu.mjs` so the keyboard handler
-walks exactly the same filtered list as the render — `menu.sel` and the
-visible rows stay in sync). The `COMMANDS` list lives in `home.mjs` and
-contains **block actions**: toggling approve and commenting on this line
-(via `startComment` from `RelatedPanel.mjs`) and **Open GitHub**. The approve
-action is **scoped to the current navigation unit** (`toggleApprove`/
-`approveTargetRows`): in list mode the whole block, in diff mode the
-selected group/line/call — it approves exactly the rows of that unit (or
-retracts them if they are already approved). At `gran==='group'`/`'line'`
-(not `'call'`) an approve additionally sweeps forward: a directly-following
-bracket/punctuation-only row (a lone `});`/`},`/etc., see
-`isBracketOnlyRow`/`sweepBracketOnlyForward` in `.claude/rules/blocks-and-ingest.md`)
-gets auto-approved along with it, one-way (never un-swept on a retract).
-**`focusLevel`/`drillCursor`-aware:** a drilled Underlying-code column
-(`state.focusLevel > 0`, see "Drilling"/"Column navigation" in
-`.claude/rules/detail-layout.md`) has its own block plus its own
-`change`/`gran` cursor (`state.drillCursor[focusLevel-1]`) — the approve
-action must operate on that, not on the top-level block. `approveContext()`
-(`home.mjs`) resolves that once (`{ block, mode, gran, change }`, mirroring
-`findNextUnapproved`/`fKey`/`dKey`/`setDrillGran`'s own `focusLevel` branch);
-`approveNoun`/`approveTargetRows`/`toggleApprove`/`toggleCallApprove` and the
-`COMMANDS` label take that context instead of reading `curBlock()`/
-`state.gran`/`state.change` directly. Without this, `Enter` → "Approve …"
-would invisibly approve/retract the TOP-LEVEL block instead of the drilled
-child while a drilled column owned the keyboard — see
-`tests/drill-approve.spec.mjs`.
-The label is a function so it moves live and names the unit
-(`approveNoun`): "Approve this block" (list), "Approve these lines" (group),
-"Approve this line" (line), "Approve this call" (call), and "Retract approval
-of …" when that unit is already approved. See the granular-approval
-explanation in `.claude/rules/blocks-and-ingest.md`. Deliberately **no**
-navigation items (step in diff / next / previous) — you do that with the
-arrows/`f`/`d`/`s`, not via the menu. A command may have **`children`**:
-choosing it then doesn't open an action but a **submenu** with those
-children instead of closing the menu (`runCommand` → `enterSubmenu`, which
-resets the query/selection and repositions). `Esc` first steps back to the
-root and only then closes the menu; `menu.sub` (in the ephemeral `menu`
-reactive) holds the open child list, `resolveCommands` filters that instead
-of `COMMANDS` (without the comment fallback). So **Open GitHub** has two
-targets underneath it: *Line in Files changed* — deep-links to the active
-line in the Files-changed diff (`openGithubLine`: the GitHub anchor
-`#diff-<sha256(path)><R|L><line>`, where the line is the `start` of the code
-side plus the offset of the active unit; new side = `R`, removed block =
-`L`) — and *PR page* (the PR overview page, as before). If filtering
-yields **nothing** for a non-empty query, the menu falls back to one item,
-**"Create a comment with this"**, which starts the typed text directly as a
-comment task on the selected line (`createComment` from `RelatedPanel.mjs` →
-`POST /api/workflows/task_code_comment`, so within the write boundary). The
-filter + fallback live in `resolveCommands(query)` in `home.mjs`, shared by
-the menu render and the keyboard handler so both see the same list.
-`CommandMenu` itself is pure presentation: it receives `menu`, a
-`resolve(query)` function and `onRun`, and contains no filter or navigation
-logic.
+`→` (`enterPrCommentThread`, `RelatedPanel.mjs`) reuses the same
+`threadMessages`/`reactionBubble` rendering as the block-scoped thread, on its
+own ephemeral, non-URL-bound cursor (`pct`, see
+`.claude/rules/comments-panel.md`):
 
-**Every (small) menu opens with a pinned `"Close menu"` at the top, and
-starts focused on the 2nd item.** `withClose(list, onClose)` (`home.mjs`)
-prepends that item to every root list (`COMMANDS`, `PR_COMMANDS`,
-`COMPOSE_COMMANDS`, the comment-scoped list built by `commentCommandsFor()`,
-`POSTAPPROVE_COMMANDS`,
-`REVIEW_APPROVE_COMMANDS`, `REVIEW_CHOICE_COMMANDS`) as well as every submenu
-(`children`, incl. "Open GitHub" and the PR-wide/compose Jira submenus) —
-choosing it in **any** case closes the entire palette, even from a submenu
-(`Esc` still just goes one step back to the root, unchanged). `postApprove`'s
-own `onClose` also clears `postApproveTarget` while at it — mirroring the
-old, separate close items it now replaces (those previously sat as the
-**last** item; now there is only one shared definition, always at the top).
-To prevent that fixed first row from becoming the default Enter action,
-every fresh menu/submenu opens **on the 2nd item** (`defaultSel(list)` =
-`Math.min(1, Math.max(0, list.length-1))`, used in `openMenu`/`enterSubmenu`/
-the Esc-back-to-root branch in `onKeydown`) — falls back to index 0 as soon
-as a list has 0 or 1 real items. This deliberately does **not** apply to the
-`reviewReject` step (the free-text rejection reason, further on — a dynamic
-0/1-item list) and the "no match" `make-comment` fallback above: both are
-separate, dynamically built actions where a pinned close + start-on-2nd-item
-"type, Enter" would break. The per-keystroke `sel` reset
-(`CommandMenu.mjs`'s `@input` handler) stays at `0` — that simply points to
-the top row of the currently filtered result, not "the 2nd item of the full
-list".
+- `↑` walks up the messages and **clamps** at the oldest one.
+- `↓` walks down and, once already at the newest, **falls through**: it leaves
+  the thread and advances the sidebar cursor to the next comment/block
+  (`stepListSelection(1)`) — mirroring the block-scoped panel's
+  `advanceFromComment` "↓ loopt door" convention, except a comment-index item
+  has no Underlying-code panel to fall into, so it falls through to the next
+  index row.
+- `←` steps back out to the index (the same row).
+- `Enter` always opens the menu, whether or not the thread is focused.
 
-**After approving via the palette** (not via the top checkbox on the block
-card — that remains a directly toggling click with no follow-up), if there
-is still a next unapproved unit, a **follow-up menu** opens immediately
-(`menu.mode = 'postApprove'`, `POSTAPPROVE_COMMANDS` in `home.mjs`): **"Close
-menu"** (pinned at the top) or **"Continue to the next unapproved
-code"** (default, the 2nd item where the selection opens — only navigates,
-does not auto-approve anything). This only triggers
-if the action **added** approval (`toggleApprove`/`toggleCallApprove`
-detect that via `allIn`/`keys.has(key)` **before** the mutation — retracting
-an approval never opens this menu) and there is actually still something
-open (`afterApproveAction` → `findNextUnapproved()`; nothing left open → the
-menu simply stays closed, as always).
+## `'list'` mode
 
-**Exception: if the next unit stays within the same block,
-`afterApproveAction` skips this follow-up menu and navigates right away** —
-asking "continue or not" is pure friction when there's nothing else to
-choose besides continuing within the block the reviewer is already looking
-at. This is exactly step 1 below (`findNextUnapproved`'s "further within the
-column that currently owns the keyboard" branch). `toggleApprove`/
-`toggleCallApprove` pass the id of the block they just approved into
-`afterApproveAction(approving, blockId)`, captured synchronously (same
-reason as `keepList`, before the async `findNextUnapproved` gap);
-`afterApproveAction` compares that `blockId` against the plan's **landing
-block** — the last entry of `target.path`, or (an empty `path`) the
-top-level block at `target.root` — plus `!keepList` (so that an approval
-from the block index, which leaves nothing else in that same block anyway,
-never hits this path) and `root === state.selected` (no jump to another
-top-level block). On a match it calls `applyNextUnapproved(target)` directly
-instead of `openMenu('postApprove')`. **This is deliberately NOT a bare
-`target.path.length === 0` check** — inside a drilled column
-(`state.focusLevel > 0`, see "Drilling"/"Column navigation" in
-`.claude/rules/detail-layout.md`), step 1's own plan always carries a
-non-empty `path` (`state.drill.slice(0, level)` — by the
-`focusLevel === state.drill.length` invariant, that's always the *same*
-drill stack, even though nothing but the change/gran cursor moved within it)
-— a path-length check alone would therefore never fire there, so approving
-a line with another unapproved line still ahead in the *same* drilled block
-used to wrongly open the follow-up menu instead of jumping straight to it,
-exactly like the top-level case already did. Comparing landing-block-id
-instead fixes that at any drill depth, while a step-2/3/4 outcome (down into
-a child subtree, up to a sibling, or on to another top-level block) still
-shows the follow-up menu as before, since the landing block then differs.
-Test: `tests/drill-approve-line-skip.spec.mjs`. "Next" follows the review
-**tree**, not just the flat sidebar list, depth-first (`findNextUnapproved`
-in `home.mjs`, four steps on each call):
+`↑`/`↓` choose a block in the sidebar, `→` steps into the diff of the selected
+block — **even if that block has 0 change groups of its own** (a real PR block
+whose body changes nothing and only exists as a parent of Underlying-code
+children): `→` still enters `state.mode==='diff'` and shows the unhighlighted
+block code, so a further `→` can continue into Underlying code, exactly like
+`→` at stop 1 unconditionally steps to the block list. `enterDiff()`'s old
+`groupsFor(b).length === 0` guard (a silent no-op) was removed, as was
+`ensureCode`'s "diff without own groups → back to list" fallback — that
+combination is a deliberately reachable state now, at any `focusLevel`. Tests:
+`tests/enter-diff-zero-groups.spec.mjs`, `tests/drill-mode-flip.spec.mjs`.
 
-1. **Further within the column that currently owns the keyboard** — the
-   top-level block (`state.gran`/`state.change`), or — if there is a drill
-   (see "Drilling"/"Column navigation" in `.claude/rules/detail-layout.md`) —
-   the drilled column at `state.focusLevel`, with **its own**
-   `state.drillCursor` cursor (`firstUnapprovedOwnUnit`, unchanged,
-   forward-searching at the current granularity, now also applied to a
-   drilled column instead of only the top-level block).
-2. **If that column is done, then down** into its **Underlying-code**
-   children (`orderedChildBlocks` — the same order the panel shows,
-   `relatedChildren`'s groupTier/prio/size sort, excluding `covered_by` to
-   avoid the method↔test cycle — see `directChildBlocks`/
-   `nestedPrBlocks` in `.claude/rules/blocks-and-ingest.md`), depth-first per
-   child (`firstUnapprovedInSubtree`, cycle-safe via a `seen` set, mirroring
-   `nestedPrBlocks`): first the child itself starting from its first
-   `'group'` unit, otherwise its own children, and so on.
-3. **If the entire subtree of the focused column is empty, then up**: back
-   to the parent in the current drill stack (an earlier drilled column, or
-   the top-level block) and try its **next, not-yet-tried** sibling child
-   (again depth-first via `firstUnapprovedInSubtree`) — repeated upward
-   through the whole drill stack.
-4. **If the entire subtree of the current top-level block is also empty**
-   (or the reviewer wasn't even in its diff), then **continue through
-   `state.blocks`** in sidebar order — now also **subtree-aware**
-   (`firstUnapprovedInSubtree` per candidate instead of just its own
-   `'group'` rows): a top-level block that only has an Underlying-code
-   child still open is no longer skipped.
+Fully approved top-level blocks are **hidden** by default (a button at the
+bottom expands them) and the "Start" heading shows a PR-wide approval counter —
+see "Hiding approved blocks" and "Server-side `total`" in
+`.claude/rules/approval.md`.
 
-With lazy `ensureCode` fetches for every visited block, just like the
-look-ahead preview. Only **forward**, no wrap and no searching back to
-previously skipped units. `findNextUnapproved` returns a plan
-`{ root, path, gran, change }` (`root` = top-level index, `path` = the chain
-of PR blocks to drill through, empty = the top-level block itself) and
-stashes it in `postApproveTarget`; "Continue" applies it via
-`applyNextUnapproved`, which trims the current `state.drill` to the common
-prefix with `path` (mirroring `expandColumn`'s trim) and then drills only
-the remaining part (`drillIntoChild`) — without unnecessarily tearing down
-the whole stack for a nearby sibling step. On a different `root` (a
-different top-level block) it resets as before (`openTask`'s block-switch
-reset: `state.drill`/`drillCursor`/`focusLevel` cleared). All of this
-without recomputing — the palette owns the keyboard while it's open, so the
-navigation state can't have shifted in the meantime. This is a one-off step:
-after navigating, **no** new follow-up menu opens automatically — the
-reviewer approves the new unit themselves again with `Enter`.
+### Hidden (approved) blocks: skip, reveal, clamp
 
-**From the block index, approving skips the follow-up menu entirely — it
-always jumps straight to the next unapproved block.** Just like the
-same-block exception above (approving within a block that still has another
-unapproved unit ahead never asks "continue or not"), approving **from the
-blokken-index** (`state.mode==='list'`, not `'diff'`) has nothing else to
-offer either — there's no diff/drill to jump into from there, only the
-sidebar selection to move — so `afterApproveAction` treats it the same way:
-no `postApprove` menu, straight to `applyNextUnapproved`. `afterApproveAction`
-captures **synchronously**, before the async `findNextUnapproved()` gap,
-`keepList = state.mode !== 'diff'` — synchronously because `state.mode` may
-have already changed by the time the promise resolves, but at the moment of
-the approve action itself it's exactly the context the reviewer pressed it
-from. Whenever `keepList` is true, `afterApproveAction` calls
-`applyNextUnapproved(target)` directly instead of stashing `postApproveTarget`
-and opening the menu. `applyNextUnapproved` itself still branches on
-`target.keepList` (stashed on it for this one case): it moves **only**
-`state.selected` (to `target.root`) + `scrollSelectedIntoView()` —
-`target.path` is ignored (no `state.mode`/`gran`/`change`, no diff entry, no
-drill), so even when the found plan would run through an Underlying-code
-child, an index-approve stays at the plain list step — drilling only makes
-sense once you're in the diff. A **diff-mode** approve (`!keepList`) that
-lands on a *different* block still opens the `postApprove` menu as before
-("Sluit menu" / "Ga door") — only the
-list-mode case is now menu-less. Because the `postApprove` menu can therefore
-never open with `keepList` true anymore, its `postapprove-next` item
-(`POSTAPPROVE_COMMANDS`, the 2nd item after the pinned "Close menu" — see
-above) is a plain string again ("Ga door") instead of the earlier
-keepList-aware label function.
+`state.selected` is a raw index in `state.blocks`, but `BlockList.mjs`'s
+`renderList` renders no row for a hidden (approved) block, so the cursor can
+land on an invisible index with no highlight anywhere. Three paths handle it,
+all using the same `isFullyApproved` criterion as `renderList`:
 
-**The postApprove follow-up menu opens at the SAME spot as the menu you
-approved with, even if the approved row has meanwhile disappeared from the
-index.** `isIndexMenu()` already counts `ms.mode === 'postApprove'`, so
-`menuAnchor()` tries the same thing for both menus:
-`[data-idx="${state.selected}"]`. But if the reviewer fully approved a
-block, that row disappears from the sidebar right away (auto-hide of fully
-approved blocks, see
-`blocks-and-ingest.md`) — and that happens before the follow-up menu opens
-(`afterApproveAction`'s `findNextUnapproved().then(...)` runs after the
-approve mutation). Without a countermeasure, `menuAnchor()` would then fall
-back to the **whole** `[data-testid="pr-index"]` aside: that bounding rect
-is much taller than one row, and `positionMenu()`'s flip-above calculation
-(`top = a.top - gap - mh`, clamped to `Math.max(gap, …)`) would throw the
-follow-up menu all the way to the top of view instead of at the spot of the
-first menu. `lastIndexRowRect` (`home.mjs`,
-module-level `let` next to `isIndexMenu`) caches the row's
-`getBoundingClientRect()` as long as it still really exists; if the row
-disappears, `menuAnchor()` reuses that cached rect (as a small
-duck-typed object with only `getBoundingClientRect()` — `positionMenu()`
-never calls anything else on the anchor) instead of the full aside.
-`openMenu(mode)` resets the cache on every open that is **not** an approve
-follow-up (`isReviewFollowup(mode)` — see
-below, covers both `postApprove` and the three review-submit modes), so it
-never leaks an old position from an earlier, unrelated session — every
-normal open rebuilds it right away once its own anchor row is visible.
-Test: `tests/postapprove-menu.spec.mjs` ("blokken-index stays there").
+- **`↑`/`↓` skip it** (`stepVisibleSelected`, used by both the normal and the
+  search-box-active branch). No visible block left in that direction → the
+  selection stays where it is rather than landing on the hidden tail.
+- **Load/refresh-restore → pin, don't unfold everything.** A restored
+  `?sel=file:line` may point at a hidden block — that is the reviewer's own
+  position, so `revealSelectedIfHidden` sets `state.pinnedApprovedId` to that
+  block's id + `scrollSelectedIntoView`, and `renderList` keeps exactly that ONE
+  row visible (`i === state.selected && b.id === state.pinnedApprovedId`).
+  `state.showApproved` is never touched. An earlier version flipped
+  `state.showApproved = true`, unfolding the whole approved section; reverted on
+  request — a restored link must not reveal unrelated approved blocks.
+  Deliberately narrower than "the selected row is always shown": the **live**
+  approve flow never sets `pinnedApprovedId`, so a block you fully approve while
+  standing on it still hides immediately (there is no reveal/clamp attached to
+  the `approvalSummaries` watch). Test:
+  `tests/selected-reveal-hidden.spec.mjs`.
+- **Search → clamp.** `setSearch` resets to index 0 — a synthetic landing, not
+  the reviewer's own position, and typing must never reveal approved blocks
+  PR-wide. `clampSelectedToVisible` moves the selection to the first visible
+  match (none → it stays put). The filter itself needs no check: a filtered-out
+  block is simply not in `state.blocks`.
 
-**No more "next": the review-submit follow-up menu (`reviewApprove`/
-`reviewChoice`/`reviewReject`) — submitting a real GitHub PR review.**
-`findNextUnapproved()` searches **only forward** from the current
-position (see its own doc comment in `home.mjs`) — a `null` result thus
-means "nothing left *ahead of me*", not necessarily "everything in the PR
-is done" (an earlier skipped or never-visited block may still be open).
-Where `afterApproveAction` previously silently ignored this case (the menu
-stayed closed), it now opens one of two follow-ups, based on
-`state.approvalTotal` (the PR-wide combined approval counter across every
-top-level block plus its nested/drilled PR-block children — see "Combined
-approval per tree" in `blocks-and-ingest.md`), read after a few `await
-Promise.resolve()` microtask ticks (the same `loadBlocks` precedent wait —
-the `approvalSummaries`/`approvalTotal` watch is decoupled and only fills as
-a microtask, not synchronously with the just-reassigned `b.approvedRows`):
-- **Everything approved** (`approvalTotal.done === total`, `total > 0`) →
-  `menu.mode = 'reviewApprove'` (`REVIEW_APPROVE_COMMANDS`): **"Close menu"**
-  (pinned at the top) / **"Approve the whole PR"** (default, the 2nd item) —
-  there is nothing left to reject, everything has already been reviewed.
-- **Not everything yet** (something is still open, somewhere outside the
-  scope of the forward search — e.g. an earlier block the reviewer hasn't
-  reached yet) → `menu.mode = 'reviewChoice'` (`REVIEW_CHOICE_COMMANDS`):
-  **"Close menu"** (pinned at the top) / **"Approve the whole PR"** (default,
-  the 2nd item) / **"Reject the PR"** — the reviewer explicitly decides here
-  whether to submit the PR despite the remaining open items, or request
-  changes first.
-**Approving the whole PR is deliberately a TWO-STEP choice, not a single
-Enter** (reported: submitting a real GitHub review on the whole PR was "too
-easy to hit by accident"). Neither "Approve the whole PR" item carries a
-`run` anymore — both instead carry `children: REVIEW_APPROVE_CONFIRM_COMMANDS`,
-so choosing it opens a one-item confirmation submenu via the **same, ordinary
-`children` mechanism** `runCommand`/`enterSubmenu` already use for e.g. "Open
-GitHub" (no new menu mode). That submenu is itself built with `withClose`
-(so it too opens with a pinned "Close menu" first, and its one real item,
-"Yes, approve the whole PR", is default-selected as the 2nd item) — only
-choosing *that* item actually calls `submitReview('APPROVE')`. The item also
-carries a small check-in-circle icon (`c.icon`, `commandIcon` in
-`CommandMenu.mjs`) next to its label, both on the first choice and on the
-confirm item — the icon's **shape** (a check inside a circle) plus the label
-text ("Approve the whole PR" / "Yes, approve the whole PR") carry the
-"this affects the entire PR" meaning; the emerald color is decoration on
-top only, never the sole carrier (colorblind rule, see `conventions.md`).
-"Reject the PR" got no matching confirm step — its own mandatory free-text
-reason (below) already is a deliberate extra action.
-Both eventually call **`submitReview('APPROVE')`** — a real
-GitHub PR-level review, via `POST /api/workflows/submit_review {pr,
-event, body}` (the sanctioned write path, see `workflows-write-boundary.md`;
-the workflow/Activity/the endpoint itself do not live in `home.mjs`, only
-this call site). **"Reject the PR" doesn't post right away** — GitHub (and
-the backend's `validateSubmitReview`, 400) reject an empty
-`REQUEST_CHANGES` body, so it instead opens **`menu.mode = 'reviewReject'`**:
-a **free-text** step that reuses the existing palette textarea (`ms.query`)
-as a reason input field instead of building a new composer. `rootCommandsFor`
-returns no static list for this mode; `resolveCommands` instead builds
-**one** command directly from the typed text, and **only**
-once it's not empty — an empty query yields `[]`, which via `onKeydown`'s
-existing `if (list[ms.sel]) runCommand(...)` guard makes `Enter` a no-op
-(not a silent close without sending anything). `CommandMenu.mjs`'s
-placeholder changes for this mode too ("Type the reason for rejection
-(required)…", the same per-mode ternary as the existing `compose` branch) as
-the only instruction — there is no separate label for it. As soon as there
-is text, the list shows exactly one row ("Reject the PR with this reason");
-that calls `submitReview('REQUEST_CHANGES', reason)` with the typed text as
-the body. Error handling is deliberately minimal (`console.error` on a
-non-200 or network error) — this app has no toast/error-surface convention
-anywhere (even `createComment` doesn't check `res.ok`, see
-`conventions.md`); a successful submit is itself a fresh workflow run, so
-`submitReview` calls `pollWorkflows()` so it shows up in "Tasks" before the
-next `WORKFLOWS_POLL_MS` tick (the same existing courtesy as
-`compose-post`/`compose-self`).
-All three new modes share `isIndexMenu()`/`lastIndexRowRect`'s
-anchor-cache exception with `postApprove` (via `isReviewFollowup(mode)`,
-`home.mjs`): just like the existing `postApprove` follow-up menu, they can
-open after the just-approved row has already disappeared from the sidebar.
-Test: `tests/review-submit-menu.spec.mjs` (both follow-ups + the
-reject-reason flow, incl. the exact `POST /api/workflows/submit_review`
-payload) and the updated last test in `tests/postapprove-menu.spec.mjs`
-("nothing left ahead, PR not fully approved").
+Order is load-bearing on the load path: the reveal runs **after**
+`applyBlockRefRestore` and after `loadBlocks` has awaited
+`loadApprovals`/`loadBlockStats` plus a couple of microtask ticks so the
+`approvalSummaries` watch has flushed — before that "hidden" isn't knowable yet
+and the reveal would be a no-op.
 
-**`findNextUnapproved()`'s "descend into children / walk sideways" steps run
-regardless of `inDiff` — only step 1 (resuming a diff cursor) is genuinely
-diff-only.** `findNextUnapproved` (`home.mjs`) walks: 1. forward within the
-focused column's own diff cursor, 2. down into its Onderliggende-code
-children, 3. up through the drill stack's siblings, 3b. (top level only)
-the remaining methods of the current `test_class` row (see "Grouping test
-methods per class" in `detail-layout.md`), 4. across the rest of the
-sidebar. Steps 2/3/3b used to sit nested inside the same `if (focused &&
-inDiff)` gate as step 1 — but `inDiff` (`level > 0 || state.mode ===
-'diff'`) is **false** in plain list mode, exactly the state a reviewer is in
-when they select a block/test method and approve it via the palette
-**without ever pressing → into its diff** (the ordinary way to review a
-small, single-group change or a freshly ADDED test method). That silently
-skipped steps 2/3/3b whenever the approve action ran from the list, so
-`findNextUnapproved()` returned `null` despite clearly remaining unapproved
-content — reported symptom: "Keur de HELE PR goed / Wijs de PR af" offered
-while a sibling test method still showed `0/N`, or while a block's own
-resolved-call child (see "Resolving (also unchanged) called … methods" in
-`tembed-workflows.md`) — hidden from the flat sidebar entirely
-(`resolvedCallTargetIds`, only reachable via the Onderliggende-code walk,
-never via step 4's flat scan) — still had unapproved rows of its own. Only
-step 1 genuinely needs a diff cursor to resume from
-(`state.gran`/`state.change`, or a drilled column's own `drillCursor`): in
-list mode there is no cursor within the block to search forward from —
-approving "the whole block" from the list already covers every one of its
-own changed rows in one pass, so step 1 staying a no-op there is correct,
-not merely skipped. Steps 2/3/3b are about the currently selected block's
-own children/siblings, which can have unapproved rows whether or not the
-reviewer ever stepped into its diff, so they were moved out from under the
-`inDiff` gate — see `findNextUnapproved`'s own doc comment in `home.mjs` for
-the exact split. Because approving from the list also always skips the
-`postApprove` follow-up menu (`keepList`, see above), the fix is only
-observable as "no follow-up menu opens at all and the selection quietly
-lands on the next open item" — not as a different menu. Test:
-`tests/findnextunapproved-list-mode.spec.mjs` (both shapes: a test_class
-row's remaining methods, PR 110; an ordinary block's resolved-call child
-hidden from the sidebar, PR 112).
+### The sidebar's `↑`/`↓` cursor forms one circular loop
 
-The same menu mechanism also serves a **comment-scoped** variant: if the
-keyboard is on a placed comment row in `RelatedPanel` (`cs.focus === 'comment'`,
-before stepping into the thread) and the reply field is still **empty**,
-`Enter` opens not the block palette but a menu with three to five rows —
-**"Close menu"** (pinned at the top), **"Resolve comment"** (default, the 2nd
-item, where the selection opens), **"Delete comment"**, optionally **"Comment
-hiervan maken"** (only when the comment's `source === 'ai'` — a
-`code_warning` finding, see "Converting an AI-controle finding into a real
-comment" in `detail-layout.md`), and — only when the
-focused comment actually has a GitHub anchor — a final, bottom item **"Open
-op GitHub"** (`menu.mode = 'comment'`, built by `commentCommandsFor()` in
-`home.mjs`, called fresh from `openMenu('comment')`/`rootCommandsFor` every
-time — unlike the other, static command lists, this one is data-conditional
-per focused comment, so it can't be a module-level const; it still goes
-through `withClose` the same way, `resolveCommands` switches on `menu.mode`,
-`openMenu(mode)` sets it, `closeMenu` resets it back to `'block'`).
-`focusedCommentGithubId()` (`RelatedPanel.mjs`) decides whether that fourth
-item appears at all — `null` for a local/private note or a comment whose
-GitHub post hasn't landed/failed (`comments.Comment.GithubID` is 0 then, see
-the `github_id` paragraph under "The first slash task" in
-`tembed-workflows.md`) — so there is never a dead, no-op row for a comment
-with nothing to open. Choosing it opens
-`(state.prUrl || GITHUB_PR) + '#discussion_r' + githubId` in a new tab — the
-comment-scoped panel only ever shows block-scoped review/diff comments
-(`kind === ''`, see `RelatedPanel.mjs`'s `recomputeView`), so that anchor form
-is always correct (never `#issuecomment-<id>`, which is for a PR-wide
-issue/review-summary comment instead). A **non-empty** reply field leaves `Enter` alone — then the
-reply field's own `keydown` wins (`sendReaction`), so "type a quick reply,
-press Enter" keeps working (`isCommentFocused`/`commentReplyEmpty` in
-`RelatedPanel.mjs` guard that distinction). `menuAnchor`/`menuRegion` anchor
-in that mode on the focused comment row resp. the thread pane instead of the
-diff. **This same menu also opens with a plain mouse click**, on the
-send-status button next to "Stuur" (`reaction-status`, see the send-status
-indicator paragraph in `.claude/rules/detail-layout.md`) — that button used
-to resolve the comment directly on click; now it only shows the send status
-of the reply field (draft/sending/sent) and opens this menu instead, so
-resolve/delete stay reachable without touching the keyboard at all. Choosing **"Delete comment"** calls `deleteFocusedComment`: that sends
-a **`delete` Signal** (`POST /api/workflows/{runID}/signals/delete`) to the
-comment's Workflow Execution — the only write path, within the write
-boundary. The workflow (`taskCodeCommentWorkflow` in `workflows.go`) first
-sets the comment to status **`deleting`** (Activity `markCommentDeleting`),
-then removes it from GitHub (Activity `deleteGithubComment`, best-effort,
-same as posting) and finally from its own read model (Activity
-`deleteComment`, cascades the reactions), and completes the Execution. A
-`delete` request rides along on the same `reply` Signal as a reaction
-(`ReactionSignal.Action`, "" = reaction, "delete" = deletion) — a workflow
-can only `WaitSignal` on one Signal name at a time, so this has to come in
-as a distinguishable variant of the existing reactions loop, not as its own
-Signal name.
-Choosing **"Resolve comment"** calls `resolveFocusedComment`: that sends —
-just like a thread reply — a **`reply` Signal** with `done:true` and the
-sentinel body `"/resolve"`. The workflow sets the read-model status to
-`resolved` (via `saveReaction`'s `Resolves` flag) and, for a
-**review-diff thread**, also resolves the conversation **on GitHub**
-(Activity `resolveGithubThread` → `github.Client.ResolveReviewThread`,
-which via `gh api graphql` looks up the review-thread node ID based on the
-root comment's `databaseId` and runs the `resolveReviewThread` mutation).
-The `"/resolve"` sentinel body is **never** posted as a text reply — the
-reply loop only ever posts a real, non-sentinel body. A **PR-wide** thread
-(issue/review-summary) has no GitHub resolve concept, so resolve stays
-local-only there (see
-`.claude/rules/tembed-workflows.md`).
+`stepListSelection`/`searchStepSelection` (`home.mjs`) wrap the bare
+`stepVisibleSelected` call in both arrow branches:
 
-That same `CommandMenu` mechanism also serves a **comment-type menu**
-(`menu.mode = 'compose'`, `COMPOSE_COMMANDS` in `home.mjs`): if the composer
-is open and text has been typed, **`Enter`** (and the composer button
-**"Place…"**, via `RelatedPanel`'s `openCompose` prop) doesn't immediately
-place the comment, but opens a menu with six rows for what to do with it:
-**"Close menu"**
-(pinned at the top), **"Place comment"** (the **default** item, the 2nd in
-the list, where the selection opens — so "type, Enter, Enter" still places
-it just as directly as before), *Claude command* (placeholder), *Let Claude
-implement this
-(group/line/call)* — placeholder, label names the current unit via
-`granNoun()` from `commentTarget()` —, *Only for myself* and *Jira* (a
-submenu with *Comment on ticket* / *Create subtask* / *Create new task*,
-all three placeholders). **"Place comment"** and **"Only for myself"**
-both actually place it: `placeComment(state, commentTarget)` resp.
-`placeComment(state, commentTarget, { local: true })` — the first posts a
-**normal, public** comment (the same existing `createComment` path, just
-without `opts.local`), the second a **private note** which is stored as a
-comment but does not go to GitHub (see the `local` flag in
-`.claude/rules/tembed-workflows.md`). Both `run` functions are `async` and
-call `pollWorkflows()` right after a successful `placeComment` — without
-that, the just-started `task_code_comment` run would only show up in the
-Tasks column (`workflows-panel`, see
-`.claude/rules/detail-layout.md`) at the next `WORKFLOWS_POLL_MS` tick
-(2.5s) instead of immediately. The Claude/Git/Jira items remain placeholders
-(no `pollWorkflows` call, they write nothing). The Enter branch sits in
-`onKeydown` **before** the `relatedActive()` branch
-(`isComposeOpen()` + `composeHasText()`, both from `RelatedPanel.mjs`), so
-it works whether the composer was opened via keyboard (`cs.focus==='new'`)
-or via the button; **Shift+Enter**
-falls outside that and thus remains a newline in the composer. Important:
-this was the first flow to open a menu **over** the open composer — which
-surfaced a latent arrow.js orphan-binding bug (menu-reopen crash), fixed
-with the fresh-`ms` state split, see `.claude/rules/conventions.md`.
+```
+first visible block → … → last visible block
+  → toggle-approved (if any hidden approved blocks exist)
+  → toggle-ignored  (if any hidden ignored comments exist)
+  → the search box
+  → back to the first visible block
+```
 
-**`/`** opens a **general, PR-wide tree menu** (`menu.mode = 'pr'`,
-`PR_COMMANDS` in `home.mjs`) — the same `CommandMenu` overlay as `Enter`, but
-instead of block actions these are actions on the **whole PR**. Five root
-items: **"Close
-menu"** (pinned at the top, where the selection has recently always opened
-on the item after it), **"GitHub"** and **"Jira"** (as a **submenu** via the
-existing `children` mechanism — each submenu itself also gets such a pinned
-"Close menu"; "GitHub" is thus the default item where the selection opens —
-a submenu, not a direct action, but deliberately left as-is rather than
-reordering the list around it), **"Diepgravend onderzoek"** ("in-depth
-investigation", starts
-`code_warning` on Opus, see `checkPRWarnings`/`.claude/rules/tembed-workflows.md`), and
-**"Show full description" / "Collapse description"** (the last item,
-a label function that toggles `state.descriptionExpanded` — the same
-ephemeral flag as the in-card "more…" affordance in the PR info column, see
-`.claude/rules/detail-layout.md`; the label is snapshotted once at open time
-by `snapshotCommands`, so no reactive binding leaks into the
-`CommandMenu` tree). Under
-GitHub: *Open on GitHub* (opens the PR page) and *Place comment* (reuses
-the line-comment composer `startComment`, same as the block palette). Under
-Jira: *Open in new tab* (deep link to the ticket), *Place comment* and
-*Create subtask* — the latter two are **placeholders** (no Jira write
-integration yet). A typed `/` in a focused input field (comment
-composer/reply) never reaches this handler — the `relatedActive()` branch
-catches it earlier, so the character just flows into the field. The
-Jira/GitHub links rely on **PR metadata** (title + URL, and the
-`KEY-123` ticket key derived from it): that comes from the **`prmeta` read
-model** via `GET /api/pr?pr=N`, filled by the `pr_status` workflow (see
-`.claude/rules/tembed-workflows.md`). `home.mjs` (`loadPRMeta`) ensures on
-load that the tracker is running
-(`POST /api/workflows/pr_status`) and then reads the metadata; if that's
-missing (yet),
-the links fall back to the bare PR URL resp. the Jira base.
+`↑` walks the same loop backwards. Each toggle row is only a stop when actually
+rendered (`toggleRowVisible()`/`ignoreToggleRowVisible()`); the search box is
+always the loop's other end. `stepListSelection(1)` first tries
+`stepVisibleSelected` and only when that finds nothing further
+(`next === state.selected`) steps onto the next existing stop —
+`state.selected` stays unchanged while a toggle row owns the keyboard, so a
+toggle row is an extra stop on top of the blocks, not a replacement.
 
-- **`'list'`** (start): `↑`/`↓` choose a block in the sidebar, `→` steps into
-  the diff of the selected block — even if that block has **0 change groups
-  of its own** (a real PR block whose own body changes nothing and which
-  only exists as a parent of Underlying-code children, e.g.
-  `CreatePaymentAction::findOrCreateCustomer`): `→` then still steps into
-  `state.mode==='diff'` and shows the (unhighlighted) block code, so a
-  subsequent `→` can continue on into Underlying code — exactly like `→` in
-  the PR summary card (stop 1) always unconditionally steps to the block
-  list. `enterDiff()` (`home.mjs`) previously had a `groupsFor(b).length ===
-  0` guard here that silently did nothing; that has been removed (only a
-  missing block itself is still a no-op). `ensureCode`'s separate "diff
-  without own groups → back to list" fallback was removed for the same
-  reason: that combination is now a deliberately reachable, non-dead state,
-  even outside a drilled column (`focusLevel===0`) — it was already excluded
-  as soon as there was a drill, see
-  `tests/drill-mode-flip.spec.mjs`. See `tests/enter-diff-zero-groups.spec.mjs`.
-  Fully approved top-level blocks are
-  **hidden** by default from this list (a button at the bottom expands them);
-  the "Start" heading shows a PR-wide approval counter. See the section
-  "Hiding approved blocks" + "Server-side `total`" in
-  `.claude/rules/blocks-and-ingest.md`.
-  **`↑`/`↓` skip a hidden (approved) block** (`stepVisibleSelected`
-  in `home.mjs`, used by both the normal and the search-box-active
-  ArrowDown/ArrowUp branch): `state.selected` is a raw index in
-  `state.blocks`, but `BlockList.mjs`'s `renderList` renders no row for a
-  hidden (approved) block. Without this step, `state.selected` would
-  sometimes land on such an invisible index — no row in the sidebar would
-  show the indigo highlight, which felt like "this block is no longer
-  selectable", especially after a lot of ↓/↑ deep into a review session with
-  several already-approved blocks. If there's no visible block left in that
-  direction, the selection just stays at the current (already visible)
-  position instead of landing on the hidden tail.
-  **The same gap existed on the load/search paths, and each resolves it
-  differently** (`revealSelectedIfHidden`/`clampSelectedToVisible` in
-  `home.mjs`):
-  - **Load/refresh-restore → pin, don't unfold everything.** A refresh
-    restores `?sel=file:line` even to a hidden block (`applyBlockRefRestore`)
-    — that's the reviewer's **own** position, so instead of moving the
-    selection away, `revealSelectedIfHidden` sets `state.pinnedApprovedId` to
-    that block's id + `scrollSelectedIntoView`. `BlockList.mjs`'s `renderList`
-    then keeps exactly that ONE row visible via a per-row exception
-    (`i === state.selected && b.id === state.pinnedApprovedId`) — **every
-    other** approved block PR-wide stays hidden, `state.showApproved` itself
-    is never touched. (An earlier version of this DID flip
-    `state.showApproved = true`, unfolding the whole approved section just to
-    show this one block — reverted on explicit request: landing on an
-    already-approved block via a shared/restored link should not reveal
-    unrelated approved blocks elsewhere in the tree.) Already visible → no-op.
-    Deliberately narrower than "the selected row is always shown": the live
-    approve flow (fully approving the block you're currently looking at)
-    never sets `pinnedApprovedId`, so that row still hides immediately the
-    moment it becomes fully approved — see the "live approve flow stays
-    deliberately untouched" paragraph further below and
-    `tests/selected-reveal-hidden.spec.mjs`.
-  - **Search → clamp.** `setSearch` resets to index 0 — a synthetic
-    landing, not the reviewer's own position. Typing should never suddenly
-    reveal all approved blocks PR-wide (and doesn't type back closed), so
-    there `clampSelectedToVisible` moves the selection to the **first
-    visible** match (no visible block → selection stays put, mirroring
-    `stepVisibleSelected`; the search filter itself needs no separate check
-    — a filtered-out block simply isn't in `state.blocks` anymore).
-  Both use exactly the same `isFullyApproved` criterion as `renderList`.
-  **The sidebar's `↑`/`↓` cursor forms one circular loop** (`stepListSelection`/
-  `searchStepSelection` in `home.mjs`, replacing the bare `stepVisibleSelected`
-  call in both ArrowDown/ArrowUp branches above):
-  ```
-  first visible block → … → last visible block
-    → toggle-approved (if any hidden approved blocks exist)
-    → toggle-ignored (if any hidden ignored comments exist — see
-      "Comment-index items" in detail-layout.md)
-    → the search box
-    → back to the first visible block
-  ```
-  `↑` walks the exact same loop backwards. Each toggle row is only a stop
-  when it's actually rendered (`toggleRowVisible()`/`ignoreToggleRowVisible()`
-  in `home.mjs`); the search box is always the loop's other end.
-  `stepListSelection(1)` falls back to `stepVisibleSelected` and, only if
-  that finds nothing further (`next === state.selected`), steps onto
-  whichever of `toggle-approved` / `toggle-ignored` / the search box is the
-  next actually-existing stop (`state.selected` stays unchanged while a
-  toggle row owns the keyboard, so a toggle row is an extra stop on top of
-  the blocks, not a replacement). `BlockList.mjs`'s `toggleRow`/
-  `ignoreToggleRow` show the same indigo bg/ring as a selected row via
-  `state.toggleFocused`/`state.ignoreToggleFocused` respectively (`rowFocused`
-  dims the underlying `state.selected` block's own ring while either flag is
-  set, so there are never two indigo highlights visible at once — except
-  while the search box also holds real DOM focus, see below, which is a
-  pre-existing, separate ring). **`Enter`/`→`** on a toggle row flips its
-  own `state.showApproved`/`state.showIgnored` (mirroring a click on the
-  button) instead of opening the command menu resp. stepping into the diff;
-  **`f`/`d`/`s`/`a`** are no-ops while either toggle row owns the keyboard
-  (there's no block/diff context to act on). A click on a regular row, or
-  typing in the search box (`setSearch`), always resets both toggle flags —
-  a new navigation context never silently leaves a toggle button focused.
-  **The search box is reached via `activateSearch()`** (real DOM focus, so
-  `BlockList.mjs`'s existing focus ring lights up) **and marks the arrival
-  as deliberate via `state.searchLoopFocused`** — a separate flag from
-  `state.searchActive` itself, because the box also ends up with real DOM
-  focus for two reasons that are **not** a loop arrival: a load-time
-  convenience focus (`focusSearchBox`, so the reviewer can start typing a
-  filter right away without clicking — this is the "auto-focused search
-  box" several specs defensively press `Escape` past) and a plain click to
-  start typing. Only while `state.searchLoopFocused` is true does
-  `searchStepSelection` exit the box again on the very next `↑`/`↓` (`↓` →
-  the first visible block; `↑` → `toggle-ignored`, else `toggle-approved`,
-  else the last visible block); otherwise (ambient/typing) `↑`/`↓` keep the
-  **existing** "browse the filtered matches while focus stays in the box"
-  behaviour, with its own wrap at either end of the (possibly filtered)
-  results, and — pre-existing, unrelated to this loop — reach only
-  `toggle-approved`, never `toggle-ignored`. Typing (`setSearch`),
-  `→`/`Enter` (step into the diff) and `Escape` (back to the list) all clear
-  `searchLoopFocused` via `exitSearch`, regardless of how the box got focus.
-  Order is load-bearing: on the load path the reveal only runs **after**
-  `applyBlockRefRestore` (a restored `?sel=` to a visible block is a
-  no-op) and after `loadBlocks` has awaited `loadApprovals`/`loadBlockStats`
-  plus a couple of microtask ticks so the `approvalSummaries` watch has
-  flushed (the `openTask` precedent) — before that, "hidden" isn't yet
-  knowable and the reveal would be a no-op. The **live** approve flow stays
-  deliberately untouched: approving a block while standing on it keeps it
-  selected (there is **no** reveal/clamp attached to the `approvalSummaries`
-  watch itself). Regression test: `tests/selected-reveal-hidden.spec.mjs`.
-- **`'diff'`**: `↑`/`↓` walk through the **changes** of that block, `←` steps
-  back to the list. Walking past the **last** change (`↓`) or the
-  **first** (`↑`) — you can't go further within this block — steps you on to
-  the **next** resp. **previous** block, **provided that block comes from the
-  same file** (the same blocks that hang together via the dotted connector
-  line); if you land on a file boundary, navigation stops there. When
-  stepping across, you land on the first resp. last change (`stepBlock`,
-  which does the file check via `sameFileNeighbour(delta)`), so you can
-  walk through all the diffs of one file without going back to the list. If
-  the neighbor block's code is still loading, `pendingLast` remembers that
-  you want to land on the last change; `ensureCode` resolves that once the
-  rows are known. If you're on the **last** (resp. **first**) change and
-  there's a next (resp. previous) **same-file** block, a **grey step-chevron
-  _outside_ the
-  block card** appears — below the card (for `↓`) just above the dotted
-  connector line, or above it (for `↑`) — as a hint that the arrow will take
-  you to the neighboring block (`stepChevron`/`canStep(delta)` in `home.mjs`,
-  rendered in the block column next to the cards). The slot that toggles
-  this chevron (`stepChevronSlot`) deliberately has a **stable element
-  root** (a static `display:contents` wrapper) — a bare keyed `${…}` wrapper
-  made the chunk `ref` go stale here and corrupted the keyed reconcile of
-  the block column (the disappearing preview card + tab hang under repeated
-  ↓/↑ through same-file blocks); see the "bare toggling expression"
-  pitfall in `.claude/rules/conventions.md`. This is separate from the
-  **green scroll chevron _inside_ the card** (`scrollHint`/`updateHints` in
-  `Block.mjs`), which now only means "there are changes off-screen —
-  keep scrolling within THIS block". Grey + outside = you're leaving the
-  block; green + inside = keep scrolling.
-  At a file boundary (no same-file neighbor), the grey step chevron stays
-  hidden.
-  **The same green, in-card chevron also appears on a TRANSLATION block's
-  per-key overview** once it has more changed keys than fit in the card — the
-  reviewer's own out-of-view scroll hint, reused verbatim (not a parallel
-  mechanism, see "Translation blocks" in `.claude/rules/blocks-and-ingest.md`
-  for the `data-scrollsync`/`data-changed`/`data-change-active` wiring that
-  makes this work). Both directions are distinguished purely by the
-  chevron's own shape (pointing up vs. down), not by color — the pill
-  background is the same green either way — so this already holds for a
-  colorblind reviewer without any change.
+`toggleRow`/`ignoreToggleRow` show the same indigo bg/ring as a selected row via
+`state.toggleFocused`/`state.ignoreToggleFocused`; `rowFocused` dims the
+underlying block's own ring while either flag is set, so there are never two
+indigo highlights at once (except while the search box also holds real DOM
+focus — a pre-existing, separate ring). On a toggle row, **`Enter`/`→`** flips
+its own `state.showApproved`/`state.showIgnored` (mirroring a click) instead of
+opening the menu resp. entering the diff, and **`f`/`d`/`s`/`a`** are no-ops
+(no block/diff context). A click on a regular row, or typing in the search box,
+always resets both toggle flags.
 
-In `'diff'` mode, **`→`** steps into the **Underlying-code card**
-(`enterRelated` in `RelatedPanel.mjs`, `cs.focus === 'code'`) — either
-directly from the diff (no comment on the selected unit) or from the last
-inline comment conversation (`↓` falling through) — and lands on the
-**first** child block (`cs.codeSel = 0`). All the child blocks stack
-vertically at full width (no side-by-side hint anymore) and the card is a
-**pure list navigation**: **`↓`** selects the **next** child block (stays on
-the last), **`↑`** the **previous** child block — from the **first** child
-block, **`↑`**/**`←`** step back onto the last inline comment conversation
-of the unit if one exists (`hasVisibleComments()`/`enterCommentsTail()`),
-else to the diff (`exitRelated`). This card has no `→` that leaves it.
-This panel cursor
-(`cs.focus`/`codeSel`/`sel`/`threadPos`) lives in the **URL** under its own
-`rel` namespace (`rel.foc`/`rel.code`/`rel.csel`/`rel.thr`, via
-`bindUrlState(cs, …, { ns:'rel' })` in `RelatedPanel.mjs`), so a refresh
-puts you back exactly on this child block / this comment thread;
-`applyRelRestore` reapplies the restored cursor once, clamped, once the
-children/comments have loaded
-(see `.claude/rules/detail-layout.md` and skill `url-state`). **`Enter`** on
-the card **drills** into the child
-the cursor is on (`focusedRelatedChild()`) — and a **mouse click** on an
-Underlying-code item (`data-testid=related-item`) drills into that child,
-along
-the same path: the child opens as its own
-diff column to the right of the existing ones, between those columns and
-`RelatedPanel`
-(`drillIntoChild`, see the "Drilling" section in `.claude/rules/detail-layout.md`),
-and the Underlying-code panel + the inline comment blocks above it jump along
-to that level (`focusedBlock()`). This applies **always to the focused child**; if
-no child is focused (empty list) then `Enter` does nothing — unresolved
-calls are **automatically** picked up by the LLM search without a key or
-button (see
-`startCallSearch` + the `setRelated` watch in `home.mjs`). Right after
-drilling, keyboard focus sits on the **diff** of the new column, not on its
-Underlying-code panel (`drillIntoChild` calls `leaveRelated()` — the
-exported `exitRelated` — instead of `enterRelated()`); from there you walk
-with `↑`/`↓` through the change groups of that column, and **`←`** closes the
-focused drilled column, after which focus falls back to the diff of the
-parent column (the closed child reappears in that parent's Underlying-code
-list) — repeated `←` peels back level by level to the original top-level
-block, where yet another `←` finally exits the whole diff session (and then
-also clears the remaining drilled-column state). Every column that doesn't
-currently have focus collapses into a narrow rail (icon + truncated
-label); a **mouse click on such a rail**
-is a shortcut that functionally does the same as repeated `←` — it
-jumps directly to that level (`expandColumn`) and discards everything
-drilled further. See the section
-"Column navigation" in `.claude/rules/detail-layout.md` for the full
-`state.focusLevel` mechanism + the rail. `←`/`Escape` from the first
-position of the
-Underlying-code panel (`cs.codeSel === 0`) steps back onto the last inline
-comment conversation of the unit if one exists, else gives keyboard focus
-back to the diff of **that same** column (`handleRelatedKey`'s
-`hasVisibleComments()`/`enterCommentsTail()`/`exitRelated()`) — that is no
-longer a separate "pop" step, the column-by-column navigation above only
-follows once `relatedActive()` is `false` again. Visually: all child blocks
-stack vertically at full width (no arrow hint anymore); the selected child
-block gets an indigo ring (`data-active=true`). See
-`.claude/rules/detail-layout.md`.
+**The search box** is reached via `activateSearch()` (real DOM focus, so its
+focus ring lights up) and marks the arrival as deliberate via
+`state.searchLoopFocused` — a **separate** flag from `state.searchActive`,
+because the box also ends up focused for two reasons that are *not* a loop
+arrival: the load-time convenience focus (`focusSearchBox`, so a filter can be
+typed right away — the "auto-focused search box" specs press `Escape` past) and
+a plain click. Only while `searchLoopFocused` does `searchStepSelection` leave
+the box on the next `↑`/`↓` (`↓` → first visible block; `↑` → `toggle-ignored`,
+else `toggle-approved`, else the last visible block); otherwise `↑`/`↓` keep the
+existing "browse the filtered matches while focus stays in the box" behaviour
+with its own wrap, and reach only `toggle-approved`, never `toggle-ignored`.
+Typing (`setSearch`), `→`/`Enter` (into the diff) and `Escape` (back to the
+list) all clear the flag via `exitSearch`, however the box got focus.
 
-When stepping in (`→`), selection jumps to the **first changed line**
-(added, removed, or modified) — `state.change` is the index. The
-navigation units come from `changeGroups(rows)` in `Block.mjs`: consecutive
-changed rows (del/ins) count as **one** group, but a run longer than 5
-rows gets cut into chunks of 5 (`MAX_GROUP`). That cut only happens on
-a row that contains a **letter (A-z)**: a changed row consisting purely of
-brackets/punctuation (e.g. `}` or `{`) gets pulled into the current group
-instead of starting a new one (`hasLetter`), so a group never ends
-right before — or on — a bare-bracket line. `blockRows(b)` produces exactly
-the same aligned rows as the render, so navigation and highlight never
-diverge. The selected block gets the active group passed in as a reactive
-`activeGroup` function (reads `state.mode/selected/change`), so the pane
-re-highlights without the whole `DetailPanel` re-rendering. The active rows
-get a stronger tint + an inset left bar (`shadow-[inset_3px_0_0_…]`, no
-layout shift) and the first row a `data-change-active` anchor; `home.mjs`
-scrolls that with `scrollIntoView({block:'center'})` to the middle of the
-diff viewport.
+## `'diff'` mode
+
+`↑`/`↓` walk the **changes** of the block, `←` steps back to the list. Walking
+past the **last** (`↓`) or **first** (`↑`) change steps on to the next resp.
+previous block **provided it comes from the same file** (the blocks joined by
+the dotted connector); at a file boundary navigation stops. Stepping across
+lands on the first resp. last change (`stepBlock`, file check via
+`sameFileNeighbour(delta)`), so you can walk a whole file's diffs without
+returning to the list. If the neighbour's code is still loading, `pendingLast`
+remembers that you want the last change and `ensureCode` resolves it once the
+rows are known.
+
+**Two different chevrons, deliberately distinct:**
+
+- **Grey, _outside_ the block card** (`stepChevron`/`canStep(delta)`,
+  `home.mjs`, rendered in the block column): shown on the last (resp. first)
+  change when a same-file neighbour exists — "the arrow will take you to the
+  next block". Hidden at a file boundary. Its toggling slot
+  (`stepChevronSlot`) must keep its **stable element root** (a static
+  `display:contents` wrapper) — a bare keyed `${…}` wrapper made the chunk
+  `ref` go stale and corrupted the block column's keyed reconcile; see the
+  "bare toggling expression" pitfall in `.claude/rules/arrowjs-pitfalls.md`.
+- **Green, _inside_ the card** (`scrollHint`/`updateHints`, `Block.mjs`):
+  "there are changes off-screen — keep scrolling within THIS block". Also used
+  verbatim by a TRANSLATION block's per-key overview (see
+  `.claude/rules/diff-render.md` for the `data-scrollsync`/`data-changed`/
+  `data-change-active` wiring). Up vs. down is carried by the chevron's own
+  shape, not colour, so it already works for a colourblind reviewer.
+
+When stepping in (`→`), selection jumps to the **first changed line** (added,
+removed or modified); `state.change` is the index. Navigation units come from
+`changeGroups(rows)` (`Block.mjs`): consecutive changed rows count as **one**
+group, but a run longer than 5 rows is cut into chunks of 5 (`MAX_GROUP`). The
+cut only happens on a row containing a **letter** — a bracket/punctuation-only
+changed row is pulled into the current group (`hasLetter`), so a group never
+ends right before or on a bare-bracket line. `blockRows(b)` produces exactly the
+same aligned rows as the render, so navigation and highlight never diverge.
+
+The selected block gets the active group as a reactive `activeGroup` function
+(reads `state.mode`/`selected`/`change`), so the pane re-highlights without
+re-rendering the whole `DetailPanel`. Active rows get a stronger tint + an inset
+left bar (`shadow-[inset_3px_0_0_…]`, no layout shift) and the first row a
+`data-change-active` anchor, which `home.mjs` scrolls with
+`scrollIntoView({block:'center'})`.
+
+## `→` into the Underlying-code card
+
+In `'diff'` mode the Underlying-code card (`enterRelated` in
+`RelatedPanel.mjs`, `cs.focus === 'code'`) is reached by `↓` falling through the
+end of whatever sits before it — the last inline comment conversation, or the
+embedded Claude chat (stop 5b, which is where a bare `→` from the diff now
+lands, see the chain above) — and lands on the **first** child
+(`cs.codeSel = 0`). The card is a pure list:
+`↓`/`↑` move through the children (clamping at the last), and from the first
+child `↑`/`←` step back onto the last conversation of the unit if one exists
+(`enterCommentsTail()`), else to the diff (`exitRelated`). There is no `→` that
+leaves the card. The selected child gets an indigo ring (`data-active=true`).
+The card itself: `.claude/rules/underlying-code.md`.
+
+The panel cursor (`cs.focus`/`codeSel`/`sel`/`threadPos`/`claudePos`) lives in
+the **URL** under its own `rel` namespace
+(`rel.foc`/`rel.code`/`rel.csel`/`rel.thr`/`rel.cpos`), so a refresh returns to
+the same child/thread/chat turn; `applyRelRestore` reapplies it once, clamped,
+after the children/comments load. A restored `rel.foc=claude` deliberately waits
+for the comments exactly like `'comment'`/`'thread'` do and never runs
+`enterClaudeChat`'s auto-create path — restoring a position must not itself
+write. See skill `url-state`.
+
+**`Enter`** on the card (or a **mouse click** on `data-testid=related-item`)
+**drills** the focused child (`focusedRelatedChild()` → `drillIntoChild`): it
+opens as its own diff column, and the Underlying-code panel + inline comment
+blocks jump along to that level (`focusedBlock()`). With no child focused
+`Enter` does nothing — unresolved calls are picked up by the LLM search
+automatically, no key or button (`startCallSearch` + the `setRelated` watch).
+
+Right after drilling the keyboard sits on the **diff** of the new column, not
+its panel (`drillIntoChild` calls `leaveRelated()`); `↑`/`↓` then walk that
+column's change groups and `←` closes it, handing focus back to the parent
+column's diff (the closed child reappears in that parent's Underlying-code
+list). Repeated `←` peels back level by level to the top-level block, where a
+further `←` exits the diff session and clears the drill state. An unfocused
+column collapses to a narrow rail; clicking a rail is a shortcut for repeated
+`←` (`expandColumn`) and discards anything drilled deeper. Full `state.focusLevel`
+mechanism: `.claude/rules/drilling.md`.
+
+`←`/`Escape` from the panel's first position (`cs.codeSel === 0`) steps back
+onto the last conversation of the unit if one exists, else gives focus back to
+the diff of **that same** column (`handleRelatedKey`) — this is no longer a
+separate "pop" step; the column-by-column navigation only follows once
+`relatedActive()` is `false` again.
 
 ## Selection granularity (`f` zoom in / `s` zoom out / `d` back)
 
-Within a block you zoom with **`f`** (zoom in) and **`s`** (zoom out) through
-three levels (`home.mjs`, `GRANS`). **`d`** is the "back" key which acts as
-previous-call at the finest level (see below). All three step aside for a
-held Cmd/Ctrl (`isModifiedKey(e)`, see the `a` section below) so
-`Cmd+F`/`Cmd+D`/`Cmd+S` still reach the browser (find/bookmark/save)
-instead of zooming:
+Within a block you zoom with **`f`** (in) and **`s`** (out) through three levels
+(`GRANS`, `home.mjs`); **`d`** is "back" and acts as previous-call at the finest
+level. All three step aside for a held Cmd/Ctrl (`isModifiedKey(e)`, see the `a`
+section) so `Cmd+F`/`Cmd+D`/`Cmd+S` still reach the browser.
 
-- **`'group'`** (starting point when stepping in): a whole run of changed
-  lines (`changeGroups`) — multiple lines at once.
+- **`'group'`** (the starting point when stepping in): a whole run of changed
+  lines (`changeGroups`).
 - **`'line'`**: one changed line at a time (`changeLines`).
 - **`'call'`**: one **call segment within** that line (`changeCalls`). Unlike
-  the coarser levels, this doesn't split on *what* changed but on the
-  **structure** — the calls the line makes — so you can later link each
-  segment to the function it calls (an edge in the call graph). A line
-  is split on `->`, `.`, `;` and the **binary separators** `??`, `&&`, `||`
-  and the comparison operators (`==`/`===`/`!=`/`!==`/`<=`/`>=`)
-  (`segmentCalls`; the `;` stays attached to its call, the separators lead
-  — just like `->`/`.` — the next segment): `$order->customer()->name();`
-  becomes `$order` /
-  `->customer()` / `->name();`, and `$a->x ?? $b->y` becomes `$a` / `->x ` /
-  `?? $b` /
-  `->y` so the two callers around the `??` stay separated. **No** separator
-  (would break real chains): `=>` (array `key => value` stays one segment),
-  `::` (static call, belongs to the chain), the ternary `?`/`:` (clashes
-  with `?->` and
-  `::`) and a bare `<`/`>` (clashes with `->`/`=>`). The `.` boundary is
-  mostly there for Vue/JS property access (`order.customer.name`), alongside
-  PHP concatenation. The chosen
-  segment characters get a **narrow underline** in the same indigo
-  (`#6366f1`,
-  `UNDERLINE_CLS`) as the inset left bar of the active row.
+  the coarser levels this splits on **structure**, not on what changed, so a
+  segment can later carry a call-graph edge. `segmentCalls` splits on `->`,
+  `.`, `;` and the binary separators `??`, `&&`, `||` and the comparison
+  operators (`==`/`===`/`!=`/`!==`/`<=`/`>=`); the `;` stays attached to its
+  call, the separators lead the next segment. So `$order->customer()->name();`
+  becomes `$order` / `->customer()` / `->name();`, and `$a->x ?? $b->y` becomes
+  `$a` / `->x ` / `?? $b` / `->y`. **Deliberately not separators** (they would
+  break real chains): `=>` (array `key => value` stays one segment), `::`
+  (static call, part of the chain), the ternary `?`/`:` (clashes with `?->` and
+  `::`), and a bare `<`/`>` (clashes with `->`/`=>`). The `.` boundary is mostly
+  for Vue/JS property access, alongside PHP concatenation. The chosen segment's
+  characters get a narrow underline in the same indigo (`#6366f1`,
+  `UNDERLINE_CLS`) as the active row's inset bar.
 
-**Every changed content row is selectable at the finer levels, and on
-`'call'` you walk through the whole line.** `'line'` lands on an added/
-modified row via its **new side** (the right/`ins` pane) **and** on a
-**pure deletion** (a removed line with no replacement) — a removed line is a
-real change that counts toward the approve total, so it must be individually
-approvable at `'line'` granularity too, not only at group/call level (its
-approve ✓ then renders on the old/left pane, see `approveHere` in
-`Block.mjs`). `'call'` splits the **whole** new line into segments —
-**every** segment is landable, changed or not (later a relation will hang
-off it there), not just the diff part; a **removed** line with no
-replacement is landable there too — as one empty new segment (nothing on the
-right) with the whole old line underlined on the old side. (`'group'`
-remains a whole run including removed lines, so stepping in and the connector
-flow stay unchanged.) Only a completely blank row (see below) stays
-un-landable at every finer level.
+**Every changed content row is selectable at the finer levels.** `'line'` lands
+on an added/modified row via its **new side** and on a **pure deletion** (a
+removed line with no replacement — a real change that counts toward the approve
+total, so it must be individually approvable; its ✓ then renders on the old/left
+pane, `approveHere` in `Block.mjs`). `'call'` splits the **whole** new line into
+segments and **every** segment is landable, changed or not; a pure deletion is
+landable there too, as one empty new segment with the whole old line underlined
+on the old side. `'group'` stays a whole run including removed lines.
 
-**A completely empty (after `trim()`) added/removed line is not its own
-landable unit at `'line'`/`'call'`, and doesn't count toward the approve
-counter.**
-Such a line is `rowChanged` (carries a del/ins mark — e.g. an empty line
-between two statements within a fully added block) but has nothing
-for the reviewer to read or judge; before the `rowHasContent` check
-(`Block.mjs`, see also `.claude/rules/blocks-and-ingest.md`) you could
-still select such a line (a visibly-empty `changeLines`/`changeCalls`
-unit — "I can select it, but there's nothing there") and even approve
-it, which let the approve counter (`changedRows`, and the backend `total`
-in `blockstats.go`) run ahead of the number of actual code lines.
-`changedRows`/`changeLines`/
-`changeCalls` now additionally filter on `rowHasContent(r)` (the display
-side —
-`right` for `ins`, otherwise `left` — not empty after `trim()`).
-**`changeGroups`
-itself remains unchanged:** such an empty line just rides along within the
-group run
-it falls in (like a brackets-only line, see `hasLetter` above),
-so the highlighted range of a group doesn't jump around it — only the
-line's own countability/landability is suppressed.
+**A completely blank (after `trim()`) added/removed line is not a landable unit
+at `'line'`/`'call'` and doesn't count toward the approve counter.** Such a row
+is `rowChanged` but has nothing to read or judge, so `changedRows`/`changeLines`/
+`changeCalls` filter on `rowHasContent(r)` (the display side — `right` for an
+`ins` row, otherwise `left`). `changeGroups` is deliberately **unchanged**: the
+blank row just rides along inside its group run (like a brackets-only line), so
+a group's highlighted range never jumps around it — only its own
+countability/landability is suppressed. See `.claude/rules/approval.md` for the
+counter side (incl. the Go port in `blockstats.go`).
 
-All diff navigation goes through `unitsFor(rows, gran)` (now exported from
-`Block.mjs`, shared with the footer) → `unitsOf(b)`; `state.change`
-indexes the units of the **current** level. On a level switch,
-`setGran` re-anchors the selection on the unit covering the current row
-(`unitAtRow`): `f` from a group lands on its first line, `f` from a line on
-its first
-call segment, and `s`/`d` walk back up along the same rows.
+All diff navigation goes through `unitsFor(rows, gran)` (exported from
+`Block.mjs`, shared with the footer) → `unitsOf(b)`; `state.change` indexes the
+units of the **current** level. On a level switch `setGran` re-anchors on the
+unit covering the current row (`unitAtRow`): `f` from a group lands on its first
+line, `f` from a line on its first call segment, and `s`/`d` walk back up the
+same rows.
 
-The three navigation keys (`fKey`/`dKey`/`sKey` in `home.mjs`):
+The three keys (`fKey`/`dKey`/`sKey`):
 
-- **`f`** — zoom in. From `'list'` it first steps into the diff
-  (`enterDiff`, which resets `gran` to `'group'`). In the diff it refines one
-  level
-  (`group → line → call`); if it's already at **`'call'`**, it instead steps
-  to the **next call** (`nextChange` — the same flow as
-  `↓`, so flowing on to the first call of the next **same-file** block).
-- **`d`** — back. At **`'call'`** it steps to the **previous call**
-  (`prevChange`,
-  flowing on to the previous same-file block, just like `↑`); if you're at
-  the
-  **very first** call with no previous one to flow to, it zooms back out
-  to `'line'`. At the coarser levels `d` simply zooms out one step.
+- **`f`** — zoom in. From `'list'` it first steps into the diff (`enterDiff`,
+  which resets `gran` to `'group'`). In the diff it refines one level; already
+  at `'call'` it steps to the **next call** (`nextChange`, so flowing on to the
+  next same-file block like `↓`).
+- **`d`** — back. At `'call'` it steps to the **previous call** (`prevChange`,
+  flowing on to the previous same-file block like `↑`); at the very first call
+  with nothing to flow to it zooms back out to `'line'`. At coarser levels it
+  simply zooms out one step.
 - **`s`** — always zoom out one level (`call → line → group`), clamped at
-  `'group'`. Unlike `d`, `s` at `'call'` never walks along previous calls but
-  goes directly back to `'line'`, so you reliably escape the call
-  selection.
+  `'group'`. Unlike `d` it never walks along previous calls, so it reliably
+  escapes the call selection.
 
-`d`/`s` do nothing in `'list'` mode (there's nothing to zoom out of); only
-`f`
-steps in from there. `nextChange`/`prevChange` are shared with `↑`/`↓`, so
-the arrows and `f`/`d` traverse the diff identically.
+`d`/`s` do nothing in `'list'` mode; only `f` steps in from there.
+`nextChange`/`prevChange` are shared with `↑`/`↓`, so arrows and `f`/`d`
+traverse the diff identically.
 
-**`f`/`d`/`s` also work within a drilled column** (`state.focusLevel > 0`,
-see "Drilling"/"Column navigation" in `.claude/rules/detail-layout.md`) —
-exactly
-the same group→line→call zoom, but on that column's own `{change, gran}`
-cursor in
+Refining a group that spans exactly **one line** (`cur.end === cur.start`) makes
+`f` skip `'line'` and jump straight to `'call'` (the line *is* the group);
+`s`/`d` still step back one at a time.
+
+**`f`/`d`/`s` also work within a drilled column** (`state.focusLevel > 0`) — the
+same zoom, but on that column's own `{change, gran}` cursor in
 `state.drillCursor[focusLevel-1]` (`setDrillGran`/`drillNextChange`/
-`drillPrevChange` in `home.mjs`, mirroring `setGran`/`nextChange`/
-`prevChange`). A drilled column is a standalone diff, so there's no
-same-file neighbor block to flow through at the first/last call at `'call'`
-— but there **is** a sibling: if `f`/`↓` (or `d`/`↑`) walks past the last
-(resp. first) call of the column, the column steps
-sideways to the next/previous child in the Underlying-code list of the
-**parent** column (at any level, any granularity — not just `'call'`), and
-**replaces** itself with it at the same depth, instead of zooming back to
-`'line'` as before. Only if there is no sibling left (or never was — an
-only child) does `f`/`d` still zoom back to `'line'`, as before. See the
-"Column navigation" section in `.claude/rules/detail-layout.md`
-(`drillSiblingContext`/`drillToSibling`) for the full mechanism,
-including the ↑ symmetry (lands on the previous sibling's **last** unit,
-mirroring
-`stepBlock`) and the adjusted `dKey` guard. If you refine a group that spans
-exactly
-**one line** (`cur.end === cur.start`), `f` skips the `'line'` level
-and jumps straight to `'call'` (there's no meaningful line step then: the
-line
-*is* the group); `s`/`d` do still step back one at a time (`call → line →
-group`). The
-call underline
-rides on `markChars` (a per-character class function): `paneHTML` passes
-the
-underline set of the active segment to `highlightChanges`, which renders it
-via
-`markChars` into the Prism-highlighted HTML. Changed characters recently
-no longer get their own background
-(that background marking has been removed — see the "Char diff" section
-in `.claude/rules/blocks-and-ingest.md`);
-the line background (red/green) now only marks a real change at the
-line level. An empty added line has no characters and thus no underline
-(correct: nothing to mark).
+`drillPrevChange`, mirroring the top-level helpers). A drilled column has no
+same-file neighbour to flow into, but it does have a **sibling**: walking past
+the last (resp. first) unit steps sideways to the next/previous child of the
+**parent** column and replaces the column at the same depth, at any level and
+any granularity. Only with no sibling left does `f`/`d` still zoom back to
+`'line'`. Full mechanism (`drillSiblingContext`/`drillToSibling`, the `↑`
+symmetry landing on the sibling's **last** unit, the adjusted `dKey` guard):
+`.claude/rules/drilling.md`.
+
+The call underline rides on `markChars` (a per-character class function):
+`paneHTML` passes the active segment's underline set to `highlightChanges`,
+which renders it into the Prism-highlighted HTML. Changed **characters** no
+longer get their own background (see "Char diff" in
+`.claude/rules/diff-render.md`) — the red/green line background marks a change
+at line level only. An empty added line has no characters and thus no
+underline.
 
 ## Shift+↑/↓ — selecting multiple lines/groups at once (`state.rangeAnchor`)
 
-At **`gran==='line'` or `gran==='group'`** (see `isRangeGran`),
-**Shift+ArrowDown**/**Shift+ArrowUp** (`extendRange`/`drillExtendRange`,
-`home.mjs`) extend the selection into a contiguous range of lines resp. a
-merged run of change-groups, instead of moving the cursor one unit at a
-time. The anchor (the unit index where the shift selection started) lives
-alongside the existing `{change, gran}` cursor: top-level in
-`state.rangeAnchor`, for a
-drilled column as `rangeAnchor` on its own `state.drillCursor[level-1]`
-entry (mirroring the rest of that cursor shape, see "Column navigation" in
-`.claude/rules/detail-layout.md`). `rangeUnit(units, change, anchor)` merges
-the
-current unit and the anchor unit into one `{start, end}` row range (min/max
-of their row indices) — treated everywhere else in the codebase as an
-ordinary
-(larger) unit, so the highlighting (`activeGroup`), the approve scope
-(`approveTargetRows`/`approveContext`) and the comment anchoring
-(`commentTarget`) didn't need deeper changes than "use the
-merged unit instead of the single current one". This merge works identically
-for a line unit and a group unit (both already carry a `{start, end}` row
-range) — merging two separate groups can span an unchanged gap in between
-(nothing else was selected there), which is fine: the highlighting/approve
-scope still only act on the actually-changed rows within that range.
+At **`gran==='line'` or `gran==='group'`** (`isRangeGran`),
+**Shift+ArrowDown**/**Shift+ArrowUp** (`extendRange`/`drillExtendRange`) extend
+the selection into a contiguous range of lines resp. a merged run of
+change-groups instead of moving one unit at a time. The anchor (the unit index
+where the shift selection started) lives alongside the `{change, gran}` cursor:
+`state.rangeAnchor` at top level, `rangeAnchor` on the drilled column's own
+`state.drillCursor[level-1]` entry.
 
-- **Only at `gran==='line'` or `gran==='group'`** (`isRangeGran`, the single
-  gate both `extendRange`/`drillExtendRange` and every `rangeUnit` call site
-  check). At `'call'` it's about segments within one line, not a vertical
-  run — Shift+↑/↓ there is a no-op (`extendRange`/`drillExtendRange` return
-  early).
-- **Clamps at the block boundary.** Unlike a normal `↓`/`↑` (which flows on
-  past the last/first unit to the next same-file block resp. the
-  next/previous Underlying-code sibling — see above and
-  "Column navigation") an active range never flows out of a block/column: it
-  clamps at the first/last unit (of the active granularity) of the current
-  block. Approve and comment operate per block, so a range spanning two
-  blocks would have no meaningful sense.
-- **Approve approves the whole range at once** — `approveTargetRows`
-  now filters `changedRows` on the merged range instead of the single unit,
-  so
-  `toggleApprove`/the command-palette "approve" action (`Enter`) approves
-  exactly
-  the selected lines/groups (or retracts them). The label follows suit only
-  at `gran==='line'`: `approveNoun` shows **"Approve these N lines"** once
-  the range spans more than one line, otherwise unchanged "this line". At
-  `gran==='group'` the label stays the existing, generic "these lines"
-  regardless of how many groups are merged — a group already spans a
-  variable number of rows, so there's no single natural "N" to name.
-- **Comment uses the range as a multi-line anchor** — `commentTarget()`
-  now also builds its code fragment/`startLine`/`endLine` from the merged
-  range; `unitLineRange` already supported a multi-line range (for a
-  `'group'` unit), so "Place comment" on an active Shift range posts a
-  real multi-line GitHub review comment with no further changes needed.
-- **The anchor clears** on any action that would overwrite the selection:
-  `clearRangeAnchor()` — an ordinary (non-shift) arrow key
-  (`nextChange`/`prevChange`/`stepBlock`/`drillNextChange`/
-  `drillPrevChange`/`setDrillChange`), an `f`/`d`/`s` zoom
-  (`setGran`/`setDrillGran`, which already builds a fresh cursor without
-  `rangeAnchor` anyway), a block switch (`stepBlock`, `enterDiff`,
-  `openTask`), and `←`/`→` (stepping out to the list, stepping into the
-  Underlying-code panel). This is deliberately the same "an ordinary step
-  releases the selection" behavior as in a text editor.
+`rangeUnit(units, change, anchor)` merges the current and the anchor unit into
+one `{start, end}` row range (min/max of their row indices) — treated everywhere
+else as an ordinary, larger unit, so the highlighting (`activeGroup`), the
+approve scope (`approveTargetRows`/`approveContext`) and the comment anchoring
+(`commentTarget`) needed nothing deeper than "use the merged unit". It works
+identically for a line and a group unit; merging two groups can span an
+unchanged gap, which is fine — highlighting and approve only act on the actually
+changed rows within the range.
+
+- **Only at `'line'`/`'group'`** (`isRangeGran`, the single gate both
+  `extendRange`/`drillExtendRange` and every `rangeUnit` call site check). At
+  `'call'` it is about segments within one line, so Shift+↑/↓ is a no-op.
+- **Clamps at the block boundary** — unlike a normal `↓`/`↑`, an active range
+  never flows into the next same-file block or the next Underlying-code sibling:
+  approve and comment operate per block, so a cross-block range has no meaning.
+- **Approve approves the whole range at once** — `approveTargetRows` filters
+  `changedRows` on the merged range. The label follows suit only at
+  `'line'`: `approveNoun` shows "Approve these N lines" once the range spans
+  more than one line. At `'group'` it stays the generic "these lines" — a group
+  already spans a variable number of rows, so there is no natural "N".
+- **Comment uses the range as a multi-line anchor** — `commentTarget()` builds
+  its code fragment/`startLine`/`endLine` from the merged range;
+  `unitLineRange` already supported a multi-line range, so "Plaats comment" on
+  a Shift range posts a real multi-line GitHub review comment.
+- **The anchor clears** on anything that would overwrite the selection
+  (`clearRangeAnchor()`): an ordinary non-shift arrow key
+  (`nextChange`/`prevChange`/`stepBlock`/`drillNextChange`/`drillPrevChange`/
+  `setDrillChange`), an `f`/`d`/`s` zoom (`setGran`/`setDrillGran` already build
+  a fresh cursor without it), a block switch (`stepBlock`, `enterDiff`,
+  `openTask`), and `←`/`→`. Deliberately the same "an ordinary step releases the
+  selection" behaviour as a text editor.
 
 ## `a` — cycling the diff view (split → unified → fit → split)
 
-**`a`** cycles globally, for **every visible diff card at once** — the
-selected/preview card and every open drilled column (`state.drill`) —
-through `DIFF_VIEW_CYCLE` (`home.mjs`, `['split', 'unified', 'fit']`):
-side-by-side (old+new, default) → **unified** (a genuinely two-sided block
-collapses into ONE column, the old (`-`) line directly above the new (`+`)
-line — mirroring the footer's own inline-diff convention, see "Footer" below
-— fixed 60% width) → **fit** (on explicit reviewer request, ONLY the
-new/right pane — old code is never shown in this stand, even for a
-genuinely two-sided block; the card's width follows that pane's own code
-instead of a fixed number) → back to split. The three stands stay
-functionally distinct: `'unified'` is the only stand that still shows old
-code (stacked instead of side-by-side); `'fit'` is the only stand with a
-content-driven width. Sits next
-to `f`/`d`/`s` in `onKeydown` (`home.mjs`), so with the same earlier guards
-(command palette/search box/related panel active) in front — works in both
-`'list'` and `'diff'` mode. **Extra guard, separate from those existing
-guards:** `relatedActive()` (`cs.focus !== null`) doesn't cover every path
-where a text field has DOM focus — `startComment()` (among others the
-command-palette fallback "Create a comment with this") only sets
-`cs.composing`, not `cs.focus`, so `relatedActive()` stays `false` there
-while the composer does have focus. A literal "a" typed there would
-otherwise be swallowed by this shortcut. Hence the `a` handler also checks
-`document.activeElement` directly (`isEditableFocused()` in `home.mjs`:
-TEXTAREA/INPUT → shortcut does nothing, key just flows into the field) — a
-generic, future-proof guard that doesn't depend on which navigation state a
-field happens to track or not.
+**`a`** cycles globally, for **every visible diff card at once** (the
+selected/preview card and every open drilled column) through `DIFF_VIEW_CYCLE`
+(`home.mjs`, `['split', 'unified', 'fit']`):
+
+- **`'split'`** — side by side, old + new (default).
+- **`'unified'`** — a genuinely two-sided block collapses into ONE column, the
+  old (`-`) line directly above the new (`+`) line, mirroring the footer's own
+  inline-diff gutter convention (see `.claude/rules/footer.md`). The only stand
+  that still shows old code.
+- **`'fit'`** — only the new/right pane; old code is never shown, even for a
+  two-sided block (`fitOnly(b)` in `Block.mjs`, folded into `codeDiff`'s
+  `effectiveOnly` next to `singleSide(b)`). **The one exception:** a REMOVED
+  block has no new side, so it keeps showing its old/left pane — hiding it would
+  leave nothing to review. The only stand with a content-driven width.
+
+`state.diffViewMode` is ephemeral, no URL binding (like
+`showDescription`/`showApproved`). The **widths** each stand produces, and
+`fitWidthCls`/`boundedWrapWidthCls`/`narrowed`, live in
+`.claude/rules/diff-card.md`.
+
+**`'unified'` hides nothing — it restructures.** For an aligned row that is a
+real del+ins pair (or a whitespace-only re-alignment, `wsOnly`),
+`unifiedRowHTML` stacks the OLD line (`-`, rose) above the NEW one (`+`,
+emerald); a context row or an already one-sided row stays a single line.
+Load-bearing: exactly **one** of a pair's two lines carries the row's metadata
+(`data-row`/`data-changed`/the change-active anchor/the ✓/the comment marker) —
+the same canonical side `approveHere`/`commentedHere` pick elsewhere — so a
+`callArrows.mjs`/`updateHints` query for a row index never finds the decorative
+OLD half. The approve ✓ moves from its absolute overlay into an inline,
+fixed-width slot right after the `-`/`+` marker (`gutterSpan`), since the
+overlay would sit on top of the gutter text.
+
+**Guards.** The handler sits next to `f`/`d`/`s` in `onKeydown`, behind the same
+earlier guards (command palette / search box / related panel active), and works
+in both modes. Two extra checks:
+
+- **`isEditableFocused()`** — `relatedActive()` (`cs.focus !== null`) doesn't
+  cover every path where a text field has DOM focus (`startComment()` only sets
+  `cs.composing`), so a literal "a" typed in a composer would be swallowed. The
+  handler therefore also reads `document.activeElement` directly: TEXTAREA/INPUT
+  → the shortcut does nothing and the key flows into the field. Generic and
+  future-proof, independent of which navigation flag a field tracks.
+- **`isModifiedKey(e)`** (`e.metaKey || e.ctrlKey`, shared with `f`/`d`/`s` and
+  with the `state.toggleFocused` swallow list) — `event.key` stays the bare
+  letter regardless of a modifier, and the diff panes are plain selectable text
+  (not an input), so without this `Cmd+A`/`Ctrl+A` near the diff toggled the
+  view instead of selecting all text. Same for `Cmd+F`/`Cmd+D`/`Cmd+S`. Test:
+  `tests/select-all-shortcut.spec.mjs`.
 
 **Compact status indicator (`viewModeIndicator`, `Block.mjs`):** three small
-icon buttons (split/unified/fit, `data-testid=diffview-split`/`-unified`/`-fit`) in
-the block card's metadata row (next to the file:line, before the approve
-checkbox) show which of the three stands is active (an indigo ring on the
-current one) and, since `state.diffViewMode` is global (every visible card
-reacts to it at once, see above), are **only rendered on the card that
-currently owns the diff keyboard** — `diffActive()`, the same opt that
-already drives the card's indigo border (see "Focus highlight per stop"
-above and detail-layout.md's `.key` explanation) — never on a preview/
-look-ahead card or an unfocused (collapsed-to-rail) drilled column, so it
-never doubles up or shows on something you're not actively reviewing. A
-click on an icon jumps `state.diffViewMode` **straight** to that stand
-(`setViewMode` opt → `home.mjs`'s `setDiffViewMode` → `applyDiffViewMode`,
-the same helper `toggleDiffView` itself now calls) — `a` keeps cycling as
-before, this is purely an additional, direct way to reach a stand. The
-three icons are a fixed, unchanging `.map()` over `VIEW_MODE_META`
-(`Block.mjs`) — always the same 3 entries in the same order, so no keyed-
-node pitfall applies (conventions.md); each button's own class is its own
-whole-value `${() => ...}` binding so only the highlight re-evaluates on a
-`viewMode` change, not the surrounding card header. Test:
-`tests/diffview.spec.mjs` ("the split/unified/fit indicator …").
+icon buttons (`data-testid=diffview-split`/`-unified`/`-fit`) in the card's
+metadata row (next to the file:line, before the approve checkbox) show which
+stand is active (indigo ring on the current one). Since `state.diffViewMode` is
+global, they render **only on the card that currently owns the diff keyboard**
+(`diffActive()`, the same opt that drives the card's indigo border) — never on a
+preview card or a collapsed rail, so they never double up. A click jumps
+straight to that stand (`setViewMode` opt → `setDiffViewMode` →
+`applyDiffViewMode`, the same helper `toggleDiffView` calls); `a` keeps cycling.
+The three icons are a fixed `.map()` over `VIEW_MODE_META` (always the same 3
+entries in the same order, so no keyed-node pitfall applies), and each button's
+class is its own whole-value `${() => ...}` binding so only the highlight
+re-evaluates. Test: `tests/diffview.spec.mjs`.
 
-**A held Cmd/Ctrl always steps aside for the browser/OS
-(`isModifiedKey(e)` in `home.mjs`, shared with the `f`/`d`/`s` zoom keys,
-see below):** `event.key` stays the bare letter `'a'` regardless of a
-modifier, and the diff/code panes are plain, selectable text — not a
-TEXTAREA/INPUT, so `isEditableFocused()` doesn't cover them. Without this
-guard, `Cmd+A`/`Ctrl+A` while the reviewer's focus/selection was anywhere
-near the diff toggled the diff view instead of letting the browser select
-all text natively. `isModifiedKey(e)` (`e.metaKey || e.ctrlKey`) is checked
-next to `isEditableFocused()` on the `a` handler, and next to the plain
-letter check on `f`/`d`/`s` (and on the `state.toggleFocused` swallow list
-that includes those same four keys) — so `Cmd+F`/`Cmd+D`/`Cmd+S` (browser
-find/bookmark/save) also keep working. Test:
-`tests/select-all-shortcut.spec.mjs`.
+`viewMode()` is read inside `Block()`'s own per-card `${() => ...}` bindings,
+never in the outer per-column closure of `home.mjs`, so a toggle only re-renders
+each visible card's diff structure and width — not the card-building closures
+(see the "outer closure depends on navigation state" pitfall in
+`.claude/rules/arrowjs-pitfalls.md`).
 
-The state (`state.diffViewMode`, `'split'`/`'unified'`/`'fit'`) is ephemeral,
-no URL binding (like `showDescription`/`showApproved`). An ADDED block has
-no old side and a REMOVED block has no new side — `singleSide(b)` already
-decides the one pane it shows, unconditional on `viewMode`. A **truly
-two-sided** (`modified`) block behaves differently per stand: `'unified'`
-restructures it into ONE column via `unifiedCodeDiff(...)` (old (`-`)
-stacked above new (`+`) — still both, just not side-by-side; the condition
-for that branch in `codeDiff` is `viewMode() === 'unified'`, checked after
-`effectiveOnly`, so it never fires for an already one-sided block); `'fit'`
-instead **hides the old pane entirely** (`fitOnly(b)` in `Block.mjs`, folded
-into `effectiveOnly` right next to `singleSide(b)`) and shows only the
-new/right pane — exactly like an ADDED block already did, only the card's
-width also changes (see below). **The one deliberate exception:** a REMOVED
-block has no new side to prefer, so it keeps showing its old/left pane in
-`'fit'` too (`fitOnly` falls back to `singleSide(b)` first) — hiding it
-there would leave nothing to review.
+## Generic input-focus guard (typing must never be swallowed by a shortcut)
 
-**Unlike the earlier "hide the old pane" behavior this replaced, `'unified'`
-does NOT hide anything — it restructures a paired change into two stacked
-lines instead of one hidden/one shown.** For an aligned row that's a real
-del+ins pair (or a whitespace-only re-alignment, see `wsOnly` in
-`Block.mjs`), `unifiedRowHTML` renders the OLD line (`-`, rose) directly
-above the NEW line (`+`, emerald) — mirroring the `-`/`+` gutter convention
-Footer.mjs's own inline-diff preview already used (`line()` in
-`Footer.mjs`). A context row (unchanged) or a one-sided row (a pure
-add/remove) still renders as a single line. Exactly **one** of the two
-lines of a pair carries the row's metadata (`data-row`/`data-changed`/the
-change-active anchor/the checkmark/the comment marker) — the same
-canonical side `approveHere`/`commentedHere` already single out elsewhere
-(the new/right side, or the old/left side when there's no right at all) —
-so a `callArrows.mjs`/`updateHints` query for a given row index still finds
-exactly one element, never the purely decorative OLD half of a pair. The
-approve checkmark moves from its usual absolute overlay into an inline,
-fixed-width slot right after the `-`/`+` marker (`gutterSpan` in
-`Block.mjs`) — the overlay would otherwise sit on top of the leading gutter
-text.
+`relatedActive()` (`cs.focus !== null`) is the existing safety-net branch: it
+ends unconditionally in a `return`, so any key it doesn't explicitly match
+(letters, `/`, unmatched Enter variants) flows through to the focused field. But
+it only works while `cs.focus` stays in lockstep with real DOM focus — which is
+why every path into the composer goes through `toNew()`/`startComment` (both set
+`cs.focus` and `cs.composing` together), never a bare `cs.composing` toggle.
 
-**The card width in `'unified'` only follows `viewMode()`, not
-`singleSide`:** as soon as `viewMode()==='unified'`, **every** visible card
-shrinks to **60% width** (`w-[42rem] 2xl:w-[49.2rem]` instead of
-`w-[70rem] 2xl:w-[82rem]`) — `modified`/`added`/`removed` all alike, plus
-every preview/look-ahead card and every drilled column (they all share the
-same `Block()` component + the same `viewMode` option). This was previously
-limited to the two-sided case (a one-sided block deliberately kept its full
-width, see the width-stability rule in `.claude/rules/detail-layout.md`);
-the reviewer wanted `a` to make **everything** narrow as long as `'unified'`
-is on, regardless of block type. The simple `narrowed(viewMode)` in
-`Block.mjs` (only `viewMode()==='unified'`, no `singleSide` check) is the
-condition behind this branch of the width ternary — independent of, but
-consistent with, the `viewMode()==='unified'` check in `codeDiff` that
-picks `unifiedCodeDiff` for a two-sided block.
+As an **extra, future-proof layer**, `onKeydown` checks `document.activeElement`
+directly (`isEditableFocused()`, the same helper as the `a` guard) after the
+`relatedActive()` branch and before `/`: if a TEXTAREA/INPUT has focus and no
+earlier branch claimed the key, no remaining global shortcut (`/`, `f`/`d`/`s`,
+`a`, arrows, the block-palette Enter) does anything.
 
-**`'fit'` (the third stand) NEVER shows old code, and sizes the card off
-its own (single, new-side) code instead of a fixed number — but PHP and
-non-PHP files get genuinely different treatment** (`isPhpFile(b)` in
-`Block.mjs`, a plain `.php` extension check; `widthCls` routes on it, only
-for `'fit'`). `fitOnly(b)` (`Block.mjs`, folded into `codeDiff`'s
-`effectiveOnly`) forces a single pane for every block in this stand — the
-new/right pane for a `modified`/`added` block, the old/left pane only for a
-`removed` block (there is no new side there to prefer). This is the actual
-answer to "the 3rd option must not show the old code": `'fit'` used to keep
-both panes side by side for a genuinely two-sided block (like `'split'`,
-just resized); it no longer does.
+- **`Escape`** in this fallback is the explicit "get me out of here" key —
+  `leaveRelated()` (blur + `cs.focus = null` + `cs.composing = false`, mirroring
+  `handleRelatedKey`'s own Escape handling).
+- **`Tab`** deliberately gets no handling: the browser moves focus natively,
+  after which the next keystroke doesn't hit this branch anyway.
+- The search box (`BlockList.mjs`) needs no fallback — its `@focus`/`@blur` set
+  `state.searchActive` from real DOM focus directly.
 
-**A `.php` file** uses `fitWidthCls(b)` — floored at the existing 60% width
-(`42rem`/`49.2rem`, so `'fit'` is never narrower than `'unified'`) but
-**deliberately uncapped upward**, on explicit reviewer request: an earlier
-version clamped this at the full split ceiling (`70rem`/`82rem`) using the
-same 75th-percentile line length as `RelatedPanel.mjs`'s
-`relatedColumnWidthCls` (`codeGrowthChars`) — which let a genuinely long
-line (wider than the ceiling) get silently cut off behind an invisible
-horizontal scroll, identically in `'fit'` and `'split'`. That defeated
-`'fit'`'s whole premise ("width follows the code"), so `fitWidthCls` uses
-**`codeMaxLineChars`** (the TRUE longest non-comment line, not a
-percentile) and a CSS `max(floor, calc(...))` — no ceiling — so `'fit'` can
-genuinely grow wider than `'split'` for a PHP block with one very long
-line. `codeGrowthChars`/the percentile approach is untouched and still used
-by `relatedColumnWidthCls`. `'split'`/`'unified'` keep their existing fixed
-widths and can still clip a very long line, unchanged, for every file
-type — a deliberate, discussed scope boundary, not an oversight. Purely a
-character-count calculation on the already-loaded source text (`b.code`),
-computed once per code-load (via the existing `state.codeVersion`/
-key-forcing rebuild, see `.claude/rules/conventions.md` — **not**
-re-derived on every navigation step, which would risk the "outer closure
-depends on navigation state" flicker pitfall). Always a **single-pane**
-calculation now (`codeMaxLineChars` on just the one side `fitOnly(b)`
-picks) — there is no more two-pane/doubled-width branch, since old is never
-shown next to new in this stand any more.
+### Caret guards: `←`/`→` inside a focused comment field
 
-**Any other file** (markdown, JSON, config, …) gets `boundedWrapWidthCls()`
-instead — the same narrow 60% width a one-sided `added`/`removed` block
-already uses in every other stand (not content-based) — and its rows
-**wrap** (`whitespace-pre-wrap break-words`) within that width instead of
-growing the card, reusing the ordinary single-pane `codePane`/`paneHTML`
-with a `wrap` flag. Reported: the PHP-only uncapped guarantee above,
-applied indiscriminately, grew a card to ~6800px for a single
-336-character markdown bullet — prose reads perfectly fine wrapped (unlike
-a PHP statement), so `'fit'` must not balloon the card for it ("niet breder
-dan nodig"). Since `'fit'` only ever renders one pane now, there is no
-longer a separate two-pane wrapping renderer (the earlier
-`wrappedCodeDiff`/`pairedRowHTML` — a shared row-wrapper that kept a
-modified block's old/new cells the same height once one of them wrapped —
-was removed as dead code once `fitOnly` made it unreachable).
-
-Read as `viewMode()` within `Block()`'s own per-card `${() => ...}` class
-binding (not in the outer per-column closure of `home.mjs`) — mirroring how
-`codeDiff`'s own slot already reads `b.code`, so a toggle only re-renders
-the diff structure (the `viewMode()==='unified'` branch in `codeDiff`, which
-picks `unifiedCodeDiff`) and the width (via `narrowed`/`fitWidthCls`, both
-inside `widthCls(b, viewMode)`) of each visible card, not the card-building
-closures themselves. The width ternary
-sits in the same card-wide `${() => ...}` `class` binding as `diffActive()`/
-`preview` (already reactive, the whole value at once — no partial string
-interpolation, see the arrow.js class-binding pitfall in `conventions.md`).
-Test: `tests/diffview.spec.mjs`.
-
-## Generic input-focus guard (typing in a field must never be swallowed by a shortcut)
-
-`relatedActive()` (`cs.focus !== null`) is the existing "safety net" branch
-that
-already suppresses unintended shortcuts as long as a text field
-(composer/reply) is opened via the
-correct path — that block unconditionally ends in a `return`, so
-any key not explicitly matched there (letters, `/`, unmatched
-Enter variants) simply flows through to the focused field. But that safety
-net
-only works if `cs.focus` is actually kept in lockstep with the real
-DOM focus. One concrete spot where that wasn't the case, historically: the
-always-present "+ Comment on this line" trigger row (`data-testid=new-comment`,
-`RelatedPanel.mjs` — since removed entirely, see "Inline comment blocks" in
-`.claude/rules/detail-layout.md`; the composer itself lives on) used to open
-the composer with a bare
-`cs.composing = !cs.composing` toggle, without setting `cs.focus` —
-clicking it while `cs.focus` didn't already happen to be `'new'` would
-then open
-a focused text field while `relatedActive()` stayed `false`. `onKeydown`
-then had no signal at all that an editable field had DOM focus, and
-`s`/`d`/`f`/arrows/`/` were caught as global shortcuts instead of
-landing in the field (the reviewer could no longer type). Fixed, at the
-time, by having the button
-open via `toNew()` — exactly the same route every remaining path to this
-composer (`toNew`/`startComment`) still uses, which
-always sets `cs.focus` and
-`cs.composing` together.
-
-As an **extra, future-proof layer** (for any other/future input field
-whose
-own app-state focus flag ever turns out not to be in sync with the real
-DOM focus —
-as above), `onKeydown` checks, after the `relatedActive()` branch, before
-`/`,
-once more directly `document.activeElement`
-(`isEditableFocused()` — the same helper as the `a` guard above): if
-DOM focus sits on a TEXTAREA/INPUT and no earlier branch has already
-claimed the key, then no remaining global shortcut (`/`, `f`/`d`/`s`,
-`a`, arrows, the block-palette Enter) does anything — the key just flows
-into the field
-. **`Escape`** within this fallback is the explicit "get me out of
-here" key
-(calls `leaveRelated()` — blur + `cs.focus = null` + `cs.composing =
-false`, mirroring `handleRelatedKey`'s Escape handling in the
-`relatedActive()` branch). **`Tab`** deliberately gets no handling of its
-own: the
-browser natively moves DOM focus to the next focusable element,
-after which the next keystroke doesn't hit this branch anyway
-(`isEditableFocused()`
-is then `false`). The search box (`BlockList.mjs`) has had this pattern
-for a while in
-its own, even more direct way: `@focus`/`@blur` set `state.searchActive`
-directly based on real DOM focus (no separate toggle path), so it doesn't
-need
-this fallback.
-
-**ArrowLeft within a focused comment field moves the caret, doesn't leave
-the field
-— unless the caret is already right at the start.** The
-`relatedActive()` branch (`cs.focus` `'new'`/`'comment'`/`'thread'`, the
-comments sidebar) used to claim `ArrowLeft` unconditionally — even while
-the reply/composer `<textarea>` actually had DOM focus and the reviewer
-was mid-text, which made a plain `←` or an Option/Alt+`←` (macOS word
-jump)
-exit (popping thread focus back, or `exitRelated()`) instead of moving the
-caret. `editableCaretCanMoveLeft()` (`home.mjs`, next to
-`isEditableFocused()`)
-checks whether the focused TEXTAREA/INPUT has a `selectionStart`/
-`selectionEnd` > 0
-— i.e. there's text/selection to the left of the caret — and both branches
-suppress their `ArrowLeft` handling as long as that's the case: the key
-then falls
-straight through to the field, which handles it natively (caret step or
-word jump). If the caret is already at position 0 (a freshly opened, still
-empty
-composer/reply field — the existing, tested case in `nav-chain.spec.mjs`:
-"← from the composer exits straight back to the diff"), `←` keeps its
-long-standing "step back out" meaning — there's nothing to move the
-caret left into anyway. `Escape` remains unchanged as the explicit
-"get me out of here" key, regardless of caret position. See
+**`←` moves the caret, unless it is already at the very start.** The
+`relatedActive()` branch (`cs.focus` `'new'`/`'comment'`/`'thread'`/`'claude'`,
+each of which lands DOM focus in a text field) used to
+claim `ArrowLeft` unconditionally, so a plain `←` or Option/Alt+`←` mid-text
+exited the field instead of moving the caret.
+`editableCaretCanMoveLeft()` (`home.mjs`) checks whether the focused
+TEXTAREA/INPUT has `selectionStart`/`selectionEnd` > 0, and both branches
+suppress their `ArrowLeft` handling while that holds — the key then falls
+through to the field (caret step or word jump). At position 0 (a freshly opened,
+empty composer/reply) `←` keeps its "step back out" meaning; `Escape` is
+unchanged regardless of caret position. Test:
 `tests/comment-arrowleft-caret.spec.mjs`.
 
-**ArrowRight gets the exact mirror-image guard, for the same reason.**
-`relatedActive()` (`cs.focus==='comment'`) claimed `ArrowRight`
-unconditionally too — including while the reviewer was mid-text in a
-comment row's already-focused reply field (`toComment()` focuses it on
-landing) — which jumped into the thread (`enterThread()`) instead of moving
-the caret right (the reported "first ← works, then → doesn't"). The new
-`editableCaretCanMoveRight()` (`home.mjs`, next to
-`editableCaretCanMoveLeft()`) checks `selectionStart`/`selectionEnd` <
-`value.length` and both branches suppress their `ArrowRight` handling as
-long as that's the case; only once the caret is already at the end does
-`→` keep its existing nav meaning there (entering the thread for a comment
-row; a no-op for `'new'`/`'thread'`). See `tests/comment-arrowright-caret.spec.mjs`.
-The comment-index item's own reply field (`commentDetailCard`,
-`RelatedPanel.mjs`) needs no such guard at all: it isn't wired into any
-`cs.focus`-based branch, so a plain ArrowLeft/ArrowRight there simply falls
-through to the browser untouched — moving the caret natively — by
-construction, not because of an explicit carve-out.
+**`→` gets the exact mirror-image guard.** `editableCaretCanMoveRight()` checks
+`selectionStart`/`selectionEnd` < `value.length`; only once the caret is at the
+end does `→` keep its nav meaning (entering the thread for a comment row,
+entering the embedded Claude chat from `'thread'`; a no-op for `'new'` and
+inside the chat itself). Test:
+`tests/comment-arrowright-caret.spec.mjs`.
 
-## Footer: inline preview of the selected line + AI description for an if
-
-Below the panels sits a fixed footer (`src/Footer.mjs`, `data-testid=footer`).
-Unlike the very first version, the footer is **not** visible just because a
-diff is open — it's only visible once there's **actually something to
-show**: `state.footerVisible` (derived in `home.mjs`'s `updateFooter()`
-as `!!(state.footerUnit || state.footerExplain)`, see below for what those
-two snapshots are). Since every navigable `group`/`line`/`call` unit now
-always yields at least one row (see below), this is in practice **almost
-every** diff-mode selection — the bar only really disappears at
-`state.mode !== 'diff'` (list mode) or when there's no focused block/no
-navigable unit (`hidden` instead of `flex` on the stable
-`<footer>` root — the class string remains one reactive
-`class="${() => …}"`
-function binding, so no keyed-node pitfall, see
-`.claude/rules/conventions.md`).
-`footerUnitInfo` (`home.mjs`) still returns `null` outside
-`state.mode==='diff'`,
-so `footerVisible` is always `false` in list mode.
-
-**The bar's own height is content-driven (`footerBoxPx`, exported from
-`Footer.mjs`), not a fixed 90/140px tier anymore.** `footerBoxPx(state)`
-derives a px figure purely from already-known counts — never a DOM
-measurement, so it can't race this same render (the same technique
-`Block.mjs`'s `widthCls`/`fitWidthCls` and `RelatedPanel.mjs`'s
-`relatedColumnWidthCls` already use for WIDTH, just applied to height): a
-small chrome allowance (the bar's own padding) + one `FOOTER_DIFF_LINE_PX`
-per rendered `-`/`+` row in `state.footerUnit`, plus, while an AI description
-shows, a fixed `FOOTER_EXPLAIN_LINES_PX` reserve for its `line-clamp-2`
-ceiling — clamped between `FOOTER_MIN_PX` (56) and `FOOTER_MAX_PX` (140, the
-unchanged ceiling the old, larger tier already had). **Deliberately accepted
-imprecision:** a visible description always reserves room for the FULL
-2-line cap, even when the actual text only needs 1 line — knowing which
-without measuring text-wrap isn't possible without a DOM read, and this is
-still a large improvement over the old flat +50px (90→140) jump regardless of
-how many diff rows were shown alongside it.
-
-**`footerBoxPx(state)` is the single source of truth for this height —
-`DetailPanel`/`<main>` (`home.mjs`) reads the EXACT same function (imported
-from `Footer.mjs`) for its own bottom reservation, so the footer's real box
-and the space reserved for it can never drift apart:** `bottom-6` (no
-reservation) as soon as `!state.footerVisible`, otherwise
-`` bottom-[${footerBoxPx(state)}px] `` — always precisely as tall as the
-footer itself, never a separate guess. The pr-index (`BlockList.mjs`) and the
-PR info column (`PrInfoPanel`, `home.mjs`) reserve nothing at all for the
-footer (`bottom-6`, was a fixed, never-reactive `bottom-[90px]`) — both are
-only visible in list mode, where the footer never shows anyway, so that
-reservation was already dead space.
-
-**`<main>`'s own `overflow-y` already resolves to `auto`, even though the
-class list only ever sets `overflow-x-auto`** — confirmed with
-`getComputedStyle` while building the preview-collapse mechanism below: per
-the CSS rule that one non-`visible` axis forces the OTHER axis to also
-compute as `auto` (the same rule already documented for the TRANSLATION
-card's own scroll container in `blocks-and-ingest.md`), a block-column taller
-than `<main>`'s own box already just scrolls/clips cleanly within it. Nothing
-in this app ever silently renders BEHIND the footer (`z-20`, above `<main>`'s
-`z-10`) — a too-tall active diff is a **space-allocation** question (the
-reviewer has to scroll `<main>` to see the rest, while the look-ahead preview
-below still claims its own height), never a clipping bug. See "The look-ahead
-preview collapses…" in `.claude/rules/detail-layout.md` for the feature this
-observation motivated, and `tests/footer-height-fits-content.spec.mjs` +
-`tests/footer-explanation.spec.mjs` for the height itself.
-
-The theme toggle is not in the footer — see "Theme" in
-`.claude/rules/conventions.md` (a narrow row in `prInfoCard`, above the
-PR summary; the older `ThemeToggleCorner` — an always-visible fixed
-element bottom-left — no longer exists).
-
-**Independent of the bar's own visibility**, the footer shows an inline
-diff
-(`- old` / `+ new`, Prism-highlighted) of **every** navigable unit,
-`group`/`line`/`call` — so also when you select a whole **block of
-changes**
-(a `group` unit, a contiguous run of changed lines), not only for a
-1-line `line`/`call` unit as before. A
-`group` of multiple lines shows **per line** what changed:
-one del/ins line pair per aligned row the group spans (up to
-`MAX_GROUP`,
-5 lines — `Block.mjs`), stacked, within the existing scrollable
-`footer-diff` column (`no-scrollbar overflow-auto`) — the bar itself now
-DOES grow with the row count (see `footerBoxPx` above), up to the unchanged
-`FOOTER_MAX_PX` (140) ceiling; only past that ceiling does a long group
-scroll internally instead of growing the bar further.
-This inline diff content follows the **focused column and its current
-granularity/cursor** — the top-level block (`state.gran`/`state.change`) at
-`focusLevel 0`, or a drilled column's own
-`state.drillCursor[focusLevel-1]` cursor (see "Column navigation" in
-`.claude/rules/detail-layout.md`) — via the same `unitsFor(rows, gran)` as
-navigation: the rows `[unit.start,
-unit.end]` of the active unit are read out one by one (`'line'`/
-`'call'` are always one row, so for those levels this is unchanged, one
-line pair). Long lines (>`WIDE_AT`, 110 characters, across **all** rows of
-the
-unit) release the `max-w` so the footer uses full width; if
-specifically the **new/right** (`ins`) line of a row is longer than
-`WIDE_AT`, that line additionally wraps fully (`whitespace-pre-wrap
-break-words` instead of `whitespace-pre`) so the entire new code is visible
-without an invisible (`no-scrollbar`) horizontal scroll — the old/left
-(`del`) line doesn't wrap along, that stays unchanged. At
-`'call'` level the footer underlines the **active segment** in the same
-indigo as the panes via the exported `markChars` +
-`UNDERLINE_CLS` (from `Block.mjs`) — underlining exactly those characters
-(at
-`'group'`/`'line'` the units have no set → no underline, on any row).
-
-**The footer no longer reads `blockRows`/`b.code` itself.** `home.mjs` has
-its
-own, decoupled footer `watch` (the `setRelated`/`setCommentScope` pattern,
-inline deps incl. `state.drillCursor` and `focusedBlock().code`) that pushes
-two flat
-snapshots: `state.footerUnit` (the aligned rows + underline arrays of
-the active unit — one row for `line`/`call`, several for a multi-line
-`group` — `null` for no unit, explicitly never an empty array, so that
-both the `!!(...)` check in `updateFooter` and the single↔array-slot
-pitfall
-in `Footer.mjs` remain correct, see `conventions.md`) and
-`state.footerExplain`
-(see below), and then within that same `updateFooter()` sets the derived
-`state.footerVisible`. This way the footer never becomes a co-subscriber
-on the
-code of the focused block (the "stuck on loading" race, see
-`conventions.md`) and follows the drilled-column cursor for free.
-
-**AI description for an if statement (`data-testid=footer-description`):**
-if the text of the focused **`group`- or `line` unit** (never `call`, and
-only in diff mode) contains an
-`if`/`elseif`/`else if` (`reIfStatement` in
-`home.mjs` — a bare regex on the line text, false positives in
-strings/comments deliberately accepted), the footer shows above the inline
-diff a short English AI explanation of what the condition checks and
-when the branch runs. That comes from the `explanations` read model
-(`GET /api/explanations?pr=N`), generated by the **`explain_code`**
-workflow
-(Haiku, context-only — see `.claude/rules/tembed-workflows.md`).
-Generation
-starts **automatically** with a debounce (`EXPLAIN_DEBOUNCE_MS`, 600ms —
-navigating through with arrows doesn't trigger anything) via
-`POST /api/workflows/explain_code`, client-side
-deduped (`explainRequested`) and server-side idempotent (a deterministic
-Run
-ID per unit+code-hash, `StartWorkflowID`). While the run is in progress the
-line shows
-"Generating AI description…" (pulsing); a `failed` row (offline,
-`SLASH_CLAUDE=off`) hides the line again. The row match is based on
-`blockId|unitKey` (unitKey = `group-<start>-<end>`/`line-<row>`, the same
-codeRef shape as `commentPath`) plus a **code-hash check** (`fnv1a` over
-`EXPLAIN_PROMPT_VERSION + '|' + code + context`): a stale row from before a
-new commit — or a prompt-text change that bumped `EXPLAIN_PROMPT_VERSION` —
-is ignored and regenerated; a seeded row with an empty hash always matches
-(test fixtures). The prompt itself caps the answer at ~40 words/~275
-characters (measured against `line-clamp-2` at the footer's real width, see
-`.claude/rules/tembed-workflows.md`) so it fits the two-line clamp below
-without being cut off. While the description shows, the footer grows from 90px to
-**140px** and `<main>` (`home.mjs`) and the comments/tasks sidebar +
-hint rail (`RelatedPanel.mjs`) reactively reserve `bottom-[140px]` instead
-of
-`bottom-[90px]`, so nothing shifts behind the footer. See
-`tests/footer-explanation.spec.mjs` (incl. the drilled-column case).
+The comment-index item's own reply field (`commentDetailCard`) needs no guard at
+all: it is not wired into any `cs.focus`-based branch, so `←`/`→` there fall
+through to the browser by construction.

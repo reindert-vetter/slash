@@ -22,7 +22,11 @@ JSX, no framework.
      lists with `.map(...).key(id)`.
    - Style with Tailwind classes; no separate CSS files unless needed.
 4. Import and mount the component in the parent module with `template(el)`.
-5. Add a Playwright test if needed that checks the rendered behavior.
+5. Add a Playwright test if needed that checks the rendered behavior. If it
+   **seeds** anything (places a comment, starts a workflow), take its PR number
+   from `seededPr(testInfo)` (`tests/_fixtures.mjs`) — never a hardcoded one; a
+   guard spec fails the run otherwise. See "Playwright test infra" in
+   `.claude/rules/conventions.md`.
 
 ## arrow.js pitfalls (from practice)
 
