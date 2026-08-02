@@ -17,6 +17,7 @@ import (
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/approvals"
 	"slash/modules/callresolve"
+	"slash/modules/chat"
 	"slash/modules/claude"
 	"slash/modules/commentignore"
 	"slash/modules/comments"
@@ -49,6 +50,7 @@ type tasks struct {
 	tasksnooze    *tasksnooze.Module
 	commentignore *commentignore.Module
 	taskinbox     *taskinbox.Module
+	chat          *chat.Module
 }
 
 // newTasks builds the tembed engine (SQLite + JSONL, so comments live in the
@@ -199,6 +201,23 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ci.Close()
 		return nil, nil, err
 	}
+	ch, err := chat.Open(dataDir + "/chat.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		ts.Close()
+		ci.Close()
+		ti.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -250,6 +269,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// Same pattern for the ignore-comment read-model: a nil store makes
 	// saveCommentIgnore a no-op.
 	mgr.commentignore = ci
+	// Same pattern for the chat read-model: a nil store makes the chat
+	// Activities (ensureChatConversation/saveChatMessage/saveChatAnswer/
+	// runClaudeTurn) no-ops.
+	mgr.chat = ch
 	// Mirror every glue-level log line (poller/startup errors that are not a
 	// workflow run of their own) into the in-memory problem buffer behind
 	// GET /api/problems — see run_errors.go.
@@ -298,9 +321,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = ts.Close()
 		_ = ti.Close()
 		_ = ci.Close()
+		_ = ch.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, tasksnooze: ts, taskinbox: ti, commentignore: ci}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, tasksnooze: ts, taskinbox: ti, commentignore: ci, chat: ch}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -596,6 +620,15 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/tasks → read-only, derived task-inbox read-model (PR reviews,
 	// unread comments on your own PRs, Jira tickets assigned to you).
 	mux.HandleFunc("/api/tasks", s.handleTasks)
+	// POST /api/workflows/claude_chat {pr, commentId} → ensure the claude_chat
+	// Execution for an existing comment thread (idempotent, Run ID derived from
+	// commentId); the UI then signals reviewer turns to its Run ID via
+	// .../signals/message.
+	mux.HandleFunc("/api/workflows/claude_chat", s.handleClaudeChatStart)
+	// GET /api/chat?commentId=X → read-only chat transcript for one conversation
+	// (see modules/chat; the conversation id IS the comment thread's id, so pr
+	// isn't needed to scope the read).
+	mux.HandleFunc("/api/chat", s.handleChat)
 	// POST /api/workflows/cleanup → manually trigger the daily data-retention
 	// cleanup pass (purges all data of PRs merged more than 7 days ago). Runs
 	// automatically once a day too — see StartCleanupScheduler.
@@ -711,7 +744,7 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" {
 		http.NotFound(w, r)
 		return
 	}
@@ -835,6 +868,27 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "deleting"})
+			return
+		}
+		// The message signal carries one reviewer turn to a claude_chat
+		// conversation — the UI write path for the embedded Claude panel.
+		if parts[2] == SignalMessage {
+			var body struct {
+				Author string `json:"author"`
+				Body   string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Body) == "" {
+				http.Error(w, "invalid message", http.StatusBadRequest)
+				return
+			}
+			sig := ChatMessageSignal{
+				ID: "msg-" + newUIReactionID(), Author: body.Author, Body: body.Body,
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalMessage, sig); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "signalled"})
 			return
 		}
 		if parts[2] != SignalReply {
@@ -1271,6 +1325,73 @@ func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		list = []taskinbox.Task{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "tasks": list})
+}
+
+// handleClaudeChatStart serves POST /api/workflows/claude_chat {pr, commentId}
+// → ensures the claude_chat Execution for that comment thread (idempotent via
+// StartClaudeChat's deterministic Run ID) and returns its Run ID, which the UI
+// then signals reviewer turns to via .../signals/message. commentId must name
+// an existing comment of pr (per product decision, a chat always hangs off a
+// comment thread — the UI creates an empty private one first if none exists
+// at the selected spot yet).
+func (s *server) handleClaudeChatStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		PR        int    `json:"pr"`
+		CommentID string `json:"commentId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 || in.CommentID == "" {
+		http.Error(w, "invalid chat request", http.StatusBadRequest)
+		return
+	}
+	list, err := s.tasks.comments.List(r.Context(), in.PR)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	found := false
+	for _, c := range list {
+		if c.ID == in.CommentID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "unknown comment", http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.StartClaudeChat(ClaudeChatInput{PR: in.PR, CommentID: in.CommentID})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleChat serves GET /api/chat?commentId=X — the read-only chat transcript
+// for the conversation hanging off that comment thread.
+func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	commentID := r.URL.Query().Get("commentId")
+	if commentID == "" {
+		http.Error(w, "commentId required", http.StatusBadRequest)
+		return
+	}
+	list, err := s.tasks.chat.List(r.Context(), commentID)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []chat.Message{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": list})
 }
 
 // filterPresets maps an allow-listed preset key to its fixed GitHub search

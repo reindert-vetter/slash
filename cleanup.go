@@ -16,6 +16,7 @@ import (
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/approvals"
 	"slash/modules/callresolve"
+	"slash/modules/chat"
 	"slash/modules/commentignore"
 	"slash/modules/comments"
 	"slash/modules/explanations"
@@ -265,6 +266,10 @@ type purgeDeps struct {
 	// block index — keyed per PR precisely so this sweep picks it up; see the
 	// package doc of modules/commentignore.
 	commentignore *commentignore.Module
+	// chat holds the embedded Claude conversations (see chat_workflow.go);
+	// each hangs off a comment thread that is itself purged via d.comments, but
+	// the chat rows have their own store and need their own sweep.
+	chat *chat.Module
 }
 
 // purgePR removes every trace of one PR's data: its worktrees, its workflow
@@ -354,6 +359,13 @@ func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, erro
 			return res, fmt.Errorf("purge commentignore: %w", err)
 		}
 		res.RowsDeleted["commentignore"] = int(n)
+	}
+	if d.chat != nil {
+		n, err := d.chat.Purge(ctx, pr)
+		if err != nil {
+			return res, fmt.Errorf("purge chat: %w", err)
+		}
+		res.RowsDeleted["chat"] = int(n)
 	}
 
 	log.Printf("cleanup pr %d: worktrees=%d workflow_runs=%d rows=%v",

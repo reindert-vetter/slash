@@ -16,6 +16,7 @@ import (
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/approvals"
 	"slash/modules/callresolve"
+	"slash/modules/chat"
 	"slash/modules/claude"
 	"slash/modules/commentignore"
 	"slash/modules/comments"
@@ -145,6 +146,15 @@ const (
 	// WorkflowSubmitReview. Triggered manually (POST /api/workflows/cleanup)
 	// and automatically once a day (see TaskManager.StartCleanupScheduler).
 	WorkflowCleanup = "cleanup"
+	// WorkflowClaudeChat is the Workflow Type behind the embedded Claude
+	// conversation panel: one Execution per conversation, hanging off exactly
+	// one existing comment thread (its Run ID is derived from that comment's
+	// id, see chatConversationRunID in chat_workflow.go). Each "message" Signal
+	// (a reviewer turn) drives one runClaudeTurn Activity and stores both
+	// turns; it never completes — a long-lived per-conversation tracker, mould
+	// of WorkflowTaskCodeComment's reactions loop. See
+	// .claude/rules/tembed-workflows.md.
+	WorkflowClaudeChat = "claude_chat"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -170,6 +180,8 @@ const (
 	// SignalIgnore delivers one comment's ignored state to the ignore_comment
 	// tracker (from the UI, on the "Ignore"/"Ignore ongedaan maken" action).
 	SignalIgnore = "ignore"
+	// SignalMessage delivers one reviewer turn to the claude_chat workflow.
+	SignalMessage = "message"
 
 	// pollInterval is the fast cadence the GitHub poller uses while the reviewer
 	// is actively viewing the thread (a heartbeat arrived within heartbeatWindow).
@@ -509,14 +521,20 @@ type TaskManager struct {
 	// test call site; a nil store makes saveCommentIgnore a no-op, like the
 	// other module-guarded activities.
 	commentignore *commentignore.Module
-	claude        claude.Client
-	jira          jira.Client
-	db            *sql.DB
-	dataDir       string
-	repo          string
-	interval      time.Duration // fast cadence (reviewer active)
-	idle          time.Duration // slow cadence + PR-state check (reviewer idle)
-	logf          func(string, ...any)
+	// chat is the claude_chat conversation read-model. Set post-construction in
+	// newTasks (like reviewerusage/taskinbox/commentignore) rather than as a
+	// NewTaskManager param, to avoid churning every existing test call site; a
+	// nil store makes the chat Activities no-ops, like the other
+	// module-guarded activities.
+	chat     *chat.Module
+	claude   claude.Client
+	jira     jira.Client
+	db       *sql.DB
+	dataDir  string
+	repo     string
+	interval time.Duration // fast cadence (reviewer active)
+	idle     time.Duration // slow cadence + PR-state check (reviewer idle)
+	logf     func(string, ...any)
 
 	// baseCtx is the server-lifetime context background pollers spawned outside
 	// a request (e.g. ensurePRStatus's fresh-poller spawn) run under — a
@@ -1618,7 +1636,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			engine: m.engine, db: m.db, dataDir: m.dataDir,
 			comments: m.comments, approvals: m.approvals, relations: m.relations,
 			callresolve: m.callresolve, testcovers: m.testcovers, prmeta: m.prmeta, explain: m.explain,
-			commentignore: m.commentignore,
+			commentignore: m.commentignore, chat: m.chat,
 		}
 		res, err := purgePR(ctx, deps, t.PR)
 		if err != nil {
@@ -1637,6 +1655,64 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(map[string]int{"deleted": n})
 	})
 
+	// Activity: create the chat conversation row if it doesn't exist yet (write,
+	// workflow-driven, idempotent). See chat_workflow.go.
+	engine.RegisterActivity("ensureChatConversation", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg ClaudeChatInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil {
+			return nil, nil
+		}
+		return nil, m.chat.EnsureConversation(ctx, arg.CommentID, arg.PR)
+	})
+	// Activity: persist one turn (write, workflow-driven). Used for both the
+	// reviewer's own message and — from runClaudeTurn — the assistant's reply,
+	// so every write to chat_messages goes through this one path plus
+	// runClaudeTurn's own save.
+	engine.RegisterActivity("saveChatMessage", func(ctx context.Context, in []byte) ([]byte, error) {
+		var msg chat.Message
+		if err := json.Unmarshal(in, &msg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil {
+			return nil, nil
+		}
+		return nil, m.chat.SaveMessage(ctx, msg)
+	})
+	// Activity: record the reviewer's answer to a pending question turn (write,
+	// workflow-driven).
+	engine.RegisterActivity("saveChatAnswer", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			ID     string `json:"id"`
+			Answer string `json:"answer"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil {
+			return nil, nil
+		}
+		return nil, m.chat.SetAnswer(ctx, arg.ID, arg.Answer)
+	})
+	// Activity: run one conversational Claude turn (side effect: shells out via
+	// claude.Client.RunChat) and persist the assistant's reply + the
+	// conversation's (possibly new) session id. Returns the saved chat.Message
+	// so the workflow can tell a "question" turn apart from a plain one. See
+	// chat_workflow.go for runOneClaudeTurn/parseAssistantTurn.
+	engine.RegisterActivity("runClaudeTurn", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatTurnInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil || m.claude == nil {
+			return json.Marshal(chat.Message{})
+		}
+		msg := runOneClaudeTurn(ctx, m.chat, m.claude, arg)
+		return json.Marshal(msg)
+	})
+
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
@@ -1653,6 +1729,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowTaskInbox, taskInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
+	engine.RegisterWorkflow(WorkflowClaudeChat, claudeChatWorkflow)
 
 	// The LLM-heavy workflows make many/long claude calls (resolve_call runs one
 	// claude call per unresolved call in the block; code_warning a whole agentic
@@ -1665,6 +1742,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.SetWorkflowPriority(WorkflowResolveTestCovers, tembed.PriorityLow)
 	engine.SetWorkflowPriority(WorkflowExplainCode, tembed.PriorityLow)
 	engine.SetWorkflowPriority(WorkflowCodeWarning, tembed.PriorityLow)
+	// Every claude_chat turn is a real claude subprocess call (see
+	// runOneClaudeTurn) — same reasoning as the LLM-heavy workflows above: an
+	// interrupted turn must not block server startup on recovery.
+	engine.SetWorkflowPriority(WorkflowClaudeChat, tembed.PriorityLow)
 
 	// pr_status itself is important (merge/close detection + ingest refresh) and
 	// stays Normal — but its one slow LLM step, generatePRSummary (a Haiku call),

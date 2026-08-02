@@ -1,19 +1,24 @@
 // Package claude is the Claude-CLI bridge module: the one place that shells out
-// to the local `claude` CLI (Anthropic's Claude Code) to resolve a PHP method
-// call to its definition. It is driven by workflow Activities — per the project
-// rule, only workflows mutate state, and a module like this runs on their
-// behalf (it performs a side effect: running a subprocess).
+// to the local `claude` CLI (Anthropic's Claude Code) — originally to resolve a
+// PHP method call to its definition, now also to run a multi-turn reviewer
+// conversation (the claude_chat workflow). It is driven by workflow Activities
+// — per the project rule, only workflows mutate state, and a module like this
+// runs on their behalf (it performs a side effect: running a subprocess).
 //
-// It is deliberately domain-thin: it runs a prompt against a model and returns
-// the model's final text. Parsing that text into a resolution is the caller's
-// job (the resolve_call workflow). This keeps the bridge reusable and testable
-// via the Fake, which callers swap in under SLASH_CLAUDE=off so tests never hit
-// the network.
+// It is deliberately domain-thin: Run executes one stateless completion and
+// returns the model's final text; RunChat is its conversational sibling (a
+// session id ties turns together via the CLI's own --session-id/--resume).
+// Parsing that text into a resolution/message is the caller's job (the
+// resolve_call/claude_chat workflows). This keeps the bridge reusable and
+// testable via the Fake, which callers swap in under SLASH_CLAUDE=off so tests
+// never hit the network.
 package claude
 
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -64,6 +69,22 @@ type RunRequest struct {
 	// body, candidates, selected code, PR metadata) stays in Prompt. "" appends
 	// nothing.
 	SystemPrompt string
+	// SessionID is read only by RunChat (Run always makes a stateless one-shot
+	// call and ignores it). Empty starts a brand-new session (RunChat picks a
+	// fresh UUID and passes it via --session-id so the caller learns it back
+	// through ChatResult.SessionID); non-empty resumes that existing session via
+	// --resume, so the CLI/backend keeps the prior turns' context without this
+	// module having to resend the whole transcript itself.
+	SessionID string
+}
+
+// ChatResult is what RunChat returns: the model's final text for this turn,
+// plus the session id to pass as RunRequest.SessionID on the next turn (it
+// never changes once a session exists — the CLI's own session id is stable
+// across --resume calls).
+type ChatResult struct {
+	Text      string
+	SessionID string
 }
 
 // Client is the module's behaviour, so workflows and tests can depend on an
@@ -73,6 +94,12 @@ type Client interface {
 	// text (trimmed). The prompt is passed as a separate arg (never a shell
 	// string) and the run is bounded by ctx.
 	Run(ctx context.Context, req RunRequest) (string, error)
+	// RunChat is like Run but conversational: with req.SessionID empty it starts
+	// a fresh multi-turn session, with it set it continues that session (see
+	// RunRequest.SessionID). Used by the claude_chat workflow; every existing
+	// one-shot caller keeps using Run and is unaffected by this method's
+	// existence.
+	RunChat(ctx context.Context, req RunRequest) (ChatResult, error)
 }
 
 // Module is the production Client: it shells out to the `claude` CLI.
@@ -152,6 +179,78 @@ func (m *Module) Run(ctx context.Context, req RunRequest) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+// RunChat is Run's conversational sibling: it invokes
+// `claude -p <prompt> --model <model> --output-format json` plus either
+// `--session-id <uuid>` (fresh session, req.SessionID == "") or
+// `--resume <req.SessionID>` (continue an existing one) — confirmed against
+// the real CLI (--session-id must be a valid UUID; --resume with the same id
+// keeps prior turns in context; the JSON output's "session_id" stays the same
+// id across turns, it never rotates). Reads the "result"/"session_id" fields
+// from the JSON output instead of the bare text Run reads, since the plain
+// stdout the model produces is what RunChat returns as ChatResult.Text.
+func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) {
+	args := []string{"-p", req.Prompt, "--model", req.Model, "--output-format", "json"}
+	if len(req.Tools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(req.Tools, ","),
+			"--permission-mode", "acceptEdits")
+	} else {
+		args = append(args, "--allowedTools", "")
+	}
+	if req.SystemPrompt != "" {
+		args = append(args, "--append-system-prompt", req.SystemPrompt)
+	}
+	sessionID := req.SessionID
+	if sessionID == "" {
+		sessionID = newSessionID()
+		args = append(args, "--session-id", sessionID)
+	} else {
+		args = append(args, "--resume", sessionID)
+	}
+	timeout := contextTimeout
+	if len(req.Tools) > 0 {
+		timeout = agenticTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	switch {
+	case req.WorkDir != "":
+		cmd.Dir = req.WorkDir
+	case m.scratchDir != "":
+		cmd.Dir = m.scratchDir
+	}
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return ChatResult{}, fmt.Errorf("claude -p --resume/--session-id (%s): %w", req.Model, err)
+	}
+	var parsed struct {
+		Result    string `json:"result"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
+		return ChatResult{}, fmt.Errorf("claude -p --resume/--session-id (%s): parse json output: %w", req.Model, err)
+	}
+	if parsed.SessionID == "" {
+		// Shouldn't happen (the CLI always echoes session_id), but never drop the
+		// session id we ourselves picked/were given.
+		parsed.SessionID = sessionID
+	}
+	return ChatResult{Text: strings.TrimSpace(parsed.Result), SessionID: parsed.SessionID}, nil
+}
+
+// newSessionID returns a random UUID v4, the shape `claude --session-id`
+// requires. Called only from a Module method (a side effect anyway — this is
+// not workflow-body code, so plain crypto/rand is fine per
+// .claude/rules/workflow-determinism.md).
+func newSessionID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
 // Fake is an in-memory Client for tests. Outputs are keyed by model id; each
 // Run records the request.
 type Fake struct {
@@ -159,6 +258,14 @@ type Fake struct {
 	outputs map[string]string
 	errs    map[string]error
 	Calls   []RunRequest
+	// chatQueue/chatErr program RunChat: a FIFO of turn outputs consumed one per
+	// call, regardless of session — deliberately simpler than per-session
+	// queues, since every test using this drives one conversation at a time.
+	// chatSeq numbers the fake session ids RunChat hands out for a fresh
+	// (SessionID == "") call.
+	chatQueue []string
+	chatErr   error
+	chatSeq   int
 }
 
 // NewFake returns an empty Fake.
@@ -200,4 +307,46 @@ func (f *Fake) CallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.Calls)
+}
+
+// SetChatTurns programs the sequence of texts RunChat returns, one per call,
+// in order (across however many sessions this Fake sees — see the Fake's own
+// chatQueue doc comment).
+func (f *Fake) SetChatTurns(texts ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatQueue = append([]string(nil), texts...)
+}
+
+// SetChatError makes every RunChat call fail with err until reset (pass nil).
+func (f *Fake) SetChatError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatErr = err
+}
+
+// RunChat returns the next programmed text off chatQueue (or "" once
+// exhausted) and a session id: req.SessionID echoed back if set, otherwise a
+// fresh deterministic fake id ("fake-session-N") — mirroring the real
+// Module's "empty starts a session, non-empty resumes it" contract closely
+// enough for a workflow test to assert on. Every call is recorded in Calls,
+// like Run.
+func (f *Fake) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, req)
+	if f.chatErr != nil {
+		return ChatResult{}, f.chatErr
+	}
+	sessionID := req.SessionID
+	if sessionID == "" {
+		f.chatSeq++
+		sessionID = fmt.Sprintf("fake-session-%d", f.chatSeq)
+	}
+	var text string
+	if len(f.chatQueue) > 0 {
+		text = f.chatQueue[0]
+		f.chatQueue = f.chatQueue[1:]
+	}
+	return ChatResult{Text: text, SessionID: sessionID}, nil
 }

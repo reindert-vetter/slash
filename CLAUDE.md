@@ -71,9 +71,11 @@ only loaded when the topic is relevant. Update the details there, not here.
   the write-boundary rule, and the concrete workflows (`task_code_comment`,
   `pr_status`, `pr_inbox`, `build_relations`, `resolve_call` — which resolves
   method calls to their definition, Go-static with an LLM fallback —, and
-  `approve`, which durably persists reviewer approval, and `cleanup`, which
+  `approve`, which durably persists reviewer approval, `cleanup`, which
   daily purges all data — worktrees, workflow runs, read-model rows — of
-  PRs merged more than 7 days ago). See
+  PRs merged more than 7 days ago, and `claude_chat`, the embedded
+  multi-turn Claude conversation next to a comment thread (backbone only so
+  far — no frontend panel yet, see the workflow's own section)). See
   `.claude/rules/tembed-workflows.md`, the endpoint surface in
   `.claude/rules/tembed-endpoints.md`, and the hard rules
   `.claude/rules/workflow-determinism.md` /

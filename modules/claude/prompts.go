@@ -44,3 +44,12 @@ var CodeWarningSystemPrompt string
 //
 //go:embed prompts/comment_removal.md
 var CommentRemovalSystemPrompt string
+
+// ChatSystemPrompt is the static instruction block for the claude_chat
+// workflow's reviewer-facing conversation (RunChat, one per turn): the
+// assistant framing plus the strict JSON contract for an optional
+// clarifying question (max 3 options) that runClaudeTurn (workflows.go)
+// parses back out of the model's response.
+//
+//go:embed prompts/chat.md
+var ChatSystemPrompt string
