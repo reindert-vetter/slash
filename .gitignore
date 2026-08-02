@@ -45,5 +45,4 @@ tests/.tmp/
 # .vscode/
 
 # Local scratch notes
-/todo.md
-/todo-async.md
+/todo/
