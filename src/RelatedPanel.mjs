@@ -2582,7 +2582,13 @@ function editingBubble(c, msg) {
         @input="${(e) => autoGrowTextarea(e.target)}"
         @keydown="${(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
+            // stopPropagation for the same reason as the Escape branch below:
+            // without it this bubbles into onKeydown's isCommentOrThreadFocused()
+            // + commentReplyEmpty() branch (the reply field is empty right after
+            // saving), which opens the comment action menu right on top of the
+            // just-saved edit.
             e.preventDefault()
+            e.stopPropagation()
             sendMessageEdit(c)
           } else if (e.key === 'Escape') {
             // stopPropagation makes this fully self-contained rather than

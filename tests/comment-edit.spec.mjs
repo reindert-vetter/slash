@@ -157,6 +157,33 @@ test.describe('PR Review Tree — editing an own message', () => {
     await expect(row).toContainText(body)
   })
 
+  test('Enter while editing a block-scoped message saves the edit without opening the action menu', async ({
+    page,
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
+    const body = 'enter-om-op-te-slaan ' + Math.random().toString(36).slice(2)
+    await seedComment(page, pr, body)
+
+    await page.goto('/pr/' + pr)
+    await leaveSearchBox(page)
+    const row = page.getByTestId('comment-item').filter({ hasText: body })
+    await expect(row).toBeVisible()
+    await row.click()
+
+    await page.getByTestId('reaction-edit').first().click()
+    const editor = page.getByTestId('message-edit-compose')
+    await expect(editor).toBeFocused()
+    const newBody = 'bijgewerkt-met-enter ' + Math.random().toString(36).slice(2)
+    await editor.fill(newBody)
+
+    await page.keyboard.press('Enter')
+
+    await expect(page.getByTestId('message-edit-compose')).toHaveCount(0)
+    await expect(page.getByTestId('reaction-bubble').first()).toContainText(newBody)
+    // The keydown must not bubble into onKeydown's Enter-opens-menu branch.
+    await expect(page.getByTestId('command-menu')).toHaveCount(0)
+  })
+
   test('Escape while editing a comment-index item\'s message releases the thread cursor back to the row', async ({
     page,
   }, testInfo) => {
