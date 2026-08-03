@@ -1813,7 +1813,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.chat == nil || m.claude == nil {
 			return json.Marshal(chatTurnResult{})
 		}
-		msg, action := runOneClaudeTurn(ctx, m.chat, m.claude, m.dataDir, arg)
+		msg, action := runOneClaudeTurn(ctx, m, m.chat, m.claude, m.dataDir, arg)
 		publishChatChanged(arg.PR, arg.ConversationID)
 		return json.Marshal(chatTurnResult{Message: msg, Action: action})
 	})

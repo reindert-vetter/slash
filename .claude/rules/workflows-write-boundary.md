@@ -72,6 +72,32 @@ workflow history, and the hub is empty again after a restart. That is exactly
 why an event may never be the source of truth — every consumer refetches the
 ordinary read-only `GET` — see `.claude/docs/server-events.md`.
 
+## Exception: the Claude chat turn may act through a shell
+
+Deliberately granted by Reindert, overriding the rule above for this one path.
+A `claude_chat` turn (`runOneClaudeTurn`, `chat_workflow.go`) may run with
+`Read/Grep/Glob/Edit` **plus `Bash`**, in the conversation's own shadow
+worktree (`chat_shadow.go`) — so Claude can run `git`, `gh` and `acli` itself
+when the reviewer asks for it in the message, instead of the reviewer clicking
+a dedicated button.
+
+What this deliberately gives up, recorded here so nobody "fixes" it back by
+accident:
+
+- A `gh`/`acli` write from inside the turn bypasses `modules/github` and its
+  bookkeeping (`github_id` dedup, the comment↔runID link), so such a write
+  updates no module read-model and cannot be replayed from one.
+- The turn's Activity is one history step, but the number and kind of external
+  side effects inside it are not individually recorded — unlike every other
+  write path, where each external write is its own idempotent Activity.
+- No confirmation is left before a real push. The only gate is Claude's reading
+  of the typed message; the git-level guarantees in `chat_merge.go`
+  (fast-forward only, never force, `merge --abort` on conflict) still hold.
+
+This carve-out covers **only** the chat turn. Everywhere else the rule stands
+unchanged: no module write outside a workflow Activity, no direct write from an
+HTTP handler or the UI.
+
 ## Why
 
 The workflow event history is the **source of truth**: durable, replayable,

@@ -54,17 +54,23 @@ var CommentRemovalSystemPrompt string
 //go:embed prompts/chat.md
 var ChatSystemPrompt string
 
-// ChatEditSystemPrompt is ChatSystemPrompt's sibling for a chatActionEdit turn
-// (chat_workflow.go/chat_shadow.go): the same assistant framing and question
-// contract, plus an explicit note that the Edit tool is available THIS turn,
-// scoped to the conversation's own disposable shadow worktree, and that
-// nothing is pushed to the real PR until the reviewer explicitly commits it.
-// A full replacement of ChatSystemPrompt rather than a second
-// --append-system-prompt (the CLI only takes one), used only for turns whose
-// RunRequest.Tools includes "Edit".
+// ChatShellSystemPrompt is ChatSystemPrompt's sibling for a turn that got real
+// shell/file access this turn (chat_workflow.go's runOneClaudeTurn, via
+// prepareChatShellWorkDir/chat_shadow.go): the same assistant framing plus
+// question/comment_action contracts, plus an explicit note that the Edit tool
+// AND a real shell (Bash) are available THIS turn, scoped to the
+// conversation's own disposable shadow worktree, so Claude can run
+// git/gh/acli itself — including committing and pushing — when the reviewer
+// explicitly asks for it in the message. See
+// .claude/rules/workflows-write-boundary.md's "Exception: the Claude chat
+// turn may act through a shell". A full replacement of ChatSystemPrompt
+// rather than a second --append-system-prompt (the CLI only takes one), used
+// whenever RunRequest.WorkDir/Tools were successfully set up for this turn —
+// which is the normal case, not a special "edit action" (see
+// runOneClaudeTurn's doc comment for why arg.Action no longer gates this).
 //
-//go:embed prompts/chat_edit.md
-var ChatEditSystemPrompt string
+//go:embed prompts/chat_shell.md
+var ChatShellSystemPrompt string
 
 // ChatConflictSystemPrompt is the static instruction block for chat_merge's
 // one begrensde Claude attempt when an automatic `git merge` of two chat

@@ -344,26 +344,39 @@ Action}`, mould of `task_code_comment`'s reactions loop). `Action` rides along
 as a variant of this one Signal (tembed can only `WaitSignal` on one name at a
 time — the same reason `task_code_comment`'s `delete` rides on its `reply`
 Signal via `ReactionSignal.Action`), validated by the HTTP handler **before**
-it ever reaches the workflow: `""` (plain, read-only turn), `chatActionEdit`
-("edit" — let Claude use its Edit tool), `chatActionCommit` ("commit" — push,
-see "Agentic edits" below). Per turn:
+it ever reaches the workflow: `""` (the ordinary turn), `chatActionEdit`
+("edit" — now a **no-op synonym** of `""`, kept only for backward
+compatibility, see below), `chatActionCommit` ("commit" — push, see "Agentic
+edits" below). Per turn:
 
 - **`sig.Action == chatActionCommit`** skips everything else: one
   `commitChatShadowEdits` Activity, no Claude call, no user/assistant text turn
   beyond the status message that Activity itself saves — see "Agentic edits"
   below.
-- Otherwise (a plain or an edit turn): if the assistant's last turn was an
-  unanswered **question** (see below), `saveChatAnswer` records the reviewer's
-  reply as that question's `Answer`; `saveChatMessage` stores the reviewer's
-  own turn (`role: "user"`); `runClaudeTurn` calls `claude.Client.RunChat` —
-  context-only (no `Tools`/`WorkDir`) for a plain turn, or against the
-  conversation's own shadow worktree with the `Edit` tool for
-  `chatActionEdit` — and stores the assistant's reply.
+- Otherwise (every other turn, `""` and `chatActionEdit` alike): if the
+  assistant's last turn was an unanswered **question** (see below),
+  `saveChatAnswer` records the reviewer's reply as that question's `Answer`;
+  `saveChatMessage` stores the reviewer's own turn (`role: "user"`);
+  `runClaudeTurn` calls `claude.Client.RunChat` — **`runOneClaudeTurn` itself
+  decides the tool scope, not `sig.Action`**: it tries
+  `prepareChatShellWorkDir` (wrapping `ensureChatShadowWorktree`,
+  `chat_shadow.go`) for every turn, gets `Tools:
+  ["Read","Grep","Glob","Edit","Bash"]` + `WorkDir` set to the shadow worktree
+  on success, and gracefully falls back to a context-only call (no
+  `Tools`/`WorkDir`) on any failure — see "Agentic edits" below and
+  `.claude/rules/workflows-write-boundary.md`'s "Exception: the Claude chat
+  turn may act through a shell". Either way, the assistant's reply is stored
+  the same way.
 
-Every branch is decided purely by `sig.Action`, part of the Signal's own
-recorded input, so the Activity count/order per Signal stays a pure function
-of history — deterministic under replay regardless of live git/filesystem
-state.
+The workflow's own branch (commit vs. everything else) is still decided purely
+by `sig.Action`, part of the Signal's own recorded input, so the Activity
+count/order per Signal stays a pure function of history — deterministic under
+replay regardless of live git/filesystem state. The Tools/WorkDir decision
+INSIDE `runOneClaudeTurn` is not part of that determinism boundary — it is an
+ordinary Activity side effect (like the `gh`/git calls it makes), free to vary
+with live reachability across replays; only the Activity's recorded output
+(the saved message) has to be reproduced, never the internal path that
+produced it.
 
 Never completes — a long-lived per-conversation tracker. Marked
 `PriorityLow` (a real turn is a `claude` subprocess call, same reasoning as
@@ -522,15 +535,36 @@ PR-scoped module.
 
 ### Agentic edits (Phase 3): a per-conversation shadow worktree, never the shared head
 
-`chatActionEdit` lets Claude use its **Edit tool** on real files, but never
-against the shared `data/worktrees/pr-<n>-head` that `/api/code`,
-`blockstats.go`, the re-anchor pass and the ingest-refresh poller all depend on
-staying pinned to the exact recorded `head_sha`. Instead each conversation gets
-its own **disposable, non-detached** worktree (`chat_shadow.go`) — deliberately
-a **third** worktree, not a repurposed base/head one, and deliberately checked
-out **on a real local branch** rather than detached (unlike `ensureWorktree`'s
-base/head worktrees), so it can be committed and pushed with an ordinary git
-flow.
+Every turn — not just a special "edit action" — lets Claude use its **Edit
+tool plus a real Bash shell** on real files, but never against the shared
+`data/worktrees/pr-<n>-head` that `/api/code`, `blockstats.go`, the re-anchor
+pass and the ingest-refresh poller all depend on staying pinned to the exact
+recorded `head_sha`. Instead each conversation gets its own **disposable,
+non-detached** worktree (`chat_shadow.go`) — deliberately a **third**
+worktree, not a repurposed base/head one, and deliberately checked out **on a
+real local branch** rather than detached (unlike `ensureWorktree`'s base/head
+worktrees), so it can be committed and pushed with an ordinary git flow.
+
+**No separate action needed — every turn tries this, and gracefully degrades
+when it can't.** `runOneClaudeTurn` (`chat_workflow.go`) calls
+`prepareChatShellWorkDir` (`chat_shadow.go`) at the start of EVERY turn
+(`sig.Action` is irrelevant to this decision — see above): on success the CLI
+gets `WorkDir` set to the shadow worktree and `Tools:
+["Read","Grep","Glob","Edit","Bash"]`; on any failure (gh/git unreachable, no
+network, a plumbing error) `prepareChatShellWorkDir` swallows the error
+(best-effort `tm.logf`, never a reviewer-facing message) and the turn falls
+back to exactly the original context-only completion. This is the graceful-
+degrade half of `.claude/rules/workflows-write-boundary.md`'s "Exception: the
+Claude chat turn may act through a shell" — an earlier, reverted attempt made
+`chatActionEdit` the unconditional default instead, which tied every plain
+conversational turn to a live `gh pr view` + `git fetch` round trip with no
+fallback and made ordinary Q&A hard-fail whenever gh was unreachable (see
+`chat_shadow_test.go`/`chat_shell_test.go`'s `stubReachableGh`/
+`stubUnreachableGh` for the regression tests covering both outcomes).
+`chatActionEdit` itself still exists as a Signal value (`tasks_api.go`
+validation, `ChatMessageSignal.Action`) purely for backward compatibility — it
+is now a no-op synonym of `""`, since `runOneClaudeTurn` no longer branches on
+it at all.
 
 - **Location/identity**: `chatShadowDir(dataDir, pr, conversationId)` →
   `data/worktrees/pr-<n>-chatshadow-<conversationId>`, checked out on local
@@ -542,16 +576,23 @@ flow.
   same PR chatting about edits get fully independent shadows/branches — no
   shared mutable workspace, so "commit deze wijziging" on thread A can never
   accidentally sweep up thread B's still-in-progress edit.
-- **Prompt:** an edit turn swaps the system prompt from `claude.ChatSystemPrompt`
-  to its sibling **`claude.ChatEditSystemPrompt`**
-  (`modules/claude/prompts/chat_edit.md`) — the CLI only takes one
+- **Prompt:** a turn that got shell/file access swaps the system prompt from
+  `claude.ChatSystemPrompt` to its sibling **`claude.ChatShellSystemPrompt`**
+  (`modules/claude/prompts/chat_shell.md`) — the CLI only takes one
   `--append-system-prompt`, so this is a full replacement, not an addition. It
-  keeps the same assistant framing + question-directive contract and adds that
-  the Edit tool is available **this turn**, scoped to the conversation's own
-  disposable shadow worktree, and that nothing reaches the real PR until the
-  reviewer explicitly commits it.
+  keeps the same assistant framing + question/`comment_action` JSON contracts
+  and adds that the Edit tool **and Bash** are available **this turn**, scoped
+  to the conversation's own disposable shadow worktree — including running
+  `git`/`gh`/`acli` to commit and push — but only ever on the reviewer's
+  explicit request, never on Claude's own initiative, and never a force-push
+  (the git-level fast-forward-only guarantee is enforced outside the model,
+  see `pushAndReclaimChatShadow` below). `chat_edit.md`/
+  `ChatEditSystemPrompt` (the earlier Edit-only, no-Bash, no-`comment_action`
+  sibling) have been folded into `chat_shell.md` and removed — there was no
+  longer a separate "edit action" for them to belong to.
 - **Lazy creation, live refresh** (`ensureChatShadowWorktree` →
-  `ensureChatShadowWorktreeAt`, called at the start of every edit turn): fetches
+  `ensureChatShadowWorktreeAt`, called at the start of every turn, via
+  `prepareChatShellWorkDir`): fetches
   the PR's real head branch (`gh pr view --json headRefName`, see
   `prMeta.HeadRefName` in `gh.go`) and either creates the worktree
   (`git worktree add -b chat/<id> <dir> origin/<headRef>`) or, if it already
@@ -596,12 +637,18 @@ flow.
   cleanup" in `.claude/docs/workflows-trackers.md`.
 - **Known test boundary:** `fetchPRMeta` (gh.go) has no offline Fake (same as
   every other ingest.go caller of it), so `ensureChatShadowWorktree`/
-  `commitChatShadowEdits` themselves are untested; the git-plumbing bodies once
-  the head branch name is already known
+  `commitChatShadowEdits` themselves are untested directly; the git-plumbing
+  bodies once the head branch name is already known
   (`ensureChatShadowWorktreeAt`/`commitChatShadowEditsAt`) are split out
   specifically so they're testable offline against a throwaway local
   bare-repo-as-"origin" (`chat_shadow_test.go`, `t.Setenv("SLASH_REPO_DIR",
-  ...)`) — no `gh`/network call at all.
+  ...)`) — no `gh`/network call at all. `chat_shell_test.go` goes one step
+  further for `runOneClaudeTurn`/`prepareChatShellWorkDir` specifically: a
+  PATH-shim fake `gh` script (`stubReachableGh`/`stubUnreachableGh`, the same
+  technique as `modules/claude/timeout_test.go`'s `writeSlowBinary`) makes
+  `fetchPRMeta` itself succeed or fail deterministically offline, so the
+  reachable→widened-Tools and unreachable→silent-degrade paths are both
+  covered without ever touching the real `gh` CLI/network.
 
 ### Serializing concurrent commits (`chat_merge`)
 
@@ -726,14 +773,14 @@ recognizes the `question` shape:
 {"type":"comment_action","action":"resolve","commentId":"<id>"}
 ```
 
-- **The system prompt (`modules/claude/prompts/chat.md`) states the "only on
-  explicit request, never on your own initiative" rule directly next to the
-  format**, mirroring how the `question` directive is introduced. This is a
-  correctness aid, not the actual guard — see below for what really prevents
-  misuse.
+- **The system prompt (`modules/claude/prompts/chat.md`, and its
+  shell-enabled sibling `chat_shell.md`) states the "only on explicit request,
+  never on your own initiative" rule directly next to the format**, mirroring
+  how the `question` directive is introduced. This is a correctness aid, not
+  the actual guard — see below for what really prevents misuse.
 - **The conversation's own comment id is injected into the system prompt in
   Go** (`runOneClaudeTurn`, appended after `claude.ChatSystemPrompt`/
-  `claude.ChatEditSystemPrompt`, both of which stay static embedded files) so
+  `claude.ChatShellSystemPrompt`, both of which stay static embedded files) so
   the model can echo the right `commentId` back — the embedded prompt files
   are call-independent text, the same "static block + dynamic call-specific
   content" split every other prompt (`resolvePrompt`/`explainPrompt`/…)
@@ -785,19 +832,22 @@ recognizes the `question` shape:
   failure — so the reviewer always sees what happened, never an optimistic
   message that turns out wrong. `chat.KindAction` is a new `Message.Kind` value
   alongside `KindQuestion`/`KindError`.
-- **No UI trigger for `chatActionEdit`/`chatActionCommit` again** (unrelated to
-  Phase 4) — the frontend panel only ever sends a plain (`Action: ""`) turn.
-  A later pass (Phase 3, see `.claude/docs/claude-chat-panel.md`'s "Agentic
-  edits" work) did add two composer buttons that set `action: "edit"`/
-  `"commit"` on the `POST .../signals/message` call; those buttons (plus the
-  commit confirm menu) were **removed again** on reviewer request — "I'll just
-  say what I want in the message" — without any replacement trigger being
-  built yet, so this line is accurate once more. The backend contract (this
-  section) is untouched and ready for whatever trigger mechanism replaces the
-  buttons; see claude-chat-panel.md's "Triggering agentic actions" for exactly
-  what stands in the way of a bare "every turn defaults to `edit`" frontend
-  change (a hard, offline-unfakeable `gh`/git dependency with no degraded
-  fallback in `ensureChatShadowWorktree`).
+- **No UI trigger needed any more, and none exists** (unrelated to Phase 4
+  itself) — the frontend panel only ever sends a plain (`Action: ""`) turn,
+  and always has. A later pass (Phase 3, see
+  `.claude/docs/claude-chat-panel.md`'s former "Agentic edits" section) did
+  add two composer buttons that set `action: "edit"`/`"commit"` on the
+  `POST .../signals/message` call; those buttons (plus the commit confirm
+  menu) were **removed again** on reviewer request — "I'll just say what I
+  want in the message". Unlike the earlier state of this doc, there is now
+  **no replacement trigger to wait for**: `runOneClaudeTurn` widens every
+  turn's tool scope itself (see "Agentic edits" above), so a reviewer who
+  wants Claude to edit/commit/push/open Jira just says so in a plain message
+  and Claude reaches for Bash on its own, gated only by the system prompt's
+  "only on explicit request" instruction. The blocker this bullet used to
+  describe — defaulting every turn to `chatActionEdit` hard-depended on a live
+  `gh`/git round trip with no degraded fallback — is fixed by
+  `prepareChatShellWorkDir`'s graceful degrade, not by a frontend trigger.
 
 ### Endpoints
 

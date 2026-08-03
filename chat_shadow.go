@@ -135,6 +135,29 @@ func chatShadowPendingState(ctx context.Context, dir, headRefName string) (dirty
 	return dirty, n, nil
 }
 
+// prepareChatShellWorkDir is runOneClaudeTurn's own entry point into the
+// shadow-worktree machinery above: it wraps ensureChatShadowWorktree and turns
+// ANY failure (gh unreachable, no network, git plumbing error) into a plain
+// "not available this turn" signal instead of an error the caller has to
+// propagate. This is the graceful-degrade half of
+// .claude/rules/workflows-write-boundary.md's "Exception: the Claude chat
+// turn may act through a shell" — every turn tries to get shell/file access,
+// but a reviewer just chatting must never see a failure turn merely because
+// gh/git happened to be unreachable at that moment; the turn simply falls
+// back to a tool-less completion (see runOneClaudeTurn). Logged best-effort
+// via tm.logf, same convention as chat_merge.go's own degrade logging — never
+// promoted to a reviewer-facing message.
+func prepareChatShellWorkDir(ctx context.Context, tm *TaskManager, dataDir string, pr int, conversationID string) (string, bool) {
+	dir, err := ensureChatShadowWorktree(ctx, dataDir, pr, conversationID)
+	if err != nil {
+		if tm != nil && tm.logf != nil {
+			tm.logf("claude_chat: shadow worktree unavailable for pr %d conversation %s, degrading to a tool-less turn: %v", pr, conversationID, err)
+		}
+		return "", false
+	}
+	return dir, true
+}
+
 // chatShadowBranchMovedOnMsg is the exact reviewer-facing text
 // commitChatShadowEditsAt reports when the PR's real branch has moved on since
 // the shadow was based (a non-fast-forward push). Named so chat_merge.go can

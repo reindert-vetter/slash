@@ -425,7 +425,7 @@ comment-less case additionally asserts that **no** `claude-chat-column` and
 **no** `comment-item` appear, so a reintroduced placeholder comment would fail
 a test rather than quietly reappear.
 
-## Triggering agentic actions (`edit` / `commit`) — REMOVED buttons, no replacement trigger yet
+## Every turn gets a real shell by default — no button, just ask in the message
 
 Phase 3's backend (a per-conversation shadow worktree + a fast-forward-only
 commit/push — see "claude_chat" → "Agentic edits" in
@@ -434,48 +434,55 @@ two plain, native `<button>`s below the composer ("Bewerk code"/
 "Commit wijziging", `data-testid=claude-chat-send-edit`/`claude-chat-commit`,
 `ClaudeChat.mjs`) next to "Stuur", plus a two-step confirm menu
 (`CLAUDE_COMMIT_CONFIRM_COMMANDS`, `home.mjs`, mode `'claudeCommit'`) before
-the commit button's push. **All of that is now removed** — reviewer request:
-"I'll just say what I want in the message, Claude should be able to do it
-itself," rather than picking a separate action first. `claudeChatColumn`
-(`ClaudeChat.mjs`) has only "Stuur" left; `claudeChatCallbacks`
-(`RelatedPanel.mjs`) has only `onSend`; `ClaudeChatPanel` lost its `openCommit`
-param; `home.mjs` lost `CLAUDE_COMMIT_CONFIRM_COMMANDS` and every
-`'claudeCommit'` mode branch (`rootCommandsFor`/`resolveCommands`/
-`menuAnchor`/`menuRegion`).
+the commit button's push. **Both buttons and the confirm menu are removed**
+— reviewer request: "I'll just say what I want in the message, Claude should
+be able to do it itself," rather than picking a separate action first.
+`claudeChatColumn` (`ClaudeChat.mjs`) has only "Stuur" left;
+`claudeChatCallbacks` (`RelatedPanel.mjs`) has only `onSend`; `ClaudeChatPanel`
+lost its `openCommit` param; `home.mjs` lost `CLAUDE_COMMIT_CONFIRM_COMMANDS`
+and every `'claudeCommit'` mode branch (`rootCommandsFor`/`resolveCommands`/
+`menuAnchor`/`menuRegion`). `sendClaudeMessage` (`RelatedPanel.mjs`) still only
+ever sends the plain `action: ''` Signal — unchanged frontend contract.
 
-**What this leaves unreachable from the UI, explicitly:** `sendClaudeMessage`
-(`RelatedPanel.mjs`) still defaults to the plain `action: ''` turn — **not**
-widened to `'edit'` on every send. `chat_workflow.go`/`tasks_api.go` are
-UNCHANGED (deliberately, per the reviewer's own instruction not to touch
-them), and every non-`''` action still routes through
-`ensureChatShadowWorktree` (`chat_shadow.go`), which does a REAL `gh pr view` +
-`git fetch` **before Claude is asked anything at all**, with **no**
-offline/degraded fallback — on any failure `runOneClaudeTurn` returns a
-`KindError` turn immediately, never calling `cl.RunChat`. Verified empirically
-against `tests/claude-chat-panel.spec.mjs`: defaulting every send to
-`action: 'edit'` made the FIRST two turns of that spec (plain question,
-question-with-choices) fail with "Kon geen werkkopie…" instead of reaching the
-Fake's programmed replies at all — i.e. it doesn't just gate the edit
-capability, it turns ordinary, tool-less Q&A into something that hard-depends
-on a live `gh`/git round trip succeeding. That is a materially different
-reliability contract than the plain turn has always had (see "Sessions, not
-resent transcripts" in `workflows-comments.md`), so it was **not** shipped as
-a bare frontend default.
+**The backend now does the widening itself, on every turn, regardless of
+`action`.** Per `.claude/rules/workflows-write-boundary.md`'s "Exception: the
+Claude chat turn may act through a shell", `runOneClaudeTurn`
+(`chat_workflow.go`) tries `prepareChatShellWorkDir`
+(`chat_shadow.go`, wrapping `ensureChatShadowWorktree`) for EVERY turn:
 
-**Net result: neither `edit` nor `commit` currently has any UI path that
-reaches it.** Resolving "let Claude edit/commit/act on GitHub or Jira itself
-when the reviewer just asks in plain text" needs a real backend design (a
-model-emitted directive akin to Phase 4's `comment_action`, or some other
-input-driven, replay-safe trigger — see `workflows-comments.md`'s "Agentic
-edits"/"Serializing concurrent commits" sections for the existing, unchanged
-Go-side mechanics these would have to hook into) — deliberately left open
-here rather than guessed at.
+- **Succeeds** (gh/git reachable) → the CLI gets `WorkDir` set to the
+  conversation's shadow worktree and `Tools:
+  ["Read","Grep","Glob","Edit","Bash"]`, plus `claude.ChatShellSystemPrompt`
+  (`prompts/chat_shell.md`) — the same question/`comment_action` JSON
+  contracts as the plain prompt, plus explicit permission to run `git`/`gh`/
+  `acli` via Bash (including committing/pushing) **only** when the reviewer
+  explicitly asks for it in the message, never on its own initiative.
+- **Fails** (gh/git unreachable, no network, a plumbing error) →
+  `prepareChatShellWorkDir` swallows the error (best-effort `tm.logf`, never
+  surfaced to the reviewer) and the turn falls back to exactly the original
+  tool-less completion: no `WorkDir`/`Tools`, `claude.ChatSystemPrompt`. A pure
+  conversational turn therefore **never** fails because of this — this is the
+  fix for an earlier, reverted attempt that defaulted every turn to the old
+  `'edit'` action and made ordinary Q&A hard-depend on a live `gh pr view` +
+  `git fetch` round trip (see `chat_shadow.go`'s doc comment and
+  `chat_workflow_test.go`'s `stubUnreachableGh`/`stubReachableGh` for the two
+  regression tests, `chat_shell_test.go`).
 
-**Test coverage** (`tests/claude-chat-panel.spec.mjs`) now only asserts that
-an ordinary "Stuur" send carries the plain `action: ''` (`toBeFalsy()` on the
-Signal payload's `action` field) — the two button-click assertions and the
-confirm-menu-open/close assertion are gone along with the buttons/menu
-themselves.
+`ChatMessageSignal.Action`'s `""`/`"edit"`/`"commit"` trichotomy
+(`tasks_api.go` validation) is otherwise unchanged: `"edit"` is now a no-op
+synonym of `""` (every turn already gets the same widened access, so nothing
+in `runOneClaudeTurn` branches on it any more) and `"commit"` still routes
+straight to `enqueueChatMerge` before `runOneClaudeTurn` is even called (see
+`workflows-comments.md`). No UI sends `"edit"`/`"commit"` today; a reviewer who
+wants to commit/push can just ask for it in a plain message and Claude does it
+itself via Bash.
+
+**Test coverage:** `tests/claude-chat-panel.spec.mjs` asserts an ordinary
+"Stuur" send still carries the plain `action: ''` (`toBeFalsy()` on the Signal
+payload's `action` field) — unaffected by this change, since the widening now
+happens entirely backend-side. The backend behavior itself
+(reachable → widened Tools/WorkDir/prompt; unreachable → silent degrade, no
+`KindError`) is covered by `chat_shell_test.go`'s two tests.
 
 ## Opt-in influence on the left comment thread (Phase 4)
 

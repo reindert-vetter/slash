@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,6 +14,23 @@ import (
 	"slash/modules/comments"
 	"slash/modules/github"
 )
+
+// stubUnreachableGh drops a fake, always-failing "gh" script onto PATH for the
+// duration of the test — so fetchPRMeta (chat_shadow.go/gh.go) fails fast and
+// deterministically, regardless of whether the real gh CLI happens to be
+// installed/authenticated/network-reachable in the environment this test runs
+// in. Used by every runOneClaudeTurn test that doesn't care about the shadow
+// worktree, so they stay hermetic (mirrors modules/claude/timeout_test.go's
+// writeSlowBinary, same PATH-shim technique, opposite outcome).
+func stubUnreachableGh(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
 
 // newChatManager builds a TaskManager with only the comments + chat stores
 // wired (post-construction, like newTasks does) plus a claude.Fake, which is
@@ -568,15 +586,16 @@ func TestClaudeChatFailedTurnStoresErrorMessage(t *testing.T) {
 // id (chatMessageID), which is part of the recorded input and therefore
 // identical on every replay.
 func TestChatTurnMessageIDsAreDerivedFromTheTurn(t *testing.T) {
-	_, _, cm, fake := newChatManager(t)
+	stubUnreachableGh(t)
+	m, _, cm, fake := newChatManager(t)
 	ctx := context.Background()
 	const pr, commentID = 970710, "comment-idem"
 
 	fake.SetChatTurns("Eerste antwoord", "Tweede poging")
 	arg := chatTurnInput{PR: pr, ConversationID: commentID, Body: "Hoi", TurnID: "msg-42"}
 
-	first, _ := runOneClaudeTurn(ctx, cm, fake, t.TempDir(), arg)
-	second, _ := runOneClaudeTurn(ctx, cm, fake, t.TempDir(), arg) // the replay
+	first, _ := runOneClaudeTurn(ctx, m, cm, fake, t.TempDir(), arg)
+	second, _ := runOneClaudeTurn(ctx, m, cm, fake, t.TempDir(), arg) // the replay
 	if first.ID != second.ID || first.ID != "asst-msg-42" {
 		t.Fatalf("ids differ across replay: %q vs %q", first.ID, second.ID)
 	}
@@ -604,9 +623,10 @@ func TestChatTurnMessageIDsAreDerivedFromTheTurn(t *testing.T) {
 // the transcript reproducible under replay: fragments are throwaway, the saved
 // row is a pure function of the recorded input.
 func TestChatTurnPublishesProgressButPersistsOnlyTheResult(t *testing.T) {
+	stubUnreachableGh(t)
 	resetChatProgress()
 	defer resetChatProgress()
-	_, _, cm, fake := newChatManager(t)
+	m, _, cm, fake := newChatManager(t)
 	ctx := context.Background()
 	const pr, commentID = 970711, "comment-progress"
 
@@ -619,7 +639,7 @@ func TestChatTurnPublishesProgressButPersistsOnlyTheResult(t *testing.T) {
 		claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "Hallo "},
 	)
 
-	msg, action := runOneClaudeTurn(ctx, cm, fake, t.TempDir(), chatTurnInput{
+	msg, action := runOneClaudeTurn(ctx, m, cm, fake, t.TempDir(), chatTurnInput{
 		PR: pr, ConversationID: commentID, Body: "Hoi", TurnID: "msg-7",
 	})
 	if action != nil {
@@ -669,13 +689,14 @@ func TestChatTurnPublishesProgressButPersistsOnlyTheResult(t *testing.T) {
 // into the saved chat.Message.Body, which stays exactly what the reviewer
 // typed. See buildChatPrompt/saveChatMessage in chat_workflow.go.
 func TestChatTurnContextEnrichesPromptNotBody(t *testing.T) {
-	_, _, cm, fake := newChatManager(t)
+	stubUnreachableGh(t)
+	m, _, cm, fake := newChatManager(t)
 	ctx := context.Background()
 	const pr, commentID = 970720, "comment-context"
 
 	fake.SetChatTurns("Ik zie het.")
 	const selectionContext = "Bestand: src/Order.php\nNieuwe regels: 41-44\nVoorbeeldcode:\n```php\n$order->total();\n```"
-	msg, _ := runOneClaudeTurn(ctx, cm, fake, t.TempDir(), chatTurnInput{
+	msg, _ := runOneClaudeTurn(ctx, m, cm, fake, t.TempDir(), chatTurnInput{
 		PR: pr, ConversationID: commentID, Body: "Wat doet dit?", TurnID: "msg-ctx",
 		Context: selectionContext,
 	})
@@ -700,7 +721,7 @@ func TestChatTurnContextEnrichesPromptNotBody(t *testing.T) {
 	// A turn with no Context (every turn after the first) is a pure
 	// pass-through — unchanged prompt, exactly the old behaviour.
 	fake.SetChatTurns("Nog een antwoord.")
-	msg2, _ := runOneClaudeTurn(ctx, cm, fake, t.TempDir(), chatTurnInput{
+	msg2, _ := runOneClaudeTurn(ctx, m, cm, fake, t.TempDir(), chatTurnInput{
 		PR: pr, ConversationID: commentID, Body: "En dit?", TurnID: "msg-ctx-2",
 	})
 	if msg2.Body != "Nog een antwoord." {
