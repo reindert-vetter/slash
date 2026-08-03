@@ -1957,6 +1957,14 @@ func (m *TaskManager) StartIngest(ctx context.Context, pr int) (*ingestResult, e
 		return nil, err
 	}
 	if status == tembed.StatusFailed {
+		// Result() on a failed run returns the actual recorded failure (the
+		// ActivityFailed/WorkflowFailed error text, e.g. a git fetch's
+		// "Permission denied (publickey)") instead of a bare status check, so
+		// the reviewer sees the real cause in the /pr-overview popover instead
+		// of just a run ID they'd have to look up in the workflow history.
+		if resErr := m.engine.Result(runID, nil); resErr != nil {
+			return nil, fmt.Errorf("ingest failed (run %s): %w", runID, resErr)
+		}
 		return nil, fmt.Errorf("ingest failed (run %s)", runID)
 	}
 	var res ingestResult

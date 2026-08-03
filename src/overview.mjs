@@ -688,7 +688,7 @@ function generateAction(pr) {
     </button>
     ${() =>
       ui.ingestError
-        ? html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400" data-testid="generate-error">${ui.ingestError}</p>`
+        ? html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400 [overflow-wrap:anywhere]" data-testid="generate-error">${ui.ingestError}</p>`
         : ''}
   `
 }
@@ -718,7 +718,7 @@ function ingestedActions(pr) {
     </button>
     ${() =>
       ui.ingestError
-        ? html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400" data-testid="regenerate-error">${ui.ingestError}</p>`
+        ? html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400 [overflow-wrap:anywhere]" data-testid="regenerate-error">${ui.ingestError}</p>`
         : ''}
   `
 }
