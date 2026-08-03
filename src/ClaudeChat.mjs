@@ -23,8 +23,58 @@ import { renderMarkdown } from './markdown.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
 
 // Claude has no GitHub login/avatar of its own — a fixed, non-photo identity
-// (avatarHTML's own initials-circle fallback, since avatarUrl is empty).
+// (avatarHTML's own initials-circle fallback, since avatarUrl is empty). Kept
+// fixed on purpose: it names the actual speaker in every chat bubble
+// (claudeBubble), so it must stay recognizable — unlike CLAUDE_MENTIONS
+// below, which only varies the column's own "announcement" copy.
 const CLAUDE_NAME = 'Claude'
+
+// CLAUDE_MENTIONS — 30 pre-written, informal ways to refer to Claude in the
+// column's own announcement copy (the header label, the empty-state
+// sentence, the composer placeholder — never the per-message author name
+// above, see CLAUDE_NAME). One is picked at random ONCE per page load
+// (claudeMention below) and reused across all three spots so a single
+// column reads consistently; a fresh pick appears on the next reload/visit.
+// Deliberately a fixed, pre-generated list rather than generating text at
+// runtime — cheap, reviewable, and never depends on anything external.
+const CLAUDE_MENTIONS = [
+  'Claude',
+  'je sparringpartner Claude',
+  'Claude, je klankbord',
+  'Claude, je denktank',
+  'je AI-maatje Claude',
+  'Claude om even mee te sparren',
+  'Claude, altijd in voor een brainstorm',
+  'je digitale collega Claude',
+  'Claude, je meedenker',
+  'Claude, klaar voor een sparsessie',
+  'Claude, je co-piloot',
+  'Claude, je reviewbuddy',
+  'Claude, je vraagbaak',
+  'je sparpartner Claude',
+  'Claude, altijd bereid tot overleg',
+  'Claude, je AI-sparringpartner',
+  'Claude, je digitale klankbord',
+  'Claude, je meedenkende assistent',
+  'Claude, je brainstormmaatje',
+  'Claude, je reviewmaatje',
+  'Claude, je codecollega',
+  'Claude, je AI-collega',
+  'Claude, je denktank-maatje',
+  'Claude, je sparbuddy',
+  'Claude, je overlegpartner',
+  'Claude, je AI-klankbord',
+  'Claude, je meedenkbuddy',
+  'Claude, je reflectiepartner',
+  'Claude, je AI-adviseur',
+  'Claude, je sparringmaatje',
+]
+
+// Picked once per module load (one page load/tab), not per render — so the
+// header, empty-state text and placeholder of one column all agree, and a
+// re-render (e.g. a new message arriving) never makes the label jump around
+// mid-conversation.
+const claudeMention = CLAUDE_MENTIONS[Math.floor(Math.random() * CLAUDE_MENTIONS.length)]
 
 // claudeMessageBody mirrors RelatedPanel.mjs's commentBody: a getter of a
 // safe HTML string (via the same renderMarkdown used for comment bodies/the
@@ -264,7 +314,9 @@ export function claudeChatColumn(view, callbacks) {
   return html`
     <div class="flex min-h-0 flex-1 flex-col gap-2 p-3" data-testid="claude-chat-card">
 
-      <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">Claude</p>
+      <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="claude-chat-header">
+        ${claudeMention}
+      </p>
       <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto no-scrollbar" data-testid="claude-chat-thread">
         ${() => {
           const messages = view.messages()
@@ -279,7 +331,7 @@ export function claudeChatColumn(view, callbacks) {
           if (total === 0) {
             return [
               html`<p class="text-xs text-slate-400 dark:text-zinc-500" data-testid="claude-chat-empty">
-                Nog geen gesprek — typ hieronder een vraag voor Claude.
+                Nog geen gesprek — typ hieronder een vraag voor ${claudeMention}.
               </p>`.key('claude:empty'),
             ]
           }
@@ -293,7 +345,7 @@ export function claudeChatColumn(view, callbacks) {
         <textarea
           rows="1"
           class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
-          placeholder="Typ een bericht voor Claude…"
+          placeholder="${'Typ een bericht voor ' + claudeMention + '…'}"
           data-testid="claude-chat-compose"
           @input="${(e) => autoGrowTextarea(e.target)}"
           @keydown="${(e) => {
