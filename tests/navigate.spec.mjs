@@ -223,18 +223,20 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(items).toHaveCount(2)
 
     // Clicking a comment expands it and its thread follows; a comment with a
-    // snippet shows the code hint in its thread (like the composer).
+    // snippet shows the code hint — now a single shared header spanning the
+    // whole comment+Claude card (comment-claude-row), not scoped inside the
+    // comment item itself, see activeComposeTargetHint in RelatedPanel.mjs.
     await items.nth(0).click()
     await expect(items.nth(0)).toHaveAttribute('data-expanded', 'true')
     await expect(items.nth(1)).toHaveAttribute('data-expanded', 'false')
     const thread = items.nth(0).getByTestId('comment-thread')
     await expect(thread).toContainText('first review comment')
-    await expect(items.nth(0).getByTestId('comment-target')).toBeVisible()
-    await expect(items.nth(0).getByTestId('comment-target')).toContainText('billingAddress')
+    await expect(page.getByTestId('comment-target')).toBeVisible()
+    await expect(page.getByTestId('comment-target')).toContainText('billingAddress')
 
-    // The second comment has no snippet, so its thread shows no code hint.
+    // The second comment has no snippet, so the shared hint disappears.
     await items.nth(1).click()
-    await expect(items.nth(1).getByTestId('comment-target')).toHaveCount(0)
+    await expect(page.getByTestId('comment-target')).toHaveCount(0)
   })
 
   // The Onderliggende-code card (RelatedPanel's default export) renders all

@@ -72,6 +72,9 @@ import RelatedPanel, {
   startEditMessage,
   focusedThreadMessage,
   focusedPrThreadMessage,
+  activeComposeTargetHint,
+  composeTargetHint,
+  CommentClaudeFooter,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
@@ -8520,40 +8523,63 @@ function DetailPanel(state) {
       }}
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="comments-and-related">
         <div
-          class="flex items-stretch overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
+          class="flex flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
           data-testid="comment-claude-row"
         >
           ${() =>
-            InlineComments(
-              state,
-              commentTarget,
-              () => {
-                if (composeHasText()) openMenu('compose')
-              },
-              // Mouse-only equivalent of Enter on a focused, empty-reply comment
-              // (isCommentOrThreadFocused() && commentReplyEmpty(), see onKeydown below) —
-              // a click on the reply-status button next to "Stuur" opens the same
-              // comment-scoped menu (Resolve/Delete/Open op GitHub) without
-              // requiring the reply field to be empty first, since a direct click
-              // is an unambiguous request, unlike the overloaded Enter key.
-              () => openMenu('comment'),
-            ).key('inline-comments')}
-          ${() =>
-            // A vertical dashed separator (not the horizontal connector
-            // nestedChipColumn uses between Onderliggende-code children) —
-            // the comment and Claude blocks merge into ONE visual card (the
-            // border/bg above), so this is an internal divider, not a
-            // connector between two separate cards. Visible only alongside
-            // the Claude column itself (claudeChatVisible()), so there's
-            // never a floating dash with nothing to its right. `self-stretch`
-            // spans the row's full (items-stretch-driven, equal) height.
-            claudeChatVisible()
-              ? html`<div
-                  class="w-3 shrink-0 self-stretch border-l border-dashed border-slate-300 dark:border-zinc-700"
-                  data-testid="comment-claude-connector"
-                ></div>`
+            // The "linked to" code-preview hint (composeTargetHint) — either
+            // the open new-comment composer's own target, or the currently
+            // expanded existing conversation's own anchor (see
+            // activeComposeTargetHint's own doc comment). Spans the FULL
+            // width of the merged card (over both the comment and the Claude
+            // column below), not just the comment column's own half — the
+            // anchor is shared by both, so the preview isn't a comment-only
+            // thing. The whole wrapper (padding included) is gated on the
+            // SAME condition as the template it holds, so no bare empty
+            // padded strip shows when there's nothing to preview.
+            activeComposeTargetHint(commentTarget)
+              ? html`<div class="px-3 pt-3">${composeTargetHint(activeComposeTargetHint(commentTarget))}</div>`
               : ''}
-          ${() => ClaudeChatPanel(state, commentTarget).key('claude-chat')}
+          <div class="flex items-stretch overflow-hidden" data-testid="comment-claude-columns">
+            ${() =>
+              InlineComments(
+                state,
+                commentTarget,
+                () => {
+                  if (composeHasText()) openMenu('compose')
+                },
+                // Mouse-only equivalent of Enter on a focused, empty-reply comment
+                // (isCommentOrThreadFocused() && commentReplyEmpty(), see onKeydown below) —
+                // a click on the reply-status button next to "Stuur" opens the same
+                // comment-scoped menu (Resolve/Delete/Open op GitHub) without
+                // requiring the reply field to be empty first, since a direct click
+                // is an unambiguous request, unlike the overloaded Enter key.
+                () => openMenu('comment'),
+              ).key('inline-comments')}
+            ${() =>
+              // A vertical dashed separator (not the horizontal connector
+              // nestedChipColumn uses between Onderliggende-code children) —
+              // the comment and Claude blocks merge into ONE visual card (the
+              // border/bg above), so this is an internal divider, not a
+              // connector between two separate cards. Visible only alongside
+              // the Claude column itself (claudeChatVisible()), so there's
+              // never a floating dash with nothing to its right. `self-stretch`
+              // spans the row's full (items-stretch-driven, equal) height.
+              claudeChatVisible()
+                ? html`<div
+                    class="w-3 shrink-0 self-stretch border-l border-dashed border-slate-300 dark:border-zinc-700"
+                    data-testid="comment-claude-connector"
+                  ></div>`
+                : ''}
+            ${() => ClaudeChatPanel(state, commentTarget).key('claude-chat')}
+          </div>
+          ${() =>
+            // One shared status footer for BOTH columns (comment send/busy
+            // status + Claude's own live-turn status) — replaces the former
+            // per-column status spots, see CommentClaudeFooter's own doc
+            // comment. Renders nothing at all when neither side has anything
+            // to report.
+            CommentClaudeFooter()}
         </div>
         ${() =>
           RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}

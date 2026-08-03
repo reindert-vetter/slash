@@ -355,8 +355,11 @@ test('Claude chat: an action turn and an error turn each get their own badge, no
 // The composer grows in height as its content grows (textareaAutoGrow.mjs,
 // shared with the comment composers in RelatedPanel.mjs — see
 // .claude/docs/claude-chat-panel.md's "Auto-grow composer textareas"), and
-// "Stuur" sits BELOW it, not beside it. A direct-mount unit test, same
-// pattern as the badge test above.
+// "Stuur" sits BESIDE it (`flex items-end gap-2`, same row, same pattern as
+// the comment thread's own reaction-compose/reaction-send — see "The
+// embedded Claude chat column" in .claude/docs/detail-layout.md), not
+// stacked below it. A direct-mount unit test, same pattern as the badge test
+// above.
 test('Claude chat composer grows with multi-line content and resets after sending', async ({ page }) => {
   await page.goto('/pr/12903')
   await expect(page.getByTestId('pr-index')).toBeVisible()
@@ -381,10 +384,11 @@ test('Claude chat composer grows with multi-line content and resets after sendin
   const composer = host.getByTestId('claude-chat-compose')
   const send = host.getByTestId('claude-chat-send')
 
-  // "Stuur" sits below the composer, not beside it.
+  // "Stuur" sits beside the composer (same row, bottom-aligned), not below it.
   const composerBox = await composer.boundingBox()
   const sendBox = await send.boundingBox()
-  expect(sendBox.y).toBeGreaterThanOrEqual(composerBox.y + composerBox.height - 1)
+  expect(sendBox.x).toBeGreaterThanOrEqual(composerBox.x + composerBox.width - 1)
+  expect(Math.abs(sendBox.y + sendBox.height - (composerBox.y + composerBox.height))).toBeLessThan(2)
 
   const startHeight = composerBox.height
   await composer.fill('regel een\nregel twee\nregel drie\nregel vier\nregel vijf')

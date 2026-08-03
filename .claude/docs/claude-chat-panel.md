@@ -237,7 +237,19 @@ The "Embedded Claude conversation" section owns:
   `items-stretch` so both columns are always exactly the same height (a
   reviewer request: "technisch wel 2 blokken, maar samengesmolten" — the left
   (comment/thread) and right (Claude) stay functionally separate, each with
-  their own keyboard cursor, only their outer boxing merged). Width is
+  their own keyboard cursor, only their outer boxing merged). This column
+  keeps its own `p-3` (`claudeChatColumn`'s root `<div>`,
+  `data-testid=claude-chat-card`) — `InlineComments`' own cards already carry
+  that inset via their own borders, so without it this column's content (the
+  "Claude" heading, the composer) sat flush against the shared card's edges,
+  most visibly on the right where "Stuur" touched the border. Its
+  `claude-chat-thread` message list carries `flex-1` so it absorbs whatever
+  vertical space a short/empty conversation leaves over, keeping the composer
+  pinned to the bottom of the (`items-stretch`-driven, possibly taller) row
+  instead of stranded right under the empty-state text. The composer row
+  itself is `flex items-end gap-2` (textarea + "Stuur" side by side, the same
+  pattern as the comment thread's own `reaction-compose`/`reaction-send`),
+  not a stacked column with the button below the field. Width is
   `claudeColumnWidthCls()` — **exactly half** of `relatedColumnWidthCls()`'s
   own clamp, `InlineComments` taking the **other half** (minus the connector's
   own width) via `commentColumnWidthCls()`, both defined next to
@@ -291,14 +303,25 @@ Three details are load-bearing:
   comes from the clock, `cc.tick` is read only to register the reactive
   dependency.
 
-Rendering (`ClaudeChat.mjs`): one **status line**
-(`data-testid=claude-chat-status`) in words — "Claude denkt na…", "Claude leest
-`src/Order.php`", "Claude schrijft… · 12s" (`PHASE_LABEL`/`TOOL_VERB`) — plus a
-**provisional bubble** (`data-testid=claude-partial`) rendering `progress.partial`
-through the same `renderMarkdown`. The word carries the meaning; the pulsing dot
-is decoration (colourblind rule). The bubble is throwaway by construction: no
-id, no key, never part of the message list, gone as soon as the stored message
-is refetched.
+Rendering: `claudeStatusText(p, elapsed)` (`ClaudeChat.mjs`, exported) turns the
+snapshot into one sentence in words — "Claude denkt na…", "Claude leest
+`src/Order.php`", "Claude schrijft… · 12s" (`PHASE_LABEL`/`TOOL_VERB`). It used
+to render inline below the message thread, as `claudeChatColumn`'s own
+`claude-chat-thinking` paragraph; that spot is gone — the text now renders
+inside `CommentClaudeFooter` (`RelatedPanel.mjs`, mounted in `home.mjs` right
+after the comment+Claude columns), the ONE shared status line for **both**
+the comment and Claude sides — see "The shared `composeTargetHint` header" and
+the send-status section in `.claude/docs/comments-panel.md` for its comment-side
+half and the `reaction-status` button it replaced. Still the same
+`data-testid=claude-chat-status` on the text itself, so
+`tests/claude-chat-progress.spec.mjs` needed no change, just relocated to
+`data-testid=comment-claude-footer-claude`'s own span. `ClaudeChat.mjs` still
+renders the **provisional bubble** (`data-testid=claude-partial`), rendering
+`progress.partial` through the same `renderMarkdown` — that one stays inline in
+the thread, only the status line moved. The word carries the meaning; the
+pulsing dot is decoration (colourblind rule). The bubble is throwaway by
+construction: no id, no key, never part of the message list, gone as soon as
+the stored message is refetched.
 
 **The durable side is untouched by all of this.** Fragments live only in memory
 (`chat_progress.go`) and the callback that produces them is a Go func on

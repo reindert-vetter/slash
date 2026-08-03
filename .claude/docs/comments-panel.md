@@ -390,8 +390,9 @@ Multiple threads can hang off one unit; each gets its own card
 (`data-testid=comment-item`), but only the one the keyboard owns (`cs.sel` +
 `cs.focus` one of `'comment'`/`'thread'`) renders `expandedConversation`: a slim
 right-aligned meta line (`comment-meta-line` — source/AI-warning badge + status
-mark), `composeTargetHint` if the comment carries a code snippet, every message
-via `threadMessages`/`reactionBubble`, and a working reply field. Every other
+mark), every message via `threadMessages`/`reactionBubble`, and a working reply
+field. The code-snippet hint itself (`composeTargetHint`) is no longer rendered
+per-card — see "the shared `composeTargetHint` header" below. Every other
 conversation on that unit stays `compactConversation`: status mark, author +
 avatar, a `line-clamp-3` body preview, `data-expanded=false`/`true` on the DOM
 node so a test can assert which is open.
@@ -423,6 +424,27 @@ text — empty while there's nothing beyond the opening message, and empty once 
 reviewer's OWN reply is last (`author === 'reviewer'`, the in-app sentinel).
 Plain text, not colour.
 
+### The shared `composeTargetHint` header, spanning comment + Claude
+
+`composeTargetHint` used to render inline in two places, both confined to
+`InlineComments`' own (half-width) column: inside `newCommentComposer` while
+composing, and inside `expandedConversation` for whichever comment is open.
+Both call sites are gone. `activeComposeTargetHint(commentTarget)`
+(`RelatedPanel.mjs`) resolves the SAME target either way — the open
+new-comment composer's target (`warningOverride` or the live cursor) while
+`cs.focus === 'new'`, else the currently expanded conversation's own anchor
+(`selComment()`, while `cs.focus` is `'comment'`/`'thread'` and it carries
+`c.code`), else `null` — and `home.mjs` renders `composeTargetHint(...)` from
+it **once**, in a `px-3 pt-3` wrapper directly inside `comment-claude-row`,
+above the `flex items-stretch` row of the two columns. So the code preview
+now spans the full merged card's width, not just the comment column's own
+half — the anchor it shows is shared by both the comment thread and the
+Claude conversation hanging off it, so confining the preview to one side was
+never quite right. The wrapper's visibility is gated on the exact same
+`activeComposeTargetHint(commentTarget)` call (mirroring `claudeChatVisible()`
+gating `comment-claude-connector`), so no empty padded strip shows when
+there's nothing to preview.
+
 ### Status mark and the resolved style
 
 `commentStatusMark(c, extraCls)` (`RelatedPanel.mjs`) replaced the former
@@ -443,7 +465,7 @@ border stays the neutral `border-slate-300 dark:border-zinc-700` in both states;
 `expandedConversation`'s indigo focus border is untouched (an orthogonal focus
 cue, not a status colour).
 
-### The send-status button (`reaction-status`)
+### The menu button (`reaction-status`) and the shared comment/Claude footer
 
 It used to fire `sendReaction(true)` directly (a resolve shortcut) — gone.
 Resolving now happens exclusively via the comment-scoped command menu's "Resolve
@@ -457,21 +479,33 @@ permissive than the keyboard gate (`commentReplyEmpty()`): a click always opens
 the menu, since a click is unambiguous (unlike `Enter`, which is overloaded with
 "send the typed reply").
 
-`sendStatusIcon(status)` renders the icon: a pencil ("draft" — covers both
-"nothing typed" and "typed but not sent") by default, a spinning arc while
-`cs.busy`, and an SVG circle-check briefly (`cs.replySent`, a 1.2s flash) right
-after a reply is sent — the one spot where "sent" is visible at all, since the
-composer and the PR-wide reply both close their input on success. Deliberately a
-different shape/technique than `commentStatusMark`'s text glyph: that is a
-*persistent* property of the thread, this a *transient* status of the control.
+`reaction-status` used to double as a send-status indicator of its own
+(`sendStatusIcon`: pencil/spinner/circle-check). That moved out to
+**`CommentClaudeFooter`** (`RelatedPanel.mjs`), one shared status line below
+**both** the comment and Claude columns (`comment-claude-row` in `home.mjs`,
+after the `flex items-stretch` row of the two columns) — see
+"Claude" doc-comment-panel.md's own section on it. `reaction-status` itself now
+always shows the same neutral three-dot ("more options") glyph
+(`data-testid=reaction-status-icon`), regardless of `cs.busy`/`cs.replySent`.
+`commentFooterText()` reads `cs.busy` (any in-flight comment action — reply,
+place, resolve, delete — worded generically as "Bezig…", since it is not
+specific to sending) and `cs.replySent` (the 1.2s "Verstuurd" flash after a
+reply, unchanged from before) for the comment-side half
+(`data-testid=comment-claude-footer-comment`); the Claude-side half
+(`data-testid=comment-claude-footer-claude`, still carrying
+`data-testid=claude-chat-status` on the text itself) reuses
+`claudeStatusText`/`view.busy()`/`view.progress()`/`view.elapsed()` — see
+"Live progress" in `.claude/docs/claude-chat-panel.md`. Either half renders
+independently; the whole footer renders **nothing** (not even an empty bar)
+when neither side has anything to report.
 
 Both buttons (`reaction-send`/`reaction-status`) are disabled while `cs.busy` via
 a plain `disabled="${() => cs.busy}"` — **not** `?disabled=`/`.disabled=`,
 neither of which works in this vendored arrow.js (see
 `.claude/rules/arrowjs-pitfalls.md`). The composer's "Plaats…" button and the
-PR-wide reply's "Stuur" button get the same icon treatment (draft/sending only);
-the PR-wide reply has its own `picm.sending` flag. Test:
-`tests/reaction-status-icon.spec.mjs`.
+PR-wide reply's "Stuur" button keep their own `sendStatusIcon` treatment
+(draft/sending only, untouched by this change); the PR-wide reply has its own
+`picm.sending` flag. Test: `tests/reaction-status-icon.spec.mjs`.
 
 ### Deleting a comment hands the keyboard back to its diff row
 

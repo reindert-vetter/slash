@@ -84,8 +84,11 @@ const TOOL_VERB = {
 
 // claudeStatusText — the one status line. `p` is null while a turn is in
 // flight but no event has landed yet (the very first moment after sending),
-// hence the plain fallback.
-function claudeStatusText(p, elapsed) {
+// hence the plain fallback. Exported: this used to render inline below the
+// message thread (a `claude-chat-thinking` paragraph); it now feeds the one
+// shared comment+Claude footer instead (see CommentClaudeFooter in
+// RelatedPanel.mjs) — same text/testid (`claude-chat-status`), just relocated.
+export function claudeStatusText(p, elapsed) {
   if (!p) return 'Claude denkt…'
   let base
   if (p.phase === 'tool' && p.tool) {
@@ -237,18 +240,32 @@ function claudeBubble(msg, i, total, claudePos, onSend, busy) {
 // ("pas de foutafhandeling aan", "commit dit") instead of picking a separate
 // action first. See "Triggering agentic actions" in claude-chat-panel.md.
 //
-// No own border/bg/rounded/padding any more — the comment block and this
-// Claude block merge into ONE visual card (that styling lives on the shared
+// No own border/bg/rounded any more — the comment block and this Claude
+// block merge into ONE visual card (that styling lives on the shared
 // `comment-claude-row` wrapper in home.mjs instead), separated only by a
 // vertical dashed line (`comment-claude-connector`). `flex-1` makes this
 // column fill the full height of that shared row (`items-stretch`), so both
-// blocks always end up exactly the same height.
+// blocks always end up exactly the same height. It DOES keep its own `p-3`:
+// InlineComments' cards (compactConversation/expandedConversation/
+// newCommentComposer) already carry that inset via their own borders, so
+// without it this column's content sat flush against the shared card's
+// edges — most noticeably the right edge, where "Stuur" ended up touching
+// the border.
+//
+// `claude-chat-thread` carries `flex-1` so it absorbs whatever vertical
+// space the (possibly taller, comment-driven) row leaves over — otherwise a
+// short/empty conversation left the composer stranded right below the
+// empty-state text instead of anchored to the bottom of the equal-height
+// card. The composer row itself is `flex items-end gap-2` (textarea +
+// button side by side, same as the comment thread's own `reaction-compose`/
+// `reaction-send` pair) instead of a stacked column with the button
+// `self-end` below the field.
 export function claudeChatColumn(view, callbacks) {
   return html`
-    <div class="flex min-h-0 flex-1 flex-col gap-2" data-testid="claude-chat-card">
+    <div class="flex min-h-0 flex-1 flex-col gap-2 p-3" data-testid="claude-chat-card">
 
       <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">Claude</p>
-      <div class="flex min-h-0 flex-col gap-2 overflow-auto no-scrollbar" data-testid="claude-chat-thread">
+      <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto no-scrollbar" data-testid="claude-chat-thread">
         ${() => {
           const messages = view.messages()
           const total = messages.length
@@ -272,22 +289,10 @@ export function claudeChatColumn(view, callbacks) {
         }}
         ${() => claudePartialBubble(view)}
       </div>
-      ${() =>
-        view.busy() || view.progress()
-          ? html`<p
-              class="flex items-center gap-1.5 text-[11px] italic text-slate-500 dark:text-zinc-500"
-              data-testid="claude-chat-thinking"
-            >
-              <span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"></span>
-              <span class="truncate" data-testid="claude-chat-status">
-                ${() => claudeStatusText(view.progress(), view.elapsed())}
-              </span>
-            </p>`
-          : ''}
-      <div class="flex flex-col gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
+      <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
         <textarea
           rows="1"
-          class="w-full resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
+          class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
           placeholder="Typ een bericht voor Claude…"
           data-testid="claude-chat-compose"
           @input="${(e) => autoGrowTextarea(e.target)}"
@@ -304,7 +309,7 @@ export function claudeChatColumn(view, callbacks) {
         ></textarea>
         <button
           class="${() =>
-            'self-end shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
+            'shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
             (view.busy() ? 'cursor-not-allowed opacity-60' : 'hover:bg-indigo-600')}"
           data-testid="claude-chat-send"
           disabled="${() => view.busy()}"

@@ -18,7 +18,7 @@ import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin } from './avatar.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
-import { claudeChatColumn } from './ClaudeChat.mjs'
+import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { colWidthStyle, startColumnResize, resetColumnWidth, resizeHandle, parseAutoWidthPx } from './columnWidth.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
@@ -1291,6 +1291,66 @@ function claudeChatCallbacks(state, commentTarget) {
   }
 }
 
+// commentFooterText — the comment-side half of CommentClaudeFooter below.
+// Generic (not "Bezig met versturen…"): cs.busy also covers deleteFocused-
+// Comment/resolveFocusedComment, not only a reply/new-comment send, so a
+// send-specific wording would mislabel those. cs.replySent is the one
+// send-specific confirmation flash (see sendReaction) and stays worded as
+// such. Returns '' when there is nothing to report — the caller hides the
+// whole footer in that case.
+function commentFooterText() {
+  if (cs.busy) return 'Bezig…'
+  if (cs.replySent) return 'Verstuurd'
+  return ''
+}
+
+// CommentClaudeFooter — ONE shared status line below both the comment and
+// Claude columns (comment-claude-row in home.mjs), replacing two former,
+// separate status spots: the reaction-status icon that used to sit next to
+// "Stuur" in an expanded comment thread (now a plain menu button, see
+// expandedConversation), and claudeChatColumn's own inline
+// `claude-chat-thinking` paragraph (ClaudeChat.mjs). Full width means room
+// for BOTH sides to say what's going on — comment-side and Claude-side are
+// independent, own-conditioned halves, so either can show alone. Renders
+// nothing at all (not even an empty bar) when neither side has anything to
+// report, per "laat weg als het er niks is". Words only, per the colourblind
+// rule — the pulsing dot next to each half is decoration on top, same as the
+// dot claude-chat-thinking already carried.
+export function CommentClaudeFooter() {
+  const view = claudeChatView()
+  const claudeActive = () => view.busy() || !!view.progress()
+  return html`
+    <div class="contents">
+      ${() =>
+        commentFooterText() || claudeActive()
+          ? html`
+              <div
+                class="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-[11px] text-slate-500 dark:text-zinc-500"
+                data-testid="comment-claude-footer"
+              >
+                ${() =>
+                  commentFooterText()
+                    ? html`<span class="flex items-center gap-1.5" data-testid="comment-claude-footer-comment">
+                        <span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"></span>
+                        <span class="truncate">${() => commentFooterText()}</span>
+                      </span>`
+                    : ''}
+                ${() =>
+                  claudeActive()
+                    ? html`<span class="flex items-center gap-1.5" data-testid="comment-claude-footer-claude">
+                        <span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"></span>
+                        <span class="truncate" data-testid="claude-chat-status">
+                          ${() => claudeStatusText(view.progress(), view.elapsed())}
+                        </span>
+                      </span>`
+                    : ''}
+              </div>
+            `
+          : ''}
+    </div>
+  `
+}
+
 // ClaudeChatPanel is the exported component home.mjs mounts next to
 // InlineComments, in the same inner row of comments-and-related — the same
 // width as InlineComments (both half of relatedColumnWidthCls(), see
@@ -2246,6 +2306,28 @@ export function composeTargetHint(target) {
   `
 }
 
+// activeComposeTargetHint resolves what composeTargetHint should show right
+// now, so home.mjs can render ONE copy of it spanning the FULL width of the
+// merged comment+Claude card (comment-claude-row) instead of the two former
+// call sites confined to the comment column's own half-width (inside
+// newCommentComposer / expandedConversation, both removed) — the code
+// preview is about the shared anchor, not just the comment side. Priority:
+// the open new-comment composer's own target (warningOverride's anchor, or
+// the live cursor) while composing; otherwise the currently expanded
+// existing conversation's own anchor (gran/label/code); else null (nothing
+// to show, e.g. while just browsing compact cards or the Onderliggende-code
+// panel).
+export function activeComposeTargetHint(commentTarget) {
+  if (cs.focus === 'new') {
+    return warningOverride ? warningOverride.target : commentTarget ? commentTarget() : null
+  }
+  if (cs.focus === 'comment' || cs.focus === 'thread') {
+    const c = selComment()
+    if (c && c.code) return { gran: c.gran, label: c.label, code: c.code }
+  }
+  return null
+}
+
 // sendReaction posts the typed text as a plain (non-resolving) reply — the
 // resolve variant (done:true) that used to live here moved to the
 // comment-scoped command menu's "Resolve comment" item (resolveFocusedComment
@@ -2783,14 +2865,18 @@ function compactConversation(c, i) {
 // commentStatusMark (see its own doc comment) — a colorblind-friendly ✓
 // instead of the former color-only dot.
 // expandedConversation's second button (reaction-status, right of "Stuur")
-// used to double as the resolve action (sendReaction(true)). It's now a pure
-// send-status indicator (draft/sending/sent, see sendStatusIcon) — resolving
-// moved to the comment-scoped command menu's "Resolve comment" item, reached
-// by keyboard via Enter (see keyboard-navigation.md) and, so it stays
-// reachable with the mouse too, by a click on this very button
-// (openCommentMenu, threaded down from home.mjs's openMenu('comment') via
-// InlineComments/commentCard — mirrors how the composer's own "Plaats…"
-// button already opens its command menu via a click callback).
+// used to double as the resolve action (sendReaction(true)), then became a
+// pure send-status indicator (draft/sending/sent, sendStatusIcon). That
+// status glyph moved out again — to the one shared CommentClaudeFooter below
+// both columns, alongside Claude's own status — so this button now shows a
+// neutral "more options" (kebab) icon and does exactly one thing: open the
+// comment-scoped command menu (resolve/delete/…), reached by keyboard via
+// Enter (see keyboard-navigation.md) and, so it stays reachable with the
+// mouse too, by a click on this very button (openCommentMenu, threaded down
+// from home.mjs's openMenu('comment') via InlineComments/commentCard —
+// mirrors how the composer's own "Plaats…" button already opens its command
+// menu via a click callback). Still disabled while cs.busy, so a reply/
+// resolve/delete in flight can't be interrupted by opening the menu.
 function expandedConversation(c, openCommentMenu) {
   return html`
     <div
@@ -2804,7 +2890,6 @@ function expandedConversation(c, openCommentMenu) {
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
         ${() => commentStatusMark(c)}
       </div>
-      ${() => (c && c.code ? composeTargetHint({ gran: c.gran, label: c.label, code: c.code }) : '')}
       <div class="flex min-h-0 flex-col gap-2" data-testid="comment-thread">
         ${() => threadMessages(c).map((r, i, arr) => reactionBubble(c, r, i, arr.length).key('msg:' + r.id))}
       </div>
@@ -2841,11 +2926,21 @@ function expandedConversation(c, openCommentMenu) {
               ? 'cursor-not-allowed border-slate-200 text-slate-400 dark:border-zinc-800 dark:text-zinc-600'
               : 'border-slate-200 text-slate-500 hover:border-indigo-300 hover:text-indigo-600 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-indigo-500/40 dark:hover:text-indigo-400')}"
           data-testid="reaction-status"
-          title="Reactiestatus · resolve/verwijder via het menu"
+          title="Resolve/verwijder via het menu"
           disabled="${() => cs.busy}"
           @click="${() => openCommentMenu && openCommentMenu()}"
         >
-          ${() => sendStatusIcon(cs.busy ? 'sending' : cs.replySent ? 'sent' : 'draft')}
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="h-3.5 w-3.5 shrink-0"
+            aria-hidden="true"
+            data-testid="reaction-status-icon"
+          ><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle><circle cx="5" cy="12" r="1"></circle></svg>
         </button>
       </div>
     </div>
@@ -2906,7 +3001,6 @@ function newCommentComposer(state, commentTarget, openCompose) {
                 <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">
                   ${() => (warningOverride ? 'Comment van AI-controle' : 'Nieuwe comment') + ' · ' + target()}
                 </p>
-                ${() => composeTargetHint(effectiveTarget() || null)}
                 <textarea
                   rows="1"
                   class="min-h-20 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"

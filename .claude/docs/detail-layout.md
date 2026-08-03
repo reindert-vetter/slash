@@ -214,15 +214,24 @@ narrow enough, and close enough, to share a row instead of each claiming a full
   (`ClaudeChat.mjs`'s composer/send row also wraps rather than stretching the
   column at this narrower width).
 - **One merged card, not two:** the comment block and this Claude block have
-  no border/bg/padding of their own any more — a single shared
+  no border/bg of their own any more — a single shared
   `rounded-xl border ... bg-white ...` sits on `comment-claude-row` itself
-  (`home.mjs`), with `items-stretch` so both columns always end up exactly the
-  same height (a short comment thread stretches to match a longer Claude
-  conversation and vice versa — this is also the "collapse together" effect:
-  when there's little content on either side the whole merged card just stays
-  small). The two halves are still functionally separate — the left
-  (comment/thread) and right (Claude) each keep their own keyboard focus/cursor
-  — only their outer boxing is now one card, split by a vertical dashed
+  (`home.mjs`), now a `flex flex-col` with up to three stacked pieces: (1) an
+  optional full-width `composeTargetHint` header (`activeComposeTargetHint`,
+  see "The shared `composeTargetHint` header" in `.claude/docs/comments-panel.md`),
+  (2) the `flex items-stretch` row of the two columns (unchanged width logic,
+  still `data-testid=comment-claude-columns`), so both columns always end up
+  exactly the same height (a short comment thread stretches to match a longer
+  Claude conversation and vice versa — this is also the "collapse together"
+  effect: when there's little content on either side the whole merged card
+  just stays small), and (3) an optional shared `CommentClaudeFooter` status
+  line below both (see "The menu button (`reaction-status`) and the shared
+  comment/Claude footer" in `.claude/docs/comments-panel.md`) — both (1) and
+  (3) render nothing at all when there's nothing to show. The two halves are
+  still functionally separate — the left (comment/thread) and right (Claude)
+  each keep their own keyboard focus/cursor, and the Claude column keeps its
+  own `p-3` (its cards' own borders provide the same inset on the comment
+  side) — only their outer boxing is now one card, split by a vertical dashed
   divider (`comment-claude-connector`, `border-l border-dashed`,
   `self-stretch`) instead of the horizontal connector `nestedChipColumn` uses
   between Onderliggende-code children.

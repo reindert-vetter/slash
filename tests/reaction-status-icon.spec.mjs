@@ -2,15 +2,16 @@ import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 
 // The button to the right of "Stuur" in an expanded comment thread
 // (reaction-status) used to double as the resolve action (a plain click sent
-// "/resolve" straight away). It's now a pure send-status indicator — draft
-// (pencil) while idle, a spinner while a reply is in flight, a circle-check
-// right after one completes — and resolving moved to the comment-scoped
-// command menu ("Resolve comment", already reachable via Enter, see
-// comment-delete.spec.mjs). This spec covers the two things that change:
-// (1) resolve must still be reachable with the mouse alone (the reaction-status
-// button now opens that same menu on click instead of resolving directly), and
-// (2) the status icon actually reflects draft/sending/sent.
-test.describe('reaction-status: send-status icon + mouse-only resolve', () => {
+// "/resolve" straight away), then became a send-status indicator of its own
+// (draft/sending/sent icon). That status glyph moved out to the one shared
+// footer below both the comment and Claude columns (comment-claude-footer,
+// see CommentClaudeFooter in RelatedPanel.mjs) — so this button is now a
+// plain, neutral "more options" trigger that only opens the resolve/delete
+// menu. This spec covers: (1) resolve is still reachable with the mouse
+// alone, (2) the shared footer — not the button — reflects draft/sending/
+// sent while a reply is in flight, and both buttons are still disabled
+// mid-send (no double-submit / no opening the menu mid-send).
+test.describe('reaction-status: neutral menu button + shared comment/Claude footer', () => {
   // Own PR per test, from seededPr — mirrors comment-delete.spec.mjs's
   // isolation reasoning (comments read-model, no ingested blocks needed here).
   async function seedComment(page, pr, body) {
@@ -35,8 +36,10 @@ test.describe('reaction-status: send-status icon + mouse-only resolve', () => {
 
     const statusButton = page.getByTestId('reaction-status')
     await expect(statusButton).toBeVisible()
-    // Idle: draft icon, not the "Verzenden" spinner or the "sent" mark.
-    await expect(statusButton.getByTestId('send-status-draft')).toBeVisible()
+    // Idle: the neutral menu (kebab) icon — never a send-status glyph, that
+    // moved to comment-claude-footer.
+    await expect(statusButton.getByTestId('reaction-status-icon')).toBeVisible()
+    await expect(page.getByTestId('comment-claude-footer')).toHaveCount(0)
 
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await statusButton.click()
@@ -62,7 +65,9 @@ test.describe('reaction-status: send-status icon + mouse-only resolve', () => {
       .toBe('resolved')
   })
 
-  test('the status icon shows a spinner while sending and disables both buttons', async ({ page }, testInfo) => {
+  test('the shared footer shows a busy/sent status while sending, and both buttons stay disabled', async ({
+    page,
+  }, testInfo) => {
     const pr = seededPr(testInfo)
     const body = 'status-icon-spinner ' + Math.random().toString(36).slice(2)
     await seedComment(page, pr, body)
@@ -90,18 +95,22 @@ test.describe('reaction-status: send-status icon + mouse-only resolve', () => {
     const statusButton = page.getByTestId('reaction-status')
     await sendButton.click()
 
-    // In flight: spinner on the status button, both buttons disabled (no
-    // double-submit / no opening the menu mid-send).
-    await expect(statusButton.getByTestId('send-status-sending')).toBeVisible()
+    // In flight: the shared footer says so in words, both buttons disabled
+    // (no double-submit / no opening the menu mid-send). The status button
+    // itself keeps showing its plain menu icon throughout — it no longer
+    // carries the send status.
+    const footer = page.getByTestId('comment-claude-footer')
+    await expect(footer.getByTestId('comment-claude-footer-comment')).toContainText('Bezig')
+    await expect(statusButton.getByTestId('reaction-status-icon')).toBeVisible()
     await expect(sendButton).toBeDisabled()
     await expect(statusButton).toBeDisabled()
 
     releaseReply()
 
-    // Done: a brief "sent" confirmation, then back to draft once the field is
-    // empty again (the field is cleared on success).
-    await expect(statusButton.getByTestId('send-status-sent')).toBeVisible()
-    await expect(statusButton.getByTestId('send-status-draft')).toBeVisible({ timeout: 3000 })
+    // Done: a brief "sent" confirmation in the shared footer, then it
+    // disappears again once the field is empty and idle.
+    await expect(footer.getByTestId('comment-claude-footer-comment')).toContainText('Verstuurd')
+    await expect(footer).toHaveCount(0, { timeout: 3000 })
     await expect(reply).toHaveValue('')
   })
 
