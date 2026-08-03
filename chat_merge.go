@@ -267,7 +267,7 @@ func resolveConflictWithClaude(ctx context.Context, cl claude.Client, dir, conve
 		return false
 	}
 	req := claude.RunRequest{
-		Model:        claude.ModelSonnet,
+		Model:        claude.ModelOpus,
 		Prompt:       chatConflictPrompt(conversationID, conflicted),
 		WorkDir:      dir,
 		Tools:        []string{"Read", "Grep", "Glob", "Edit"},

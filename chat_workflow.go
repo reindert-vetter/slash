@@ -380,7 +380,7 @@ func runOneClaudeTurn(ctx context.Context, cm *chat.Module, cl claude.Client, da
 
 	sessionID, _ := cm.GetSession(ctx, arg.ConversationID)
 	req := claude.RunRequest{
-		Model:        claude.ModelSonnet,
+		Model:        claude.ModelOpus,
 		Prompt:       buildChatPrompt(arg.Context, arg.Body),
 		SessionID:    sessionID,
 		SystemPrompt: claude.ChatSystemPrompt,
