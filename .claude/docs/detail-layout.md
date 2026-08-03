@@ -211,8 +211,8 @@ narrow enough, and close enough, to share a row instead of each claiming a full
   homogeneously, so this holds for every code-growth width, not just the
   floor/ceiling — see `relatedWidthCls`'s doc comment. It is deliberately *not*
   a fourth content-driven width computation of its own; the transcript wraps
-  (`ClaudeChat.mjs`'s `claude-chat-actions` button row also wraps rather than
-  stretching the column at this narrower width).
+  (`ClaudeChat.mjs`'s composer/send row also wraps rather than stretching the
+  column at this narrower width).
 - **Visibility:** `claudeChatVisible()` = `hasVisibleComments() ||
   chatConversationExists() || cs.focus === 'claude' || cs.focus === 'new'` — a
   unit with neither a comment nor an earlier conversation has **no** chat

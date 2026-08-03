@@ -6,10 +6,11 @@ import { test, expect, seededPr, evaluateSettled, leaveSearchBox } from './_fixt
 // level further from an existing thread into it, a plain message round-trips
 // through the fake claude backend (SLASH_CLAUDE_CHAT_TURNS, see
 // _fixtures.mjs), a "question with choices" turn renders its option buttons,
-// choosing one both records the answer and continues the conversation, and
-// the two agentic action buttons ("Bewerk code"/"Commit wijziging", see
-// .claude/docs/claude-chat-panel.md) are wired to a real send resp. a
-// confirm-before-push menu.
+// choosing one both records the answer and continues the conversation.
+// The two separate agentic-action buttons ("Bewerk code"/"Commit wijziging")
+// are gone — see .claude/docs/claude-chat-panel.md's "Triggering agentic
+// actions" for what that leaves unreachable from the UI, and why "every turn
+// gets the wider bereik" was NOT implemented as a bare frontend default.
 test('embedded Claude chat: enter via →, send a message, answer a question', async ({ page }, testInfo) => {
   // Its own synthetic PR (and its own again on a retry) — comments have no
   // reset hook shared across specs, see "A spec that SEEDS data" in
@@ -81,34 +82,18 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
     'Bedankt, ik ga verder met Optie B.',
   )
 
-  // "Bewerk code" sends the SAME typed text as "Stuur", but with an
-  // action:'edit' turn (see chat_workflow.go's ChatMessageSignal.Action). An
-  // edit turn first needs a per-conversation shadow worktree
-  // (ensureChatShadowWorktree, chat_shadow.go), which requires a REAL PR head
-  // branch from gh — something this synthetic seededPr number doesn't have
-  // even under the offline Fake, so it deterministically reports the "no
-  // worktree" KindError turn instead of consuming the next programmed reply.
-  // That is still exactly what this test needs to verify: the button really
-  // sends a real action:'edit' Signal end-to-end (real success/failure git
-  // plumbing is covered offline at the Go level, see chat_shadow_test.go).
-  await composer.fill('Pas de foutafhandeling aan.')
-  await page.getByTestId('claude-chat-send-edit').click()
-  await expect(page.getByTestId('claude-message-body').last()).toContainText(
-    'Kon geen werkkopie voor Claude klaarzetten om in te bewerken.',
-  )
-
-  // "Commit wijziging" needs no typed text and genuinely fast-forward-pushes
-  // onto the PR's real head branch, so it never acts on a single click: it
-  // only opens a confirm menu (mirrors "Approve the whole PR"). Verifying the
-  // confirm step opens/closes is enough here — actually confirming would push
-  // to a real remote, out of scope for this offline suite (see
-  // claude-chat-panel.md).
-  await page.getByTestId('claude-chat-commit').click()
-  const confirmMenu = page.getByTestId('command-menu')
-  await expect(confirmMenu).toBeVisible()
-  await expect(confirmMenu).toContainText('Ja, commit en push naar de PR-branch')
-  await page.keyboard.press('Escape')
-  await expect(confirmMenu).toBeHidden()
+  // Neither agentic action has a UI trigger left at all (both buttons and the
+  // commit confirm menu are gone) — the composer sends every turn with the
+  // plain, tool-less `action: ''` (see sendClaudeMessage's own doc comment in
+  // RelatedPanel.mjs for why that default was NOT widened to 'edit', and
+  // claude-chat-panel.md's "Triggering agentic actions" for the full,
+  // explicitly flagged gap this leaves).
+  await composer.fill('Nog een gewone vraag.')
+  const [plainReq] = await Promise.all([
+    page.waitForRequest((req) => req.url().includes('/signals/message') && req.method() === 'POST'),
+    composer.press('Enter'),
+  ])
+  expect(plainReq.postDataJSON().action).toBeFalsy()
 
   // ← steps back out of the chat straight onto the comment card it hangs on
   // (no more 'thread' stop in between).

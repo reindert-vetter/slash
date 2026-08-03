@@ -71,13 +71,13 @@ reviewer's own comment is placed. **This is deliberately a different trigger
 than the removed placeholder above, not a reintroduction of it**: the
 placeholder fired on bare `→` **navigation**, with zero reviewer input; this
 one only creates anything once the reviewer takes a genuinely explicit action
-— typing into the Claude composer and clicking "Stuur"/"Bewerk code" — exactly
-the same weight "Plaats…" already has.
+— typing into the Claude composer and clicking "Stuur" — exactly the same
+weight "Plaats…" already has.
 
 - **`ensureClaudeAnchorForNew(state, commentTarget)`** (`RelatedPanel.mjs`) is
   the lazy-creation step, called from `sendClaudeMessageFromNew` (which
-  `claudeChatCallbacks`' `onSend`/`onSendEdit` use instead of calling
-  `sendClaudeMessage` directly). A no-op — returning `null`, changing
+  `claudeChatCallbacks`' `onSend` uses instead of calling `sendClaudeMessage`
+  directly). A no-op — returning `null`, changing
   nothing — unless `cs.focus === 'new'` **and** no anchor exists yet
   (`chatAnchorComment()`); once an anchor exists (including the one it just
   created) every later send is the ordinary, already-anchored path.
@@ -95,7 +95,7 @@ the same weight "Plaats…" already has.
   `status`/`progress`) whenever there is no existing anchor for the unit being
   composed on — without this, opening a brand-new composer right after
   viewing a DIFFERENT unit's conversation would keep showing that stale
-  transcript (and, worse, let "Commit wijziging" act on its stale `runId`).
+  transcript (and, worse, let a later send act on its stale `runId`).
   An existing conversation on the exact unit being composed on
   (`chatAnchorComment()` already resolves it) is left alone.
 - **`placeComment` never creates a SECOND comment once this anchor exists.**
@@ -425,75 +425,57 @@ comment-less case additionally asserts that **no** `claude-chat-column` and
 **no** `comment-item` appear, so a reintroduced placeholder comment would fail
 a test rather than quietly reappear.
 
-## Triggering the two agentic actions (`edit` / `commit`)
+## Triggering agentic actions (`edit` / `commit`) — REMOVED buttons, no replacement trigger yet
 
 Phase 3's backend (a per-conversation shadow worktree + a fast-forward-only
 commit/push — see "claude_chat" → "Agentic edits" in
-`.claude/docs/workflows-comments.md`) is reached from this panel via two
-plain, native `<button>`s below the composer (`data-testid=claude-chat-actions`,
-`ClaudeChat.mjs`), next to the existing "Stuur":
+`.claude/docs/workflows-comments.md`) used to be reached from this panel via
+two plain, native `<button>`s below the composer ("Bewerk code"/
+"Commit wijziging", `data-testid=claude-chat-send-edit`/`claude-chat-commit`,
+`ClaudeChat.mjs`) next to "Stuur", plus a two-step confirm menu
+(`CLAUDE_COMMIT_CONFIRM_COMMANDS`, `home.mjs`, mode `'claudeCommit'`) before
+the commit button's push. **All of that is now removed** — reviewer request:
+"I'll just say what I want in the message, Claude should be able to do it
+itself," rather than picking a separate action first. `claudeChatColumn`
+(`ClaudeChat.mjs`) has only "Stuur" left; `claudeChatCallbacks`
+(`RelatedPanel.mjs`) has only `onSend`; `ClaudeChatPanel` lost its `openCommit`
+param; `home.mjs` lost `CLAUDE_COMMIT_CONFIRM_COMMANDS` and every
+`'claudeCommit'` mode branch (`rootCommandsFor`/`resolveCommands`/
+`menuAnchor`/`menuRegion`).
 
-- **"Bewerk code"** (`data-testid=claude-chat-send-edit`) sends the SAME typed
-  composer text as "Stuur", but as an `action: "edit"` turn
-  (`callbacks.onSendEdit` → `sendClaudeMessage(text, 'edit')`,
-  `RelatedPanel.mjs`) — Claude may then use its Edit tool against the
-  conversation's own throwaway shadow worktree. **No confirm step**: nothing
-  real (the PR's actual branch) is touched yet, so this is exactly as
-  low-friction as an ordinary plain turn.
-- **"Commit wijziging"** (`data-testid=claude-chat-commit`) needs no typed
-  text at all (`sendClaudeMessage`'s own guard skips the "needs real text"
-  check only for `action === 'commit'`, mirroring the backend's identical
-  validation in `tasks_api.go`) and genuinely fast-forward-pushes onto the
-  PR's real head branch (`chat_shadow.go`/`chat_merge.go`), so it does **not**
-  act on a single click: it only opens a confirm menu
-  (`CLAUDE_COMMIT_CONFIRM_COMMANDS`, `home.mjs`, mode `'claudeCommit'`) —
-  "Sluit menu" pinned, "Ja, commit en push naar de PR-branch" the default 2nd
-  item — mirroring the two-step "Approve the whole PR" confirm
-  (`REVIEW_APPROVE_CONFIRM_COMMANDS`, see `.claude/docs/command-palette.md`).
-  Confirming calls the exported `commitClaudeChange()`
-  (`RelatedPanel.mjs`), which is the only thing that actually sends the
-  `action: "commit"` Signal. The eventual outcome (pushed / nothing to commit
-  / a merge conflict) is **never** returned synchronously from either the
-  button or the confirm — it lands later as its own assistant chat message
-  once the PR's `chat_merge` queue processes the request, exactly like any
-  other turn's reply arrives (see "Live progress" above).
+**What this leaves unreachable from the UI, explicitly:** `sendClaudeMessage`
+(`RelatedPanel.mjs`) still defaults to the plain `action: ''` turn — **not**
+widened to `'edit'` on every send. `chat_workflow.go`/`tasks_api.go` are
+UNCHANGED (deliberately, per the reviewer's own instruction not to touch
+them), and every non-`''` action still routes through
+`ensureChatShadowWorktree` (`chat_shadow.go`), which does a REAL `gh pr view` +
+`git fetch` **before Claude is asked anything at all**, with **no**
+offline/degraded fallback — on any failure `runOneClaudeTurn` returns a
+`KindError` turn immediately, never calling `cl.RunChat`. Verified empirically
+against `tests/claude-chat-panel.spec.mjs`: defaulting every send to
+`action: 'edit'` made the FIRST two turns of that spec (plain question,
+question-with-choices) fail with "Kon geen werkkopie…" instead of reaching the
+Fake's programmed replies at all — i.e. it doesn't just gate the edit
+capability, it turns ordinary, tool-less Q&A into something that hard-depends
+on a live `gh`/git round trip succeeding. That is a materially different
+reliability contract than the plain turn has always had (see "Sessions, not
+resent transcripts" in `workflows-comments.md`), so it was **not** shipped as
+a bare frontend default.
 
-**Keyboard reachability is free, by construction — no new global shortcut.**
-Both are ordinary `<button>` elements (like "Stuur" itself), so Tab-focusing
-one and pressing Enter/Space fires the exact same `@click` handler a mouse
-click would — no parallel implementation (mouse-navigation.md's rule 1). The
-existing plain-Enter-sends-a-message behaviour in the composer's own
-`@keydown` is deliberately **untouched**: overloading Enter to open a
-choose-an-action menu (the way `COMPOSE_COMMANDS` does for a brand-new
-comment) would have turned every ordinary conversational turn — still the
-overwhelmingly common case — into a two-Enter flow, which is not the
-"continuing a conversation" weight this send already has (mirrors why a
-thread **reply** field sends directly while a **new** comment composer opens
-a menu — see `.claude/docs/comments-panel.md`).
+**Net result: neither `edit` nor `commit` currently has any UI path that
+reaches it.** Resolving "let Claude edit/commit/act on GitHub or Jira itself
+when the reviewer just asks in plain text" needs a real backend design (a
+model-emitted directive akin to Phase 4's `comment_action`, or some other
+input-driven, replay-safe trigger — see `workflows-comments.md`'s "Agentic
+edits"/"Serializing concurrent commits" sections for the existing, unchanged
+Go-side mechanics these would have to hook into) — deliberately left open
+here rather than guessed at.
 
-`ClaudeChatPanel(state, commentTarget, openCommit)`'s `openCommit` param
-(mirrors `InlineComments`' own `openCompose`/`openCommentMenu` props) exists
-purely to reach `home.mjs`'s `openMenu` — `RelatedPanel.mjs`/`ClaudeChat.mjs`
-have no access to it directly, same reason `InlineComments` needs those two
-callbacks. `commentTarget` was added alongside it for `ensureClaudeAnchorForNew`
-(see "Optimistically visible while composing a brand-new comment" above).
-`menuAnchor()`/`menuRegion()` gained a `'claudeCommit'` branch anchoring on
-`[data-testid=claude-chat-card]`/`-column]`.
-
-**Test coverage is deliberately end-to-end for the Signal, not for the git
-outcome.** `tests/claude-chat-panel.spec.mjs` clicks both buttons on its
-existing seeded conversation: "Bewerk code" really sends an `action: "edit"`
-Signal, which then needs a per-conversation shadow worktree
-(`ensureChatShadowWorktree`, `chat_shadow.go`) — that in turn needs a REAL PR
-head branch from `gh`, which a synthetic `seededPr` number doesn't have even
-under the offline Fake, so it deterministically reports the "no worktree"
-`KindError` turn instead of a normal reply. That failure message is exactly
-what the test asserts on: it still proves the button reaches the workflow
-with the right action, without needing a real git remote. "Commit wijziging"
-is asserted only up to opening/closing the confirm menu — actually confirming
-would push to a real remote. The real success/conflict git plumbing for both
-actions is covered offline at the Go level
-(`chat_shadow_test.go`/`chat_merge_test.go`).
+**Test coverage** (`tests/claude-chat-panel.spec.mjs`) now only asserts that
+an ordinary "Stuur" send carries the plain `action: ''` (`toBeFalsy()` on the
+Signal payload's `action` field) — the two button-click assertions and the
+confirm-menu-open/close assertion are gone along with the buttons/menu
+themselves.
 
 ## Opt-in influence on the left comment thread (Phase 4)
 

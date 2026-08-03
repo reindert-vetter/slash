@@ -229,19 +229,12 @@ function claudeBubble(msg, i, total, claudePos, onSend, busy) {
 // comment); `callbacks.onSend(text)` posts a reviewer turn (free text OR a
 // clicked question option, same Signal either way).
 //
-// Below the composer sit the two agentic actions (see chat_workflow.go's
-// ChatMessageSignal.Action): both are plain, native <button>s — not a
-// mouse-only affordance — so a keyboard reviewer reaches them the same way
-// as "Stuur" above (Tab to the button, Enter/Space activates it, which fires
-// the exact same @click handler; see mouse-navigation.md's rule 1). "Bewerk
-// code" (callbacks.onSendEdit) sends the SAME typed text as "Stuur" but lets
-// Claude use its Edit tool against this conversation's own throwaway shadow
-// worktree — no confirm step, since nothing real is touched yet. "Commit
-// wijziging" needs no typed text at all and genuinely fast-forward-pushes
-// onto the PR's real head branch, so it only OPENS a confirm menu
-// (callbacks.onCommitClick → CLAUDE_COMMIT_CONFIRM_COMMANDS in home.mjs)
-// rather than acting directly — the same two-step caution as "Approve the
-// whole PR" (see command-palette.md).
+// The two agentic actions ("Bewerk code"/"Commit wijziging") that used to sit
+// as their own buttons below the composer are GONE — every ordinary "Stuur"
+// send now carries the same capability implicitly (see sendClaudeMessage's
+// own doc comment in RelatedPanel.mjs): the reviewer just types the request
+// ("pas de foutafhandeling aan", "commit dit") instead of picking a separate
+// action first. See "Triggering agentic actions" in claude-chat-panel.md.
 export function claudeChatColumn(view, callbacks) {
   return html`
     <div
@@ -317,39 +310,6 @@ export function claudeChatColumn(view, callbacks) {
           }}"
         >
           Stuur
-        </button>
-      </div>
-      <div class="flex flex-wrap items-center gap-2 pt-1" data-testid="claude-chat-actions">
-        <button
-          type="button"
-          class="${() =>
-            'shrink-0 rounded-lg border border-indigo-300 dark:border-indigo-500/40 px-2.5 py-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-300 ' +
-            (view.busy() ? 'cursor-not-allowed opacity-50' : 'hover:bg-indigo-50 dark:hover:bg-indigo-500/15')}"
-          data-testid="claude-chat-send-edit"
-          title="Stuur dit bericht en laat Claude de code aanpassen"
-          disabled="${() => view.busy()}"
-          @click="${() => {
-            const el = document.querySelector('[data-testid=claude-chat-compose]')
-            const text = el && el.value
-            if (text && text.trim()) {
-              callbacks.onSendEdit(text)
-              el.value = ''
-            }
-          }}"
-        >
-          Bewerk code
-        </button>
-        <button
-          type="button"
-          class="${() =>
-            'shrink-0 rounded-lg border border-slate-300 dark:border-zinc-700 px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:text-zinc-300 ' +
-            (view.busy() ? 'cursor-not-allowed opacity-50' : 'hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
-          data-testid="claude-chat-commit"
-          title="Commit en push Claude's wijziging naar de PR-branch"
-          disabled="${() => view.busy()}"
-          @click="${() => callbacks.onCommitClick()}"
-        >
-          Commit wijziging
         </button>
       </div>
     </div>

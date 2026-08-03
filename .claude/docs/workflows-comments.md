@@ -714,11 +714,19 @@ recognizes the `question` shape:
   failure — so the reviewer always sees what happened, never an optimistic
   message that turns out wrong. `chat.KindAction` is a new `Message.Kind` value
   alongside `KindQuestion`/`KindError`.
-- **No UI trigger yet for `chatActionEdit`/`chatActionCommit`** (unrelated to
-  Phase 4) — the frontend panel only ever sends a plain (`Action: ""`) turn
-  today; a later pass needs to add the composer action(s)/button(s) that set
-  `action: "edit"` or `"commit"` on the `POST .../signals/message` call. The
-  backend contract (this section) is ready for it.
+- **No UI trigger for `chatActionEdit`/`chatActionCommit` again** (unrelated to
+  Phase 4) — the frontend panel only ever sends a plain (`Action: ""`) turn.
+  A later pass (Phase 3, see `.claude/docs/claude-chat-panel.md`'s "Agentic
+  edits" work) did add two composer buttons that set `action: "edit"`/
+  `"commit"` on the `POST .../signals/message` call; those buttons (plus the
+  commit confirm menu) were **removed again** on reviewer request — "I'll just
+  say what I want in the message" — without any replacement trigger being
+  built yet, so this line is accurate once more. The backend contract (this
+  section) is untouched and ready for whatever trigger mechanism replaces the
+  buttons; see claude-chat-panel.md's "Triggering agentic actions" for exactly
+  what stands in the way of a bare "every turn defaults to `edit`" frontend
+  change (a hard, offline-unfakeable `gh`/git dependency with no degraded
+  fallback in `ensureChatShadowWorktree`).
 
 ### Endpoints
 
