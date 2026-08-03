@@ -497,6 +497,19 @@ fixture file loads — see the test's own comment; the backend's
 KindAction/KindError decision is already covered end-to-end by
 `chat_workflow_test.go`).
 
+## The composer is a `<textarea>`, not an `<input>`
+
+`ClaudeChat.mjs`'s composer (`data-testid=claude-chat-compose`) is a
+single-row (`rows="1"`, `resize-none`) `<textarea>` that grows with its
+content, so a multi-line message is possible: plain `Enter` still sends
+(`@keydown` calls `e.preventDefault()` and only then checks
+`!e.shiftKey`/busy/non-empty before firing `callbacks.onSend`), `Shift+Enter`
+falls through to the textarea's own default behaviour and inserts a newline.
+The composer row is `items-end` (not `items-center`) so "Stuur" stays pinned
+to the bottom as the textarea grows taller. Reading/writing its value
+(`el.value`) via `querySelector('[data-testid=claude-chat-compose]')` in the
+"Stuur"/"Bewerk code" click handlers is unaffected by the element swap.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat

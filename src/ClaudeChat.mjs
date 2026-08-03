@@ -285,18 +285,22 @@ export function claudeChatColumn(view, callbacks) {
               </span>
             </p>`
           : ''}
-      <div class="flex items-center gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
-        <input
-          class="flex-1 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
+      <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
+        <textarea
+          rows="1"
+          class="flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
           placeholder="Typ een bericht voor Claude…"
           data-testid="claude-chat-compose"
           @keydown="${(e) => {
-            if (e.key === 'Enter' && !view.busy() && e.target.value.trim()) {
-              callbacks.onSend(e.target.value)
-              e.target.value = ''
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              if (!view.busy() && e.target.value.trim()) {
+                callbacks.onSend(e.target.value)
+                e.target.value = ''
+              }
             }
           }}"
-        />
+        ></textarea>
         <button
           class="${() =>
             'shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
