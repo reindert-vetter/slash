@@ -179,12 +179,16 @@ grow it to half the screen. That symmetry is thus a default, not a guarantee.
 See "Column width" in `.claude/docs/underlying-code.md`.
 
 Both of those live in **one shared wrapper column**
-(`data-testid=comments-and-related`, a `flex min-h-0 shrink-0 flex-col gap-3`):
-the inline comment blocks (`data-testid=inline-comments`) stacked directly above
-the Underlying-code card, each carrying its own copy of the **same**
-`relatedColumnWidthCls()` clamp (a flex-col only stretches a child whose own
-width is `auto`, and `related-code` sets an explicit one — see
-`.claude/docs/comments-panel.md`).
+(`data-testid=comments-and-related`, a `flex min-h-0 shrink-0 flex-col gap-3`),
+but not as two plain stacked rows any more: the **first** row is itself a
+`flex items-start` (`data-testid=comment-claude-row`) holding
+`inline-comments`, the dashed comment↔Claude connector (below), and
+`claude-chat-column` side by side; the Underlying-code card
+(`related-code`) is the **second** row, stacked below that whole row. See "The
+embedded Claude chat column" below for the two narrower clamps
+(`commentColumnWidthCls`/`claudeColumnWidthCls`) that make `inline-comments` +
+the connector + `claude-chat-column` sum to exactly the same width as
+`related-code`'s own `relatedColumnWidthCls()`, so the two rows still line up.
 
 Tasks is **no longer** in this column flow either: it sits under the PR-info
 column (below).
@@ -192,26 +196,35 @@ column (below).
 ### The embedded Claude chat column
 
 **`data-testid=claude-chat-column`** (`ClaudeChatPanel`, exported from
-`RelatedPanel.mjs`, rendering `src/ClaudeChat.mjs`'s `claudeChatColumn`) is a
-**sibling column of `comments-and-related`, mounted after it**, so it is the
-**rightmost** thing in `<main>`'s flex-row — deliberately its own column rather
-than a third section stacked inside that wrapper: a chat transcript is a
-different kind of content from a code excerpt, and stacking it would push the
-Underlying-code card down as the conversation grows.
+`RelatedPanel.mjs`, rendering `src/ClaudeChat.mjs`'s `claudeChatColumn`) sits in
+`comment-claude-row`, immediately to the right of `inline-comments` — **not** a
+sibling column of `comments-and-related` any more (that was the case before the
+comment/Claude blocks were resized to sit close together; a chat transcript is
+still a different kind of content from a code excerpt, but the two are now
+narrow enough, and close enough, to share a row instead of each claiming a full
+`relatedColumnWidthCls()`-wide column of their own).
 
-- **Width:** `shrink-0 p-3` plus the exported `relatedColumnWidthCls()`
-  **verbatim** — the same clamp as `inline-comments`/`related-code`, so all
-  three read as equal-width columns. It is deliberately *not* a fourth
-  content-driven width computation of its own; the transcript wraps.
+- **Width:** `shrink-0 p-3` plus the exported `claudeColumnWidthCls()` — **1/3**
+  of `relatedColumnWidthCls()`'s own clamp, `inline-comments` taking the other
+  **2/3** minus the connector's own width via `commentColumnWidthCls()` (both in
+  `RelatedPanel.mjs`, next to `relatedColumnWidthCls` itself). `clamp()` scales
+  homogeneously, so this holds for every code-growth width, not just the
+  floor/ceiling — see `relatedWidthCls`'s doc comment. It is deliberately *not*
+  a fourth content-driven width computation of its own; the transcript wraps
+  (`ClaudeChat.mjs`'s `claude-chat-actions` button row also wraps rather than
+  stretching the column at this narrower width).
 - **Visibility:** `claudeChatVisible()` = `hasVisibleComments() ||
   chatConversationExists() || cs.focus === 'claude'` — a unit with neither a
   comment nor an earlier conversation has **no** chat column at all (nothing
   creates a placeholder comment for one; see
-  `.claude/docs/claude-chat-panel.md`).
+  `.claude/docs/claude-chat-panel.md`). The dashed connector
+  (`data-testid=comment-claude-connector`, the same style as
+  `nestedChipColumn`'s own connector) shares that same visibility check, so it
+  never floats with nothing to its right.
 - Keyboard-wise it is stop **5b**, entered from the comment thread's `→` (or
   straight from the diff on a unit whose conversation's comment is no longer in
-  the visible index), so the chain's last stop —
-  Underlying code — sits to its *left* on screen. See
+  the visible index) — on screen it now sits *above* Underlying code (same row
+  as the comment block) rather than to its right. See
   `.claude/docs/keyboard-navigation.md` and, for everything the panel itself
   does, `.claude/docs/claude-chat-panel.md`.
 

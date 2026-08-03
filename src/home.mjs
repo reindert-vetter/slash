@@ -7499,7 +7499,9 @@ function menuRegion() {
     return document.querySelector('[data-testid="pr-info-column"]')
   }
   // The Claude chat commit confirm sits over the chat column itself, the same
-  // width relatedColumnWidthCls() already gives it (see claude-chat-panel.md).
+  // width claudeColumnWidthCls() already gives it (1/3 of
+  // relatedColumnWidthCls(), see claude-chat-panel.md) — positionMenu clamps
+  // into the viewport regardless of how narrow that region is.
   if (ms.mode === 'claudeCommit') {
     return (
       document.querySelector('[data-testid="claude-chat-column"]') ||
@@ -8365,47 +8367,52 @@ function DetailPanel(state) {
         })
       }}
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="comments-and-related">
-        ${() =>
-          InlineComments(
-            state,
-            commentTarget,
-            () => {
-              if (composeHasText()) openMenu('compose')
-            },
-            // Mouse-only equivalent of Enter on a focused, empty-reply comment
-            // (isCommentFocused() && commentReplyEmpty(), see onKeydown below) —
-            // a click on the reply-status button next to "Stuur" opens the same
-            // comment-scoped menu (Resolve/Delete/Open op GitHub) without
-            // requiring the reply field to be empty first, since a direct click
-            // is an unambiguous request, unlike the overloaded Enter key.
-            () => openMenu('comment'),
-          ).key('inline-comments')}
+        <div class="flex items-start" data-testid="comment-claude-row">
+          ${() =>
+            InlineComments(
+              state,
+              commentTarget,
+              () => {
+                if (composeHasText()) openMenu('compose')
+              },
+              // Mouse-only equivalent of Enter on a focused, empty-reply comment
+              // (isCommentFocused() && commentReplyEmpty(), see onKeydown below) —
+              // a click on the reply-status button next to "Stuur" opens the same
+              // comment-scoped menu (Resolve/Delete/Open op GitHub) without
+              // requiring the reply field to be empty first, since a direct click
+              // is an unambiguous request, unlike the overloaded Enter key.
+              () => openMenu('comment'),
+            ).key('inline-comments')}
+          ${() =>
+            // Same dashed connector the Onderliggende-code children use between
+            // each other (nestedChipColumn, RelatedPanel.mjs) — visible only
+            // alongside the Claude column itself (claudeChatVisible()), so there's
+            // never a floating dash with nothing to its right. Built in TODO 2
+            // (todo-claude-chat-blok.md); TODO 3 only moved it into this row, next
+            // to its now proportionally-resized neighbours (commentColumnWidthCls/
+            // claudeColumnWidthCls, RelatedPanel.mjs) — no extra flex `gap` on this
+            // row, the connector's own w-3 is the entire visible gap, exactly like
+            // nestedChipColumn's own connector.
+            claudeChatVisible()
+              ? html`<div
+                  class="mt-5 h-px w-3 shrink-0 self-center border-t border-dashed border-slate-300 dark:border-zinc-700"
+                  data-testid="comment-claude-connector"
+                ></div>`
+              : ''}
+          ${() =>
+            ClaudeChatPanel(
+              state,
+              // The "Commit wijziging" button (ClaudeChat.mjs) is a plain native
+              // <button>, so Tab+Enter/Space already reaches this callback with
+              // no extra keyboard wiring here — see claudeChatColumn's own doc
+              // comment and "Triggering the two agentic actions" in
+              // claude-chat-panel.md.
+              () => openMenu('claudeCommit'),
+            ).key('claude-chat')}
+        </div>
         ${() =>
           RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
       </div>
-      ${() =>
-        // Same dashed connector the Onderliggende-code children use between
-        // each other (nestedChipColumn, RelatedPanel.mjs) — visible only
-        // alongside the Claude column itself (claudeChatVisible()), so there's
-        // never a floating dash with nothing to its right. Built here (TODO 2
-        // in todo-claude-chat-blok.md) rather than in TODO 3, which reuses it
-        // once the two columns are resized side by side.
-        claudeChatVisible()
-          ? html`<div
-              class="mt-5 h-px w-3 shrink-0 self-center border-t border-dashed border-slate-300 dark:border-zinc-700"
-              data-testid="comment-claude-connector"
-            ></div>`
-          : ''}
-      ${() =>
-        ClaudeChatPanel(
-          state,
-          // The "Commit wijziging" button (ClaudeChat.mjs) is a plain native
-          // <button>, so Tab+Enter/Space already reaches this callback with
-          // no extra keyboard wiring here — see claudeChatColumn's own doc
-          // comment and "Triggering the two agentic actions" in
-          // claude-chat-panel.md.
-          () => openMenu('claudeCommit'),
-        ).key('claude-chat')}
     </main>
   `
 }

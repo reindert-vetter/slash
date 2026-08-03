@@ -149,12 +149,23 @@ The "Embedded Claude conversation" section owns:
   leave a column that should reappear invisible until the next navigation step
   (the static chunk-reuse trap, see `.claude/rules/arrowjs-pitfalls.md`).
 - **`ClaudeChatPanel(state, openCommit)`** — the exported component
-  `home.mjs` mounts as its own **sibling column** next to
-  `comments-and-related` inside `<main>`'s flex-row (not stacked inside that
-  column — a chat transcript is a different kind of content from a code
-  excerpt). Width reuses the exported `relatedColumnWidthCls()` verbatim —
-  same clamp as `InlineComments`/`related-code`, for visual symmetry across
-  all three columns, not a new content-driven computation.
+  `home.mjs` mounts inside `comments-and-related`'s own first row
+  (`comment-claude-row`), directly next to `InlineComments`, connected by the
+  same dashed connector the Onderliggende-code children use between each
+  other (`data-testid=comment-claude-connector`, built in TODO 2 of
+  `todo/todo-claude-chat-blok.md`; not a sibling column of
+  `comments-and-related` any more — that was the earlier, wider-apart shape).
+  Width is `claudeColumnWidthCls()` — **1/3** of `relatedColumnWidthCls()`'s
+  own clamp, `InlineComments` taking the other **2/3** (minus the connector's
+  own width) via `commentColumnWidthCls()`, both defined next to
+  `relatedColumnWidthCls` in `RelatedPanel.mjs`. `clamp()` scales
+  homogeneously (`k·clamp(a,b,c) = clamp(k·a,k·b,k·c)`), so
+  `commentColumnWidthCls() + connector + claudeColumnWidthCls()` is exactly
+  `relatedColumnWidthCls()` at every code-growth width, not just at the
+  floor/ceiling — see `relatedWidthCls`'s doc comment. Not a new
+  content-driven computation of its own; the transcript wraps
+  (`ClaudeChat.mjs`'s `claude-chat-actions` button row also wraps, rather
+  than stretching the column, at this narrower width).
 
 ## Live progress: what Claude is doing, and the answer as it is written
 

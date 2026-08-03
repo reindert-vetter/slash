@@ -315,7 +315,7 @@ export function claudeChatColumn(view, callbacks) {
           Stuur
         </button>
       </div>
-      <div class="flex items-center gap-2 pt-1" data-testid="claude-chat-actions">
+      <div class="flex flex-wrap items-center gap-2 pt-1" data-testid="claude-chat-actions">
         <button
           type="button"
           class="${() =>

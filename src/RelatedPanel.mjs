@@ -1224,8 +1224,10 @@ function claudeChatCallbacks(openCommit) {
 }
 
 // ClaudeChatPanel is the exported component home.mjs mounts next to
-// InlineComments/RelatedPanel, as its own sibling column in <main>'s flex-row
-// (see detail-layout.md). `state` mirrors InlineComments' own param;
+// InlineComments, in the same inner row of comments-and-related — 1/3 of
+// relatedColumnWidthCls() next to InlineComments' 2/3, see
+// commentColumnWidthCls/claudeColumnWidthCls above and detail-layout.md.
+// `state` mirrors InlineComments' own param;
 // `openCommit` mirrors InlineComments' openCompose/openCommentMenu (see
 // claudeChatCallbacks above). It deliberately takes no `commentTarget`: a
 // conversation only ever hangs on an EXISTING comment, so nothing here needs
@@ -1245,7 +1247,7 @@ export function ClaudeChatPanel(state, openCommit) {
     <div class="contents">
       ${() =>
         claudeChatVisible()
-          ? html`<div class="${() => 'shrink-0 p-3 ' + relatedColumnWidthCls()}" data-testid="claude-chat-column">
+          ? html`<div class="${() => 'shrink-0 p-3 ' + claudeColumnWidthCls()}" data-testid="claude-chat-column">
               ${claudeChatColumn(view, callbacks)}
             </div>`
           : ''}
@@ -2496,28 +2498,31 @@ function newCommentComposer(state, commentTarget, openCompose) {
 // (visibleComments()).
 export function InlineComments(state, commentTarget, openCompose, openCommentMenu) {
   syncComments(state ? state.pr : null)
-  // Reuses relatedColumnWidthCls() (below) — the SAME clamp width as the
-  // related-code section it stacks above in the shared flex-col column (see
-  // DetailPanel, home.mjs) — so this section carries its own explicit,
-  // bounded width instead of the earlier "no own width, stretches to the
-  // sibling" comment, which no longer held: a flex-col's cross-axis stretch
-  // only applies to a child whose OWN width is auto, and related-code
-  // already sets its own explicit width, so it never stretched this one.
-  // Left unbounded, an unwrapped long line inside a comment (composeTargetHint's
-  // code excerpt, or a fenced code block in a Markdown comment body via
-  // commentBody/renderMarkdown — see conventions.md) forced this whole
-  // column — and thus <main> — to shrink-to-fit around that one long line
-  // instead of clipping/scrolling inside it, pushing the block/drill columns
-  // to its left out of view. Giving this section the same explicit width as
-  // related-code fixes that: `overflow-auto`/`.markdown-body pre
-  // {overflow-x:auto}` only actually clip+scroll once their ancestor has a
-  // real (non-auto) width to clip against. See detail-layout.md.
-  // The `p-3` mirrors the p-3 on related-code's own inner scroll wrapper
-  // (below) — without it, a comment card sat flush against the shared
-  // column's left edge while a related-code card sat inset by that same
-  // 12px, so the two stacked sections' cards didn't line up vertically.
+  // Own explicit, bounded width instead of the earlier "no own width,
+  // stretches to the sibling" comment, which never held: a flex-col's
+  // cross-axis stretch only applies to a child whose OWN width is auto, and
+  // related-code already sets its own explicit width, so it never stretched
+  // this one. Left unbounded, an unwrapped long line inside a comment
+  // (composeTargetHint's code excerpt, or a fenced code block in a Markdown
+  // comment body via commentBody/renderMarkdown — see conventions.md) forced
+  // this whole column — and thus <main> — to shrink-to-fit around that one
+  // long line instead of clipping/scrolling inside it, pushing the
+  // block/drill columns to its left out of view. `overflow-auto`/
+  // `.markdown-body pre {overflow-x:auto}` only actually clip+scroll once
+  // their ancestor has a real (non-auto) width to clip against. See
+  // detail-layout.md.
+  //
+  // commentColumnWidthCls() — 2/3 of relatedColumnWidthCls(), so this section
+  // sits at 2/3 width next to the Claude column's 1/3 in their shared inner
+  // row (home.mjs), while still lining up under related-code below (both
+  // rows sum to the same relatedColumnWidthCls() total, see
+  // commentColumnWidthCls's own doc comment). The `p-3` mirrors the p-3 on
+  // related-code's own inner scroll wrapper (below) — without it, a comment
+  // card sat flush against the shared column's left edge while a
+  // related-code card sat inset by that same 12px, so the two stacked
+  // sections' cards didn't line up vertically.
   return html`
-    <div class="${() => 'flex shrink-0 flex-col gap-2 p-3 ' + relatedColumnWidthCls()}" data-testid="inline-comments">
+    <div class="${() => 'flex shrink-0 flex-col gap-2 p-3 ' + commentColumnWidthCls()}" data-testid="inline-comments">
       ${newCommentComposer(state, commentTarget, openCompose)}
       ${() => visibleComments().map((c, i) => commentCard(c, i, openCommentMenu).key('comment:' + c.id))}
     </div>
@@ -2887,21 +2892,71 @@ function nestedChipColumn(ancestors, kids, drill, path, cardIdx) {
 // 1rem(gap) + 40rem(this column, narrow floor) = 83rem = 1328px, leaving
 // ~50px of slack for a scrollbar/rounding. See "Narrow viewport (< 1400px)"
 // in detail-layout.md for the full measurement this was based on.
-// Exported: InlineComments (above, in the same stacked flex-col column) reuses
-// this exact same class so both sections always share one width — see its own
-// doc comment for why that's load-bearing, not just cosmetic.
-export function relatedColumnWidthCls() {
+// Exported: InlineComments/ClaudeChatPanel (above) reuse this same clamp
+// SCALED (commentColumnWidthCls/claudeColumnWidthCls, below) rather than
+// verbatim, so their row still sums to this exact width — see those
+// functions' own doc comment for why that's load-bearing, not just cosmetic.
+//
+// relatedGrowthChars is the one shared "how wide does the code want to be"
+// read, reused below by commentColumnWidthCls/claudeColumnWidthCls too so all
+// three stay in lockstep off the same rc.children snapshot.
+function relatedGrowthChars() {
   let chars = 0
   for (const r of rc.children) {
     if (r.kind === 'tests_group' || !r.code) continue
     const c = codeGrowthChars(r.code)
     if (c > chars) chars = c
   }
-  return (
-    `w-[clamp(42rem,calc(${chars}ch_+_2rem),56rem)] ` +
-    `narrow:w-[clamp(40rem,calc(${chars}ch_+_2rem),48rem)] ` +
-    `2xl:w-[clamp(49.2rem,calc(${chars}ch_+_2rem),65rem)]`
-  )
+  return chars
+}
+
+// relatedWidthCls builds the clamp() triplet (default/narrow/2xl) shared by
+// relatedColumnWidthCls and its two scaled siblings below.  clamp() scales
+// homogeneously (k·clamp(a,b,c) = clamp(k·a,k·b,k·c) for any k>0), and
+// subtracting a constant distributes through it the same way
+// (clamp(a,b,c) − d = clamp(a−d,b−d,c−d)). So a `scale` (1, 2/3, 1/3) plus an
+// optional `subtractRem` (the dashed comment↔Claude connector's own width,
+// see home.mjs) are enough to keep
+// commentColumnWidthCls() + connector + claudeColumnWidthCls() exactly equal
+// to relatedColumnWidthCls() for EVERY value of `chars`, not just at the
+// floor/ceiling extremes — no separate hand-picked rem table that could
+// silently drift out of sync with this one.
+function relatedWidthCls(chars, scale, subtractRem = 0) {
+  const round = (n) => Math.round(n * 1000) / 1000
+  const segment = (floor, ceil) => {
+    const growth = round(2 * scale - subtractRem)
+    const sign = growth < 0 ? '-' : '+'
+    return (
+      `clamp(${round(floor * scale - subtractRem)}rem,` +
+      `calc(${round(chars * scale)}ch_${sign}_${Math.abs(growth)}rem),` +
+      `${round(ceil * scale - subtractRem)}rem)`
+    )
+  }
+  return `w-[${segment(42, 56)}] narrow:w-[${segment(40, 48)}] 2xl:w-[${segment(49.2, 65)}]`
+}
+
+export function relatedColumnWidthCls() {
+  return relatedWidthCls(relatedGrowthChars(), 1)
+}
+
+// The dashed connector between the comment and Claude columns (home.mjs,
+// data-testid=comment-claude-connector): w-3 = 0.75rem, no extra flex `gap`
+// around it (mirrors nestedChipColumn's own connector, which also has none).
+const COMMENT_CLAUDE_CONNECTOR_REM = 0.75
+
+// commentColumnWidthCls / claudeColumnWidthCls — 2/3 and 1/3 of
+// relatedColumnWidthCls()'s own clamp, reading the SAME chars snapshot so
+// both split proportionally as the code grows, not just at the extremes. The
+// connector's width comes off the comment side only (see the inner row in
+// home.mjs), so this holds exactly, for any chars value:
+//   commentColumnWidthCls() + 0.75rem(connector) + claudeColumnWidthCls()
+//     === relatedColumnWidthCls()
+export function commentColumnWidthCls() {
+  return relatedWidthCls(relatedGrowthChars(), 2 / 3, COMMENT_CLAUDE_CONNECTOR_REM)
+}
+
+export function claudeColumnWidthCls() {
+  return relatedWidthCls(relatedGrowthChars(), 1 / 3)
 }
 
 // relatedCard renders one child block: a header (label + file:line + relation

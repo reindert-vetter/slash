@@ -284,17 +284,23 @@ diff, to the exact unit under the cursor — call ⊂ line ⊂ group ⊂ block).
 presentation changed: that scoped set is now inline and always visible for the
 current unit instead of behind a toggle.
 
-**`InlineComments`' wrapper carries the SAME explicit width as `related-code`
-below it** (`relatedColumnWidthCls()`, exported from `RelatedPanel.mjs`, reused
-as-is). Relying on "stretches to the sibling's width" never held — a
-flex-column's cross-axis stretch only applies to a child whose own width is
-`auto`, and `related-code` sets an explicit width. Left unbounded, one unwrapped
-long line (a `composeTargetHint` excerpt, or a fenced code block in a Markdown
-body) forced this column and thus `<main>` to shrink-to-fit around it instead of
-clipping inside it (`overflow-auto`/`.markdown-body pre {overflow-x:auto}` only
-clip once an ancestor has a real width), pushing the block/drill columns out of
-view. The identical clamp width fixes that and keeps both sections the same
-width.
+**`InlineComments`' wrapper carries its own explicit width**,
+`commentColumnWidthCls()` (exported from `RelatedPanel.mjs`) — 2/3 of
+`related-code`'s own `relatedColumnWidthCls()`, minus the dashed connector to
+its right (`comment-claude-connector`), since it now sits beside
+`ClaudeChatPanel` (`claudeColumnWidthCls()`, 1/3) in a shared row rather than
+stacked full-width above `related-code`; see "The embedded Claude chat column"
+in `.claude/docs/detail-layout.md`. Relying on "stretches to the sibling's
+width" never held — a flex-column's cross-axis stretch only applies to a child
+whose own width is `auto`, and `related-code` sets an explicit width. Left
+unbounded, one unwrapped long line (a `composeTargetHint` excerpt, or a fenced
+code block in a Markdown body) forced this column and thus `<main>` to
+shrink-to-fit around it instead of clipping inside it (`overflow-auto`/
+`.markdown-body pre {overflow-x:auto}` only clip once an ancestor has a real
+width), pushing the block/drill columns out of view. The explicit clamp width
+fixes that, and `commentColumnWidthCls() + connector + claudeColumnWidthCls()`
+still sums to exactly `relatedColumnWidthCls()`, so the row lines up with
+`related-code` below it.
 
 ### One card per conversation, only the focused one expands
 

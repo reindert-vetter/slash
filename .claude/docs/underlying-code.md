@@ -154,7 +154,10 @@ no co-subscription on the selected block's `b.code`. Consequence: the width
 symmetry with the neighbouring column is a **default**, not a guarantee. Test:
 `tests/related-code-grow.spec.mjs`.
 
-`InlineComments` reuses this exact class — see
+`InlineComments`/`ClaudeChatPanel` reuse this same clamp **scaled**, not
+verbatim: `commentColumnWidthCls()` (2/3) and `claudeColumnWidthCls()` (1/3),
+sitting side by side in `comments-and-related`'s first row — see
+"The embedded Claude chat column" in `.claude/docs/detail-layout.md` and
 `.claude/docs/comments-panel.md`.
 
 ### Narrow viewport (< 1400px)
@@ -168,9 +171,9 @@ alongside a base class wins below 1400px with no specificity conflict; at/above
 (`w-[70rem]` = 1120px) next to even the floor of this column (672px) overflowed by
 430px, so the reviewer had to scroll away most of the diff to glimpse this column.
 
-- **`relatedColumnWidthCls`** (and thus the comment blocks stacked above it) drops
-  floor/ceiling from `w-[42rem]`/`w-[56rem]` (672/896px) to
-  **`w-[40rem]`/`w-[48rem]` (640/768px)**.
+- **`relatedColumnWidthCls`** (and thus `commentColumnWidthCls`/
+  `claudeColumnWidthCls`, scaled off it) drops floor/ceiling from
+  `w-[42rem]`/`w-[56rem]` (672/896px) to **`w-[40rem]`/`w-[48rem]` (640/768px)**.
 - **`widthCls`** (`Block.mjs`, the diff card — top-level and every drilled column)
   drops its two tiers from `w-[70rem]`/`w-[42rem]` (1120/672px) to
   **`w-[42rem]`/`w-[28rem]` (672/448px)** — the `split` tier reuses the number the
