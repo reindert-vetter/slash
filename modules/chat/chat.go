@@ -12,7 +12,8 @@
 //
 // WRITE methods (SaveMessage/SetAnswer/SetSession) are driven only by
 // workflow Activities (per .claude/rules/workflows-write-boundary.md); the
-// READ methods (List/GetSession) back the read-only UI/API.
+// READ methods (List/GetSession/ConversationsWithMessages) back the read-only
+// UI/API.
 package chat
 
 import (
@@ -192,6 +193,32 @@ func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// ConversationsWithMessages returns the ids of every conversation of pr that
+// has at least one message — i.e. "here a Claude conversation really happened",
+// without any bodies. READ — safe for the UI/API. It backs the frontend's
+// "should the chat column exist at all" question for a whole PR in one request:
+// a conversation must stay reachable once it has turns, even if its comment is
+// no longer among the visible ones (see claudeChatVisible in RelatedPanel.mjs).
+// A conversation row that only ever got ensured (no turns) is deliberately not
+// reported — nothing to come back to.
+func (m *Module) ConversationsWithMessages(ctx context.Context, pr int) ([]string, error) {
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT DISTINCT conversation_id FROM chat_messages WHERE pr = ? ORDER BY conversation_id`, pr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // List returns every message of one conversation, oldest first. READ — safe

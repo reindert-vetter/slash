@@ -33,7 +33,7 @@ which the UI then signals. A **one-shot** type runs synchronously to completion
 | `/api/workflows/submit_review` | `{pr, event, body}` | one-shot | 400 on invalid input *before* any `gh` call (`validateSubmitReview`; a `REQUEST_CHANGES` needs a body), 502 if the submit itself fails. |
 | `/api/workflows/ready_for_review` | `{pr, reviewers?}` | one-shot | 400 on a non-positive pr or invalid login (`validateReadyForReview`, which also trims+dedups). |
 | `/api/workflows/cleanup` | — | one-shot | Never accepts a body: the retention cutoff is always server-side. Force-purging specific PRs is CLI-only (`slash cleanup -force`). |
-| `/api/workflows/claude_chat` | `{pr, commentId}` | tracker (per comment thread) | Returns `runId` (`"chat-" + commentId`, deterministic — no in-memory map needed); the UI signals `message`. 400 if `commentId` doesn't name an existing comment of `pr`. |
+| `/api/workflows/claude_chat` | `{pr, commentId}` | tracker (per comment thread) | Returns `runId` (`"chat-" + commentId`, deterministic — no in-memory map needed); the UI signals `message`. 400 if `commentId` doesn't name an existing comment of `pr`. Started as a **child** of that comment's `task_code_comment` run (via its `"chat"` Action Signal), with a top-level fallback for a thread that already ended — see "claude_chat" in `.claude/docs/workflows-comments.md`. |
 | `/api/ingest` | `{pr}` | one-shot | Starts the `ingest` workflow and then `EnsureRelations`; 200 only once both finished. See `.claude/docs/blocks-and-ingest.md`. |
 
 **Adding a signal-less type also means adding its name to the reserved-name
@@ -104,6 +104,7 @@ Both are carve-outs from the write boundary because they touch nothing durable
 | `GET /api/tasksnoozes` | `{taskId, until}` — expiry is checked client-side, `List` does not filter. |
 | `GET /api/commentignores?pr=N` | `{ok, ignored}` — the ids of the PR-wide comments hidden from the block index. |
 | `GET /api/chat?commentId=X` | The `claude_chat` transcript for the conversation hanging off that comment thread (`pr` isn't needed — the comment id already scopes it). |
+| `GET /api/chat?pr=N` | Same handler, PR-wide variant: `{ok, conversations}` — only the ids of the PR's conversations that actually have turns, no bodies. One request per PR answers "does this unit already have a Claude conversation", which decides whether the chat column exists at all (see `.claude/docs/claude-chat-panel.md`). |
 | `GET /api/problems` | `{failedRuns, logErrors}` — failed runs (repo-wide) + mirrored glue log lines. |
 | `GET /api/me` | The authenticated GitHub user (`gh api user`, cached for the process lifetime). |
 | `GET /api/names?logins=a,b` | Login → real name + avatar. See `.claude/docs/pages-and-routing.md`. |

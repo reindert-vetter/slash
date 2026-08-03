@@ -73,14 +73,10 @@ test.describe('PR Review Tree — footer AI description for if-units', () => {
     const description = page.getByTestId('footer').getByTestId('footer-description')
     await expect(description).toContainText('Deze groep introduceert een if-statement')
 
-    // Drill into the child (→ into the embedded Claude chat — no comment
-    // thread on this unit yet, so → is unconditionally reachable there first,
-    // see the "Embedded Claude chat" section of comments-panel.md — then ↓
-    // falls through to Onderliggende code, Enter on its first child): the new
-    // column owns the keyboard on ITS first change group — the footer swaps
-    // to the child's own seeded description.
+    // Drill into the child (→ into Onderliggende code, Enter on its first
+    // child): the new column owns the keyboard on ITS first change group —
+    // the footer swaps to the child's own seeded description.
     await page.keyboard.press('ArrowRight')
-    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('drill-column')).toHaveCount(1)
     await expect(description).toContainText('Het onderliggende blok krijgt een if')

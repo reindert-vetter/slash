@@ -280,7 +280,7 @@ type ReactionSignal struct {
 	AvatarURL string `json:"avatarUrl"`
 	Body      string `json:"body"`
 	Done      bool   `json:"done"`   // resolves the thread
-	Action    string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor"
+	Action    string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor" | "chat"
 	// Anchor carries the comment's re-derived row anchor with Action "reanchor" (a
 	// pure metadata move, no reply stored) — see reanchor.go for how it's computed
 	// and comments.Module.SetAnchor for what it changes.
@@ -2905,6 +2905,31 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				"path": commentPath(moved, runID),
 			}, nil); err != nil {
 				return nil, fmt.Errorf("save comment anchor: %w", err)
+			}
+			continue
+		}
+
+		// A "chat" action starts (or idempotently re-ensures) this thread's own
+		// embedded Claude conversation as a CHILD workflow of this Execution — the
+		// conversation belongs to the comment, so the run tree should say so
+		// (RunRecord.ParentRunID). Its run ID stays the derived
+		// chatConversationRunID(runID) via ExecuteChildWorkflowID, so everything
+		// addressing "chat-<commentID>" (the UI's message Signal, chat_merge.go,
+		// cleanup.go) keeps working, and a second "chat" signal is a no-op reuse
+		// rather than a second child. Deliberately no WaitChildWorkflow: a
+		// claude_chat Execution never completes, so this thread must not block on
+		// it. Stores no reply, so the thread itself is untouched. Input-driven like
+		// every other branch here, hence replay-deterministic.
+		//
+		// NOTE for whoever extends claude_chat: this child is started INLINE inside
+		// this run's own advance (the parent's run lock is held and is not
+		// reentrant), so claude_chat's first Activity must never signal this
+		// thread. It only ensures its conversation row and then waits.
+		if r.Action == "chat" {
+			if _, err := w.ExecuteChildWorkflowID(chatConversationRunID(runID), WorkflowClaudeChat, ClaudeChatInput{
+				PR: in.PR, CommentID: runID,
+			}); err != nil {
+				return nil, fmt.Errorf("start claude chat child: %w", err)
 			}
 			continue
 		}

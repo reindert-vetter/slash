@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -63,6 +64,62 @@ func TestChildWorkflowsRunConcurrently(t *testing.T) {
 	// clearly if the children were serialized.
 	if elapsed >= 35*time.Millisecond {
 		t.Fatalf("elapsed = %v, want < 35ms (children must run concurrently, not sequentially)", elapsed)
+	}
+}
+
+// TestExecuteChildWorkflowIDUsesTheGivenID proves the explicit-ID variant: the
+// child run really carries that ID (not the positional <parent>/child-0), it
+// records the parent, and calling it a second time with the same ID reuses that
+// child instead of starting a second one.
+func TestExecuteChildWorkflowIDUsesTheGivenID(t *testing.T) {
+	e := New(NewMemoryStore())
+
+	runs := 0
+	e.RegisterWorkflow("namedChild", func(w *Workflow, _ []byte) ([]byte, error) {
+		runs++
+		return json.Marshal("done")
+	})
+	e.RegisterWorkflow("parent", func(w *Workflow, _ []byte) ([]byte, error) {
+		id, err := w.ExecuteChildWorkflowID("my-own-child", "namedChild", nil)
+		if err != nil {
+			return nil, err
+		}
+		// A second call with the same ID is a no-op reuse, not a second child.
+		again, err := w.ExecuteChildWorkflowID("my-own-child", "namedChild", nil)
+		if err != nil {
+			return nil, err
+		}
+		if again != id {
+			return nil, fmt.Errorf("second call returned %q, want %q", again, id)
+		}
+		var res string
+		if err := w.WaitChildWorkflow(id, &res); err != nil {
+			return nil, err
+		}
+		return json.Marshal(id + ":" + res)
+	})
+
+	id, err := e.StartWorkflow("parent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+
+	if s, _ := e.Status(id); s != StatusCompleted {
+		t.Fatalf("parent status = %s, want completed", s)
+	}
+	var got string
+	if err := e.Result(id, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "my-own-child:done" {
+		t.Fatalf("result = %q, want %q", got, "my-own-child:done")
+	}
+	if runs != 1 {
+		t.Fatalf("child ran %d times, want exactly 1", runs)
+	}
+	if s, _ := e.Status("my-own-child"); s != StatusCompleted {
+		t.Fatalf("child status = %s, want completed", s)
 	}
 }
 

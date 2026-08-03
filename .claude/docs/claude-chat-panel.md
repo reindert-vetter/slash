@@ -8,45 +8,60 @@ the review-tree panel that talks to it: `src/ClaudeChat.mjs` (pure template)
 and the "Embedded Claude conversation" section of `src/RelatedPanel.mjs`
 (state machine, the SSE subscriptions, focusToken discipline).
 
-## Product decision: always reachable via `→`, one hop past the comment thread
+## Product decision: the chat exists only where there is something to hang it on
 
 A Claude conversation always hangs off an existing comment thread (the
 backend's own constraint — `CommentID` must name an existing comment of the
-PR). The panel is nonetheless **unconditionally reachable via `→`**, not
-gated behind "does a comment already exist": the `→` chain becomes
+PR). The column is therefore **conditional**, and the `→` chain of a
+commented unit is
 
 ```
 comment → thread → claude → (↓, nothing left) → Onderliggende code
 ```
 
-reached from the diff exactly like the comment stop already was — `→` from
-the diff enters the first comment conversation when `hasVisibleComments()`
-is true (unchanged), **otherwise it now goes straight to the embedded Claude
-chat** instead of the Onderliggende-code panel. The **first** time a unit's
-chat is entered this way, `enterClaudeChat` (`RelatedPanel.mjs`) silently
-creates an **empty, private** (`Local: true`, never posted to GitHub)
-comment via the existing `createComment` write path to hang the conversation
-on, then ensures the `claude_chat` workflow for it
-(`POST /api/workflows/claude_chat {pr, commentId}`). From then on the unit
-genuinely has a comment thread (visible as an ordinary, if near-empty,
-inline comment card above the chat column — `CLAUDE_PLACEHOLDER_BODY`), so a
-later `→` from the diff lands on that thread first, same as any other
-commented unit — the "auto-create" path only ever fires once per unit.
+`→` from the diff enters the first comment conversation when
+`hasVisibleComments()` is true; with no comment **and** no earlier
+conversation it goes **straight to the Onderliggende-code panel**, exactly as
+it did before this panel existed.
 
-**Deliberately not gated on "comments already exist"**: "net zo'n blok als
-het comments-blok, zichtbaar zodra er al comments zijn" describes the
-*normal* case (a reviewer typically comments before chatting about it), not
-a hard precondition — see `claudeChatVisible()` below for the exact
-visibility rule, which is looser than that on purpose (visible while
-genuinely focused too, covering the async gap right after auto-create).
+**The auto-created placeholder comment is gone and must not come back.** An
+earlier version made the panel unconditionally reachable via `→` by silently
+creating an empty, private comment with the body
+`(Aangemaakt voor een Claude-gesprek.)` to hang the conversation on. That put
+a comment the reviewer never wrote in the thread of every unit they once
+walked past with `→`. Removed: `enterClaudeChat` is a plain **no-op** when
+there is nothing to hang a conversation on (not an error state — nothing is
+wrong, there is simply nothing to chat about), and it takes the focus only
+once an anchor is known. Comments already stored with that body stay put as
+ordinary private notes; they are deleted by hand via the existing comment
+Delete menu, deliberately not by a migration.
+
+**Why a chat still needs a comment at all:** it is the anchor that gives a
+conversation its place in the review tree (a unit, a file:line, a thread the
+conversation can reply into — see `applyChatCommentAction`). The requirement
+"a chat only where there already is a comment, or where a conversation
+already happened" is exactly `claudeChatVisible()` below.
+
+**A conversation that already happened never becomes unreachable**, even if
+its comment falls out of the visible index (an orphan or PR-wide comment,
+which `recomputeView` filters out): `cc.conversations` — the ids of this PR's
+conversations that actually have turns, from `GET /api/chat?pr=N` — keeps the
+column visible, and `chatAnchorComment()` resolves the same comment for both
+the visibility check and `enterClaudeChat`, so the column can never be shown
+without `→` being able to reach it. A genuinely **deleted** comment is the one
+irreducible case: without a row there is no file:line, so its conversation has
+no unit to appear under any more.
 
 ### The chain, key by key
 
 - **`→` from the diff**: `hasVisibleComments() ? enterCommentsHead() :
-  enterClaudeChat(state.pr, commentTarget)` (`home.mjs`'s `onKeydown`).
+  claudeChatVisible() ? enterClaudeChat(state.pr) : enterRelated()`
+  (`home.mjs`'s `onKeydown`) — the middle branch only fires for the
+  conversation-without-visible-comment case above.
 - **`→` on `cs.focus === 'thread'`** (the deepest existing comment-thread
-  stop): `enterClaudeChat(cs.pr)` — no `commentTargetFn` needed, a comment
-  already exists (`RelatedPanel.mjs`'s `handleRelatedKey`).
+  stop): `enterClaudeChat(cs.pr)` — a focused thread always has its own
+  comment, so this can never hit the no-op (`RelatedPanel.mjs`'s
+  `handleRelatedKey`).
 - **`↑`/`↓` on `cs.focus === 'claude'`**: walk the transcript exactly like
   `'thread'` walks reactions, via its own `cs.claudePos` cursor (mirrors
   `cs.threadPos`, 0 = composer, 1..n = the n-th turn from the bottom).
@@ -67,7 +82,8 @@ The "Embedded Claude conversation" section owns:
 
 - **`cc`** — this module's own `reactive()` chat state for whichever ONE
   conversation is currently in view: `{ commentId, runId, messages, status,
-  busy, progress, tick }` (the last two are the live turn, see "Live
+  busy, progress, tick, conversations }` (`conversations` is PR-wide, see
+  `claudeChatVisible()`; `progress`/`tick` are the live turn, see "Live
   progress"). `status` is the PANEL's own loading/error state (ensuring the
   workflow, fetching the transcript) — a genuinely **failed Claude turn** is
   a normal message with `kind: 'error'` (see `chat_workflow.go`'s
@@ -77,11 +93,13 @@ The "Embedded Claude conversation" section owns:
   list as `rel.cpos`, so a refresh restores the exact turn the reviewer was
   on (same `restorePending`/`applyRelRestore` snapshot-then-reapply pattern
   as every other panel cursor field).
-- **`enterClaudeChat(pr, commentTargetFn)`** — the single entry point for
-  both call sites above. `commentTargetFn` (the same callback
-  `home.mjs`/`ClaudeChatPanel` already thread through, mirroring
-  `commentTarget()`) is stashed in a module `let currentCommentTarget` so the
-  keyboard-only re-entry (from `'thread'`) doesn't need its own copy.
+- **`enterClaudeChat(pr)`** — the single entry point for both call sites
+  above. It resolves its own anchor via `chatAnchorComment()` and returns
+  without touching the focus when there is none, so no call site needs to
+  pre-check. It takes **no** `commentTarget` callback: nothing here creates a
+  comment any more, so the live cursor's anchor fields are irrelevant (the old
+  `currentCommentTarget`/`claudeAnchorArgs` pair is gone with the placeholder
+  comment).
 - **`ensureAndLoadChat`/`loadChatMessages`/`sendClaudeMessage`** — the write
   paths: `POST /api/workflows/claude_chat` (idempotent, ensures the
   Execution), `GET /api/chat?commentId=` (read-only transcript),
@@ -94,8 +112,15 @@ The "Embedded Claude conversation" section owns:
   that await is no longer what makes the reply appear (see "Live progress"
   below); it is the belt-and-braces refetch for the reviewer's own send.
 - **`ensureChatEvents`/`loadChatProgress`** — the live channel, see below.
-- **`claudeChatVisible()`** — `hasVisibleComments() || cs.focus === 'claude'`.
-- **`ClaudeChatPanel(state, commentTarget)`** — the exported component
+- **`claudeChatVisible()`** — `hasVisibleComments() ||
+  chatConversationExists() || cs.focus === 'claude'`. The middle term reads
+  `cc.conversations` (reactive, refreshed by `loadChatConversations` on every
+  comment poll and only ever **reassigned**, never mutated) through
+  `chatAnchorComment()`. It must stay inside the existing
+  `${() => claudeChatVisible()}` binding: a plain, non-reactive value would
+  leave a column that should reappear invisible until the next navigation step
+  (the static chunk-reuse trap, see `.claude/rules/arrowjs-pitfalls.md`).
+- **`ClaudeChatPanel(state, openCommit)`** — the exported component
   `home.mjs` mounts as its own **sibling column** next to
   `comments-and-related` inside `<main>`'s flex-row (not stacked inside that
   column — a chat transcript is a different kind of content from a code
@@ -267,27 +292,21 @@ back into the thread. Deliberately does **not** assert on the transient
 transient state is explicitly disallowed — see
 `.claude/docs/testing-playwright.md`).
 
-## Ripple: every existing "→ from the diff enters the related panel directly"
-## test needed an extra hop
+## Ripple: the extra hop every spec once needed is gone again
 
-Any pre-existing spec that pressed `→` twice (list→diff, diff→related) on a
-unit **without** a seeded comment now lands on `'claude'` on the second
-press, not `'code'` — an intentional consequence of the product decision
-above, not a regression. Fixed by inserting either one more `→` (comment
-already exists in that test) or one `↓` (comment-less unit, falls through
-past the freshly auto-created empty chat) at each such call site:
-`related-nav.spec.mjs`, `related-tests-group.spec.mjs`,
+While the panel was unconditionally reachable, every pre-existing spec that
+pressed `→` twice (list→diff, diff→related) on a unit **without** a seeded
+comment needed one extra hop, because the second press landed on `'claude'`.
+Now that a comment-less unit has no chat column at all, those hops were
+**reverted** — `related-nav.spec.mjs`, `related-tests-group.spec.mjs`,
 `related-nested-chip.spec.mjs`, `footer-explanation.spec.mjs`,
-`scroll-focus-vertical-only.spec.mjs`, `urlstate.spec.mjs`. Two of
-`scroll-focus-vertical-only.spec.mjs`'s "the originally-focused diff column
-must still be fully in view" sanity assertions were removed rather than
-patched: with the embedded Claude chat now sitting between the diff and the
-related panel, `scrollFocusIntoView`'s existing left-alignment of that
-intermediate stop already scrolls the original diff column partway
-off-screen at a narrow viewport — expected pre-existing scroll behaviour
-(see "Unfocused columns collapse into a narrow rail" in `drilling.md`), not
-something this spec (which guards against *additional* scroll from chip
-navigation specifically) needs to re-assert.
+`scroll-focus-vertical-only.spec.mjs`, `urlstate.spec.mjs` drive the original
+chain again, including the two `scroll-focus-vertical-only.spec.mjs` "the
+originally-focused diff column must still be fully in view" sanity assertions
+that the intermediate stop had made untrue. `related-nav.spec.mjs`'s
+comment-less case additionally asserts that **no** `claude-chat-column` and
+**no** `comment-item` appear, so a reintroduced placeholder comment would fail
+a test rather than quietly reappear.
 
 ## Triggering the two agentic actions (`edit` / `commit`)
 
@@ -335,8 +354,8 @@ overwhelmingly common case — into a two-Enter flow, which is not the
 thread **reply** field sends directly while a **new** comment composer opens
 a menu — see `.claude/docs/comments-panel.md`).
 
-`ClaudeChatPanel(state, commentTarget, openCommit)` gained a third param
-(mirrors `InlineComments`' own `openCompose`/`openCommentMenu` props) purely
+`ClaudeChatPanel(state, openCommit)`'s `openCommit` param (mirrors
+`InlineComments`' own `openCompose`/`openCommentMenu` props) exists purely
 to reach `home.mjs`'s `openMenu` — `RelatedPanel.mjs`/`ClaudeChat.mjs` have no
 access to it directly, same reason `InlineComments` needs those two callbacks.
 `menuAnchor()`/`menuRegion()` gained a `'claudeCommit'` branch anchoring on

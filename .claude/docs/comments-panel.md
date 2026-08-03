@@ -471,11 +471,10 @@ entry:
 
 - **`→` from the diff:** ≥1 comment → the **first** conversation
   (`enterCommentsHead()`, `cs.sel=0` + `toComment()`, which also focuses the
-  reply field); otherwise on to the **embedded Claude chat**
-  (`enterClaudeChat()`, stop 5b — which auto-creates the empty private comment
-  it hangs on), **not** the Onderliggende-code card. That card is now only
-  reached by a `↓` falling through the end of the comments resp. the chat. See
-  `.claude/docs/claude-chat-panel.md`.
+  reply field); no comment but an earlier Claude conversation on this unit → the
+  **embedded Claude chat** (`enterClaudeChat()`, stop 5b); with neither →
+  straight to the Onderliggende-code card (`enterRelated()`). Nothing creates a
+  comment on the way — see `.claude/docs/claude-chat-panel.md`.
 - **`↓`** on a conversation (`cs.focus==='comment'`) or at the bottom of an open
   thread (`cs.focus==='thread' && threadPos===0`) advances to the next
   conversation on the same unit; if there isn't one it **falls through** to

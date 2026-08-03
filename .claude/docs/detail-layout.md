@@ -204,11 +204,13 @@ Underlying-code card down as the conversation grows.
   three read as equal-width columns. It is deliberately *not* a fourth
   content-driven width computation of its own; the transcript wraps.
 - **Visibility:** `claudeChatVisible()` = `hasVisibleComments() ||
-  cs.focus === 'claude'`. The second half is not redundant: it keeps the column
-  mounted across the async gap right after `enterClaudeChat` auto-creates the
-  first comment for a unit that had none.
+  chatConversationExists() || cs.focus === 'claude'` — a unit with neither a
+  comment nor an earlier conversation has **no** chat column at all (nothing
+  creates a placeholder comment for one; see
+  `.claude/docs/claude-chat-panel.md`).
 - Keyboard-wise it is stop **5b**, entered from the comment thread's `→` (or
-  straight from the diff on an uncommented unit), so the chain's last stop —
+  straight from the diff on a unit whose conversation's comment is no longer in
+  the visible index), so the chain's last stop —
   Underlying code — sits to its *left* on screen. See
   `.claude/docs/keyboard-navigation.md` and, for everything the panel itself
   does, `.claude/docs/claude-chat-panel.md`.

@@ -121,19 +121,14 @@ test.describe('drill-hint chips next to Onderliggende-code cards', () => {
     await rows.filter({ hasText: 'CreatePaymentAction::execute' }).click()
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
-    // The click only selected the block (still 'list' mode, with its own diff
-    // preview) — the first ArrowRight is the list→diff step. The unit has no
-    // comment thread yet, so the second ArrowRight now lands on the embedded
-    // Claude chat instead of the related panel directly (→ is unconditionally
-    // reachable there, auto-creating an empty private comment to hang it on —
-    // see the "Embedded Claude chat" section of comments-panel.md); ArrowDown
-    // with nothing to walk in that empty chat falls through to enterRelated(),
-    // exactly like ArrowDown at the bottom of an existing comment thread would.
+    // Two presses: the click only selected the block (still 'list' mode, with
+    // its own diff preview) — the first ArrowRight is the list→diff step, the
+    // second is the actual enterRelated() into this panel (see the nav-chain
+    // "stops" in keyboard-navigation.md).
     await page.keyboard.press('ArrowRight')
     await page.waitForTimeout(200)
     await page.keyboard.press('ArrowRight')
     await page.waitForTimeout(200)
-    await page.keyboard.press('ArrowDown')
 
     const childCard = page.getByTestId('related-item').filter({ hasText: 'findOrCreateCustomer' })
     await expect(childCard).toBeVisible()
@@ -170,20 +165,12 @@ test.describe('drill-hint chips next to Onderliggende-code cards', () => {
     await page.keyboard.press('ArrowLeft')
     await expect(childCard).toHaveAttribute('data-active', 'false')
 
-    // → re-enters the panel from the diff — but this unit now HAS a comment
-    // thread (the empty private one auto-created on first entry, above), so
-    // → first lands on that conversation, then its thread, then the embedded
-    // Claude chat, before ArrowDown falls through to enterRelated() again —
-    // the same chain as the first entry, just via the 'comment'/'thread'
-    // stops instead of skipping straight to 'claude'. Lands back on the card
-    // itself (chipPath resets to []); → twice more descends to the handle
-    // chip, then its billingAddress sub-chip; Enter then drills through the
-    // WHOLE chain (findOrCreateCustomer → handle → billingAddress) in one
-    // go, same as a click on the sub-chip.
-    await page.keyboard.press('ArrowRight') // diff -> comment
-    await page.keyboard.press('ArrowRight') // comment -> thread
-    await page.keyboard.press('ArrowRight') // thread -> claude
-    await page.keyboard.press('ArrowDown') // claude -> related (nothing to walk)
+    // → re-enters the panel from the diff (enterRelated, unchanged), landing
+    // back on the card itself (chipPath resets to []); → twice more descends
+    // to the handle chip, then its billingAddress sub-chip; Enter then drills
+    // through the WHOLE chain (findOrCreateCustomer → handle →
+    // billingAddress) in one go, same as a click on the sub-chip.
+    await page.keyboard.press('ArrowRight')
     await expect(childCard).toHaveAttribute('data-active', 'true')
     await page.keyboard.press('ArrowRight')
     await expect(handleChip).toHaveAttribute('data-active', 'true')

@@ -96,6 +96,38 @@ func TestChatQuestionAndAnswer(t *testing.T) {
 	}
 }
 
+// ConversationsWithMessages reports only the conversations of the asked PR that
+// really have turns — an ensured-but-empty conversation is nothing to come back
+// to, so it must stay out (it is what decides whether the chat column exists).
+func TestConversationsWithMessages(t *testing.T) {
+	m := testModule(t)
+	ctx := context.Background()
+
+	if err := m.EnsureConversation(ctx, "c-empty", 11); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.EnsureConversation(ctx, "c-talked", 11); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SaveMessage(ctx, Message{ID: "m1", ConversationID: "c-talked", PR: 11, Role: "user", Body: "hoi"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SaveMessage(ctx, Message{ID: "m2", ConversationID: "c-talked", PR: 11, Role: "assistant", Body: "hallo"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SaveMessage(ctx, Message{ID: "m3", ConversationID: "c-other-pr", PR: 12, Role: "user", Body: "elders"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := m.ConversationsWithMessages(ctx, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != "c-talked" {
+		t.Fatalf("ids = %v, want exactly [c-talked]", ids)
+	}
+}
+
 // Purge removes every conversation + message of a PR and leaves other PRs
 // untouched — the cleanup workflow's per-module contract.
 func TestChatPurge(t *testing.T) {

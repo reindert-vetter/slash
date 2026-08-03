@@ -51,11 +51,13 @@ code).
    has a comment (`hasVisibleComments()`, see
    `.claude/docs/comments-panel.md`); otherwise `→` skips straight past it.
    - **Stop 5b — the embedded Claude chat** (`data-testid=claude-chat-column`,
-     `cs.focus==='claude'`): reached with `→` from stop 5's `'thread'` level,
-     **or straight from the diff** when the unit has no comment at all — unlike
-     stop 5 it is **unconditional**, and entering it that way silently
-     auto-creates the empty private comment the conversation hangs on
-     (`enterClaudeChat`, `RelatedPanel.mjs`). Deliberately NOT renumbered into
+     `cs.focus==='claude'`): reached with `→` from stop 5's `'thread'` level —
+     **also conditional**, on `claudeChatVisible()`: a comment must exist, or a
+     conversation for this unit must already have happened (then `→` from the
+     diff reaches it directly). Nothing auto-creates a comment to hang a
+     conversation on, so a unit with neither has no chat column and `→` from the
+     diff skips to stop 6 (`enterClaudeChat` is a no-op there — see
+     `.claude/docs/claude-chat-panel.md`). Deliberately NOT renumbered into
      the chain, so every "stop 6" reference below stays valid. Details in
      `.claude/docs/claude-chat-panel.md`; keyboard summary: `↑`/`↓` walk the
      transcript on its own `cs.claudePos` cursor (exactly as `'thread'` walks
@@ -333,9 +335,10 @@ the **URL** under its own `rel` namespace
 (`rel.foc`/`rel.code`/`rel.csel`/`rel.thr`/`rel.cpos`), so a refresh returns to
 the same child/thread/chat turn; `applyRelRestore` reapplies it once, clamped,
 after the children/comments load. A restored `rel.foc=claude` deliberately waits
-for the comments exactly like `'comment'`/`'thread'` do and never runs
-`enterClaudeChat`'s auto-create path — restoring a position must not itself
-write. See skill `url-state`.
+for the comments (or, for a conversation whose comment isn't in the visible
+index, for `cc.conversations`) exactly like `'comment'`/`'thread'` wait for
+theirs, and only ever restores onto an EXISTING comment — restoring a position
+must not itself write. See skill `url-state`.
 
 **`Enter`** on the card (or a **mouse click** on `data-testid=related-item`)
 **drills** the focused child (`focusedRelatedChild()` → `drillIntoChild`): it

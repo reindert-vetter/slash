@@ -1414,16 +1414,38 @@ func (s *server) handleClaudeChatStart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
 }
 
-// handleChat serves GET /api/chat?commentId=X — the read-only chat transcript
-// for the conversation hanging off that comment thread.
+// handleChat serves two read-only reads, both GET:
+//
+//   - ?commentId=X — the chat transcript for the conversation hanging off that
+//     comment thread.
+//   - ?pr=N — only the ids of the PR's conversations that actually have turns
+//     ({"conversations": [...]}), no bodies. One request per PR, so the frontend
+//     can answer "does this unit already have a Claude conversation" (and thus
+//     "should the chat column exist") without a fetch per comment.
 func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	pr := 0
+	if v := r.URL.Query().Get("pr"); v != "" {
+		pr, _ = strconv.Atoi(v)
+	}
+	if pr > 0 {
+		ids, err := s.tasks.chat.ConversationsWithMessages(r.Context(), pr)
+		if err != nil {
+			http.Error(w, "query failed", http.StatusInternalServerError)
+			return
+		}
+		if ids == nil {
+			ids = []string{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "conversations": ids})
+		return
+	}
 	commentID := r.URL.Query().Get("commentId")
 	if commentID == "" {
-		http.Error(w, "commentId required", http.StatusBadRequest)
+		http.Error(w, "commentId or pr required", http.StatusBadRequest)
 		return
 	}
 	list, err := s.tasks.chat.List(r.Context(), commentID)

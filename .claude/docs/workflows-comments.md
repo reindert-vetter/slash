@@ -219,17 +219,51 @@ one existing place with a durable Execution and a reply mechanism, so a later
 phase can let the reviewer ask Claude to act on **that same thread** with no
 new addressing scheme.
 
-**If the reviewer opens the chat panel somewhere with no comment thread yet,
-the frontend places one first** — an ordinary `task_code_comment` Execution
-with `Local: true` (so it's never posted to GitHub, see the `Local` flag
-above) and an empty/placeholder body — and then starts the chat on that
-comment's id. This is the sanctioned write path already used for every other
-comment (`StartCodeComment`); `claude_chat` itself never creates a comment.
+**No comment ⇒ no chat.** Nothing creates a comment to hang a conversation on:
+an earlier version had the frontend silently place an empty `Local: true`
+placeholder comment for that purpose, which put a comment the reviewer never
+wrote on every unit they walked past — removed, and it must not come back (see
+`.claude/docs/claude-chat-panel.md` for the frontend rule and how an
+already-happened conversation stays reachable). `claude_chat` itself has never
+created a comment and still doesn't.
 
-`StartClaudeChat(ClaudeChatInput{PR, CommentID})` starts/reuses the Execution
-(idempotent via `StartWorkflowID`, mirroring `resolveCallRunID`/
-`explainRunID` — no in-memory map needed, unlike the per-PR trackers, since
-the Run ID is already a pure function of the input).
+### The conversation is a CHILD workflow of its comment thread
+
+`StartClaudeChat(ClaudeChatInput{PR, CommentID})` starts/reuses the Execution,
+idempotently, and always returns the same derived
+`chatConversationRunID(CommentID)`. It gets there by **signalling the comment
+thread's own `task_code_comment` Execution** — its existing `reply` Signal with
+`Action: "chat"` (riding along like `"avatar"`/`"reanchor"`/`"delete"`, since a
+workflow can only `WaitSignal` on one name at a time) — whose branch calls
+`w.ExecuteChildWorkflowID(chatConversationRunID(runID), WorkflowClaudeChat, …)`.
+So the run tree says what is true: the conversation belongs to the comment
+(`RunRecord.ParentRunID`). Deliberately:
+
+- **`ExecuteChildWorkflowID`, not `ExecuteChildWorkflow`** — the positional
+  variant would derive `<runID>/child-<idx>` and throw away the
+  `chat-<commentID>` Run ID that the UI's `message` Signal, `chat_merge.go` and
+  `cleanup.go` all address. The explicit-ID variant is idempotent on the
+  recorded `EventChildWorkflowStarted` name, so a second `"chat"` signal reuses
+  the child instead of starting a `child-1`.
+- **No `WaitChildWorkflow`** — a `claude_chat` Execution never completes, so
+  the comment thread must not block on it. It signals and `continue`s.
+- **Signalling is synchronous** (`SignalWorkflow` → `advance` → the child's own
+  start, all inline), so the chat run exists by the time `StartClaudeChat`
+  returns and can immediately be signalled itself.
+- **The child starts while the parent's run lock is held** (and that lock is
+  not reentrant), so `claude_chat`'s FIRST Activity must never signal its
+  parent thread. It only ensures its conversation row and then waits — keep it
+  that way.
+
+**Carve-out — a thread that can no longer be signalled:**
+`taskCodeCommentWorkflow` **ends** on a resolve (`r.Done` → `break`) and on a
+delete, and a completed/failed Execution accepts no Signals. `StartClaudeChat`
+therefore checks the thread's status first (the same shape
+`applyChatCommentAction` uses) and falls back to the original top-level
+`StartWorkflowID` when the thread is unknown or terminal, logging it via
+`tm.logf` — a resolved thread must not lose its chat. Such a run simply has an
+empty `ParentRunID`, exactly like every chat created before this change, so
+nothing needed migrating and no run needed restarting.
 
 ### Flow
 

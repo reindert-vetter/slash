@@ -21,8 +21,10 @@ import (
 // ClaudeChatInput starts (or, idempotently, re-ensures) a claude_chat
 // Workflow Execution. CommentID is the existing task_code_comment thread this
 // conversation hangs on — per product decision, a chat is always attached to
-// a comment thread; the frontend creates an empty, private (Local: true)
-// comment first if the reviewer opens the panel somewhere with no thread yet.
+// an EXISTING comment thread and is normally a child workflow of it (see
+// StartClaudeChat). Nothing auto-creates a comment for it: no comment (and no
+// earlier conversation) means no chat, so the reviewer never gets a placeholder
+// comment they didn't ask for.
 type ClaudeChatInput struct {
 	PR        int    `json:"pr"`
 	CommentID string `json:"commentId"`
@@ -67,11 +69,58 @@ func chatConversationRunID(commentID string) string {
 	return "chat-" + commentID
 }
 
-// StartClaudeChat ensures the claude_chat Execution for commentID exists
-// (idempotent via StartWorkflowID) and returns its Run ID — the sanctioned UI
-// write path (starting/reusing an Execution).
+// StartClaudeChat ensures the claude_chat Execution for commentID exists and
+// returns its Run ID — the sanctioned UI write path (starting/reusing an
+// Execution). Idempotent either way, and the Run ID is the same
+// chatConversationRunID(commentID) in both routes below, so callers (the UI's
+// message Signal, chat_merge.go, cleanup.go) never see the difference.
+//
+// The conversation belongs to the comment thread, so it is started as a CHILD
+// workflow of that thread's own task_code_comment Execution — via its existing
+// "reply" Signal with Action "chat" (tembed can only WaitSignal on one name at
+// a time, so this rides along like "avatar"/"reanchor"/"delete"). Signalling is
+// synchronous (SignalWorkflow advances the run inline, which starts the child
+// inline too), so by the time this returns the chat run exists and can be
+// signalled itself.
+//
+// CARVE-OUT: taskCodeCommentWorkflow ENDS on a resolve/delete, and a completed
+// Execution can no longer receive a Signal. A thread whose Execution is gone or
+// unreachable must not lose its chat, so those cases fall back to the original
+// top-level StartWorkflowID (the run then simply has no ParentRunID — exactly
+// what every chat created before this change looks like). Same "check the
+// status BEFORE signalling" shape as applyChatCommentAction below.
 func (m *TaskManager) StartClaudeChat(in ClaudeChatInput) (string, error) {
-	return m.engine.StartWorkflowID(chatConversationRunID(in.CommentID), WorkflowClaudeChat, in)
+	runID := chatConversationRunID(in.CommentID)
+	parent, ok := m.commentThreadRunID(in)
+	if ok {
+		err := m.Signal(parent, ReactionSignal{Action: "chat"})
+		if err == nil {
+			return runID, nil
+		}
+		m.logf("claude_chat: chat signal to thread %s failed, starting top-level instead: %v", parent, err)
+	}
+	return m.engine.StartWorkflowID(runID, WorkflowClaudeChat, in)
+}
+
+// commentThreadRunID resolves the task_code_comment Run ID that can host
+// in.CommentID's conversation as a child, reporting false when that thread is
+// unknown or can no longer be signalled (see StartClaudeChat's carve-out).
+func (m *TaskManager) commentThreadRunID(in ClaudeChatInput) (string, bool) {
+	if m.comments == nil {
+		return "", false
+	}
+	ctx := context.Background()
+	c, found, err := m.comments.Get(ctx, in.CommentID)
+	if err != nil || !found || c.RunID == "" {
+		m.logf("claude_chat: comment %s has no signallable thread, starting chat top-level (found=%v, err=%v)", in.CommentID, found, err)
+		return "", false
+	}
+	status, err := m.engine.Status(c.RunID)
+	if err != nil || status == tembed.StatusCompleted || status == tembed.StatusFailed {
+		m.logf("claude_chat: thread %s not signallable (status=%q, err=%v), starting chat top-level", c.RunID, status, err)
+		return "", false
+	}
+	return c.RunID, true
 }
 
 // claudeChatWorkflow is the durable definition. Deterministic: the only side

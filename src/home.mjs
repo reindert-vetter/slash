@@ -26,9 +26,11 @@ import RelatedPanel, {
   InlineComments,
   ClaudeChatPanel,
   enterClaudeChat,
+  claudeChatVisible,
   TasksPanel,
   hasVisibleComments,
   enterCommentsHead,
+  enterRelated,
   startComment,
   createComment,
   placeComment,
@@ -6998,16 +7000,16 @@ function onKeydown(e) {
       // line-range selection, mirroring every other navigation path that
       // supersedes one (see clearRangeAnchor). Lands on the first inline
       // comment conversation of the selected unit if there is one (see
-      // hasVisibleComments/enterCommentsHead in RelatedPanel.mjs); otherwise
-      // it goes straight into the embedded Claude chat (enterClaudeChat),
-      // which — per product decision — is unconditionally reachable via →
-      // and auto-creates an empty private comment to hang the conversation
-      // on the first time it's entered this way. → no longer falls straight
-      // through to the Onderliggende-code panel; that's now one step further
-      // (↓ with nothing left in the chat, or the comment thread's own →).
+      // hasVisibleComments/enterCommentsHead in RelatedPanel.mjs). Otherwise
+      // it enters the embedded Claude chat ONLY when that column actually
+      // exists — i.e. an earlier conversation is hanging on a comment that
+      // isn't in the visible index (claudeChatVisible). With neither, → falls
+      // straight through to the Onderliggende-code panel, as it always did:
+      // nothing auto-creates a comment to hang a chat on.
       clearRangeAnchor()
       if (hasVisibleComments()) enterCommentsHead()
-      else enterClaudeChat(state.pr, commentTarget)
+      else if (claudeChatVisible()) enterClaudeChat(state.pr)
+      else enterRelated()
     }
     return
   }
@@ -8369,7 +8371,6 @@ function DetailPanel(state) {
       ${() =>
         ClaudeChatPanel(
           state,
-          commentTarget,
           // The "Commit wijziging" button (ClaudeChat.mjs) is a plain native
           // <button>, so Tab+Enter/Space already reaches this callback with
           // no extra keyboard wiring here — see claudeChatColumn's own doc

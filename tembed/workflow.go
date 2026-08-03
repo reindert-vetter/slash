@@ -226,8 +226,19 @@ func (w *Workflow) record(e Event) {
 func (w *Workflow) ExecuteChildWorkflow(name string, input any) (string, error) {
 	idx := w.childIdx
 	w.childIdx++
-	childID := fmt.Sprintf("%s/child-%d", w.runID, idx)
+	return w.ExecuteChildWorkflowID(fmt.Sprintf("%s/child-%d", w.runID, idx), name, input)
+}
 
+// ExecuteChildWorkflowID is ExecuteChildWorkflow with an EXPLICIT child run ID
+// instead of the positionally derived one — the same relation StartWorkflowID
+// has to StartWorkflow. Use it when the child's own ID is meaningful outside
+// this workflow (something else must be able to address it without knowing at
+// which call site it was started, e.g. slash's chat-<commentID> conversation).
+// Idempotent on that ID via the recorded EventChildWorkflowStarted, so calling
+// it twice with the same ID reuses the existing child instead of starting a
+// second one — and, unlike ExecuteChildWorkflow, it advances no positional
+// counter, so a second call can never drift into "child-1".
+func (w *Workflow) ExecuteChildWorkflowID(childID, name string, input any) (string, error) {
 	if _, ok := w.firstNamed(childID, EventChildWorkflowStarted); ok {
 		// Already started (this run or an earlier replay) — do not restart it.
 		return childID, nil

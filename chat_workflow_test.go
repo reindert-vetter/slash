@@ -405,6 +405,82 @@ func TestParseAssistantTurnIgnoresMalformedCommentAction(t *testing.T) {
 	}
 }
 
+// A chat on a live comment thread is started as a CHILD of that thread's own
+// task_code_comment Execution (via its "chat" Action Signal), keeping the
+// derived chat-<commentID> Run ID — and starting it twice adds no second child.
+func TestClaudeChatStartsAsChildOfCommentThread(t *testing.T) {
+	m, _, store, _, _ := newChatManagerWithStore(t)
+	const pr, commentID = 970720, "comment-child-chat"
+
+	commentRunID := startTestComment(t, m, pr, commentID)
+
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := chatConversationRunID(commentID); runID != want {
+		t.Fatalf("run ID = %q, want the unchanged derived %q", runID, want)
+	}
+	rec, _, err := store.LoadRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.ParentRunID != commentRunID {
+		t.Fatalf("ParentRunID = %q, want the comment thread %q", rec.ParentRunID, commentRunID)
+	}
+
+	// Idempotent: a second start reuses the same child, so the parent's history
+	// holds exactly one EventChildWorkflowStarted.
+	again, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != runID {
+		t.Fatalf("second start returned %q, want reuse of %q", again, runID)
+	}
+	_, hist, err := store.LoadRun(commentRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := 0
+	for _, ev := range hist {
+		if ev.Type == tembed.EventChildWorkflowStarted {
+			started++
+		}
+	}
+	if started != 1 {
+		t.Fatalf("parent recorded %d child starts, want exactly 1", started)
+	}
+}
+
+// A thread whose Execution is no longer signallable (it ended on a resolve or a
+// delete) must not lose its chat: the conversation then falls back to a
+// top-level Execution with the same Run ID and no parent.
+func TestClaudeChatFallsBackToTopLevelForTerminalThread(t *testing.T) {
+	m, _, store, _, _ := newChatManagerWithStore(t)
+	const pr, commentID = 970721, "comment-terminal-chat"
+
+	commentRunID := startTestComment(t, m, pr, commentID)
+	if err := store.SetStatus(commentRunID, tembed.StatusCompleted, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := chatConversationRunID(commentID); runID != want {
+		t.Fatalf("run ID = %q, want %q", runID, want)
+	}
+	rec, _, err := store.LoadRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.ParentRunID != "" {
+		t.Fatalf("ParentRunID = %q, want empty (top-level fallback)", rec.ParentRunID)
+	}
+}
+
 // startTestComment starts a real task_code_comment Execution with the given
 // Run ID == commentID (mirroring how the app always derives a comment's own
 // RunID) and returns that Run ID, so applyChatCommentAction has something
