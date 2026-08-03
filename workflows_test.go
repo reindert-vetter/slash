@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -126,8 +127,14 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 		return len(l) == 1 && l[0].ReactionCount == 1
 	})
 
-	// A GitHub reaction arrives via the poller.
-	gh.EnqueueReply(github.Reply{ID: 1, Author: "colleague", Body: "agreed"})
+	// A GitHub reaction arrives via the poller. IDs deliberately far above the
+	// fake's own post/mirror counter (1 for the root, 2 for the mirrored
+	// reply above) — real GitHub comment ids are globally unique, so a
+	// genuinely external reply never collides with one this workflow itself
+	// posted; using low, colliding numbers here would look like this
+	// workflow's own echo-of-self guard (see the reply-Signal loop in
+	// workflows.go) incorrectly swallowing a real external reply.
+	gh.EnqueueReply(github.Reply{ID: 501, Author: "colleague", Body: "agreed"})
 	waitFor(t, func() bool {
 		l, _ := cs.List(ctx, 42)
 		return len(l) == 1 && l[0].ReactionCount == 2
@@ -135,7 +142,7 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 
 	// A resolving reaction (Done, no "/resolve" text) closes the thread and
 	// completes the execution — the Done flag alone must resolve the comment.
-	gh.EnqueueReply(github.Reply{ID: 2, Author: "colleague", Body: "looks fine now", Done: true})
+	gh.EnqueueReply(github.Reply{ID: 502, Author: "colleague", Body: "looks fine now", Done: true})
 	waitFor(t, func() bool {
 		s, _ := m.engine.Status(runID)
 		return s == tembed.StatusCompleted
@@ -257,6 +264,62 @@ func TestTaskCodeCommentEditReply(t *testing.T) {
 		t.Fatalf("root github comment %d must not have been edited", rootGithubID)
 	}
 	waitFor(t, func() bool { return gh.EditedReviews[replyGithubID] == "please clarify the edge case" })
+}
+
+// A UI reply that got mirrored to GitHub must not come back as a SECOND
+// reaction once the per-thread poller (simulated here directly via a Signal,
+// same shape poll() sends) fetches it back from the GitHub thread — it's an
+// echo of the reply this workflow itself just posted, not a new external one.
+// Regression for the "mijn comment meerdere keren terugkomen" bug.
+func TestTaskCodeCommentGithubEchoOfOwnReplyIsIgnored(t *testing.T) {
+	m, _, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reindert",
+		Body: "Check this.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-1", Source: "ui", Author: "reindert", Body: "please clarify"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && len(l[0].Reactions) == 1 && l[0].Reactions[0].GithubID != 0
+	})
+	list, _ := cs.List(ctx, 42)
+	mirroredGithubID := list[0].Reactions[0].GithubID
+
+	// The per-thread poller fetches this same reply back from GitHub and
+	// signals it under its own GitHub-derived id ("gh-<id>"), exactly like
+	// poll() does (workflows.go).
+	if err := m.Signal(runID, ReactionSignal{
+		ID: fmt.Sprintf("gh-%d", mirroredGithubID), Source: "github", Author: "reindert", Body: "please clarify",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Give the echo a moment to (not) land, then assert the reaction count
+	// stayed at 1 — a second reaction never gets stored.
+	time.Sleep(30 * time.Millisecond)
+	list, _ = cs.List(ctx, 42)
+	if len(list) != 1 || len(list[0].Reactions) != 1 {
+		t.Fatalf("reactions = %+v, want exactly 1 (echo of own reply must be ignored)", list[0].Reactions)
+	}
+
+	// A genuinely new, unrelated GitHub reply still comes through normally.
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "gh-999999", Source: "github", Author: "someone-else", Body: "actually a real reply",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && len(l[0].Reactions) == 2
+	})
 }
 
 // Editing the root of a PR-wide (issue) thread PATCHes the mirrored GitHub

@@ -3112,6 +3112,31 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			return json.Marshal(map[string]any{"comment": runID, "deleted": true})
 		}
 
+		// A "github" reply can be an ECHO of our own reply: the per-thread
+		// poller (poll(), TaskManager) fetches EVERY reply on the GitHub
+		// thread, including the one this workflow itself just mirrored out via
+		// replyGithub/postGithubIssueComment below — it comes back under a
+		// different reaction id ("gh-<githubId>" vs the original "ui-<id>"),
+		// so AddReaction's id-based INSERT OR IGNORE never catches it and the
+		// reviewer's own reply used to show up twice. replyGithubIDs already
+		// records, per own reply id, the GitHub id it was mirrored to — purely
+		// rebuilt from this workflow's own history on replay (same mechanism
+		// the "edit" action above relies on), so this stays deterministic and
+		// needs no fresh lookup. Iteration order doesn't affect the outcome
+		// (a membership test), so ranging over the map is safe here.
+		if r.Source == "github" {
+			echo := false
+			for _, ghID := range replyGithubIDs {
+				if r.ID == fmt.Sprintf("gh-%d", ghID) {
+					echo = true
+					break
+				}
+			}
+			if echo {
+				continue
+			}
+		}
+
 		reactions++
 		if err := w.ExecuteActivity("saveReaction", comments.Reaction{
 			ID: r.ID, CommentID: runID, Source: r.Source, Author: r.Author, AvatarURL: r.AvatarURL,

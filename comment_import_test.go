@@ -305,8 +305,14 @@ func TestImportedThreadMirrorsWithoutEcho(t *testing.T) {
 	}
 	waitFor(t, func() bool { return gh.PostedCount() == 1 })
 
-	// A GitHub-sourced reply is stored but not echoed back to GitHub.
-	if err := m.Signal(runID, ReactionSignal{ID: "gh-1", Source: "github", Author: "colleague", Body: "ok"}); err != nil {
+	// A GitHub-sourced reply is stored but not echoed back to GitHub. Its id
+	// (501) is deliberately far above the fake's own mirror counter (1, for
+	// the "ui-1" reply mirrored just above) — a real GitHub comment id is
+	// globally unique, so an external reply never collides with one this
+	// workflow itself just mirrored; a colliding low number here would look
+	// like the workflow's own echo-of-self guard (see the reply-Signal loop
+	// in workflows.go) incorrectly swallowing a genuinely external reply.
+	if err := m.Signal(runID, ReactionSignal{ID: "gh-501", Source: "github", Author: "colleague", Body: "ok"}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {

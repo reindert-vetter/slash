@@ -239,6 +239,27 @@ not read-only copies.
     as a **new issue comment** (the Activity returns the new id so it lands in
     history, for the dedup below). A resolve is **local only** — GitHub has no
     concept for it, so the workflow never calls out (`if !r.Done`).
+- **Echo-of-self guard on an INCOMING `github` reply:** `replyGithubIDs` (the
+  in-memory map, keyed by our own reply's Signal id, of the GitHub comment id
+  each UI reply was mirrored to — same map the "edit" action above uses,
+  rebuilt purely from this workflow's own history on replay) is also checked
+  right before an ordinary `Source == "github"` reply is saved: if the
+  incoming id (`"gh-<id>"`) equals one of those mirrored ids, it's skipped
+  entirely rather than stored as a second reaction. Without this, the
+  per-thread poller (`poll()`, `TaskManager`) fetches EVERY reply on the
+  GitHub thread — including the one this same workflow just mirrored out a
+  moment earlier via `replyGithub`/`postGithubIssueComment` above — and that
+  echo used to come back under a different reaction id (`"gh-<githubId>"` vs
+  the original `"ui-<id>"`), so `AddReaction`'s id-based `INSERT OR IGNORE`
+  never caught it: the reviewer's own reply showed up twice in the thread.
+  Deterministic: the check only reads `replyGithubIDs`, never a fresh GitHub
+  lookup. Test: `TestTaskCodeCommentGithubEchoOfOwnReplyIsIgnored`
+  (`workflows_test.go`) — also documents why the existing fixture tests
+  (`TestTaskCodeCommentFlow`, `TestImportedThreadMirrorsWithoutEcho`) enqueue
+  a deliberately high, non-colliding GitHub reply id for a genuinely external
+  reply: a real GitHub comment id is globally unique, so it can never equal
+  one this workflow itself just mirrored — a low, colliding test id would
+  look like this guard incorrectly swallowing a real external reply.
 - **Dedup against the app's own comments (`knownGithubIDs`):** the import
   fetches **all** roots, including ones the app placed itself (whose run has no
   `gh-<id>` Run ID, so `StartWorkflowID` idempotency doesn't catch them).
