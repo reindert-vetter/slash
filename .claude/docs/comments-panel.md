@@ -384,7 +384,7 @@ fixes that, and `commentColumnWidthCls() + connector + claudeColumnWidthCls()`
 still sums to exactly `relatedColumnWidthCls()`, so the row lines up with
 `related-code` below it.
 
-### One card per conversation, only the focused one expands
+### One card per conversation, only the focused (or Claude-anchored) one expands
 
 Multiple threads can hang off one unit; each gets its own card
 (`data-testid=comment-item`), but only the one the keyboard owns (`cs.sel` +
@@ -404,6 +404,17 @@ place. The toggle between the two lives in a stable `<div class="contents">` roo
 per card (`commentCard`) — the outer `.map()` key stays `'comment:' + c.id`
 regardless of expand/collapse, only the nested `${() => …}` binding swaps (see
 the "bare toggling expression" pitfall in `.claude/rules/arrowjs-pitfalls.md`).
+
+**Also stays expanded once the keyboard moves on into the Claude column**
+(`cs.focus === 'claude'`, see "The embedded Claude chat column" below), for
+whichever comment that Claude conversation is anchored on
+(`chatAnchorComment().id === c.id`, compared by id rather than by
+`selI() === i`, since `chatAnchorComment()`'s own fallback can point at a
+comment outside the current selection index). The merged comment-claude-row
+card shows both halves side by side (see "The embedded Claude chat column"
+below and `.claude/docs/detail-layout.md`), so collapsing the comment the
+moment `→` moves focus into Claude would hide the very thread the
+conversation is about.
 
 **The expanded thread has no height cap/internal scroll** — its message list
 (`data-testid=comment-thread`) grows with the conversation. An earlier

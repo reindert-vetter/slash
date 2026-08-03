@@ -57,6 +57,12 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   await expect(composer).toBeVisible()
   await expect(composer).toBeFocused()
 
+  // The comment card it hangs on stays expanded — not collapsed back to
+  // compact — now that the keyboard sits on the Claude column: the merged
+  // comment-claude-row card (home.mjs) shows both halves at once (see
+  // commentCard in RelatedPanel.mjs).
+  await expect(page.getByTestId('comment-item')).toHaveAttribute('data-expanded', 'true')
+
   // First turn: a plain text reply (see tests/fixtures/claude-chat-turns.json).
   // .first() is the reviewer's own just-sent message; the assistant's reply
   // is the second bubble (threadMessages ordering: user turn, then reply).

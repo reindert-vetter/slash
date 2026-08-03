@@ -2953,11 +2953,22 @@ function expandedConversation(c, openCommentMenu) {
 // pitfall in conventions.md): the outer `.key('comment:'+c.id)` (see
 // InlineComments below) never needs to change on this toggle, the nested
 // `${() => …}` binding handles it.
+//
+// Also stays expanded while the keyboard has actually moved on to the Claude
+// column (cs.focus === 'claude'), for exactly the comment that Claude
+// conversation is anchored on (chatAnchorComment()) — the merged
+// comment-claude-row card (home.mjs) shows both halves side by side, so
+// collapsing the comment back the moment → moves focus into Claude read as a
+// bug: the reviewer loses the very thread the conversation is about. Compared
+// by id, not selI() === i, because chatAnchorComment() has its own fallback
+// (an orphan/PR-wide comment whose conversation already has turns) that can
+// point elsewhere than the current selection index.
 function commentCard(c, i, openCommentMenu) {
   return html`
     <div class="contents">
       ${() =>
-        selI() === i && (cs.focus === 'comment' || cs.focus === 'thread')
+        (selI() === i && (cs.focus === 'comment' || cs.focus === 'thread')) ||
+        (cs.focus === 'claude' && chatAnchorComment() && chatAnchorComment().id === c.id)
           ? expandedConversation(c, openCommentMenu)
           : compactConversation(c, i)}
     </div>
