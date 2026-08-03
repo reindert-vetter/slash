@@ -527,6 +527,31 @@ interface Repo {
 	}
 }
 
+// TestCategoryForModuleHttpLayer: a module keeps Laravel's own
+// Http/Controllers|Requests|Resources convention, so those files must get the
+// same category as their app/ counterparts instead of falling through to the
+// generic modules/ → MODULE rule. Without this, relations.go's
+// routeControllerDetector (which filters on Category == "CONTROLLER") never
+// linked a route to a module controller. The last two cases guard the rule
+// ordering that makes this safe: modules/<Name>/Resources/ is a module's
+// asset/lang directory, so a lang file there must still reach TRANSLATION and
+// any other module file must still be MODULE.
+func TestCategoryForModuleHttpLayer(t *testing.T) {
+	cases := map[string]string{
+		"modules/Sitemaps/Http/Controllers/MerchantFeedController.php": "CONTROLLER",
+		"modules/Sitemaps/Http/Requests/ShowMerchantFeedRequest.php":   "REQUEST",
+		"modules/Pages/Http/Resources/PageResource.php":                "RESOURCE",
+		"app/Http/Controllers/Api/PluginController.php":                "CONTROLLER",
+		"modules/Affiliates/Resources/lang/en/includes.php":            "TRANSLATION",
+		"modules/Sitemaps/Services/MerchantFeed/GoogleFeedXml.php":     "MODULE",
+	}
+	for path, want := range cases {
+		if got := categoryFor(path); got != want {
+			t.Errorf("categoryFor(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
 // TestCategoryForInterfaceFilenameFallback proves the path-based
 // `*Interface.php` naming-convention fallback in categoryRules: it only
 // matters for the whole-file-scan fallback scenario (a file the scanner

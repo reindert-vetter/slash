@@ -336,6 +336,34 @@ share a category and thus a rank — the stable sort keeps them together.
 `sel`/refresh restore is unaffected (it looks up by block id/`file:line`, not
 index).
 
+### The HTTP layer matches on `Http/<Dir>/`, not on an `app/` prefix
+
+`CONTROLLER`/`REQUEST`/`RESOURCE` key on the `Http/Controllers/`,
+`Http/Requests/` and `Http/Resources/` **segment** — deliberately without the
+`app/` prefix the other rules use, because a module repeats Laravel's very same
+convention under `modules/<Name>/Http/Controllers|Requests|Resources/`. With the
+`app/` prefix those files fell through to the generic `modules/` → `MODULE` rule,
+and because `relations.go`'s `routeControllerDetector` (and the
+controller→request/resource/model detectors) filter hard on
+`Category == "CONTROLLER"`, **every controller-shaped relation was silently
+missing for a module PR**: a `Route::get(..., [MerchantFeedController::class,
+'show'])` produced no `route_controller` edge, so the controller never appeared as
+Underlying code (found on PR 12112, `modules/Sitemaps`). Don't reintroduce the
+`app/` prefix here.
+
+**`Http/Resources/`, never a bare `Resources/`:** `modules/<Name>/Resources/` is a
+module's own asset/lang directory, whose lang files must keep reaching the
+`TRANSLATION` rule further down. The three rules also stay **above** the
+`modules/` rule (first match wins). Tests:
+`TestCategoryForModuleHttpLayer` (`classify_test.go`, incl. the lang-file and
+plain-module-file ordering guards) and `TestBuildRelationsRouteToModuleController`
+(`relations_test.go`, the whole path → category → edge chain).
+
+Consequence when this landed: a module controller/request/resource block changes
+category, so its badge and its `categoryRank` position in the left list change
+too — but only after a **re-ingest**, since `category` is stored per block row in
+`graph.db`.
+
 ### Trait blocks (`TRAIT`, keyword-based, not path-based)
 
 A method declared directly inside a PHP `trait` body classifies as **`TRAIT`**

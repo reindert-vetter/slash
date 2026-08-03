@@ -313,9 +313,21 @@ var categoryRules = []categoryRule{
 	{func(p string) bool { return hasSeg(p, "database/migrations/") }, "MIGRATION"},
 	{func(p string) bool { return hasSeg(p, "database/factories/") }, "FACTORY"},
 	{func(p string) bool { return hasSeg(p, "app/Actions/") }, "ACTION"},
-	{func(p string) bool { return hasSeg(p, "app/Http/Controllers/") }, "CONTROLLER"},
-	{func(p string) bool { return hasSeg(p, "app/Http/Requests/") }, "REQUEST"},
-	{func(p string) bool { return hasSeg(p, "app/Http/Resources/") }, "RESOURCE"},
+	// The three Laravel HTTP-layer directories match on the `Http/<Dir>/`
+	// segment, NOT on an `app/` prefix: a module keeps the very same convention
+	// under modules/<Name>/Http/Controllers|Requests|Resources/, and those files
+	// used to fall through to the generic `modules/` → MODULE rule below. That
+	// silently broke every controller-shaped relation for a module PR, since
+	// relations.go's routeControllerDetector (and the controller→request/
+	// resource/model detectors) filter hard on Category == "CONTROLLER" — a
+	// `Route::get(..., [MerchantFeedController::class, 'show'])` therefore never
+	// produced a route_controller edge and the controller never showed up as
+	// underlying code. Deliberately `Http/Resources/` and not the bare
+	// `Resources/`: modules/<Name>/Resources/ is a module's asset/lang
+	// directory, which must keep reaching the TRANSLATION rule below.
+	{func(p string) bool { return hasSeg(p, "Http/Controllers/") }, "CONTROLLER"},
+	{func(p string) bool { return hasSeg(p, "Http/Requests/") }, "REQUEST"},
+	{func(p string) bool { return hasSeg(p, "Http/Resources/") }, "RESOURCE"},
 	{func(p string) bool { return hasSeg(p, "app/Policies/") }, "POLICY"},
 	{func(p string) bool { return hasSeg(p, "app/Models/") }, "MODEL"},
 	{func(p string) bool { return hasSeg(p, "app/Enums/") }, "ENUM"},

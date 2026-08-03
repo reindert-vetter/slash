@@ -419,6 +419,67 @@ func TestBuildRelationsLaravelChain(t *testing.T) {
 	}
 }
 
+// TestBuildRelationsRouteToModuleController: a route pointing at a controller
+// that lives in a MODULE (modules/<Name>/Http/Controllers/, Laravel's own
+// convention inside a module) must produce the same route_controller edge as an
+// app/Http/Controllers/ one, and that controller's own FormRequest edge must
+// follow. This used to yield nothing: the module paths fell through to the
+// generic modules/ → MODULE category, and routeControllerDetector /
+// controllerRequestDetector filter hard on Category == "CONTROLLER". The block
+// categories here deliberately come from categoryFor(path), so this test covers
+// the whole path → category → edge chain rather than a hand-picked category.
+func TestBuildRelationsRouteToModuleController(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 77
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"routes/client/web.php": `<?php
+use Modules\Sitemaps\Http\Controllers\MerchantFeedController;
+Route::get('/google_merchant_feed.xml', [MerchantFeedController::class, 'show']);
+`,
+		"modules/Sitemaps/Http/Controllers/MerchantFeedController.php": `<?php
+namespace Modules\Sitemaps\Http\Controllers;
+class MerchantFeedController {
+    public function show(ShowMerchantFeedRequest $request) { return null; }
+}
+`,
+		"modules/Sitemaps/Http/Requests/ShowMerchantFeedRequest.php": `<?php
+namespace Modules\Sitemaps\Http\Requests;
+class ShowMerchantFeedRequest {
+    public function rules() { return []; }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nb := func(file, class, name string) Block {
+		return Block{PR: pr, File: file, Class: class, Name: name, Category: categoryFor(file), Side: SideNew, Status: StatusAdded}
+	}
+	blocks := []Block{
+		nb("routes/client/web.php", "", "web.php"),
+		nb("modules/Sitemaps/Http/Controllers/MerchantFeedController.php", "MerchantFeedController", "show"),
+		nb("modules/Sitemaps/Http/Requests/ShowMerchantFeedRequest.php", "ShowMerchantFeedRequest", "rules"),
+	}
+	rels := buildRelations(dataDir, pr, blocks)
+
+	route := blockBy(blocks, "", "web.php")
+	ctrl := blockBy(blocks, "MerchantFeedController", "show")
+	req := blockBy(blocks, "ShowMerchantFeedRequest", "rules")
+	if !hasKindEdge(rels, route, ctrl, relations.KindRouteController) {
+		t.Errorf("missing route→controller edge for a module controller, got %+v", rels)
+	}
+	if !hasKindEdge(rels, ctrl, req, relations.KindControllerRequest) {
+		t.Errorf("missing module controller→request edge, got %+v", rels)
+	}
+}
+
 // TestBuildRelationsLaravelChainCapturesLine verifies that every detector
 // anchors its relation to the real absolute line of its own regex match (see
 // matchLine/blockText in relations.go) — the frontend's group-scoping/
