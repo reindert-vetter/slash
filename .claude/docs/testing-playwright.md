@@ -150,6 +150,37 @@ is baked into the JSON): such a spec must clean up after itself in-test, the way
 
 ## Spec-writing rules
 
+- **Never wait for `networkidle` — open a page with `await appReady(page)`**
+  (exported from `tests/_fixtures.mjs`). `networkidle` wants 500ms with zero
+  in-flight requests, which this app never offers: `/pr/<id>` holds
+  `GET /api/events` — the multiplexed SSE stream, see
+  `.claude/docs/server-events.md` — open for the entire life of the page, so
+  idle **never** fires there (measured: 3/3 timeouts on an otherwise idle box),
+  and `/pr-overview`/`/inbox` poll on 800ms…15s cadences whose quiet gap drops
+  below 500ms as soon as 4 workers load the machine. Whether a `/pr` spec
+  survived was luck: the stream opens on the first detail-column render, so an
+  idle sample taken just before it passed and everything after it burned the
+  full 30s test timeout — the "flaky, worse under load, green in isolation"
+  signature that cost several sessions. It also only gets worse as pollers move
+  onto the SSE channel (the migration path in `server-events.md`).
+  `appReady` waits on traffic-independent facts instead: the document's `load`
+  event, the app's first render (`#app` has children — all three shells mount
+  there) plus, on `/pr/<id>`, the sidebar search box (the same anchor
+  `leaveSearchBox` uses to prove `BlockList` mounted), and finally a **bounded,
+  non-fatal** "no `fetch` in flight for 300ms" settle. That last part is what
+  `networkidle` was really buying the component-mounting specs: `home.mjs`
+  keeps pushing into shared module state as `/api/callresolve`,
+  `/api/testcovers` and `/api/comments` land, and `RelatedPanel`'s `setRelated`
+  is a **module-level singleton** — inject fixture data before those arrive and
+  the app overwrites it a second later (`approval.spec.mjs`'s per-child badges
+  appeared, then vanished, at ~50%). The counter is a `window.fetch` wrapper
+  installed by the `page` fixture via `addInitScript`, so it sees the app's own
+  loads and by construction **not** `EventSource`. It times out after 5s
+  without failing — on a busy box a 300ms gap may genuinely never exist, and
+  every caller's real assertions poll for 15s anyway, so missing it costs
+  nothing while asserting it would reintroduce the hang.
+  `tests/no-networkidle.spec.mjs` (a source-reading guard, like
+  `seeded-pr-literals.spec.mjs`) fails the run on any new occurrence.
 - **Mount a component through `evaluateSettled`** (exported from
   `tests/_fixtures.mjs`), never a bare `page.evaluate`. ~14 specs mount a
   component by dynamically importing a module *inside* `page.evaluate()` against
@@ -159,9 +190,12 @@ is baked into the JSON): such a spec must clean up after itself in-test, the way
   `history.replaceState` during load that can tear down the execution context
   ("Execution context was destroyed"), and under 4 workers the dynamic import
   can lose its race with a briefly saturated server ("Failed to fetch
-  dynamically imported module"). `waitForLoadState('networkidle')` does **not**
-  guarantee the burst is over. `evaluateSettled` retries the whole evaluate (up
-  to 4 attempts) on exactly those two messages, waiting for idle in between — a
+  dynamically imported module"). No load-level wait guarantees the burst is
+  over. `evaluateSettled` retries the whole evaluate (up
+  to 4 attempts) on exactly those two messages, first removing the failed
+  attempt's DOM and then re-settling via `appReady` — in that order, because a
+  half-mounted second `BlockList` carries its own `#block-search`, which
+  `appReady` looks at — a
   targeted retry instead of leaning on `retries: 1`, which would also hand a
   free retry to a genuine unrelated failure and hide how often the race fires.
   **Requirement:** put the `await import(...)` calls **first** in the body,

@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // Regression test for: "ready-confirm" (the "Zet om naar review" button in a
 // draft PR's popover, see readyForReviewSection in src/overview.mjs) used to
@@ -71,7 +71,7 @@ test.describe('PR Review Tree — ready for review', () => {
     })
 
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const row = page.locator('[data-testid="pr-row"][data-pr="90210"]')
     await row.click()

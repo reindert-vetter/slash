@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 
 // evaluateSettled (the mount-race-resilient page.evaluate) started here and now
 // lives in _fixtures.mjs, since every spec that mounts a component via an
@@ -18,7 +18,7 @@ test.describe('PR Review Tree — combined approval', () => {
     await page.goto('/pr/12903')
     // Settle the app's own load before mounting a second component into the
     // live page (the cold-start mount race in conventions.md).
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const BlockList = (await import('/src/BlockList.mjs')).default
@@ -67,8 +67,8 @@ test.describe('PR Review Tree — combined approval', () => {
     // history.replaceState burst) before mounting a second component into the
     // live page — that burst can disturb the mount, the cold-start race
     // conventions.md describes. The sibling tests below already do this via
-    // evaluateSettled/networkidle; this one used to mount straight away.
-    await page.waitForLoadState('networkidle')
+    // evaluateSettled/appReady; this one used to mount straight away.
+    await appReady(page)
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const mod = await import('/src/RelatedPanel.mjs')
@@ -105,7 +105,7 @@ test.describe('PR Review Tree — combined approval', () => {
   // horizontal offset in both, while the checkmark stays visible.
   test('an approved row does not shift its code to the right', async ({ page }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const offsets = await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

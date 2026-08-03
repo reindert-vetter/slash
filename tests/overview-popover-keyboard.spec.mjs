@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // Regression test for: while a row's popover menu is open on /pr-overview,
 // ↑/↓ must drive the popover's own items (a real menu widget — cycling with
@@ -20,7 +20,7 @@ test.describe('PR Review Tree — popover keyboard navigation', () => {
   // hardcoded number.
   test('"Sluit menu" is the first item, opens focused on the 2nd, and ↑/↓ cycle with wrap-around', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const row = page.locator('[data-testid="pr-row"][data-pr="12888"]')
     await row.click()
@@ -86,7 +86,7 @@ test.describe('PR Review Tree — popover keyboard navigation', () => {
   // Escape still closes it too, independent of where focus is.
   test('Escape closes the popover without navigating anywhere', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const row = page.locator('[data-testid="pr-row"][data-pr="12888"]')
     await row.click()
@@ -104,7 +104,7 @@ test.describe('PR Review Tree — popover keyboard navigation', () => {
   // being swallowed.
   test('Enter activates the currently focused popover item', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const row = page.locator('[data-testid="pr-row"][data-pr="12888"]')
     await row.click()

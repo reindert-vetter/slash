@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 
 // Syntax highlighting of the code panes. The real /api/code path needs the
 // base/head worktrees (absent for the seeded fixture DB), so we mount a Block
@@ -9,7 +9,7 @@ test.describe('PR Review Tree — code highlighting', () => {
   test('renders Prism-tokenised PHP in both code panes', async ({ page }) => {
     await page.goto('/pr/12903')
 
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

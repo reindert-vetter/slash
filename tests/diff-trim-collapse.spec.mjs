@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, leaveSearchBox, appReady } from './_fixtures.mjs'
 
 // Performance work for huge whole-file blocks (a multi-thousand-line locale
 // JSON, PR 13166's nl.json): (1) diffLines trims the common prefix/suffix
@@ -13,7 +13,7 @@ import { test, expect, evaluateSettled, leaveSearchBox } from './_fixtures.mjs'
 test.describe('diff trim + context collapsing for huge blocks', () => {
   test('diffLines trim keeps the alignment intact (via blockRows)', async ({ page }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     const res = await evaluateSettled(page, async () => {
       const { blockRows } = await import('/src/Block.mjs')
       // A large common prefix + suffix around one replaced line and one added
@@ -60,7 +60,7 @@ test.describe('diff trim + context collapsing for huge blocks', () => {
   }) => {
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default

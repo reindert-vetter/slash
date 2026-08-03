@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // Regression coverage for "arrow-down navigation gets hijacked by hover":
 // src/overview.mjs's paintSelection() calls scrollIntoView on every keyboard
@@ -25,7 +25,7 @@ test.describe('PR overview — keyboard nav is not hijacked by a same-position m
     page,
   }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const rows = page.locator('[data-nav-row]')
     await expect(rows).toHaveCount(4)
@@ -87,7 +87,7 @@ test.describe('PR overview — keyboard nav is not hijacked by a same-position m
     page,
   }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const rows = page.locator('[data-nav-row]')
     await expect(rows).toHaveCount(4)

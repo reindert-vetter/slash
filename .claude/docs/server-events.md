@@ -73,6 +73,14 @@ allows ~6 concurrent connections per origin, and a stream holds one of them for
 as long as the page lives. One shared, multiplexed stream leaves five for
 ordinary fetches; a stream per feature would not.
 
+**Consequence for the test suite:** an always-open stream is, to a browser
+automation tool, a request that never finishes — so Playwright's
+`networkidle` can never fire on a page that holds one, and `/pr/<id>` holds one
+for its whole life. That is why no spec may wait on `networkidle`; they use
+`appReady(page)` instead. See "Spec-writing rules" in
+`.claude/docs/testing-playwright.md`, and expect the same to apply to
+`/pr-overview`/`/inbox` as soon as their pollers migrate here.
+
 "Per tab" is literal here because `/pr/<id>`, `/pr-overview` and `/inbox` are
 separate documents (no SPA routing), so one loaded page = one connection.
 

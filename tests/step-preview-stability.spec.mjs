@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // Regression test for the disappearing look-ahead preview card (and the tab
 // hang that followed): stepping ↓ through block 0's changes into the same-file
@@ -25,7 +25,7 @@ test('look-ahead preview survives repeated down/up same-file block steps', async
   page.on('pageerror', (err) => errors.push(err.message))
 
   await page.goto('/pr/12903')
-  await page.waitForLoadState('networkidle')
+  await appReady(page)
   // Select block 1 (CreatePaymentAction::execute) instead of the
   // default-selected block 0 (ContractController::index, no local diff).
   await page.locator('[data-idx="1"]').click()

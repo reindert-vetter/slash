@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // Task 29: a look-ahead preview card must never be WIDER than the ACTIVE
 // (selected) card it's stacked next to. PR 105
@@ -20,7 +20,7 @@ import { test, expect } from './_fixtures.mjs'
 test.describe('PR Review Tree — look-ahead preview matches a one-sided active block', () => {
   test('preview card narrows to unified when the active card is one-sided', async ({ page }) => {
     await page.goto('/pr/105')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     // List mode already renders the selected card (0) + its look-ahead
     // preview (1) side by side in the block column (see
@@ -64,7 +64,7 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
     // neighbours — the pre-existing, unaffected case: no override should
     // apply, so the preview keeps its own full width and both panes.
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     await page.locator('[data-idx="1"]').click()
 
     const cards = page.locator('[data-testid="block-column"] article')
@@ -87,7 +87,7 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
     page.on('pageerror', (err) => errors.push(err.message))
 
     await page.goto('/pr/105')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await expect(page.locator('[data-testid="block-column"] article')).toHaveCount(2)
     await expect(page.getByTestId('block-row')).toHaveCount(2)

@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 
 // Out-of-view change hints. When a diff is taller than its viewport, Block.mjs
 // floats a small bar with a chevron at the top/bottom edge of the code body to
@@ -13,7 +13,7 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
   }) => {
     await page.goto('/pr/12903')
 
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -82,7 +82,7 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
   test('shows no hints when the whole diff fits in view', async ({ page }) => {
     await page.goto('/pr/12903')
 
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -123,7 +123,7 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
   }) => {
     await page.goto('/pr/12903')
 
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 
 // A TRANSLATION block's per-key overview reuses the EXACT SAME green
 // out-of-view scroll hint (scrollHint/updateHints, Block.mjs) as an ordinary
@@ -13,7 +13,7 @@ test.describe('PR Review Tree — TRANSLATION block out-of-view scroll hints', (
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -87,7 +87,7 @@ test.describe('PR Review Tree — TRANSLATION block out-of-view scroll hints', (
 
   test('shows no hints when every changed key fits in view', async ({ page }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 
 // The "Taken" (workflow runs) block's per-row description + timestamp
 // (workflowNote/relTime in RelatedPanel.mjs), and its 5-minute visibility
@@ -19,7 +19,7 @@ test.describe('PR Review Tree — Taken panel: waiting note + relative update ti
   }) => {
     await page.goto('/pr/12903')
 
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -101,7 +101,7 @@ test.describe('PR Review Tree — Taken panel: waiting note + relative update ti
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

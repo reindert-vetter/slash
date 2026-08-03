@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // Regression test for: "ingest-btn" (the "Ingest #<pr>" button in the empty
 // block list, BlockList.mjs's emptyState) used to only be dimmed with
@@ -26,7 +26,7 @@ test.describe('PR Review Tree — ingest button', () => {
     })
 
     await page.goto('/pr/900001')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const ingestBtn = page.locator('[data-testid="ingest-btn"]')
     await expect(ingestBtn).toBeVisible()

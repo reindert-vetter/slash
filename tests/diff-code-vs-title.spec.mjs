@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // Regression test for a title/code mismatch: the selected card's header
 // (class::method) always tracked the current block correctly, but the diff
@@ -36,7 +36,7 @@ test("diff pane never shows a neighbour block's code after a down/up cycle", asy
   page.on('pageerror', (err) => errors.push(err.message))
 
   await page.goto('/pr/12903')
-  await page.waitForLoadState('networkidle')
+  await appReady(page)
   // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
   // in home.mjs) carries no local diff, so ArrowRight would silently stay in
   // list mode; select block 1 (CreatePaymentAction::execute), the same-file

@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // The PR overview (/pr-overview) is a live GitHub-style inbox. Under test the Go
 // bridge serves tests/fixtures/inbox.json (SLASH_GITHUB=off + SLASH_INBOX), so
@@ -9,7 +9,7 @@ import { test, expect } from './_fixtures.mjs'
 test.describe('PR Review Tree — PR inbox', () => {
   test('renders sections and rows from the live inbox', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await expect(page.locator('[data-testid="inbox"]')).toBeVisible()
 
@@ -39,7 +39,7 @@ test.describe('PR Review Tree — PR inbox', () => {
     //     invisible and unclickable, a real click landed on whatever sat
     //     behind it (e.g. the "Recent gegenereerd" button) instead.
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const row = page.locator('[data-testid="pr-row"][data-pr="12801"]')
     await row.click()
@@ -68,7 +68,7 @@ test.describe('PR Review Tree — PR inbox', () => {
 
   test('stacked PRs surface as their own group', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const stack = page.locator('[data-testid="stack"]')
     await expect(stack).toHaveCount(1)
@@ -81,7 +81,7 @@ test.describe('PR Review Tree — PR inbox', () => {
 
   test('an ingested PR opens a popover with "Open review-boom"', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const ingested = page.locator('[data-testid="pr-row"][data-pr="12903"]')
     await ingested.click()
@@ -102,7 +102,7 @@ test.describe('PR Review Tree — PR inbox', () => {
 
   test('status pills backfill after first paint', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     // The approved "Ready to merge" PR shows its review chip once status lands.
     const chip = page
@@ -118,7 +118,7 @@ test.describe('PR Review Tree — PR inbox', () => {
     // even though GET /api/prs succeeded. Now every branch is a keyed array
     // (see recentDrawer in overview.mjs + conventions.md).
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await page.locator('[data-testid="recent"]').click()
 
@@ -133,7 +133,7 @@ test.describe('PR Review Tree — PR inbox', () => {
 
   test('search filters over all open PRs', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await page.locator('[data-testid="search"]').fill('scheduling')
     const results = page.locator('[data-testid="search-results"]')
@@ -150,7 +150,7 @@ test.describe('PR Review Tree — PR inbox', () => {
   // the popover instead of linking straight into /pr/<id>.
   test('generating a review tree from the popover redirects into /pr/<id>', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await page.route('**/api/ingest', async (route) => {
       const body = JSON.parse(route.request().postData() || '{}')
@@ -174,7 +174,7 @@ test.describe('PR Review Tree — PR inbox', () => {
   // control the timing deterministically.
   test('generating shows the real ingest stage while busy', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     let resolveIngest
     const ingestDone = new Promise((resolve) => {
@@ -206,7 +206,7 @@ test.describe('PR Review Tree — PR inbox', () => {
 
   test('a failed generate keeps the popover open with an inline error', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await page.route('**/api/ingest', async (route) => {
       await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"gh unreachable"}' })
@@ -229,7 +229,7 @@ test.describe('PR Review Tree — PR inbox', () => {
   // navigating away.
   test('regenerating an already-ingested PR reruns ingest without navigating', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     let ingestCalls = 0
     await page.route('**/api/ingest', async (route) => {
@@ -256,7 +256,7 @@ test.describe('PR Review Tree — PR inbox', () => {
   // same PR.
   test('regenerating is really disabled while busy, not just dimmed', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     let ingestCalls = 0
     let resolveIngest
@@ -288,7 +288,7 @@ test.describe('PR Review Tree — PR inbox', () => {
 
   test('a failed regenerate shows an inline error under the button, row stays put', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await page.route('**/api/ingest', async (route) => {
       await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"gh unreachable"}' })
@@ -324,7 +324,7 @@ test.describe('PR Review Tree — PR inbox', () => {
   // mouse click would — it never navigates or generates by itself.
   test('Enter opens the popover on a non-generated row, same as a click', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await selectRowByKeyboard(page, 12801)
     await page.keyboard.press('Enter')
@@ -343,7 +343,7 @@ test.describe('PR Review Tree — PR inbox', () => {
   // to actually go to /pr/<id>.
   test('Enter opens the popover on a generated row, same as a click', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await selectRowByKeyboard(page, 12903)
     await page.keyboard.press('Enter')
@@ -361,7 +361,7 @@ test.describe('PR Review Tree — PR inbox', () => {
   // jumps straight into the tree — no popover ever shows.
   test('ArrowRight navigates straight into an already-generated row, no popover', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await selectRowByKeyboard(page, 12903)
     await page.keyboard.press('ArrowRight')
@@ -376,7 +376,7 @@ test.describe('PR Review Tree — PR inbox', () => {
   // markup. See openOrGenerate/activateSelectedForward in src/overview.mjs.
   test('ArrowRight generates a not-yet-ingested row and opens it automatically', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     let resolveIngest
     const ingestDone = new Promise((resolve) => {
@@ -410,7 +410,7 @@ test.describe('PR Review Tree — PR inbox', () => {
   // on the overview.
   test('a failed ArrowRight generate keeps the popover open with an inline error', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await page.route('**/api/ingest', async (route) => {
       await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"gh unreachable"}' })
@@ -440,7 +440,7 @@ test.describe('PR Review Tree — PR inbox', () => {
       })
     })
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await page.locator('[data-testid="pr-row"][data-pr="12888"]').click()
     await page.locator('[data-testid="copy-url"]').click()
@@ -449,7 +449,7 @@ test.describe('PR Review Tree — PR inbox', () => {
 
   test('ArrowUp past the first row focuses the search box (which searches all PRs)', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     await expect(page.locator('[data-testid="pr-row"]').first()).toBeVisible()
 
     await page.keyboard.press('ArrowDown') // select the first row

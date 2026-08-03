@@ -450,6 +450,27 @@ export const test = base.extend({
     await use(`http://127.0.0.1:${_server.port}`)
   },
 
+  // Count in-flight fetches in the page itself, so appReady can wait for "the
+  // app's own loads have landed" without Playwright's `networkidle` — which is
+  // unreachable here (see appReady's own comment: the SSE stream never ends).
+  // A counter around window.fetch sees exactly the app's XHR-ish traffic and,
+  // by construction, nothing of EventSource — the one thing that has to be
+  // ignored. Installed via addInitScript so it is in place before any module
+  // script runs, on every document the test navigates to.
+  page: async ({ page }, use) => {
+    await page.addInitScript(() => {
+      window.__pendingFetches = 0
+      const orig = window.fetch
+      window.fetch = function (...args) {
+        window.__pendingFetches++
+        return orig.apply(this, args).finally(() => {
+          window.__pendingFetches--
+        })
+      }
+    })
+    await use(page)
+  },
+
   // Auto, test-scoped: reset the shared fixture state (stored approvals, plus
   // the shared anchor PR's comments) before every test.
   //
@@ -574,6 +595,99 @@ export function seededPr(testInfo, slot = 0) {
   return seededPrs.get(key)
 }
 
+// appReady replaces `await page.waitForLoadState('networkidle')`, which ~109
+// spec sites used as "let the app finish loading before I touch it".
+//
+// NEVER USE `networkidle` IN THIS APP. It waits for 500ms with zero in-flight
+// requests, and this app never offers that:
+//   • /pr/<id> holds `GET /api/events` (the multiplexed SSE stream, see
+//     .claude/docs/server-events.md) open for the whole life of the page — an
+//     in-flight request that by design never finishes. Measured: networkidle
+//     times out 3/3 there, even on an otherwise idle box. Whether a spec
+//     survived was pure luck: the stream opens on the first detail-column
+//     render, so an idle window that happened to be sampled BEFORE that render
+//     passed and everything after it hung for the full timeout. That is the
+//     "flaky, worse under load" signature.
+//   • /pr-overview and /inbox have no stream but poll continuously (800ms
+//     ingest stage, 1500ms repoll, 2500ms workflows, 5000ms comments, 15s
+//     snapshot, 60s heartbeats), so under 4 parallel workers the quiet gap
+//     between two polls shrinks below 500ms and idle is missed there too.
+// Migrating a poller onto the SSE channel (the stated plan in
+// server-events.md) makes this strictly worse, so the criterion had to go.
+//
+// What replaces it is deterministic and traffic-independent: the document's
+// own `load` event, then the app's first render (#app has children — all three
+// shells mount into it) plus, on /pr/<id>, the sidebar's search box, which is
+// the same anchor leaveSearchBox already relies on to prove BlockList mounted.
+// Two rAFs at the end settle the first paint (same idiom as leaveSearchBox).
+//
+// This is deliberately NOT "the data has loaded": every assertion in the suite
+// polls (15s expect timeout) and every locator auto-waits, so callers never
+// needed that — they needed "the app is mounted" before mounting a second
+// component into the live page or sending keys at it.
+export async function appReady(page) {
+  await page.waitForLoadState('load')
+  await page.waitForFunction(() => {
+    const app = document.getElementById('app')
+    return !!app && app.children.length > 0
+  })
+  if (/\/pr\/\d+/.test(page.url())) {
+    // `.first()`/attached, deliberately NOT toHaveCount(1): a ~14-spec family
+    // mounts a SECOND BlockList into this same live page, and evaluateSettled
+    // calls appReady from its retry path — i.e. possibly with a half-finished
+    // extra mount standing. Requiring exactly one would turn the recovery path
+    // into a failure of its own.
+    await expect(page.locator('#block-search').first()).toBeAttached()
+  }
+  // Then let the app's own one-shot loads land: no fetch in flight for 300ms
+  // straight (the page-side counter installed by the `page` fixture, which
+  // never sees the SSE stream). This is what `networkidle` was really buying
+  // the ~14 specs that mount a second component into the live page: home.mjs
+  // keeps pushing into shared module state as /api/callresolve, /api/testcovers
+  // and /api/comments arrive — RelatedPanel's setRelated is a module-level
+  // singleton — so injecting fixture data before those land gets it overwritten
+  // a second later (approval.spec.mjs's per-child badges appeared and then
+  // vanished, at ~50% under load).
+  //
+  // Bounded and non-fatal on purpose: the app polls forever (2500ms workflows,
+  // 5000ms comments, …), so a busy box can genuinely never show a 300ms gap.
+  // Missing the window then costs nothing — every caller's real assertions poll
+  // for 15s anyway — whereas making it an assertion would reintroduce exactly
+  // the hang this helper replaced.
+  await page
+    .waitForFunction(
+      () => {
+        if (window.__pendingFetches === undefined) return true // no counter (raw context)
+        if (window.__pendingFetches > 0) {
+          window.__quietSince = 0
+          return false
+        }
+        if (!window.__quietSince) {
+          window.__quietSince = performance.now()
+          return false
+        }
+        return performance.now() - window.__quietSince > 300
+      },
+      null,
+      { timeout: 5000 },
+    )
+    .catch(() => {})
+  // Finally settle the first paint. The load-time history.replaceState burst
+  // (see evaluateSettled below) can tear down the execution context
+  // mid-evaluate; this settle is a nicety, not a guarantee, so a lost context
+  // here is simply retried once and then let go.
+  for (let i = 0; i < 2; i++) {
+    try {
+      await page.evaluate(
+        () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+      )
+      return
+    } catch (err) {
+      if (i === 1) return
+    }
+  }
+}
+
 // leaveSearchBox replaces the `await page.keyboard.press('Escape') // leave the
 // auto-focused starting-points search box` idiom that ~70 spec sites open with.
 // That bare press is a race: home.mjs focuses the search box from a
@@ -616,9 +730,10 @@ export async function leaveSearchBox(page) {
 // that burst can tear down the very execution context the evaluate() is running
 // in ("Execution context was destroyed"); under 4 parallel workers the dynamic
 // import itself can also simply lose its race with a briefly saturated server
-// ("Failed to fetch dynamically imported module"). waitForLoadState
-// ('networkidle') does not guarantee the burst is over, so on exactly those two
-// errors we wait for the page to go idle again and retry the whole evaluate.
+// ("Failed to fetch dynamically imported module"). No wait criterion
+// guarantees the burst is over (`networkidle` least of all — it never fires on
+// /pr/<id> at all, see appReady), so on exactly those two errors we re-settle
+// via appReady and retry the whole evaluate.
 //
 // This started life as a local helper in approval.spec.mjs; it lives here now
 // because every mounting spec needs it — relying on the config's `retries: 1`
@@ -640,7 +755,7 @@ export async function leaveSearchBox(page) {
 // then treat every unmarked body child as the failed attempt's. Guarded on at
 // least one mark still being present, so a real navigation (fresh document, no
 // marks) skips the cleanup instead of deleting the app's entire UI. It cannot
-// delete app chrome either: every caller awaits `networkidle` before mounting,
+// delete app chrome either: every caller awaits `appReady` before mounting,
 // by which time the app's own body-level mounts (MenuHost, the call-arrows svg)
 // are long done — anything appearing after our mark is the test's own host.
 //
@@ -663,7 +778,12 @@ export async function evaluateSettled(page, fn, arg, attempts = 4) {
     } catch (err) {
       if (!MOUNT_RACE.test(err.message) || i === attempts - 1) throw err
       lastErr = err
-      await page.waitForLoadState('networkidle')
+      // Clean up the failed attempt FIRST, then re-settle — in that order,
+      // because the leftovers are what make the page ambiguous (a half-mounted
+      // second BlockList carries its own #block-search, which appReady looks
+      // at). Re-settling is never `networkidle`, see appReady above: on
+      // /pr/<id> that would burn the whole test timeout on the open SSE
+      // stream, on the very path that exists to RECOVER from a race.
       await page
         .evaluate((attr) => {
           const kids = Array.from(document.body.children)
@@ -671,6 +791,7 @@ export async function evaluateSettled(page, fn, arg, attempts = 4) {
           for (const el of kids) if (!el.hasAttribute(attr)) el.remove()
         }, PRE_MARK)
         .catch(() => {})
+      await appReady(page)
     }
   }
   throw lastErr

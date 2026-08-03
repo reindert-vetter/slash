@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // The "Mislukte taken" block at the bottom of /pr-overview surfaces work that
 // went wrong out of sight: a workflow run that ended in status `failed`
@@ -43,7 +43,7 @@ test.describe('PR overview — "Mislukte taken" block', () => {
   test('is always present and collapsed, and reports the count in words', async ({ page }) => {
     await stubProblems(page, PROBLEMS)
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const toggle = page.locator('[data-testid="problems-drawer"]')
     await expect(toggle).toBeVisible()
@@ -72,7 +72,7 @@ test.describe('PR overview — "Mislukte taken" block', () => {
   test('shows an explicit empty state when nothing went wrong', async ({ page }) => {
     await stubProblems(page, { ok: true, failedRuns: [], logErrors: [] })
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await expect(page.locator('[data-testid="problems-count"]')).toHaveText('Mislukte taken · geen')
     await page.locator('[data-testid="problems-drawer"]').click()
@@ -85,7 +85,7 @@ test.describe('PR overview — "Mislukte taken" block', () => {
   test('its rows never join the keyboard navigation', async ({ page }) => {
     await stubProblems(page, PROBLEMS)
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await page.locator('[data-testid="problems-drawer"]').click()
     await expect(page.locator('[data-testid="problem-run"]')).toHaveCount(1)

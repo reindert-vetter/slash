@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // Regression coverage for "arrow-down selects the wrong PR": src/overview.mjs
 // used to track the keyboard selection as a bare array position (`selIndex`)
@@ -21,7 +21,7 @@ test.describe('PR overview — keyboard selection tracks identity, not position'
     page,
   }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const rows = page.locator('[data-nav-row]')
     await expect(rows).toHaveCount(4)
@@ -58,7 +58,7 @@ test.describe('PR overview — keyboard selection tracks identity, not position'
 
   test('Escape in the search box blurs it so ArrowDown immediately drives the row list again', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const search = page.locator('[data-testid="search"]')
     await search.click()
@@ -84,7 +84,7 @@ test.describe('PR overview — keyboard selection tracks identity, not position'
     page,
   }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await page.locator('[data-testid="recent"]').click()
     const recentItems = page.locator('[data-testid="recent-item"]')

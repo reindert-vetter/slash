@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 
 // Coverage for the test harness itself: evaluateSettled (_fixtures.mjs) retries
 // a mounting page.evaluate() on the cold-start mount race, and 14 specs now
@@ -14,7 +14,7 @@ import { test, expect, evaluateSettled } from './_fixtures.mjs'
 // hosts.
 test('evaluateSettled: a retry after a partial mount leaves exactly one host', async ({ page }) => {
   await page.goto('/pr/12903')
-  await page.waitForLoadState('networkidle')
+  await appReady(page)
 
   await evaluateSettled(page, async () => {
     const { reactive } = await import('/src/vendor/arrow.js')

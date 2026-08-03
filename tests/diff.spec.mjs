@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 
 // Line-aligned diff in the code panes. Block.mjs runs a pure LCS line diff
 // (alignRows/diffLines — no AI) so the two sides line up row-for-row: unchanged
@@ -13,7 +13,7 @@ test.describe('PR Review Tree — code diff alignment', () => {
     // Let the app's initial module load + lazy fetches settle before the in-page
     // evaluate() runs — otherwise its dynamic import races the load and the
     // execution context can be destroyed mid-import ("context destroyed").
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -80,7 +80,7 @@ test.describe('PR Review Tree — code diff alignment', () => {
     await expect(page.getByTestId('block-row').first()).toBeVisible()
     // Settle the app's own load before the in-page evaluate() so its dynamic
     // import doesn't race a client re-render / navigation ("context destroyed").
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // A drilled Onderliggende-code column (state.drill/drillCursor) mirrors into
 // `?drill=`/`?dgran=`/`?dchg=` (home.mjs, alongside `sel`/`mode`/`chg`/`gran`)
@@ -93,7 +93,7 @@ test.describe('PR Review Tree — drilled column URL state', () => {
     const before = new URL(page.url()).search
 
     await page.reload()
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     await page.waitForTimeout(300)
 
     // The drilled column reopened, owns the keyboard again, and the URL is

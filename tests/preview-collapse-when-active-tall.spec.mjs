@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // The look-ahead preview card (the "block below" the selected/active one, see
 // DetailPanel's pair.forEach in home.mjs and drillPreviewColumns) collapses to
@@ -47,7 +47,7 @@ test.describe('look-ahead preview collapses when the active card does not fit', 
     })
 
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     // Select block 1 (CreatePaymentAction::execute) — see step-preview-
     // stability.spec.mjs for why block 0 (ContractController::index) isn't
     // the one to pick here (no local diff of its own).
@@ -90,7 +90,7 @@ test.describe('look-ahead preview collapses when the active card does not fit', 
     })
 
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     await page.locator('[data-idx="1"]').click()
 
     const cards = page.locator('[data-testid="block-column"] article')

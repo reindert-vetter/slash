@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 
 // A genuinely deleted file (absent from the head worktree — git's
 // `+++ /dev/null`) is persisted as a reliable per-block flag
@@ -12,7 +12,7 @@ import { test, expect, evaluateSettled } from './_fixtures.mjs'
 test.describe('PR Review Tree — deleted-file markers', () => {
   test('sidebar rows carry the rose removed pills', async ({ page }) => {
     await page.goto('/pr/98')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const pills = page.locator('[data-testid="block-row-removed"]')
     await expect(pills).toHaveCount(2)
@@ -24,7 +24,7 @@ test.describe('PR Review Tree — deleted-file markers', () => {
 
   test('block-card header shows the "Verwijderd bestand" badge', async ({ page }) => {
     await page.goto('/pr/98')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     // Block 0 (file/line order) is LegacyExporter::export — the deleted file.
     const badge = page.locator('[data-testid="block-status-badge"]').first()
@@ -35,7 +35,7 @@ test.describe('PR Review Tree — deleted-file markers', () => {
 
   test('diff banner renders above the old-only pane', async ({ page }) => {
     await page.goto('/pr/98')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

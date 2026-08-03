@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // A file the PR moved (a git-detected rename) is scanned as ONE logical file:
 // its methods pair up on class::method across the old and new path, so each
@@ -10,7 +10,7 @@ import { test, expect } from './_fixtures.mjs'
 test.describe('PR Review Tree — renamed-file path display', () => {
   test('block card shows the old path above the new path', async ({ page }) => {
     await page.goto('/pr/104')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     // Block 0 (file/line order) is InvoiceService::total — the moved file.
     const oldPath = page.locator('[data-testid="block-old-path"]').first()
@@ -34,7 +34,7 @@ test.describe('PR Review Tree — renamed-file path display', () => {
   test('a non-renamed block shows no old-path line', async ({ page }) => {
     // PR 12903 (the default blocks.json fixture) has no renamed files.
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     await expect(page.locator('[data-testid="block-old-path"]')).toHaveCount(0)
   })
 })

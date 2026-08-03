@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // Each inbox row starts with WHO wrote the PR — the avatar with the author's
 // real first name under it — instead of the old git-pull-request glyph (which
@@ -26,7 +26,7 @@ test.describe('PR overview — author name + avatar per row', () => {
     })
 
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const alice = page.locator('[data-testid="row-author"][data-author="alice"]').first()
     await expect(alice).toContainText('Alice')
@@ -50,7 +50,7 @@ test.describe('PR overview — author name + avatar per row', () => {
     await page.route('**/api/names**', (route) => route.fulfill({ status: 500, body: '' }))
 
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const authors = page.locator('[data-testid="row-author"]')
     await expect(authors.first()).toBeVisible()

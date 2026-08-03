@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // The symmetric counterpart to overview.spec.mjs's "ArrowUp past the
 // first row focuses the search box" test: ArrowDown from the search box must
@@ -8,7 +8,7 @@ import { test, expect } from './_fixtures.mjs'
 test.describe('PR overview — ArrowDown escapes the search box', () => {
   test('clicking the search box, then ArrowDown selects the first row and drops focus', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const search = page.locator('[data-testid="search"]')
     await search.click()
@@ -27,7 +27,7 @@ test.describe('PR overview — ArrowDown escapes the search box', () => {
 
   test('ArrowDown then ArrowUp then ArrowDown is not a dead end', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     await expect(page.locator('[data-testid="pr-row"]').first()).toBeVisible()
 
     await page.keyboard.press('ArrowDown') // select the first row

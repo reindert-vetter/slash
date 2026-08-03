@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 
 // `a` cycles the global diff-pane view (state.diffViewMode, see
 // keyboard-navigation.md "`a` — diff-weergave toggelen") through THREE stands
@@ -32,7 +32,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -124,7 +124,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -180,7 +180,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -230,7 +230,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -306,7 +306,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -373,7 +373,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
@@ -557,7 +557,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')

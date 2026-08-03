@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, appReady } from './_fixtures.mjs'
 
 // A PR-wide comment (kind !== '') is a synthetic, navigable "Start" sidebar
 // item (kind:'comment', see recomputeLeftList/commentBlockItem in home.mjs).
@@ -57,7 +57,7 @@ test.describe('Comment-index selection survives a refresh (?sel=comment:<id>)', 
     await expect(card).toContainText('Second PR-wide comment')
 
     await page.reload()
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     expect(new URL(page.url()).searchParams.get('sel')).toBe('comment:ci-2')
     await expect(page.getByTestId('comment-detail-card').first()).toContainText('Second PR-wide comment')
@@ -73,7 +73,7 @@ test.describe('Comment-index selection survives a refresh (?sel=comment:<id>)', 
       comment('ci-2', 'Resolved comment', 'resolved'),
     ])
     await page.goto('/pr/12903?sel=' + encodeURIComponent('comment:ci-2'))
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     // The comment restore is async — it retries from the comment-poll watch
     // once RelatedPanel's own comment fetch has landed (see

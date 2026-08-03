@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // URL-state persistence: the navigation position (selected block, mode, change)
 // is mirrored into the query string via history.replaceState, so a refresh
@@ -24,7 +24,7 @@ test.describe('PR Review Tree — URL state persistence', () => {
 
   test('navigation writes the query string and survives a reload', async ({ page }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     // `sel` mirrors the selected block's `file:line` from the very first render
     // (blockRef is only '' — the bindUrlState default that gets dropped — before
     // any block is loaded), unlike the old index-based `sel` whose default 0
@@ -49,14 +49,14 @@ test.describe('PR Review Tree — URL state persistence', () => {
 
     // enterDiff needs the block's code loaded to know its change groups; wait for
     // the lazy fetch to settle before stepping in.
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     await page.keyboard.press('ArrowRight')
     await expect.poll(() => new URL(page.url()).searchParams.get('mode')).toBe('diff')
     const before = new URL(page.url()).search
 
     // Reload from the exact URL — state must come back.
     await page.reload()
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     expect(normalizeQuery(new URL(page.url()).search)).toBe(normalizeQuery(before))
 
     // Diff mode restored → the detail panel is in its full-width, flush-left
@@ -69,7 +69,7 @@ test.describe('PR Review Tree — URL state persistence', () => {
 
   test('stepping back to the first block restores its sel again', async ({ page }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     const first = await fileLineOf(page)
 
     await page.keyboard.press('ArrowDown')
@@ -112,7 +112,7 @@ test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
     // re-own the keyboard (the async data-push must not clobber it —
     // applyRelRestore re-applies it once the children load).
     await page.reload()
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     await expect
       .poll(() => new URL(page.url()).searchParams.get('rel.foc'))
       .toBe('code')
@@ -160,7 +160,7 @@ test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
     // list (applyRelRestore's comments trigger) — the card stays expanded and the
     // reply field regains focus.
     await page.reload()
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     await expect(page.getByTestId('comment-item').first()).toHaveAttribute('data-expanded', 'true')
     await expect(page.getByTestId('reaction-compose')).toBeFocused()
     expect(new URL(page.url()).searchParams.get('rel.foc')).toBe('comment')

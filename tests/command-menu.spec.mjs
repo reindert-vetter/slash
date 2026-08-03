@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, leaveSearchBox, appReady } from './_fixtures.mjs'
 
 // Command palette: pressing Enter opens a searchable menu overlaid on the
 // next-block preview slot. Typing fuzzy-filters, ↑/↓ move the selection, Enter
@@ -255,7 +255,7 @@ test.describe('PR Review Tree — command palette', () => {
   // depend on the seeded PR's diff shape.
   test('a block is approved only once every changed row is', async ({ page }) => {
     await page.goto('/pr/12903')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
     const r = await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const { blockApproved, blockPartlyApproved, changedRows, blockRows } = await import(

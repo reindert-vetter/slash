@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // The per-PR reviewer-approval badge on /pr-overview: a green "✓ done/total"
 // pill once fully approved, a neutral grey "done/total" while in progress,
@@ -31,7 +31,7 @@ test.describe('PR Review Tree — PR-overview approval badge', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, summaries: { 12903: { done: 10, total: 10 } } }) }),
     )
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const badge = page.locator('[data-testid="pr-row"][data-pr="12903"] [data-testid="approval-badge"]')
     await expect(badge).toBeVisible()
@@ -48,7 +48,7 @@ test.describe('PR Review Tree — PR-overview approval badge', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, summaries: { 12903: { done: 4, total: 10 }, 12801: { done: 1, total: 2 } } }) }),
     )
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const badge = page.locator('[data-testid="pr-row"][data-pr="12903"] [data-testid="approval-badge"]')
     await expect(badge).toBeVisible()

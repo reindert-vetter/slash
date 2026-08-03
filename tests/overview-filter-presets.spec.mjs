@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // The filter drawer (a second expandable button like "Recent gegenereerd")
 // offers preset filters — each a live gh-search for a fixed, allow-listed query
@@ -7,7 +7,7 @@ import { test, expect } from './_fixtures.mjs'
 test.describe('PR overview — preset filter drawer', () => {
   test('opening the drawer and picking "Alle open PRs" shows results, back returns to the inbox', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await page.locator('[data-testid="filter-drawer"]').click()
     await page.locator('[data-testid="preset-alle-open"]').click()
@@ -23,7 +23,7 @@ test.describe('PR overview — preset filter drawer', () => {
 
   test('"PR\'s ouder dan 3 dagen" groups results per author', async ({ page }) => {
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     await page.locator('[data-testid="filter-drawer"]').click()
     await page.locator('[data-testid="preset-ouder-3-dagen"]').click()

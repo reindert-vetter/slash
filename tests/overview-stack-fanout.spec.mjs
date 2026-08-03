@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 import { readFileSync } from 'node:fs'
 
 // computeStacks (src/overview.mjs) used to model a stack as a strict linear
@@ -30,7 +30,7 @@ test.describe('PR Review Tree — stack fan-out', () => {
     // primed so importing /src/overview.mjs returns the already-executed
     // module instead of re-running its page-bootstrap side effects fresh.
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const chains = await evaluateSettled(page, async (prs) => {
       const { computeStacks } = await import('/src/overview.mjs')
@@ -64,7 +64,7 @@ test.describe('PR Review Tree — stack fan-out', () => {
     ]
 
     await page.goto('/pr-overview')
-    await page.waitForLoadState('networkidle')
+    await appReady(page)
 
     const chains = await evaluateSettled(page, async (prs) => {
       const { computeStacks } = await import('/src/overview.mjs')
