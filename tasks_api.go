@@ -650,6 +650,14 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// turn (chat_progress.go): the resync read for the SSE stream below, not a
 	// poll target.
 	mux.HandleFunc("/api/chat/progress", s.handleChatProgress)
+	// GET /api/chat/shadow-status?pr=N&commentId=X → read-only check of whether
+	// a conversation's agentic-edit shadow worktree (chat_shadow.go) has pending
+	// (uncommitted or locally-unpushed) work, so the UI can warn the reviewer
+	// BEFORE "wis gesprek" (chatActionClear) discards it. A plain git-status/
+	// rev-list read of a directory already on disk — no module write, no
+	// workflow, no network — the same read-only-side-effect class as
+	// blockstats.go/comment_import.go reading a worktree.
+	mux.HandleFunc("/api/chat/shadow-status", s.handleChatShadowStatus)
 	// GET /api/events?pr=N → the one multiplexed SSE stream per browser tab
 	// (eventbus.go). Read-only and non-durable, like the heartbeat ping.
 	mux.HandleFunc("/api/events", s.handleEvents)
@@ -913,14 +921,14 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			switch body.Action {
 			case "", chatActionEdit:
 				// A plain question or an edit instruction both need real text —
-				// only "commit" (below) needs none.
+				// only "commit"/"clear" (below) need none.
 				if strings.TrimSpace(body.Body) == "" {
 					http.Error(w, "invalid message", http.StatusBadRequest)
 					return
 				}
-			case chatActionCommit:
-				// No text required — this action pushes whatever Claude already
-				// changed, it doesn't ask it anything new.
+			case chatActionCommit, chatActionClear:
+				// No text required — "commit" pushes whatever Claude already
+				// changed, "clear" wipes the conversation; neither asks it anything.
 			default:
 				http.Error(w, "invalid action", http.StatusBadRequest)
 				return
@@ -1507,6 +1515,38 @@ func (s *server) handleChatProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": true, "progress": p})
+}
+
+// handleChatShadowStatus serves GET /api/chat/shadow-status?pr=N&commentId=X —
+// see the route registration above for why this needs no workflow. No shadow
+// worktree at all → {ok:true, exists:false}; otherwise {exists:true, dirty,
+// ahead} from chatShadowLocalPendingState (chat_shadow.go), a purely local
+// git-plumbing read. A read that itself fails is reported as pending (dirty:
+// true) rather than silently "nothing to warn about" — conservative, same
+// "can't tell → don't discard" reasoning ensureChatShadowWorktreeAt already
+// uses.
+func (s *server) handleChatShadowStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr, _ := strconv.Atoi(r.URL.Query().Get("pr"))
+	commentID := r.URL.Query().Get("commentId")
+	if pr <= 0 || commentID == "" {
+		http.Error(w, "pr and commentId required", http.StatusBadRequest)
+		return
+	}
+	dir := chatShadowDir(s.dataDir, pr, commentID)
+	if _, err := os.Stat(dir); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exists": false})
+		return
+	}
+	dirty, ahead, err := chatShadowLocalPendingState(r.Context(), dir)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exists": true, "dirty": true, "ahead": 0})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exists": true, "dirty": dirty, "ahead": ahead})
 }
 
 // sseKeepAlive is how often an idle stream writes a comment frame. Without it a

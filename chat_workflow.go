@@ -63,14 +63,24 @@ type ChatMessageSignal struct {
 	Context string `json:"context,omitempty"`
 }
 
-// The two non-default ChatMessageSignal.Action values. Validated by the HTTP
+// The three non-default ChatMessageSignal.Action values. Validated by the HTTP
 // handler (tasks_api.go) before the Signal is ever sent — an unrecognized
 // value is rejected there, so the workflow body only ever sees one of these
-// three, and the branch it takes is thus fully determined by the Signal's own
+// four, and the branch it takes is thus fully determined by the Signal's own
 // input (workflow-determinism.md).
 const (
 	chatActionEdit   = "edit"   // no-op synonym of "" — every turn already gets shell/Edit access
 	chatActionCommit = "commit" // commit + push the shadow worktree's edits
+	// chatActionClear is "wis gesprek" (the palette's confirm-gated command,
+	// see rootCommandsFor('claude') in home.mjs): wipe the transcript + the
+	// stored claude session, and best-effort remove the conversation's own
+	// agentic-edit shadow worktree (chat_shadow.go's clearChatShadow). The
+	// reviewer already saw a warning about any pending (uncommitted/unpushed)
+	// shadow work before confirming — see the read-only
+	// GET /api/chat/shadow-status endpoint (tasks_api.go) and
+	// chatShadowPendingWarning (RelatedPanel.mjs) — so this proceeds
+	// unconditionally once the Signal arrives.
+	chatActionClear = "clear"
 )
 
 // chatConversationRunID derives the claude_chat Execution's Run ID from the
@@ -155,6 +165,21 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	for {
 		var sig ChatMessageSignal
 		w.WaitSignal(SignalMessage, &sig)
+
+		// "wis gesprek": wipe the transcript + session (and best-effort the shadow
+		// worktree) via one Activity, drop any pending question, and go straight
+		// back to WaitSignal — no user/assistant text turn, no Claude call. Decided
+		// purely by sig.Action, part of the Signal's own recorded input, so this is
+		// deterministic under replay exactly like the chatActionCommit branch below.
+		if sig.Action == chatActionClear {
+			if err := w.ExecuteActivity("clearChatConversation", chatCommitInput{
+				PR: in.PR, ConversationID: in.CommentID,
+			}, nil); err != nil {
+				return nil, fmt.Errorf("clear chat conversation: %w", err)
+			}
+			pendingQuestionID = ""
+			continue
+		}
 
 		// "commit deze wijziging": hand this conversation's shadow-worktree edits
 		// to the PR's own chat_merge queue, which serializes every conversation's

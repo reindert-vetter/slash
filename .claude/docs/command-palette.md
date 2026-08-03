@@ -17,6 +17,7 @@ Arrow-key navigation of the tree itself lives in
 | `block` | `Enter` in list/diff mode | `COMMANDS` |
 | `pr` | `/` anywhere, and `Enter` at stop 1 (the description column) | `PR_COMMANDS` |
 | `comment` | `Enter` on a focused comment row with an empty reply field | `commentCommandsFor()` |
+| `claude` | `Enter` on the Claude column while its composer is NOT the focused element (`cs.claudePos > 0`, stepped up into the transcript) | `claudeChatCommandsFor()` |
 | `prComment` | `Enter` on a comment-index row | `prCommentCommandsFor()` |
 | `compose` | `Enter`/"Place…" with text in the composer | `COMPOSE_COMMANDS` |
 | `postApprove` | automatically after a palette approve | `POSTAPPROVE_COMMANDS` |
@@ -66,6 +67,13 @@ of the right (NEW) pane — half width, over the code you're reviewing:
 - **`comment` mode** anchors on the focused comment row resp. the thread pane;
   **`prComment` mode** on `[data-testid=comment-detail-card]`, falling back to
   `[data-testid=block-column]`.
+- **`claude` mode** anchors on `[data-testid=claude-chat-card]`, falling back to
+  `[data-testid=comment-claude-row]` — deliberately its OWN branch in both
+  `menuAnchor`/`menuRegion`, never falling through to the diff-row default
+  every other mode eventually reaches: the Claude column is reachable with no
+  diff row on screen at all (it hangs off a comment thread, not a diff), so
+  without this branch `positionMenu` finds neither anchor nor region and the
+  palette silently never becomes visible (stays `visibility:hidden` forever).
 
 If it doesn't fit below the screen it flips above, and is clamped within the
 viewport regardless. It starts `visibility:hidden` until `positionMenu` has

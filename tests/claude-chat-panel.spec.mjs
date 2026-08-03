@@ -441,3 +441,63 @@ test('Claude chat composer grows with multi-line content and resets after sendin
     expect(resetBox.height).toBe(startHeight)
   }).toPass()
 })
+
+// "Wis Claude-gesprek" (chat_workflow.go's chatActionClear): a command-palette
+// item, confirm-gated (two Enters, mirroring "Keur de HELE PR goed"'s own
+// REVIEW_APPROVE_CONFIRM_COMMANDS submenu), reachable only while the composer
+// is NOT the focused element (claudePos > 0 — see focusClaudeComposer) so a
+// plain Enter on the composer itself keeps sending/newlining as before.
+test('Wis Claude-gesprek: confirm-gated command palette clears the transcript', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kan dit sneller?',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+  await page.keyboard.press('ArrowRight') // comment -> claude
+  const composer = page.getByTestId('claude-chat-compose')
+  await expect(composer).toBeFocused()
+
+  await composer.fill('Kun je hier iets over zeggen?')
+  await composer.press('Enter')
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+  await expect(page.getByTestId('claude-message')).toHaveCount(2)
+
+  // Enter while the composer is still the focused element must NOT open the
+  // menu — it's the ordinary send/newline key there.
+  await expect(page.getByTestId('command-menu')).not.toBeVisible()
+
+  // Step up into the transcript — blurs the composer (focusClaudeComposer) —
+  // before Enter is free to open the Claude-scoped menu.
+  await page.keyboard.press('ArrowUp')
+  await expect(composer).not.toBeFocused()
+  await page.keyboard.press('Enter')
+  const menu = page.getByTestId('command-menu')
+  await expect(menu).toBeVisible()
+  await expect(page.getByTestId('command-row').filter({ hasText: 'Wis Claude-gesprek' })).toBeVisible()
+
+  // First Enter opens the confirm submenu, not the clear itself — the
+  // transcript must still be there.
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('command-row').filter({ hasText: 'Ja, wis dit gesprek' })).toBeVisible()
+  await expect(page.getByTestId('claude-message')).toHaveCount(2)
+
+  // Second Enter (the confirm step) actually clears it.
+  await page.keyboard.press('Enter')
+  await expect(menu).not.toBeVisible()
+  await expect(page.getByTestId('claude-chat-empty')).toBeVisible()
+  await expect(page.getByTestId('claude-message')).toHaveCount(0)
+})

@@ -1785,6 +1785,25 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		publishChatChanged(msg.PR, msg.ConversationID)
 		return nil, nil
 	})
+	// Activity ("wis gesprek" / chatActionClear): wipe the conversation's
+	// transcript + stored claude session, then best-effort remove its
+	// agentic-edit shadow worktree (clearChatShadow, chat_shadow.go) — the
+	// reviewer already confirmed this, including any pending-work warning, on
+	// the frontend (see chat_workflow.go's chatActionClear doc comment).
+	engine.RegisterActivity("clearChatConversation", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatCommitInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat != nil {
+			if err := m.chat.ClearConversation(ctx, arg.ConversationID); err != nil {
+				return nil, err
+			}
+		}
+		clearChatShadow(ctx, m, m.dataDir, arg.PR, arg.ConversationID)
+		publishChatChanged(arg.PR, arg.ConversationID)
+		return nil, nil
+	})
 	// Activity: record the reviewer's answer to a pending question turn (write,
 	// workflow-driven).
 	engine.RegisterActivity("saveChatAnswer", func(ctx context.Context, in []byte) ([]byte, error) {

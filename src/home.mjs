@@ -75,6 +75,9 @@ import RelatedPanel, {
   activeComposeTargetHint,
   composeTargetHint,
   CommentClaudeFooter,
+  isClaudeChatFocused,
+  clearClaudeChat,
+  claudeChatShadowWarning,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
@@ -4110,6 +4113,46 @@ function commentCommandsFor() {
   return withClose(items)
 }
 
+// claudeChatClearConfirmCommandsFor — the one-more-step confirm submenu for
+// "Wis Claude-gesprek" (mirrors REVIEW_APPROVE_CONFIRM_COMMANDS): clearing a
+// conversation is destructive (wipes the transcript + any not-yet-committed
+// agentic-edit shadow worktree, see chat_workflow.go's chatActionClear), so it
+// never fires on the first Enter — this submenu is the deliberate second
+// keypress. Built fresh each time (not a static const, unlike
+// REVIEW_APPROVE_CONFIRM_COMMANDS) because its label carries a live warning
+// when claudeChatShadowWarning (a plain snapshot read, refreshed by
+// enterClaudeChat right after entering the chat — see RelatedPanel.mjs)
+// reports pending (uncommitted/unpushed) shadow-worktree work that clearing
+// would discard.
+function claudeChatClearConfirmCommandsFor() {
+  const warning = claudeChatShadowWarning()
+  return withClose([
+    {
+      id: 'clear-claude-chat-confirm',
+      label: warning ? 'Ja, toch wissen — ' + warning : 'Ja, wis dit gesprek',
+      hint: 'bevestig',
+      run: () => clearClaudeChat(),
+    },
+  ])
+}
+
+// claudeChatCommandsFor — the root list for Enter on the Claude column (see
+// isClaudeChatFocused/claudeComposeEmpty below, mirrors commentCommandsFor's
+// own role for the comment column). Just the one command, gated behind its
+// own confirm submenu (see claudeChatClearConfirmCommandsFor) rather than
+// running directly — the same two-step pattern REVIEW_APPROVE_COMMANDS uses
+// for "Keur de HELE PR goed".
+function claudeChatCommandsFor() {
+  return withClose([
+    {
+      id: 'clear-claude-chat',
+      label: 'Wis Claude-gesprek',
+      hint: 'wis',
+      children: claudeChatClearConfirmCommandsFor(),
+    },
+  ])
+}
+
 // isOwnComment reports whether `c` (a raw comment row, e.g. selectedComment()
 // or focusedComment()) was written by the current reviewer — either placed IN
 // THIS APP (an in-app comment stores no explicit Source at all: createComment
@@ -6557,6 +6600,7 @@ async function openGithubLine() {
 // menu/ms comment above.
 function rootCommandsFor(mode) {
   if (mode === 'comment') return commentCommandsFor()
+  if (mode === 'claude') return claudeChatCommandsFor()
   if (mode === 'prComment') return prCommentCommandsFor()
   if (mode === 'postApprove') return POSTAPPROVE_COMMANDS
   if (mode === 'reviewApprove') return REVIEW_APPROVE_COMMANDS
@@ -6589,6 +6633,10 @@ function resolveCommands(query) {
   // The comment-scoped menu (Enter on a focused comment row) is just its own
   // small list — no submenu, no make-a-comment fallback.
   if (ms.mode === 'comment') return filterCommands(ms.commands, query)
+  // The Claude-column menu (Enter on the claude focus, empty composer — see
+  // isClaudeChatFocused/claudeComposeEmpty below): same shape, just its own
+  // small list (one command behind its own confirm submenu).
+  if (ms.mode === 'claude') return filterCommands(ms.commands, query)
   // The comment-INDEX-item menu (Enter on a selected comment row in the
   // sidebar — see selectedComment/prCommentCommandsFor): same shape, just its
   // own small list.
@@ -6887,6 +6935,25 @@ function onKeydown(e) {
     if (e.key === 'Enter' && isCommentOrThreadFocused() && commentReplyEmpty()) {
       e.preventDefault()
       openMenu('comment')
+    }
+    // Enter on the focused Claude column opens its own small menu ("Wis
+    // Claude-gesprek", behind a confirm submenu — see claudeChatCommandsFor)
+    // — but only while the composer itself is NOT the focused element:
+    // focusClaudeComposer only focuses it at claudePos===0 (the rest
+    // position, where Enter must keep sending/newlining via ClaudeChat.mjs's
+    // own @keydown) and explicitly BLURS it for any stepped-up position
+    // (claudePos > 0, walking the transcript) — exactly the state this menu
+    // is meant for. A DOM-focus check rather than reading the composer's
+    // VALUE (unlike commentReplyEmpty for the comment column) — the composer
+    // clears its own value synchronously on send, so a value check here would
+    // race that clear and reopen this menu right after an ordinary send.
+    if (
+      e.key === 'Enter' &&
+      isClaudeChatFocused() &&
+      document.activeElement !== document.querySelector('[data-testid=claude-chat-compose]')
+    ) {
+      e.preventDefault()
+      openMenu('claude')
     }
     // Enter on the Onderliggende-code block drills into the resolved child the
     // cursor is sitting on as its own diff column (see drillIntoChild) — recursing
@@ -7560,6 +7627,18 @@ function menuAnchor() {
       document.querySelector('[data-testid="inline-comments"]')
     )
   }
+  // The Claude-column menu ('claude') anchors on the chat card itself — unlike
+  // every mode below this, it must NOT fall back to the selected block's diff
+  // row: the Claude column can be reached with no diff row on screen at all
+  // (comments panel is column-scoped, not diff-scoped), and that fallback
+  // chain would otherwise leave the palette permanently un-positioned
+  // (positionMenu bails when either anchor or region is null).
+  if (ms.mode === 'claude') {
+    return (
+      document.querySelector('[data-testid="claude-chat-card"]') ||
+      document.querySelector('[data-testid="comment-claude-row"]')
+    )
+  }
   // The comment-index-item menu ('prComment') anchors on its own detail card
   // in the block column, to the right of the index — that card already shows
   // the thread (see commentDetailCard/detail-layout.md), so the menu opens
@@ -7629,6 +7708,14 @@ function menuRegion() {
     return (
       document.querySelector('[data-testid="comment-thread"]') ||
       document.querySelector('[data-testid="inline-comments"]')
+    )
+  }
+  // The Claude-column menu ('claude') sits over the chat card itself — same
+  // "must not fall back to the diff row" reasoning as menuAnchor above.
+  if (ms.mode === 'claude') {
+    return (
+      document.querySelector('[data-testid="claude-chat-card"]') ||
+      document.querySelector('[data-testid="comment-claude-row"]')
     )
   }
   if (ms.mode === 'prComment') {

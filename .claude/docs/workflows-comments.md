@@ -870,18 +870,65 @@ recognizes the `question` shape:
   `gh`/git round trip with no degraded fallback — is fixed by
   `prepareChatShellWorkDir`'s graceful degrade, not by a frontend trigger.
 
+### "Wis gesprek" (`chatActionClear`) — clearing a conversation
+
+A fourth `ChatMessageSignal.Action` value, `"clear"`, alongside `""`/`"edit"`/
+`"commit"` — the command-palette's confirm-gated "Wis Claude-gesprek" (frontend
+mechanism: "Wis Claude-gesprek" in `.claude/docs/claude-chat-panel.md`). Needs
+no `Body` (validated in `tasks_api.go`'s `SignalMessage` handler alongside
+`"commit"`).
+
+- **`claudeChatWorkflow`'s own branch** (`chat_workflow.go`), checked first in
+  the Signal loop: runs exactly one `clearChatConversation` Activity, resets
+  `pendingQuestionID = ""` (so a message right after a clear is never
+  mistaken for an answer to the just-wiped question turn), then `continue`s —
+  no Claude call, no user/assistant text turn. Decided purely by `sig.Action`,
+  part of the Signal's own recorded input — deterministic under replay, same
+  shape as the existing `chatActionCommit` branch.
+- **`modules/chat.Module.ClearConversation`** deletes every row of that
+  conversation from `chat_messages` and resets `chat_conversations.session_id`
+  to `''` — the conversation row itself (and its id) survive, so it keeps
+  anchoring to the same comment thread and the next turn simply starts a
+  fresh `claude` session instead of `--resume`-ing the wiped one.
+- **`clearChatShadow`** (`chat_shadow.go`), called right after, best-effort
+  removes the conversation's agentic-edit shadow worktree + branch (`git
+  worktree remove --force` + `git branch -D`, under `ingestMu` like every
+  other shadow-worktree git call) — **unconditionally**, never re-checking for
+  pending work itself: the reviewer already saw a warning about any
+  uncommitted/locally-unpushed shadow content (see the shadow-status endpoint
+  below) before confirming the clear on the frontend, so the backend simply
+  acts once asked, per the usual "the UI decides to warn/confirm, the backend
+  executes the write once asked" split. A no-op when no shadow worktree exists.
+- **`chatShadowLocalPendingState(ctx, dir)`** (`chat_shadow.go`) is the cheap,
+  purely local check both the shadow-status endpoint and (conceptually)
+  `clearChatShadow` reason about: `git status --porcelain` for `dirty`, `git
+  rev-list --count HEAD --not --remotes` for `ahead` — no `git fetch`/`gh`
+  call, so it's safe to run synchronously from an HTTP handler. `--not
+  --remotes` (every already-known remote-tracking ref) rather than
+  specifically `origin/<headRef>` — resolving that would need a live `gh`
+  lookup — good enough to answer "is there real, exclusively-local work here".
+
 ### Endpoints
 
 `POST /api/workflows/claude_chat {pr, commentId}` → `StartClaudeChat`
 (validates `commentId` names an existing comment of `pr` before starting);
 `POST /api/workflows/{runID}/signals/message {author, body, action?}` → the
-generic signal route (the reviewer turn; `action` is `""`/`"edit"`/`"commit"`
-and is validated in the handler before it ever reaches the workflow);
+generic signal route (the reviewer turn; `action` is
+`""`/`"edit"`/`"commit"`/`"clear"` and is validated in the handler before it
+ever reaches the workflow);
 `GET /api/chat?commentId=X` → the read-only transcript;
 `GET /api/chat/progress?commentId=X` → the in-memory snapshot of a running
 turn, which is the resync read for the SSE stream `GET /api/events` pushes the
-live progress over (`.claude/docs/server-events.md`). Full table:
-`.claude/docs/tembed-endpoints.md`.
+live progress over (`.claude/docs/server-events.md`);
+`GET /api/chat/shadow-status?pr=N&commentId=X` → read-only
+`{exists, dirty, ahead}` for a conversation's shadow worktree
+(`chatShadowLocalPendingState`) — the check the "Wis Claude-gesprek" palette
+command runs before warning the reviewer about discarding pending shadow work.
+No module write, no workflow, no network (purely local git plumbing against a
+directory already on disk) — the same read-only-side-effect class as
+`blockstats.go`/`comment_import.go` reading a worktree, so it needs no
+workflow of its own per `.claude/rules/workflows-write-boundary.md`. Full
+table: `.claude/docs/tembed-endpoints.md`.
 
 ### Tests
 

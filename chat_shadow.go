@@ -135,6 +135,58 @@ func chatShadowPendingState(ctx context.Context, dir, headRefName string) (dirty
 	return dirty, n, nil
 }
 
+// chatShadowLocalPendingState is chatShadowPendingState's LOCAL-ONLY sibling:
+// no live `git fetch`/gh call, just two git plumbing reads against whatever is
+// already on disk — cheap enough to run synchronously from an HTTP handler.
+// "ahead" is measured against every already-known remote-tracking ref
+// (`--not --remotes`) rather than specifically origin/<headRef> (which would
+// need a live gh lookup to resolve) — good enough to answer "is there
+// exclusively-local work here worth warning about" without touching the
+// network. Used by handleChatShadowStatus (tasks_api.go, the read-only check
+// the UI runs BEFORE warning the reviewer about "wis gesprek") and by
+// clearChatShadow below, so both agree on what counts as "pending".
+func chatShadowLocalPendingState(ctx context.Context, dir string) (dirty bool, ahead int, err error) {
+	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain")
+	if err != nil {
+		return false, 0, err
+	}
+	dirty = strings.TrimSpace(string(statusOut)) != ""
+	aheadOut, err := runGitIn(ctx, dir, "rev-list", "--count", "HEAD", "--not", "--remotes")
+	if err != nil {
+		return dirty, 0, err
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(aheadOut)))
+	return dirty, n, nil
+}
+
+// clearChatShadow is "wis gesprek"'s (chatActionClear) best-effort removal of
+// a conversation's agentic-edit shadow worktree + branch, called from the
+// clearChatConversation Activity right after the transcript itself is wiped.
+// The reviewer already saw a warning (chatShadowLocalPendingState via the
+// shadow-status endpoint) naming any pending work before confirming the
+// clear, so this proceeds unconditionally — never a Go error, only logged,
+// mirroring every other best-effort git/GitHub call in this file. A no-op
+// when no shadow worktree exists for this conversation.
+func clearChatShadow(ctx context.Context, tm *TaskManager, dataDir string, pr int, conversationID string) {
+	dir := chatShadowDir(dataDir, pr, conversationID)
+	if _, err := os.Stat(dir); err != nil {
+		return
+	}
+	ingestMu.Lock()
+	defer ingestMu.Unlock()
+	if _, err := runGit(ctx, "worktree", "remove", "--force", dir); err != nil {
+		if tm != nil && tm.logf != nil {
+			tm.logf("claude_chat: clear could not remove shadow worktree %s: %v", dir, err)
+		}
+		return
+	}
+	if _, err := runGit(ctx, "branch", "-D", chatShadowBranch(conversationID)); err != nil {
+		if tm != nil && tm.logf != nil {
+			tm.logf("claude_chat: clear could not delete shadow branch for conversation %s: %v", conversationID, err)
+		}
+	}
+}
+
 // prepareChatShellWorkDir is runOneClaudeTurn's own entry point into the
 // shadow-worktree machinery above: it wraps ensureChatShadowWorktree and turns
 // ANY failure (gh unreachable, no network, git plumbing error) into a plain

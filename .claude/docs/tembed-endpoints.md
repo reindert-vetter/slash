@@ -105,6 +105,7 @@ Both are carve-outs from the write boundary because they touch nothing durable
 | `GET /api/commentignores?pr=N` | `{ok, ignored}` — the ids of the PR-wide comments hidden from the block index. |
 | `GET /api/chat?commentId=X` | The `claude_chat` transcript for the conversation hanging off that comment thread (`pr` isn't needed — the comment id already scopes it). |
 | `GET /api/chat?pr=N` | Same handler, PR-wide variant: `{ok, conversations}` — only the ids of the PR's conversations that actually have turns, no bodies. One request per PR answers "does this unit already have a Claude conversation", which decides whether the chat column exists at all (see `.claude/docs/claude-chat-panel.md`). |
+| `GET /api/chat/shadow-status?pr=N&commentId=X` | `{ok, exists, dirty, ahead}` — whether a conversation's agentic-edit shadow worktree has pending (uncommitted/locally-unpushed) work, purely local git plumbing (no fetch/gh). The check "Wis Claude-gesprek" runs before warning the reviewer it would discard that work (see `.claude/docs/workflows-comments.md`'s "Wis gesprek" section). |
 | `GET /api/problems` | `{failedRuns, logErrors}` — failed runs (repo-wide) + mirrored glue log lines. |
 | `GET /api/me` | The authenticated GitHub user (`gh api user`, cached for the process lifetime). |
 | `GET /api/names?logins=a,b` | Login → real name + avatar. See `.claude/docs/pages-and-routing.md`. |

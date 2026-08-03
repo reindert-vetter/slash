@@ -686,6 +686,61 @@ seeds a second comment thread on the exact same file+label before entering the
 chat, and asserts the first turn's intercepted `context` contains both
 bodies, in creation order, with the later one tagged `meest recent`.
 
+## "Wis Claude-gesprek" — clearing a conversation (chatActionClear)
+
+A confirm-gated command-palette item, not a header button (explicit product
+choice) — mirrors "Keur de HELE PR goed"'s own `REVIEW_APPROVE_CONFIRM_COMMANDS`
+two-step shape rather than a plain click. Backend mechanics (the `"clear"`
+`ChatMessageSignal.Action`, `clearChatConversation`/`clearChatShadow`) are in
+`.claude/docs/workflows-comments.md`'s `claude_chat` section; this section is
+the frontend/palette half.
+
+- **Reached via Enter on the Claude column, but only while the composer is
+  NOT the focused DOM element** (`home.mjs`'s `onKeydown`, inside the
+  `relatedActive()` block): `focusClaudeComposer` only focuses the composer at
+  `cs.claudePos === 0` (the rest position, where Enter must keep
+  sending/newlining via `ClaudeChat.mjs`'s own `@keydown`) and explicitly
+  blurs it for any stepped-up position (`claudePos > 0`, walking the
+  transcript via ↑) — exactly the state this menu opens in. A DOM-focus check
+  rather than a value-emptiness check (unlike `commentReplyEmpty` for the
+  comment column): the composer clears its own value **synchronously** on
+  send, so reading its value from the document-level handler — which runs
+  *after* the composer's own bubbled keydown handler already cleared it —
+  would misread an ordinary just-sent message as "empty composer" and reopen
+  this menu right after every send.
+- **`claudeChatCommandsFor()`/`claudeChatClearConfirmCommandsFor()`** (`home.mjs`,
+  wired into `rootCommandsFor`/`resolveCommands` as mode `'claude'`): the root
+  list is one item ("Wis Claude-gesprek") whose `children` is a one-item
+  confirm submenu ("Ja, wis dit gesprek" / "Ja, toch wissen — …") — never runs
+  directly, mirroring `REVIEW_APPROVE_CONFIRM_COMMANDS`. Built fresh on every
+  open (not a static list) because the confirm label carries a live warning.
+- **`menuAnchor()`/`menuRegion()` need their own `'claude'` branch** — every
+  other mode ultimately falls back to the selected block's diff row
+  (`[data-change-active]` et al.), which does not exist when the Claude column
+  is reachable with no diff on screen (e.g. a comment-thread-only view); without
+  a dedicated branch `positionMenu` finds no anchor/region and the palette
+  never becomes visible at all — it stays permanently `visibility:hidden`.
+  Anchors on `claude-chat-card` (falling back to `comment-claude-row`).
+- **The pending-shadow-work warning**: `refreshChatShadowWarning(pr, commentId)`
+  (`RelatedPanel.mjs`) is a fire-and-forget read run from `enterClaudeChat`
+  right after entering the chat — it hits the read-only
+  `GET /api/chat/shadow-status` (see `workflows-comments.md`) and caches a
+  Dutch warning sentence when the conversation's own agentic-edit shadow
+  worktree still has uncommitted or locally-unpushed work. `home.mjs` reads
+  that cache **synchronously** at menu-open time via `claudeChatShadowWarning()`
+  — the confirm submenu is built by plain, non-reactive code
+  (`rootCommandsFor`/`openMenu`) that cannot itself `await` a fetch, the same
+  reason `commentCommandsFor`'s own `focusedCommentGithubId()` is a snapshot
+  read rather than a live query. A stale/failed check just means the extra
+  warning line is missing, never a wrong block.
+- **`clearClaudeChat()`** (`RelatedPanel.mjs`) sends the `"clear"` Signal and
+  resets `cc.progress`/`cs.claudePos` locally — belt-and-braces on top of the
+  `chat.message` SSE event's own refetch, same reasoning as `sendClaudeMessage`'s
+  own post-send refetch.
+- Test: `tests/claude-chat-panel.spec.mjs`'s "Wis Claude-gesprek" case drives
+  the full two-Enter confirm flow and asserts the transcript is empty
+  afterwards.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat

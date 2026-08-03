@@ -173,6 +173,75 @@ func TestEnsureChatShadowWorktreeNeverDiscardsPendingEdit(t *testing.T) {
 	}
 }
 
+// chatShadowLocalPendingState (the shadow-status endpoint's own read) detects
+// an uncommitted edit AND a local commit that was never pushed — both purely
+// from local git plumbing, no fetch/gh call.
+func TestChatShadowLocalPendingStateDetectsDirtyAndAhead(t *testing.T) {
+	setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1004, "conv-d", "feature/x")
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+
+	if dirty, ahead, err := chatShadowLocalPendingState(ctx, dir); err != nil || dirty || ahead != 0 {
+		t.Fatalf("clean shadow reported dirty=%v ahead=%d err=%v, want false/0/nil", dirty, ahead, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("claude was here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if dirty, _, err := chatShadowLocalPendingState(ctx, dir); err != nil || !dirty {
+		t.Fatalf("dirty shadow reported dirty=%v err=%v, want true/nil", dirty, err)
+	}
+
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("add", "-A")
+	run("commit", "-m", "local only")
+	if dirty, ahead, err := chatShadowLocalPendingState(ctx, dir); err != nil || dirty || ahead != 1 {
+		t.Fatalf("committed-but-unpushed shadow reported dirty=%v ahead=%d err=%v, want false/1/nil", dirty, ahead, err)
+	}
+}
+
+// clearChatShadow proceeds unconditionally once asked — the reviewer already
+// saw a pending-work warning (via chatShadowLocalPendingState, the shadow-
+// status endpoint) before confirming "wis gesprek" — so it removes the
+// worktree + branch even with an uncommitted edit still sitting in it.
+func TestClearChatShadowRemovesWorktreeAndBranchEvenWithPendingWork(t *testing.T) {
+	setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1005, "conv-e", "feature/x")
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("claude was here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	clearChatShadow(ctx, nil, dataDir, 1005, "conv-e")
+
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("shadow worktree still exists after clear: %v", err)
+	}
+	out, err := exec.Command("git", "-C", os.Getenv("SLASH_REPO_DIR"), "branch", "--list", "chat/conv-e").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git branch --list: %v: %s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("shadow branch still exists after clear: %q", out)
+	}
+}
+
 func TestCommitChatShadowEditsPushesFastForward(t *testing.T) {
 	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
 	dataDir := t.TempDir()

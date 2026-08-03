@@ -161,3 +161,41 @@ func TestChatPurge(t *testing.T) {
 		t.Fatalf("pr 10 messages wrongly affected: %+v, %v", list, err)
 	}
 }
+
+// ClearConversation wipes the transcript + stored session but keeps the
+// conversation row itself (so the id keeps anchoring to the same comment
+// thread), and leaves an unrelated conversation untouched.
+func TestClearConversation(t *testing.T) {
+	m := testModule(t)
+	ctx := context.Background()
+
+	if err := m.EnsureConversation(ctx, "c1", 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SaveMessage(ctx, Message{ID: "m1", ConversationID: "c1", PR: 5, Role: "user", Body: "hoi"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetSession(ctx, "c1", "sess-abc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.EnsureConversation(ctx, "c2", 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SaveMessage(ctx, Message{ID: "m2", ConversationID: "c2", PR: 5, Role: "user", Body: "andere"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.ClearConversation(ctx, "c1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if list, err := m.List(ctx, "c1"); err != nil || len(list) != 0 {
+		t.Fatalf("c1 messages survived clear: %+v, %v", list, err)
+	}
+	if got, err := m.GetSession(ctx, "c1"); err != nil || got != "" {
+		t.Fatalf("GetSession after clear = %q, %v", got, err)
+	}
+	if list, err := m.List(ctx, "c2"); err != nil || len(list) != 1 {
+		t.Fatalf("c2 messages wrongly affected: %+v, %v", list, err)
+	}
+}

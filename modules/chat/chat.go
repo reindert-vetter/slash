@@ -181,6 +181,20 @@ func (m *Module) SetAnswer(ctx context.Context, id, answer string) error {
 	return err
 }
 
+// ClearConversation wipes one conversation's transcript and stored claude
+// session ("wis gesprek") — never the conversation row itself, so the id keeps
+// anchoring to the same comment thread and the next turn simply starts a
+// fresh session instead of --resume-ing the wiped one. WRITE — driven only by
+// the claude_chat workflow's clearChatConversation Activity (chat_workflow.go).
+func (m *Module) ClearConversation(ctx context.Context, id string) error {
+	if _, err := m.db.ExecContext(ctx, `DELETE FROM chat_messages WHERE conversation_id = ?`, id); err != nil {
+		return err
+	}
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE chat_conversations SET session_id = '', updated_at = ? WHERE id = ?`, now(), id)
+	return err
+}
+
 // Purge removes every conversation + message row of pr. WRITE — workflow-only,
 // the per-PR data-retention cleanup path (see the cleanup workflow). Returns
 // the number of messages removed, for logging.

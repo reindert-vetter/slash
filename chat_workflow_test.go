@@ -578,6 +578,78 @@ func TestClaudeChatFailedTurnStoresErrorMessage(t *testing.T) {
 	}
 }
 
+// "wis gesprek" (chatActionClear) wipes the transcript + stored session, and
+// drops any pending question so a message right after a clear is treated as
+// an ordinary NEW turn rather than an "answer" to the question turn that
+// clear just wiped. stubUnreachableGh keeps the shadow-worktree removal
+// (clearChatShadow) a harmless no-op — there is no shadow to remove here.
+func TestClaudeChatClearWipesTranscriptAndSession(t *testing.T) {
+	stubUnreachableGh(t)
+	m, engine, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970720, "comment-clear"
+
+	fake.SetChatTurns(`{"type":"question","question":"Welke aanpak?","options":["A","B"]}`)
+
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-1", Author: "reviewer", Body: "Hoe pak ik dit aan?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2
+	})
+	sessionBeforeClear, err := cm.GetSession(ctx, commentID)
+	if err != nil || sessionBeforeClear == "" {
+		t.Fatalf("expected a session id before clear, got %q, %v", sessionBeforeClear, err)
+	}
+
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-clear", Author: "reviewer", Action: chatActionClear,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 0
+	})
+	if got, err := cm.GetSession(ctx, commentID); err != nil || got != "" {
+		t.Fatalf("GetSession after clear = %q, %v", got, err)
+	}
+
+	// A message right after a clear must be treated as an ordinary NEW turn —
+	// never as an "answer" to the (now-gone) question turn, which would
+	// otherwise silently no-op a SetAnswer against a deleted row — and must
+	// start a FRESH session rather than --resume the wiped one.
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-2", Author: "reviewer", Body: "Nieuwe vraag na het wissen",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2
+	})
+	list, err := cm.List(ctx, commentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list[1].Kind != chat.KindQuestion || list[1].Answer != "" {
+		t.Fatalf("expected a fresh, unanswered question turn after clear, got %+v", list[1])
+	}
+	if len(fake.Calls) != 2 {
+		t.Fatalf("expected 2 RunChat calls, got %d", len(fake.Calls))
+	}
+	if fake.Calls[1].SessionID != "" {
+		t.Fatalf("post-clear turn should start a FRESH session, got SessionID=%q", fake.Calls[1].SessionID)
+	}
+}
+
 // A re-executed Activity must OVERWRITE its assistant turn, never append a
 // second one. An Activity's side effects land before its result is recorded,
 // so a process killed in that window re-runs the whole Activity on recovery —

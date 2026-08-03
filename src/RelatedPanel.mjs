@@ -1058,9 +1058,11 @@ function applyChatProgress(p) {
 // and why only the conversation's first turn does.
 async function sendClaudeMessage(text, action = '', context = '') {
   const trimmed = (text || '').trim()
-  const isCommit = action === 'commit'
+  // 'commit'/'clear' both need no typed text — commit pushes whatever Claude
+  // already changed, clear wipes the conversation; neither asks it anything.
+  const needsNoText = action === 'commit' || action === 'clear'
   if (!cc.runId) return
-  if (!isCommit && !trimmed) return
+  if (!needsNoText && !trimmed) return
   cc.busy = true
   try {
     await fetch('/api/workflows/' + encodeURIComponent(cc.runId) + '/signals/message', {
@@ -1079,6 +1081,67 @@ async function sendClaudeMessage(text, action = '', context = '') {
     cc.busy = false
   }
 }
+
+// clearClaudeChat sends the "clear" ChatMessageSignal (chatActionClear in
+// chat_workflow.go) — wipes the transcript + the stored claude session, and
+// best-effort removes the conversation's agentic-edit shadow worktree
+// (chat_shadow.go's clearChatShadow). Only ever reached from the command
+// palette's confirm-gated "Wis Claude-gesprek" item (home.mjs), which already
+// ran the extra pending-work warning (chatShadowPendingWarning below) before
+// this point — so this itself asks for no further confirmation.
+export async function clearClaudeChat() {
+  await sendClaudeMessage('', 'clear')
+  // Belt-and-braces local reset, same reasoning as sendClaudeMessage's own
+  // refetch: chat.message (SSE) already triggers loadChatMessages elsewhere,
+  // but the reviewer's OWN action shouldn't wait on that round trip.
+  cc.progress = null
+  cs.claudePos = 0
+}
+
+// shadowWarning/shadowWarningFor cache the last-known shadow-pending check
+// (refreshChatShadowWarning) for the CURRENTLY open conversation, so
+// claudeChatShadowWarning below can answer SYNCHRONOUSLY — home.mjs builds
+// the "Wis Claude-gesprek" confirm submenu at Enter/openMenu time (plain,
+// non-reactive code, mirroring commentCommandsFor's own focusedCommentGithubId
+// snapshot read), which cannot itself await a fetch.
+let shadowWarning = ''
+let shadowWarningFor = null
+
+// refreshChatShadowWarning is the read-only check the Claude column runs
+// right after entering a conversation (enterClaudeChat, fire-and-forget —
+// entering the chat must not wait on it) — see GET /api/chat/shadow-status
+// (tasks_api.go). Populates shadowWarning with a sentence when the
+// conversation's own shadow worktree (chat_shadow.go) still has uncommitted
+// or locally-unpushed work that "wis gesprek" would discard, '' when there's
+// nothing to warn about (no shadow worktree at all, a clean one, or the check
+// itself failed — best-effort, never blocks anything).
+async function refreshChatShadowWarning(pr, commentId) {
+  shadowWarning = ''
+  shadowWarningFor = commentId
+  try {
+    const res = await fetch(
+      '/api/chat/shadow-status?pr=' + encodeURIComponent(pr) + '&commentId=' + encodeURIComponent(commentId),
+    )
+    if (!res.ok) return
+    const json = await res.json()
+    if (cc.commentId !== commentId) return // stale — the reviewer switched conversations meanwhile
+    if (json.exists && (json.dirty || json.ahead)) {
+      shadowWarning =
+        'Let op: er staat nog niet-gepushte Claude-code in de shadow-worktree van dit gesprek — die gaat verloren bij het wissen.'
+    }
+  } catch (_) {
+    // keep '' — a failed check just means no extra warning line
+  }
+}
+
+// claudeChatShadowWarning is a plain, non-reactive snapshot read of the
+// cached warning for whichever conversation is currently open — '' if the
+// cache belongs to a DIFFERENT (or no) conversation, so a stale check from a
+// previously viewed thread never leaks into this one's confirm menu.
+export function claudeChatShadowWarning() {
+  return shadowWarningFor === cc.commentId ? shadowWarning : ''
+}
+
 
 // claudeContextBlock builds the invisible selection context sent alongside a
 // conversation's FIRST turn only (cc.messages still empty at that point —
@@ -1190,6 +1253,10 @@ export async function enterClaudeChat(pr) {
   ensureChatEvents(pr)
   loadChatProgress(c.id)
   focusClaudeComposer()
+  // Fire-and-forget: the "Wis Claude-gesprek" palette command's extra warning
+  // (claudeChatShadowWarning) reads this cache synchronously at open time —
+  // entering the chat must not wait on this read-only check.
+  refreshChatShadowWarning(pr, c.id)
 }
 
 // isClaudeChatFocused/claudeChatVisible are the two questions home.mjs/this
