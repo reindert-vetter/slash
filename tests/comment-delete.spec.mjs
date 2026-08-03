@@ -47,16 +47,19 @@ test.describe('PR Review Tree — delete a comment', () => {
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     const rows = page.getByTestId('command-row')
-    // Four items: "Sluit menu" (pinned first), "Resolve comment" (default,
-    // 2nd — where the selection opens), "Verwijder comment", and "Open op
-    // GitHub" (the comment posted successfully via the github Fake, so it has
-    // a non-zero githubId — see comment-view-on-github.spec.mjs for the case
-    // where that item is absent).
-    await expect(rows).toHaveCount(4)
+    // Five items: "Sluit menu" (pinned first), "Resolve comment" (default,
+    // 2nd — where the selection opens), "Verwijder comment", "Bewerk bericht"
+    // (this comment is the reviewer's own, see comments-panel.md's "Editing
+    // an own message"), and "Open op GitHub" (the comment posted successfully
+    // via the github Fake, so it has a non-zero githubId — see
+    // comment-view-on-github.spec.mjs for the case where that item is
+    // absent).
+    await expect(rows).toHaveCount(5)
     await expect(rows.first()).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('Resolve comment')
     await expect(rows.nth(2)).toContainText('Verwijder comment')
-    await expect(rows.nth(3)).toContainText('Open op GitHub')
+    await expect(rows.nth(3)).toContainText('Bewerk bericht')
+    await expect(rows.nth(4)).toContainText('Open op GitHub')
 
     // Move to the delete row before running it (resolve is the default).
     await page.keyboard.press('ArrowDown')

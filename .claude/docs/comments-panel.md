@@ -239,6 +239,8 @@ change also resets it, mirroring how the same watch resets
   a PR-wide thread, GitHub-resolved for a review-diff thread, see
   `.claude/docs/workflows-comments.md`. Both reply and resolve go through the
   existing `POST /api/workflows/{runId}/signals/reply` — no new write path.
+- **"Bewerk bericht"** edits whichever OWN message the keyboard is currently
+  on — see "Editing an own message" below.
 - **"Ignore"** (`toggleIgnoreComment`, label flips to "Ignore ongedaan maken"
   once ignored — resolved once by `snapshotCommands` at open time) is a
   **durable** flag (`state.ignoredComments`, a plain `{blockId: true}` map) bound
@@ -267,6 +269,62 @@ change also resets it, mirroring how the same watch resets
 A comment-index item's thread lives exclusively in its own detail card; it is
 never part of the inline comment blocks below (those only ever show
 `kind === ''`, via `recomputeView`'s `!c.kind` filter).
+
+## Editing an own message
+
+Any message the reviewer wrote themselves — the thread's root/opening
+message, or a later reply — can be edited in place, both in the block-scoped
+inline thread (`expandedConversation`) and the comment-index item's detail
+card (`commentDetailCard`); both share the same `reactionBubble`/
+`threadMessages` rendering, so one mechanism covers both surfaces.
+
+**Reached via the Enter command palette, not primarily a hover affordance**
+(deliberate product decision — "I want to do this with Enter"): a **"Bewerk
+bericht"** item appears in both `commentCommandsFor()` (block-scoped, `Enter`
+on a focused conversation with an empty reply field) and
+`prCommentCommandsFor()` (a comment-index row), gated on `isOwnMessage(msg)`
+so it's never offered on a foreign or AI (`code_warning`) message. `msg` is
+**whichever message the keyboard is currently on**:
+
+- Block-scoped: `focusedThreadMessage()` (`RelatedPanel.mjs`) — the bubble at
+  `cs.threadPos` while stepped ↑ into the thread (`cs.focus === 'thread'`), or
+  the root/opening message at rest (`cs.focus === 'comment'`, where no single
+  bubble is highlighted — same convention "Resolve comment"/"Verwijder
+  comment" already use for "the comment" at that position). Reaching a reply
+  this way needed widening the Enter gate itself: `isCommentOrThreadFocused()`
+  (which also covers `cs.focus === 'thread'`) replaces the narrower
+  `isCommentFocused()` the Enter-opens-menu check used before this feature —
+  mirrors how the comment-index item's own Enter already opens its menu
+  regardless of its own thread-walk position (`pct.pos`, see "Enter still
+  opens the menu regardless" above).
+- Comment-index item: `focusedPrThreadMessage(c)`, the same index math over
+  `pct` instead of `cs.focus`/`cs.threadPos`.
+
+**A click on a bubble's own small edit-pencil button** (`reaction-author-line`,
+`data-testid=reaction-edit`, shown only for an own message) runs the exact
+same `startEditMessage` the palette item does — click and key do the same
+thing, per `.claude/docs/mouse-navigation.md`.
+
+`startEditMessage(c, msg)` opens an inline editor **in place of that one
+bubble** (`editingBubble`, swapped in via a stable `contents` root around
+`reactionBubble` — the "bare toggling expression" pitfall in
+`.claude/rules/arrowjs-pitfalls.md`) prefilled with the message's raw
+(pre-Markdown) body via the existing `prefillField` helper — an **uncontrolled**
+field, like every other composer textarea in this file, never a reactive
+`.value=` binding. `editState` (module-level, `{commentId, targetId, busy}`)
+scopes which ONE bubble is currently editing, mirroring `picm`'s
+`commentId`-scoping reasoning: several conversations/preview cards can be
+mounted at once, so a bare boolean would open an editor on all of them.
+`editTargetId(c, msg)` maps a message back to what the backend Signal needs:
+the run id itself for the synthetic opening message `threadMessages()` builds
+(`'origin:' + c.id`, carries no real reaction id of its own), or the reply's
+own real reaction id otherwise.
+
+**`sendMessageEdit(c)`** posts to the exact same endpoint every reply already
+uses (`POST /api/workflows/{c.runId}/signals/reply`), only with a different
+request shape: `{author:'reviewer', body, action:'edit', targetId}`. No new
+write path — see "The `edit` Action" in `.claude/docs/workflows-comments.md`
+for what the backend does with it, including the GitHub PATCH mirror.
 
 ## Inline comment blocks
 

@@ -1692,6 +1692,17 @@ export function isCommentFocused() {
   return cs.focus === 'comment' && selComment() != null
 }
 
+// isCommentOrThreadFocused additionally covers cs.focus === 'thread' (the
+// keyboard stepped ↑ into one of the conversation's own replies, see
+// handleRelatedKey) — used to gate the Enter command palette so "Bewerk
+// bericht" reaches a reply too, mirroring how the comment-index item's own
+// Enter-opens-menu already works regardless of its pct thread position (see
+// "Enter opens an action menu; → steps into the thread" in
+// comments-panel.md).
+export function isCommentOrThreadFocused() {
+  return (cs.focus === 'comment' || cs.focus === 'thread') && selComment() != null
+}
+
 // commentReplyEmpty reports whether the focused comment's reply field is
 // empty. Landing on a comment row already focuses that field (see toComment),
 // so Enter must only open the delete menu when there's nothing typed to send
@@ -2413,6 +2424,193 @@ function staleAnchorBadge(c) {
   >`
 }
 
+// editState is the ephemeral "which own message is being edited right now"
+// cursor — mirrors picm's own commentId-scoping reasoning (a bare boolean
+// would reveal an editor on every bubble at once, since several conversations/
+// bubbles can be mounted side by side — the selected card and the look-ahead
+// preview, or several comment-index items). `commentId` names the thread the
+// edited message belongs to (needed to build the reply Signal's endpoint,
+// `c.runId`); `targetId` is what ReactionSignal.ID means under Action "edit" —
+// the thread's own run id for the root/opening message, or an existing
+// reply's own reaction id (see editTargetId below). Reached primarily via the
+// Enter command palette's "Bewerk bericht" item (commentCommandsFor/
+// prCommentCommandsFor in home.mjs, using focusedThreadMessage/
+// focusedPrThreadMessage below) — a click on the same message's own edit
+// button runs the exact same startEditMessage, per the "click runs the same
+// function a key runs" rule in .claude/docs/mouse-navigation.md.
+const editState = reactive({ commentId: null, targetId: null, busy: false })
+
+// isOwnMessage mirrors home.mjs's isOwnComment, but for one THREAD MESSAGE
+// (the shape threadMessages() returns: {source, author, ...}) rather than a
+// whole comment row — so it gates the edit affordance identically for the
+// root/opening message and any later reply. Deliberately duplicated rather
+// than imported: home.mjs imports FROM RelatedPanel.mjs, never the reverse,
+// and the check itself is three lines.
+export function isOwnMessage(msg) {
+  if (!msg) return false
+  if (!msg.source || msg.source === 'ui') return true
+  return msg.source === 'github' && !!meLogin() && msg.author === meLogin()
+}
+
+// editTargetId maps a thread message back to the id ReactionSignal.ID must
+// carry for Action "edit": the run id itself for the synthetic opening
+// message threadMessages() builds (see its own doc comment — it carries no
+// real reaction id of its own), or the reply's own real reaction id otherwise.
+function editTargetId(c, msg) {
+  if (!c || !msg) return null
+  return msg.id === 'origin:' + c.id ? c.id : msg.id
+}
+
+// isEditingMessage/startEditMessage/cancelEditMessage/sendMessageEdit drive
+// the inline editor a bubble swaps to (see reactionBubble/editingBubble
+// below).
+export function isEditingMessage(c, msg) {
+  return !!c && !!msg && editState.targetId === editTargetId(c, msg)
+}
+
+// startEditMessage opens the inline editor on msg (a no-op for a foreign/AI
+// message — isOwnMessage gates it here too, not just in the palette/button
+// that call it, so a stray direct call can never open an editor on a message
+// that isn't the reviewer's own). Prefills the field with the message's
+// current (raw, pre-markdown) body, mirroring startPrCommentConvert's own use
+// of prefillField.
+export function startEditMessage(c, msg) {
+  if (!c || !msg || !isOwnMessage(msg)) return
+  editState.commentId = c.id
+  editState.targetId = editTargetId(c, msg)
+  prefillField('[data-testid=message-edit-compose]', msg.body || '')
+}
+
+export function cancelEditMessage() {
+  editState.commentId = null
+  editState.targetId = null
+}
+
+// sendMessageEdit posts the "edit" Action of the reply Signal (see
+// ReactionSignal's own doc comment in workflows.go) — overwrites an
+// already-placed message's own body in place, mirrored to GitHub
+// (best-effort) when that message was posted there. Reuses the exact same
+// endpoint every other reply already posts to; only the request body's shape
+// differs (action + targetId instead of a plain reply/done).
+async function sendMessageEdit(c) {
+  if (!c || !c.runId || editState.commentId !== c.id) return
+  const el = document.querySelector('[data-testid=message-edit-compose]')
+  const body = el && el.value.trim()
+  if (!body) return
+  const targetId = editState.targetId
+  editState.busy = true
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ author: 'reviewer', body, action: 'edit', targetId }),
+    })
+    cancelEditMessage()
+    await loadComments(cs.pr)
+  } finally {
+    editState.busy = false
+  }
+}
+
+// focusedThreadMessage returns the block-scoped thread message currently
+// under the keyboard — the bubble at cs.threadPos while stepped into the
+// thread (cs.focus === 'thread', same index math as reactionBubble's own
+// `active` check), or the root/opening message at rest (cs.focus ===
+// 'comment', where no single bubble is highlighted — see handleRelatedKey)
+// — matching what "Resolve comment"/"Verwijder comment" already treat as
+// "the comment" at that position. Used by the Enter command palette's
+// "Bewerk bericht" item (commentCommandsFor, home.mjs).
+export function focusedThreadMessage() {
+  const c = selComment()
+  if (!c) return null
+  const msgs = threadMessages(c)
+  if (msgs.length === 0) return null
+  if (cs.focus === 'thread') {
+    return msgs[msgs.length - cs.threadPos] || null
+  }
+  return msgs[0]
+}
+
+// focusedPrThreadMessage is focusedThreadMessage's comment-index sibling,
+// walking pct (this item's own thread cursor, see enterPrCommentThread)
+// instead of cs.focus/cs.threadPos. pct.pos === 0 is the rest position (no
+// bubble highlighted, mirrors cs.focus==='comment' above) and also resolves
+// to the root/opening message.
+export function focusedPrThreadMessage(c) {
+  if (!c) return null
+  const msgs = threadMessages(c)
+  if (msgs.length === 0) return null
+  if (pct.commentId === c.id && pct.pos > 0) {
+    return msgs[msgs.length - pct.pos] || null
+  }
+  return msgs[0]
+}
+
+// editPencilIcon is the small inline "edit" affordance next to a bubble's own
+// author line — same pencil path sendStatusIcon's 'draft' state already
+// draws, factored out so the two never drift into slightly different icons.
+function editPencilIcon() {
+  return html`<svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    class="h-3 w-3"
+    aria-hidden="true"
+  ><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>`
+}
+
+// editingBubble replaces a bubble's normal content while it is being edited
+// (isEditingMessage) — a plain uncontrolled textarea (prefilled imperatively
+// by startEditMessage/prefillField, never a reactive `.value=` binding, per
+// the existing convention every other composer field in this file follows)
+// plus Opslaan/Annuleer. Enter sends (Shift+Enter is a newline, same
+// convention as every other composer here); Escape cancels.
+function editingBubble(c, msg) {
+  const mine = msg.source === 'ui'
+  return html`
+    <div class="${() => 'flex flex-col gap-1.5 ' + (mine ? 'items-end' : 'items-start')}">
+      <textarea
+        rows="1"
+        class="markdown-body w-full max-w-[92%] resize-none rounded-xl border border-indigo-300 dark:border-indigo-500/40 bg-white dark:bg-zinc-900 px-3 py-2 text-xs leading-relaxed text-slate-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
+        data-testid="message-edit-compose"
+        @input="${(e) => autoGrowTextarea(e.target)}"
+        @keydown="${(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault()
+            sendMessageEdit(c)
+          } else if (e.key === 'Escape') {
+            cancelEditMessage()
+          }
+        }}"
+      ></textarea>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="${() =>
+            'rounded-lg bg-indigo-500 px-2.5 py-1 text-[11px] font-medium text-white ' +
+            (editState.busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-indigo-600')}"
+          data-testid="message-edit-save"
+          disabled="${() => editState.busy}"
+          @click="${() => sendMessageEdit(c)}"
+        >
+          Opslaan
+        </button>
+        <button
+          type="button"
+          class="rounded-lg px-2.5 py-1 text-[11px] font-medium text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"
+          data-testid="message-edit-cancel"
+          @click="${() => cancelEditMessage()}"
+        >
+          Annuleer
+        </button>
+      </div>
+    </div>
+  `
+}
+
 // reactionBubble — one message in the thread. `i`/`total` let it light up when it
 // is the one the reviewer walked up to (cs.threadPos counts from the bottom).
 // `isActive`, when given, overrides that default check — used by
@@ -2420,8 +2618,15 @@ function staleAnchorBadge(c) {
 // not cs.focus/cs.threadPos. Each bubble carries its own author's avatar+name
 // above it — reactions/replies have an `author` just like the comment root
 // (see threadMessages), so this works for every message in the thread, not
-// only the opening one.
-function reactionBubble(r, i, total, isActive) {
+// only the opening one. `c` is the message's own thread's comment row (needed
+// to target an edit at the right run/reaction id, see editTargetId) — wrapped
+// in a stable `contents` root so toggling to/from editingBubble never derails
+// arrow.js's keyed reconcile (the "bare toggling expression" pitfall).
+function reactionBubble(c, r, i, total, isActive) {
+  return html`<div class="contents">${() => (isEditingMessage(c, r) ? editingBubble(c, r) : viewingBubble(c, r, i, total, isActive))}</div>`
+}
+
+function viewingBubble(c, r, i, total, isActive) {
   const mine = r.source === 'ui'
   // An own message carries no GitHub author/avatar — identityOf fills in the
   // local reviewer for it (see avatar.mjs), so the name and the picture always
@@ -2445,6 +2650,18 @@ function reactionBubble(r, i, total, isActive) {
           data-testid="reaction-author"
           >${who.name || 'onbekend'}</span
         >
+        ${() =>
+          isOwnMessage(r)
+            ? html`<button
+                type="button"
+                class="text-slate-400 hover:text-indigo-600 dark:text-zinc-600 dark:hover:text-indigo-400"
+                data-testid="reaction-edit"
+                title="Bewerk bericht"
+                @click="${() => startEditMessage(c, r)}"
+              >
+                ${editPencilIcon()}
+              </button>`
+            : ''}
       </div>
       <div
         class="${() => {
@@ -2567,7 +2784,7 @@ function expandedConversation(c, openCommentMenu) {
       </div>
       ${() => (c && c.code ? composeTargetHint({ gran: c.gran, label: c.label, code: c.code }) : '')}
       <div class="flex min-h-0 flex-col gap-2" data-testid="comment-thread">
-        ${() => threadMessages(c).map((r, i, arr) => reactionBubble(r, i, arr.length).key('msg:' + r.id))}
+        ${() => threadMessages(c).map((r, i, arr) => reactionBubble(c, r, i, arr.length).key('msg:' + r.id))}
       </div>
       <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
         <textarea
@@ -4010,7 +4227,7 @@ export function commentDetailCard(c, opts) {
       >
         ${() =>
           threadMessages(c).map((r, ti, arr) =>
-            reactionBubble(r, ti, arr.length, () => !preview && pct.commentId === c.id && pct.pos === arr.length - ti).key(
+            reactionBubble(c, r, ti, arr.length, () => !preview && pct.commentId === c.id && pct.pos === arr.length - ti).key(
               'detail-msg:' + r.id,
             ),
           )}

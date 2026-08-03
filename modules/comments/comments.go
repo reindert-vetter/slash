@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS reactions (
   author     TEXT NOT NULL DEFAULT '',
   avatar_url TEXT NOT NULL DEFAULT '',
   body       TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  github_id  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_comments_pr ON comments(pr);
@@ -150,6 +151,13 @@ type Reaction struct {
 	Body      string `json:"body"`
 	Resolves  bool   `json:"resolves"` // resolves the thread
 	CreatedAt string `json:"createdAt"`
+	// GithubID is this reply's own GitHub comment id, once known: set once the
+	// UI reply is mirrored (a review-comment reply, or — for a PR-wide thread —
+	// a new issue comment; see taskCodeCommentWorkflow's reactions loop in
+	// workflows.go). 0 for a GitHub-sourced reply (never re-mirrored) or a
+	// reply that failed to mirror/hasn't yet. Lets the reviewer's own later
+	// edit of this reply PATCH the right GitHub comment.
+	GithubID int64 `json:"githubId,omitempty"`
 }
 
 // Module is the comments service.
@@ -197,6 +205,7 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE comments ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE comments ADD COLUMN anchor_state TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE reactions ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE reactions ADD COLUMN github_id INTEGER NOT NULL DEFAULT 0`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -283,6 +292,34 @@ func (m *Module) SetAvatarURL(ctx context.Context, id, url string) error {
 		return nil
 	}
 	_, err := m.db.ExecContext(ctx, `UPDATE comments SET avatar_url = ? WHERE id = ?`, url, id)
+	return err
+}
+
+// UpdateBody overwrites a comment's own body — the reviewer editing an
+// already-placed comment they wrote themselves. Leaves every other column
+// (status, anchor, code snippet, github_id) untouched. WRITE — workflow-driven
+// only.
+func (m *Module) UpdateBody(ctx context.Context, id, body string) error {
+	_, err := m.db.ExecContext(ctx, `UPDATE comments SET body = ? WHERE id = ?`, body, id)
+	return err
+}
+
+// UpdateReactionBody overwrites one reply's own body — the reviewer editing a
+// reply they wrote earlier in the thread. WRITE — workflow-driven only.
+func (m *Module) UpdateReactionBody(ctx context.Context, id, body string) error {
+	_, err := m.db.ExecContext(ctx, `UPDATE reactions SET body = ? WHERE id = ?`, body, id)
+	return err
+}
+
+// SetReactionGithubID records the GitHub comment id a reply was mirrored to,
+// once known — see Reaction.GithubID. A no-op for id <= 0, mirroring
+// SetGithubID's own convention for the root comment. WRITE — workflow-driven
+// only.
+func (m *Module) SetReactionGithubID(ctx context.Context, id string, githubID int64) error {
+	if githubID <= 0 {
+		return nil
+	}
+	_, err := m.db.ExecContext(ctx, `UPDATE reactions SET github_id = ? WHERE id = ?`, githubID, id)
 	return err
 }
 
@@ -433,14 +470,14 @@ func (m *Module) query(ctx context.Context, where string, args ...any) ([]Commen
 	}
 
 	rrows, err := m.db.QueryContext(ctx,
-		`SELECT id, comment_id, source, author, avatar_url, body, created_at FROM reactions ORDER BY created_at`)
+		`SELECT id, comment_id, source, author, avatar_url, body, created_at, github_id FROM reactions ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
 	defer rrows.Close()
 	for rrows.Next() {
 		var r Reaction
-		if err := rrows.Scan(&r.ID, &r.CommentID, &r.Source, &r.Author, &r.AvatarURL, &r.Body, &r.CreatedAt); err != nil {
+		if err := rrows.Scan(&r.ID, &r.CommentID, &r.Source, &r.Author, &r.AvatarURL, &r.Body, &r.CreatedAt, &r.GithubID); err != nil {
 			return nil, err
 		}
 		if i, ok := byID[r.CommentID]; ok {

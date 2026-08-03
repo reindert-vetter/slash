@@ -40,7 +40,7 @@ import RelatedPanel, {
   leaveRelated,
   handleRelatedKey,
   isCodeFocused,
-  isCommentFocused,
+  isCommentOrThreadFocused,
   commentReplyEmpty,
   commentSelIndex,
   deleteFocusedComment,
@@ -68,6 +68,10 @@ import RelatedPanel, {
   exitPrCommentThread,
   handlePrCommentThreadKey,
   scrollIntoViewVertical,
+  isOwnMessage,
+  startEditMessage,
+  focusedThreadMessage,
+  focusedPrThreadMessage,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
@@ -4031,7 +4035,7 @@ async function deleteCommentAndSelectRow() {
 // prCommentCommandsFor below, this menu has no "Beantwoorden" item to reorder
 // (a block-scoped comment's reply field is always visible and typed into
 // directly; this menu only ever opens once that field is empty, see
-// commentReplyEmpty/isCommentFocused in RelatedPanel.mjs), so isOwnComment
+// commentReplyEmpty/isCommentOrThreadFocused in RelatedPanel.mjs), so isOwnComment
 // (see prCommentCommandsFor) doesn't apply here.
 //
 // "Open op GitHub" is appended at the bottom, ONLY when the focused comment
@@ -4070,6 +4074,19 @@ function commentCommandsFor() {
     },
   ]
   const c = focusedComment()
+  // "Bewerk bericht" edits whichever message the keyboard is currently ON —
+  // the root/opening message at rest, or the specific reply stepped into via
+  // ↑ (see focusedThreadMessage's own doc comment) — only ever shown for the
+  // reviewer's OWN message (isOwnMessage), never a foreign or AI one.
+  const msg = focusedThreadMessage()
+  if (isOwnMessage(msg)) {
+    items.push({
+      id: 'comment-edit',
+      label: 'Bewerk bericht',
+      hint: 'edit',
+      run: () => startEditMessage(c, msg),
+    })
+  }
   if (c && c.source === 'ai') {
     items.push({
       id: 'comment-from-warning',
@@ -4167,6 +4184,18 @@ function prCommentCommandsFor() {
     },
   }
   const items = isOwnComment(c) ? [resolveItem, replyItem] : [replyItem, resolveItem]
+  // "Bewerk bericht" edits whichever message the keyboard is currently ON in
+  // this item's own thread (→/enterPrCommentThread + pct, see
+  // focusedPrThreadMessage) — only for the reviewer's OWN message.
+  const msg = focusedPrThreadMessage(c)
+  if (isOwnMessage(msg)) {
+    items.push({
+      id: 'pr-comment-edit',
+      label: 'Bewerk bericht',
+      hint: 'edit',
+      run: () => startEditMessage(selectedComment(), msg),
+    })
+  }
   if (c && c.source === 'ai') {
     items.push({
       id: 'pr-comment-from-warning',
@@ -6834,10 +6863,15 @@ function onKeydown(e) {
       return
     }
     // Enter on a focused comment card (reply field empty — see commentReplyEmpty)
-    // opens the comment-scoped menu (delete, for now) instead of falling through
-    // to the reply field. A non-empty reply field is left alone so "type a quick
-    // reply, hit Enter" (the reply input's own keydown handler) still works.
-    if (e.key === 'Enter' && isCommentFocused() && commentReplyEmpty()) {
+    // opens the comment-scoped menu (delete, resolve, edit, for now) instead of
+    // falling through to the reply field. A non-empty reply field is left alone
+    // so "type a quick reply, hit Enter" (the reply input's own keydown handler)
+    // still works. Also reachable while stepped ↑ into one of the thread's own
+    // replies (isCommentOrThreadFocused, not just the rest position) — that is
+    // exactly how "Bewerk bericht" reaches a reply, not just the root message,
+    // mirroring the comment-index item's own Enter (which already opens
+    // regardless of its thread-walk position).
+    if (e.key === 'Enter' && isCommentOrThreadFocused() && commentReplyEmpty()) {
       e.preventDefault()
       openMenu('comment')
     }
@@ -8484,7 +8518,7 @@ function DetailPanel(state) {
                 if (composeHasText()) openMenu('compose')
               },
               // Mouse-only equivalent of Enter on a focused, empty-reply comment
-              // (isCommentFocused() && commentReplyEmpty(), see onKeydown below) —
+              // (isCommentOrThreadFocused() && commentReplyEmpty(), see onKeydown below) —
               // a click on the reply-status button next to "Stuur" opens the same
               // comment-scoped menu (Resolve/Delete/Open op GitHub) without
               // requiring the reply field to be empty first, since a direct click

@@ -159,6 +159,57 @@ func TestSetGithubID(t *testing.T) {
 	}
 }
 
+func TestUpdateBody(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	if err := m.Save(ctx, Comment{ID: "c1", RunID: "c1", PR: 1, File: "a.php", Line: 1, Body: "original"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.UpdateBody(ctx, "c1", "edited"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := m.List(ctx, 1)
+	if len(list) != 1 || list[0].Body != "edited" {
+		t.Fatalf("comments = %+v, want body=edited", list)
+	}
+}
+
+func TestUpdateReactionBodyAndSetReactionGithubID(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	if err := m.Save(ctx, Comment{ID: "c1", RunID: "c1", PR: 1, File: "a.php", Line: 1, Body: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AddReaction(ctx, Reaction{ID: "r1", CommentID: "c1", Source: "ui", Body: "original reply"}); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := m.List(ctx, 1)
+	if len(list[0].Reactions) != 1 || list[0].Reactions[0].GithubID != 0 {
+		t.Fatalf("reactions = %+v, want one reaction with githubId=0", list[0].Reactions)
+	}
+
+	if err := m.SetReactionGithubID(ctx, "r1", 999); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.UpdateReactionBody(ctx, "r1", "edited reply"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = m.List(ctx, 1)
+	if len(list[0].Reactions) != 1 || list[0].Reactions[0].Body != "edited reply" || list[0].Reactions[0].GithubID != 999 {
+		t.Fatalf("reactions = %+v, want body=edited reply githubId=999", list[0].Reactions)
+	}
+
+	// A no-op for id <= 0 (never clears an already-known id) — mirrors SetGithubID.
+	if err := m.SetReactionGithubID(ctx, "r1", 0); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = m.List(ctx, 1)
+	if list[0].Reactions[0].GithubID != 999 {
+		t.Fatalf("githubId after SetReactionGithubID(0) = %d, want unchanged 999", list[0].Reactions[0].GithubID)
+	}
+}
+
 func TestSearchByPathPrefix(t *testing.T) {
 	m := openTest(t)
 	ctx := context.Background()

@@ -49,9 +49,18 @@ mirrored to GitHub, and `Done`/`/resolve` closes the thread.
   The **thread** opens with the comment itself as its first message:
   `threadMessages(c)` = a synthetic opening (`{source:'ui', body:c.body}`) plus
   `c.reactions`, and the keyboard cursor counts that opening, so `↑` reaches it.
+  - **`reactions.github_id`** is the reply's own equivalent of the comment's
+    `github_id` above: the GitHub comment id a UI reply was mirrored to (a
+    review-comment reply, or — for a PR-wide thread — a new issue comment; see
+    "The `edit` Action" below), set by **`saveReactionGithubID`**, called right
+    after the existing reply-mirror Activity (`replyGithub`/
+    `postGithubIssueComment`, both of which now return the mirrored id as a
+    `postResult` for this purpose) whenever it returned a non-zero id. 0 for a
+    GitHub-sourced reply (never mirrored) or one that failed to mirror.
 - **`modules/github`** (`gh api`): `PostReviewComment`, `PostIssueComment`,
   `Reply`, `FetchReplies`, `FetchReviewComments`, `FetchGeneralComments`,
-  `PRState`, `PRMeta`, `DeleteComment`, `ResolveReviewThread`, `MarkFileViewed`,
+  `PRState`, `PRMeta`, `DeleteComment`, `EditReviewComment`,
+  `EditIssueComment`, `ResolveReviewThread`, `MarkFileViewed`,
   `SubmitReview`, `ListCollaborators`, `MarkReadyForReview`,
   `RequestReviewers`, `UsersByLogin`, `CurrentUser`. Interface +
   `github.Fake` for tests; **`SLASH_GITHUB=off`** → the Fake.
@@ -96,6 +105,68 @@ list `state.focusLevel`/`drill`/`drillCursor` **inline** in its deps, else the
 comment index stays scoped to the pre-drill block (see the watch-inline-deps
 rule in `.claude/rules/arrowjs-pitfalls.md`). Test:
 `tests/drill-comment-target.spec.mjs`.
+
+### The `edit` Action — changing an already-placed message's own wording
+
+`ReactionSignal` gained an `Action: "edit"` value: the reviewer changing the
+wording of a message they wrote earlier, in place — never adds a new reply.
+`ID` is **reused** rather than adding a field: under `"edit"` it names the
+message being edited (the thread's own Run ID for the root/opening message, or
+an existing reply's own reaction id) instead of a new message's id; `Body` is
+the new wording. Frontend: `sendMessageEdit`
+(`RelatedPanel.mjs`) posts `{author:'reviewer', body, action:'edit',
+targetId}` to the same `POST /api/workflows/{runID}/signals/reply` endpoint
+every reply already uses — the HTTP handler (`tasks_api.go`) validates
+`action`/`targetId` before ever reaching the workflow, mirroring the
+`message` Signal's own `action` validation. Full UI mechanism (the palette
+item, the inline editor, `isOwnMessage` gating): "Editing an own message" in
+`.claude/docs/comments-panel.md`.
+
+**In `taskCodeCommentWorkflow`'s reactions loop:**
+
+- `r.ID == runID` → the root: **`editCommentBody`** overwrites `comments.body`
+  (`comments.Module.UpdateBody`). Leaves status/anchor/code/`github_id`
+  untouched.
+- otherwise → a reply: **`editReactionBody`** overwrites that one row's
+  `reactions.body` (`comments.Module.UpdateReactionBody`).
+
+**Mirrored to GitHub, best-effort, exactly like every other GitHub call in
+this loop** — never a Go error, just a log line on failure:
+
+- Root: PATCHed when `posted.RootID != 0` (the value already known in the
+  workflow's own memory from the initial post/import, no fresh lookup needed).
+- Reply: PATCHed when that reply was itself mirrored when first sent —
+  tracked via **`replyGithubIDs`**, a `map[string]int64` **local to this one
+  loop**, populated only from this same loop's own already-recorded mirror
+  Activity results (`replyGithub`/`postGithubIssueComment`, both changed to
+  return the mirrored id as a `postResult` for this purpose, persisted via the
+  new **`saveReactionGithubID`** Activity into `reactions.github_id`). Rebuilt
+  identically on every replay — never a live GitHub lookup — since it's
+  populated purely from this same loop's own recorded history, the same
+  reasoning as the `reactions` counter right above it.
+- **Which endpoint**: `isPRWide(in.Kind)` → **`editGithubIssueComment`**
+  (`gh.EditIssueComment`, `PATCH .../issues/comments/{id}`) — both the root of
+  a PR-wide thread and any of its replies always mirror as plain issue
+  comments (see "Reply loop per thread kind" below). Otherwise →
+  **`editGithubReviewComment`** (`gh.EditReviewComment`,
+  `PATCH .../pulls/comments/{id}`) — GitHub represents a review-comment reply
+  as a review comment too, at the same endpoint as the root, so one Activity
+  covers both.
+- **Deliberately not special-cased per sub-kind of `isPRWide`** (`issue` /
+  `review_summary` / `review` / `ai_warning`): every one of them posts (root)
+  or mirrors (reply) via `postGithubIssueComment` in the existing code above,
+  so the same id is always issue-comment-shaped for any of them — including an
+  **imported** `review_summary` root, where the recorded id is actually a
+  review's own id rather than a plain issue comment (GitHub has no per-comment
+  edit endpoint for a review body at all). That one case's PATCH simply
+  404s and is logged, the same graceful degrade every other best-effort GitHub
+  call here already accepts — not worth a special case for.
+
+Tests: `TestTaskCodeCommentEditRoot`, `TestTaskCodeCommentEditReply`,
+`TestTaskCodeCommentEditPRWideRootUsesIssueEndpoint` (`workflows_test.go`,
+against `github.Fake`'s `EditedReviews`/`EditedIssues` maps), plus
+`TestUpdateBody`/`TestUpdateReactionBodyAndSetReactionGithubID`
+(`modules/comments/comments_test.go`).
 
 ### Private note (`local` flag)
 

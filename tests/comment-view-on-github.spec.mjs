@@ -71,12 +71,14 @@ test.describe('PR Review Tree — "Open op GitHub" in the comment menu', () => {
 
     await openCommentMenu(page, pr, body)
     const rows = page.getByTestId('command-row')
-    // Only the three usual items — no dead/no-op GitHub row for a comment
-    // that was never posted.
-    await expect(rows).toHaveCount(3)
+    // The usual items plus "Bewerk bericht" (this is the reviewer's own
+    // comment) — no dead/no-op GitHub row for a comment that was never
+    // posted.
+    await expect(rows).toHaveCount(4)
     await expect(rows.first()).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('Resolve comment')
     await expect(rows.nth(2)).toContainText('Verwijder comment')
+    await expect(rows.nth(3)).toContainText('Bewerk bericht')
     for (const r of await rows.allTextContents()) {
       expect(r).not.toContain('Open op GitHub')
     }

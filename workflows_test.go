@@ -178,6 +178,117 @@ func TestTaskCodeCommentPersistsGithubID(t *testing.T) {
 	}
 }
 
+// Editing the root comment of a review-diff thread overwrites its own body in
+// the read model and PATCHes the same GitHub review comment it was posted as.
+func TestTaskCodeCommentEditRoot(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reindert",
+		Body: "This branch looks unreachable.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, _ := cs.List(ctx, 42)
+	rootGithubID := list[0].GithubID
+	if rootGithubID == 0 {
+		t.Fatalf("comments = %+v, want a non-zero githubId", list)
+	}
+
+	if err := m.Signal(runID, ReactionSignal{
+		ID: runID, Source: "ui", Author: "reindert", Body: "This branch is actually fine.", Action: "edit",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && l[0].Body == "This branch is actually fine."
+	})
+	waitFor(t, func() bool { return gh.EditedReviews[rootGithubID] == "This branch is actually fine." })
+}
+
+// Editing a reply overwrites its own body in the read model and PATCHes the
+// GitHub comment that reply was mirrored to when it was first sent — not the
+// thread's root comment.
+func TestTaskCodeCommentEditReply(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reindert",
+		Body: "Check this.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-1", Source: "ui", Author: "reindert", Body: "please clarify"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && len(l[0].Reactions) == 1 && l[0].Reactions[0].GithubID != 0
+	})
+	list, _ := cs.List(ctx, 42)
+	rootGithubID := list[0].GithubID
+	replyGithubID := list[0].Reactions[0].GithubID
+	if replyGithubID == rootGithubID {
+		t.Fatalf("reply githubId %d must differ from root %d", replyGithubID, rootGithubID)
+	}
+
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-1", Source: "ui", Author: "reindert", Body: "please clarify the edge case", Action: "edit",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && len(l[0].Reactions) == 1 && l[0].Reactions[0].Body == "please clarify the edge case"
+	})
+	// The root comment's own body/GitHub comment were left untouched.
+	list, _ = cs.List(ctx, 42)
+	if list[0].Body != "Check this." {
+		t.Fatalf("root body = %q, want unchanged", list[0].Body)
+	}
+	if _, edited := gh.EditedReviews[rootGithubID]; edited {
+		t.Fatalf("root github comment %d must not have been edited", rootGithubID)
+	}
+	waitFor(t, func() bool { return gh.EditedReviews[replyGithubID] == "please clarify the edge case" })
+}
+
+// Editing the root of a PR-wide (issue) thread PATCHes the mirrored GitHub
+// issue comment, not a review comment.
+func TestTaskCodeCommentEditPRWideRootUsesIssueEndpoint(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, Author: "reindert", Body: "Overall this looks fine.", Kind: "issue",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, _ := cs.List(ctx, 42)
+	rootGithubID := list[0].GithubID
+	if rootGithubID == 0 {
+		t.Fatalf("comments = %+v, want a non-zero githubId", list)
+	}
+
+	if err := m.Signal(runID, ReactionSignal{
+		ID: runID, Source: "ui", Author: "reindert", Body: "Overall this looks great.", Action: "edit",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return gh.EditedIssues[rootGithubID] == "Overall this looks great." })
+	if len(gh.EditedReviews) != 0 {
+		t.Fatalf("edited reviews = %+v, want none (PR-wide root mirrors as an issue comment)", gh.EditedReviews)
+	}
+}
+
 // A UI resolve of a review-diff thread resolves the conversation on GitHub via
 // ResolveReviewThread, flips the read-model status to resolved, and never posts
 // the "/resolve" sentinel as a reply comment.

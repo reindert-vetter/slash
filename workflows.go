@@ -270,6 +270,11 @@ type CodeCommentInput struct {
 // (see taskCodeCommentWorkflow's reactions loop), so a delete request has to
 // be delivered as a distinguishable reply rather than a signal of its own.
 type ReactionSignal struct {
+	// ID is the new reply's own id (Action "" / "reply"), OR — with Action
+	// "edit" — the id of the EXISTING message being edited: the thread's own
+	// run ID for its root comment, or an existing reply's own reaction id.
+	// Reused rather than adding a second field, the same way AvatarURL/Anchor
+	// already change meaning per Action.
 	ID     string `json:"id"`
 	Source string `json:"source"` // ui | github | ai (an automated reply, e.g. comment_autoresolve.go)
 	Author string `json:"author"`
@@ -278,9 +283,11 @@ type ReactionSignal struct {
 	// "avatar" it instead carries the ROOT comment's own avatar (a backfill, no
 	// reply is stored).
 	AvatarURL string `json:"avatarUrl"`
-	Body      string `json:"body"`
-	Done      bool   `json:"done"`   // resolves the thread
-	Action    string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor" | "chat"
+	// Body is the reply text (Action "" / "reply"), or the new wording (Action
+	// "edit").
+	Body   string `json:"body"`
+	Done   bool   `json:"done"`   // resolves the thread
+	Action string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor" | "chat" | "edit"
 	// Anchor carries the comment's re-derived row anchor with Action "reanchor" (a
 	// pure metadata move, no reply stored) — see reanchor.go for how it's computed
 	// and comments.Module.SetAnchor for what it changes.
@@ -746,6 +753,88 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, cs.AddReaction(ctx, r)
 	})
 
+	// Activity: overwrite the root comment's own body (write, workflow-driven)
+	// — the reviewer editing their own already-placed comment. Leaves every
+	// other column (status, anchor, code snippet) untouched.
+	engine.RegisterActivity("editCommentBody", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			ID   string `json:"id"`
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return nil, cs.UpdateBody(ctx, arg.ID, arg.Body)
+	})
+
+	// Activity: overwrite one reply's own body (write, workflow-driven) — the
+	// reviewer editing a reply they wrote earlier in this thread.
+	engine.RegisterActivity("editReactionBody", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			ID   string `json:"id"`
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return nil, cs.UpdateReactionBody(ctx, arg.ID, arg.Body)
+	})
+
+	// Activity: record the GitHub comment id a reply was mirrored to (write,
+	// workflow-driven) — a no-op for id <= 0, mirrors saveCommentGithubID for
+	// the root. Needed so a later edit of that same reply knows what to PATCH.
+	engine.RegisterActivity("saveReactionGithubID", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			ID       string `json:"id"`
+			GithubID int64  `json:"githubId"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return nil, cs.SetReactionGithubID(ctx, arg.ID, arg.GithubID)
+	})
+
+	// Activity: PATCH an already-posted review comment's body on GitHub
+	// (best-effort — used for both a thread's root comment and any of its
+	// replies, since GitHub represents a review-comment reply as a review
+	// comment too).
+	engine.RegisterActivity("editGithubReviewComment", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			CommentID int64  `json:"commentId"`
+			Body      string `json:"body"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if arg.CommentID == 0 {
+			return nil, nil
+		}
+		if err := gh.EditReviewComment(ctx, arg.CommentID, arg.Body); err != nil {
+			m.logf("task_code_comment: github edit review comment skipped: %v", err)
+		}
+		return nil, nil
+	})
+
+	// Activity: PATCH an already-posted issue comment's body on GitHub
+	// (best-effort — used for a PR-wide thread's root comment and any of its
+	// replies, both of which mirror as plain issue comments).
+	engine.RegisterActivity("editGithubIssueComment", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			CommentID int64  `json:"commentId"`
+			Body      string `json:"body"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if arg.CommentID == 0 {
+			return nil, nil
+		}
+		if err := gh.EditIssueComment(ctx, arg.CommentID, arg.Body); err != nil {
+			m.logf("task_code_comment: github edit issue comment skipped: %v", err)
+		}
+		return nil, nil
+	})
+
 	// Activity: mark the comment as being deleted (write, workflow-driven). The
 	// first step of the delete flow, so the UI can show "Aan het verwijderen"
 	// while the actual removal (GitHub + the row itself) is still in flight.
@@ -790,7 +879,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, cs.Delete(ctx, arg.ID)
 	})
 
-	// Activity: reply on GitHub to a UI reaction (best-effort).
+	// Activity: reply on GitHub to a UI reaction (best-effort). Returns the new
+	// reply's own GitHub comment id (as a postResult) so it can be recorded
+	// against the reaction — needed later to PATCH that same reply if the
+	// reviewer edits it (see the "edit" Action above).
 	engine.RegisterActivity("replyGithub", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
 			PR     int    `json:"pr"`
@@ -803,10 +895,12 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if arg.RootID == 0 {
 			return nil, nil
 		}
-		if _, err := gh.Reply(ctx, arg.PR, arg.RootID, arg.Body); err != nil {
+		id, err := gh.Reply(ctx, arg.PR, arg.RootID, arg.Body)
+		if err != nil {
 			m.logf("task_code_comment: github reply skipped: %v", err)
+			return json.Marshal(postResult{})
 		}
-		return nil, nil
+		return json.Marshal(postResult{RootID: id})
 	})
 
 	// Activity: resolve ("Resolve conversation") the GitHub review-diff thread of
@@ -2878,6 +2972,13 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	// deleting it on GitHub (best-effort) and from our own store — and completes
 	// the execution, ending the thread.
 	reactions := 0
+	// replyGithubIDs remembers, per reply ID, the GitHub comment id that reply
+	// was mirrored to (0/absent = never mirrored, e.g. a private note or a
+	// GitHub-sourced reply that is never echoed back) — so a later "edit" Action
+	// on that same reply knows what to PATCH. Rebuilt identically on every
+	// replay: it is only ever populated from the recorded result of this same
+	// loop's own mirror Activities below, never from live state.
+	replyGithubIDs := map[string]int64{}
 	for {
 		var r ReactionSignal
 		w.WaitSignal(SignalReply, &r)
@@ -2942,6 +3043,60 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			continue
 		}
 
+		// An "edit" action changes the wording of an already-placed message the
+		// reviewer wrote themselves — either the thread's own root comment
+		// (r.ID == runID) or one of its replies (r.ID names that reply's own
+		// reaction id, reused here as the edit target rather than adding a
+		// second field to ReactionSignal). Stores no NEW reply; only the body of
+		// the existing row changes. Mirrored to GitHub (best-effort, like every
+		// other GitHub call in this loop) when that row was posted there:
+		// isPRWide(in.Kind) means it mirrors as a plain issue comment (both the
+		// root of a PR-wide thread and any of its replies always do, per the
+		// mirror rule below), otherwise as a review comment (the root of a
+		// review-diff thread, or one of its replies — GitHub represents a
+		// review-comment reply as a review comment too). Input-driven, so
+		// replay-deterministic: which Activities run depends only on r.ID/
+		// in.Kind/the already-known posted.RootID / replyGithubIDs, never on a
+		// fresh GitHub lookup.
+		if r.Action == "edit" {
+			if r.ID == runID {
+				if err := w.ExecuteActivity("editCommentBody", map[string]any{
+					"id": runID, "body": r.Body,
+				}, nil); err != nil {
+					return nil, fmt.Errorf("edit comment body: %w", err)
+				}
+				if posted.RootID != 0 {
+					if isPRWide(in.Kind) {
+						_ = w.ExecuteActivity("editGithubIssueComment", map[string]any{
+							"commentId": posted.RootID, "body": r.Body,
+						}, nil)
+					} else {
+						_ = w.ExecuteActivity("editGithubReviewComment", map[string]any{
+							"commentId": posted.RootID, "body": r.Body,
+						}, nil)
+					}
+				}
+			} else {
+				if err := w.ExecuteActivity("editReactionBody", map[string]any{
+					"id": r.ID, "body": r.Body,
+				}, nil); err != nil {
+					return nil, fmt.Errorf("edit reaction body: %w", err)
+				}
+				if ghID := replyGithubIDs[r.ID]; ghID != 0 {
+					if isPRWide(in.Kind) {
+						_ = w.ExecuteActivity("editGithubIssueComment", map[string]any{
+							"commentId": ghID, "body": r.Body,
+						}, nil)
+					} else {
+						_ = w.ExecuteActivity("editGithubReviewComment", map[string]any{
+							"commentId": ghID, "body": r.Body,
+						}, nil)
+					}
+				}
+			}
+			continue
+		}
+
 		if r.Action == "delete" {
 			if err := w.ExecuteActivity("markCommentDeleting", map[string]any{"id": runID}, nil); err != nil {
 				return nil, fmt.Errorf("mark comment deleting: %w", err)
@@ -2978,15 +3133,29 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		if r.Source == "ui" {
 			if isPRWide(in.Kind) {
 				if !r.Done {
+					var mirrored postResult
 					_ = w.ExecuteActivity("postGithubIssueComment", map[string]any{
 						"pr": in.PR, "body": r.Body,
-					}, nil)
+					}, &mirrored)
+					if mirrored.RootID != 0 {
+						replyGithubIDs[r.ID] = mirrored.RootID
+						_ = w.ExecuteActivity("saveReactionGithubID", map[string]any{
+							"id": r.ID, "githubId": mirrored.RootID,
+						}, nil)
+					}
 				}
 			} else {
 				if body := strings.TrimSpace(r.Body); body != "" && body != "/resolve" {
+					var mirrored postResult
 					_ = w.ExecuteActivity("replyGithub", map[string]any{
 						"pr": in.PR, "rootId": posted.RootID, "body": r.Body,
-					}, nil)
+					}, &mirrored)
+					if mirrored.RootID != 0 {
+						replyGithubIDs[r.ID] = mirrored.RootID
+						_ = w.ExecuteActivity("saveReactionGithubID", map[string]any{
+							"id": r.ID, "githubId": mirrored.RootID,
+						}, nil)
+					}
 				}
 				if r.Done {
 					_ = w.ExecuteActivity("resolveGithubThread", map[string]any{

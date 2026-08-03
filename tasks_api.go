@@ -940,18 +940,42 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown signal", http.StatusBadRequest)
 			return
 		}
+		// action ("" | "edit") is validated here, before it ever reaches the
+		// workflow — mirrors the message-signal switch above. "edit" changes the
+		// wording of an EXISTING message (targetId names it: the run's own id for
+		// the root comment, or an existing reply's id) instead of adding a new one.
 		var body struct {
-			Author string `json:"author"`
-			Body   string `json:"body"`
-			Done   bool   `json:"done"`
+			Author   string `json:"author"`
+			Body     string `json:"body"`
+			Done     bool   `json:"done"`
+			Action   string `json:"action"`
+			TargetID string `json:"targetId"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Body == "" {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid reaction", http.StatusBadRequest)
+			return
+		}
+		switch body.Action {
+		case "":
+			if body.Body == "" {
+				http.Error(w, "invalid reaction", http.StatusBadRequest)
+				return
+			}
+		case "edit":
+			if body.Body == "" || body.TargetID == "" {
+				http.Error(w, "invalid edit", http.StatusBadRequest)
+				return
+			}
+		default:
+			http.Error(w, "invalid action", http.StatusBadRequest)
 			return
 		}
 		sig := ReactionSignal{
 			ID: "ui-" + newUIReactionID(), Source: "ui",
-			Author: body.Author, Body: body.Body, Done: body.Done,
+			Author: body.Author, Body: body.Body, Done: body.Done, Action: body.Action,
+		}
+		if body.Action == "edit" {
+			sig.ID = body.TargetID
 		}
 		if err := s.tasks.manager.Signal(runID, sig); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})

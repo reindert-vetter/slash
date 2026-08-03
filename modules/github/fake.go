@@ -11,10 +11,12 @@ import (
 type Fake struct {
 	mu              sync.Mutex
 	nextID          int64
-	Posted          []string // review comment/reply bodies posted, in order
-	IssuePosted     []string // issue-comment bodies posted (PR-wide replies), in order
-	Deleted         []int64  // comment IDs deleted, in order
-	ResolvedThreads []int64  // root comment IDs whose thread was resolved, in order
+	Posted          []string         // review comment/reply bodies posted, in order
+	IssuePosted     []string         // issue-comment bodies posted (PR-wide replies), in order
+	Deleted         []int64          // comment IDs deleted, in order
+	ResolvedThreads []int64          // root comment IDs whose thread was resolved, in order
+	EditedReviews   map[int64]string // review-comment id -> its last edited body
+	EditedIssues    map[int64]string // issue-comment id -> its last edited body
 	replies         []Reply
 	reviewComments  []ReviewComment
 	general         []GeneralComment
@@ -215,6 +217,26 @@ func (f *Fake) DeleteComment(_ context.Context, pr int, commentID int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Deleted = append(f.Deleted, commentID)
+	return nil
+}
+
+func (f *Fake) EditReviewComment(_ context.Context, commentID int64, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.EditedReviews == nil {
+		f.EditedReviews = map[int64]string{}
+	}
+	f.EditedReviews[commentID] = body
+	return nil
+}
+
+func (f *Fake) EditIssueComment(_ context.Context, commentID int64, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.EditedIssues == nil {
+		f.EditedIssues = map[int64]string{}
+	}
+	f.EditedIssues[commentID] = body
 	return nil
 }
 

@@ -354,17 +354,23 @@ test.
 ## The comment-scoped menu (`comment`, `commentCommandsFor`)
 
 If the keyboard is on a placed comment row in `RelatedPanel`
-(`cs.focus === 'comment'`, before stepping into the thread) **and the reply
-field is empty**, `Enter` opens this menu instead of the block palette — three
-to five rows:
+(`isCommentOrThreadFocused()` — `cs.focus === 'comment'` at rest, OR
+`cs.focus === 'thread'` while stepped ↑ into one of its own replies) **and the
+reply field is empty**, `Enter` opens this menu instead of the block palette —
+three to six rows:
 
 1. **"Close menu"** (pinned).
 2. **"Resolve comment"** (default, 2nd item).
 3. **"Verwijder comment"**.
-4. **"Comment hiervan maken"** — only when `source === 'ai'` (a `code_warning`
+4. **"Bewerk bericht"** — only for the reviewer's OWN message
+   (`isOwnMessage`), which the keyboard is currently on
+   (`focusedThreadMessage()` — the root at rest, or the specific reply
+   stepped into). See "Editing an own message" in
+   `.claude/docs/comments-panel.md`.
+5. **"Comment hiervan maken"** — only when `source === 'ai'` (a `code_warning`
    finding; see "Converting an AI-controle finding into a real comment" in
    `.claude/docs/comments-panel.md`).
-5. **"Open op GitHub"** — only when the comment actually has a GitHub anchor.
+6. **"Open op GitHub"** — only when the comment actually has a GitHub anchor.
 
 `commentCommandsFor()` is built fresh on every open (unlike the static lists it
 is data-conditional per focused comment), still via `withClose`.
@@ -377,7 +383,7 @@ always right (never `#issuecomment-<id>`).
 
 A **non-empty** reply field leaves `Enter` alone — the field's own `keydown`
 wins (`sendReaction`), so "type a quick reply, press Enter" keeps working
-(`isCommentFocused`/`commentReplyEmpty` guard the distinction).
+(`isCommentOrThreadFocused`/`commentReplyEmpty` guard the distinction).
 
 **Mouse path:** the send-status button next to "Stuur" (`reaction-status`)
 opens this same menu on click, so resolve/delete stay reachable without the
@@ -398,6 +404,10 @@ keyboard. See the send-status paragraph in
   resolves the conversation on GitHub too; a PR-wide thread has no GitHub
   resolve concept, so it stays local. See
   `.claude/docs/workflows-comments.md`.
+- **"Bewerk bericht"** → `startEditMessage` opens an inline editor on the
+  focused message in place; sending posts the `edit` Action of the same
+  `reply` Signal (`sendMessageEdit`, `RelatedPanel.mjs`). See "Editing an own
+  message" in `.claude/docs/comments-panel.md`.
 
 ## The comment-index item menu (`prComment`, `prCommentCommandsFor`)
 
@@ -414,10 +424,13 @@ comment — placed in this app (`!c.source || c.source === 'ui'`) or placed on
 GitHub by them and later imported (`c.source === 'github'` +
 `c.author === meLogin()`) — **"Resolve comment"** comes first (thus default);
 otherwise **"Beantwoorden"** stays first. Both are always present, only the
-order changes → optionally **"Comment hiervan maken"** (only
-`source === 'ai'`, never true at the same time as "own") → **"Ignore"**
-("Ignore ongedaan maken" once ignored — `toggleIgnoreComment`, a durable
-sidebar-visibility flag through the per-PR `ignore_comment` tracker).
+order changes → optionally **"Bewerk bericht"** (only for the reviewer's OWN
+message the keyboard is currently on — `focusedPrThreadMessage(c)` walking
+`pct`, see "Editing an own message" in `.claude/docs/comments-panel.md`) →
+optionally **"Comment hiervan maken"** (only `source === 'ai'`, never true at
+the same time as "own") → **"Ignore"** ("Ignore ongedaan maken" once ignored —
+`toggleIgnoreComment`, a durable sidebar-visibility flag through the per-PR
+`ignore_comment` tracker).
 
 Because the detail card already shows on selection, "the thread shows above the
 menu" is just a consequence of the anchoring, not a separate menu variant.

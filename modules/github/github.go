@@ -123,6 +123,14 @@ type Client interface {
 	PRMeta(ctx context.Context, pr int) (Meta, error)
 	// DeleteComment removes a review comment (the root of a thread) from the PR.
 	DeleteComment(ctx context.Context, pr int, commentID int64) error
+	// EditReviewComment overwrites the body of an existing review comment (a
+	// thread's root comment, or one of its replies — GitHub represents a
+	// review-comment reply as a review comment too, at the same endpoint).
+	EditReviewComment(ctx context.Context, commentID int64, body string) error
+	// EditIssueComment overwrites the body of an existing issue comment (a
+	// PR-wide thread's root, or one of its replies — both mirror as plain issue
+	// comments on the PR's flat conversation, see PostIssueComment).
+	EditIssueComment(ctx context.Context, commentID int64, body string) error
 	// ResolveReviewThread resolves ("Resolve conversation") the review-diff
 	// thread whose root comment has REST id commentID. It is a no-op if no such
 	// thread is found. GitHub only supports resolving review-diff threads, not
@@ -441,6 +449,27 @@ func (m *Module) PRMeta(ctx context.Context, pr int) (Meta, error) {
 func (m *Module) DeleteComment(ctx context.Context, pr int, commentID int64) error {
 	_, err := m.api(ctx, "DELETE",
 		fmt.Sprintf("repos/%s/pulls/comments/%d", m.repo, commentID))
+	return err
+}
+
+// EditReviewComment overwrites the body of the existing review comment
+// commentID (its root, or one of its replies — both live at this same
+// endpoint). See the Client interface doc.
+func (m *Module) EditReviewComment(ctx context.Context, commentID int64, body string) error {
+	_, err := m.api(ctx, "PATCH",
+		fmt.Sprintf("repos/%s/pulls/comments/%d", m.repo, commentID),
+		"-f", "body="+body,
+	)
+	return err
+}
+
+// EditIssueComment overwrites the body of the existing issue comment
+// commentID. See the Client interface doc.
+func (m *Module) EditIssueComment(ctx context.Context, commentID int64, body string) error {
+	_, err := m.api(ctx, "PATCH",
+		fmt.Sprintf("repos/%s/issues/comments/%d", m.repo, commentID),
+		"-f", "body="+body,
+	)
 	return err
 }
 
