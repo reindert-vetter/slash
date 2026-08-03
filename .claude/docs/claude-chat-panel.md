@@ -16,7 +16,7 @@ PR). The column is therefore **conditional**, and the `→` chain of a
 commented unit is
 
 ```
-comment (↑ walks its own thread bubbles) → claude → (↓, nothing left) → Onderliggende code
+comment (↑ walks its own thread bubbles) → claude → (↓, nothing left) → next visible block's diff
 ```
 
 `'thread'` is **not** a horizontal `→` stop between `'comment'` and `'claude'`
@@ -45,15 +45,20 @@ conversation can reply into — see `applyChatCommentAction`). The requirement
 "a chat only where there already is a comment, or where a conversation
 already happened" is exactly `claudeChatVisible()` below.
 
-**A conversation that already happened never becomes unreachable**, even if
-its comment falls out of the visible index (an orphan or PR-wide comment,
-which `recomputeView` filters out): `cc.conversations` — the ids of this PR's
-conversations that actually have turns, from `GET /api/chat?pr=N` — keeps the
-column visible, and `chatAnchorComment()` resolves the same comment for both
-the visibility check and `enterClaudeChat`, so the column can never be shown
-without `→` being able to reach it. A genuinely **deleted** comment is the one
-irreducible case: without a row there is no file:line, so its conversation has
-no unit to appear under any more.
+**Superseded: "a conversation that already happened never becomes unreachable".**
+An earlier version kept the column visible via `cc.conversations` (the ids of
+this PR's conversations that actually have turns, from `GET /api/chat?pr=N`)
+even once its comment fell out of the visible index (an orphan or PR-wide
+comment, which `recomputeView` filters out, or one filtered out by the current
+granularity scope). **Explicitly replaced** by a stricter invariant (Reindert's
+own words: *"claude blok moet altijd alleen zichtbaar zijn als er ook een
+comment blok zichtbaar is (en andersom)"*) — see `claudeChatVisible()` below.
+A conversation whose comment isn't currently visible is therefore no longer
+reachable through ordinary navigation; `chatAnchorComment()` (which still
+falls back to searching `cc.conversations` for such a comment) is now only
+used internally to resolve an anchor, never to decide visibility. A genuinely
+**deleted** comment remains the one irreducible case: without a row there is
+no file:line, so its conversation has no unit to appear under any more.
 
 ### Optimistically visible while composing a brand-new comment
 
@@ -140,17 +145,32 @@ from either `'comment'` or `'thread'`, and one `←` returns directly to
 - **`↑`/`↓` on `cs.focus === 'claude'`**: walk the transcript exactly like
   `'thread'` walks reactions, via its own `cs.claudePos` cursor (mirrors
   `cs.threadPos`, 0 = composer, 1..n = the n-th turn from the bottom).
-- **`↓` at `cs.claudePos === 0`** (nothing further to walk): falls through to
-  `enterRelated()` — the same "↓ loopt door" convention `advanceFromComment`
-  already uses at the bottom of a comment thread.
+- **`↓` at `cs.claudePos === 0`** (nothing further to walk): **explicit
+  request, deliberately NOT** the "↓ loopt door" convention
+  `advanceFromComment` uses at the bottom of a comment thread — falling into
+  the Onderliggende-code panel read as an unwanted extra "menu" in the way of
+  continuing the review. `handleRelatedKey` instead calls `exitRelated()`
+  (fully releases the panel focus, same as `Escape`) and returns the
+  `'advance'` sentinel; `home.mjs`'s `onKeydown` then calls
+  `advanceToNextBlockFromClaudeChat()`, which moves `state.selected` to the
+  next VISIBLE block (`stepVisibleSelected(1)`, the same walker the sidebar's
+  own `↓` uses — a no-op at the last block) and calls `enterDiff()` on it
+  (resets drill/gran/change and re-aligns `<main>`'s scroll on its own). Since
+  `cs.focus` is now `null`, `claudeChatVisible()`'s strict invariant (see
+  above) means the just-left unit's Claude AND comment blocks disappear
+  together the moment the keyboard sits on the new unit — there is no window
+  where one lingers without the other. Test:
+  `tests/claude-chat-panel.spec.mjs`'s "↓ at the bottom of the Claude chat
+  advances to the next block…" case.
 - **`←` on `cs.focus === 'claude'`**: steps back directly to `cs.focus ===
   'comment'` (`toComment()`, which also resets `cs.threadPos` — `'thread'` is
   never visited on the way back) — always possible, since entering `'claude'`
   guarantees a comment now exists.
 
 No new stop exists between `'code'` and `'claude'` — `→` has no meaning past
-`'claude'` (nothing deeper), only `↓`'s fallthrough reaches Onderliggende
-code from there. A dashed connector (`data-testid=comment-claude-connector`,
+`'claude'` (nothing deeper); `↓` from there skips Onderliggende code entirely
+and advances to the next block (see above). A dashed connector
+(`data-testid=comment-claude-connector`,
 the same look as the Onderliggende-code chip connector, `RelatedPanel.mjs`'s
 `nestedChipColumn`) renders between the comment block and the Claude column
 whenever `claudeChatVisible()` (`home.mjs`, next to the `ClaudeChatPanel(...)`
@@ -163,9 +183,11 @@ The "Embedded Claude conversation" section owns:
 
 - **`cc`** — this module's own `reactive()` chat state for whichever ONE
   conversation is currently in view: `{ commentId, runId, messages, status,
-  busy, progress, tick, conversations }` (`conversations` is PR-wide, see
-  `claudeChatVisible()`; `progress`/`tick` are the live turn, see "Live
-  progress"). `status` is the PANEL's own loading/error state (ensuring the
+  busy, progress, tick, conversations }` (`conversations` is PR-wide — no
+  longer read by `claudeChatVisible()`, only by `chatAnchorComment()`'s
+  internal anchor-resolution fallback, see "Superseded" above;
+  `progress`/`tick` are the live turn, see "Live progress"). `status` is the
+  PANEL's own loading/error state (ensuring the
   workflow, fetching the transcript) — a genuinely **failed Claude turn** is
   a normal message with `kind: 'error'` (see `chat_workflow.go`'s
   `runOneClaudeTurn`), not this field.
@@ -193,11 +215,12 @@ The "Embedded Claude conversation" section owns:
   that await is no longer what makes the reply appear (see "Live progress"
   below); it is the belt-and-braces refetch for the reviewer's own send.
 - **`ensureChatEvents`/`loadChatProgress`** — the live channel, see below.
-- **`claudeChatVisible()`** — `hasVisibleComments() ||
-  chatConversationExists() || cs.focus === 'claude'`. The middle term reads
-  `cc.conversations` (reactive, refreshed by `loadChatConversations` on every
-  comment poll and only ever **reassigned**, never mutated) through
-  `chatAnchorComment()`. It must stay inside the existing
+- **`claudeChatVisible()`** — `hasVisibleComments() || cs.focus === 'new'`, a
+  **strict iff** with whatever `InlineComments` itself renders (a visible
+  comment thread, or the brand-new composer) — never on its own (explicit
+  request, replacing an earlier looser rule that also kept the column visible
+  via `chatConversationExists()`/`cs.focus === 'claude'` alone; see "Product
+  decision" above). It must stay inside the existing
   `${() => claudeChatVisible()}` binding: a plain, non-reactive value would
   leave a column that should reappear invisible until the next navigation step
   (the static chunk-reuse trap, see `.claude/rules/arrowjs-pitfalls.md`).

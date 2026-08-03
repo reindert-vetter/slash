@@ -901,20 +901,22 @@ const cc = reactive({
   tick: 0,
   // conversations holds the ids of THIS PR's comment threads that already have
   // Claude turns (GET /api/chat?pr=N, refreshed alongside every comment poll).
-  // Reactive and only ever REASSIGNED, never mutated — the chat column's
-  // visibility binding reads it through chatConversationExists(), and a plain
-  // (non-reactive) value would leave a column that should reappear invisible
-  // until the next navigation step (see claude-chat-panel.md).
+  // Reactive and only ever REASSIGNED, never mutated. No longer read by the
+  // chat column's visibility binding (see claudeChatVisible()'s strict
+  // invariant) — only chatAnchorComment()'s fallback below still reads it, to
+  // resolve which comment a conversation hangs on when the reviewer's cursor
+  // isn't sitting on a visible comment itself.
   conversations: [],
 })
 
-// chatConversationExists / chatAnchorComment answer the two halves of "does
-// this unit have a Claude conversation to show, and which comment does it hang
-// on". A chat ALWAYS hangs on an existing comment (the backend's own
-// constraint) and nothing ever auto-creates one for it — so the unit either
-// carries a comment, or it carries a comment whose conversation already has
-// turns but which is filtered out of the visible index (an orphan/PR-wide
-// comment), or there is simply no chat.
+// chatAnchorComment answers "which comment does a Claude conversation on this
+// unit hang on". A chat ALWAYS hangs on an existing comment (the backend's own
+// constraint) and nothing ever auto-creates one for it — the unit either
+// carries a visible comment (selComment()), or — a fallback kept for internal
+// anchor resolution, though no longer relevant to the column's own visibility,
+// see claudeChatVisible()'s strict invariant — a comment whose conversation
+// already has turns but which is filtered out of the visible index (an
+// orphan/PR-wide comment), or there is simply no chat.
 function chatAnchorComment() {
   const c = selComment()
   if (c) return c
@@ -922,9 +924,6 @@ function chatAnchorComment() {
   if (!s) return null
   const hasTurns = (id) => cc.conversations.indexOf(id) >= 0
   return cs.list.find((x) => x.file === s.file && x.label === s.label && hasTurns(x.id)) || null
-}
-function chatConversationExists() {
-  return !!chatAnchorComment()
 }
 
 // loadChatConversations refreshes cc.conversations for pr — read-only GET, so
@@ -1162,14 +1161,18 @@ export async function enterClaudeChat(pr) {
 // panel's own render need: whether the KEYBOARD is on the chat column, and
 // whether the column should be VISIBLE at all.
 //
-// The column exists only when there is something to hang a conversation on: an
-// ordinary comment thread already shows (hasVisibleComments(), "net zo'n blok
-// als het comments-blok, zichtbaar zodra er al comments zijn"), or a Claude
-// conversation for this unit already happened (chatConversationExists(), so a
-// conversation whose comment fell out of the visible index doesn't become
-// unreachable), or the keyboard is on it right now. NEVER unconditionally: a
-// unit with neither must show no chat column at all, and → then goes straight
-// to Onderliggende code (see home.mjs' ArrowRight branch).
+// STRICT invariant (explicit request, replacing an earlier looser rule): the
+// Claude column is visible EXACTLY when the comment column (InlineComments)
+// has something to show — a visible comment thread (hasVisibleComments()) or
+// the brand-new composer (cs.focus === 'new') — never on its own. This is a
+// deliberate narrowing of the earlier "a conversation that already happened
+// never becomes unreachable" guarantee: a conversation whose backing comment
+// has fallen out of the visible index (an orphan/PR-wide comment, or one
+// filtered out by the current granularity scope) is no longer reachable
+// through ordinary navigation. Also fixes a stale-focus bug: cs.focus could
+// stay 'claude' after the reviewer had already navigated to a different unit
+// (see advanceToNextBlockFromClaudeChat, home.mjs), which used to keep this
+// column showing with nothing behind it.
 export function isClaudeChatFocused() {
   return cs.focus === 'claude'
 }
@@ -1182,7 +1185,7 @@ export function isClaudeChatFocused() {
 // backing comment is lazily created only once the reviewer does something
 // real (ensureClaudeAnchorForNew below).
 export function claudeChatVisible() {
-  return hasVisibleComments() || chatConversationExists() || cs.focus === 'claude' || cs.focus === 'new'
+  return hasVisibleComments() || cs.focus === 'new'
 }
 
 // focusClaudeComposer/scrollClaudeMessageIntoView mirror focusThread/
@@ -1366,13 +1369,13 @@ function applyRelRestore() {
   const children = rc.children.length
   const comments = visibleComments().length
   // Wait for the data the wanted focus points at; 'new'/null need none.
-  // 'claude' also needs a comment to hang the conversation on — it can only
-  // ever be restored onto an EXISTING one (see the branch below), which is
-  // either in the visible index or is the conversation-carrying comment
-  // chatAnchorComment() falls back to (an orphan/PR-wide one).
+  // 'claude' also needs a comment to hang the conversation on — and, per the
+  // strict claudeChatVisible() invariant above, that comment must actually be
+  // in the VISIBLE index (comments === 0 means it isn't), otherwise the
+  // column wouldn't render at all and cs.focus would restore onto nothing.
   if (want.focus === 'code' && children === 0) return
   if ((want.focus === 'comment' || want.focus === 'thread') && comments === 0) return
-  if (want.focus === 'claude' && comments === 0 && !chatConversationExists()) return
+  if (want.focus === 'claude' && comments === 0) return
   restorePending = null
   cs.codeSel = children ? Math.min(want.codeSel, children - 1) : 0
   cs.sel = comments ? Math.min(want.sel, comments - 1) : 0
@@ -1449,12 +1452,16 @@ function applyRelRestore() {
 //    same comment thread ('claude', see enterClaudeChat).
 //  - the embedded Claude conversation ('claude') — ↑/↓ walk older/newer
 //    turns exactly like 'thread' does (its own claudePos cursor); ↓ at the
-//    bottom falls through to the Onderliggende-code panel (mirroring
-//    advanceFromComment, since there's nothing further right of it); ←
-//    steps back directly to the 'comment' level (not to 'thread' — mirrors
-//    'comment'.ArrowRight reaching 'claude' directly). → and ↑/↓ elsewhere in
-//    the chain reach 'claude' via enterClaudeChat, not via a case here — see
-//    its own doc comment for the "no comment thread yet" auto-create path.
+//    bottom (claudePos === 0) does NOT fall into the Onderliggende-code panel
+//    any more (explicit request: that read as an unwanted extra "menu" in the
+//    way of continuing to review) — it releases the panel focus and returns
+//    the 'advance' sentinel so home.mjs's onKeydown can select the next
+//    visible block and step straight into its diff (see
+//    advanceToNextBlockFromClaudeChat, home.mjs); ← steps back directly to
+//    the 'comment' level (not to 'thread' — mirrors 'comment'.ArrowRight
+//    reaching 'claude' directly). → and ↑/↓ elsewhere in the chain reach
+//    'claude' via enterClaudeChat, not via a case here — see its own doc
+//    comment for the "no comment thread yet" auto-create path.
 export function handleRelatedKey(key) {
   if (key === 'Escape') {
     exitRelated()
@@ -1466,11 +1473,15 @@ export function handleRelatedKey(key) {
       focusClaudeComposer()
     } else if (key === 'ArrowDown') {
       if (cs.claudePos === 0) {
-        enterRelated()
-      } else {
-        cs.claudePos -= 1
-        focusClaudeComposer()
+        // Nothing further within this unit's own chain any more (no
+        // Onderliggende-code detour, per the explicit request above) —
+        // release the panel focus and let home.mjs advance to the next
+        // visible block's diff.
+        exitRelated()
+        return 'advance'
       }
+      cs.claudePos -= 1
+      focusClaudeComposer()
     } else if (key === 'ArrowLeft') {
       // Straight back to 'comment' — 'thread' is no longer visited on the way
       // (mirrors 'comment'.ArrowRight reaching 'claude' directly, see TODO 2

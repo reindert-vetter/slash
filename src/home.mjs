@@ -3831,6 +3831,23 @@ function enterDiff() {
   scrollChangeIntoView()
 }
 
+// advanceToNextBlockFromClaudeChat is what ↓ at the bottom of the embedded
+// Claude conversation (cs.claudePos === 0) does instead of falling into the
+// Onderliggende-code panel (see handleRelatedKey's 'advance' sentinel,
+// RelatedPanel.mjs) — explicit request: reviewing a unit's chat/comments
+// shouldn't dead-end into another panel before moving on. handleRelatedKey has
+// already released the panel focus (exitRelated), so this only needs to move
+// the selection and step into the next block's diff; enterDiff() itself
+// resets drill/gran/change and re-aligns <main>'s scroll. A no-op at the last
+// visible block (stepVisibleSelected clamps by returning the same index).
+function advanceToNextBlockFromClaudeChat() {
+  const next = stepVisibleSelected(1)
+  if (next === state.selected) return
+  selectRow(next)
+  enterDiff()
+  scrollSelectedIntoView()
+}
+
 // openTask jumps to what a "Taken" row (RelatedPanel's workflows section)
 // points at — currently only meaningful for a task_code_comment run that
 // carries a resolved `comment` reference (see WorkflowRunView.comment in
@@ -6825,7 +6842,15 @@ function onKeydown(e) {
       !(e.key === 'ArrowRight' && editableCaretCanMoveRight())
     ) {
       e.preventDefault()
-      handleRelatedKey(e.key)
+      const relatedResult = handleRelatedKey(e.key)
+      // ↓ at the bottom of the embedded Claude conversation (claudePos === 0)
+      // returns this sentinel instead of falling into the Onderliggende-code
+      // panel (explicit request — see handleRelatedKey's own doc comment):
+      // advance straight to the next visible block's diff.
+      if (relatedResult === 'advance') {
+        advanceToNextBlockFromClaudeChat()
+        return
+      }
       // Exiting the panel (← / Escape from the code card's first block) just
       // hands the keyboard back to the diff of whichever column is currently
       // focused (handleRelatedKey's exitRelated already did that) — it does

@@ -59,27 +59,33 @@ code).
    clamping.
    - **Stop 5b — the embedded Claude chat** (`data-testid=claude-chat-column`,
      `cs.focus==='claude'`): reached with `→` from stop 5's `'comment'` or
-     `'thread'` level — **also conditional**, on `claudeChatVisible()`: a
-     comment must exist, or a conversation for this unit must already have
-     happened (then `→` from the diff reaches it directly). Nothing
-     auto-creates a comment to hang a conversation on, so a unit with neither
-     has no chat column and `→` from the diff skips to stop 6 (`enterClaudeChat`
-     is a no-op there — see `.claude/docs/claude-chat-panel.md`). Deliberately
-     NOT renumbered into the chain, so every "stop 6" reference below stays
-     valid. A dashed connector (`data-testid=comment-claude-connector`, same
-     look as the Onderliggende-code chip connector) sits between stop 5 and 5b
+     `'thread'` level — **also conditional**, on `claudeChatVisible()`, a
+     **strict iff** with stop 5 itself: a comment must actually be visible
+     (or the brand-new composer be open), never on its own (explicit request —
+     a conversation whose comment fell out of the visible index is no longer
+     independently reachable, see "Superseded" in
+     `.claude/docs/claude-chat-panel.md`). Nothing auto-creates a comment to
+     hang a conversation on, so a unit with neither has no chat column and `→`
+     from the diff skips to stop 6 (`enterClaudeChat` is a no-op there). NOT
+     renumbered into the chain, so every "stop 6" reference below stays valid.
+     A dashed connector (`data-testid=comment-claude-connector`, same look as
+     the Onderliggende-code chip connector) sits between stop 5 and 5b
      whenever 5b is visible. Details in `.claude/docs/claude-chat-panel.md`;
      keyboard summary: `↑`/`↓` walk the transcript on its own `cs.claudePos`
      cursor (exactly as `'thread'` walks reactions on `cs.threadPos` — 0 = the
      composer, 1..n = the n-th turn from the bottom, clamped at the oldest);
-     `↓` at `claudePos === 0` falls through to stop 6 (`enterRelated()`); `←`
-     steps back directly to `'comment'` (not to `'thread'`); `→` does nothing
-     (there is no stop past it).
+     `↓` at `claudePos === 0` releases the panel focus entirely and jumps
+     straight to the **next visible block's diff**, skipping stop 6 (explicit
+     request — landing in Underlying code read as an unwanted extra "menu" in
+     the way of continuing the review; see `advanceToNextBlockFromClaudeChat`,
+     `home.mjs`); `←` steps back directly to `'comment'` (not to `'thread'`);
+     `→` does nothing (there is no stop past it).
 6. **Underlying code** (`RelatedPanel`, `cs.focus==='code'`) — the last stop of
-   the chain: `→` there leaves the card nowhere to go. Note that "last" is
-   about the chain, not the screen — the stop-5b Claude column renders to the
-   *right* of it (see `.claude/docs/detail-layout.md`), and `↓` out of the
-   chat therefore steps leftwards on screen.
+   the chain reachable via `→`: `→` there leaves the card nowhere to go. Note
+   that "last" is about the `→` chain, not the screen — the stop-5b Claude
+   column renders to the *right* of it (see `.claude/docs/detail-layout.md`).
+   `↓` out of the chat (stop 5b) no longer reaches this stop at all — it jumps
+   straight to the next block instead (see stop 5b above).
 
 Tasks has no keyboard stop at all — it is click-only, under stop 1.
 
@@ -104,11 +110,14 @@ Transitions, and how they differ from the older per-mechanism behaviour:
   conversation) when the unit has one (`enterCommentsHead()`), else straight on
   to **stop 5b**, the embedded Claude chat (`enterClaudeChat()`) — it no longer
   goes to stop 6 from here. `↓` on the last conversation (or at the bottom of an
-  open thread) falls through to stop 6 instead of clamping, and so does `↓` at
-  the bottom of stop 5b; `↑` on stop 6's first child steps back onto stop 5's
-  last conversation if one exists, else straight to the diff — stop 5b is
-  **not** on that way back, it is only ever entered by `→`/the diff-with-no-
-  comment path. `↑` on a conversation first walks that conversation's OWN
+  open thread) falls through to stop 6 instead of clamping; `↓` at the bottom
+  of stop 5b is different — it does **not** fall through to stop 6 any more
+  (explicit request), it releases the panel entirely and jumps to the next
+  visible block's diff (see stop 5b's own entry above). `↑` on stop 6's first
+  child steps back onto stop 5's last conversation if one exists, else straight
+  to the diff — stop 5b is **not** on that way back, it is only ever entered by
+  `→`/the diff-with-no-comment path. `↑` on a conversation first walks that
+  conversation's OWN
   thread (newest bubble first, `'thread'`), and only once you're past the
   oldest message does it move to the previous conversation — or, on the first
   conversation, exit straight to the diff — the "+ Nieuwe comment" trigger row
@@ -332,9 +341,11 @@ left bar (`shadow-[inset_3px_0_0_…]`, no layout shift) and the first row a
 
 In `'diff'` mode the Underlying-code card (`enterRelated` in
 `RelatedPanel.mjs`, `cs.focus === 'code'`) is reached by `↓` falling through the
-end of whatever sits before it — the last inline comment conversation, or the
-embedded Claude chat (stop 5b, which is where a bare `→` from the diff now
-lands, see the chain above) — and lands on the **first** child
+end of the last inline comment conversation, or by a bare `→` from the diff
+when the unit has no comments/conversation at all (see the chain above) —
+**not** by `↓` from the embedded Claude chat (stop 5b) any more, which instead
+jumps straight to the next visible block's diff (explicit request, see
+`.claude/docs/claude-chat-panel.md`). Landing here selects the **first** child
 (`cs.codeSel = 0`). The card is a pure list:
 `↓`/`↑` move through the children (clamping at the last), and from the first
 child `↑`/`←` step back onto the last conversation of the unit if one exists

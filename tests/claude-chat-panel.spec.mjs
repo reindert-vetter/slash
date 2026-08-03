@@ -116,6 +116,76 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   await expect(page.getByTestId('reaction-compose')).toBeFocused()
 })
 
+// ↓ at the bottom of the Claude conversation (claudePos === 0) used to fall
+// into the Onderliggende-code panel — an unwanted extra "menu" in the way of
+// just continuing the review (explicit request). It now advances straight to
+// the next visible block's diff instead, and — since the strict
+// claudeChatVisible() invariant ties the Claude column to the comment column
+// (visible ⟺ visible) — the just-left block's Claude/comment blocks are gone
+// the moment the keyboard sits on a different, comment-less unit. Uses the
+// shared PR 12903 fixture (real ingested blocks, see the test above), seeding
+// the one comment it needs directly via the workflow API (mirrors
+// related-nav.spec.mjs) and cleaning it up afterwards.
+test('↓ at the bottom of the Claude chat advances to the next block, and the Claude/comment blocks disappear together', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await page.locator('[data-idx="1"]').click()
+  const card = page.getByTestId('block-column').locator('article').first()
+  await expect(card).toBeVisible()
+  const label = (await card.locator('h2').first().innerText()).trim()
+  const file = (await card.locator('.font-mono.text-slate-500').first().innerText()).trim().split(':')[0]
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: { pr: 12903, file, line: 1, author: 'reviewer', body: 'kan dit anders?', label, rowStart: -1, rowEnd: -1 },
+  })
+  const runId = (await start.json()).runId
+  expect(runId).toBeTruthy()
+  await expect
+    .poll(async () => {
+      const list = await (await page.request.get('/api/comments?pr=12903')).json()
+      return list.some((x) => x.runId === runId)
+    })
+    .toBe(true)
+
+  try {
+    // Reload so the comment is present from the start (avoids racing the
+    // frontend's own poll cadence, same as related-nav.spec.mjs).
+    await page.goto('/pr/12903')
+    await page.locator('[data-idx="1"]').click()
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowRight') // list -> diff
+    await page.keyboard.press('ArrowRight') // diff -> the comment conversation
+    await page.keyboard.press('ArrowRight') // comment -> claude
+    const composer = page.getByTestId('claude-chat-compose')
+    await expect(composer).toBeFocused()
+
+    await composer.fill('Kun je hier iets over zeggen?')
+    await composer.press('Enter')
+    await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+    await expect(composer).toBeFocused() // still claudePos === 0
+
+    await page.keyboard.press('ArrowDown')
+
+    // Landed on the NEXT visible block's diff, not on Onderliggende code —
+    // the panel released the keyboard entirely (relatedActive() is false), and
+    // the block column now shows a DIFFERENT block than the one the chat hung
+    // off (its h2 label no longer matches `label`).
+    await expect(page.locator('[data-idx="2"]')).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('related-item')).toHaveCount(0)
+    await expect(card).not.toContainText(label)
+
+    // Block 2 carries no comment of its own, so BOTH the comment column and
+    // the Claude column are gone together — never one without the other.
+    await expect(page.getByTestId('comment-item')).toHaveCount(0)
+    await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
+  } finally {
+    await page.request.post('/api/workflows/' + runId + '/signals/delete', {
+      data: { author: 'reviewer' },
+    })
+  }
+})
+
 // Composing a brand-new "Comment op deze regel" (cs.focus === 'new') shows
 // the Claude column right away, before any comment genuinely exists on the
 // backend — see "Optimistically visible while composing a brand-new comment"
