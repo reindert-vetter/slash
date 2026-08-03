@@ -124,4 +124,79 @@ test.describe('PR Review Tree — editing an own message', () => {
     await expect(page.getByTestId('message-edit-compose')).toHaveCount(0)
     await expect(page.getByTestId('reaction-bubble').first()).toContainText(body)
   })
+
+  test('Escape while editing a block-scoped message cancels the edit and hands the keyboard back to the block', async ({
+    page,
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
+    const body = 'blok-comment ' + Math.random().toString(36).slice(2)
+    await seedComment(page, pr, body)
+
+    await page.goto('/pr/' + pr)
+    await leaveSearchBox(page)
+    const row = page.getByTestId('comment-item').filter({ hasText: body })
+    await expect(row).toBeVisible()
+    await row.click()
+
+    await page.getByTestId('reaction-edit').first().click()
+    const editor = page.getByTestId('message-edit-compose')
+    await expect(editor).toBeFocused()
+    await editor.fill('deze-tekst-mag-niet-blijven-staan')
+
+    await page.keyboard.press('Escape')
+
+    // The edit is discarded, not saved.
+    await expect(page.getByTestId('message-edit-compose')).toHaveCount(0)
+
+    // The keyboard is handed back to the block (exitRelated → cs.focus =
+    // null), so the conversation collapses back to its compact,
+    // not-currently-focused form — it no longer renders the expanded thread's
+    // reaction-bubble list at all.
+    await expect(page.getByTestId('reaction-bubble')).toHaveCount(0)
+    await expect(row).toHaveAttribute('data-expanded', 'false')
+    await expect(row).toContainText(body)
+  })
+
+  test('Escape while editing a comment-index item\'s message releases the thread cursor back to the row', async ({
+    page,
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
+    const body = 'pr-wide-comment ' + Math.random().toString(36).slice(2)
+    const start = await page.request.post('/api/workflows/task_code_comment', {
+      // kind:'issue' (not file:'') is what makes this a PR-wide "Start" row
+      // (recomputeLeftList/prWideComments filter on kind !== '') — file/line
+      // still need real values to pass the backend's validation.
+      data: { pr, file: 'test.php', line: 1, kind: 'issue', author: 'reviewer', body },
+    })
+    const runId = (await start.json()).runId
+    expect(runId).toBeTruthy()
+    // A UI reply, so the thread has more than just the root message to walk.
+    await page.request.post('/api/workflows/' + encodeURIComponent(runId) + '/signals/reply', {
+      data: { author: 'reviewer', body: 'een-reactie', done: false },
+    })
+
+    await page.goto('/pr/' + pr)
+    await leaveSearchBox(page)
+    const row = page.locator('[data-testid=block-row]').filter({ hasText: body })
+    await expect(row).toBeVisible()
+    await row.click()
+
+    // Step into the thread and walk up to the reply (the newest message).
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('reaction-bubble')).toHaveCount(2)
+
+    await page.getByTestId('reaction-edit').nth(1).click()
+    const editor = page.getByTestId('message-edit-compose')
+    await expect(editor).toBeFocused()
+
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('message-edit-compose')).toHaveCount(0)
+
+    // The thread cursor (pct) is released: ArrowDown now moves the sidebar
+    // cursor along the ordinary block-index loop instead of walking the
+    // (now exited) thread again — with only this one row in the list, that
+    // loop's next stop is the search box.
+    await page.keyboard.press('ArrowDown')
+    await expect(page.getByTestId('block-search')).toBeFocused()
+  })
 })

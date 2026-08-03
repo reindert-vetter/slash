@@ -2567,7 +2567,10 @@ function editPencilIcon() {
 // by startEditMessage/prefillField, never a reactive `.value=` binding, per
 // the existing convention every other composer field in this file follows)
 // plus Opslaan/Annuleer. Enter sends (Shift+Enter is a newline, same
-// convention as every other composer here); Escape cancels.
+// convention as every other composer here); Escape cancels AND hands the
+// keyboard back to whichever cursor owns this comment, landing on the block/
+// item itself rather than leaving it stuck mid-thread — see "Editing an own
+// message" in .claude/docs/comments-panel.md.
 function editingBubble(c, msg) {
   const mine = msg.source === 'ui'
   return html`
@@ -2582,7 +2585,16 @@ function editingBubble(c, msg) {
             e.preventDefault()
             sendMessageEdit(c)
           } else if (e.key === 'Escape') {
+            // stopPropagation makes this fully self-contained rather than
+            // relying on the event bubbling into onKeydown's relatedActive()/
+            // isEditableFocused() fallbacks (which, for a comment-index item,
+            // never released the pct thread cursor at all — see
+            // .claude/docs/comments-panel.md).
+            e.preventDefault()
+            e.stopPropagation()
             cancelEditMessage()
+            if (pct.commentId === c.id) exitPrCommentThread()
+            else if (cs.focus !== null) exitRelated()
           }
         }}"
       ></textarea>

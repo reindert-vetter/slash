@@ -326,6 +326,30 @@ request shape: `{author:'reviewer', body, action:'edit', targetId}`. No new
 write path — see "The `edit` Action" in `.claude/docs/workflows-comments.md`
 for what the backend does with it, including the GitHub PATCH mirror.
 
+**`Escape` cancels the edit AND hands the keyboard back to the block/item
+itself**, not just to wherever the thread cursor happened to sit — explicit
+request ("I want to be able to get out with Escape, landing on the block
+itself"). `editingBubble`'s own `@keydown` calls `e.stopPropagation()` so this
+is fully self-contained rather than relying on the event bubbling into
+`home.mjs`'s `onKeydown` (which, before this, only incidentally worked for the
+block-scoped case via `relatedActive()`'s `handleRelatedKey('Escape')` →
+`exitRelated()`, and did nothing at all for a comment-index item — `pct`, that
+item's own thread cursor, was never released, so a subsequent `↑`/`↓` kept
+walking the thread instead of moving the sidebar selection). The handler
+branches on which cursor actually owns this comment: `pct.commentId === c.id`
+(a comment-index item's own thread, see `pct` above) → `exitPrCommentThread()`;
+otherwise, if `cs.focus !== null` (the block-scoped inline thread) →
+`exitRelated()`, same as `handleRelatedKey`'s own Escape handling elsewhere.
+Neither branch fires when editing was started via a mouse click on a
+look-ahead/preview card's own bubble while the keyboard sits elsewhere —
+`pct` can never point at a non-selected item (reset by the
+`watch(() => state.selected, …)` in `home.mjs`), and the block-scoped edit
+pencil only ever renders on the conversation `cs.focus` already owns
+(`commentCard`'s `selI() === i && cs.focus is 'comment'/'thread'` gate), so
+there is nothing stray to release in that case. The "Annuleer" button keeps
+calling the plain `cancelEditMessage()` — a mouse click doesn't carry the same
+"get me out of here" intent as Escape.
+
 ## Inline comment blocks
 
 Block-scoped comment threads (`kind === ''`, the `task_code_comment` workflow)
