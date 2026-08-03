@@ -6432,6 +6432,16 @@ const PR_COMMANDS = withClose([
         run: () => window.open(state.prUrl || GITHUB_PR, '_blank'),
       },
       {
+        id: 'pr-github-review',
+        // Manual entry point into the exact same approve/reject flow as the
+        // automatic postApprove follow-up (see REVIEW_CHOICE_COMMANDS above) —
+        // reachable at any time, not only after approving the last unit.
+        label: 'PR keuren',
+        hint: 'review',
+        icon: 'approve-pr',
+        children: REVIEW_CHOICE_COMMANDS,
+      },
+      {
         id: 'pr-github-comment',
         label: 'Comment plaatsen',
         hint: 'comment',

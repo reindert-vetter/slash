@@ -276,4 +276,50 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     expect(copied).toContain('/pull/12903')
     expect(copied.trim().endsWith('✅ met 2 comments')).toBe(true)
   })
+
+  // "PR keuren" (PR_COMMANDS → the "GitHub" submenu) is a manual entry point
+  // into this exact same REVIEW_CHOICE_COMMANDS array — reachable at any time
+  // via `/`, not only right after approving the last reachable unit (the
+  // automatic postApprove/reviewChoice path covered by the tests above and by
+  // postapprove-menu.spec.mjs). No second implementation: it's the identical
+  // `children` array, so this only checks the new entry point + item order,
+  // not the submit mechanics again.
+  test('`/` → GitHub → "PR keuren" opens the same approve/reject choice, reachable at any time', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape')
+
+    await page.keyboard.press('/')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await page.getByTestId('command-row').filter({ hasText: 'GitHub' }).click()
+
+    const rows = page.getByTestId('command-row')
+    await expect(rows).toHaveCount(4)
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Open op GitHub')
+    await expect(rows.nth(2)).toContainText('PR keuren')
+    await expect(rows.nth(3)).toContainText('Comment plaatsen')
+    await expect(rows.nth(2).getByTestId('command-icon-approve-pr')).toBeVisible()
+
+    await rows.filter({ hasText: 'PR keuren' }).click()
+    await expect(menu).toBeVisible()
+    await expect(rows).toHaveCount(3)
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('Keur de HELE PR goed')
+    await expect(rows.nth(2)).toContainText('Wijs de PR af')
+
+    // Esc from this nested submenu resets straight to the PR-menu root, not
+    // one level back to "GitHub" — the documented "Esc always goes to root"
+    // behaviour (see command-palette.md), which is what makes this extra
+    // nesting level free.
+    await page.keyboard.press('Escape')
+    await expect(rows).toHaveCount(5)
+    await expect(rows.nth(1)).toContainText('GitHub')
+
+    await page.keyboard.press('Escape')
+    await expect(menu).not.toBeVisible()
+  })
 })

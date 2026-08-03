@@ -474,8 +474,17 @@ The same overlay, with actions on the **whole PR**. Five root items:
 
 1. **"Sluit menu"** (pinned).
 2. **"GitHub"** (submenu, thus the default item — a submenu rather than a
-   direct action, deliberately left as-is): *Open on GitHub* and *Place comment*
-   (reuses `startComment`).
+   direct action, deliberately left as-is): *Open on GitHub*, **"PR keuren"**
+   and *Place comment* (reuses `startComment`). **"PR keuren"** is a manual
+   entry point into the exact same approve/reject flow as the automatic
+   review-submit follow-up below (`children: REVIEW_CHOICE_COMMANDS`, the
+   identical array, no second implementation) — so a reviewer can approve or
+   reject the whole PR at any moment, not only right after approving the last
+   reachable unit. Nesting a submenu's item that itself opens a further
+   submenu (here down to `REVIEW_APPROVE_CONFIRM_COMMANDS`, or into the
+   `reviewReject` mode) works with no changes to `enterSubmenu`/`onKeydown`:
+   `Esc` from any submenu depth always resets straight to that mode's root
+   (`ms.sub = null`), never "back one level", so extra nesting is free.
 3. **"Jira"** (submenu): *Open in new tab* (deep link), plus *Place comment* and
    *Create subtask* as **placeholders** (no Jira write integration yet).
 4. **"Diepgravend onderzoek"** — starts `code_warning` on Opus
