@@ -130,7 +130,12 @@ The name comes from read-only **`GET /api/names?logins=a,b`** (`handleNames` →
    It wins, because a GitHub profile name is freely editable, often empty, and
    sometimes just the username again; this file is where a team corrects that
    without touching code. Missing or unparsable → empty map (never an error),
-   read once per data dir, so editing it takes a restart.
+   read once per data dir, so editing it takes a restart. The repo **ships**
+   this file (`data/names.json`, committed — only `data/*.db*` is gitignored):
+   it covers every `plug-and-pay/plug-and-pay` collaborator whose GitHub
+   profile `name` is empty, which is the only thing that makes the UI fall back
+   to the bare lowercase login. Names in it are hand-supplied by the team;
+   never guess one.
 2. The **GitHub profile `name`**, via one batched `gh api graphql` call
    (`github.Client.UsersByLogin`: one aliased `user(login:)` field per login,
    logins validated + passed as `-f` variables, a non-resolving login parsed out
