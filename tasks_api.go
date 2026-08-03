@@ -901,9 +901,10 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		// see ChatMessageSignal's own doc comment for what each value means.
 		if parts[2] == SignalMessage {
 			var body struct {
-				Author string `json:"author"`
-				Body   string `json:"body"`
-				Action string `json:"action"`
+				Author  string `json:"author"`
+				Body    string `json:"body"`
+				Action  string `json:"action"`
+				Context string `json:"context"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid message", http.StatusBadRequest)
@@ -926,6 +927,7 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			}
 			sig := ChatMessageSignal{
 				ID: "msg-" + newUIReactionID(), Author: body.Author, Body: body.Body, Action: body.Action,
+				Context: body.Context,
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalMessage, sig); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})

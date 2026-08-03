@@ -662,3 +662,51 @@ func TestChatTurnPublishesProgressButPersistsOnlyTheResult(t *testing.T) {
 		t.Fatalf("transcript = %+v, want exactly the final result", list)
 	}
 }
+
+// ChatMessageSignal.Context (the reviewer's selection: file, old/new line
+// range, code excerpt — built by RelatedPanel.mjs's claudeContextBlock for a
+// conversation's first turn only) must enrich the CLI PROMPT but never leak
+// into the saved chat.Message.Body, which stays exactly what the reviewer
+// typed. See buildChatPrompt/saveChatMessage in chat_workflow.go.
+func TestChatTurnContextEnrichesPromptNotBody(t *testing.T) {
+	_, _, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970720, "comment-context"
+
+	fake.SetChatTurns("Ik zie het.")
+	const selectionContext = "Bestand: src/Order.php\nNieuwe regels: 41-44\nVoorbeeldcode:\n```php\n$order->total();\n```"
+	msg, _ := runOneClaudeTurn(ctx, cm, fake, t.TempDir(), chatTurnInput{
+		PR: pr, ConversationID: commentID, Body: "Wat doet dit?", TurnID: "msg-ctx",
+		Context: selectionContext,
+	})
+
+	if msg.Body != "Ik zie het." {
+		t.Fatalf("saved assistant body = %q, want the CLI's plain reply", msg.Body)
+	}
+	if len(fake.Calls) != 1 {
+		t.Fatalf("expected exactly 1 RunChat call, got %d", len(fake.Calls))
+	}
+	gotPrompt := fake.Calls[0].Prompt
+	if gotPrompt != selectionContext+"\n\nWat doet dit?" {
+		t.Fatalf("prompt sent to claude = %q, want context prepended to the typed body", gotPrompt)
+	}
+
+	// A saveChatMessage for the reviewer's OWN turn (the workflow's job, not
+	// runOneClaudeTurn's) must never receive Context either — asserted at the
+	// workflow level below via chatMessageID reuse: the user row it wrote in
+	// TestClaudeChatWorkflowRoundTrip already only carries Body, unchanged by
+	// this field's existence (that test predates Context and still passes).
+
+	// A turn with no Context (every turn after the first) is a pure
+	// pass-through — unchanged prompt, exactly the old behaviour.
+	fake.SetChatTurns("Nog een antwoord.")
+	msg2, _ := runOneClaudeTurn(ctx, cm, fake, t.TempDir(), chatTurnInput{
+		PR: pr, ConversationID: commentID, Body: "En dit?", TurnID: "msg-ctx-2",
+	})
+	if msg2.Body != "Nog een antwoord." {
+		t.Fatalf("saved assistant body = %q", msg2.Body)
+	}
+	if got := fake.Calls[1].Prompt; got != "En dit?" {
+		t.Fatalf("prompt without context = %q, want the plain body unchanged", got)
+	}
+}

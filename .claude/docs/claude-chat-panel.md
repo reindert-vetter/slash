@@ -510,6 +510,68 @@ to the bottom as the textarea grows taller. Reading/writing its value
 (`el.value`) via `querySelector('[data-testid=claude-chat-compose]')` in the
 "Stuur"/"Bewerk code" click handlers is unaffected by the element swap.
 
+## Invisible selection context on a conversation's FIRST turn
+
+Before this, `claude` genuinely had no idea what code a conversation was
+about — the CLI's `Prompt` was just the reviewer's typed text, so a question
+like "wat weet jij over de code wat ik heb geselecteerd?" (asked with nothing
+else in the prompt) could only be answered "I don't know, tell me the
+file/line". Fixed end to end, but deliberately **invisible**: the reviewer's
+own chat bubble must show exactly what they typed, nothing more.
+
+- **`claudeContextBlock(commentTarget)`** (`RelatedPanel.mjs`) builds a plain
+  text block — the file, "Oude regels"/"Nieuwe regels" (whichever side(s) the
+  current unit actually touches), the unit's label, and its code excerpt —
+  from `commentTarget()` (`home.mjs`), the exact same object the comment
+  composer already renders against, so it reflects whatever granularity
+  (group/line/call, `f`/`d`/`s`) the reviewer is on. Returns `''` when there's
+  nothing useful (no target, or a block-level fallback with no real code — see
+  `commentTarget`'s own `!unit` branch), which is treated as "send nothing
+  extra", unchanged from before this existed.
+- **Old + new line ranges, not just one side:** `commentTarget()`'s existing
+  `startLine`/`endLine`/`side` (used for GitHub anchoring, see `placeComment`)
+  only ever describe ONE side of a unit. `unitBothLineRanges` (`home.mjs`,
+  next to `unitLineRange`) is the same aligned-row counting algorithm but
+  tracks BOTH sides' counters/ranges at once, so `commentTarget()` additionally
+  returns `oldStartLine`/`oldEndLine`/`newStartLine`/`newEndLine` (0 when that
+  side has no rows in the unit — e.g. a pure addition has no old range). Purely
+  additive fields; every existing consumer of `commentTarget()`
+  (`createComment`/`placeComment`) is unaffected.
+- **Only the conversation's FIRST turn carries it** (`cc.messages.length === 0`
+  at send time, checked inside `claudeContextBlock`) — the claude CLI's own
+  `--resume` session already has the context from turn 1, so repeating it on
+  every later turn would only bloat the prompt for nothing. A "Bewerk code"/
+  quick-option send goes through the exact same `sendClaudeMessageFromNew`
+  choke point, so this is not special-cased per button.
+- **The block never touches the visible bubble.** `sendClaudeMessage(text,
+  action, context)` sends `context` as `ChatMessageSignal`'s own
+  **`context`** field (`chat_workflow.go`), separate from `body` — the
+  workflow's `saveChatMessage` still only ever stores `sig.Body` (what the
+  reviewer typed), while `runClaudeTurn`'s Activity input carries
+  `Context: sig.Context` alongside it. `runOneClaudeTurn` builds the actual CLI
+  prompt via **`buildChatPrompt(selectionContext, body)`** — `selectionContext
+  + "\n\n" + body` when non-empty, otherwise a plain pass-through of `body`
+  (every turn after the first, or no cursor info available: unchanged
+  behaviour). `tasks_api.go`'s `SignalMessage` handler decodes the extra
+  `context` field from the POST body into the Signal; no new validation (it's
+  always optional, mirroring `Action`).
+- **Deterministic under replay** (`.claude/rules/workflow-determinism.md`):
+  `Context` is part of the Signal's own recorded input, exactly like `Body` —
+  `buildChatPrompt` is a pure function of it, no new non-determinism.
+  **Write-boundary**-clean (`.claude/rules/workflows-write-boundary.md`): no
+  new write path, just one more field flowing through the existing
+  Signal → Activity chain.
+- Tests: `TestChatTurnContextEnrichesPromptNotBody`
+  (`chat_workflow_test.go`) asserts at the `runOneClaudeTurn`/`claude.Fake`
+  level that the saved `chat.Message.Body` stays exactly the typed text while
+  `Fake.Calls[i].Prompt` carries the context prepended, and that a turn with no
+  `Context` is an unchanged pass-through. `tests/claude-chat-panel.spec.mjs`'s
+  "composing a new comment…" test intercepts the first `.../signals/message`
+  POST and asserts its JSON body has `context` (containing `Bestand:`/
+  `Voorbeeldcode:`) while `body` is exactly the typed text and the rendered
+  reviewer bubble (`claude-message-body`) shows only that typed text; a second
+  send in the same conversation asserts `context` is empty/absent.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat

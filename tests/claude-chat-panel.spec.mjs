@@ -158,10 +158,11 @@ test('composing a new comment: the Claude column shows before it is placed, and 
   // CLAUDE_ANCHOR_PLACEHOLDER for its body.
   const claudeComposer = page.getByTestId('claude-chat-compose')
   await claudeComposer.fill('Wat doet deze functie?')
-  const [createRes] = await Promise.all([
+  const [createRes, firstMsgReq] = await Promise.all([
     page.waitForResponse(
       (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
     ),
+    page.waitForRequest((req) => req.url().includes('/signals/message') && req.method() === 'POST'),
     claudeComposer.press('Enter'),
   ])
   const runId = (await createRes.json()).runId
@@ -178,6 +179,28 @@ test('composing a new comment: the Claude column shows before it is placed, and 
     await expect(page.getByTestId('claude-message-body').last()).toContainText(
       'Ik heb naar de code gekeken',
     )
+
+    // This conversation's FIRST turn invisibly carries the reviewer's
+    // selection (file + the unit's code) as its own `context` field
+    // (ChatMessageSignal.Context, chat_workflow.go's buildChatPrompt) —
+    // `body` stays exactly what was typed, and so does the reviewer's own
+    // rendered bubble, never mixed with the context block (see
+    // claudeContextBlock in RelatedPanel.mjs).
+    const firstPayload = firstMsgReq.postDataJSON()
+    expect(firstPayload.body).toBe('Wat doet deze functie?')
+    expect(firstPayload.context).toContain('Bestand:')
+    expect(firstPayload.context).toContain('Voorbeeldcode:')
+    await expect(page.getByTestId('claude-message-body').first()).toHaveText('Wat doet deze functie?')
+
+    // A SECOND turn in the same conversation needs no context of its own —
+    // the claude CLI's own --resume session already has it from the first
+    // turn's prompt.
+    await claudeComposer.fill('En dit stukje?')
+    const [secondMsgReq] = await Promise.all([
+      page.waitForRequest((req) => req.url().includes('/signals/message') && req.method() === 'POST'),
+      claudeComposer.press('Enter'),
+    ])
+    expect(secondMsgReq.postDataJSON().context).toBeFalsy()
 
     // "Plaats…" must not start a SECOND comment next to it — it updates the
     // existing anchor via a reply instead.

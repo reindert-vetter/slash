@@ -5050,6 +5050,10 @@ function commentTarget() {
       endLine: 0,
       side: 'RIGHT',
       segment: '',
+      oldStartLine: 0,
+      oldEndLine: 0,
+      newStartLine: 0,
+      newEndLine: 0,
     }
   let code = ''
   for (let i = unit.start; i <= unit.end; i++) {
@@ -5058,6 +5062,7 @@ function commentTarget() {
     if (text != null) code += (code ? '\n' : '') + text
   }
   const { startLine, endLine, side } = unitLineRange(b, rows, unit)
+  const { oldStartLine, oldEndLine, newStartLine, newEndLine } = unitBothLineRanges(b, rows, unit)
   return {
     gran,
     label: b.label,
@@ -5076,6 +5081,15 @@ function commentTarget() {
     endLine,
     side,
     segment: unitSegment(rows, unit),
+    // Both sides' own line ranges (0 when that side has no rows in the unit),
+    // independent of `side`'s pick above — only consumed so far by
+    // RelatedPanel's claudeContextBlock (the invisible chat-prompt context; see
+    // claude-chat-panel.md), which wants "old" and "new" together rather than
+    // GitHub's single-side anchor.
+    oldStartLine,
+    oldEndLine,
+    newStartLine,
+    newEndLine,
   }
 }
 
@@ -5118,6 +5132,40 @@ function unitLineRange(b, rows, unit) {
     if (r.left != null) oldNo++
   }
   return { startLine, endLine, side }
+}
+
+// unitBothLineRanges is unitLineRange's counterpart for a caller that wants
+// BOTH sides' line ranges together (old ánd new), instead of the single side
+// GitHub anchoring needs. Same row-counting algorithm, just tracking two
+// independent counters/ranges instead of picking one via `side`. A side with
+// no content in the unit (e.g. a pure addition has no old range) comes back
+// as 0/0, same "unknown" convention as unitLineRange's own fallback.
+function unitBothLineRanges(b, rows, unit) {
+  const c = b && b.code
+  if (!c || !c.new || !c.old || !unit)
+    return { oldStartLine: 0, oldEndLine: 0, newStartLine: 0, newEndLine: 0 }
+  let newNo = c.new.start
+  let oldNo = c.old.start
+  let oldStartLine = 0,
+    oldEndLine = 0,
+    newStartLine = 0,
+    newEndLine = 0
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
+    if (!r) continue
+    const inUnit = i >= unit.start && i <= unit.end
+    if (inUnit && r.right != null) {
+      if (!newStartLine) newStartLine = newNo
+      newEndLine = newNo
+    }
+    if (inUnit && r.left != null) {
+      if (!oldStartLine) oldStartLine = oldNo
+      oldEndLine = oldNo
+    }
+    if (r.right != null) newNo++
+    if (r.left != null) oldNo++
+  }
+  return { oldStartLine, oldEndLine, newStartLine, newEndLine }
 }
 
 // unitSegment returns the source text of a 'call' unit's underlined segment —

@@ -1042,7 +1042,14 @@ function applyChatProgress(p) {
 // against the conversation's shadow worktree) or 'commit' (push that shadow's
 // edits — no Body needed, the ONLY case allowed to send with empty text; see
 // tasks_api.go's validation of the exact same three values).
-async function sendClaudeMessage(text, action = '') {
+//
+// `context` (optional) is the reviewer's SELECTION at send time — never part
+// of the visible bubble. It travels as its own field on the Signal
+// (ChatMessageSignal.Context, chat_workflow.go) and only enriches the PROMPT
+// the claude CLI sees (buildChatPrompt); `text`/`trimmed` is what gets saved
+// and shown, unchanged. See claudeContextBlock's doc comment for who builds it
+// and why only the conversation's first turn does.
+async function sendClaudeMessage(text, action = '', context = '') {
   const trimmed = (text || '').trim()
   const isCommit = action === 'commit'
   if (!cc.runId) return
@@ -1052,13 +1059,43 @@ async function sendClaudeMessage(text, action = '') {
     await fetch('/api/workflows/' + encodeURIComponent(cc.runId) + '/signals/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ author: 'reviewer', body: trimmed, action: action || undefined }),
+      body: JSON.stringify({
+        author: 'reviewer',
+        body: trimmed,
+        action: action || undefined,
+        context: context || undefined,
+      }),
     })
     await loadChatMessages(cc.commentId)
     clearFinishedChatProgress()
   } finally {
     cc.busy = false
   }
+}
+
+// claudeContextBlock builds the invisible selection context sent alongside a
+// conversation's FIRST turn only (cc.messages still empty at that point —
+// every later turn resumes the same claude CLI session, which already knows
+// it, so repeating it would only bloat the prompt for nothing). Built from
+// `commentTarget()` (home.mjs) — the same object the comment composer already
+// renders against — so it always describes whatever unit/granularity
+// (group/line/call, see keyboard-navigation.md's f/d/s) the reviewer is
+// currently on. Returns '' when there's nothing useful to say (no target, or
+// a block-level target with no real code — see commentTarget's `!unit`
+// fallback), which sendClaudeMessage/sendClaudeMessageFromNew treat as "send
+// nothing extra", identical to today's behaviour.
+function claudeContextBlock(commentTarget) {
+  if (cc.messages.length > 0) return '' // not this conversation's first turn
+  const t = commentTarget && commentTarget()
+  if (!t || !t.file || !t.code) return ''
+  const lines = ['Context van de reviewer-selectie (niet door de reviewer getypt):', 'Bestand: ' + t.file]
+  if (t.oldStartLine)
+    lines.push('Oude regels: ' + t.oldStartLine + (t.oldEndLine > t.oldStartLine ? '-' + t.oldEndLine : ''))
+  if (t.newStartLine)
+    lines.push('Nieuwe regels: ' + t.newStartLine + (t.newEndLine > t.newStartLine ? '-' + t.newEndLine : ''))
+  if (t.label) lines.push('Onderdeel: ' + t.label)
+  lines.push('Voorbeeldcode:', '```php', t.code, '```')
+  return lines.join('\n')
 }
 
 // commitClaudeChange sends the 'commit' turn after the reviewer confirms via
@@ -2042,7 +2079,7 @@ async function ensureClaudeAnchorForNew(state, commentTarget) {
 async function sendClaudeMessageFromNew(state, commentTarget, text, action) {
   const c = await ensureClaudeAnchorForNew(state, commentTarget)
   if (c) await ensureAndLoadChat(state.pr, c.id)
-  await sendClaudeMessage(text, action)
+  await sendClaudeMessage(text, action, claudeContextBlock(commentTarget))
 }
 
 // placeComment submits the composer's text as a comment on the current unit.
