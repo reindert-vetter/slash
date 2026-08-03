@@ -155,16 +155,31 @@ test.describe('PR Review Tree — Shift+arrow line/group-range selection', () =>
     // The range now spans 3 of the 4 changed lines.
     await expect(activeRows).toHaveCount(3)
 
-    const firstBox = await activeRows.first().boundingBox()
-    const lastBox = await activeRows.last().boundingBox()
-    expect(lastBox.y).toBeGreaterThan(firstBox.y) // sanity: the range really spans multiple rows
+    // The diff panes are re-set as whole `.innerHTML` blobs whenever a late
+    // load bumps `state.codeVersion`, so a row node can detach between two
+    // separate boundingBox() reads (-> null). Read both in ONE polled step and
+    // let the sanity assertion itself do the retrying.
+    let lastBox = null
+    await expect
+      .poll(async () => {
+        const first = await activeRows.first().boundingBox()
+        const last = await activeRows.last().boundingBox()
+        if (!first || !last) return null
+        lastBox = last
+        return last.y - first.y
+      })
+      .toBeGreaterThan(0) // sanity: the range really spans multiple rows
 
     await page.keyboard.press('Enter')
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
-    const menuBox = await page.getByTestId('command-anchor').boundingBox()
     // The menu must clear the bottom of the LAST selected row, not just the
     // first one (positionMenu adds an 8px gap below the anchor).
-    expect(menuBox.y).toBeGreaterThanOrEqual(lastBox.y + lastBox.height)
+    await expect
+      .poll(async () => {
+        const box = await page.getByTestId('command-anchor').boundingBox()
+        return box ? box.y : null
+      })
+      .toBeGreaterThanOrEqual(lastBox.y + lastBox.height)
   })
 })
