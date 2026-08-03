@@ -2163,7 +2163,7 @@ export function composeTargetHint(target) {
       ${() =>
         target.code
           ? html`<code
-              class="language-php mt-1 block max-h-16 overflow-auto whitespace-pre rounded bg-white/70 dark:bg-zinc-800/70 px-2 py-1 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
+              class="language-php mt-1 block max-h-16 overflow-auto no-scrollbar whitespace-pre rounded bg-white/70 dark:bg-zinc-800/70 px-2 py-1 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
               .innerHTML="${() => highlight(target.code)}"
             ></code>`
           : ''}
