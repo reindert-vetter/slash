@@ -1093,15 +1093,55 @@ async function sendClaudeMessage(text, action = '', context = '') {
 // nothing extra", identical to today's behaviour.
 function claudeContextBlock(commentTarget) {
   if (cc.messages.length > 0) return '' // not this conversation's first turn
+  const parts = []
   const t = commentTarget && commentTarget()
-  if (!t || !t.file || !t.code) return ''
-  const lines = ['Context van de reviewer-selectie (niet door de reviewer getypt):', 'Bestand: ' + t.file]
-  if (t.oldStartLine)
-    lines.push('Oude regels: ' + t.oldStartLine + (t.oldEndLine > t.oldStartLine ? '-' + t.oldEndLine : ''))
-  if (t.newStartLine)
-    lines.push('Nieuwe regels: ' + t.newStartLine + (t.newEndLine > t.newStartLine ? '-' + t.newEndLine : ''))
-  if (t.label) lines.push('Onderdeel: ' + t.label)
-  lines.push('Voorbeeldcode:', '```php', t.code, '```')
+  if (t && t.file && t.code) {
+    const lines = ['Context van de reviewer-selectie (niet door de reviewer getypt):', 'Bestand: ' + t.file]
+    if (t.oldStartLine)
+      lines.push('Oude regels: ' + t.oldStartLine + (t.oldEndLine > t.oldStartLine ? '-' + t.oldEndLine : ''))
+    if (t.newStartLine)
+      lines.push('Nieuwe regels: ' + t.newStartLine + (t.newEndLine > t.newStartLine ? '-' + t.newEndLine : ''))
+    if (t.label) lines.push('Onderdeel: ' + t.label)
+    lines.push('Voorbeeldcode:', '```php', t.code, '```')
+    parts.push(lines.join('\n'))
+  }
+  const threadBlock = claudeThreadContextBlock()
+  if (threadBlock) parts.push(threadBlock)
+  return parts.join('\n\n')
+}
+
+// claudeThreadContextBlock summarizes every already-written comment message
+// scoped to this same code block/line — the conversation's own anchor thread
+// (opening + reactions) PLUS any other comment thread on the same unit (i.e.
+// exactly visibleComments()/cs.view, the same "under this selection" scope
+// the comment index itself uses — see recomputeView/commentUnder) — so
+// Claude doesn't need the reviewer to repeat in the chat what's already
+// written right next to it. Deliberately NOT every comment on the whole PR,
+// only this unit's.
+//
+// Ordered chronologically (createdAt) across every thread combined, and the
+// LAST message is explicitly tagged as the most recent one the conversation
+// builds on — an unordered dump left it unclear which remark is the standing
+// one to react to (explicit reviewer request). Skips
+// CLAUDE_ANCHOR_PLACEHOLDER (see ensureClaudeAnchorForNew) since that is not
+// a real message the reviewer wrote.
+function claudeThreadContextBlock() {
+  const threads = visibleComments()
+  if (!threads.length) return ''
+  const msgs = []
+  for (const c of threads) {
+    for (const m of threadMessages(c)) {
+      if (!m.body || m.body === CLAUDE_ANCHOR_PLACEHOLDER) continue
+      msgs.push({ author: m.author, body: m.body, createdAt: m.createdAt || c.createdAt || '' })
+    }
+  }
+  if (!msgs.length) return ''
+  msgs.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
+  const lines = ['Al geschreven comments op dit codeblok/deze regel (chronologisch, oud naar nieuw):']
+  msgs.forEach((m, i) => {
+    const tag = i === msgs.length - 1 ? ' [meest recent — het gesprek gaat hierop verder]' : ''
+    lines.push('- ' + displayNameOf(m.author || 'onbekend') + ': ' + m.body + tag)
+  })
   return lines.join('\n')
 }
 

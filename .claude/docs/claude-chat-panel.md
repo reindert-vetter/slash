@@ -657,6 +657,35 @@ own chat bubble must show exactly what they typed, nothing more.
   reviewer bubble (`claude-message-body`) shows only that typed text; a second
   send in the same conversation asserts `context` is empty/absent.
 
+### The already-written comment thread(s) on this unit also ride along, chronologically
+
+`claudeContextBlock` also folds in **`claudeThreadContextBlock()`**
+(`RelatedPanel.mjs`, same file, same first-turn-only gate) — every
+already-written comment message scoped to the exact same code block/line: the
+conversation's own anchor thread (opening + every reaction) **plus** any other
+comment thread on that same unit, i.e. exactly `visibleComments()`/`cs.view`,
+the same "under this selection" scope `recomputeView`/`commentUnder` already
+compute for the comment index itself. Deliberately **not** every comment on
+the whole PR — reviewer's explicit choice, "de tussenvorm": own thread plus
+same-unit threads, not PR-wide.
+
+Reviewer's second explicit requirement: it must be unambiguous which remark is
+the standing one to react to, not an unordered dump. So every message
+(comment openings + reactions, across every thread on the unit) is sorted
+**chronologically by `createdAt`** (comments/reactions both carry
+`RFC3339Nano` timestamps, see `modules/comments/comments.go`, so ties across
+near-simultaneous inserts are never actually ambiguous) and the **last** line
+is explicitly tagged `[meest recent — het gesprek gaat hierop verder]`.
+`CLAUDE_ANCHOR_PLACEHOLDER` bodies are filtered out (not a real reviewer
+message, see `ensureClaudeAnchorForNew` above). Same invisibility/determinism
+guarantees as the selection block above: only the `context` Signal field, the
+visible bubble is untouched; no new write path.
+
+Test: the first "embedded Claude chat…" spec in `tests/claude-chat-panel.spec.mjs`
+seeds a second comment thread on the exact same file+label before entering the
+chat, and asserts the first turn's intercepted `context` contains both
+bodies, in creation order, with the later one tagged `meest recent`.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat
