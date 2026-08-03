@@ -2731,7 +2731,7 @@ function compactConversation(c, i) {
   return html`
     <button
       class="${() =>
-        'flex w-full items-start gap-2 rounded-md border border-slate-300 dark:border-zinc-700 px-2.5 py-2 text-left transition ' +
+        'flex w-full items-start gap-2 rounded-xl border border-slate-300 dark:border-zinc-700 px-2.5 py-2 text-left ring-1 ring-black/5 transition ' +
         (c.status === 'resolved'
           ? 'bg-slate-50/60 dark:bg-zinc-800/40 hover:border-indigo-200 dark:hover:border-indigo-500/40'
           : 'bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
