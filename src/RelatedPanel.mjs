@@ -3189,10 +3189,19 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
   // `items-stretch`, so this column has no padding/border/background of its
   // own any more — only its own inner cards (compactConversation/
   // expandedConversation/newCommentComposer) keep their own padding.
+  //
+  // `justify-end`: `items-stretch` gives this column the full height of the
+  // (often taller) Claude column next to it, but this column's own content
+  // is only as tall as its comments — without `justify-end` that content
+  // sits at the TOP, leaving a dead gap below and stranding the reply
+  // composer far above the Claude composer beside it. The Claude column
+  // doesn't need this itself: its message thread already carries its own
+  // `flex-1` to pin its composer to the bottom (see claudeChatColumn in
+  // ClaudeChat.mjs).
   const widthKey = () => colWidthKeyFor('comments', commentTarget)
   return html`
     <div
-      class="${() => 'relative flex shrink-0 flex-col gap-2 ' + commentColumnWidthCls()}"
+      class="${() => 'relative flex shrink-0 flex-col justify-end gap-2 ' + commentColumnWidthCls()}"
       style="${() => colWidthStyle(state, widthKey())}"
       data-testid="inline-comments"
       data-col-resize-root
