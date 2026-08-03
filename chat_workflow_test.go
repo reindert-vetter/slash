@@ -592,6 +592,14 @@ func TestChatTurnMessageIDsAreDerivedFromTheTurn(t *testing.T) {
 	const pr, commentID = 970710, "comment-idem"
 
 	fake.SetChatTurns("Eerste antwoord", "Tweede poging")
+	// The conversation row must exist, exactly as the workflow creates it
+	// before it ever runs a turn: SetSession is an UPDATE, so without the row
+	// the first turn's session id is silently dropped and the replay below
+	// starts a SECOND fake session (which, with the Fake's per-session turn
+	// cursor, would replay turn 1 instead of moving on to turn 2).
+	if err := cm.EnsureConversation(ctx, commentID, pr); err != nil {
+		t.Fatal(err)
+	}
 	arg := chatTurnInput{PR: pr, ConversationID: commentID, Body: "Hoi", TurnID: "msg-42"}
 
 	first, _ := runOneClaudeTurn(ctx, m, cm, fake, t.TempDir(), arg)

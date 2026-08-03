@@ -377,10 +377,13 @@ falls back to its initials-circle rendering (empty `avatarUrl`).
 existing `SLASH_JIRA_ASSIGNED` fixture-path convention exactly.
 **`SLASH_CLAUDE_CHAT_TURNS`** (`tasks_api.go`, only read under
 `SLASH_CLAUDE=off`) optionally points at a JSON `[]string` fixture that
-programs the Fake's reply queue at server startup — a **worker-wide FIFO**,
-safe because no other workflow in this app calls `RunChat` (only the
-one-shot `Run`), so only `tests/claude-chat-panel.spec.mjs`'s own sends ever
-consume from it. Wired in `tests/_fixtures.mjs`'s worker-scoped server
+programs the Fake's turn script at server startup. That script is
+**per conversation, not a queue**: the Fake keeps a **cursor per session id**,
+so every fresh session (`SessionID == ""`) starts again at turn 1 and only a
+*resumed* session walks on to the next turn. It used to be one worker-wide
+consuming FIFO, which was fine while a single spec used it and broke as soon as
+a second chat spec landed on the same worker — the second conversation then got
+turn 2 or 3 instead of turn 1, red or green purely by scheduler luck. Wired in `tests/_fixtures.mjs`'s worker-scoped server
 fixture → `tests/fixtures/claude-chat-turns.json` (a plain-text reply, then a
 strict `{"type":"question",...}` directive, then a follow-up reply).
 

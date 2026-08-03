@@ -443,12 +443,17 @@ type Fake struct {
 	outputs map[string]string
 	errs    map[string]error
 	Calls   []RunRequest
-	// chatQueue/chatErr program RunChat: a FIFO of turn outputs consumed one per
-	// call, regardless of session — deliberately simpler than per-session
-	// queues, since every test using this drives one conversation at a time.
+	// chatQueue/chatErr program RunChat. chatQueue is the programmed turn
+	// script and is NEVER consumed: chatPos holds a cursor PER SESSION into it,
+	// so a fresh session (SessionID == "") starts over at turn 0 while a
+	// resumed session walks on to its next turn. It used to be one FIFO shared
+	// by every session, which broke as soon as two conversations ran against
+	// the same Fake — the Playwright worker server is shared by every chat
+	// spec, so whichever spec came second got turn 2 or 3 instead of turn 1.
 	// chatSeq numbers the fake session ids RunChat hands out for a fresh
 	// (SessionID == "") call.
 	chatQueue []string
+	chatPos   map[string]int
 	chatErr   error
 	chatSeq   int
 	// chatEvents are replayed to req.OnEvent (when set) before each RunChat
@@ -499,13 +504,15 @@ func (f *Fake) CallCount() int {
 	return len(f.Calls)
 }
 
-// SetChatTurns programs the sequence of texts RunChat returns, one per call,
-// in order (across however many sessions this Fake sees — see the Fake's own
-// chatQueue doc comment).
+// SetChatTurns programs the sequence of texts RunChat returns for a single
+// conversation, one per turn, in order. Every session walks this same script
+// independently — see the Fake's own chatQueue/chatPos doc comment — so it is
+// a per-session turn script, not a global queue. Resets every cursor.
 func (f *Fake) SetChatTurns(texts ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.chatQueue = append([]string(nil), texts...)
+	f.chatPos = map[string]int{}
 }
 
 // SetChatEvents programs the ChatEvents every RunChat call replays to
@@ -524,8 +531,9 @@ func (f *Fake) SetChatError(err error) {
 	f.chatErr = err
 }
 
-// RunChat returns the next programmed text off chatQueue (or "" once
-// exhausted) and a session id: req.SessionID echoed back if set, otherwise a
+// RunChat returns this session's next programmed text off chatQueue (or ""
+// once that session ran past the end of the script) and a session id:
+// req.SessionID echoed back if set, otherwise a
 // fresh deterministic fake id ("fake-session-N") — mirroring the real
 // Module's "empty starts a session, non-empty resumes it" contract closely
 // enough for a workflow test to assert on. Every call is recorded in Calls,
@@ -547,10 +555,13 @@ func (f *Fake) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) 
 		f.chatSeq++
 		sessionID = fmt.Sprintf("fake-session-%d", f.chatSeq)
 	}
-	var text string
-	if len(f.chatQueue) > 0 {
-		text = f.chatQueue[0]
-		f.chatQueue = f.chatQueue[1:]
+	if f.chatPos == nil {
+		f.chatPos = map[string]int{}
 	}
+	var text string
+	if i := f.chatPos[sessionID]; i < len(f.chatQueue) {
+		text = f.chatQueue[i]
+	}
+	f.chatPos[sessionID]++
 	return ChatResult{Text: text, SessionID: sessionID}, nil
 }

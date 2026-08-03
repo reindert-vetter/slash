@@ -228,9 +228,10 @@ test('composing a new comment: the Claude column shows before it is placed, and 
     const item = page.getByTestId('comment-item')
     await expect(item).toHaveCount(1)
     await expect(item).toContainText('Nog geen eigen comment getypt')
-    // Each test gets its own worker/server, which reads the fixture queue
-    // fresh (see _fixtures.mjs), so this — like the file's first test — sees
-    // the FIRST programmed reply regardless of test order.
+    // The Fake walks its programmed turn script with a cursor PER SESSION
+    // (see claude.Fake.SetChatTurns), and this is a brand-new conversation,
+    // so — like the file's first test — it sees the FIRST programmed reply,
+    // no matter which other chat spec already ran on this worker's server.
     await expect(page.getByTestId('claude-message-body').last()).toContainText(
       'Ik heb naar de code gekeken',
     )
