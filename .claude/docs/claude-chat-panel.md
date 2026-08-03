@@ -16,10 +16,13 @@ PR). The column is therefore **conditional**, and the `→` chain of a
 commented unit is
 
 ```
-comment → thread → claude → (↓, nothing left) → Onderliggende code
+comment (↑ walks its own thread bubbles) → claude → (↓, nothing left) → Onderliggende code
 ```
 
-`→` from the diff enters the first comment conversation when
+`'thread'` is **not** a horizontal `→` stop between `'comment'` and `'claude'`
+— it's a vertical cursor reached only via `↑` from `'comment'` (see "The
+chain, key by key" below). `→` from the diff enters the first comment
+conversation when
 `hasVisibleComments()` is true; with no comment **and** no earlier
 conversation it goes **straight to the Onderliggende-code panel**, exactly as
 it did before this panel existed.
@@ -54,27 +57,52 @@ no unit to appear under any more.
 
 ### The chain, key by key
 
+Before this section's redesign (see `todo/todo-claude-chat-blok.md` TODO 2),
+`'thread'` was a horizontal `→` stop of its own — comment → thread → claude
+took **two** `→` presses, and back took two `←`. `'thread'` is now a
+**vertical** cursor reached only via `↑` from `'comment'`, exactly like
+`'claude'`'s own `cs.claudePos` cursor — so one `→` reaches the chat directly
+from either `'comment'` or `'thread'`, and one `←` returns directly to
+`'comment'`.
+
 - **`→` from the diff**: `hasVisibleComments() ? enterCommentsHead() :
   claudeChatVisible() ? enterClaudeChat(state.pr) : enterRelated()`
   (`home.mjs`'s `onKeydown`) — the middle branch only fires for the
   conversation-without-visible-comment case above.
-- **`→` on `cs.focus === 'thread'`** (the deepest existing comment-thread
-  stop): `enterClaudeChat(cs.pr)` — a focused thread always has its own
-  comment, so this can never hit the no-op (`RelatedPanel.mjs`'s
+- **`→` on `cs.focus === 'comment'` or `'thread'`**: both call
+  `enterClaudeChat(cs.pr)` directly — a focused comment/thread always has its
+  own comment, so this can never hit the no-op (`RelatedPanel.mjs`'s
   `handleRelatedKey`).
+- **`↑` on `cs.focus === 'comment'`**: steps into `'thread'` at the newest
+  bubble (`cs.threadPos = 1` — a conversation always has at least its own
+  opening message) instead of moving to the previous conversation. **`↑` on
+  `cs.focus === 'thread'`** keeps walking older messages
+  (`cs.threadPos += 1`, clamped implicitly by the branch below) until the
+  oldest message (`cs.threadPos === reactionCount()`); a further `↑` from
+  there steps to the **previous** conversation (or exits to the diff, on the
+  first one) instead of clamping — this is the one deliberate BEHAVIOUR
+  CHANGE of TODO 2: `↑` in a conversation used to mean "previous
+  conversation" and now means "older message in this conversation first,
+  previous conversation only once you're past the oldest".
 - **`↑`/`↓` on `cs.focus === 'claude'`**: walk the transcript exactly like
   `'thread'` walks reactions, via its own `cs.claudePos` cursor (mirrors
   `cs.threadPos`, 0 = composer, 1..n = the n-th turn from the bottom).
 - **`↓` at `cs.claudePos === 0`** (nothing further to walk): falls through to
   `enterRelated()` — the same "↓ loopt door" convention `advanceFromComment`
   already uses at the bottom of a comment thread.
-- **`←` on `cs.focus === 'claude'`**: steps back to `cs.focus === 'thread'`
-  (mirrors `'thread'`'s own `←` stepping back to `'comment'`) — always
-  possible, since entering `'claude'` guarantees a comment now exists.
+- **`←` on `cs.focus === 'claude'`**: steps back directly to `cs.focus ===
+  'comment'` (`toComment()`, which also resets `cs.threadPos` — `'thread'` is
+  never visited on the way back) — always possible, since entering `'claude'`
+  guarantees a comment now exists.
 
 No new stop exists between `'code'` and `'claude'` — `→` has no meaning past
 `'claude'` (nothing deeper), only `↓`'s fallthrough reaches Onderliggende
-code from there.
+code from there. A dashed connector (`data-testid=comment-claude-connector`,
+the same look as the Onderliggende-code chip connector, `RelatedPanel.mjs`'s
+`nestedChipColumn`) renders between the comment block and the Claude column
+whenever `claudeChatVisible()` (`home.mjs`, next to the `ClaudeChatPanel(...)`
+call) — built here rather than waiting for TODO 3 (the column-width pass),
+which reuses it once the two columns sit side by side at their final widths.
 
 ## `RelatedPanel.mjs`: state, not template
 
@@ -283,11 +311,13 @@ conversation that isn't open yet is dropped by design.
 
 Seeds an ordinary comment via the API (mirrors `comment-thread.spec.mjs`,
 its own PR via `seededPr`), clicks the comment row, and drives the whole
-chain with real keypresses (`→` comment→thread, `→` thread→claude): sends a
-plain message and asserts the programmed reply, sends a second message and
-asserts the 3 option buttons render, clicks one and asserts both the
-recorded `claude-question-answer` and the next programmed reply, then `←`
-back into the thread. Deliberately does **not** assert on the transient
+chain with real keypresses: `↑` into the thread's own bubble then `→` (and,
+separately, a single `→` straight from the comment card) both reach the
+Claude block in one step — sends a plain message and asserts the programmed
+reply, sends a second message and asserts the 3 option buttons render,
+clicks one and asserts both the recorded `claude-question-answer` and the
+next programmed reply, then `←` back onto the comment card directly.
+Deliberately does **not** assert on the transient
 "Claude denkt…" line (the Fake resolves near-instantly, and asserting a
 transient state is explicitly disallowed — see
 `.claude/docs/testing-playwright.md`).

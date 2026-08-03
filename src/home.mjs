@@ -7083,11 +7083,12 @@ function onKeydown(e) {
     e.preventDefault()
     // A selected comment-index item (kind:'comment', see recomputeLeftList)
     // has no diff to step into — → instead steps into its thread's message
-    // history (mirrors → on a block-scoped inline comment conversation, see
-    // enterThread in RelatedPanel.mjs), reusing the same threadMessages
-    // rendering; ↑/↓/← are handled above once focused. Enter still opens the
-    // action menu (see the Enter branch above) — deliberately no longer the
-    // same action as →.
+    // history (its own separate pct/enterPrCommentThread cursor, RelatedPanel.mjs
+    // — NOT the block-scoped cs.focus/'thread' state machine, which reaches
+    // 'thread' only via ↑, see .claude/docs/claude-chat-panel.md), reusing the
+    // same threadMessages rendering; ↑/↓/← are handled above once focused.
+    // Enter still opens the action menu (see the Enter branch above) —
+    // deliberately no longer the same action as →.
     const sc = selectedComment()
     if (sc) {
       if (!isPrCommentThreadFocused(sc)) enterPrCommentThread(sc)
@@ -8382,6 +8383,19 @@ function DetailPanel(state) {
         ${() =>
           RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
       </div>
+      ${() =>
+        // Same dashed connector the Onderliggende-code children use between
+        // each other (nestedChipColumn, RelatedPanel.mjs) — visible only
+        // alongside the Claude column itself (claudeChatVisible()), so there's
+        // never a floating dash with nothing to its right. Built here (TODO 2
+        // in todo-claude-chat-blok.md) rather than in TODO 3, which reuses it
+        // once the two columns are resized side by side.
+        claudeChatVisible()
+          ? html`<div
+              class="mt-5 h-px w-3 shrink-0 self-center border-t border-dashed border-slate-300 dark:border-zinc-700"
+              data-testid="comment-claude-connector"
+            ></div>`
+          : ''}
       ${() =>
         ClaudeChatPanel(
           state,

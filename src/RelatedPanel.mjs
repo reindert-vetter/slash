@@ -646,10 +646,17 @@ function toNew(commentTargetFn) {
 // there re-selects the card/scrolls it into view WITHOUT stealing the
 // keyboard into the reply textarea, mirroring the ↑-from-the-first-
 // underlying-code-child landing it's called from.
+//
+// Always resets threadPos to 0: 'comment' is the rest position of the
+// conversation, and ↑ from there always starts a fresh walk of the thread's
+// own bubbles (see handleRelatedKey's 'comment'+ArrowUp branch) — a leftover
+// threadPos from a previous comment (or from stepping back out of 'thread'/
+// 'claude') must never leak into that walk.
 function toComment(focusInput = true) {
   releaseFocus()
   cs.composing = false
   cs.focus = 'comment'
+  cs.threadPos = 0
   scrollCommentIntoView()
   if (focusInput) {
     focusEl('[data-testid=reaction-compose]')
@@ -823,16 +830,6 @@ function focusThread(focusInput = true) {
       scrollReactionIntoView()
     }
   })
-}
-
-// enterThread steps into the selected comment's thread, landing on the reply
-// field so the reviewer can type straight away (→ from a comment row).
-function enterThread() {
-  releaseFocus()
-  cs.composing = false
-  cs.focus = 'thread'
-  cs.threadPos = 0
-  focusThread()
 }
 
 // ── Embedded Claude conversation (claude_chat workflow) ──────────────────────
@@ -1334,24 +1331,31 @@ function applyRelRestore() {
 //    diff only when hasVisibleComments() is true — see enterCommentsHead) —
 //    ↓ walks to the next conversation, falling through to the
 //    Onderliggende-code panel once there is no next one (advanceFromComment);
-//    ↑ at the first conversation ('new' or 'comment') exits to the diff (there
-//    is no trigger stop above it any more); →
-//    steps into the conversation's message history ('thread'); ← exits to
-//    the diff.
-//  - that conversation's own message history ('thread') — ↑/↓ walk older/
-//    newer messages; ↓ at the bottom (threadPos === 0) advances to the next
+//    → steps ONE level further, straight into the embedded Claude conversation
+//    attached to this comment ('claude', see enterClaudeChat) — 'thread' is no
+//    longer a horizontal stop in between (↑/↓ within one card felt wrong, see
+//    todo-claude-chat-blok.md TODO 2); ← exits to the diff. ↑ on 'comment'
+//    first walks the conversation's OWN bubbles ('thread', see below) rather
+//    than jumping straight to the previous conversation — only once you're
+//    already past the oldest message does ↑ move to the previous conversation
+//    (or exit, on the very first one).
+//  - that conversation's own message history ('thread', a VERTICAL cursor
+//    reached only via ↑ from 'comment', never via →) — ↑/↓ walk older/newer
+//    messages; ↓ at the bottom (threadPos === 0) advances to the next
 //    conversation (or the Onderliggende-code panel), same as the 'comment'
-//    case; ← steps back to the 'comment' level (one stop back, not all the
-//    way to the diff — mirrors the chip-path "← climbs one level" pattern
-//    just below); → steps ONE level further, into the embedded Claude
-//    conversation attached to this same comment thread ('claude', see
-//    enterClaudeChat).
+//    case; ↑ at the top (threadPos === reactionCount(), the oldest message)
+//    steps to the PREVIOUS conversation (or exits, mirroring 'comment'+↑ on
+//    the first conversation) instead of clamping; ← steps back to the
+//    'comment' level (one stop back, not all the way to the diff — mirrors
+//    the chip-path "← climbs one level" pattern just below); → steps ONE
+//    level further, into the embedded Claude conversation attached to this
+//    same comment thread ('claude', see enterClaudeChat).
 //  - the embedded Claude conversation ('claude') — ↑/↓ walk older/newer
 //    turns exactly like 'thread' does (its own claudePos cursor); ↓ at the
 //    bottom falls through to the Onderliggende-code panel (mirroring
 //    advanceFromComment, since there's nothing further right of it); ←
-//    steps back to the comment thread's own 'thread' level (mirrors
-//    'thread'.ArrowLeft stepping back to 'comment'). → and ↑/↓ elsewhere in
+//    steps back directly to the 'comment' level (not to 'thread' — mirrors
+//    'comment'.ArrowRight reaching 'claude' directly). → and ↑/↓ elsewhere in
 //    the chain reach 'claude' via enterClaudeChat, not via a case here — see
 //    its own doc comment for the "no comment thread yet" auto-create path.
 export function handleRelatedKey(key) {
@@ -1371,17 +1375,30 @@ export function handleRelatedKey(key) {
         focusClaudeComposer()
       }
     } else if (key === 'ArrowLeft') {
-      releaseFocus()
-      cs.focus = 'thread'
-      cs.threadPos = 0
-      focusThread()
+      // Straight back to 'comment' — 'thread' is no longer visited on the way
+      // (mirrors 'comment'.ArrowRight reaching 'claude' directly, see TODO 2
+      // in todo-claude-chat-blok.md). toComment() resets threadPos to 0.
+      toComment()
     }
     return true
   }
   if (cs.focus === 'thread') {
     if (key === 'ArrowUp') {
-      cs.threadPos = Math.min(cs.threadPos + 1, reactionCount())
-      focusThread()
+      if (cs.threadPos < reactionCount()) {
+        cs.threadPos += 1
+        focusThread()
+      } else if (selI() === 0) {
+        // Already at the oldest message of the FIRST conversation — nothing
+        // further up at all.
+        exitRelated()
+        return 'exit'
+      } else {
+        // Past the oldest message: step to the previous conversation (lands
+        // on 'comment', not back into ITS thread — mirrors 'comment'+ArrowUp
+        // on the first conversation exiting rather than auto-diving in).
+        cs.sel -= 1
+        toComment()
+      }
     } else if (key === 'ArrowDown') {
       if (cs.threadPos === 0) {
         advanceFromComment()
@@ -1474,13 +1491,21 @@ export function handleRelatedKey(key) {
   // cs.focus is 'new' or 'comment' here — an inline comment conversation (or
   // the still-empty composer). ↓ advances to the next conversation, falling
   // through to Onderliggende code once there's no next one (advanceFromComment);
-  // ↑ at the first conversation ('new' or 'comment') exits to the diff (there
-  // is no trigger stop above it any more — see the removed enterTrigger); ←
-  // always exits to the diff.
+  // ↑ on 'comment' first walks that conversation's OWN bubbles (see below) —
+  // 'new' has no thread to walk, so it keeps the old "exit or previous
+  // conversation" behaviour directly; ← always exits to the diff.
   if (key === 'ArrowDown') {
     advanceFromComment()
   } else if (key === 'ArrowUp') {
-    if (selI() === 0) {
+    if (cs.focus === 'comment' && selComment()) {
+      // Step into 'thread' at the newest bubble — a conversation always has
+      // at least its own opening message, so reactionCount() >= 1 here. Only
+      // once ↑ walks past the OLDEST message (the 'thread' branch above) does
+      // it move to the previous conversation or exit.
+      cs.focus = 'thread'
+      cs.threadPos = 1
+      focusThread()
+    } else if (selI() === 0) {
       exitRelated()
       return 'exit'
     } else {
@@ -1492,8 +1517,10 @@ export function handleRelatedKey(key) {
     return 'exit'
   } else if (key === 'ArrowRight') {
     if (cs.focus === 'comment' && selComment()) {
-      // → steps into the thread so ↑ walks the old messages instead of the index.
-      enterThread()
+      // → steps straight into the embedded Claude conversation — 'thread' is
+      // reached only via ↑, not as a horizontal stop (see TODO 2 in
+      // todo-claude-chat-blok.md).
+      enterClaudeChat(cs.pr)
     }
   }
   return true

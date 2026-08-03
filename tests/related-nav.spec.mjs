@@ -6,14 +6,14 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // code, only reachable when the unit actually has comments — see
 // hasVisibleComments/enterCommentsHead in RelatedPanel.mjs), else straight on
 // Onderliggende code. ↓ within a conversation advances to the next one,
-// falling through to Onderliggende code once there is no next one; → on a
-// conversation opens its thread with the reply field focused; ↑ walks up
-// through the old messages; ← peels back one stop at a time (thread →
-// conversation → diff). See home.mjs (onKeydown → relatedActive/enterRelated/
-// handleRelatedKey) and RelatedPanel.mjs (the cs.focus/threadPos state
-// machine).
+// falling through to Onderliggende code once there is no next one; ↑ on a
+// conversation first walks its own thread (old messages, newest first) before
+// moving to the previous conversation; ← peels back one stop at a time
+// (thread → conversation → diff). See home.mjs (onKeydown → relatedActive/
+// enterRelated/handleRelatedKey) and RelatedPanel.mjs (the cs.focus/threadPos
+// state machine).
 test.describe('PR Review Tree — related-panel navigation', () => {
-  test('↓ into the comment conversation, → opens the thread (reply focused), ↑ selects an old message, ← peels back one stop at a time', async ({
+  test('↓ into the comment conversation, ↑ walks the thread (reply loses focus), ← peels back one stop at a time', async ({
     page,
   }) => {
     // The comment index is scoped to the selected block, so seed the comment on
@@ -67,10 +67,11 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     await expect(inlineComments.getByTestId('comment-item').first()).toHaveAttribute('data-expanded', 'true')
     await expect(page.getByTestId('reaction-compose')).toBeFocused()
 
-    // → steps into the thread (so ↑ now walks the old messages); ↑ highlights the
-    // newest message (the reaction, last bubble — the comment's own body is the
-    // first bubble above it) and drops the reply-field focus.
-    await page.keyboard.press('ArrowRight')
+    // ↑ steps into the thread directly (it's a vertical cursor now, not a
+    // horizontal → stop — see TODO 2 in todo-claude-chat-blok.md); it
+    // highlights the newest message (the reaction, last bubble — the
+    // comment's own body is the first bubble above it) and drops the
+    // reply-field focus.
     await page.keyboard.press('ArrowUp')
     await expect(page.getByTestId('reaction-bubble').last()).toHaveClass(/ring-indigo-400/)
     await expect(page.getByTestId('reaction-compose')).not.toBeFocused()
@@ -110,8 +111,10 @@ test.describe('PR Review Tree — related-panel navigation', () => {
 
     // No comment and no earlier Claude conversation on this unit ⇒ no chat
     // column at all, and nothing created one on the way past (the placeholder
-    // comment is gone for good — see claude-chat-panel.md).
+    // comment is gone for good — see claude-chat-panel.md). No column ⇒ no
+    // dashed connector either (it's gated on the same claudeChatVisible()).
     await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
+    await expect(page.getByTestId('comment-claude-connector')).toHaveCount(0)
     await expect(page.getByTestId('comment-item')).toHaveCount(0)
   })
 })

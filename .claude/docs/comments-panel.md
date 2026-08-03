@@ -503,20 +503,31 @@ entry:
   conversation on the same unit; if there isn't one it **falls through** to
   `enterRelated()` instead of clamping (`advanceFromComment()`, internal to
   `RelatedPanel.mjs`).
-- **`↑`** on the **first** conversation exits straight to the diff
-  (`exitRelated()`). On the Onderliggende-code card's **first** child, `↑` steps
-  back onto the **last** conversation if one exists (`enterCommentsTail()`,
-  highlight-only — no reply-field focus steal), else also exits to the diff.
-  **`←` on the Onderliggende-code card keeps its own unconditional behaviour at
-  ANY child position** — `hasVisibleComments() ? enterCommentsTail() :
+- **`↑`** on a conversation (`cs.focus==='comment'`) steps into its own thread
+  history FIRST, landing on the newest bubble (`cs.focus='thread'`,
+  `threadPos=1` — a conversation always has at least its own opening message);
+  `↑` there keeps walking older messages. Only once `↑` is pressed again at the
+  OLDEST message (`threadPos===reactionCount()`) does it move to the
+  **previous** conversation — or, on the very first conversation, exit
+  straight to the diff (`exitRelated()`). This is a deliberate behaviour
+  change (TODO 2 in `todo-claude-chat-blok.md`): `↑` used to mean "previous
+  conversation" directly; `'thread'` is not reachable via `→` any more, so
+  walking a conversation's own messages had to move onto `↑` instead. On the
+  Onderliggende-code card's **first** child, `↑` steps back onto the **last**
+  conversation if one exists (`enterCommentsTail()`, highlight-only — no
+  reply-field focus steal, and no thread-walk either — landing on a
+  conversation this way starts fresh), else also exits to the diff. **`←` on
+  the Onderliggende-code card keeps its own unconditional behaviour at ANY
+  child position** — `hasVisibleComments() ? enterCommentsTail() :
   exitRelated()` — so one `←` always fully leaves the panel when there are no
   comments.
-- **`→`** on a conversation steps into its thread (`enterThread`); `↑`/`↓` there
-  walk the history (`threadPos`); `←` from the thread steps back **one stop** to
-  the conversation level, `←` from there exits to the diff. A further **`→`**
-  from the thread steps one stop deeper still, into the embedded Claude
-  conversation hanging off that same comment (`cs.focus==='claude'`, stop 5b);
-  its `←` comes straight back here.
+- **`→`** on a conversation (`cs.focus==='comment'` OR `'thread'`) steps
+  straight into the embedded Claude conversation hanging off that same
+  comment (`enterClaudeChat`, `cs.focus==='claude'`, stop 5b) — one press from
+  either level, `'thread'` is never a stop in between. Its `←`
+  (`toComment()`) comes straight back to `'comment'`, resetting `threadPos` to
+  0 — so a fresh `↑` from there always restarts the walk at the newest
+  message rather than continuing from wherever it was left.
 
 ### Deferred focus must never land after the keyboard moved on
 
@@ -553,10 +564,14 @@ module-level singleton. Without a guard the stale tail's unconditional
 `cs.sel = …` (`createComment`) and `exitRelated()` (`placeComment`) would clobber
 that. Both snapshot `focusToken` before their `await` and only apply their
 follow-up if it's unchanged. Consequence: every function that sets
-`cs.focus`/`cs.composing` directly — `enterRelated`, `enterThread`,
-`startComment`, and the two direct branches in `applyRelRestore` — must also call
-`releaseFocus()`, so a genuine navigation-away is visible to that guard. Test:
-`tests/comment-nav-race.spec.mjs`.
+`cs.focus`/`cs.composing` directly — `enterRelated`, `toComment`,
+`enterClaudeChat`, and the two direct branches in `applyRelRestore` — must
+also call `releaseFocus()` (directly, or via `focusThread`/`toComment`, which
+do it themselves), so a genuine navigation-away is visible to that guard.
+`handleRelatedKey`'s 'comment'+ArrowUp branch (entering `'thread'`) and
+`'thread'`+ArrowUp's fall-through to the previous conversation rely on this
+the same way — they set `cs.focus`/`cs.threadPos` then call `focusThread()`/
+`toComment()`, never bypassing it. Test: `tests/comment-nav-race.spec.mjs`.
 
 ### A placed comment gives the keyboard back to its code
 

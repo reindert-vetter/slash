@@ -75,9 +75,7 @@ test('embedded Claude chat: live status line and streaming partial answer', asyn
   const item = page.getByTestId('comment-item').first()
   await expect(item).toBeVisible()
   await item.click()
-  await page.keyboard.press('ArrowRight') // comment -> thread
-  await expect(page.getByTestId('reaction-compose')).toBeFocused()
-  await page.keyboard.press('ArrowRight') // thread -> claude
+  await page.keyboard.press('ArrowRight') // comment -> claude, one step
   await expect(page.getByTestId('claude-chat-compose')).toBeVisible()
 
   // The status line names the tool and its target in words (never a

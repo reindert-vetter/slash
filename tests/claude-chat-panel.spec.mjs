@@ -34,13 +34,23 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   await expect(item).toBeVisible()
   await item.click()
 
-  // → deepens comment -> thread -> claude, exactly like → already deepens
-  // comment -> thread (the reply field is empty both times, so the caret
-  // guard lets ArrowRight through as a nav key — see
-  // editableCaretCanMoveRight in keyboard-navigation.md).
-  await page.keyboard.press('ArrowRight') // comment -> thread
+  // ↑ from the comment card walks into its own thread bubble first ('thread'
+  // is a vertical cursor now, reached via ↑, not a horizontal → stop — see
+  // TODO 2 in todo-claude-chat-blok.md); → from that bubble reaches the
+  // Claude block in the same single step as → from the comment card itself.
+  await page.keyboard.press('ArrowUp')
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
+  // ← goes straight back to the comment card (not to 'thread' in between).
+  await page.keyboard.press('ArrowLeft')
   await expect(page.getByTestId('reaction-compose')).toBeFocused()
-  await page.keyboard.press('ArrowRight') // thread -> claude
+
+  // → deepens comment -> claude directly, one step (the reply field is empty,
+  // so the caret guard lets ArrowRight through as a nav key — see
+  // editableCaretCanMoveRight in keyboard-navigation.md).
+  await page.keyboard.press('ArrowRight') // comment -> claude
+  const connector = page.getByTestId('comment-claude-connector')
+  await expect(connector).toBeVisible()
 
   const composer = page.getByTestId('claude-chat-compose')
   await expect(composer).toBeVisible()
@@ -100,8 +110,8 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   await page.keyboard.press('Escape')
   await expect(confirmMenu).toBeHidden()
 
-  // ← steps back out of the chat into the thread it hangs on — one level at
-  // a time, mirroring 'thread' -> 'comment'.
+  // ← steps back out of the chat straight onto the comment card it hangs on
+  // (no more 'thread' stop in between).
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByTestId('reaction-compose')).toBeFocused()
 })

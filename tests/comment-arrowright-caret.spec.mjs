@@ -108,17 +108,15 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
     await expect(page.getByTestId('reaction-bubble').first()).not.toHaveClass(/ring-indigo-400/)
 
     // Only once the caret is genuinely at the end does ArrowRight keep its
-    // existing nav meaning: it steps into the thread (enterThread(), which
-    // resets cs.threadPos to 0 — the reply field itself, no bubble
-    // highlighted yet). ArrowUp then walks up into the message history —
-    // that only does anything in 'thread' focus (in 'comment' focus, ArrowUp
-    // instead walks the flat comment-row list), so the bubble lighting up
-    // proves ArrowRight really flipped cs.focus to 'thread'.
+    // existing nav meaning: it steps straight into the embedded Claude chat
+    // (enterClaudeChat() — 'thread' is a vertical cursor reached via ArrowUp,
+    // not a horizontal ArrowRight stop any more, see TODO 2 in
+    // todo-claude-chat-blok.md), focusing its own composer instead of the
+    // reply field.
     pos = await reply.evaluate((el) => el.selectionStart)
     expect(pos).toBe(len)
     await page.keyboard.press('ArrowRight')
-    await page.keyboard.press('ArrowUp')
-    await expect(page.getByTestId('reaction-bubble').first()).toHaveClass(/ring-indigo-400/)
+    await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
   })
 
   test('comment-index item reply field: ArrowRight/Alt+ArrowRight move the caret, field stays open', async ({
