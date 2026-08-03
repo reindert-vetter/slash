@@ -37,14 +37,18 @@ const CLAUDE_NAME = 'Claude'
 // column reads consistently; a fresh pick appears on the next reload/visit.
 // Deliberately a fixed, pre-generated list rather than generating text at
 // runtime — cheap, reviewable, and never depends on anything external.
+// Each entry is capped at 5 words: the placeholder renders the mention
+// itself (plus an ellipsis) with no extra prefix, so a longer mention would
+// overflow the single-line composer box (it used to, via the now-removed
+// "Typ een bericht voor …" wrapper — see the placeholder binding below).
 const CLAUDE_MENTIONS = [
   'Claude',
   'je sparringpartner Claude',
   'Claude, je klankbord',
   'Claude, je denktank',
   'je AI-maatje Claude',
-  'Claude om even mee te sparren',
-  'Claude, altijd in voor een brainstorm',
+  'Claude, tijd om te sparren',
+  'Claude, in voor een brainstorm',
   'je digitale collega Claude',
   'Claude, je meedenker',
   'Claude, klaar voor een sparsessie',
@@ -345,7 +349,7 @@ export function claudeChatColumn(view, callbacks) {
         <textarea
           rows="1"
           class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
-          placeholder="${'Typ een bericht voor ' + claudeMention + '…'}"
+          placeholder="${claudeMention + '…'}"
           data-testid="claude-chat-compose"
           @input="${(e) => autoGrowTextarea(e.target)}"
           @keydown="${(e) => {
