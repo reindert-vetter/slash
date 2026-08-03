@@ -490,14 +490,21 @@ export default function Block(b, opts = {}) {
       data-col-resize-root
     >
       ${() =>
-        // Only the card that currently owns the diff keyboard may be dragged
-        // wider/narrower — never a preview/look-ahead card (mirrors the
-        // viewModeIndicator gating right below, and the "preview never wider
-        // than active" rule in diff-card.md) and never a card whose caller
-        // didn't wire up resizing at all (onResizeStart stays a no-op then, so
-        // this handle would drag nothing — see column-resize.md, testClass
-        // preview cards etc. never pass these opts).
-        !preview && diffActive()
+        // Any non-preview/look-ahead card may be dragged wider/narrower —
+        // NOT gated on diffActive() (unlike viewModeIndicator right below,
+        // which is genuinely diff-session-only): resize must also work in
+        // list mode (the block-index/sidebar still open, before stepping →
+        // into a diff session) and while the keyboard has moved into this
+        // card's own Underlying-code panel (relatedActive()) — both cases
+        // `preview` already reports false for (see its own definition at
+        // both Block() call sites in home.mjs), so `!preview` alone is the
+        // right, and only, gate — consistent with how the Underlying-code/
+        // Claude-chat/inline-comments handles show unconditionally (see
+        // column-resize.md). Never shown on a card whose caller didn't wire
+        // up resizing at all (onResizeStart stays a no-op then, so this
+        // handle would drag nothing — e.g. testClass preview cards never
+        // pass these opts).
+        !preview
           ? resizeHandle(
               (e) => onResizeStart(e, () => parseAutoWidthPx(widthCls(b, viewModeFn))),
               () => onResizeReset(),

@@ -29,8 +29,9 @@ test('dragging the block-card handle sets a width override that persists and res
   // targets stale coordinates from before the card finished sliding into view.
   await page.waitForTimeout(300)
 
-  // Only the card that owns the keyboard (diffActive()) renders the handle —
-  // never the look-ahead preview card next to it.
+  // Only the non-preview card renders the handle (!preview, not gated on
+  // diffActive()/mode — see below) — never the look-ahead preview card next
+  // to it.
   const handle = page.locator('[data-testid="block-column"] [data-testid="col-resize-handle"]')
   await expect(handle).toHaveCount(1)
   const article = page.locator('[data-testid="block-column"] article:has([data-testid="col-resize-handle"])')
@@ -95,4 +96,36 @@ test('dragging back close to the auto width snaps back instead of committing an 
   await page.mouse.up()
 
   expect(await article.getAttribute('style')).toBe('')
+})
+
+// Resize must also work BEFORE stepping → into a diff session — the selected
+// block card already renders next to the block-index/sidebar in list mode
+// (see step-preview-stability.spec.mjs's own note: list mode shows the
+// selected card + its look-ahead preview side by side), and the handle used
+// to be gated on diffActive() (state.mode === 'diff'), which made it vanish
+// there even though the card is visibly on screen. See column-resize.md.
+test('the handle also works in list mode, before entering the diff session', async ({ page }) => {
+  await page.goto('/pr/12903')
+  await leaveSearchBox(page)
+  await page.locator('[data-idx="1"]').click()
+  await expect(page).not.toHaveURL(/mode=diff/)
+
+  // Only the selected card gets a handle — never the look-ahead preview.
+  const handle = page.locator('[data-testid="block-column"] [data-testid="col-resize-handle"]')
+  await expect(handle).toHaveCount(1)
+  const article = page.locator('[data-testid="block-column"] article:has([data-testid="col-resize-handle"])')
+  expect(await article.getAttribute('style')).toBe('')
+
+  const box = await handle.boundingBox()
+  const startX = box.x + box.width / 2
+  const startY = box.y + box.height / 2
+
+  await page.mouse.move(startX, startY)
+  await page.mouse.down()
+  await page.mouse.move(startX + 150, startY, { steps: 5 })
+  await page.mouse.up()
+
+  const style = await article.getAttribute('style')
+  expect(style).toMatch(/width:\d+px/)
+  expect(Number(/width:(\d+)px/.exec(style)[1])).toBeGreaterThan(box.width)
 })

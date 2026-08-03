@@ -110,12 +110,25 @@ unrelated reasons; a handle positioned outside the box's own edge
 `page.mouse.down()` silently missed it entirely in the regression test until
 this was caught. `right-0` keeps the handle inside the clipped box.
 
-- **Only the card that owns the diff keyboard shows the handle** for the
-  `'diff'` kind — `Block.mjs` gates it on `!preview && diffActive()`, mirroring
-  `viewModeIndicator`'s own gating and the "preview never wider than active"
-  rule (`.claude/docs/diff-card.md`). The override itself still applies to a
-  preview/unfocused instance of the same block (its width persists
-  regardless of role) — only the drag handle is focus-gated.
+- **Any non-preview/look-ahead card shows the handle**, for the `'diff'`
+  kind too — `Block.mjs` gates it on plain `!preview`, **not**
+  `diffActive()`. `diffActive()` additionally requires `state.mode ===
+  'diff'` and `!relatedActive()`, which is right for `viewModeIndicator`
+  (a genuinely diff-session-only concept, see the "preview never wider than
+  active" rule in `.claude/docs/diff-card.md`) but wrong for resize: it made
+  the handle disappear in **list mode** (the block-index/sidebar still
+  open, before stepping `→` into a diff session) even though the selected
+  card is visibly right there, and while the keyboard had moved into the
+  card's own Underlying-code panel (`relatedActive()`). `preview` already
+  reports `false` in exactly the cases resize should stay available (both
+  `Block()` call sites in `home.mjs`: `preview: i !== sel || !focusedHere`
+  at the top level, `preview: !focusedHere` for a drilled column — `focusedHere
+  = state.focusLevel === 0/level`), so `!preview` alone is the right, and
+  only, gate — consistent with how the Underlying-code/Claude-chat/
+  inline-comments handles already show unconditionally (no mode/
+  `relatedActive()` gating at all). The override itself always applied to a
+  preview/unfocused instance of the same block regardless (its width
+  persists regardless of role) — only the drag handle's visibility changed.
 - **Drag** (`startColumnResize`): `mousedown` on the handle starts it,
   `document`-level `mousemove`/`mouseup` track the rest of the gesture — the
   same module-level-listener shape as `home.mjs`'s own
