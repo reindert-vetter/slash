@@ -447,18 +447,21 @@ function rowMeta(pr) {
 // The name comes from ensureNames (see avatar.mjs) and falls back to the bare
 // login when GitHub/names.json know no real name; the title always carries the
 // full name plus the login, so the account behind a first name stays findable.
-// The avatar is 2x the original size (h-6 -> h-12) — on explicit request, to
-// make the author more prominent at the left edge of the row; the wrapper
-// width grows along (w-14 -> w-20) so the bigger circle still has breathing
-// room next to the name underneath it.
+// The avatar was 2x the original size (h-6 -> h-12) to make the author more
+// prominent at the left edge of the row; the wrapper width grew along
+// (w-14 -> w-20). On a later request the avatar shrank slightly again
+// (h-12 -> h-10) and the name below it grew bolder/bigger
+// (text-[10.5px] -> text-[12px] font-semibold, slate-500 -> slate-700 /
+// zinc-500 -> zinc-300 for contrast) so the first name reads as prominent
+// as the avatar itself.
 function authorMark(pr) {
   const login = pr.author || ''
   const full = fullNameOf(login)
   const title = full ? full + ' (' + login + ')' : login
   return html`
     <span class="flex w-20 shrink-0 flex-col items-center gap-1" data-testid="row-author" data-author="${login}" title="${title}">
-      ${avatarHTML(full || login, avatarUrlOf(login), 'h-12 w-12')}
-      <span class="max-w-full truncate text-[10.5px] leading-none text-slate-500 dark:text-zinc-500">${displayNameOf(login)}</span>
+      ${avatarHTML(full || login, avatarUrlOf(login), 'h-10 w-10')}
+      <span class="max-w-full truncate text-[12px] font-semibold leading-none text-slate-700 dark:text-zinc-300">${displayNameOf(login)}</span>
     </span>
   `
 }
