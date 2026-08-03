@@ -55,15 +55,18 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await page.keyboard.press('/')
     const rows = page.getByTestId('command-row')
 
-    // GitHub → its two children, plus its own pinned "Sluit menu" first.
+    // GitHub → its three children (Open op GitHub / PR keuren / Comment
+    // plaatsen — see "PR keuren" in home.mjs PR_COMMANDS), plus its own pinned
+    // "Sluit menu" first.
     await page.getByTestId('command-input').fill('github')
     await expect(rows).toHaveCount(1)
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).toBeVisible()
-    await expect(rows).toHaveCount(3)
+    await expect(rows).toHaveCount(4)
     await expect(rows.nth(0)).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('Open op GitHub')
-    await expect(rows.nth(2)).toContainText('Comment plaatsen')
+    await expect(rows.nth(2)).toContainText('PR keuren')
+    await expect(rows.nth(3)).toContainText('Comment plaatsen')
 
     // Esc backs out to the root, then Jira → its three children (plus its own
     // pinned "Sluit menu" first).
@@ -92,7 +95,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await page.getByTestId('command-input').fill('github')
     await page.keyboard.press('Enter') // into the GitHub submenu
     const rows = page.getByTestId('command-row')
-    await rows.nth(2).click() // "Comment plaatsen" (after the pinned "Sluit menu" and "Open op GitHub")
+    await rows.nth(3).click() // "Comment plaatsen" (after the pinned "Sluit menu", "Open op GitHub" and "PR keuren")
 
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await expect(page.getByTestId('comment-compose')).toBeVisible()
