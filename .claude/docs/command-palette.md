@@ -322,6 +322,35 @@ All three modes share the `lastIndexRowRect` exception with `postApprove` via
 `isReviewFollowup(mode)`. Tests: `tests/review-submit-menu.spec.mjs`, plus the
 last test in `tests/postapprove-menu.spec.mjs`.
 
+### After a successful submit: copy a one-line summary to the clipboard
+
+`submitReview` also copies a short summary of the just-submitted review to the
+clipboard — for pasting into Slack/a PR checklist elsewhere — but **only**
+after the `fetch` actually succeeded (never on a `!res.ok` or a network error,
+both of which `return`/throw before reaching this). `buildReviewClipboardText`
+builds the text from `state.prUrl || GITHUB_PR` (the same fallback the
+"Open GitHub" links use) plus the event:
+
+- **`APPROVE`** — `${link} ✅`, or, when the reviewer has own comments still
+  open, `${link} ✅ met N comment`/`comments` (singular at exactly 1). "Own"
+  reuses `isOwnComment` (see below); "still open" is `c.status !== 'resolved'`.
+  The count (`ownOpenCommentCount`) is **PR-wide**, not scoped to one block —
+  it reads the whole `commentListSnapshot()` (`RelatedPanel.mjs`), matching
+  what "approving the whole PR" itself covers. Deliberately **not** scoped to
+  "placed during this session" — a reviewer who reopens the same PR later
+  still gets an accurate count of what they left open.
+- **`REQUEST_CHANGES`** — deliberately **no emoji**: `${link} met nog een paar
+  aanpassingen: ${reason}`, `reason` being the typed rejection text verbatim
+  (only internal whitespace/newlines are collapsed to one line — never
+  summarized or truncated).
+
+`copyReviewSummary` wraps `navigator.clipboard.writeText` with the same
+minimal error handling as `submitReview` itself (`console.error`, no toast
+convention). Tests: the three cases (no comments, with own unresolved
+comments, reject) in `tests/review-submit-menu.spec.mjs`, using the same
+`navigator.clipboard` stub as `tests/overview.spec.mjs`'s "Kopieer GitHub URL"
+test.
+
 ## The comment-scoped menu (`comment`, `commentCommandsFor`)
 
 If the keyboard is on a placed comment row in `RelatedPanel`

@@ -4300,6 +4300,48 @@ const POSTAPPROVE_COMMANDS = withClose(
   }
 )
 
+// ownOpenCommentCount counts the reviewer's OWN comments (isOwnComment, so
+// placed in this app or on GitHub by the reviewer themselves — never someone
+// else's, never a bot/AI finding) that are not (yet) resolved, across the
+// WHOLE PR (commentListSnapshot(), not scoped to one block/subtree — the
+// clipboard summary below is a PR-level review outcome, not a per-block one).
+// Reused only by buildReviewClipboardText; a plain synchronous read of
+// RelatedPanel.mjs's cs.list, exactly like prWideComments/commentRowSet.
+function ownOpenCommentCount() {
+  return commentListSnapshot().filter((c) => isOwnComment(c) && c.status !== 'resolved').length
+}
+
+// buildReviewClipboardText renders the one-line summary the reviewer pastes
+// elsewhere (Slack, a PR checklist, …) right after actually submitting a real
+// GitHub review — see submitReview below. Deliberately no emoji for a
+// rejection (only for an approve, where it doubles as a friendly "done"
+// signal) — a reject already carries its own written reason, no icon needed.
+function buildReviewClipboardText(event, body) {
+  const link = state.prUrl || GITHUB_PR
+  if (event === 'REQUEST_CHANGES') {
+    // Collapse the typed reason to one line — a clipboard summary is meant to
+    // stay short/pasteable, so only whitespace is normalized, the text itself
+    // is never summarized or truncated.
+    const reason = body.replace(/\s+/g, ' ').trim()
+    return `${link} met nog een paar aanpassingen: ${reason}`
+  }
+  const n = ownOpenCommentCount()
+  if (n === 0) return `${link} ✅`
+  return `${link} ✅ met ${n} comment${n === 1 ? '' : 's'}`
+}
+
+// copyReviewSummary puts the text on the clipboard. Same minimal error
+// handling as submitReview itself (no toast convention in this app, see
+// conventions.md) — a failure (no clipboard permission, insecure context)
+// just logs; the review itself already succeeded regardless.
+async function copyReviewSummary(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (err) {
+    console.error('clipboard write failed:', err)
+  }
+}
+
 // submitReview posts a real GitHub PR-level review via the submit_review
 // Workflow (POST /api/workflows/submit_review — the sanctioned write path,
 // see .claude/rules/workflows-write-boundary.md; the backend itself is out
@@ -4316,6 +4358,8 @@ const POSTAPPROVE_COMMANDS = withClose(
 // On success this is itself a fresh workflow run, so pollWorkflows() refreshes
 // the Taken column sooner than the next WORKFLOWS_POLL_MS tick — the same
 // courtesy call compose-post/compose-self already make after placing a comment.
+// It ALSO copies a one-line PR summary to the clipboard — but only after a
+// genuinely successful submit (a failed fetch returns before this).
 async function submitReview(event, body = '') {
   try {
     const res = await fetch('/api/workflows/submit_review', {
@@ -4329,6 +4373,7 @@ async function submitReview(event, body = '') {
       return
     }
     pollWorkflows()
+    await copyReviewSummary(buildReviewClipboardText(event, body))
   } catch (err) {
     console.error('submit_review network error:', err)
   }

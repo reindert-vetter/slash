@@ -74,12 +74,32 @@ async function approveViaPalette(page) {
   await page.getByTestId('command-row').first().click()
 }
 
+// mockClipboard stubs navigator.clipboard the same way tests/overview.spec.mjs's
+// "Kopieer GitHub URL" test does — buildReviewClipboardText/copyReviewSummary
+// (home.mjs) write the post-submit summary here.
+async function mockClipboard(page) {
+  await page.addInitScript(() => {
+    window.__copied = null
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: (t) => {
+          window.__copied = t
+          return Promise.resolve()
+        },
+        readText: () => Promise.resolve(window.__copied),
+      },
+    })
+  })
+}
+
 test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed / Wijs de PR af)', () => {
   test('PR fully approved: "Keur de HELE PR goed" opens a confirm step before it POSTs event APPROVE', async ({
     page,
   }) => {
     await clearBlockApproval(page, BLOCK1_ID)
     await clearBlockApproval(page, BLOCK6_ID)
+    await mockClipboard(page)
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
     await page.keyboard.press('Escape')
@@ -129,6 +149,12 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     const response = await request.response()
     expect(response.status()).toBe(200)
     await expect(menu).not.toBeVisible()
+
+    // With no own unresolved comments on this PR, the clipboard summary is
+    // the bare link + a checkmark, no comment count.
+    const copied = await page.evaluate(() => window.__copied)
+    expect(copied).toContain('/pull/12903')
+    expect(copied.trim().endsWith('✅')).toBe(true)
   })
 
   test('PR not fully approved: "Wijs de PR af" requires a typed reason before it submits', async ({
@@ -136,6 +162,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
   }) => {
     await clearBlockApproval(page, BLOCK1_ID)
     await clearBlockApproval(page, BLOCK6_ID)
+    await mockClipboard(page)
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
     await page.keyboard.press('Escape')
@@ -184,5 +211,69 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     const response = await request.response()
     expect(response.status()).toBe(200)
     await expect(menu).not.toBeVisible()
+
+    // No emoji for a rejection — the link, the fixed "met nog een paar
+    // aanpassingen" phrase, and the typed reason verbatim.
+    const copied = await page.evaluate(() => window.__copied)
+    expect(copied).toContain('/pull/12903')
+    expect(copied).toContain(
+      ' met nog een paar aanpassingen: Graag nog een test toevoegen voor de foutafhandeling.',
+    )
+    expect(copied).not.toMatch(/[✅❌]/)
+  })
+
+  // buildReviewClipboardText (home.mjs) counts the reviewer's OWN comments
+  // that are not (yet) resolved, across the whole PR — not scoped to any one
+  // block. Seeded here via the sanctioned task_code_comment write path;
+  // _cleanApprovals (_fixtures.mjs) deletes every comment on the shared
+  // anchor PR 12903 before each test, so this never leaks into a neighbour.
+  test('Approving the whole PR with own unresolved comments open counts them in the clipboard summary', async ({
+    page,
+  }) => {
+    await clearBlockApproval(page, BLOCK1_ID)
+    await clearBlockApproval(page, BLOCK6_ID)
+    const seedComment = async (line, body) => {
+      const start = await page.request.post('/api/workflows/task_code_comment', {
+        data: { pr: 12903, file: 'app/Actions/CreatePaymentAction.php', line, author: 'reviewer', body },
+      })
+      expect((await start.json()).runId).toBeTruthy()
+    }
+    await seedComment(26, 'own comment one')
+    await seedComment(27, 'own comment two')
+
+    await mockClipboard(page)
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape')
+
+    await page.locator('[data-idx="1"]').click()
+    await page.keyboard.press('ArrowRight')
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await approveViaPalette(page)
+
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await page.getByTestId('command-row').filter({ hasText: 'Ga door' }).click()
+    await expect(menu).not.toBeVisible()
+
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await approveViaPalette(page)
+
+    await expect(menu).toBeVisible()
+    const rows = page.getByTestId('command-row')
+    await rows.filter({ hasText: 'Keur de HELE PR goed' }).click()
+    await expect(menu).toBeVisible()
+
+    const [request] = await Promise.all([
+      page.waitForRequest('**/api/workflows/submit_review'),
+      rows.filter({ hasText: 'Ja, keur de hele PR goed' }).click(),
+    ])
+    const response = await request.response()
+    expect(response.status()).toBe(200)
+    await expect(menu).not.toBeVisible()
+
+    const copied = await page.evaluate(() => window.__copied)
+    expect(copied).toContain('/pull/12903')
+    expect(copied.trim().endsWith('✅ met 2 comments')).toBe(true)
   })
 })
