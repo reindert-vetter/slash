@@ -5092,7 +5092,21 @@ function segKey(unit) {
 // can't observe home.mjs' `state` across the module boundary from inside its own
 // list binding, so home.mjs re-keys the whole panel by the scope signature (see
 // the RelatedPanel binding in DetailPanel) and hands the scope down as an arg.
+//
+// A synthetic PR-wide comment-index item (kind:'comment', see
+// recomputeLeftList/commentBlockItem) gets its own sentinel scope
+// (`{ none: true }`) instead of falling through to null. commentTarget()
+// already returns null for such an item, but for a DIFFERENT reason (its own
+// "nothing to anchor a NEW comment to" no-op, load-bearing for placeComment —
+// see its own comment) — reusing that null here would be indistinguishable
+// from "nothing selected yet", which is exactly the bug: RelatedPanel's
+// recomputeView reads a null scope as "no filter" and shows every anchored
+// comment of the PR next to a comment that has no code anchor at all. So this
+// reads focusedBlock() directly, ahead of commentTarget(), to tell the two
+// apart.
 function commentScope() {
+  const b = focusedBlock()
+  if (b && b.kind === 'comment') return { none: true }
   const t = commentTarget()
   if (!t) return null
   return {

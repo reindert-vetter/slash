@@ -16,6 +16,29 @@ like an ordinary PR block, and the block column to the right of the index shows
 its thread instead of a diff. (This replaced the removed `PrWideComments` card,
 see `.claude/docs/detail-layout.md`.)
 
+### Selecting a "Start" item empties the block-scoped index
+
+A `kind:'comment'` sidebar item is itself unanchored, so the block-scoped index
+next to it must show **nothing** — not "no filter". `commentTarget()`
+(`home.mjs`) already returns `null` for it, but for a different reason (its own
+"nothing to anchor a NEW comment to" no-op, load-bearing for `placeComment`);
+reusing that `null` for the comment index too was indistinguishable from
+"nothing selected yet", and `recomputeView`'s `!s` branch reads a null scope as
+"no filter" — so selecting a PR-wide comment used to show the index's
+**entire** unfiltered anchored list next to it. `commentScope()` (`home.mjs`)
+therefore checks `focusedBlock().kind === 'comment'` directly (ahead of, and
+independently from, `commentTarget()`) and returns a sentinel scope
+(`{ none: true }`); `setCommentScope`'s signature (`RelatedPanel.mjs`) gives
+that sentinel its own fixed signature (`'none'`, distinct from both the real-scope
+join and the null-scope `''`) so the switch always re-triggers `recomputeView`,
+which checks `s.none` **before** the `!s` branch and assigns `cs.view = []`.
+`hasVisibleComments()` then reports `false`, so the inline `comment-item` cards
+disappear and — per `claudeChatVisible()` — so does the Claude-chat column,
+which is correct: there is no comment here to hang a chat on. The "Start"
+item's own detail card (`commentDetailCard`, reading `prWideComments()`, not
+`cs.view`) and its own thread cursor (`pct`/`enterPrCommentThread`) are a wholly
+separate mechanism and are unaffected.
+
 ### An orphaned block comment joins them
 
 `anchorState === 'orphan'` (`isOrphanComment`): a new commit renamed or removed

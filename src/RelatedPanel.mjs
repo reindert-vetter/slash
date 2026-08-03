@@ -42,7 +42,10 @@ import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 // are the comment's own body (its opening message) followed by its reactions
 // — see threadMessages.
 // `scope` is the current selection context (from home.mjs, pushed via
-// setCommentScope): { file, label, mode, gran, rowStart, rowEnd, seg } or null.
+// setCommentScope): { file, label, mode, gran, rowStart, rowEnd, seg }, or
+// `{ none: true }` when a PR-wide comment-index item is selected (no code
+// anchor at all — see "Selecting a Start item empties the block-scoped index"
+// in comments-panel.md), or plain `null` when nothing is selected yet.
 // It lives on cs — RelatedPanel's own reactive — on purpose: the render reads
 // cs and reliably re-renders on cs changes, whereas reading home.mjs' `state`
 // across the module boundary from inside this list binding did not retrigger
@@ -161,11 +164,19 @@ export function setRelated(children, unresolved, warning) {
 // setCommentScope receives the live selection context from home.mjs (via a watch
 // on the navigation state) and stores it on cs, so the index re-filters as the
 // reviewer moves. Skips a redundant write (same signature) so an unrelated
-// reactive tick doesn't needlessly re-render the list.
+// reactive tick doesn't needlessly re-render the list. A sentinel scope
+// (`{ none: true }` — a selected PR-wide comment-index item, see
+// home.mjs' commentScope) gets its own fixed signature `'none'`, distinct from
+// both the real-scope join (which always starts with a real file path) and the
+// null-scope `''` ("nothing selected yet") — so switching between "nothing"
+// and "comment-item selected" always triggers a recomputeView(), which is the
+// only place cs.view actually re-derives.
 export function setCommentScope(scope) {
-  const sig = scope
-    ? [scope.file, scope.label, scope.mode, scope.gran, scope.rowStart, scope.rowEnd, scope.seg].join('|')
-    : ''
+  const sig = !scope
+    ? ''
+    : scope.none
+      ? 'none'
+      : [scope.file, scope.label, scope.mode, scope.gran, scope.rowStart, scope.rowEnd, scope.seg].join('|')
   if (sig === cs.scopeSig) return
   cs.scopeSig = sig
   cs.scope = scope
@@ -202,6 +213,16 @@ function recomputeView() {
   // null-scope list-mode view, which would show it twice.
   const anchored = cs.list.filter((c) => !c.kind && !isOrphanComment(c))
   const s = cs.scope
+  // A selected PR-wide comment-index item (see setCommentScope's sentinel) has
+  // no code anchor, so by definition no code-comment falls under it — this
+  // must be checked BEFORE the `!s` branch below, since both leave `s`
+  // falsy-for-filtering-purposes but mean opposite things: `!s` is "nothing
+  // selected yet, show everything", `s.none` is "something is selected and it
+  // is exactly this — show nothing".
+  if (s && s.none) {
+    cs.view = []
+    return
+  }
   if (!s) {
     cs.view = anchored
     return

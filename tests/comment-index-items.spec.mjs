@@ -88,11 +88,16 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(row).toBeVisible()
     await expect(row).toContainText('Overall this looks great')
     await expect(row.getByTestId('block-approval')).toHaveText('0/1')
-    // The block-scoped comment never becomes its own Start row — it's
-    // anchored to block 0 (the currently selected block, whole-block scope),
-    // so it does show up as an inline comment card there, just never in the
-    // "Start" index (no [data-idx] row for it).
+    // The block-scoped comment never becomes its own Start row — no
+    // [data-idx] row for it.
     await expect(page.locator('[data-idx]').getByText('please rename this variable')).toHaveCount(0)
+    // The "Start" item itself has no code anchor, so the block-scoped index
+    // right next to it must show NOTHING while it's selected — not "no
+    // filter" (see commentScope's sentinel scope, comments-panel.md). Only
+    // once you select the block the comment is actually anchored to does it
+    // reappear there.
+    await expect(page.getByTestId('inline-comments').getByTestId('comment-item')).toHaveCount(0)
+    await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('inline-comments').getByText('please rename this variable')).toBeVisible()
   })
 
