@@ -309,7 +309,7 @@ export function claudeChatColumn(view, callbacks) {
         ></textarea>
         <button
           class="${() =>
-            'shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
+            'flex min-h-[2.25rem] shrink-0 items-center justify-center rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
             (view.busy() ? 'cursor-not-allowed opacity-60' : 'hover:bg-indigo-600')}"
           data-testid="claude-chat-send"
           disabled="${() => view.busy()}"

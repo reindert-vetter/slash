@@ -2911,7 +2911,7 @@ function expandedConversation(c, openCommentMenu) {
           }}"
         ></textarea>
         <button
-          class="${() => 'shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' + (cs.busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-indigo-600')}"
+          class="${() => 'flex min-h-[2.25rem] shrink-0 items-center justify-center rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' + (cs.busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-indigo-600')}"
           data-testid="reaction-send"
           disabled="${() => cs.busy}"
           @click="${() => sendReaction()}"
@@ -2921,7 +2921,7 @@ function expandedConversation(c, openCommentMenu) {
         <button
           type="button"
           class="${() =>
-            'flex shrink-0 items-center justify-center rounded-lg border px-2.5 py-1.5 transition ' +
+            'flex min-h-[2.25rem] shrink-0 items-center justify-center rounded-lg border px-2.5 py-1.5 transition ' +
             (cs.busy
               ? 'cursor-not-allowed border-slate-200 text-slate-400 dark:border-zinc-800 dark:text-zinc-600'
               : 'border-slate-200 text-slate-500 hover:border-indigo-300 hover:text-indigo-600 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-indigo-500/40 dark:hover:text-indigo-400')}"
