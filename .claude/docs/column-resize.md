@@ -1,0 +1,153 @@
+# Manual column resize: drag any column to a custom width
+
+Every column in `<main>`'s column flow — the block-diff card, a drilled
+Underlying-code column, and the Underlying-code/Claude-chat/inline-comments
+columns next to it — computes its own width as a pure, content-driven
+Tailwind class (`widthCls`/`relatedColumnWidthCls`/`commentColumnWidthCls`/
+`claudeColumnWidthCls`, see `.claude/docs/diff-card.md`). On top of that, a
+reviewer can drag any of those columns' right edge to a custom pixel width,
+remembered per block for a month. Mechanism lives in `src/columnWidth.mjs`, a
+pure, state-agnostic utility module (same tier as `urlState.mjs`/`theme.mjs`).
+
+## Why a cookie, not the URL or `localStorage`
+
+An explicit product decision, not a default:
+
+- **Per block, not one global preference** — unlike `theme.mjs`'s
+  `localStorage`, which holds exactly one value for the whole app. A width
+  override is keyed per `(kind, block)` (see below), so `localStorage`'s
+  single-key shape doesn't fit without inventing the same JSON-map structure
+  a cookie already gives for free.
+- **Not the URL** — `?sel=`/`?drill=`/etc. already carry the navigation
+  position (see CLAUDE.md's "URL state" section); a per-block width map for
+  every column kind would make a shared link unreadably long, and a width
+  preference isn't "where you were", it's "how you like to look at code" —
+  the same category of decision the cookie already fits.
+- **30 days, not indefinite** — long enough to matter across a multi-day PR
+  review, short enough that a stale entry for a since-merged/deleted block
+  eventually ages out on its own; there is no cleanup workflow for this
+  cookie (deliberately — see `.claude/rules/workflows-write-boundary.md`: a
+  cookie write is a pure browser-local operation, not a durable write that
+  needs a workflow at all).
+
+## Mechanism: an inline style always wins over the class
+
+An inline `style="width:...px;max-width:...px"` beats a Tailwide `w-[...]`
+class regardless of specificity, so **none of the existing width-class
+functions needed to change** — this is a purely additive layer:
+
+- `colWidthStyle(state, key)` returns that whole-value style string (or `''`
+  for "auto — the class wins"), read by each column's own `style="${() =>
+  ...}"` binding (the "attribute value must be the whole value" rule in
+  `.claude/rules/arrowjs-pitfalls.md`).
+- `getColumnWidth(state, key)` is the reactive read: it `void`s
+  `state.colWidthVersion` before reading `state.colWidths[key]`. **Adding a
+  brand-new key to a plain reactive object is not reliably re-notified in
+  this codebase's arrow.js build** — the same caveat already documented on
+  `state.langSiblings` in `home.mjs` — so every write bumps
+  `state.colWidthVersion` and every reader depends on that counter instead of
+  the individual key. Cheap and correct, at the cost of every column's style
+  binding re-evaluating on any OTHER column's resize too (acceptable — these
+  are already small, per-card nested slots, not the outer array-building
+  closures the "outer closure vs. nested slot" pitfall warns about).
+
+## Column identity: `${kind}:${id}`
+
+`kind` ∈ `'diff' | 'related' | 'claude' | 'comments'`. Each kind is an
+**independent** override, even for two columns that visually sit in the same
+row (see the accepted trade-off below).
+
+- **`'diff'`** — keyed by the block's own stable `b.id` (Block.mjs already
+  relies on this id for drilled/synthetic call frames, see
+  `.claude/docs/drilling.md`). Both the top-level selected card and every
+  drilled column reuse the same `Block()` render and therefore the same
+  wiring (`home.mjs`'s two `Block(b, {...})` call sites), so an override
+  survives a drill/step exactly like the rest of a block's state.
+- **`'related' | 'claude' | 'comments'`** — these three (`RelatedPanel.mjs`)
+  only ever receive `commentTarget()`, never a raw block, so the key reuses
+  the `${file}:${line}` identity `state.blockRef` already relies on
+  elsewhere (CLAUDE.md's "URL state" section):
+  `colWidthKeyFor(kind, commentTarget)` in `RelatedPanel.mjs`. `null` when
+  `commentTarget()` returns nothing (e.g. a synthetic comment-index item) —
+  no key, no override, no handle.
+
+## Accepted trade-off: the comment/Claude ↔ Underlying-code row alignment can break
+
+`.claude/docs/detail-layout.md` documents a width invariant:
+`commentColumnWidthCls()` (2/3) + the connector + `claudeColumnWidthCls()`
+(1/3) sum to exactly `relatedColumnWidthCls()`, so the comment/Claude row
+lines up with the Underlying-code row beneath it. Resizing any ONE of the
+three columns independently (the reviewer's explicit choice — "elke kolom
+volledig onafhankelijk resizable") breaks that alignment the moment an
+override is active on just one of them. **Deliberately accepted**, not a bug:
+an explicit manual resize is allowed to override an automatic layout
+guarantee, the same stance already taken for `fit`'s clip-avoidance guarantee
+below.
+
+## The `fit` stand: the override wins there too
+
+`fit`'s whole point is normally to avoid clipping a long PHP line (see
+`.claude/docs/diff-card.md`'s "uncapped upward" note). A manual override
+still applies on top of `fit` and can re-introduce clipping if dragged
+narrower than the content needs — again explicitly accepted per product
+decision: a reviewer's own drag is a deliberate action, and the override
+mechanism draws no distinction between stands.
+
+## Resize handle and the two reset paths
+
+`resizeHandle(onDown, onReset)` (`columnWidth.mjs`) renders a thin
+`data-testid=col-resize-handle` strip on the right edge
+(`cursor-col-resize` — Rule 4 in `.claude/docs/mouse-navigation.md`: hover
+carries no state, only a CSS cursor change) with a subtle hover tint. Its
+column root needs **`relative` + `data-col-resize-root`** — the latter is the
+drag's `closest(...)` anchor, so the handle can find its own column
+regardless of nesting.
+
+**`right-0`, never a negative offset:** several resizable roots
+(`related-code`, the block-diff `<article>`) carry `overflow-hidden` for
+unrelated reasons; a handle positioned outside the box's own edge
+(`-right-1`) is clipped there and therefore never hit-testable —
+`page.mouse.down()` silently missed it entirely in the regression test until
+this was caught. `right-0` keeps the handle inside the clipped box.
+
+- **Only the card that owns the diff keyboard shows the handle** for the
+  `'diff'` kind — `Block.mjs` gates it on `!preview && diffActive()`, mirroring
+  `viewModeIndicator`'s own gating and the "preview never wider than active"
+  rule (`.claude/docs/diff-card.md`). The override itself still applies to a
+  preview/unfocused instance of the same block (its width persists
+  regardless of role) — only the drag handle is focus-gated.
+- **Drag** (`startColumnResize`): `mousedown` on the handle starts it,
+  `document`-level `mousemove`/`mouseup` track the rest of the gesture — the
+  same module-level-listener shape as `home.mjs`'s own
+  `window.addEventListener('resize', ...)` for `state.viewportH` — needed
+  because the pointer routinely leaves the handle's thin (`w-2`, 8px) hit
+  area mid-drag. Floored at `MIN_COL_PX` (200px) so a column can never
+  collapse to an unusable sliver; no upper bound (`<main>` already scrolls
+  horizontally without limit).
+- **Reset path 1 — snap-back:** on `mouseup`, if the dragged width ends up
+  within `SNAP_BACK_PX` (10px) of the CURRENT auto width, the override is
+  cleared instead of committed. `parseAutoWidthPx(clsString)` computes that
+  auto width from the same width-class string the column would render
+  without an override — **viewport-aware**: every width-class function
+  emits `w-[Nrem] narrow:w-[Nrem] 2xl:w-[Nrem]`, and picking the wrong token
+  (e.g. always the bare one) compared a wide-viewport drag against the
+  narrower base width and wrongly committed an override on a 3px nudge —
+  caught by the regression test below.
+- **Reset path 2 — double-click:** `@dblclick` on the handle calls
+  `resetColumnWidth`/`clearColumnWidth` directly, independent of any drag
+  distance.
+
+## Test
+
+`tests/column-resize.spec.mjs` — drags the block-card handle wider, asserts
+the inline style, reloads the page and asserts the cookie-backed override
+survived, then double-click-resets it; a second test drags a few px (within
+the snap-back window) and asserts no override commits at all. Uses the
+shared, read-only anchor fixture PR 12903 (no write happens, so neither
+`APPROVAL_RESET_PRS` nor `seededPr` applies — see
+`.claude/docs/testing-playwright.md`). Runs at a widened viewport
+(`test.use({ viewport: { width: 2200, height: 900 } })`) so a rightward drag
+has room before hitting the window edge, and waits ~300ms after entering
+diff mode for `scrollFocusIntoView`'s auto-scroll to settle before measuring
+the handle's position — otherwise the drag targets stale coordinates from
+before the card finished sliding into view.

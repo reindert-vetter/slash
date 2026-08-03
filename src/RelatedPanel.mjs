@@ -20,6 +20,22 @@ import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin }
 import { labelForWorkflow } from './workflowLabels.mjs'
 import { claudeChatColumn } from './ClaudeChat.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
+import { colWidthStyle, startColumnResize, resetColumnWidth, resizeHandle, parseAutoWidthPx } from './columnWidth.mjs'
+
+// colWidthKeyFor — the manual-column-width identity (see columnWidth.mjs /
+// .claude/docs/column-resize.md) for the three RelatedPanel-side columns
+// (related-code/claude-chat-column/inline-comments). Unlike Block.mjs's
+// diff/drilled columns these never receive a raw block, only
+// commentTarget() — so the key reuses the same `${file}:${line}` identity
+// blockRef already relies on elsewhere (see CLAUDE.md's URL-state section).
+// Each kind gets an INDEPENDENT override, even though comments/claude/related
+// sit in visually related rows — see column-resize.md's accepted trade-off
+// (resizing one no longer keeps the comment/Claude row width-matched to the
+// Underlying-code row beneath it).
+function colWidthKeyFor(kind, commentTarget) {
+  const t = commentTarget()
+  return t ? kind + ':' + t.file + ':' + t.line : null
+}
 
 // ── Real comments (task_code_comment workflow) ────────────────────────────────
 // This section IS wired to the API. Placing a comment starts a Workflow
@@ -1271,11 +1287,25 @@ export function ClaudeChatPanel(state, commentTarget, openCommit) {
   ensureChatEvents(state.pr)
   const view = claudeChatView()
   const callbacks = claudeChatCallbacks(state, commentTarget, openCommit)
+  const widthKey = () => colWidthKeyFor('claude', commentTarget)
   return html`
     <div class="contents">
       ${() =>
         claudeChatVisible()
-          ? html`<div class="${() => 'shrink-0 p-3 ' + claudeColumnWidthCls()}" data-testid="claude-chat-column">
+          ? html`<div
+              class="${() => 'relative shrink-0 p-3 ' + claudeColumnWidthCls()}"
+              style="${() => colWidthStyle(state, widthKey())}"
+              data-testid="claude-chat-column"
+              data-col-resize-root
+            >
+              ${() =>
+                widthKey()
+                  ? resizeHandle(
+                      (e) =>
+                        startColumnResize(e, state, widthKey(), () => parseAutoWidthPx(claudeColumnWidthCls())),
+                      () => resetColumnWidth(state, widthKey()),
+                    )
+                  : ''}
               ${claudeChatColumn(view, callbacks)}
             </div>`
           : ''}
@@ -2662,8 +2692,21 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
   // card sat flush against the shared column's left edge while a
   // related-code card sat inset by that same 12px, so the two stacked
   // sections' cards didn't line up vertically.
+  const widthKey = () => colWidthKeyFor('comments', commentTarget)
   return html`
-    <div class="${() => 'flex shrink-0 flex-col gap-2 p-3 ' + commentColumnWidthCls()}" data-testid="inline-comments">
+    <div
+      class="${() => 'relative flex shrink-0 flex-col gap-2 p-3 ' + commentColumnWidthCls()}"
+      style="${() => colWidthStyle(state, widthKey())}"
+      data-testid="inline-comments"
+      data-col-resize-root
+    >
+      ${() =>
+        widthKey()
+          ? resizeHandle(
+              (e) => startColumnResize(e, state, widthKey(), () => parseAutoWidthPx(commentColumnWidthCls())),
+              () => resetColumnWidth(state, widthKey()),
+            )
+          : ''}
       ${newCommentComposer(state, commentTarget, openCompose)}
       ${() => visibleComments().map((c, i) => commentCard(c, i, openCommentMenu).key('comment:' + c.id))}
     </div>
@@ -3502,11 +3545,21 @@ export default function RelatedPanel(state, commentTarget, search) {
   // Clicking a child drills into it as its own diff column — the same path Enter
   // takes on a focused child (drillIntoChild in home.mjs), just mouse-driven.
   const drill = (r) => search && search.drill && search.drill(r)
+  const widthKey = () => colWidthKeyFor('related', commentTarget)
   return html`
     <section
       class="${() => 'relative flex shrink-0 max-h-full min-h-0 flex-col overflow-hidden ' + relatedColumnWidthCls()}"
+      style="${() => colWidthStyle(state, widthKey())}"
       data-testid="related-code"
+      data-col-resize-root
     >
+      ${() =>
+        widthKey()
+          ? resizeHandle(
+              (e) => startColumnResize(e, state, widthKey(), () => parseAutoWidthPx(relatedColumnWidthCls())),
+              () => resetColumnWidth(state, widthKey()),
+            )
+          : ''}
       ${() =>
         searching() || pending() > 0
           ? html`<span

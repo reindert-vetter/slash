@@ -81,6 +81,9 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
 - `diff-card.md` — how wide a diff card gets: the `split`/`unified`/`fit`
   stands, the `narrow:` breakpoint, the look-ahead preview's width/collapse
   rules.
+- `column-resize.md` — the manual, per-block, cookie-persisted column-width
+  override on top of every column's auto width (drag handle, snap-back/
+  dblclick reset, the accepted comment/Claude-row alignment trade-off).
 - `diff-render.md` — old/new line alignment, huge-block trim/collapse, char
   diff, and the two categories that replace the text diff (TRANSLATION, SVG).
 - `drilling.md` — opening an Underlying-code child as its own column

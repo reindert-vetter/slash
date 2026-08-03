@@ -77,6 +77,7 @@ import { renderMarkdown } from './markdown.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 import { meLogin } from './avatar.mjs'
+import { loadColumnWidths, colWidthStyle, startColumnResize, resetColumnWidth } from './columnWidth.mjs'
 
 initTheme()
 
@@ -463,6 +464,22 @@ const state = reactive({
   // *inside* a passed-in function opt (see previewTooTallForActive's own
   // call sites) so a resize can't force those to rebuild every Block() card.
   viewportH: window.innerHeight,
+  // colWidths — per-column manual width override in px, keyed
+  // `${kind}:${id}` (kind ∈ 'diff'|'related'|'claude'|'comments'; id is a
+  // block's stable b.id for 'diff', `${file}:${line}` for the other three —
+  // see columnWidth.mjs). Hydrated from a 30-day cookie right after
+  // construction (below), NOT from the URL/localStorage — a deliberate,
+  // per-block choice, see .claude/docs/column-resize.md. Ephemeral in the
+  // sense that it lives only in this reactive object; loadColumnWidths/
+  // startColumnResize/resetColumnWidth persist every actual change straight
+  // back to the cookie.
+  colWidths: {},
+  // colWidthVersion — bumped on every colWidths write. Adding a brand-new key
+  // to a plain object is not reliably reactive on its own in this codebase's
+  // arrow.js build (the same caveat as state.langSiblings elsewhere in this
+  // file), so every reader voids this counter first instead of depending on
+  // colWidths[key] directly.
+  colWidthVersion: 0,
 })
 
 // Keeps state.viewportH in sync with the real window size — same module-level
@@ -471,6 +488,12 @@ const state = reactive({
 window.addEventListener('resize', () => {
   state.viewportH = window.innerHeight
 })
+
+// Seed state.colWidths from the cookie set on an earlier visit. Cookies are
+// available synchronously, unlike GET /api/me / GET /api/names (avatar.mjs),
+// so this needs no async hydration dance — just a plain object merge before
+// anything reads state.colWidths.
+Object.assign(state.colWidths, loadColumnWidths())
 
 // DIFF_VIEW_CYCLE is the fixed order `a` steps through — see state.diffViewMode
 // above. 'unified' restructures a two-sided block into one "old above new"
@@ -8127,6 +8150,16 @@ function DetailPanel(state) {
             // the preview card) jumps state.diffViewMode straight to that
             // stand — see applyDiffViewMode/setDiffViewMode.
             setViewMode: setDiffViewMode,
+            // Manual column-width override (see columnWidth.mjs /
+            // .claude/docs/column-resize.md), keyed by this block's own
+            // stable id — independent of role (selected/preview) or drilled
+            // depth, so navigating doesn't lose/mix up an override. Only the
+            // diffActive() card actually shows the drag handle (gated inside
+            // Block.mjs), but the style override itself applies regardless,
+            // so a resized-then-stepped-away-from card keeps its width.
+            colWidthStyle: () => colWidthStyle(state, 'diff:' + b.id),
+            onResizeStart: (e, autoWidthPxFn) => startColumnResize(e, state, 'diff:' + b.id, autoWidthPxFn),
+            onResizeReset: () => resetColumnWidth(state, 'diff:' + b.id),
             // Only the look-ahead PREVIEW card (i !== sel) can ever collapse to
             // just its header — never the selected/active card itself. A plain
             // closure (undefined for the active card, so Block()'s own default
@@ -8334,6 +8367,14 @@ function DetailPanel(state) {
                   lineSummaries: () => lineChildSummaries(b),
                   viewMode: () => state.diffViewMode,
                   setViewMode: setDiffViewMode,
+                  // Same manual column-width override as the top-level card
+                  // (see columnWidth.mjs) — a drilled column gets its own
+                  // independent override, keyed by its own block's id (a real
+                  // block or a synthetic call-frame, both already carry a
+                  // stable b.id, see drilling.md).
+                  colWidthStyle: () => colWidthStyle(state, 'diff:' + b.id),
+                  onResizeStart: (e, autoWidthPxFn) => startColumnResize(e, state, 'diff:' + b.id, autoWidthPxFn),
+                  onResizeReset: () => resetColumnWidth(state, 'diff:' + b.id),
                 })}
               </div>
               ${

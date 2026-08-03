@@ -7,6 +7,7 @@ import { html, reactive } from './vendor/arrow.js'
 import { categoryClass } from './BlockList.mjs'
 import { translationBlockView, translationChangeUnits } from './translationDiff.mjs'
 import { avatarHtmlString } from './avatar.mjs'
+import { parseAutoWidthPx, resizeHandle } from './columnWidth.mjs'
 import Prism from './vendor/prism.js'
 
 // highlight turns raw PHP source into Prism-tokenised HTML (keywords, strings,
@@ -390,6 +391,18 @@ export default function Block(b, opts = {}) {
   // cards, which never show the indicator anyway since diffActive is always
   // false there) doesn't need to wire it up.
   const setViewMode = opts.setViewMode || (() => {})
+  // colWidthStyleFn — the reactive inline `style="width:...px"` override for
+  // this card (see columnWidth.mjs), read from the same nested slot as the
+  // width class below. Defaults to '' (auto — the class-driven width wins).
+  const colWidthStyleFn = opts.colWidthStyle || (() => '')
+  // onResizeStart/onResizeReset — home.mjs already knows `state` and this
+  // card's stable column key ('diff:' + b.id); Block.mjs stays decoupled from
+  // `state` (per its existing opts convention) and only supplies the ONE
+  // thing it alone knows: the current auto-width class string, so the drag's
+  // snap-back-to-auto comparison (see columnWidth.mjs) uses the width this
+  // exact card would have without an override.
+  const onResizeStart = opts.onResizeStart || (() => {})
+  const onResizeReset = opts.onResizeReset || (() => {})
   const preview = !!opts.preview
   // collapsedFn is a function returning whether this card should shrink to just
   // its header + meta row (category/title/status, file:line + approve pill) —
@@ -459,7 +472,7 @@ export default function Block(b, opts = {}) {
   return html`
     <article
       class="${() =>
-        'flex min-h-0 max-w-full flex-col overflow-hidden rounded-xl border bg-white dark:bg-zinc-900 transition ' +
+        'relative flex min-h-0 max-w-full flex-col overflow-hidden rounded-xl border bg-white dark:bg-zinc-900 transition ' +
         // A one-sided (added/removed) block only ever shows a single pane, so it
         // renders at the narrow (60%) width by default — the same width the `a`
         // toggle gives every card. A two-sided (modified) block keeps the full
@@ -473,7 +486,23 @@ export default function Block(b, opts = {}) {
           : diffActive()
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"
+      style="${() => colWidthStyleFn()}"
+      data-col-resize-root
     >
+      ${() =>
+        // Only the card that currently owns the diff keyboard may be dragged
+        // wider/narrower — never a preview/look-ahead card (mirrors the
+        // viewModeIndicator gating right below, and the "preview never wider
+        // than active" rule in diff-card.md) and never a card whose caller
+        // didn't wire up resizing at all (onResizeStart stays a no-op then, so
+        // this handle would drag nothing — see column-resize.md, testClass
+        // preview cards etc. never pass these opts).
+        !preview && diffActive()
+          ? resizeHandle(
+              (e) => onResizeStart(e, () => parseAutoWidthPx(widthCls(b, viewModeFn))),
+              () => onResizeReset(),
+            )
+          : ''}
       <div class="flex items-center gap-3 border-b border-slate-100 dark:border-zinc-800/60 px-4 py-2.5">
         <span
           class="${() =>
