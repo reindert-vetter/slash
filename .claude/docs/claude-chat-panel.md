@@ -226,13 +226,20 @@ The "Embedded Claude conversation" section owns:
   (the static chunk-reuse trap, see `.claude/rules/arrowjs-pitfalls.md`).
 - **`ClaudeChatPanel(state, commentTarget, openCommit)`** — the exported component
   `home.mjs` mounts inside `comments-and-related`'s own first row
-  (`comment-claude-row`), directly next to `InlineComments`, connected by the
-  same dashed connector the Onderliggende-code children use between each
-  other (`data-testid=comment-claude-connector`, built in TODO 2 of
-  `todo/todo-claude-chat-blok.md`; not a sibling column of
-  `comments-and-related` any more — that was the earlier, wider-apart shape).
-  Width is `claudeColumnWidthCls()` — **1/3** of `relatedColumnWidthCls()`'s
-  own clamp, `InlineComments` taking the other **2/3** (minus the connector's
+  (`comment-claude-row`), directly next to `InlineComments`, split off by a
+  vertical dashed divider (`data-testid=comment-claude-connector`,
+  `border-l border-dashed`, `self-stretch` so it spans the full row height —
+  not the horizontal connector the Onderliggende-code children use between
+  each other; not a sibling column of `comments-and-related` any more — that
+  was the earlier, wider-apart shape). The comment block and this Claude
+  block have no border/bg/padding of their own — they merge into **one**
+  visual card whose border/bg lives on `comment-claude-row` itself, with
+  `items-stretch` so both columns are always exactly the same height (a
+  reviewer request: "technisch wel 2 blokken, maar samengesmolten" — the left
+  (comment/thread) and right (Claude) stay functionally separate, each with
+  their own keyboard cursor, only their outer boxing merged). Width is
+  `claudeColumnWidthCls()` — **exactly half** of `relatedColumnWidthCls()`'s
+  own clamp, `InlineComments` taking the **other half** (minus the connector's
   own width) via `commentColumnWidthCls()`, both defined next to
   `relatedColumnWidthCls` in `RelatedPanel.mjs`. `clamp()` scales
   homogeneously (`k·clamp(a,b,c) = clamp(k·a,k·b,k·c)`), so

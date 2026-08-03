@@ -204,15 +204,28 @@ still a different kind of content from a code excerpt, but the two are now
 narrow enough, and close enough, to share a row instead of each claiming a full
 `relatedColumnWidthCls()`-wide column of their own).
 
-- **Width:** `shrink-0 p-3` plus the exported `claudeColumnWidthCls()` — **1/3**
-  of `relatedColumnWidthCls()`'s own clamp, `inline-comments` taking the other
-  **2/3** minus the connector's own width via `commentColumnWidthCls()` (both in
-  `RelatedPanel.mjs`, next to `relatedColumnWidthCls` itself). `clamp()` scales
-  homogeneously, so this holds for every code-growth width, not just the
+- **Width:** `shrink-0` plus the exported `claudeColumnWidthCls()` — **exactly
+  half** of `relatedColumnWidthCls()`'s own clamp, `inline-comments` taking the
+  other **half** minus the connector's own width via `commentColumnWidthCls()`
+  (both in `RelatedPanel.mjs`, next to `relatedColumnWidthCls` itself). `clamp()`
+  scales homogeneously, so this holds for every code-growth width, not just the
   floor/ceiling — see `relatedWidthCls`'s doc comment. It is deliberately *not*
   a fourth content-driven width computation of its own; the transcript wraps
   (`ClaudeChat.mjs`'s composer/send row also wraps rather than stretching the
   column at this narrower width).
+- **One merged card, not two:** the comment block and this Claude block have
+  no border/bg/padding of their own any more — a single shared
+  `rounded-xl border ... bg-white ...` sits on `comment-claude-row` itself
+  (`home.mjs`), with `items-stretch` so both columns always end up exactly the
+  same height (a short comment thread stretches to match a longer Claude
+  conversation and vice versa — this is also the "collapse together" effect:
+  when there's little content on either side the whole merged card just stays
+  small). The two halves are still functionally separate — the left
+  (comment/thread) and right (Claude) each keep their own keyboard focus/cursor
+  — only their outer boxing is now one card, split by a vertical dashed
+  divider (`comment-claude-connector`, `border-l border-dashed`,
+  `self-stretch`) instead of the horizontal connector `nestedChipColumn` uses
+  between Onderliggende-code children.
 - **Visibility:** `claudeChatVisible()` = `hasVisibleComments() ||
   chatConversationExists() || cs.focus === 'claude' || cs.focus === 'new'` — a
   unit with neither a comment nor an earlier conversation has **no** chat

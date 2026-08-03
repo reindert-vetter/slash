@@ -1292,9 +1292,13 @@ function claudeChatCallbacks(state, commentTarget) {
 }
 
 // ClaudeChatPanel is the exported component home.mjs mounts next to
-// InlineComments, in the same inner row of comments-and-related — 1/3 of
-// relatedColumnWidthCls() next to InlineComments' 2/3, see
-// commentColumnWidthCls/claudeColumnWidthCls above and detail-layout.md.
+// InlineComments, in the same inner row of comments-and-related — the same
+// width as InlineComments (both half of relatedColumnWidthCls(), see
+// commentColumnWidthCls/claudeColumnWidthCls above and detail-layout.md); the
+// two merge into one visual card (border/bg on the shared row wrapper in
+// home.mjs, `items-stretch` so both columns end up the same height), so this
+// column has no padding/border/background of its own any more — see
+// claudeChatColumn's own doc comment in ClaudeChat.mjs.
 // `state`/`commentTarget` mirror InlineComments' own params (commentTarget is
 // only needed for the lazy anchor creation above — an already-anchored
 // conversation needs no live cursor info). Wrapped in a stable `contents`
@@ -1315,7 +1319,7 @@ export function ClaudeChatPanel(state, commentTarget) {
       ${() =>
         claudeChatVisible()
           ? html`<div
-              class="${() => 'relative shrink-0 p-3 ' + claudeColumnWidthCls()}"
+              class="${() => 'relative flex min-h-0 flex-col shrink-0 ' + claudeColumnWidthCls()}"
               style="${() => colWidthStyle(state, widthKey())}"
               data-testid="claude-chat-column"
               data-col-resize-root
@@ -2964,19 +2968,19 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
   // their ancestor has a real (non-auto) width to clip against. See
   // detail-layout.md.
   //
-  // commentColumnWidthCls() — 2/3 of relatedColumnWidthCls(), so this section
-  // sits at 2/3 width next to the Claude column's 1/3 in their shared inner
-  // row (home.mjs), while still lining up under related-code below (both
-  // rows sum to the same relatedColumnWidthCls() total, see
-  // commentColumnWidthCls's own doc comment). The `p-3` mirrors the p-3 on
-  // related-code's own inner scroll wrapper (below) — without it, a comment
-  // card sat flush against the shared column's left edge while a
-  // related-code card sat inset by that same 12px, so the two stacked
-  // sections' cards didn't line up vertically.
+  // commentColumnWidthCls() — half of relatedColumnWidthCls(), so this
+  // section sits at the same width as the Claude column in their shared
+  // inner row (home.mjs), while still lining up under related-code below
+  // (both rows sum to the same relatedColumnWidthCls() total, see
+  // commentColumnWidthCls's own doc comment). The two columns merge into one
+  // visual card (border/bg live on the shared row wrapper in home.mjs) with
+  // `items-stretch`, so this column has no padding/border/background of its
+  // own any more — only its own inner cards (compactConversation/
+  // expandedConversation/newCommentComposer) keep their own padding.
   const widthKey = () => colWidthKeyFor('comments', commentTarget)
   return html`
     <div
-      class="${() => 'relative flex shrink-0 flex-col gap-2 p-3 ' + commentColumnWidthCls()}"
+      class="${() => 'relative flex shrink-0 flex-col gap-2 ' + commentColumnWidthCls()}"
       style="${() => colWidthStyle(state, widthKey())}"
       data-testid="inline-comments"
       data-col-resize-root
@@ -3409,19 +3413,21 @@ export function relatedColumnWidthCls() {
 // around it (mirrors nestedChipColumn's own connector, which also has none).
 const COMMENT_CLAUDE_CONNECTOR_REM = 0.75
 
-// commentColumnWidthCls / claudeColumnWidthCls — 2/3 and 1/3 of
+// commentColumnWidthCls / claudeColumnWidthCls — equal (1/2 each) halves of
 // relatedColumnWidthCls()'s own clamp, reading the SAME chars snapshot so
-// both split proportionally as the code grows, not just at the extremes. The
-// connector's width comes off the comment side only (see the inner row in
-// home.mjs), so this holds exactly, for any chars value:
+// both split evenly as the code grows, not just at the extremes — the two
+// blocks read as one merged card (see home.mjs's comment-claude-row) and
+// must therefore stay the same width as each other. The connector's width
+// comes off the comment side only (see the inner row in home.mjs), so this
+// holds exactly, for any chars value:
 //   commentColumnWidthCls() + 0.75rem(connector) + claudeColumnWidthCls()
 //     === relatedColumnWidthCls()
 export function commentColumnWidthCls() {
-  return relatedWidthCls(relatedGrowthChars(), 2 / 3, COMMENT_CLAUDE_CONNECTOR_REM)
+  return relatedWidthCls(relatedGrowthChars(), 1 / 2, COMMENT_CLAUDE_CONNECTOR_REM)
 }
 
 export function claudeColumnWidthCls() {
-  return relatedWidthCls(relatedGrowthChars(), 1 / 3)
+  return relatedWidthCls(relatedGrowthChars(), 1 / 2)
 }
 
 // relatedCard renders one child block: a header (label + file:line + relation

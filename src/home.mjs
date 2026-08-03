@@ -8519,7 +8519,10 @@ function DetailPanel(state) {
         })
       }}
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="comments-and-related">
-        <div class="flex items-start" data-testid="comment-claude-row">
+        <div
+          class="flex items-stretch overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
+          data-testid="comment-claude-row"
+        >
           ${() =>
             InlineComments(
               state,
@@ -8536,18 +8539,17 @@ function DetailPanel(state) {
               () => openMenu('comment'),
             ).key('inline-comments')}
           ${() =>
-            // Same dashed connector the Onderliggende-code children use between
-            // each other (nestedChipColumn, RelatedPanel.mjs) — visible only
-            // alongside the Claude column itself (claudeChatVisible()), so there's
-            // never a floating dash with nothing to its right. Built in TODO 2
-            // (todo-claude-chat-blok.md); TODO 3 only moved it into this row, next
-            // to its now proportionally-resized neighbours (commentColumnWidthCls/
-            // claudeColumnWidthCls, RelatedPanel.mjs) — no extra flex `gap` on this
-            // row, the connector's own w-3 is the entire visible gap, exactly like
-            // nestedChipColumn's own connector.
+            // A vertical dashed separator (not the horizontal connector
+            // nestedChipColumn uses between Onderliggende-code children) —
+            // the comment and Claude blocks merge into ONE visual card (the
+            // border/bg above), so this is an internal divider, not a
+            // connector between two separate cards. Visible only alongside
+            // the Claude column itself (claudeChatVisible()), so there's
+            // never a floating dash with nothing to its right. `self-stretch`
+            // spans the row's full (items-stretch-driven, equal) height.
             claudeChatVisible()
               ? html`<div
-                  class="mt-5 h-px w-3 shrink-0 self-center border-t border-dashed border-slate-300 dark:border-zinc-700"
+                  class="w-3 shrink-0 self-stretch border-l border-dashed border-slate-300 dark:border-zinc-700"
                   data-testid="comment-claude-connector"
                 ></div>`
               : ''}

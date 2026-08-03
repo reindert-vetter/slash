@@ -236,12 +236,17 @@ function claudeBubble(msg, i, total, claudePos, onSend, busy) {
 // own doc comment in RelatedPanel.mjs): the reviewer just types the request
 // ("pas de foutafhandeling aan", "commit dit") instead of picking a separate
 // action first. See "Triggering agentic actions" in claude-chat-panel.md.
+//
+// No own border/bg/rounded/padding any more — the comment block and this
+// Claude block merge into ONE visual card (that styling lives on the shared
+// `comment-claude-row` wrapper in home.mjs instead), separated only by a
+// vertical dashed line (`comment-claude-connector`). `flex-1` makes this
+// column fill the full height of that shared row (`items-stretch`), so both
+// blocks always end up exactly the same height.
 export function claudeChatColumn(view, callbacks) {
   return html`
-    <div
-      class="flex min-h-0 flex-col gap-2 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-3 ring-1 ring-black/5"
-      data-testid="claude-chat-card"
-    >
+    <div class="flex min-h-0 flex-1 flex-col gap-2" data-testid="claude-chat-card">
+
       <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">Claude</p>
       <div class="flex min-h-0 flex-col gap-2 overflow-auto no-scrollbar" data-testid="claude-chat-thread">
         ${() => {

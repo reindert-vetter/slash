@@ -1,15 +1,14 @@
 import { test, expect, seededPr } from './_fixtures.mjs'
 
-// TODO 3 in todo-claude-chat-blok.md: the comment block (InlineComments,
-// commentColumnWidthCls()) and the Claude block (ClaudeChatPanel,
-// claudeColumnWidthCls()) sit side by side, connected by the same dashed
-// connector the Onderliggende-code children use between each other
-// (comment-claude-connector, built in TODO 2). Together — comment column +
-// connector + Claude column — they are exactly as wide as the
+// The comment block (InlineComments, commentColumnWidthCls()) and the Claude
+// block (ClaudeChatPanel, claudeColumnWidthCls()) merge into one visual card
+// (one border/bg, home.mjs's comment-claude-row) at equal width, separated by
+// a vertical dashed divider (comment-claude-connector). Together — comment
+// column + connector + Claude column — they are exactly as wide as the
 // Onderliggende-code card underneath (related-code, relatedColumnWidthCls()),
 // so the whole stack lines up vertically; see relatedWidthCls's doc comment
 // in RelatedPanel.mjs for why that holds exactly, not just approximately.
-test('comment block (2/3) and Claude block (1/3) sit beside each other and line up with Onderliggende code', async ({
+test('comment block and Claude block are equally wide, sit beside each other and line up with Onderliggende code', async ({
   page,
 }, testInfo) => {
   const pr = seededPr(testInfo)
@@ -46,11 +45,11 @@ test('comment block (2/3) and Claude block (1/3) sit beside each other and line 
   const claudeBox = await claude.boundingBox()
   const relatedBox = await related.boundingBox()
 
-  // The comment block is roughly twice as wide as the Claude block (2/3 vs
-  // 1/3 of the same total) — comparing the two columns to each other, not to
-  // an exact px value (.claude/docs/testing-playwright.md).
-  expect(commentsBox.width).toBeGreaterThan(claudeBox.width * 1.6)
-  expect(commentsBox.width).toBeLessThan(claudeBox.width * 2.4)
+  // The comment block and the Claude block are roughly the same width (1/2
+  // vs 1/2 of the same total) — comparing the two columns to each other, not
+  // to an exact px value (.claude/docs/testing-playwright.md).
+  expect(commentsBox.width).toBeGreaterThan(claudeBox.width * 0.85)
+  expect(commentsBox.width).toBeLessThan(claudeBox.width * 1.15)
 
   // The three sit left-to-right in that order, immediately next to each
   // other (no extra flex gap around the connector, see home.mjs).
@@ -58,8 +57,11 @@ test('comment block (2/3) and Claude block (1/3) sit beside each other and line 
   expect(claudeBox.x).toBeGreaterThanOrEqual(connectorBox.x + connectorBox.width - 1)
 
   // Comment + connector + Claude together are exactly as wide as the
-  // Onderliggende-code card below, and start at the same left edge.
+  // Onderliggende-code card below, and start at roughly the same left edge —
+  // within a couple of px, not exactly: the merged comment/Claude card now
+  // has its own 1px border (see comment-claude-row in home.mjs), which
+  // related-code doesn't have, so its content starts 1px further right.
   const rowWidth = claudeBox.x + claudeBox.width - commentsBox.x
   expect(rowWidth).toBeCloseTo(relatedBox.width, 0)
-  expect(commentsBox.x).toBeCloseTo(relatedBox.x, 0)
+  expect(Math.abs(commentsBox.x - relatedBox.x)).toBeLessThan(3)
 })

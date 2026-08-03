@@ -74,8 +74,8 @@ row (see the accepted trade-off below).
 ## Accepted trade-off: the comment/Claude ↔ Underlying-code row alignment can break
 
 `.claude/docs/detail-layout.md` documents a width invariant:
-`commentColumnWidthCls()` (2/3) + the connector + `claudeColumnWidthCls()`
-(1/3) sum to exactly `relatedColumnWidthCls()`, so the comment/Claude row
+`commentColumnWidthCls()` (half) + the connector + `claudeColumnWidthCls()`
+(the other half) sum to exactly `relatedColumnWidthCls()`, so the comment/Claude row
 lines up with the Underlying-code row beneath it. Resizing any ONE of the
 three columns independently (the reviewer's explicit choice — "elke kolom
 volledig onafhankelijk resizable") breaks that alignment the moment an
