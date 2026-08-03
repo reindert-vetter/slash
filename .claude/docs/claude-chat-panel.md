@@ -55,6 +55,59 @@ without `→` being able to reach it. A genuinely **deleted** comment is the one
 irreducible case: without a row there is no file:line, so its conversation has
 no unit to appear under any more.
 
+### Optimistically visible while composing a brand-new comment
+
+`claudeChatVisible()` also returns `true` while `cs.focus === 'new'` — the
+composer for a brand-new "Comment op deze regel" (`toNew`/`startComment`) is
+itself already shown before anything is persisted (an uncontrolled `<textarea>`
+backed only by `composeDrafts`, see above); the Claude column now mirrors that
+same "shows before it's real" idea instead of staying invisible until the
+reviewer's own comment is placed. **This is deliberately a different trigger
+than the removed placeholder above, not a reintroduction of it**: the
+placeholder fired on bare `→` **navigation**, with zero reviewer input; this
+one only creates anything once the reviewer takes a genuinely explicit action
+— typing into the Claude composer and clicking "Stuur"/"Bewerk code" — exactly
+the same weight "Plaats…" already has.
+
+- **`ensureClaudeAnchorForNew(state, commentTarget)`** (`RelatedPanel.mjs`) is
+  the lazy-creation step, called from `sendClaudeMessageFromNew` (which
+  `claudeChatCallbacks`' `onSend`/`onSendEdit` use instead of calling
+  `sendClaudeMessage` directly). A no-op — returning `null`, changing
+  nothing — unless `cs.focus === 'new'` **and** no anchor exists yet
+  (`chatAnchorComment()`); once an anchor exists (including the one it just
+  created) every later send is the ordinary, already-anchored path.
+- It creates the ONE backing comment via the same `createComment(...)` the
+  composer's own `placeComment` uses, anchored on the same `commentTarget()`
+  unit, always **`local: true`** (never posted to GitHub — the reviewer
+  hasn't confirmed any public-facing text by merely chatting with Claude) and
+  with a body of **whatever is already typed** in the "Comment op deze
+  regel" field, or `CLAUDE_ANCHOR_PLACEHOLDER`
+  (`'(Nog geen eigen comment getypt — gesprek met Claude gestart.)'`) if that
+  field is still empty. `createComment` itself already lands `cs.sel` on the
+  fresh comment, so `chatAnchorComment()`/`selComment()` resolve to it
+  immediately — no separate wiring needed for the panel to pick it up.
+- **`toNew` resets the visible chat state** (`cc.commentId`/`messages`/`runId`/
+  `status`/`progress`) whenever there is no existing anchor for the unit being
+  composed on — without this, opening a brand-new composer right after
+  viewing a DIFFERENT unit's conversation would keep showing that stale
+  transcript (and, worse, let "Commit wijziging" act on its stale `runId`).
+  An existing conversation on the exact unit being composed on
+  (`chatAnchorComment()` already resolves it) is left alone.
+- **`placeComment` never creates a SECOND comment once this anchor exists.**
+  `claudeAutoAnchor` (`{draftKey}`, keyed the same way `composeDraftKey`/
+  `composeDrafts` are) lets it recognize "this exact draft already has a real
+  comment behind it" and, since there is no "edit body" Signal (a comment's
+  body is fixed at Execution start), "updating" it means posting the
+  reviewer's typed text as a **reply** on that same thread (the same Signal
+  `sendReaction` uses) instead of starting a new Execution. The anchor's own
+  local-ness (always `true`, fixed at creation) wins over `opts.local` here —
+  chatting with Claude first already made this thread private, and there is
+  no Signal to flip a comment from private to public after the fact.
+  `claudeAutoAnchor` is cleared on every fresh `toNew` (a stale pointer from a
+  different unit's draft must never be reused; `draftKeyFor`'s own
+  unit-scoped compare in `placeComment` is a second safety net on top of
+  that).
+
 ### The chain, key by key
 
 Before this section's redesign (see `todo/todo-claude-chat-blok.md` TODO 2),
@@ -148,7 +201,7 @@ The "Embedded Claude conversation" section owns:
   `${() => claudeChatVisible()}` binding: a plain, non-reactive value would
   leave a column that should reappear invisible until the next navigation step
   (the static chunk-reuse trap, see `.claude/rules/arrowjs-pitfalls.md`).
-- **`ClaudeChatPanel(state, openCommit)`** — the exported component
+- **`ClaudeChatPanel(state, commentTarget, openCommit)`** — the exported component
   `home.mjs` mounts inside `comments-and-related`'s own first row
   (`comment-claude-row`), directly next to `InlineComments`, connected by the
   same dashed connector the Onderliggende-code children use between each
@@ -395,10 +448,12 @@ overwhelmingly common case — into a two-Enter flow, which is not the
 thread **reply** field sends directly while a **new** comment composer opens
 a menu — see `.claude/docs/comments-panel.md`).
 
-`ClaudeChatPanel(state, openCommit)`'s `openCommit` param (mirrors
-`InlineComments`' own `openCompose`/`openCommentMenu` props) exists purely
-to reach `home.mjs`'s `openMenu` — `RelatedPanel.mjs`/`ClaudeChat.mjs` have no
-access to it directly, same reason `InlineComments` needs those two callbacks.
+`ClaudeChatPanel(state, commentTarget, openCommit)`'s `openCommit` param
+(mirrors `InlineComments`' own `openCompose`/`openCommentMenu` props) exists
+purely to reach `home.mjs`'s `openMenu` — `RelatedPanel.mjs`/`ClaudeChat.mjs`
+have no access to it directly, same reason `InlineComments` needs those two
+callbacks. `commentTarget` was added alongside it for `ensureClaudeAnchorForNew`
+(see "Optimistically visible while composing a brand-new comment" above).
 `menuAnchor()`/`menuRegion()` gained a `'claudeCommit'` branch anchoring on
 `[data-testid=claude-chat-card]`/`-column]`.
 

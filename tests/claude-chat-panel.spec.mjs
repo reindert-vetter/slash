@@ -1,4 +1,4 @@
-import { test, expect, seededPr, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, seededPr, evaluateSettled, leaveSearchBox } from './_fixtures.mjs'
 
 // Verifies the embedded Claude conversation column (claude_chat workflow,
 // see .claude/docs/comments-panel.md's "Embedded Claude chat" section):
@@ -114,6 +114,91 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   // (no more 'thread' stop in between).
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByTestId('reaction-compose')).toBeFocused()
+})
+
+// Composing a brand-new "Comment op deze regel" (cs.focus === 'new') shows
+// the Claude column right away, before any comment genuinely exists on the
+// backend — see "Optimistically visible while composing a brand-new comment"
+// in claude-chat-panel.md. Sending Claude a message lazily creates the ONE
+// backing comment (local, with a placeholder body since nothing was typed
+// yet); "Plaats…" afterwards must not create a SECOND one — it updates the
+// same anchor via a reply instead (ensureClaudeAnchorForNew/placeComment,
+// RelatedPanel.mjs). Uses the shared PR 12903 fixture (real ingested blocks
+// are needed to reach a block's own command palette — a seededPr() PR has
+// none, see comment-delete.spec.mjs), and cleans up the one real comment it
+// creates via the same delete Signal deleteComment itself uses, so no state
+// leaks into another spec sharing that PR.
+test('composing a new comment: the Claude column shows before it is placed, and a first Claude message lazily creates the ONE backing comment', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await leaveSearchBox(page)
+  // Block 0 has no local diff to step into (see place-comment-return-focus.
+  // spec.mjs) — block 1 does, and (per that same spec + comment-nav-race.
+  // spec.mjs, both of which mock the POST) carries no real comment yet.
+  await page.locator('[data-idx="1"]').click()
+  await page.keyboard.press('ArrowRight') // list -> diff
+
+  await expect(page.getByTestId('comment-item')).toHaveCount(0)
+  await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
+
+  await page.keyboard.press('Enter') // block command palette
+  await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
+  const composer = page.getByTestId('comment-compose')
+  await expect(composer).toBeFocused()
+
+  // The Claude column is visible right away, next to the still-unplaced,
+  // still-empty composer — before any comment exists on the backend at all.
+  await expect(page.getByTestId('claude-chat-column')).toBeVisible()
+  await expect(page.getByTestId('comment-item')).toHaveCount(0)
+
+  // Send Claude a message WITHOUT having typed anything into the "Comment op
+  // deze regel" field yet — the lazy anchor falls back to
+  // CLAUDE_ANCHOR_PLACEHOLDER for its body.
+  const claudeComposer = page.getByTestId('claude-chat-compose')
+  await claudeComposer.fill('Wat doet deze functie?')
+  const [createRes] = await Promise.all([
+    page.waitForResponse(
+      (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
+    ),
+    claudeComposer.press('Enter'),
+  ])
+  const runId = (await createRes.json()).runId
+  expect(runId).toBeTruthy()
+
+  try {
+    // Sending to Claude lazily created the ONE backing comment.
+    const item = page.getByTestId('comment-item')
+    await expect(item).toHaveCount(1)
+    await expect(item).toContainText('Nog geen eigen comment getypt')
+    // Each test gets its own worker/server, which reads the fixture queue
+    // fresh (see _fixtures.mjs), so this — like the file's first test — sees
+    // the FIRST programmed reply regardless of test order.
+    await expect(page.getByTestId('claude-message-body').last()).toContainText(
+      'Ik heb naar de code gekeken',
+    )
+
+    // "Plaats…" must not start a SECOND comment next to it — it updates the
+    // existing anchor via a reply instead.
+    await composer.fill('Kun je dit uitleggen?')
+    await page.getByTestId('comment-send').click()
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await page.getByTestId('command-row').filter({ hasText: 'Plaats comment' }).click()
+    await expect(menu).toBeHidden()
+
+    await expect(item).toHaveCount(1) // still exactly one comment
+    await item.click()
+    await expect(page.getByTestId('comment-thread')).toContainText('Kun je dit uitleggen?')
+  } finally {
+    // Never leave this real, non-mocked comment behind on the shared PR
+    // 12903 fixture (see place-comment-return-focus.spec.mjs for the same
+    // leftover-state rationale).
+    await page.request.post('/api/workflows/' + runId + '/signals/delete', {
+      data: { author: 'reviewer' },
+    })
+  }
 })
 
 // A message with `kind: 'action'` (chat.KindAction — Claude placed/resolved a

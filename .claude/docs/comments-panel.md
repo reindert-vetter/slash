@@ -592,3 +592,10 @@ reviewer ready to continue with `↑`/`↓`/`f`/`d`/`s`. Test:
 
 Placing a comment also **retracts the approval of the unit it hangs on** — see
 `.claude/docs/approval.md`.
+
+**If a Claude message already lazily created this exact draft's backing
+comment** (`ensureClaudeAnchorForNew`, see "Optimistically visible while
+composing a brand-new comment" in `.claude/docs/claude-chat-panel.md`),
+`placeComment` does not call `createComment` at all — it posts the typed text
+as a **reply** on that already-existing thread instead, so exactly one comment
+ever exists for that draft.

@@ -214,10 +214,14 @@ narrow enough, and close enough, to share a row instead of each claiming a full
   (`ClaudeChat.mjs`'s `claude-chat-actions` button row also wraps rather than
   stretching the column at this narrower width).
 - **Visibility:** `claudeChatVisible()` = `hasVisibleComments() ||
-  chatConversationExists() || cs.focus === 'claude'` — a unit with neither a
-  comment nor an earlier conversation has **no** chat column at all (nothing
-  creates a placeholder comment for one; see
-  `.claude/docs/claude-chat-panel.md`). The dashed connector
+  chatConversationExists() || cs.focus === 'claude' || cs.focus === 'new'` — a
+  unit with neither a comment nor an earlier conversation has **no** chat
+  column, except while a brand-new "Comment op deze regel" composer is open
+  (`cs.focus === 'new'`): the column then shows optimistically, same as the
+  composer's own not-yet-placed draft, and only becomes a real backing
+  comment once the reviewer sends Claude a message or places the comment —
+  see "Optimistically visible while composing a brand-new comment" in
+  `.claude/docs/claude-chat-panel.md`. The dashed connector
   (`data-testid=comment-claude-connector`, the same style as
   `nestedChipColumn`'s own connector) shares that same visibility check, so it
   never floats with nothing to its right.

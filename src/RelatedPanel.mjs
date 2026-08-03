@@ -631,12 +631,30 @@ function draftKeyFor(t) {
 function toNew(commentTargetFn) {
   releaseFocus()
   warningOverride = null
+  // A stale ensureClaudeAnchorForNew pointer from a PREVIOUS draft (on a
+  // different unit) must never be reused by placeComment below — see its own
+  // doc comment. draftKeyFor's own unit-scoped compare is a second safety
+  // net, this just avoids ever needing it in the common case.
+  claudeAutoAnchor = null
   cs.composing = true
   cs.focus = 'new'
   composeDraftKey = draftKeyFor(commentTargetFn ? commentTargetFn() : null)
   focusEl('[data-testid=comment-compose]')
   const draft = composeDrafts.get(composeDraftKey)
   if (draft) prefillField('[data-testid=comment-compose]', draft)
+  // A brand-new composer with no comment on THIS unit yet must not keep
+  // showing a STALE Claude conversation left over from whatever was open
+  // before (a different unit's transcript/runId — which "Commit wijziging"
+  // would otherwise silently act on). Only reset when there is genuinely
+  // nothing to anchor to yet; an existing conversation on this exact unit
+  // (chatAnchorComment) keeps showing normally.
+  if (!chatAnchorComment()) {
+    cc.commentId = null
+    cc.messages = []
+    cc.runId = null
+    cc.status = 'idle'
+    cc.progress = null
+  }
 }
 
 // `focusInput` defaults to true for every existing caller (a click or an
@@ -1102,8 +1120,16 @@ export async function enterClaudeChat(pr) {
 export function isClaudeChatFocused() {
   return cs.focus === 'claude'
 }
+// The 'new' branch is the optimistic counterpart of the composer itself: a
+// brand-new "Comment op deze regel" composer already shows before anything is
+// persisted (cs.focus === 'new', see toNew/composeDrafts above), so the
+// Claude column shows right alongside it — nothing is created on the backend
+// yet, exactly like the composer's own draft. See "Optimistically visible
+// while composing a brand-new comment" in claude-chat-panel.md for how the
+// backing comment is lazily created only once the reviewer does something
+// real (ensureClaudeAnchorForNew below).
 export function claudeChatVisible() {
-  return hasVisibleComments() || chatConversationExists() || cs.focus === 'claude'
+  return hasVisibleComments() || chatConversationExists() || cs.focus === 'claude' || cs.focus === 'new'
 }
 
 // focusClaudeComposer/scrollClaudeMessageIntoView mirror focusThread/
@@ -1207,16 +1233,19 @@ function claudeChatView() {
 // the card's "Commit" button opens CLAUDE_COMMIT_CONFIRM_COMMANDS via the
 // existing command-palette machinery — this file has no access to
 // home.mjs's openMenu/ms directly, exactly like it has none for
-// openMenu('compose')/openMenu('comment').
-function claudeChatCallbacks(openCommit) {
+// openMenu('compose')/openMenu('comment'). `commentTarget` is the same
+// callback InlineComments/the composer already render against — needed here
+// only for ensureClaudeAnchorForNew's lazy anchor creation (sendClaudeMessage
+// itself needs no anchor info once one exists).
+function claudeChatCallbacks(state, commentTarget, openCommit) {
   return {
-    onSend: (text) => sendClaudeMessage(text),
+    onSend: (text) => sendClaudeMessageFromNew(state, commentTarget, text),
     // "Bewerk code": the SAME typed text, but as an 'edit'-action turn (Claude
     // may use its Edit tool against the shadow worktree) — a plain send, no
     // confirm step, since it never touches the real PR branch. See
     // sendClaudeMessage's own doc comment for why only 'commit' skips the
     // "needs real text" requirement.
-    onSendEdit: (text) => sendClaudeMessage(text, 'edit'),
+    onSendEdit: (text) => sendClaudeMessageFromNew(state, commentTarget, text, 'edit'),
     onCommitClick: () => {
       if (openCommit) openCommit()
     },
@@ -1227,22 +1256,21 @@ function claudeChatCallbacks(openCommit) {
 // InlineComments, in the same inner row of comments-and-related — 1/3 of
 // relatedColumnWidthCls() next to InlineComments' 2/3, see
 // commentColumnWidthCls/claudeColumnWidthCls above and detail-layout.md.
-// `state` mirrors InlineComments' own param;
-// `openCommit` mirrors InlineComments' openCompose/openCommentMenu (see
-// claudeChatCallbacks above). It deliberately takes no `commentTarget`: a
-// conversation only ever hangs on an EXISTING comment, so nothing here needs
-// the live cursor's anchor fields any more. Wrapped in a stable
-// `contents` root — not a bare toggling expression — so the visibility (empty
-// ↔ template) toggle never corrupts arrow.js's keyed reconcile (the same
-// pitfall newCommentComposer/commentCard guard against). Everything that can
-// change AFTER this column first mounts lives behind claudeChatView()'s
-// getters, read from inside ClaudeChat.mjs's own `${() => ...}` bindings —
-// see claudeChatView's doc comment for why a plain snapshot isn't enough
-// here.
-export function ClaudeChatPanel(state, openCommit) {
+// `state`/`commentTarget` mirror InlineComments' own params (commentTarget is
+// only needed for the lazy anchor creation above — an already-anchored
+// conversation needs no live cursor info); `openCommit` mirrors
+// InlineComments' openCompose/openCommentMenu (see claudeChatCallbacks
+// above). Wrapped in a stable `contents` root — not a bare toggling
+// expression — so the visibility (empty ↔ template) toggle never corrupts
+// arrow.js's keyed reconcile (the same pitfall newCommentComposer/
+// commentCard guard against). Everything that can change AFTER this column
+// first mounts lives behind claudeChatView()'s getters, read from inside
+// ClaudeChat.mjs's own `${() => ...}` bindings — see claudeChatView's doc
+// comment for why a plain snapshot isn't enough here.
+export function ClaudeChatPanel(state, commentTarget, openCommit) {
   ensureChatEvents(state.pr)
   const view = claudeChatView()
-  const callbacks = claudeChatCallbacks(openCommit)
+  const callbacks = claudeChatCallbacks(state, commentTarget, openCommit)
   return html`
     <div class="contents">
       ${() =>
@@ -1907,6 +1935,86 @@ export async function createComment({
   }
 }
 
+// claudeAutoAnchor tracks the ONE local comment ensureClaudeAnchorForNew
+// (below) creates, keyed by the same draft identity draftKeyFor/composeDrafts
+// already use — so placeComment can recognize "this exact still-open
+// composer already has a real, if minimally-worded, comment behind it" and
+// UPDATE that one instead of starting a second Execution next to it. Cleared
+// whenever a fresh composer opens (toNew) so a stale pointer from a different
+// unit's draft can never be reused; draftKeyFor's own unit-scoped compare in
+// placeComment is a second safety net on top of that.
+let claudeAutoAnchor = null
+
+// CLAUDE_ANCHOR_PLACEHOLDER stands in for the reviewer's own comment text when
+// they chat with Claude before typing (or instead of ever typing) anything in
+// the "Comment op deze regel" field — see ensureClaudeAnchorForNew below. It
+// is what the anchor comment's body reads until the reviewer's own text
+// replaces it via placeComment's reply-update path.
+const CLAUDE_ANCHOR_PLACEHOLDER = '(Nog geen eigen comment getypt — gesprek met Claude gestart.)'
+
+// ensureClaudeAnchorForNew lazily creates the ONE backing comment a Claude
+// conversation needs (the backend's own constraint: CommentID must name an
+// EXISTING comment) the moment the reviewer sends Claude a message WHILE
+// composing a brand-new, not-yet-placed comment (cs.focus === 'new', see
+// toNew/startComment) — the same "shows before anything is persisted" idea
+// the composer's own draft already relies on (composeDrafts above).
+//
+// Deliberately NOT the removed auto-placeholder-on-navigation behaviour (see
+// "Product decision" in claude-chat-panel.md, "must not come back"): that one
+// silently created a comment on bare → navigation, with zero reviewer input.
+// This one only fires on a genuine, explicit send — typing into a real text
+// field and clicking "Stuur"/"Bewerk code" is exactly the kind of deliberate
+// action "Plaats…" already is.
+//
+// Always `local: true` (never posted to GitHub — the reviewer hasn't
+// confirmed any public-facing text yet), reusing whatever is already typed in
+// the "Comment op deze regel" field as the body (CLAUDE_ANCHOR_PLACEHOLDER if
+// that field is still empty). Returns the created comment, or null if there
+// is nothing to anchor to, or an anchor already exists (chatAnchorComment) —
+// the ordinary, already-anchored path then applies unchanged.
+async function ensureClaudeAnchorForNew(state, commentTarget) {
+  if (cs.focus !== 'new') return null
+  if (chatAnchorComment()) return null
+  const b = state && state.blocks && state.blocks[state.selected]
+  if (!b || b.kind === 'comment') return null
+  const t = warningOverride ? warningOverride.target : (commentTarget && commentTarget()) || null
+  const el = document.querySelector('[data-testid=comment-compose]')
+  const typed = el && el.value.trim()
+  const ok = await createComment({
+    pr: state.pr,
+    file: (t && t.file) || b.file,
+    line: (t && t.startLine) || b.line,
+    body: typed || CLAUDE_ANCHOR_PLACEHOLDER,
+    code: t ? t.code : '',
+    gran: t ? t.gran : '',
+    label: t ? t.label : '',
+    rowStart: t ? t.rowStart : -1,
+    rowEnd: t ? t.rowEnd : -1,
+    seg: t ? t.seg : '',
+    local: true,
+    startLine: t ? t.startLine : 0,
+    endLine: t ? t.endLine : 0,
+    side: t ? t.side : 'RIGHT',
+    segment: t ? t.segment : '',
+  })
+  if (!ok) return null
+  const c = selComment() // createComment already landed cs.sel on the fresh comment
+  if (!c) return null
+  claudeAutoAnchor = { draftKey: draftKeyFor(t) }
+  return c
+}
+
+// sendClaudeMessageFromNew wraps sendClaudeMessage with the lazy-anchor step
+// above — the one extra thing a still-composing ('new') unit needs over the
+// ordinary, already-anchored case. A no-op ensureClaudeAnchorForNew (an
+// anchor already exists, or there's nothing to anchor to) falls straight
+// through to the plain send.
+async function sendClaudeMessageFromNew(state, commentTarget, text, action) {
+  const c = await ensureClaudeAnchorForNew(state, commentTarget)
+  if (c) await ensureAndLoadChat(state.pr, c.id)
+  await sendClaudeMessage(text, action)
+}
+
 // placeComment submits the composer's text as a comment on the current unit.
 // Exported so the comment-kind menu (home.mjs COMPOSE_COMMANDS) can place a
 // private note via opts.local; the composer button routes through the menu too.
@@ -1950,6 +2058,39 @@ export async function placeComment(state, commentTarget, opts = {}) {
   // selected block `b` — so t.file/t.startLine (not b.file/b.line) are the
   // ones that must anchor the comment when a drilled column is focused.
   const t = override ? override.target : (commentTarget && commentTarget()) || null
+
+  // A Claude message already lazily created the ONE backing comment for this
+  // exact draft (see ensureClaudeAnchorForNew) — "Plaats…" must not start a
+  // SECOND Execution next to it. There is no "edit body" Signal (a comment's
+  // body is fixed at Execution start), so "updating" it means posting the
+  // reviewer's own typed text as a reply on that same thread — the same
+  // Signal an ordinary thread reply (sendReaction) already uses — instead of
+  // creating a new one. The anchor's own local-ness (fixed at creation,
+  // always private, see ensureClaudeAnchorForNew) wins over opts.local here:
+  // chatting with Claude first already made this a private thread.
+  if (claudeAutoAnchor && claudeAutoAnchor.draftKey === draftKeyFor(t)) {
+    claudeAutoAnchor = null
+    const c = chatAnchorComment()
+    if (c && c.runId) {
+      cs.busy = true
+      try {
+        await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ author: 'reviewer', body, done: false }),
+        })
+        await loadComments(state.pr)
+      } finally {
+        cs.busy = false
+      }
+      composeDrafts.delete(draftKeyFor(t))
+      if (token !== focusToken) return
+      el.value = ''
+      exitRelated()
+      return
+    }
+  }
+
   const ok = await createComment({
     pr: state.pr,
     file: (t && t.file) || b.file,

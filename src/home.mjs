@@ -8402,6 +8402,7 @@ function DetailPanel(state) {
           ${() =>
             ClaudeChatPanel(
               state,
+              commentTarget,
               // The "Commit wijziging" button (ClaudeChat.mjs) is a plain native
               // <button>, so Tab+Enter/Space already reaches this callback with
               // no extra keyboard wiring here — see claudeChatColumn's own doc
