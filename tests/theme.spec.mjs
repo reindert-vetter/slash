@@ -17,6 +17,12 @@ test.describe('theme — prefers-color-scheme (default "system" pref)', () => {
     await page.emulateMedia({ colorScheme: 'light' })
     await page.goto('/pr/12903')
     await expect(page.getByTestId('pr-index')).toBeVisible()
+    // Poll before capturing: the Play CDN generates the utilities in-browser,
+    // so the body tint can land a frame after the first render (see the block-
+    // card test below for the full reasoning).
+    await expect
+      .poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor))
+      .toBe('rgb(248, 250, 252)') // bg-slate-50
     const lightBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
     const lightText = await page.evaluate(() => getComputedStyle(document.body).color)
 
@@ -43,8 +49,14 @@ test.describe('theme — prefers-color-scheme (default "system" pref)', () => {
     await page.goto('/pr/12903')
     const card = page.locator('article').first()
     await expect(card).toBeVisible()
-    const lightCardBg = await card.evaluate((el) => getComputedStyle(el).backgroundColor)
-    expect(lightCardBg).toBe('rgb(255, 255, 255)') // bg-white
+    // Tailwind runs as the Play CDN, i.e. it GENERATES the utility CSS in the
+    // browser while the page mounts, so `bg-white` can land a frame after the
+    // card itself is visible (on a loaded box: a plain read then sees the
+    // inherited/transparent background). Poll, exactly like the dark read
+    // below — every asserted colour in this file does.
+    await expect
+      .poll(() => card.evaluate((el) => getComputedStyle(el).backgroundColor))
+      .toBe('rgb(255, 255, 255)') // bg-white
 
     await page.emulateMedia({ colorScheme: 'dark' })
     // The card has a `transition` class; the media-query re-evaluation and the
@@ -59,6 +71,10 @@ test.describe('theme — prefers-color-scheme (default "system" pref)', () => {
     await page.emulateMedia({ colorScheme: 'light' })
     await page.goto('/pr-overview')
     await expect(page.getByTestId('inbox')).toBeVisible()
+    // Poll before capturing — same in-browser Tailwind generation as above.
+    await expect
+      .poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor))
+      .toBe('rgb(255, 255, 255)')
     const lightBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
     const lightText = await page.evaluate(() => getComputedStyle(document.body).color)
 
