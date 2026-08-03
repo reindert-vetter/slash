@@ -493,6 +493,27 @@ live typing/caret. A draft is deleted once consumed: on successful placement
 abandoned draft just stays for the session. Test:
 `tests/comment-draft-persists.spec.mjs`.
 
+### `Shift+Enter` newline + auto-grow height on every composer field
+
+All four text-composing fields in this file (`comment-compose`,
+`reaction-compose`, `comment-detail-reply`) plus the Claude chat composer
+(`ClaudeChat.mjs`) behave identically: plain `Enter` sends/opens the follow-up
+menu, `Shift+Enter` inserts a newline, and the field grows taller as it fills
+up (capped, then scrolls internally) via the shared
+`autoGrowTextarea`/`resetTextareaHeight` in `src/textareaAutoGrow.mjs`. Full
+mechanism, including why `comment-compose` alone has no *local* `@keydown`
+(that Enter/Shift+Enter split already lived in `home.mjs`'s document-level
+`isComposeOpen()` handler): "Auto-grow composer textareas" in
+`.claude/docs/claude-chat-panel.md`.
+
+`reaction-compose` used to be a plain single-line `<input>` — converted to a
+`<textarea rows="1">` for this, so its own `@keydown` now mirrors
+`comment-detail-reply`'s (Enter sends via `sendReaction()`, Shift+Enter falls
+through to the browser's own newline). Tests:
+`tests/reaction-status-icon.spec.mjs` (reaction-compose),
+`tests/comment-composer-typing-guard.spec.mjs` (comment-compose),
+`tests/claude-chat-panel.spec.mjs` (the Claude composer).
+
 ### Keyboard: reachable only when the unit has a comment
 
 `hasVisibleComments()` (exported, `visibleComments().length > 0`) gates every

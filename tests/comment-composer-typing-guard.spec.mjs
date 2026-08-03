@@ -62,4 +62,46 @@ test.describe('PR Review Tree — composer typing guard', () => {
     await page.keyboard.press('f')
     await expect.poll(granOf).not.toBeNull()
   })
+
+  // Shift+Enter must insert a newline (not open the comment-kind menu, see
+  // isComposeOpen's own doc comment in home.mjs) and the field must grow
+  // taller as it fills up (textareaAutoGrow.mjs, shared with the Claude
+  // composer — see .claude/docs/claude-chat-panel.md).
+  test('Shift+Enter adds a newline in the comment composer, and it grows with content', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.locator('[data-idx="1"]').click()
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowRight') // list → diff
+
+    const composer = page.getByTestId('comment-compose')
+    await openNewComment(page)
+    await expect(composer).toBeFocused()
+
+    const startHeight = (await composer.boundingBox()).height
+    await composer.type('regel een')
+    await page.keyboard.down('Shift')
+    await page.keyboard.press('Enter')
+    await page.keyboard.up('Shift')
+    await composer.type('regel twee')
+    await expect(composer).toHaveValue('regel een\nregel twee')
+    // The composer stayed open — a real send would close it — confirming
+    // Shift+Enter never triggered the comment-kind menu's Enter path.
+    await expect(composer).toBeVisible()
+
+    // Two lines still fit inside the field's own min-h-20 floor, so keep
+    // adding Shift+Enter'd lines until the content genuinely needs more room
+    // than that floor gives it — only then does the box visibly grow.
+    for (let i = 0; i < 8; i++) {
+      await page.keyboard.down('Shift')
+      await page.keyboard.press('Enter')
+      await page.keyboard.up('Shift')
+      await composer.type('regel ' + i)
+    }
+
+    await expect(async () => {
+      const grownHeight = (await composer.boundingBox()).height
+      expect(grownHeight).toBeGreaterThan(startHeight)
+    }).toPass()
+  })
 })

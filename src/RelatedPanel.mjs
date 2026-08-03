@@ -21,6 +21,7 @@ import { labelForWorkflow } from './workflowLabels.mjs'
 import { claudeChatColumn } from './ClaudeChat.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { colWidthStyle, startColumnResize, resetColumnWidth, resizeHandle, parseAutoWidthPx } from './columnWidth.mjs'
+import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
 
 // colWidthKeyFor — the manual-column-width identity (see columnWidth.mjs /
 // .claude/docs/column-resize.md) for the three RelatedPanel-side columns
@@ -589,6 +590,10 @@ function prefillField(sel, text) {
         return
       }
       el.value = text
+      // Setting .value here fires no `input` event, so a restored multi-line
+      // draft needs an explicit auto-grow — otherwise it sits clipped at the
+      // field's natural height until the reviewer's next keystroke.
+      autoGrowTextarea(el)
       el.focus()
       el.setSelectionRange(el.value.length, el.value.length)
     })
@@ -2245,7 +2250,10 @@ async function sendReaction() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ author: 'reviewer', body, done: false }),
     })
-    if (el) el.value = ''
+    if (el) {
+      el.value = ''
+      resetTextareaHeight(el)
+    }
     // The typed reply just went out — the draft standing in for it (see
     // replyDrafts above) has nothing left to hold.
     replyDrafts.delete(c.id)
@@ -2561,14 +2569,23 @@ function expandedConversation(c, openCommentMenu) {
       <div class="flex min-h-0 flex-col gap-2" data-testid="comment-thread">
         ${() => threadMessages(c).map((r, i, arr) => reactionBubble(r, i, arr.length).key('msg:' + r.id))}
       </div>
-      <div class="flex items-center gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
-        <input
-          class="flex-1 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
+      <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
+        <textarea
+          rows="1"
+          class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
           placeholder="Reageer op deze comment…"
           data-testid="reaction-compose"
-          @keydown="${(e) => e.key === 'Enter' && sendReaction()}"
-          @input="${(e) => c && replyDrafts.set(c.id, e.target.value)}"
-        />
+          @input="${(e) => {
+            if (c) replyDrafts.set(c.id, e.target.value)
+            autoGrowTextarea(e.target)
+          }}"
+          @keydown="${(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              sendReaction()
+            }
+          }}"
+        ></textarea>
         <button
           class="${() => 'shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' + (cs.busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-indigo-600')}"
           data-testid="reaction-send"
@@ -2652,10 +2669,14 @@ function newCommentComposer(state, commentTarget, openCompose) {
                 </p>
                 ${() => composeTargetHint(effectiveTarget() || null)}
                 <textarea
-                  class="min-h-20 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
+                  rows="1"
+                  class="min-h-20 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
                   placeholder="Je comment op deze regel…"
                   data-testid="comment-compose"
-                  @input="${(e) => composeDrafts.set(composeDraftKey, e.target.value)}"
+                  @input="${(e) => {
+                    composeDrafts.set(composeDraftKey, e.target.value)
+                    autoGrowTextarea(e.target)
+                  }}"
                 ></textarea>
                 <div class="flex items-center justify-end gap-2">
                   <button
@@ -3997,11 +4018,13 @@ export function commentDetailCard(c, opts) {
       <div class="contents">
         ${() =>
           picm.replying && picm.commentId === c.id
-            ? html`<div class="flex items-center gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-3">
+            ? html`<div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-3">
                 <textarea
+                  rows="1"
                   class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2 py-1 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
                   placeholder="${() => (picm.mode === 'convert' ? 'Nieuwe comment op basis van deze melding…' : 'Reageer…')}"
                   data-testid="comment-detail-reply"
+                  @input="${(e) => autoGrowTextarea(e.target)}"
                   @keydown="${(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()

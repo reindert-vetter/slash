@@ -350,3 +350,51 @@ test('Claude chat: an action turn and an error turn each get their own badge, no
   await expect(plainHost.getByTestId('claude-message-action')).toHaveCount(0)
   await expect(plainHost.getByTestId('claude-message-error')).toHaveCount(0)
 })
+
+// The composer grows in height as its content grows (textareaAutoGrow.mjs,
+// shared with the comment composers in RelatedPanel.mjs — see
+// .claude/docs/claude-chat-panel.md's "Auto-grow composer textareas"), and
+// "Stuur" sits BELOW it, not beside it. A direct-mount unit test, same
+// pattern as the badge test above.
+test('Claude chat composer grows with multi-line content and resets after sending', async ({ page }) => {
+  await page.goto('/pr/12903')
+  await expect(page.getByTestId('pr-index')).toBeVisible()
+
+  await evaluateSettled(page, async () => {
+    const { claudeChatColumn } = await import('/src/ClaudeChat.mjs')
+    const view = {
+      messages: () => [],
+      status: () => 'ready',
+      busy: () => false,
+      progress: () => null,
+      elapsed: () => 0,
+      claudePos: () => 0,
+    }
+    const host = document.createElement('div')
+    host.id = 'claude-chat-grow-host'
+    document.body.appendChild(host)
+    claudeChatColumn(view, { onSend: () => {} })(host)
+  })
+
+  const host = page.locator('#claude-chat-grow-host')
+  const composer = host.getByTestId('claude-chat-compose')
+  const send = host.getByTestId('claude-chat-send')
+
+  // "Stuur" sits below the composer, not beside it.
+  const composerBox = await composer.boundingBox()
+  const sendBox = await send.boundingBox()
+  expect(sendBox.y).toBeGreaterThanOrEqual(composerBox.y + composerBox.height - 1)
+
+  const startHeight = composerBox.height
+  await composer.fill('regel een\nregel twee\nregel drie\nregel vier\nregel vijf')
+  await expect(async () => {
+    const grownBox = await composer.boundingBox()
+    expect(grownBox.height).toBeGreaterThan(startHeight)
+  }).toPass()
+
+  await composer.press('Enter')
+  await expect(async () => {
+    const resetBox = await composer.boundingBox()
+    expect(resetBox.height).toBe(startHeight)
+  }).toPass()
+})

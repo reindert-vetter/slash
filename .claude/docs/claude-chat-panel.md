@@ -505,15 +505,55 @@ KindAction/KindError decision is already covered end-to-end by
 ## The composer is a `<textarea>`, not an `<input>`
 
 `ClaudeChat.mjs`'s composer (`data-testid=claude-chat-compose`) is a
-single-row (`rows="1"`, `resize-none`) `<textarea>` that grows with its
-content, so a multi-line message is possible: plain `Enter` still sends
-(`@keydown` calls `e.preventDefault()` and only then checks
-`!e.shiftKey`/busy/non-empty before firing `callbacks.onSend`), `Shift+Enter`
-falls through to the textarea's own default behaviour and inserts a newline.
-The composer row is `items-end` (not `items-center`) so "Stuur" stays pinned
-to the bottom as the textarea grows taller. Reading/writing its value
+single-row (`rows="1"`, `resize-none`) `<textarea>`, so a multi-line message
+is possible: plain `Enter` still sends (`@keydown` calls `e.preventDefault()`
+and only then checks `!e.shiftKey`/busy/non-empty before firing
+`callbacks.onSend`), `Shift+Enter` falls through to the textarea's own
+default behaviour and inserts a newline. Reading/writing its value
 (`el.value`) via `querySelector('[data-testid=claude-chat-compose]')` in the
-"Stuur"/"Bewerk code" click handlers is unaffected by the element swap.
+"Stuur" click handler is unaffected by the element swap.
+
+"Stuur" sits **below** the composer, not beside it (`flex-col` instead of a
+row) — a narrow Claude column left almost no width/height for the textarea
+when the button sat to its side. See "Auto-grow composer textareas" below for
+how it actually grows taller as you type.
+
+## Auto-grow composer textareas (`src/textareaAutoGrow.mjs`)
+
+A bare `rows="1"`/no-rows `<textarea>` never grows with its content on its
+own — an earlier version of this doc claimed the Claude composer already did,
+which was wrong (there was no `@input` handler at all, so the field stayed
+stuck at one row while typing a longer message). `textareaAutoGrow.mjs` is a
+small shared module, imported by both `ClaudeChat.mjs` and `RelatedPanel.mjs`,
+so all **four** composer fields in the app behave identically:
+
+- `autoGrowTextarea(el)` — called from every composer's `@input` binding.
+  Resizes `el` to `scrollHeight`, capped at `MAX_COMPOSER_HEIGHT_PX` (~12rem,
+  about 8 lines); past that the textarea scrolls internally
+  (`overflow-y: auto`) instead of pushing the surrounding column ever taller.
+- `resetTextareaHeight(el)` — called right after a successful send clears
+  `el.value`, for the two composers that stay MOUNTED after sending (the
+  Claude composer, `reaction-compose`) so the grown inline `style.height`
+  doesn't linger on an now-empty field. The two composers that instead
+  UNMOUNT on send (`comment-compose`, `comment-detail-reply`) need no reset —
+  they mount fresh, with no inline height, the next time they open.
+- `prefillField` (`RelatedPanel.mjs`) also calls `autoGrowTextarea` right
+  after seeding `.value` — setting `.value` in JS fires no `input` event, so
+  a restored multi-line draft (see `composeDrafts`/`replyDrafts` below) would
+  otherwise sit clipped at the field's natural height until the next
+  keystroke.
+
+The four fields: `claude-chat-compose` (`ClaudeChat.mjs`), `comment-compose`
+(the new-comment composer), `reaction-compose` (an inline thread's reply —
+converted from a plain `<input>` to a `<textarea rows="1">` for this, so it
+can support `Shift+Enter` too) and `comment-detail-reply` (the PR-wide
+comment reply) — all in `RelatedPanel.mjs`. All four share the same
+Enter-sends/Shift+Enter-newline keydown shape; `comment-compose` is the one
+exception that has no *local* `@keydown` for Enter — that path already ran
+through the document-level handler in `home.mjs` (`isComposeOpen()`, which
+opens the comment-kind menu on plain `Enter` and leaves `Shift+Enter` alone
+for the browser's own newline) before this change and still does; only its
+auto-grow `@input` is new.
 
 ## Invisible selection context on a conversation's FIRST turn
 

@@ -104,4 +104,49 @@ test.describe('reaction-status: send-status icon + mouse-only resolve', () => {
     await expect(statusButton.getByTestId('send-status-draft')).toBeVisible({ timeout: 3000 })
     await expect(reply).toHaveValue('')
   })
+
+  // reaction-compose used to be a plain single-line <input> — no Shift+Enter,
+  // no growing height. It's now a <textarea> with the same behaviour as the
+  // other three composers (comment-compose, comment-detail-reply, the Claude
+  // chat composer — see textareaAutoGrow.mjs and
+  // .claude/docs/claude-chat-panel.md).
+  test('reaction-compose is a textarea: Shift+Enter adds a newline, it grows with content, and resets on send', async ({
+    page,
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
+    const body = 'reaction-textarea ' + Math.random().toString(36).slice(2)
+    await seedComment(page, pr, body)
+
+    await page.goto('/pr/' + pr)
+    await leaveSearchBox(page)
+    const row = page.getByTestId('comment-item').filter({ hasText: body })
+    await expect(row).toBeVisible()
+    await row.click()
+
+    const reply = page.getByTestId('reaction-compose')
+    await expect(reply).toBeFocused()
+    expect(await reply.evaluate((el) => el.tagName)).toBe('TEXTAREA')
+
+    const startHeight = (await reply.boundingBox()).height
+    await reply.type('regel een')
+    await page.keyboard.down('Shift')
+    await page.keyboard.press('Enter')
+    await page.keyboard.up('Shift')
+    await reply.type('regel twee')
+    await expect(reply).toHaveValue('regel een\nregel twee')
+
+    await expect(async () => {
+      const grownHeight = (await reply.boundingBox()).height
+      expect(grownHeight).toBeGreaterThan(startHeight)
+    }).toPass()
+
+    // Plain Enter sends and clears the field — and the grown height resets
+    // back down (the field stays mounted, unlike comment-compose).
+    await page.keyboard.press('Enter')
+    await expect(reply).toHaveValue('')
+    await expect(async () => {
+      const resetHeight = (await reply.boundingBox()).height
+      expect(resetHeight).toBe(startHeight)
+    }).toPass()
+  })
 })
