@@ -112,6 +112,56 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     await expect(row).toBeVisible()
   })
 
+  test('a fresh composer with no earlier comments/Claude chat still gets a visible, non-zero-height row', async ({
+    page,
+  }) => {
+    // Regression for the `overflow-hidden` + `justify-end` interaction on
+    // comment-claude-row (see detail-layout.md): a brand-new composer opened
+    // on a block with no earlier comments and no Claude conversation used to
+    // collapse the whole comment-claude-row to just the composeTargetHint
+    // bar's height, silently clipping the composer/Claude column away above
+    // it — "commenting on a line only shows a bare bar at the top". The
+    // actual browser collapse only reproduces at a specific real
+    // Onderliggende-code-driven column width (relatedGrowthChars() > some
+    // threshold, see RelatedPanel.mjs's relatedWidthCls) — not reliably
+    // triggerable through this suite's synthetic fixtures despite trying
+    // several blocks/widths/viewports — so this asserts the actual CSS
+    // property whose removal fixed it, directly, in addition to the ordinary
+    // visibility check below.
+    await page.goto('/pr/12903')
+    await ready(page)
+    const first = await ident(page)
+
+    // rel.foc=new restores straight onto the fresh "new comment" composer
+    // (see CLAUDE.md's URL-state section, `RelatedPanel`'s `ns: 'rel'`).
+    await page.goto(
+      '/pr/12903?sel=' + encodeURIComponent(first.fileLine) + '&mode=diff&rel.foc=new',
+    )
+    await waitBlock(page, first.label)
+
+    const row = page.getByTestId('comment-claude-row')
+    await expect(row).toBeVisible()
+    const composer = page.getByTestId('comment-composer')
+    await expect(composer).toBeVisible()
+
+    const rowBox = await row.boundingBox()
+    const composerBox = await composer.boundingBox()
+    expect(rowBox.height).toBeGreaterThan(20)
+    expect(composerBox.height).toBeGreaterThan(20)
+    // The composer must sit fully inside its row, not clipped above a
+    // collapsed 0px ancestor (the tell-tale symptom: a negative y offset
+    // relative to the row).
+    expect(composerBox.y).toBeGreaterThanOrEqual(rowBox.y)
+
+    // Pin the actual fix: an `overflow-hidden` ancestor combined with
+    // `justify-end` on the inline-comments column (bottom-aligning it with
+    // the taller Claude column) is what collapsed every intermediate
+    // flex-col ancestor's auto-height to 0 in Chromium. comment-claude-row
+    // must never carry it again.
+    const rowClass = await row.getAttribute('class')
+    expect(rowClass).not.toMatch(/\boverflow-hidden\b/)
+  })
+
   test('resolving a comment removes its 💬 marker', async ({ page }) => {
     await page.goto('/pr/12903')
     await ready(page)

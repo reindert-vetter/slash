@@ -267,6 +267,23 @@ narrow enough, and close enough, to share a row instead of each claiming a full
   chicken-and-egg deadlock that never flips `claudeChatVisible()` to `true` in
   the first place. Test: `tests/inline-comments.spec.mjs` ("the
   comment-claude-row card is hidden while there is nothing to show...").
+- **`comment-claude-row` deliberately carries NO `overflow-hidden`.** It did
+  once (added together with the `hidden`-toggle above), and that combination
+  broke a fresh, empty composer: `inline-comments` picked up
+  `justify-end` (see "Bottom-align the inline comment column" above) so it
+  can sit at the bottom of the taller Claude column, but a `justify-end` flex
+  item with an indefinite (`auto`) height inside an `overflow-hidden`
+  ancestor makes Chromium compute the auto-height of **every** intermediate
+  `flex-col` ancestor up to and including that `overflow-hidden` box as `0`
+  — not just its immediate parent. The composer/Claude content still
+  rendered with the right text (verifiable via `innerHTML`), just clipped
+  away above a collapsed 0px row, leaving only the (sibling,
+  un-clipped) `composeTargetHint` bar visible — "commenting on a line only
+  shows a bare bar at the top". Removing `overflow-hidden` here costs
+  nothing visually: every nested card already carries its own
+  border/rounding/padding that never touches this row's own edge. Regression
+  test: `tests/inline-comments.spec.mjs` ("a fresh composer with no earlier
+  comments/Claude chat still gets a visible, non-zero-height row").
 
 ## `<main>`'s own offsets
 

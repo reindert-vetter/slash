@@ -8771,9 +8771,25 @@ function DetailPanel(state) {
             // stop that poll from ever running until the row is already
             // visible, a chicken-and-egg deadlock that never flips
             // claudeChatVisible() to true in the first place.
+            //
+            // Deliberately NO `overflow-hidden` here (removed — a fresh,
+            // empty composer/Claude column used to render as a bare
+            // composeTargetHint bar with nothing below it, see the
+            // "overflow-hidden + justify-end" note in detail-layout.md):
+            // with an `overflow-hidden` ancestor, Chromium computes the
+            // auto-height of EVERY intermediate flex-col ancestor up to and
+            // including that ancestor as 0 the moment a nested flex item
+            // (inline-comments, `justify-end`, added for the bottom-align
+            // fix) sits in an indefinite-height flex context — not just its
+            // immediate parent. The composer/Claude content itself still
+            // rendered with the right text, just clipped away above a
+            // collapsed 0px row. Every nested card already carries its own
+            // border/rounding/padding that never touches this row's own
+            // edge, so dropping `overflow-hidden` here costs nothing
+            // visually.
             (!claudeChatVisible() && !hasCommentClaudeFooter()
               ? 'hidden'
-              : 'flex flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5')}"
+              : 'flex flex-col rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5')}"
           data-testid="comment-claude-row"
         >
           ${() =>
