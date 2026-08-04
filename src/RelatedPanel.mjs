@@ -15,7 +15,7 @@ import { highlight, blockLabel, codeGrowthChars } from './Block.mjs'
 import { translationValueView } from './translationDiff.mjs'
 import { statusInfo, categoryClass } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
-import { renderMarkdown } from './markdown.mjs'
+import { renderMarkdown, countCodeFences, annotateFenceNumbers } from './markdown.mjs'
 import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin } from './avatar.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
@@ -1258,6 +1258,53 @@ function claudeContextBlock(commentTarget) {
   return parts.join('\n\n')
 }
 
+// orderedThreadMessages returns every message across every comment thread on
+// this unit (visibleComments()), chronologically (createdAt) — the exact
+// scope/order claudeThreadContextBlock feeds to Claude, and ALSO the order
+// used to number each message's own fenced code blocks (see
+// threadFenceStartIndexes below), so a "Codeblok N" badge the reviewer sees
+// always names the same block Claude's own copy of the context calls "Codeblok
+// N" — the whole point of the numbering (the reviewer types "pas codeblok 3
+// toe" in the Claude chat instead of a dedicated accept action). Skips
+// CLAUDE_ANCHOR_PLACEHOLDER (see ensureClaudeAnchorForNew) since that is not a
+// real message the reviewer wrote.
+function orderedThreadMessages() {
+  const threads = visibleComments()
+  const msgs = []
+  for (const c of threads) {
+    for (const m of threadMessages(c)) {
+      if (!m.body || m.body === CLAUDE_ANCHOR_PLACEHOLDER) continue
+      msgs.push({ id: m.id, author: m.author, body: m.body, createdAt: m.createdAt || c.createdAt || '' })
+    }
+  }
+  msgs.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
+  return msgs
+}
+
+// threadFenceStartIndexes maps a message's own id to the running code-fence
+// count BEFORE that message's own fences, so a rendered bubble can continue
+// the thread's numbering instead of resetting to "Codeblok 1" in every bubble
+// (commentBody's own `startIndex` parameter, see viewingBubble/
+// compactConversation below). Uses the SAME cross-thread, chronological order
+// as `orderedThreadMessages`/claudeThreadContextBlock when `c` is part of that
+// scope (the ordinary block-scoped case, where an embedded Claude chat can
+// reference these numbers) — and falls back to `c`'s own thread in isolation
+// otherwise (e.g. a PR-wide comment-index item's detail card, which has no
+// Claude chat/cross-thread scope to match), so numbering is always at least
+// continuous within one thread even there.
+function threadFenceStartIndexes(c) {
+  const crossScope = visibleComments()
+  const inScope = c && crossScope.some((x) => x.id === c.id)
+  const msgs = inScope ? orderedThreadMessages() : threadMessages(c).filter((m) => m.body)
+  const map = new Map()
+  let running = 0
+  for (const m of msgs) {
+    map.set(m.id, running)
+    running += countCodeFences(m.body)
+  }
+  return map
+}
+
 // claudeThreadContextBlock summarizes every already-written comment message
 // scoped to this same code block/line — the conversation's own anchor thread
 // (opening + reactions) PLUS any other comment thread on the same unit (i.e.
@@ -1270,25 +1317,24 @@ function claudeContextBlock(commentTarget) {
 // Ordered chronologically (createdAt) across every thread combined, and the
 // LAST message is explicitly tagged as the most recent one the conversation
 // builds on — an unordered dump left it unclear which remark is the standing
-// one to react to (explicit reviewer request). Skips
-// CLAUDE_ANCHOR_PLACEHOLDER (see ensureClaudeAnchorForNew) since that is not
-// a real message the reviewer wrote.
+// one to react to (explicit reviewer request).
+//
+// Every fenced code block in every message is also annotated with the same
+// "[Codeblok N]"/"[Suggestie N]" marker its visual badge shows
+// (annotateFenceNumbers, markdown.mjs) — running continuously across every
+// message in this same order — so the reviewer can say "pas codeblok 3 toe:
+// ..." in the Claude composer and Claude's own copy of the context contains
+// that exact same numbering, no separate accept action needed.
 function claudeThreadContextBlock() {
-  const threads = visibleComments()
-  if (!threads.length) return ''
-  const msgs = []
-  for (const c of threads) {
-    for (const m of threadMessages(c)) {
-      if (!m.body || m.body === CLAUDE_ANCHOR_PLACEHOLDER) continue
-      msgs.push({ author: m.author, body: m.body, createdAt: m.createdAt || c.createdAt || '' })
-    }
-  }
+  const msgs = orderedThreadMessages()
   if (!msgs.length) return ''
-  msgs.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
   const lines = ['Al geschreven comments op dit codeblok/deze regel (chronologisch, oud naar nieuw):']
+  let running = 0
   msgs.forEach((m, i) => {
     const tag = i === msgs.length - 1 ? ' [meest recent — het gesprek gaat hierop verder]' : ''
-    lines.push('- ' + displayNameOf(m.author || 'onbekend') + ': ' + m.body + tag)
+    const { text: body, count } = annotateFenceNumbers(m.body, running)
+    running += count
+    lines.push('- ' + displayNameOf(m.author || 'onbekend') + ': ' + body + tag)
   })
   return lines.join('\n')
 }
@@ -3070,7 +3116,7 @@ function viewingBubble(c, r, i, total, isActive) {
           )
         }}"
         data-testid="reaction-bubble"
-        .innerHTML="${commentBody(r)}"
+        .innerHTML="${commentBody(r, threadFenceStartIndexes(c).get(r.id) ?? 0)}"
       ></div>
     </div>
   `
@@ -3133,7 +3179,7 @@ function compactConversation(c, i) {
         </span>
         <span
           class="line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200"
-          .innerHTML="${commentBody(c)}"
+          .innerHTML="${commentBody(c, threadFenceStartIndexes(c).get('origin:' + c.id) ?? 0)}"
         ></span>
         <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
           >${() =>
@@ -4376,8 +4422,13 @@ const COMMENT_KIND_LABEL = { issue: 'PR-comment', review: 'PR-comment', review_s
 // summary/description, see markdown.mjs) meant for an `.innerHTML` binding —
 // never a plain-text slot, see the arrow.js `.innerHTML` convention in
 // conventions.md.
-export function commentBody(c) {
-  return () => (c ? renderMarkdown(c.body) : '')
+//
+// `startIndex` (default 0) continues the running "Codeblok N"/"Suggestie N"
+// numbering across a thread's messages instead of resetting to 1 in every
+// bubble — see threadFenceStartIndexes, which computes the value callers pass
+// here.
+export function commentBody(c, startIndex = 0) {
+  return () => (c ? renderMarkdown(c.body, startIndex) : '')
 }
 
 // pct ("PR-comment thread") is the ephemeral thread cursor for a selected

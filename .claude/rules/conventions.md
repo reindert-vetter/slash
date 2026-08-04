@@ -64,18 +64,54 @@ added) and used out of the box: headings, lists, bold/italic/strike,
 blockquotes, inline code, links, images, `---`. **No** GFM tables or task
 checklists (`- [ ]`) — deliberately out of scope, snarkdown doesn't support them.
 
-`src/markdown.mjs` is a thin wrapper (`renderMarkdown(text) -> safeHtmlString`)
-that adds two things:
+`src/markdown.mjs` is a thin wrapper (`renderMarkdown(text, startIndex) ->
+safeHtmlString`) that adds three things:
 
-1. Fenced code blocks are extracted **before** anything else and rendered with
-   the same Prism `highlight()` as the diff panes — hence also the
-   `.language-php` class (same CSS scope as above) instead of snarkdown's bare
+1. Fenced code blocks are extracted **before** anything else and rendered as a
+   small card: a slim header with a running **"Codeblok N"** number plus the
+   announced language word (or "php", the pre-existing default for an
+   unannounced fence), then the code via `highlightForLang(code, lang)`
+   (`Block.mjs`) — every fence still carries the `.language-php` CSS-scope
+   class regardless of which grammar actually highlighted it (see "Fenced code
+   blocks get a language badge…" below) instead of snarkdown's bare
    `<pre><code>`.
-2. An XSS layer: the **entire** raw Markdown text is fully HTML-escaped
+2. A `` ```suggestion `` fence (GitHub's own "replace these lines" convention)
+   gets a visually distinct header instead — **"Suggestie N"**, no language
+   word, its own accent colour — so it stands out from an ordinary code
+   sample. Per the colorblind rule the WORD carries the meaning, the colour is
+   decoration.
+3. An XSS layer: the **entire** raw Markdown text is fully HTML-escaped
    (`escapeHtml`, `&<>"`) before it reaches snarkdown — snarkdown does **not**
    escape loose HTML in the source text, only the attribute values it builds
    itself — and link/image URLs additionally pass through `sanitizeUrls`, which
    neutralizes `javascript:`/`vbscript:`/`data:text/html`.
+
+### Fenced code blocks get a language badge, a running number, and a wider set of Prism grammars
+
+`Block.mjs`'s `highlight(code)` (always `php`, used by the diff panes) got a
+sibling, `highlightForLang(code, lang)`, which maps the free-form word after
+` ``` ` onto one of the grammars vendored in `src/vendor/prism.js` — now
+`markup`/`css`/`clike`/`javascript`/`php` (as before) **plus `sql`/`json`/
+`bash`/`typescript`**, downloaded from the same cdnjs Prism 1.29.0 release —
+via a small alias table (`js`→`javascript`, `ts`→`typescript`, `html`/`xml`/
+`svg`→`markup`, `sh`/`shell`→`bash`, and **`vue`→`markup`**: Prism ships no
+dedicated Vue grammar, upstream or vendored, so a `` ```vue `` fence gets the
+outer `<template>`/`<script>`/`<style>` tags tagged and nothing more —
+explicitly accepted, not a bug). A language that isn't vendored at all (e.g.
+`yaml`) falls back to escaped plain text, same as a genuinely missing
+grammar — still labelled with the reviewer's own word in the badge, just
+without token colours.
+
+`markdown.mjs`'s `renderMarkdown`/`countCodeFences`/`annotateFenceNumbers`
+number every fence sequentially, starting at an optional `startIndex` so a
+caller can continue the count across several messages instead of resetting to
+1 in every bubble — see "Codeblok numbering must match what Claude sees" in
+`.claude/docs/claude-chat-panel.md` for why that continuity matters and how
+`RelatedPanel.mjs` computes it. The numbering is deliberately the **entire**
+feature here — there is no "accept this codeblock/suggestion" button or menu
+action: the reviewer just refers to "codeblok 3" by number in the embedded
+Claude chat and says in plain language what should happen with it (an
+explicit product decision — see the same doc section).
 
 Used in `prInfoCard` (`home.mjs`) for the PR summary/description/Jira
 description, and in `ClaudeChat.mjs` for every chat bubble
@@ -84,9 +120,11 @@ description, and in `ClaudeChat.mjs` for every chat bubble
 typography block in `index.html` is the styling layer (Tailwind Play CDN has no
 typography plugin without a build step).
 
-**Comment bodies also render as Markdown** (`RelatedPanel.mjs`): `commentBody(c)`
-(`() => renderMarkdown(c.body)`, `.innerHTML` binding) is the **only** place a
-comment body renders — reused by `commentRow`, `reactionBubble` (every thread
+**Comment bodies also render as Markdown** (`RelatedPanel.mjs`): `commentBody(c,
+startIndex)` (`() => renderMarkdown(c.body, startIndex)`, `.innerHTML` binding,
+`startIndex` defaulting to 0 — see "Fenced code blocks get a language badge…"
+above) is the **only** place a comment body renders — reused by `commentRow`,
+`reactionBubble` (every thread
 bubble, block-scoped and PR-wide `prWideItem`) and therefore any future fourth
 render point. The composer input is a bare text field with no restriction, so
 markdown *input* was already free; only the display lacked `renderMarkdown`.

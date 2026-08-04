@@ -7,9 +7,10 @@
 // (src/vendor/snarkdown.js, ~1kb), used exactly as it renders out of the
 // box: headings, lists, bold/italic/strike, blockquotes, inline code, links,
 // images and `---` rules. The only thing layered on top here:
-//   - Fenced code blocks are pulled out *before* everything else and
-//     highlighted with the same Prism `highlight()` used by the diff panes
-//     (Block.mjs) instead of snarkdown's own bare-escaped `<pre><code>`.
+//   - Fenced code blocks are pulled out *before* everything else, tagged with
+//     the announced language (see below) and highlighted with Prism via
+//     `highlightForLang` (Block.mjs) instead of snarkdown's own bare-escaped
+//     `<pre><code>`.
 //   - The XSS safety net described below.
 //
 // Safety: the raw Markdown text is fully HTML-escaped (`escapeHtml`) before
@@ -29,7 +30,7 @@
 // arrow.js's `.innerHTML` binding.
 
 import snarkdown from './vendor/snarkdown.js'
-import { highlight } from './Block.mjs'
+import { highlightForLang } from './Block.mjs'
 
 function escapeHtml(str) {
   return String(str)
@@ -44,11 +45,80 @@ function escapeHtml(str) {
 // escapeHtml over already-Prism-highlighted markup would double-escape it.
 // Replaced with a placeholder that survives escapeHtml + snarkdown untouched
 // (no markdown-special or HTML-special characters), then substituted back.
-const CODE_FENCE_RE = /```[ \t]*(\S*)\n([\s\S]*?)\n```/g
+//
+// The SAME pattern (as a fresh RegExp instance, since `g` regexes carry
+// mutable `lastIndex` state across calls) backs `countCodeFences` and
+// `annotateFenceNumbers` below, so every caller numbers fences identically —
+// load-bearing: a reviewer types "codeblok 3" in the Claude chat meaning the
+// SAME block the badge shows, see RelatedPanel.mjs's claudeThreadContextBlock.
+const CODE_FENCE_SOURCE = '```[ \\t]*(\\S*)\\n([\\s\\S]*?)\\n```'
+const CODE_FENCE_RE = new RegExp(CODE_FENCE_SOURCE, 'g')
 
-function extractCodeFences(text, store) {
+// countCodeFences counts the fenced code blocks in `text` without rendering
+// anything — used to compute the running start-index for a later message's
+// own fences, so numbering is continuous across a whole thread rather than
+// resetting to 1 in every bubble.
+export function countCodeFences(text) {
+  if (!text) return 0
+  const re = new RegExp(CODE_FENCE_SOURCE, 'g')
+  return (String(text).match(re) || []).length
+}
+
+// A ```suggestion fence is GitHub's own convention for "replace the selected
+// lines with this" — never a language. Detected case-insensitively; every
+// other announced word (or none) is treated as an ordinary language tag.
+function isSuggestionLang(lang) {
+  return String(lang || '')
+    .trim()
+    .toLowerCase() === 'suggestion'
+}
+
+// fenceLabel is the ONE place that turns (counter, isSuggestion) into display
+// text, shared between the visual badge below and the plain-text marker
+// `annotateFenceNumbers` puts in front of the same fence for Claude's own
+// copy of the context — so the two can never drift apart in wording.
+function fenceLabel(counter, isSuggestion) {
+  return isSuggestion ? `Suggestie ${counter}` : `Codeblok ${counter}`
+}
+
+// extractCodeFences renders each fence to a small card: a slim header with
+// the running number (`fenceLabel`) plus the announced language (or "php",
+// the pre-existing default for an unannounced fence — see
+// `highlightForLang`), and the Prism-highlighted code underneath. A
+// ```suggestion fence gets a visually distinct header (no language word, a
+// "Suggestie N" label and its own accent) instead — per the colorblind rule
+// (never colour-only) the WORD "Suggestie" carries the meaning, the accent
+// colour is decoration on top.
+//
+// `class="language-php"` is kept on every `<code>` regardless of the actual
+// grammar used to highlight it — this is a CSS *scoping* class, not a claim
+// about the language (see the Prism/theming note in
+// `.claude/rules/conventions.md`): the token-colour rules in index.html's
+// `<style>` are the only place that reads it, and Prism's token names
+// (keyword/string/comment/number/operator/…) are shared across every vendored
+// grammar, so every fence gets the same colour treatment this way without a
+// second CSS block per language.
+function extractCodeFences(text, store, startIndex) {
+  let counter = startIndex
   return text.replace(CODE_FENCE_RE, (m, lang, code) => {
-    const html = `<pre class="code"><code class="language-php">${highlight(code)}</code></pre>`
+    counter += 1
+    const rawLang = String(lang || '').trim()
+    const suggestion = isSuggestionLang(rawLang)
+    const highlighted = highlightForLang(code, suggestion ? '' : rawLang)
+    const label = fenceLabel(counter, suggestion)
+    const langWord = rawLang && !suggestion ? rawLang.toLowerCase() : suggestion ? '' : 'php'
+    const wrapperCls = suggestion
+      ? 'my-2 rounded border-2 border-emerald-400 dark:border-emerald-500/60 overflow-hidden'
+      : 'my-2 rounded border border-slate-200 dark:border-zinc-700 overflow-hidden'
+    const headerCls = suggestion
+      ? 'flex items-center justify-between px-2 py-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 border-b border-emerald-200 dark:border-emerald-500/30'
+      : 'flex items-center justify-between px-2 py-1 text-[11px] font-medium text-slate-500 dark:text-zinc-400 bg-slate-50 dark:bg-zinc-800/60 border-b border-slate-200 dark:border-zinc-700'
+    const html =
+      `<div class="${wrapperCls}" data-testid="code-fence" data-fence-index="${counter}"` +
+      `${suggestion ? ' data-fence-suggestion="true"' : ''}${langWord ? ` data-fence-lang="${escapeHtml(langWord)}"` : ''}>` +
+      `<div class="${headerCls}"><span>${escapeHtml(label)}</span>` +
+      (langWord ? `<span class="uppercase tracking-wide">${escapeHtml(langWord)}</span>` : '') +
+      `</div><pre class="code m-0"><code class="language-php">${highlighted}</code></pre></div>`
     const token = ` MD${store.length} `
     store.push(html)
     return `\n\n${token}\n\n`
@@ -57,6 +127,24 @@ function extractCodeFences(text, store) {
 
 function applyPlaceholders(html, store) {
   return html.replace(/ MD(\d+) /g, (m, i) => store[Number(i)] ?? '')
+}
+
+// annotateFenceNumbers returns `text` with a plain "[Codeblok N]"/"[Suggestie
+// N]" marker line inserted right before each fence — used ONLY for the text
+// sent to Claude as invisible context (RelatedPanel.mjs's
+// claudeThreadContextBlock), never for display. Uses the exact same
+// `fenceLabel` numbering `extractCodeFences` renders into the visual badge,
+// so "codeblok 3" means the same block whether the reviewer reads it on
+// screen or asks Claude about it.
+export function annotateFenceNumbers(text, startIndex = 0) {
+  if (!text) return { text: text || '', count: 0 }
+  let counter = startIndex
+  const annotated = String(text).replace(CODE_FENCE_RE, (m, lang) => {
+    counter += 1
+    const label = fenceLabel(counter, isSuggestionLang(lang))
+    return `[${label}]\n${m}`
+  })
+  return { text: annotated, count: counter }
 }
 
 // Defense in depth: neutralise dangerous URL schemes in href/src attributes.
@@ -70,13 +158,16 @@ function sanitizeUrls(html) {
   })
 }
 
-// renderMarkdown(text) -> safe HTML string, meant for arrow.js's
-// `.innerHTML="${() => renderMarkdown(...)}"` binding.
-export function renderMarkdown(text) {
+// renderMarkdown(text, startIndex) -> safe HTML string, meant for arrow.js's
+// `.innerHTML="${() => renderMarkdown(...)}"` binding. `startIndex` (default
+// 0, i.e. the first fence in `text` is numbered 1) lets a caller continue the
+// running code-block count across several messages instead of resetting to 1
+// in every bubble — see `countCodeFences` above.
+export function renderMarkdown(text, startIndex = 0) {
   if (!text) return ''
   const store = []
   let src = String(text)
-  src = extractCodeFences(src, store)
+  src = extractCodeFences(src, store, startIndex)
   src = escapeHtml(src)
   let out = snarkdown(src)
   out = applyPlaceholders(out, store)

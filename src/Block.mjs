@@ -16,9 +16,47 @@ import Prism from './vendor/prism.js'
 // `<?php` tag, which the php grammar still tokenises fine. If the grammar is
 // somehow missing we fall back to an escaped plain string — never raw innerHTML.
 export function highlight(code) {
-  const grammar = Prism.languages.php
+  return highlightForLang(code, 'php')
+}
+
+// A fenced code block in a comment/reply body (markdown.mjs) announces its own
+// language after the opening ``` — this maps that free-form word onto one of
+// the grammars actually vendored in prism.js (see its own header for the full
+// list) plus a few common aliases (the word a reviewer types isn't always the
+// exact Prism grammar name). `vue` deliberately has no grammar of its own —
+// Prism itself ships none — and falls back to `markup`: a .vue single-file
+// component's outer `<template>`/`<script>`/`<style>` tags still get tagged,
+// even though the TS/JS inside `<script>` isn't tokenised on its own terms.
+// A language that isn't vendored at all (e.g. `yaml`) falls through to the
+// same plain-escaped-text path as a missing grammar — still labelled with the
+// reviewer's own word in the badge (see markdown.mjs), just without colours.
+const LANGUAGE_ALIASES = {
+  js: 'javascript',
+  jsx: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  html: 'markup',
+  htm: 'markup',
+  xml: 'markup',
+  svg: 'markup',
+  vue: 'markup',
+  sh: 'bash',
+  shell: 'bash',
+  zsh: 'bash',
+}
+
+// highlightForLang resolves `lang` (the word after ``` , case-insensitive,
+// blank defaults to `php` — the pre-existing behaviour for an unannounced
+// fence) to a vendored Prism grammar and highlights `code` with it. Falls back
+// to escaped plain text, never raw innerHTML, exactly like `highlight` above.
+export function highlightForLang(code, lang) {
+  const key = String(lang || 'php').toLowerCase().trim()
+  const grammarName = LANGUAGE_ALIASES[key] || key
+  const grammar = Prism.languages[grammarName]
   if (!grammar) return escapeHtml(code)
-  return Prism.highlight(code, grammar, 'php')
+  return Prism.highlight(code, grammar, grammarName)
 }
 
 function escapeHtml(s) {

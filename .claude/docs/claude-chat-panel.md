@@ -836,6 +836,52 @@ seeds a second comment thread on the exact same file+label before entering the
 chat, and asserts the first turn's intercepted `context` contains both
 bodies, in creation order, with the later one tagged `meest recent`.
 
+### Codeblok numbering must match what Claude sees — the ONLY mechanism for acting on a fenced code block/suggestion
+
+A fenced code block (` ``` `) or a GitHub `` ```suggestion `` block in a
+comment/reply gets a visible, running **"Codeblok N"**/**"Suggestie N"** badge
+(`markdown.mjs`, see "Fenced code blocks get a language badge…" in
+`.claude/rules/conventions.md`). This is a deliberate product decision,
+reversed from an earlier plan that would have added a dedicated
+"accept suggestion" action (a new write path, a git commit onto the PR
+branch): **there is no button, no menu item, no write path for this at all.**
+The reviewer instead refers to the number in the embedded Claude chat — "pas
+codeblok 3 toe: gebruik hier een early return" — and Claude acts on it exactly
+like any other request in the conversation, through its existing Bash/Edit
+tool access in the conversation's own shadow worktree (see "Agentic edits" in
+`.claude/docs/workflows-comments.md`, and the write-boundary carve-out in
+`.claude/rules/workflows-write-boundary.md`). No backend change was needed for
+this at all — only the numbering itself, and getting Claude's own copy of the
+context to carry the same numbers.
+
+For that to work, "codeblok 3" must mean the exact same block to the reviewer
+and to Claude, so the numbering used in the visible badges and the numbering
+folded into `claudeThreadContextBlock`'s text (above) share ONE mechanism:
+
+- `markdown.mjs` exports `countCodeFences(text)` (count only, no render) and
+  `annotateFenceNumbers(text, startIndex)` (returns `{text, count}`: the SAME
+  text with a `[Codeblok N]`/`[Suggestie N]` marker line inserted right before
+  each fence, using the same `fenceLabel` wording the visual badge renders) —
+  both driven off the identical fence regex `renderMarkdown`/`extractCodeFences`
+  use, so a "codeblok" can never be counted differently between the three.
+- `RelatedPanel.mjs`'s `orderedThreadMessages()` (the function
+  `claudeThreadContextBlock` already builds, factored out) also backs
+  `threadFenceStartIndexes(c)`: it walks the same chronological, cross-thread
+  message list and assigns each message the running fence-count BEFORE its own
+  fences. `commentBody(c, startIndex)` (see `.claude/rules/conventions.md`)
+  takes that as its numbering offset, so a bubble rendered later in the thread
+  continues the count instead of restarting at 1 — exactly mirroring how
+  `claudeThreadContextBlock` threads its own `running` counter through
+  `annotateFenceNumbers` across the same messages, in the same order.
+- **Scope, same as `claudeThreadContextBlock`'s own:** continuity only holds
+  across `visibleComments()` — the block-scoped case where an embedded Claude
+  conversation actually exists. A PR-wide comment-index item's own
+  `commentDetailCard` thread (which has no Claude chat, see "Scope: one
+  conversation per comment thread" in `.claude/docs/workflows-comments.md`)
+  falls back to numbering continuously within just that one thread instead
+  (`threadFenceStartIndexes`' own `inScope` check) — nothing to keep in sync
+  with there, but still nicer than resetting to 1 in every bubble.
+
 ## "Wis Claude-gesprek" — clearing a conversation (chatActionClear)
 
 A confirm-gated command-palette item, not a header button (explicit product
