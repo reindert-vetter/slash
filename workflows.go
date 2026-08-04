@@ -287,6 +287,10 @@ type ReactionSignal struct {
 	// "edit").
 	Body   string `json:"body"`
 	Done   bool   `json:"done"`   // resolves the thread
+	// Action "publish" carries no message at all: it publishes the thread AS IT
+	// STANDS (the root, plus the earlier local replies with PublishHistory) —
+	// the reviewer moving an existing local conversation to GitHub without
+	// typing a new reply first. Stores no reaction.
 	Action string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor" | "chat" | "edit" | "publish"
 	// Publish promotes a thread that has never touched GitHub (a private note,
 	// or an "ai" code_warning finding — both start with posted.RootID == 0) to a
@@ -3174,6 +3178,21 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				PR: in.PR, CommentID: runID,
 			}); err != nil {
 				return nil, fmt.Errorf("start claude chat child: %w", err)
+			}
+			continue
+		}
+
+		// A "publish" action moves the EXISTING conversation to GitHub without
+		// adding anything to it: the root's own body (an "ai" one quoted, see
+		// publishRootBody) plus, with PublishHistory, the earlier local replies.
+		// Stores no reply, so the thread itself is untouched. A no-op once the
+		// thread already has a GitHub root — from then on everything mirrors
+		// anyway. Input-driven, so replay-deterministic.
+		if r.Action == "publish" {
+			if posted.RootID == 0 {
+				if err := publishThread(publishRootBody(), true, r.PublishHistory); err != nil {
+					return nil, fmt.Errorf("publish thread: %w", err)
+				}
 			}
 			continue
 		}

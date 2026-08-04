@@ -337,6 +337,75 @@ func TestPublishLocalThreadKeepsHistoryLocal(t *testing.T) {
 	}
 }
 
+// The "publish" Action moves an EXISTING local conversation to GitHub without
+// adding a message to it — the reviewer publishing from the comment menu
+// instead of while sending a reply. It stores no reaction, and is a no-op once
+// the thread is already on GitHub.
+func TestPublishActionMovesThreadToGithub(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "AI check",
+		Body: "Unchecked array access.", Source: "ai", Local: true, RowStart: -1, RowEnd: -1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-1", Source: "ui", Author: "reindert", Body: "Agreed, fixing.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && l[0].ReactionCount == 1
+	})
+
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-2", Source: "ui", Author: "reindert", Action: "publish", PublishHistory: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return gh.PostedCount() == 2 })
+	want := []string{"> [AI-check] Unchecked array access.", "Agreed, fixing."}
+	got := gh.PostedBodies()
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("posted[%d] = %q, want %q (all: %q)", i, got[i], want[i], got)
+		}
+	}
+	// No new reply was stored, and the thread now counts as a GitHub chat.
+	l, _ := cs.List(ctx, 42)
+	if l[0].ReactionCount != 1 {
+		t.Fatalf("reactionCount = %d, want 1 (publish stores no reply)", l[0].ReactionCount)
+	}
+	if l[0].GithubID == 0 {
+		t.Fatalf("comment = %+v, want a non-zero githubId", l[0])
+	}
+
+	// Publishing again changes nothing.
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-3", Source: "ui", Author: "reindert", Action: "publish", PublishHistory: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		hist, _ := m.engine.History(runID)
+		n := 0
+		for _, ev := range hist {
+			if ev.Type == tembed.EventSignalReceived {
+				n++
+			}
+		}
+		return n == 3 // the second publish really was processed
+	})
+	if n := gh.PostedCount(); n != 2 {
+		t.Fatalf("posted %d after a second publish, want 2", n)
+	}
+}
+
 // Editing the root comment of a review-diff thread overwrites its own body in
 // the read model and PATCHes the same GitHub review comment it was posted as.
 func TestTaskCodeCommentEditRoot(t *testing.T) {

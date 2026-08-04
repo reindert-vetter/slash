@@ -368,7 +368,7 @@ If the keyboard is on a placed comment row in `RelatedPanel`
 (`isCommentOrThreadFocused()` — `cs.focus === 'comment'` at rest, OR
 `cs.focus === 'thread'` while stepped ↑ into one of its own replies) **and the
 reply field is empty**, `Enter` opens this menu instead of the block palette —
-three to six rows:
+three to seven rows:
 
 1. **"Close menu"** (pinned).
 2. **"Resolve comment"** (default, 2nd item).
@@ -381,11 +381,18 @@ three to six rows:
 5. **"Comment hiervan maken"** — only when `source === 'ai'` (a `code_warning`
    finding; see "Converting an AI-controle finding into a real comment" in
    `.claude/docs/comments-panel.md`).
-6. **"Open op GitHub"** — only when the comment actually has a GitHub anchor.
+6. **"Zet op GitHub"** — only while the thread has NO GitHub root
+   (`needsPublishChoice`), i.e. exactly when item 7 is absent. This is how an
+   already-written local conversation moves over without typing a new reply
+   first: it publishes the root (and, via its with/without-the-earlier-messages
+   submenu, the earlier local replies) through `publishThreadOnly`. See
+   `publishThreadCommand` and "Publishing a local thread to GitHub" in
+   `.claude/docs/comments-panel.md`.
+7. **"Open op GitHub"** — only when the comment actually has a GitHub anchor.
 
 `commentCommandsFor()` is built fresh on every open (unlike the static lists it
 is data-conditional per focused comment), still via `withClose`.
-`focusedCommentGithubId()` (`RelatedPanel.mjs`) decides whether item 5 exists
+`focusedCommentGithubId()` (`RelatedPanel.mjs`) decides whether the last item exists
 at all — `null` for a local note or a comment whose GitHub post never landed
 (`comments.Comment.GithubID` is 0 then) — so there is never a dead row. It
 opens `(state.prUrl || GITHUB_PR) + '#discussion_r' + githubId`; this panel only

@@ -2816,6 +2816,29 @@ export async function sendPendingReply(publish, withHistory) {
   await postThreadReply(c, p.body, publish, withHistory)
 }
 
+// publishThreadOnly moves an existing local conversation to GitHub without
+// adding a message to it — the reviewer pressing Enter on an EMPTY reply field
+// and picking "Zet op GitHub" from the comment menu (see commentCommandsFor/
+// prCommentCommandsFor in home.mjs). `withHistory` decides whether the earlier
+// local replies go along; the root (an AI finding gets its attribution quote
+// backend-side) always does — there would be nothing to publish otherwise.
+// Rides the same "reply" Signal as everything else, with Action "publish", so
+// nothing is stored as a new reply.
+export async function publishThreadOnly(c, withHistory) {
+  if (!c || !c.runId) return
+  cs.busy = true
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ author: 'reviewer', action: 'publish', publishHistory: !!withHistory }),
+    })
+    await loadComments(cs.pr)
+  } finally {
+    cs.busy = false
+  }
+}
+
 async function sendReaction() {
   const c = selComment()
   if (!c) return

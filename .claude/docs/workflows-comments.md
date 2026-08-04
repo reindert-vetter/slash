@@ -202,6 +202,14 @@ become public, and the answer rides along on that same `reply` Signal as
   replay, and a slice rather than a map so the mirror order is deterministic.
   `ai`/system notes in the thread are never mirrored.
 
+**`Action: "publish"`** is the same thing without a message: it publishes the
+thread **as it stands** (the root, plus the earlier local replies with
+`PublishHistory`) and stores no reaction — the reviewer moving an
+already-written local conversation over without typing a new reply first
+(`Enter` on an empty reply field, see the comment menu's "Zet op GitHub"). It
+sits with the other message-less Actions (`avatar`/`reanchor`/`chat`) and is a
+no-op once `posted.RootID != 0`.
+
 All of it lives in **`publishThread`** (a closure in the workflow body), which
 also runs `saveCommentGithubID`, so `github_id` flips to non-zero — and that,
 with no new state anywhere, IS the "this is a GitHub chat now" marker: from then
@@ -216,12 +224,14 @@ root. It is true only for an imported/normally-posted root or a `"thread"`
 publish.
 
 The HTTP handler validates `publish` (`""`/`"reply"`/`"thread"`, and only
-together with `action: ""`) before it reaches the workflow, like the
-`action`/`targetId` validation above. Frontend mechanism (the menu, the held
+together with `action: ""`) and accepts `action: "publish"` with no body,
+before either reaches the workflow — like the `action`/`targetId` validation
+above. Frontend mechanism (the menu, the held
 send): "Publishing a local thread to GitHub" in
 `.claude/docs/comments-panel.md`. Tests: `TestPublishLocalThreadWithReply`,
 `TestPublishLocalThreadWithHistory`,
-`TestPublishLocalThreadKeepsHistoryLocal` (`workflows_test.go`) and
+`TestPublishLocalThreadKeepsHistoryLocal`,
+`TestPublishActionMovesThreadToGithub` (`workflows_test.go`) and
 `tests/reply-publish-local-thread.spec.mjs`.
 
 ### Poller cadence (heartbeat-driven)

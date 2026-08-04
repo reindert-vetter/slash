@@ -83,6 +83,9 @@ import RelatedPanel, {
   sendPendingReply,
   pendingPublishInfo,
   setReplyPublishMenuOpener,
+  needsPublishChoice,
+  localReplyCount,
+  publishThreadOnly,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
@@ -4207,6 +4210,50 @@ async function deleteCommentAndSelectRow() {
 // (editable before it's placed) rather than left as-is. Deliberately NOT the
 // default item (Resolve comment stays that, per keyboard-navigation.md) —
 // pushed after Resolve/Delete instead of unshifted to the front.
+// publishThreadCommand — the "Zet op GitHub" item both comment menus get for a
+// thread that has never touched GitHub (needsPublishChoice). It is how an
+// EXISTING local conversation moves over without first typing a new reply:
+// `Enter` on an empty reply field already opens the comment menu, so this needs
+// no new nav stop or key of its own, and it deliberately never runs on that
+// first keypress — Resolve stays the default item.
+//
+// With earlier local replies it opens a submenu (bring them along or not),
+// exactly like the replyPublish menu's own GitHub items; without any it is a
+// plain item, since there would be only one possible answer. Both labels are
+// plain strings built here, at open time.
+function publishThreadCommand(c) {
+  const n = localReplyCount(c)
+  const isAI = (c.source || 'ui') === 'ai'
+  const rootNoun = isAI ? 'de AI-melding' : 'mijn comment'
+  if (n === 0) {
+    return {
+      id: 'comment-publish',
+      label: 'Zet op GitHub',
+      hint: 'github',
+      run: () => publishThreadOnly(c, false),
+    }
+  }
+  return {
+    id: 'comment-publish',
+    label: 'Zet op GitHub',
+    hint: 'github',
+    children: withClose([
+      {
+        id: 'comment-publish-root',
+        label: `Alleen ${rootNoun}`,
+        hint: 'alleen dit',
+        run: () => publishThreadOnly(c, false),
+      },
+      {
+        id: 'comment-publish-history',
+        label: `Met de eerdere ${n} bericht${n === 1 ? '' : 'en'}`,
+        hint: 'hele gesprek',
+        run: () => publishThreadOnly(c, true),
+      },
+    ]),
+  }
+}
+
 function commentCommandsFor() {
   const items = [
     {
@@ -4244,6 +4291,7 @@ function commentCommandsFor() {
       run: () => convertWarningToComment(c),
     })
   }
+  if (needsPublishChoice(c)) items.push(publishThreadCommand(c))
   const githubId = focusedCommentGithubId()
   if (githubId) {
     items.push({
@@ -4393,6 +4441,7 @@ function prCommentCommandsFor() {
       run: () => convertPrWideWarningToComment(c),
     })
   }
+  if (needsPublishChoice(c)) items.push(publishThreadCommand(c))
   items.push({
     id: 'pr-comment-ignore',
     // Label is a function so it names the current state (resolveLabel/

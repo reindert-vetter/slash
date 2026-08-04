@@ -613,6 +613,17 @@ the send and asks first**.
   question. A frame later the keydown is over and the global handler has already
   seen a closed menu + a non-empty reply field (a no-op there).
 
+**Without typing anything:** `Enter` on an EMPTY reply field already opens the
+comment menu (`isCommentOrThreadFocused()` + `commentReplyEmpty()`), so moving an
+existing local conversation over needs no new key or nav stop — it is just an
+extra item there, **"Zet op GitHub"** (`publishThreadCommand`, in both
+`commentCommandsFor` and `prCommentCommandsFor`, gated on the same
+`needsPublishChoice`). Resolve stays the default, so it never fires on that
+first keypress. It calls `publishThreadOnly(c, withHistory)` — the `publish`
+Action of the same `reply` Signal, which stores no message — with a
+with/without-the-earlier-messages submenu when, and only when, there are earlier
+local replies.
+
 RelatedPanel never imports from `home.mjs`, so the opener is handed down:
 `setReplyPublishMenuOpener(() => openMenu('replyPublish'))`, called once at
 `home.mjs` module scope — the same direction as `InlineComments`' existing

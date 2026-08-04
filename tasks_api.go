@@ -978,6 +978,9 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "invalid edit", http.StatusBadRequest)
 				return
 			}
+		case "publish":
+			// Carries no message: it publishes the thread as it stands (see
+			// ReactionSignal's "publish" Action), so an empty body is correct.
 		default:
 			http.Error(w, "invalid action", http.StatusBadRequest)
 			return

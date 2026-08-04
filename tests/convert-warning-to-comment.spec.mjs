@@ -66,8 +66,10 @@ test.describe('Convert an AI-controle finding into a real comment', () => {
     await expect(menu).toBeVisible()
     const rows = menu.getByTestId('command-row')
     // "Sluit menu", "Resolve comment" (default), "Verwijder comment", "Comment
-    // hiervan maken" — no "Open op GitHub" (a Local:true finding never posts).
-    await expect(rows).toHaveCount(4)
+    // hiervan maken", "Zet op GitHub" (the finding is local — see
+    // publishThreadCommand) — no "Open op GitHub" (a Local:true finding never
+    // posts).
+    await expect(rows).toHaveCount(5)
     await expect(rows.nth(1)).toContainText('Resolve comment')
     await expect(rows.nth(3)).toContainText('Comment hiervan maken')
     await rows.nth(3).click()
@@ -148,8 +150,8 @@ test.describe('Convert an AI-controle finding into a real comment', () => {
     await expect(menu).toBeVisible()
     const rows = menu.getByTestId('command-row')
     // "Sluit menu", "Beantwoorden" (default), "Resolve comment", "Comment
-    // hiervan maken", "Ignore".
-    await expect(rows).toHaveCount(5)
+    // hiervan maken", "Zet op GitHub" (the finding is local), "Ignore".
+    await expect(rows).toHaveCount(6)
     await expect(rows.nth(1)).toContainText('Beantwoorden')
     await expect(rows.nth(3)).toContainText('Comment hiervan maken')
     await rows.nth(3).click()

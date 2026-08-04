@@ -105,4 +105,45 @@ test.describe('Publish a local comment thread to GitHub', () => {
     await expect(page.getByTestId('comment-thread')).toContainText('derde reactie')
     await expect(menu).toHaveCount(0)
   })
+
+  test('Enter on an empty reply field offers to move the existing conversation over', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    const aiBody = 'de nieuwe tak wordt nooit bereikt'
+    await seedWarning(page, aiBody)
+    await openThread(page, aiBody)
+
+    // One local reply first, so the with/without-history choice applies.
+    await typeReply(page, 'lokale aantekening')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await page.keyboard.press('Enter') // "Alleen voor mijzelf", the default
+    await expect(menu).toHaveCount(0)
+    await expect(page.getByTestId('comment-thread')).toContainText('lokale aantekening')
+
+    // Enter on the now-empty reply field opens the comment menu, which offers
+    // the publish item — Resolve is still the default, so nothing happens on
+    // that first keypress.
+    await page.getByTestId('reaction-compose').press('Enter')
+    await expect(menu).toBeVisible()
+    const publish = menu.getByTestId('command-row').filter({ hasText: 'Zet op GitHub' })
+    await expect(publish).toHaveCount(1)
+    await expect(menu.getByTestId('command-row').nth(1)).toContainText('Resolve comment')
+    await publish.click()
+    await expect(menu.getByTestId('command-row').nth(1)).toContainText('Alleen de AI-melding')
+    await menu.getByTestId('command-row').nth(2).click() // met de eerdere 1 bericht
+    await expect(menu).toHaveCount(0)
+
+    await expect
+      .poll(async () => {
+        const res = await page.request.get('/api/comments?pr=12903')
+        const list = await res.json()
+        const c = list.find((x) => x.body === aiBody)
+        return (c && c.githubId) || 0
+      })
+      .toBeGreaterThan(0)
+    // Nothing was added to the thread — publishing is not a message.
+    await expect(page.getByTestId('comment-thread')).toContainText('lokale aantekening')
+    await expect(page.getByTestId('reaction-compose')).toHaveValue('')
+  })
 })
