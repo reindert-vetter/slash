@@ -28,6 +28,11 @@ const state = reactive({
   sections: [], // [{ title, prs: Row[] }]
   statuses: {}, // pr.number -> Status, backfilled async
   approvals: {}, // pr.number -> { done, total }, backfilled async (ingested PRs only)
+  // pendingPush — pr.number -> the PR's landed-but-unpushed Claude edits
+  // ({ headRef, ahead, ... }, see pending_push.go), backfilled async by
+  // kickOffPendingPush. Only ingested rows can have any: the edits come from
+  // this app's own Claude chat.
+  pendingPush: {},
   query: '',
   searching: false,
   searchResults: null, // null = no active search
@@ -110,6 +115,9 @@ const ICON_PATHS = {
     '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   loader: '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  // 'arrow-up' — the "still has to go up to GitHub" glyph next to the
+  // "Ongepusht" chip (unpushedPill).
+  'arrow-up': '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
 }
 
 // icon renders one outline SVG (24x24 viewBox, stroke=currentColor). The path
@@ -413,6 +421,28 @@ function approvalPill(pr) {
   return [chip(done + '/' + a.total, cls, 'approval-badge', full ? 'check' : null).key('approval:' + done + '/' + a.total + ':' + full)]
 }
 
+// unpushedPill — this PR has Claude edits that landed on its branch LOCALLY but
+// are not pushed to GitHub yet (state.pendingPush, from GET /api/pending-push
+// via kickOffPendingPush). It belongs on the overview because that is where the
+// reviewer decides what to pick up next: "this one still has something of mine
+// waiting" must be visible without opening the review tree first.
+//
+// Word + glyph, never colour alone (the reviewer is colour-blind). Returned as a
+// keyed array like approvalPill, so the async backfill's "nothing" → pill flip
+// can't hit the single↔array slot pitfall (see .claude/rules/conventions.md).
+function unpushedPill(pr) {
+  const p = pr.hasGraph ? state.pendingPush[pr.number] : null
+  if (!p || !p.ahead) return []
+  const label = p.state === 'failed' ? 'Push mislukt' : 'Ongepusht ' + p.ahead
+  const cls =
+    p.state === 'failed'
+      ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-500/30'
+      : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-amber-500/30'
+  return [
+    chip(label, cls, 'unpushed-badge', 'arrow-up').key('unpushed:' + p.ahead + ':' + (p.state || 'ready')),
+  ]
+}
+
 function commentsBit(pr) {
   if (!pr.comments) return null
   return html`<span class="inline-flex items-center gap-1 text-[12px] text-slate-500 dark:text-zinc-500"
@@ -556,7 +586,7 @@ function rowInner(pr, opts) {
     `,
     html`
       <div class="flex shrink-0 items-center gap-3">
-        ${statusArea(pr)} ${() => approvalPill(pr)} ${commentsBit(pr)} ${graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
+        ${statusArea(pr)} ${() => approvalPill(pr)} ${() => unpushedPill(pr)} ${commentsBit(pr)} ${graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
       </div>
     `,
   ]
@@ -1717,6 +1747,7 @@ async function loadInbox() {
         await applyLive(body)
         kickOffStatuses(gen)
         kickOffApprovals(gen)
+        kickOffPendingPush(gen)
         return
       }
     }
@@ -1942,6 +1973,29 @@ async function kickOffApprovals(gen) {
     }
   } catch (e) {
     // approval backfill is best-effort — rows just show no badge
+  }
+}
+
+// kickOffPendingPush backfills the "ongepusht" badge (GET /api/pending-push),
+// mirroring kickOffApprovals: only ingested rows can have landed chat edits, so
+// the request is scoped to those numbers. Best-effort — a failure just leaves
+// the rows without the badge.
+async function kickOffPendingPush(gen) {
+  const numbers = []
+  state.sections.forEach((sec) => sec.prs.forEach((pr) => pr.hasGraph && numbers.push(pr.number)))
+  if (!numbers.length) return
+  try {
+    const res = await fetch('/api/pending-push?prs=' + numbers.join(','))
+    if (!res.ok) return
+    const body = await res.json()
+    if (gen !== loadGen) return // page moved on — drop this response
+    if (body && body.ok && body.pending) {
+      Object.keys(body.pending).forEach((k) => {
+        state.pendingPush[k] = body.pending[k]
+      })
+    }
+  } catch (e) {
+    // pending-push backfill is best-effort — rows just show no badge
   }
 }
 
@@ -2439,6 +2493,7 @@ async function reloadSnapshot() {
       state.cached = false
       kickOffStatuses(gen)
       kickOffApprovals(gen)
+      kickOffPendingPush(gen)
     }
   } catch (e) {
     // keep the current snapshot on a transient failure

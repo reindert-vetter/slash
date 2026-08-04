@@ -9047,6 +9047,10 @@ function DetailPanel(state) {
           }
           ensureCode(b)
           const inner = Block(b, {
+            // Marks a block whose file is in a landed-but-unpushed commit (see
+            // pendingPushFiles/loadPendingPush). Its own nested slot inside
+            // Block, so a push landing repaints the chip and nothing else.
+            unpushed: () => pendingPushFiles().has(b.file),
             // Dimmed like the look-ahead preview whenever it isn't the selected
             // card, OR the keyboard focus has stepped off it onto a drilled
             // column (state.focusLevel > 0).
@@ -9328,6 +9332,7 @@ function DetailPanel(state) {
                   : ''}
                 ${Block(b, {
                   preview: !focusedHere,
+                  unpushed: () => pendingPushFiles().has(b.file),
                   activeGroup: () => {
                     if (state.focusLevel !== level) return null
                     const cur = state.drillCursor[i] || { change: 0, gran: 'group' }

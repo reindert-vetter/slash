@@ -382,6 +382,32 @@ function pushTodoRow(state) {
   `.key(`push-todo-${p.state || 'ready'}-${n}`)
 }
 
+// unpushedPill marks a row whose file is part of a commit that landed on the
+// PR's branch locally but isn't on GitHub yet (state.pendingPush.files, see
+// loadPendingPush in home.mjs) — the same thing the push-todo row at the bottom
+// is about, but per block, so the reviewer can see WHICH code is still only
+// local while walking the index. A glyph plus a word, never colour alone.
+//
+// Per FILE, not per block: the read model reports the changed paths of the
+// pending commits, which is as fine-grained as a git diff gets without
+// re-deriving blocks for an unpushed commit — an accepted trade-off (a file
+// with several changed blocks marks all of them).
+//
+// A nested `${() => …}` slot like removedPill/approvalPill, so both branches are
+// whole templates and a push landing repaints only this pill.
+function unpushedPill(state, b) {
+  const files = state.pendingPush && Array.isArray(state.pendingPush.files) ? state.pendingPush.files : []
+  if (!b.file || !files.includes(b.file)) return ''
+  return html`
+    <span
+      data-testid="row-unpushed"
+      title="Deze wijziging staat lokaal op de PR-branch, maar is nog niet gepusht"
+      class="shrink-0 rounded bg-amber-50 dark:bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+      >⇧ ongepusht</span
+    >
+  `
+}
+
 // toggleRow is the bottom button that hides/shows the fully-approved blocks.
 // It's also a stop of the sidebar's keyboard ↑/↓ loop (see stepListSelection/
 // searchStepSelection in home.mjs, which also runs through toggleRow's own
@@ -530,6 +556,7 @@ function row(state, b, i) {
         state.selected = i
         state.toggleFocused = false
         state.ignoreToggleFocused = false
+        state.pushTodoFocused = false
         // A stale "which method"/"is the methodes-kolom focused" from a
         // PREVIOUSLY selected test_class row (see testClassRowItem in
         // home.mjs) must never leak onto whatever gets clicked next — mirrors
@@ -549,6 +576,7 @@ function row(state, b, i) {
         >${b.label}</span
       >
       ${() => removedPill(b)}
+      ${() => unpushedPill(state, b)}
       ${() => commentActivityPill(state, b)}
       ${() => approvalPill(state, b)}
       <span class="${() => 'shrink-0 text-xs font-medium ' + st.cls}"

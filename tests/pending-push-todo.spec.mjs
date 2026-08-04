@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, appReady, leaveSearchBox } from './_fixtures.mjs'
 
 // The push todo at the very bottom of the block index: Claude's commits land on
 // the PR's branch locally (so the code is reviewable right away) and the push to
@@ -23,7 +23,9 @@ const ready = {
   headRef: 'feature/x',
   sha: 'abc1234',
   ahead: 2,
-  files: ['app/Services/OrderService.php'],
+  // A path the block fixture really has, so the per-block marking below has
+  // something to mark (tests/fixtures/blocks.json).
+  files: ['app/Actions/CreatePaymentAction.php'],
   state: 'ready',
   pushRunId: 'chatmerge-12903',
 }
@@ -103,6 +105,23 @@ test.describe('Push todo at the bottom of the index', () => {
     await expect(page.getByTestId('command-menu')).toContainText('Push opnieuw naar GitHub')
   })
 
+  test('marks the blocks that came from the unpushed commits', async ({ page }) => {
+    await mockPendingPush(page, ready)
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    // Two of the fixture's blocks live in that one file; every other row is
+    // untouched, so the marking is not a blanket "this PR has something".
+    const index = page.getByTestId('pr-index')
+    await expect(index.getByTestId('row-unpushed')).toHaveCount(2)
+    await expect(index.getByTestId('row-unpushed').first()).toContainText('ongepusht')
+
+    // And the card of such a block says it too, so it also reads in diff mode
+    // where the index has slid away.
+    await index.getByTestId('block-row').nth(1).click()
+    await expect(page.getByTestId('block-unpushed').first()).toContainText('ongepusht')
+  })
+
   test('no row at all when there is nothing to push', async ({ page }) => {
     await mockPendingPush(page, null)
     await page.goto('/pr/12903')
@@ -111,5 +130,31 @@ test.describe('Push todo at the bottom of the index', () => {
     await expect(page.getByTestId('pr-index')).toBeVisible()
     await expect(page.getByTestId('push-todo')).toHaveCount(0)
     await expect(page.getByTestId('push-todo-heading')).toHaveCount(0)
+    await expect(page.getByTestId('row-unpushed')).toHaveCount(0)
+  })
+})
+
+// The same read model also marks the PR-overview row, so "this one still has
+// something of mine waiting" is visible before opening the review tree at all
+// (unpushedPill/kickOffPendingPush in overview.mjs). 12903 is the fixture's own
+// ingested PR (hasGraph) — the badge is scoped to those rows.
+test.describe('Ongepusht badge on the PR overview', () => {
+  test('shows the badge on an ingested row with unpushed work', async ({ page }) => {
+    await mockPendingPush(page, ready)
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    const badge = page.getByTestId('unpushed-badge')
+    await expect(badge).toHaveCount(1)
+    await expect(badge).toContainText('Ongepusht 2')
+  })
+
+  test('no badge when nothing is waiting', async ({ page }) => {
+    await mockPendingPush(page, null)
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    await expect(page.getByTestId('pr-row').first()).toBeVisible()
+    await expect(page.getByTestId('unpushed-badge')).toHaveCount(0)
   })
 })

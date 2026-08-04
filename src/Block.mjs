@@ -512,6 +512,13 @@ export default function Block(b, opts = {}) {
   // card border turns light blue — the same indigo as a selected row in the comment
   // index — as an at-a-glance cue that the keyboard now drives the diff.
   const diffActive = opts.diffActive || (() => false)
+  // unpushed is a function returning whether this block's file is part of a
+  // commit that landed on the PR's branch locally but isn't pushed to GitHub
+  // yet (state.pendingPush.files, see loadPendingPush in home.mjs). A function
+  // so its own nested slot re-runs when a push lands, without rebuilding the
+  // card. Defaults to false, so a caller that doesn't know about it (the drill
+  // preview) simply never shows the chip.
+  const unpushed = opts.unpushed || (() => false)
   // approvedRows is a function returning the Set of approved row indices for this
   // block, so the panes re-tint (an emerald left bar) as the reviewer approves
   // units. A function (not a value) so the .innerHTML binding re-runs when
@@ -641,6 +648,18 @@ export default function Block(b, opts = {}) {
           // status indicator; see viewModeIndicator above and the "a —
           // cycling the diff view" section in keyboard-navigation.md.
           diffActive() ? viewModeIndicator(viewModeFn, setViewMode) : ''}
+        ${() =>
+          // Landed locally but not on GitHub yet: the code below IS what the
+          // reviewer asked Claude for, it just isn't pushed. The word carries
+          // the meaning, the ⇧ glyph reinforces it — never colour alone (the
+          // reviewer is colour-blind). Cleared by the push (pending_push.go).
+          unpushed()
+            ? html`<span
+                data-testid="block-unpushed"
+                class="rounded bg-amber-50 dark:bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
+                >⇧ ongepusht</span
+              >`
+            : ''}
         ${() =>
           b.tests === false
             ? html`<span
