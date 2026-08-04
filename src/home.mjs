@@ -95,6 +95,7 @@ import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { commentMentionsMe } from './mentions.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
+import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 import { meLogin } from './avatar.mjs'
 import {
@@ -9242,3 +9243,24 @@ loadPRMeta()
 ensurePraiseWords()
 pollWorkflows()
 setInterval(pollWorkflows, WORKFLOWS_POLL_MS)
+
+// callresolve/testcovers' LLM search keeps running server-side well after
+// loadBlocks' own one-shot fetch above (resolve_call/resolve_test_covers are
+// started fire-and-forget right after ingest/a rebuild, see
+// autoStartResolveCall in .claude/docs/workflows-analysis.md) — without this,
+// a reviewer who stays on the page never sees a child resolve, while a fresh
+// tab opened a bit later fetches the by-then-already-resolved read model and
+// sees more (the "navigation looks frozen right after Generate" symptom).
+// Mirrors RelatedPanel.mjs's ensureChatEvents: an event only says "something
+// changed", loadCallResolve/loadTestCovers stay the actual read (both already
+// call recomputeLeftList themselves, so no extra plumbing is needed here).
+// This module runs once per page load (no SPA routing), so — unlike
+// ensureChatEvents, which can be called again per opened comment thread — no
+// "already bound" dedupe guard is needed.
+ensureEvents(state.pr)
+onEvent('callresolve.changed', () => loadCallResolve())
+onEvent('testcovers.changed', () => loadTestCovers())
+onEventsResync(() => {
+  loadCallResolve()
+  loadTestCovers()
+})

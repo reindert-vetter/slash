@@ -6,9 +6,10 @@
 push travels. Native `EventSource` — no dependency, no build step, and the
 browser reconnects by itself.
 
-Today exactly **one** feature is on it (the embedded Claude chat, see
-`.claude/docs/claude-chat-panel.md`); the channel is generic from day one so
-the existing pollers can move over one at a time (below).
+Two features are on it today: the embedded Claude chat (see
+`.claude/docs/claude-chat-panel.md`) and callresolve/testcovers (see
+"Migrating a poller onto this channel" below); the channel is generic from day
+one so the remaining pollers can move over one at a time.
 
 ## The two rules that make this safe
 
@@ -86,9 +87,9 @@ separate documents (no SPA routing), so one loaded page = one connection.
 
 ## Migrating a poller onto this channel (not done in one sweep)
 
-Only the chat moved so far, on purpose. The pattern for the rest
-(`ingest_progress`, the workflow poll, the comment poll, the inbox poll) is
-always the same two steps, and each can be done independently:
+Chat and callresolve/testcovers moved so far, on purpose. The pattern for the
+rest (`ingest_progress`, the workflow poll, the comment poll, the inbox poll)
+is always the same two steps, and each can be done independently:
 
 1. Server: call `events.publish(...)` at the place that already changes the
    thing (the Activity that writes the read model, the in-memory stage setter).
@@ -100,10 +101,49 @@ Do **not** push the changed data itself in the frame while migrating — that
 would break rule 1 and turn a cheap channel into a second, competing read
 model.
 
+### callresolve/testcovers (`callresolve.changed`/`testcovers.changed`)
+
+Unlike chat, this wasn't replacing an existing poller — before this, the
+callresolve/testcovers read-models were fetched **once** at `loadBlocks()` and
+otherwise only refreshed lazily, per selected block (`startCallSearch`/its
+test-covers counterpart, `src/home.mjs`), gated behind the reviewer actually
+navigating onto the caller/test whose search was still running. That is a
+problem specifically right after "Genereer review-boom" redirects into
+`/pr/<id>` (`src/overview.mjs`'s `generatePage`): `resolve_call`'s/
+`resolve_test_covers`' LLM search starts **fire-and-forget** (its own
+goroutine, `autoStartResolveCall`, see `.claude/docs/workflows-analysis.md`)
+well after `POST /api/ingest` already returned, so a reviewer who stays on the
+page can hit what looks like "the end of the tree" within a couple of
+keystrokes, while a fresh tab opened a bit later fetches the by-then-resolved
+read model and gets further — the tree simply hadn't finished growing yet, and
+nothing told the tab that was already open.
+
+- **Server** (`eventbus.go`'s `publishCallResolveChanged`/
+  `publishTestCoversChanged`, called from `workflows.go`): after
+  `buildRelations`'s own `UpsertGo`/`Prune` for calls/covers (covers the first
+  ingest AND a later `rebuild`/delta refresh), and after `saveResolutions`/
+  `saveTestCoverResolutions` (the LLM search's own result — the exact moment
+  described above). PR-wide, no `key` — there is no finer per-connection scope
+  than the `pr` the SSE connection already carries.
+- **Client** (`src/home.mjs`, next to the initial `loadBlocks()` kick-off):
+  `ensureEvents(state.pr)` once per page load (this file has no SPA routing,
+  so — unlike `RelatedPanel.mjs`'s `ensureChatEvents`, callable again per
+  opened comment thread — no "already bound" dedupe guard is needed), then
+  `onEvent('callresolve.changed', …)`/`onEvent('testcovers.changed', …)` each
+  just call the existing `loadCallResolve()`/`loadTestCovers()` (which already
+  call `recomputeLeftList()` themselves, so no extra plumbing), plus the same
+  pair in `onEventsResync(...)`.
+
+Test: `tests/callresolve-live-update.spec.mjs` — mocks `/api/callresolve` to
+hide a real, permanently-seeded row (PR 91) and holds the one `/api/events`
+connection open until the test itself lets go, so the frame can only arrive
+after a "still nothing yet" assertion has already settled.
+
 ## Tests
 
 `eventbus_test.go` (scoping, payload snapshotting, drop-instead-of-block,
 unsubscribe), `events_api_test.go` (headers, frame shape, PR scoping, cleanup
 after the client goes away, the resync-after-drop frame). Frontend behaviour is
 covered where it is used — `tests/claude-chat-progress.spec.mjs` fulfils
-`/api/events` with hand-written frames.
+`/api/events` with hand-written frames, `tests/callresolve-live-update.spec.mjs`
+the same for `callresolve.changed`.

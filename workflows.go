@@ -1210,6 +1210,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			// `slash relations`, which never runs this Activity at all (see
 			// .claude/docs/tembed-workflows.md).
 			go m.autoStartResolveCall(input.PR, calls, blocks)
+			// "Something changed in callresolve" — a tab already open on this
+			// PR refetches GET /api/callresolve instead of only learning about
+			// it once it happens to select the caller block (see
+			// eventCallResolveChanged, eventbus.go).
+			publishCallResolveChanged(input.PR)
 		}
 		// Also detect test-coverage annotations statically (resolved/unannotated/
 		// unresolved) into the testcovers read-model. UpsertGo preserves LLM-owned
@@ -1222,6 +1227,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			if err := m.testcovers.Prune(ctx, input.PR, covers); err != nil {
 				return nil, fmt.Errorf("build_relations: prune test covers: %w", err)
 			}
+			publishTestCoversChanged(input.PR)
 		}
 		return json.Marshal(map[string]int{"relations": len(rels), "calls": len(calls), "covers": len(covers)})
 	})
@@ -1264,6 +1270,13 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			if err := m.callresolve.Save(ctx, e); err != nil {
 				return nil, err
 			}
+		}
+		// This is the LLM search's own result, landing well after
+		// build_relations' Go-only pass and after POST /api/ingest already
+		// returned (see autoStartResolveCall) — the exact moment a tab already
+		// open on this PR needs telling.
+		if len(entries) > 0 {
+			publishCallResolveChanged(entries[0].PR)
 		}
 		return json.Marshal(map[string]int{"saved": len(entries)})
 	})
@@ -1333,6 +1346,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			if err := m.testcovers.Save(ctx, e); err != nil {
 				return nil, err
 			}
+		}
+		// Same rationale as saveResolutions above: this is the LLM search's
+		// own result, landing after build_relations' Go-only pass.
+		if len(entries) > 0 {
+			publishTestCoversChanged(entries[0].PR)
 		}
 		return json.Marshal(map[string]int{"saved": len(entries)})
 	})

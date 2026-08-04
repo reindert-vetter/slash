@@ -317,6 +317,15 @@ and the frontend's own `startCallSearch` safety net can never both spend a call.
   bypasses the engine entirely and starts no search; such a PR relies on the
   frontend trigger once a server is running.
 
+**A tab already open on this PR is told when this search lands**, not just a
+later fresh open: `saveResolutions` (and `buildRelations`' own `UpsertGo`)
+publish `callresolve.changed` over the SSE channel (`eventbus.go`), so
+`src/home.mjs` refetches `/api/callresolve` on its own — see "callresolve/
+testcovers" under "Migrating a poller onto this channel" in
+`.claude/docs/server-events.md` for the full mechanism and why it mattered
+(this fire-and-forget search is exactly what made a just-generated PR's
+navigation look "frozen" for the reviewer who stayed on the page).
+
 ### Frontend
 
 `state.callResolve` adds `resolved`/`found` rows as children and starts the
@@ -400,6 +409,10 @@ likewise carries the full child descriptor + code text.
   function of a recorded result — the same pattern as callresolve's
   `HadCandidates` gate. This only saves Haiku calls; it does not reintroduce
   Sonnet.
+- **A tab already open on this PR is told when this search lands**, same as
+  callresolve above: `saveTestCoverResolutions` (and `buildRelations`' own
+  `UpsertGo`) publish `testcovers.changed` over the SSE channel — see
+  `.claude/docs/server-events.md`.
 - **Frontend:** direction 1 = `resolvedTestCoverChildren` (`covers` child, same
   diffstat/`source` badges as a call child); direction 2 = `coveredByChildren`
   (`covered_by`, reusing the existing test PR block, so no code snapshot). Both

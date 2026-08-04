@@ -45,10 +45,29 @@ const (
 	// conversation/comment id). Deliberately carries NO message payload — the
 	// client refetches GET /api/chat, so the read model stays the only truth.
 	eventChatMessage = "chat.message"
+	// eventCallResolveChanged/eventTestCoversChanged say the callresolve/
+	// testcovers read-model changed for this PR (no Key — PR-wide, there is no
+	// finer per-connection scope than the pr the SSE connection already carries).
+	// Deliberately no payload either: the client refetches GET /api/callresolve/
+	// GET /api/testcovers, same as eventChatMessage. These exist because
+	// resolve_call's/resolve_test_covers' LLM search runs fire-and-forget AFTER
+	// POST /api/ingest already returned (see autoStartResolveCall,
+	// .claude/docs/workflows-analysis.md) — without a push, a reviewer who
+	// stayed on the page never sees a child that resolves a few seconds later,
+	// while a fresh tab opened afterwards fetches the already-resolved read
+	// model and sees more. See .claude/docs/server-events.md.
+	eventCallResolveChanged = "callresolve.changed"
+	eventTestCoversChanged  = "testcovers.changed"
 	// eventResync is emitted by the connection itself after it had to drop an
 	// event: "you may have missed something, refetch everything you track".
 	eventResync = "resync"
 )
+
+// publishCallResolveChanged/publishTestCoversChanged are the two callresolve/
+// testcovers publishers, mirroring publishChatChanged (chat_progress.go): a
+// volatile "refetch me" nudge, never the new rows themselves.
+func publishCallResolveChanged(pr int) { events.publish(eventCallResolveChanged, pr, "", nil) }
+func publishTestCoversChanged(pr int)  { events.publish(eventTestCoversChanged, pr, "", nil) }
 
 // busEvent is one multiplexed message. Data is pre-marshalled at publish time
 // so the hub never holds a live pointer into a caller's struct (which the
