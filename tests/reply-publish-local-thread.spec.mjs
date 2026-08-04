@@ -1,0 +1,108 @@
+import { test, expect } from './_fixtures.mjs'
+
+// Replying to a thread that has never touched GitHub (an AI finding, or a
+// private "Alleen voor mijzelf" note) first asks what may become public — see
+// needsPublishChoice/openPublishMenu + sendPendingReply (RelatedPanel.mjs), the
+// 'replyPublish' menu (home.mjs's replyPublishCommandsFor) and
+// ReactionSignal.Publish (workflows.go). Local stays the default action, and
+// once the thread HAS a GitHub root the question disappears for good: every
+// following reply mirrors on its own.
+test.describe('Publish a local comment thread to GitHub', () => {
+  function selectedCard(page) {
+    return page.getByTestId('block-column').locator('article').first()
+  }
+  // Same seeding shape as convert-warning-to-comment.spec.mjs: an inline-visible
+  // AI finding needs a real block of the seeded PR to anchor on.
+  async function seedWarning(page, body) {
+    const card = selectedCard(page)
+    await expect(card).toBeVisible()
+    const label = (await card.locator('h2').first().innerText()).trim()
+    const fileLine = (await card.locator('.font-mono.text-slate-500').first().innerText()).trim()
+    const res = await page.request.post('/api/workflows/task_code_comment', {
+      data: {
+        pr: 12903,
+        file: fileLine.split(':')[0],
+        line: 1,
+        author: 'AI check',
+        body,
+        source: 'ai',
+        local: true,
+        label,
+        gran: 'group',
+        rowStart: 0,
+        rowEnd: 0,
+      },
+    })
+    expect(res.ok()).toBeTruthy()
+    await page.goto('/pr/12903?sel=' + encodeURIComponent(fileLine))
+    await expect(selectedCard(page).locator('h2').first()).toHaveText(label)
+    return { label, fileLine }
+  }
+
+  async function openThread(page, body) {
+    const row = page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: body })
+    await expect(row).toBeVisible()
+    await row.click()
+    await expect(page.getByTestId('reaction-compose')).toBeFocused()
+  }
+
+  // Types a reply and submits it from the field itself — the thread stays open
+  // between sends, so it is only clicked into once (a second click would toggle
+  // it shut).
+  async function typeReply(page, text) {
+    const field = page.getByTestId('reaction-compose')
+    await field.fill(text)
+    await field.press('Enter')
+  }
+
+  test('the send asks first, and stops asking once the thread is on GitHub', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    const aiBody = 'deze aanroep valideert de invoer niet meer'
+    await seedWarning(page, aiBody)
+    await openThread(page, aiBody)
+
+    // A first reply, while nothing else was ever written: no history choice yet.
+    await typeReply(page, 'eerste lokale reactie')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    let rows = menu.getByTestId('command-row')
+    await expect(rows).toHaveCount(4)
+    await expect(rows.nth(1)).toContainText('Alleen voor mijzelf')
+    await expect(rows.nth(2)).toContainText('Alleen mijn antwoord op GitHub')
+    await expect(rows.nth(3)).toContainText('Ook de AI-melding op GitHub')
+    // The default (2nd item) keeps it local.
+    await page.keyboard.press('Enter')
+    await expect(menu).toHaveCount(0)
+    await expect(page.getByTestId('comment-thread')).toContainText('eerste lokale reactie')
+
+    // A second reply now has an earlier local message to decide about, so the
+    // two GitHub items become submenus.
+    await typeReply(page, 'tweede reactie, nu publiek')
+    await expect(menu).toBeVisible()
+    rows = menu.getByTestId('command-row')
+    await rows.nth(3).click()
+    await expect(menu.getByTestId('command-row').nth(1)).toContainText('Zonder de eerdere 1 bericht')
+    await expect(menu.getByTestId('command-row').nth(2)).toContainText('Met de eerdere 1 bericht')
+    await menu.getByTestId('command-row').nth(2).click()
+    await expect(menu).toHaveCount(0)
+    await expect(page.getByTestId('comment-thread')).toContainText('tweede reactie, nu publiek')
+
+    // The thread now has a GitHub root (github.Fake answers offline). The
+    // workflow records that id asynchronously, so wait for it: it is exactly
+    // the "this is a GitHub chat now" marker the UI reads (githubId).
+    await expect
+      .poll(async () => {
+        const res = await page.request.get('/api/comments?pr=12903')
+        const list = await res.json()
+        const c = list.find((x) => x.body === aiBody)
+        return (c && c.githubId) || 0
+      })
+      .toBeGreaterThan(0)
+
+    // So the next reply goes straight out — no menu at all.
+    await typeReply(page, 'derde reactie')
+    await expect(page.getByTestId('comment-thread')).toContainText('derde reactie')
+    await expect(menu).toHaveCount(0)
+  })
+})

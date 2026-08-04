@@ -2708,18 +2708,147 @@ export function activeComposeTargetHint(commentTarget) {
 // below), which always sends the fixed "/resolve" sentinel instead of
 // whatever happened to be typed — see the reaction-status button in
 // expandedConversation for how resolve stays mouse-reachable now.
+// --- Publishing a local thread to GitHub ------------------------------------
+//
+// A thread starts local in two ways: the reviewer placed it as "Alleen voor
+// mijzelf" (createComment with local:true) or it IS an AI finding (source
+// 'ai', always local — see code_warning.go). Such a thread has no GitHub root,
+// so the backend mirrors nothing at all (the RootID === 0 guard in
+// taskCodeCommentWorkflow). Replying to one therefore asks first what may
+// become public, instead of silently staying private forever: the send opens
+// the 'replyPublish' menu (home.mjs) and the chosen item calls
+// sendPendingReply, which repeats the very same send with a `publish` flag on
+// the Signal.
+//
+// "Is this a GitHub chat now?" needs no new state anywhere: the backend
+// records the GitHub root id on the comment (github_id → `c.githubId`), so a
+// non-zero githubId means every following reply mirrors on its own and the
+// menu simply stops appearing — that is the whole "once it's a GitHub chat,
+// the next messages go to GitHub too" rule.
+
+// needsPublishChoice reports whether replying to `c` should ask the publish
+// question first: only while the thread has no GitHub root of its own.
+// Deliberately also true for a post that failed earlier (githubId stayed 0) —
+// asking again is the correct behaviour there. A github-SOURCED thread is
+// excluded regardless: it was written on GitHub in the first place, so it can
+// never be a local thread even if its id never made it into our read-model.
+export function needsPublishChoice(c) {
+  return !!c && !c.githubId && (c.source || 'ui') !== 'github'
+}
+
+// localLocalReplyCount counts the reviewer's OWN replies in `c` that never
+// reached GitHub — the "eerdere berichten" a publish can optionally bring
+// along (ReactionSignal.PublishHistory). AI/system notes are excluded: they
+// are never mirrored. Used only for the menu labels, so it may be a plain
+// synchronous read.
+export function localReplyCount(c) {
+  if (!c || !c.reactions) return 0
+  return c.reactions.filter((r) => (r.source || 'ui') === 'ui' && !r.githubId).length
+}
+
+// pendingPublish holds the send that is waiting on the publish menu's answer:
+// which thread, which reply field it came from ('thread' = the block-scoped
+// conversation, 'prwide' = the PR-comment detail card), and the typed body
+// ('' when the menu was opened without any new reply — see publishThreadOnly).
+// A plain (non-reactive) object read once by the menu at open time, exactly
+// like the snapshotCommands convention in home.mjs.
+let pendingPublish = null
+
+// replyPublishOpener is home.mjs's openMenu('replyPublish'), registered once
+// at module load (setReplyPublishMenuOpener). RelatedPanel never imports from
+// home.mjs — the dependency only runs the other way — so the opener is handed
+// down, the same way InlineComments already receives openCommentMenu.
+let replyPublishOpener = null
+
+export function setReplyPublishMenuOpener(fn) {
+  replyPublishOpener = fn
+}
+
+// pendingPublishInfo exposes the waiting send to home.mjs so the menu can
+// name what it is about (an AI finding vs the reviewer's own note, and how
+// many earlier local replies there are).
+export function pendingPublishInfo() {
+  if (!pendingPublish) return null
+  const c = commentById(pendingPublish.commentId)
+  return {
+    ...pendingPublish,
+    source: c ? c.source || 'ui' : 'ui',
+    localReplies: localReplyCount(c),
+  }
+}
+
+// openPublishMenu holds the send and opens the choice menu — deliberately a
+// FRAME LATER. Both reply fields open it from their own Enter handler, and that
+// keydown keeps bubbling to home.mjs's document-level handler; opening the menu
+// synchronously would make that same keystroke immediately run the menu's
+// default item ("Alleen voor mijzelf"), so the reviewer would never see the
+// question at all. By the next frame the keydown is long over, and the global
+// handler saw a closed menu plus a non-empty reply field, which is a no-op
+// there.
+function openPublishMenu(info) {
+  pendingPublish = info
+  requestAnimationFrame(() => {
+    if (replyPublishOpener) replyPublishOpener()
+  })
+}
+
+function commentById(id) {
+  return cs.list.find((c) => c.id === id) || null
+}
+
+// sendPendingReply performs the send the publish menu was asked about.
+// `publish` is '' (keep it local, the default item), 'reply' (only the typed
+// answer goes public, as the thread's new GitHub root) or 'thread' (the
+// comment/finding itself goes public too); `withHistory` additionally mirrors
+// the earlier local replies. Consumes pendingPublish before the first await,
+// per this file's "capture once, before the await" convention — a second menu
+// must never act on a stale snapshot.
+export async function sendPendingReply(publish, withHistory) {
+  const p = pendingPublish
+  pendingPublish = null
+  if (!p) return
+  const c = commentById(p.commentId)
+  if (!c) return
+  if (p.kind === 'prwide') {
+    await postPrCommentReply(c, p.body, publish, withHistory)
+    return
+  }
+  await postThreadReply(c, p.body, publish, withHistory)
+}
+
 async function sendReaction() {
   const c = selComment()
   if (!c) return
   const el = document.querySelector('[data-testid=reaction-compose]')
   const body = el && el.value.trim()
   if (!body) return
+  // A thread that has never touched GitHub asks first what may go public —
+  // see openPublishMenu / sendPendingReply.
+  if (needsPublishChoice(c)) {
+    openPublishMenu({ kind: 'thread', commentId: c.id, body })
+    return
+  }
+  await postThreadReply(c, body)
+}
+
+// postThreadReply is sendReaction's actual write half, split out so the
+// publish menu (sendPendingReply) can reuse the exact same POST + tail after
+// the reviewer picked what may reach GitHub. `publish`/`withHistory` ride
+// along on the same "reply" Signal (see ReactionSignal.Publish in
+// workflows.go); the ordinary, already-public path passes neither.
+async function postThreadReply(c, body, publish, withHistory) {
+  const el = document.querySelector('[data-testid=reaction-compose]')
   cs.busy = true
   try {
     await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ author: 'reviewer', body, done: false }),
+      body: JSON.stringify({
+        author: 'reviewer',
+        body,
+        done: false,
+        ...(publish ? { publish, publishHistory: !!withHistory } : {}),
+      }),
     })
     if (el) {
       el.value = ''
@@ -4624,12 +4753,31 @@ export function cancelPrCommentReply() {
 export async function sendPrCommentReply(c, body) {
   const text = (body || '').trim()
   if (!c || !c.runId || !text) return
+  // Same publish question as the block-scoped thread (see needsPublishChoice):
+  // a PR-wide AI finding is local too, so replying to one asks first.
+  if (needsPublishChoice(c)) {
+    openPublishMenu({ kind: 'prwide', commentId: c.id, body: text })
+    return
+  }
+  await postPrCommentReply(c, text)
+}
+
+// postPrCommentReply is sendPrCommentReply's write half, split out for the
+// publish menu (sendPendingReply) exactly like postThreadReply above.
+async function postPrCommentReply(c, body, publish, withHistory) {
+  const text = (body || '').trim()
+  if (!c || !c.runId || !text) return
   picm.sending = true
   try {
     await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ author: 'reviewer', body: text, done: false }),
+      body: JSON.stringify({
+        author: 'reviewer',
+        body: text,
+        done: false,
+        ...(publish ? { publish, publishHistory: !!withHistory } : {}),
+      }),
     })
     cancelPrCommentReply()
     await loadComments(cs.pr)

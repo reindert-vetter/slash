@@ -958,6 +958,10 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			Done     bool   `json:"done"`
 			Action   string `json:"action"`
 			TargetID string `json:"targetId"`
+			// publish/publishHistory promote a still-local thread to GitHub as
+			// part of this reply — see ReactionSignal.Publish.
+			Publish        string `json:"publish"`
+			PublishHistory bool   `json:"publishHistory"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid reaction", http.StatusBadRequest)
@@ -978,9 +982,24 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid action", http.StatusBadRequest)
 			return
 		}
+		// publish is only meaningful while ADDING a reply, and only in its two
+		// known shapes — validated here, before it ever reaches the workflow,
+		// like the action switch above.
+		switch body.Publish {
+		case "":
+		case "reply", "thread":
+			if body.Action != "" {
+				http.Error(w, "invalid publish", http.StatusBadRequest)
+				return
+			}
+		default:
+			http.Error(w, "invalid publish", http.StatusBadRequest)
+			return
+		}
 		sig := ReactionSignal{
 			ID: "ui-" + newUIReactionID(), Source: "ui",
 			Author: body.Author, Body: body.Body, Done: body.Done, Action: body.Action,
+			Publish: body.Publish, PublishHistory: body.PublishHistory,
 		}
 		if body.Action == "edit" {
 			sig.ID = body.TargetID

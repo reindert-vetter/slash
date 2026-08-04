@@ -20,6 +20,7 @@ Arrow-key navigation of the tree itself lives in
 | `claude` | `Enter` on the Claude column while its composer is NOT the focused element (`cs.claudePos > 0`, stepped up into the transcript) | `claudeChatCommandsFor()` |
 | `prComment` | `Enter` on a comment-index row | `prCommentCommandsFor()` |
 | `compose` | `Enter`/"Place…" with text in the composer | `COMPOSE_COMMANDS` |
+| `replyPublish` | automatically when a reply is sent on a thread that isn't on GitHub | `replyPublishCommandsFor()` |
 | `postApprove` | automatically after a palette approve | `POSTAPPROVE_COMMANDS` |
 | `reviewApprove` / `reviewChoice` / `reviewReject` | automatically when nothing is left ahead | `REVIEW_APPROVE_COMMANDS` / `REVIEW_CHOICE_COMMANDS` / built from the typed text |
 
@@ -477,6 +478,28 @@ opened by keyboard or button; **Shift+Enter** falls outside it and stays a
 newline. This was the first flow to open a menu **over** an open composer,
 which is what surfaced the arrow.js orphan-binding crash the fresh-`ms` split
 fixes (above).
+
+## The publish menu (`replyPublish`, `replyPublishCommandsFor()`)
+
+The compose menu's sibling for an **existing** thread that has never touched
+GitHub (a private note, or an AI finding). Sending a reply there doesn't post:
+the send is held (`pendingPublish` in `RelatedPanel.mjs`) and this menu decides
+what may become public. Four rows: **"Sluit menu"** (pinned), **"Alleen voor
+mijzelf (blijft lokaal)"** (default, 2nd — so "type, Enter, Enter" keeps
+behaving exactly as before this menu existed), **"Alleen mijn antwoord op
+GitHub"** and **"Ook de AI-melding op GitHub"** / **"Ook mijn comment op
+GitHub"** (label by `source`). Every item calls
+`sendPendingReply(publish, withHistory)`, which re-runs the very same send with
+a `publish` flag on the `reply` Signal.
+
+The two GitHub items become a **submenu** (*"Zonder de eerdere N berichten"* /
+*"Met de eerdere N berichten"*) only when the thread actually holds earlier
+local replies — otherwise they stay plain, directly running items rather than
+costing a keypress for a choice with one possible answer. Built fresh at open
+time with plain-string labels, per `snapshotCommands`' rule.
+
+It is **not** an `isReviewFollowup` mode: the reply field it belongs to is
+on-screen, so `positionMenu` anchors it normally.
 
 ## `/` — the PR-wide menu (`pr`, `PR_COMMANDS`)
 

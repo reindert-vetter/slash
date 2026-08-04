@@ -206,6 +206,15 @@ func (f *Fake) EnqueueReply(r Reply) {
 	f.replies = append(f.replies, r)
 }
 
+// PostedBodies returns a copy of every review comment/reply body posted, in
+// order — for a test that asserts the ORDER of a multi-post flow, not just the
+// count (e.g. publishing a local thread: root first, then its replies).
+func (f *Fake) PostedBodies() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.Posted...)
+}
+
 // PostedCount returns how many comments/replies have been posted.
 func (f *Fake) PostedCount() int {
 	f.mu.Lock()

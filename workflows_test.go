@@ -185,6 +185,158 @@ func TestTaskCodeCommentPersistsGithubID(t *testing.T) {
 	}
 }
 
+// A local thread (a private note or an "ai" finding) touches GitHub only once
+// the reviewer publishes it along with a reply — and from then on every next
+// reply mirrors on its own, without asking again.
+func TestPublishLocalThreadWithReply(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "AI check",
+		Body: "Unchecked array access.", Source: "ai", Local: true, RowStart: -1, RowEnd: -1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gh.PostedCount() != 0 {
+		t.Fatalf("github posted %d for a local comment, want 0", gh.PostedCount())
+	}
+
+	// Publish "reply": only the reviewer's own answer reaches GitHub, as the
+	// thread's new root — the finding's own wording stays private.
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-1", Source: "ui", Author: "reindert", Body: "Fixed in the next commit.", Publish: "reply",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return gh.PostedCount() == 1 })
+	if got := gh.PostedBodies(); got[0] != "Fixed in the next commit." {
+		t.Fatalf("posted %q, want only the reply body", got)
+	}
+	// The read model now says "this is a GitHub chat" (github_id != 0) — what
+	// the UI reads to stop offering the publish choice.
+	var rootGithubID int64
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		rootGithubID = l[0].GithubID
+		return rootGithubID != 0
+	})
+
+	// A following reply needs no publish flag at all: the ordinary mirror path
+	// now has a root to reply to.
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-2", Source: "ui", Author: "reindert", Body: "Done.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return gh.PostedCount() == 2 })
+	if got := gh.PostedBodies(); got[1] != "Done." {
+		t.Fatalf("posted %q, want the second reply mirrored", got)
+	}
+
+	// Editing the local root must NOT rewrite the GitHub comment that holds the
+	// reply (see rootPublished in workflows.go).
+	if err := m.Signal(runID, ReactionSignal{
+		ID: runID, Source: "ui", Author: "reindert", Body: "Unchecked array access (line 12).", Action: "edit",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return l[0].Body == "Unchecked array access (line 12)."
+	})
+	if b, ok := gh.EditedReviews[rootGithubID]; ok {
+		t.Fatalf("github review comment %d edited to %q, want untouched", rootGithubID, b)
+	}
+}
+
+// Publishing the whole thread posts the finding itself as the root — quoted
+// with an attribution marker so nobody reads it as the reviewer's own wording —
+// and, on request, brings the earlier local replies along in order.
+func TestPublishLocalThreadWithHistory(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "AI check",
+		Body: "Unchecked array access.", Source: "ai", Local: true, RowStart: -1, RowEnd: -1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, body := range []string{"Looks intentional?", "No, it isn't."} {
+		if err := m.Signal(runID, ReactionSignal{
+			ID: fmt.Sprintf("ui-%d", i+1), Source: "ui", Author: "reindert", Body: body,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && l[0].ReactionCount == 2
+	})
+	if gh.PostedCount() != 0 {
+		t.Fatalf("github posted %d while still local, want 0", gh.PostedCount())
+	}
+
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-3", Source: "ui", Author: "reindert", Body: "Publishing this.",
+		Publish: "thread", PublishHistory: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return gh.PostedCount() == 4 })
+	want := []string{
+		"> [AI-check] Unchecked array access.",
+		"Looks intentional?",
+		"No, it isn't.",
+		"Publishing this.",
+	}
+	got := gh.PostedBodies()
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("posted[%d] = %q, want %q (all: %q)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// Without PublishHistory the earlier local replies stay local: only the root
+// and the reply being sent reach GitHub.
+func TestPublishLocalThreadKeepsHistoryLocal(t *testing.T) {
+	m, gh, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reindert",
+		Body: "Private note.", Local: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-1", Source: "ui", Author: "reindert", Body: "Only for me.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-2", Source: "ui", Author: "reindert", Body: "This one goes out.", Publish: "thread",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return gh.PostedCount() == 2 })
+	want := []string{"Private note.", "This one goes out."}
+	got := gh.PostedBodies()
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("posted[%d] = %q, want %q (all: %q)", i, got[i], want[i], got)
+		}
+	}
+}
+
 // Editing the root comment of a review-diff thread overwrites its own body in
 // the read model and PATCHes the same GitHub review comment it was posted as.
 func TestTaskCodeCommentEditRoot(t *testing.T) {

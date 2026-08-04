@@ -579,6 +579,50 @@ what makes this possible; the backend's initial-post branch needed a matching
 addition (a PR-wide comment posts as a new issue comment) — see
 `.claude/docs/workflows-comments.md`.
 
+### Publishing a local thread to GitHub
+
+A thread with no GitHub root of its own — a private "Alleen voor mijzelf" note,
+or an AI finding (always `Local:true`) — used to be a one-way street: every
+reply on it stayed local forever. Sending a reply on such a thread now **holds
+the send and asks first**.
+
+- **Gate:** `needsPublishChoice(c)` = `!c.githubId` and `c.source !== 'github'`
+  (a github-sourced thread was written there in the first place). `c.githubId`
+  is the ONLY state involved — the backend sets it the moment the thread lands
+  on GitHub (see `.claude/docs/workflows-comments.md`), so "once it's a GitHub
+  chat, the next messages go there too" needs no extra flag: the question simply
+  stops being asked and every following reply mirrors through the existing path.
+- **Both reply fields** route through it: `sendReaction` (`reaction-compose`,
+  the block-scoped conversation) and `sendPrCommentReply` (`comment-detail-reply`
+  on a comment-index item, `'reply'` mode only — `'convert'` is its own flow
+  above). Each splits into a thin gate + a `postThreadReply`/`postPrCommentReply`
+  write half, so the menu re-runs the very same send.
+- **The held send** lives in a plain module-level `pendingPublish`
+  (`{kind, commentId, body}`), read once by the menu via `pendingPublishInfo()`
+  (which adds the thread's `source` and `localReplyCount(c)` for the labels) and
+  consumed by `sendPendingReply(publish, withHistory)` before its first await.
+- **The menu** is a command-palette mode `'replyPublish'`
+  (`replyPublishCommandsFor`, `home.mjs` — see
+  `.claude/docs/command-palette.md`): local is the default item, the two GitHub
+  items grow a with/without-the-earlier-messages submenu only when there
+  actually are earlier local replies.
+- **`openPublishMenu` defers the open by one frame.** Both fields open it from
+  their own `Enter` handler, and that keydown keeps bubbling to home.mjs's
+  document-level handler; opening synchronously made that same keystroke
+  immediately run the menu's default item, so the reviewer never saw the
+  question. A frame later the keydown is over and the global handler has already
+  seen a closed menu + a non-empty reply field (a no-op there).
+
+RelatedPanel never imports from `home.mjs`, so the opener is handed down:
+`setReplyPublishMenuOpener(() => openMenu('replyPublish'))`, called once at
+`home.mjs` module scope — the same direction as `InlineComments`' existing
+`openCommentMenu` parameter.
+
+Accepted rough edge: the workflow records `github_id` asynchronously, so a reply
+sent within the same second as the publish can still see `githubId === 0` and be
+asked again. Choosing a GitHub option twice is harmless (the workflow ignores a
+`Publish` once the thread has a root, so it degrades into an ordinary reply).
+
 ### The "+ Nieuwe comment" trigger row is gone
 
 `newCommentComposer` used to render a permanently visible "+ Nieuwe comment"

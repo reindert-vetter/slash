@@ -287,7 +287,26 @@ type ReactionSignal struct {
 	// "edit").
 	Body   string `json:"body"`
 	Done   bool   `json:"done"`   // resolves the thread
-	Action string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor" | "chat" | "edit"
+	Action string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor" | "chat" | "edit" | "publish"
+	// Publish promotes a thread that has never touched GitHub (a private note,
+	// or an "ai" code_warning finding — both start with posted.RootID == 0) to a
+	// real GitHub thread, as part of delivering THIS reply. Empty (the default)
+	// keeps the thread local, exactly as before:
+	//   - "reply"  — only the reviewer's own reply reaches GitHub. There is no
+	//     root to reply to, so this reply itself BECOMES the GitHub root
+	//     comment; the local root's body (e.g. the AI finding) stays private.
+	//   - "thread" — the local root's body is posted first (an "ai" root as an
+	//     attributed quote, see aiQuoteBody), and this reply then mirrors onto
+	//     it through the ordinary reply path.
+	// Ignored once the thread already has a GitHub root (posted.RootID != 0):
+	// from that point every reply mirrors anyway, which is exactly the
+	// "once it's a GitHub chat, it stays one" rule.
+	Publish string `json:"publish,omitempty"`
+	// PublishHistory additionally mirrors the reviewer's OWN earlier replies —
+	// the ones written while the thread was still local — in their original
+	// order, right after the root lands. Only meaningful together with Publish
+	// (or Action "publish"). AI/system notes in the thread are never mirrored.
+	PublishHistory bool `json:"publishHistory,omitempty"`
 	// Anchor carries the comment's re-derived row anchor with Action "reanchor" (a
 	// pure metadata move, no reply stored) — see reanchor.go for how it's computed
 	// and comments.Module.SetAnchor for what it changes.
@@ -2914,6 +2933,23 @@ func pathSeg(s string) string {
 	return b.String()
 }
 
+// aiQuoteBody renders an automated finding's own text as an attributed
+// Markdown blockquote, so a reader on GitHub can tell at a glance that the
+// wording is the AI check's and not the reviewer's. Every line is quoted (a
+// blank line included, so a multi-paragraph finding stays one block) and the
+// first one carries the marker.
+func aiQuoteBody(body string) string {
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	for i, l := range lines {
+		if i == 0 {
+			lines[i] = "> [AI-check] " + l
+			continue
+		}
+		lines[i] = "> " + l
+	}
+	return strings.Join(lines, "\n")
+}
+
 func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in CodeCommentInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -2998,6 +3034,86 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	// replay: it is only ever populated from the recorded result of this same
 	// loop's own mirror Activities below, never from live state.
 	replyGithubIDs := map[string]int64{}
+	// rootPublished says whether the COMMENT'S OWN BODY is what lives at
+	// posted.RootID on GitHub. True for an imported or normally posted root,
+	// false for a local one — and it stays false when a later Publish "reply"
+	// puts the reviewer's REPLY text at posted.RootID instead (see
+	// publishThread), so an "edit" of the local root body never PATCHes the
+	// GitHub comment that actually holds that reply.
+	rootPublished := posted.RootID != 0
+	// localReplies remembers the reviewer's own replies written while the thread
+	// was still local (posted.RootID == 0), in order — the material a later
+	// Publish with PublishHistory brings along. Rebuilt identically on replay:
+	// only ever appended from this loop's own signals, and cleared once
+	// published. A slice, not a map: the mirror order must be deterministic.
+	type localReply struct{ ID, Body string }
+	var localReplies []localReply
+
+	// publishThread promotes a thread that has never touched GitHub into a real
+	// GitHub thread: it posts `rootBody` as the thread's root (an issue comment
+	// for a PR-wide thread, a review comment otherwise — the same two
+	// best-effort Activities the initial post uses), records the resulting id on
+	// the comment so the read-model flips to "this is a GitHub chat now"
+	// (github_id != 0, what the UI reads), and optionally mirrors the earlier
+	// local replies onto it. Deterministic: it only ever reads the workflow
+	// input and values recorded by this same loop.
+	publishThread := func(rootBody string, rootIsOwnBody, history bool) error {
+		var pr postResult
+		if isPRWide(in.Kind) {
+			if err := w.ExecuteActivity("postGithubIssueComment", map[string]any{
+				"pr": in.PR, "body": rootBody,
+			}, &pr); err != nil {
+				return err
+			}
+		} else {
+			rooted := in
+			rooted.Body = rootBody
+			if err := w.ExecuteActivity("postGithubComment", rooted, &pr); err != nil {
+				return err
+			}
+		}
+		posted.RootID = pr.RootID
+		rootPublished = rootIsOwnBody && pr.RootID != 0
+		if err := w.ExecuteActivity("saveCommentGithubID", map[string]any{
+			"id": runID, "githubId": pr.RootID,
+		}, nil); err != nil {
+			return err
+		}
+		if history {
+			for _, lr := range localReplies {
+				var mirrored postResult
+				if isPRWide(in.Kind) {
+					_ = w.ExecuteActivity("postGithubIssueComment", map[string]any{
+						"pr": in.PR, "body": lr.Body,
+					}, &mirrored)
+				} else {
+					_ = w.ExecuteActivity("replyGithub", map[string]any{
+						"pr": in.PR, "rootId": posted.RootID, "body": lr.Body,
+					}, &mirrored)
+				}
+				if mirrored.RootID != 0 {
+					replyGithubIDs[lr.ID] = mirrored.RootID
+					_ = w.ExecuteActivity("saveReactionGithubID", map[string]any{
+						"id": lr.ID, "githubId": mirrored.RootID,
+					}, nil)
+				}
+			}
+		}
+		localReplies = nil
+		return nil
+	}
+
+	// publishRootBody is the text a Publish posts as the thread's root: the
+	// comment's own body, quoted with an attribution marker when it is an
+	// automated finding (Source "ai") — a PR reader must never mistake the
+	// AI check's wording for the reviewer's own.
+	publishRootBody := func() string {
+		if in.Source == "ai" {
+			return aiQuoteBody(in.Body)
+		}
+		return in.Body
+	}
+
 	for {
 		var r ReactionSignal
 		w.WaitSignal(SignalReply, &r)
@@ -3084,7 +3200,11 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				}, nil); err != nil {
 					return nil, fmt.Errorf("edit comment body: %w", err)
 				}
-				if posted.RootID != 0 {
+				// rootPublished, not just a non-zero RootID: after a Publish
+				// "reply" the GitHub comment at posted.RootID holds the
+				// reviewer's REPLY, not this body — PATCHing it would rewrite
+				// the wrong message (see rootPublished/publishThread).
+				if posted.RootID != 0 && rootPublished {
 					if isPRWide(in.Kind) {
 						_ = w.ExecuteActivity("editGithubIssueComment", map[string]any{
 							"commentId": posted.RootID, "body": r.Body,
@@ -3163,6 +3283,42 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}, nil); err != nil {
 			return nil, fmt.Errorf("save reaction: %w", err)
 		}
+
+		// Publish: this reply promotes a thread that has never touched GitHub
+		// (a private note, or an "ai" finding) into a real one — the reviewer
+		// picked that from the send menu (see the replyPublish menu in
+		// home.mjs). "reply" makes THIS reply the GitHub root (the local root's
+		// body stays private, so it must not be mirrored again below —
+		// publishedAsRoot); "thread" posts the root's own body first and lets
+		// the ordinary mirror below hang this reply off it. Input-driven, so
+		// replay-deterministic. Never for a resolve, and never once the thread
+		// already has a GitHub root: from then on every reply mirrors anyway.
+		publishedAsRoot := false
+		if r.Source == "ui" && !r.Done && posted.RootID == 0 && r.Publish != "" {
+			rootBody := publishRootBody()
+			if r.Publish == "reply" {
+				rootBody = r.Body
+			}
+			if err := publishThread(rootBody, r.Publish != "reply", r.PublishHistory); err != nil {
+				return nil, fmt.Errorf("publish thread: %w", err)
+			}
+			if r.Publish == "reply" {
+				publishedAsRoot = true
+				if posted.RootID != 0 {
+					replyGithubIDs[r.ID] = posted.RootID
+					_ = w.ExecuteActivity("saveReactionGithubID", map[string]any{
+						"id": r.ID, "githubId": posted.RootID,
+					}, nil)
+				}
+			}
+		}
+		// Still local after this reply — remember it, so a later publish can
+		// offer to bring the earlier conversation along (PublishHistory).
+		if r.Source == "ui" && posted.RootID == 0 {
+			if body := strings.TrimSpace(r.Body); body != "" && body != "/resolve" {
+				localReplies = append(localReplies, localReply{ID: r.ID, Body: r.Body})
+			}
+		}
 		// Mirror a UI reaction onto GitHub (best-effort). GitHub-sourced
 		// reactions are not echoed back. The mirror path depends on the thread:
 		//   - PR-wide (issue/review-summary): a reply posts a NEW issue comment to
@@ -3174,7 +3330,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		//     mutation. The "/resolve" sentinel body (sent by a bare resolve, see
 		//     sendReaction/resolveFocusedComment in RelatedPanel.mjs) is not posted
 		//     as text — it only carries the intent to resolve.
-		if r.Source == "ui" {
+		if r.Source == "ui" && !publishedAsRoot {
 			if isPRWide(in.Kind) {
 				if !r.Done {
 					var mirrored postResult

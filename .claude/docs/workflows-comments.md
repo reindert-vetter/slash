@@ -177,6 +177,53 @@ starts and the existing `RootID == 0` guards make `deleteGithubComment`/
 `replyGithub` no-ops: reacting to or deleting a private note never touches
 GitHub.
 
+### Publishing a local thread to GitHub afterwards (`Publish`)
+
+A local thread (a private note, or an **`ai`** `code_warning` finding — always
+`Local: true`) is not a dead end: sending a reply on one first asks what may
+become public, and the answer rides along on that same `reply` Signal as
+**`Publish`** (`""` | `"reply"` | `"thread"`) + **`PublishHistory`**.
+
+- **`"reply"`** — GitHub has no reply without a root, so the reviewer's own
+  reply text is posted **as the thread's root** (`postGithubComment`, or
+  `postGithubIssueComment` for a PR-wide thread) and is therefore **not**
+  mirrored a second time by the ordinary reply path (`publishedAsRoot`). The
+  local root's body (e.g. the finding's own wording) stays private.
+- **`"thread"`** — the root's own body is posted first and the reply then
+  mirrors onto it through the unchanged reply path. An `ai` root goes out as
+  **`aiQuoteBody`**: every line quoted, the first prefixed `> [AI-check] ` —
+  a reader on GitHub must never mistake the AI check's wording for the
+  reviewer's own.
+- **`PublishHistory`** additionally mirrors the reviewer's OWN earlier replies —
+  the ones written while the thread was still local — in their original order,
+  right after the root lands. They come from **`localReplies`**, an ordered
+  slice appended in this same loop for every `ui` reply seen while
+  `posted.RootID == 0`, and cleared once published: rebuilt identically on
+  replay, and a slice rather than a map so the mirror order is deterministic.
+  `ai`/system notes in the thread are never mirrored.
+
+All of it lives in **`publishThread`** (a closure in the workflow body), which
+also runs `saveCommentGithubID`, so `github_id` flips to non-zero — and that,
+with no new state anywhere, IS the "this is a GitHub chat now" marker: from then
+on `posted.RootID != 0` makes every following reply mirror through the existing
+path, and the frontend stops asking (`needsPublishChoice`). A `Publish` on a
+thread that already has a root is ignored for the same reason.
+
+**`rootPublished`** guards one asymmetry: after `Publish: "reply"` the GitHub
+comment at `posted.RootID` holds the *reply*, not the root's body, so the
+`edit` Action must not PATCH it when the reviewer rewords the still-private
+root. It is true only for an imported/normally-posted root or a `"thread"`
+publish.
+
+The HTTP handler validates `publish` (`""`/`"reply"`/`"thread"`, and only
+together with `action: ""`) before it reaches the workflow, like the
+`action`/`targetId` validation above. Frontend mechanism (the menu, the held
+send): "Publishing a local thread to GitHub" in
+`.claude/docs/comments-panel.md`. Tests: `TestPublishLocalThreadWithReply`,
+`TestPublishLocalThreadWithHistory`,
+`TestPublishLocalThreadKeepsHistoryLocal` (`workflows_test.go`) and
+`tests/reply-publish-local-thread.spec.mjs`.
+
 ### Poller cadence (heartbeat-driven)
 
 The poller checks GitHub on a **fast** cadence (`pollInterval`, 1 min) as long

@@ -80,6 +80,9 @@ import RelatedPanel, {
   isClaudeChatFocused,
   clearClaudeChat,
   claudeChatShadowWarning,
+  sendPendingReply,
+  pendingPublishInfo,
+  setReplyPublishMenuOpener,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
@@ -4499,6 +4502,65 @@ const COMPOSE_COMMANDS = withClose([
   },
 ])
 
+// replyPublishCommandsFor — the follow-up menu shown when the reviewer sends a
+// reply on a thread that has never touched GitHub (a private note, or an AI
+// finding — see needsPublishChoice/openPublishMenu in RelatedPanel.mjs). The
+// send is held until an item here runs it, so nothing reaches GitHub without
+// this choice. Local stays the DEFAULT action: "Sluit menu" is pinned first
+// (withClose) and defaultSel opens on the 2nd item, which is the local one, so
+// the plain "type, Enter, Enter" flow behaves exactly as before this menu
+// existed.
+//
+// The two GitHub items only grow a submenu when there is actually an earlier
+// local conversation to decide about (localReplies > 0) — asking "with or
+// without the earlier messages?" on a thread that has none would just be an
+// extra keypress for nothing. Built fresh at open time and every label is a
+// plain string, so nothing that reads live state reaches CommandMenu's own
+// (never disposed) reactive tree — see the disposal-gap note in
+// arrowjs-pitfalls.md.
+function replyPublishCommandsFor() {
+  const info = pendingPublishInfo()
+  const n = info ? info.localReplies : 0
+  const isAI = !!info && info.source === 'ai'
+  const rootLabel = isAI ? 'Ook de AI-melding op GitHub' : 'Ook mijn comment op GitHub'
+  const earlier = `de eerdere ${n} bericht${n === 1 ? '' : 'en'}`
+  // historyChoice turns one publish mode into its own with/without-the-earlier-
+  // messages submenu; without earlier messages it stays a plain, directly
+  // running item.
+  const historyChoice = (id, label, publish) =>
+    n === 0
+      ? { id, label, hint: 'github', run: () => sendPendingReply(publish, false) }
+      : {
+          id,
+          label,
+          hint: 'github',
+          children: withClose([
+            {
+              id: id + '-without-history',
+              label: `Zonder ${earlier}`,
+              hint: 'alleen dit',
+              run: () => sendPendingReply(publish, false),
+            },
+            {
+              id: id + '-with-history',
+              label: `Met ${earlier}`,
+              hint: 'hele gesprek',
+              run: () => sendPendingReply(publish, true),
+            },
+          ]),
+        }
+  return withClose([
+    {
+      id: 'reply-publish-local',
+      label: 'Alleen voor mijzelf (blijft lokaal)',
+      hint: 'privé',
+      run: () => sendPendingReply('', false),
+    },
+    historyChoice('reply-publish-reply', 'Alleen mijn antwoord op GitHub', 'reply'),
+    historyChoice('reply-publish-thread', rootLabel, 'thread'),
+  ])
+}
+
 // POSTAPPROVE_COMMANDS — shown right after a palette approve action (menu mode
 // 'postApprove', see afterApproveAction) when there's a next not-yet-approved
 // unit still ahead: continue straight to it, or just close. Only reached from
@@ -6753,6 +6815,7 @@ function rootCommandsFor(mode) {
   if (mode === 'comment') return commentCommandsFor()
   if (mode === 'claude') return claudeChatCommandsFor()
   if (mode === 'prComment') return prCommentCommandsFor()
+  if (mode === 'replyPublish') return replyPublishCommandsFor()
   if (mode === 'postApprove') return POSTAPPROVE_COMMANDS
   if (mode === 'reviewApprove') return REVIEW_APPROVE_COMMANDS
   if (mode === 'reviewChoice') return REVIEW_CHOICE_COMMANDS
@@ -6792,6 +6855,10 @@ function resolveCommands(query) {
   // sidebar — see selectedComment/prCommentCommandsFor): same shape, just its
   // own small list.
   if (ms.mode === 'prComment') return filterCommands(ms.commands, query)
+  // The publish follow-up (opened by a send on a still-local thread — see
+  // replyPublishCommandsFor): a plain list whose GitHub items may carry
+  // `children`, handled by the ms.sub check at the top of this function.
+  if (ms.mode === 'replyPublish') return filterCommands(ms.commands, query)
   // The postApprove follow-up (opened right after an approve action finds a
   // next not-yet-approved unit ahead): just its two choices, no submenu, no
   // make-a-comment fallback.
@@ -6867,8 +6934,8 @@ window.addEventListener('scroll', repositionMenu, true) // capture: catch inner 
 // openMenu opens the palette, then a frame later (once it's rendered and its size
 // is known) focuses the input and positions it just beneath the current selection.
 // `mode` picks the command list (see resolveCommands): 'block' (default),
-// 'comment', 'pr', 'compose', 'postApprove', 'reviewApprove', 'reviewChoice' or
-// 'reviewReject'. It installs a FRESH `ms` reactive so the previous
+// 'comment', 'pr', 'compose', 'replyPublish', 'postApprove', 'reviewApprove',
+// 'reviewChoice' or 'reviewReject'. It installs a FRESH `ms` reactive so the previous
 // open's (undisposed) CommandMenu bindings can't fire when this menu mutates its
 // state — see the note on the menu/ms split. `commands` is filled here, in this
 // plain (non-reactive) function, by resolving rootCommandsFor(mode) through
@@ -6900,6 +6967,11 @@ function openMenu(mode = 'block') {
   // mid-transition the region is measured too narrow, so re-place once it settles.
   setTimeout(() => menu.open && positionMenu(), 220)
 }
+
+// The publish follow-up is a command-palette menu, so it lives here — but the
+// send that needs it starts in RelatedPanel (which never imports from this
+// module). Hand the opener down once, at module load.
+setReplyPublishMenuOpener(() => openMenu('replyPublish'))
 
 function closeMenu() {
   // Only flip `open`; the volatile state is replaced wholesale on the next
