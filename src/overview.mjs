@@ -364,9 +364,22 @@ function statusPills(pr, status) {
   const pills = []
   const strip = reviewersStrip(status)
   if (strip) pills.push(strip.key('reviewers'))
-  pills.push(reviewChip(pr, status).key('review:' + (pr.isDraft ? 'draft' : status.reviewDecision || 'none')))
+  const reviewVariant = pr.isDraft ? 'draft' : status.reviewDecision || 'none'
+  const review = reviewChip(pr, status)
   const checks = checksChip(status)
-  if (checks) pills.push(checks.key('checks:' + (status.checksState || '') + ':' + status.checksTotal))
+  // Stack the review chip and the checks chip vertically (on explicit
+  // request) instead of side by side, so they read as two related lines of
+  // status rather than a run-on row of pills — the reviewers-avatar strip
+  // stays a sibling, not part of the stack.
+  if (checks) {
+    pills.push(
+      html`<div class="flex flex-col items-start gap-1">${review}${checks}</div>`.key(
+        'review-checks:' + reviewVariant + ':' + (status.checksState || '') + ':' + status.checksTotal,
+      ),
+    )
+  } else {
+    pills.push(review.key('review:' + reviewVariant))
+  }
   return pills
 }
 
