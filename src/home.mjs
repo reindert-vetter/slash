@@ -613,6 +613,102 @@ function editableCaretCanMoveRight() {
   }
 }
 
+// caretVisualLineMarks measures which VISUAL (wrapped) line a character offset
+// falls on inside a <textarea> — selectionStart/selectionEnd alone only give a
+// linear character index, not which rendered row that is once the text wraps
+// (a comment/Claude composer is exactly such a wrapping, multi-row field). It
+// builds a hidden mirror <div> that reproduces every style influencing
+// wrapping (font, content width via clientWidth — so an active vertical
+// scrollbar is accounted for the same way it narrows the textarea's own
+// content box — padding, white-space/wrap), inserts zero-width marker spans at
+// the very start, at `pos`, and at the very end of the field's value, and
+// returns their offsetTop. Comparing `pos` against `start`/`end` then tells
+// editableCaretCanMoveUp/Down below whether the caret already sits on the
+// first/last wrapped row.
+function caretVisualLineMarks(el, pos) {
+  const csEl = getComputedStyle(el)
+  const mirror = document.createElement('div')
+  const style = mirror.style
+  style.position = 'absolute'
+  style.visibility = 'hidden'
+  style.top = '0'
+  style.left = '-9999px'
+  style.height = 'auto'
+  style.boxSizing = 'border-box'
+  style.border = '0'
+  style.width = el.clientWidth + 'px'
+  style.whiteSpace = 'pre-wrap'
+  style.overflowWrap = 'break-word'
+  for (const p of [
+    'paddingTop',
+    'paddingRight',
+    'paddingBottom',
+    'paddingLeft',
+    'fontFamily',
+    'fontSize',
+    'fontWeight',
+    'fontStyle',
+    'letterSpacing',
+    'lineHeight',
+    'textTransform',
+  ]) {
+    style[p] = csEl[p]
+  }
+  document.body.appendChild(mirror)
+  const value = el.value
+  const mark = () => {
+    const span = document.createElement('span')
+    span.textContent = '​'
+    return span
+  }
+  const startMarker = mark()
+  mirror.appendChild(startMarker)
+  mirror.appendChild(document.createTextNode(value.slice(0, pos)))
+  const posMarker = mark()
+  mirror.appendChild(posMarker)
+  mirror.appendChild(document.createTextNode(value.slice(pos)))
+  const endMarker = mark()
+  mirror.appendChild(endMarker)
+  const result = { start: startMarker.offsetTop, pos: posMarker.offsetTop, end: endMarker.offsetTop }
+  document.body.removeChild(mirror)
+  return result
+}
+
+// editableCaretCanMoveUp reports whether a focused <textarea>'s caret sits
+// below the very first VISUAL (wrapped) line, meaning a plain ArrowUp has a
+// line to move to *within* the field. Mirrors editableCaretCanMoveLeft's role
+// but for the vertical axis — used so ArrowUp moves the caret up one wrapped
+// line (leave it to the browser) instead of being hijacked by relatedActive's
+// ArrowUp shortcut below, only falling through to that nav shortcut once the
+// caret is already on the first line. Deliberately TEXTAREA-only: a plain
+// INPUT never wraps, so ArrowUp there keeps its existing nav meaning, same as
+// today. Collapses a selection to its start, matching how the browser itself
+// collapses an ArrowUp press on a selection.
+function editableCaretCanMoveUp() {
+  const el = document.activeElement
+  if (!el || el.tagName !== 'TEXTAREA') return false
+  try {
+    const marks = caretVisualLineMarks(el, el.selectionStart)
+    return marks.pos !== marks.start
+  } catch {
+    return false
+  }
+}
+
+// editableCaretCanMoveDown is the mirror image of editableCaretCanMoveUp: is
+// there a wrapped line *below* the caret's current one. Collapses a selection
+// to its end, matching how the browser collapses an ArrowDown press.
+function editableCaretCanMoveDown() {
+  const el = document.activeElement
+  if (!el || el.tagName !== 'TEXTAREA') return false
+  try {
+    const marks = caretVisualLineMarks(el, el.selectionEnd)
+    return marks.pos !== marks.end
+  } catch {
+    return false
+  }
+}
+
 // Persist the navigation position in the URL so a refresh (or a shared link)
 // reopens the same selected block, mode and change. The PR itself lives in the
 // path (/pr/<id>), not the query string. Bare params are the main navigation;
@@ -6940,7 +7036,14 @@ function onKeydown(e) {
       // at the end, e.g. a freshly opened composer — that keeps its
       // long-standing nav meaning).
       !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft()) &&
-      !(e.key === 'ArrowRight' && editableCaretCanMoveRight())
+      !(e.key === 'ArrowRight' && editableCaretCanMoveRight()) &&
+      // ArrowUp/ArrowDown get the exact same treatment on the vertical axis —
+      // a wrapped, multi-visual-line textarea must let the caret walk up/down
+      // its own rows first, only hijacking the key once the caret is already
+      // on the field's first/last VISUAL line (see editableCaretCanMoveUp/
+      // Down; a plain INPUT never wraps, so it keeps today's behavior there).
+      !(e.key === 'ArrowUp' && editableCaretCanMoveUp()) &&
+      !(e.key === 'ArrowDown' && editableCaretCanMoveDown())
     ) {
       e.preventDefault()
       const relatedResult = handleRelatedKey(e.key)

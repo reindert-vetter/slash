@@ -657,3 +657,30 @@ itself). Test: `tests/comment-arrowright-caret.spec.mjs`.
 The comment-index item's own reply field (`commentDetailCard`) needs no guard at
 all: it is not wired into any `cs.focus`-based branch, so `←`/`→` there fall
 through to the browser by construction.
+
+### Caret guards: `↑`/`↓` inside a focused, WRAPPED comment/Claude field
+
+**`↑`/`↓` get the same treatment, on the vertical axis, but need a genuinely
+different check.** `selectionStart`/`selectionEnd` alone is a linear character
+offset — it can't tell "first/last VISUAL (wrapped) line" from "first/last
+character", which only diverge once a multi-line composer (comment or the
+embedded Claude chat) actually wraps its text across more than one rendered
+row. Before this guard, the `relatedActive()` branch hijacked `ArrowUp`/
+`ArrowDown` unconditionally, so pressing `↑` mid-paragraph in a wrapped
+composer immediately exited the field instead of moving the caret up a row.
+
+`caretVisualLineMarks(el, pos)` (`home.mjs`) builds a hidden mirror `<div>`
+that reproduces every style influencing wrapping (font, content width via
+`el.clientWidth` — so an active vertical scrollbar narrows the mirror the same
+way it narrows the textarea's own content box — padding, `white-space:
+pre-wrap`/`overflow-wrap: break-word`), inserts zero-width marker `<span>`s at
+the very start, at `pos`, and at the very end of the field's `value`, and
+returns their `offsetTop`. `editableCaretCanMoveUp()`/`editableCaretCanMoveDown()`
+compare the caret's marker against the start/end marker (`selectionStart` for
+up, `selectionEnd` for down, mirroring how the browser itself collapses a
+selection on `↑`/`↓`) — TEXTAREA-only, since a plain INPUT never wraps and
+keeps its existing nav meaning there. Note the caret needn't land on character
+0/`value.length` exactly to count as "first"/"last line": the browser's own
+column-preserving vertical caret movement can stop anywhere within that row,
+so the guard compares *rows* (marker `offsetTop`), not exact offsets. Test:
+`tests/comment-arrowup-caret.spec.mjs`.
