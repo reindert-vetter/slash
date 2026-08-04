@@ -694,14 +694,17 @@ export default function Block(b, opts = {}) {
         // sole content of a keyed list item, so the "bare toggling
         // expression" pitfall doesn't apply here either (same reasoning as
         // the b.tests/b.author/checkbox toggles above).
-        collapsedFn()
+        //
+        // No description yet (still being generated, or never will be) also
+        // skips this whole strip — no placeholder text, the strip itself
+        // doesn't render, on explicit request. There is no separate loading
+        // flag for b.description, so this also hides the strip while an
+        // AI description is still in flight; it appears the moment
+        // b.description is populated, same as any other reactive field here.
+        collapsedFn() || !b.description
           ? ''
           : html`<p class="border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-sm leading-relaxed">
-              <span
-                class="${() =>
-                  b.description ? 'text-slate-600 dark:text-zinc-400' : 'italic text-slate-400 dark:text-zinc-500'}"
-                >${() => b.description || 'nog geen omschrijving'}</span
-              >
+              <span class="text-slate-600 dark:text-zinc-400">${() => b.description}</span>
             </p>`}
       ${() =>
         collapsedFn()
