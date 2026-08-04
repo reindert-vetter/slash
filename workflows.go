@@ -2087,7 +2087,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.chat == nil {
 			return json.Marshal(chat.Message{})
 		}
-		msg := processChatMerge(ctx, m.chat, m.claude, m.dataDir, arg)
+		msg := processChatMerge(ctx, m, m.chat, m.claude, m.dataDir, arg)
 		publishChatChanged(arg.PR, arg.ConversationID)
 		return json.Marshal(msg)
 	})
@@ -4272,6 +4272,32 @@ func (m *TaskManager) pollTaskInbox(ctx context.Context, runID string) {
 	}
 }
 
+// ingestRefreshNeeded reports whether an observed remote head SHA warrants an
+// ingest-refresh Signal, given the head SHA the blocks were last ingested from.
+//
+// "They differ" is deliberately not enough. A chat edit that landed on the PR's
+// local pending ref (chat_shadow.go) is ingested at that LOCAL commit, which
+// GitHub hasn't seen yet — so remote and stored differ on every single tick, and
+// a bare inequality check would rewind the review tree to the older remote tip
+// over and over, undoing exactly the "meteen zichtbaar" this feature exists
+// for. So a refresh is only needed when the stored head does NOT already
+// contain the remote tip.
+//
+// Once the reviewer pushes, the remote tip IS the stored head again and this
+// falls back to the plain equality case. If someone else pushes on top of an
+// unpushed local commit, the remote tip is no longer contained, the refresh
+// fires, and the tree follows GitHub again until the pending commit is pushed —
+// a deliberate degrade (GitHub is the shared truth), not a silent conflict.
+func ingestRefreshNeeded(ctx context.Context, remoteHead, storedHead string) bool {
+	if remoteHead == "" || remoteHead == storedHead {
+		return false
+	}
+	if _, err := runGit(ctx, "merge-base", "--is-ancestor", remoteHead, storedHead); err == nil {
+		return false
+	}
+	return true
+}
+
 // pollIngestRefresh checks, on the heartbeat-driven cadence (fast while a
 // heartbeat for prRunID arrived within heartbeatWindow, else slow — same gate
 // as poll/pollInbox), whether the PR's live head SHA has moved past what was
@@ -4279,6 +4305,8 @@ func (m *TaskManager) pollTaskInbox(ctx context.Context, runID string) {
 // "" so it's read as an ingest-refresh request rather than a lifecycle
 // transition) to run refreshIngestDelta. It stops once the tracker itself is
 // done (merged/closed) — mirrors poll's shutdown check.
+//
+// See ingestRefreshNeeded for why "the SHAs differ" is not enough on its own.
 func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, pr int) {
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
@@ -4318,8 +4346,8 @@ func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, pr 
 			m.logf("pr_status: load ingest state pr=%d: %v", pr, err)
 			continue
 		}
-		if !ok || meta.HeadRefOid == head {
-			continue // no prior ingest yet, or nothing new since
+		if !ok || !ingestRefreshNeeded(ctx, meta.HeadRefOid, head) {
+			continue // no prior ingest yet, nothing new since, or already ahead
 		}
 		sig := PRStateSignal{BaseSHA: meta.BaseRefOid, HeadSHA: meta.HeadRefOid}
 		if err := m.engine.SignalWorkflow(prRunID, SignalPRState, sig); err != nil {

@@ -130,7 +130,7 @@ func enqueueChatMerge(tm *TaskManager, arg chatCommitInput) {
 // processChatMerge is the processChatMerge Activity's body: resolve the PR's
 // real head branch name (the one gh/network call in this whole path) and
 // delegate to processChatMergeAt.
-func processChatMerge(ctx context.Context, cm *chat.Module, cl claude.Client, dataDir string, arg chatMergeInput) chat.Message {
+func processChatMerge(ctx context.Context, tm *TaskManager, cm *chat.Module, cl claude.Client, dataDir string, arg chatMergeInput) chat.Message {
 	meta, err := fetchPRMeta(ctx, arg.PR)
 	if err != nil || meta.HeadRefName == "" {
 		msg := chat.Message{
@@ -141,7 +141,7 @@ func processChatMerge(ctx context.Context, cm *chat.Module, cl claude.Client, da
 		_ = cm.SaveMessage(ctx, msg)
 		return msg
 	}
-	return processChatMergeAt(ctx, cm, cl, dataDir, arg, meta.HeadRefName)
+	return processChatMergeAt(ctx, tm, cm, cl, dataDir, arg, meta.HeadRefName)
 }
 
 // processChatMergeAt is processChatMerge's body once the PR's head branch
@@ -150,13 +150,17 @@ func processChatMerge(ctx context.Context, cm *chat.Module, cl claude.Client, da
 // test can exercise the real fast-forward/merge/conflict mechanics against a
 // throwaway local repo.
 //
-// Attempts the conversation's shadow-worktree push via the EXISTING
-// commitChatShadowEditsAt (unchanged — still the sole fast-forward-only
-// path), and only escalates to an automatic merge when that reports the one
-// specific, named outcome "the real branch moved on"
-// (chatShadowBranchMovedOnMsg) — never for any other failure (no shadow, the
-// push itself failed for an unrelated reason), which are returned to the
-// reviewer as-is.
+// Attempts the conversation's landing via the EXISTING commitChatShadowEditsAt
+// (unchanged — still the sole fast-forward-only path), and only escalates to an
+// automatic merge when that reports the one specific, named outcome "the branch
+// moved on" (chatShadowBranchMovedOnMsg) — never for any other failure (no
+// shadow, the landing failed for an unrelated reason), which are returned to
+// the reviewer as-is.
+//
+// A successful landing additionally asks the PR's own tracker to refresh the
+// review tree (refreshTreeAfterLanding), so the code the reviewer just had
+// changed is visible in the blocks/diff right away instead of only after the
+// eventual push.
 //
 // Bounded to exactly one merge/resolve attempt: if the branch moves on AGAIN
 // while resolving, this degrades to the ordinary "ververs en probeer opnieuw"
@@ -170,12 +174,54 @@ func processChatMerge(ctx context.Context, cm *chat.Module, cl claude.Client, da
 // rather than adding a second one — the reviewer only ever sees the final
 // outcome, never the transient "moved on" text this uses internally as a
 // detection signal.
-func processChatMergeAt(ctx context.Context, cm *chat.Module, cl claude.Client, dataDir string, arg chatMergeInput, headRefName string) chat.Message {
+func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, cl claude.Client, dataDir string, arg chatMergeInput, headRefName string) chat.Message {
 	msg := commitChatShadowEditsAt(ctx, cm, dataDir, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
-	if msg.Kind != chat.KindError || msg.Body != chatShadowBranchMovedOnMsg {
-		return msg
+	if msg.Kind == chat.KindError && msg.Body == chatShadowBranchMovedOnMsg {
+		msg = resolveChatShadowMerge(ctx, cm, cl, dataDir, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
 	}
-	return resolveChatShadowMerge(ctx, cm, cl, dataDir, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
+	if msg.Kind != chat.KindError {
+		refreshTreeAfterLanding(ctx, tm, arg.PR, headRefName)
+	}
+	return msg
+}
+
+// refreshTreeAfterLanding makes a just-landed chat edit visible in the review
+// tree immediately: it signals the PR's own pr_status tracker with the pending
+// ref's new commit as the head SHA, which runs the ordinary ingest-refresh
+// branch (refreshIngestDelta + the re-anchor pass + the relations/code_warning
+// rebuild — see prStatusWorkflow). Nothing about that branch cares whether the
+// head SHA is on GitHub yet; it only needs a locally reachable commit, which a
+// landed commit is by definition.
+//
+// Cross-workflow Ensure+Signal from inside an Activity, best-effort/log-only on
+// failure — the same shape enqueueChatMerge and reanchorAfterRefresh already
+// use. A missed refresh costs nothing durable: pollIngestRefresh re-observes
+// the same state on its next tick.
+//
+// The BASE SHA is deliberately the one already recorded for this PR, so the
+// refresh stays an incremental delta instead of falling back to a full ingest
+// (refreshIngestDelta compares the two). No prior ingest at all → nothing to
+// refresh yet, so this is a no-op.
+func refreshTreeAfterLanding(ctx context.Context, tm *TaskManager, pr int, headRefName string) {
+	if tm == nil || tm.engine == nil || tm.db == nil {
+		return // tests / a manager without an engine or graph DB
+	}
+	sha := pendingRefSHA(ctx, prPendingRef(pr, headRefName))
+	if sha == "" {
+		return
+	}
+	base, _, ok, err := loadIngestSHAs(tm.db, pr)
+	if err != nil || !ok {
+		return
+	}
+	runID, err := tm.EnsurePRStatus(pr)
+	if err != nil {
+		tm.logf("chat_merge: no pr_status tracker for pr %d: %v", pr, err)
+		return
+	}
+	if err := tm.engine.SignalWorkflow(runID, SignalPRState, PRStateSignal{BaseSHA: base, HeadSHA: sha}); err != nil {
+		tm.logf("chat_merge: signal ingest refresh after landing pr %d: %v", pr, err)
+	}
 }
 
 // chatMergeConflictConsultMsg is what a conflict the one begrensde Claude

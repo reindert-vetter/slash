@@ -344,3 +344,47 @@ func bytesTrim(b []byte) []byte {
 	}
 	return b[:n]
 }
+
+// ingestRefreshNeeded is what keeps a landed-but-unpushed chat edit visible: the
+// stored head SHA is then a LOCAL commit GitHub hasn't seen, so remote and
+// stored differ on every poll tick and a bare inequality check would rewind the
+// review tree to the older remote tip over and over.
+func TestIngestRefreshNeededIgnoresALandedLocalCommit(t *testing.T) {
+	_, cloneDir := setupChatShadowRepo(t, "feature/x", "v1\n")
+	ctx := context.Background()
+
+	remoteOut, err := runGit(ctx, "rev-parse", "origin/feature/x")
+	if err != nil {
+		t.Fatalf("rev-parse origin: %v", err)
+	}
+	remote := string(bytesTrim(remoteOut))
+
+	if ingestRefreshNeeded(ctx, remote, remote) {
+		t.Fatal("identical SHAs should never need a refresh")
+	}
+
+	// A landed chat edit: one commit on top of the remote tip, present only
+	// locally (commit-tree needs no checkout — the clone has none, exactly like
+	// the real clone whose worktrees are all detached/on their own branches).
+	localOut, err := exec.Command("git", "-C", cloneDir, "commit-tree", remote+"^{tree}", "-p", remote, "-m", "landed chat edit").Output()
+	if err != nil {
+		t.Fatalf("commit-tree: %v", err)
+	}
+	local := string(bytesTrim(localOut))
+
+	if ingestRefreshNeeded(ctx, remote, local) {
+		t.Fatal("a stored head that already contains the remote tip must not trigger a refresh")
+	}
+	// The reverse — the remote genuinely moved past what was ingested — still must.
+	if !ingestRefreshNeeded(ctx, local, remote) {
+		t.Fatal("a remote tip the stored head does not contain must trigger a refresh")
+	}
+}
+
+// refreshTreeAfterLanding is best-effort glue called from an Activity: without a
+// manager (tests), without a graph DB, or without any prior ingest to build a
+// delta on, it must quietly do nothing rather than panic or signal nonsense.
+func TestRefreshTreeAfterLandingNoOpsWithoutPriorIngest(t *testing.T) {
+	setupChatShadowRepo(t, "feature/x", "v1\n")
+	refreshTreeAfterLanding(context.Background(), nil, 4242, "feature/x")
+}

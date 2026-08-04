@@ -86,7 +86,7 @@ func TestProcessChatMergeCleanlyAutoMergesNonOverlappingEdit(t *testing.T) {
 	// a DIFFERENT file — git can merge this on its own, no AI needed.
 	pushFileToBare(t, bareDir, "feature/x", "bar.txt", "bar edited elsewhere\n")
 
-	msg := processChatMergeAt(ctx, cm, &claude.Fake{}, dataDir, chatMergeInput{
+	msg := processChatMergeAt(ctx, nil, cm, &claude.Fake{}, dataDir, chatMergeInput{
 		PR: 2001, ConversationID: "conv-x", TurnID: "turn-x",
 	}, "feature/x")
 	if msg.Kind == chat.KindError {
@@ -139,7 +139,7 @@ func TestProcessChatMergeSerializesTwoConversationsInArrivalOrder(t *testing.T) 
 	}
 
 	// Request A processed first: plain fast-forward push.
-	msgA := processChatMergeAt(ctx, cm, &claude.Fake{}, dataDir, chatMergeInput{
+	msgA := processChatMergeAt(ctx, nil, cm, &claude.Fake{}, dataDir, chatMergeInput{
 		PR: 2002, ConversationID: "conv-a", TurnID: "turn-a",
 	}, "feature/x")
 	if msgA.Kind == chat.KindError {
@@ -152,7 +152,7 @@ func TestProcessChatMergeSerializesTwoConversationsInArrivalOrder(t *testing.T) 
 	// Request B processed second, AFTER a's commit already landed — this is the
 	// exact race the merge queue exists to serialize instead of both pushes
 	// failing/racing each other.
-	msgB := processChatMergeAt(ctx, cm, &claude.Fake{}, dataDir, chatMergeInput{
+	msgB := processChatMergeAt(ctx, nil, cm, &claude.Fake{}, dataDir, chatMergeInput{
 		PR: 2002, ConversationID: "conv-b", TurnID: "turn-b",
 	}, "feature/x")
 	if msgB.Kind == chat.KindError {
@@ -217,7 +217,7 @@ func TestProcessChatMergeAbortsAndDegradesOnUnresolvedConflict(t *testing.T) {
 	pushToBare(t, bareDir, "feature/x", "foo edited by someone else\n")
 
 	fake := &claude.Fake{}
-	msg := processChatMergeAt(ctx, cm, fake, dataDir, chatMergeInput{
+	msg := processChatMergeAt(ctx, nil, cm, fake, dataDir, chatMergeInput{
 		PR: 2003, ConversationID: "conv-c", TurnID: "turn-c",
 	}, "feature/x")
 
