@@ -519,6 +519,14 @@ func chatProgressSink(pr int, conversationID string) func(claude.ChatEvent) {
 // (the raw text verbatim — including when it happens to start with "{" but
 // doesn't parse as a recognized directive, so a stray/malformed directive
 // degrades to plain text rather than vanishing).
+// stripEmDash replaces every em dash ("—") with a plain hyphen. Used only on a
+// comment_action "reply" body (see parseAssistantTurn) — the reviewer never
+// wants that character in a Claude-drafted comment reply, and a system-prompt
+// instruction alone isn't a guarantee.
+func stripEmDash(s string) string {
+	return strings.ReplaceAll(s, "—", "-")
+}
+
 func parseAssistantTurn(pr int, conversationID, turnID, text string) (chat.Message, *commentActionDirective) {
 	msg := chat.Message{
 		ID: chatMessageID(turnID, ""), ConversationID: conversationID, PR: pr,
@@ -555,7 +563,16 @@ func parseAssistantTurn(pr int, conversationID, turnID, text string) (chat.Messa
 		if strings.TrimSpace(d.CommentID) == "" {
 			return msg, nil
 		}
-		return chat.Message{}, &commentActionDirective{CommentID: d.CommentID, Action: d.Action, Body: d.Body}
+		body := d.Body
+		if d.Action == "reply" {
+			// The reviewer never wants an em dash in a Claude-drafted reply — this
+			// body lands verbatim in the comment composer via saveChatDraftReply, so
+			// sanitize it once here rather than trust the system prompt's wording
+			// alone. "resolve" carries no reviewable body (always "/resolve", set by
+			// applyChatCommentAction), so it needs no sanitizing.
+			body = stripEmDash(body)
+		}
+		return chat.Message{}, &commentActionDirective{CommentID: d.CommentID, Action: d.Action, Body: body}
 	default:
 		return msg, nil
 	}

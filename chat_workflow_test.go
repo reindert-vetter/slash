@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -457,6 +458,22 @@ func TestParseAssistantTurnIgnoresMalformedCommentAction(t *testing.T) {
 	}
 	if msg.Body != raw || msg.Kind != "" {
 		t.Fatalf("expected the raw text as a plain turn, got %+v", msg)
+	}
+}
+
+// A comment_action "reply" body carrying an em dash is sanitized before it
+// ever reaches the drafted comment reply (Reindert's explicit preference).
+func TestParseAssistantTurnStripsEmDashFromReplyBody(t *testing.T) {
+	raw := `{"type":"comment_action","action":"reply","commentId":"c1","body":"Klopt — dit moet anders."}`
+	_, action := parseAssistantTurn(1, "c1", "turn-1", raw)
+	if action == nil {
+		t.Fatal("expected a comment_action directive")
+	}
+	if strings.Contains(action.Body, "—") {
+		t.Fatalf("expected the em dash to be stripped, got %q", action.Body)
+	}
+	if action.Body != "Klopt - dit moet anders." {
+		t.Fatalf("body = %q, want the em dash replaced with a hyphen", action.Body)
 	}
 }
 
