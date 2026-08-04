@@ -170,7 +170,17 @@ in the frontend (`firstNameOf`/`displayNameOf`, `src/avatar.mjs`), so a later
 caller can show the full name with no backend change. Casing is whatever
 GitHub/`names.json` gives.
 
-**A second local override file follows this same pattern:**
+**Two more local override files follow this same pattern.**
+`<dataDir>/settings.json` (`settings.go`, read-once-per-data-dir,
+missing/unparsable → empty settings, served by read-only `GET /api/settings`)
+holds the per-reviewer settings — today only "who am I" for `@mention` detection
+(`{"me": {"login": …, "aliases": […]}}`), which **wins over `GET /api/me`**; see
+"Who am I" in `.claude/rules/conventions.md` and the "Mentioned" section in
+`.claude/docs/comments-panel.md`. It is **gitignored** (it names one person) with
+a committed `data/settings.example.json` as the template. New **per-user**
+settings belong in this file rather than in a fourth one.
+
+The other:
 `<dataDir>/praise-words.json` (read-once-per-data-dir, missing/unparsable →
 built-in defaults, served by read-only `GET /api/praisewords`) holds the
 "meaningless praise" words that the review clipboard summary does not count as

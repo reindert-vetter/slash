@@ -608,6 +608,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GitHub login, so the UI can show "Dennis" instead of "dennissloove". See
 	// handleNames / usernames.go.
 	mux.HandleFunc("/api/names", s.handleNames)
+	// GET /api/settings → read-only: the local, per-reviewer settings file
+	// (<dataDir>/settings.json, gitignored). Today only "who am I" for @mention
+	// detection, which OVERRIDES the login /api/me reports. See settings.go.
+	mux.HandleFunc("/api/settings", s.handleSettings)
 	// POST /api/workflows/code_warning {pr} → start an agentic Opus review of
 	// the whole PR for risks (the "/" menu's "Diepgravend onderzoek"). One
 	// Execution per manual run.

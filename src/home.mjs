@@ -60,7 +60,7 @@ import RelatedPanel, {
   focusedRelatedChild,
   focusedChipChain,
   selectComment,
-  prWideComments,
+  indexComments,
   isOrphanComment,
   commentDetailCard,
   startPrCommentReply,
@@ -93,6 +93,7 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
+import { commentMentionsMe } from './mentions.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 import { meLogin } from './avatar.mjs'
@@ -898,7 +899,7 @@ function applyTestClassRefRestore() {
 // poll (syncComments) has landed, which runs independently of loadBlocks and
 // may well not have completed yet the first time this runs (from
 // applyBlockRefRestore). So this is called again — safely, it's a no-op once
-// resolved — from the watch on prWideComments() below, every time the
+// resolved — from the watch on indexComments() below, every time the
 // comment list changes, until the target is actually found or blockRefPending
 // gets cleared some other way. Not found (yet, or ever — a deleted/expired
 // link) simply leaves blockRefPending pending, mirroring
@@ -1414,7 +1415,7 @@ async function loadBlocks() {
   // interaction — unlike revealSelectedIfHidden, which is self-correcting (a
   // no-op unless the CURRENT selection is hidden), applyDefaultUnapprovedSelection
   // always picks a target, so it needs this explicit check instead.
-  // Deliberately an ID snapshot, not the raw index: the prWideComments()
+  // Deliberately an ID snapshot, not the raw index: the indexComments()
   // watch (recomputeLeftList, see below) can insert new rank -1 comment
   // items and reindex the SAME still-selected block to a different index in
   // the meantime — that's not the reviewer moving the selection, just
@@ -1683,9 +1684,10 @@ function categoryRank(cat) {
   return 2
 }
 
-// commentBlockItem turns a PR-wide comment (kind !== '', see
-// RelatedPanel.mjs's prWideComments — issue/review/review_summary comments
-// plus code_warning's ai_warning findings) into a synthetic, navigable
+// commentBlockItem turns a comment that belongs in the index (see
+// RelatedPanel.mjs's indexComments — the PR-wide ones: issue/review/
+// review_summary comments plus code_warning's ai_warning findings and orphans,
+// PLUS a block-anchored comment that @-mentions me) into a synthetic, navigable
 // state.blocks item: kind:'comment' marks it (guarded everywhere something
 // assumes a real PR block — see enterDiff/ensureCode/sameFileNeighbour/
 // blockApproveCount/the DetailPanel pair.forEach branch), a stable id
@@ -1703,7 +1705,7 @@ function categoryRank(cat) {
 // applyDefaultUnapprovedSelection's fresh-open pick once the PR-wide comment
 // list arrives (see that function's own doc comment, and
 // retryDefaultSelectionForComments below) — declared here, ahead of the
-// prWideComments() watch a little further down, which calls
+// indexComments() watch a little further down, which calls
 // retryDefaultSelectionForComments() from its own callback the moment it's
 // registered (arrow.js runs a fresh watch's callback once, synchronously):
 // a `let` declared after that point would still be in its temporal dead
@@ -1721,13 +1723,22 @@ function commentBlockItem(c) {
     ? c.label || 'Verdwenen code'
     : c.kind === 'ai_warning'
       ? 'AI-risico'
-      : 'PR-comment'
+      : // A block-anchored (kind === '') comment only gets an index item when it
+        // mentions me (see indexComments); with an empty body, naming the block
+        // it hangs on says far more than the generic "PR-comment" would.
+        (!c.kind && c.label) || 'PR-comment'
   return {
     id: 'comment:' + c.id,
     kind: 'comment',
     label: snippet || fallback,
     category: 'COMMENT',
     status: '',
+    // mentioned — this comment (or one of its replies) @-mentions the local
+    // reviewer, which sorts it above every other comment item (rank -2 in
+    // recomputeLeftList) under its own "Mentioned" heading (BlockList.mjs).
+    // Computed here, once per recompute, so neither the sort nor the heading
+    // has to re-scan bodies.
+    mentioned: commentMentionsMe(c),
     comment: c,
   }
 }
@@ -1811,8 +1822,13 @@ function recomputeLeftList() {
   // "Toon N goedgekeurde blocks" section as a fully-approved block (see
   // isFullyApproved/blockApproveCount's comment-item branch below), exactly
   // like any other row.
-  const rank = (b) => (b.kind === 'comment' ? -1 : childIds.has(b.id) ? 3 : categoryRank(b.category))
-  const commentItems = prWideComments().map(commentBlockItem)
+  // A comment that @-mentions the local reviewer ranks above the other comment
+  // items (-2 vs -1) under its own "Mentioned" heading — someone is waiting on
+  // an answer, so it must not sit below unrelated feedback. It is otherwise an
+  // ordinary comment item: resolving it still folds it into the same
+  // "Toon N goedgekeurde blokken" section, mentioned or not.
+  const rank = (b) => (b.kind === 'comment' ? (b.mentioned ? -2 : -1) : childIds.has(b.id) ? 3 : categoryRank(b.category))
+  const commentItems = indexComments().map(commentBlockItem)
   const visibleBlocks = state.allBlocks.filter((b) => !hidden.has(b.id))
   state.blocks = [...groupTestClasses(visibleBlocks), ...commentItems]
     .filter(
@@ -1829,10 +1845,14 @@ function recomputeLeftList() {
   state.selected = at >= 0 ? at : Math.min(state.selected, Math.max(0, state.blocks.length - 1))
 }
 
-// Re-derive state.blocks whenever the PR-wide comment list changes (initial
-// load, a poll picking up a new/imported comment, a resolve) — mirrors
-// loadCallResolve's own recomputeLeftList() call after its async load.
-// prWideComments() only reads RelatedPanel.mjs's cs.list (a plain filter, no
+// Re-derive state.blocks whenever the index-comment list changes (initial
+// load, a poll picking up a new/imported comment or a reply that mentions me,
+// a resolve) — mirrors loadCallResolve's own recomputeLeftList() call after its
+// async load. Deliberately the same indexComments() recomputeLeftList itself
+// uses (not the narrower prWideComments): a newly arrived block-anchored
+// comment that mentions me must trigger a recompute too, or its "Mentioned"
+// row would only appear on the next unrelated recompute.
+// indexComments() only reads RelatedPanel.mjs's cs.list (a plain filter, no
 // b.code involved), so this never risks the "stuck on loading" co-subscriber
 // pitfall (see conventions.md) the way reading a block's own code would.
 // Also retries a pending `?sel=comment:<id>` restore (applyCommentRefRestore)
@@ -1842,7 +1862,7 @@ function recomputeLeftList() {
 // with actual data, which may well be later than loadBlocks' own one-shot
 // applyBlockRefRestore/applyDefaultUnapprovedSelection calls.
 watch(
-  () => prWideComments(),
+  () => indexComments(),
   () => {
     recomputeLeftList()
     applyCommentRefRestore()
@@ -2140,7 +2160,7 @@ function applyDefaultUnapprovedSelection() {
 }
 
 // retryDefaultSelectionForComments re-applies applyDefaultUnapprovedSelection
-// once the PR-wide comment list changes (see the watch on prWideComments()
+// once the PR-wide comment list changes (see the watch on indexComments()
 // below) — but only as long as the selection is still exactly where the last
 // automatic pick left it (see freshDefaultSelectionAt's own comment above);
 // any other outcome means the reviewer (or some other restore path) has

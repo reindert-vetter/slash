@@ -188,6 +188,7 @@ function renderList(state) {
   let commentHeadingDone = false
   let underlyingHeadingDone = false
   let hiddenCommentHeadingDone = false
+  let mentionHeadingDone = false
   state.blocks.forEach((b, i) => {
     // An ignored comment (see isIgnoredComment) is its own, SEPARATE hidden
     // section from the approved-blocks one below — checked first: an ignored
@@ -199,7 +200,18 @@ function renderList(state) {
     // sort to the very top of state.blocks (recomputeLeftList's rank -1) —
     // the first VISIBLE one gets its own "PR-comments" heading, mirroring
     // underlyingHeading below.
-    if (!commentHeadingDone && b.kind === 'comment' && !isIgnoredComment(state, b)) {
+    // A comment that @-mentions the local reviewer (b.mentioned, see
+    // commentBlockItem/mentions.mjs) sorts above every other comment item
+    // (rank -2) and gets its OWN heading — checked before the "PR-comments" one
+    // below, which is why that one excludes b.mentioned. Gated on
+    // !isIgnoredComment for the same reason the PR-comments heading is: a
+    // revealed ignored comment belongs under "Verborgen comments" above, even
+    // when it mentions me.
+    if (!mentionHeadingDone && b.kind === 'comment' && b.mentioned && !isIgnoredComment(state, b)) {
+      items.push(mentionHeading().key('mention-heading'))
+      mentionHeadingDone = true
+    }
+    if (!commentHeadingDone && b.kind === 'comment' && !b.mentioned && !isIgnoredComment(state, b)) {
       items.push(commentHeading().key('comment-heading'))
       commentHeadingDone = true
     }
@@ -236,6 +248,23 @@ function commentHeading() {
       class="border-b border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
     >
       PR-comments
+    </div>
+  `
+}
+
+// mentionHeading titles the very first section of the index: comments that
+// @-mention the local reviewer (see mentions.mjs / settings.json for who that
+// is). Includes block-anchored comments, which have no index row otherwise —
+// so a mention buried in a thread on a block you haven't opened yet still
+// surfaces. Same styling as the other section headings; the WORD carries the
+// meaning, not a colour (see the colorblind rule in conventions.md).
+function mentionHeading() {
+  return html`
+    <div
+      data-testid="mention-heading"
+      class="border-b border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
+    >
+      Mentioned
     </div>
   `
 }

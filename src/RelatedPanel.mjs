@@ -17,6 +17,7 @@ import { statusInfo, categoryClass } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown, countCodeFences, annotateFenceNumbers } from './markdown.mjs'
 import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin } from './avatar.mjs'
+import { commentMentionsMe, ensureSettings } from './mentions.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
@@ -2306,6 +2307,11 @@ async function loadComments(pr) {
     // already-keyed comment node (see avatar.mjs/ensureMe). Cached after the
     // first call, so this is a no-op on every subsequent poll.
     await ensureMe()
+    // Same rule, same reason, for WHICH @mentions mean me: the settings.json
+    // aliases decide whether a comment lands in the "Mentioned" index section
+    // and whether its body highlights, and `cfg` in mentions.mjs is plain
+    // non-reactive state too. Cached after the first call.
+    await ensureSettings()
     const res = await fetch('/api/comments?pr=' + encodeURIComponent(pr))
     if (res.ok) {
       const list = await res.json()
@@ -4676,6 +4682,32 @@ function isKiloReview(body) {
 // and start mirroring its replies to GitHub as issue comments.
 export function prWideComments() {
   return cs.list.filter((c) => (c.kind || c.anchorState === 'orphan') && !isKiloReview(c.body))
+}
+
+// indexComments is the FULL set of comments that get a row in the block index —
+// the PR-wide/orphan ones above, PLUS every block-anchored (kind === '') comment
+// that mentions the local reviewer (see mentions.mjs). Such a comment already
+// lives in its block's own inline thread; the extra row is deliberate, so a
+// mention can't hide inside a block you haven't opened yet. It is one row, not
+// two: the inline thread is a different panel, not a second index item.
+//
+// DEDUP ON c.id IS LOAD-BEARING, not cosmetic. A PR-wide comment that also
+// mentions me matches both halves, and two items would carry the SAME
+// state.blocks id ('comment:' + c.id) — exactly the id that
+// recomputeLeftList's selection-preserving findIndex and the
+// ?sel=comment:<id> restore (applyCommentRefRestore) resolve through. One
+// comment = exactly one index row, always.
+export function indexComments() {
+  const out = []
+  const seen = new Set()
+  for (const c of cs.list) {
+    const prWide = (c.kind || c.anchorState === 'orphan') && !isKiloReview(c.body)
+    if (!prWide && !(!c.kind && !isOrphanComment(c) && commentMentionsMe(c))) continue
+    if (seen.has(c.id)) continue
+    seen.add(c.id)
+    out.push(c)
+  }
+  return out
 }
 
 // isOrphanComment reports whether a comment lost the code it was anchored to. Used

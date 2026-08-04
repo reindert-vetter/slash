@@ -74,7 +74,8 @@ Same reasoning for `approvedRowSet`.
 
 `commentBlockItem` (`recomputeLeftList`, `home.mjs`):
 `{ id: 'comment:'+c.id, kind: 'comment', label: <short body snippet>,
-category: 'COMMENT', status: '', comment: c }`. `kind` is the marker every
+category: 'COMMENT', status: '', mentioned: <@mentions me>, comment: c }`
+(`mentioned`: see "Mentioned" below). `kind` is the marker every
 block-assuming code path guards on; `id` is stable across a recompute so
 selection survives a comment-list reload; `comment` carries the raw row back for
 the detail card/action menu.
@@ -88,14 +89,56 @@ ahead of `ROUTE`): PR-wide feedback usually wants attention before diving into
 the tree.
 
 Items are synthesized fresh from `RelatedPanel.mjs`'s exported
-`prWideComments()` (the `kind !== ''`-filtered, kilo-review-bot-excluded subset
-of `cs.list`) on every `recomputeLeftList()` call; a dedicated
-`watch(() => prWideComments(), () => recomputeLeftList())` re-derives
-`state.blocks` whenever that list changes — safe because `prWideComments()` only
+**`indexComments()`** — `prWideComments()` (the `kind !== ''`-filtered,
+kilo-review-bot-excluded subset of `cs.list`) **plus** every block-anchored
+comment that mentions the local reviewer (see "Mentioned" below) — on every
+`recomputeLeftList()` call; a dedicated
+`watch(() => indexComments(), () => recomputeLeftList())` re-derives
+`state.blocks` whenever that list changes — safe because `indexComments()` only
 reads `cs.list`, never a block's `.code`, so it can't trigger the "stuck on
-loading" co-subscriber race (`.claude/rules/arrowjs-pitfalls.md`). `cs.list`
-itself is loaded/polled by `syncComments`, called unconditionally by
-`InlineComments` — no separate fetch.
+loading" co-subscriber race (`.claude/rules/arrowjs-pitfalls.md`). The watch
+deliberately uses the **same** function `recomputeLeftList` does, not the
+narrower `prWideComments()`: a newly polled block-anchored comment (or reply)
+that mentions me must trigger a recompute too, or its row would only appear on
+the next unrelated one. `cs.list` itself is loaded/polled by `syncComments`,
+called unconditionally by `InlineComments` — no separate fetch.
+
+### "Mentioned": an `@`-mention of the local reviewer ranks above everything
+
+A comment whose body — **or any of its replies** (`c.reactions`, where a mention
+very often lands) — `@`-mentions the local reviewer gets `mentioned: true` on its
+index item (`commentMentionsMe`, `src/mentions.mjs`) and ranks **`-2`**, above
+the other comment items (`-1`), under its own **"Mentioned" heading**
+(`mentionHeading`, `data-testid=mention-heading`, `BlockList.mjs`) — someone is
+waiting on an answer, so it must not sit below unrelated feedback. Otherwise it
+is an ordinary comment item: resolving it still folds it into the same
+"Toon N goedgekeurde blokken" section, and the heading is gated on
+`!isIgnoredComment` for the same reason `commentHeading` is (a revealed ignored
+comment belongs under "Verborgen comments"). `commentHeading`'s own condition
+gained `&& !b.mentioned`, so "PR-comments" starts at the first non-mentioned
+item.
+
+**This is the one case where a block-anchored (`kind === ''`) comment gets an
+index row.** Deliberate (explicitly decided): a mention must not be able to hide
+in a thread on a block you haven't opened yet. Such a comment therefore shows in
+**two** places — its block's inline thread *and* the "Mentioned" row. That is two
+renderings of one row, not two items: **`indexComments()` dedups on `c.id`**,
+which is load-bearing rather than cosmetic — a PR-wide comment that also mentions
+me matches both halves of the union, and two items would carry the **same**
+`state.blocks` id (`'comment:' + c.id`), exactly the id that
+`recomputeLeftList`'s selection-preserving `findIndex` and the
+`?sel=comment:<id>` restore (`applyCommentRefRestore`) resolve through. One
+comment = exactly one index row, always. Its `blockApproveCount`/kind-badge
+paths needed nothing: the former reads `comment.status` (kind-agnostic) and
+`COMMENT_KIND_LABEL[c.kind] || … || 'Regelcomment'` already had a fallback for
+`kind === ''`. Its fallback label (empty body) names the block it hangs on.
+
+**Who "I" am** is `<dataDir>/settings.json` (`GET /api/settings`, `settings.go`)
+first, then the `GET /api/me` login — see "Who am I" in
+`.claude/rules/conventions.md` for the precedence and the matched spellings. The
+same module also highlights the mention **inside** the body, as the last step of
+`renderMarkdown`. Tests: `tests/mention-highlight.spec.mjs` (both surfaces, the
+dedup, the `?sel=` restore, and the no-settings no-op) plus `settings_test.go`.
 
 ### "Resolved == approved" (0/1 → 1/1)
 

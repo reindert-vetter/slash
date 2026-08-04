@@ -212,6 +212,43 @@ author/avatar column: it also fixes every own message **already** stored with
 `'reviewer'`, which a write-time fix could only repair through a per-thread
 backfill Signal.
 
+### Who am I: `data/settings.json` wins over `/api/me`
+
+`src/mentions.mjs` answers "does this comment `@`-mention **me**?". The spellings
+that count come from `<dataDir>/settings.json` (`GET /api/settings`,
+`settings.go`) — `{"me": {"login": "reindert-vetter", "aliases": ["reindert"]}}`
+— and that file **wins** over the authenticated login from `GET /api/me`, which
+stays the fallback: with no file at all, `@<your-login>` is matched and the
+feature works out of the box. The file exists for the two things `/api/me`
+cannot give: overriding that login, and adding the **shorter forms people
+actually type**. Those aliases are deliberately **explicit**, never derived from
+the login — a "first segment before the dash" heuristic would turn the login
+`dev-tools` into a stray `@dev` match. Matching is case-insensitive with a
+`(?![\w-])` tail guard (so `@reindert` does not match inside `@reindert-vetter`,
+which the login itself covers) and longest-alias-first.
+
+`settings.json` is **gitignored** — it names one person, unlike the team-wide,
+committed `data/names.json` — with a committed `data/settings.example.json` as
+the template. It sits **next to** `names.json`/`praise-words.json` rather than
+swallowing them (one is committed team data, the other pre-existing with its own
+endpoint/tests; merging would be a migration for no functional gain), but any new
+**per-user** setting belongs in it. Same read-once-per-data-dir + in-memory-cache
+shape and the same read-only write-boundary carve-out as those two.
+
+**The highlight is the LAST step of `renderMarkdown`** (`markdown.mjs` →
+`highlightMentions`), so it runs on the finished, already-escaped HTML and only
+*adds* a `<mark>` around inert text — the XSS layer is untouched, and every
+render point (comment bodies via the single `commentBody`, the PR description,
+the chat bubbles) gets it without a signature change. Only the **non-tag**
+segments are transformed (split on `(<[^>]*>)`), so an `@name` inside an
+`href`/class value is out of reach; Prism code fences are still opaque
+placeholders at that point and stay untouched on purpose. Styling is background
+**plus bold plus a ring** (`data-testid=mention`) — never colour alone, per the
+colorblind rule. Timing rule as always: `ensureSettings()` is **awaited** next to
+`ensureMe()` in `loadComments` before the rows are pushed, because `cfg` is plain
+non-reactive state. Where the mention *also* changes the index (the "Mentioned"
+section): `.claude/docs/comments-panel.md`.
+
 ### Real names instead of logins
 
 The same module resolves a login to a real name (`ensureNames`/`fullNameOf`/

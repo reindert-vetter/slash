@@ -31,6 +31,7 @@
 
 import snarkdown from './vendor/snarkdown.js'
 import { highlightForLang } from './Block.mjs'
+import { highlightMentions } from './mentions.mjs'
 
 function escapeHtml(str) {
   return String(str)
@@ -172,5 +173,11 @@ export function renderMarkdown(text, startIndex = 0) {
   let out = snarkdown(src)
   out = applyPlaceholders(out, store)
   out = sanitizeUrls(out)
+  // Last: highlight an @mention of the local reviewer (see mentions.mjs). Runs
+  // on the finished, already-escaped HTML and only ADDS a <mark> around inert
+  // text, so it can't undermine the XSS layer above — and being here means
+  // every render point (comment bodies, PR description, chat bubbles) gets it
+  // without a signature change.
+  out = highlightMentions(out)
   return out
 }

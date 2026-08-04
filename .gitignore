@@ -33,6 +33,10 @@ go.work.sum
 .claude/scripts/server.log
 data/*.db
 data/*.db-*
+# Per-reviewer local settings (who "I" am for @mention detection, see
+# settings.go). One person's identity, so never committed — the template
+# data/settings.example.json is.
+data/settings.json
 data/worktrees/
 data/workflows/
 node_modules/
