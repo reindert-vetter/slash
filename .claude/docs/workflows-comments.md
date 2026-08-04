@@ -825,34 +825,56 @@ recognizes the `question` shape:
   the existing `pendingQuestionID` branch — deterministic under replay, no
   live-state dependency.
 - **`applyChatCommentAction`** (its own registered Activity, plain testable
-  function) is the only thing that signals anything, and only after every
-  check passes, in order:
+  function) validates every directive the same way up front, in order:
   1. **`directive.CommentID` must equal the conversation's own thread**
      (`arg.ConversationID`) — a chat has no context about any other comment of
      the PR, so a mismatch can only be a mistake/hallucination, never a
-     legitimate cross-thread request. Never signalled; logged via `logf` and
-     surfaced as a `KindError` turn.
+     legitimate cross-thread request. Never signalled/drafted; logged via
+     `logf` and surfaced as a `KindError` turn.
   2. **The comment must still exist and not be `deleting`/`deleted`**
      (`comments.Module.Get`, a new read method — `WHERE id = ?`, mirrors
      `List`/`Search`'s shared `query`).
-  3. **The target Execution must still be signallable**
-     (`engine.Status(c.RunID)` not `completed`/`failed`) — a completed/failed
-     run can never receive a Signal again; checked **before** signalling
-     (mirrors the avatar-backfill glue's own `Status` check in
-     `comment_import.go`) so the reviewer-facing message can name the real
-     reason instead of a bare error.
-  4. Only then: **the existing `reply` Signal** (`ReactionSignal{Source: "ai",
-     Author: "Claude", Body, Done}` — `Done: true` + the `"/resolve"` sentinel
-     body for `"resolve"`) via `TaskManager.Signal` — the exact same sanctioned
-     write path an AI `code_warning` finding already uses, never a new one.
-  A failed `Signal` call itself is also caught (best-effort, never a Go error
-  that would fail the whole `claude_chat` workflow) and surfaced the same way.
-- **Exactly one visible outcome turn is recorded either way**
-  (`saveChatActionOutcome`): `Kind: chat.KindAction` with a `"✓ …"` confirmation
-  text on success, `Kind: chat.KindError` with a concrete reason on any
-  failure — so the reviewer always sees what happened, never an optimistic
-  message that turns out wrong. `chat.KindAction` is a new `Message.Kind` value
-  alongside `KindQuestion`/`KindError`.
+
+  Past that point the two actions diverge — **a later, explicit correction
+  from Reindert**: "Claude mag namens mij een bericht sturen, ik wil het
+  daarna kunnen bewerken... je hoeft het dus vooral alleen in de input te
+  plaatsen en de focus erop te zetten." A `"reply"` used to signal the thread
+  exactly like `"resolve"` (see the git history of this section for the
+  original one-Signal-for-both shape) — **removed**: there is text to review
+  first, so the reviewer must see and possibly edit it before anything is
+  ever written to the thread.
+
+  - **`d.Action == "reply"`**: no Signal, no Execution-status check (a draft
+    never touches the thread, so whether its Execution can still receive a
+    Signal is irrelevant) — `saveChatDraftReply` just records the drafted body
+    verbatim as its own turn, `Kind: chat.KindDraftReply`. The frontend
+    (`RelatedPanel.mjs`'s `applyPendingDraftReplies`, see
+    `.claude/docs/claude-chat-panel.md`'s "A `reply` directive only drafts,
+    never posts") merges it into the LEFT thread's own reply composer; sending
+    it afterwards is the ordinary, unprivileged `sendReaction` path — never
+    `Source: "ai"`.
+  - **`d.Action == "resolve"`**: unchanged — an immediate action, nothing to
+    review. **The target Execution must still be signallable**
+    (`engine.Status(c.RunID)` not `completed`/`failed`) — a completed/failed
+    run can never receive a Signal again; checked **before** signalling
+    (mirrors the avatar-backfill glue's own `Status` check in
+    `comment_import.go`) so the reviewer-facing message can name the real
+    reason instead of a bare error. Then the existing `reply` Signal
+    (`ReactionSignal{Source: "ai", Author: "Claude", Body: "/resolve", Done:
+    true}`) via `TaskManager.Signal` — the exact same sanctioned write path an
+    AI `code_warning` finding already uses, never a new one. A failed `Signal`
+    call itself is also caught (best-effort, never a Go error that would fail
+    the whole `claude_chat` workflow) and surfaced the same way.
+- **Exactly one visible outcome turn is recorded either way** for a "resolve"
+  attempt or a validation failure of either action (`saveChatActionOutcome`):
+  `Kind: chat.KindAction` with a `"✓ …"` confirmation text on success,
+  `Kind: chat.KindError` with a concrete reason on any failure — so the
+  reviewer always sees what happened, never an optimistic message that turns
+  out wrong. A successful "reply" draft instead goes through
+  `saveChatDraftReply` (`Kind: chat.KindDraftReply`, body verbatim, no
+  "✓ …" framing — it hasn't happened yet). `chat.KindAction`/
+  `chat.KindDraftReply` are `Message.Kind` values alongside
+  `KindQuestion`/`KindError`.
 - **No UI trigger needed any more, and none exists** (unrelated to Phase 4
   itself) — the frontend panel only ever sends a plain (`Action: ""`) turn,
   and always has. A later pass (Phase 3, see
@@ -936,12 +958,15 @@ table: `.claude/docs/tembed-endpoints.md`.
 purge — all offline, no `claude`), `chat_workflow_test.go` (end-to-end via
 `claude.Fake`: idempotent start, the reviewer/assistant turn cycle + session
 id reuse, a question turn's answer landing on the same row, a failed turn
-degrading to a `KindError` message, a valid `comment_action` reply/resolve
-directive landing on the target thread's own `task_code_comment` Execution
-with `Source: "ai"` plus a `KindAction` confirmation turn, a directive whose
-`commentId` doesn't match the conversation being rejected without touching any
-thread, a directive targeting a forced-`completed` Execution degrading to
-`KindError`, and a malformed directive degrading to plain text),
+degrading to a `KindError` message, a `"reply"` directive drafting a
+`KindDraftReply` turn WITHOUT touching the target thread at all (and still
+succeeding even when that thread's own Execution has gone terminal — a draft
+never signals it), a `"resolve"` directive landing on the target thread's own
+`task_code_comment` Execution with `Source: "ai"` plus a `KindAction`
+confirmation turn (and degrading to `KindError` when that Execution is
+terminal), a directive whose `commentId` doesn't match the conversation being
+rejected without touching any thread, and a malformed directive degrading to
+plain text),
 `chat_shadow_test.go` (the
 `...At`-suffixed git-plumbing bodies against a throwaway local bare-repo
 "origin": worktree creation on a real branch, refresh-when-clean,

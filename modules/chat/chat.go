@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   conversation_id TEXT NOT NULL,
   pr              INTEGER NOT NULL,
   role            TEXT NOT NULL,           -- 'user' | 'assistant'
-  kind            TEXT NOT NULL DEFAULT '', -- '' (plain text) | 'question' | 'error'
+  kind            TEXT NOT NULL DEFAULT '', -- '' (plain text) | 'question' | 'error' | 'action' | 'draft_reply'
   body            TEXT NOT NULL,
   options_json    TEXT NOT NULL DEFAULT '', -- JSON array of up to a few option strings ('question' only)
   answer          TEXT NOT NULL DEFAULT '', -- filled once the reviewer responds to a 'question' turn
@@ -58,12 +58,19 @@ const (
 	KindQuestion = "question" // an assistant turn asking the reviewer to pick (or type) an answer
 	KindError    = "error"    // an assistant turn reporting a failed Claude call
 	// KindAction marks the confirmation turn shown after Claude — on the
-	// reviewer's explicit request — successfully replied to or resolved the
-	// comment thread this conversation hangs on (see chat_workflow.go's
+	// reviewer's explicit request — successfully resolved the comment thread
+	// this conversation hangs on (see chat_workflow.go's
 	// applyChatCommentAction, the "claude_chat" opt-in influence path). A
 	// FAILED attempt is stored as KindError instead, never KindAction, so the
 	// Kind alone tells the reviewer whether it actually happened.
 	KindAction = "action"
+	// KindDraftReply marks a comment_action "reply" directive's drafted body —
+	// Claude may draft a reply "on the reviewer's behalf", but unlike
+	// KindAction it is NEVER signalled onto the comment thread by itself. The
+	// frontend (RelatedPanel.mjs's applyPendingDraftReplies) merges Body into
+	// the left thread's own reply composer instead, so only the reviewer's own
+	// edit + explicit send ever posts anything there.
+	KindDraftReply = "draft_reply"
 )
 
 // Message is one turn in a conversation.

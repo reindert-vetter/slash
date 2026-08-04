@@ -519,6 +519,7 @@ test('Claude chat: an action turn and an error turn each get their own badge, no
     const messages = [
       { id: 'm1', role: 'assistant', kind: 'action', body: '✓ Comment-thread opgelost.' },
       { id: 'm2', role: 'assistant', kind: 'error', body: 'Kon de comment-thread niet bijwerken.' },
+      { id: 'm3', role: 'assistant', kind: 'draft_reply', body: 'Concept: dit endpoint is niet meer in gebruik.' },
     ]
     const view = {
       messages: () => messages,
@@ -541,11 +542,14 @@ test('Claude chat: an action turn and an error turn each get their own badge, no
   const errorBadge = host.getByTestId('claude-message-error')
   await expect(errorBadge).toBeVisible()
   await expect(errorBadge).toContainText('foutmelding')
+  const draftBadge = host.getByTestId('claude-message-draft-reply')
+  await expect(draftBadge).toBeVisible()
+  await expect(draftBadge).toContainText('concept in comment-veld gezet')
 
   // Neither badge is present on a plain assistant turn.
   await evaluateSettled(page, async () => {
     const { claudeChatColumn } = await import('/src/ClaudeChat.mjs')
-    const messages = [{ id: 'm3', role: 'assistant', body: 'Gewoon een antwoord.' }]
+    const messages = [{ id: 'm4', role: 'assistant', body: 'Gewoon een antwoord.' }]
     const view = {
       messages: () => messages,
       status: () => 'ready',
@@ -562,6 +566,68 @@ test('Claude chat: an action turn and an error turn each get their own badge, no
   const plainHost = page.locator('#claude-chat-plain-host')
   await expect(plainHost.getByTestId('claude-message-action')).toHaveCount(0)
   await expect(plainHost.getByTestId('claude-message-error')).toHaveCount(0)
+  await expect(plainHost.getByTestId('claude-message-draft-reply')).toHaveCount(0)
+})
+
+// A comment_action "reply" directive must land in the LEFT comment thread's
+// own reply composer for the reviewer to edit and send themselves — never
+// post itself. Driving the real claude subprocess would again need the
+// comment's run id known before the SLASH_CLAUDE_CHAT_TURNS fixture file
+// loads (see the badge test above), so this drives the same effect through
+// GET /api/chat, mocked to return a chat.KindDraftReply turn — exactly the
+// shape chat_workflow.go's saveChatDraftReply persists, and exactly what
+// RelatedPanel.mjs's applyPendingDraftReplies (the code under test) reads.
+// The backend's own "reply never signals the comment thread" guarantee is
+// covered separately, end-to-end, by
+// TestClaudeChatCommentActionDraftsReplyWithoutTouchingCommentThread in
+// chat_workflow_test.go.
+test('Claude chat: a drafted reply lands in the comment composer, appended under an existing draft, never auto-posted', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'is dit nog in gebruik?',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  const draftBody = 'Concept van Claude: dit endpoint wordt niet meer aangeroepen.'
+  await page.route('**/api/chat?commentId=' + conversationId, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ messages: [{ id: 'draft-1', role: 'assistant', kind: 'draft_reply', body: draftBody }] }),
+    }),
+  )
+
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+
+  // The reviewer's own half-typed reply must survive, with Claude's draft
+  // appended underneath it — never overwritten, never discarded.
+  const reply = page.getByTestId('reaction-compose')
+  await expect(reply).toBeVisible()
+  await reply.fill('Eigen tekst die ik al had getypt.')
+
+  await page.keyboard.press('ArrowRight') // comment -> claude, which loads /api/chat (mocked above)
+  await expect(page.getByTestId('claude-chat-compose')).toBeVisible()
+
+  await expect(reply).toHaveValue('Eigen tekst die ik al had getypt.\n\n' + draftBody)
+
+  // It never became a real reply on the comment thread itself — only the
+  // reviewer's own opening comment shows as a bubble.
+  await expect(page.getByTestId('reaction-bubble')).toHaveCount(1)
 })
 
 // The composer grows in height as its content grows (textareaAutoGrow.mjs,

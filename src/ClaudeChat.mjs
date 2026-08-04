@@ -181,10 +181,13 @@ function claudePartialBubble(view) {
 }
 
 // chatKindBadge marks a message whose `kind` carries meaning beyond an
-// ordinary reply: 'action' (chat.KindAction — Claude placed/resolved a
-// comment on the left thread on the reviewer's request, see "Opt-in
-// influence on the left comment thread (Phase 4)" in workflows-comments.md)
-// or 'error' (chat.KindError — that same attempt failed). Mirrors
+// ordinary reply: 'action' (chat.KindAction — Claude resolved the comment
+// thread this conversation hangs on, on the reviewer's request, see "Opt-in
+// influence on the left comment thread (Phase 4)" in workflows-comments.md),
+// 'draft_reply' (chat.KindDraftReply — Claude drafted a reply for that same
+// thread, but it only landed in the comment composer for the reviewer to edit
+// and send themselves; see RelatedPanel.mjs's applyPendingDraftReplies) or
+// 'error' (chat.KindError — an attempted action/resolve failed). Mirrors
 // RelatedPanel.mjs's aiWarningBadge/staleAnchorBadge: a small pill carrying a
 // WORD (+ a shape glyph), the tint decoration on top — never colour alone,
 // per the colourblind rule. `kind` is set once at message creation and never
@@ -210,6 +213,26 @@ function chatKindBadge(msg) {
         <path d="M20 6 9 17l-5-5"></path>
       </svg>
       actie in commentthread</span
+    >`
+  }
+  if (msg.kind === 'draft_reply') {
+    return html`<span
+      class="inline-flex shrink-0 items-center gap-1 rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-700 dark:bg-sky-500/15 dark:text-sky-300"
+      data-testid="claude-message-draft-reply"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-2.5 w-2.5"
+      >
+        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path>
+      </svg>
+      concept in comment-veld gezet</span
     >`
   }
   if (msg.kind === 'error') {

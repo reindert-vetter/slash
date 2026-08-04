@@ -1000,6 +1000,68 @@ async function ensureAndLoadChat(pr, commentId) {
   }
 }
 
+// appliedDraftReplyIds tracks which chat.KindDraftReply turns have already
+// been merged into replyDrafts — a plain, session-only Set (mirrors
+// replyDrafts itself), so a later re-render of the SAME turn (a poll, a
+// resync, a page that happened to fetch the transcript twice) never
+// re-appends the same text a second time. A genuinely NEW draft turn (a
+// distinct id — see chatMessageID's turnID-derived, per-turn id in
+// chat_workflow.go) always gets its own entry, so a follow-up Claude proposal
+// in the SAME conversation still merges in — this is deliberately NOT a
+// one-shot-then-frozen mechanism (Reindert's explicit request).
+const appliedDraftReplyIds = new Set()
+
+// applyPendingDraftReplies is the frontend half of the comment_action "reply"
+// draft (see chat_workflow.go's saveChatDraftReply / chat.KindDraftReply):
+// Claude may draft a reply "on the reviewer's behalf", but it must never be
+// posted by itself — this only SEEDS the left thread's own reply composer
+// (reaction-compose) with the drafted text, exactly like an ordinary
+// replyDrafts-backed draft the reviewer typed themselves, and leaves the
+// actual send to sendReaction's normal, unprivileged path.
+//
+// Reindert's three explicit rules, in order:
+//   1. Only a comment_action "reply" turn becomes a draft (chat_workflow.go's
+//      own decision — "resolve" is applied immediately, nothing to merge here).
+//   2. The text is ALWAYS written into replyDrafts (so it's there next time the
+//      reviewer opens this thread, even if it isn't mounted right now), but the
+//      DOM focus only moves onto the field when the reviewer is NOT currently
+//      typing in the Claude composer — never steal the keyboard out from under
+//      an in-progress follow-up message.
+//   3. An already-typed reviewer draft is never overwritten or discarded —
+//      Claude's text is appended UNDERNEATH it (blank line separator), so both
+//      survive.
+//
+// Deliberately does NOT reuse prefillField's rAF + focusToken-gated wait: that
+// mechanism exists for a field that is only ABOUT to mount because of the very
+// state change that requested the focus (see prefillField's own doc comment),
+// and entering/leaving the Claude column in between can bump focusToken before
+// the deferred write lands — silently dropping the draft. reaction-compose is
+// (per "Also stays expanded once the keyboard moves on into the Claude
+// column" in .claude/docs/comments-panel.md) already mounted whenever this
+// runs, or genuinely not part of the current view at all — either way a
+// synchronous DOM read settles it with no race.
+function applyPendingDraftReplies(commentId) {
+  let appended = false
+  for (const m of cc.messages) {
+    if (m.kind !== 'draft_reply' || appliedDraftReplyIds.has(m.id)) continue
+    appliedDraftReplyIds.add(m.id)
+    const existing = replyDrafts.get(commentId) || ''
+    replyDrafts.set(commentId, existing ? existing + '\n\n' + m.body : m.body)
+    appended = true
+  }
+  if (!appended) return
+  const merged = replyDrafts.get(commentId)
+  const el = document.querySelector('[data-testid=reaction-compose]')
+  if (!el) return // not currently mounted — replyDrafts already holds it for the next time this thread opens
+  el.value = merged
+  autoGrowTextarea(el) // .value= fires no input event, so the auto-grow needs an explicit nudge
+  const active = document.activeElement
+  const typingInClaude = !!(active && active.matches && active.matches('[data-testid=claude-chat-compose]'))
+  if (typingInClaude) return // never steal the keyboard out from under an in-progress follow-up message
+  el.focus()
+  el.setSelectionRange(el.value.length, el.value.length)
+}
+
 // loadChatMessages re-fetches the transcript (read-only GET, safe to poll).
 // Guards against a stale response landing after the reviewer has since
 // switched to a different comment's conversation.
@@ -1011,6 +1073,7 @@ async function loadChatMessages(commentId) {
     if (cc.commentId !== commentId) return // stale — a later switch already won
     cc.messages = json.messages || []
     cc.status = 'idle'
+    applyPendingDraftReplies(commentId)
     scrollClaudeThreadToBottom()
   } catch (_) {
     // keep the last good transcript on a transient error

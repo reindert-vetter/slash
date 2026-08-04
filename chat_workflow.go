@@ -563,13 +563,18 @@ func parseAssistantTurn(pr int, conversationID, turnID, text string) (chat.Messa
 
 // applyChatCommentAction is the applyChatCommentAction Activity's body (a
 // plain, testable function, mirroring runOneClaudeTurn): validates a
-// comment_action directive and, only if it passes every check, signals the
-// target comment thread's own task_code_comment Execution via the EXISTING
-// "reply" Signal (Source "ai") — never a direct write, the same sanctioned
-// path an AI code_warning finding already uses. Exactly one outcome message
-// (KindAction on success, KindError otherwise) is recorded either way, so the
-// reviewer always sees what happened. Every failure is also logged via
-// tm.logf, per .claude/rules/workflows-write-boundary.md's best-effort
+// comment_action directive and, only if it passes every check, applies it.
+//
+// The two actions diverge on purpose (reviewer's explicit request): "resolve"
+// still signals the target comment thread's own task_code_comment Execution
+// directly via the EXISTING "reply" Signal (Source "ai") — never a direct
+// write, the same sanctioned path an AI code_warning finding already uses —
+// because there is no text to review first. "reply" does NOT touch the
+// comment thread at all any more; Claude may draft a reply "on the reviewer's
+// behalf", but only the reviewer's own edit + explicit send in the comment
+// composer ever posts it (see saveChatDraftReply and, on the frontend,
+// RelatedPanel.mjs's applyPendingDraftReplies). Every failure is also logged
+// via tm.logf, per .claude/rules/workflows-write-boundary.md's best-effort
 // convention — never a Go error that would fail the whole workflow.
 func applyChatCommentAction(ctx context.Context, tm *TaskManager, arg chatCommentActionInput) {
 	d := arg.Directive
@@ -578,7 +583,7 @@ func applyChatCommentAction(ctx context.Context, tm *TaskManager, arg chatCommen
 	// context about any other comment of the PR, so any other id can only be a
 	// hallucination/mistake, never a legitimate cross-thread request. Rejected
 	// silently from the reviewer's point of view except for the log line + the
-	// KindError turn below; never signalled.
+	// KindError turn below; never signalled, never drafted.
 	if d.CommentID != arg.ConversationID {
 		tm.logf("claude_chat: comment_action ignored — directive commentId=%q does not match conversation=%q (pr=%d)",
 			d.CommentID, arg.ConversationID, arg.PR)
@@ -600,6 +605,17 @@ func applyChatCommentAction(ctx context.Context, tm *TaskManager, arg chatCommen
 		saveChatActionOutcome(ctx, tm.chat, arg, "De comment-thread bestaat niet meer.")
 		return
 	}
+
+	if d.Action == "reply" {
+		// No Signal, no Execution-status check: a draft is never written to the
+		// comment thread by itself, so whether that thread's Execution can still
+		// receive a Signal is irrelevant here — only the comment row itself must
+		// still exist (checked above).
+		saveChatDraftReply(ctx, tm.chat, arg, d.Body)
+		return
+	}
+
+	// d.Action == "resolve" — an immediate action, no text to review first.
 	// A completed/failed Execution can no longer receive a Signal — check
 	// BEFORE signalling rather than relying on Signal's own error, so the
 	// reviewer-facing message can name the real reason (mirrors the avatar-
@@ -614,24 +630,19 @@ func applyChatCommentAction(ctx context.Context, tm *TaskManager, arg chatCommen
 	// A deterministic reaction id for the same reason chatMessageID exists: a
 	// replayed Activity must not post the SAME reply into the comment thread
 	// twice (comments.AddReaction is an INSERT OR IGNORE on this id).
-	sig := ReactionSignal{ID: chatActionReactionID(arg.TurnID), Source: "ai", Author: "Claude", Body: d.Body}
-	successText := "✓ Reactie geplaatst op de comment-thread."
-	if d.Action == "resolve" {
-		sig.Body = "/resolve"
-		sig.Done = true
-		successText = "✓ Comment-thread opgelost."
-	}
+	sig := ReactionSignal{ID: chatActionReactionID(arg.TurnID), Source: "ai", Author: "Claude", Body: "/resolve", Done: true}
 	if err := tm.Signal(c.RunID, sig); err != nil {
 		tm.logf("claude_chat: comment_action signal failed for %s: %v", c.RunID, err)
 		saveChatActionOutcome(ctx, tm.chat, arg, "Kon de comment-thread niet bijwerken. Probeer het opnieuw.")
 		return
 	}
-	saveChatActionOutcome(ctx, tm.chat, arg, successText)
+	saveChatActionOutcome(ctx, tm.chat, arg, "✓ Comment-thread opgelost.")
 }
 
 // saveChatActionOutcome records the single visible turn for a comment_action
-// attempt: KindAction for a text starting with "✓" (the success texts built
-// above), KindError for anything else — see chat.KindAction's own doc comment.
+// "resolve" attempt (or a validation failure of either action): KindAction for
+// a text starting with "✓" (the success text built above), KindError for
+// anything else — see chat.KindAction's own doc comment.
 func saveChatActionOutcome(ctx context.Context, cm *chat.Module, arg chatCommentActionInput, text string) {
 	if cm == nil {
 		return
@@ -643,5 +654,21 @@ func saveChatActionOutcome(ctx context.Context, cm *chat.Module, arg chatComment
 	_ = cm.SaveMessage(ctx, chat.Message{
 		ID: chatMessageID(arg.TurnID, "action"), ConversationID: arg.ConversationID, PR: arg.PR,
 		Role: "assistant", Kind: kind, Body: text,
+	})
+}
+
+// saveChatDraftReply records a comment_action "reply" directive's drafted
+// body as its own turn (chat.KindDraftReply) — never signalled onto the
+// comment thread. A distinct id suffix ("draft") from saveChatActionOutcome's
+// ("action") so the two can never collide for the same TurnID; deterministic
+// under replay for the same reason chatMessageID exists (modules/chat.SaveMessage
+// is an INSERT OR REPLACE on this id).
+func saveChatDraftReply(ctx context.Context, cm *chat.Module, arg chatCommentActionInput, body string) {
+	if cm == nil {
+		return
+	}
+	_ = cm.SaveMessage(ctx, chat.Message{
+		ID: chatMessageID(arg.TurnID, "draft"), ConversationID: arg.ConversationID, PR: arg.PR,
+		Role: "assistant", Kind: chat.KindDraftReply, Body: body,
 	})
 }

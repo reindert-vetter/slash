@@ -239,17 +239,16 @@ func TestClaudeChatQuestionTurnRecordsAnswerOnSameRow(t *testing.T) {
 }
 
 // The reviewer explicitly asking Claude to reply on the comment thread yields
-// a comment_action directive; the workflow applies it via the EXISTING "reply"
-// Signal on the comment's own task_code_comment Execution (Source "ai") and
-// the chat transcript shows a single KindAction confirmation turn — never the
-// raw JSON directive.
-func TestClaudeChatCommentActionAppliesReplyToCommentThread(t *testing.T) {
+// a comment_action directive; a "reply" action is now a DRAFT only (Reindert's
+// explicit request: he wants to edit it in the comment composer before it is
+// ever sent) — the chat transcript shows a single KindDraftReply turn holding
+// exactly the drafted body, and the comment thread itself receives no reply.
+func TestClaudeChatCommentActionDraftsReplyWithoutTouchingCommentThread(t *testing.T) {
 	m, engine, cm, fake := newChatManager(t)
 	ctx := context.Background()
 	const pr, commentID = 970710, "comment-action-reply"
 
-	// The target comment thread this conversation hangs on must itself be a
-	// running task_code_comment Execution for the Signal to land anywhere.
+	// The target comment thread this conversation hangs on.
 	commentRunID := startTestComment(t, m, pr, commentID)
 
 	fake.SetChatTurns(`{"type":"comment_action","action":"reply","commentId":"` + commentID + `","body":"Klopt, dit moet anders."}`)
@@ -272,23 +271,20 @@ func TestClaudeChatCommentActionAppliesReplyToCommentThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if list[1].Kind != chat.KindAction || list[1].Body == "" {
-		t.Fatalf("expected a KindAction confirmation turn, got %+v", list[1])
-	}
-	if list[1].Body == `{"type":"comment_action","action":"reply","commentId":"`+commentID+`","body":"Klopt, dit moet anders."}` {
-		t.Fatal("the raw directive JSON must never be shown verbatim")
+	if list[1].Kind != chat.KindDraftReply || list[1].Body != "Klopt, dit moet anders." {
+		t.Fatalf("expected a KindDraftReply turn carrying the drafted body verbatim, got %+v", list[1])
 	}
 
-	// The comment thread itself received the reply, mirrored with Source "ai".
-	waitForComment(t, m, commentRunID, func(cs []comments.Comment) bool { return len(cs) > 0 })
+	// The comment thread itself must receive NOTHING — only the reviewer's own
+	// edit + explicit send in the comment composer may ever post there.
 	replies := listReplies(t, m, commentRunID)
-	if len(replies) != 1 || replies[0].Source != "ai" || replies[0].Body != "Klopt, dit moet anders." {
-		t.Fatalf("expected one ai-sourced reply on the comment thread, got %+v", replies)
+	if len(replies) != 0 {
+		t.Fatalf("expected the comment thread to stay untouched by a reply draft, got %+v", replies)
 	}
 }
 
-// The same directive with action "resolve" resolves the target thread and
-// needs no Body.
+// The same directive with action "resolve" is still applied immediately —
+// there is no text to review first — and needs no Body.
 func TestClaudeChatCommentActionResolvesCommentThread(t *testing.T) {
 	m, engine, cm, fake := newChatManager(t)
 	ctx := context.Background()
@@ -367,9 +363,11 @@ func TestClaudeChatCommentActionRejectsOtherComment(t *testing.T) {
 	}
 }
 
-// A comment_action directive targeting an already-completed/failed Execution
-// (which can no longer receive a Signal) degrades to a KindError turn instead
-// of crashing the claude_chat workflow.
+// A comment_action "resolve" directive targeting an already-completed/failed
+// Execution (which can no longer receive a Signal) degrades to a KindError
+// turn instead of crashing the claude_chat workflow. Only "resolve" is tested
+// here — "reply" no longer signals the target thread at all, so its own
+// Execution status is irrelevant (see the next test).
 func TestClaudeChatCommentActionSkipsTerminalRun(t *testing.T) {
 	m, engine, store, cm, fake := newChatManagerWithStore(t)
 	ctx := context.Background()
@@ -384,7 +382,46 @@ func TestClaudeChatCommentActionSkipsTerminalRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fake.SetChatTurns(`{"type":"comment_action","action":"reply","commentId":"` + commentID + `","body":"Te laat."}`)
+	fake.SetChatTurns(`{"type":"comment_action","action":"resolve","commentId":"` + commentID + `"}`)
+
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-1", Author: "reviewer", Body: "Los deze comment maar op.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2
+	})
+
+	list, err := cm.List(ctx, commentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list[1].Kind != chat.KindError {
+		t.Fatalf("expected a KindError turn, got %+v", list[1])
+	}
+}
+
+// A "reply" directive drafts successfully even when the target thread's own
+// Execution is already terminal — a draft never signals that thread, so its
+// status can't block it. This is the one deliberate behaviour difference from
+// "resolve" above.
+func TestClaudeChatCommentActionDraftsReplyEvenOnTerminalRun(t *testing.T) {
+	m, engine, store, cm, fake := newChatManagerWithStore(t)
+	ctx := context.Background()
+	const pr, commentID = 970714, "comment-action-reply-terminal"
+
+	commentRunID := startTestComment(t, m, pr, commentID)
+	if err := store.SetStatus(commentRunID, tembed.StatusCompleted, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	fake.SetChatTurns(`{"type":"comment_action","action":"reply","commentId":"` + commentID + `","body":"Nog steeds relevant."}`)
 
 	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
 	if err != nil {
@@ -404,8 +441,8 @@ func TestClaudeChatCommentActionSkipsTerminalRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if list[1].Kind != chat.KindError {
-		t.Fatalf("expected a KindError turn, got %+v", list[1])
+	if list[1].Kind != chat.KindDraftReply || list[1].Body != "Nog steeds relevant." {
+		t.Fatalf("expected a KindDraftReply turn despite the terminal target Execution, got %+v", list[1])
 	}
 }
 

@@ -594,27 +594,103 @@ happens entirely backend-side. The backend behavior itself
 ## Opt-in influence on the left comment thread (Phase 4)
 
 Phase 4's backend is built — on the reviewer's explicit request,
-`chat_workflow.go`'s `applyChatCommentAction` signals the left comment
-thread's own `task_code_comment` Execution (`Source: "ai"`) and records a
-`Kind: chat.KindAction` (success) or `Kind: chat.KindError` (failure)
-confirmation turn — see "Opt-in influence on the left comment thread
-(Phase 4)" in `.claude/docs/workflows-comments.md`. `ClaudeChat.mjs`'s
-`chatKindBadge(msg)` now marks both kinds distinctly, mirroring
-`RelatedPanel.mjs`'s `aiWarningBadge`/`staleAnchorBadge`: a small pill with a
-word + a shape glyph (a checkmark for `'action'`, the same warning-triangle
-SVG as `aiWarningBadge`/`related-covers-warning` for `'error'`) — the tint
-(emerald resp. rose) is decoration on top, never the sole carrier, per the
-colourblind rule. `msg.kind` is fixed at message creation (unlike `answer`,
-which fills in later on the same row), so the badge needs no `${() => ...}`
-getter wrapper of its own — same reasoning as the existing `isError`/`mine`
-locals just below it. Testids `claude-message-action`/`claude-message-error`.
+`chat_workflow.go`'s `applyChatCommentAction` applies a validated
+`comment_action` directive against the left comment thread. The two actions
+deliberately diverge (a later, explicit reviewer correction — see "A `reply`
+directive only drafts, never posts" below): `"resolve"` still signals the
+thread's own `task_code_comment` Execution directly (`Source: "ai"`, no text
+to review first) and records a `Kind: chat.KindAction` (success) or
+`Kind: chat.KindError` (failure) confirmation turn; `"reply"` never signals
+anything — see "Opt-in influence on the left comment thread (Phase 4)" in
+`.claude/docs/workflows-comments.md`. `ClaudeChat.mjs`'s `chatKindBadge(msg)`
+marks all three kinds distinctly, mirroring `RelatedPanel.mjs`'s
+`aiWarningBadge`/`staleAnchorBadge`: a small pill with a word + a shape glyph
+(a checkmark for `'action'`, a pencil for `'draft_reply'`, the same
+warning-triangle SVG as `aiWarningBadge`/`related-covers-warning` for
+`'error'`) — the tint (emerald/sky/rose respectively) is decoration on top,
+never the sole carrier, per the colourblind rule. `msg.kind` is fixed at
+message creation (unlike `answer`, which fills in later on the same row), so
+the badge needs no `${() => ...}` getter wrapper of its own — same reasoning
+as the existing `isError`/`mine` locals just below it. Testids
+`claude-message-action`/`claude-message-draft-reply`/`claude-message-error`.
 Test: the "action turn and an error turn each get their own badge" case in
 `tests/claude-chat-panel.spec.mjs` (a direct-mount unit test of
 `claudeChatColumn`, since driving a real `comment_action` directive through
 the Playwright fixture would need the comment's run id known before the
 fixture file loads — see the test's own comment; the backend's
-KindAction/KindError decision is already covered end-to-end by
-`chat_workflow_test.go`).
+KindAction/KindDraftReply/KindError decisions are already covered end-to-end
+by `chat_workflow_test.go`).
+
+### A `reply` directive only drafts, never posts
+
+Explicit correction to the paragraph above, from Reindert: "Claude mag namens
+mij een bericht sturen, ik wil het daarna kunnen bewerken... je hoeft het dus
+vooral alleen in de input te plaatsen en de focus erop te zetten." A
+`comment_action` with `action: "reply"` used to be signalled straight onto the
+comment thread (`Source: "ai"`) the moment Claude produced it — the reviewer
+only found out afterwards. Now `applyChatCommentAction` never signals a
+`"reply"` at all: it records the drafted body as its own turn
+(`chat.KindDraftReply`, `saveChatDraftReply` in `chat_workflow.go`), and this
+panel's `applyPendingDraftReplies` (`RelatedPanel.mjs`, called from
+`loadChatMessages` right after `cc.messages` is reassigned — i.e. on the
+initial load, every `chat.message` SSE-triggered refetch, and the resync read,
+exactly the three places a new turn can arrive) is the ONLY thing that acts on
+it: it merges the drafted body into `replyDrafts` (the same session-only,
+per-comment-id draft cache `reaction-compose`/`toComment` already use for a
+half-typed reviewer reply) and seeds the mounted field via `prefillField`.
+Sending afterwards is the ordinary, unprivileged `sendReaction` path — the
+message posts with the reviewer's own identity, never `Source: "ai"`.
+`"resolve"` is untouched by this — there is no text to review, so it keeps
+applying immediately.
+
+Three explicit rules govern how the merge behaves (`appliedDraftReplyIds`
+tracks which `chat.KindDraftReply` turns were already merged, keyed by the
+turn's own stable id — see `chatMessageID`'s turnID-derived id in
+`chat_workflow.go` — so a later, unrelated re-render of the same turn, e.g. a
+resync, never re-appends the same text twice):
+
+1. **Deliberately not a one-shot-then-frozen value.** A follow-up Claude
+   proposal later in the SAME conversation gets its own turn id and therefore
+   its own `appliedDraftReplyIds` entry, so it merges in too — "daarnaast mag
+   die input overschreven/samengevoegd worden door vervolg chat met claude"
+   (Reindert's own words).
+2. **Focus only moves onto `reaction-compose` when the reviewer is NOT
+   currently typing in the Claude composer** (`document.activeElement` checked
+   against `[data-testid=claude-chat-compose]`) — the text is written into
+   `replyDrafts` (and the mounted field, if any) unconditionally either way,
+   only the caret-steal is conditional. Deliberately a plain, synchronous
+   `document.querySelector` + `.value=`/`.focus()`, NOT `prefillField`'s rAF +
+   `focusToken`-gated wait: that mechanism exists for a field that is only
+   ABOUT to mount because of the very state change that requested the focus,
+   and entering/leaving the Claude column in between can bump `focusToken`
+   before the deferred write lands — which silently dropped the draft in an
+   early version of this feature. `reaction-compose` is (per "One card per
+   conversation, only the focused... expands" in `.claude/docs/comments-panel.md`)
+   already mounted whenever `applyPendingDraftReplies` runs, or genuinely not
+   part of the current view at all (then only `replyDrafts` gets the write,
+   picked up next time `toComment` opens this thread) — either way a
+   synchronous read settles it with no race.
+3. **An already-typed reviewer draft is never overwritten or discarded** —
+   Claude's text is appended UNDERNEATH it (`existing + '\n\n' + body`), so
+   both survive; a reviewer composing their own reply while Claude is
+   mid-conversation keeps their own words on top.
+
+The core merge (rules 1 and 3, plus "never auto-posts to the comment thread")
+is covered by `tests/claude-chat-panel.spec.mjs`'s "a drafted reply lands in
+the comment composer, appended under an existing draft, never auto-posted" —
+driven by mocking `GET /api/chat?commentId=` to return a `chat.KindDraftReply`
+turn (the same reasoning as the badge test above for why this can't drive a
+real `claude` subprocess call). Rule 2's "focus stays put while typing in the
+Claude composer" half has no Playwright coverage yet (frontend gap, flagged in
+"Open" below) — hard to drive deterministically without racing the SSE
+reconnect timing `claude-chat-progress.spec.mjs` also relies on. The backend
+behavior (no Signal reaches the comment thread for `"reply"`, the saved turn
+carries `chat.KindDraftReply` with the body verbatim, and the same draft still
+succeeds even if the target thread's own Execution has gone terminal — a draft
+never touches it, unlike `"resolve"`) is covered by
+`TestClaudeChatCommentActionDraftsReplyWithoutTouchingCommentThread` and
+`TestClaudeChatCommentActionDraftsReplyEvenOnTerminalRun` in
+`chat_workflow_test.go`.
 
 ## The composer is a `<textarea>`, not an `<input>`
 
@@ -885,3 +961,11 @@ clientHeight` after two sends.
   composer — a page navigation away loses an unsent, half-typed message. Not
   requested; flagging as a known gap mirroring the existing comment
   composer's own draft feature.
+- `applyPendingDraftReplies`'s "focus stays put while the reviewer is typing
+  in the Claude composer" rule (see "A `reply` directive only drafts, never
+  posts" above) has no Playwright coverage — driving a second, LATER draft
+  turn to arrive precisely while a real keystroke sits in
+  `claude-chat-compose` would need the same SSE-reconnect timing
+  `claude-chat-progress.spec.mjs` relies on, without that spec's luxury of a
+  steady state to poll for. The merge/append/never-auto-post behavior itself
+  IS covered (see above).
