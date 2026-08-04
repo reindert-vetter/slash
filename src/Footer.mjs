@@ -38,6 +38,12 @@
 // preview-collapse mechanism in detail-layout.md, which also reads this value
 // to know how much room is actually left for the active card).
 //
+// A separate, always-visible PR-wide progress bar (ProgressBar.mjs) sits BELOW
+// this footer, at the true bottom-0 of the screen (this footer's own root is
+// therefore bottom-[PROGRESS_BAR_PX]px, not bottom-0) — see "A separate,
+// always-visible progress bar" in footer.md for why it's not folded into this
+// component's own footerVisible gate.
+//
 // The theme toggle (system/light/dark) used to live in this footer's top-right
 // corner, then in its own always-visible fixed corner element — it now lives
 // in prInfoCard (home.mjs), in a slim row just above the PR summary, since the
@@ -54,6 +60,7 @@
 
 import { html } from './vendor/arrow.js'
 import { highlight, markChars, UNDERLINE_CLS } from './Block.mjs'
+import { PROGRESS_BAR_PX } from './ProgressBar.mjs'
 
 // line builds the innerHTML for one footer diff line: a non-selectable +/- gutter
 // followed by the Prism-highlighted PHP, so it reads exactly like a row in the
@@ -154,7 +161,7 @@ export default function Footer(state) {
   return html`
     <footer
       class="${() =>
-        `fixed bottom-0 left-0 right-0 z-20 ${state.footerVisible ? 'flex' : 'hidden'} h-[${footerBoxPx(state)}px] justify-center border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-2.5`}"
+        `fixed bottom-[${PROGRESS_BAR_PX}px] left-0 right-0 z-20 ${state.footerVisible ? 'flex' : 'hidden'} h-[${footerBoxPx(state)}px] justify-center border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-2.5`}"
       data-testid="footer"
     >
       <div class="${() => wrapClass(state)}">

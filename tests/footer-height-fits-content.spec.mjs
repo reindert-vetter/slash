@@ -1,4 +1,5 @@
 import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { PROGRESS_BAR_PX } from '../src/ProgressBar.mjs'
 
 // The footer's own box height (Footer.mjs's footerBoxPx) is content-driven —
 // no longer a fixed 90/140px tier: it's derived purely from known counts (how
@@ -64,9 +65,12 @@ test.describe('footer height fits its actual content', () => {
     expect(groupHeight).toBeLessThanOrEqual(140)
 
     // <main>'s own bottom reservation always matches the footer's real
-    // height exactly (footerBoxPx is the single source of truth for both).
+    // height exactly (footerBoxPx is the single source of truth for both),
+    // plus PROGRESS_BAR_PX for the always-visible review-progress bar sitting
+    // below the footer (see "A separate, always-visible progress bar" in
+    // footer.md).
     const main = page.getByTestId('detail-panel')
     const mainClass = await main.getAttribute('class')
-    expect(mainClass).toContain(`bottom-[${groupHeight}px]`)
+    expect(mainClass).toContain(`bottom-[${groupHeight + PROGRESS_BAR_PX}px]`)
   })
 })

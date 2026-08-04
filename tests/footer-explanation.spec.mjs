@@ -120,11 +120,13 @@ test.describe('PR Review Tree — footer AI description for if-units', () => {
     await expect(footerDiff).toContainText('$extra = 3;')
 
     // Reserved bottom strip matches the footer's own content-driven height
-    // exactly (footerBoxPx: padding + 3 diff lines, no description reserved):
-    // well under the old fixed 90px tier, and <main>'s own reservation is the
-    // identical figure (the single-source-of-truth guarantee — see the
-    // "Footer" section in keyboard-navigation.md).
-    await expect(page.getByTestId('detail-panel')).toHaveClass(/bottom-\[74px\]/)
+    // exactly (footerBoxPx: padding + 3 diff lines, no description reserved),
+    // plus PROGRESS_BAR_PX (3px) for the always-visible review-progress bar
+    // sitting below the footer (see "A separate, always-visible progress bar"
+    // in footer.md): well under the old fixed 90px tier, and <main>'s own
+    // reservation is the identical figure (the single-source-of-truth
+    // guarantee — see the "Footer" section in keyboard-navigation.md).
+    await expect(page.getByTestId('detail-panel')).toHaveClass(/bottom-\[77px\]/)
     await expect(page.getByTestId('detail-panel')).not.toHaveClass(/bottom-\[140px\]/)
     await expect(page.getByTestId('detail-panel')).not.toHaveClass(/bottom-6\b/)
   })

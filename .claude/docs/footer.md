@@ -17,6 +17,50 @@ the stable `<footer>` root — the class string stays one whole-value
 `footerUnitInfo` (`home.mjs`) returns `null` outside `state.mode==='diff'`, so
 `footerVisible` is always `false` in list mode.
 
+## A separate, always-visible progress bar (`src/ProgressBar.mjs`)
+
+A very thin (`PROGRESS_BAR_PX`, 3px), full-width strip sits at the TRUE
+`bottom-0` of the screen (`data-testid=review-progress-bar`, fill
+`data-testid=review-progress-fill`), showing PR-wide review progress: how many
+of the approvable changed lines are already approved vs. the total. It reuses
+`state.approvalTotal` (`{done, total}`) verbatim — the exact same combined-
+approval rollup that already feeds `BlockList.mjs`'s "X/Y approved · N left to
+review" heading (see "Combined approval per tree" in
+`.claude/docs/approval.md`) — no new computation, just a different view on an
+existing number.
+
+**Deliberately NOT gated by `state.footerVisible`** and not part of this
+component at all: this footer only shows once there's a navigation unit to
+preview (hidden in list mode / with no selection, see "Visibility" above),
+whereas the progress bar is a PR-wide indicator that must stay visible
+everywhere the reviewer is, including list mode. It is mounted directly in
+`home.mjs`, right after `Footer(state)(app)`, always.
+
+**No text label, by deliberate choice** — only the bar. Colourblind-safe
+without one (the reviewer is colourblind, see the palette rule in
+`.claude/rules/conventions.md`): the ratio is carried by the **fill length**
+itself (position, not colour), and the empty track (`bg-slate-200`/
+`dark:bg-zinc-800`) vs. the filled portion (`bg-indigo-600`/
+`dark:bg-indigo-400`) differ clearly in **lightness**, not just hue — so even a
+very low, thin sliver of fill still visibly reads as "something is filled"
+without relying on colour discrimination. Hidden entirely at `total === 0`
+(nothing to review yet), mirroring `footerVisible`'s "nothing to show yet"
+pattern. Purely informational: not clickable, no tooltip/breakdown.
+
+**Stacking:** `PROGRESS_BAR_PX` is exported from `ProgressBar.mjs` so both
+`Footer.mjs` (whose own fixed root sits at `bottom-[PROGRESS_BAR_PX]px`, not
+`bottom-0`, so the two bars never overlap) and `home.mjs`'s `<main>`
+bottom-reservation (adds `PROGRESS_BAR_PX` on top of `footerBoxPx(state)`
+whenever the footer is visible) read the exact same figure — the same
+single-source-of-truth pattern `footerBoxPx` itself already uses.
+`footerReservePxSnapshot` (read by `previewTooTallForActive`, see the "Height"
+section above) also folds in `PROGRESS_BAR_PX` unconditionally, since the bar
+always consumes its own sliver of the bottom regardless of `footerVisible`.
+When the footer is hidden, `<main>` keeps its existing `bottom-6` (24px)
+gutter unchanged — the 3px bar comfortably fits inside that already-existing
+space, so no separate reservation was needed there. Test:
+`tests/review-progress-bar.spec.mjs`.
+
 The theme toggle is **not** in the footer — see "Theme" in
 `.claude/rules/conventions.md`.
 

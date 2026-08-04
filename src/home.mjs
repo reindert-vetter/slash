@@ -5,6 +5,7 @@
 import { reactive, html, watch } from './vendor/arrow.js'
 import BlockList, { isFullyApproved, isIgnoredComment } from './BlockList.mjs'
 import Footer, { footerBoxPx } from './Footer.mjs'
+import ProgressBar, { PROGRESS_BAR_PX } from './ProgressBar.mjs'
 import Block, {
   blockRows,
   changedRows,
@@ -6001,7 +6002,11 @@ let footerReservePxSnapshot = 0
 function updateFooter() {
   computeFooterSnapshots()
   state.footerVisible = !!(state.footerUnit || state.footerExplain)
-  footerReservePxSnapshot = footerBoxPx(state)
+  // + PROGRESS_BAR_PX: the always-visible review-progress bar (ProgressBar.mjs)
+  // sits below the footer and takes up its own sliver of the bottom regardless
+  // of footerVisible, so it's part of the real space consumed at the page
+  // bottom that this snapshot represents.
+  footerReservePxSnapshot = footerBoxPx(state) + PROGRESS_BAR_PX
 }
 
 function computeFooterSnapshots() {
@@ -8558,7 +8563,14 @@ function DetailPanel(state) {
         // this reservation is what keeps a too-tall active card's own diff
         // clipped/scrollable within this box instead of ever rendering behind
         // the footer.
-        (!state.footerVisible ? 'bottom-6 ' : `bottom-[${footerBoxPx(state)}px] `) +
+        // The always-visible review-progress bar (ProgressBar.mjs) adds its own
+        // PROGRESS_BAR_PX on top of footerBoxPx once the footer is visible
+        // (the footer's own root already sits PROGRESS_BAR_PX above bottom-0,
+        // see Footer.mjs) — matching that stack keeps a column from sliding in
+        // behind either bar. When the footer is hidden the existing bottom-6
+        // (24px) gutter already comfortably fits the 3px bar, so it's left as
+        // is (no need to reserve extra space for it there).
+        (!state.footerVisible ? 'bottom-6 ' : `bottom-[${footerBoxPx(state) + PROGRESS_BAR_PX}px] `) +
         // No 1.5rem margin on the right anymore — the far edge is where the
         // last column's own content clipped (hidden by no-scrollbar) before
         // it was fully scrolled into view, so <main> now runs flush to the
@@ -9181,6 +9193,7 @@ MenuHost()(app)
 // would be capped at <main>'s own z-10 stacking context.
 CallArrowsHost()(app)
 Footer(state)(app)
+ProgressBar(state)(app)
 
 // Start with the search box already focused so the reviewer can type straight
 // away — a frame later, once BlockList has rendered the input into the DOM.
