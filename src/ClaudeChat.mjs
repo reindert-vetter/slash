@@ -21,6 +21,7 @@ import { html } from './vendor/arrow.js'
 import { avatarHTML } from './avatar.mjs'
 import { renderMarkdown, hardBreaks } from './markdown.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
+import { updateScrollFade } from './scrollFade.mjs'
 
 // Claude has no GitHub login/avatar of its own — a fixed, non-photo identity
 // (avatarHTML's own initials-circle fallback, since avatarUrl is empty). Kept
@@ -380,6 +381,17 @@ function claudeBubble(msg, i, total, claudePos, onSend) {
 // button side by side, same as the comment thread's own `reaction-compose`/
 // `reaction-send` pair) instead of a stacked column with the button
 // `self-end` below the field.
+//
+// `max-h-[38vh] overflow-y-auto` caps that growth — a long conversation used
+// to stretch this whole column (and, via <main>'s align-items:stretch, the
+// merged comment-claude-row card and its sibling block-diff column too)
+// without bound. A VISIBLE native scrollbar (no `no-scrollbar` here, unlike
+// most other panels in this app) plus the `@scroll`-driven `.scroll-fade-top`
+// class (src/scrollFade.mjs) make the cap discoverable instead of silently
+// truncating. See "A capped, fading thread" in .claude/docs/comments-panel.md
+// (the comment-thread pane in RelatedPanel.mjs mirrors this exactly) and the
+// `scrollClaudeThreadToBottom` calls in RelatedPanel.mjs that keep the newest
+// turn in view at the rest position.
 export function claudeChatColumn(view, callbacks) {
   return html`
     <div class="flex min-h-0 flex-1 flex-col gap-2 p-3" data-testid="claude-chat-card">
@@ -387,7 +399,11 @@ export function claudeChatColumn(view, callbacks) {
       <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="claude-chat-header">
         ${claudeMention}
       </p>
-      <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto no-scrollbar" data-testid="claude-chat-thread">
+      <div
+        class="flex max-h-[38vh] min-h-0 flex-1 flex-col gap-2 overflow-y-auto"
+        data-testid="claude-chat-thread"
+        @scroll="${(e) => updateScrollFade(e.target)}"
+      >
         ${() => {
           const messages = view.messages()
           const total = messages.length

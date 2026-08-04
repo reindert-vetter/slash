@@ -23,6 +23,7 @@ import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { colWidthStyle, startColumnResize, resetColumnWidth, resizeHandle, parseAutoWidthPx } from './columnWidth.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
+import { updateScrollFade } from './scrollFade.mjs'
 
 // colWidthKeyFor — the manual-column-width identity (see columnWidth.mjs /
 // .claude/docs/column-resize.md) for the three RelatedPanel-side columns
@@ -720,6 +721,7 @@ function toComment(focusInput = true) {
   cs.focus = 'comment'
   cs.threadPos = 0
   scrollCommentIntoView()
+  scrollCommentThreadToBottom()
   if (focusInput) {
     focusEl('[data-testid=reaction-compose]')
     // Restore whatever reply the reviewer was mid-typing on THIS comment
@@ -931,6 +933,26 @@ function scrollReactionIntoView() {
     const j = reactionCount() - cs.threadPos
     const el = document.querySelectorAll('[data-testid=reaction-bubble]')[j]
     if (el) scrollIntoViewVertical(el)
+  })
+}
+
+// scrollCommentThreadToBottom keeps the newest message in view while the
+// reviewer sits at the rest position (cs.threadPos === 0) — the exact mirror
+// of scrollClaudeThreadToBottom below (`comment-thread` is now itself the
+// scrolling container, capped at max-h-[38vh], see "A capped, fading thread"
+// in .claude/docs/comments-panel.md). Called after toComment() resets
+// threadPos to 0 and after a comment poll (loadComments) brings in a new
+// reply on the currently-open thread. A no-op at any other threadPos —
+// walking older messages via ↑ must never be yanked back down. Also updates
+// the top-fade class directly, since a JS-driven scrollTop write isn't
+// guaranteed to fire a native 'scroll' event in every browser.
+function scrollCommentThreadToBottom() {
+  if (cs.threadPos !== 0) return
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid=comment-thread]')
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    updateScrollFade(el)
   })
 }
 
@@ -1640,7 +1662,12 @@ function scrollClaudeThreadToBottom() {
   if (cs.claudePos !== 0) return
   requestAnimationFrame(() => {
     const el = document.querySelector('[data-testid=claude-chat-thread]')
-    if (el) el.scrollTop = el.scrollHeight
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    // A JS-driven scrollTop write isn't guaranteed to fire a native 'scroll'
+    // event in every browser, so update the top-fade class directly too (see
+    // scrollFade.mjs / "A capped, fading thread" in comments-panel.md).
+    updateScrollFade(el)
   })
 }
 
@@ -2431,6 +2458,12 @@ async function loadComments(pr) {
       // Comments just arrived — a pending refresh-restore that wanted a comment/
       // thread (or a sel) can now land. One-shot; see applyRelRestore.
       applyRelRestore()
+      // A poll can bring in a new reply on the currently-open thread — keep it
+      // pinned to the newest message, mirroring loadChatMessages/
+      // scrollClaudeThreadToBottom. A no-op while walking older messages
+      // (cs.threadPos !== 0) or with nothing expanded (no [data-testid=
+      // comment-thread] mounted).
+      scrollCommentThreadToBottom()
     }
   } catch (_) {
     // keep the last good list on a transient error
@@ -3604,7 +3637,11 @@ function expandedConversation(c, openCommentMenu) {
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
         ${() => commentStatusMark(c)}
       </div>
-      <div class="flex min-h-0 flex-col gap-2" data-testid="comment-thread">
+      <div
+        class="flex max-h-[38vh] min-h-0 flex-col gap-2 overflow-y-auto"
+        data-testid="comment-thread"
+        @scroll="${(e) => updateScrollFade(e.target)}"
+      >
         ${() => threadMessages(c).map((r, i, arr) => reactionBubble(c, r, i, arr.length).key('msg:' + r.id))}
       </div>
       <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">

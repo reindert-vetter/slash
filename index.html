@@ -55,6 +55,18 @@
         display: none;
       }
 
+      /* Top fade for a capped, internally-scrolling message thread
+         (comment-thread / claude-chat-thread, see src/scrollFade.mjs and "A
+         capped, fading thread" in .claude/docs/comments-panel.md). Toggled by
+         JS based on the container's own scrollTop, so it only shows once
+         something is genuinely scrolled out of view above — never a
+         permanent fade on a short conversation that fits entirely. A plain
+         gradient mask, not colour-dependent, so no dark-mode variant needed. */
+      .scroll-fade-top {
+        -webkit-mask-image: linear-gradient(to bottom, transparent, black 1.5rem);
+        mask-image: linear-gradient(to bottom, transparent, black 1.5rem);
+      }
+
       /* A small, subtle one-shot entrance animation for a newly-opened drilled
          Onderliggende-code column (see the drillOpenMarker comment in
          home.mjs) — a short fade + slight slide-in, never a repeating/looping

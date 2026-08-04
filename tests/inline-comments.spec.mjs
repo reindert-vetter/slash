@@ -237,7 +237,9 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     await expect(items.nth(0).getByTestId('comment-thread')).toContainText('eerste conversatie')
   })
 
-  test('the expanded thread has no internal height cap — a long conversation is never clipped', async ({ page }) => {
+  test('the expanded thread is capped at max-h-[38vh] and scrolls internally, newest message visible by default, faded once scrolled', async ({
+    page,
+  }) => {
     await page.goto('/pr/12903')
     await ready(page)
     const first = await ident(page)
@@ -249,7 +251,7 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     const { runId } = await created.json()
     expect(runId).toBeTruthy()
 
-    // Enough replies to make the thread taller than the old max-h-64 (16rem/256px) cap.
+    // Enough replies to overflow the max-h-[38vh] cap.
     for (let i = 0; i < 15; i++) {
       const res = await page.request.post(`/api/workflows/${runId}/signals/reply`, {
         data: { author: 'bogsat', body: 'reactie nummer ' + i, done: false },
@@ -268,13 +270,27 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     const lastBubble = thread.getByTestId('reaction-bubble').last()
     await expect(lastBubble).toContainText('reactie nummer 14')
 
-    // No internal clipping: the thread's content height fits its own box (no
-    // overflow beyond it — height simply grows with the conversation).
+    // The thread is capped (see "A capped, fading thread" in
+    // .claude/docs/comments-panel.md) — a 16-message conversation genuinely
+    // overflows max-h-[38vh] and scrolls internally instead of growing the
+    // whole comment-claude-row (and, via <main>'s align-items:stretch, the
+    // sibling block-diff column) without bound.
     const overflow = await thread.evaluate((el) => el.scrollHeight - el.clientHeight)
-    expect(overflow).toBe(0)
+    expect(overflow).toBeGreaterThan(0)
 
-    // The last message is fully visible without any scroll action.
+    // The newest message is still visible without any manual scroll — toComment()
+    // scrolls the thread to the bottom at the rest position (threadPos === 0),
+    // mirroring the Claude column's own scrollClaudeThreadToBottom.
     await expect(lastBubble).toBeInViewport()
+
+    // The top fade only appears once something is actually scrolled out of view
+    // above — it must not be a permanent, misleading cue.
+    await expect(thread).toHaveClass(/scroll-fade-top/)
+    await thread.evaluate((el) => {
+      el.scrollTop = 0
+      el.dispatchEvent(new Event('scroll'))
+    })
+    await expect(thread).not.toHaveClass(/scroll-fade-top/)
   })
 
   // compactConversation's preview used to hard-truncate at 1 line — fine for a

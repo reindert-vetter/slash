@@ -376,7 +376,16 @@ The "Embedded Claude conversation" section owns:
   `claude-chat-thread` message list carries `flex-1` so it absorbs whatever
   vertical space a short/empty conversation leaves over, keeping the composer
   pinned to the bottom of the (`items-stretch`-driven, possibly taller) row
-  instead of stranded right under the empty-state text. The composer row
+  instead of stranded right under the empty-state text — **and now also
+  `max-h-[38vh] overflow-y-auto`** (a VISIBLE scrollbar, `no-scrollbar` was
+  removed here) so a long conversation scrolls internally instead of
+  stretching this column — and, via `<main>`'s `align-items: stretch`, the
+  whole merged card and its sibling block-diff column — without bound. Same
+  cap, same reasoning, same `.scroll-fade-top` (`src/scrollFade.mjs`) top-fade
+  cue as the comment thread's own `comment-thread` pane — see "A capped,
+  fading thread" in `.claude/docs/comments-panel.md` for the full story
+  (including why this reverses, without repeating, an earlier `max-h-64
+  no-scrollbar` mistake). The composer row
   itself is `flex items-end gap-2` (textarea + "Stuur" side by side, the same
   pattern as the comment thread's own `reaction-compose`/`reaction-send`),
   not a stacked column with the button below the field. Width is

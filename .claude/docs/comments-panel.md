@@ -459,10 +459,65 @@ below and `.claude/docs/detail-layout.md`), so collapsing the comment the
 moment `→` moves focus into Claude would hide the very thread the
 conversation is about.
 
-**The expanded thread has no height cap/internal scroll** — its message list
-(`data-testid=comment-thread`) grows with the conversation. An earlier
-`max-h-64 overflow-auto no-scrollbar` silently cut off the tail behind an
-invisible scrollbar, which read as a truncated conversation; don't reintroduce.
+### A capped, fading thread — a later, deliberate reversal of the note above
+
+**Superseded.** This section used to say the expanded thread has no height cap
+at all — an earlier `max-h-64 overflow-auto no-scrollbar` had silently cut off
+the tail behind an invisible scrollbar, which read as a truncated
+conversation, so a cap was removed outright rather than fixed. A long
+conversation (or a long single reply) then had nowhere to stop: `comment-thread`
+grew without bound, `<main>`'s flex row (no `items-start`, so the CSS default
+`align-items: stretch` applies) stretched the whole `comments-and-related`
+column — and, via that same stretch, the sibling block-diff column too,
+showing as a large blank gap under a short diff/test card — and `<main>`'s own
+vertical scroll (already `auto`, see `.claude/docs/detail-layout.md`) then
+carried the reviewer's focus down far enough to push the diff off the top of
+the screen. Reported directly by a reviewer screenshot: a long reply made it
+impossible to see the diff and the conversation at the same time.
+
+**The fix this time is different from the earlier, reverted `max-h-64`
+attempt** — it deliberately does not repeat either mistake that attempt made:
+
+- **A viewport-relative cap** (`max-h-[38vh]`, matching `related-code`'s own
+  `max-h-full` bounded-by-`<main>` approach in `.claude/docs/detail-layout.md`
+  and `column-resize.md`), not a small fixed pixel value that clips a
+  perfectly ordinary conversation.
+- **A VISIBLE native scrollbar** — `overflow-y-auto`, deliberately without
+  `no-scrollbar` on this one container (every other scrollable panel in this
+  app hides its scrollbar chrome) — so the cap is discoverable instead of an
+  invisible truncation. `claude-chat-thread` (`ClaudeChat.mjs`) got the exact
+  same treatment (its own `no-scrollbar` was removed), for the identical
+  reason — a long Claude conversation stretched the row the same way.
+- **The newest message still stays in view by default**, mirroring how the
+  Claude column already behaved: `scrollCommentThreadToBottom()`
+  (`RelatedPanel.mjs`, an exact mirror of `scrollClaudeThreadToBottom`) sets
+  `comment-thread`'s own `scrollTop = scrollHeight` whenever `cs.threadPos ===
+  0` — called from `toComment()` and from `loadComments()` after a poll brings
+  in a new reply on the currently-open thread. A no-op while walking older
+  messages via `↑` (`cs.threadPos !== 0`) — that must never be yanked back
+  down.
+- **A top fade, not a hard clip, as the "there's more above" cue**
+  (`src/scrollFade.mjs`'s `updateScrollFade`, toggling the `.scroll-fade-top`
+  mask-image class defined in `index.html`) — bound via `@scroll` on the
+  container, plus called directly after every programmatic `scrollTop` write
+  (a JS-driven scrollTop assignment isn't guaranteed to fire a native
+  `'scroll'` event in every browser). Deliberately **not** a permanently
+  applied fade: it only toggles on once `scrollTop > 4`, so a short
+  conversation that fits entirely inside the cap never shows it — the
+  earlier `no-scrollbar` mistake hid the fact that there was more to see at
+  all; this fade only ever appears when that is actually true.
+- **No new `overflow-hidden` anywhere in the ancestor chain** — only the two
+  innermost message-list containers (`comment-thread`,
+  `claude-chat-thread`) got the cap; `comment-claude-row`/
+  `comment-claude-columns` themselves are untouched, so the documented
+  `overflow-hidden` + `justify-end` 0px-collapse trap (see
+  "`comment-claude-row` deliberately carries NO `overflow-hidden`" in
+  `.claude/docs/detail-layout.md`) can't recur.
+
+The comment/Claude-column menu anchors (`menuAnchor`'s `'comment'`/`'claude'`/
+`'replyPublish'` branches in `home.mjs`) target `comment-item`/
+`claude-chat-card` — the OUTER card, not the now-scrollable inner thread div —
+so an open menu's position is unaffected by this change.
 
 **`expandedConversation` has no author+avatar header** — that duplicated the
 opening bubble `threadMessages()` already renders (the comment's own body as the
