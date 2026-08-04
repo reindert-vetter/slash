@@ -3400,6 +3400,24 @@ function viewingBubble(c, r, i, total, isActive) {
 // while giving a typical 2-4 sentence finding enough room to read in place;
 // a genuinely long comment still ends in "…" and needs a click to read in
 // full.
+// truncateMiddle — shortens a string in the MIDDLE instead of the end, so
+// both the start and the end stay readable. Used for a file path (see the
+// comment-meta line below): a plain end-truncate ("resources/admin/…/huddl…")
+// eats the tail — the file name and line number, exactly the part that
+// matters most for a path — while the leading directories are the least
+// useful part to keep in full. A fixed character budget rather than a
+// measured pixel width: there is no CSS-only way to middle-truncate variable
+// text, and the comment/Claude columns already have a bounded, only
+// mildly-varying width (commentColumnWidthCls(), ~21–28rem), so one constant
+// comfortably fits without a measurement dance.
+function truncateMiddle(str, maxLen = 46) {
+  if (!str || str.length <= maxLen) return str
+  const keep = maxLen - 1 // room for the … itself
+  const head = Math.ceil(keep / 2)
+  const tail = keep - head
+  return str.slice(0, head) + '…' + str.slice(str.length - tail)
+}
+
 function compactConversation(c, i) {
   const who = identityOf(c.source, c.author, c.avatarUrl)
   return html`
@@ -3437,7 +3455,7 @@ function compactConversation(c, i) {
         ></span>
         <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
           >${() =>
-            c.file + ':' + c.line + ' · ' + c.reactionCount + ' reacties · ' + c.status + lastReplyNote(c)}</span
+            truncateMiddle(c.file) + ':' + c.line + ' · ' + c.reactionCount + ' reacties · ' + c.status + lastReplyNote(c)}</span
         >
       </span>
     </button>
