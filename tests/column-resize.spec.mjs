@@ -129,3 +129,39 @@ test('the handle also works in list mode, before entering the diff session', asy
   expect(style).toMatch(/width:\d+px/)
   expect(Number(/width:(\d+)px/.exec(style)[1])).toBeGreaterThan(box.width)
 })
+
+// Keyboard counterpart of the drag handle (see .claude/docs/column-resize.md,
+// "Keyboard resize"): holding `v` grows the FOCUSED column, and two quick
+// taps of the same key reset it back to auto.
+test('holding v grows the focused column, and a double-tap resets it', async ({ page }) => {
+  await page.goto('/pr/12903')
+  await leaveSearchBox(page)
+  await page.locator('[data-idx="1"]').click()
+  await page.keyboard.press('ArrowRight')
+  await expect(page).toHaveURL(/mode=diff/)
+  await page.waitForTimeout(300)
+
+  const article = page.locator('[data-testid="block-column"] article:has([data-testid="col-resize-handle"])')
+  const startWidth = (await article.boundingBox()).width
+  expect(await article.getAttribute('style')).toBe('')
+
+  // Hold v long enough to clear the tap threshold, so this release commits an
+  // override instead of arming the double-tap window.
+  await page.keyboard.down('v')
+  await page.waitForTimeout(400)
+  await page.keyboard.up('v')
+
+  const styleAfterHold = await article.getAttribute('style')
+  expect(styleAfterHold).toMatch(/width:\d+px/)
+  const pxAfterHold = Number(/width:(\d+)px/.exec(styleAfterHold)[1])
+  expect(pxAfterHold).toBeGreaterThan(startWidth)
+
+  // Two quick taps of c reset the override back to auto (no inline style).
+  await page.keyboard.down('c')
+  await page.keyboard.up('c')
+  await page.keyboard.down('c')
+  await page.keyboard.up('c')
+  await expect(async () => {
+    expect(await article.getAttribute('style')).toBe('')
+  }).toPass()
+})

@@ -94,7 +94,14 @@ import { renderMarkdown } from './markdown.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 import { meLogin } from './avatar.mjs'
-import { loadColumnWidths, colWidthStyle, startColumnResize, resetColumnWidth } from './columnWidth.mjs'
+import {
+  loadColumnWidths,
+  colWidthStyle,
+  startColumnResize,
+  resetColumnWidth,
+  startKeyResize,
+  clearColumnWidth,
+} from './columnWidth.mjs'
 
 initTheme()
 
@@ -4912,6 +4919,61 @@ function focusedBlock() {
   return state.focusLevel === 0 ? curBlock() : state.drill[state.focusLevel - 1]
 }
 
+// Keyboard column resize (`c` shrinks, `v` grows) — the keyboard counterpart
+// of the resize handle's drag (see columnWidth.mjs / column-resize.md). Holds
+// c/v on the FOCUSED column: whichever column focusedBlock() currently
+// belongs to, i.e. the column that owns state.focusLevel — not necessarily
+// the diff card at rest. So this reaches the same column whether the
+// keyboard is sitting on that block's own diff, or already stepped further
+// into its Underlying-code panel, an inline comment thread or the embedded
+// Claude chat (relatedActive()) — deliberately broader than f/d/s/a, which
+// stay diff-only (see the guard in onKeydown just below for why).
+//
+// activeKeyResize/lastTap are plain module-level state, not reactive — like
+// `ms`/`menu` above, they only ever drive this one gesture and don't need to
+// be observed by any template.
+let activeKeyResize = null // { key: 'c'|'v', handle: ReturnType<startKeyResize> }
+const lastTap = { c: { time: 0, short: false }, v: { time: 0, short: false } }
+const KEY_RESIZE_TAP_MAX_MS = 250 // a press shorter than this counts as a "tap"
+const KEY_RESIZE_DOUBLE_TAP_MS = 350 // max gap between two taps to count as a double-tap reset
+
+function startResizeKey(key) {
+  if (activeKeyResize) {
+    if (activeKeyResize.key === key) return // OS key-repeat while already held — ignore
+    activeKeyResize.handle.commit() // switching key mid-hold: commit the other one first
+    activeKeyResize = null
+  }
+  const b = focusedBlock()
+  if (!b) return
+  const widthKey = 'diff:' + b.id
+  const root = document.querySelector('[data-diff-col-key="' + widthKey + '"]')
+  if (!root) return
+  const handle = startKeyResize(state, widthKey, root, key === 'c' ? -1 : 1)
+  activeKeyResize = { key, widthKey, pressStart: performance.now(), handle }
+}
+
+// stopResizeKey — the keyup counterpart. Decides whether this release closes
+// a genuine hold (commit the width it landed on) or is the SECOND half of a
+// quick double-tap (reset to auto instead, discarding whatever tiny width
+// change the brief tap itself made — mirroring the resize handle's own
+// dblclick reset, which likewise ignores any drag distance).
+function stopResizeKey(key) {
+  if (!activeKeyResize || activeKeyResize.key !== key) return
+  const { widthKey, pressStart, handle } = activeKeyResize
+  activeKeyResize = null
+  const now = performance.now()
+  const heldMs = now - pressStart
+  const isShortTap = heldMs <= KEY_RESIZE_TAP_MAX_MS
+  const isDoubleTap = isShortTap && lastTap[key].short && now - lastTap[key].time <= KEY_RESIZE_DOUBLE_TAP_MS
+  lastTap[key] = { time: now, short: isShortTap }
+  if (isDoubleTap) {
+    handle.cancel()
+    clearColumnWidth(state, widthKey)
+  } else {
+    handle.commit()
+  }
+}
+
 // focusedGranCursor resolves the {gran, change} of whichever column currently
 // owns the keyboard — the top-level state.gran/state.change (focusLevel 0), or
 // the focused drilled column's own state.drillCursor[level-1] entry
@@ -7150,6 +7212,35 @@ function onKeydown(e) {
     return
   }
 
+  // c/v resize the FOCUSED column (see startResizeKey's own doc comment) —
+  // deliberately handled here, BEFORE relatedActive(), so holding c/v keeps
+  // working while the keyboard already sits inside that column's own
+  // Underlying-code panel / comment thread / Claude chat: relatedActive()
+  // ends unconditionally in a `return` for any key it doesn't itself claim
+  // (see "Generic input-focus guard" in keyboard-navigation.md), so a c/v
+  // check placed after it would never fire from in there. isModifiedKey(e)
+  // keeps Cmd/Ctrl+C/V as native copy/paste; isEditableFocused() is the ONLY
+  // "don't hijack, let it flow into the field" guard here — deliberately
+  // narrower than f/d/s/a's relatedActive()-inclusive guard, since a reviewer
+  // reading a thread or an Underlying-code card (no text field focused) is
+  // exactly the "also works in the sub-panels" case this was widened for; it
+  // still yields the moment a composer/reply/Claude-chat field actually has
+  // DOM focus. toggleFocused/ignoreToggleFocused/isTestColumnActive() stay a
+  // no-op, like every other diff-only shortcut — none of those stops owns a
+  // column to resize.
+  if (
+    (e.key === 'c' || e.key === 'v') &&
+    !isModifiedKey(e) &&
+    !isEditableFocused() &&
+    !state.toggleFocused &&
+    !state.ignoreToggleFocused &&
+    !isTestColumnActive()
+  ) {
+    e.preventDefault()
+    startResizeKey(e.key)
+    return
+  }
+
   // Once the reviewer has stepped into either the inline Onderliggende-code
   // card ('code') or an inline comment conversation ('new'/'comment'/
   // 'thread', reached by → from the diff only when the selected unit has
@@ -7604,6 +7695,19 @@ function onKeydown(e) {
 }
 
 window.addEventListener('keydown', onKeydown)
+
+// keyup ends a held c/v resize (see startResizeKey/stopResizeKey above); a
+// window-level `blur` is a safety net for the case the keyup itself never
+// arrives (e.g. Alt+Tab away while still holding the key) — without it the
+// animation would keep running, silently growing/shrinking the column
+// forever in the background.
+window.addEventListener('keyup', (e) => {
+  if (e.key === 'c' || e.key === 'v') stopResizeKey(e.key)
+})
+window.addEventListener('blur', () => {
+  if (activeKeyResize) activeKeyResize.handle.cancel()
+  activeKeyResize = null
+})
 
 // connector — the dashed vertical line drawn between two stacked cards that come
 // from the same file, so a reviewer sees at a glance they belong together.

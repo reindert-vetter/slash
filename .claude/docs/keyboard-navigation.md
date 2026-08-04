@@ -608,6 +608,25 @@ each visible card's diff structure and width — not the card-building closures
 (see the "outer closure depends on navigation state" pitfall in
 `.claude/rules/arrowjs-pitfalls.md`).
 
+## `c`/`v` — resizing the focused column by keyboard
+
+Holding **`c`** shrinks and holding **`v`** grows the manual column-width
+override (the same one the resize handle's drag sets, see
+`.claude/docs/column-resize.md`) of whichever column is currently
+**focused** — `focusedBlock()`'s own `'diff:' + b.id` key, i.e. the top-level
+selected card or the currently open drilled column, whichever owns
+`state.focusLevel`. **Deliberately not diff-only** like `f`/`d`/`s`/`a`
+above: its guard sits in `onKeydown` **before** the `relatedActive()` branch,
+so it keeps working while the keyboard has already stepped further into that
+same block's Underlying-code panel, an inline comment thread, or the embedded
+Claude chat — only `isEditableFocused()` (a real composer/reply/Claude-chat
+field has DOM focus) makes it yield, plus the usual `isModifiedKey(e)` so
+Cmd/Ctrl+C/V stays native copy/paste. Releasing the key persists the width it
+landed on; **two quick taps of the same key in a row reset it to auto**,
+mirroring the handle's own dblclick reset. Full mechanism (the
+`startKeyResize`/`cancel`/`commit` split, the double-tap timing, the `blur`
+safety net): `.claude/docs/column-resize.md`.
+
 ## Generic input-focus guard (typing must never be swallowed by a shortcut)
 
 `relatedActive()` (`cs.focus !== null`) is the existing safety-net branch: it

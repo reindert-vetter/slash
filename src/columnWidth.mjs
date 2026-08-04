@@ -161,6 +161,63 @@ export function startColumnResize(e, state, key, autoWidthPxFn) {
   document.addEventListener('mouseup', onUp)
 }
 
+// KEY_RESIZE_PX_PER_SEC — how fast a held c/v keeps shrinking/growing the
+// focused column (see startKeyResize below). Frame-rate independent (driven
+// off the animation frame's own timestamp delta), so it feels the same on a
+// 60Hz and a 120Hz display.
+const KEY_RESIZE_PX_PER_SEC = 420
+
+// startKeyResize — the keyboard counterpart of startColumnResize: holding `c`
+// (dir -1) or `v` (dir 1) continuously shrinks/grows the given column instead
+// of a single mousedown→mousemove drag. `root` is the column's own DOM node
+// (found by the caller via its `data-diff-col-key` — see the doc comment on
+// that attribute in Block.mjs), read once for the CURRENT rendered width
+// exactly like startColumnResize's own `root.getBoundingClientRect().width` —
+// so a hold that starts from an existing override continues from there, and a
+// hold starting from the auto (class-driven) width continues from whatever
+// that auto width currently renders as.
+//
+// Returns a handle with two terminal actions instead of a single onUp, because
+// the caller (home.mjs) needs to tell a genuine "held it, then let go" apart
+// from "this was the first half of a quick double-tap, about to be reset" —
+// see the doc comment on home.mjs's own key-resize tracking:
+//   - cancel() stops the animation WITHOUT persisting — used when the release
+//     turns out to be the second half of a double-tap (the tiny width change
+//     the brief tap already made is simply discarded, mirroring the resize
+//     handle's own dblclick reset, which also ignores any drag distance).
+//   - commit() stops the animation and persists the current width, exactly
+//     like startColumnResize's mouseup path (but with no snap-back-to-auto:
+//     that check needs the auto-width class function, which only Block.mjs
+//     has — see MIN_COL_PX's neighbour parseAutoWidthPx and the doc-comment
+//     in column-resize.md on why the keyboard path skips it).
+export function startKeyResize(state, key, root, dir) {
+  const startWidth = getColumnWidth(state, key) || root.getBoundingClientRect().width
+  state.colWidths[key] = startWidth
+  state.colWidthVersion++
+  let raf = null
+  let last = null
+  const step = (t) => {
+    if (last == null) last = t
+    const dt = (t - last) / 1000
+    last = t
+    const next = Math.max(MIN_COL_PX, (state.colWidths[key] || startWidth) + dir * KEY_RESIZE_PX_PER_SEC * dt)
+    state.colWidths[key] = next
+    state.colWidthVersion++
+    raf = requestAnimationFrame(step)
+  }
+  raf = requestAnimationFrame(step)
+  return {
+    cancel() {
+      if (raf != null) cancelAnimationFrame(raf)
+    },
+    commit() {
+      if (raf != null) cancelAnimationFrame(raf)
+      const current = state.colWidths[key]
+      if (current != null) setColumnWidth(state, key, current)
+    },
+  }
+}
+
 // resizeHandle — the visual affordance shared by every resizable column: a
 // thin strip on the right edge with a col-resize cursor (Rule 4 in
 // mouse-navigation.md: hover carries no state here, only a CSS cursor

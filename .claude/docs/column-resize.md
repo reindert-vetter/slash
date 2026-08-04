@@ -150,14 +150,83 @@ this was caught. `right-0` keeps the handle inside the clipped box.
   `resetColumnWidth`/`clearColumnWidth` directly, independent of any drag
   distance.
 
+## Keyboard resize: hold `c`/`v` on the FOCUSED column, double-tap to reset
+
+The drag handle has a keyboard counterpart, next to `f`/`d`/`s`/`a` in
+`onKeydown` (`home.mjs`): holding **`c`** continuously shrinks and holding
+**`v`** continuously grows the column at a fixed px/sec rate
+(`startKeyResize`/`KEY_RESIZE_PX_PER_SEC`, `columnWidth.mjs`), floored at
+`MIN_COL_PX` like the drag, no upper bound; releasing the key persists
+whatever width it landed on (the cookie write, same as a drag's mouseup).
+**Two quick taps of the same key in a row reset to auto** — the keyboard
+mirror of the handle's dblclick reset — see "Double-tap detection" below.
+
+**Which column: the FOCUSED one, kind `'diff'` only.** `startResizeKey`
+(`home.mjs`) targets `focusedBlock()` — whichever block owns
+`state.focusLevel` right now (the top-level selected card, or the currently
+open drilled column) — via its `'diff:' + b.id` key, exactly the key
+`Block.mjs`'s own resize handle already writes to. This is the same column
+whether the keyboard is sitting on that block's own diff, or has already
+stepped further into ITS Underlying-code panel / an inline comment thread /
+the embedded Claude chat (`relatedActive()`): the guard sits **before** the
+`relatedActive()` branch in `onKeydown`, not after like `f`/`d`/`s`/`a` (which
+stay diff-only, see `.claude/docs/keyboard-navigation.md`) — `relatedActive()`
+otherwise ends unconditionally in a `return` for any key it doesn't itself
+claim, so a check placed after it would never fire while a sub-panel owns the
+keyboard. The only "don't hijack" guard here is `isEditableFocused()` (a real
+composer/reply/Claude-chat field has DOM focus) plus `isModifiedKey(e)`
+(Cmd/Ctrl+C/V stays native copy/paste) — deliberately narrower than
+`f`/`d`/`s`/`a`'s guard, since "reading a thread with no field focused" is
+exactly the case this was widened for. `toggleFocused`/`ignoreToggleFocused`/
+`isTestColumnActive()` still make it a no-op, like every other diff-only
+shortcut — none of those stops owns a column.
+
+**`Block.mjs` needed one small addition to make the column findable from
+`home.mjs`:** the card's own `<article>` carries a static
+`data-diff-col-key="${'diff:' + b.id}"` next to `data-col-resize-root` (same
+static-interpolation shape as the existing `data-testid="${'svg-pane-' +
+labelText}"`), so `startResizeKey` can `document.querySelector(...)` the
+actually-rendered column and start from its real current width — the same
+`getBoundingClientRect().width` source `startColumnResize`'s drag already
+uses, via `startKeyResize`'s own read.
+
+**No snap-back-to-auto on release** (unlike the drag's mouseup path): that
+check needs the auto-width class function (`parseAutoWidthPx(widthCls(...))`),
+which only `Block.mjs` has — plumbing it out to `home.mjs` for this one path
+wasn't worth it, and the double-tap reset already covers "I want to go back to
+auto" explicitly.
+
+### Double-tap detection
+
+`startResizeKey`/`stopResizeKey` (`home.mjs`) track, per key (`c` and `v`
+independently — `c` then `v` in a row is NOT a double-tap), whether the last
+release was a short **tap** (held ≤ `KEY_RESIZE_TAP_MAX_MS`, 250ms) and how
+long ago. A release counts as the second half of a double-tap only when BOTH
+presses were short taps AND the gap between them is ≤
+`KEY_RESIZE_DOUBLE_TAP_MS` (350ms) — deliberately requiring both, not just a
+short gap: two genuine long holds back to back (shrink, pause, shrink some
+more) must NOT reset, only two quick taps like a double-click. On a detected
+double-tap, `startKeyResize`'s handle is `cancel()`ed (not `commit()`ed) and
+`clearColumnWidth` runs directly — the tiny width change the brief tap itself
+already made is simply discarded, exactly like the handle's own dblclick
+reset ignores any drag distance.
+
+A `keyup` on `c`/`v` ends the hold (`stopResizeKey`); a `window` `blur`
+listener is a safety net for the case a `keyup` never arrives (e.g. Alt-Tab
+away while still holding the key) — without it the animation frame loop would
+keep running, silently growing/shrinking the column forever in the
+background.
+
 ## Test
 
 `tests/column-resize.spec.mjs` — drags the block-card handle wider, asserts
 the inline style, reloads the page and asserts the cookie-backed override
 survived, then double-click-resets it; a second test drags a few px (within
-the snap-back window) and asserts no override commits at all. Uses the
-shared, read-only anchor fixture PR 12903 (no write happens, so neither
-`APPROVAL_RESET_PRS` nor `seededPr` applies — see
+the snap-back window) and asserts no override commits at all; a third holds
+`c` via `keyboard.down`/`keyboard.up` and asserts the inline style shrank and
+survived a reload, then double-taps `c` and asserts the override is gone
+again. Uses the shared, read-only anchor fixture PR 12903 (no write happens,
+so neither `APPROVAL_RESET_PRS` nor `seededPr` applies — see
 `.claude/docs/testing-playwright.md`). Runs at a widened viewport
 (`test.use({ viewport: { width: 2200, height: 900 } })`) so a rightward drag
 has room before hitting the window edge, and waits ~300ms after entering

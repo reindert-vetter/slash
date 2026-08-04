@@ -526,6 +526,7 @@ export default function Block(b, opts = {}) {
           : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"
       style="${() => colWidthStyleFn()}"
       data-col-resize-root
+      data-diff-col-key="${'diff:' + b.id}"
     >
       ${() =>
         // Any non-preview/look-ahead card may be dragged wider/narrower —
