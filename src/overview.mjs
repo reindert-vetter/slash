@@ -185,6 +185,21 @@ function chip(text, cls, testid, iconName) {
   >`
 }
 
+// iconChip — a chip that shows ONLY the icon, no text. Used where the
+// tooltip/aria-label carries the meaning instead of a label, so two chips
+// distinguished only by color also stay distinguishable by shape (see
+// user_colorblind.md) — `title`/`aria-label` are plain static attribute
+// values (never mixed with a ${} slot, see .claude/rules/arrowjs-pitfalls.md).
+function iconChip(iconName, cls, testid, title) {
+  return html`<span
+    class="${'inline-flex items-center justify-center rounded-full p-1 ring-1 ring-inset ' + cls}"
+    data-testid="${testid || ''}"
+    title="${title}"
+    aria-label="${title}"
+    >${icon(iconName, 'h-3 w-3')}</span
+  >`
+}
+
 // ── status pills (review chip, checks chip, reviewer avatars) ──────────────
 
 const STATE_LABEL = {
@@ -364,8 +379,8 @@ function statusArea(pr) {
 }
 
 function graphChip(pr) {
-  if (pr.hasGraph) return chip('generated', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'graph-chip', 'sparkles')
-  return chip('op GitHub ›', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30', 'graph-chip')
+  if (pr.hasGraph) return iconChip('sparkles', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'graph-chip', 'Gegenereerd')
+  return iconChip('external-link', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30', 'graph-chip', 'Op GitHub')
 }
 
 // approvalPill — the per-PR reviewer-approval badge (done/total changed rows over
