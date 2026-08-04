@@ -54,9 +54,24 @@ test('embedded Claude chat: live status line and streaming partial answer', asyn
         : 'retry: 300\n\n' +
           frame(progress({ phase: 'writing', partial: 'Ik kijk naar `total()` en zie' })) +
           // The snapshot keeps the text produced so far when Claude moves on to
-          // a tool (chat_progress.go), so this last frame is the steady state
-          // the assertions below poll for: a tool label AND the answer so far.
-          frame(progress({ phase: 'tool', tool: 'Read', detail: 'src/Order.php', partial: 'Ik kijk naar `total()` en zie' }))
+          // a tool (chat_progress.go), so a tool frame carries BOTH a tool
+          // label and the answer so far.
+          frame(progress({ phase: 'tool', tool: 'Read', detail: 'src/Order.php', partial: 'Ik kijk naar `total()` en zie' })) +
+          // The LAST frame is the steady state the assertions below poll for.
+          frame(
+            progress({
+              phase: 'tool',
+              tool: 'Bash',
+              // Deliberately LONG: the status line may wrap over up to three
+              // lines (line-clamp-3) instead of being truncated to one — see
+              // "Live progress" in .claude/docs/claude-chat-panel.md.
+              detail:
+                'git log --oneline --stat --follow -- src/Order.php src/OrderLine.php src/Invoice.php ' +
+                'src/InvoiceLine.php src/Payment.php src/PaymentMethod.php src/Subscription.php ' +
+                'src/SubscriptionLine.php src/Refund.php src/RefundLine.php src/Coupon.php',
+              partial: 'Ik kijk naar `total()` en zie',
+            }),
+          )
     await route.fulfill({
       status: 200,
       headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
@@ -83,6 +98,19 @@ test('embedded Claude chat: live status line and streaming partial answer', asyn
   const status = page.getByTestId('claude-chat-status')
   await expect(status).toContainText('src/Order.php')
   await expect(status).toContainText(/\d+s/)
+
+  // The status line may run over MULTIPLE lines (max 3) rather than being cut
+  // off at one — a long Bash/Read detail is exactly what used to disappear.
+  const lines = await status.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    return {
+      clamp: cs.webkitLineClamp,
+      lines: Math.round(el.getBoundingClientRect().height / parseFloat(cs.lineHeight)),
+    }
+  })
+  expect(lines.clamp).toBe('3')
+  expect(lines.lines).toBeGreaterThan(1)
+  expect(lines.lines).toBeLessThanOrEqual(3)
 
   // The answer-so-far renders as its own provisional bubble, markdown and all,
   // separate from the stored transcript.

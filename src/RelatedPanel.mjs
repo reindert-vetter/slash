@@ -1789,7 +1789,7 @@ export function CommentClaudeFooter() {
         commentFooterText() || claudeActive()
           ? html`
               <div
-                class="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-[11px] text-slate-500 dark:text-zinc-500"
+                class="flex w-0 min-w-full flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-[11px] text-slate-500 dark:text-zinc-500"
                 data-testid="comment-claude-footer"
               >
                 ${() =>
@@ -1801,9 +1801,17 @@ export function CommentClaudeFooter() {
                     : ''}
                 ${() =>
                   claudeActive()
-                    ? html`<span class="flex items-center gap-1.5" data-testid="comment-claude-footer-claude">
-                        <span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"></span>
-                        <span class="truncate" data-testid="claude-chat-status">
+                    ? html`<span
+                        class="flex min-w-0 flex-1 items-start gap-1.5"
+                        data-testid="comment-claude-footer-claude"
+                      >
+                        <span
+                          class="mt-[0.3rem] inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"
+                        ></span>
+                        <span
+                          class="line-clamp-3 min-w-0 flex-1 [overflow-wrap:anywhere]"
+                          data-testid="claude-chat-status"
+                        >
                           ${() => claudeStatusText(view.progress(), view.elapsed()) + claudeQueueNote()}
                         </span>
                       </span>`

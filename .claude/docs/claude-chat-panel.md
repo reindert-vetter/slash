@@ -445,7 +445,32 @@ the send-status section in `.claude/docs/comments-panel.md` for its comment-side
 half and the `reaction-status` button it replaced. Still the same
 `data-testid=claude-chat-status` on the text itself, so
 `tests/claude-chat-progress.spec.mjs` needed no change, just relocated to
-`data-testid=comment-claude-footer-claude`'s own span. `ClaudeChat.mjs` still
+`data-testid=comment-claude-footer-claude`'s own span.
+
+**The Claude half wraps over up to THREE lines** (`line-clamp-3`
+`[overflow-wrap:anywhere]`, on a `min-w-0 flex-1 items-start` half with the
+pulsing dot nudged down to the first line). It used to be a single `truncate`d
+line, which cut off exactly the informative cases: a long `Bash`/`Read` detail,
+or the status plus the queue note ("· nog 2 berichten in de wachtrij", see
+"Doorpraten tijdens een lopende turn"). Three lines is the cap on purpose — the
+footer must not grow into a panel of its own — and the third line still ends in
+an ellipsis when even that isn't enough. The comment-side half keeps its single
+`truncate`d line: its texts are fixed and short ("Bezig…", "Verstuurd").
+
+**The footer row itself carries `w-0 min-w-full`, and that is load-bearing.**
+`comment-claude-row` (`home.mjs`) is a `flex-col` with no width of its own: its
+width follows its widest child, and `<main>` scrolls horizontally, so nothing
+clips it. A wrapping status line therefore did NOT wrap at first — the footer's
+own intrinsic width simply stretched the whole merged card (measured: 640px →
+1390px) and the text stayed on one line, now in a card wider than both columns.
+`w-0` takes the footer out of that intrinsic-width calculation (the columns row
+decides the width) while `min-w-full` stretches it back to exactly that width,
+which is what finally gives `line-clamp-3` a boundary to wrap against. Same
+reason the status span needs `min-w-0 flex-1` inside its half. Test: the
+line-count assertions in `tests/claude-chat-progress.spec.mjs`, whose steady
+mocked frame carries a deliberately long `Bash` detail.
+
+`ClaudeChat.mjs` still
 renders the **provisional bubble** (`data-testid=claude-partial`), rendering
 `progress.partial` through the same `renderMarkdown` — that one stays inline in
 the thread, only the status line moved. The word carries the meaning; the
