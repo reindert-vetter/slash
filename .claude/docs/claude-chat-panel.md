@@ -113,6 +113,70 @@ weight "Plaats…" already has.
   unit-scoped compare in `placeComment` is a second safety net on top of
   that).
 
+### `→` reaches the Claude composer directly from the still-open `'new'` field
+
+Explicit reviewer request: typing "Comment op deze regel", reaching the end
+of that field (caret has nowhere further right — `editableCaretCanMoveRight()`
+in `home.mjs`) and pressing `→` should let the reviewer keep typing straight
+into Claude, without first placing the comment. Before this,
+`handleRelatedKey`'s `'new'`/`'comment'` `ArrowRight` case only handled
+`cs.focus === 'comment'` — a bare `→` on the still-open composer was a no-op.
+
+**`enterClaudeChatFromNew()`** (`RelatedPanel.mjs`) is the `'new'`-specific
+counterpart of `enterClaudeChat`, called from that same `ArrowRight` case: it
+sets `cs.focus = 'claude'` + `cs.claudePos = 0` and focuses the Claude
+composer, same as `enterClaudeChat`, but **needs no anchor comment to already
+exist** — unlike `enterClaudeChat`, it is never a no-op. `cc` is already
+blank/idle (reset by `toNew`) and no fetch/SSE re-subscribe is needed
+(`ClaudeChatPanel` already called `ensureChatEvents` on mount, while the
+composer itself opened). Sending from there goes through the exact same
+lazy-anchor path as "Bewerk code"/any other send from `'new'`
+(`ensureClaudeAnchorForNew` above) — nothing new is created until the reviewer
+actually sends a Claude message, not on this mere navigation step (same "must
+not come back" guarantee as the removed placeholder, see "Product decision"
+above).
+
+**`claudeChatVisible()` needed a third branch for this to work at all.** The
+moment `cs.focus` flips from `'new'` to `'claude'`, the existing
+`cs.focus === 'new'` check no longer holds — and `hasVisibleComments()` is
+still `false` (there genuinely is no comment yet) — so without a fix the whole
+column, *including the very composer the keyboard just landed in*, vanished
+one keypress after entering it (caught by this feature's own regression test,
+not a hypothetical). `claudeChatVisible()` therefore ALSO returns `true` for
+`cs.focus === 'claude' && cc.commentId == null` — the same "no anchor yet"
+signal `toNewFocus`'s callers use below. An already-anchored conversation
+(reached via the ordinary `enterClaudeChat`) always has `cc.commentId` set, so
+this third branch can never keep a genuinely gone conversation visible.
+
+**Getting back out, with the draft intact.** `newCommentComposer`'s own
+`cs.focus === 'new'` contents-toggle means the composer `<textarea>` actually
+**unmounts** while `cs.focus === 'claude'` — so, same as `toNew()` itself, the
+draft must be explicitly restored from `composeDrafts` on the way back, not
+merely left alone. **`toNewFocus()`** (`RelatedPanel.mjs`) is that restore: the
+mirror of `toComment()`, but back to `'new'` — it does NOT touch
+`cc`/`warningOverride`/`claudeAutoAnchor` (nothing about the anchor changed
+while the reviewer was in Claude, only the DOM focus did), and it re-prefills
+`comment-compose` from `composeDrafts.get(composeDraftKey)` (`composeDraftKey`
+is unchanged since the original `toNew()` call, so this always resolves the
+SAME draft). Reached from `handleRelatedKey`'s `cs.focus === 'claude'` branch:
+**both `ArrowLeft` and `Escape`** check `cc.commentId == null` — the signal
+that this conversation was entered via `enterClaudeChatFromNew` and has no
+anchor yet (an already-anchored conversation always has `cc.commentId` set
+synchronously by `ensureAndLoadChat`, before any keypress could follow) — and
+call `toNewFocus()` instead of the ordinary `toComment()`/`exitRelated()`,
+since there is no comment to land `'comment'` on.
+
+**`↓` at `claudePos === 0` is deliberately UNCHANGED**, even reached this way:
+it still releases the panel and advances to the next visible block's diff
+(`advanceToNextBlockFromClaudeChat`, see "The chain, key by key" below) —
+explicit reviewer answer, not the no-op an earlier draft of this feature
+proposed. The still-unplaced draft is not lost by that: `composeDrafts` is
+untouched by `exitRelated()`, so it is restored the next time "Comment op deze
+regel" reopens on the same unit, exactly like leaving mid-type any other way.
+
+Test: the "→ from the still-open new-comment composer reaches Claude directly"
+case in `tests/claude-chat-panel.spec.mjs`.
+
 ### The chain, key by key
 
 Before this section's redesign (see `todo/todo-claude-chat-blok.md` TODO 2),
@@ -131,6 +195,11 @@ from either `'comment'` or `'thread'`, and one `←` returns directly to
   `enterClaudeChat(cs.pr)` directly — a focused comment/thread always has its
   own comment, so this can never hit the no-op (`RelatedPanel.mjs`'s
   `handleRelatedKey`).
+- **`→` on `cs.focus === 'new'`** (only once the caret is at the end of the
+  still-open composer, see `editableCaretCanMoveRight()`): calls
+  `enterClaudeChatFromNew()` instead — no anchor comment is required, see
+  "`→` reaches the Claude composer directly from the still-open `'new'`
+  field" above.
 - **`↑` on `cs.focus === 'comment'`**: steps into `'thread'` at the newest
   bubble (`cs.threadPos = 1` — a conversation always has at least its own
   opening message) instead of moving to the previous conversation. **`↑` on
@@ -162,10 +231,15 @@ from either `'comment'` or `'thread'`, and one `←` returns directly to
   where one lingers without the other. Test:
   `tests/claude-chat-panel.spec.mjs`'s "↓ at the bottom of the Claude chat
   advances to the next block…" case.
-- **`←` on `cs.focus === 'claude'`**: steps back directly to `cs.focus ===
-  'comment'` (`toComment()`, which also resets `cs.threadPos` — `'thread'` is
-  never visited on the way back) — always possible, since entering `'claude'`
-  guarantees a comment now exists.
+- **`←`/`Escape` on `cs.focus === 'claude'`**: step back directly to
+  `cs.focus === 'comment'` (`toComment()`, which also resets `cs.threadPos` —
+  `'thread'` is never visited on the way back) — unless this conversation has
+  no anchor yet (`cc.commentId == null`, i.e. reached via
+  `enterClaudeChatFromNew`), in which case they go to `toNewFocus()` instead,
+  back to the still-open composer with its draft intact (see "`→` reaches the
+  Claude composer directly from the still-open `'new'` field" above). Every
+  OTHER way of reaching `'claude'` (`enterClaudeChat`) guarantees a comment
+  already exists, so `cc.commentId` is never `null` there.
 
 No new stop exists between `'code'` and `'claude'` — `→` has no meaning past
 `'claude'` (nothing deeper); `↓` from there skips Onderliggende code entirely

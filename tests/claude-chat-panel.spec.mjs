@@ -318,6 +318,81 @@ test('composing a new comment: the Claude column shows before it is placed, and 
   }
 })
 
+// → from the still-open, not-yet-placed "Comment op deze regel" composer
+// (cs.focus === 'new') reaches the Claude composer directly, without an
+// anchor comment existing yet — enterClaudeChatFromNew, see "→ reaches the
+// Claude composer directly from the still-open 'new' field" in
+// claude-chat-panel.md. Complements the caret-guard mechanics already covered
+// by tests/comment-arrowright-caret.spec.mjs with the RelatedPanel-specific
+// behaviour: nothing is created by the mere navigation, ←/Escape both return
+// to the SAME still-open composer with its draft intact (toNewFocus,
+// mirroring toComment()), and ↓ at the bottom of the (anchor-less) Claude
+// conversation still advances to the next visible block exactly as it does
+// for an already-anchored one — the draft simply survives via composeDrafts,
+// same as leaving the composer any other way. Uses PR 12903 (real ingested
+// blocks are needed to reach a block's own command palette).
+test('→ from the still-open new-comment composer reaches Claude directly, with the draft surviving ←/Escape/↓', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await leaveSearchBox(page)
+  await page.locator('[data-idx="1"]').click()
+  await page.keyboard.press('ArrowRight') // list -> diff
+
+  await page.keyboard.press('Enter') // block command palette
+  await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
+  const composer = page.getByTestId('comment-compose')
+  await expect(composer).toBeFocused()
+
+  const draftText = 'Nog niet geplaatst, maar ik wil al met Claude praten'
+  await composer.type(draftText)
+  await expect(composer).toHaveValue(draftText)
+
+  // Caret sits at the end after typing — → jumps straight into the Claude
+  // composer, and nothing is created by this navigation alone.
+  const claudeComposer = page.getByTestId('claude-chat-compose')
+  await page.keyboard.press('ArrowRight')
+  await expect(claudeComposer).toBeFocused()
+  await expect(page.getByTestId('comment-item')).toHaveCount(0)
+
+  // ← returns to the SAME still-open composer, draft intact (toNewFocus) —
+  // not toComment(), which would assume a comment already exists.
+  await page.keyboard.press('ArrowLeft')
+  await expect(composer).toBeFocused()
+  await expect(composer).toHaveValue(draftText)
+
+  // Escape does the exact same thing as ← here.
+  await page.keyboard.press('ArrowRight')
+  await expect(claudeComposer).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(composer).toBeFocused()
+  await expect(composer).toHaveValue(draftText)
+
+  // ↓ at the bottom of this still-anchor-less conversation is UNCHANGED: it
+  // still advances to the next visible block's diff (not a no-op), per the
+  // explicit reviewer decision to keep the existing behaviour.
+  await page.keyboard.press('ArrowRight')
+  await expect(claudeComposer).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(page.locator('[data-idx="2"]')).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('comment-item')).toHaveCount(0)
+  await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
+
+  // The draft itself was never lost — composeDrafts survives leaving the
+  // composer via ↓, exactly like leaving it any other way. Navigating back to
+  // the original block (via the keyboard — the sidebar row is out of the
+  // diff-mode viewport right now) and reopening "Comment op deze regel"
+  // restores it.
+  await page.keyboard.press('ArrowLeft') // diff -> list, still on block 2
+  await page.keyboard.press('ArrowUp') // back to block 1
+  await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
+  await page.keyboard.press('ArrowRight') // list -> diff
+  await page.keyboard.press('Enter')
+  await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
+  await expect(composer).toHaveValue(draftText)
+})
+
 // A brand-new "Comment op deze regel" on a unit that ALREADY has a comment
 // (with its own Claude conversation, complete with prior turns) must get its
 // own, wholly separate comment + Claude block — never silently continue the

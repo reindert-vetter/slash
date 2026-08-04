@@ -119,6 +119,55 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
     await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
   })
 
+  test('still-open new-comment composer: ArrowRight moves the caret, entering Claude only fires once the caret is at the end — with no anchor comment yet', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toBeVisible()
+    await page.locator('[data-idx="1"]').click()
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowRight') // list -> diff
+
+    await openNewComment(page)
+    const composer = page.getByTestId('comment-compose')
+    await expect(composer).toBeFocused()
+
+    await composer.type('hello world')
+    await expect(composer).toHaveValue('hello world')
+    const len = 'hello world'.length
+
+    // Move the caret away from the end first (the same bug-report sequence).
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowLeft')
+    let pos = await composer.evaluate((el) => el.selectionStart)
+    expect(pos).toBe(len - 2)
+
+    // A plain ArrowRight moves the caret — it must NOT jump into Claude while
+    // there's still text to the right of the caret, and it must not place
+    // anything.
+    await page.keyboard.press('ArrowRight')
+    await expect(composer).toBeFocused()
+    pos = await composer.evaluate((el) => el.selectionStart)
+    expect(pos).toBe(len - 1)
+    await expect(composer).toHaveValue('hello world')
+    await expect(page.getByTestId('comment-item')).toHaveCount(0)
+
+    // One more ArrowRight reaches the actual end of the field.
+    await page.keyboard.press('ArrowRight')
+    await expect(composer).toBeFocused()
+
+    // Only once the caret is genuinely at the end does ArrowRight keep its
+    // nav meaning: it steps straight into the embedded Claude chat
+    // (enterClaudeChatFromNew() — no anchor comment exists yet, unlike the
+    // 'comment'/'thread' case above, see claude-chat-panel.md), focusing its
+    // own composer instead of the still-open comment field.
+    pos = await composer.evaluate((el) => el.selectionStart)
+    expect(pos).toBe(len)
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
+    await expect(page.getByTestId('comment-item')).toHaveCount(0) // still nothing placed
+  })
+
   test('comment-index item reply field: ArrowRight/Alt+ArrowRight move the caret, field stays open', async ({
     page,
   }) => {

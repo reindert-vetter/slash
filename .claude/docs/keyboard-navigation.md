@@ -56,11 +56,16 @@ code).
    pattern stop 5b already uses. `→` on either `'comment'` or `'thread'` goes
    straight to stop 5b in one step (see below); `↑` past the oldest bubble
    moves to the previous conversation (or exits, on the first one), instead of
-   clamping.
+   clamping. **`→` also reaches stop 5b from the still-open `'new'` composer**
+   (only once the caret has nowhere further right to go, same
+   `editableCaretCanMoveRight()` guard as `'comment'`/`'thread'` — see above),
+   even before anything is placed: `enterClaudeChatFromNew`
+   (`.claude/docs/claude-chat-panel.md`), not `enterClaudeChat` — no anchor
+   comment is required.
    - **Stop 5b — the embedded Claude chat** (`data-testid=claude-chat-column`,
-     `cs.focus==='claude'`): reached with `→` from stop 5's `'comment'` or
-     `'thread'` level — **also conditional**, on `claudeChatVisible()`, a
-     **strict iff** with stop 5 itself: a comment must actually be visible
+     `cs.focus==='claude'`): reached with `→` from stop 5's `'comment'`,
+     `'thread'` or `'new'` level — **also conditional**, on `claudeChatVisible()`,
+     a **strict iff** with stop 5 itself: a comment must actually be visible
      (or the brand-new composer be open), never on its own (explicit request —
      a conversation whose comment fell out of the visible index is no longer
      independently reachable, see "Superseded" in
@@ -78,8 +83,12 @@ code).
      straight to the **next visible block's diff**, skipping stop 6 (explicit
      request — landing in Underlying code read as an unwanted extra "menu" in
      the way of continuing the review; see `advanceToNextBlockFromClaudeChat`,
-     `home.mjs`); `←` steps back directly to `'comment'` (not to `'thread'`);
-     `→` does nothing (there is no stop past it).
+     `home.mjs`) — unchanged even when reached via the still-unplaced `'new'`
+     composer, since its draft text lives in `composeDrafts`, untouched by
+     leaving; `←`/`Escape` step back directly to `'comment'` (not to
+     `'thread'`) — or, reached via the composer (no anchor comment exists yet,
+     `cc.commentId == null`), back to the still-open `'new'` composer instead,
+     draft intact; `→` does nothing (there is no stop past it).
 6. **Underlying code** (`RelatedPanel`, `cs.focus==='code'`) — the last stop of
    the chain reachable via `→`: `→` there leaves the card nowhere to go. Note
    that "last" is about the `→` chain, not the screen — the stop-5b Claude
@@ -633,7 +642,9 @@ unchanged regardless of caret position. Test:
 **`→` gets the exact mirror-image guard.** `editableCaretCanMoveRight()` checks
 `selectionStart`/`selectionEnd` < `value.length`; only once the caret is at the
 end does `→` keep its nav meaning (entering the embedded Claude chat directly
-from `'comment'` or `'thread'`; a no-op for `'new'` and inside the chat
+from `'comment'` or `'thread'`, or — via `enterClaudeChatFromNew`, see
+`.claude/docs/claude-chat-panel.md` — from the still-open, not-yet-placed
+`'new'` composer too, even with no anchor comment yet; a no-op inside the chat
 itself). Test: `tests/comment-arrowright-caret.spec.mjs`.
 
 The comment-index item's own reply field (`commentDetailCard`) needs no guard at

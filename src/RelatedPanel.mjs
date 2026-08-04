@@ -681,6 +681,23 @@ function toNew(commentTargetFn) {
   cc.progress = null
 }
 
+// toNewFocus is the mirror of toComment() for the still-open, not-yet-placed
+// composer: it hands the keyboard back to 'new' from the embedded Claude
+// composer (see enterClaudeChatFromNew/cc.commentId's role there) WITHOUT
+// resetting cc/warningOverride/claudeAutoAnchor — none of that changed while
+// the reviewer was typing into Claude, only the DOM focus/cs.focus did.
+// newCommentComposer's own contents-root toggle (cs.focus === 'new') means the
+// composer textarea actually UNMOUNTS while cs.focus === 'claude' — so, same
+// as toNew() itself, the draft must be explicitly restored from composeDrafts
+// once it remounts; composeDraftKey is unchanged since the original toNew()
+// call, so this always resolves the SAME draft.
+function toNewFocus() {
+  cs.focus = 'new'
+  focusEl('[data-testid=comment-compose]')
+  const draft = composeDrafts.get(composeDraftKey)
+  if (draft) prefillField('[data-testid=comment-compose]', draft)
+}
+
 // `focusInput` defaults to true for every existing caller (a click or an
 // explicit arrow-key step onto a comment card) — landing already opens the
 // reply pane and drops the caret in it, per this file's own long-standing
@@ -1262,6 +1279,25 @@ export async function enterClaudeChat(pr) {
   refreshChatShadowWarning(pr, c.id)
 }
 
+// enterClaudeChatFromNew is the → target for the still-open "Comment op deze
+// regel" composer (cs.focus === 'new') once the caret has nowhere further
+// right to go (home.mjs's editableCaretCanMoveRight() guard) — reviewer
+// request: type a comment, then keep going right into Claude without first
+// placing the comment. Unlike enterClaudeChat it needs no anchor comment to
+// already exist: claudeChatVisible() is already true while cs.focus === 'new'
+// (see below), so the Claude column/composer is already mounted and cc is
+// already blank/idle (reset by toNew) — sending from there lazily creates the
+// backing comment on the reviewer's first actual send
+// (ensureClaudeAnchorForNew/sendClaudeMessageFromNew), never on mere
+// navigation (see "Product decision" in claude-chat-panel.md). No fetch, no
+// SSE re-subscribe: ClaudeChatPanel's own mount already called
+// ensureChatEvents while the composer opened.
+function enterClaudeChatFromNew() {
+  cs.focus = 'claude'
+  cs.claudePos = 0
+  focusClaudeComposer()
+}
+
 // isClaudeChatFocused/claudeChatVisible are the two questions home.mjs/this
 // panel's own render need: whether the KEYBOARD is on the chat column, and
 // whether the column should be VISIBLE at all.
@@ -1289,8 +1325,22 @@ export function isClaudeChatFocused() {
 // while composing a brand-new comment" in claude-chat-panel.md for how the
 // backing comment is lazily created only once the reviewer does something
 // real (ensureClaudeAnchorForNew below).
+//
+// The THIRD branch (cs.focus === 'claude' && cc.commentId == null) covers the
+// keyboard sitting IN the Claude composer itself, reached via
+// enterClaudeChatFromNew (→ from the still-open 'new' composer, see
+// claude-chat-panel.md) before anything is placed: the moment cs.focus flips
+// away from 'new' to 'claude', the plain 'new' check above no longer holds,
+// and hasVisibleComments() is still false (there is genuinely no comment yet)
+// — without this branch the whole column, including the very composer the
+// keyboard just landed in, would vanish out from under the reviewer one
+// keypress after entering it. cc.commentId is the same "no anchor exists yet"
+// signal handleRelatedKey's own 'claude' ArrowLeft/Escape branches use (see
+// toNewFocus) — an already-anchored conversation (reached via the ordinary
+// enterClaudeChat) always has it set, so this branch can never keep a
+// genuinely gone conversation visible.
 export function claudeChatVisible() {
-  return hasVisibleComments() || cs.focus === 'new'
+  return hasVisibleComments() || cs.focus === 'new' || (cs.focus === 'claude' && cc.commentId == null)
 }
 
 // focusClaudeComposer/scrollClaudeMessageIntoView mirror focusThread/
@@ -1627,13 +1677,23 @@ function applyRelRestore() {
 //    way of continuing to review) — it releases the panel focus and returns
 //    the 'advance' sentinel so home.mjs's onKeydown can select the next
 //    visible block and step straight into its diff (see
-//    advanceToNextBlockFromClaudeChat, home.mjs); ← steps back directly to
-//    the 'comment' level (not to 'thread' — mirrors 'comment'.ArrowRight
-//    reaching 'claude' directly). → and ↑/↓ elsewhere in the chain reach
-//    'claude' via enterClaudeChat, not via a case here — see its own doc
-//    comment for the "no comment thread yet" auto-create path.
+//    advanceToNextBlockFromClaudeChat, home.mjs) — UNCHANGED even when this
+//    conversation has no anchor comment yet (reached via enterClaudeChatFromNew
+//    below): the still-open composer's typed text stays put in composeDrafts
+//    regardless (exitRelated never touches it), so advancing away loses
+//    nothing. ← (and Escape) step back directly to the 'comment' level (not
+//    to 'thread' — mirrors 'comment'.ArrowRight reaching 'claude' directly) —
+//    OR, when this conversation has no anchor yet (cc.commentId == null, see
+//    enterClaudeChatFromNew), back to the still-open composer ('new',
+//    toNewFocus) instead, since there is no comment to land 'comment' on. →
+//    and ↑/↓ elsewhere in the chain reach 'claude' via enterClaudeChat/
+//    enterClaudeChatFromNew, not via a case here — see their own doc comments.
 export function handleRelatedKey(key) {
   if (key === 'Escape') {
+    if (cs.focus === 'claude' && cc.commentId == null) {
+      toNewFocus()
+      return true
+    }
     exitRelated()
     return 'exit'
   }
@@ -1653,10 +1713,17 @@ export function handleRelatedKey(key) {
       cs.claudePos -= 1
       focusClaudeComposer()
     } else if (key === 'ArrowLeft') {
-      // Straight back to 'comment' — 'thread' is no longer visited on the way
-      // (mirrors 'comment'.ArrowRight reaching 'claude' directly, see TODO 2
-      // in todo-claude-chat-blok.md). toComment() resets threadPos to 0.
-      toComment()
+      if (cc.commentId == null) {
+        // Reached via enterClaudeChatFromNew — there is no comment yet to
+        // land 'comment' on, so go back to the still-open composer instead.
+        toNewFocus()
+      } else {
+        // Straight back to 'comment' — 'thread' is no longer visited on the
+        // way (mirrors 'comment'.ArrowRight reaching 'claude' directly, see
+        // TODO 2 in todo-claude-chat-blok.md). toComment() resets threadPos
+        // to 0.
+        toComment()
+      }
     }
     return true
   }
@@ -1799,6 +1866,10 @@ export function handleRelatedKey(key) {
       // reached only via ↑, not as a horizontal stop (see TODO 2 in
       // todo-claude-chat-blok.md).
       enterClaudeChat(cs.pr)
+    } else if (cs.focus === 'new') {
+      // Same one-step jump, but there is no anchor comment yet — see
+      // enterClaudeChatFromNew.
+      enterClaudeChatFromNew()
     }
   }
   return true
