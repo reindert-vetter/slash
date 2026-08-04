@@ -675,3 +675,53 @@ test('Wis Claude-gesprek: confirm-gated command palette clears the transcript', 
   await expect(page.getByTestId('claude-chat-empty')).toBeVisible()
   await expect(page.getByTestId('claude-message')).toHaveCount(0)
 })
+
+// A just-sent message must stay in view, and must STAY in view once the live
+// progress line disappears again — regression for a bug where a newly
+// appended bubble landed below the fold of claude-chat-thread's own
+// overflow-auto (nothing ever moved that div's scrollTop) and stayed there
+// even after the turn finished. `max-height` is forced small via an injected
+// style so the thread overflows deterministically regardless of how short
+// the fixture replies are.
+test('a just-sent Claude message scrolls into view and stays there once the turn finishes', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kan dit sneller?',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await page.addStyleTag({ content: '[data-testid="claude-chat-thread"] { max-height: 90px !important; }' })
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+  await page.keyboard.press('ArrowRight') // comment -> claude
+  const composer = page.getByTestId('claude-chat-compose')
+  await expect(composer).toBeFocused()
+  const thread = page.getByTestId('claude-chat-thread')
+
+  const distanceFromBottom = () =>
+    thread.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
+
+  await composer.fill('Kun je hier iets over zeggen?')
+  await composer.press('Enter')
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+  // The reply just landed at the bottom of an overflowing thread — it must
+  // already be scrolled into view.
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2)
+
+  // A second turn (renders as option buttons) must land in view the same way.
+  await composer.fill('Stel een aanpak voor.')
+  await composer.press('Enter')
+  await expect(page.getByTestId('claude-question-option')).toHaveCount(3)
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2)
+})

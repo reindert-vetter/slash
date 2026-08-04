@@ -1011,6 +1011,7 @@ async function loadChatMessages(commentId) {
     if (cc.commentId !== commentId) return // stale — a later switch already won
     cc.messages = json.messages || []
     cc.status = 'idle'
+    scrollClaudeThreadToBottom()
   } catch (_) {
     // keep the last good transcript on a transient error
   }
@@ -1044,6 +1045,7 @@ let lastProgressAt = 0
 function applyChatProgress(p) {
   cc.progress = p
   lastProgressAt = Date.now()
+  scrollClaudeThreadToBottom()
   syncChatTicker()
 }
 
@@ -1361,10 +1363,31 @@ function focusClaudeComposer() {
     const input = document.querySelector('[data-testid=claude-chat-compose]')
     if (cs.claudePos === 0) {
       if (input) input.focus()
+      scrollClaudeThreadToBottom()
     } else {
       if (input && document.activeElement === input) input.blur()
       scrollClaudeMessageIntoView()
     }
+  })
+}
+
+// scrollClaudeThreadToBottom keeps the newest turn in view while the
+// reviewer sits at the rest position (cs.claudePos === 0). Unlike
+// scrollIntoViewVertical (which walks up to an ANCESTOR that scrolls),
+// `claude-chat-thread` (ClaudeChat.mjs) is itself the scrolling container —
+// so this sets its own scrollTop directly, no ancestor lookup, no conflict
+// with the scrollIntoView axis rule in arrowjs-pitfalls.md. Called after a
+// send (focusClaudeComposer), after a transcript refetch adds a message
+// (loadChatMessages) and while the live progress/partial bubble grows
+// (applyChatProgress) — the three moments new content is appended at the
+// bottom of that div without anything moving its scroll position on its
+// own. A no-op at any other cs.claudePos (walking older turns via ↑ must
+// never be yanked back down).
+function scrollClaudeThreadToBottom() {
+  if (cs.claudePos !== 0) return
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid=claude-chat-thread]')
+    if (el) el.scrollTop = el.scrollHeight
   })
 }
 

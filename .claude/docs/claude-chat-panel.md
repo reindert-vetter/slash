@@ -848,6 +848,37 @@ seeds one comment, gives its conversation real turns, opens a SECOND, brand-new
 an empty transcript and a send creates a distinct second comment, leaving the
 first one's conversation untouched.
 
+## `claude-chat-thread` scrolls itself to the bottom, not an ancestor
+
+`claude-chat-thread` (`ClaudeChat.mjs`) is `overflow-auto` and is itself the
+scrolling container — unlike every other `scrollIntoViewVertical` call site in
+`RelatedPanel.mjs` (comment reactions, chips, tasks), which walk up to an
+ancestor that scrolls. A newly appended bubble or a growing partial-progress
+bubble never moved this div's own `scrollTop`, so a just-sent message (added
+only once the transcript is refetched — see "No optimistic append" above)
+could land below the fold and stay there even after the turn finished and the
+progress line disappeared again.
+
+**`scrollClaudeThreadToBottom()`** (`RelatedPanel.mjs`, next to
+`scrollClaudeMessageIntoView`) sets `el.scrollTop = el.scrollHeight` directly
+on that div via `requestAnimationFrame` — no ancestor lookup, so it does not
+touch the `scrollIntoView`-axis rule in `arrowjs-pitfalls.md` (that rule is
+about `Element.scrollIntoView()` moving the wrong axis on an ancestor; this
+sets a container's own `scrollTop`, a different mechanism entirely). Called
+from the three moments new content is appended at the bottom of that div
+without anything else moving its scroll position: `focusClaudeComposer`'s
+`claudePos === 0` branch (right after a send), `loadChatMessages` once a
+fresher transcript lands, and `applyChatProgress` (the partial bubble/"Claude
+denkt…" line growing before the real message exists). A no-op whenever
+`cs.claudePos !== 0` — walking older turns via `↑` must never be yanked back
+to the bottom.
+
+Test: "a just-sent Claude message scrolls into view and stays there once the
+turn finishes" in `tests/claude-chat-panel.spec.mjs` — forces the thread to
+overflow deterministically via an injected `max-height`, regardless of how
+short the fixture replies are, and polls `scrollHeight - scrollTop -
+clientHeight` after two sends.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat
