@@ -155,7 +155,7 @@ func TestScanTestCoversAnnotationForms(t *testing.T) {
 	writeTestCoversFixtureRepo(t, dataDir, pr)
 
 	blocks := testCoversBlocks(t, dataDir, pr, "tests/Feature/OrderCoverageTest.php")
-	entries := scanTestCovers(dataDir, pr, blocks)
+	entries := scanTestCovers(dataDir, pr, blocks, nil)
 
 	testID := func(method string) string {
 		for _, b := range blocks {
@@ -220,7 +220,7 @@ func TestScanTestCoversCapturesLine(t *testing.T) {
 	writeTestCoversFixtureRepo(t, dataDir, pr)
 
 	blocks := testCoversBlocks(t, dataDir, pr, "tests/Feature/OrderCoverageTest.php")
-	entries := scanTestCovers(dataDir, pr, blocks)
+	entries := scanTestCovers(dataDir, pr, blocks, nil)
 
 	testID := func(method string) string {
 		for _, b := range blocks {
@@ -255,7 +255,7 @@ func TestScanTestCoversBareClassFallback(t *testing.T) {
 	writeTestCoversFixtureRepo(t, dataDir, pr)
 
 	blocks := testCoversBlocks(t, dataDir, pr, "tests/Feature/BareCoversTest.php")
-	entries := scanTestCovers(dataDir, pr, blocks)
+	entries := scanTestCovers(dataDir, pr, blocks, nil)
 
 	testID := func(method string) string {
 		for _, b := range blocks {
@@ -335,7 +335,7 @@ final class ProductGroupUpdateTest extends HttpTestCase
 	}
 
 	blocks := testCoversBlocks(t, dataDir, pr, "tests/Http/ProductGroups/ProductGroupUpdateTest.php")
-	entries := scanTestCovers(dataDir, pr, blocks)
+	entries := scanTestCovers(dataDir, pr, blocks, nil)
 
 	testID := func(method string) string {
 		for _, b := range blocks {
@@ -358,6 +358,124 @@ final class ProductGroupUpdateTest extends HttpTestCase
 	}
 }
 
+// TestScanTestCoversSingleStartpointShortcut reproduces the screenshot case:
+// a PR with exactly one non-TEST start block (Cart::fill) and a test class
+// with no coverage annotation at all — every otherwise-"unannotated" test
+// method is linked to that one block instead. An explicitly (but only
+// partially) annotated test method keeps going through the ordinary
+// "unresolved" path, untouched by the shortcut.
+func TestScanTestCoversSingleStartpointShortcut(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 20
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Models/Cart.php": `<?php
+namespace App\Models;
+class Cart {
+    public function fill() {}
+}
+`,
+		"tests/Feature/CartShippingTest.php": `<?php
+namespace Tests\Feature;
+
+use PHPUnit\Framework\TestCase;
+
+class CartShippingTest extends TestCase
+{
+    public function testShippingIsCalculated(): void
+    {
+        $this->assertTrue(true);
+    }
+
+    #[CoversClass(\App\Models\Cart::class)]
+    public function testWithClassLevelAnnotation(): void
+    {
+        $this->assertTrue(true);
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	testBlocks := testCoversBlocks(t, dataDir, pr, "tests/Feature/CartShippingTest.php")
+	blocks := append([]Block{
+		{PR: pr, File: "app/Models/Cart.php", Class: "Cart", Name: "fill", Category: "OTHER", Line: 4, EndLine: 4, Side: SideNew, Status: StatusModified},
+	}, testBlocks...)
+
+	testID := func(method string) string {
+		for _, b := range testBlocks {
+			if b.Name == method {
+				return b.ID()
+			}
+		}
+		t.Fatalf("no block named %s", method)
+		return ""
+	}
+
+	// No relations at all (rels=nil): Cart::fill is the PR's only non-TEST
+	// block and isn't a relation child of anything, so it's the one start
+	// block.
+	entries := scanTestCovers(dataDir, pr, blocks, nil)
+
+	e, ok := findCoverEntry(entries, testID("testShippingIsCalculated"), "method:Cart::fill")
+	if !ok || e.Status != testcovers.StatusResolved || e.Annotation != annotationSingleStartpoint || e.CoveredCode == "" {
+		t.Fatalf("unannotated test entry = %+v, ok=%v", e, ok)
+	}
+
+	// An explicit (if incomplete) annotation still wins — the shortcut never
+	// touches an "unresolved" row.
+	e, ok = findCoverEntry(entries, testID("testWithClassLevelAnnotation"), "class:Cart")
+	if !ok || e.Status != testcovers.StatusUnresolved {
+		t.Fatalf("class-level-annotated test entry = %+v, ok=%v", e, ok)
+	}
+}
+
+// TestScanTestCoversSingleStartpointShortcutNeedsExactlyOne proves the
+// shortcut stays inert with zero or several non-TEST start blocks: an
+// unannotated test falls back to the ordinary "unannotated" status.
+func TestScanTestCoversSingleStartpointShortcutNeedsExactlyOne(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 21
+	writeTestCoversFixtureRepo(t, dataDir, pr)
+	blocks := testCoversBlocks(t, dataDir, pr, "tests/Feature/OrderCoverageTest.php")
+
+	testID := func(method string) string {
+		for _, b := range blocks {
+			if b.Name == method {
+				return b.ID()
+			}
+		}
+		t.Fatalf("no block named %s", method)
+		return ""
+	}
+
+	// Zero non-TEST blocks in the PR at all.
+	entries := scanTestCovers(dataDir, pr, blocks, nil)
+	e, ok := findCoverEntry(entries, testID("testNoAnnotationAtAll"), "none")
+	if !ok || e.Status != testcovers.StatusUnannotated {
+		t.Fatalf("zero-candidate entry = %+v, ok=%v", e, ok)
+	}
+
+	// Two non-TEST blocks — too ambiguous to guess.
+	withTwo := append([]Block{
+		{PR: pr, File: "app/Models/Order.php", Class: "Order", Name: "billingAddress", Category: "OTHER", Side: SideNew, Status: StatusModified},
+		{PR: pr, File: "app/Models/Order.php", Class: "Order", Name: "shippingAddress", Category: "OTHER", Side: SideNew, Status: StatusModified},
+	}, blocks...)
+	entries = scanTestCovers(dataDir, pr, withTwo, nil)
+	e, ok = findCoverEntry(entries, testID("testNoAnnotationAtAll"), "none")
+	if !ok || e.Status != testcovers.StatusUnannotated {
+		t.Fatalf("two-candidate entry = %+v, ok=%v", e, ok)
+	}
+}
+
 // A non-TEST-category block, and the old (removed) side of a changed test
 // block, never produce a test-coverage entry.
 func TestScanTestCoversSkipsNonTestBlocks(t *testing.T) {
@@ -368,7 +486,7 @@ func TestScanTestCoversSkipsNonTestBlocks(t *testing.T) {
 	blocks := []Block{
 		{PR: pr, File: "app/Models/Order.php", Class: "Order", Name: "billingAddress", Category: "MODEL", Side: SideNew, Status: StatusModified},
 	}
-	entries := scanTestCovers(dataDir, pr, blocks)
+	entries := scanTestCovers(dataDir, pr, blocks, nil)
 	if len(entries) != 0 {
 		t.Fatalf("expected no entries for a non-TEST block, got %+v", entries)
 	}
@@ -505,7 +623,7 @@ class OrderCoverageTest extends TestCase
 	}
 
 	blocks := testCoversBlocks(t, dataDir, pr, "tests/Feature/OrderCoverageTest.php")
-	entries := scanTestCovers(dataDir, pr, blocks)
+	entries := scanTestCovers(dataDir, pr, blocks, nil)
 
 	testID := blocks[0].ID()
 	e, ok := findCoverEntry(entries, testID, "method:Order::billingAddress")

@@ -374,7 +374,22 @@ likewise carries the full child descriptor + code text.
     the class zone too and it then resolves for **every** test method of that
     class. The opposite of `#[CoversClass]`, which only ever names a class
     wherever it sits and therefore stays LLM territory.
-  - **`unannotated`** — no annotation at all → **permanent warning, never AI**.
+  - **`unannotated`** — no annotation at all → **permanent warning, never AI**
+    — UNLESS `singleNonTestStartBlock` finds this PR has exactly **one**
+    non-TEST top-level block (not a relation child, see below): the test is
+    then linked to it as a `resolved` row instead, `Annotation:
+    "single-startpoint"` (display-inert — the frontend never reads
+    `annotation`). Deliberately placed in the deterministic Go scan, not
+    `resolve_test_covers`: the shortcut only ever fills in what would
+    otherwise have been the terminal, LLM-free `unannotated` status, so it can
+    never race or conflict with the AI branch below, which only ever touches
+    an `unresolved` row (an explicit but incomplete annotation always keeps
+    its own search — the shortcut never overrides one). "Top-level" is
+    computed the same way the frontend derives `state.blocks` (`allBlocks` −
+    relation children): a block whose id is absent from `rels`' `child_id`
+    column, using the `rels` this same Activity/the headless `slash relations`
+    twin just built. Zero or ≥2 such blocks → no shortcut, ordinary
+    `unannotated`.
   - **`unresolved`** — a class-level-only annotation → triggers the search.
   - **`searching`/`found`/`notfound`** — LLM-owned, as in callresolve.
   `UpsertGo` never overwrites an LLM-owned row; `Prune` cleans up orphans.

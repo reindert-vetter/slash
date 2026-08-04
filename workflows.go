@@ -1260,7 +1260,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// Also detect test-coverage annotations statically (resolved/unannotated/
 		// unresolved) into the testcovers read-model. UpsertGo preserves LLM-owned
 		// rows (searching/found/notfound).
-		covers := scanTestCovers(m.dataDir, input.PR, blocks)
+		covers := scanTestCovers(m.dataDir, input.PR, blocks, rels)
 		if m.testcovers != nil {
 			if err := m.testcovers.UpsertGo(ctx, covers); err != nil {
 				return nil, fmt.Errorf("build_relations: save test covers: %w", err)

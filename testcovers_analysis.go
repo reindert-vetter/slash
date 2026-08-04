@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"slash/modules/relations"
 	"slash/modules/testcovers"
 )
 
@@ -121,10 +122,18 @@ type coverTarget struct {
 // PHPUnit test method) for coverage annotations and returns one or more
 // testcovers.Entry per test: resolved (method-level annotation, verified),
 // unresolved (class-level-only annotation — LLM territory), or unannotated
-// (no annotation at all — never sent to an LLM).
-func scanTestCovers(dataDir string, pr int, blocks []Block) []testcovers.Entry {
+// (no annotation at all — never sent to an LLM), unless singleNonTestStartBlock
+// finds this PR has exactly one non-TEST top-level block, in which case an
+// otherwise-unannotated test is linked to it instead (see below).
+//
+// rels is the PR's just-built relations (build_relations' own output, or the
+// headless `slash relations` twin's) — needed only to find that one
+// candidate block; scanTestCovers itself never writes to the relations
+// read-model.
+func scanTestCovers(dataDir string, pr int, blocks []Block, rels []relations.Relation) []testcovers.Entry {
 	_, headDir := worktreeDirs(dataDir, pr)
 	idx := buildSymbolIndex(headDir)
+	startBlock := singleNonTestStartBlock(blocks, rels)
 
 	type fileInfo struct {
 		lines      []string
@@ -162,9 +171,49 @@ func scanTestCovers(dataDir string, pr int, blocks []Block) []testcovers.Entry {
 			continue
 		}
 
-		out = append(out, coverEntriesForTest(idx, headDir, pr, b, zone, zoneFrom, fi.classZone)...)
+		out = append(out, coverEntriesForTest(idx, headDir, pr, b, zone, zoneFrom, fi.classZone, startBlock)...)
 	}
 	return out
+}
+
+// annotationSingleStartpoint marks a testcovers.Entry that was NOT derived
+// from any source annotation but from singleNonTestStartBlock's structural
+// shortcut — kept distinct from "CoversMethod"/"@covers" so the origin stays
+// traceable. Not read by the frontend (annotation is display-inert there),
+// so introducing it needs no frontend change.
+const annotationSingleStartpoint = "single-startpoint"
+
+// singleNonTestStartBlock implements the "1 non-TEST start block ⇒ hang
+// every test on it" shortcut (see .claude/docs/workflows-analysis.md,
+// "resolve_test_covers"): if this PR has exactly one top-level, non-TEST
+// block — a block that is NOT a child in rels, i.e. it would still be its
+// own row in the frontend's left-hand index after relation-building, exactly
+// like the frontend's own state.blocks = allBlocks − children — that block
+// is offered to coverEntriesForTest as the fallback target for a test that
+// carries no coverage annotation at all. Returns nil when 0 or ≥2 such
+// blocks exist (nothing to prefer, or too ambiguous to guess).
+//
+// Deliberately pure and a function only of blocks+rels (both already fully
+// computed by the caller) — no I/O, no randomness, so it stays safe to call
+// from inside a workflow Activity without affecting replay.
+func singleNonTestStartBlock(blocks []Block, rels []relations.Relation) *Block {
+	childIDs := make(map[string]bool, len(rels))
+	for _, r := range rels {
+		childIDs[r.ChildID] = true
+	}
+
+	var candidate *Block
+	for i := range blocks {
+		b := blocks[i]
+		if b.Side == SideOld || b.Category == "TEST" || childIDs[b.ID()] {
+			continue
+		}
+		if candidate != nil {
+			return nil // more than one non-TEST start block — too ambiguous
+		}
+		candidate = &blocks[i]
+	}
+	return candidate
 }
 
 // classZone returns the file text up to (not including) the first `class`
@@ -304,8 +353,13 @@ func docblockTarget(raw, defaultClass string) []coverTarget {
 // is dropped, as if it wasn't annotated); a class-only target is skipped when
 // a method-level annotation already resolved that same class precisely (no
 // point asking the LLM again). No target surviving at all → one "unannotated"
-// row.
-func coverEntriesForTest(idx *symbolIndex, headDir string, pr int, b Block, zone string, zoneFrom int, classZoneText string) []testcovers.Entry {
+// row, UNLESS startBlock is non-nil (this PR has exactly one non-TEST start
+// block, see singleNonTestStartBlock), in which case the test is linked to it
+// as a resolved row instead — this only ever replaces what would otherwise
+// have been "unannotated" (a terminal, LLM-free status), so it can never
+// race or conflict with resolve_test_covers' AI branch, which only ever
+// touches an explicitly (but incompletely) annotated "unresolved" row.
+func coverEntriesForTest(idx *symbolIndex, headDir string, pr int, b Block, zone string, zoneFrom int, classZoneText string, startBlock *Block) []testcovers.Entry {
 	targets := coverTargets(zone, classZoneText, zoneFrom, classZoneFromLine)
 
 	resolvedClasses := map[string]bool{}
@@ -350,6 +404,15 @@ func coverEntriesForTest(idx *symbolIndex, headDir string, pr int, b Block, zone
 		})
 	}
 	if len(rows) == 0 {
+		if startBlock != nil {
+			key := "method:" + startBlock.Class + "::" + startBlock.Name
+			code := enrichedCodeSide(blockSource(headDir, *startBlock))
+			return []testcovers.Entry{{
+				PR: pr, TestID: b.ID(), TargetKey: key, Status: testcovers.StatusResolved, Annotation: annotationSingleStartpoint,
+				CoveredFile: startBlock.File, CoveredClass: startBlock.Class, CoveredMethod: startBlock.Name,
+				CoveredLine: code.Start, CoveredCode: code.Text,
+			}}
+		}
 		return []testcovers.Entry{{PR: pr, TestID: b.ID(), TargetKey: "none", Status: testcovers.StatusUnannotated}}
 	}
 	return rows

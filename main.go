@@ -213,7 +213,7 @@ func runRelationsCmd(args []string) {
 	// Also detect test-coverage annotations, mirroring the buildRelations
 	// Activity's third step (Go rows only — UpsertGo preserves any LLM-owned
 	// searching/found/notfound row from a prior resolve_test_covers run).
-	covers := scanTestCovers(dataDir, pr, blocks)
+	covers := scanTestCovers(dataDir, pr, blocks, rels)
 	tc, err := testcovers.Open(filepath.Join(dataDir, "testcovers.db"))
 	if err != nil {
 		log.Fatalf("open testcovers db: %v", err)
