@@ -120,8 +120,10 @@ Markdown. Only the reviewer's own Claude-chat bubbles use it (see
 `.claude/docs/claude-chat-panel.md`); everything else keeps Markdown's ordinary
 "a lone newline is a space".
 
-Used in `prInfoCard` (`home.mjs`) for the PR summary/description/Jira
-description, and in `ClaudeChat.mjs` for every chat bubble
+Used in `prInfoCard` (`home.mjs`) for the PR summary/description (the Jira
+description box that used to render there is currently switched off, see the
+comment above `prInfoCard`; the fetch of `jiraTitle`/`jiraDesc` itself is
+unaffected), and in `ClaudeChat.mjs` for every chat bubble
 (`claudeMessageBody`, plus the provisional streaming bubble), all via the
 `.innerHTML` binding; the hand-written `.markdown-body`
 typography block in `index.html` is the styling layer (Tailwind Play CDN has no

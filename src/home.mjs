@@ -8458,6 +8458,13 @@ function prStatusSlot(meta) {
 // often-too-short 160px that left unused space above the status pills.
 const DESC_TRUNCATE_AT = 280
 
+// The Jira description box (title + full ticket body, formerly
+// data-testid="pr-info-jira", right under the Omschrijving section) is
+// deliberately not rendered for now — it overwhelmed the card with a long
+// ticket body. The fetch mechanism stays intact (state.prMeta.jiraTitle/
+// jiraDesc keep getting set, only nothing reads them here anymore), as does
+// the jiraKey pill next to the title (data-testid="pr-info-jira-key",
+// a link, not the "explanation").
 function prInfoCard(state) {
   return html`
     <div
@@ -8591,18 +8598,6 @@ function prInfoCard(state) {
                   .innerHTML="${() => renderMarkdown(state.prMeta.body)}"
                 ></div>`
             : html`<p class="shrink-0 text-[13px] text-slate-400 dark:text-zinc-500">geen omschrijving</p>`}
-        ${() =>
-          state.prMeta.jiraTitle
-            ? html`<div class="mt-2 shrink-0 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 p-2.5" data-testid="pr-info-jira">
-                <div class="text-[12px] font-medium text-slate-700 dark:text-zinc-300">Jira: ${state.prMeta.jiraTitle}</div>
-                ${state.prMeta.jiraDesc
-                  ? html`<div
-                      class="markdown-body mt-1 text-[12px] leading-relaxed text-slate-600 dark:text-zinc-400"
-                      .innerHTML="${() => renderMarkdown(state.prMeta.jiraDesc)}"
-                    ></div>`
-                  : ''}
-              </div>`
-            : ''}
       </div>
       <div class="mt-auto flex flex-wrap items-center gap-1.5 pt-1" data-testid="pr-info-statuses">
         ${() => prStatusSlot(state.prMeta)}
