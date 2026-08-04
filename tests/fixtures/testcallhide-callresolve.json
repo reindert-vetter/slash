@@ -1,0 +1,14 @@
+[
+  {
+    "pr": 113,
+    "callerId": "113:tests/Feature/TestCallHideActionTest.php:TestCallHideActionTest::it_should_execute",
+    "callKey": "execute",
+    "status": "resolved",
+    "kind": "method_call",
+    "childFile": "app/Actions/TestCallHideAction.php",
+    "childClass": "TestCallHideAction",
+    "childMethod": "execute",
+    "childLine": 5,
+    "childCode": "public function execute(): void\n{\n}"
+  }
+]

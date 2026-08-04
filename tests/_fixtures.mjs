@@ -373,6 +373,26 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Test-caller-hides-target fixture (PR 113, test-call-target-visible.spec.mjs):
+  // one changed ACTION block plus one changed TEST method that resolved-calls
+  // it. Regression for resolvedCallTargetIds/testCallTargetIds in home.mjs: a
+  // resolved call whose CALLER is a TEST block must not hide the (changed,
+  // reviewable) target from the index the way an ordinary production-to-
+  // production call does — it stays visible, under the "Onderliggende code"
+  // heading, mirroring the existing testCoverTargetIds exemption.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/testcallhide-blocks.json',
+      '-callresolve',
+      'tests/fixtures/testcallhide-callresolve.json',
+    ],
+    { stdio: 'ignore' },
+  )
 }
 
 function canConnect(port) {

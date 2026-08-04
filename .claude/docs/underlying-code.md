@@ -74,6 +74,21 @@ appear separately in the left list. It runs on `loadBlocks` and after every
 `loadCallResolve`, preserving selection by **block id** so a reload doesn't shift
 the cursor.
 
+**Exception, symmetric with `testCoverTargetIds`:** a resolved-call target whose
+**caller is a TEST block** (`testCallTargetIds`, `home.mjs`) — a test literally
+calling the production method it exercises, as opposed to only covering it via a
+`@covers` annotation — is exempt from `resolvedCallTargetIds`'s hidden set. Such a
+target is always primary, reviewable PR code (e.g. the very action a new test
+method is added for), never incidental reference code, so a test resolved-calling
+it must not make it vanish from the index — the same reasoning that already kept
+`testCoverTargetIds` out of the hidden set. Instead of merely staying visible at
+its ordinary category rank, it joins `state.underlyingIds` alongside relation
+children (`recomputeLeftList`'s `childIds`), so it sorts to the bottom under the
+same "Onderliggende code" heading. Before this exemption, a PR consisting only of
+a changed production method plus new tests for it showed a single index entry —
+the test class — with the actual changed code hidden entirely, reachable only by
+drilling from the test's own Onderliggende-code panel.
+
 ## "loading code…" vs. "no code found"
 
 Every child descriptor carries a `loading` flag, set in `home.mjs` (the

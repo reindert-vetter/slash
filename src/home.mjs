@@ -1670,9 +1670,13 @@ function recomputeLeftList() {
   // bottom, under the "Onderliggende code" heading (state.underlyingIds →
   // BlockList.mjs). A relation child that is ALSO a resolved call target keeps
   // following the hidden set (it already shows in the panel as a resolved
-  // call).
+  // call). A resolved call TARGET whose CALLER is a TEST block (a test
+  // literally calling the production method it exercises) is exempt from the
+  // hidden set the same way a testCoverTargetIds() target is exempt — see
+  // resolvedCallTargetIds/testCallTargetIds — so it joins the relation
+  // children here instead of vanishing.
   const hidden = resolvedCallTargetIds()
-  const childIds = new Set(state.relations.map((r) => r.childId))
+  const childIds = new Set([...state.relations.map((r) => r.childId), ...testCallTargetIds()])
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
   const q = (state.search || '').trim().toLowerCase()
   // Comment items rank ahead of every real category (their own group at the
@@ -2119,9 +2123,12 @@ function exitSearch() {
 // resolvedCallTargetIds returns the ids of PR blocks that are the definition of
 // some resolved/found method call — the blocks that surface in a RelatedPanel's
 // "Onderliggende code" (prio 0 in resolvedCallChildren). Those are pulled from
-// the left list, like relation children.
+// the left list, like relation children. EXCEPT a target that testCallTargetIds
+// already claims (a TEST caller resolved-calling the very method it exercises)
+// — that target stays visible instead, see testCallTargetIds below.
 function resolvedCallTargetIds() {
   const prBlockIds = new Set(state.allBlocks.map((x) => x.id))
+  const testTargets = testCallTargetIds()
   const ids = new Set()
   for (const r of state.callResolve || []) {
     if (r.status !== 'resolved' && r.status !== 'found') continue
@@ -2129,6 +2136,28 @@ function resolvedCallTargetIds() {
     // TRANSLATION block from the left list — both stay visible (the block in the
     // list, the key value as a child), like test coverage.
     if (r.kind === 'translation') continue
+    const childId =
+      state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
+    if (prBlockIds.has(childId) && !testTargets.has(childId)) ids.add(childId)
+  }
+  return ids
+}
+
+// testCallTargetIds returns the ids of PR blocks that are the definition of a
+// resolved/found method call made FROM a TEST-category caller — e.g. a test
+// method directly calling the production method it exercises (as opposed to
+// only covering it via a @covers annotation, see testCoverTargetIds). Mirrors
+// that same, deliberate exemption: such a target is ALWAYS primary, reviewable
+// PR code, not incidental reference code, so resolvedCallTargetIds must not
+// hide it from the left list — recomputeLeftList instead keeps it visible,
+// sorted under the "Onderliggende code" heading like a relation child.
+function testCallTargetIds() {
+  const prBlockIds = new Set(state.allBlocks.map((x) => x.id))
+  const callerCategory = new Map(state.allBlocks.map((b) => [b.id, b.category]))
+  const ids = new Set()
+  for (const r of state.callResolve || []) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    if (callerCategory.get(r.callerId) !== 'TEST') continue
     const childId =
       state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
     if (prBlockIds.has(childId)) ids.add(childId)

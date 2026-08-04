@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 113,
+    "file": "app/Actions/TestCallHideAction.php",
+    "class": "TestCallHideAction",
+    "name": "execute",
+    "category": "ACTION",
+    "line": 5,
+    "endLine": 12,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 113,
+    "file": "tests/Feature/TestCallHideActionTest.php",
+    "class": "TestCallHideActionTest",
+    "name": "it_should_execute",
+    "category": "TEST",
+    "line": 5,
+    "endLine": 12,
+    "status": "added",
+    "side": "new"
+  }
+]
