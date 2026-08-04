@@ -134,6 +134,18 @@ nothing told the tab that was already open.
   call `recomputeLeftList()` themselves, so no extra plumbing), plus the same
   pair in `onEventsResync(...)`.
 
+### pending push (`pendingpush.changed`)
+
+- **Server** (`eventbus.go`'s `publishPendingPushChanged`): after a chat edit
+  lands on the PR's pending ref (`processChatMergeAt`) and on every transition
+  of a push attempt (`pushPendingPR`: started, succeeded, failed). PR-wide, no
+  `key`, no payload.
+- **Client** (`src/home.mjs`): `onEvent('pendingpush.changed', …)` and the same
+  call in `onEventsResync(...)` both just refetch `GET /api/pending-push`, which
+  reads git itself — so a dropped frame costs a refetch and never correctness.
+  It feeds the todo row at the bottom of the index and the per-block "ongepusht"
+  marking at once. See `.claude/docs/pending-push.md`.
+
 Test: `tests/callresolve-live-update.spec.mjs` — mocks `/api/callresolve` to
 hide a real, permanently-seeded row (PR 91) and holds the one `/api/events`
 connection open until the test itself lets go, so the frame can only arrive

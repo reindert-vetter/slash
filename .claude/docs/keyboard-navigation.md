@@ -272,12 +272,14 @@ and the reveal would be a no-op.
 first visible block → … → last visible block
   → toggle-approved (if any hidden approved blocks exist)
   → toggle-ignored  (if any hidden ignored comments exist)
+  → push-todo       (if this PR has landed-but-unpushed chat edits)
   → the search box
   → back to the first visible block
 ```
 
-`↑` walks the same loop backwards. Each toggle row is only a stop when actually
-rendered (`toggleRowVisible()`/`ignoreToggleRowVisible()`); the search box is
+`↑` walks the same loop backwards. Each trailing row is only a stop when
+actually rendered (`toggleRowVisible()`/`ignoreToggleRowVisible()`/
+`pushTodoRowVisible()`); the search box is
 always the loop's other end. `stepListSelection(1)` first tries
 `stepVisibleSelected` and only when that finds nothing further
 (`next === state.selected`) steps onto the next existing stop —
@@ -293,6 +295,13 @@ its own `state.showApproved`/`state.showIgnored` (mirroring a click) instead of
 opening the menu resp. entering the diff, and **`f`/`d`/`s`/`a`** are no-ops
 (no block/diff context). A click on a regular row, or typing in the search box,
 always resets both toggle flags.
+
+**The push-todo row** (`state.pushTodoFocused`, the bottom-most stop — see
+`.claude/docs/pending-push.md`) mirrors all of that with one deliberate
+difference: its `Enter`/`→`/click does not act directly, because pushing writes
+to a branch other people work on. It opens a one-more-step confirm menu
+(`openMenu('pushTodo')`), the same two-step shape "Wis Claude-gesprek" uses.
+`f`/`d`/`s`/`a`/`Space` are no-ops there for the same reason as on a toggle row.
 
 **The search box** is reached via `activateSearch()` (real DOM focus, so its
 focus ring lights up) and marks the arrival as deliberate via

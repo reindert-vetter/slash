@@ -39,8 +39,14 @@ needn't re-ingest by hand after every push. `PRStateSignal` carries
 request.
 
 - **`pollIngestRefresh`** (its own loop, same heartbeat cadence) compares the
-  live `headRefOid` against the stored `pr_ingest` row and signals on a
-  difference. The per-thread comment heartbeat only fires with a thread open, so
+  live `headRefOid` against the stored `pr_ingest` row and signals when they
+  differ **and** the stored head does not already contain the remote tip
+  (`ingestRefreshNeeded`). That second condition exists for the landed-but-
+  unpushed chat edit: the tree is then ingested at a LOCAL commit GitHub has
+  never seen, so a bare inequality check would rewind it to the older remote
+  tip on every tick. Someone else pushing on top makes the remote tip
+  uncontained again, and the tree deliberately follows GitHub — see
+  `.claude/docs/pending-push.md`. The per-thread comment heartbeat only fires with a thread open, so
   `home.mjs` separately pings the `pr_status` Run ID every 60s while the PR page
   is visible+focused (operational, no state).
 - **`refreshIngestDelta` Activity** (`ingest.go`) diffs the **previously
@@ -57,6 +63,11 @@ request.
     seen in practice as permanently orphaned blocks for a directory renamed
     mid-PR. With `--no-renames` a rename yields both paths and the old one is
     cleaned up like any other removal.
+  - **A landed chat edit signals this same branch itself**
+    (`refreshTreeAfterLanding`, `chat_merge.go`) with the pending ref's commit
+    as the head SHA and the already-stored base SHA, which is what makes such
+    an edit visible in the review tree immediately. Nothing here cares whether
+    that commit is on GitHub — only that it is locally reachable.
   - **Base SHA changed** (e.g. a rebase) makes an incremental diff unsafe → it
     falls back to the **full** pipeline, marked `FullFallback` in the history.
   - **`pr_ingest` table** (`pr → base_sha, head_sha`) is updated by both a full

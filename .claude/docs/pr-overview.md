@@ -270,12 +270,23 @@ slash-placed (`source: ui`) and imported (`source: github`) comments, so
 resolving a comment in slash lowers the badge directly. Read-only enrichment
 inside the Activity — no new write path.
 
+**The "Ongepusht N" badge** (`unpushedPill`, backfilled by
+`kickOffPendingPush` from `GET /api/pending-push` exactly like the approval
+badge, scoped to `hasGraph` rows — only an ingested PR can have chat edits at
+all) says this PR has Claude commits that landed on its branch **locally** but
+are not on GitHub yet. It belongs here because this is where the reviewer picks
+his next PR: "this one still has something of mine waiting" must be visible
+without opening the review tree first. A word plus an arrow glyph, never colour
+alone; `Push mislukt` (rose) when the last attempt was refused. Full mechanism:
+`.claude/docs/pending-push.md`.
+
 ## Endpoints
 
 | Endpoint | Does |
 |---|---|
 | `GET /api/inbox` | Reads the read model → `{ok,live,repo,generatedFor,updatedAt,runId,sections}`. `runId` = the `pr_inbox` Run ID (for refresh/heartbeat). No snapshot yet → `{ok:false}`. |
 | `GET /api/inbox/status?prs=12,13` | The pills, also from the read-model snapshot (no GitHub call). |
+| `GET /api/pending-push?prs=12,13` | The "Ongepusht" badge — landed-but-unpushed chat edits per PR, read straight from local git refs. See `.claude/docs/pending-push.md`. |
 | `POST /api/workflows/{runID}/signals/refresh` | Refresh Signal (UI on load). Only starts the fetch Activity. |
 | `POST /api/workflows/{runID}/heartbeat` | Operational ping (poll cadence), no state write. |
 | `GET /api/prs/search?q=…` | **Still a direct** live gh `search` (`inbox_api.go`) — an ephemeral, parameterized read, not a persistent list. A bare number → `<n> in:title`. Also matches by **author name** (not just title/number/login), see below. |

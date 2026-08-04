@@ -72,6 +72,16 @@ workflow history, and the hub is empty again after a restart. That is exactly
 why an event may never be the source of truth — every consumer refetches the
 ordinary read-only `GET` — see `.claude/docs/server-events.md`.
 
+Fifth example: the in-memory pending-push status behind
+`GET /api/pending-push` (`pending_push.go`, `pendingPushStatus`) — a
+`map[int]…` saying "a push is running right now" / "the last one failed,
+because …". No module, no read-model, no workflow-history write, and empty
+again after a restart. Safe because it is not the source of truth about
+anything: git is — the PR's pending ref either still exists (not pushed) or it
+doesn't, and the handler reads that live. The push itself is a real write and
+goes through the `chat_merge` queue's `"push"` Signal, never through this
+handler. See `.claude/docs/pending-push.md`.
+
 ## Exception: the Claude chat turn may act through a shell
 
 Deliberately granted by Reindert, overriding the rule above for this one path.

@@ -20,6 +20,8 @@ column's own width, and the "Taken" block.
 - `.claude/docs/claude-chat-panel.md` — the embedded Claude conversation
   column (stop 5b): its state machine, the SSE-driven live progress, and the
   getter-based render contract of `src/ClaudeChat.mjs`.
+- `.claude/docs/pending-push.md` — the push-todo row at the very bottom of the
+  index (below both toggle rows) and the per-block "ongepusht" marking
 - `.claude/docs/diff-card.md` — the `a`-toggle widths
   (`split`/`unified`/`fit`), `fitWidthCls`, "preview never wider than active",
   the preview-collapse mechanism.

@@ -664,7 +664,7 @@ it at all.
   `git`/`gh`/`acli` to commit and push — but only ever on the reviewer's
   explicit request, never on Claude's own initiative, and never a force-push
   (the git-level fast-forward-only guarantee is enforced outside the model,
-  see `pushAndReclaimChatShadow` below). `chat_edit.md`/
+  see `landAndReclaimChatShadow` below). `chat_edit.md`/
   `ChatEditSystemPrompt` (the earlier Edit-only, no-Bash, no-`comment_action`
   sibling) have been folded into `chat_shell.md` and removed — there was no
   longer a separate "edit action" for them to belong to.
@@ -673,9 +673,13 @@ it at all.
   `prepareChatShellWorkDir`): fetches
   the PR's real head branch (`gh pr view --json headRefName`, see
   `prMeta.HeadRefName` in `gh.go`) and either creates the worktree
-  (`git worktree add -b chat/<id> <dir> origin/<headRef>`) or, if it already
-  exists **and has nothing pending** (clean + no local commits ahead of
-  `origin/<headRef>`), fast-forwards it in place (`git reset --hard`). A dirty
+  (`git worktree add -b chat/<id> <dir> <tip>`) or, if it already
+  exists **and has nothing pending** (clean + no local commits ahead of that
+  tip), fast-forwards it in place (`git reset --hard`). `<tip>` is
+  `chatShadowBaseTip`: the PR's **pending ref** when one exists, else
+  `origin/<headRef>` — so a second conversation starts from the first one's
+  already-landed-but-unpushed commit instead of trying to rewind it (see
+  `.claude/docs/pending-push.md`). A dirty
   or ahead-of-remote shadow is **left exactly as is** — an in-progress or
   already-committed-but-unpushed edit must never be silently discarded/rebased,
   the same "degrade rather than guess" rule the re-anchor pass follows.
@@ -694,24 +698,28 @@ it at all.
 - **"Commit deze wijziging" (`chatActionCommit` → `enqueueChatMerge` →
   the PR's own `chat_merge` queue → `processChatMerge` →
   `commitChatShadowEditsAt`):** stage+commit whatever changed in the shadow,
-  then **fast-forward-push only** onto the PR's real head branch via an
-  explicit refspec (`chat/<id>:<headRef>`) — **never a force-push**. A
-  pre-flight `rev-list --count HEAD..origin/<headRef>` check refuses the push
-  (with a reviewer-facing message, no Go error) the moment the real branch has
-  moved on since the shadow was based, on top of git's own default refusal of a
-  non-fast-forward push. On success the shadow worktree + its branch are
-  **reclaimed immediately** (`git worktree remove` + `git branch -D`) — nothing
-  is left to represent once the shadow matches the new head; a later edit turn
-  re-materializes it lazily. A pushed commit is picked up like any other new
-  commit: the existing `pr_status` ingest-refresh poller notices the head SHA
-  moved and does its normal delta refresh + re-anchor pass — no new
-  integration needed. **This is no longer called directly from
+  then **land it, fast-forward-only, on the PR's LOCAL pending ref**
+  (`refs/slash/pending/pr-<n>/<headRef>`, see
+  `.claude/docs/pending-push.md`) — **not** a push to GitHub, which is a
+  separate step the reviewer fires from the todo row at the bottom of the block
+  index. A pre-flight `chatShadowMissingTips` check refuses the landing (with a
+  reviewer-facing message, no Go error) the moment the shadow's commit does not
+  contain both `origin/<headRef>` and the current pending ref. On success the
+  shadow worktree + its branch are **reclaimed immediately**
+  (`git worktree remove` + `git branch -D`) — nothing is left behind on disk; a
+  later edit turn re-materializes it lazily. The landed commit is picked up like
+  any other new commit, only sooner: `refreshTreeAfterLanding` signals the
+  `pr_status` tracker itself with that local SHA, so the delta refresh +
+  re-anchor pass run immediately instead of waiting for the poller (which, by
+  design, will not signal for a commit GitHub cannot see —
+  `ingestRefreshNeeded`). **This is no longer called directly from
   `claudeChatWorkflow`** — see "Serializing concurrent commits (`chat_merge`)"
   below for what wraps it and why.
 - **Cleanup:** `cleanup.go`'s `reWorktreeDir`/`removePRWorktrees` were extended
   to also discover/sweep any `pr-<n>-chatshadow-*` directory (plus its
   `chat/<conversationId>` branch) once the PR itself is purged — covers a
-  conversation whose edits were never committed/pushed. See "Daily data
+  conversation whose edits were never committed/landed. `purgePR` also drops the
+  PR's pending refs (`removePendingRefs`). See "Daily data
   cleanup" in `.claude/docs/workflows-trackers.md`.
 - **Known test boundary:** `fetchPRMeta` (gh.go) has no offline Fake (same as
   every other ingest.go caller of it), so `ensureChatShadowWorktree`/
@@ -786,10 +794,15 @@ instead of racing.
   2. **Only** on "branch moved on" (`chatShadowBranchMovedOnMsg`, a named
      constant shared between the two files so detecting this one specific
      outcome never string-matches an inline literal in two places): attempt an
-     ordinary **`git merge origin/<headRef>`** in the conversation's own
-     shadow. Non-overlapping edits (different files/regions) merge cleanly
-     with **no AI involved at all** — by far the common case for "several
-     conversations changed different things".
+     ordinary **`git merge`** of every tip the landing must contain
+     (`chatShadowMissingTips`, in a fixed order: `origin/<headRef>`, then the
+     PR's pending ref) in the conversation's own shadow. Both can have moved —
+     someone pushing to GitHub advances the first, another conversation landing
+     an edit the second — so merging both is what makes divergence resolve
+     automatically instead of leaving the reviewer stuck. Non-overlapping edits
+     (different files/regions) merge cleanly with **no AI involved at all** —
+     by far the common case for "several conversations changed different
+     things". Still exactly ONE Activity per Signal: the loop is internal.
   3. **Only on a genuine conflict** (`chatShadowConflictedPaths`, git's own
      `--diff-filter=U` list — never inferred from the merge command's exit
      code alone): **one begrensde Claude attempt** — a one-shot, non-session
@@ -800,13 +813,20 @@ instead of racing.
      (`modules/claude/prompts/chat_conflict.md`). The result is **never
      trusted on the model's own say-so** — `chatShadowConflictedPaths` is
      re-checked afterwards; only a genuinely clean tree gets `git add -A` +
-     `git commit --no-edit` + the push.
-  4. **Bounded to exactly one merge/resolve attempt, no internal loop.** Any
+     `git commit --no-edit` + the landing.
+  4. **Bounded to one merge/resolve attempt per tip, no retry loop.** Any
      failure at any step — the merge command itself failing for a non-conflict
-     reason, an unresolved conflict, a push that fails again after a
+     reason, an unresolved conflict, a landing that fails again after a
      successful resolve — **aborts the merge** (`git merge --abort`, so the
      shadow is left clean, never mid-conflict) and degrades to a
-     reviewer-facing message. The reviewer's own next "commit" click enqueues
+     reviewer-facing message. For a conflict Claude could not clear, that
+     message is deliberately a **consultation, not a dead end**
+     (`chatMergeConflictConsultMsg`): it names which tip it conflicts with
+     (GitHub's, or another conversation's landed-but-unpushed change), lists
+     the conflicting files, says what was already tried, and asks how the
+     reviewer wants to proceed. It lands in that same conversation's transcript,
+     so the reviewer answers it in the Claude column and Claude can redo the
+     change against the current state of the branch. The reviewer's own next "commit" click enqueues
      a brand new request, which starts over against whatever the branch looks
      like by then — this is what keeps the Activity a bounded, deterministic
      sequence of steps regardless of how much the branch thrashes, rather than
@@ -819,12 +839,16 @@ instead of racing.
   the reviewer) rather than adding a second message, and the Activity
   registration's own `publishChatChanged` fires exactly once, after the whole
   attempt settles — never per intermediate step.
-- **`pushAndReclaimChatShadow`** (`chat_shadow.go`) is the ONE place that ever
-  pushes a chat shadow onto the real PR branch — extracted out of
+- **`landAndReclaimChatShadow`** (`chat_shadow.go`) is the ONE place that ever
+  moves a PR's pending ref forward — extracted out of
   `commitChatShadowEditsAt`'s own tail so both the plain fast-forward path and
   chat_merge's merge/conflict-resolved path share it, instead of two copies of
-  the same push+reclaim logic. `ingestMu`-guarded, same reasoning as
-  `ensureChatShadowWorktreeAt`.
+  the same land+reclaim logic. Since it no longer pushes, git's own
+  non-fast-forward refusal is gone, so it re-checks containment itself before
+  `update-ref` — no code path can rewind another conversation's unpushed work.
+  `ingestMu`-guarded, same reasoning as `ensureChatShadowWorktreeAt`. The push
+  to GitHub is `pushPendingPR` (`pending_push.go`), a separate `"push"` request
+  on this same queue — see `.claude/docs/pending-push.md`.
 - **`PriorityLow`** (same reasoning as `claude_chat` itself): a conflict
   resolution is a real `claude` subprocess call, so an interrupted
   `processChatMerge` must not block server startup on recovery.
