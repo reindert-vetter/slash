@@ -133,6 +133,17 @@ function fitOnly(b) {
   return singleSide(b) || 'right'
 }
 
+// fitOnlyText — the exact text fitWidthCls/fitCapCharsFor measure: whichever
+// side fitOnly(b) renders, guarded against missing/errored code. Extracted so
+// both call sites (a card's own width and another card's cap on it, see
+// fitCapCharsFor below) can never drift apart.
+function fitOnlyText(b) {
+  const c = b.code
+  const oldText = c && !c.error && c.old ? c.old.text : ''
+  const newText = c && !c.error && c.new ? c.new.text : ''
+  return fitOnly(b) === 'left' ? oldText : newText
+}
+
 // narrowed reports whether the `a` toggle should shrink this card to its 60%
 // width. The reviewer wants EVERY visible card — modified, added, removed, a
 // preview/look-ahead card, or any drilled column — to shrink in lockstep
@@ -244,6 +255,28 @@ function codeMaxLineChars(code) {
   return lens.length ? lens[lens.length - 1] : 0
 }
 
+// fitCapCharsFor — the effective 'fit'-stand cap another card should never
+// exceed, expressed in the SAME chars unit fitWidthCls builds its own width
+// from: for a PHP file, its own codeMaxLineChars (mirrors fitWidthCls
+// exactly, via the shared fitOnlyText helper); for a non-PHP file there is no
+// chars-based width at all (boundedWrapWidthCls is a fixed floor), so this
+// returns 0 — capping a preview's fitWidthCls at 0 chars collapses it to that
+// exact same 42rem/49.2rem floor via the `max(...)` in fitWidthCls below,
+// which is exactly the width a non-PHP active card renders at.
+//
+// Used by home.mjs's look-ahead preview call sites (never by a card's own,
+// unconstrained width) to fix the gap in "the preview must never be wider
+// than the active card" (see diff-card.md): the existing activeSingleSided
+// override only narrows a preview by forcing 'unified', which does nothing
+// in the 'fit' stand and nothing when BOTH cards are two-sided (modified) PHP
+// files with a different own longest line — reported: a `modified` preview
+// (`ContractsExport::headings`) rendered wider than the `modified` active
+// card next to it (`ContractsExport::map`) in 'fit', because each card's
+// 'fit' width is otherwise entirely its own content's business.
+export function fitCapCharsFor(b) {
+  return isPhpFile(b) ? codeMaxLineChars(fitOnlyText(b)) : 0
+}
+
 // widthCls picks the card's width class for the current `a` stand: for
 // 'fit', a PHP file gets the uncapped, content-based width (fitWidthCls);
 // any other file gets a bounded width instead (boundedWrapWidthCls) — see
@@ -267,8 +300,8 @@ function codeMaxLineChars(code) {
 // 1378px regardless, and narrowing its floor too would only add risk to the
 // many `fit`-specific assertions in diffview.spec.mjs for no product
 // benefit.
-function widthCls(b, viewMode) {
-  if (viewMode() === 'fit') return isPhpFile(b) ? fitWidthCls(b) : boundedWrapWidthCls()
+function widthCls(b, viewMode, capFitChars) {
+  if (viewMode() === 'fit') return isPhpFile(b) ? fitWidthCls(b, capFitChars) : boundedWrapWidthCls()
   return narrowed(viewMode) || singleSide(b)
     ? 'w-[42rem] narrow:w-[28rem] 2xl:w-[49.2rem] '
     : 'w-[70rem] narrow:w-[42rem] 2xl:w-[82rem] '
@@ -333,15 +366,23 @@ function boundedWrapWidthCls() {
 // for an added or modified block, the old/left text for a removed block
 // (the one deliberate exception — a removed block has no new side to prefer,
 // so its old pane stays visible in every stand, 'fit' included).
-function fitWidthCls(b) {
-  const c = b.code
-  const oldText = c && !c.error && c.old ? c.old.text : ''
-  const newText = c && !c.error && c.new ? c.new.text : ''
-  const only = fitOnly(b)
-  const chars = codeMaxLineChars(only === 'left' ? oldText : newText)
+//
+// capFitChars — an optional `() => number|null` (only ever passed by home.mjs
+// for a look-ahead PREVIEW card, see fitCapCharsFor's own doc comment above):
+// when it returns a finite number, this card's own chars are clamped down to
+// it BEFORE the `max(42rem, …)` floor applies, so a preview can never render
+// wider than the active card it's stacked with even though both are
+// genuinely two-sided PHP blocks with a different longest line. Absent for
+// every non-preview card (a card's own width stays exactly as uncapped as the
+// doc comment above describes), and a no-op whenever the preview's own chars
+// already happen to be the smaller number.
+function fitWidthCls(b, capFitChars) {
+  const chars = codeMaxLineChars(fitOnlyText(b))
+  const cap = capFitChars && capFitChars()
+  const clamped = typeof cap === 'number' && isFinite(cap) ? Math.min(chars, cap) : chars
   return (
-    `w-[max(42rem,calc(${chars}ch_+_2rem))] ` +
-    `2xl:w-[max(49.2rem,calc(${chars}ch_+_2rem))] `
+    `w-[max(42rem,calc(${clamped}ch_+_2rem))] ` +
+    `2xl:w-[max(49.2rem,calc(${clamped}ch_+_2rem))] `
   )
 }
 
@@ -507,6 +548,10 @@ export default function Block(b, opts = {}) {
   // non-TRANSLATION block, and a TRANSLATION block before its siblings have
   // loaded/without a lang-root sibling directory).
   const langSiblingsFn = opts.langSiblings || (() => [])
+  // capFitChars — see fitCapCharsFor's own doc comment above. Only ever
+  // passed for a look-ahead preview card (home.mjs); defaults to "no cap" so
+  // every other card's 'fit' width stays exactly as uncapped as before.
+  const capFitChars = opts.capFitChars || (() => null)
   return html`
     <article
       class="${() =>
@@ -518,7 +563,7 @@ export default function Block(b, opts = {}) {
         // `narrowed`) then shrinks EVERY visible card — modified included — to
         // that same narrow width in lockstep. `a`'s third stand ('fit') gets its
         // own, content-based width instead — see widthCls.
-        widthCls(b, viewModeFn) +
+        widthCls(b, viewModeFn, capFitChars) +
         (preview
           ? 'max-h-72 border-slate-300 dark:border-zinc-700 opacity-50'
           : diffActive()

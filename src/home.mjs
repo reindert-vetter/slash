@@ -21,6 +21,7 @@ import Block, {
   singleSide,
   sweepBracketOnlyForward,
   translationRowUnits,
+  fitCapCharsFor,
 } from './Block.mjs'
 import RelatedPanel, {
   InlineComments,
@@ -7938,6 +7939,14 @@ function drillPreviewColumns() {
           // highlighting on every navigation step, since footerBoxPx changes
           // then too).
           collapsed: () => previewTooTallForActive(focusedBlock() || {}),
+          // Caps this preview's own 'fit'-stand width at the focused column's
+          // card — the second half of "never wider than active" (see
+          // fitCapCharsFor's own doc comment): activeSingleSided above only
+          // covers the split/unified stands and a one-sided active card, it
+          // does nothing in 'fit' or when both cards are two-sided PHP
+          // blocks with a different longest line. Same lazy-closure
+          // discipline as collapsed above.
+          capFitChars: () => fitCapCharsFor(focusedBlock() || {}),
         })}
       </div>
     `.key('drill-preview:' + previewBlock.id + ':' + codeState),
@@ -8752,6 +8761,14 @@ function DetailPanel(state) {
             // that slot, never this outer pair.forEach closure that builds every
             // card here (see previewTooTallForActive's own doc comment).
             collapsed: i !== sel ? () => previewTooTallForActive(curBlock() || {}) : undefined,
+            // Only the look-ahead PREVIEW card ever gets a cap — the 'fit'-stand
+            // counterpart of the activeSingleSided override above (see
+            // fitCapCharsFor's own doc comment): that override only narrows via
+            // 'unified' and only fires for a one-sided active card, so it does
+            // nothing in 'fit' or when both the active and preview card are
+            // two-sided PHP blocks with a different longest line. Same lazy-
+            // closure discipline as collapsed right above.
+            capFitChars: i !== sel ? () => fitCapCharsFor(curBlock() || {}) : undefined,
             // The key encodes (a) whether this card is the *selected* one or the
             // look-ahead *preview*, (b) whether its code has loaded yet, and (c)
             // whether the keyboard is actually focused on it (vs. a drilled

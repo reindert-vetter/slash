@@ -195,6 +195,46 @@ Three properties of this rule are deliberate:
 The selected/active card itself is never given this override. Test:
 `tests/preview-matches-active-width.spec.mjs` (fixture PR 105).
 
+### The `fit` stand needed a SECOND mechanism: `fitCapCharsFor`/`capFitChars`
+
+The `activeSingleSided` override above only narrows a preview by forcing
+`viewMode` to `'unified'` — it does nothing for the `fit` stand (which never
+reads `narrowed()`, see `widthCls` above) and nothing when **both** the active
+and preview card are two-sided (`modified`) PHP files: reported, a `modified`
+preview (`ContractsExport::headings`) rendered wider than the `modified`
+active card next to it (`ContractsExport::map`) in `fit`, because each card's
+`fitWidthCls` is otherwise entirely its own content's business — the single
+longest non-comment line of the block it happens to render, with no notion of
+its neighbour.
+
+`fitCapCharsFor(b)` (`Block.mjs`, exported) answers "what chars-count would
+`b`'s own `fit` width be capped at" — its own `codeMaxLineChars` for a PHP
+file, `0` for a non-PHP file (whose `fit` width is the fixed
+`boundedWrapWidthCls` floor anyway, so capping a preview at `0` chars
+collapses it to that exact same floor via `fitWidthCls`'s `max(42rem, …)`).
+`fitWidthCls`/`widthCls` take an optional `capFitChars` — a `() =>
+number|null` — and clamp their own computed `chars` down to it before
+building the `max(...)` class string; absent (every non-preview card) means
+no cap, unchanged from before.
+
+Both preview call sites pass `capFitChars: () => fitCapCharsFor(<active
+block>)` (`curBlock()` at the top level, `focusedBlock()` for
+`drillPreviewColumns`) — the exact same lazy-closure discipline as `collapsed`
+right next to it (a function, read from Block's own nested reactive slot,
+never resolved in the outer array-building closure). One-directional and
+purely additive, same as `activeSingleSided`: it only ever narrows a preview,
+never widens the active card, and is a no-op whenever the preview's own chars
+already happen to be the smaller number.
+
+**Does not fight a manual column-width override** (mouse-drag or the `c`/`v`
+keyboard resize, see `.claude/docs/column-resize.md`): both write an inline
+`style="width:...px"` on the card, which always wins over any Tailwind
+`w-[...]` class regardless of how that class was computed — `capFitChars` only
+changes the **class**, so an explicit reviewer resize on either card still
+wins exactly as it already does over `activeSingleSided`/every other
+auto-width rule (the same accepted trade-off already documented in
+`column-resize.md`).
+
 ## The look-ahead preview collapses when the active diff doesn't fit
 
 `<main>` already scrolls and clips cleanly, so a too-tall active diff is never a

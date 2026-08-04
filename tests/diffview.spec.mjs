@@ -216,6 +216,75 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     expect(width).toBeGreaterThan(1120)
   })
 
+  // Direct-mount unit test: the look-ahead preview's 'fit'-stand cap
+  // (fitCapCharsFor/capFitChars, Block.mjs — see "The look-ahead preview must
+  // never be wider than the active card" in diff-card.md). Two genuinely
+  // two-sided (modified) PHP blocks, mounted side by side: the "preview" has
+  // a much longer new-side line than the "active" one — without a cap it
+  // would render wider than the active card, exactly the reported bug
+  // (a `modified` ContractsExport::headings preview wider than the
+  // `modified` ContractsExport::map active card in 'fit'). Passing
+  // `capFitChars: () => fitCapCharsFor(active)` must clamp the preview back
+  // down to the active card's own width.
+  test('viewMode="fit" caps a look-ahead preview at the active card\'s own width', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    const widths = await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const { default: Block, fitCapCharsFor } = await import('/src/Block.mjs')
+      const makeBlock = (name, line, newLine) =>
+        reactive({
+          category: 'ACTION',
+          label: 'Foo::' + name,
+          status: 'modified',
+          file: 'app/Foo.php',
+          line,
+          name,
+          class: 'Foo',
+          approved: false,
+          code: {
+            old: { start: line, end: line + 2, text: `public function ${name}(): int {\n    return 1;\n}` },
+            new: {
+              start: line,
+              end: line + 2,
+              text: `public function ${name}(): int {\n    ${newLine}\n}`,
+            },
+          },
+        })
+      const active = makeBlock('map', 60, 'return $short;')
+      const preview = makeBlock(
+        'headings',
+        70,
+        'return $this->fooBarValuesFromRequestPayloadDataThatIsGenuinelyMuchLonger($a, $b, $c, $d, $e, $f, $g, $h);',
+      )
+
+      const activeHost = document.createElement('div')
+      activeHost.id = 'fit-cap-active-host'
+      document.body.appendChild(activeHost)
+      Block(active, { viewMode: () => 'fit' })(activeHost)
+
+      const previewHost = document.createElement('div')
+      previewHost.id = 'fit-cap-preview-host'
+      document.body.appendChild(previewHost)
+      Block(preview, {
+        viewMode: () => 'fit',
+        preview: true,
+        capFitChars: () => fitCapCharsFor(active),
+      })(previewHost)
+
+      const activeCard = activeHost.querySelector('article')
+      const previewCard = previewHost.querySelector('article')
+      return {
+        activeWidth: activeCard.getBoundingClientRect().width,
+        previewWidth: previewCard.getBoundingClientRect().width,
+      }
+    })
+
+    // The capped preview must never be wider than the active card next to it.
+    expect(widths.previewWidth).toBeLessThanOrEqual(widths.activeWidth + 1)
+  })
+
   // Direct-mount unit test: a NON-PHP file (e.g. a markdown/config file) does
   // NOT get the uncapped, max-line-based 'fit' width above — it stays at the
   // same narrow 60% width a one-sided block already uses in every other
