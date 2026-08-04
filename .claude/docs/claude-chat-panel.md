@@ -572,7 +572,22 @@ turn 2 or 3 instead of turn 1, red or green purely by scheduler luck. Wired in `
 fixture → `tests/fixtures/claude-chat-turns.json` (a plain-text reply, then a
 strict `{"type":"question",...}` directive, then a follow-up reply).
 
-## Tests: `tests/claude-chat-panel.spec.mjs` + `tests/claude-chat-progress.spec.mjs`
+## Tests: `tests/claude-chat-panel.spec.mjs` + `tests/claude-chat-progress.spec.mjs` + `claude-chat-queue.spec.mjs` + `claude-chat-newline.spec.mjs`
+
+`claude-chat-queue.spec.mjs` covers "doorpraten": it **holds** the first
+message Signal's POST via `page.route` (a running turn as a *steady* state,
+never a slow real turn), then asserts the composer stays enabled, two further
+messages queue up as visible `claude-queued` bubbles in order, nothing extra
+goes on the wire, and releasing the held POST drains them FIFO.
+
+`claude-chat-newline.spec.mjs` covers Shift+Enter: the newline lands in the
+field, nothing is sent, Space still types a space, and the sent bubble keeps
+both lines as a `<br>`.
+
+The two specs below hand-build a `view` object for `claudeChatColumn`, so they
+also pin its render contract — `queued: () => []` had to be added there when
+the queue landed.
+
 
 `claude-chat-progress.spec.mjs` covers the live half: it fulfils
 `GET /api/events` with hand-written SSE frames (and makes the resync read
@@ -838,6 +853,35 @@ een lopende turn" above), `Shift+Enter` falls through to the textarea's own
 default behaviour and inserts a newline. Reading/writing its value
 (`el.value`) via `querySelector('[data-testid=claude-chat-compose]')` in the
 "Stuur" click handler is unaffected by the element swap.
+
+### The newline was never the problem — the RENDER was
+
+Reported as "Shift+Enter doesn't work in the Claude chat". A probe
+(`claude-chat-newline.spec.mjs`) showed the keystroke was already fine: the
+field is a `<textarea>`, none of the Enter paths claim a shifted Enter
+(`ClaudeChat.mjs`'s own `@keydown`, `home.mjs`'s palette/`isComposeOpen()`/
+`relatedActive()` branches all test `!e.shiftKey`), and the value really did
+contain `\n`. What went missing was the **display**: the bubble renders through
+`renderMarkdown`, and Markdown collapses a lone newline into a space, so two
+typed lines came back as one running sentence.
+
+Fix: **`hardBreaks(text)`** (`src/markdown.mjs`, exported) turns every single
+newline into a Markdown hard break (`  \n` → snarkdown's `<br />`), leaving a
+blank line as a paragraph break and never touching a fenced block's own lines.
+Applied by the caller, **before** `renderMarkdown` — so it sits in front of
+every step inside it (escaping, fence extraction, `highlightMentions`) and no
+other render point (comment bodies, PR description) changes at all.
+
+Applied only to the **reviewer's own** turns (`msg.role === 'user'`, plus the
+queued bubbles): Claude's own answers are written AS Markdown, where a
+soft-wrapped source line joining the sentence above it is intended. The
+composer also carries a `title="Enter verstuurt · Shift+Enter nieuwe regel"`,
+so the affordance is stated in words somewhere.
+
+Space keeps typing a space in the composer, unaffected by the global
+approve-and-continue Space shortcut — that branch sits behind `onKeydown`'s
+`relatedActive()`/`isEditableFocused()` guards. Asserted in the same spec, since
+it is exactly the kind of thing a later global shortcut could quietly break.
 
 "Stuur" sits **below** the composer, not beside it (`flex-col` instead of a
 row) — a narrow Claude column left almost no width/height for the textarea

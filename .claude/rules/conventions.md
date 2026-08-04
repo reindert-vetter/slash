@@ -113,6 +113,13 @@ action: the reviewer just refers to "codeblok 3" by number in the embedded
 Claude chat and says in plain language what should happen with it (an
 explicit product decision — see the same doc section).
 
+It also exports **`hardBreaks(text)`** — single newlines → Markdown hard breaks
+(`  \n`), fenced blocks untouched — which a caller applies **before**
+`renderMarkdown` when the text is a *typed message* rather than authored
+Markdown. Only the reviewer's own Claude-chat bubbles use it (see
+`.claude/docs/claude-chat-panel.md`); everything else keeps Markdown's ordinary
+"a lone newline is a space".
+
 Used in `prInfoCard` (`home.mjs`) for the PR summary/description/Jira
 description, and in `ClaudeChat.mjs` for every chat bubble
 (`claudeMessageBody`, plus the provisional streaming bubble), all via the

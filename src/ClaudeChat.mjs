@@ -19,7 +19,7 @@
 // single nested template instead of a keyed list item).
 import { html } from './vendor/arrow.js'
 import { avatarHTML } from './avatar.mjs'
-import { renderMarkdown } from './markdown.mjs'
+import { renderMarkdown, hardBreaks } from './markdown.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
 
 // Claude has no GitHub login/avatar of its own — a fixed, non-photo identity
@@ -83,8 +83,16 @@ const claudeMention = CLAUDE_MENTIONS[Math.floor(Math.random() * CLAUDE_MENTIONS
 // claudeMessageBody mirrors RelatedPanel.mjs's commentBody: a getter of a
 // safe HTML string (via the same renderMarkdown used for comment bodies/the
 // PR summary), meant for an `.innerHTML` binding — never a plain-text slot.
+//
+// The reviewer's OWN message runs through hardBreaks first, so a line typed
+// with Shift+Enter stays its own line instead of being collapsed into the
+// previous one by Markdown (see hardBreaks in markdown.mjs). Deliberately not
+// applied to Claude's own turns: those are written AS Markdown, where a
+// soft-wrapped source line joining the sentence above it is the intended
+// behaviour.
 function claudeMessageBody(msg) {
-  return () => renderMarkdown(msg.body || '')
+  const body = msg.role === 'user' ? hardBreaks(msg.body || '') : msg.body || ''
+  return () => renderMarkdown(body)
 }
 
 // claudeQuestionOptions renders the up-to-3 choice buttons of a still-open
@@ -208,7 +216,7 @@ function claudeQueuedBubbles(view) {
         <div
           class="markdown-body max-w-[92%] rounded-xl border border-dashed border-indigo-300 bg-indigo-50/50 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-600 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-zinc-300"
           data-testid="claude-queued-body"
-          .innerHTML="${() => renderMarkdown(q.body)}"
+          .innerHTML="${() => renderMarkdown(hardBreaks(q.body))}"
         ></div>
       </div>
     `.key('claude-queued:' + q.id),
@@ -409,6 +417,7 @@ export function claudeChatColumn(view, callbacks) {
           rows="1"
           class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2.5 py-1.5 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
           placeholder="${claudeMention + '…'}"
+          title="Enter verstuurt · Shift+Enter nieuwe regel"
           data-testid="claude-chat-compose"
           @input="${(e) => autoGrowTextarea(e.target)}"
           @keydown="${(e) => {

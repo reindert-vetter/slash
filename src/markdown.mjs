@@ -159,6 +159,29 @@ function sanitizeUrls(html) {
   })
 }
 
+// hardBreaks(text) -> the same text with every SINGLE newline turned into a
+// Markdown hard break (two trailing spaces), so a line the author typed on its
+// own stays on its own line. Markdown collapses a single newline into a space,
+// which is right for prose written in a Markdown editor but wrong for a chat
+// message: a reviewer pressing Shift+Enter in the Claude composer saw their
+// two lines render as one running sentence (snarkdown's tokenizer only emits
+// `<br />` for `  \n`/`\n\n`, see src/vendor/snarkdown.js's TAGS).
+//
+// Applied by the CALLER, before renderMarkdown — which keeps it in front of
+// every step inside it (escaping, the fence extraction, highlightMentions) and
+// leaves every other render point (comment bodies, the PR description) exactly
+// as it was. A blank line still means a paragraph break: the regex only
+// matches a newline that is neither preceded nor followed by another one.
+// Fenced blocks are split out first so their own lines never gain stray
+// trailing spaces.
+export function hardBreaks(text) {
+  if (!text) return ''
+  return String(text)
+    .split(/(```[\s\S]*?```)/g)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(/([^\n])\n(?!\n)/g, '$1  \n')))
+    .join('')
+}
+
 // renderMarkdown(text, startIndex) -> safe HTML string, meant for arrow.js's
 // `.innerHTML="${() => renderMarkdown(...)}"` binding. `startIndex` (default
 // 0, i.e. the first fence in `text` is numbered 1) lets a caller continue the
