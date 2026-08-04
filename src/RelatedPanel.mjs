@@ -810,6 +810,68 @@ function threadMessages(c) {
   return [origin, ...(c.reactions || [])]
 }
 
+// threadParticipants — every distinct person/bot that has spoken in a thread
+// (root author + every reply), deduped by display name, in the order each
+// first appears (so the root author always leads). Feeds
+// authorAvatarStack's compact-card avatar stack below: a solo author keeps a
+// single bare avatar, several joining in get a small overlapping stack so a
+// reviewer can tell at a glance whether others replied, without expanding
+// the thread.
+function threadParticipants(c) {
+  const seen = new Map()
+  for (const m of threadMessages(c)) {
+    const who = identityOf(m.source, m.author, m.avatarUrl)
+    if (!seen.has(who.name)) seen.set(who.name, who)
+  }
+  return [...seen.values()]
+}
+
+// AVATAR_STACK_MAX — how many real avatars authorAvatarStack shows before
+// collapsing the rest into a "+N" circle — a long-running thread with many
+// participants would otherwise eat a growing chunk of the one-line author
+// row.
+const AVATAR_STACK_MAX = 3
+
+// authorAvatarStack — compactConversation's author avatar: a single
+// `avatarHTML` when only one person has spoken (unchanged from before), or a
+// small overlapping stack (`-ml-2` + a `ring` to keep each circle visually
+// separate from its neighbour — shape/border carries the distinction, not
+// colour, per the colorblind rule in conventions.md) once more than one
+// participant is in the thread. `who` is the already-computed root author
+// (compactConversation's own `identityOf` call) so the single-participant
+// path needs no second lookup.
+function authorAvatarStack(c, who) {
+  const participants = threadParticipants(c)
+  if (participants.length <= 1) return avatarHTML(who.name, who.avatarUrl, 'h-5 w-5')
+  const shown = participants.slice(0, AVATAR_STACK_MAX)
+  const extra = participants.length - shown.length
+  return html`
+    <span class="flex shrink-0 items-center" data-testid="comment-author-stack">
+      ${shown.map((p, idx) =>
+        avatarHTML(
+          p.name,
+          p.avatarUrl,
+          'h-5 w-5',
+          (idx > 0 ? '-ml-2 ' : '') + 'ring-2 ring-white dark:ring-zinc-900',
+        ).key('p:' + idx),
+      )}
+      ${() =>
+        // Function-bound, not a bare toggling expression, per the "statically
+        // interpolated template↔string slot" pitfall in arrowjs-pitfalls.md —
+        // `extra` is fixed for this call, but the ${} slot's own chunk-caching
+        // is keyed on TEMPLATE SHAPE, shared with every other authorAvatarStack
+        // instance, so a plain ternary risks leaking the template as text.
+        extra > 0
+          ? html`<span
+              class="-ml-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 dark:bg-zinc-700 text-[9px] font-semibold text-slate-600 dark:text-zinc-300 ring-2 ring-white dark:ring-zinc-900"
+              data-testid="comment-author-stack-extra"
+              >+${extra}</span
+            >`
+          : ''}
+    </span>
+  `
+}
+
 // lastReplyNote — who sent the LAST message of the thread, for the compact
 // summary (see compactConversation): the meta line otherwise only shows the
 // ROOT author + reaction count, which never changes once someone replies —
@@ -3361,7 +3423,7 @@ function compactConversation(c, i) {
       ${() => commentStatusMark(c, 'mt-1')}
       <span class="flex min-w-0 flex-col gap-0.5">
         <span class="flex min-w-0 items-center gap-2" data-testid="comment-author-line">
-          ${avatarHTML(who.name, who.avatarUrl, 'h-5 w-5')}
+          ${authorAvatarStack(c, who)}
           <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400" data-testid="comment-author"
             >${who.name || 'onbekend'}</span
           >

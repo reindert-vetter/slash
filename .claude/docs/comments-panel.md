@@ -427,6 +427,25 @@ first message). Only the source/AI-warning badge + status mark remain,
 right-aligned in the slim `comment-meta-line`. `compactConversation` keeps its
 own author+avatar line (it never shows the thread body).
 
+**`compactConversation`'s avatar becomes an overlapping stack once more than
+one person has spoken** (`authorAvatarStack`, right next to `threadMessages`):
+`threadParticipants(c)` dedupes every message's author (root + replies) by
+display name, root first. A solo author keeps the existing bare `avatarHTML`
+call (no visual change, the overwhelmingly common case); two or more render as
+a small stack — each avatar after the first gets `-ml-2` (overlap) plus a
+`ring-2 ring-white`/`dark:ring-zinc-900` (shape/border keeps each circle
+visually distinct from its neighbour, never color-only, per the colorblind
+rule in `.claude/rules/conventions.md`). Capped at `AVATAR_STACK_MAX` (3); any
+remainder collapses into a trailing `+N` circle, same shape as the other
+avatars, `data-testid=comment-author-stack-extra`. The name text next to the
+stack still shows only the root author (`who.name`) — `lastReplyNote` already
+covers "who spoke last" in the meta line below, so the stack alone answers
+"how many/who are in this thread", not the whole roster in text. The `+N`
+slot is a `${() => …}` function binding, not a bare ternary, per the
+"statically interpolated template↔string slot" pitfall in
+`.claude/rules/arrowjs-pitfalls.md` — its `${}` shares chunk-caching with
+every other `authorAvatarStack` call site.
+
 **`compactConversation`'s meta line also names who sent the LAST message**
 (`lastReplyNote`, next to `threadMessages`): a collapsed thread with several
 reactions otherwise gave no clue whose turn it is. It looks at the last entry of

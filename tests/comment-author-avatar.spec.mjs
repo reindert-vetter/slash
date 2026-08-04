@@ -37,7 +37,10 @@ test('comment row, reply bubble, and PR-wide item all show author + avatar', asy
   await expect(item).toBeVisible()
   await expect(item.getByTestId('comment-author')).toHaveText('octocat')
   // No avatarUrl in the data → the initials-fallback circle, not an <img>.
-  await expect(item.getByTestId('avatar-fallback')).toHaveText('OC')
+  // Two distinct participants (octocat + reviewer) render as an overlapping
+  // avatar stack (authorAvatarStack, RelatedPanel.mjs) — the root author
+  // always leads, hence .first().
+  await expect(item.getByTestId('avatar-fallback').first()).toHaveText('OC')
 
   await item.click()
 
