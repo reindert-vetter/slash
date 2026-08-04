@@ -386,6 +386,19 @@ const state = reactive({
   // searchStepSelection, which always clear the other stops on every
   // transition). Ephemeral, not bound to the URL.
   ignoreToggleFocused: false,
+  // pushTodoFocused — the same idea again, for the push-todo row at the very
+  // bottom of the index ("N commit(s) nog niet gepusht", see pushTodoRow in
+  // BlockList.mjs): true once the keyboard cursor sits on THAT row. Mutually
+  // exclusive with the two stops above and with searchActive. Ephemeral.
+  pushTodoFocused: false,
+  // pendingPush — the PR's landed-but-unpushed Claude edits, or null when
+  // there are none (the normal state). Read from GET /api/pending-push
+  // (pending_push.go): { headRef, sha, ahead, files, state, pushRunId, error }.
+  // Drives the todo row at the bottom of the index AND the "ongepusht"
+  // marking on the blocks whose file is in `files`. Refetched on the
+  // pendingpush.changed SSE event and on every resync. Ephemeral, never in
+  // the URL: it describes the repo's state, not a navigation position.
+  pendingPush: null,
   // ignoredComments — { blockId: true } of PR-comment index items (kind:'comment',
   // see commentBlockItem) the reviewer explicitly ignored via the "Ignore" action
   // in prCommentCommandsFor. Hidden by default from the "PR-comments" section,
@@ -424,6 +437,16 @@ const state = reactive({
   // by activateSearch, cleared by exitSearch/setSearch.
   searchLoopFocused: false,
   onSearch: setSearch,
+  // onPushTodo — the push-todo row's click handler. A click runs the same
+  // function a key runs (see .claude/docs/mouse-navigation.md): it moves the
+  // keyboard stop onto the row and opens the same confirm menu Enter opens,
+  // never the push itself.
+  onPushTodo: () => {
+    state.toggleFocused = false
+    state.ignoreToggleFocused = false
+    state.pushTodoFocused = true
+    openMenu('pushTodo')
+  },
   // showDescription — stop 1 of the left→right nav chain (see
   // keyboard-navigation.md): the PR-info/description column, hidden by default so
   // it doesn't eat width. Only reachable from stop 2 (the block-index, ← ) and
@@ -1939,6 +1962,17 @@ function ignoreToggleRowVisible() {
   return state.blocks.some((b) => isIgnoredComment(state, b))
 }
 
+// pushTodoRowVisible mirrors the two above for the push-todo row at the very
+// bottom of the index (pushTodoRow in BlockList.mjs) — it exists exactly while
+// this PR has landed Claude commits that are not pushed to GitHub yet
+// (state.pendingPush, see loadPendingPush). Unlike the toggle rows it is not
+// derived from state.blocks at all: it is about the branch, not about a block,
+// which is precisely why it is a todo "for the end" rather than a comment on
+// some block.
+function pushTodoRowVisible() {
+  return !!(state.pendingPush && state.pendingPush.ahead > 0)
+}
+
 // selectRow sets state.selected to a NEW index chosen by the reviewer
 // (sidebar click, ↑/↓, search) — resetting state.classMethodSel/
 // testColumnFocused every time, so a stale "which method"/"is the column
@@ -1969,15 +2003,22 @@ function selectRow(idx) {
 // keyboard-navigation.md.
 function stepListSelection(dir) {
   if (dir > 0) {
-    if (state.ignoreToggleFocused) {
+    if (state.pushTodoFocused) {
       // Already the bottom-most block-list stop — continue into the search box.
-      state.ignoreToggleFocused = false
+      state.pushTodoFocused = false
       activateSearch()
+      return
+    }
+    if (state.ignoreToggleFocused) {
+      state.ignoreToggleFocused = false
+      if (pushTodoRowVisible()) state.pushTodoFocused = true
+      else activateSearch()
       return
     }
     if (state.toggleFocused) {
       state.toggleFocused = false
       if (ignoreToggleRowVisible()) state.ignoreToggleFocused = true
+      else if (pushTodoRowVisible()) state.pushTodoFocused = true
       else activateSearch()
       return
     }
@@ -1985,10 +2026,19 @@ function stepListSelection(dir) {
     if (next === state.selected) {
       if (toggleRowVisible()) state.toggleFocused = true
       else if (ignoreToggleRowVisible()) state.ignoreToggleFocused = true
+      else if (pushTodoRowVisible()) state.pushTodoFocused = true
       else activateSearch()
       return
     }
     selectRow(next)
+    return
+  }
+  if (state.pushTodoFocused) {
+    state.pushTodoFocused = false
+    if (ignoreToggleRowVisible()) state.ignoreToggleFocused = true
+    else if (toggleRowVisible()) state.toggleFocused = true
+    // Neither toggle row: state.selected already holds the last visible block
+    // (unchanged all the way through the trailing rows) — nothing to do.
     return
   }
   if (state.ignoreToggleFocused) {
@@ -2053,6 +2103,10 @@ function searchStepSelection(dir) {
     // visible block), so it must be set explicitly on every branch below.
     const last = lastVisibleIndex()
     if (last >= 0) selectRow(last)
+    if (pushTodoRowVisible()) {
+      state.pushTodoFocused = true
+      return
+    }
     if (ignoreToggleRowVisible()) {
       state.ignoreToggleFocused = true
       return
@@ -2149,6 +2203,7 @@ function applyDefaultUnapprovedSelection() {
     // at all) must not leave the app in diff mode with nothing to show one.
     if (state.blocks[idx].kind === 'comment') state.mode = 'list'
     state.toggleFocused = false
+    state.pushTodoFocused = false
     scrollSelectedIntoView()
     freshDefaultSelectionAt = { blockId: state.blocks[idx].id }
     return
@@ -2220,6 +2275,7 @@ function setSearch(q) {
   // Typing is a fresh navigation reset — never leave the keyboard cursor
   // parked on the toggle-approved row from a previous, now-irrelevant walk.
   state.toggleFocused = false
+  state.pushTodoFocused = false
   // Typing is also a deliberate switch to the "browse while typing" feature
   // (see searchStepSelection): it must win over an earlier, still-pending
   // loop-stop arrival, so the very next ArrowDown/ArrowUp walks the filtered
@@ -2328,6 +2384,62 @@ async function loadCallResolve() {
   } catch (_) {
     /* offline — keep whatever we have */
   }
+}
+
+// loadPendingPush fetches whether this PR has landed-but-unpushed Claude edits
+// (GET /api/pending-push, pending_push.go). Claude's own commits land on a
+// LOCAL ref of the PR's branch so the code is reviewable right away; pushing
+// them to GitHub is the reviewer's own last step, driven from the todo row at
+// the bottom of the index (pushTodoRow in BlockList.mjs).
+//
+// Assigns the whole object (or null) rather than mutating it, so every reactive
+// reader — the todo row, its counter, the per-block "ongepusht" marking — sees
+// the change (see the keyed-node pitfall in arrowjs-pitfalls.md). Best-effort:
+// offline simply keeps whatever we had.
+async function loadPendingPush() {
+  try {
+    const res = await fetch(`/api/pending-push?prs=${state.pr}`)
+    if (!res.ok) return
+    const data = await res.json()
+    const row = data && data.pending ? data.pending[String(state.pr)] : null
+    state.pendingPush = row || null
+    // The row appears/disappears at the very bottom of the index, so a keyboard
+    // cursor parked on it must not be left pointing at nothing.
+    if (!state.pendingPush) state.pushTodoFocused = false
+  } catch (_) {
+    /* offline — keep whatever we have */
+  }
+}
+
+// pushPendingWork fires the actual push: a "push" Action on the PR's chat_merge
+// queue (the same queue that serializes landings, see chat_merge.go), never a
+// direct write from here. Only reachable through the confirm submenu
+// (pushTodoConfirmCommands), so this itself asks nothing further.
+//
+// The response says only that the Signal was accepted; the outcome arrives as a
+// pendingpush.changed event (which refetches the read model, flipping the row to
+// "pushen…" and then away entirely — or to "push mislukt" with a reason).
+async function pushPendingWork() {
+  const p = state.pendingPush
+  if (!p || !p.pushRunId) return
+  try {
+    await fetch(`/api/workflows/${p.pushRunId}/signals/merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'push' }),
+    })
+  } catch (_) {
+    /* best-effort — the row keeps showing the work as unpushed */
+  }
+  loadPendingPush()
+}
+
+// pendingPushFiles is the set of file paths touched by the not-yet-pushed
+// commits, used to mark those blocks in the index/diff as unpushed. Empty set
+// when there's nothing pending.
+function pendingPushFiles() {
+  const p = state.pendingPush
+  return new Set(p && Array.isArray(p.files) ? p.files : [])
 }
 
 // loadExplanations fetches the PR's AI unit-explanations into state (keyed
@@ -3871,11 +3983,13 @@ window.addEventListener('resize', refreshHints)
 function scrollSelectedIntoView() {
   requestAnimationFrame(() => {
     const el = document.querySelector(
-      state.ignoreToggleFocused
-        ? '[data-testid="toggle-ignored"]'
-        : state.toggleFocused
-          ? '[data-testid="toggle-approved"]'
-          : `[data-idx="${state.selected}"]`
+      state.pushTodoFocused
+        ? '[data-testid="push-todo"]'
+        : state.ignoreToggleFocused
+          ? '[data-testid="toggle-ignored"]'
+          : state.toggleFocused
+            ? '[data-testid="toggle-approved"]'
+            : `[data-idx="${state.selected}"]`
     )
     if (el) el.scrollIntoView({ block: 'nearest' })
   })
@@ -4371,6 +4485,41 @@ function claudeChatCommandsFor() {
       label: 'Wis Claude-gesprek',
       hint: 'wis',
       children: claudeChatClearConfirmCommandsFor(),
+    },
+  ])
+}
+
+// pushTodoConfirmCommands — the one-more-step confirm submenu behind the
+// push-todo row (mirrors claudeChatClearConfirmCommandsFor): pushing writes to
+// a branch other people work on, so it never fires on the first Enter. Built
+// fresh each open so the label can name the branch and the commit count the
+// read model currently reports.
+function pushTodoConfirmCommands() {
+  const p = state.pendingPush || {}
+  const n = p.ahead || 0
+  return withClose([
+    {
+      id: 'push-pending-confirm',
+      label: `Ja, push ${n} commit${n === 1 ? '' : 's'} naar ${p.headRef || 'de PR-branch'}`,
+      hint: 'bevestig',
+      run: () => pushPendingWork(),
+    },
+  ])
+}
+
+// pushTodoCommandsFor — the root list for Enter on the push-todo row at the
+// bottom of the index. One command, gated behind the confirm submenu above; a
+// previous failure is named in the label so the reviewer knows a retry is what
+// he is confirming.
+function pushTodoCommandsFor() {
+  const p = state.pendingPush || {}
+  const retry = p.state === 'failed'
+  return withClose([
+    {
+      id: 'push-pending',
+      label: retry ? 'Push opnieuw naar GitHub' : 'Push naar GitHub',
+      hint: 'push',
+      children: pushTodoConfirmCommands(),
     },
   ])
 }
@@ -7065,6 +7214,7 @@ function rootCommandsFor(mode) {
   if (mode === 'comment') return commentCommandsFor()
   if (mode === 'claude') return claudeChatCommandsFor()
   if (mode === 'prComment') return prCommentCommandsFor()
+  if (mode === 'pushTodo') return pushTodoCommandsFor()
   if (mode === 'replyPublish') return replyPublishCommandsFor()
   if (mode === 'postApprove') return POSTAPPROVE_COMMANDS
   if (mode === 'reviewApprove') return REVIEW_APPROVE_COMMANDS
@@ -7105,6 +7255,9 @@ function resolveCommands(query) {
   // sidebar — see selectedComment/prCommentCommandsFor): same shape, just its
   // own small list.
   if (ms.mode === 'prComment') return filterCommands(ms.commands, query)
+  // The push-todo row's menu (Enter on the bottom-most index stop — see
+  // pushTodoCommandsFor): one command behind its own confirm submenu.
+  if (ms.mode === 'pushTodo') return filterCommands(ms.commands, query)
   // The publish follow-up (opened by a send on a still-local thread — see
   // replyPublishCommandsFor): a plain list whose GitHub items may carry
   // `children`, handled by the ms.sub check at the top of this function.
@@ -7317,6 +7470,7 @@ function onKeydown(e) {
       exitSearch()
       state.toggleFocused = false
       state.ignoreToggleFocused = false
+      state.pushTodoFocused = false
       state.showDescription = true
       return
     }
@@ -7336,6 +7490,10 @@ function onKeydown(e) {
       }
       if (state.ignoreToggleFocused) {
         state.showIgnored = !state.showIgnored
+        return
+      }
+      if (state.pushTodoFocused) {
+        openMenu('pushTodo')
         return
       }
       exitSearch()
@@ -7380,6 +7538,7 @@ function onKeydown(e) {
     !isEditableFocused() &&
     !state.toggleFocused &&
     !state.ignoreToggleFocused &&
+    !state.pushTodoFocused &&
     !isTestColumnActive()
   ) {
     e.preventDefault()
@@ -7540,6 +7699,17 @@ function onKeydown(e) {
     return
   }
 
+  // The push-todo row (the bottom-most stop, see stepListSelection) is the one
+  // trailing row whose Enter does something to the outside world, so — unlike
+  // the two toggles — it never acts directly: it opens a one-more-step confirm
+  // menu, the same two-step shape "Wis Claude-gesprek" and "Keur de HELE PR
+  // goed" use (see pushTodoCommandsFor).
+  if (e.key === 'Enter' && state.pushTodoFocused) {
+    e.preventDefault()
+    openMenu('pushTodo')
+    return
+  }
+
   // Enter on a selected comment-index item (kind:'comment', synthesized from a
   // PR-wide comment into the sidebar — see recomputeLeftList/
   // commentBlockItem) opens its own small action menu ("Beantwoorden" /
@@ -7588,7 +7758,7 @@ function onKeydown(e) {
   // continue, see spaceKey below) joins this list for the same reason — a
   // toggle row is not a PR block, there is nothing there to approve.
   if (
-    (state.toggleFocused || state.ignoreToggleFocused) &&
+    (state.toggleFocused || state.ignoreToggleFocused || state.pushTodoFocused) &&
     !isModifiedKey(e) &&
     ['f', 'd', 's', 'a', ' ', 'ArrowRight'].includes(e.key)
   ) {
@@ -7856,6 +8026,7 @@ function onKeydown(e) {
     e.preventDefault()
     state.toggleFocused = false
     state.ignoreToggleFocused = false
+    state.pushTodoFocused = false
     state.showDescription = true // step left out of the list into stop 1 (the description)
   }
 }
@@ -9355,6 +9526,7 @@ if (state.mode === 'list') requestAnimationFrame(focusSearchBox)
 // Kick off the initial load.
 loadBlocks()
 loadPRMeta()
+loadPendingPush()
 ensurePraiseWords()
 pollWorkflows()
 setInterval(pollWorkflows, WORKFLOWS_POLL_MS)
@@ -9375,7 +9547,12 @@ setInterval(pollWorkflows, WORKFLOWS_POLL_MS)
 ensureEvents(state.pr)
 onEvent('callresolve.changed', () => loadCallResolve())
 onEvent('testcovers.changed', () => loadTestCovers())
+// A landing or a push changes what still has to be pushed — the todo row at the
+// bottom of the index and the per-block "ongepusht" marking both read that one
+// read model, so one refetch covers both.
+onEvent('pendingpush.changed', () => loadPendingPush())
 onEventsResync(() => {
   loadCallResolve()
   loadTestCovers()
+  loadPendingPush()
 })

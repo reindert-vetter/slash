@@ -234,7 +234,19 @@ function renderList(state) {
   })
   if (approvedCount > 0) items.push(toggleRow(state, approvedCount))
   if (ignoredCount > 0) items.push(ignoreToggleRow(state, ignoredCount))
+  // The push todo goes LAST, below both toggle rows: it is not about a block at
+  // all but about the branch, and it is deliberately a thing for the end of the
+  // review — see pushTodoRow.
+  if (hasPendingPush(state)) items.push(pushTodoHeading().key('push-todo-heading'), pushTodoRow(state))
   return items
+}
+
+// hasPendingPush reports whether this PR has landed-but-unpushed Claude commits
+// (state.pendingPush, fed by GET /api/pending-push — see loadPendingPush in
+// home.mjs). Mirrors pushTodoRowVisible there; both must agree, since that one
+// decides whether the keyboard has a stop here.
+export function hasPendingPush(state) {
+  return !!(state.pendingPush && state.pendingPush.ahead > 0)
 }
 
 // commentHeading titles the comment-index-items section at the top of the
@@ -297,6 +309,77 @@ function underlyingHeading() {
       Onderliggende code
     </div>
   `
+}
+
+// pushTodoHeading titles the push-todo section at the very bottom of the index.
+// A section of its own, not a continuation of the toggle rows above it: those
+// fold rows away, this one is a task the reviewer still has to do.
+function pushTodoHeading() {
+  return html`
+    <div
+      data-testid="push-todo-heading"
+      class="border-b border-t border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
+    >
+      Aan het einde
+    </div>
+  `
+}
+
+// pushTodoStatusWord is the row's state in WORDS — never colour alone, so it
+// reads the same for a colour-blind reviewer (see the CATEGORY_STYLE.TRAIT note
+// above for the same reasoning). The ⇧ glyph in the row's title carries the
+// "there is something to send upstream" meaning next to it.
+function pushTodoStatusWord(p) {
+  if (p.state === 'pushing') return 'pushen…'
+  if (p.state === 'failed') return 'push mislukt — Enter probeert opnieuw'
+  return 'klaar om te pushen — Enter'
+}
+
+// pushTodoRow is the todo at the very bottom of the index: Claude's landed
+// commits are already part of the PR's branch locally (and therefore already
+// visible in this tree), but they are not on GitHub yet. It is deliberately NOT
+// a comment on a block — it belongs to no block, it belongs to the end of the
+// review — and deliberately a stop of the sidebar's ↑/↓ loop like the two
+// toggle rows above (state.pushTodoFocused, see stepListSelection in home.mjs),
+// so it is reachable without the mouse.
+//
+// Enter/click never push directly: both open the same one-more-step confirm menu
+// (state.onPushTodo → openMenu('pushTodo'), see pushTodoCommandsFor).
+//
+// The key encodes the row's STATE and count, not just its identity: everything
+// but the focus class is interpolated statically (a plain string, read from a
+// non-reactive snapshot of state.pendingPush), and arrow.js reuses a keyed node
+// without re-running its bindings — so ready → pushen… → mislukt has to arrive
+// as a fresh node (see the keyed-node pitfall in arrowjs-pitfalls.md).
+function pushTodoRow(state) {
+  const p = state.pendingPush || {}
+  const n = p.ahead || 0
+  return html`
+    <button
+      data-testid="push-todo"
+      class="${() =>
+        // Same always-present 1px border as toggleRow, so gaining focus only
+        // changes colour and never the row height.
+        'w-full border px-3 py-2 text-left ' +
+        (state.pushTodoFocused
+          ? 'border-indigo-300 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30'
+          : 'border-slate-300 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
+      @click="${() => state.onPushTodo && state.onPushTodo()}"
+    >
+      <span class="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-zinc-300">
+        <span aria-hidden="true">⇧</span>
+        <span data-testid="push-todo-title"
+          >${n} commit${n === 1 ? '' : 's'} nog niet gepusht naar
+          ${p.headRef || 'de PR-branch'}</span
+        >
+      </span>
+      <span
+        data-testid="push-todo-status"
+        class="mt-0.5 block text-[11px] text-slate-500 dark:text-zinc-500"
+        >${pushTodoStatusWord(p)}</span
+      >
+    </button>
+  `.key(`push-todo-${p.state || 'ready'}-${n}`)
 }
 
 // toggleRow is the bottom button that hides/shows the fully-approved blocks.
