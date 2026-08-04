@@ -31,6 +31,9 @@ func nameManager(t *testing.T, gh github.Client, namesJSON string) (*TaskManager
 	namesMu.Lock()
 	namesByDir = map[string]map[string]string{}
 	namesMu.Unlock()
+	collabMu.Lock()
+	collabLoaded = false
+	collabMu.Unlock()
 
 	m := NewTaskManager(tembed.New(tembed.NewMemoryStore()), gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, dir, "test/repo")
 	return m, dir
@@ -173,5 +176,89 @@ func TestHandleNames(t *testing.T) {
 	s.handleNames(rec2, httptest.NewRequest(http.MethodGet, "/api/names", nil))
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("status without logins = %d, want 200", rec2.Code)
+	}
+}
+
+// TestEnsureCollaboratorsLoadedWarmsCacheOnce proves the search-by-name feature
+// can find a colleague's name even though it never came up anywhere else in
+// this run (the whole point of fetching collaborators up front), and that a
+// repeat call costs nothing (loaded once per process lifetime, mirroring
+// namesFileOverride's own restart-to-refresh trade-off).
+func TestEnsureCollaboratorsLoadedWarmsCacheOnce(t *testing.T) {
+	gh := &github.Fake{}
+	gh.SetCollaborators([]github.Collaborator{{Login: "dennissloove"}, {Login: "alice"}})
+	gh.SetUser(github.User{Login: "dennissloove", Name: "Dennis Sloove"})
+	gh.SetUser(github.User{Login: "alice", Name: "Alice Anderson"})
+	m, dir := nameManager(t, gh, "")
+
+	ensureCollaboratorsLoaded(context.Background(), m)
+	if got := matchingLogins(dir, "dennis"); len(got) != 1 || got[0] != "dennissloove" {
+		t.Fatalf("matchingLogins(dennis) = %v, want [dennissloove]", got)
+	}
+	if calls := gh.UserLookups(); calls != 1 {
+		t.Fatalf("UserLookups after warm-up = %d, want 1 (one batched call)", calls)
+	}
+
+	ensureCollaboratorsLoaded(context.Background(), m) // repeat: no-op
+	if calls := gh.UserLookups(); calls != 1 {
+		t.Fatalf("UserLookups after a repeat warm-up = %d, want still 1", calls)
+	}
+}
+
+// TestMatchingLoginsSearchesNameAndLoginCaseInsensitively covers the pure
+// matcher: a login match, a display-name match (case-insensitive, substring),
+// the names.json override, and the cap on how many logins one query returns.
+func TestMatchingLoginsSearchesNameAndLoginCaseInsensitively(t *testing.T) {
+	gh := &github.Fake{}
+	m, dir := nameManager(t, gh, `{"bob007":"Bob Boss"}`)
+
+	userNameMu.Lock()
+	userNameCache["dennissloove"] = displayUser{Name: "Dennis Sloove"}
+	userNameCache["alice"] = displayUser{Name: "Alice Anderson"}
+	userNameMu.Unlock()
+	_ = m
+
+	if got := matchingLogins(dir, "DENNIS"); len(got) != 1 || got[0] != "dennissloove" {
+		t.Fatalf("matchingLogins(DENNIS) = %v, want [dennissloove] (case-insensitive name match)", got)
+	}
+	if got := matchingLogins(dir, "alice"); len(got) != 1 || got[0] != "alice" {
+		t.Fatalf("matchingLogins(alice) = %v, want [alice] (login match)", got)
+	}
+	if got := matchingLogins(dir, "boss"); len(got) != 1 || got[0] != "bob007" {
+		t.Fatalf("matchingLogins(boss) = %v, want [bob007] (names.json override match)", got)
+	}
+	if got := matchingLogins(dir, "nobody-matches-this"); len(got) != 0 {
+		t.Fatalf("matchingLogins(no match) = %v, want none", got)
+	}
+}
+
+// TestHandleSearchOfflineMatchesAuthorLogin proves the offline (SLASH_GITHUB=off)
+// search path also matches a PR by its author's login, not only by title/number
+// — "dave" doesn't appear anywhere in PR 12888's title in the fixture.
+func TestHandleSearchOfflineMatchesAuthorLogin(t *testing.T) {
+	t.Setenv("SLASH_GITHUB", "off")
+	t.Setenv("SLASH_INBOX", "tests/fixtures/inbox.json")
+
+	db, err := openDB(filepath.Join(t.TempDir(), "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := &server{db: db}
+
+	rec := httptest.NewRecorder()
+	s.handleSearch(rec, httptest.NewRequest(http.MethodGet, "/api/prs/search?q=dave", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body struct {
+		OK  bool       `json:"ok"`
+		PRs []inboxRow `json:"prs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.OK || len(body.PRs) != 1 || body.PRs[0].Number != 12888 {
+		t.Fatalf("prs = %+v, want exactly PR 12888 (author dave)", body.PRs)
 	}
 }

@@ -237,13 +237,35 @@ inside the Activity — no new write path.
 | `GET /api/inbox/status?prs=12,13` | The pills, also from the read-model snapshot (no GitHub call). |
 | `POST /api/workflows/{runID}/signals/refresh` | Refresh Signal (UI on load). Only starts the fetch Activity. |
 | `POST /api/workflows/{runID}/heartbeat` | Operational ping (poll cadence), no state write. |
-| `GET /api/prs/search?q=…` | **Still a direct** live gh `search` (`inbox_api.go`) — an ephemeral, parameterized read, not a persistent list. A bare number → `<n> in:title`. |
+| `GET /api/prs/search?q=…` | **Still a direct** live gh `search` (`inbox_api.go`) — an ephemeral, parameterized read, not a persistent list. A bare number → `<n> in:title`. Also matches by **author name** (not just title/number/login), see below. |
 | `GET /api/prs/filter?preset=<key>` | Live gh `search` for a **fixed, allow-listed** preset query (`filterPresets`) — never raw UI text to gh. See "Filter drawer". |
 | `GET /api/reviewers` | Read-only candidate reviewers → `{ok, reviewers:[{login,avatarUrl,count}]}`, most-used-first. |
 | `GET /api/names?logins=a,b` | Login → real name + avatar. See "Real names instead of logins" in `.claude/docs/pages-and-routing.md`. |
 | `POST /api/workflows/ready_for_review` | `{pr, reviewers?}` → flip a draft to ready + request reviewers. 400 on an invalid pr/login. |
 | `GET /api/problems` | Read-only → `{ok, failedRuns:[{runId,workflow,pr,updatedAt,error}], logErrors:[{at,scope,pr,message}]}`. Feeds "Mislukte taken". |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
+
+### Search also matches the author's NAME, not just their login
+
+GitHub's own free-text PR search (the plain `q` term `handleSearch` passes to
+`gh`) matches title/body/comments — never the author's real name, only their
+exact login as it happens to appear in that text. So typing a colleague's name
+("Dennis") found nothing unless it literally occurred in a PR title.
+
+`handleSearch` (`inbox_api.go`) now also runs the query against every known
+login/name via `matchingLogins` (`usernames.go`): a substring, case-insensitive
+match against the `names.json` override and whatever `DisplayNames` has cached
+in `userNameCache` (capped at `matchingLoginsCap`, so a broad query can't fan
+out into unbounded extra `gh` calls). For each matching login it runs one more
+`author:<login>` search and merges the rows in (`dedupeRowsByNumber`, keyed on
+PR number). `ensureCollaboratorsLoaded` (`usernames.go`) warms `userNameCache`
+with **every repo collaborator's** name once per process lifetime (one
+`ListCollaborators` + one batched `DisplayNames` call, same
+restart-to-refresh trade-off as `namesFileOverride`) — so a colleague's PR is
+findable by name right away, not only once their name has separately surfaced
+somewhere else in this run (e.g. as a visible PR author). The offline
+(`SLASH_GITHUB=off`) fixture path has no name resolution to warm, but matches
+the author **login** substring directly against `inboxRow.Author`.
 
 ## Offline / test mode
 

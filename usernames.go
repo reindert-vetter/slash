@@ -114,6 +114,83 @@ func resolveDisplayName(login, ghName string, override map[string]string) string
 	return strings.TrimSpace(ghName)
 }
 
+// collabMu/collabLoaded guard ensureCollaboratorsLoaded's once-per-process
+// warm-up (see below).
+var (
+	collabMu     sync.Mutex
+	collabLoaded bool
+)
+
+// ensureCollaboratorsLoaded fetches the repo's collaborators and warms
+// userNameCache with every one of their display names, once per process
+// lifetime (same restart-to-refresh trade-off as namesFileOverride). Without
+// this, matchingLogins could only find a colleague whose name had already
+// surfaced somewhere else in this run (e.g. as a PR author already shown on
+// the dashboard); with it, any collaborator's name is searchable right away.
+// A failed fetch is not sticky: the next search call retries.
+func ensureCollaboratorsLoaded(ctx context.Context, tm *TaskManager) {
+	if tm == nil || tm.gh == nil {
+		return
+	}
+	collabMu.Lock()
+	defer collabMu.Unlock()
+	if collabLoaded {
+		return
+	}
+	collabs, err := tm.gh.ListCollaborators(ctx)
+	if err != nil {
+		return
+	}
+	logins := make([]string, 0, len(collabs))
+	for _, c := range collabs {
+		logins = append(logins, c.Login)
+	}
+	tm.DisplayNames(ctx, logins) // batches one GitHub call, warms userNameCache
+	collabLoaded = true
+}
+
+// matchingLogins returns every known login whose login or resolved display
+// name contains query (case-insensitive): the local names.json override plus
+// whatever DisplayNames/ensureCollaboratorsLoaded has cached in userNameCache.
+// Used by /api/prs/search so a reviewer can also search by AUTHOR NAME, which
+// GitHub's own free-text PR search does not match against. Capped so a broad
+// query never fans out into an unbounded number of extra author: searches.
+const matchingLoginsCap = 5
+
+func matchingLogins(dataDir, query string) []string {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(login string) bool {
+		if login == "" || seen[login] {
+			return len(out) >= matchingLoginsCap
+		}
+		seen[login] = true
+		out = append(out, login)
+		return len(out) >= matchingLoginsCap
+	}
+	for login, name := range namesFileOverride(dataDir) {
+		if strings.Contains(strings.ToLower(login), q) || strings.Contains(strings.ToLower(name), q) {
+			if add(login) {
+				return out
+			}
+		}
+	}
+	userNameMu.Lock()
+	defer userNameMu.Unlock()
+	for login, u := range userNameCache {
+		if strings.Contains(strings.ToLower(login), q) || strings.Contains(strings.ToLower(u.Name), q) {
+			if add(login) {
+				return out
+			}
+		}
+	}
+	return out
+}
+
 // DisplayNames resolves logins to their name + avatar, batching every
 // not-yet-cached login into ONE GitHub call and caching the outcome (including
 // misses) for the process lifetime. A failed lookup is not an error for the

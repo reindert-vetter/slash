@@ -107,7 +107,8 @@ func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			needle := strings.ToLower(q)
 			for _, row := range fixtureRows(f) {
 				if strings.Contains(strings.ToLower(row.Title), needle) ||
-					strings.Contains(strconv.Itoa(row.Number), q) {
+					strings.Contains(strconv.Itoa(row.Number), q) ||
+					strings.Contains(strings.ToLower(row.Author), needle) {
 					rows = append(rows, row)
 				}
 			}
@@ -115,6 +116,10 @@ func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		overlayGraph(s.db, rows)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "prs": rows})
 		return
+	}
+
+	if s.tasks != nil {
+		ensureCollaboratorsLoaded(r.Context(), s.tasks.manager)
 	}
 
 	term := q
@@ -127,8 +132,34 @@ func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false})
 		return
 	}
+	// GitHub's own free-text PR search matches title/body/comments, never the
+	// author's real name — so also search by AUTHOR NAME via every collaborator
+	// login whose login or resolved name matches q, merged in and deduped.
+	for _, login := range matchingLogins(s.dataDir, q) {
+		extra, err := searchPRs(r.Context(), "is:pr is:open archived:false author:"+login, false)
+		if err == nil {
+			rows = append(rows, extra...)
+		}
+	}
+	rows = dedupeRowsByNumber(rows)
 	overlayGraph(s.db, rows)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "prs": rows})
+}
+
+// dedupeRowsByNumber drops later duplicates of a PR number, keeping the first
+// occurrence's ordering — used when merging the title/number text-search rows
+// with the extra author-name matches (the same PR can appear in both).
+func dedupeRowsByNumber(rows []inboxRow) []inboxRow {
+	seen := map[int]bool{}
+	out := make([]inboxRow, 0, len(rows))
+	for _, row := range rows {
+		if seen[row.Number] {
+			continue
+		}
+		seen[row.Number] = true
+		out = append(out, row)
+	}
+	return out
 }
 
 // parsePRList parses "12,13,14" into a bounded slice of positive ints.
