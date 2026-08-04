@@ -136,7 +136,7 @@ func processChatMerge(ctx context.Context, cm *chat.Module, cl claude.Client, da
 		msg := chat.Message{
 			ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
 			Role: "assistant", Kind: chat.KindError,
-			Body: "Kon de PR-branch niet bepalen om naartoe te pushen.",
+			Body: "Kon de PR-branch niet bepalen om de wijziging op te landen.",
 		}
 		_ = cm.SaveMessage(ctx, msg)
 		return msg
@@ -185,13 +185,14 @@ func processChatMergeAt(ctx context.Context, cm *chat.Module, cl claude.Client, 
 const chatMergeConflictFailedMsg = "Er ontstond een samenvoegconflict met een andere, inmiddels gepushte wijziging dat niet automatisch kon worden opgelost. Vraag Claude de wijziging opnieuw te maken op basis van de huidige branch."
 
 // resolveChatShadowMerge runs once the plain fast-forward attempt reported the
-// PR branch moved on: try an ordinary `git merge` of that (already fetched by
-// commitChatShadowEditsAt) branch tip into the conversation's shadow first —
-// no AI, fully deterministic — and only when that leaves real conflicts, make
-// ONE begrensde Claude attempt to resolve them. Any failure aborts the merge
+// PR branch moved on: try an ordinary `git merge` of every tip the landing must
+// contain (origin's — already fetched by commitChatShadowEditsAt — and the PR's
+// pending ref) into the conversation's shadow first — no AI, fully
+// deterministic — and only when that leaves real conflicts, make ONE begrensde
+// Claude attempt to resolve them. Any failure aborts the merge
 // (never leaves the shadow worktree mid-conflict) and degrades to a
-// reviewer-facing message; success pushes via the same
-// pushAndReclaimChatShadow every fast-forward push already uses.
+// reviewer-facing message; success lands via the same
+// landAndReclaimChatShadow every fast-forward landing already uses.
 func resolveChatShadowMerge(ctx context.Context, cm *chat.Module, cl claude.Client, dataDir string, pr int, conversationID, turnID, headRefName string) chat.Message {
 	newMsg := func(body string, isErr bool) chat.Message {
 		kind := ""
@@ -208,43 +209,57 @@ func resolveChatShadowMerge(ctx context.Context, cm *chat.Module, cl claude.Clie
 
 	dir := chatShadowDir(dataDir, pr, conversationID)
 
-	_, mergeErr := runGitIn(ctx, dir, "merge", "origin/"+headRefName, "-m", "Merge remote-tracking branch for chat edit")
-	conflicted, statusErr := chatShadowConflictedPaths(ctx, dir)
-	if statusErr != nil {
-		_, _ = runGitIn(ctx, dir, "merge", "--abort")
-		return newMsg(chatShadowBranchMovedOnMsg, true)
-	}
-
-	if len(conflicted) == 0 {
-		if mergeErr != nil {
-			// The merge command itself failed for a reason other than a real
-			// conflict — bail out cleanly rather than guessing further.
+	// EVERY tip the landing must contain, merged one at a time in
+	// chatShadowMissingTips' own fixed order (origin's tip, then the PR's
+	// pending ref) — both can have moved: someone pushing to GitHub advances
+	// the first, another conversation landing an unpushed edit the second.
+	// Merging both is what makes divergence resolve automatically instead of
+	// leaving the reviewer stuck; deliberately never a rewind of either.
+	//
+	// Determinism is unaffected: this is all INSIDE one Activity, so the
+	// workflow still executes exactly one ExecuteActivity per "merge" Signal
+	// regardless of how many tips turn out to need merging (see the file
+	// header and .claude/rules/workflow-determinism.md).
+	resolvedByClaude := false
+	for _, ref := range chatShadowMissingTips(ctx, dir, pr, headRefName) {
+		_, mergeErr := runGitIn(ctx, dir, "merge", ref, "-m", "Merge "+ref+" for chat edit")
+		conflicted, statusErr := chatShadowConflictedPaths(ctx, dir)
+		if statusErr != nil {
 			_, _ = runGitIn(ctx, dir, "merge", "--abort")
 			return newMsg(chatShadowBranchMovedOnMsg, true)
 		}
-		// Clean merge: git resolved every changed line on its own (different
-		// files/regions of the same conversation's edit vs. the other one) — no
-		// AI needed at all.
-		if err := pushAndReclaimChatShadow(ctx, dir, conversationID, headRefName); err != nil {
-			return newMsg(chatShadowBranchMovedOnMsg, true)
+
+		if len(conflicted) == 0 {
+			if mergeErr != nil {
+				// The merge command itself failed for a reason other than a real
+				// conflict — bail out cleanly rather than guessing further.
+				_, _ = runGitIn(ctx, dir, "merge", "--abort")
+				return newMsg(chatShadowBranchMovedOnMsg, true)
+			}
+			// Clean merge: git resolved every changed line on its own (different
+			// files/regions of this conversation's edit vs. the other one) — no
+			// AI needed at all.
+			continue
 		}
-		return newMsg(fmt.Sprintf("Wijziging gepusht naar `%s` (automatisch samengevoegd met een andere wijziging).", headRefName), false)
+
+		// A real conflict — exactly one begrensde Claude-poging per tip, never
+		// more.
+		if !resolveConflictWithClaude(ctx, cl, dir, conversationID, conflicted) {
+			_, _ = runGitIn(ctx, dir, "merge", "--abort")
+			return newMsg(chatMergeConflictFailedMsg, true)
+		}
+		if _, err := runGitIn(ctx, dir, "add", "-A"); err != nil {
+			_, _ = runGitIn(ctx, dir, "merge", "--abort")
+			return newMsg(chatMergeConflictFailedMsg, true)
+		}
+		if _, err := runGitIn(ctx, dir, "commit", "--no-edit"); err != nil {
+			_, _ = runGitIn(ctx, dir, "merge", "--abort")
+			return newMsg(chatMergeConflictFailedMsg, true)
+		}
+		resolvedByClaude = true
 	}
 
-	// A real conflict — exactly one begrensde Claude-poging, never more.
-	if !resolveConflictWithClaude(ctx, cl, dir, conversationID, conflicted) {
-		_, _ = runGitIn(ctx, dir, "merge", "--abort")
-		return newMsg(chatMergeConflictFailedMsg, true)
-	}
-	if _, err := runGitIn(ctx, dir, "add", "-A"); err != nil {
-		_, _ = runGitIn(ctx, dir, "merge", "--abort")
-		return newMsg(chatMergeConflictFailedMsg, true)
-	}
-	if _, err := runGitIn(ctx, dir, "commit", "--no-edit"); err != nil {
-		_, _ = runGitIn(ctx, dir, "merge", "--abort")
-		return newMsg(chatMergeConflictFailedMsg, true)
-	}
-	if err := pushAndReclaimChatShadow(ctx, dir, conversationID, headRefName); err != nil {
+	if err := landAndReclaimChatShadow(ctx, dir, pr, conversationID, headRefName); err != nil {
 		// The merge itself is already committed locally at this point (an abort
 		// is no longer possible/meaningful) — a further race is rare enough that
 		// degrading to the ordinary retry message is acceptable; the next
@@ -252,7 +267,10 @@ func resolveChatShadowMerge(ctx context.Context, cm *chat.Module, cl claude.Clie
 		// against the newer tip.
 		return newMsg(chatShadowBranchMovedOnMsg, true)
 	}
-	return newMsg(fmt.Sprintf("Wijziging gepusht naar `%s` (samenvoegconflict met een andere wijziging automatisch opgelost door Claude).", headRefName), false)
+	if resolvedByClaude {
+		return newMsg(pendingLandedMsg(headRefName)+" (Samenvoegconflict met een andere wijziging automatisch opgelost door Claude.)", false)
+	}
+	return newMsg(pendingLandedMsg(headRefName)+" (Automatisch samengevoegd met een andere wijziging.)", false)
 }
 
 // resolveConflictWithClaude asks Claude, agentically and read/write-scoped to

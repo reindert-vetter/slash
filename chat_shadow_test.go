@@ -242,8 +242,11 @@ func TestClearChatShadowRemovesWorktreeAndBranchEvenWithPendingWork(t *testing.T
 	}
 }
 
-func TestCommitChatShadowEditsPushesFastForward(t *testing.T) {
-	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+// A successful "commit deze wijziging" LANDS on the PR's local pending ref and
+// deliberately does NOT push: the reviewer fires that separately from the todo
+// row at the bottom of the block index (see landAndReclaimChatShadow).
+func TestCommitChatShadowEditsLandsOnPendingRefWithoutPushing(t *testing.T) {
+	bareDir, cloneDir := setupChatShadowRepo(t, "feature/x", "v1\n")
 	dataDir := t.TempDir()
 	ctx := context.Background()
 	cm := testChatModule(t)
@@ -261,20 +264,90 @@ func TestCommitChatShadowEditsPushesFastForward(t *testing.T) {
 		t.Fatalf("commit reported an error: %+v", msg)
 	}
 
-	// Verify the push actually landed on the bare "remote" branch.
+	// The pending ref now holds the edit.
+	ref := prPendingRef(1004, "feature/x")
+	sha := pendingRefSHA(ctx, ref)
+	if sha == "" {
+		t.Fatalf("pending ref %s does not exist after a successful landing", ref)
+	}
+	out, err := exec.Command("git", "-C", cloneDir, "show", sha+":foo.txt").Output()
+	if err != nil || string(out) != "edited by claude\n" {
+		t.Fatalf("pending ref content = %q, err %v; want the edit", out, err)
+	}
+
+	// ...and the remote is deliberately untouched: no push happened.
 	verify := t.TempDir()
 	if out, err := exec.Command("git", "clone", "--branch", "feature/x", bareDir, verify).CombinedOutput(); err != nil {
 		t.Fatalf("clone to verify: %v: %s", err, out)
 	}
-	got, err := os.ReadFile(filepath.Join(verify, "foo.txt"))
-	if err != nil || string(got) != "edited by claude\n" {
-		t.Fatalf("pushed content = %q, err %v; want the edit", got, err)
+	if got, _ := os.ReadFile(filepath.Join(verify, "foo.txt")); string(got) != "v1\n" {
+		t.Fatalf("remote content = %q, want v1 (landing must not push)", got)
 	}
 
-	// Reclaimed: the shadow directory is gone once pushed (see
-	// commitChatShadowEditsAt's own reclaim step).
+	// Reclaimed: nothing is left behind in the worktree once landed.
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("shadow worktree not reclaimed after a successful push: err=%v", err)
+		t.Fatalf("shadow worktree not reclaimed after a successful landing: err=%v", err)
+	}
+	branches, err := exec.Command("git", "-C", cloneDir, "branch", "--list", "chat/conv-d").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git branch --list: %v: %s", err, branches)
+	}
+	if strings.TrimSpace(string(branches)) != "" {
+		t.Fatalf("shadow branch still exists after landing: %q", branches)
+	}
+	// The pending ref lives outside refs/heads, so it can never collide with the
+	// developer's own branches (see prPendingRef).
+	all, err := exec.Command("git", "-C", cloneDir, "branch", "--list").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git branch --list: %v: %s", err, all)
+	}
+	if strings.Contains(string(all), "slash") {
+		t.Fatalf("pending ref leaked into `git branch`: %q", all)
+	}
+}
+
+// A second conversation's shadow is based on the PR's pending ref, so its own
+// landing STACKS on the first one's unpushed commit instead of rewinding it.
+func TestSecondConversationStacksOnPendingRef(t *testing.T) {
+	_, cloneDir := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	cm := testChatModule(t)
+
+	dirA, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1010, "conv-a", "feature/x")
+	if err != nil {
+		t.Fatalf("ensure a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirA, "a.txt"), []byte("from a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1010, "conv-a", "turn-a", "feature/x"); msg.Kind == chat.KindError {
+		t.Fatalf("first landing failed: %+v", msg)
+	}
+	firstSHA := pendingRefSHA(ctx, prPendingRef(1010, "feature/x"))
+
+	dirB, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1010, "conv-b", "feature/x")
+	if err != nil {
+		t.Fatalf("ensure b: %v", err)
+	}
+	// The second conversation must see the first one's landed file.
+	if _, err := os.Stat(filepath.Join(dirB, "a.txt")); err != nil {
+		t.Fatalf("second shadow is not based on the pending ref (a.txt missing): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirB, "b.txt"), []byte("from b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1010, "conv-b", "turn-b", "feature/x"); msg.Kind == chat.KindError {
+		t.Fatalf("second landing failed: %+v", msg)
+	}
+
+	secondSHA := pendingRefSHA(ctx, prPendingRef(1010, "feature/x"))
+	if secondSHA == "" || secondSHA == firstSHA {
+		t.Fatalf("pending ref did not advance: first=%s second=%s", firstSHA, secondSHA)
+	}
+	// Fast-forward only: the first landing is still an ancestor.
+	if out, err := exec.Command("git", "-C", cloneDir, "merge-base", "--is-ancestor", firstSHA, secondSHA).CombinedOutput(); err != nil {
+		t.Fatalf("second landing rewound the first one: %v: %s", err, out)
 	}
 }
 
@@ -299,7 +372,10 @@ func TestCommitChatShadowEditsRefusesNonFastForward(t *testing.T) {
 
 	msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1005, "conv-e", "turn-conv-e", "feature/x")
 	if msg.Kind != chat.KindError {
-		t.Fatalf("expected an error message on a non-fast-forward push, got: %+v", msg)
+		t.Fatalf("expected an error message on a non-fast-forward landing, got: %+v", msg)
+	}
+	if sha := pendingRefSHA(ctx, prPendingRef(1005, "feature/x")); sha != "" {
+		t.Fatalf("pending ref was created for a refused landing: %s", sha)
 	}
 
 	// The bare repo's branch must be untouched by our attempt (no force-push).

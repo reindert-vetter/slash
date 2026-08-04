@@ -92,26 +92,22 @@ func TestProcessChatMergeCleanlyAutoMergesNonOverlappingEdit(t *testing.T) {
 	if msg.Kind == chat.KindError {
 		t.Fatalf("expected a clean auto-merge success, got error: %+v", msg)
 	}
-	if !strings.Contains(msg.Body, "automatisch samengevoegd") {
+	if !strings.Contains(msg.Body, "Automatisch samengevoegd") {
 		t.Fatalf("expected the auto-merge wording, got: %q", msg.Body)
 	}
 
-	// Both edits must be present on the real branch afterwards.
-	verify := t.TempDir()
-	if out, err := exec.Command("git", "clone", "--branch", "feature/x", bareDir, verify).CombinedOutput(); err != nil {
-		t.Fatalf("clone to verify: %v: %s", err, out)
+	// Both edits must be present on the PR's pending ref afterwards (the
+	// landing target — the push to GitHub is a separate, reviewer-triggered
+	// step, see landAndReclaimChatShadow).
+	if got := pendingFileAt(t, 2001, "feature/x", "foo.txt"); got != "foo edited by claude\n" {
+		t.Fatalf("foo.txt = %q; want the chat conversation's own edit", got)
 	}
-	foo, err := os.ReadFile(filepath.Join(verify, "foo.txt"))
-	if err != nil || string(foo) != "foo edited by claude\n" {
-		t.Fatalf("foo.txt = %q, err %v; want the chat conversation's own edit", foo, err)
-	}
-	bar, err := os.ReadFile(filepath.Join(verify, "bar.txt"))
-	if err != nil || string(bar) != "bar edited elsewhere\n" {
-		t.Fatalf("bar.txt = %q, err %v; want the other conversation's edit", bar, err)
+	if got := pendingFileAt(t, 2001, "feature/x", "bar.txt"); got != "bar edited elsewhere\n" {
+		t.Fatalf("bar.txt = %q; want the other conversation's edit", got)
 	}
 
 	// The shadow worktree/branch must have been reclaimed, exactly like an
-	// ordinary fast-forward push (commitChatShadowEditsAt's own reclaim step).
+	// ordinary fast-forward landing (commitChatShadowEditsAt's own reclaim step).
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("expected the shadow worktree to be reclaimed, stat err = %v", err)
 	}
@@ -121,8 +117,8 @@ func TestProcessChatMergeSerializesTwoConversationsInArrivalOrder(t *testing.T) 
 	// Two conversations both touch DIFFERENT files, and both are asked to
 	// commit in the same order their requests would be queued in — a merge
 	// queue's whole point is that the second one sees the first's already-
-	// pushed commit and cleanly merges around it, rather than racing it.
-	bareDir, _ := setupChatMergeRepo(t, "feature/x")
+	// landed commit and cleanly merges around it, rather than racing it.
+	setupChatMergeRepo(t, "feature/x")
 	dataDir := t.TempDir()
 	ctx := context.Background()
 	cm := testChatModule(t)
@@ -162,19 +158,31 @@ func TestProcessChatMergeSerializesTwoConversationsInArrivalOrder(t *testing.T) 
 	if msgB.Kind == chat.KindError {
 		t.Fatalf("conversation b: expected an auto-merge success, got %+v", msgB)
 	}
-	if !strings.Contains(msgB.Body, "automatisch samengevoegd") {
+	if !strings.Contains(msgB.Body, "Automatisch samengevoegd") {
 		t.Fatalf("conversation b: expected the auto-merge wording, got: %q", msgB.Body)
 	}
 
-	verify := t.TempDir()
-	if out, err := exec.Command("git", "clone", "--branch", "feature/x", bareDir, verify).CombinedOutput(); err != nil {
-		t.Fatalf("clone to verify: %v: %s", err, out)
-	}
-	foo, _ := os.ReadFile(filepath.Join(verify, "foo.txt"))
-	bar, _ := os.ReadFile(filepath.Join(verify, "bar.txt"))
-	if string(foo) != "foo from a\n" || string(bar) != "bar from b\n" {
+	foo := pendingFileAt(t, 2002, "feature/x", "foo.txt")
+	bar := pendingFileAt(t, 2002, "feature/x", "bar.txt")
+	if foo != "foo from a\n" || bar != "bar from b\n" {
 		t.Fatalf("both edits should have landed: foo=%q bar=%q", foo, bar)
 	}
+}
+
+// pendingFileAt reads one file as of the PR's pending ref (the landing target,
+// see prPendingRef) — the "did this really land?" assertion every merge test
+// needs now that landing no longer pushes to the remote.
+func pendingFileAt(t *testing.T, pr int, headRefName, path string) string {
+	t.Helper()
+	sha := pendingRefSHA(context.Background(), prPendingRef(pr, headRefName))
+	if sha == "" {
+		t.Fatalf("pending ref for pr %d/%s does not exist", pr, headRefName)
+	}
+	out, err := exec.Command("git", "-C", os.Getenv("SLASH_REPO_DIR"), "show", sha+":"+path).Output()
+	if err != nil {
+		t.Fatalf("git show %s:%s: %v", sha, path, err)
+	}
+	return string(out)
 }
 
 // TestProcessChatMergeAbortsAndDegradesOnUnresolvedConflict covers the real

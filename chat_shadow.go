@@ -50,6 +50,75 @@ func chatShadowBranch(conversationID string) string {
 	return "chat/" + conversationID
 }
 
+// prPendingRef is the LOCAL ref one PR's committed-but-not-yet-pushed chat
+// edits land on — "the PR's branch as slash knows it locally". Deliberately
+// its own refs/slash/... namespace instead of refs/heads/<headRef>: the clone
+// runGit works in is the developer's OWN checkout, where a real local branch
+// of that name may already exist (possibly checked out), and moving it under
+// the reviewer's feet is exactly the kind of surprise this app must never
+// cause. A ref outside refs/heads never shows up in `git branch`, can't
+// collide with a checkout, and pushes just as well
+// (<pendingRef>:refs/heads/<headRef>, see pushPendingPR in chat_merge.go).
+//
+// The branch name is part of the ref PATH so every reader can recover it from
+// git alone (`git for-each-ref refs/slash/pending/pr-<n>/`) without a gh call —
+// that is what keeps the pending-push read model (tasks_api.go) purely local.
+func prPendingRef(pr int, headRefName string) string {
+	return fmt.Sprintf("refs/slash/pending/pr-%d/%s", pr, headRefName)
+}
+
+// pendingRefSHA resolves ref to a commit SHA, or "" when it doesn't exist
+// (which is the normal state: no chat edit has landed for this PR yet).
+func pendingRefSHA(ctx context.Context, ref string) string {
+	out, err := runGit(ctx, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// chatShadowBaseTip is the ref a conversation's shadow worktree is created
+// from / fast-forwarded to: the PR's pending ref when one exists, else
+// origin/<headRefName>. Basing on the pending ref is what makes two
+// conversations STACK instead of clobbering each other — the second one starts
+// from the first one's already-landed (but unpushed) commit, rather than from
+// an origin tip that doesn't contain it yet.
+func chatShadowBaseTip(ctx context.Context, pr int, headRefName string) string {
+	ref := prPendingRef(pr, headRefName)
+	if pendingRefSHA(ctx, ref) != "" {
+		return ref
+	}
+	return "origin/" + headRefName
+}
+
+// chatShadowMissingTips reports which of the two tips a landing must contain —
+// origin/<headRefName> and the PR's pending ref, in that FIXED order — are not
+// yet ancestors of dir's HEAD. Empty means the shadow's own commit contains
+// everything and may land as a plain fast-forward.
+//
+// Both tips matter: the pending ref is the local truth a landing may never
+// rewind (another conversation's unpushed work), and the origin tip is what
+// the eventual push has to fast-forward onto. A non-empty result is exactly
+// the "branch moved on" situation resolveChatShadowMerge (chat_merge.go)
+// merges away, one tip at a time, in this same order.
+// No error return on purpose: `merge-base --is-ancestor` answers "no" with exit
+// code 1, indistinguishable here from a genuine git failure, and both belong in
+// the same place — report the tip as missing and let the merge path deal with
+// it. A false "missing" costs one no-op merge, never correctness.
+func chatShadowMissingTips(ctx context.Context, dir string, pr int, headRefName string) []string {
+	candidates := []string{"origin/" + headRefName, prPendingRef(pr, headRefName)}
+	var missing []string
+	for _, ref := range candidates {
+		if pendingRefSHA(ctx, ref) == "" {
+			continue // doesn't exist locally (no pending ref yet) — nothing to contain
+		}
+		if _, err := runGitIn(ctx, dir, "merge-base", "--is-ancestor", ref, "HEAD"); err != nil {
+			missing = append(missing, ref)
+		}
+	}
+	return missing
+}
+
 // ensureChatShadowWorktree lazily creates (on the conversation's first edit
 // turn) or, if it's safe to, refreshes a conversation's shadow worktree, and
 // returns its directory.
@@ -90,10 +159,16 @@ func ensureChatShadowWorktreeAt(ctx context.Context, dataDir string, pr int, con
 		return "", fmt.Errorf("fetch head branch %s: %w", headRefName, err)
 	}
 
+	// Based on the PR's LOCAL landing tip, not blindly on origin: an earlier
+	// conversation's already-landed-but-unpushed commit must be the starting
+	// point, or this conversation's own landing would try to rewind it (see
+	// chatShadowBaseTip / prPendingRef).
+	tip := chatShadowBaseTip(ctx, pr, headRefName)
+
 	dir := chatShadowDir(dataDir, pr, conversationID)
 	if _, err := os.Stat(dir); err != nil {
 		branch := chatShadowBranch(conversationID)
-		if _, err := runGit(ctx, "worktree", "add", "-b", branch, dir, "origin/"+headRefName); err != nil {
+		if _, err := runGit(ctx, "worktree", "add", "-b", branch, dir, tip); err != nil {
 			return "", fmt.Errorf("create chat shadow worktree: %w", err)
 		}
 		return dir, nil
@@ -105,13 +180,13 @@ func ensureChatShadowWorktreeAt(ctx context.Context, dataDir string, pr int, con
 	// and let the next turn/commit attempt degrade instead of guessing (the same
 	// "degrade rather than guess" rule the re-anchor pass follows — see the
 	// pr_status section of .claude/docs/workflows-trackers.md).
-	dirty, ahead, err := chatShadowPendingState(ctx, dir, headRefName)
+	dirty, ahead, err := chatShadowPendingState(ctx, dir, tip)
 	if err != nil {
 		// Can't tell — be conservative and leave the worktree untouched.
 		return dir, nil
 	}
 	if !dirty && ahead == 0 {
-		if _, err := runGitIn(ctx, dir, "reset", "--hard", "origin/"+headRefName); err != nil {
+		if _, err := runGitIn(ctx, dir, "reset", "--hard", tip); err != nil {
 			return "", fmt.Errorf("refresh chat shadow worktree: %w", err)
 		}
 	}
@@ -119,15 +194,15 @@ func ensureChatShadowWorktreeAt(ctx context.Context, dataDir string, pr int, con
 }
 
 // chatShadowPendingState reports whether dir has uncommitted changes, and how
-// many commits its own HEAD is ahead of origin/<headRefName> (local commits
-// not yet pushed).
-func chatShadowPendingState(ctx context.Context, dir, headRefName string) (dirty bool, ahead int, err error) {
+// many commits its own HEAD is ahead of tip (local commits that have not landed
+// on the PR's pending ref yet — see chatShadowBaseTip for what tip is).
+func chatShadowPendingState(ctx context.Context, dir, tip string) (dirty bool, ahead int, err error) {
 	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain")
 	if err != nil {
 		return false, 0, err
 	}
 	dirty = strings.TrimSpace(string(statusOut)) != ""
-	aheadOut, err := runGitIn(ctx, dir, "rev-list", "--count", "origin/"+headRefName+"..HEAD")
+	aheadOut, err := runGitIn(ctx, dir, "rev-list", "--count", tip+"..HEAD")
 	if err != nil {
 		return dirty, 0, err
 	}
@@ -211,34 +286,58 @@ func prepareChatShellWorkDir(ctx context.Context, tm *TaskManager, dataDir strin
 }
 
 // chatShadowBranchMovedOnMsg is the exact reviewer-facing text
-// commitChatShadowEditsAt reports when the PR's real branch has moved on since
-// the shadow was based (a non-fast-forward push). Named so chat_merge.go can
-// detect this SPECIFIC outcome (as opposed to "no shadow exists"/"couldn't
-// determine the PR branch"/a genuine push failure) without string-matching an
-// inline literal in two places — a shared constant can't drift out of sync.
-const chatShadowBranchMovedOnMsg = "De PR-branch is intussen verder; jouw wijziging kon niet worden gepusht. Ververs en probeer opnieuw."
+// commitChatShadowEditsAt reports when the PR's branch has moved on since the
+// shadow was based (so the landing would not be a fast-forward). Named so
+// chat_merge.go can detect this SPECIFIC outcome (as opposed to "no shadow
+// exists"/"couldn't determine the PR branch"/a genuine git failure) without
+// string-matching an inline literal in two places — a shared constant can't
+// drift out of sync.
+const chatShadowBranchMovedOnMsg = "De PR-branch is intussen verder; jouw wijziging kon niet worden geland. Ververs en probeer opnieuw."
 
-// pushAndReclaimChatShadow pushes dir's own conversation branch onto
-// origin/<headRefName> via the explicit refspec chat/<id>:<headRef> — never
-// --force, git itself refuses a non-fast-forward push on top of whatever
-// ahead-check the caller already did — and, only once that succeeds, reclaims
-// the now-superfluous shadow worktree + branch (best-effort; a leftover is
-// still swept by cleanup.go once the PR is purged). Shared by
-// commitChatShadowEditsAt's own fast-forward path and chat_merge.go's merge/
-// conflict-resolution path, so there is exactly one place that ever pushes a
-// chat shadow onto the real PR branch.
+// landAndReclaimChatShadow lands dir's commit on the PR's LOCAL pending ref
+// (prPendingRef) and, only once that succeeds, reclaims the now-superfluous
+// shadow worktree + branch (best-effort; a leftover is still swept by
+// cleanup.go once the PR is purged). Shared by commitChatShadowEditsAt's own
+// fast-forward path and chat_merge.go's merge/conflict-resolution path, so
+// there is exactly one place that ever moves a PR's pending ref forward.
 //
-// ingestMu-guarded: push/worktree-remove/branch-delete all touch the shared
-// clone's own remote-tracking refs and worktree registry — the same reason
+// This REPLACES the direct `git push origin chat/<id>:<headRef>` this function
+// used to do. The push to GitHub is now a separate, reviewer-triggered step
+// (the todo row at the bottom of the block index → the chat_merge queue's
+// "push" Signal → pushPendingPR), so a reviewer-requested edit is immediately
+// part of the PR branch as slash sees it — and immediately visible in the
+// review tree — without a network write nobody asked for yet.
+//
+// git's own non-fast-forward refusal is gone with the push, so the guarantee is
+// kept here explicitly: the ref only ever moves to a commit that CONTAINS its
+// current value. Callers already check the same thing against both tips
+// (chatShadowMissingTips); this is the last line of defence, so no code path
+// can silently rewind another conversation's unpushed work.
+//
+// ingestMu-guarded: update-ref/worktree-remove/branch-delete all touch the
+// shared clone's own refs and worktree registry — the same reason
 // ensureChatShadowWorktreeAt takes this lock.
-func pushAndReclaimChatShadow(ctx context.Context, dir, conversationID, headRefName string) error {
+func landAndReclaimChatShadow(ctx context.Context, dir string, pr int, conversationID, headRefName string) error {
 	ingestMu.Lock()
 	defer ingestMu.Unlock()
-	branch := chatShadowBranch(conversationID)
-	refspec := branch + ":" + headRefName
-	if _, err := runGitIn(ctx, dir, "push", "origin", refspec); err != nil {
-		return err
+
+	shaOut, err := runGitIn(ctx, dir, "rev-parse", "HEAD")
+	if err != nil {
+		return fmt.Errorf("resolve shadow HEAD: %w", err)
 	}
+	sha := strings.TrimSpace(string(shaOut))
+
+	ref := prPendingRef(pr, headRefName)
+	if cur := pendingRefSHA(ctx, ref); cur != "" && cur != sha {
+		if _, err := runGitIn(ctx, dir, "merge-base", "--is-ancestor", cur, sha); err != nil {
+			return fmt.Errorf("landing %s would not be a fast-forward of %s", short(sha), short(cur))
+		}
+	}
+	if _, err := runGit(ctx, "update-ref", ref, sha); err != nil {
+		return fmt.Errorf("update pending ref: %w", err)
+	}
+
+	branch := chatShadowBranch(conversationID)
 	_, _ = runGit(ctx, "worktree", "remove", "--force", dir)
 	_, _ = runGit(ctx, "branch", "-D", branch)
 	return nil
@@ -262,9 +361,9 @@ func chatShadowConflictedPaths(ctx context.Context, dir string) ([]string, error
 }
 
 // commitChatShadowEdits is the "commit deze wijziging" Activity body: commit
-// whatever Claude changed in the conversation's shadow worktree and
-// fast-forward-push it straight onto the PR's real head branch via an
-// explicit refspec (chat/<id>:<headRef>) — never a force-push. Persists and
+// whatever Claude changed in the conversation's shadow worktree and land it,
+// fast-forward-only, on the PR's LOCAL pending ref (landAndReclaimChatShadow) —
+// the push to GitHub is a separate, reviewer-triggered step. Persists and
 // returns the resulting chat.Message (success, or a specific reviewer-facing
 // failure reason). An ordinary "nothing to commit" or "branch moved on"
 // outcome is expected, normal behaviour — never a Go error — only a genuinely
@@ -277,7 +376,7 @@ func commitChatShadowEdits(ctx context.Context, cm *chat.Module, dataDir string,
 		msg := chat.Message{
 			ID: chatMessageID(turnID, ""), ConversationID: conversationID, PR: pr,
 			Role: "assistant", Kind: chat.KindError,
-			Body: "Kon de PR-branch niet bepalen om naartoe te pushen.",
+			Body: "Kon de PR-branch niet bepalen om de wijziging op te landen.",
 		}
 		_ = cm.SaveMessage(ctx, msg)
 		return msg
@@ -323,31 +422,39 @@ func commitChatShadowEditsAt(ctx context.Context, cm *chat.Module, dataDir strin
 		}
 	}
 	// Else: nothing new to stage — but an earlier attempt may already have
-	// committed locally without managing to push, so it's still worth trying.
+	// committed locally without managing to land, so it's still worth trying.
 
 	// git fetch touches the shared clone's remote-tracking refs — the same
 	// reason ensureChatShadowWorktree takes ingestMu. Scoped to JUST the fetch +
-	// ahead-check: the push itself takes the same lock again, on its own, inside
-	// pushAndReclaimChatShadow — a plain sync.Mutex isn't reentrant, so it must
-	// be released here first rather than deferred.
+	// containment check: the landing itself takes the same lock again, on its
+	// own, inside landAndReclaimChatShadow — a plain sync.Mutex isn't reentrant,
+	// so it must be released here first rather than deferred.
 	ingestMu.Lock()
 	_, fetchErr := runGit(ctx, "fetch", "origin", headRefName)
 	if fetchErr != nil {
 		ingestMu.Unlock()
 		return newMsg("Kon de laatste stand van de branch niet ophalen.", true)
 	}
-	aheadOut, err := runGitIn(ctx, dir, "rev-list", "--count", "HEAD..origin/"+headRefName)
+	missing := chatShadowMissingTips(ctx, dir, pr, headRefName)
 	ingestMu.Unlock()
-	if err != nil {
-		return newMsg("Kon niet controleren of de branch intussen is doorgelopen.", true)
-	}
-	if strings.TrimSpace(string(aheadOut)) != "0" {
+	if len(missing) > 0 {
 		return newMsg(chatShadowBranchMovedOnMsg, true)
 	}
 
-	if err := pushAndReclaimChatShadow(ctx, dir, conversationID, headRefName); err != nil {
-		return newMsg("Pushen naar de PR-branch is mislukt.", true)
+	if err := landAndReclaimChatShadow(ctx, dir, pr, conversationID, headRefName); err != nil {
+		return newMsg("De wijziging kon niet op de PR-branch worden gezet.", true)
 	}
 
-	return newMsg(fmt.Sprintf("Wijziging gepusht naar `%s`.", headRefName), false)
+	return newMsg(pendingLandedMsg(headRefName), false)
+}
+
+// pendingLandedMsg is the reviewer-facing text for a successful landing — the
+// one place that wording lives, so the plain fast-forward path and
+// chat_merge.go's merge paths can't describe the same outcome differently. It
+// says two things on purpose: the change IS on the PR branch as slash sees it
+// (so the review tree showing it right away is not a surprise), and it is NOT
+// on GitHub yet, with a pointer at where the push lives.
+func pendingLandedMsg(headRefName string) string {
+	return fmt.Sprintf("Wijziging staat op `%s` en is meteen zichtbaar in de review-tree. "+
+		"Nog niet gepusht naar GitHub — dat doe je met de todo onderaan de index.", headRefName)
 }
