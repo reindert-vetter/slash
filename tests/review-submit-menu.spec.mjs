@@ -240,9 +240,20 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     }
     await seedComment(26, 'own comment one')
     await seedComment(27, 'own comment two')
+    // A "just praise" comment is NOT an open point, so it must not be counted
+    // (isPraiseComment, home.mjs). Deliberately a LONGER body around the word:
+    // the rule is a raw substring match with no word boundaries, so this one is
+    // skipped as well — see the two documented choices at isPraiseComment.
+    await seedComment(28, 'Nice, maar deze query geeft N+1')
 
     await mockClipboard(page)
+    // The word list is configurable (GET /api/praisewords → praise-words.json,
+    // see praisewords.go); ensurePraiseWords fetches it once at startup. Waiting
+    // for that response proves the wiring — without it the page would silently
+    // fall back to DEFAULT_PRAISE_WORDS and this test would still pass.
+    const praiseWords = page.waitForResponse('**/api/praisewords')
     await page.goto('/pr/12903')
+    expect((await praiseWords).ok()).toBe(true)
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
     await page.keyboard.press('Escape')
 

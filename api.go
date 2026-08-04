@@ -33,6 +33,10 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	mux.HandleFunc("/api/prs", s.handlePRs)
 	mux.HandleFunc("/api/prs/search", s.handleSearch)
 	mux.HandleFunc("/api/avatar", s.handleAvatar)
+	// The word list behind the review clipboard summary's "this comment is just
+	// praise" rule (see praisewords.go). Registered here rather than in
+	// routesTasks: it reads a file next to the DBs, not the workflow engine.
+	mux.HandleFunc("/api/praisewords", s.handlePraiseWords)
 	if s.tasks != nil {
 		s.routesTasks(mux)
 	}

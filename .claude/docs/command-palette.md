@@ -349,7 +349,8 @@ builds the text from `state.prUrl || GITHUB_PR` (the same fallback the
   it reads the whole `commentListSnapshot()` (`RelatedPanel.mjs`), matching
   what "approving the whole PR" itself covers. Deliberately **not** scoped to
   "placed during this session" — a reviewer who reopens the same PR later
-  still gets an accurate count of what they left open.
+  still gets an accurate count of what they left open. A thread that ends in
+  **meaningless praise** is skipped (`isPraiseComment`, see below).
 - **`REQUEST_CHANGES`** — deliberately **no emoji**: `${link} met nog een paar
   aanpassingen: ${reason}`, `reason` being the typed rejection text verbatim
   (only internal whitespace/newlines are collapsed to one line — never
@@ -361,6 +362,43 @@ convention). Tests: the three cases (no comments, with own unresolved
 comments, reject) in `tests/review-submit-menu.spec.mjs`, using the same
 `navigator.clipboard` stub as `tests/overview.spec.mjs`'s "Kopieer GitHub URL"
 test.
+
+#### A thread ending in "just praise" is not an open point
+
+A comment that only says "Nice"/"Goed"/"Lekker" leaves the PR author nothing to
+do, so `ownOpenCommentCount` filters it out via `isPraiseComment` (`home.mjs`).
+Two choices in it are **deliberate and explicitly agreed — do not "fix" either**:
+
+1. **Raw substring, no word boundaries.** Any occurrence anywhere in the text
+   matches, so `"Nice, maar deze query geeft N+1"` is skipped too — and
+   `"goedgekeurd"`/`"goedkeuring"` therefore match on `goed`. Adding `\b` would
+   make the rule narrower than what was asked for.
+2. **Only the LAST message of the thread decides** (`threadLastBody` — the final
+   `c.reactions` entry, which is already chronological, else `c.body`),
+   regardless of who wrote it. The last message is the thread's current state: an
+   inhoudelijke comment closed off with "Goed, opgelost" is settled, while a
+   thread that opens with "Nice" but ends in a real question still counts.
+   Checking *every* message would let one polite word mid-discussion hide a
+   thread forever.
+
+The word list is **configurable**, so a reviewer can add words without touching
+code: read-only **`GET /api/praisewords`** (`praisewords.go`) serves
+`<dataDir>/praise-words.json` — a JSON array of strings, normalized to trimmed
+lowercase. Missing, unparsable, or normalizing to nothing → the built-in
+defaults `["nice","goed","lekker"]`, never an error; editing it takes a restart
+(cached per data dir, same as `names.json` — see "Real names instead of logins"
+in `.claude/docs/pages-and-routing.md`). The file is deliberately **not**
+committed: unlike the team-wide `data/names.json` it is one reviewer's personal
+vocabulary. Write boundary: a pure read + in-memory cache, so it needs no
+workflow (same carve-out as `/api/me`).
+
+The frontend fetches it **once at startup** (`ensurePraiseWords`, next to
+`loadBlocks()`), because `buildReviewClipboardText` is synchronous; a failed or
+slow fetch just leaves `DEFAULT_PRAISE_WORDS` in place, which is also what every
+offline test run sees. Tests: `TestPraiseWords*` (`praisewords_test.go`) for the
+list + endpoint, and the "own unresolved comments" case in
+`tests/review-submit-menu.spec.mjs`, which seeds a third, praise-carrying
+comment and still expects `✅ met 2 comments`.
 
 ## The comment-scoped menu (`comment`, `commentCommandsFor`)
 

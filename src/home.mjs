@@ -4650,15 +4650,73 @@ const POSTAPPROVE_COMMANDS = withClose(
   }
 )
 
+// ── "just praise" comments don't count as open points ──────────────────────
+// A comment that only says "Nice"/"Goed"/"Lekker" leaves the PR author nothing
+// to do, so counting it in the clipboard summary below ("✅ met N comments")
+// overstates what still needs looking at. The word list comes from read-only
+// GET /api/praisewords (the <dataDir>/praise-words.json override, else the
+// server's built-in defaults — see praisewords.go), so a reviewer can add words
+// without touching code.
+const DEFAULT_PRAISE_WORDS = ['nice', 'goed', 'lekker']
+let praiseWords = DEFAULT_PRAISE_WORDS
+
+// ensurePraiseWords fetches the list once, at startup — buildReviewClipboardText
+// is synchronous (it runs inside a click handler, after the submit already
+// succeeded), so the value has to be there by then rather than awaited. A failed
+// or slow fetch simply leaves the defaults in place, which is also what every
+// offline/SLASH_GITHUB=off test run sees. Plain non-reactive module state: it is
+// read at click time only, never rendered, so there is no arrow.js repaint
+// concern (unlike `me`/`names` in avatar.mjs, see conventions.md).
+function ensurePraiseWords() {
+  fetch('/api/praisewords')
+    .then((res) => (res.ok ? res.json() : null))
+    .catch(() => null)
+    .then((data) => {
+      if (data && data.ok && Array.isArray(data.words) && data.words.length) praiseWords = data.words
+    })
+}
+
+// threadLastBody is the body of the LAST message of a comment thread: its final
+// reply if there is one, otherwise the comment's own body. `c.reactions` is
+// already chronological (modules/comments orders reactions by created_at), so
+// the last entry needs no sorting here.
+function threadLastBody(c) {
+  const replies = c.reactions || []
+  return (replies.length ? replies[replies.length - 1].body : c.body) || ''
+}
+
+// isPraiseComment reports whether a thread has ended in meaningless praise, and
+// therefore should not be counted as an open point.
+//
+// TWO DELIBERATE CHOICES, both explicitly agreed — do not "fix" either:
+//
+//  1. RAW SUBSTRING, no word boundaries. Any occurrence anywhere in the text
+//     matches, so "Nice, maar deze query geeft N+1" is skipped too — and yes,
+//     "goedgekeurd"/"goedkeuring" therefore match on "goed". Accepted: adding
+//     \b would make the rule narrower than what was asked for.
+//  2. Only the LAST message of the thread decides (threadLastBody), regardless
+//     of who wrote it. The final message is the thread's current state: an
+//     inhoudelijke comment closed off with "Goed, opgelost" is settled, while a
+//     thread that opens with "Nice" but ends in a real question still counts.
+//     Checking EVERY message would let one polite word mid-discussion hide a
+//     thread forever.
+function isPraiseComment(c) {
+  const body = threadLastBody(c).toLowerCase()
+  return praiseWords.some((w) => body.includes(w))
+}
+
 // ownOpenCommentCount counts the reviewer's OWN comments (isOwnComment, so
 // placed in this app or on GitHub by the reviewer themselves — never someone
-// else's, never a bot/AI finding) that are not (yet) resolved, across the
-// WHOLE PR (commentListSnapshot(), not scoped to one block/subtree — the
-// clipboard summary below is a PR-level review outcome, not a per-block one).
+// else's, never a bot/AI finding) that are not (yet) resolved and are not just
+// praise (isPraiseComment), across the WHOLE PR (commentListSnapshot(), not
+// scoped to one block/subtree — the clipboard summary below is a PR-level
+// review outcome, not a per-block one).
 // Reused only by buildReviewClipboardText; a plain synchronous read of
 // RelatedPanel.mjs's cs.list, exactly like prWideComments/commentRowSet.
 function ownOpenCommentCount() {
-  return commentListSnapshot().filter((c) => isOwnComment(c) && c.status !== 'resolved').length
+  return commentListSnapshot().filter(
+    (c) => isOwnComment(c) && c.status !== 'resolved' && !isPraiseComment(c)
+  ).length
 }
 
 // buildReviewClipboardText renders the one-line summary the reviewer pastes
@@ -9148,5 +9206,6 @@ if (state.mode === 'list') requestAnimationFrame(focusSearchBox)
 // Kick off the initial load.
 loadBlocks()
 loadPRMeta()
+ensurePraiseWords()
 pollWorkflows()
 setInterval(pollWorkflows, WORKFLOWS_POLL_MS)

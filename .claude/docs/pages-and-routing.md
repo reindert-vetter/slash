@@ -170,6 +170,14 @@ in the frontend (`firstNameOf`/`displayNameOf`, `src/avatar.mjs`), so a later
 caller can show the full name with no backend change. Casing is whatever
 GitHub/`names.json` gives.
 
+**A second local override file follows this same pattern:**
+`<dataDir>/praise-words.json` (read-once-per-data-dir, missing/unparsable →
+built-in defaults, served by read-only `GET /api/praisewords`) holds the
+"meaningless praise" words that the review clipboard summary does not count as
+open points — see "A thread ending in 'just praise' is not an open point" in
+`.claude/docs/command-palette.md`. Unlike `data/names.json` that one is
+deliberately **not** committed: it is personal, not team-wide.
+
 **Write boundary:** a pure read plus a **process-lifetime, in-memory** cache
 (including negative caching, so a bot/deleted login is never re-queried), so it
 is allowed outside a workflow — the same operational carve-out as `/api/me`'s
