@@ -77,6 +77,41 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     await expect(page.getByTestId('block-column').locator('[data-comment]').first()).toBeVisible()
   })
 
+  test('the comment-claude-row card is hidden while there is nothing to show, and reappears once a comment exists', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await ready(page)
+    const first = await ident(page)
+
+    // Nothing hangs on this block yet (no comment, no composer open, no
+    // Claude chat, no busy/replySent footer) — the bordered
+    // comment-claude-row card must be hidden (see
+    // .claude/docs/comments-panel.md).
+    const row = page.getByTestId('comment-claude-row')
+    await expect(row).toBeHidden()
+
+    const res = await page.request.post('/api/workflows/task_code_comment', {
+      data: {
+        pr: 12903,
+        file: first.file,
+        line: 1,
+        author: 'reviewer',
+        body: 'brengt de kaart terug',
+        label: first.label,
+        gran: 'group',
+        rowStart: 0,
+        rowEnd: 0,
+      },
+    })
+    expect(res.ok()).toBeTruthy()
+
+    // Once the block carries a visible comment the card is back.
+    await page.goto('/pr/12903?sel=' + encodeURIComponent(first.fileLine))
+    await waitBlock(page, first.label)
+    await expect(row).toBeVisible()
+  })
+
   test('resolving a comment removes its 💬 marker', async ({ page }) => {
     await page.goto('/pr/12903')
     await ready(page)

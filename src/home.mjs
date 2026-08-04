@@ -75,6 +75,7 @@ import RelatedPanel, {
   activeComposeTargetHint,
   composeTargetHint,
   CommentClaudeFooter,
+  hasCommentClaudeFooter,
   isClaudeChatFocused,
   clearClaudeChat,
   claudeChatShadowWarning,
@@ -8639,7 +8640,24 @@ function DetailPanel(state) {
       }}
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="comments-and-related">
         <div
-          class="flex flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
+          class="${() =>
+            // Hidden (not unmounted!) while neither InlineComments/
+            // ClaudeChatPanel/the composer has anything to show
+            // (claudeChatVisible()) NOR the shared footer does
+            // (hasCommentClaudeFooter()) — without this the bordered card
+            // still rendered with zero-height content on a line with no
+            // comments/Claude chat and nothing in flight, showing as a bare
+            // thin gray bar above Onderliggende code (see
+            // .claude/docs/comments-panel.md). Deliberately a CSS `hidden`
+            // toggle, not a conditionally-mounted subtree: InlineComments()
+            // itself starts the comment poll (syncComments) as a plain call
+            // in its own body, not behind a watch — unmounting it here would
+            // stop that poll from ever running until the row is already
+            // visible, a chicken-and-egg deadlock that never flips
+            // claudeChatVisible() to true in the first place.
+            (!claudeChatVisible() && !hasCommentClaudeFooter()
+              ? 'hidden'
+              : 'flex flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5')}"
           data-testid="comment-claude-row"
         >
           ${() =>

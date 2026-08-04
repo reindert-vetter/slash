@@ -1414,6 +1414,20 @@ function commentFooterText() {
   return ''
 }
 
+// hasCommentClaudeFooter — true exactly when CommentClaudeFooter itself would
+// render a status line (comment side busy/replySent, or a Claude turn
+// running/reporting progress). Exported so home.mjs can fold away the whole
+// comment-claude-row card (border/bg wrapper around InlineComments +
+// ClaudeChatPanel + this footer) when NEITHER a visible conversation/composer
+// (claudeChatVisible()) NOR this footer has anything to show — otherwise that
+// bordered card still rendered with zero-height content on every line with no
+// comments/Claude chat and nothing in flight, showing as a bare thin gray bar
+// above Onderliggende code (see .claude/docs/comments-panel.md).
+export function hasCommentClaudeFooter() {
+  const view = claudeChatView()
+  return !!commentFooterText() || view.busy() || !!view.progress()
+}
+
 // CommentClaudeFooter — ONE shared status line below both the comment and
 // Claude columns (comment-claude-row in home.mjs), replacing two former,
 // separate status spots: the reaction-status icon that used to sit next to

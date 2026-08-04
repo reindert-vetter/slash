@@ -253,6 +253,20 @@ narrow enough, and close enough, to share a row instead of each claiming a full
   as the comment block) rather than to its right. See
   `.claude/docs/keyboard-navigation.md` and, for everything the panel itself
   does, `.claude/docs/claude-chat-panel.md`.
+- **The whole `comment-claude-row` card hides (CSS `hidden`, not unmounted)
+  when there is nothing at all to show:** neither `claudeChatVisible()` (the
+  comment/composer/Claude-chat columns all share that one condition) nor
+  `hasCommentClaudeFooter()` (the shared footer's own independent condition,
+  exported from `RelatedPanel.mjs` for exactly this). Before this, a line with
+  no comments and no Claude chat still rendered the bordered card with
+  zero-height content — a bare thin gray bar directly above Onderliggende
+  code. **Deliberately `hidden`, not a conditionally-mounted subtree:**
+  `InlineComments()` starts the comment poll (`syncComments`) as a plain call
+  in its own function body, not behind a `watch` — unmounting the whole row
+  until something is visible would stop that poll from ever running, a
+  chicken-and-egg deadlock that never flips `claudeChatVisible()` to `true` in
+  the first place. Test: `tests/inline-comments.spec.mjs` ("the
+  comment-claude-row card is hidden while there is nothing to show...").
 
 ## `<main>`'s own offsets
 
