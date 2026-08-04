@@ -178,11 +178,36 @@ func processChatMergeAt(ctx context.Context, cm *chat.Module, cl claude.Client, 
 	return resolveChatShadowMerge(ctx, cm, cl, dataDir, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
 }
 
-// chatMergeConflictFailedMsg is shown when the one begrensde Claude attempt
-// couldn't clear a real conflict — the merge is aborted (chat_shadow.go's
-// "degrade rather than guess" rule), so the reviewer's next "commit" simply
-// tries again from a clean shadow.
-const chatMergeConflictFailedMsg = "Er ontstond een samenvoegconflict met een andere, inmiddels gepushte wijziging dat niet automatisch kon worden opgelost. Vraag Claude de wijziging opnieuw te maken op basis van de huidige branch."
+// chatMergeConflictConsultMsg is what a conflict the one begrensde Claude
+// attempt couldn't clear turns into: not a dead end, but a message that opens a
+// CONSULTATION in the very conversation the edit came from.
+//
+// It lands in that conversation's own transcript (same deterministic message id
+// as every other outcome, see processChatMergeAt), so the reviewer reads it in
+// the Claude column and answers it there — his reply is an ordinary chat turn
+// and Claude can redo the change against the current state of the branch. That
+// is why the body has to carry the facts a reply needs: which tip conflicted,
+// which files, and what has already been tried. The merge itself is aborted
+// first (chat_shadow.go's "degrade rather than guess" rule), so nothing is left
+// half-merged while the two of them figure it out.
+//
+// Markdown, like every chat bubble (renderMarkdown, see conventions.md), so the
+// file list reads as a real list.
+func chatMergeConflictConsultMsg(ref, headRefName string, conflicted []string) string {
+	origin := "een andere, inmiddels op GitHub gepushte wijziging"
+	if strings.HasPrefix(ref, "refs/slash/pending/") {
+		origin = "een andere wijziging die al op `" + headRefName + "` staat maar nog niet gepusht is"
+	}
+	var b strings.Builder
+	b.WriteString("**Samenvoegconflict — hier wil ik even met je overleggen.**\n\n")
+	b.WriteString("Jouw wijziging botst met " + origin + ". Ik heb `git merge` geprobeerd en daarna één poging gedaan om het conflict zelf op te lossen; dat is niet gelukt, dus ik heb de merge afgebroken (er staat niets half samengevoegd).\n\n")
+	b.WriteString("Conflicterende bestanden:\n\n")
+	for _, p := range conflicted {
+		b.WriteString("- `" + p + "`\n")
+	}
+	b.WriteString("\nHoe wil je verder? Zeg bijvoorbeeld welke kant voorrang heeft, of vraag me de wijziging opnieuw te maken op de huidige stand van `" + headRefName + "`.")
+	return b.String()
+}
 
 // resolveChatShadowMerge runs once the plain fast-forward attempt reported the
 // PR branch moved on: try an ordinary `git merge` of every tip the landing must
@@ -246,15 +271,15 @@ func resolveChatShadowMerge(ctx context.Context, cm *chat.Module, cl claude.Clie
 		// more.
 		if !resolveConflictWithClaude(ctx, cl, dir, conversationID, conflicted) {
 			_, _ = runGitIn(ctx, dir, "merge", "--abort")
-			return newMsg(chatMergeConflictFailedMsg, true)
+			return newMsg(chatMergeConflictConsultMsg(ref, headRefName, conflicted), true)
 		}
 		if _, err := runGitIn(ctx, dir, "add", "-A"); err != nil {
 			_, _ = runGitIn(ctx, dir, "merge", "--abort")
-			return newMsg(chatMergeConflictFailedMsg, true)
+			return newMsg(chatMergeConflictConsultMsg(ref, headRefName, conflicted), true)
 		}
 		if _, err := runGitIn(ctx, dir, "commit", "--no-edit"); err != nil {
 			_, _ = runGitIn(ctx, dir, "merge", "--abort")
-			return newMsg(chatMergeConflictFailedMsg, true)
+			return newMsg(chatMergeConflictConsultMsg(ref, headRefName, conflicted), true)
 		}
 		resolvedByClaude = true
 	}

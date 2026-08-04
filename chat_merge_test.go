@@ -224,8 +224,26 @@ func TestProcessChatMergeAbortsAndDegradesOnUnresolvedConflict(t *testing.T) {
 	if msg.Kind != chat.KindError {
 		t.Fatalf("expected an error message for an unresolved conflict, got: %+v", msg)
 	}
-	if !strings.Contains(msg.Body, "samenvoegconflict") {
-		t.Fatalf("expected the conflict-specific wording, got: %q", msg.Body)
+	// Not a dead end but a consultation IN the conversation: the body must name
+	// the conflicting file and ask how to proceed, so a reply can act on it (see
+	// chatMergeConflictConsultMsg).
+	if !strings.Contains(msg.Body, "Samenvoegconflict") || !strings.Contains(msg.Body, "overleggen") {
+		t.Fatalf("expected the conflict-consultation wording, got: %q", msg.Body)
+	}
+	if !strings.Contains(msg.Body, "foo.txt") {
+		t.Fatalf("expected the conflicting file to be named, got: %q", msg.Body)
+	}
+	if !strings.Contains(msg.Body, "Hoe wil je verder?") {
+		t.Fatalf("expected an explicit question back to the reviewer, got: %q", msg.Body)
+	}
+	// The conversation must still be able to receive that reply — the message is
+	// stored in the conversation's own transcript, not merely returned.
+	stored, err := cm.List(ctx, "conv-c")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(stored) == 0 || stored[len(stored)-1].Body != msg.Body {
+		t.Fatalf("consultation message not stored in the conversation transcript: %+v", stored)
 	}
 	if fake.CallCount() != 1 {
 		t.Fatalf("expected exactly one begrensde Claude attempt, got %d calls", fake.CallCount())
