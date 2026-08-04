@@ -94,6 +94,47 @@ The row is never an `<a href="/pr/<id>">`, so the old hover-only
 `regenerateButton` and the separate `data-row` wrapper were removed — they only
 existed to avoid nesting an interactive element in an `<a>`.
 
+## "Nieuw sinds jouw comment/review" (`newSinceKind`)
+
+The "Bijgewerkt … geleden" line (`rowMeta`, `src/overview.mjs`) can carry one
+extra word segment right after it: **"· nieuw sinds jouw comment"** or
+**"· nieuw sinds jouw review"** (`newSinceMark`, `data-testid=new-since-mark`).
+It answers "did anything happen on this PR after I last said something" —
+comment or approve/request-changes — for **every** row, author or reviewer
+alike, in every section.
+
+- **Only shown when something is genuinely new** — no "you were last, all
+  quiet" affirmative state is rendered; silence covers both "nothing happened
+  since" and "you never commented/reviewed this PR" (deliberate, per Reindert:
+  this is a stand-out signal, not a status readout).
+- **The word distinguishes comment vs. review**, never colour
+  (`newSinceMark` uses no colour class at all) — the colourblind rule.
+- Computed server-side in `myLastActivity`/`statusFromNode` (`inbox.go`): the
+  later of the logged-in reviewer's (`ghLogin`) own last **review submission**
+  (`reviews[].submittedAt`, any state — APPROVED/CHANGES_REQUESTED/COMMENTED
+  all count) and own last **conversation comment** (`comments[].createdAt`,
+  capped at `myCommentsCap`), compared against the PR's own `updatedAt`
+  (`afterRFC3339`). The result (`prStatus.NewSinceKind`, `"comment"|"review"`,
+  omitted when empty) rides the existing heavy status backfill —
+  `GET /api/inbox/status` — no new endpoint.
+- **Inline review comments are NOT separately queried.** A single inline
+  comment (with or without "start a review") is always submitted as part of a
+  review in GitHub's data model, so its timestamp already surfaces via
+  `reviews[].submittedAt` — querying it a second time (a `comments`
+  sub-connection per review) would multiply real query cost across
+  `reviewsPerPRCap` reviews × however many PRs are visible in one
+  `statusesFor` batch, for a timestamp already in hand. The one narrow gap
+  this leaves: a reviewer whose own last **conversation** comment is older
+  than the last `myCommentsCap` (20) comments on a busy PR won't trigger the
+  "comment" variant from that comment alone — the PR's `updatedAt` already
+  implies something happened regardless, so the fallback is simply no signal
+  shown, never a wrong one.
+- `statusFromNode`/`mapPRNode` now take the reviewer's `login` (from
+  `ghLogin(ctx)`) as a parameter — computed once per query (`runPRSearch`,
+  `statusesFor`) rather than threading `context.Context` further down.
+- Test: `TestMyLastActivity` (`inbox_test.go`), same style as
+  `TestMergeReviewersDecisiveFold`.
+
 ## Filter drawer (preset filters, live gh search)
 
 Next to "Recently generated" sits a second expandable button **"Filters"**

@@ -45,6 +45,12 @@ type prStatus struct {
 	Reviewers      []reviewer `json:"reviewers"`
 	ChecksState    string     `json:"checksState"` // SUCCESS|FAILURE|PENDING|EXPECTED|ERROR|""
 	ChecksTotal    int        `json:"checksTotal"`
+	// NewSinceKind is set only when the PR's own updatedAt postdates the
+	// logged-in reviewer's OWN last comment/review on it: "comment" or
+	// "review" (never both — whichever of the two was more recent). Empty
+	// when the reviewer never commented/reviewed, or when nothing happened
+	// since. See myLastActivity's doc comment for exactly what counts.
+	NewSinceKind string `json:"newSinceKind,omitempty"`
 }
 
 // inboxRow is one PR in the inbox. The status fields carry the heavy data and
@@ -193,6 +199,15 @@ type ghPRNode struct {
 	} `json:"author"`
 	Comments struct {
 		TotalCount int `json:"totalCount"`
+		// Nodes is only requested on the heavy query (see heavyFields) — the
+		// last N conversation comments, used to find the reviewer's own last
+		// one for the "new since your comment" signal (myLastActivity).
+		Nodes []struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			CreatedAt string `json:"createdAt"`
+		} `json:"nodes"`
 	} `json:"comments"`
 	// heavy fields (full query only)
 	Mergeable      string `json:"mergeable"`
@@ -240,9 +255,14 @@ type ghPRNode struct {
 	} `json:"commits"`
 }
 
+// lightFields deliberately omits `comments`: the light query only draws the
+// first-paint row, and the "💬 n" badge is overwritten right after anyway (see
+// pr.Comments = open in refreshInbox, workflows.go) — the raw GitHub count is
+// never actually shown. The heavy query below adds it back WITH nodes, since
+// that's also where myLastActivity needs the reviewer's own comment authors.
 const lightFields = `
 	number title url updatedAt createdAt isDraft state baseRefName headRefName
-	additions deletions changedFiles author { login } comments { totalCount }`
+	additions deletions changedFiles author { login }`
 
 // reviewsPerPRCap is the `first:` cap on the `reviews` connection below.
 // statusesFor batches EVERY inbox PR into one aliased query, so this cap
@@ -252,6 +272,16 @@ const lightFields = `
 // its reviewer count: one reviewer commonly submits several rounds). See
 // mergeReviewers' own doc comment for what happens once a PR exceeds it.
 const reviewsPerPRCap = 50
+
+// myCommentsCap is the `last:` cap on the `comments` connection in heavyFields
+// — only used to find the reviewer's OWN most recent conversation comment
+// (myLastActivity), not to render every comment. A reviewer whose own last
+// comment is older than the last 20 conversation comments on a PR (i.e. lots
+// of back-and-forth happened after it) simply won't trigger the "new since
+// your comment" signal from that comment — the PR's `updatedAt` already
+// implies something happened, which is the strictly-worse fallback (no
+// signal shown) rather than a wrong one.
+const myCommentsCap = 20
 
 // stateUnknown marks a reviewer whose decisive state we could not reliably
 // determine because their review history was truncated by reviewsPerPRCap
@@ -273,6 +303,7 @@ type reviewNode struct {
 }
 
 var heavyFields = fmt.Sprintf(`
+	comments(last: %d) { totalCount nodes { author { login } createdAt } }
 	mergeable reviewDecision
 	reviewRequests(first: 30) { nodes { requestedReviewer {
 		__typename ... on User { login avatarUrl } ... on Team { name } } } }
@@ -280,7 +311,7 @@ var heavyFields = fmt.Sprintf(`
 	reviews(first: %d) { pageInfo { hasNextPage } nodes {
 		state submittedAt author { login ... on User { avatarUrl } } } }
 	commits(last: 1) { nodes { commit { statusCheckRollup {
-		state contexts { totalCount } } } } }`, reviewsPerPRCap)
+		state contexts { totalCount } } } } }`, myCommentsCap, reviewsPerPRCap)
 
 // ghGraphQL runs a gh GraphQL query with -f/-F variables and returns the raw
 // data body. Variables are passed as separate args (no shell interpolation).
@@ -339,15 +370,16 @@ func runPRSearch(ctx context.Context, expr string, light bool) ([]inboxRow, erro
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return nil, fmt.Errorf("parse search nodes: %w", err)
 	}
+	login := ghLogin(ctx)
 	rows := make([]inboxRow, 0, len(parsed.Search.Nodes))
 	for _, n := range parsed.Search.Nodes {
-		rows = append(rows, mapPRNode(n, !light))
+		rows = append(rows, mapPRNode(n, !light, login))
 	}
 	return rows, nil
 }
 
 // mapPRNode turns a GraphQL node into a row; heavy fills the status fields.
-func mapPRNode(n ghPRNode, heavy bool) inboxRow {
+func mapPRNode(n ghPRNode, heavy bool, login string) inboxRow {
 	r := inboxRow{
 		Number:       n.Number,
 		Title:        n.Title,
@@ -364,7 +396,7 @@ func mapPRNode(n ghPRNode, heavy bool) inboxRow {
 		Comments:     n.Comments.TotalCount,
 	}
 	if heavy {
-		st := statusFromNode(n)
+		st := statusFromNode(n, login)
 		r.Mergeable = st.Mergeable
 		r.ReviewDecision = st.ReviewDecision
 		r.Reviewers = st.Reviewers
@@ -374,8 +406,9 @@ func mapPRNode(n ghPRNode, heavy bool) inboxRow {
 	return r
 }
 
-// statusFromNode extracts the heavy status from a full node.
-func statusFromNode(n ghPRNode) prStatus {
+// statusFromNode extracts the heavy status from a full node. login is the
+// logged-in reviewer (ghLogin) — used only for myLastActivity.
+func statusFromNode(n ghPRNode, login string) prStatus {
 	st := prStatus{
 		Mergeable:      n.Mergeable,
 		ReviewDecision: n.ReviewDecision,
@@ -388,7 +421,58 @@ func statusFromNode(n ghPRNode) prStatus {
 			st.ChecksTotal = roll.Contexts.TotalCount
 		}
 	}
+	if at, kind := myLastActivity(n, login); at != "" && afterRFC3339(n.UpdatedAt, at) {
+		st.NewSinceKind = kind
+	}
 	return st
+}
+
+// myLastActivity finds the logged-in reviewer's own most recent comment/review
+// on this PR — the later of: their last conversation comment (`comments`,
+// capped at myCommentsCap) and their last review submission (`reviews`, any
+// state — APPROVED/CHANGES_REQUESTED/COMMENTED all count as "you said
+// something"). Returns ("", "") if the reviewer never did either.
+//
+// Deliberately does NOT separately query inline review comments: a single
+// inline comment (with or without "start a review") is always submitted as
+// part of a review in GitHub's data model, so its timestamp already surfaces
+// here via `reviews[].submittedAt` — a second, per-review `comments`
+// sub-connection would add real query cost (reviewsPerPRCap reviews × N
+// comments, per PR, batched across every visible PR in statusesFor) for
+// exactly the timestamp we already have.
+func myLastActivity(n ghPRNode, login string) (at, kind string) {
+	if login == "" || login == "me" {
+		return "", ""
+	}
+	for _, rv := range n.Reviews.Nodes {
+		if rv.Author.Login != login || rv.SubmittedAt == "" {
+			continue
+		}
+		if at == "" || afterRFC3339(rv.SubmittedAt, at) {
+			at, kind = rv.SubmittedAt, "review"
+		}
+	}
+	for _, c := range n.Comments.Nodes {
+		if c.Author.Login != login || c.CreatedAt == "" {
+			continue
+		}
+		if at == "" || afterRFC3339(c.CreatedAt, at) {
+			at, kind = c.CreatedAt, "comment"
+		}
+	}
+	return at, kind
+}
+
+// afterRFC3339 reports whether RFC3339 timestamp a is strictly after b. An
+// unparsable timestamp on either side is treated as "not after" (defensive —
+// shouldn't happen for a real GitHub API response).
+func afterRFC3339(a, b string) bool {
+	ta, ea := time.Parse(time.RFC3339, a)
+	tb, eb := time.Parse(time.RFC3339, b)
+	if ea != nil || eb != nil {
+		return false
+	}
+	return ta.After(tb)
 }
 
 // reviewerFold is the outcome of folding one author's reviews (in submission
@@ -646,7 +730,11 @@ func statusesFor(ctx context.Context, numbers []int) (map[string]prStatus, error
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("query {\n repository(owner: %q, name: %q) {\n", owner, name))
 	for _, num := range numbers {
-		b.WriteString(fmt.Sprintf("  pr%d: pullRequest(number: %d) { number state %s }\n", num, num, heavyFields))
+		// updatedAt is requested here directly (not via lightFields, which
+		// this query otherwise skips) — myLastActivity/afterRFC3339 need it
+		// to decide whether anything happened since the reviewer's own last
+		// comment/review.
+		b.WriteString(fmt.Sprintf("  pr%d: pullRequest(number: %d) { number state updatedAt %s }\n", num, num, heavyFields))
 	}
 	b.WriteString(" }\n}")
 
@@ -660,12 +748,13 @@ func statusesFor(ctx context.Context, numbers []int) (map[string]prStatus, error
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return nil, fmt.Errorf("parse statuses: %w", err)
 	}
+	login := ghLogin(ctx)
 	out := map[string]prStatus{}
 	for _, n := range parsed.Repository {
 		if n.Number == 0 {
 			continue
 		}
-		out[strconv.Itoa(n.Number)] = statusFromNode(n)
+		out[strconv.Itoa(n.Number)] = statusFromNode(n, login)
 	}
 	return out, nil
 }

@@ -237,3 +237,75 @@ func TestMergeReviewersReviewRequestOverridesFold(t *testing.T) {
 		t.Fatalf("got %q, want PENDING (re-request must win)", got)
 	}
 }
+
+// TestMyLastActivity covers the "new since your comment/review" signal
+// (myLastActivity + statusFromNode's NewSinceKind): it must only fire once the
+// PR's own updatedAt postdates the reviewer's OWN last comment/review, must
+// pick the LATER of the two categories, and must stay empty for a reviewer who
+// never did either.
+func TestMyLastActivity(t *testing.T) {
+	const me = "reindert"
+
+	t.Run("nothing happened after your review", func(t *testing.T) {
+		var n ghPRNode
+		n.UpdatedAt = "2026-01-01T09:00:00Z"
+		n.Reviews.Nodes = []reviewNode{rev(me, "APPROVED", "2026-01-01T09:00:00Z")}
+		st := statusFromNode(n, me)
+		if st.NewSinceKind != "" {
+			t.Fatalf("got NewSinceKind %q, want empty (updatedAt == your review time)", st.NewSinceKind)
+		}
+	})
+
+	t.Run("something happened after your review", func(t *testing.T) {
+		var n ghPRNode
+		n.UpdatedAt = "2026-01-01T12:00:00Z"
+		n.Reviews.Nodes = []reviewNode{rev(me, "CHANGES_REQUESTED", "2026-01-01T09:00:00Z")}
+		st := statusFromNode(n, me)
+		if st.NewSinceKind != "review" {
+			t.Fatalf("got NewSinceKind %q, want \"review\"", st.NewSinceKind)
+		}
+	})
+
+	t.Run("something happened after your comment", func(t *testing.T) {
+		var n ghPRNode
+		n.UpdatedAt = "2026-01-01T12:00:00Z"
+		n.Comments.Nodes = append(n.Comments.Nodes, struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			CreatedAt string `json:"createdAt"`
+		}{CreatedAt: "2026-01-01T09:00:00Z"})
+		n.Comments.Nodes[0].Author.Login = me
+		st := statusFromNode(n, me)
+		if st.NewSinceKind != "comment" {
+			t.Fatalf("got NewSinceKind %q, want \"comment\"", st.NewSinceKind)
+		}
+	})
+
+	t.Run("your later review wins over an earlier comment", func(t *testing.T) {
+		var n ghPRNode
+		n.UpdatedAt = "2026-01-01T12:00:00Z"
+		n.Reviews.Nodes = []reviewNode{rev(me, "COMMENTED", "2026-01-01T10:00:00Z")}
+		n.Comments.Nodes = append(n.Comments.Nodes, struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			CreatedAt string `json:"createdAt"`
+		}{CreatedAt: "2026-01-01T09:00:00Z"})
+		n.Comments.Nodes[0].Author.Login = me
+		st := statusFromNode(n, me)
+		if st.NewSinceKind != "review" {
+			t.Fatalf("got NewSinceKind %q, want \"review\" (later than the comment)", st.NewSinceKind)
+		}
+	})
+
+	t.Run("you never commented or reviewed", func(t *testing.T) {
+		var n ghPRNode
+		n.UpdatedAt = "2026-01-01T12:00:00Z"
+		n.Reviews.Nodes = []reviewNode{rev("someone-else", "APPROVED", "2026-01-01T09:00:00Z")}
+		st := statusFromNode(n, me)
+		if st.NewSinceKind != "" {
+			t.Fatalf("got NewSinceKind %q, want empty (you never acted on this PR)", st.NewSinceKind)
+		}
+	})
+}

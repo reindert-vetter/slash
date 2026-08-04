@@ -296,6 +296,35 @@ function statusFor(pr) {
   return null
 }
 
+// newSinceMark — appended to the "Bijgewerkt … geleden" line: only shown once
+// the async status backfill (statusFor) confirms something happened on the PR
+// AFTER the reviewer's OWN last comment/review (newSinceKind, from
+// GET /api/inbox/status — see myLastActivity in inbox.go). Deliberately no
+// "you were last" affirmative state — silence means either nothing happened
+// since, or the reviewer never commented/reviewed at all; this is a
+// stand-out signal, not a status readout. The two words ("comment" vs
+// "review") carry the distinction, not colour (colourblind rule) — no colour
+// class is used here at all.
+//
+// Wrapped in a static `<span class="contents">` root so the reactive toggle
+// (template ↔ null) never becomes the WHOLE body of the returned template —
+// see "Never key a template whose entire body is one toggling expression" in
+// .claude/rules/arrowjs-pitfalls.md.
+function newSinceMark(pr) {
+  return html`<span class="contents">${() => {
+    const status = statusFor(pr)
+    const kind = status && status.newSinceKind
+    if (!kind) return null
+    const label = kind === 'review' ? 'nieuw sinds jouw review' : 'nieuw sinds jouw comment'
+    return html`
+      <span class="inline-flex items-center gap-2" data-testid="new-since-mark">
+        <span class="text-slate-300 dark:text-zinc-700">·</span>
+        <span class="font-medium text-slate-600 dark:text-zinc-400">${label}</span>
+      </span>
+    `
+  }}</span>`
+}
+
 // A single shimmering placeholder pill, sized like a real chip so the row
 // never reflows when the real status lands. A draft's review chip is already
 // known from the light query, so that shows immediately instead.
@@ -427,6 +456,7 @@ function rowMeta(pr) {
         <span class="font-mono">${() => state.repo || ''}#${pr.number}</span>
         <span class="text-slate-300 dark:text-zinc-700">·</span>
         <span title="${pr.updatedAt || ''}">Bijgewerkt ${relativeTime(pr.updatedAt)}</span>
+        ${newSinceMark(pr)}
       </div>
       ${stat || branch
         ? html`<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
