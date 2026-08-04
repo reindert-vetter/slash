@@ -537,6 +537,55 @@ changed rows within the range.
   `openTask`), and `←`/`→`. Deliberately the same "an ordinary step releases the
   selection" behaviour as a text editor.
 
+## `Space` — approve + continue in one keypress
+
+**`Space`** (`spaceKey`, `home.mjs`) is a one-key shortcut for exactly what the
+block palette already does with two actions in a row: `Enter` → "Keur ...
+goed" → (if the postApprove follow-up opens) "Ga door". It reuses the very
+same functions — no second approve/continue implementation:
+
+- **Approve:** `approveContext()` + `toggleApprove()`/`toggleCallApprove()` —
+  the whole block in list mode, else the current group/line/call at whichever
+  granularity (`f`/`d`/`s`) currently owns the keyboard, exactly like the
+  palette's "approve" item (see `.claude/docs/command-palette.md`).
+- **Continue:** `toggleApprove(true)`/`toggleCallApprove(..., true)` pass an
+  `auto` flag down to `afterApproveAction`, which — only when it would
+  otherwise stash `postApproveTarget` and open the `postApprove` confirm menu —
+  applies the plan via `applyNextUnapproved` directly instead. So the menu
+  never flashes on screen at all when reached through Space; the two existing
+  no-menu exceptions (staying within the same block, approving from the
+  blokken-index) still short-circuit exactly as before, `auto` is just a third
+  way to skip the same menu.
+- **Already approved → only continue:** if the unit under the keyboard is
+  already fully approved (`isApproveDone(ctx)`, extracted out of the
+  `COMMANDS` 'approve' label so both agree on the same "done" check), `spaceKey`
+  toggles nothing — it runs `findNextUnapproved()`/`applyNextUnapproved()`
+  itself, i.e. the bare "Ga door" half with no approve action at all.
+- **Nothing left ahead either way:** mirrors `afterApproveAction`'s own
+  "nothing left ahead" branch verbatim (same two `await Promise.resolve()`
+  ticks to let the decoupled `state.approvalTotal` watch flush) and opens the
+  same `reviewApprove`/`reviewChoice` review-submit menu (see
+  "Review-submit menus" in `.claude/docs/command-palette.md`) — approving or
+  rejecting the whole PR stays a manual, two-step choice regardless of how the
+  last unit got approved.
+
+**Guards** (`onKeydown`): `!isModifiedKey(e)` (a held Cmd/Ctrl falls through
+untouched, same as `f`/`d`/`s`/`a`) and `!state.showDescription` — stop 1 (the
+PR-description column) has no block to approve, the same reason `Enter` there
+opens the `pr` menu instead of `block`. Placed after `relatedActive()`/
+`isEditableFocused()` (so it's suspended, like `f`/`d`/`s`/`a`, the moment the
+keyboard has stepped into a comment thread, the Claude chat or a composer —
+`Space` then types a literal space into that field) and after the toggle-row
+guard (`state.toggleFocused`/`ignoreToggleFocused` — added to the same
+`['f','d','s','a',...]` no-op list, since a toggle row is not a PR block).
+Deliberately **not** excluded for `isTestColumnActive()` (unlike `f`/`d`/`s`/`a`,
+which need diff context to zoom): `curBlock()` already resolves stop 2b to the
+active test method, exactly like `Enter` already opens the ordinary block
+palette there, so approving with Space is meaningful on that stop too.
+`e.preventDefault()` always fires when handled, so Space never scrolls the
+page nor (were a focusable element to hold real DOM focus) activates it
+natively. Test: `tests/space-approve-continue.spec.mjs`.
+
 ## `a` — cycling the diff view (split → unified → fit → split)
 
 **`a`** cycles globally, for **every visible diff card at once** (the

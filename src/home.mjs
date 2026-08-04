@@ -6282,12 +6282,15 @@ function approveTargetRows(ctx = approveContext()) {
 // approveContext() ONCE up front so the whole action (including the call-
 // granularity fast path) targets a focused drilled column's own block/unit
 // instead of the top-level curBlock()/state.gran/state.change.
-function toggleApprove() {
+// `auto` (default false, only passed `true` by spaceKey below) skips the
+// postApprove confirm menu and jumps straight to the next unapproved unit
+// instead — see afterApproveAction's own `auto` doc comment.
+function toggleApprove(auto = false) {
   const ctx = approveContext()
   const b = ctx.b
   if (!b) return
   if (ctx.mode === 'diff' && ctx.gran === 'call') {
-    toggleCallApprove(b, ctx.change)
+    toggleCallApprove(b, ctx.change, auto)
     return
   }
   const target = approveTargetRows(ctx)
@@ -6308,7 +6311,7 @@ function toggleApprove() {
   b.approvedRows = [...set].sort((x, y) => x - y)
   persistApproval(b)
   // allIn was false → this action just ADDED approval (not revoked it).
-  afterApproveAction(!allIn, b.id)
+  afterApproveAction(!allIn, b.id, auto)
 }
 
 // toggleCallApprove flips approval of exactly the one call segment the
@@ -6322,8 +6325,9 @@ function toggleApprove() {
 // graduates into b.approvedRows (and its approvedCalls entries are dropped)
 // so the coarser group/line approval and the checkbox summary see it too.
 // Both arrays are always reassigned, never mutated in place, so arrow.js
-// re-renders the checkmark/circle indicators.
-function toggleCallApprove(b, change = state.change) {
+// re-renders the checkmark/circle indicators. `auto` is forwarded straight
+// through to afterApproveAction (see toggleApprove's own doc comment).
+function toggleCallApprove(b, change = state.change, auto = false) {
   const rows = blockRows(b)
   const unit = unitsFor(rows, 'call')[change]
   if (!unit) return
@@ -6354,7 +6358,7 @@ function toggleCallApprove(b, change = state.change) {
   }
   b.approvedRows = [...rowSet].sort((x, y) => x - y)
   persistApproval(b)
-  afterApproveAction(approving, b.id)
+  afterApproveAction(approving, b.id, auto)
 }
 
 // revokeApprovalForComment retracts approval for the row(s)/call segment a
@@ -6739,7 +6743,15 @@ let postApproveTarget = null
 // much friction as exception 1, so a list-mode approve ALWAYS jumps straight
 // to the next not-yet-approved block instead of opening the postApprove menu,
 // regardless of whether that next block is the same one or a different one.
-function afterApproveAction(approving, blockId) {
+// `auto` (passed by spaceKey, below) is a THIRD way to skip the postApprove
+// confirm menu: unlike exceptions 1/2 it isn't about WHERE the next unit
+// lands, it's the reviewer having asked, via Space, to always continue
+// without confirming — so the branch that would otherwise stash
+// postApproveTarget and open 'postApprove' applies the plan directly instead.
+// The "nothing left ahead" branch is deliberately untouched by `auto`: whether
+// to submit a real GitHub review (or reject it) stays a manual, two-step
+// choice regardless of how the last unit was approved.
+function afterApproveAction(approving, blockId, auto = false) {
   if (!approving) return
   const keepList = state.mode !== 'diff'
   findNextUnapproved().then(async (target) => {
@@ -6782,7 +6794,7 @@ function afterApproveAction(approving, blockId) {
         ? rootBlock && rootBlock.methods[target.methodIdx] && rootBlock.methods[target.methodIdx].id
         : rootBlock && rootBlock.id
     const sameBlock = !keepList && target.root === state.selected && landingId === blockId
-    if (sameBlock || keepList) {
+    if (sameBlock || keepList || auto) {
       // `applyNextUnapproved` reads `target.keepList` to decide whether to
       // stay in the list (see its own doc comment) — `target` itself never
       // carries that flag, only the stashed `postApproveTarget` normally
@@ -6795,6 +6807,57 @@ function afterApproveAction(approving, blockId) {
   })
 }
 
+// isApproveDone tells whether the unit approveContext() currently resolves to
+// is ALREADY fully approved — shared by the COMMANDS 'approve' label (its
+// "goedkeuren vs. intrekken" wording) and spaceKey (below), so both agree on
+// the same "is there anything left to approve here" answer without a second
+// implementation of the check.
+function isApproveDone(ctx) {
+  const b = ctx.b
+  if (b && ctx.mode === 'diff' && ctx.gran === 'call') {
+    const unit = unitsFor(blockRows(b), 'call')[ctx.change]
+    return callUnitApproved(b, unit)
+  }
+  const set = b ? approvedRowSet(b) : new Set()
+  const target = approveTargetRows(ctx)
+  return target.length > 0 && target.every((i) => set.has(i))
+}
+
+// spaceKey — Space is a one-key shortcut for exactly what the block palette's
+// "Keur ... goed" already does, immediately followed by "Ga door": it reuses
+// toggleApprove/toggleCallApprove (via approveContext, same as the palette
+// item) with `auto = true`, which makes afterApproveAction apply the next-
+// unapproved plan directly instead of stashing it for a postApprove confirm
+// (see afterApproveAction's own `auto` doc comment) — so approving and
+// continuing happen in one keypress, no menu ever flashes on screen.
+// If the unit under the keyboard is ALREADY approved (isApproveDone), there is
+// nothing to approve here — Space then behaves purely as "Ga door" would:
+// jump to the next unapproved unit via the same findNextUnapproved/
+// applyNextUnapproved pair the postApprove menu itself uses, with no toggle.
+// If nothing is left ahead either, this mirrors afterApproveAction's own
+// "nothing left ahead" branch (the same two microtask ticks to let the
+// decoupled state.approvalTotal watch flush) and opens the same
+// reviewApprove/reviewChoice review-submit menu — approving/rejecting the
+// whole PR stays a manual, two-step choice, never automatic.
+function spaceKey() {
+  const ctx = approveContext()
+  if (!ctx.b) return
+  if (!isApproveDone(ctx)) {
+    toggleApprove(true)
+    return
+  }
+  findNextUnapproved().then(async (target) => {
+    if (target) {
+      applyNextUnapproved(target)
+      return
+    }
+    await Promise.resolve()
+    await Promise.resolve()
+    const allDone = state.approvalTotal.total > 0 && state.approvalTotal.done === state.approvalTotal.total
+    openMenu(allDone ? 'reviewApprove' : 'reviewChoice')
+  })
+}
+
 // "Sluit menu" is pinned first (withClose); the menu opens on the 2nd item
 // (defaultSel), so "Keur ... goed" stays the default Enter action.
 const COMMANDS = withClose([
@@ -6802,18 +6865,8 @@ const COMMANDS = withClose([
     id: 'approve',
     label: () => {
       const ctx = approveContext()
-      const b = ctx.b
       const noun = approveNoun(ctx)
-      let done
-      if (b && ctx.mode === 'diff' && ctx.gran === 'call') {
-        const unit = unitsFor(blockRows(b), 'call')[ctx.change]
-        done = callUnitApproved(b, unit)
-      } else {
-        const set = b ? approvedRowSet(b) : new Set()
-        const target = approveTargetRows(ctx)
-        done = target.length > 0 && target.every((i) => set.has(i))
-      }
-      return done ? `Trek goedkeuring van ${noun} in` : `Keur ${noun} goed`
+      return isApproveDone(ctx) ? `Trek goedkeuring van ${noun} in` : `Keur ${noun} goed`
     },
     hint: 'approve',
     run: () => toggleApprove(),
@@ -7523,11 +7576,13 @@ function onKeydown(e) {
   // silently act on it would read as broken ("I'm on the toggle button but
   // ArrowRight opened a diff"). A held Cmd/Ctrl is excluded here too (see the
   // isModifiedKey note below) so e.g. Cmd+A still selects text natively even
-  // while a toggle row happens to have keyboard focus.
+  // while a toggle row happens to have keyboard focus. Space (approve +
+  // continue, see spaceKey below) joins this list for the same reason — a
+  // toggle row is not a PR block, there is nothing there to approve.
   if (
     (state.toggleFocused || state.ignoreToggleFocused) &&
     !isModifiedKey(e) &&
-    ['f', 'd', 's', 'a', 'ArrowRight'].includes(e.key)
+    ['f', 'd', 's', 'a', ' ', 'ArrowRight'].includes(e.key)
   ) {
     e.preventDefault()
     return
@@ -7562,6 +7617,24 @@ function onKeydown(e) {
   if (e.key === 's' && !isModifiedKey(e)) {
     e.preventDefault()
     sKey()
+    return
+  }
+
+  // Space — approve the unit under the keyboard (whole block in list mode,
+  // else the current group/line/call, exactly like the palette's "Keur ...
+  // goed" — see approveContext/toggleApprove) and continue straight to the
+  // next unapproved unit in one keypress, without ever showing the
+  // postApprove confirm menu. Already standing on an approved unit just jumps
+  // to the next one, and reaching the end opens the same review-submit menu
+  // as the natural end of a "Ga door" chain — see spaceKey's own doc comment.
+  // !state.showDescription mirrors the Enter branch above: stop 1 (the
+  // PR-description column) has no block context to approve, same reason Enter
+  // there opens the 'pr' menu instead of 'block'. preventDefault always fires
+  // here so the key never scrolls the page or (were a focusable element to
+  // hold real DOM focus) activates it instead.
+  if (e.key === ' ' && !isModifiedKey(e) && !state.showDescription) {
+    e.preventDefault()
+    spaceKey()
     return
   }
 

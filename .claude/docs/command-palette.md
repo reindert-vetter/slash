@@ -180,6 +180,10 @@ page*.
 
 ## The postApprove follow-up menu
 
+**`Space` (outside the palette) approves + "Ga door"s in one keypress and
+never opens this menu at all** — see "Space" in
+`.claude/docs/keyboard-navigation.md`.
+
 After approving **via the palette** (not via the block card's own checkbox,
 which stays a plain toggling click), if there is still a next unapproved unit a
 follow-up menu opens immediately (`ms.mode = 'postApprove'`,
