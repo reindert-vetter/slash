@@ -8176,6 +8176,27 @@ function menuAnchor() {
       document.querySelector('[data-testid="inline-comments"]')
     )
   }
+  // The publish-choice menu ('replyPublish', opened after a reply on a thread
+  // that has never touched GitHub — see pendingPublishInfo/openPublishMenu in
+  // RelatedPanel.mjs) reuses the SAME anchor as whichever reply field it was
+  // opened from: pendingPublishInfo().kind is 'prwide' for the comment-index
+  // detail card's reply field (mirror the 'prComment' branch below), 'thread'
+  // for the block-scoped conversation (mirror the 'comment' branch above).
+  // This mode used to fall all the way through to the generic diff-row
+  // default, which floated the menu over the code being reviewed instead of
+  // the comment column it belongs to.
+  if (ms.mode === 'replyPublish') {
+    if ((pendingPublishInfo() || {}).kind === 'prwide') {
+      return (
+        document.querySelector('[data-testid="comment-detail-card"]') ||
+        document.querySelector('[data-testid="block-column"]')
+      )
+    }
+    return (
+      document.querySelectorAll('[data-testid="comment-item"]')[commentSelIndex()] ||
+      document.querySelector('[data-testid="inline-comments"]')
+    )
+  }
   // The Claude-column menu ('claude') anchors on the chat card itself — unlike
   // every mode below this, it must NOT fall back to the selected block's diff
   // row: the Claude column can be reached with no diff row on screen at all
@@ -8254,6 +8275,21 @@ function menuRegion() {
     )
   }
   if (ms.mode === 'comment') {
+    return (
+      document.querySelector('[data-testid="comment-thread"]') ||
+      document.querySelector('[data-testid="inline-comments"]')
+    )
+  }
+  // The publish-choice menu ('replyPublish') mirrors menuAnchor's own
+  // 'replyPublish' branch: same region as 'prComment' for a comment-index
+  // reply, same region as 'comment' for a block-scoped reply.
+  if (ms.mode === 'replyPublish') {
+    if ((pendingPublishInfo() || {}).kind === 'prwide') {
+      return (
+        document.querySelector('[data-testid="comment-detail-card"]') ||
+        document.querySelector('[data-testid="block-column"]')
+      )
+    }
     return (
       document.querySelector('[data-testid="comment-thread"]') ||
       document.querySelector('[data-testid="inline-comments"]')

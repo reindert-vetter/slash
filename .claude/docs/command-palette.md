@@ -68,6 +68,17 @@ of the right (NEW) pane — half width, over the code you're reviewing:
 - **`comment` mode** anchors on the focused comment row resp. the thread pane;
   **`prComment` mode** on `[data-testid=comment-detail-card]`, falling back to
   `[data-testid=block-column]`.
+- **`replyPublish` mode** reuses whichever of the two anchors above matches the
+  reply field it was opened from, via `pendingPublishInfo().kind`
+  (`RelatedPanel.mjs`): `'prwide'` (the comment-index detail card's reply
+  field) gets the `prComment` anchor/region, `'thread'` (the block-scoped
+  conversation) gets the `comment` anchor/region. **This mode was added
+  without its own branch at first** — it fell through to the generic diff-row
+  default and floated the publish-choice menu over the code being reviewed
+  instead of the comment column. Every new `ms.mode` needs an explicit branch
+  in both `menuAnchor`/`menuRegion` (or a deliberate decision to fall through);
+  don't assume the generic default is harmless. Test:
+  `tests/reply-publish-menu-position.spec.mjs`.
 - **`claude` mode** anchors on `[data-testid=claude-chat-card]`, falling back to
   `[data-testid=comment-claude-row]` — deliberately its OWN branch in both
   `menuAnchor`/`menuRegion`, never falling through to the diff-row default

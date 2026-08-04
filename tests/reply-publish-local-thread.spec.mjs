@@ -106,6 +106,38 @@ test.describe('Publish a local comment thread to GitHub', () => {
     await expect(menu).toHaveCount(0)
   })
 
+  // Regression: the 'replyPublish' mode had no menuAnchor/menuRegion branch of
+  // its own and fell through to the generic diff-row default, which floated
+  // this menu over the code being reviewed instead of the comment column it
+  // belongs to (see the 'replyPublish' branches in home.mjs and
+  // .claude/docs/command-palette.md).
+  test('the publish menu is positioned over the comment column, not the diff', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    const aiBody = 'deze functie mist een null-check'
+    await seedWarning(page, aiBody)
+    await openThread(page, aiBody)
+
+    await typeReply(page, 'positioneringstest')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+
+    const anchor = page.getByTestId('command-anchor')
+    const comments = page.getByTestId('inline-comments')
+    const a = await anchor.boundingBox()
+    const c = await comments.boundingBox()
+    const pane = await page.locator('[data-pane="new"]').first().boundingBox()
+    expect(a).toBeTruthy()
+    expect(c).toBeTruthy()
+    // The menu's left edge sits within the comment column's own width, well
+    // clear of the diff's NEW pane to its left.
+    expect(a.x).toBeGreaterThanOrEqual(c.x - 10)
+    if (pane) expect(a.x).toBeGreaterThanOrEqual(pane.x + pane.width - 10)
+
+    await page.keyboard.press('Enter') // keep it local, the default
+    await expect(menu).toHaveCount(0)
+  })
+
   test('Enter on an empty reply field offers to move the existing conversation over', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
