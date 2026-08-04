@@ -2092,6 +2092,18 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(msg)
 	})
 
+	// Activity: push one PR's landed-but-unpushed chat edits to GitHub, from the
+	// same per-PR chat_merge queue that serializes landings (write: a real
+	// `git push` plus dropping the local pending ref — see pending_push.go).
+	engine.RegisterActivity("pushPendingPR", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatMergeInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		pushPendingPR(ctx, m, arg.PR)
+		return nil, nil
+	})
+
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)

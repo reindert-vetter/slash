@@ -37,6 +37,17 @@ const WorkflowChatMerge = "chat_merge"
 // chat_merge queue.
 const SignalChatMerge = "merge"
 
+// The two ChatMergeRequest.Action values. A second Signal NAME would need a
+// WaitSignal that can wait on either name, which tembed deliberately doesn't
+// have (one name per WaitSignal, no select in a workflow body — see
+// .claude/rules/workflow-determinism.md), so the action rides along as a
+// variant of the same Signal exactly like ChatMessageSignal.Action and
+// ReactionSignal.Action already do.
+const (
+	chatMergeActionLand = ""     // land one conversation's edit (the default)
+	chatMergeActionPush = "push" // push the PR's pending ref to GitHub
+)
+
 // ChatMergeQueueInput starts (or, idempotently, re-ensures) the chat_merge
 // Execution for one PR.
 type ChatMergeQueueInput struct {
@@ -52,6 +63,12 @@ type ChatMergeQueueInput struct {
 type ChatMergeRequest struct {
 	ConversationID string `json:"conversationId"`
 	TurnID         string `json:"turnId,omitempty"`
+	// Action selects what this request is (see chatMergeActionLand/Push). Empty
+	// means "land this conversation's edit", so every existing sender keeps
+	// working unchanged. A "push" request carries no conversation at all: it is
+	// about the PR's pending ref, and it comes straight from the reviewer's todo
+	// row rather than from a chat turn.
+	Action string `json:"action,omitempty"`
 }
 
 // chatMergeQueueRunID derives the chat_merge Execution's Run ID from the PR
@@ -83,6 +100,15 @@ func chatMergeQueueWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	for {
 		var req ChatMergeRequest
 		w.WaitSignal(SignalChatMerge, &req)
+		// Which branch runs is decided purely by the Signal's own recorded
+		// payload, so it is a pure function of the history — the same shape
+		// claudeChatWorkflow's own Action branches have.
+		if req.Action == chatMergeActionPush {
+			if err := w.ExecuteActivity("pushPendingPR", chatMergeInput{PR: in.PR}, nil); err != nil {
+				return nil, fmt.Errorf("push pending pr: %w", err)
+			}
+			continue
+		}
 		if err := w.ExecuteActivity("processChatMerge", chatMergeInput{
 			PR: in.PR, ConversationID: req.ConversationID, TurnID: req.TurnID,
 		}, nil); err != nil {
@@ -181,6 +207,9 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 	}
 	if msg.Kind != chat.KindError {
 		refreshTreeAfterLanding(ctx, tm, arg.PR, headRefName)
+		// The landing created (or advanced) the PR's pending ref, so the todo row
+		// at the bottom of the block index has something new to show.
+		publishPendingPushChanged(arg.PR)
 	}
 	return msg
 }

@@ -58,6 +58,12 @@ const (
 	// model and sees more. See .claude/docs/server-events.md.
 	eventCallResolveChanged = "callresolve.changed"
 	eventTestCoversChanged  = "testcovers.changed"
+	// eventPendingPushChanged says a PR's not-yet-pushed landed chat edits
+	// changed: something landed, a push started, succeeded or failed (no Key —
+	// PR-wide). No payload, same rule as the two above: the client refetches
+	// GET /api/pending-push, which reads git itself, so a dropped event costs a
+	// refetch and never correctness (see .claude/docs/server-events.md).
+	eventPendingPushChanged = "pendingpush.changed"
 	// eventResync is emitted by the connection itself after it had to drop an
 	// event: "you may have missed something, refetch everything you track".
 	eventResync = "resync"
@@ -68,6 +74,11 @@ const (
 // volatile "refetch me" nudge, never the new rows themselves.
 func publishCallResolveChanged(pr int) { events.publish(eventCallResolveChanged, pr, "", nil) }
 func publishTestCoversChanged(pr int)  { events.publish(eventTestCoversChanged, pr, "", nil) }
+
+// publishPendingPushChanged nudges every tab watching this PR to refetch
+// GET /api/pending-push (the todo row at the bottom of the block index and the
+// PR-overview's own "ongepusht" pill).
+func publishPendingPushChanged(pr int) { events.publish(eventPendingPushChanged, pr, "", nil) }
 
 // busEvent is one multiplexed message. Data is pre-marshalled at publish time
 // so the hub never holds a live pointer into a caller's struct (which the

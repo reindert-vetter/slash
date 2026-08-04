@@ -301,6 +301,11 @@ func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, erro
 	}
 	res.WorktreesRemoved = n
 
+	// A PR that is purged is merged/closed and gone from the review tree, so a
+	// pending ref that was never pushed has nothing left to belong to — sweeping
+	// it keeps refs/slash/pending/ from accumulating dead refs (pending_push.go).
+	removePendingRefs(ctx, pr)
+
 	if d.engine != nil {
 		deleted, err := deletePRWorkflowRuns(d.engine, pr)
 		if err != nil {

@@ -723,6 +723,12 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// workflow, no network — the same read-only-side-effect class as
 	// blockstats.go/comment_import.go reading a worktree.
 	mux.HandleFunc("/api/chat/shadow-status", s.handleChatShadowStatus)
+	// GET /api/pending-push?prs=N[,N…] → read-only: which of these PRs have
+	// landed chat edits that are not pushed to GitHub yet (pending_push.go).
+	// Purely local git reads (for-each-ref/rev-list/diff), no gh call, no
+	// module, no workflow — the review tree's todo row and the PR-overview's
+	// "ongepusht" pill both read it, hence the batch shape.
+	mux.HandleFunc("/api/pending-push", s.handlePendingPush)
 	// GET /api/events?pr=N → the one multiplexed SSE stream per browser tab
 	// (eventbus.go). Read-only and non-durable, like the heartbeat ping.
 	mux.HandleFunc("/api/events", s.handleEvents)
@@ -1682,6 +1688,29 @@ func (s *server) handleChatShadowStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exists": true, "dirty": dirty, "ahead": ahead})
+}
+
+// handlePendingPush serves GET /api/pending-push?prs=12,13 — per PR, the landed
+// chat edits still waiting for a push (or nothing at all for a PR with a clean
+// slate, which is the normal case). Read-only: it asks git what it already has
+// on disk, never the network, and never writes.
+//
+// The push itself is NOT here: that is a real write and goes through the PR's
+// chat_merge queue as a "push" Signal, whose Run ID this response carries
+// (pushRunId) so the UI has something to signal.
+func (s *server) handlePendingPush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	numbers := parsePRList(r.URL.Query().Get("prs"))
+	out := map[string]*pendingPushView{}
+	for _, pr := range numbers {
+		if v := loadPendingPush(r.Context(), pr); v != nil {
+			out[strconv.Itoa(pr)] = v
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pending": out})
 }
 
 // sseKeepAlive is how often an idle stream writes a comment frame. Without it a
