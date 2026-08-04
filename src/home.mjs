@@ -95,6 +95,7 @@ import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { commentMentionsMe } from './mentions.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
+import { ensureAutoWarn, autoWarnToggleButton } from './autowarn.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 import { meLogin } from './avatar.mjs'
@@ -1439,7 +1440,7 @@ async function loadBlocks() {
   // open with no sel at all — and only if nothing already moved the selection
   // in the meantime — land on the first not-yet-approved item instead
   // (applyDefaultUnapprovedSelection) — see its own doc comment below.
-  await Promise.all([loadApprovals(), loadBlockStats(), loadIgnoredComments()])
+  await Promise.all([loadApprovals(), loadBlockStats(), loadIgnoredComments(), ensureAutoWarn()])
   await Promise.resolve()
   await Promise.resolve()
   const curSelectedId = state.blocks[state.selected] ? state.blocks[state.selected].id : null
@@ -8534,7 +8535,10 @@ function prInfoCard(state) {
       </div>
       <div class="flex items-center justify-between" data-testid="pr-info-theme-row">
         <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Weergave</span>
-        ${themeToggleButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
+        <div class="flex items-center gap-1.5">
+          ${autoWarnToggleButton()}
+          ${themeToggleButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
+        </div>
       </div>
       <div class="rounded-lg bg-emerald-50 dark:bg-emerald-500/15 p-2.5" data-testid="pr-info-summary">
         <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Doel</div>

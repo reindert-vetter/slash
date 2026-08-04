@@ -17,6 +17,7 @@ import (
 
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/approvals"
+	"slash/modules/autowarn"
 	"slash/modules/callresolve"
 	"slash/modules/chat"
 	"slash/modules/claude"
@@ -32,6 +33,7 @@ import (
 	"slash/modules/taskinbox"
 	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
+	"slash/modules/warnrevoke"
 )
 
 // tasks holds the workflow engine + the module read sides. It is built once at
@@ -219,6 +221,43 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ti.Close()
 		return nil, nil, err
 	}
+	aw, err := autowarn.Open(dataDir + "/autowarn.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		ts.Close()
+		ci.Close()
+		ti.Close()
+		ch.Close()
+		return nil, nil, err
+	}
+	wr, err := warnrevoke.Open(dataDir + "/warnrevoke.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		ts.Close()
+		ci.Close()
+		ti.Close()
+		ch.Close()
+		aw.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -290,6 +329,13 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// Activities (ensureChatConversation/saveChatMessage/saveChatAnswer/
 	// runClaudeTurn) no-ops.
 	mgr.chat = ch
+	// Same pattern for the auto-warn preference: a nil store makes
+	// AutoWarnEnabled report "enabled" (the default) and saveAutoWarnEnabled a
+	// no-op.
+	mgr.autowarn = aw
+	// Same pattern for the warning-revocation bookkeeping: a nil store makes
+	// markWarningRevocation always report "new" (never suppresses a revoke).
+	mgr.warnrevoke = wr
 	// Mirror every glue-level log line (poller/startup errors that are not a
 	// workflow run of their own) into the in-memory problem buffer behind
 	// GET /api/problems — see run_errors.go.
@@ -315,6 +361,12 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		if _, err := mgr.EnsureTaskSnooze(); err != nil {
 			mgr.logf("tasksnooze: ensure: %v", err)
 		}
+		// Own the per-repo auto-warn tracker so the toggle next to the theme
+		// button has a Run ID to signal to (no poller — it only reacts to UI
+		// signals).
+		if _, err := mgr.EnsureAutoWarn(); err != nil {
+			mgr.logf("autowarn: ensure: %v", err)
+		}
 		// Own the task inbox via the workflow: aggregate an initial snapshot
 		// into the read-model and start the refresh poller (the UI reads only
 		// the read-model). Mirrors EnsureInbox.
@@ -339,6 +391,8 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = ti.Close()
 		_ = ci.Close()
 		_ = ch.Close()
+		_ = aw.Close()
+		_ = wr.Close()
 		return cs.Close()
 	}
 	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, tasksnooze: ts, taskinbox: ti, commentignore: ci, chat: ch}, closeFn, nil
@@ -633,6 +687,13 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/tasksnoozes → read-only task-snooze read-model (which tasks are
 	// hidden, and until when). The UI filters expired entries at read time.
 	mux.HandleFunc("/api/tasksnoozes", s.handleTaskSnoozes)
+	// POST /api/workflows/auto_warn {repo?} → ensure the per-repo auto-warn
+	// tracker; the UI then signals its on/off toggle to its Run ID via
+	// .../signals/autowarn.
+	mux.HandleFunc("/api/workflows/auto_warn", s.handleAutoWarnStart)
+	// GET /api/autowarn → read-only auto-warn preference ({"enabled":bool}),
+	// backing the toggle next to the theme button in prInfoCard.
+	mux.HandleFunc("/api/autowarn", s.handleAutoWarn)
 	// POST /api/workflows/task_inbox → ensure the per-repo task-inbox tracker
 	// (its start synchronously aggregates the three task sources into the
 	// taskinbox read-model). The generic .../signals/refresh handler (below)
@@ -780,7 +841,7 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" {
 		http.NotFound(w, r)
 		return
 	}
@@ -886,6 +947,21 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+			return
+		}
+		// The autowarn signal carries the desired on/off flag for the automatic
+		// code_warning trigger (from the UI toggle next to the theme button).
+		if parts[2] == SignalAutoWarn {
+			var body AutoWarnSignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid autowarn", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalAutoWarn, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
 			return
 		}
 		// The delete signal carries no comment body — it just asks the workflow
@@ -1386,6 +1462,39 @@ func (s *server) handleTaskSnoozes(w http.ResponseWriter, r *http.Request) {
 		list = []tasksnooze.Snooze{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "snoozes": list})
+}
+
+// handleAutoWarnStart starts (or reuses) the per-repo auto-warn tracker and
+// returns its Run ID. Starting an Execution is the sanctioned UI write path;
+// the UI then signals its on/off toggle to this Run ID via
+// .../signals/autowarn.
+func (s *server) handleAutoWarnStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	runID, err := s.tasks.manager.EnsureAutoWarn()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleAutoWarn serves GET /api/autowarn — the read-only on/off preference
+// for the automatic code_warning trigger. Defaults to enabled (see
+// modules/autowarn.Enabled).
+func (s *server) handleAutoWarn(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	enabled, err := s.tasks.manager.AutoWarnEnabled(r.Context())
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": enabled})
 }
 
 // handleTaskInboxStart starts (or reuses) the per-repo task-inbox tracker and

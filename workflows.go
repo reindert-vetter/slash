@@ -15,6 +15,7 @@ import (
 
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/approvals"
+	"slash/modules/autowarn"
 	"slash/modules/callresolve"
 	"slash/modules/chat"
 	"slash/modules/claude"
@@ -30,6 +31,7 @@ import (
 	"slash/modules/taskinbox"
 	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
+	"slash/modules/warnrevoke"
 )
 
 // This file wires the first task as a durable tembed Workflow. Terminology
@@ -155,6 +157,15 @@ const (
 	// of WorkflowTaskCodeComment's reactions loop. See
 	// .claude/docs/tembed-workflows.md.
 	WorkflowClaudeChat = "claude_chat"
+	// WorkflowAutoWarn is the Workflow Type that persists the reviewer's on/off
+	// preference for the AUTOMATIC code_warning trigger (see autoStartCodeWarning):
+	// one Execution per repo, mirroring WorkflowTaskSnooze. Each "autowarn" Signal
+	// carries the desired enabled flag, which one Activity writes into the
+	// autowarn read-model. It never completes — a long-lived per-repo tracker.
+	// A manual "Diepgravend onderzoek" from the "/" menu never checks this flag —
+	// only the automatic trigger does. See the "AI risk check" section of
+	// .claude/docs/workflows-analysis.md.
+	WorkflowAutoWarn = "auto_warn"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -180,6 +191,12 @@ const (
 	// SignalIgnore delivers one comment's ignored state to the ignore_comment
 	// tracker (from the UI, on the "Ignore"/"Ignore ongedaan maken" action).
 	SignalIgnore = "ignore"
+	// SignalAutoWarn delivers the desired on/off flag to the auto_warn tracker
+	// (from the UI toggle next to the theme button). Deliberately a distinct
+	// literal from SignalSet/SignalSnooze/SignalIgnore: the generic
+	// .../signals/{name} route (tasks_api.go) dispatches purely on this literal,
+	// so it must not collide with an existing one.
+	SignalAutoWarn = "autowarn"
 	// SignalMessage delivers one reviewer turn to the claude_chat workflow.
 	SignalMessage = "message"
 
@@ -285,8 +302,8 @@ type ReactionSignal struct {
 	AvatarURL string `json:"avatarUrl"`
 	// Body is the reply text (Action "" / "reply"), or the new wording (Action
 	// "edit").
-	Body   string `json:"body"`
-	Done   bool   `json:"done"`   // resolves the thread
+	Body string `json:"body"`
+	Done bool   `json:"done"` // resolves the thread
 	// Action "publish" carries no message at all: it publishes the thread AS IT
 	// STANDS (the root, plus the earlier local replies with PublishHistory) —
 	// the reviewer moving an existing local conversation to GitHub without
@@ -403,6 +420,17 @@ type SnoozeSignal struct {
 	TaskID string `json:"taskId"`
 	Until  int64  `json:"until"`
 	Clear  bool   `json:"clear"`
+}
+
+// AutoWarnInput starts an auto_warn Execution — one tracker per repo.
+type AutoWarnInput struct {
+	Repo string `json:"repo"`
+}
+
+// AutoWarnSignal carries the desired on/off flag into the auto_warn tracker
+// (delivered under SignalAutoWarn).
+type AutoWarnSignal struct {
+	Enabled bool `json:"enabled"`
 }
 
 // IgnoreCommentInput starts an ignore_comment Execution — one tracker per PR.
@@ -556,15 +584,27 @@ type TaskManager struct {
 	// NewTaskManager param, to avoid churning every existing test call site; a
 	// nil store makes the chat Activities no-ops, like the other
 	// module-guarded activities.
-	chat     *chat.Module
-	claude   claude.Client
-	jira     jira.Client
-	db       *sql.DB
-	dataDir  string
-	repo     string
-	interval time.Duration // fast cadence (reviewer active)
-	idle     time.Duration // slow cadence + PR-state check (reviewer idle)
-	logf     func(string, ...any)
+	chat *chat.Module
+	// autowarn is the on/off preference for the automatic code_warning trigger
+	// (see autoStartCodeWarning). Set post-construction in newTasks (like
+	// reviewerusage/taskinbox/commentignore/chat) rather than as a
+	// NewTaskManager param; a nil store makes AutoWarnEnabled report "enabled"
+	// (the default) and saveAutoWarnEnabled a no-op.
+	autowarn *autowarn.Module
+	// warnrevoke remembers which (pr, blockId, row) already had an approval
+	// retracted by a code_warning finding once, so a repeat finding on a
+	// re-ingest doesn't retract it again (see revokeApprovalForWarning). Set
+	// post-construction, same reasoning as autowarn; a nil store makes
+	// markWarningRevocation always report "new" (never suppresses a revoke).
+	warnrevoke *warnrevoke.Module
+	claude     claude.Client
+	jira       jira.Client
+	db         *sql.DB
+	dataDir    string
+	repo       string
+	interval   time.Duration // fast cadence (reviewer active)
+	idle       time.Duration // slow cadence + PR-state check (reviewer idle)
+	logf       func(string, ...any)
 
 	// baseCtx is the server-lifetime context background pollers spawned outside
 	// a request (e.g. ensurePRStatus's fresh-poller spawn) run under — a
@@ -574,7 +614,7 @@ type TaskManager struct {
 	baseCtx      context.Context
 	runtimeReady bool
 
-	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + ignRuns + inboxRun + snoozeRun + taskInboxRun + importPolled
+	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + ignRuns + inboxRun + snoozeRun + taskInboxRun + autoWarnRun + importPolled
 	lastBeat     map[string]time.Time // code-comment/inbox Run ID → last heartbeat
 	prRuns       map[int]string       // PR → pr_status Run ID
 	relRuns      map[int]string       // PR → build_relations Run ID
@@ -583,6 +623,7 @@ type TaskManager struct {
 	inboxRun     string               // pr_inbox Run ID (one per repo/process)
 	snoozeRun    string               // task_snooze Run ID (one per repo/process)
 	taskInboxRun string               // task_inbox Run ID (one per repo/process)
+	autoWarnRun  string               // auto_warn Run ID (one per repo/process)
 	importPolled map[string]bool      // imported-thread Run ID → poller running (dedup, operational)
 	avatarTried  map[string]bool      // imported-thread Run ID → avatar backfill attempted (dedup, operational)
 
@@ -1552,6 +1593,125 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.tasksnooze.Set(ctx, arg.TaskID, arg.Until)
 	})
 
+	// Activity: persist the auto_warn on/off preference (write, workflow-driven).
+	// The autowarn module is the only writer of the autowarn read-model.
+	engine.RegisterActivity("saveAutoWarnEnabled", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			Repo    string `json:"repo"`
+			Enabled bool   `json:"enabled"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.autowarn == nil {
+			return nil, nil
+		}
+		return nil, m.autowarn.SetEnabled(ctx, arg.Repo, arg.Enabled)
+	})
+
+	// Activity: fire-and-forget the automatic code_warning trigger for pr. This
+	// Activity itself does no slow work — it only spawns the goroutine and
+	// returns immediately — so build_relations/prStatusWorkflow's delta-refresh
+	// never wait on a live, possibly slow agentic Opus call. On replay this
+	// Activity's recorded (empty) result is returned directly without
+	// re-invoking the function (tembed only executes a live Activity once), so
+	// the goroutine is launched exactly once per real occurrence, never again
+	// on replay. See TaskManager.autoStartCodeWarning for the on/off check.
+	engine.RegisterActivity("autoStartCodeWarning", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR int `json:"pr"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		go m.autoStartCodeWarning(arg.PR)
+		return nil, nil
+	})
+
+	// Activity: check-and-mark whether (pr, blockId, row) already triggered an
+	// approval revoke before (write, workflow-driven — see modules/warnrevoke's
+	// doc comment for why identity is the anchor, not the comment id/wording).
+	// Returns isNew=true only the first time; codeWarningWorkflow only calls
+	// revokeApprovalForWarning when this is true.
+	engine.RegisterActivity("markWarningRevocation", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR      int    `json:"pr"`
+			BlockID string `json:"blockId"`
+			Row     int    `json:"row"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.warnrevoke == nil {
+			return json.Marshal(true)
+		}
+		isNew, err := m.warnrevoke.MarkIfNew(ctx, arg.PR, arg.BlockID, arg.Row)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(isNew)
+	})
+
+	// Activity: retract the reviewer's approval of the exact row an AI warning
+	// just anchored to (write, workflow-driven). Reuses the SAME "set" Signal
+	// route the frontend's own revokeApprovalForComment uses (see
+	// .claude/docs/approval.md, "Placing a comment retracts the approval it
+	// hangs on") instead of a second, competing approvals.Replace call site: it
+	// reads the block's current approved state, drops the row range (plus any
+	// call-segment key whose row falls in it), and signals the PR's approve
+	// tracker with the trimmed set — exactly what the UI would send.
+	engine.RegisterActivity("revokeApprovalForWarning", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR       int    `json:"pr"`
+			BlockID  string `json:"blockId"`
+			RowStart int    `json:"rowStart"`
+			RowEnd   int    `json:"rowEnd"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.approvals == nil {
+			return nil, nil
+		}
+		list, err := m.approvals.List(ctx, arg.PR)
+		if err != nil {
+			return nil, fmt.Errorf("code_warning: list approvals: %w", err)
+		}
+		var rows []int
+		var calls []string
+		found := false
+		for _, a := range list {
+			if a.BlockID != arg.BlockID {
+				continue
+			}
+			found = true
+			rows, calls = a.Rows, a.Calls
+			break
+		}
+		if !found || (len(rows) == 0 && len(calls) == 0) {
+			return nil, nil // nothing approved there yet — nothing to retract
+		}
+		newRows, newCalls, changed := removeApprovalRowRange(rows, calls, arg.RowStart, arg.RowEnd)
+		if !changed {
+			return nil, nil
+		}
+		runID, err := m.EnsureApprovals(arg.PR)
+		if err != nil {
+			return nil, fmt.Errorf("code_warning: ensure approvals: %w", err)
+		}
+		sig := ApprovalSignal{BlockID: arg.BlockID, Rows: newRows, Calls: newCalls}
+		if sig.Rows == nil {
+			sig.Rows = []int{}
+		}
+		if sig.Calls == nil {
+			sig.Calls = []string{}
+		}
+		if err := m.engine.SignalWorkflow(runID, SignalSet, sig); err != nil {
+			return nil, fmt.Errorf("code_warning: signal revoke: %w", err)
+		}
+		return nil, nil
+	})
+
 	// Activity: store one comment's ignored state (write, workflow-driven —
 	// the commentignore module is the only writer of that read-model). Set is
 	// idempotent in both directions, so a replay is safe.
@@ -1715,6 +1875,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// shells out to the claude CLI (a side effect, hence an Activity) — and
 	// maps every accepted finding onto the existing comment-anchoring model
 	// (anchoredWarning, code_warning.go), ready to hand to createWarningComment.
+	// Also carries each finding's anchored block id (empty for an unanchored
+	// PR-wide "ai_warning") so codeWarningWorkflow knows whether/what to
+	// revoke via revokeApprovalForWarning.
 	engine.RegisterActivity("runAgenticReview", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg warningReviewArg
 		if err := json.Unmarshal(in, &arg); err != nil {
@@ -1722,15 +1885,16 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		findings := runCodeWarningReview(ctx, m.claude, m.dataDir, arg)
 		if len(findings) == 0 {
-			return json.Marshal([]CodeCommentInput{})
+			return json.Marshal([]warningToCreate{})
 		}
 		blocks, err := blocksByPR(m.db, arg.PR)
 		if err != nil {
 			return nil, fmt.Errorf("code_warning: load blocks: %w", err)
 		}
-		out := make([]CodeCommentInput, 0, len(findings))
+		out := make([]warningToCreate, 0, len(findings))
 		for _, f := range findings {
-			out = append(out, anchoredWarning(m.dataDir, arg.PR, blocks, f))
+			cc, blockID := anchoredWarning(m.dataDir, arg.PR, blocks, f)
+			out = append(out, warningToCreate{Comment: cc, BlockID: blockID})
 		}
 		return json.Marshal(out)
 	})
@@ -1771,7 +1935,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			engine: m.engine, db: m.db, dataDir: m.dataDir,
 			comments: m.comments, approvals: m.approvals, relations: m.relations,
 			callresolve: m.callresolve, testcovers: m.testcovers, prmeta: m.prmeta, explain: m.explain,
-			commentignore: m.commentignore, chat: m.chat,
+			commentignore: m.commentignore, chat: m.chat, warnrevoke: m.warnrevoke,
 		}
 		res, err := purgePR(ctx, deps, t.PR)
 		if err != nil {
@@ -1941,6 +2105,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowReadyForReview, readyForReviewWorkflow)
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
 	engine.RegisterWorkflow(WorkflowTaskSnooze, taskSnoozeWorkflow)
+	engine.RegisterWorkflow(WorkflowAutoWarn, autoWarnPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowTaskInbox, taskInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
@@ -2044,6 +2209,16 @@ func buildRelationsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 	if err := w.ExecuteActivity("buildRelations", in, nil); err != nil {
 		return nil, fmt.Errorf("build relations: %w", err)
+	}
+	// This top-of-function build runs exactly once, the very first time this
+	// PR is ever ingested — real "there are changes" (a brand-new PR). Fire the
+	// automatic code_warning trigger here, but NOT from the "rebuild" loop
+	// below: a plain re-ingest/"Regenereren" Signal carries no guarantee that
+	// any code actually changed, so it must never auto-start an agentic Opus
+	// run on its own (see prStatusWorkflow's delta-refresh branch for the
+	// other legitimate trigger — genuinely new commits).
+	if err := w.ExecuteActivity("autoStartCodeWarning", in, nil); err != nil {
+		return nil, fmt.Errorf("auto-start code warning: %w", err)
 	}
 	for {
 		var s json.RawMessage
@@ -2407,19 +2582,57 @@ func codeWarningWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	if maxFindings < warningsPerBlock {
 		maxFindings = warningsPerBlock
 	}
-	var toCreate []CodeCommentInput
+	var toCreate []warningToCreate
 	if err := w.ExecuteActivity("runAgenticReview", warningReviewArg{
 		PR: in.PR, Files: scope.Files, BlockCount: scope.BlockCount, MaxFindings: maxFindings,
 	}, &toCreate); err != nil {
 		return nil, fmt.Errorf("run agentic review: %w", err)
 	}
 
-	for _, cc := range toCreate {
-		if err := w.ExecuteActivity("createWarningComment", cc, nil); err != nil {
+	for _, item := range toCreate {
+		if err := w.ExecuteActivity("createWarningComment", item.Comment, nil); err != nil {
 			return nil, fmt.Errorf("create warning comment: %w", err)
+		}
+		// Retract the approval of the exact row this warning anchors to — but
+		// only the FIRST time this (pr, blockId, row) triggers a warning; a
+		// repeat of the same warning on a re-ingest must not undo an approval
+		// the reviewer deliberately gave again after already seeing it once
+		// (see modules/warnrevoke's doc comment). Unanchored PR-wide findings
+		// (BlockID == "") have no row to retract.
+		if item.BlockID == "" || item.Comment.RowStart < 0 {
+			continue
+		}
+		var isNew bool
+		markArg := struct {
+			PR      int    `json:"pr"`
+			BlockID string `json:"blockId"`
+			Row     int    `json:"row"`
+		}{PR: in.PR, BlockID: item.BlockID, Row: item.Comment.RowStart}
+		if err := w.ExecuteActivity("markWarningRevocation", markArg, &isNew); err != nil {
+			return nil, fmt.Errorf("mark warning revocation: %w", err)
+		}
+		if !isNew {
+			continue
+		}
+		revokeArg := struct {
+			PR       int    `json:"pr"`
+			BlockID  string `json:"blockId"`
+			RowStart int    `json:"rowStart"`
+			RowEnd   int    `json:"rowEnd"`
+		}{PR: in.PR, BlockID: item.BlockID, RowStart: item.Comment.RowStart, RowEnd: item.Comment.RowEnd}
+		if err := w.ExecuteActivity("revokeApprovalForWarning", revokeArg, nil); err != nil {
+			return nil, fmt.Errorf("revoke approval for warning: %w", err)
 		}
 	}
 	return json.Marshal(map[string]int{"found": len(toCreate)})
+}
+
+// warningToCreate is runAgenticReview's per-finding Activity result: the
+// comment to create plus the block it anchored to (empty for an unanchored
+// PR-wide "ai_warning" finding — see anchoredWarning, code_warning.go).
+type warningToCreate struct {
+	Comment CodeCommentInput `json:"comment"`
+	BlockID string           `json:"blockId"`
 }
 
 // StartCodeWarning launches a code_warning Execution and runs it to
@@ -2495,6 +2708,29 @@ func taskSnoozeWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}{TaskID: sig.TaskID, Until: until}
 		if err := w.ExecuteActivity("saveTaskSnooze", arg, nil); err != nil {
 			return nil, fmt.Errorf("save task snooze: %w", err)
+		}
+	}
+}
+
+// autoWarnPrefWorkflow persists the reviewer's on/off preference for the
+// automatic code_warning trigger, for one repo. It is deterministic: the only
+// side effect (the read-model write) is an Activity, the number of Activities
+// is exactly the number of "autowarn" Signals in the history. It never
+// completes — a long-lived per-repo tracker, mirrors taskSnoozeWorkflow.
+func autoWarnPrefWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in AutoWarnInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	for {
+		var sig AutoWarnSignal
+		w.WaitSignal(SignalAutoWarn, &sig)
+		arg := struct {
+			Repo    string `json:"repo"`
+			Enabled bool   `json:"enabled"`
+		}{Repo: in.Repo, Enabled: sig.Enabled}
+		if err := w.ExecuteActivity("saveAutoWarnEnabled", arg, nil); err != nil {
+			return nil, fmt.Errorf("save auto warn enabled: %w", err)
 		}
 	}
 }
@@ -2826,6 +3062,14 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				}
 				if err := w.ExecuteActivity("buildRelations", BuildRelationsInput{PR: in.PR}, nil); err != nil {
 					return nil, fmt.Errorf("rebuild relations after refresh: %w", err)
+				}
+				// Real new commits landed (this branch only runs when
+				// refreshIngestDelta found a new head SHA and res.Skipped is
+				// false) — exactly the "there are changes" signal the automatic
+				// code_warning trigger should fire on. Mirrors the one-time call
+				// in buildRelationsWorkflow for a PR's very first ingest.
+				if err := w.ExecuteActivity("autoStartCodeWarning", BuildRelationsInput{PR: in.PR}, nil); err != nil {
+					return nil, fmt.Errorf("auto-start code warning after refresh: %w", err)
 				}
 			}
 		}
@@ -3727,6 +3971,94 @@ func (m *TaskManager) findTaskSnoozeRunLocked() string {
 		}
 	}
 	return ""
+}
+
+// EnsureAutoWarn ensures the single auto_warn tracker for the repo exists
+// (starting one if none is live) and returns its Run ID. The UI calls this on
+// load so the toggle next to the theme button has a Run ID to signal to; the
+// tracker is reused across restarts. Starting/reusing an Execution is the
+// sanctioned UI write path. Mirrors EnsureTaskSnooze.
+func (m *TaskManager) EnsureAutoWarn() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.autoWarnRun != "" {
+		return m.autoWarnRun, nil
+	}
+	if id := m.findAutoWarnRunLocked(); id != "" {
+		m.autoWarnRun = id
+		return id, nil
+	}
+	id, err := m.engine.StartWorkflow(WorkflowAutoWarn, AutoWarnInput{Repo: m.repo})
+	if err != nil {
+		return "", err
+	}
+	m.autoWarnRun = id
+	return id, nil
+}
+
+// findAutoWarnRunLocked scans for a running/waiting auto_warn Execution for
+// m.repo. It reads only the engine, so it is safe to call while holding m.mu.
+func (m *TaskManager) findAutoWarnRunLocked() string {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowAutoWarn {
+			continue
+		}
+		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var pin AutoWarnInput
+		if json.Unmarshal(in, &pin) == nil && pin.Repo == m.repo {
+			return r.ID
+		}
+	}
+	return ""
+}
+
+// AutoWarnEnabled reports whether the automatic code_warning trigger is
+// currently turned on — read-only, backs GET /api/autowarn. A nil autowarn
+// module (not wired, e.g. some test harnesses) defaults to enabled, matching
+// modules/autowarn.Enabled's own default.
+func (m *TaskManager) AutoWarnEnabled(ctx context.Context) (bool, error) {
+	if m.autowarn == nil {
+		return true, nil
+	}
+	return m.autowarn.Enabled(ctx, m.repo)
+}
+
+// autoStartCodeWarning is the server-side counterpart of the "/" menu's
+// manual "Diepgravend onderzoek" trigger (StartCodeWarning): fired
+// fire-and-forget (its own goroutine, spawned from the autoStartCodeWarning
+// Activity) whenever real new code lands — the very first ingest of a PR, or
+// a later delta-refresh that found genuinely new commits (see
+// buildRelationsWorkflow/prStatusWorkflow) — so a reviewer sees AI warnings
+// without clicking the menu item. A plain "rebuild" Signal (manual
+// "Regenereren" without new commits) never reaches this. Checks the reviewer's
+// own on/off preference (AutoWarnEnabled) first — the toggle next to the
+// theme button — and does nothing when it's off; a manual trigger from the
+// menu is never gated by it. StartCodeWarning itself is a deliberate,
+// repeatable refresh (supersedeFileWarnings replaces the previous run's
+// findings for the files in scope), so calling it again here is "refresh the
+// risk check", not "duplicate it".
+func (m *TaskManager) autoStartCodeWarning(pr int) {
+	enabled, err := m.AutoWarnEnabled(context.Background())
+	if err != nil {
+		m.logf("code_warning: auto-start pr=%d: check enabled: %v", pr, err)
+		return
+	}
+	if !enabled {
+		return
+	}
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		m.logf("code_warning: auto-start pr=%d: %v", pr, err)
+	}
 }
 
 // EnsureInbox starts (or reuses) the single pr_inbox Execution for the repo,

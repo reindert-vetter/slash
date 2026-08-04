@@ -480,16 +480,51 @@ caller whose call no longer matches a changed signature, a test still checking
 the old form, a listener not handling a new payload field). Opus because this is
 a manually triggered, low-frequency action.
 
-- **Trigger: manual, PR-wide** — the `/` menu item **"Diepgravend onderzoek"**
-  (see `.claude/docs/command-palette.md`). No automatic trigger (unlike
-  `explain_code`'s debounce or `resolve_call`'s auto-search): a PR-wide agentic
-  pass with a judgment-based goal is too expensive and too noise-sensitive to
-  run silently on every navigation step. **Re-running it is a deliberate
-  "refresh"** — no idempotent Run ID: every run supersedes the previous findings
-  of the files in scope, so it replaces rather than stacks. **Incremental on a
+- **Trigger: manual (the `/` menu item "Diepgravend onderzoek", see
+  `.claude/docs/command-palette.md`) OR automatic, on real new code.**
+  `autoStartCodeWarning` (workflows.go) fires it fire-and-forget from exactly
+  two places: `buildRelationsWorkflow`'s one-time build at Execution start (a
+  PR's very first ingest) and `prStatusWorkflow`'s delta-refresh branch, but
+  **only** in the `!res.Skipped` case — i.e. `refreshIngestDelta` actually found
+  a newer head SHA. A bare `rebuild` Signal (a manual "Regenereren" with no new
+  commits) deliberately does **not** auto-trigger it — see the doc comment on
+  `buildRelationsWorkflow`'s one-time call. Both call sites go through a tiny
+  `autoStartCodeWarning` **Activity** that only spawns a goroutine and returns
+  immediately (mirrors `autoStartResolveCall`), so neither ingest nor the
+  delta-refresh ever waits on a live, possibly slow agentic Opus call; on
+  replay tembed returns the recorded (empty) Activity result without
+  re-invoking the function, so the goroutine fires exactly once per real
+  occurrence. A manual "Diepgravend onderzoek" is never gated by anything
+  below.
+- **Reviewer on/off switch (`modules/autowarn` + `WorkflowAutoWarn`/
+  `SignalAutoWarn`):** a toggle next to the theme button in `prInfoCard`
+  (`data-testid=auto-warn-toggle`, `src/autowarn.mjs`) turns the AUTOMATIC
+  trigger above off entirely — `autoStartCodeWarning` (the `TaskManager`
+  method, not the Activity) checks `AutoWarnEnabled` first and does nothing
+  when it's off. Manually starting it from the menu is **never** gated by this.
+  Default is **enabled** (the reviewer's own words: "gewoon toch altijd doen…
+  het moet een optie zijn die je aan en uit kan zetten"). Deliberately **not**
+  `localStorage` (like the theme preference) or `settings.json` (read once per
+  process — see `settings.go`): the toggle gates a **backend** decision that
+  must be readable the instant the trigger wants to fire, so it rides the same
+  one-Execution-per-repo Signal pattern as `task_snooze`
+  (`EnsureAutoWarn`/`SignalAutoWarn` → `saveAutoWarnEnabled` Activity →
+  `autowarn.SetEnabled`), read via `GET /api/autowarn`
+  (`autowarn.Enabled`, defaults to `true`). No numeric token-budget gate was
+  built — deliberately rejected; every earlier idea for "pause automatic
+  generation once an AI budget runs low" (a `claude` CLI rate-limit query, a
+  local usage-history file) turned out to be either only a post-hoc
+  allowed/rejected flag or an OS-app-specific, undocumented file — neither
+  reliable enough to gate a feature on, and the reviewer explicitly asked for a
+  plain on/off switch instead.
+- **Re-running it is a deliberate "refresh"** (whether manual or automatic) —
+  no idempotent Run ID: every run supersedes the previous findings of the
+  files in scope, so it replaces rather than stacks. **Incremental scope on a
   new commit is deliberately NOT built**: a fast-follow could piggyback on
   `refreshIngestDelta`'s changed-file list, but that touches `pr_status`'s body
-  and `ingestResult`'s schema.
+  and `ingestResult`'s schema — the automatic trigger still reviews the PR's
+  **whole current changed-file scope** every time (`resolveWarningScope`'s
+  existing default), never just the new delta.
 - **Scope + cap (`resolveWarningScope`,** read-only): the files come from the
   PR's current blocks (`Files` empty → all changed files; filled → passed
   through, reserved for that fast-follow). The findings cap is
@@ -515,11 +550,36 @@ a manually triggered, low-frequency action.
   machinery: `createWarningComment` calls `StartCodeComment` with `Source:"ai"`
   + `Local:true` (never to GitHub) and `Author:"AI check"`. Being a full
   Execution, the reviewer can resolve or delete it like any other comment.
+- **A block-anchored finding retracts the reviewer's approval of that exact
+  row — but only the FIRST time.** Mirrors "Placing a comment retracts the
+  approval it hangs on" (`.claude/docs/approval.md`) and **reuses the same
+  mechanism** rather than a second write path: `revokeApprovalForWarning`
+  (Activity) reads the block's current approved state (`approvals.List`),
+  drops the row (plus any call-segment key whose row falls in it — same
+  group/line logic as `revokeApprovalForComment`, factored out as
+  `removeApprovalRowRange` in `code_warning.go`), and signals the PR's
+  `approve` tracker with the trimmed set via the existing `SignalSet` route
+  (`EnsureApprovals` + `engine.SignalWorkflow(runID, SignalSet, …)`) — exactly
+  what the UI itself would send. **Identity for "already revoked once" is
+  `(pr, blockId, row)`** — the anchor, never the comment id (a stale AI comment
+  is deleted and a fresh one created on every run via `supersedeFileWarnings`)
+  and never the finding's wording (the model may rephrase the same issue
+  between runs). `modules/warnrevoke`'s `MarkIfNew` records that tuple once;
+  `codeWarningWorkflow` only calls `revokeApprovalForWarning` when
+  `markWarningRevocation`'s Activity result says it's new. Consequence: if the
+  reviewer sees the warning, decides the code is fine, and re-approves that
+  row, a **later** run whose finding recurs on the same row does **not** undo
+  that approval again — only a warning on a **different** row is treated as
+  new. An unanchored `ai_warning` (no block/row) never revokes anything.
 - **Determinism:** the body only does `ExecuteActivity` calls in a fixed order
-  (scope → supersede → the one Opus call → one `createWarningComment` per
-  finding), and that last count comes from the **stored** review result.
+  (scope → supersede → the one Opus call → per finding: `createWarningComment`,
+  then `markWarningRevocation` + conditionally `revokeApprovalForWarning`), and
+  every count comes from a **stored** Activity result — never a live check.
 - **Frontend:** the same warning-triangle SVG as `related-covers-warning`, now
   as an `aiWarningBadge` pill; the Taken card shows the run as "Risk check" with
   either "searching the PR for risks…" or the **exact** number of findings —
   including "no risks found" — via `WorkflowRunView.WarningsFound`.
-- Tests: `code_warning_test.go`.
+- Tests: `code_warning_test.go` (anchoring, PR-wide fallback, hallucination
+  guard, supersede, the findings cap, the once-only revoke, and the automatic
+  trigger firing/skipping-when-disabled/not-on-a-bare-rebuild),
+  `modules/autowarn/autowarn_test.go`, `modules/warnrevoke/warnrevoke_test.go`.

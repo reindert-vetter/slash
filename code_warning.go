@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"slash/modules/claude"
@@ -136,7 +137,11 @@ func parseWarningFindings(raw string) []warningFinding {
 // without a precise row). File is kept either way, as a hint of what the
 // finding is about. Every warning is Source "ai" + Local true (never posted
 // to GitHub), regardless of whether it anchors.
-func anchoredWarning(dataDir string, pr int, blocks []Block, f warningFinding) CodeCommentInput {
+//
+// The second return value is the anchored block's id ("" when the finding
+// didn't anchor to a block) — codeWarningWorkflow needs it to know which
+// block's approval to retract (see revokeApprovalForWarning).
+func anchoredWarning(dataDir string, pr int, blocks []Block, f warningFinding) (CodeCommentInput, string) {
 	in := CodeCommentInput{
 		PR: pr, File: f.File, Line: f.Line, Author: warningAuthor,
 		Body: f.Text, Source: "ai", Local: true, RowStart: -1, RowEnd: -1,
@@ -145,7 +150,7 @@ func anchoredWarning(dataDir string, pr int, blocks []Block, f warningFinding) C
 	b, ok := blockForLine(baseDir, headDir, blocks, f.File, f.Line, "RIGHT")
 	if !ok {
 		in.Kind = "ai_warning"
-		return in
+		return in, ""
 	}
 	in.Label = b.Label
 	in.Gran = "line"
@@ -153,5 +158,47 @@ func anchoredWarning(dataDir string, pr int, blocks []Block, f warningFinding) C
 		in.RowStart = row
 		in.RowEnd = row
 	}
-	return in
+	return in, b.ID()
+}
+
+// removeApprovalRowRange drops every row in [rowStart, rowEnd] from rows, plus
+// any calls entry ("<row>:<segStart>") whose row falls in that range —
+// mirroring the frontend's revokeApprovalForComment (home.mjs) for the
+// group/line case (a code_warning finding always anchors at line granularity,
+// never call). changed reports whether anything was actually removed, so the
+// caller can skip a no-op Signal.
+func removeApprovalRowRange(rows []int, calls []string, rowStart, rowEnd int) (newRows []int, newCalls []string, changed bool) {
+	newRows = make([]int, 0, len(rows))
+	for _, r := range rows {
+		if r >= rowStart && r <= rowEnd {
+			changed = true
+			continue
+		}
+		newRows = append(newRows, r)
+	}
+	newCalls = make([]string, 0, len(calls))
+	for _, c := range calls {
+		row, ok := callRowOf(c)
+		if ok && row >= rowStart && row <= rowEnd {
+			changed = true
+			continue
+		}
+		newCalls = append(newCalls, c)
+	}
+	return newRows, newCalls, changed
+}
+
+// callRowOf parses the row prefix out of a "<row>:<segStart>" call-segment
+// key. ok is false for a malformed key (kept as-is by the caller rather than
+// silently dropped).
+func callRowOf(key string) (int, bool) {
+	idx := strings.IndexByte(key, ':')
+	if idx < 0 {
+		return 0, false
+	}
+	row, err := strconv.Atoi(key[:idx])
+	if err != nil {
+		return 0, false
+	}
+	return row, true
 }

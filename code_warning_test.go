@@ -3,14 +3,20 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/reindert-vetter/tembed"
+	"slash/modules/approvals"
+	"slash/modules/autowarn"
 	"slash/modules/claude"
 	"slash/modules/comments"
 	"slash/modules/github"
+	"slash/modules/relations"
+	"slash/modules/warnrevoke"
 )
 
 // warningFixtureBody is the fixture PHP file both worktrees carry: a single
@@ -72,6 +78,38 @@ func warningManager(t *testing.T, dataDir string, fake *claude.Fake) (*TaskManag
 	engine := tembed.New(tembed.NewMemoryStore())
 	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
 	return m, cs, gh
+}
+
+// warningManagerWithApprovals is warningManager plus a real approvals module
+// (constructor param) and a real warnrevoke module (post-construction, like
+// production wiring) — for exercising code_warning's approval-revoke path.
+func warningManagerWithApprovals(t *testing.T, dataDir string, fake *claude.Fake) (*TaskManager, *comments.Module, *approvals.Module) {
+	t.Helper()
+	cs, err := comments.Open(filepath.Join(dataDir, "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+	ap, err := approvals.Open(filepath.Join(dataDir, "approvals.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ap.Close() })
+	wr, err := warnrevoke.Open(filepath.Join(dataDir, "warnrevoke.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { wr.Close() })
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	gh := &github.Fake{}
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, ap, nil, nil, fake, nil, db, dataDir, "test/repo")
+	m.warnrevoke = wr
+	return m, cs, ap
 }
 
 // A Sonnet finding on a line inside the block's range anchors to it: a
@@ -267,6 +305,253 @@ func TestCodeWarningCapsFindingsPerBlock(t *testing.T) {
 	if !got["a"] || !got["b"] {
 		t.Fatalf("kept findings = %+v, want the two lowest-line findings (a, b)", list)
 	}
+}
+
+// A code_warning finding retracts the reviewer's approval of the row it
+// anchors to — but only the FIRST time that (pr, block, row) triggers a
+// warning. A re-run whose finding lands on the SAME row again (e.g. a trivial
+// re-ingest that doesn't change the underlying issue) must not undo an
+// approval the reviewer gave again after already seeing the warning once.
+func TestCodeWarningRevokesApprovalOnlyOnce(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 36
+	writeWarningFixtureRepo(t, dataDir, pr)
+	block := warningFixtureBlock(pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{block}); err != nil {
+		t.Fatal(err)
+	}
+
+	baseDir, headDir := worktreeDirs(dataDir, pr)
+	row, ok := rowForLine(baseDir, headDir, block, 6, "RIGHT")
+	if !ok {
+		t.Fatal("rowForLine: could not resolve line 6 to a row")
+	}
+	blockID := block.ID()
+
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelOpus, `[{"file":"app/Services/OrderService.php","line":6,"text":"Hardcoded 1.21 VAT rate."}]`)
+	m, cs, ap := warningManagerWithApprovals(t, dataDir, fake)
+	ctx := context.Background()
+
+	// The reviewer had already approved this row before the risk check ever ran.
+	if err := ap.Replace(ctx, pr, blockID, []int{row}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run 1: the finding anchors to the already-approved row — this is the
+	// FIRST time this (pr, block, row) triggers a warning, so the approval is
+	// retracted.
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := cs.List(ctx, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("after run 1: comments = %d, want 1: %+v", len(list), list)
+	}
+	approvals1, err := ap.List(ctx, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(approvals1) != 0 && (len(approvals1) != 1 || len(approvals1[0].Rows) != 0) {
+		t.Fatalf("after run 1: approvals = %+v, want the row retracted", approvals1)
+	}
+
+	// The reviewer looks at the (still open) warning, decides the code is fine
+	// after all, and approves the row again.
+	if err := ap.Replace(ctx, pr, blockID, []int{row}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run 2: the SAME finding recurs on the SAME row (e.g. a trivial re-ingest)
+	// — this (pr, block, row) already triggered a warning once, so the
+	// reviewer's fresh approval must survive.
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	approvals2, err := ap.List(ctx, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, a := range approvals2 {
+		if a.BlockID != blockID {
+			continue
+		}
+		found = true
+		hasRow := false
+		for _, r := range a.Rows {
+			if r == row {
+				hasRow = true
+			}
+		}
+		if !hasRow {
+			t.Fatalf("after run 2: row %d was retracted again, want it to survive: %+v", row, a)
+		}
+	}
+	if !found {
+		t.Fatalf("after run 2: no approval row for block %q at all: %+v", blockID, approvals2)
+	}
+}
+
+// autoWarnTriggerManager wires a TaskManager for exercising the AUTOMATIC
+// code_warning trigger (autoStartCodeWarning, fired from build_relations —
+// see workflows.go): a real relations module (buildRelations writes to it), a
+// real comments module (supersedeFileWarnings/createWarningComment read/write
+// it), and a real autowarn module (post-construction, mirrors production
+// wiring) so the on/off toggle can be flipped from the test.
+func autoWarnTriggerManager(t *testing.T, dataDir string, fake *claude.Fake) (*TaskManager, *relations.Module) {
+	t.Helper()
+	cs, err := comments.Open(filepath.Join(dataDir, "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+	rel, err := relations.Open(filepath.Join(dataDir, "relations.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rel.Close() })
+	aw, err := autowarn.Open(filepath.Join(dataDir, "autowarn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { aw.Close() })
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), rel, testPRMeta(t), nil, nil, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
+	m.autowarn = aw
+	return m, rel
+}
+
+// codeWarningRunExists polls (the trigger fires from a goroutine, so it isn't
+// necessarily recorded the instant EnsureRelations returns) for up to 2s for a
+// code_warning run whose input names pr.
+func codeWarningRunExists(t *testing.T, m *TaskManager, pr int) bool {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		runs, err := m.engine.Runs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range runs {
+			if r.Workflow != WorkflowCodeWarning {
+				continue
+			}
+			in, err := m.engine.Input(r.ID)
+			if err != nil {
+				continue
+			}
+			var pin CodeWarningInput
+			if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
+				return true
+			}
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The very first build_relations run for a PR (a fresh ingest) automatically
+// starts a code_warning run — no menu click needed.
+func TestBuildRelationsAutoStartsCodeWarning(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 40
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := autoWarnTriggerManager(t, dataDir, claude.NewFake())
+
+	m.EnsureRelations(context.Background(), pr)
+
+	if !codeWarningRunExists(t, m, pr) {
+		t.Fatal("no code_warning run was auto-started after the first build_relations")
+	}
+}
+
+// The reviewer's own on/off toggle (next to the theme button) gates the
+// AUTOMATIC trigger: switched off, a fresh ingest starts no code_warning run.
+func TestBuildRelationsSkipsAutoWarnWhenDisabled(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 41
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := autoWarnTriggerManager(t, dataDir, claude.NewFake())
+	if err := m.autowarn.SetEnabled(context.Background(), m.repo, false); err != nil {
+		t.Fatal(err)
+	}
+
+	m.EnsureRelations(context.Background(), pr)
+
+	if codeWarningRunExists(t, m, pr) {
+		t.Fatal("a code_warning run was auto-started while the toggle is off")
+	}
+}
+
+// A plain "rebuild" (re-ingest without new commits, e.g. a manual
+// "Regenereren") must NOT auto-start a second code_warning run — only the
+// very first build and a genuine delta-refresh (prStatusWorkflow) do.
+func TestRebuildSignalDoesNotAutoStartCodeWarning(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 42
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := autoWarnTriggerManager(t, dataDir, claude.NewFake())
+	ctx := context.Background()
+
+	m.EnsureRelations(ctx, pr) // initial build — auto-starts one code_warning run
+	if !codeWarningRunExists(t, m, pr) {
+		t.Fatal("setup: initial build_relations should have auto-started a code_warning run")
+	}
+	runsBefore, err := m.engine.Runs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	countBefore := countCodeWarningRuns(runsBefore, m, pr)
+
+	m.EnsureRelations(ctx, pr) // already running — this signals SignalRebuild instead
+	// Give any (wrongly fired) goroutine a moment, then compare counts.
+	time.Sleep(200 * time.Millisecond)
+	runsAfter, err := m.engine.Runs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	countAfter := countCodeWarningRuns(runsAfter, m, pr)
+	if countAfter != countBefore {
+		t.Fatalf("code_warning runs for pr %d: before=%d after a rebuild signal=%d, want unchanged", pr, countBefore, countAfter)
+	}
+}
+
+func countCodeWarningRuns(runs []tembed.RunRecord, m *TaskManager, pr int) int {
+	n := 0
+	for _, r := range runs {
+		if r.Workflow != WorkflowCodeWarning {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var pin CodeWarningInput
+		if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
+			n++
+		}
+	}
+	return n
 }
 
 // mustOpenGraphDB opens (or re-opens) the graph DB under dataDir — a thin
