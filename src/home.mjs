@@ -1278,6 +1278,19 @@ async function loadBlocks() {
   // that treatment; a restored sel keeps going through the existing
   // reveal/pin path untouched.
   const hadSelParam = hadInitialSelParam
+  // A genuinely fresh open (no ?sel= at all — a bare /pr/<id> link, "Open
+  // review tree"/"Generate" from the PR overview without a remembered
+  // position, a freshly generated PR) lands on stop 1 (the PR-description
+  // column) instead of the block-index default-unapproved pick below: the
+  // reviewer's first view of a PR they haven't navigated in yet should be the
+  // summary, not a block. Set eagerly (before the approvals/blockstats await
+  // below) so it takes effect immediately, not once loading finishes. A
+  // restored `sel` (hadSelParam true) never touches this — it keeps landing
+  // straight on the restored block, as before. → still unconditionally steps
+  // from stop 1 into the block-index regardless of load state (see
+  // onKeydown's showDescription branch), so this doesn't newly depend on the
+  // tree having finished loading.
+  if (!hadSelParam) state.showDescription = true
   applyBlockRefRestore()
   // pristineSelectedId/pristineToggleFocused snapshot the selection right
   // after the synchronous load steps above, so applyDefaultUnapprovedSelection

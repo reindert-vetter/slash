@@ -23,7 +23,14 @@ code).
 1. **Description** (`prInfoCard`/`state.showDescription`) — PR title/summary/
    description plus the **Taken** block stacked below it (see
    `.claude/docs/detail-layout.md`). **Hidden by default** (the column then
-   takes up no width at all) and the leftmost stop.
+   takes up no width at all) and the leftmost stop — **except** on a
+   genuinely fresh open (no `?sel=` at all: a bare `/pr/<id>` link, "Open
+   review tree" from the PR overview without a remembered position, a just-
+   generated PR), where `loadBlocks` sets it `true` so the reviewer's first
+   view is the summary, not a block in the index (see `hadSelParam`/
+   `hadInitialSelParam` in `home.mjs`, and `.claude/docs/pages-and-routing.md`).
+   A restored `?sel=` (refresh, shared link, the `/pr-overview` round trip)
+   always skips this and lands straight on the restored block, as before.
 2. **PR block index** (`data-testid=pr-index`, the sidebar,
    `state.mode==='list'`) — shifts right as soon as stop 1 is open, so the
    description really sits to its left (see `.claude/docs/detail-layout.md`).

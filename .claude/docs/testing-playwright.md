@@ -202,6 +202,18 @@ is baked into the JSON): such a spec must clean up after itself in-test, the way
   before creating the host element — a context torn down at the import hasn't
   mounted anything yet, so a retry can't leave a duplicate host behind (which
   would trip strict-mode locators).
+- **`page.goto` auto-skips stop 1 on a fresh `/pr/<id>` open.** A genuinely
+  fresh open (no `?sel=` at all) now lands on stop 1 (the PR-description
+  column, `state.showDescription`) instead of the block-index — see
+  `.claude/docs/pages-and-routing.md`'s "A fresh `/pr/<id>` open lands on the
+  PR-description column" and `loadBlocks`' `!hadSelParam` branch in
+  `home.mjs`. Almost the whole suite predates that and drives the keyboard
+  assuming the block-index already owns it right after `page.goto()`, so the
+  `page` fixture in `_fixtures.mjs` wraps `goto()` to press the same → a
+  reviewer would to skip past stop 1 — nothing else in a spec has to change. A
+  spec that means to exercise stop 1 itself (or the fresh-open behaviour
+  itself, see `tests/fresh-open-shows-description.spec.mjs`) opts out with
+  `page.goto(url, { keepDescription: true })`.
 - **Open a `/pr/<id>` spec with `await leaveSearchBox(page)`** (exported from
   `tests/_fixtures.mjs`), never a bare `page.keyboard.press('Escape')`.
   `home.mjs` focuses the sidebar search box from a

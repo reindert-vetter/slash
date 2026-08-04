@@ -490,6 +490,62 @@ export const test = base.extend({
         })
       }
     })
+
+    // A genuinely fresh /pr/<id> open (no ?sel= at all) now lands on stop 1
+    // (the PR-description column, state.showDescription) instead of the
+    // block-index — see loadBlocks' `!hadSelParam` branch in home.mjs. Almost
+    // the entire suite predates that and drives the keyboard assuming the
+    // block-index already owns it right after page.goto(), so wrap goto()
+    // here — the ONE place nearly every spec funnels through — to press the
+    // same → a reviewer would to skip past stop 1, restoring the pre-existing
+    // default for every caller. A spec that means to exercise stop 1 itself
+    // (or a fresh-open regression test) passes `{ keepDescription: true }`,
+    // stripped before it reaches the real goto (Playwright's own goto()
+    // rejects unknown options).
+    const origGoto = page.goto.bind(page)
+    page.goto = async (url, options = {}) => {
+      const { keepDescription, ...gotoOptions } = options
+      const result = await origGoto(url, gotoOptions)
+      if (!keepDescription) {
+        let path, search
+        try {
+          const u = new URL(page.url())
+          path = u.pathname
+          search = u.searchParams
+        } catch {
+          path = ''
+          search = new URLSearchParams()
+        }
+        if (/^\/pr\/\d+/.test(path) && !search.has('sel')) {
+          const info = page.getByTestId('pr-info-column')
+          const appeared = await info
+            .waitFor({ state: 'visible', timeout: 5000 })
+            .then(() => true)
+            .catch(() => false)
+          if (appeared) {
+            // The block-search box grabs the keyboard ambiently on load (a
+            // requestAnimationFrame right after mount, see leaveSearchBox's own
+            // comment) — while it's focused, ArrowRight is handled by the
+            // search-box branch of onKeydown (enters the diff), not the
+            // earlier-in-the-chain showDescription branch, so it must be left
+            // first. Same two-rAF-then-Escape idiom as leaveSearchBox, inlined
+            // here to avoid a circular import (leaveSearchBox lives in this
+            // same module).
+            const box = page.locator('#block-search')
+            if (await box.count()) {
+              await page.evaluate(
+                () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+              )
+              await page.keyboard.press('Escape')
+            }
+            await page.keyboard.press('ArrowRight')
+            await info.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {})
+          }
+        }
+      }
+      return result
+    }
+
     await use(page)
   },
 

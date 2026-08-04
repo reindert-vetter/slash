@@ -36,6 +36,28 @@ All three are static HTML shells with no build step; the Go server (`api.go`,
 - **`/`** redirects (302) to `/pr-overview`; every other path (`/src/*`,
   `/overview.html`, …) is served statically by the `http.FileServer`.
 
+## A fresh `/pr/<id>` open lands on the PR-description column
+
+A genuinely fresh open — **no `?sel=` at all**: a bare `/pr/<id>` link, "Open
+review tree"/"Generate" from the PR overview without a remembered position, a
+just-generated PR — lands the reviewer on stop 1 (`prInfoCard`/
+`state.showDescription`, see `.claude/docs/keyboard-navigation.md`) instead of
+the block-index: `loadBlocks` (`home.mjs`) sets `state.showDescription = true`
+whenever `!hadSelParam` (the same flag that gates
+`applyDefaultUnapprovedSelection` below it), set eagerly — before the
+approvals/blockstats await — so it takes effect immediately rather than once
+loading finishes. → still unconditionally steps from stop 1 into the
+block-index regardless of load state, so this doesn't newly depend on the
+tree having finished loading. A **restored** `?sel=` (a refresh, a shared
+link, or the `/pr-overview` round trip described below) is entirely
+unaffected and keeps landing straight on the restored block, as before — the
+reviewer only sees the summary first on a PR they haven't navigated in yet.
+
+Test harness note: this changed the default nearly every existing Playwright
+spec assumed (`page.goto('/pr/<id>')` with no `sel`, then driving the
+keyboard as if the block-index already owned it) — see the `page.goto`
+wrapper in `.claude/docs/testing-playwright.md`.
+
 ## `?pr=<id>` auto-selects the row you came from
 
 From `/pr/<id>`, the **`←` nav-chain exit** (stop 1, `state.showDescription`,
