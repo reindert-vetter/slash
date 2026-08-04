@@ -741,6 +741,39 @@ the frontend/palette half.
   the full two-Enter confirm flow and asserts the transcript is empty
   afterwards.
 
+## A brand-new comment ALWAYS gets its own Claude block, even on an already-commented line
+
+`toNew()`/`ensureClaudeAnchorForNew()` used to decide "is there already an
+anchor for this draft" via `chatAnchorComment()`/`selComment()` — which
+resolve to whatever comment is currently selected in the unit's scoped list,
+non-null as soon as the unit carries **any** existing comment, whether or not
+it has anything to do with the brand-new draft being composed. That silently
+made a second "Comment op deze regel" on an already-commented line keep
+showing — and appending to — the FIRST comment's Claude conversation instead
+of starting a wholly separate one (explicit reviewer request: "een nieuwe
+comment per regel moet een hele nieuwe comment + claude blok worden, ook als
+er al een comment bestaat").
+
+Fixed by decoupling the two questions: `toNew()` now **unconditionally**
+resets `cc` (the visible chat state) to blank/idle on every open — a fresh
+draft never inherits whatever conversation happened to be on screen before.
+`ensureClaudeAnchorForNew()`'s own "already anchored" check no longer reads
+`chatAnchorComment()` at all — it compares `claudeAutoAnchor.draftKey` against
+`draftKeyFor(t)` instead, which is only ever set by this same function once it
+has actually created THIS draft's own backing comment; an unrelated existing
+comment on the same unit no longer matches. `chatAnchorComment()` itself is
+unchanged and still correct everywhere else (`enterClaudeChat`,
+`applyRelRestore`'s `'claude'` branch, `commentCard`'s "stays expanded" check)
+— those only ever run while `cs.focus` genuinely sits on an existing
+comment/thread/claude cursor, never while composing `'new'`.
+
+Test: "a new comment on an already-commented line gets its own comment +
+Claude block, not the existing one" in `tests/claude-chat-panel.spec.mjs` —
+seeds one comment, gives its conversation real turns, opens a SECOND, brand-new
+"Comment op deze regel" on the same line, and asserts the Claude column shows
+an empty transcript and a send creates a distinct second comment, leaving the
+first one's conversation untouched.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat

@@ -318,6 +318,105 @@ test('composing a new comment: the Claude column shows before it is placed, and 
   }
 })
 
+// A brand-new "Comment op deze regel" on a unit that ALREADY has a comment
+// (with its own Claude conversation, complete with prior turns) must get its
+// own, wholly separate comment + Claude block — never silently continue the
+// existing conversation. Regression test for a bug where toNew()/
+// ensureClaudeAnchorForNew (RelatedPanel.mjs) resolved "is there already an
+// anchor here" via chatAnchorComment()/selComment(), which happily matched
+// ANY existing comment on the unit, not just one this draft itself created —
+// so opening a second, brand-new comment on an already-commented line kept
+// showing (and appending to) the FIRST comment's Claude transcript instead of
+// starting fresh. Uses PR 12903 (real ingested blocks, see the tests above).
+test('a new comment on an already-commented line gets its own comment + Claude block, not the existing one', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await page.locator('[data-idx="1"]').click()
+  const card = page.getByTestId('block-column').locator('article').first()
+  await expect(card).toBeVisible()
+  const label = (await card.locator('h2').first().innerText()).trim()
+  const file = (await card.locator('.font-mono.text-slate-500').first().innerText()).trim().split(':')[0]
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: { pr: 12903, file, line: 1, author: 'reviewer', body: 'kan dit anders?', label, rowStart: -1, rowEnd: -1 },
+  })
+  const runId1 = (await start.json()).runId
+  expect(runId1).toBeTruthy()
+  await expect
+    .poll(async () => {
+      const list = await (await page.request.get('/api/comments?pr=12903')).json()
+      return list.some((x) => x.runId === runId1)
+    })
+    .toBe(true)
+
+  let runId2 = null
+  try {
+    // Reload so the first comment is present from the start.
+    await page.goto('/pr/12903')
+    await page.locator('[data-idx="1"]').click()
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowRight') // list -> diff
+    await page.keyboard.press('ArrowRight') // diff -> the (only) comment conversation
+    await page.keyboard.press('ArrowRight') // comment -> claude
+
+    // Give the FIRST comment's own conversation some real history — the exact
+    // ingredient the bug ignored.
+    const composer = page.getByTestId('claude-chat-compose')
+    await expect(composer).toBeFocused()
+    await composer.fill('Kun je hier iets over zeggen?')
+    await composer.press('Enter')
+    await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+    await expect(page.getByTestId('claude-message')).toHaveCount(2)
+
+    // Back to the diff, then start a wholly new comment on the same line.
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Enter') // block command palette
+    await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
+    const newComposer = page.getByTestId('comment-compose')
+    await expect(newComposer).toBeFocused()
+
+    // The Claude column is visible right away (per "Optimistically visible
+    // while composing a brand-new comment") — but it must show a FRESH, EMPTY
+    // transcript, not the first comment's 2 existing messages.
+    await expect(page.getByTestId('claude-chat-column')).toBeVisible()
+    await expect(page.getByTestId('claude-chat-empty')).toBeVisible()
+    await expect(page.getByTestId('claude-message')).toHaveCount(0)
+
+    // Sending a message from here must create a SECOND, brand-new backing
+    // comment — not reply onto the first one's thread.
+    const claudeComposer = page.getByTestId('claude-chat-compose')
+    await claudeComposer.fill('Nog een vraag over deze regel')
+    const [createRes] = await Promise.all([
+      page.waitForResponse(
+        (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
+      ),
+      claudeComposer.press('Enter'),
+    ])
+    runId2 = (await createRes.json()).runId
+    expect(runId2).toBeTruthy()
+    expect(runId2).not.toBe(runId1)
+
+    await expect(page.getByTestId('comment-item')).toHaveCount(2)
+
+    // The first comment's OWN conversation still shows exactly its 2
+    // original messages — untouched by the second draft's send.
+    await page.getByTestId('comment-item').filter({ hasText: 'kan dit anders?' }).click()
+    await page.keyboard.press('ArrowRight') // comment -> claude
+    await expect(page.getByTestId('claude-message')).toHaveCount(2)
+    await expect(page.getByTestId('claude-message-body').last()).not.toContainText('Nog een vraag')
+  } finally {
+    await page.request.post('/api/workflows/' + runId1 + '/signals/delete', {
+      data: { author: 'reviewer' },
+    })
+    if (runId2) {
+      await page.request.post('/api/workflows/' + runId2 + '/signals/delete', {
+        data: { author: 'reviewer' },
+      })
+    }
+  }
+})
+
 // A message with `kind: 'action'` (chat.KindAction — Claude placed/resolved a
 // comment on the left thread on the reviewer's request, Phase 4, see
 // chat_workflow.go's applyChatCommentAction) and `kind: 'error'` (that same

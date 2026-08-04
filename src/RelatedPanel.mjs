@@ -663,19 +663,22 @@ function toNew(commentTargetFn) {
   focusEl('[data-testid=comment-compose]')
   const draft = composeDrafts.get(composeDraftKey)
   if (draft) prefillField('[data-testid=comment-compose]', draft)
-  // A brand-new composer with no comment on THIS unit yet must not keep
-  // showing a STALE Claude conversation left over from whatever was open
-  // before (a different unit's transcript/runId — which "Commit wijziging"
-  // would otherwise silently act on). Only reset when there is genuinely
-  // nothing to anchor to yet; an existing conversation on this exact unit
-  // (chatAnchorComment) keeps showing normally.
-  if (!chatAnchorComment()) {
-    cc.commentId = null
-    cc.messages = []
-    cc.runId = null
-    cc.status = 'idle'
-    cc.progress = null
-  }
+  // A brand-new, not-yet-placed comment always starts its own fresh Claude
+  // block — always reset, never keep showing whatever conversation happened
+  // to be open before. That includes an EXISTING comment/conversation
+  // already sitting on this exact unit: chatAnchorComment()/selComment()
+  // would happily return that unrelated thread too (it doesn't know "new" is
+  // being composed), which used to make this brand-new draft silently
+  // piggyback the old conversation instead of getting its own — explicit
+  // reviewer request: a new comment on a line is a wholly new comment +
+  // Claude block, even when one already exists. ensureClaudeAnchorForNew
+  // lazily creates THIS draft's own backing comment the moment the reviewer
+  // actually sends a Claude message from here.
+  cc.commentId = null
+  cc.messages = []
+  cc.runId = null
+  cc.status = 'idle'
+  cc.progress = null
 }
 
 // `focusInput` defaults to true for every existing caller (a click or an
@@ -2212,14 +2215,24 @@ const CLAUDE_ANCHOR_PLACEHOLDER = '(Nog geen eigen comment getypt — gesprek me
 // confirmed any public-facing text yet), reusing whatever is already typed in
 // the "Comment op deze regel" field as the body (CLAUDE_ANCHOR_PLACEHOLDER if
 // that field is still empty). Returns the created comment, or null if there
-// is nothing to anchor to, or an anchor already exists (chatAnchorComment) —
-// the ordinary, already-anchored path then applies unchanged.
+// is nothing to anchor to, or THIS EXACT draft already lazily created its own
+// anchor (claudeAutoAnchor, set at the bottom of this function once it runs)
+// — the ordinary, already-anchored path then applies unchanged.
+//
+// Deliberately NOT `chatAnchorComment()`/`selComment()` for that "already
+// anchored" check (as it used to be): those resolve to whatever comment is
+// currently selected in the scoped list, which is non-null as soon as the
+// unit carries ANY existing comment — even one wholly unrelated to this
+// brand-new draft. That wrongly skipped creating this draft's own anchor and
+// made it silently continue/reply onto that unrelated conversation instead of
+// getting a comment + Claude block of its own. `claudeAutoAnchor`'s own
+// draftKey match is precise: it is only ever set here, for this draft.
 async function ensureClaudeAnchorForNew(state, commentTarget) {
   if (cs.focus !== 'new') return null
-  if (chatAnchorComment()) return null
+  const t = warningOverride ? warningOverride.target : (commentTarget && commentTarget()) || null
+  if (claudeAutoAnchor && claudeAutoAnchor.draftKey === draftKeyFor(t)) return null
   const b = state && state.blocks && state.blocks[state.selected]
   if (!b || b.kind === 'comment') return null
-  const t = warningOverride ? warningOverride.target : (commentTarget && commentTarget()) || null
   const el = document.querySelector('[data-testid=comment-compose]')
   const typed = el && el.value.trim()
   const ok = await createComment({
