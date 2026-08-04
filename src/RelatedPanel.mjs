@@ -986,6 +986,12 @@ const cc = reactive({
   // GET /api/chat/progress; never persisted anywhere, so it is null whenever
   // no turn is running. The saved transcript (cc.messages) stays the truth.
   progress: null,
+  // queued holds the reviewer's NEXT turns, typed while an earlier one is
+  // still running ("doorpraten", like the Claude CLI): each entry is
+  // {id, body, context, commentId, runId} and is sent as its own ordinary
+  // "message" Signal once the turn before it returns (see queueClaudeMessage/
+  // drainClaudeQueue). Reactive and only ever REASSIGNED, never mutated.
+  queued: [],
   // tick exists purely so the "Claude denkt… 12s" counter re-renders once a
   // second while a turn runs — a reactive heartbeat, not data.
   tick: 0,
@@ -1206,16 +1212,25 @@ function applyChatProgress(p) {
 // the claude CLI sees (buildChatPrompt); `text`/`trimmed` is what gets saved
 // and shown, unchanged. See claudeContextBlock's doc comment for who builds it
 // and why only the conversation's first turn does.
-async function sendClaudeMessage(text, action = '', context = '') {
+//
+// `target` (optional) pins the conversation this turn belongs to
+// ({runId, commentId}) instead of reading the live `cc.*`. Only
+// drainClaudeQueue passes it: a queued turn is sent minutes after it was
+// typed, by which time the reviewer may already be looking at another
+// conversation — it must still land on the one it was written for, and only
+// refetch the transcript when that is also the one currently in view.
+async function sendClaudeMessage(text, action = '', context = '', target = null) {
   const trimmed = (text || '').trim()
   // 'commit'/'clear' both need no typed text — commit pushes whatever Claude
   // already changed, clear wipes the conversation; neither asks it anything.
   const needsNoText = action === 'commit' || action === 'clear'
-  if (!cc.runId) return
+  const runId = target ? target.runId : cc.runId
+  const commentId = target ? target.commentId : cc.commentId
+  if (!runId) return
   if (!needsNoText && !trimmed) return
   cc.busy = true
   try {
-    await fetch('/api/workflows/' + encodeURIComponent(cc.runId) + '/signals/message', {
+    await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1225,11 +1240,64 @@ async function sendClaudeMessage(text, action = '', context = '') {
         context: context || undefined,
       }),
     })
-    await loadChatMessages(cc.commentId)
-    clearFinishedChatProgress()
+    if (commentId === cc.commentId) {
+      await loadChatMessages(commentId)
+      clearFinishedChatProgress()
+    }
   } finally {
     cc.busy = false
+    // Whatever the reviewer typed meanwhile goes out now, one turn at a time.
+    drainClaudeQueue()
   }
+}
+
+// queuedIdSeq numbers the client-side queue entries. A queued turn has no
+// Signal id yet (the server mints that, see the message handler in
+// tasks_api.go) but its bubble still needs a stable arrow.js key, so this is
+// purely a render key — never sent anywhere.
+let queuedIdSeq = 0
+
+// queueClaudeMessage is the one entry point for a reviewer turn from the
+// composer: send it straight away when nothing is running, otherwise put it in
+// cc.queued and let drainClaudeQueue pick it up after the running turn — the
+// Claude CLI's own "keep typing while it works" behaviour. The composer is
+// therefore no longer disabled while a turn runs (ClaudeChat.mjs), and a
+// message typed during one is never silently swallowed.
+//
+// Deliberately NOT merged into the running turn: the workflow's own
+// WaitSignal loop (chat_workflow.go) is what makes each turn a separate,
+// replayable step, and its pendingQuestionID bookkeeping assumes one reviewer
+// message per turn. Each queued entry keeps the runId/commentId it was typed
+// against so a conversation switch can't misroute it.
+//
+// Durability trade-off, recorded in claude-chat-panel.md: the queued Signal
+// only reaches the workflow history once the running turn finishes (tembed's
+// SignalWorkflow holds the run lock while it drives the turn inline), so a
+// queued message lives client-side until then and is lost if the server
+// restarts mid-turn. The reviewer sees it sitting in the queue the whole time.
+function queueClaudeMessage(text, context = '') {
+  const trimmed = (text || '').trim()
+  if (!trimmed) return Promise.resolve()
+  if (!cc.busy) return sendClaudeMessage(trimmed, '', context)
+  if (!cc.runId) return Promise.resolve()
+  queuedIdSeq += 1
+  cc.queued = cc.queued.concat([
+    { id: 'q' + queuedIdSeq, body: trimmed, context, commentId: cc.commentId, runId: cc.runId },
+  ])
+  return Promise.resolve()
+}
+
+// drainClaudeQueue sends the oldest queued turn, if any — called from
+// sendClaudeMessage's own `finally`, so the queue drains itself one turn at a
+// time (each send ends in another drain). Guarded on cc.busy so two overlapping
+// drains can never send the same entry twice; the entry is removed from the
+// queue BEFORE it is sent, which is also what makes its "in de wachtrij"
+// bubble give way to the ordinary user bubble the send itself produces.
+function drainClaudeQueue() {
+  if (cc.busy || !cc.queued.length) return
+  const [next, ...rest] = cc.queued
+  cc.queued = rest
+  sendClaudeMessage(next.body, '', next.context, { runId: next.runId, commentId: next.commentId })
 }
 
 // clearClaudeChat sends the "clear" ChatMessageSignal (chatActionClear in
@@ -1636,6 +1704,10 @@ function claudeChatView() {
     claudePos: () => cs.claudePos,
     // The live turn: null when nothing is running. See cc.progress.
     progress: () => cc.progress,
+    // The reviewer's own not-yet-sent turns, oldest first — scoped to the
+    // conversation in view, since an entry keeps the one it was typed against
+    // (see queueClaudeMessage).
+    queued: () => cc.queued.filter((q) => q.commentId === cc.commentId),
     // Seconds since the running turn started. cc.tick is read purely to
     // register the reactive dependency that makes this re-render every second
     // (the value itself is irrelevant — the real number comes from the clock).
@@ -1683,7 +1755,17 @@ function commentFooterText() {
 // above Onderliggende code (see .claude/docs/comments-panel.md).
 export function hasCommentClaudeFooter() {
   const view = claudeChatView()
-  return !!commentFooterText() || view.busy() || !!view.progress()
+  return !!commentFooterText() || view.busy() || !!view.progress() || view.queued().length > 0
+}
+
+// claudeQueueNote — the Claude half's queue suffix ("· nog 2 berichten in de
+// wachtrij"): what the reviewer typed ahead while a turn was running, in words
+// (never a colour or a bare count badge, per the colourblind rule). '' when
+// nothing is waiting.
+function claudeQueueNote() {
+  const n = claudeChatView().queued().length
+  if (n === 0) return ''
+  return ' · nog ' + n + (n === 1 ? ' bericht' : ' berichten') + ' in de wachtrij'
 }
 
 // CommentClaudeFooter — ONE shared status line below both the comment and
@@ -1700,7 +1782,7 @@ export function hasCommentClaudeFooter() {
 // dot claude-chat-thinking already carried.
 export function CommentClaudeFooter() {
   const view = claudeChatView()
-  const claudeActive = () => view.busy() || !!view.progress()
+  const claudeActive = () => view.busy() || !!view.progress() || view.queued().length > 0
   return html`
     <div class="contents">
       ${() =>
@@ -1722,7 +1804,7 @@ export function CommentClaudeFooter() {
                     ? html`<span class="flex items-center gap-1.5" data-testid="comment-claude-footer-claude">
                         <span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"></span>
                         <span class="truncate" data-testid="claude-chat-status">
-                          ${() => claudeStatusText(view.progress(), view.elapsed())}
+                          ${() => claudeStatusText(view.progress(), view.elapsed()) + claudeQueueNote()}
                         </span>
                       </span>`
                     : ''}
@@ -2587,6 +2669,15 @@ async function ensureClaudeAnchorForNew(state, commentTarget) {
 // anchor already exists, or there's nothing to anchor to) falls straight
 // through to the plain send.
 async function sendClaudeMessageFromNew(state, commentTarget, text, action) {
+  // A turn typed while an earlier one is still running only gets queued (see
+  // queueClaudeMessage) — no anchor step needed, since a running turn means
+  // this conversation is already anchored. Placed before the anchor step so
+  // "doorpraten" never triggers a second lazy comment creation.
+  // No selection context on a queued turn: a running turn means this is never
+  // the conversation's FIRST turn, which is the only one that carries one
+  // (claudeContextBlock) — and it would go stale anyway by the time this is
+  // actually sent.
+  if (cc.busy && !action) return queueClaudeMessage(text)
   const c = await ensureClaudeAnchorForNew(state, commentTarget)
   if (c) await ensureAndLoadChat(state.pr, c.id)
   await sendClaudeMessage(text, action, claudeContextBlock(commentTarget))

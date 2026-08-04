@@ -593,6 +593,10 @@ test('Claude chat: an action turn and an error turn each get their own badge, no
       progress: () => null,
       elapsed: () => 0,
       claudePos: () => 0,
+      // Part of the render contract since "doorpraten" landed (see
+      // claudeChatView in RelatedPanel.mjs): the turns typed while an earlier
+      // one is still running. None here.
+      queued: () => [],
     }
     const host = document.createElement('div')
     host.id = 'claude-chat-badge-host'
@@ -622,6 +626,10 @@ test('Claude chat: an action turn and an error turn each get their own badge, no
       progress: () => null,
       elapsed: () => 0,
       claudePos: () => 0,
+      // Part of the render contract since "doorpraten" landed (see
+      // claudeChatView in RelatedPanel.mjs): the turns typed while an earlier
+      // one is still running. None here.
+      queued: () => [],
     }
     const host = document.createElement('div')
     host.id = 'claude-chat-plain-host'
@@ -716,6 +724,10 @@ test('Claude chat composer grows with multi-line content and resets after sendin
       progress: () => null,
       elapsed: () => 0,
       claudePos: () => 0,
+      // Part of the render contract since "doorpraten" landed (see
+      // claudeChatView in RelatedPanel.mjs): the turns typed while an earlier
+      // one is still running. None here.
+      queued: () => [],
     }
     const host = document.createElement('div')
     host.id = 'claude-chat-grow-host'

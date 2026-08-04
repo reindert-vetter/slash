@@ -92,9 +92,11 @@ function claudeMessageBody(msg) {
 // ordinary composer below, the implicit 4th option (see chat_workflow.go's
 // maxChatQuestionOptions). Clicking an option sends it through the SAME
 // onSend callback a typed reply uses — the backend just treats the next
-// "message" Signal's body as the answer to the still-open question. `busy`
-// is a getter (see the file-level doc comment).
-function claudeQuestionOptions(msg, onSend, busy) {
+// "message" Signal's body as the answer to the still-open question. Clicking
+// one while an earlier turn is still running QUEUES it, exactly like a typed
+// message (queueClaudeMessage in RelatedPanel.mjs) — which is why these
+// buttons are no longer disabled while busy.
+function claudeQuestionOptions(msg, onSend) {
   if (msg.kind !== 'question' || msg.answer || !msg.options || !msg.options.length) return ''
   return html`
     <div class="flex flex-wrap gap-1.5 pl-7" data-testid="claude-question-options">
@@ -102,12 +104,9 @@ function claudeQuestionOptions(msg, onSend, busy) {
         html`
           <button
             type="button"
-            class="${() =>
-              'rounded-full border border-indigo-300 dark:border-indigo-500/40 px-2.5 py-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-300 ' +
-              (busy() ? 'cursor-not-allowed opacity-50' : 'hover:bg-indigo-50 dark:hover:bg-indigo-500/15')}"
+            class="rounded-full border border-indigo-300 dark:border-indigo-500/40 px-2.5 py-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-500/15"
             data-testid="claude-question-option"
-            disabled="${() => busy()}"
-            @click="${() => !busy() && onSend(opt)}"
+            @click="${() => onSend(opt)}"
           >
             ${opt}
           </button>
@@ -178,6 +177,42 @@ function claudePartialBubble(view) {
       ></div>
     </div>
   `
+}
+
+// claudeQueuedBubbles — the reviewer's own turns typed while an earlier one is
+// still running ("doorpraten", see queueClaudeMessage in RelatedPanel.mjs).
+// Shown immediately, in the same right-aligned place their real bubble will
+// take, so nothing the reviewer typed ever seems to vanish; the dashed border
+// plus the "wacht" pill (a WORD and a glyph, never colour alone — the
+// colourblind rule in conventions.md) is what distinguishes "still waiting"
+// from "sent". An entry disappears the moment its own turn starts, replaced by
+// the ordinary user bubble the send itself produces.
+//
+// Always returns an ARRAY (empty when nothing is queued) — never a
+// single↔array or template↔string slot, per the two matching pitfalls in
+// arrowjs-pitfalls.md — and every entry is keyed on its stable queue id.
+function claudeQueuedBubbles(view) {
+  return view.queued().map((q) =>
+    html`
+      <div class="flex flex-col items-end gap-0.5" data-testid="claude-queued">
+        <div class="flex items-center gap-2 py-0.5">
+          <span class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">
+            Jij
+          </span>
+          <span
+            class="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+            data-testid="claude-queued-badge"
+            >⏳ in de wachtrij</span
+          >
+        </div>
+        <div
+          class="markdown-body max-w-[92%] rounded-xl border border-dashed border-indigo-300 bg-indigo-50/50 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-600 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-zinc-300"
+          data-testid="claude-queued-body"
+          .innerHTML="${() => renderMarkdown(q.body)}"
+        ></div>
+      </div>
+    `.key('claude-queued:' + q.id),
+  )
 }
 
 // chatKindBadge marks a message whose `kind` carries meaning beyond an
@@ -260,14 +295,14 @@ function chatKindBadge(msg) {
   return ''
 }
 
-// claudeBubble — one turn. `claudePos`/`busy` are getters; `active` marks the
+// claudeBubble — one turn. `claudePos` is a getter; `active` marks the
 // bubble the cursor currently points at (mirrors reactionBubble's own
 // active-highlight rule, counting from the bottom the same way). A `kind:
 // 'error'` turn (a failed Claude call, see chat_workflow.go's
 // runOneClaudeTurn) gets a rose tint instead of the ordinary assistant/own
 // tint, plus chatKindBadge's word+glyph — the tint alone never carries the
 // meaning, per the colorblind rule.
-function claudeBubble(msg, i, total, claudePos, onSend, busy) {
+function claudeBubble(msg, i, total, claudePos, onSend) {
   const mine = msg.role === 'user'
   const isError = msg.kind === 'error'
   return html`
@@ -300,7 +335,7 @@ function claudeBubble(msg, i, total, claudePos, onSend, busy) {
           ? html`<span class="pl-1 text-[11px] text-slate-500 dark:text-zinc-500" data-testid="claude-question-answer"
               >→ ${msg.answer}</span
             >`
-          : claudeQuestionOptions(msg, onSend, busy)}
+          : claudeQuestionOptions(msg, onSend)}
     </div>
   `
 }
@@ -363,10 +398,11 @@ export function claudeChatColumn(view, callbacks) {
             ]
           }
           return messages.map((m, i) =>
-            claudeBubble(m, i, total, view.claudePos, callbacks.onSend, view.busy).key('claude-msg:' + m.id),
+            claudeBubble(m, i, total, view.claudePos, callbacks.onSend).key('claude-msg:' + m.id),
           )
         }}
         ${() => claudePartialBubble(view)}
+        ${() => claudeQueuedBubbles(view)}
       </div>
       <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
         <textarea
@@ -378,7 +414,11 @@ export function claudeChatColumn(view, callbacks) {
           @keydown="${(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
-              if (!view.busy() && e.target.value.trim()) {
+              // No view.busy() gate any more: a turn typed while an earlier one
+              // still runs is QUEUED instead of dropped (queueClaudeMessage in
+              // RelatedPanel.mjs), like the Claude CLI. Shift+Enter is left
+              // untouched above so it inserts a newline.
+              if (e.target.value.trim()) {
                 callbacks.onSend(e.target.value)
                 e.target.value = ''
                 resetTextareaHeight(e.target)
@@ -387,11 +427,8 @@ export function claudeChatColumn(view, callbacks) {
           }}"
         ></textarea>
         <button
-          class="${() =>
-            'flex min-h-[2.25rem] shrink-0 items-center justify-center rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
-            (view.busy() ? 'cursor-not-allowed opacity-60' : 'hover:bg-indigo-600')}"
+          class="flex min-h-[2.25rem] shrink-0 items-center justify-center rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600"
           data-testid="claude-chat-send"
-          disabled="${() => view.busy()}"
           @click="${() => {
             const el = document.querySelector('[data-testid=claude-chat-compose]')
             const text = el && el.value

@@ -748,13 +748,68 @@ never touches it, unlike `"resolve"`) is covered by
 `TestClaudeChatCommentActionDraftsReplyEvenOnTerminalRun` in
 `chat_workflow_test.go`.
 
+## Doorpraten tijdens een lopende turn (de wachtrij)
+
+Like the Claude CLI, the reviewer can **keep typing while a turn is still
+running**. The composer used to be `disabled` for the whole turn (`view.busy()`
+on the textarea's `@keydown`, on `claude-chat-send` and on every question
+option), which meant a message typed meanwhile did nothing at all — the text
+just sat in the field. All three gates are gone.
+
+- **`queueClaudeMessage(text)`** (`RelatedPanel.mjs`) is now the single entry
+  point for a composer turn: nothing running → send straight away; a turn
+  running (`cc.busy`) → append to **`cc.queued`** and return. `cc.queued` is
+  reactive and only ever REASSIGNED, never mutated.
+- **`drainClaudeQueue()`** runs from `sendClaudeMessage`'s own `finally`, so the
+  queue drains itself **one turn at a time**, FIFO — each send ends in another
+  drain. The entry is removed from the queue **before** it is sent, which is
+  what makes its "in de wachtrij" bubble give way to the ordinary user bubble
+  that send produces. Three messages in a row therefore become three separate
+  turns in the order they were typed.
+- **Each entry carries the `runId`/`commentId` it was typed against**, and
+  `sendClaudeMessage` takes an optional `target` that pins those instead of
+  reading the live `cc.*` — a queued turn is sent minutes later, by which time
+  the reviewer may be looking at another conversation. The transcript refetch
+  after such a send only happens when that conversation is also the one in view
+  (`commentId === cc.commentId`), and `claudeChatView().queued()` filters on the
+  same thing so a queued bubble only shows in its own column.
+- **A queued turn is visible immediately** (`claudeQueuedBubbles`,
+  `ClaudeChat.mjs`, `data-testid=claude-queued`): right-aligned like a real own
+  message, dashed border, plus a pill carrying the **word** "in de wachtrij"
+  and a glyph — never colour alone (the colourblind rule in
+  `conventions.md`). The shared footer says how many are waiting
+  (`claudeQueueNote`), which is also why `hasCommentClaudeFooter()` now counts
+  a non-empty queue as "something to report".
+- **A queued turn carries no selection context.** A running turn means this is
+  never the conversation's first turn, and only that one gets a context block
+  (see "Invisible selection context" below); it would be stale by send time
+  anyway.
+- **Deliberately not merged into the running turn.** The workflow's own
+  `WaitSignal` loop (`chat_workflow.go`) is what makes each turn a separate
+  replayable step, and its `pendingQuestionID` bookkeeping assumes one reviewer
+  message per turn.
+
+**No backend change was needed, and that is not a coincidence:** tembed's
+`SignalWorkflow` takes the **per-run lock** and drives the turn inline, so a
+second `POST .../signals/message` simply blocks on that lock, then appends its
+own `EventSignalReceived` and the eternal `for { w.WaitSignal(...) }` loop picks
+it up as the next turn. Ordering and determinism are the engine's, not ours.
+
+**Accepted trade-off — a queued message is not crash-durable.** Because the run
+lock is held for the whole turn, the queued Signal only reaches the workflow
+history *after* the running turn finishes; until then it lives client-side only,
+so a server restart mid-turn loses it (the reviewer does see it sitting in the
+queue the whole time). Making it durable would mean appending the signal event
+outside the run lock — a tembed change, deliberately not done here.
+
 ## The composer is a `<textarea>`, not an `<input>`
 
 `ClaudeChat.mjs`'s composer (`data-testid=claude-chat-compose`) is a
 single-row (`rows="1"`, `resize-none`) `<textarea>`, so a multi-line message
 is possible: plain `Enter` still sends (`@keydown` calls `e.preventDefault()`
-and only then checks `!e.shiftKey`/busy/non-empty before firing
-`callbacks.onSend`), `Shift+Enter` falls through to the textarea's own
+and only then checks `!e.shiftKey`/non-empty before firing
+`callbacks.onSend` — the former `busy` check is gone, see "Doorpraten tijdens
+een lopende turn" above), `Shift+Enter` falls through to the textarea's own
 default behaviour and inserts a newline. Reading/writing its value
 (`el.value`) via `querySelector('[data-testid=claude-chat-compose]')` in the
 "Stuur" click handler is unaffected by the element swap.
