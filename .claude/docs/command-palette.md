@@ -139,9 +139,11 @@ boundary). Filter + fallback both live in `resolveCommands(query)`.
 ## `Enter` — the block palette (`COMMANDS`)
 
 Block actions only: toggle approve, comment on this line (`startComment` from
-`RelatedPanel.mjs`), and **Open GitHub**. Deliberately **no** navigation items
-(step in diff / next / previous) — that's what the arrows and `f`/`d`/`s` are
-for.
+`RelatedPanel.mjs`), **"Chat over deze regel"** (`startClaudeChat` — opens the
+Claude composer directly, with no comment written/placed first; see
+"`Enter` → 'Chat over deze regel'" in `.claude/docs/claude-chat-panel.md`), and
+**Open GitHub**. Deliberately **no** navigation items (step in diff / next /
+previous) — that's what the arrows and `f`/`d`/`s` are for.
 
 At **stop 1** (the description column) there is no block context, so `Enter`
 there opens the `pr` menu instead

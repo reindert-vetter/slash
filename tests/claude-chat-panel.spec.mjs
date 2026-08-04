@@ -393,6 +393,71 @@ test('→ from the still-open new-comment composer reaches Claude directly, with
   await expect(composer).toHaveValue(draftText)
 })
 
+// "Chat over deze regel" (COMMANDS, home.mjs) — chat with Claude about a line
+// right away, with no comment written/placed first. Regression test for two
+// bugs the → path above never actually exercised: (1) the still-open "Comment
+// op deze regel" composer used to unmount the moment cs.focus flipped to
+// 'claude' (a bare `cs.focus === 'new'` toggle in newCommentComposer), leaving
+// the left column blank while the reviewer typed into Claude; (2) sending
+// FROM the Claude composer in this state never created its anchor comment at
+// all (ensureClaudeAnchorForNew's own guard was the same bare
+// `cs.focus === 'new'` check, which no longer holds once the keyboard is
+// actually in 'claude') — cc.runId stayed empty and sendClaudeMessage's own
+// `if (!cc.runId) return` silently swallowed the click. Both are fixed via
+// the shared isNewChatUnanchored() predicate. Uses PR 12903 (real ingested
+// blocks, see the tests above).
+test('"Chat over deze regel" opens the Claude composer directly, keeps the comment column expanded, and a first send still creates the anchor comment', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await leaveSearchBox(page)
+  await page.locator('[data-idx="1"]').click()
+  await page.keyboard.press('ArrowRight') // list -> diff
+
+  await expect(page.getByTestId('comment-item')).toHaveCount(0)
+  await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
+
+  await page.keyboard.press('Enter') // block command palette
+  await page.getByTestId('command-row').filter({ hasText: 'Chat over deze regel' }).click()
+
+  const claudeComposer = page.getByTestId('claude-chat-compose')
+  await expect(claudeComposer).toBeFocused()
+
+  // The still-unplaced "Comment op deze regel" composer stays expanded next
+  // to the Claude column — it must not go blank just because the keyboard
+  // sits in Claude instead of in it.
+  await expect(page.getByTestId('comment-composer')).toBeVisible()
+  await expect(page.getByTestId('comment-item')).toHaveCount(0)
+
+  await claudeComposer.fill('Wat doet deze functie?')
+  const [createRes, firstMsgReq] = await Promise.all([
+    page.waitForResponse(
+      (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
+    ),
+    page.waitForRequest((req) => req.url().includes('/signals/message') && req.method() === 'POST'),
+    claudeComposer.press('Enter'),
+  ])
+  const runId = (await createRes.json()).runId
+  expect(runId).toBeTruthy()
+
+  try {
+    // Sending lazily created the ONE backing comment, same fallback body as
+    // the plain "Comment op deze regel" flow.
+    const item = page.getByTestId('comment-item')
+    await expect(item).toHaveCount(1)
+    await expect(item).toContainText('Nog geen eigen comment getypt')
+    await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+    expect(firstMsgReq.postDataJSON().body).toBe('Wat doet deze functie?')
+  } finally {
+    // Never leave this real, non-mocked comment behind on the shared PR
+    // 12903 fixture (see place-comment-return-focus.spec.mjs).
+    await page.request.post('/api/workflows/' + runId + '/signals/delete', {
+      data: { author: 'reviewer' },
+    })
+  }
+})
+
 // A brand-new "Comment op deze regel" on a unit that ALREADY has a comment
 // (with its own Claude conversation, complete with prior turns) must get its
 // own, wholly separate comment + Claude block — never silently continue the

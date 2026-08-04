@@ -686,11 +686,13 @@ function toNew(commentTargetFn) {
 // composer (see enterClaudeChatFromNew/cc.commentId's role there) WITHOUT
 // resetting cc/warningOverride/claudeAutoAnchor — none of that changed while
 // the reviewer was typing into Claude, only the DOM focus/cs.focus did.
-// newCommentComposer's own contents-root toggle (cs.focus === 'new') means the
-// composer textarea actually UNMOUNTS while cs.focus === 'claude' — so, same
-// as toNew() itself, the draft must be explicitly restored from composeDrafts
-// once it remounts; composeDraftKey is unchanged since the original toNew()
-// call, so this always resolves the SAME draft.
+// newCommentComposer's own contents-root toggle now keys off
+// isNewChatUnanchored(), which stays true across this transition — so the
+// composer textarea stays MOUNTED the whole time (it used to unmount, see
+// "Two bugs the → path never actually exercised" in claude-chat-panel.md).
+// The prefill below is therefore only a harmless belt-and-braces restore, not
+// a genuine remount recovery any more; composeDraftKey is unchanged since the
+// original toNew() call, so it always resolves the SAME draft either way.
 function toNewFocus() {
   cs.focus = 'new'
   focusEl('[data-testid=comment-compose]')
@@ -1450,8 +1452,19 @@ export function isClaudeChatFocused() {
 // toNewFocus) — an already-anchored conversation (reached via the ordinary
 // enterClaudeChat) always has it set, so this branch can never keep a
 // genuinely gone conversation visible.
+//
+// isNewChatUnanchored() names exactly this "'new', or 'claude' with no anchor
+// yet" condition as its own predicate — three call sites need the identical
+// check (this function, ensureClaudeAnchorForNew's own guard below, and
+// newCommentComposer's visibility toggle in this same file) and a bare
+// inline repeat of it drifting out of sync in only one of the three is
+// exactly the shape of bug this fixes (see claude-chat-panel.md's "Comment
+// column stays expanded..." section).
+function isNewChatUnanchored() {
+  return cs.focus === 'new' || (cs.focus === 'claude' && cc.commentId == null)
+}
 export function claudeChatVisible() {
-  return hasVisibleComments() || cs.focus === 'new' || (cs.focus === 'claude' && cc.commentId == null)
+  return hasVisibleComments() || isNewChatUnanchored()
 }
 
 // focusClaudeComposer/scrollClaudeMessageIntoView mirror focusThread/
@@ -2022,6 +2035,22 @@ export function startComment(commentTargetFn) {
   toNew(commentTargetFn)
 }
 
+// startClaudeChat is the "Chat over deze regel" palette command's own entry
+// point (COMMANDS, home.mjs): reviewer request — chat with Claude about a
+// line straight away, without first writing/placing a comment. It reuses
+// startComment's exact setup (toNew: resets cs.focus to 'new', the comment
+// draft state, cc's blank/idle chat state) and then immediately steps the
+// keyboard into the Claude composer via enterClaudeChatFromNew, the same
+// function the still-open "Comment op deze regel" field's own → reaches —
+// so both entry points land in the identical state (an unanchored 'claude'
+// focus, comment column still expanded via isNewChatUnanchored()) and every
+// existing ←/Escape/send behaviour documented for that state applies
+// unchanged.
+export function startClaudeChat(commentTargetFn) {
+  toNew(commentTargetFn)
+  enterClaudeChatFromNew()
+}
+
 // convertWarningToComment opens the "+ Nieuwe comment" composer prefilled
 // with an ANCHORED (kind '') AI finding's own text, anchored on that
 // finding's own file/label/gran/rowStart/rowEnd/code — not the current
@@ -2445,7 +2474,15 @@ const CLAUDE_ANCHOR_PLACEHOLDER = '(Nog geen eigen comment getypt — gesprek me
 // getting a comment + Claude block of its own. `claudeAutoAnchor`'s own
 // draftKey match is precise: it is only ever set here, for this draft.
 async function ensureClaudeAnchorForNew(state, commentTarget) {
-  if (cs.focus !== 'new') return null
+  // isNewChatUnanchored(), not a bare cs.focus === 'new': the reviewer's
+  // first real send often happens FROM the Claude composer itself
+  // (enterClaudeChatFromNew already flipped cs.focus to 'claude' by the time
+  // "Stuur" is clicked), and a bare 'new' check here made that send a silent
+  // no-op — no anchor ever got created, so cc.runId stayed empty and
+  // sendClaudeMessage's own `if (!cc.runId) return` swallowed the click. See
+  // "A send from the Claude composer never created its anchor" in
+  // claude-chat-panel.md.
+  if (!isNewChatUnanchored()) return null
   const t = warningOverride ? warningOverride.target : (commentTarget && commentTarget()) || null
   if (claudeAutoAnchor && claudeAutoAnchor.draftKey === draftKeyFor(t)) return null
   const b = state && state.blocks && state.blocks[state.selected]
@@ -3340,7 +3377,14 @@ function newCommentComposer(state, commentTarget, openCompose) {
   return html`
     <div class="contents">
       ${() =>
-        cs.focus === 'new'
+        // isNewChatUnanchored() (not a bare cs.focus === 'new'): the reviewer
+        // can reach the Claude composer from here (enterClaudeChatFromNew,
+        // → from this very field) before anything is placed, and this
+        // composer must stay expanded/visible the whole time — otherwise the
+        // left column goes blank the moment the keyboard lands in Claude.
+        // See "Comment column stays expanded while chatting on a brand-new
+        // unit" in claude-chat-panel.md.
+        isNewChatUnanchored()
           ? html`
               <div
                 class="flex flex-col gap-2 rounded-xl border border-indigo-300 dark:border-indigo-500/40 bg-white dark:bg-zinc-900 p-3 ring-1 ring-black/5"

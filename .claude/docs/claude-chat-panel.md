@@ -148,23 +148,79 @@ signal `toNewFocus`'s callers use below. An already-anchored conversation
 (reached via the ordinary `enterClaudeChat`) always has `cc.commentId` set, so
 this third branch can never keep a genuinely gone conversation visible.
 
+**`isNewChatUnanchored()`** (`RelatedPanel.mjs`, private) names this exact
+"`'new'`, or `'claude'` with no anchor yet" condition once, since three call
+sites need it identically: `claudeChatVisible()` above,
+`newCommentComposer`'s own visibility toggle, and `ensureClaudeAnchorForNew`'s
+guard (both below) — see "Two bugs the → path never actually exercised" for
+why letting these three drift apart is exactly what broke.
+
 **Getting back out, with the draft intact.** `newCommentComposer`'s own
-`cs.focus === 'new'` contents-toggle means the composer `<textarea>` actually
-**unmounts** while `cs.focus === 'claude'` — so, same as `toNew()` itself, the
-draft must be explicitly restored from `composeDrafts` on the way back, not
-merely left alone. **`toNewFocus()`** (`RelatedPanel.mjs`) is that restore: the
-mirror of `toComment()`, but back to `'new'` — it does NOT touch
-`cc`/`warningOverride`/`claudeAutoAnchor` (nothing about the anchor changed
-while the reviewer was in Claude, only the DOM focus did), and it re-prefills
-`comment-compose` from `composeDrafts.get(composeDraftKey)` (`composeDraftKey`
-is unchanged since the original `toNew()` call, so this always resolves the
-SAME draft). Reached from `handleRelatedKey`'s `cs.focus === 'claude'` branch:
-**both `ArrowLeft` and `Escape`** check `cc.commentId == null` — the signal
-that this conversation was entered via `enterClaudeChatFromNew` and has no
-anchor yet (an already-anchored conversation always has `cc.commentId` set
+contents-root now toggles on `isNewChatUnanchored()`, not a bare
+`cs.focus === 'new'` — so the composer stays **mounted and visible** the whole
+time the reviewer is in the Claude composer with no anchor yet (see "Two bugs"
+below; it used to unmount there). `composeDrafts` is still the source of
+truth for the typed text (`@input` keeps it in sync), so **`toNewFocus()`**
+(`RelatedPanel.mjs`) — the mirror of `toComment()`, back to `'new'` — still
+re-prefills `comment-compose` from `composeDrafts.get(composeDraftKey)` as a
+harmless belt-and-braces (the field never actually lost its value now that it
+stays mounted), but does NOT touch `cc`/`warningOverride`/`claudeAutoAnchor`
+(nothing about the anchor changed while the reviewer was in Claude, only the
+DOM focus did). Reached from `handleRelatedKey`'s `cs.focus === 'claude'`
+branch: **both `ArrowLeft` and `Escape`** check `cc.commentId == null` — the
+signal that this conversation was entered via `enterClaudeChatFromNew` and has
+no anchor yet (an already-anchored conversation always has `cc.commentId` set
 synchronously by `ensureAndLoadChat`, before any keypress could follow) — and
 call `toNewFocus()` instead of the ordinary `toComment()`/`exitRelated()`,
 since there is no comment to land `'comment'` on.
+
+### Two bugs the → path never actually exercised
+
+Both found via a reviewer bug report with screenshots, not a hypothetical:
+typing "Comment op deze regel", pressing `→` into Claude, showed a blank left
+column, and sending from there did nothing at all.
+
+1. **The comment column went blank the moment the keyboard reached
+   Claude.** `newCommentComposer`'s contents-root toggled on a bare
+   `cs.focus === 'new'`, so the composer unmounted as soon as
+   `enterClaudeChatFromNew` flipped `cs.focus` to `'claude'` — even though
+   `claudeChatVisible()`'s own third branch already keeps the *Claude* column
+   showing in exactly that state. Fixed by toggling on the shared
+   `isNewChatUnanchored()` predicate instead (see above), so the still-unplaced
+   comment composer and the Claude column now appear/disappear together, as
+   the reviewer expects from one merged card.
+2. **A send FROM the Claude composer in that same state silently did
+   nothing.** `ensureClaudeAnchorForNew`'s own guard was also a bare
+   `cs.focus !== 'new'` — by the time the reviewer actually clicks "Stuur",
+   `cs.focus` is already `'claude'` (that's the whole point of
+   `enterClaudeChatFromNew`), so the guard always failed, the lazy anchor
+   comment was never created, `cc.runId` stayed empty, and
+   `sendClaudeMessage`'s own `if (!cc.runId) return` swallowed the click with
+   no feedback. Fixed by using `isNewChatUnanchored()` here too.
+
+Both existing regression tests for this flow only drove the composer via
+Playwright's own `.fill()`/`.press('Enter')` directly on
+`claude-chat-compose` **without** first navigating there via `→` (so
+`cs.focus` stayed `'new'`, masking bug 2), or navigated via `→` but never sent
+a message from there at all (only asserting navigation, masking both bugs).
+Test: `tests/claude-chat-panel.spec.mjs`'s `"Chat over deze regel"` case below
+covers both — it enters via the command below, asserts the comment composer
+stays visible, then sends and asserts the anchor comment + reply both land.
+
+### `Enter` → "Chat over deze regel" (`COMMANDS`, `home.mjs`)
+
+A second entry point into the same unanchored state above, reviewer request:
+chat with Claude about a line right away, without writing/placing a comment
+first. **`startClaudeChat(commentTargetFn)`** (`RelatedPanel.mjs`, exported)
+is the command's `run`: it calls `toNew(commentTargetFn)` (the exact same
+setup `startComment` uses — resets `cs.focus` to `'new'`, the draft state, and
+`cc` to blank/idle) and then immediately `enterClaudeChatFromNew()`, landing in
+the identical state a `→` from the still-open field would — so every
+behaviour documented on this page for that state (comment column staying
+expanded, `←`/`Escape` via `toNewFocus()`, `↓` advancing to the next block, the
+lazy anchor on first send) applies unchanged; nothing here is a separate code
+path. Sits in `COMMANDS` directly after `"Comment op deze regel"`, see
+"`Enter` — the block palette" in `.claude/docs/command-palette.md`.
 
 **`↓` at `claudePos === 0` is deliberately UNCHANGED**, even reached this way:
 it still releases the panel and advances to the next visible block's diff

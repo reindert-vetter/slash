@@ -32,6 +32,7 @@ import RelatedPanel, {
   enterCommentsHead,
   enterRelated,
   startComment,
+  startClaudeChat,
   createComment,
   placeComment,
   isComposeOpen,
@@ -6564,6 +6565,17 @@ const COMMANDS = withClose([
     label: 'Comment op deze regel',
     hint: 'task',
     run: () => startComment(commentTarget),
+  },
+  {
+    id: 'claude-chat',
+    // Reviewer request: chat with Claude about this line right away, with no
+    // comment written/placed first — startClaudeChat (RelatedPanel.mjs)
+    // opens the same brand-new composer state as "Comment op deze regel" and
+    // immediately steps the keyboard into the Claude composer, exactly as if
+    // → had been pressed from that still-open field.
+    label: 'Chat over deze regel',
+    hint: 'claude',
+    run: () => startClaudeChat(commentTarget),
   },
   {
     id: 'github',
