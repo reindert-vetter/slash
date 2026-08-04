@@ -33,7 +33,7 @@ const state = reactive({
   searchResults: null, // null = no active search
   recentOpen: false,
   recentLoading: false,
-  recentPrs: [], // [{ pr, blocks, files }]
+  recentPrs: [], // [{ pr, blocks, files, title, author?, additions?, deletions?, changedFiles?, headRefName?, updatedAt? }]
   // Preset-filter drawer (a second expandable button like "Recent gegenereerd").
   // filterOpen: the drawer menu is expanded. activePreset: the key of the preset
   // whose live gh-search results currently replace the main sections (null =
@@ -1431,6 +1431,56 @@ async function toggleRecent() {
   if (state.recentOpen) await ensureRecentPrs()
 }
 
+// recentAvatarMark — the left-edge mark of a "Recent gegenereerd" row. Reuses
+// authorMark (avatar + first name, same as the inbox rows) whenever handlePRs
+// could enrich this row from the prmeta read-model (r.author present); falls
+// back to the original bare sparkle glyph for a PR that was ingested but never
+// opened via /pr/<id> (pr_status never ran, so prmeta has nothing to show —
+// see the PRSummary doc comment in db.go). Both branches keep the same w-20
+// column width so mixed rows (some enriched, some not) still line up.
+function recentAvatarMark(r) {
+  if (r.author) return authorMark(r)
+  return html`<span class="flex w-20 shrink-0 items-center justify-center text-emerald-600 dark:text-emerald-400"
+    >${icon('sparkles', 'h-5 w-5')}</span
+  >`
+}
+
+// recentItemMeta — the meta block under a "Recent gegenereerd" title, mirroring
+// rowMeta's two-line shape (updated-at on its own line, diffstat + branch on
+// the next) but built from PRSummary's own field names, not pr.number/pr.title
+// (rowMeta itself isn't reused: it hardcodes "#${pr.number}" and a reactive
+// state.repo prefix that don't apply here, and pulls in newSinceMark, which
+// depends on the live inbox status backfill this drawer never fetches —
+// deliberately out of scope, see the "no review/checks chip" call in
+// .claude/docs/pr-overview.md). diffStatFragment/branchFragment/relativeTime
+// are reused as-is: they only read pr.additions/deletions/changedFiles/
+// headRefName/updatedAt, which handlePRs now fills from the very same
+// prmeta.Get call it already made for r.title — no extra request. Every field
+// here is static per r (fetched once, never updated in place), the same
+// non-reactive template↔null shape rowMeta itself already uses.
+function recentItemMeta(r) {
+  const stat = diffStatFragment(r)
+  const branch = branchFragment(r)
+  return html`
+    <div class="mt-0.5 text-[12px] text-slate-500 dark:text-zinc-500">
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span class="font-mono">#${r.pr}</span>
+        <span class="text-slate-300 dark:text-zinc-700">·</span>
+        <span>${r.blocks} ${r.blocks === 1 ? 'blok' : 'blokken'} · ${r.files} ${r.files === 1 ? 'bestand' : 'bestanden'}</span>
+        ${r.updatedAt
+          ? html`<span class="text-slate-300 dark:text-zinc-700">·</span
+              ><span title="${r.updatedAt}">Bijgewerkt ${relativeTime(r.updatedAt)}</span>`
+          : null}
+      </div>
+      ${stat || branch
+        ? html`<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            ${stat} ${stat && branch ? html`<span class="text-slate-300 dark:text-zinc-700">·</span>` : null} ${branch}
+          </div>`
+        : null}
+    </div>
+  `
+}
+
 function recentItem(r) {
   return html`
     <a
@@ -1441,12 +1491,10 @@ function recentItem(r) {
       data-nav-key="${'recent:' + r.pr}"
       class="${ROW_CLASS}"
     >
-      <span class="shrink-0 text-emerald-600 dark:text-emerald-400">${icon('sparkles', 'h-4 w-4')}</span>
+      ${recentAvatarMark(r)}
       <div class="min-w-0 flex-1">
         <h3 class="truncate text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">${r.title || '#' + r.pr}</h3>
-        <span class="block truncate text-[12px] text-slate-500 dark:text-zinc-500"
-          >#${r.pr} · ${r.blocks} ${r.blocks === 1 ? 'blok' : 'blokken'} · ${r.files} ${r.files === 1 ? 'bestand' : 'bestanden'}</span
-        >
+        ${recentItemMeta(r)}
       </div>
       ${chip('open boom', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', '', 'sparkles')}
       ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
@@ -1781,7 +1829,16 @@ async function ensureRecentPrs() {
       const res = await fetch('/api/prs')
       if (res.ok) {
         const body = await res.json()
-        state.recentPrs = Array.isArray(body) ? body : []
+        const rows = Array.isArray(body) ? body : []
+        // Resolve author names/avatars BEFORE pushing the rows into reactive
+        // state — same timing rule as primeAuthorNames/ensureNames elsewhere
+        // (a late arrival can never repaint an already-mounted keyed row, see
+        // .claude/rules/conventions.md). Only runs when the drawer is actually
+        // opened (ensureRecentPrs is called from toggleRecent/
+        // trySelectPendingPr), so this batched request never delays the
+        // initial page load.
+        await primeAuthorNames(rows)
+        state.recentPrs = rows
       }
     } catch (e) {
       // keep the drawer usable even if this fetch fails

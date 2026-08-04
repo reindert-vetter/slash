@@ -286,6 +286,52 @@ inside the Activity — no new write path.
 | `GET /api/problems` | Read-only → `{ok, failedRuns:[{runId,workflow,pr,updatedAt,error}], logErrors:[{at,scope,pr,message}]}`. Feeds "Mislukte taken". |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 
+### "Recent gegenereerd" rows are enriched from the SAME local prmeta read, no extra request
+
+`recentItem` used to be much sparser than an inbox row: a bare sparkle glyph,
+title, `#pr · N blokken · N bestanden`, and a right-hand "open boom" chip — no
+author, no diffstat, no branch, no "Bijgewerkt … geleden". Reindert asked for
+the same look as "Needs your review" **without slowing the page down**, so the
+extra fields ride an already-made read instead of a new one:
+
+- `PRSummary` (`db.go`) gained `Author`/`Additions`/`Deletions`/`ChangedFiles`/
+  `HeadRefName`/`UpdatedAt` (all `omitempty`), filled by `handlePRs` from the
+  **same** `prmeta.Get(pr)` call it already made just for `Title` — a local
+  SQLite read, no GitHub call, no second query. A PR whose `pr_status` tracker
+  never ran (never opened via `/pr/<id>`) simply keeps these empty/zero — the
+  frontend degrades gracefully for it (see below), never a blank/broken row.
+- `recentItem` (`src/overview.mjs`) reuses the inbox row's own building blocks
+  instead of inventing new ones: `authorMark(r)` (avatar + first name),
+  `diffStatFragment(r)` / `branchFragment(r)` (+N −M · files, branch name) and
+  `relativeTime(r.updatedAt)` all read the same field names `PRSummary` now
+  emits, so no adapter layer was needed. **Not** reused: `rowMeta` itself
+  (hardcodes `#${pr.number}` + a reactive `state.repo` prefix that don't apply
+  here) and `newSinceMark` (depends on the live inbox status backfill —
+  `state.statuses[pr.number]` — which this drawer never fetches; adding that
+  fetch for every recent PR would be exactly the slow-down Reindert asked to
+  avoid). No review/checks chip either, on the same reasoning plus: a stale
+  review decision on a PR nobody's actively looking at anymore would read as
+  current when it might not be.
+- **Graceful fallback per field, not per row:** `recentAvatarMark(r)` shows
+  `authorMark(r)` only when `r.author` is present, otherwise the original bare
+  sparkle glyph (same `w-20` column width either way, so mixed enriched/
+  un-enriched rows still line up); the diffstat/branch line and the
+  "Bijgewerkt …" fragment likewise only render when their fields are present
+  (`diffStatFragment`/`branchFragment` already do this; the updated-at
+  fragment is a small inline ternary in `recentItemMeta`). A PR can end up
+  partially enriched (e.g. `updated_at` set by a later `pr_meta` upsert while
+  `title`/`author` stayed empty because `fetchPRBasics`'s `gh.PRMeta` call
+  failed) — every field decides independently, so that shows exactly what's
+  known instead of an all-or-nothing card.
+- **Names/avatars are the one part that still costs a request**, and it stays
+  lazy: `ensureRecentPrs` (only called from `toggleRecent`/
+  `trySelectPendingPr`, i.e. once the drawer is actually opened) awaits
+  `primeAuthorNames(rows)` — the same batched `ensureNames` call/timing
+  discipline as the inbox sections (see "Timing is load-bearing" in
+  `.claude/rules/conventions.md`) — before caching `state.recentPrs`, so a
+  late name arrival can never leave a keyed row stuck on a bare login. Nothing
+  here touches the initial page load.
+
 ### Search also matches the author's NAME, not just their login
 
 GitHub's own free-text PR search (the plain `q` term `handleSearch` passes to

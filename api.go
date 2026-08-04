@@ -81,14 +81,23 @@ func (s *server) handlePRs(w http.ResponseWriter, r *http.Request) {
 	if prs == nil {
 		prs = []PRSummary{}
 	}
-	// Enrich each row with its PR title from the prmeta read-model (read-only,
-	// within the write-boundary). Titles land when the pr_status tracker has run
-	// (on first /pr/<id> visit); a PR without a stored title keeps an empty
-	// Title and the UI falls back to showing just #number.
+	// Enrich each row from the prmeta read-model (read-only, within the
+	// write-boundary) — one local SQLite read per row, already made just for
+	// Title, now also feeding author/diffstat/branch/updated-at so the
+	// "Recent gegenereerd" drawer can render the same look as the inbox rows.
+	// These land when the pr_status tracker has run (on first /pr/<id> visit);
+	// a PR without a stored meta row keeps these fields empty/zero and the UI
+	// falls back to showing just #number with no extra meta line.
 	if s.tasks != nil && s.tasks.prmeta != nil {
 		for i := range prs {
 			if meta, ok, err := s.tasks.prmeta.Get(r.Context(), prs[i].PR); err == nil && ok {
 				prs[i].Title = meta.Title
+				prs[i].Author = meta.Author
+				prs[i].Additions = meta.Additions
+				prs[i].Deletions = meta.Deletions
+				prs[i].ChangedFiles = meta.ChangedFiles
+				prs[i].HeadRefName = meta.HeadRef
+				prs[i].UpdatedAt = meta.UpdatedAt
 			}
 		}
 	}

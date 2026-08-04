@@ -226,6 +226,19 @@ type PRSummary struct {
 	Blocks int    `json:"blocks"`
 	Files  int    `json:"files"`
 	Title  string `json:"title"` // filled by handlePRs from the prmeta read-model (empty when unknown)
+	// The fields below are also filled by handlePRs from the same prmeta.Get
+	// call as Title — one local SQLite read already made per row, no extra
+	// query and no GitHub call — so the "Recent gegenereerd" drawer can render
+	// the same author/diffstat/branch/updated-at look as the inbox rows
+	// (authorMark/diffStatFragment/branchFragment/relativeTime in
+	// overview.mjs) without a slower page load. Empty/zero when the PR was
+	// never opened via /pr/<id> (the pr_status tracker never ran for it).
+	Author       string `json:"author,omitempty"`
+	Additions    int    `json:"additions,omitempty"`
+	Deletions    int    `json:"deletions,omitempty"`
+	ChangedFiles int    `json:"changedFiles,omitempty"`
+	HeadRefName  string `json:"headRefName,omitempty"` // mapped from prmeta.Meta.HeadRef, named to match branchFragment's pr.headRefName
+	UpdatedAt    string `json:"updatedAt,omitempty"`
 }
 
 // listPRs returns every ingested PR with its block/file counts, newest PR first.
