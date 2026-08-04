@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -97,8 +98,21 @@ func runServe(args []string) {
 	defer closeTasks()
 
 	srv := &server{db: db, dataDir: resolvedData, tasks: tk, avatars: newAvatarCache()}
+
+	// Bind the listener before opening the ready gate: newTasks armed it (see
+	// tasks_api.go) so every background poller/trigger resumed during Recover
+	// (pollIngestRefresh, pollImportComments, the pr_inbox/task_inbox initial
+	// fetch, the automatic code_warning worker) waits right here — the port is
+	// bound first, so the server is reachable, and only THEN does that
+	// possibly large batch of background work (network calls, `claude`
+	// subprocess calls, workflows.db writes) start competing for resources.
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
 	log.Printf("PR Review Tree listening on http://%s", *addr)
-	if err := http.ListenAndServe(*addr, srv.routes(*staticDir)); err != nil {
+	tk.manager.MarkReady()
+	if err := http.Serve(ln, srv.routes(*staticDir)); err != nil {
 		log.Fatal(err)
 	}
 }

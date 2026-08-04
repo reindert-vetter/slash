@@ -504,13 +504,29 @@ a manually triggered, low-frequency action.
   a newer head SHA. A bare `rebuild` Signal (a manual "Regenereren" with no new
   commits) deliberately does **not** auto-trigger it — see the doc comment on
   `buildRelationsWorkflow`'s one-time call. Both call sites go through a tiny
-  `autoStartCodeWarning` **Activity** that only spawns a goroutine and returns
-  immediately (mirrors `autoStartResolveCall`), so neither ingest nor the
-  delta-refresh ever waits on a live, possibly slow agentic Opus call; on
-  replay tembed returns the recorded (empty) Activity result without
-  re-invoking the function, so the goroutine fires exactly once per real
-  occurrence. A manual "Diepgravend onderzoek" is never gated by anything
-  below.
+  `autoStartCodeWarning` **Activity** that only queues the PR onto a single
+  serial worker and returns immediately (mirrors `autoStartResolveCall`), so
+  neither ingest nor the delta-refresh ever waits on a live, possibly slow
+  agentic Opus call; on replay tembed returns the recorded (empty) Activity
+  result without re-invoking the function, so the PR is queued exactly once
+  per real occurrence. A manual "Diepgravend onderzoek" is never gated by
+  anything below.
+  **Serialized + deferred past server startup:** `enqueueAutoStartCodeWarning`/
+  `runCodeWarnWorker` (`TaskManager`) drain one PR at a time — never a
+  goroutine per trigger — so a burst of PRs all reporting "new commits" at
+  once (the exact scenario after downtime: every `pollIngestRefresh` poller
+  wakes and finds a newer head SHA) never launches more than one Opus call
+  concurrently. That worker (and `pollIngestRefresh`/`pollImportComments`/
+  `EnsureInbox`/`EnsureTaskInbox`'s initial fetch) additionally waits on the
+  `TaskManager`'s ready gate (`ArmReadyGate`/`MarkReady`/`waitReady`), armed in
+  `newTasks` and opened only after `runServe` (`main.go`) has actually bound
+  the HTTP listener (`net.Listen`, before `http.Serve`) — so this whole class
+  of startup-recovery background work (network calls, `claude` subprocess
+  calls, `workflows.db` writes) never competes with, and thereby delays, the
+  synchronous work `Engine.Recover`/`ListenAndServe` still have to do. Every
+  test/CLI caller that never calls `ArmReadyGate` sees `waitReady` as a no-op
+  (the gate defaults to already-open), so this is invisible outside the real
+  server boot path.
 - **Reviewer on/off switch (`modules/autowarn` + `WorkflowAutoWarn`/
   `SignalAutoWarn`):** a toggle next to the theme button in `prInfoCard`
   (`data-testid=auto-warn-toggle`, `src/autowarn.mjs`) turns the AUTOMATIC

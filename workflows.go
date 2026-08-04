@@ -614,6 +614,23 @@ type TaskManager struct {
 	baseCtx      context.Context
 	runtimeReady bool
 
+	// ready gates every background poller/trigger spawned at boot
+	// (pollIngestRefresh, pollImportComments, pollInbox, pollTaskInbox, the
+	// initial EnsureInbox/EnsureTaskInbox refresh, and the automatic
+	// code_warning worker) behind the HTTP listener actually being bound —
+	// see waitReady/ArmReadyGate/MarkReady. Defaults to an already-closed
+	// channel (NewTaskManager) so every existing test/CLI caller, which never
+	// arms the gate, behaves exactly as before (no wait at all).
+	ready chan struct{}
+	// codeWarnQueue serializes automatic code_warning starts through a single
+	// worker (see enqueueAutoStartCodeWarning/runCodeWarnWorker) instead of an
+	// unbounded goroutine per trigger, so a burst of PRs with new commits
+	// after downtime never launches dozens of concurrent Opus calls (and their
+	// workflows.db writes) at once — mirrors Engine.Recover's own "drain
+	// serially" precaution for its background low-priority runs.
+	codeWarnQueue     chan int
+	codeWarnWorkerOne sync.Once
+
 	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + ignRuns + inboxRun + snoozeRun + taskInboxRun + autoWarnRun + importPolled
 	lastBeat     map[string]time.Time // code-comment/inbox Run ID → last heartbeat
 	prRuns       map[int]string       // PR → pr_status Run ID
@@ -638,6 +655,8 @@ type TaskManager struct {
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
 func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, tc *testcovers.Module, ap *approvals.Module, ex *explanations.Module, ts *tasksnooze.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
+	closedGate := make(chan struct{})
+	close(closedGate)
 	m := &TaskManager{
 		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, tasksnooze: ts, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
@@ -645,6 +664,14 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		importPolled: map[string]bool{},
 		avatarTried:  map[string]bool{},
 		logf:         log.Printf,
+		ready:        closedGate,
+		// Buffered generously: enqueue must never block the deterministic
+		// Activity that calls it. A full queue (extremely unlikely — it would
+		// take hundreds of PRs signalling "new commits" between two drains of
+		// a single serial worker) just drops the trigger with a log line,
+		// same "best-effort automatic check" spirit as autoStartCodeWarning's
+		// own enabled-check.
+		codeWarnQueue: make(chan int, 256),
 	}
 
 	// Activity: fetch the inbox from GitHub and store it in the read-model
@@ -1610,13 +1637,15 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	})
 
 	// Activity: fire-and-forget the automatic code_warning trigger for pr. This
-	// Activity itself does no slow work — it only spawns the goroutine and
-	// returns immediately — so build_relations/prStatusWorkflow's delta-refresh
-	// never wait on a live, possibly slow agentic Opus call. On replay this
-	// Activity's recorded (empty) result is returned directly without
-	// re-invoking the function (tembed only executes a live Activity once), so
-	// the goroutine is launched exactly once per real occurrence, never again
-	// on replay. See TaskManager.autoStartCodeWarning for the on/off check.
+	// Activity itself does no slow work — it only queues pr onto the single
+	// serial code_warning worker and returns immediately — so
+	// build_relations/prStatusWorkflow's delta-refresh never wait on a live,
+	// possibly slow agentic Opus call, and a burst of PRs triggering at once
+	// (e.g. after downtime) never launches more than one such call at a time.
+	// On replay this Activity's recorded (empty) result is returned directly
+	// without re-invoking the function (tembed only executes a live Activity
+	// once), so pr is queued exactly once per real occurrence, never again on
+	// replay. See TaskManager.autoStartCodeWarning for the on/off check.
 	engine.RegisterActivity("autoStartCodeWarning", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
 			PR int `json:"pr"`
@@ -1624,7 +1653,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		go m.autoStartCodeWarning(arg.PR)
+		m.enqueueAutoStartCodeWarning(arg.PR)
 		return nil, nil
 	})
 
@@ -2177,6 +2206,63 @@ func distinctSortedFiles(blocks []Block) []string {
 func (m *TaskManager) SetRuntime(ctx context.Context, ready bool) {
 	m.baseCtx = ctx
 	m.runtimeReady = ready
+}
+
+// ArmReadyGate replaces the (default already-open) ready gate with a closed
+// one, so every background poller/trigger that calls waitReady blocks until
+// MarkReady is called. newTasks calls this once, only when resumeRuntime is
+// true, right before Recover() — see MarkReady/waitReady for why this exists:
+// a burst of background work (pollImportComments' immediate first import,
+// EnsureInbox/EnsureTaskInbox's initial fetch, the automatic code_warning
+// trigger) must not compete with — and thereby delay — the synchronous work
+// Recover/ListenAndServe still have to do at startup.
+func (m *TaskManager) ArmReadyGate() {
+	m.ready = make(chan struct{})
+}
+
+// MarkReady opens the ready gate: every background poller/trigger parked in
+// waitReady proceeds. Call this once, right after the HTTP listener has
+// actually bound its port (runServe in main.go) — never before, and never
+// from inside newTasks, since that call itself must return before the
+// listener can bind.
+func (m *TaskManager) MarkReady() {
+	close(m.ready)
+}
+
+// waitReady blocks until MarkReady has been called (a no-op — the gate is
+// already open — for every caller that never called ArmReadyGate: tests and
+// one-shot CLI processes).
+func (m *TaskManager) waitReady() {
+	<-m.ready
+}
+
+// enqueueAutoStartCodeWarning queues pr for the automatic code_warning trigger
+// and lazily starts the single serial worker that drains the queue (see
+// runCodeWarnWorker). Called from the autoStartCodeWarning Activity, which
+// must itself stay fast/deterministic — this only ever sends on a buffered
+// channel or logs and drops on the (practically unreachable) full-queue case.
+func (m *TaskManager) enqueueAutoStartCodeWarning(pr int) {
+	m.codeWarnWorkerOne.Do(func() { go m.runCodeWarnWorker() })
+	select {
+	case m.codeWarnQueue <- pr:
+	default:
+		m.logf("code_warning: auto-start queue full, dropping pr=%d", pr)
+	}
+}
+
+// runCodeWarnWorker drains codeWarnQueue one PR at a time, forever — the
+// single serialization point for every automatic code_warning trigger (see
+// enqueueAutoStartCodeWarning). It waits for the ready gate first, so a burst
+// of triggers queued during startup recovery never starts its (possibly many)
+// Opus calls until after the HTTP listener has bound; from then on it simply
+// processes whatever is queued, one PR at a time, same "avoid a thundering
+// herd" precaution Engine.Recover applies to its own background low-priority
+// drain.
+func (m *TaskManager) runCodeWarnWorker() {
+	m.waitReady()
+	for pr := range m.codeWarnQueue {
+		m.autoStartCodeWarning(pr)
+	}
 }
 
 // prInboxWorkflow owns the PR inbox for a repo. It is deterministic: each
@@ -4073,10 +4159,14 @@ func (m *TaskManager) autoStartCodeWarning(pr int) {
 	}
 }
 
-// EnsureInbox starts (or reuses) the single pr_inbox Execution for the repo,
-// fetches an initial snapshot synchronously (so the read-model is populated
-// before the server serves), and launches its refresh poller. Idempotent across
-// restarts: it reuses an existing running/waiting Execution.
+// EnsureInbox starts (or reuses) the single pr_inbox Execution for the repo
+// (a fast, DB-only step, so it returns with the Run ID resolved right away),
+// then — once the ready gate opens (see waitReady; a no-op if it was never
+// armed) — fetches an initial snapshot and launches the refresh poller.
+// Idempotent across restarts: it reuses an existing running/waiting
+// Execution. The initial fetch used to run synchronously right here, "so
+// /api/inbox has a snapshot the moment the server comes up" — deliberately
+// traded for a faster server bind: see ArmReadyGate.
 func (m *TaskManager) EnsureInbox(ctx context.Context) {
 	m.mu.Lock()
 	runID := m.inboxRun
@@ -4097,12 +4187,15 @@ func (m *TaskManager) EnsureInbox(ctx context.Context) {
 	m.inboxRun = runID
 	m.mu.Unlock()
 
-	// Initial refresh runs the fetch Activity synchronously, so /api/inbox has a
-	// snapshot the moment the server comes up.
-	if err := m.engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
-		m.logf("pr_inbox: initial refresh: %v", err)
-	}
-	go m.pollInbox(ctx, runID)
+	go func() {
+		m.waitReady()
+		// Initial refresh runs the fetch Activity, so /api/inbox has a
+		// snapshot as soon as the server is actually serving requests.
+		if err := m.engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
+			m.logf("pr_inbox: initial refresh: %v", err)
+		}
+		m.pollInbox(ctx, runID)
+	}()
 }
 
 // InboxRunID returns the pr_inbox Run ID so the UI can signal/heartbeat it.
@@ -4148,6 +4241,7 @@ func (m *TaskManager) findInboxRunLocked() string {
 // heartbeatWindow), else slow (m.idle). It never stops on its own — the inbox is
 // a long-lived tracker — only when the context is cancelled or the run failed.
 func (m *TaskManager) pollInbox(ctx context.Context, runID string) {
+	m.waitReady()
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
 	var lastPoll time.Time
@@ -4182,10 +4276,12 @@ func (m *TaskManager) pollInbox(ctx context.Context, runID string) {
 }
 
 // EnsureTaskInbox starts (or reuses) the single task_inbox Execution for the
-// repo, aggregates an initial snapshot synchronously (so the read-model is
-// populated before the server serves), and launches its refresh poller.
-// Idempotent across restarts: it reuses an existing running/waiting
-// Execution. Exact mirror of EnsureInbox.
+// repo (a fast, DB-only step, so it returns with the Run ID resolved right
+// away), then — once the ready gate opens (see waitReady; a no-op if it was
+// never armed) — aggregates an initial snapshot and launches the refresh
+// poller. Idempotent across restarts: it reuses an existing running/waiting
+// Execution. Exact mirror of EnsureInbox, including the same startup-bind
+// trade-off (see ArmReadyGate).
 func (m *TaskManager) EnsureTaskInbox(ctx context.Context) {
 	m.mu.Lock()
 	runID := m.taskInboxRun
@@ -4206,12 +4302,15 @@ func (m *TaskManager) EnsureTaskInbox(ctx context.Context) {
 	m.taskInboxRun = runID
 	m.mu.Unlock()
 
-	// Initial refresh runs the aggregation Activity synchronously, so
-	// /api/tasks has a snapshot the moment the server comes up.
-	if err := m.engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
-		m.logf("task_inbox: initial refresh: %v", err)
-	}
-	go m.pollTaskInbox(ctx, runID)
+	go func() {
+		m.waitReady()
+		// Initial refresh runs the aggregation Activity, so /api/tasks has a
+		// snapshot as soon as the server is actually serving requests.
+		if err := m.engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
+			m.logf("task_inbox: initial refresh: %v", err)
+		}
+		m.pollTaskInbox(ctx, runID)
+	}()
 }
 
 // TaskInboxRunID returns the task_inbox Run ID so the UI can signal/heartbeat it.
@@ -4251,6 +4350,7 @@ func (m *TaskManager) findTaskInboxRunLocked() string {
 // (m.interval) while the task inbox is actively viewed (a heartbeat arrived
 // within heartbeatWindow), else slow (m.idle). Mirrors pollInbox exactly.
 func (m *TaskManager) pollTaskInbox(ctx context.Context, runID string) {
+	m.waitReady()
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
 	var lastPoll time.Time
@@ -4320,6 +4420,7 @@ func ingestRefreshNeeded(ctx context.Context, remoteHead, storedHead string) boo
 //
 // See ingestRefreshNeeded for why "the SHAs differ" is not enough on its own.
 func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, pr int) {
+	m.waitReady()
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
 	var lastPoll time.Time
@@ -4376,6 +4477,7 @@ func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, pr 
 // glue mirrors poll/pollInbox; the only write is starting an Execution (the
 // sanctioned path), made idempotent by the deterministic gh-<id> Run ID.
 func (m *TaskManager) pollImportComments(ctx context.Context, prRunID string, pr int) {
+	m.waitReady()
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
 	// Run one import immediately (don't wait a whole tick to surface existing

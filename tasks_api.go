@@ -344,6 +344,16 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// so ensurePRStatus's fresh-poller spawn uses a context that outlives the
 	// HTTP request that triggered it (see TaskManager.baseCtx).
 	mgr.SetRuntime(ctx, resumeRuntime)
+	if resumeRuntime {
+		// Arm the ready gate before Recover/the pollers below spawn a single
+		// goroutine: every one of them (and the automatic code_warning
+		// worker) waits behind it until MarkReady is called, right after the
+		// HTTP listener binds (runServe in main.go) — so a startup burst of
+		// background work never competes with, and thereby delays, the
+		// synchronous work newTasks/ListenAndServe still have to do. See
+		// TaskManager.ArmReadyGate.
+		mgr.ArmReadyGate()
+	}
 
 	if err := engine.Recover(); err != nil {
 		return nil, nil, err

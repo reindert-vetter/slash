@@ -183,8 +183,14 @@ The **only** workflow that reads GitHub for the overview: a `refresh` Signal
 (from the UI on load and from `pollInbox` on the heartbeat cadence) drives the
 `refreshInbox` Activity, which fetches the inbox and writes it into the `inbox`
 read model, returning only a small summary so the endlessly-refreshing history
-stays compact. `EnsureInbox` starts/reuses one per repo and does a synchronous
-first refresh at startup. See `.claude/docs/pr-overview.md`.
+stays compact. `EnsureInbox` starts/reuses one per repo (a fast, DB-only step) and then, once
+the `TaskManager`'s ready gate opens, runs the first refresh and starts
+`pollInbox` — deferred past the HTTP listener binding (see "Serialized +
+deferred past server startup" in `.claude/docs/workflows-analysis.md`'s
+`code_warning` section for the full gate mechanism), traded off against the
+read-model having a snapshot the instant the server starts serving.
+`EnsureTaskInbox` (`task_inbox`, below) is an exact mirror. See
+`.claude/docs/pr-overview.md`.
 
 ## Persisting reviewer approval (`approve` + `modules/approvals`)
 
