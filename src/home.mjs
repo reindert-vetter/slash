@@ -7289,6 +7289,13 @@ function onKeydown(e) {
     } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (list[ms.sel]) runCommand(list[ms.sel])
+    } else if (e.key === ' ' && ms.query === '') {
+      // Space with an empty search field runs the selected item, exactly like
+      // Enter — but only while nothing is typed yet: once the field holds
+      // text, Space is a normal character (you can write a comment directly
+      // in it), so this branch must not preventDefault/intercept it then.
+      e.preventDefault()
+      if (list[ms.sel]) runCommand(list[ms.sel])
     }
     // Typing filters the list, which changes the palette's height — reposition a
     // frame later (once re-rendered) so it stays snug under the selection, even

@@ -80,6 +80,42 @@ test.describe('PR Review Tree — command palette', () => {
     await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
   })
 
+  test('Space with an empty search field runs the selected command, like Enter', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    // Block 0 (ContractController::index, CONTROLLER-first) carries no local
+    // diff — approving it would be vacuously checked already. Select block 1
+    // (CreatePaymentAction::execute), which reliably has one changed row.
+    await page.locator('[data-idx="1"]').click()
+    await leaveSearchBox(page)
+    const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
+    await expect(approve).not.toBeChecked()
+
+    await page.keyboard.press('Enter')
+    const input = page.getByTestId('command-input')
+    await expect(input).toHaveValue('')
+    // "Sluit menu" is pinned first; defaultSel opens on the 2nd item, the
+    // approve command for this list — pressing Space runs it directly.
+    await page.keyboard.press(' ')
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
+    await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
+  })
+
+  test('Space with text already typed stays a normal space, not a run', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await leaveSearchBox(page)
+
+    await page.keyboard.press('Enter')
+    const input = page.getByTestId('command-input')
+    await input.fill('keur')
+    await page.keyboard.press(' ')
+    // The menu stays open and the space was typed into the field, not run.
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await expect(input).toHaveValue('keur ')
+  })
+
   test('no match falls back to "Maak hiermee een comment" and pre-fills the composer', async ({
     page,
   }) => {

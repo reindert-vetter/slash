@@ -40,6 +40,13 @@ runs the action), `Esc` (close — from a submenu it first steps back to the
 root), and block navigation is suspended. Typed characters flow into the
 focused input (`data-testid=command-input`, two-way bound to `ms.query`).
 
+**`Space` with an empty search field runs the selected item too** — the exact
+same `runCommand(list[ms.sel])` call as `Enter`, no second implementation.
+Gated on `ms.query === ''`: as soon as anything is typed (you can write a
+comment straight into that field, e.g. the no-match "Create a comment with
+this" fallback), Space is a normal character again and falls through
+untouched to the input, same as any other letter.
+
 `positionMenu` anchors it just **below** the selection and gives it the width
 of the right (NEW) pane — half width, over the code you're reviewing:
 
