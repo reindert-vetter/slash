@@ -165,6 +165,14 @@ Stop 5/6 (Underlying code) deliberately has **no outer** focus border of its
 own, but every child card/chip/tests-bar inside it follows the same two-state
 border (see `.claude/docs/underlying-code.md`).
 
+The same `diffActive()` flag also dims the **active-row cursor bar** *inside*
+the diff (the inset indigo bar on the row `state.change` points at) to grey —
+one pixel thinner too — the moment the diff stops owning the keyboard, even
+though the block stays selected and the cursor position doesn't move (e.g.
+back in the block index, or inside a comment thread/Underlying code/the
+Claude chat). See "The active-row cursor bar dims when the diff doesn't own
+the keyboard" in `.claude/docs/diff-render.md`.
+
 **The same rule applies to list rows** — the sidebar row (`BlockList.mjs`'s
 `row`), the search box, `toggleRow`/`ignoreToggleRow`, and
 `TestMethodsColumn.mjs`'s `methodRow`. A selected row keeps its existing

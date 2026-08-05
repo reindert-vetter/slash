@@ -284,8 +284,23 @@ const KIND_BADGE_CLS = {
 // anymore — every column (primary + siblings) carries its own padding so the
 // highlight background/left bar span the FULL row width, including under a
 // sibling column that might be scrolled past the visible edge.
-function translationRowCls(active) {
-  return 'flex items-stretch ' + (active ? 'bg-indigo-50 shadow-[inset_3px_0_0_#6366f1] dark:bg-indigo-500/10' : '')
+//
+// `focused` mirrors `diffActive()` (Block.mjs, see "Focus highlight per
+// stop" in keyboard-navigation.md): the cursor can sit on this row while the
+// keyboard has actually moved into a comment thread, Underlying code, the
+// embedded Claude chat, or back to the block index — in which case the bar
+// turns GREY and one pixel thinner (2px vs 3px) instead of indigo, and the
+// background tint drops. Colour and thickness change together, never colour
+// alone (the reviewer is colourblind, see CLAUDE.md) — same rule as
+// Block.mjs's rowCellHTML.
+function translationRowCls(active, focused = true) {
+  if (!active) return 'flex items-stretch'
+  return (
+    'flex items-stretch ' +
+    (focused
+      ? 'bg-indigo-50 shadow-[inset_3px_0_0_#6366f1] dark:bg-indigo-500/10'
+      : 'shadow-[inset_2px_0_0_#94a3b8] dark:shadow-[inset_2px_0_0_#71717a]')
+  )
 }
 
 // SIBLING_LOCALE_BADGE_CLS — the small locale pill on a sibling column (see
@@ -348,6 +363,7 @@ function siblingColumnHTML(sib, key) {
 // Block.mjs (its own markup functions stay there) — no circular import.
 export function translationBlockView(units, opts = {}) {
   const activeIndex = opts.activeIndex || (() => null)
+  const focused = opts.focused || (() => true)
   const approvedRowSet = opts.approvedRowSet || (() => new Set())
   const siblings = opts.siblings || []
   const onScroll = opts.onScroll || (() => {})
@@ -408,7 +424,7 @@ export function translationBlockView(units, opts = {}) {
     // b.code.
     const siblingLocaleSig = siblings.map((sib) => sib.locale).join(',')
     return html`<div
-      class="${() => translationRowCls(activeIndex() === i)}"
+      class="${() => translationRowCls(activeIndex() === i, focused())}"
       data-testid="translation-row"
       data-active="${() => (activeIndex() === i ? '1' : '0')}"
       data-changed="1"

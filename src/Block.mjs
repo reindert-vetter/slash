@@ -575,8 +575,15 @@ export default function Block(b, opts = {}) {
   // diffActive is a function returning whether the reviewer is currently stepping
   // through this block's code diff (the selected card, in diff mode). When true the
   // card border turns light blue — the same indigo as a selected row in the comment
-  // index — as an at-a-glance cue that the keyboard now drives the diff.
-  const diffActive = opts.diffActive || (() => false)
+  // index — as an at-a-glance cue that the keyboard now drives the diff; it also
+  // keeps the active-row cursor bar (rowCellHTML/translationRowCls) indigo instead
+  // of dimming it to grey (see "Focus highlight per stop" in
+  // keyboard-navigation.md). Defaults to focused (`() => true`, mirrors
+  // translationBlockView's own `opts.focused` default) — every real call site in
+  // home.mjs passes this explicitly (a preview card passes `() => false`), so the
+  // default only matters for a test/harness that constructs Block() directly and
+  // only cares about e.g. activeGroup, not about focus dimming.
+  const diffActive = opts.diffActive || (() => true)
   // unpushed is a function returning whether this block's file is part of a
   // commit that landed on the PR's branch locally but isn't pushed to GitHub
   // yet (state.pendingPush.files, see loadPendingPush in home.mjs). A function
@@ -794,10 +801,10 @@ export default function Block(b, opts = {}) {
         collapsedFn()
           ? ''
           : b.category === 'TRANSLATION'
-          ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled, commentedFn, lineSummaryFn)
+          ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled, commentedFn, lineSummaryFn, diffActive)
           : isSvgFile(b)
           ? svgSlot(b)
-          : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn)}
+          : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn, diffActive)}
     </article>
   `
 }
@@ -916,6 +923,7 @@ function translationSlot(
   hintsEnabled = () => false,
   commentedFn = () => new Set(),
   lineSummaryFn = () => new Map(),
+  diffActive = () => false,
 ) {
   const c = b.code
   if (c === undefined || c === null) {
@@ -948,6 +956,7 @@ function translationSlot(
     >
       ${translationBlockView(units, {
         activeIndex,
+        focused: diffActive,
         approvedRowSet: approvedFn,
         siblings,
         onScroll: (e) => {
@@ -1076,6 +1085,7 @@ function codeDiff(
   approvedCallsFn = () => new Set(),
   viewMode = () => 'split',
   lineSummaryFn = () => new Map(),
+  diffActive = () => false,
 ) {
   const c = b.code
   if (c === undefined) return ''
@@ -1134,7 +1144,7 @@ function codeDiff(
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn)}
+        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive)}
         ${scrollHint('up')}
         ${scrollHint('down')}
       </div>
@@ -1162,7 +1172,7 @@ function codeDiff(
               : 'Verwijderd — deze code bestaat niet meer'}
         </div>
         <div class="relative flex min-h-0 flex-1 overflow-hidden">
-          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn)}
+          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive)}
           ${scrollHint('up')}
           ${scrollHint('down')}
         </div>
@@ -1175,7 +1185,16 @@ function codeDiff(
   // two-pane branch left in this function: 'fit' always forces
   // effectiveOnly above, so it never reaches this point at all.
   if (viewMode() === 'unified') {
-    return unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn, approvedCallsFn, lineSummaryFn)
+    return unifiedCodeDiff(
+      rows,
+      hintsEnabled,
+      activeGroup,
+      approvedFn,
+      commentedFn,
+      approvedCallsFn,
+      lineSummaryFn,
+      diffActive,
+    )
   }
   return html`
     <div
@@ -1183,9 +1202,9 @@ function codeDiff(
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
-      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn)}
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive)}
       <div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>
-      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn)}
+      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive)}
       ${scrollHint('up')}
       ${scrollHint('down')}
     </div>
@@ -1311,6 +1330,7 @@ function codePane(
   approvedCallsFn = () => new Set(),
   wrap = false,
   lineSummaryFn = () => new Map(),
+  diffActive = () => false,
 ) {
   return html`
     <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}" data-pane="${side}">
@@ -1319,7 +1339,7 @@ function codePane(
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() =>
-            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, lineSummaryFn())}"
+            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn())}"
         ></code>
       </div>
     </div>
@@ -1360,7 +1380,7 @@ function commentMarkerHtml() {
 // index ambiguous. Exactly one line per row keeps carrying metadata: the
 // same canonical side approveHere/commentedHere below already single out
 // (the new/right side, or the old/left side when there's no right at all).
-function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, opts = {}, lineSummaries = null) {
+function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = true, opts = {}, lineSummaries = null) {
   const { gutter = false, emitMeta = true } = opts
   const text = sideKey === 'left' ? r.left : r.right
   const mark = sideKey === 'left' ? r.leftMark : r.rightMark
@@ -1383,13 +1403,30 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, opts = {},
   // Backgrounds are ~20% lighter than the raw Tailwind rose/emerald shades
   // (mixed 20% toward white) so the tint reads as an accent, not a fill.
   let cls = 'relative block px-3 ' + (wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre')
-  if (active) {
+  if (active && focused) {
     // Brighter tint + an inset left bar (box-shadow, so it adds no width and
     // the bars of adjacent active rows merge into one continuous accent).
+    // Only while the diff genuinely owns the keyboard (`focused`, mirrors
+    // `diffActive()` — see keyboard-navigation.md "Focus highlight per
+    // stop"): otherwise this same row falls into the dimmed branch below.
     cls += ' shadow-[inset_3px_0_0_#6366f1]'
     if (mark === 'del') cls += ' bg-[#fed7dc] dark:bg-rose-500/25' // rose-200 +20% white
     else if (mark === 'ins') cls += ' bg-[#b9f5d9] dark:bg-emerald-500/25' // emerald-200 +20% white
     else cls += ' bg-indigo-50 dark:bg-indigo-500/15'
+  } else if (active) {
+    // The cursor still sits on this row, but the diff doesn't currently own
+    // the keyboard (it moved into a comment thread, Underlying code, the
+    // embedded Claude chat, or back to the block index/search — see
+    // "Focus highlight per stop" in keyboard-navigation.md). The bar turns
+    // GREY *and* one pixel thinner than the focused indigo bar (2px vs 3px)
+    // — colour and thickness change together, never colour alone (the
+    // reviewer is colourblind, see CLAUDE.md). The del/ins background falls
+    // back to its ordinary (non-active) tint; a mark-less row (the filler
+    // side of a one-sided add/remove) gets the ordinary filler tint.
+    cls += ' shadow-[inset_2px_0_0_#94a3b8] dark:shadow-[inset_2px_0_0_#71717a]'
+    if (mark === 'del') cls += ' bg-[#ffe9eb] dark:bg-rose-500/10' // rose-100 +20% white
+    else if (mark === 'ins') cls += ' bg-[#dafbea] dark:bg-emerald-500/10' // emerald-100 +20% white
+    else if (text === null) cls += ' bg-slate-50 dark:bg-zinc-800/60' // filler for the missing side
   } else {
     if (ws) {
       // Whitespace-only re-alignment: no full-line tint (it isn't a real
@@ -1696,12 +1733,13 @@ function paneHTML(
   commented = new Set(),
   approvedCalls = new Set(),
   wrap = false,
+  focused = true,
   lineSummaries = null,
 ) {
   const parts = []
   const pushRow = (i) => {
     const r = rows[i]
-    parts.push(rowCellHTML(r, i, sideKey, group, approved, commented, wrap, {}, lineSummaries))
+    parts.push(rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused, {}, lineSummaries))
 
     // Partial call approval: once at least one — but not all — of this row's
     // call segments is approved, an open circle marks every segment still
@@ -1741,19 +1779,19 @@ function paneHTML(
 // whitespace-only re-alignment, see wsOnly) renders both lines. See
 // rowCellHTML's own doc comment for why exactly one of the two lines (the
 // canonical, metadata-carrying one) ever gets `data-row`/etc.
-function unifiedRowHTML(r, i, group, approved, commented, lineSummaries = null) {
+function unifiedRowHTML(r, i, group, approved, commented, focused = true, lineSummaries = null) {
   const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
   if (paired) {
     return (
-      rowCellHTML(r, i, 'left', group, approved, commented, false, { gutter: true, emitMeta: false }, lineSummaries) +
-      rowCellHTML(r, i, 'right', group, approved, commented, false, { gutter: true, emitMeta: true }, lineSummaries)
+      rowCellHTML(r, i, 'left', group, approved, commented, false, focused, { gutter: true, emitMeta: false }, lineSummaries) +
+      rowCellHTML(r, i, 'right', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries)
     )
   }
   if (r.right != null) {
-    return rowCellHTML(r, i, 'right', group, approved, commented, false, { gutter: true, emitMeta: true }, lineSummaries)
+    return rowCellHTML(r, i, 'right', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries)
   }
   if (r.left != null) {
-    return rowCellHTML(r, i, 'left', group, approved, commented, false, { gutter: true, emitMeta: true }, lineSummaries)
+    return rowCellHTML(r, i, 'left', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries)
   }
   return ''
 }
@@ -1778,11 +1816,12 @@ function unifiedHTML(
   approved = new Set(),
   commented = new Set(),
   approvedCalls = new Set(),
+  focused = true,
   lineSummaries = null,
 ) {
   const parts = []
   const pushRow = (i) => {
-    parts.push(unifiedRowHTML(rows[i], i, group, approved, commented, lineSummaries))
+    parts.push(unifiedRowHTML(rows[i], i, group, approved, commented, focused, lineSummaries))
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
     if (partial) parts.push(circleRowHTML(unifiedCallText(rows[i]), partial.segs, partial.approvedStarts))
   }
@@ -1805,7 +1844,16 @@ function unifiedHTML(
 // already carries on the ordinary new/right codePane — the side the call
 // site actually lives on) so the call-arrow overlay
 // (callArrows.mjs's `[data-pane="new"]` query) still finds it.
-function unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedFn, approvedCallsFn, lineSummaryFn = () => new Map()) {
+function unifiedCodeDiff(
+  rows,
+  hintsEnabled,
+  activeGroup,
+  approvedFn,
+  commentedFn,
+  approvedCallsFn,
+  lineSummaryFn = () => new Map(),
+  diffActive = () => false,
+) {
   return html`
     <div
       class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
@@ -1817,7 +1865,7 @@ function unifiedCodeDiff(rows, hintsEnabled, activeGroup, approvedFn, commentedF
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() =>
-            unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), lineSummaryFn())}"
+            unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), diffActive(), lineSummaryFn())}"
         ></code>
       </div>
       ${scrollHint('up')}

@@ -83,6 +83,49 @@ The **call underline** (`UNDERLINE_CLS`, indigo, the active segment at
 `gran==='call'`) is a separate layer on the same `markChars` pass and works
 unchanged, also on a line without a word background.
 
+## The active-row cursor bar dims when the diff doesn't own the keyboard
+
+The active row/unit gets an inset left bar (`shadow-[inset_...px_0_0_...]`, a
+box-shadow so it adds no width and the bars of adjacent active rows merge into
+one continuous accent) plus a brighter background tint — `rowCellHTML`
+(`Block.mjs`) for an ordinary code diff, `translationRowCls`
+(`translationDiff.mjs`) for a TRANSLATION block's per-key overview. Both are
+driven by `activeGroup()`/`activeIndex()`, which only checks
+`state.selected`/`state.focusLevel` (see "`→` into the Underlying-code card" in
+`.claude/docs/keyboard-navigation.md`) — **not** `state.mode` or
+`relatedActive()`. So the bar used to stay bright indigo even when the keyboard
+had actually left the diff: back in the block index (`state.mode==='list'`),
+inside an inline comment thread, the embedded Claude chat, or the
+Underlying-code panel — same block still selected, same cursor position, wrong
+visual cue.
+
+The fix reuses `diffActive()` (`Block.mjs`, `opts.diffActive` — the same flag
+that already dims the card's own **border**, see "Focus highlight per stop" in
+`.claude/docs/keyboard-navigation.md`) as a second input, threaded all the way
+down through `codeDiff`/`codePane`/`unifiedCodeDiff`/`paneHTML`/`unifiedHTML`
+into `rowCellHTML`'s new `focused` parameter (and `translationSlot` →
+`translationBlockView`'s `opts.focused` → `translationRowCls`'s `focused`
+parameter):
+
+- **`focused` (diff owns the keyboard):** unchanged — indigo, 3px bar
+  (`shadow-[inset_3px_0_0_#6366f1]`) + the brighter del/ins/context tint.
+- **Not focused, but still the cursor's row:** the bar turns **grey and one
+  pixel thinner** — `shadow-[inset_2px_0_0_#94a3b8] dark:shadow-[inset_2px_0_0_#71717a]`
+  (slate-400/zinc-500) — and the background falls back to the row's ordinary
+  (non-active) tint, or the plain filler tint for a mark-less row (the empty
+  side of a one-sided add/remove). **Colour and thickness change together,
+  never colour alone** — the reviewer is colourblind (see `CLAUDE.md`).
+
+`Block()`'s own `diffActive` opt defaults to `() => true` (not `() => false`)
+for this reason: every real call site in `home.mjs` passes it explicitly (a
+preview/look-ahead card passes `() => false`, and also always pins
+`activeGroup: () => null`, so it never reaches the active branch at all), so
+the default only matters for a test/harness that constructs `Block()` directly
+and only cares about e.g. `activeGroup` — such a test gets the ordinary
+"focused" look without also having to wire `diffActive`.
+`translationBlockView`'s `opts.focused` mirrors this with its own
+`() => true` default. Test: `tests/diff-active-row-dim.spec.mjs`.
+
 ## TRANSLATION blocks
 
 ### Category
