@@ -708,6 +708,7 @@ function toNew(commentTargetFn) {
   cc.runId = null
   cc.status = 'idle'
   cc.progress = null
+  cc.sendError = ''
 }
 
 // toNewFocus is the mirror of toComment() for the still-open, not-yet-placed
@@ -1029,6 +1030,14 @@ const cc = reactive({
   // normal message with kind 'error' (see chat_workflow.go), not this field.
   status: 'idle',
   busy: false, // a message/turn is currently in flight (POST .../signals/message)
+  // sendError is the reviewer-facing sentence for a Signal POST that was
+  // REJECTED or never arrived — '' whenever the last send was accepted. This
+  // is deliberately separate from `status` (the panel's own load state) and
+  // from a kind:'error' turn (Claude answered, but the call failed): here the
+  // message never even reached the workflow, so nothing appears in the
+  // transcript at all and without this the column is simply inert. See
+  // sendClaudeMessage.
+  sendError: '',
   // progress is the VOLATILE snapshot of a turn Claude is running right now
   // (chat_progress.go): which phase/tool, plus the answer text produced so
   // far. Pushed over SSE (chat.progress) and refetched on (re)connect from
@@ -1109,6 +1118,7 @@ function syncClaudeAnchorForSelection() {
   cc.messages = []
   cc.runId = null
   cc.progress = null
+  cc.sendError = '' // another conversation, so the previous one's rejection no longer applies
   if (nextId == null) {
     cc.status = 'idle'
     return
@@ -1334,6 +1344,34 @@ function applyChatProgress(p) {
 // typed, by which time the reviewer may already be looking at another
 // conversation — it must still land on the one it was written for, and only
 // refetch the transcript when that is also the one currently in view.
+// sendErrorText turns a rejected Signal POST into one Dutch sentence that says
+// what to DO about it — the three statuses the message endpoint really
+// produces (tasks_api.go's handleWorkflows):
+//
+//   400 "invalid action"  — the running server does not know this action at
+//       all. In practice: a stale binary next to a fresh frontend. `src/` is
+//       served straight off disk, so a browser reload picks up a new button
+//       (e.g. "Opnieuw proberen", added with the `retry` action) while the Go
+//       process still runs yesterday's code and rejects it. This is exactly
+//       how the whole Claude column can look healthy and still refuse every
+//       press, which is the bug this function was written for.
+//   409 — SignalWorkflow refused because the Execution is already
+//       completed/failed, so this conversation can never accept another turn.
+//   anything else — an unexpected server-side failure; naming the status is
+//       the most useful thing we can say.
+//
+// Every sentence starts with a WORD, never a bare colour/red bubble, per the
+// colourblind rule in .claude/rules/conventions.md.
+function sendErrorText(status) {
+  if (status === 400) {
+    return 'Versturen geweigerd — de server kent deze actie niet. Herstart slash (de server draait een oudere versie dan deze pagina) en laad opnieuw.'
+  }
+  if (status === 409) {
+    return 'Dit gesprek is op de server afgesloten en neemt geen berichten meer aan. Wis het gesprek en begin opnieuw.'
+  }
+  return 'Versturen mislukt (HTTP ' + status + '). Probeer het opnieuw.'
+}
+
 async function sendClaudeMessage(text, action = '', context = '', target = null) {
   const trimmed = (text || '').trim()
   // 'commit'/'clear'/'retry' need no typed text — commit pushes whatever
@@ -1346,8 +1384,9 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
   if (!runId) return
   if (!needsNoText && !trimmed) return
   cc.busy = true
+  cc.sendError = ''
   try {
-    await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/message', {
+    const res = await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1357,10 +1396,24 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
         context: context || undefined,
       }),
     })
+    // A rejected Signal used to be swallowed whole: the response was never
+    // read, so the reviewer got no bubble, no status line and no hint that
+    // nothing had been sent — the column just sat there, inert. See
+    // sendErrorText for the three ways this actually happens.
+    if (!res.ok) {
+      cc.sendError = sendErrorText(res.status)
+      return
+    }
     if (commentId === cc.commentId) {
       await loadChatMessages(commentId)
       clearFinishedChatProgress()
     }
+  } catch (_) {
+    // fetch() only rejects when the request never completed at all (server
+    // down, connection dropped). Previously uncaught, so it escaped as an
+    // unhandled rejection out of the click handler — again with nothing
+    // visible in the column.
+    cc.sendError = 'Geen verbinding met de server — draait slash nog?'
   } finally {
     cc.busy = false
     // Whatever the reviewer typed meanwhile goes out now, one turn at a time.
@@ -1838,6 +1891,9 @@ function claudeChatView() {
     messages: () => cc.messages,
     status: () => cc.status,
     busy: () => cc.busy,
+    // The last send that never made it to the workflow — '' when there is
+    // none. See sendClaudeMessage/sendErrorText.
+    sendError: () => cc.sendError,
     claudePos: () => cs.claudePos,
     // The live turn: null when nothing is running. See cc.progress.
     progress: () => cc.progress,

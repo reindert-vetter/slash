@@ -1348,6 +1348,51 @@ Opus→Sonnet escalation, the `"retry"` Signal) is in
   the pill's mere presence already means "another model answered this one" —
   a word, never a colour.
 
+### A rejected Signal must not be silent
+
+`sendClaudeMessage` (`RelatedPanel.mjs`) used to `await fetch(...)` and never
+look at the response. A **rejected** message Signal therefore produced
+literally nothing in the UI: no bubble, no status line, no disabled button —
+the reviewer pressed "Stuur" (or "Opnieuw proberen") and the column just sat
+there, looking perfectly healthy. Bug report: "ik kan niet reageren op claude".
+
+The incident behind it: **`src/` is served straight off disk, the Go process is
+not.** A browser reload therefore picks up a frontend that is newer than the
+running binary. The page had the "Opnieuw proberen" button (and the palette
+twin), the server predated the `"retry"` action, and `handleWorkflows`'
+validate-before-exec switch answered every press with `400 invalid action`
+(`tasks_api.go`) — which the frontend then threw away. The button was dead with
+zero feedback and no way to tell it apart from a UI that had simply stopped
+working. The operational fix is a restart; the *code* fix is that the reviewer
+must be told.
+
+- `cc.sendError` holds the reviewer-facing sentence for the LAST send, `''`
+  when it was accepted. Cleared at the start of every send and wherever `cc`
+  itself resets (`toNew`, `syncClaudeAnchorForSelection`), so it never sticks
+  to another conversation.
+- `sendErrorText(status)` maps the three statuses the endpoint really produces:
+  **400** → "de server kent deze actie niet … herstart slash" (the version-skew
+  case above — the only one whose fix is not in the browser), **409** →
+  `SignalWorkflow` refused because this Execution is completed/failed, so the
+  conversation can never take another turn, **anything else** → named by
+  status. The `catch` (previously absent, so the rejection escaped as an
+  unhandled rejection out of the click handler) covers "the request never
+  completed at all".
+- `claudeSendError(view)` (`ClaudeChat.mjs`) renders it directly **above the
+  composer**, not in the thread: nothing was stored, so it is not a turn, and
+  the reviewer's next move (reload, restart, wipe) is a composer-level one.
+  Leading word "Niet verstuurd" + a glyph carries the meaning, the rose tint is
+  decoration (colourblind rule). A `${() => ...}` function binding, per the
+  statically-interpolated-template↔string pitfall.
+- Deliberately distinct from the two error states that already existed:
+  `cc.status === 'error'` is the PANEL failing to load, and a `kind: 'error'`
+  bubble means Claude **was** reached and the call failed. This one means the
+  message never left the page.
+- Test: `tests/claude-chat-send-rejected.spec.mjs` (mocked 400, then an
+  accepted send clears the line again). The three hand-built `view` stubs in
+  `claude-chat-panel.spec.mjs` grew a `sendError: () => ''` along with the
+  contract.
+
 ## "Wis Claude-gesprek" — clearing a conversation (chatActionClear)
 
 A confirm-gated command-palette item, not a header button (explicit product

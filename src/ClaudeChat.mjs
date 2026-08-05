@@ -502,6 +502,49 @@ function claudeBubble(msg, i, total, claudePos, onSend, onRetry, busy) {
   `
 }
 
+// claudeSendError — the one line that says "your message never left the
+// page". It sits directly above the composer (not in the thread): nothing was
+// stored, so it is not a turn, and the reviewer's next action — reload,
+// restart, wipe the conversation — is a composer-level one.
+//
+// Distinct from a kind:'error' BUBBLE, which means Claude was reached and the
+// call itself failed. Without this the column stayed completely inert on a
+// rejected Signal: no bubble, no status, nothing at all (see
+// sendClaudeMessage/sendErrorText in RelatedPanel.mjs, and "A rejected Signal
+// must not be silent" in .claude/docs/claude-chat-panel.md).
+//
+// A `${() => ...}` FUNCTION binding, per the "statically interpolated
+// template↔string slot" pitfall — the slot toggles between a template and
+// '', which only the reactive path handles correctly. The leading warning
+// WORD carries the meaning; the rose tint is decoration only (colourblind
+// rule).
+function claudeSendError(view) {
+  const text = view.sendError()
+  if (!text) return ''
+  return html`
+    <p
+      class="flex items-start gap-1.5 rounded-lg border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300"
+      data-testid="claude-send-error"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="mt-0.5 h-3 w-3 shrink-0"
+      >
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path>
+        <line x1="12" y1="9" x2="12" y2="13"></line>
+        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+      </svg>
+      <span><span class="font-semibold">Niet verstuurd</span> — ${text}</span>
+    </p>
+  `
+}
+
 // claudeChatColumn is the exported render. `view` = { messages, status,
 // busy, claudePos } — each a GETTER function (see the file-level doc
 // comment); `callbacks.onSend(text)` posts a reviewer turn (free text OR a
@@ -594,6 +637,7 @@ export function claudeChatColumn(view, callbacks) {
         ${() => claudePartialBubble(view)}
         ${() => claudeQueuedBubbles(view)}
       </div>
+      ${() => claudeSendError(view)}
       <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
         <textarea
           rows="1"
