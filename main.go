@@ -82,6 +82,20 @@ func runServe(args []string) {
 	if err := os.MkdirAll(resolvedData, 0o755); err != nil {
 		log.Fatalf("mkdir %s: %v", resolvedData, err)
 	}
+
+	// Bind the listener as early as possible — before opening the DB and
+	// before newTasks (which itself runs a synchronous slice of startup:
+	// engine.Recover() re-drives Normal/High priority runs inline, see
+	// tembed/engine.go). This way the TCP port is already accepting
+	// connections while that work runs, instead of only after it finishes.
+	// http.Serve below is what actually starts consuming those connections,
+	// once srv/tk are ready.
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("PR Review Tree listening on http://%s", *addr)
+
 	resolvedDB := dbPath(*dbFlag)
 	db, err := openDB(resolvedDB)
 	if err != nil {
@@ -99,18 +113,14 @@ func runServe(args []string) {
 
 	srv := &server{db: db, dataDir: resolvedData, tasks: tk, avatars: newAvatarCache()}
 
-	// Bind the listener before opening the ready gate: newTasks armed it (see
-	// tasks_api.go) so every background poller/trigger resumed during Recover
-	// (pollIngestRefresh, pollImportComments, the pr_inbox/task_inbox initial
-	// fetch, the automatic code_warning worker) waits right here — the port is
-	// bound first, so the server is reachable, and only THEN does that
-	// possibly large batch of background work (network calls, `claude`
-	// subprocess calls, workflows.db writes) start competing for resources.
-	ln, err := net.Listen("tcp", *addr)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("PR Review Tree listening on http://%s", *addr)
+	// Open the ready gate now: newTasks armed it (see tasks_api.go) so every
+	// background poller/trigger resumed during Recover (pollIngestRefresh,
+	// pollImportComments, the pr_inbox/task_inbox initial fetch, the automatic
+	// code_warning worker) has been parked behind it since it spawned — the
+	// listener above has already been accepting connections this whole time,
+	// and only now does that possibly large batch of background work (network
+	// calls, `claude` subprocess calls, workflows.db writes) start competing
+	// for resources.
 	tk.manager.MarkReady()
 	if err := http.Serve(ln, srv.routes(*staticDir)); err != nil {
 		log.Fatal(err)
