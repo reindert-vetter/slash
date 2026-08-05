@@ -147,6 +147,90 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   await expect(page.getByTestId('reaction-compose')).toBeFocused()
 })
 
+// The visible Claude column must follow whichever comment is currently
+// selected, even without the keyboard explicitly entering 'claude' — see
+// "The Claude column must follow the browsed comment, not just the
+// last-entered one" in claude-chat-panel.md. Regression for a bug where
+// selecting a SECOND comment (here: one that never had a Claude conversation
+// at all) kept showing the FIRST comment's already-loaded transcript, because
+// nothing resynced `cc` on a bare selection change. Two threads on the exact
+// same unit, mirroring the first test's own two-thread setup.
+test('the Claude column follows the selected comment: blanks for one with no conversation, reloads read-only for one that has one', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start1 = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'eerste comment, met een Claude-gesprek',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start1.json()).runId).toBeTruthy()
+
+  const start2 = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'tweede comment, nog geen Claude-gesprek gehad',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start2.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  const items = page.getByTestId('comment-item')
+  await expect(items).toHaveCount(2)
+
+  // Give the FIRST comment (rendered last — newest on top, see the first
+  // test's own ordering note) a real Claude conversation.
+  const first = items.filter({ hasText: 'eerste comment' })
+  await first.click()
+  await page.keyboard.press('ArrowUp') // comment -> its own thread bubble
+  await page.keyboard.press('ArrowRight') // thread -> claude
+  const composer = page.getByTestId('claude-chat-compose')
+  await expect(composer).toBeFocused()
+  await composer.fill('Kun je hier iets over zeggen?')
+  await composer.press('Enter')
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+  await expect(page.getByTestId('claude-message')).toHaveCount(2)
+
+  // Watch for a genuine claude_chat Execution start — merely browsing to the
+  // second comment (never entering its own 'claude' focus) must not fire one.
+  let claudeChatStarted = false
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && req.url().includes('/api/workflows/claude_chat')) claudeChatStarted = true
+  })
+
+  // Click the SECOND comment's compact card directly — cs.sel moves, but the
+  // keyboard never enters 'claude' focus for it.
+  const second = items.filter({ hasText: 'tweede comment' })
+  await second.click()
+  await expect(second).toHaveAttribute('data-expanded', 'true')
+
+  // The Claude column must now show ITS own (empty) state, not the first
+  // comment's stale transcript.
+  await expect(page.getByTestId('claude-chat-empty')).toBeVisible()
+  await expect(page.getByTestId('claude-message')).toHaveCount(0)
+  expect(claudeChatStarted).toBe(false)
+
+  // Clicking back onto the first comment reloads its real transcript
+  // read-only (no fresh "Wis Claude-gesprek"-worthy Execution start either).
+  await first.click()
+  await expect(page.getByTestId('claude-message')).toHaveCount(2)
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+  expect(claudeChatStarted).toBe(false)
+})
+
 // ↓ at the bottom of the Claude conversation (claudePos === 0) used to fall
 // into the Onderliggende-code panel — an unwanted extra "menu" in the way of
 // just continuing the review (explicit request). It now advances straight to

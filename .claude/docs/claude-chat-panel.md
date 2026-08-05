@@ -332,6 +332,71 @@ visible the whole time it owns the keyboard. Test: the "code card above the
 comment/Claude row stays visible after → into an anchored Claude conversation"
 case in `tests/claude-chat-panel.spec.mjs`.
 
+### The Claude column must follow the browsed comment, not just the last-entered one
+
+`claudeChatVisible()` shows the column for **any** visible comment, regardless
+of `cs.focus` — browsing with the keyboard still on the diff or on `'code'`
+shows it too, not only `'comment'`/`'thread'`/`'claude'`. But until this fix
+nothing ever refreshed `cc` when the reviewer merely moved `cs.sel` to a
+DIFFERENT comment without explicitly entering `'claude'` (the only paths that
+ever wrote `cc` were `enterClaudeChat`, `applyRelRestore`'s `'claude'` branch,
+and `ensureClaudeAnchorForNew`) — so the column kept showing whichever
+conversation was last entered, unrelated to whatever comment the reviewer had
+since selected. Reported bug: selecting a second comment (an AI-controle
+warning that never had a Claude conversation) while a DIFFERENT comment's
+conversation was still loaded in `cc` kept showing that other, unrelated
+transcript instead of the empty state the newly selected comment deserves.
+
+**`syncClaudeAnchorForSelection()`** (`RelatedPanel.mjs`, module-level
+`watch(() => [cs.sel, cs.focus, cs.list, cs.scopeSig],
+syncClaudeAnchorForSelection)`, deps listed inline per the arrow.js `watch`
+pitfall) keeps `cc` matched to `chatAnchorComment()` passively:
+
+- **Skips entirely while `cs.focus === 'claude'` or `'new'`** — those two
+  already own `cc` completely (`enterClaudeChat`/`applyRelRestore`/
+  `ensureClaudeAnchorForNew`, resp. `toNew`) and this passive sync must never
+  race or fight with them. Every other focus (`null`, `'code'`,
+  `'comment'`, `'thread'`) falls through to the sync.
+- **No-ops when the resolved anchor's id already matches `cc.commentId`** —
+  so stepping `←`/`Escape` out of an anchored `'claude'` conversation back to
+  `'comment'` (unchanged `cs.sel`) costs nothing extra.
+- **Never calls `ensureAndLoadChat`** (the idempotent-but-CREATING
+  `POST /api/workflows/claude_chat`) — merely browsing the comment list must
+  not spin up a `claude_chat` Execution for a comment nobody has chatted
+  about yet, the same "nothing auto-creates a conversation" invariant as the
+  removed placeholder comment (see "Product decision" above). It always does
+  a plain read-only `GET` instead (`loadChatMessages`/`loadChatProgress`) and
+  lets the response decide: `GET /api/chat?commentId=` is safe and
+  side-effect-free even for a comment that never had a conversation at all
+  (`tasks_api.go`'s `handleChat` just returns an empty `messages` array), so
+  there is no need to gate this on `cc.conversations` first. That set is only
+  refreshed on the comment poll's own cadence (`loadChatConversations`) and
+  can lag behind a conversation the reviewer just started in THIS tab — an
+  earlier version of this fix gated on it and briefly treated a real,
+  just-created conversation as nonexistent when switching straight back to it.
+- **Calls `loadChatMessages(nextId, false)`** — the `applyDrafts = false` arg
+  skips `applyPendingDraftReplies` for this preload specifically. Without it,
+  a comment whose conversation already carries an unread `chat.KindDraftReply`
+  turn (see "A `reply` directive only drafts, never posts" above) would have
+  Claude's drafted text silently written into `reaction-compose` the instant
+  the reviewer merely SELECTS the comment — before they've had any chance to
+  type (or decide not to type) their own reply — breaking rule 3's "an
+  already-typed reviewer draft is never overwritten" ordering the moment the
+  reviewer's own keystrokes land after that eager write. Every explicit
+  "the reviewer is actually looking at/using this conversation" caller
+  (`ensureAndLoadChat`, `applyRelRestore`, the `chat.message` SSE handler, the
+  resync) keeps the default `applyDrafts = true` — the merge still happens the
+  moment `'claude'` is actually entered, same as before this fix.
+- **`cs.scopeSig`** (not `cs.scope` itself, a fresh object every
+  `setCommentScope` call) is in the dependency list so a bare block switch —
+  which changes which comment is "current" via `recomputeView`'s
+  reassignment of `cs.view`, without necessarily touching `cs.sel`/`cs.list`
+  — also re-fires this sync; `cs.list` alone is not enough for that case.
+
+Test: the "the Claude column blanks when browsing to a comment with no
+conversation, and loads read-only for one that has one" case in
+`tests/claude-chat-panel.spec.mjs`.
+
 ## `RelatedPanel.mjs`: state, not template
 
 The "Embedded Claude conversation" section owns:

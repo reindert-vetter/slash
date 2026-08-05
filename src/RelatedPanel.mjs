@@ -10,7 +10,7 @@
 // from home.mjs' prInfoCard area).
 
 import { html } from './vendor/arrow.js'
-import { reactive } from './vendor/arrow.js'
+import { reactive, watch } from './vendor/arrow.js'
 import { highlight, blockLabel, codeGrowthChars } from './Block.mjs'
 import { translationValueView } from './translationDiff.mjs'
 import { statusInfo, categoryClass } from './BlockList.mjs'
@@ -1045,6 +1045,62 @@ function chatAnchorComment() {
   return cs.list.find((x) => x.file === s.file && x.label === s.label && hasTurns(x.id)) || null
 }
 
+// syncClaudeAnchorForSelection keeps the VISIBLE Claude column matched to
+// whichever comment is currently selected/scoped — claudeChatVisible() shows
+// the column for ANY visible comment, regardless of cs.focus (browsing with
+// the keyboard still on the diff, or on 'code', shows it too, not only
+// 'comment'/'thread'/'claude' — see claudeChatVisible()'s doc comment), but
+// until this watch existed nothing ever refreshed `cc` when the reviewer
+// merely moved cs.sel to a DIFFERENT comment without explicitly entering
+// 'claude' — so the column kept showing whatever conversation was last
+// entered, unrelated to the newly selected comment. Bug report: selecting an
+// AI-controle finding that never had a Claude conversation still showed the
+// previous comment's transcript.
+//
+// Deliberately skips 'claude' and 'new' focus — those two already own `cc`
+// completely (enterClaudeChat/applyRelRestore/ensureClaudeAnchorForNew resp.
+// toNew), and this passive sync must never race or fight with them.
+//
+// Deliberately NEVER calls ensureAndLoadChat (the idempotent-but-CREATING
+// `POST /api/workflows/claude_chat`) — merely browsing the comment list must
+// not spin up a claude_chat Execution for a comment nobody chatted about yet
+// (the same "nothing auto-creates a conversation" rule as the removed
+// placeholder comment, see "Product decision" in claude-chat-panel.md). It
+// always does a plain read-only GET (loadChatMessages/loadChatProgress)
+// instead — `GET /api/chat?commentId=` is safe and side-effect-free even for
+// a comment that never had a conversation at all (it just returns an empty
+// `messages` array, see tasks_api.go's handleChat), so there is no need to
+// gate this on cc.conversations first: that set is only refreshed on the
+// comment poll's own cadence (loadChatConversations) and can lag behind a
+// conversation the reviewer just started in THIS tab, which briefly made this
+// sync wrongly treat a real, just-created conversation as nonexistent.
+function syncClaudeAnchorForSelection() {
+  if (cs.focus === 'claude' || cs.focus === 'new') return
+  const c = chatAnchorComment()
+  const nextId = c ? c.id : null
+  if (nextId === cc.commentId) return
+  cc.commentId = nextId
+  cc.messages = []
+  cc.runId = null
+  cc.progress = null
+  if (nextId == null) {
+    cc.status = 'idle'
+    return
+  }
+  cc.status = 'loading'
+  loadChatMessages(nextId, false)
+  loadChatProgress(nextId)
+}
+
+// The getter lists cs.sel/cs.focus/cs.list/cs.scopeSig INLINE (per the
+// arrow.js `watch` pitfall — reads buried inside a called function can drop
+// out of the crystallized dependency set on an early-return path); cs.scopeSig
+// is the cheap primitive setCommentScope already bumps on every real scope
+// change (a block switch), so this watch also re-fires on a bare ↓/↑ between
+// blocks, not only when cs.sel/cs.list itself changes. The work happens in
+// the callback via chatAnchorComment()/selComment().
+watch(() => [cs.sel, cs.focus, cs.list, cs.scopeSig], syncClaudeAnchorForSelection)
+
 // loadChatConversations refreshes cc.conversations for pr — read-only GET, so
 // it rides along with the comment poll (loadComments) rather than owning a
 // timer of its own.
@@ -1159,7 +1215,17 @@ function applyPendingDraftReplies(commentId) {
 // loadChatMessages re-fetches the transcript (read-only GET, safe to poll).
 // Guards against a stale response landing after the reviewer has since
 // switched to a different comment's conversation.
-async function loadChatMessages(commentId) {
+// applyDrafts defaults to true for every explicit "the reviewer is actually
+// looking at/using this conversation" caller (ensureAndLoadChat,
+// applyRelRestore, the chat.message SSE handler, the resync). It is passed
+// `false` only by syncClaudeAnchorForSelection's passive preload — merely
+// selecting a comment must not silently write a Claude-drafted reply into the
+// reaction-compose field the moment its data happens to arrive, before the
+// reviewer has had a chance to type (or decide not to) their own reply; see
+// "The Claude column must follow the browsed comment" in
+// claude-chat-panel.md. The transcript itself still loads either way — only
+// the reply-field side effect is skipped.
+async function loadChatMessages(commentId, applyDrafts = true) {
   try {
     const res = await fetch('/api/chat?commentId=' + encodeURIComponent(commentId))
     if (!res.ok) return
@@ -1167,7 +1233,7 @@ async function loadChatMessages(commentId) {
     if (cc.commentId !== commentId) return // stale — a later switch already won
     cc.messages = json.messages || []
     cc.status = 'idle'
-    applyPendingDraftReplies(commentId)
+    if (applyDrafts) applyPendingDraftReplies(commentId)
     scrollClaudeThreadToBottom()
   } catch (_) {
     // keep the last good transcript on a transient error
