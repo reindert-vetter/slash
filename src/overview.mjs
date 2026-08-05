@@ -122,6 +122,12 @@ const ICON_PATHS = {
   // 'arrow-up' — the "still has to go up to GitHub" glyph next to the
   // "Ongepusht" chip (unpushedPill).
   'arrow-up': '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
+  // 'tree' — the graphChip glyph for a PR that has no review tree yet
+  // ("Op GitHub"), replacing the earlier external-link icon there (that
+  // icon stays in use for the real link-open actions, see popover()).
+  // Lucide's stacked-triangle "tree-pine" outline, same 24x24/stroke-2
+  // convention as the rest of this set.
+  tree: '<path d="m17 14 3 3.3a1 1 0 0 1-.7 1.7H4.7a1 1 0 0 1-.7-1.7L7 14h-.3a1 1 0 0 1-.7-1.7L9 9h-.2A1 1 0 0 1 8 7.3L12 3l4 4.3a1 1 0 0 1-.8 1.7H15l3 3.3a1 1 0 0 1-.7 1.7H17Z"/><path d="M12 22v-3"/>',
 }
 
 // icon renders one outline SVG (24x24 viewBox, stroke=currentColor). The path
@@ -405,7 +411,7 @@ function statusArea(pr) {
 
 function graphChip(pr) {
   if (pr.hasGraph) return iconChip('sparkles', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'graph-chip', 'Gegenereerd')
-  return iconChip('external-link', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30', 'graph-chip', 'Op GitHub')
+  return iconChip('tree', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30', 'graph-chip', 'Op GitHub')
 }
 
 // approvalPill — the per-PR reviewer-approval badge (done/total changed rows over
