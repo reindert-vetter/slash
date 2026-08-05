@@ -6560,6 +6560,30 @@ function toggleApprove(auto = false) {
   afterApproveAction(!allIn, b.id, auto)
 }
 
+// toggleTestClassApproval is the class-level counterpart of Block.mjs's top
+// checkbox (toggleBlockApproval): approves — or, if already fully approved,
+// clears — every method of a test_class row (see testClassRowItem/
+// "Grouping test methods per class" in test-class-grouping.md) in one action,
+// from the checkbox in the methodes-kolom header (TestMethodsColumn.mjs).
+// Unlike a single block, most methods here have never had their code fetched
+// (only the ACTIVE method loads lazily, see curBlock()/ensureCode) — so
+// blockRows(m)/changedRows(...) would be empty for the rest and approving
+// would silently approve nothing. Approving therefore first awaits every
+// method's code via ensureCode (a no-op for one already loaded/loading —
+// see codeRequested), THEN computes each method's full changed-row set.
+// Same scope decision as the block checkbox: no afterApproveAction/postApprove
+// menu, each method persisted individually through the existing single-block
+// `approve` Signal (persistApproval) — never a direct write.
+async function toggleTestClassApproval(row) {
+  const s = state.approvalSummaries && state.approvalSummaries[row.id]
+  const approving = !(s && s.total > 0 && s.done === s.total)
+  if (approving) await Promise.all(row.methods.map((m) => ensureCode(m)))
+  for (const m of row.methods) {
+    m.approvedRows = approving ? changedRows(blockRows(m)) : []
+    persistApproval(m)
+  }
+}
+
 // toggleCallApprove flips approval of exactly the one call segment the
 // keyboard is currently on, tracked at sub-row granularity in b.approvedCalls
 // (see callKey). `change` is the call-granularity unit index to act on —
@@ -9058,7 +9082,7 @@ function DetailPanel(state) {
         // so ← from that diff brings it straight back — see
         // keyboard-navigation.md, stop 2b).
         if (!row || state.focusLevel !== 0 || state.mode === 'diff') return []
-        return [TestMethodsColumn(state, row).key('testmethods:' + row.id)]
+        return [TestMethodsColumn(state, row, toggleTestClassApproval).key('testmethods:' + row.id)]
       }}
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="block-column">
       ${() => {

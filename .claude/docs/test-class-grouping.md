@@ -172,6 +172,33 @@ iteration. See `.claude/docs/approval.md` for the generic rollup and
 `tests/test-class-grouping.spec.mjs` ("approving a method rolls up into the class
 pill, and the PR-wide total stays correct").
 
+## Approving the whole class in one action
+
+The methodes-kolom header's `done/total methodes` pill (fed by the same
+`approvalSummaries[row.id]` above) doubles as a checkbox
+(`data-testid=test-class-approve-checkbox`, `TestMethodsColumn.mjs`) — the
+class-level counterpart of `Block.mjs`'s top checkbox
+(`blockApproved`/`blockPartlyApproved`/`toggleBlockApproval`, see
+`.claude/docs/approval.md`): checked once every method is fully approved,
+indeterminate while partial, a click approves or clears **every** method of
+the class in one action (`toggleTestClassApproval`, `home.mjs`) instead of
+having to step through each method individually.
+
+Only the currently **active** method has its code loaded (`curBlock()`/
+`ensureCode`, lazy per method) — the rest have no fetched diff yet, so
+`blockRows(m)`/`changedRows(...)` would be empty for them. Approving therefore
+first `await`s `ensureCode(m)` for every method (a no-op for one already
+loaded/loading, see `codeRequested`) before computing each method's full
+changed-row set; clearing needs no such wait, it just sets every method's
+`approvedRows` to `[]`. Each method is persisted individually through the
+existing single-block `approve` Signal (`persistApproval`) — the class
+checkbox issues one Signal per method, never a batch/direct write. Same scope
+decision as the block checkbox: no `afterApproveAction`/postApprove-menu
+follow-up, this is a bulk toggle, not a step in the review flow.
+
+Test: `tests/test-class-grouping.spec.mjs` ("the class checkbox approves every
+method, and clears them again").
+
 ## URL state
 
 `?sel=testclass:<file>::<class>` mirrors the selected class row

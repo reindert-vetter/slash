@@ -309,4 +309,59 @@ test.describe('test methods group per class', () => {
     await expect(page.getByTestId('test-methods-column')).toBeVisible()
     await expect(rows.nth(1)).toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
   })
+
+  // The methodes-kolom header checkbox approves every method of the class in
+  // one action (toggleTestClassApproval, home.mjs) — the class-level
+  // counterpart of Block.mjs's top checkbox. Only the ACTIVE method's code is
+  // loaded up front, so approving must first fetch the other method's code
+  // (ensureCode) before it can compute its changed rows — this is the
+  // regression the async wait guards against (approving used to be a no-op
+  // for a never-opened method). Every method is still persisted through the
+  // existing single-block `approve` Signal, never a direct/batch write.
+  test('the class checkbox approves every method, and clears them again', async ({ page }) => {
+    await page.goto(`/pr/${PR}`)
+    await page.getByTestId('block-row').filter({ hasText: 'TriggersIndexTest' }).click()
+
+    const checkbox = page.getByTestId('test-class-approve-checkbox').locator('input[type=checkbox]')
+    const methodRows = page.getByTestId('test-method-row')
+    await expect(checkbox).toBeVisible()
+    await expect(checkbox).not.toBeChecked()
+    // Method 1 (it_should_filter_triggers) is not the active one, so its code
+    // has never been fetched yet.
+    await expect(methodRows.nth(1)).not.toContainText('✓')
+
+    const method0 = '110:tests/Feature/TriggersIndexTest.php:TriggersIndexTest::it_should_index_triggers'
+    const method1 = '110:tests/Feature/TriggersIndexTest.php:TriggersIndexTest::it_should_filter_triggers'
+    const approvedRowCounts = async () => {
+      const res = await page.request.get(`/api/approvals?pr=${PR}`)
+      const rows = await res.json()
+      const rowsFor = (id) => (Array.isArray(rows) ? rows.find((r) => r.blockId === id) : null)?.rows.length || 0
+      return [rowsFor(method0), rowsFor(method1)]
+    }
+
+    await checkbox.click()
+
+    await expect
+      .poll(async () => {
+        const [a, b] = await approvedRowCounts()
+        return a > 0 && b > 0
+      })
+      .toBe(true)
+
+    await expect(checkbox).toBeChecked()
+    await expect(methodRows.nth(0)).toContainText('✓')
+    await expect(methodRows.nth(1)).toContainText('✓')
+
+    // Clicking again clears every method's approval.
+    await checkbox.click()
+    await expect
+      .poll(async () => {
+        const [a, b] = await approvedRowCounts()
+        return a + b
+      })
+      .toBe(0)
+    await expect(checkbox).not.toBeChecked()
+    await expect(methodRows.nth(0)).not.toContainText('✓')
+    await expect(methodRows.nth(1)).not.toContainText('✓')
+  })
 })

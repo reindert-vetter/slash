@@ -104,7 +104,7 @@ function methodRow(state, row, m, idx) {
   `.key(m.id + ':' + (m.approvedRows ? m.approvedRows.length : 0) + ':' + (m.approvedCalls ? m.approvedCalls.length : 0))
 }
 
-export default function TestMethodsColumn(state, row) {
+export default function TestMethodsColumn(state, row, onApproveClass) {
   return html`
     <div
       class="${() =>
@@ -133,19 +133,40 @@ export default function TestMethodsColumn(state, row) {
           >
         </div>
         ${() => {
+          // Class-level checkbox — the same "top checkbox on a block card"
+          // convention as Block.mjs's blockApproved/blockPartlyApproved/
+          // toggleBlockApproval (checked/indeterminate off a done/total
+          // fraction, click approves-or-clears everything), applied to every
+          // method of this class in one action instead of one block's rows.
+          // Reuses the same {done,total} the plain pill used to show
+          // (state.approvalSummaries[row.id], the narrow "own rows only" sum
+          // — see blockApproveCount's test_class branch), so appearance is
+          // unchanged until the reviewer actually clicks. See "Approving the
+          // whole class in one action" in test-class-grouping.md.
           const s = state.approvalSummaries && state.approvalSummaries[row.id]
           if (!s || !s.total) return ''
           const done = s.done === s.total
           return html`
-            <p class="mt-1 text-xs" data-testid="test-class-approval">
+            <label
+              class="mt-1 flex cursor-pointer items-center gap-1.5 text-xs"
+              data-testid="test-class-approve-checkbox"
+            >
+              <input
+                type="checkbox"
+                class="h-3.5 w-3.5 rounded border-slate-300 dark:border-zinc-700"
+                checked="${() => done}"
+                .indeterminate="${() => s.done > 0 && !done}"
+                @change="${() => onApproveClass && onApproveClass(row)}"
+              />
               <span
                 class="${'rounded px-1.5 py-0.5 font-semibold tabular-nums ' +
                 (done
                   ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
                   : 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400')}"
+                data-testid="test-class-approval"
                 >${done ? '✓ ' : ''}${s.done}/${s.total} methodes</span
               >
-            </p>
+            </label>
           `
         }}
       </header>

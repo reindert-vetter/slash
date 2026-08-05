@@ -22,6 +22,11 @@ counter; clicking approves or clears everything. A fully approved row shows a
 small emerald **checkmark** in the left margin (the active indigo bar wins while
 the cursor sits on it).
 
+The methodes-kolom header of a grouped test class has its own checkbox in the
+same shape, but for the whole **class** at once (every method, not one
+block's rows) — see "Approving the whole class in one action" in
+`.claude/docs/test-class-grouping.md`.
+
 **Call segments are finer than a row.** At `call` level one row can hold several
 segments (`segmentCalls`), so `b.approvedCalls` holds `${row}:${segStart}` keys
 (`callKey`/`approvedCallSet`/`rowCallSegments` in `Block.mjs`) alongside
