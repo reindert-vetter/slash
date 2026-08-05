@@ -150,10 +150,18 @@ and repositions). `ms.sub` holds the open child list; `resolveCommands` filters
 that instead of the root list (without the comment fallback).
 
 If filtering yields **nothing** for a non-empty query, the menu falls back to
-one item, **"Create a comment with this"**, which starts the typed text
-directly as a comment task on the selected line (`createComment` from
-`RelatedPanel.mjs` → `POST /api/workflows/task_code_comment`, within the write
-boundary). Filter + fallback both live in `resolveCommands(query)`.
+**two** items, both prefilling their own composer with the typed text instead
+of running anything immediately: **"Maak hiermee een comment"** (default, first
+— opens the comment composer via `startComment`, same target as the ordinary
+`comment` row in `COMMANDS`) and **"Chat over deze regel"** (opens the Claude
+composer via `startClaudeChat`, prefilling `claude-chat-compose` instead of
+`comment-compose`). Neither posts/sends on its own — placing the comment still
+goes through the ordinary compose flow (`createComment` from `RelatedPanel.mjs`
+→ `POST /api/workflows/task_code_comment`, within the write boundary), and the
+Claude composer only sends once the reviewer presses Enter/"Stuur" there. This
+is a **plain array, not `withClose`** — so index 0 (not index 1 via
+`defaultSel`) is the default Enter action, which is why the comment item must
+stay first. Filter + fallback both live in `resolveCommands(query)`.
 
 ## `Enter` — the block palette (`COMMANDS`)
 

@@ -7321,10 +7321,11 @@ function rootCommandsFor(mode) {
 // resolveCommands returns the commands to show for `query`: the fuzzy-matched
 // `ms.commands` (a plain-string-label snapshot of the current mode's root list,
 // built by openMenu/rootCommandsFor+snapshotCommands), or — when nothing
-// matches a non-empty query in the default 'block' mode — a single fallback
-// that opens the composer with the typed text pre-filled, so the reviewer can
-// continue typing ("Maak hiermee een comment"). Shared by the menu render and
-// the keyboard handler so both walk the same list.
+// matches a non-empty query in the default 'block' mode — a two-item fallback
+// that opens either the comment composer or the Claude composer with the
+// typed text pre-filled, so the reviewer can continue typing ("Maak hiermee
+// een comment", default, and "Chat over deze regel"). Shared by the menu
+// render and the keyboard handler so both walk the same list.
 function resolveCommands(query) {
   // A submenu (ms.sub, set by enterSubmenu when a command has `children` —
   // e.g. "Open GitHub", or REVIEW_APPROVE_CONFIRM_COMMANDS opened from
@@ -7396,6 +7397,13 @@ function resolveCommands(query) {
   const list = filterCommands(ms.commands, query)
   const q = (query || '').trim()
   if (list.length === 0 && q) {
+    // "Maak hiermee een comment" stays FIRST (thus the default Enter action —
+    // this fallback is a plain array, not run through withClose/defaultSel,
+    // so index 0 IS the default here): unchanged pre-existing behavior. "Chat
+    // over deze regel" is the reviewer's requested second option, same shape
+    // as the comment one but prefilling the Claude composer
+    // (claude-chat-compose) instead of the comment composer — see
+    // startClaudeChat's own doc comment for why it reuses startComment's setup.
     return [
       {
         id: 'make-comment',
@@ -7405,6 +7413,21 @@ function resolveCommands(query) {
           startComment(commentTarget)
           requestAnimationFrame(() => {
             const el = document.querySelector('[data-testid=comment-compose]')
+            if (el) {
+              el.value = q
+              el.focus()
+            }
+          })
+        },
+      },
+      {
+        id: 'make-claude-chat',
+        label: 'Chat over deze regel',
+        hint: 'claude',
+        run: () => {
+          startClaudeChat(commentTarget)
+          requestAnimationFrame(() => {
+            const el = document.querySelector('[data-testid=claude-chat-compose]')
             if (el) {
               el.value = q
               el.focus()

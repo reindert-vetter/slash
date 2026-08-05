@@ -137,10 +137,12 @@ test.describe('PR Review Tree — command palette', () => {
     await page.keyboard.press('Enter')
     const rows = page.getByTestId('command-row')
 
-    // A query matching no command collapses to the single comment fallback.
+    // A query matching no command collapses to the two-item fallback, comment
+    // first (the default Enter action — see resolveCommands in home.mjs).
     await page.getByTestId('command-input').fill('dit klopt niet helemaal')
-    await expect(rows).toHaveCount(1)
+    await expect(rows).toHaveCount(2)
     await expect(rows.first()).toContainText('Maak hiermee een comment')
+    await expect(rows.nth(1)).toContainText('Chat over deze regel')
 
     // Enter runs it: the menu closes and the comments composer opens with the
     // typed text already in the textarea, ready to keep typing — nothing is
@@ -168,6 +170,32 @@ test.describe('PR Review Tree — command palette', () => {
     // can show the same code the composer did (see composeTargetHint reuse).
     expect(posted.code).toBeTruthy()
     expect(posted.label).toBeTruthy()
+  })
+
+  test('no match: second fallback item "Chat over deze regel" pre-fills the Claude composer', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    // Same block choice as the comment-fallback test above (a real changed line).
+    await page.locator('[data-idx="1"]').click()
+    await leaveSearchBox(page)
+
+    await page.keyboard.press('Enter')
+    const rows = page.getByTestId('command-row')
+    await page.getByTestId('command-input').fill('dit klopt niet helemaal')
+    await expect(rows).toHaveCount(2)
+
+    // ↓ selects the 2nd row; Enter runs it — the menu closes and the Claude
+    // composer opens with the typed text already in the textarea, focused,
+    // ready to keep typing. Nothing is sent until the reviewer presses
+    // Enter/"Stuur" in that composer.
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
+    const composer = page.getByTestId('claude-chat-compose')
+    await expect(composer).toBeVisible()
+    await expect(composer).toHaveValue('dit klopt niet helemaal')
+    await expect(composer).toBeFocused()
   })
 
   // The comment-kind menu: Enter (or the send button) on a filled composer opens
