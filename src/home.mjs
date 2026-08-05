@@ -5102,8 +5102,12 @@ const REVIEW_APPROVE_COMMANDS = withClose([
 // opens the dedicated free-text follow-up step instead (menu mode
 // 'reviewReject' below) — that mandatory-reason step already is its own
 // deliberate extra action, so it needed no additional confirm layer here.
-// "Sluit menu" is pinned first (withClose); the menu opens on the 2nd item
-// (defaultSel), so "Keur de HELE PR goed" stays the default Enter action.
+// Both items carry an icon (commandIcon in CommandMenu.mjs) — a check-in-
+// circle for approve, an X-in-circle for reject — so the two opposite
+// choices are told apart by SHAPE, not only by the emerald/rose tint
+// (colorblind rule: the tint is decoration on top only). "Sluit menu" is
+// pinned first (withClose); the menu opens on the 2nd item (defaultSel), so
+// "Keur de HELE PR goed" stays the default Enter action.
 const REVIEW_CHOICE_COMMANDS = withClose([
   {
     id: 'review-choice-approve',
@@ -5116,6 +5120,7 @@ const REVIEW_CHOICE_COMMANDS = withClose([
     id: 'review-choice-reject',
     label: 'Wijs de PR af',
     hint: 'reject',
+    icon: 'reject-pr',
     run: () => openMenu('reviewReject'),
   },
 ])

@@ -180,6 +180,11 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await expect(rows.nth(0)).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('Keur de HELE PR goed')
     await expect(rows.nth(2)).toContainText('Wijs de PR af')
+    // Colorblind rule: approve and reject are told apart by icon SHAPE
+    // (check-in-circle vs. X-in-circle), the emerald/rose tint is decoration
+    // only — both icons must be present regardless.
+    await expect(rows.nth(1).getByTestId('command-icon-approve-pr')).toBeVisible()
+    await expect(rows.nth(2).getByTestId('command-icon-reject-pr')).toBeVisible()
     await rows.filter({ hasText: 'Wijs de PR af' }).click()
 
     // The rejection-reason step: an empty textarea offers no command at all
@@ -321,6 +326,8 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await expect(rows.nth(0)).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('Keur de HELE PR goed')
     await expect(rows.nth(2)).toContainText('Wijs de PR af')
+    await expect(rows.nth(1).getByTestId('command-icon-approve-pr')).toBeVisible()
+    await expect(rows.nth(2).getByTestId('command-icon-reject-pr')).toBeVisible()
 
     // Esc from this nested submenu resets straight to the PR-menu root, not
     // one level back to "GitHub" — the documented "Esc always goes to root"

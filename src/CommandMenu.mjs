@@ -36,28 +36,48 @@ export function filterCommands(commands, query) {
 }
 
 // commandIcon renders a small inline icon before a command's label, keyed on
-// c.icon (a plain string tag — currently only 'approve-pr' exists). Colorblind
-// rule: the SHAPE (a check mark inside a circle) is what carries the meaning
-// here, the emerald color is decoration on top of it — never the sole
-// carrier — mirroring the existing warning-triangle + text convention
-// (aiWarningBadge/related-covers-warning in RelatedPanel.mjs). Returns '' for
-// no/unknown icon, same shape as the existing c.hint slot below.
+// c.icon (a plain string tag — 'approve-pr' or 'reject-pr'). Colorblind rule:
+// the SHAPE is what carries the meaning here — a check mark inside a circle
+// for approve, an X inside a circle for reject — the emerald/rose color is
+// decoration on top of it — never the sole carrier — mirroring the existing
+// warning-triangle + text convention (aiWarningBadge/related-covers-warning
+// in RelatedPanel.mjs). Returns '' for no/unknown icon, same shape as the
+// existing c.hint slot below.
 function commandIcon(icon) {
-  if (icon !== 'approve-pr') return ''
-  return html`<svg
-    xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    class="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
-    data-testid="command-icon-approve-pr"
-  >
-    <circle cx="12" cy="12" r="9"></circle>
-    <path d="m8 12 3 3 5-6"></path>
-  </svg>`
+  if (icon === 'approve-pr') {
+    return html`<svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+      data-testid="command-icon-approve-pr"
+    >
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="m8 12 3 3 5-6"></path>
+    </svg>`
+  }
+  if (icon === 'reject-pr') {
+    return html`<svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-400"
+      data-testid="command-icon-reject-pr"
+    >
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="m9 9 6 6"></path>
+      <path d="m15 9-6 6"></path>
+    </svg>`
+  }
+  return ''
 }
 
 // commandRow — one entry. Clicking runs it; hovering moves the selection so

@@ -333,10 +333,12 @@ carries a `run`; both carry `children: REVIEW_APPROVE_CONFIRM_COMMANDS`, so
 choosing it opens a one-item confirmation submenu through the ordinary
 `children` mechanism (no new mode). That submenu also goes through `withClose`,
 so its one real item ("Yes, approve the whole PR") is the default 2nd item, and
-only that calls `submitReview('APPROVE')`. Both items carry a check-in-circle
-icon (`c.icon`, `commandIcon` in `CommandMenu.mjs`); the icon **shape** plus
-the label text carry the "this affects the whole PR" meaning, the emerald
-colour is decoration only (see the colourblind rule in
+only that calls `submitReview('APPROVE')`. Both "Approve" items carry a
+check-in-circle icon, and "Reject the PR" carries an X-in-circle icon (`c.icon`,
+`commandIcon` in `CommandMenu.mjs`, `'approve-pr'`/`'reject-pr'`) — the icon
+**shape** plus the label text carry the meaning (which of the two opposite
+actions this is, and for approve also "this affects the whole PR"), the
+emerald/rose colour is decoration only (see the colourblind rule in
 `.claude/rules/conventions.md`). "Reject the PR" got no confirm step — its
 mandatory free-text reason already is one.
 
