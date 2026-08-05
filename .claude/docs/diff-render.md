@@ -69,6 +69,43 @@ the memoized `rows` array, ephemeral — resets on a code reload) and a reactive
 block's `collapsePlan` early-returns before that read, so it never subscribes).
 Test: `tests/diff-trim-collapse.spec.mjs`.
 
+### A collapsed run in a yaml/yml file shows its key hierarchy as a breadcrumb
+
+A whole-file yaml/yml fallback block (e.g. an OpenAPI spec) can collapse a run
+of unchanged sibling keys right before a changed line — the reviewer then sees
+e.g. a changed `description:` with no clue it sits under
+`paths > /products/{id}/clone > post`. `isYamlFile(b)` (mirrors
+`isPhpFile`/`isSvgFile`, a plain `.yml`/`.yaml` extension check on `b.file`)
+gates an extra line inside the spacer itself (`collapsedRunHTML`'s
+`breadcrumb` param, `data-testid=collapsed-run-breadcrumb`): the ' > '-joined
+key hierarchy, e.g. `Pad: paths > /products/{id}/clone > post`. `isYaml` is
+computed once in `codeDiff` and threaded through every `codePane`/
+`unifiedCodeDiff` call site into `paneHTML`/`unifiedHTML`, exactly like the
+existing `wrap`/`diffActive` flags.
+
+Deliberately **not** a real YAML parser — `yamlBreadcrumbsForSegs` (`Block.mjs`)
+is a single forward pass over every row (hidden rows included; they're still
+present in `rows`, just not rendered) maintaining a depth-ordered stack of
+`{depth, key}` via `YAML_KEY_RE` (indentation + optional `- ` list-item prefix
++ a quoted-or-not mapping key). A new key pops every stack entry at or above
+its own depth, then pushes itself — plain indentation tracking, no nesting
+grammar beyond that.
+
+**The snapshot for a collapsed run is the ancestor chain of the NEXT VISIBLE
+row, not simply "the stack right after the run's last hidden row"** — that
+last hidden row's own key is typically a SIBLING of the next visible line
+(both at the same depth), not its ancestor, so a naive snapshot would show
+`paths > /products/{id}/clone > post > key299` instead of stopping at `post`.
+The fix peeks one row ahead (`yamlRowKey(rows, end + 1)`) and pops anything at
+or above that row's own depth BEFORE snapshotting — the same pop the main loop
+performs anyway once it actually reaches that row, just done one row early.
+
+One run of unchanged text in a non-yaml huge block (locale JSON, etc.) never
+computes this at all — `isYaml` short-circuits `yamlBreadcrumbsForSegs` before
+any regex work, so the existing performance profile for the huge-block case
+this whole mechanism was built for (see above) is unaffected. Test:
+`tests/yaml-collapse-breadcrumb.spec.mjs`.
+
 ## Char diff: line background only, no word background
 
 A truly changed line (paired del/ins, not `wsOnly`) gets its red/green **line**

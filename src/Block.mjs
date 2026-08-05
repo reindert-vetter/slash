@@ -190,6 +190,14 @@ function isSvgFile(b) {
   return !!(b.file && b.file.toLowerCase().endsWith('.svg'))
 }
 
+// isYamlFile — a plain `.yml`/`.yaml` extension check on b.file, mirrors
+// isPhpFile/isSvgFile. Used only to gate the collapsed-run breadcrumb below
+// (see YAML_KEY_RE) — everything else about a yaml block's rendering is
+// already covered by the existing non-PHP width/wrap treatment.
+function isYamlFile(b) {
+  return !!(b.file && /\.ya?ml$/i.test(b.file))
+}
+
 // nonCommentLineLengths — the shared scan behind codeGrowthChars and
 // codeMaxLineChars below: the character lengths of every non-blank,
 // non-comment line in `code` (a leading PHPDoc block, `//`/`#` line
@@ -1140,6 +1148,9 @@ function codeDiff(
   // single-pane codePane branches below (effectiveOnly === 'right'/'left')
   // — there is no two-pane wrapping path left to reach.
   const wrap = viewMode() === 'fit' && !isPhpFile(b)
+  // Gates the collapsed-run breadcrumb (see yamlBreadcrumbsForSegs) — only a
+  // yaml/yml whole-file fallback block gets the extra key-hierarchy line.
+  const isYaml = isYamlFile(b)
   // A one-sided block (added/removed) renders at the card's full width in
   // every stand — the `a` toggle's narrower 60% width (`narrowed`, see above)
   // still applies to the card itself, just without a second pane to hide;
@@ -1153,7 +1164,7 @@ function codeDiff(
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive)}
+        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml)}
         ${scrollHint('up')}
         ${scrollHint('down')}
       </div>
@@ -1181,7 +1192,7 @@ function codeDiff(
               : 'Verwijderd — deze code bestaat niet meer'}
         </div>
         <div class="relative flex min-h-0 flex-1 overflow-hidden">
-          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive)}
+          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml)}
           ${scrollHint('up')}
           ${scrollHint('down')}
         </div>
@@ -1203,6 +1214,7 @@ function codeDiff(
       approvedCallsFn,
       lineSummaryFn,
       diffActive,
+      isYaml,
     )
   }
   return html`
@@ -1211,9 +1223,9 @@ function codeDiff(
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
-      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive)}
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml)}
       <div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>
-      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive)}
+      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml)}
       ${scrollHint('up')}
       ${scrollHint('down')}
     </div>
@@ -1340,6 +1352,7 @@ function codePane(
   wrap = false,
   lineSummaryFn = () => new Map(),
   diffActive = () => false,
+  isYaml = false,
 ) {
   return html`
     <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}" data-pane="${side}">
@@ -1348,7 +1361,7 @@ function codePane(
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() =>
-            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn())}"
+            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn(), isYaml)}"
         ></code>
       </div>
     </div>
@@ -1716,14 +1729,92 @@ function collapsePlan(rows, commented) {
 // collapsedRunHTML renders the spacer for one hidden run of unchanged rows.
 // The word + count carry the meaning (never colour alone — colorblind rule);
 // the ⋯ glyph and muted tint are decoration on top. Clicking expands the run
-// in place (see onPaneClick above).
-function collapsedRunHTML(start, end) {
+// in place (see onPaneClick above). `breadcrumb` (optional — only ever set
+// for a yaml/yml file, see yamlBreadcrumbsForSegs below) renders as a second,
+// smaller line inside the same spacer: the key hierarchy the collapsed run
+// sits under, so the reviewer doesn't lose track of "which path/response/…
+// am I looking at" once the surrounding structure scrolls out of view.
+function collapsedRunHTML(start, end, breadcrumb) {
   const n = end - start + 1
   return (
     `<div class="block cursor-pointer select-none whitespace-pre border-y border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 text-center text-[10px] leading-relaxed text-slate-400 dark:text-zinc-500 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-zinc-800/70 dark:hover:text-zinc-300"` +
     ` data-collapsed-run="${start}-${end}" data-testid="collapsed-run" title="Klik om deze regels te tonen">` +
-    `⋯ ${n} ongewijzigde regels</div>`
+    `⋯ ${n} ongewijzigde regels` +
+    (breadcrumb
+      ? `<div data-testid="collapsed-run-breadcrumb" class="mt-0.5 truncate text-slate-400 dark:text-zinc-500">Pad: ${escapeHtml(breadcrumb)}</div>`
+      : '') +
+    `</div>`
   )
+}
+
+// ── YAML key-hierarchy breadcrumb for a collapsed run ───────────────────────
+// A whole-file yaml/yml fallback block (e.g. an OpenAPI spec) loses the
+// surrounding key hierarchy once a long unchanged run of sibling keys gets
+// collapsed (see above) — the reviewer sees a changed `description:` line
+// with no clue it sits under `paths > /products/{id}/clone > post`. This is
+// deliberately NOT a real YAML parser (no volwaardige parser nodig): a plain
+// indentation/key tracker is enough to answer "what's the ancestor chain of
+// the next visible line" for the flow-mapping-free, `key: value`-per-line
+// style every yaml file in this repo actually uses.
+//
+// YAML_KEY_RE matches a mapping key at the start of a line: optional leading
+// indentation + optional `- ` list-item prefix(es), then either a quoted key
+// (any characters, including `:`, up to the matching quote — needed for a
+// path key like '/products/{id}/clone') or an unquoted key (no `:`/`#`), then
+// the `:` that makes it a mapping key. Lines that don't match (comments,
+// blank lines, scalar/list-item lines with no key of their own) are ignored
+// — they don't change the ancestor stack.
+const YAML_KEY_RE = /^(\s*)((?:-\s+)*)(?:(['"])((?:(?!\3).)*)\3|([^\s:#][^:]*?))\s*:(\s|$)/
+
+// yamlRowKey extracts {depth, key} from one row's text via YAML_KEY_RE, or
+// null when the row isn't a mapping-key line (comment/blank/valueless list
+// item). Shared by the stack-building pass and its next-line lookahead below.
+function yamlRowKey(rows, i) {
+  if (i < 0 || i >= rows.length) return null
+  const r = rows[i]
+  const text = r.left != null ? r.left : r.right
+  if (text == null) return null
+  const m = YAML_KEY_RE.exec(text)
+  if (!m) return null
+  return { depth: m[1].length + m[2].length, key: m[4] != null ? m[4] : m[5].trim() }
+}
+
+// yamlBreadcrumbsForSegs walks every row ONCE, maintaining a depth-ordered
+// stack of {depth, key}: a new key pops every stack entry at or above its own
+// depth (indentation + `- ` prefix length), then pushes itself. For each skip
+// segment it snapshots the ancestor chain of the NEXT (first VISIBLE) row —
+// NOT simply the stack right after the segment's last hidden row, because
+// that row's own key is a SIBLING of the next line in the common case (both
+// at the same depth), not an ancestor. So right before that last hidden row's
+// key would be pushed, we peek at the next row's depth and pop anything at or
+// above it first — the same pop the main loop would perform anyway once it
+// reaches that next row, just done one row early so the snapshot reflects it.
+// Returns a Map from `${start}-${end}` to a ' > '-joined breadcrumb string
+// (segments with an empty ancestor chain, e.g. top-level, are omitted — no
+// breadcrumb to show).
+function yamlBreadcrumbsForSegs(rows, segs) {
+  const skipEnds = new Set()
+  for (const seg of segs) if (seg.skip) skipEnds.add(seg.end)
+  if (skipEnds.size === 0) return new Map()
+  const out = new Map()
+  const stack = []
+  for (let i = 0; i < rows.length; i++) {
+    if (skipEnds.has(i)) {
+      const next = yamlRowKey(rows, i + 1)
+      if (next) while (stack.length && stack[stack.length - 1].depth >= next.depth) stack.pop()
+      if (stack.length) {
+        for (const seg of segs) {
+          if (seg.skip && seg.end === i) out.set(seg.start + '-' + seg.end, stack.map((s) => s.key).join(' > '))
+        }
+      }
+    }
+    const cur = yamlRowKey(rows, i)
+    if (cur) {
+      while (stack.length && stack[stack.length - 1].depth >= cur.depth) stack.pop()
+      stack.push(cur)
+    }
+  }
+  return out
 }
 
 // paneHTML builds the innerHTML string of one pane's <code>: one <div> per
@@ -1744,6 +1835,7 @@ function paneHTML(
   wrap = false,
   focused = true,
   lineSummaries = null,
+  isYaml = false,
 ) {
   const parts = []
   const pushRow = (i) => {
@@ -1770,8 +1862,9 @@ function paneHTML(
   if (!plan) {
     for (let i = 0; i < rows.length; i++) pushRow(i)
   } else {
+    const breadcrumbs = isYaml ? yamlBreadcrumbsForSegs(rows, plan) : null
     for (const seg of plan) {
-      if (seg.skip) parts.push(collapsedRunHTML(seg.start, seg.end))
+      if (seg.skip) parts.push(collapsedRunHTML(seg.start, seg.end, breadcrumbs && breadcrumbs.get(seg.start + '-' + seg.end)))
       else for (let i = seg.start; i <= seg.end; i++) pushRow(i)
     }
   }
@@ -1827,6 +1920,7 @@ function unifiedHTML(
   approvedCalls = new Set(),
   focused = true,
   lineSummaries = null,
+  isYaml = false,
 ) {
   const parts = []
   const pushRow = (i) => {
@@ -1838,8 +1932,9 @@ function unifiedHTML(
   if (!plan) {
     for (let i = 0; i < rows.length; i++) pushRow(i)
   } else {
+    const breadcrumbs = isYaml ? yamlBreadcrumbsForSegs(rows, plan) : null
     for (const seg of plan) {
-      if (seg.skip) parts.push(collapsedRunHTML(seg.start, seg.end))
+      if (seg.skip) parts.push(collapsedRunHTML(seg.start, seg.end, breadcrumbs && breadcrumbs.get(seg.start + '-' + seg.end)))
       else for (let i = seg.start; i <= seg.end; i++) pushRow(i)
     }
   }
@@ -1862,6 +1957,7 @@ function unifiedCodeDiff(
   approvedCallsFn,
   lineSummaryFn = () => new Map(),
   diffActive = () => false,
+  isYaml = false,
 ) {
   return html`
     <div
@@ -1874,7 +1970,7 @@ function unifiedCodeDiff(
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() =>
-            unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), diffActive(), lineSummaryFn())}"
+            unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), diffActive(), lineSummaryFn(), isYaml)}"
         ></code>
       </div>
       ${scrollHint('up')}
