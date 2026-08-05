@@ -83,13 +83,48 @@ one pane's width is chosen.
 w-[max(42rem,calc(<chars>ch_+_2rem))]  2xl:w-[max(49.2rem,calc(<chars>ch_+_2rem))]
 ```
 
-`<chars>` is **`codeMaxLineChars`** — the TRUE longest non-comment line of
-whichever side `fitOnly(b)` renders (new/right for added+modified, old/left for a
-removed block). The `ch` unit is exactly one monospace glyph, so this is
-arithmetic on the already-loaded source string.
+`<chars>` is, in order of precedence: **`activeUnitLineChars`** — the longest
+non-comment line among ONLY the rows of the currently selected/highlighted
+navigation unit (`Block()`'s own `activeGroup` opt — a change group, a single
+line, a call segment, or a Shift+arrow range, whichever `{start,end}` row range
+is currently landed on) — falling back to **`codeMaxLineChars`** — the TRUE
+longest non-comment line of the WHOLE block, on whichever side `fitOnly(b)`
+renders (new/right for added+modified, old/left for a removed block) — when
+there is no active unit (a preview/collapsed card, list mode without changes,
+or a caller that doesn't pass `activeGroup` at all). The `ch` unit is exactly
+one monospace glyph, so this is arithmetic on the already-loaded source string.
 
-Two deliberate departures from every other width in the codebase, both explicit
-reviewer decisions rather than oversights:
+**Follow-up, on explicit reviewer request:** the block's own true longest line,
+wherever it happens to sit, must not dictate the width while the reviewer is
+looking at (and has selected) a genuinely short line elsewhere in the same
+block — reported: a `Cart::applyPromotion` card ballooned to ~1330px in `fit`
+because of one long line elsewhere in the method, while the actively selected
+line (`$hasRestrictions = …`) was short. `activeUnitLineChars` (`Block.mjs`)
+restricts the scan to the active unit's own row range, on the same side
+`fitOnly(b)` renders, with the same comment-line exclusion as
+`nonCommentLineLengths`. Home.mjs feeds it the exact same unit its own
+`activeGroup` opt already highlights with — `topLevelActiveUnit(b)` for the
+top-level selected card, `focusedActiveUnit()` for a focused drilled column
+(both pulled out of the existing inline `activeGroup` closures, no behavior
+change there) — so highlighting and width always agree on which unit is
+"selected". A unit whose rows carry no measurable text on the rendered side
+(e.g. landing on a pure-deletion line at `line` granularity within a `fit`-
+hidden-old modified block — there is nothing to show on that pane for that
+row) falls back to the whole-block `codeMaxLineChars`, never to a 0-width
+card.
+
+**The preview cap moves in lockstep.** `fitCapCharsFor(b, unit)` (the "preview
+must never be wider than the active card" mechanism, see below) takes the same
+optional unit and applies the identical `activeUnitLineChars` restriction
+before its own `codeMaxLineChars` fallback — otherwise a preview capped at the
+active card's OLD (whole-block) width could again render wider than the active
+card's new, usually narrower, selected-line width. Both call sites
+(`home.mjs`) pass the matching unit: `topLevelActiveUnit(curBlock())` for the
+top-level look-ahead preview, `focusedActiveUnit()` for the drill-preview
+column.
+
+Two further deliberate departures from every other width in the codebase, both
+explicit reviewer decisions rather than oversights:
 
 - **The true maximum, not the 75th percentile.** `codeGrowthChars` (the
   non-ballooning percentile technique `relatedColumnWidthCls` still uses) plus a

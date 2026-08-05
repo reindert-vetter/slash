@@ -216,6 +216,84 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     expect(width).toBeGreaterThan(1120)
   })
 
+  // Direct-mount unit test: 'fit' now sizes the card off the CURRENTLY
+  // SELECTED unit's own longest line, not the block's true longest line
+  // wherever it happens to sit (activeUnitLineChars, Block.mjs) — reviewer
+  // follow-up request. Same fixture (one short line, one genuinely long one)
+  // mounted twice: with no `activeGroup` at all (the block's own longest line
+  // still wins — every existing caller/test that doesn't pass this opt), and
+  // with `activeGroup` pointing at just the SHORT line — the card must then
+  // shrink back down near the 60% floor, proving the width follows the
+  // cursor, not the block.
+  test('viewMode="fit" follows only the selected line, not the block\'s own longest line', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    // Mounted via evaluateSettled (like every other test here); the width is
+    // measured in a SEPARATE step below (locator.evaluate, not inside this
+    // same evaluate) so Tailwind Play CDN's async JIT has actually injected
+    // CSS for these freshly-computed arbitrary-value classes before we read
+    // getBoundingClientRect() — measuring synchronously in the same evaluate
+    // call races that injection and reads the pre-Tailwind (unstyled, full
+    // width) box.
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const shortLine = '$hasRestrictions = $promotion->hasProductRestrictions();'
+      const longLine =
+        'return $this->fooBarValuesFromRequestPayloadDataThatIsGenuinelyMuchLongerThanTheSelectedLine' +
+        '($a, $b, $c, $d, $e, $f, $g, $h);'
+      const makeBlock = () =>
+        reactive({
+          category: 'ACTION',
+          label: 'Cart::applyPromotion',
+          status: 'modified',
+          file: 'app/Cart.php',
+          line: 338,
+          name: 'applyPromotion',
+          class: 'Cart',
+          approved: false,
+          code: {
+            old: { start: 338, end: 342, text: 'public function applyPromotion(): void {\n    return;\n}' },
+            new: {
+              start: 338,
+              end: 342,
+              text: `public function applyPromotion(): void {\n    ${shortLine}\n    ${longLine}\n}`,
+            },
+          },
+        })
+
+      const wholeBlockHost = document.createElement('div')
+      wholeBlockHost.id = 'fit-selected-line-whole-host'
+      document.body.appendChild(wholeBlockHost)
+      Block(makeBlock(), { viewMode: () => 'fit' })(wholeBlockHost)
+
+      const selectedLineHost = document.createElement('div')
+      selectedLineHost.id = 'fit-selected-line-narrow-host'
+      document.body.appendChild(selectedLineHost)
+      // Row 0 is the function signature (context), row 1 the short line, row
+      // 2 the long line — see alignRows/blockRows in Block.mjs.
+      Block(makeBlock(), { viewMode: () => 'fit', activeGroup: () => ({ start: 1, end: 1 }) })(selectedLineHost)
+    })
+
+    const wholeBlockWidth = await page
+      .locator('#fit-selected-line-whole-host article')
+      .evaluate((el) => el.getBoundingClientRect().width)
+    const selectedLineWidth = await page
+      .locator('#fit-selected-line-narrow-host article')
+      .evaluate((el) => el.getBoundingClientRect().width)
+
+    // Without an active unit the card still follows the block's true longest
+    // line (unchanged existing behavior) — comfortably past the 60% floor.
+    expect(wholeBlockWidth).toBeGreaterThan(1000)
+    // With the SHORT line selected the card shrinks back down near the 60%
+    // floor (42rem = 672px) — nowhere near the long line's own width.
+    expect(selectedLineWidth).toBeLessThan(750)
+    expect(selectedLineWidth).toBeLessThan(wholeBlockWidth)
+  })
+
   // Direct-mount unit test: the look-ahead preview's 'fit'-stand cap
   // (fitCapCharsFor/capFitChars, Block.mjs — see "The look-ahead preview must
   // never be wider than the active card" in diff-card.md). Two genuinely

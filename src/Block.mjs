@@ -255,6 +255,45 @@ function codeMaxLineChars(code) {
   return lens.length ? lens[lens.length - 1] : 0
 }
 
+// activeUnitLineChars — like codeMaxLineChars, but restricted to the rows the
+// reviewer currently has selected/highlighted: the {start,end} row range of
+// the active navigation unit (a change group, a single line, a call segment,
+// or a Shift+arrow range — same shape `activeGroup` already carries, see
+// Block()'s own doc comment), on whichever side fitOnly(b) renders. This is
+// the reviewer's explicit follow-up request: the 'fit' stand's uncapped width
+// must follow ONLY the selected line/unit, not the block's own true longest
+// line elsewhere — a block with one long outlier line shouldn't balloon the
+// card while the reviewer is looking at (and has selected) a short one.
+//
+// Returns null when there is nothing to measure in that range — no `unit` at
+// all, or a unit whose rows carry no text on the rendered side (e.g. a pure
+// deletion row landed on at 'line' granularity within a 'fit'-hidden-old
+// modified block: there is no visible "selected line" to size against). The
+// caller (fitWidthCls) then falls back to the previous whole-block
+// codeMaxLineChars behavior — never a silent 0-width card.
+function activeUnitLineChars(b, unit) {
+  if (!unit) return null
+  const rows = blockRows(b)
+  if (!rows.length) return null
+  const side = fitOnly(b) === 'left' ? 'left' : 'right'
+  const start = Math.max(0, unit.start)
+  const end = Math.min(rows.length - 1, unit.end)
+  let max = 0
+  let any = false
+  for (let i = start; i <= end; i++) {
+    const raw = rows[i][side]
+    if (raw == null) continue
+    const line = raw.replace(/\s+$/, '')
+    const trimmed = line.trim()
+    if (trimmed === '') continue
+    if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('*') || trimmed.startsWith('/*'))
+      continue
+    any = true
+    if (line.length > max) max = line.length
+  }
+  return any ? max : null
+}
+
 // fitCapCharsFor — the effective 'fit'-stand cap another card should never
 // exceed, expressed in the SAME chars unit fitWidthCls builds its own width
 // from: for a PHP file, its own codeMaxLineChars (mirrors fitWidthCls
@@ -273,8 +312,20 @@ function codeMaxLineChars(code) {
 // (`ContractsExport::headings`) rendered wider than the `modified` active
 // card next to it (`ContractsExport::map`) in 'fit', because each card's
 // 'fit' width is otherwise entirely its own content's business.
-export function fitCapCharsFor(b) {
-  return isPhpFile(b) ? codeMaxLineChars(fitOnlyText(b)) : 0
+//
+// unit — optional, the SAME {start,end} row range the active card's own
+// activeGroup opt is currently highlighting (home.mjs passes
+// topLevelActiveUnit(...)/focusedActiveUnit()): since fitWidthCls now narrows
+// a card's own width to just its selected unit's longest line (see
+// activeUnitLineChars above), the cap must track that same, usually smaller,
+// number — otherwise a preview could again render wider than the active card
+// whenever the active card's selected line is short but some OTHER line in
+// that same block is long. Absent (or no usable line in that range) falls
+// back to the previous whole-block codeMaxLineChars.
+export function fitCapCharsFor(b, unit) {
+  if (!isPhpFile(b)) return 0
+  const unitChars = activeUnitLineChars(b, unit)
+  return unitChars != null ? unitChars : codeMaxLineChars(fitOnlyText(b))
 }
 
 // widthCls picks the card's width class for the current `a` stand: for
@@ -300,8 +351,8 @@ export function fitCapCharsFor(b) {
 // 1378px regardless, and narrowing its floor too would only add risk to the
 // many `fit`-specific assertions in diffview.spec.mjs for no product
 // benefit.
-function widthCls(b, viewMode, capFitChars) {
-  if (viewMode() === 'fit') return isPhpFile(b) ? fitWidthCls(b, capFitChars) : boundedWrapWidthCls()
+function widthCls(b, viewMode, capFitChars, activeGroup) {
+  if (viewMode() === 'fit') return isPhpFile(b) ? fitWidthCls(b, capFitChars, activeGroup) : boundedWrapWidthCls()
   return narrowed(viewMode) || singleSide(b)
     ? 'w-[42rem] narrow:w-[28rem] 2xl:w-[49.2rem] '
     : 'w-[70rem] narrow:w-[42rem] 2xl:w-[82rem] '
@@ -376,8 +427,22 @@ function boundedWrapWidthCls() {
 // every non-preview card (a card's own width stays exactly as uncapped as the
 // doc comment above describes), and a no-op whenever the preview's own chars
 // already happen to be the smaller number.
-function fitWidthCls(b, capFitChars) {
-  const chars = codeMaxLineChars(fitOnlyText(b))
+//
+// activeGroup — an optional `() => {start,end}|null` (Block()'s own opt of
+// the same name — the reviewer's currently selected/highlighted navigation
+// unit). On explicit reviewer follow-up request, this stand's chars-count
+// is now taken from ONLY that unit's own longest line (activeUnitLineChars),
+// not the block's true longest line wherever it happens to sit — a block
+// with one long outlier line elsewhere must not keep the card wide while a
+// short selected line is what's actually in view. Falls back to the
+// previous whole-block codeMaxLineChars when there's no active unit (a
+// preview/collapsed card, list mode without changes, or a caller that
+// doesn't pass this opt at all — every existing direct-mount test, see
+// diffview.spec.mjs) or when the unit's own rows carry no measurable text on
+// the rendered side.
+function fitWidthCls(b, capFitChars, activeGroup) {
+  const unitChars = activeUnitLineChars(b, activeGroup && activeGroup())
+  const chars = unitChars != null ? unitChars : codeMaxLineChars(fitOnlyText(b))
   const cap = capFitChars && capFitChars()
   const clamped = typeof cap === 'number' && isFinite(cap) ? Math.min(chars, cap) : chars
   return (
@@ -570,7 +635,7 @@ export default function Block(b, opts = {}) {
         // `narrowed`) then shrinks EVERY visible card — modified included — to
         // that same narrow width in lockstep. `a`'s third stand ('fit') gets its
         // own, content-based width instead — see widthCls.
-        widthCls(b, viewModeFn, capFitChars) +
+        widthCls(b, viewModeFn, capFitChars, activeGroup) +
         (preview
           ? 'max-h-72 border-slate-300 dark:border-zinc-700 opacity-50'
           : diffActive()

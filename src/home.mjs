@@ -5150,6 +5150,39 @@ function focusedBlock() {
   return state.focusLevel === 0 ? curBlock() : state.drill[state.focusLevel - 1]
 }
 
+// topLevelActiveUnit — the { start, end } row range of `b`'s currently
+// selected navigation unit at the TOP level (state.mode/gran/change/
+// rangeAnchor), regardless of state.focusLevel: the same computation the
+// top-level block card's own `activeGroup` opt uses (see the DetailPanel
+// pair.forEach render loop below), pulled out so it can also feed the
+// look-ahead preview's `fitCapCharsFor` cap (see diff-card.md, "fit follows
+// only the selected unit") — that cap must track this unit even while the
+// keyboard has drilled elsewhere, since the top card being capped against
+// still renders (dimmed) at this exact selection. Falls back to the first
+// change group in list mode (there's no active unit there), null for a block
+// with no navigable changes at all (or no block).
+function topLevelActiveUnit(b) {
+  if (!b) return null
+  if (state.mode !== 'diff') return groupsFor(b)[0] || null
+  const units = unitsOf(b)
+  return isRangeGran(state.gran) ? rangeUnit(units, state.change, state.rangeAnchor) : units[state.change] || null
+}
+
+// focusedActiveUnit — the active unit of whichever card currently owns the
+// keyboard: topLevelActiveUnit(curBlock()) at focusLevel 0, or the focused
+// drilled column's own cursor (state.drillCursor) at a deeper level — the
+// same computation the drilled column's own `activeGroup` opt uses. Used to
+// feed the drill-preview column's `fitCapCharsFor` cap (drillPreviewColumns,
+// below), which is only ever mounted while a drilled column owns the focus.
+function focusedActiveUnit() {
+  if (state.focusLevel === 0) return topLevelActiveUnit(curBlock())
+  const b = state.drill[state.focusLevel - 1]
+  if (!b) return null
+  const cur = state.drillCursor[state.focusLevel - 1] || { change: 0, gran: 'group' }
+  const units = unitsFor(blockRows(b), cur.gran)
+  return isRangeGran(cur.gran) ? rangeUnit(units, cur.change, cur.rangeAnchor) : units[cur.change] || null
+}
+
 // Keyboard column resize (`c` shrinks, `v` grows) — the keyboard counterpart
 // of the resize handle's drag (see columnWidth.mjs / column-resize.md). Holds
 // c/v on the FOCUSED column: whichever column focusedBlock() currently
@@ -8282,7 +8315,7 @@ function drillPreviewColumns() {
           // does nothing in 'fit' or when both cards are two-sided PHP
           // blocks with a different longest line. Same lazy-closure
           // discipline as collapsed above.
-          capFitChars: () => fitCapCharsFor(focusedBlock() || {}),
+          capFitChars: () => fitCapCharsFor(focusedBlock() || {}, focusedActiveUnit()),
         })}
       </div>
     `.key('drill-preview:' + previewBlock.id + ':' + codeState),
@@ -9059,19 +9092,15 @@ function DetailPanel(state) {
             // the reviewer navigates. Only the selected block, in diff mode,
             // with the keyboard actually on it (not a drilled column), gets a
             // highlighted group.
-            activeGroup: () => {
-              if (i !== state.selected || state.focusLevel > 0) return null
-              // In list mode we preview the first change group (the very run →
-              // would step onto). In diff mode we follow state.change into the
-              // current granularity's units (a run, a line, or a call segment) —
-              // merged with an active Shift+arrow range selection, if any (see
-              // rangeUnit/extendRange/isRangeGran).
-              if (state.mode !== 'diff') return groupsFor(b)[0] || null
-              const units = unitsOf(b)
-              return isRangeGran(state.gran)
-                ? rangeUnit(units, state.change, state.rangeAnchor)
-                : units[state.change] || null
-            },
+            // In list mode this previews the first change group (the very run
+            // → would step onto). In diff mode it follows state.change into
+            // the current granularity's units (a run, a line, or a call
+            // segment) — merged with an active Shift+arrow range selection,
+            // if any (see rangeUnit/extendRange/isRangeGran). Also feeds the
+            // 'fit' stand's width (Block.mjs's fitWidthCls/
+            // activeUnitLineChars): the card narrows to just THIS unit's own
+            // longest line, see topLevelActiveUnit's own doc comment.
+            activeGroup: () => (i === state.selected && state.focusLevel === 0 ? topLevelActiveUnit(b) : null),
             // Out-of-view change hints belong only to the block being stepped
             // through: the selected card, in diff mode, with the keyboard on it.
             hintsEnabled: () => i === state.selected && state.mode === 'diff' && state.focusLevel === 0,
@@ -9149,7 +9178,7 @@ function DetailPanel(state) {
             // nothing in 'fit' or when both the active and preview card are
             // two-sided PHP blocks with a different longest line. Same lazy-
             // closure discipline as collapsed right above.
-            capFitChars: i !== sel ? () => fitCapCharsFor(curBlock() || {}) : undefined,
+            capFitChars: i !== sel ? () => fitCapCharsFor(curBlock() || {}, topLevelActiveUnit(curBlock())) : undefined,
             // The key encodes (a) whether this card is the *selected* one or the
             // look-ahead *preview*, (b) whether its code has loaded yet, and (c)
             // whether the keyboard is actually focused on it (vs. a drilled
@@ -9333,14 +9362,10 @@ function DetailPanel(state) {
                 ${Block(b, {
                   preview: !focusedHere,
                   unpushed: () => pendingPushFiles().has(b.file),
-                  activeGroup: () => {
-                    if (state.focusLevel !== level) return null
-                    const cur = state.drillCursor[i] || { change: 0, gran: 'group' }
-                    const units = unitsFor(blockRows(b), cur.gran)
-                    return isRangeGran(cur.gran)
-                      ? rangeUnit(units, cur.change, cur.rangeAnchor)
-                      : units[cur.change] || null
-                  },
+                  // Also feeds the 'fit' stand's width the same way the
+                  // top-level card's activeGroup does — see
+                  // focusedActiveUnit's own doc comment.
+                  activeGroup: () => (state.focusLevel === level ? focusedActiveUnit() : null),
                   hintsEnabled: () => state.focusLevel === level,
                   diffActive: () => state.focusLevel === level && !relatedActive(),
                   approvedRows: () => approvedRowSet(b),
