@@ -534,18 +534,66 @@ Three details are load-bearing:
   dependency.
 
 Rendering: `claudeStatusText(p, elapsed)` (`ClaudeChat.mjs`, exported) turns the
-snapshot into one sentence in words — "Claude denkt na…", "Claude leest
-`src/Order.php`", "Claude schrijft… · 12s" (`PHASE_LABEL`/`TOOL_VERB`). It used
-to render inline below the message thread, as `claudeChatColumn`'s own
-`claude-chat-thinking` paragraph; that spot is gone — the text now renders
-inside `CommentClaudeFooter` (`RelatedPanel.mjs`, mounted in `home.mjs` right
-after the comment+Claude columns), the ONE shared status line for **both**
-the comment and Claude sides — see "The shared `composeTargetHint` header" and
-the send-status section in `.claude/docs/comments-panel.md` for its comment-side
-half and the `reaction-status` button it replaced. Still the same
+snapshot into one sentence in words — "Werkmap klaarzetten…", "Claude denkt
+na…", "Claude leest `src/Order.php`", "Claude schrijft… · 12s"
+(`PHASE_LABEL`/`TOOL_VERB`). It used to render inline below the message
+thread, as `claudeChatColumn`'s own `claude-chat-thinking` paragraph; that spot
+is gone — the text now renders inside `CommentClaudeFooter`
+(`RelatedPanel.mjs`, mounted in `home.mjs` right after the comment+Claude
+columns), the ONE shared status line for **both** the comment and Claude
+sides — see "The shared `composeTargetHint` header" and the send-status
+section in `.claude/docs/comments-panel.md` for its comment-side half and the
+`reaction-status` button it replaced. Still the same
 `data-testid=claude-chat-status` on the text itself, so
 `tests/claude-chat-progress.spec.mjs` needed no change, just relocated to
 `data-testid=comment-claude-footer-claude`'s own span.
+
+### `preparing` vs `starting`: three different waits used to share one label
+
+`chatPhaseStarting` originally covered three very different things at once:
+local prep (`gh pr view` + `git fetch` + a worktree refresh, ~7s), the `claude`
+CLI spawning, and the wait for its first token or tool call — which, on an API
+529 (overloaded), the CLI retries **silently**; a reviewer could watch the
+exact same "Claude start… · 84s" for minutes with zero signal that anything
+was even happening, let alone that it might fail. See `chat_progress.go` for
+the measured spread across a day of shadow sessions (most turns 3-7s, a few
+minutes-long outliers ending in a 529).
+
+`startChatProgress` (`chat_progress.go`) now starts a turn in
+`chatPhasePreparing` ("Werkmap klaarzetten…") — everything before
+`prepareChatShellWorkDir` in `runOneClaudeTurn` (`chat_workflow.go`) returns.
+Once that local prep is done and the claude CLI is about to be invoked,
+`advanceChatProgress` (the same mutate+publish pair `chatProgressSink` uses for
+every streamed CLI event, just called once from outside that stream) moves the
+phase to `chatPhaseStarting` ("Claude start…") — which then covers ONLY "CLI
+session started, waiting for its first event". `chatProgressSink`'s existing
+`ChatEventStatus` case (the CLI's own `init` frame) still maps onto that same
+`chatPhaseStarting`, so the label doesn't jump again when the CLI confirms it
+actually started — it was already showing the right thing.
+
+**The long-wait suffix is front-end only, deliberately no new backend state.**
+`elapsed` (`RelatedPanel.mjs`'s `elapsed()` getter) already counts seconds
+since `startedAt`, which now marks the start of `preparing` and therefore keeps
+counting straight through into `starting` — exactly the number a reviewer sees
+in "· 84s". `claudeStatusText` (`ClaudeChat.mjs`) appends a fixed suffix once
+`phase === 'starting'` (never `preparing`, which is bounded to a few seconds
+and never needs this) and `elapsed >= LONG_WAIT_SECONDS` (30): "Claude start…
+· 47s · het is nu druk, hij blijft proberen". Worded as a still-in-progress
+sentence, not an error — "nog geen antwoord" was rejected as an opening because
+it reads as something already went wrong, when the CLI is (usually) still
+quietly retrying. The only consumer of `GET /api/chat/progress` is this same
+UI with its own clock, so there is no reason to compute or store the threshold
+server-side.
+
+**Per-turn timing also goes to `server.log`** (`runOneClaudeTurn`,
+`chat_workflow.go`): a `tm.logf` line after local prep finishes, one for the
+first CLI event of any kind (in practice the `init` frame) and one for the
+first real content event (thinking/text/tool), each with the elapsed time
+since the turn started, plus one when `cl.RunChat` returns (with its error, if
+any). Purely operational — never persisted, never reviewer-facing, same
+carve-out as the rest of this file — but it turns "why did this turn take four
+minutes" from a manual reconstruction (as the investigation behind this
+section had to do) into one `grep` of the log.
 
 **The Claude half wraps over up to THREE lines** (`line-clamp-3`
 `[overflow-wrap:anywhere]`, on a `min-w-0 flex-1 items-start` half with the

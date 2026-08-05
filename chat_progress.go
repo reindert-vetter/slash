@@ -24,11 +24,19 @@ import (
 // Chat progress phases — a small vocabulary the frontend turns into one Dutch
 // status line (src/ClaudeChat.mjs). The word carries the meaning; there is no
 // colour-only signal.
+//
+// chatPhasePreparing and chatPhaseStarting used to be one undifferentiated
+// "starting" phase that covered three very different things: the local
+// worktree/gh prep (a few seconds), the claude CLI spawning, and the wait for
+// its first token (which can run into minutes, e.g. on an API 529 overload
+// the CLI retries silently). Splitting them lets the status line actually
+// say which of those is happening — see runOneClaudeTurn (chat_workflow.go).
 const (
-	chatPhaseStarting = "starting"
-	chatPhaseThinking = "thinking"
-	chatPhaseWriting  = "writing"
-	chatPhaseTool     = "tool"
+	chatPhasePreparing = "preparing" // local prep: gh/git worktree refresh, before the CLI is even invoked
+	chatPhaseStarting  = "starting"  // CLI session started, waiting for its first event/token
+	chatPhaseThinking  = "thinking"
+	chatPhaseWriting   = "writing"
+	chatPhaseTool      = "tool"
 )
 
 // chatProgress is the whole volatile state of one running turn.
@@ -55,15 +63,32 @@ var (
 var nowMillis = func() int64 { return time.Now().UnixMilli() }
 
 // startChatProgress marks a turn as running and publishes that first state, so
-// the reviewer sees "Claude denkt…" the moment the turn begins rather than
-// only once the first token arrives.
+// the reviewer sees "Werkmap klaarzetten…" the moment the turn begins rather
+// than only once the CLI has actually started. The phase moves on to
+// chatPhaseStarting once local prep is done — see advanceChatProgress, called
+// from runOneClaudeTurn right before the claude CLI is invoked.
 func startChatProgress(pr int, conversationID string) {
 	now := nowMillis()
-	p := chatProgress{Running: true, Phase: chatPhaseStarting, StartedAt: now, UpdatedAt: now}
+	p := chatProgress{Running: true, Phase: chatPhasePreparing, StartedAt: now, UpdatedAt: now}
 	chatProgressMu.Lock()
 	chatProgressByConv[conversationID] = p
 	chatProgressMu.Unlock()
 	publishChatProgress(pr, conversationID, p)
+}
+
+// advanceChatProgress sets phase on the running turn's snapshot and publishes
+// it — the same mutate+publish pair chatProgressSink uses for every streamed
+// CLI event, reused here for the one phase transition that happens OUTSIDE
+// that stream (local prep finished, about to invoke the CLI). A no-op if the
+// turn already finished (mirrors mutateChatProgress's own late-event guard).
+func advanceChatProgress(pr int, conversationID, phase string) {
+	snap, ok := mutateChatProgress(conversationID, func(p *chatProgress) {
+		p.Phase = phase
+	})
+	if !ok {
+		return
+	}
+	publishChatProgress(pr, conversationID, snap)
 }
 
 // mutateChatProgress applies fn to the stored snapshot and returns the result.

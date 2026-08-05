@@ -131,6 +131,7 @@ function claudeQuestionOptions(msg, onSend) {
 // busy with, and the meaning may not depend on colour (see the colourblind
 // rule in .claude/rules/conventions.md).
 const PHASE_LABEL = {
+  preparing: 'Werkmap klaarzetten…',
   starting: 'Claude start…',
   thinking: 'Claude denkt na…',
   writing: 'Claude schrijft…',
@@ -143,6 +144,18 @@ const TOOL_VERB = {
   Write: 'schrijft',
   Bash: 'draait',
 }
+
+// LONG_WAIT_SECONDS/LONG_WAIT_SUFFIX: once the CLI session has started but not
+// a single token has come back after this long, say so explicitly instead of
+// silently repeating "Claude start…" — the CLI retries an API overload (HTTP
+// 529) on its own, invisibly, and a reviewer watching the same word for
+// minutes has no way to tell "still starting" from "stuck". Deliberately
+// worded as a still-in-progress sentence, not an error ("nog geen antwoord"
+// reads as something went wrong) — the request has not failed, it's just
+// slow. Only for chatPhaseStarting (waiting on the CLI/API): chatPhasePreparing
+// is local prep bounded to a few seconds and never needs this.
+const LONG_WAIT_SECONDS = 30
+const LONG_WAIT_SUFFIX = 'het is nu druk, hij blijft proberen'
 
 // claudeStatusText — the one status line. `p` is null while a turn is in
 // flight but no event has landed yet (the very first moment after sending),
@@ -160,7 +173,11 @@ export function claudeStatusText(p, elapsed) {
     base = PHASE_LABEL[p.phase] || 'Claude denkt…'
   }
   if (!p.running) base = 'Claude is klaar — bezig met opslaan…'
-  return elapsed > 0 ? base + ' · ' + elapsed + 's' : base
+  let text = elapsed > 0 ? base + ' · ' + elapsed + 's' : base
+  if (p.running && p.phase === 'starting' && elapsed >= LONG_WAIT_SECONDS) {
+    text += ' · ' + LONG_WAIT_SUFFIX
+  }
+  return text
 }
 
 // claudePartialBubble — the answer as it is still being written. A THROWAWAY

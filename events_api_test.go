@@ -74,7 +74,7 @@ func TestHandleChatProgress(t *testing.T) {
 	startChatProgress(7, "c1")
 	rr = httptest.NewRecorder()
 	s.handleChatProgress(rr, httptest.NewRequest(http.MethodGet, "/api/chat/progress?commentId=c1", nil))
-	if body := rr.Body.String(); !strings.Contains(body, `"running":true`) || !strings.Contains(body, chatPhaseStarting) {
+	if body := rr.Body.String(); !strings.Contains(body, `"running":true`) || !strings.Contains(body, chatPhasePreparing) {
 		t.Fatalf("running turn = %q", body)
 	}
 

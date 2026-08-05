@@ -549,26 +549,55 @@ func buildChatPrompt(selectionContext, body string) string {
 func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl claude.Client, dataDir string, arg chatTurnInput) (chat.Message, *commentActionDirective) {
 	// Volatile live progress for the reviewer (chat_progress.go + the SSE
 	// stream): a turn is a real subprocess call that can run for minutes, so
-	// "Claude denkt…" must be visible from the first moment and grow with what
-	// the CLI streams back. None of it is persisted or fed back into the
-	// Activity's result — see the OnEvent doc comment in modules/claude.
+	// "Werkmap klaarzetten…"/"Claude start…" must be visible from the first
+	// moment and grow with what the CLI streams back. None of it is persisted
+	// or fed back into the Activity's result — see the OnEvent doc comment in
+	// modules/claude.
 	startChatProgress(arg.PR, arg.ConversationID)
 	defer finishChatProgress(arg.PR, arg.ConversationID)
 
+	// t0/logTurnMilestone: a purely operational timing log (server.log), not
+	// reviewer-facing and not persisted anywhere — same carve-out as
+	// chat_progress.go itself. Exists so a slow turn (the claude CLI silently
+	// retrying an API 529 overload can take minutes) can be diagnosed from the
+	// log alone instead of only from a bug report of "it said the same thing
+	// for 4 minutes".
+	t0 := time.Now()
+	logTurnMilestone := func(format string, args ...any) {
+		if tm == nil || tm.logf == nil {
+			return
+		}
+		tm.logf("claude_chat turn %s pr %d conv %s: "+format,
+			append([]any{arg.TurnID, arg.PR, arg.ConversationID}, args...)...)
+	}
+
 	sessionID, _ := cm.GetSession(ctx, arg.ConversationID)
 	model := chatModelForAttempt(arg.Attempt)
+	sink := chatProgressSink(arg.PR, arg.ConversationID)
+	loggedFirstEvent, loggedFirstContent := false, false
 	req := claude.RunRequest{
 		Model:        model,
 		Prompt:       buildChatPrompt(arg.Context, arg.Body),
 		SessionID:    sessionID,
 		SystemPrompt: claude.ChatSystemPrompt,
-		OnEvent:      chatProgressSink(arg.PR, arg.ConversationID),
+		OnEvent: func(ev claude.ChatEvent) {
+			if !loggedFirstEvent {
+				loggedFirstEvent = true
+				logTurnMilestone("first CLI event (%s) after %v", ev.Kind, time.Since(t0))
+			}
+			if !loggedFirstContent && ev.Kind != claude.ChatEventStatus {
+				loggedFirstContent = true
+				logTurnMilestone("first content event (%s) after %v", ev.Kind, time.Since(t0))
+			}
+			sink(ev)
+		},
 	}
 	if dir, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.PR, arg.ConversationID); ok {
 		req.WorkDir = dir
 		req.Tools = []string{"Read", "Grep", "Glob", "Edit", "Bash"}
 		req.SystemPrompt = claude.ChatShellSystemPrompt
 	}
+	logTurnMilestone("local prep done after %v, invoking claude CLI", time.Since(t0))
 	// The embedded prompt files are static, call-independent text (see
 	// modules/claude/prompts.go), so the conversation's own comment id — which
 	// chat.md's comment_action directive needs to echo back as "commentId" —
@@ -576,7 +605,13 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// content" split every other prompt already uses. Harmless for a turn that
 	// never uses the directive.
 	req.SystemPrompt += "\n\nHet id van DEZE comment-thread (gebruik dit exact als \"commentId\" in het comment_action-format): " + arg.ConversationID
+	// Local prep (gh/git worktree refresh above) is done; the CLI is about to
+	// be invoked. This is the "sessie gestart — wachten op Claude" phase, kept
+	// distinct from the preceding "Werkmap klaarzetten…" — see chatPhaseStarting
+	// / chatPhasePreparing in chat_progress.go.
+	advanceChatProgress(arg.PR, arg.ConversationID, chatPhaseStarting)
 	result, err := cl.RunChat(ctx, req)
+	logTurnMilestone("claude CLI returned after %v (err=%v)", time.Since(t0), err)
 	if err != nil {
 		kind, body := chatFailureTurn(arg.Attempt, model)
 		msg := chat.Message{

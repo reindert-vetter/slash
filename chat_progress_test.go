@@ -26,8 +26,17 @@ func TestChatProgressLifecycle(t *testing.T) {
 	}
 	startChatProgress(5, "conv")
 	p, ok := chatProgressFor("conv")
-	if !ok || !p.Running || p.Phase != chatPhaseStarting {
+	if !ok || !p.Running || p.Phase != chatPhasePreparing {
 		t.Fatalf("after start: %+v ok=%v", p, ok)
+	}
+
+	// Local prep finished, the claude CLI is about to be invoked: the
+	// dedicated advanceChatProgress transition, mirroring what runOneClaudeTurn
+	// does between prepareChatShellWorkDir and cl.RunChat.
+	advanceChatProgress(5, "conv", chatPhaseStarting)
+	p, _ = chatProgressFor("conv")
+	if p.Phase != chatPhaseStarting {
+		t.Fatalf("after advanceChatProgress: %+v", p)
 	}
 
 	sink := chatProgressSink(5, "conv")
