@@ -118,13 +118,29 @@ function fenceLabel(counter, isSuggestion) {
 // (= PHP) fence by `recomputeCodePreviews`'s D4 rule — its own visually
 // distinct "Suggestie N" header/accent above is unchanged, only the preview
 // button was added.
-function extractCodeFences(text, store, startIndex) {
+// INLINE_MAX_LINES/FADE — see "truncate" below: a truncated fence shows at
+// most this many source lines inline (the last one carries the fade mask), so
+// a reviewer sees a couple of lines' worth of context, never the full block.
+const INLINE_MAX_LINES = 3
+
+function extractCodeFences(text, store, startIndex, truncate) {
   let counter = startIndex
   return text.replace(CODE_FENCE_RE, (m, lang, code) => {
     counter += 1
     const rawLang = String(lang || '').trim()
     const suggestion = isSuggestionLang(rawLang)
-    const highlighted = highlightForLang(code, suggestion ? '' : rawLang)
+    // `truncate` (comment/Claude-chat bodies only, see renderMarkdown's own
+    // doc comment) caps the INLINE rendering to a couple of lines — the full
+    // code is already shown in full size in the code-preview card stacked
+    // below the comment/Claude column (see "A full-size code-preview column"
+    // in .claude/docs/claude-chat-panel.md), so the inline copy only needs to
+    // give a taste, not the whole thing. `data-fence-code` below still carries
+    // the FULL raw code regardless — that attribute is what the preview card
+    // reads, and must never be shortened.
+    const lines = code.split('\n')
+    const isLong = truncate && lines.length > INLINE_MAX_LINES - 1
+    const visibleCode = isLong ? lines.slice(0, INLINE_MAX_LINES).join('\n') : code
+    const highlighted = highlightForLang(visibleCode, suggestion ? '' : rawLang)
     const label = fenceLabel(counter, suggestion)
     const langWord = rawLang && !suggestion ? rawLang.toLowerCase() : suggestion ? '' : 'php'
     const wrapperCls = suggestion
@@ -136,12 +152,19 @@ function extractCodeFences(text, store, startIndex) {
     const openButton =
       `<button type="button" class="ml-2 shrink-0 rounded border border-slate-300 dark:border-zinc-600 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700" ` +
       `data-testid="code-fence-open" data-fence-code="${escapeHtml(code)}" data-fence-lang="${escapeHtml(langWord)}">Bekijk volledig ↗</button>`
+    // A truncated fence's <pre> gets `code-fence-fade-bottom` (index.html) — a
+    // plain mask-image gradient fading the LAST visible line to transparent,
+    // the purely visual "there's more, see the full preview below" cue the
+    // reviewer asked for instead of a "+N regels" text line. Shape/mask, not
+    // colour, per the colourblind rule.
+    const preCls = 'code m-0' + (isLong ? ' code-fence-fade-bottom' : '')
     const html =
       `<div class="${wrapperCls}" data-testid="code-fence" data-fence-index="${counter}"` +
-      `${suggestion ? ' data-fence-suggestion="true"' : ''}${langWord ? ` data-fence-lang="${escapeHtml(langWord)}"` : ''}>` +
+      `${suggestion ? ' data-fence-suggestion="true"' : ''}${langWord ? ` data-fence-lang="${escapeHtml(langWord)}"` : ''}` +
+      `${isLong ? ' data-fence-truncated="true"' : ''}>` +
       `<div class="${headerCls}"><span class="flex items-center">${escapeHtml(label)}` +
       (langWord ? `<span class="ml-2 uppercase tracking-wide">${escapeHtml(langWord)}</span>` : '') +
-      `</span>${openButton}</div><pre class="code m-0"><code class="language-php">${highlighted}</code></pre></div>`
+      `</span>${openButton}</div><pre class="${preCls}"><code class="language-php">${highlighted}</code></pre></div>`
     const token = ` MD${store.length} `
     store.push(html)
     return `\n\n${token}\n\n`
@@ -204,16 +227,26 @@ export function hardBreaks(text) {
     .join('')
 }
 
-// renderMarkdown(text, startIndex) -> safe HTML string, meant for arrow.js's
-// `.innerHTML="${() => renderMarkdown(...)}"` binding. `startIndex` (default
-// 0, i.e. the first fence in `text` is numbered 1) lets a caller continue the
-// running code-block count across several messages instead of resetting to 1
-// in every bubble — see `countCodeFences` above.
-export function renderMarkdown(text, startIndex = 0) {
+// renderMarkdown(text, startIndex, truncate) -> safe HTML string, meant for
+// arrow.js's `.innerHTML="${() => renderMarkdown(...)}"` binding. `startIndex`
+// (default 0, i.e. the first fence in `text` is numbered 1) lets a caller
+// continue the running code-block count across several messages instead of
+// resetting to 1 in every bubble — see `countCodeFences` above.
+//
+// `truncate` (default false) caps every fence's INLINE code to a couple of
+// lines with a fade on the last one (see `extractCodeFences`'s own comment) —
+// on, ONLY for comment/Claude-chat bodies (`RelatedPanel.mjs`'s `commentBody`,
+// `ClaudeChat.mjs`'s bubble renderers), where the full code is already shown
+// in full size in the code-preview card below (see "A full-size code-preview
+// column" in .claude/docs/claude-chat-panel.md) — everywhere else (the PR
+// summary/description in `prInfoCard`, the task-inbox description) there is no
+// such card to point at, so those keep the untruncated, pre-existing
+// rendering (the default `false`).
+export function renderMarkdown(text, startIndex = 0, truncate = false) {
   if (!text) return ''
   const store = []
   let src = String(text)
-  src = extractCodeFences(src, store, startIndex)
+  src = extractCodeFences(src, store, startIndex, truncate)
   src = escapeHtml(src)
   let out = snarkdown(src)
   out = applyPlaceholders(out, store)

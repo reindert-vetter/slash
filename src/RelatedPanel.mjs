@@ -5399,7 +5399,7 @@ export function commentBody(c, startIndex = 0) {
     if (!c) return ''
     const st = threadStatusSentinel(c.body)
     if (st) return statusLineHTML(st)
-    return renderMarkdown(c.body, startIndex)
+    return renderMarkdown(c.body, startIndex, true)
   }
 }
 

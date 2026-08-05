@@ -1715,6 +1715,52 @@ sibling to its right any more) and that a `suggestion` fence now also gets a
 `code-fence-open` button and its own preview card (title "Codeblok", same as
 any other unlabeled fence), alongside the plain fence's existing preview.
 
+## The INLINE fence is capped to ~2 lines, faded — the full code is already below
+
+Reviewer follow-up, once the preview card above always shows the full code
+below the comment/Claude column: "code bloks in een communicatie, graag
+maximaal 2 rijen, de rest staat er al onder als referentie" — the fence
+rendered INLINE inside a comment/Claude bubble no longer needs to show the
+whole block, since it is fully duplicated in the preview card underneath.
+
+- **`markdown.mjs`'s `extractCodeFences(text, store, startIndex, truncate)`**
+  gained a fourth parameter. When `truncate` is on and a fence has more than 2
+  source lines, only the first `INLINE_MAX_LINES` (3) lines are fed to
+  `highlightForLang` for the visible `<pre>` — 2 full lines plus one more that
+  carries the fade (below). Everything beyond that is not rendered inline at
+  all (not just visually hidden) — it exists only in the preview card. A fence
+  of 2 lines or fewer is completely unaffected (no point capping something
+  already short).
+- **`data-fence-code` always carries the FULL, untruncated raw code**,
+  regardless of `truncate` — that attribute is `recomputeCodePreviews`'s only
+  data source for the preview card (see "Always on, stacked in one column"
+  above), so shortening it there would shorten the preview card too, which is
+  exactly the opposite of the point (the preview card is the place the full
+  code is supposed to live).
+- **No "+N regels meer" text.** Explicitly rejected in favour of a purely
+  visual cue: the last visible line fades to transparent via a `mask-image`
+  gradient (`code-fence-fade-bottom`, `index.html`, mirrors the existing
+  `.scroll-fade-top` pattern in `src/scrollFade.mjs` — same technique, bottom
+  instead of top, and a static class here rather than JS-toggled since a
+  truncated fence is truncated for its whole lifetime, nothing to react to).
+  This is a shape/mask signal, not colour-only, per the colourblind rule.
+  `isLong` also stamps `data-fence-truncated="true"` on the fence's wrapper
+  `<div>` for tests/future tooling to key off, alongside the fade class on the
+  `<pre>` itself.
+- **`truncate` is opt-in per call site, default `false`** — only where a
+  full-size preview card actually exists to point at:
+  `RelatedPanel.mjs`'s `commentBody` (every comment/reply/reaction bubble) and
+  `ClaudeChat.mjs`'s three body renderers (`claudeMessageBody`, the partial
+  streaming bubble, a still-open question's own body). **Not** `home.mjs`'s
+  `prInfoCard` (the PR summary/description) or `inbox.mjs`'s task description
+  — neither sits next to a code-preview column, so both keep the
+  pre-existing, untruncated rendering via the default.
+
+Test: `tests/code-fence-preview.spec.mjs` (or a sibling spec) asserts a
+>2-line fence renders truncated (a `<pre>` with fewer lines than the source,
+carrying `code-fence-fade-bottom`) inline while its preview card below still
+shows the full code.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat

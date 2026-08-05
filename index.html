@@ -67,6 +67,23 @@
         mask-image: linear-gradient(to bottom, transparent, black 1.5rem);
       }
 
+      /* Bottom fade for a truncated INLINE code fence inside a comment/Claude
+         chat bubble (markdown.mjs's extractCodeFences, `truncate` on) — a
+         purely visual "there's more, see the full preview below" cue instead
+         of a "+N regels" text line, since the full code already has its own
+         full-size preview card stacked below the comment/Claude column (see
+         "A full-size code-preview column" in claude-chat-panel.md). Applied to
+         the <pre> only when it actually shows a truncated fence
+         (`code-fence-fade-bottom`, always paired with `data-fence-truncated`);
+         the em unit is relative to that <pre>'s own font-size, so it fades
+         roughly the height of its last visible line regardless of the
+         surrounding bubble's text size. A plain alpha mask, not colour, so no
+         dark-mode variant is needed. */
+      .code-fence-fade-bottom {
+        -webkit-mask-image: linear-gradient(to bottom, black, black calc(100% - 1.4em), transparent);
+        mask-image: linear-gradient(to bottom, black, black calc(100% - 1.4em), transparent);
+      }
+
       /* A small, subtle one-shot entrance animation for a newly-opened drilled
          Onderliggende-code column (see the drillOpenMarker comment in
          home.mjs) — a short fade + slight slide-in, never a repeating/looping

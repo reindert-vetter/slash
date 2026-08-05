@@ -124,3 +124,57 @@ test('a block-scoped comment\'s fence gets a "Huidig (PR)" comparison pane', asy
   await expect(column).toContainText('Voorgesteld (chat)')
   await expect(column).toContainText('$hasRestrictions = false;')
 })
+
+// The INLINE fence (inside the comment bubble itself) is capped to a couple
+// of lines with a fading last line — the full code is already duplicated in
+// the preview card below (see "The INLINE fence is capped to ~2 lines, faded"
+// in .claude/docs/claude-chat-panel.md). `data-fence-code` (the preview
+// card's own data source) must still carry the FULL code regardless.
+test('a >2-line fence renders truncated + faded inline, full code stays in the preview card', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const fullCode = '$a = 1;\n$b = 2;\n$c = 3;\n$d = 4;'
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kijk hier eens naar:\n```php\n' + fullCode + '\n```',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+
+  // Inline: only up to 3 source lines rendered (2 full + 1 fading), never the
+  // whole 4-line block, and the fade class/marker are present. Only one place
+  // renders the full body with fence markup while the comment is focused (see
+  // the sibling test above, which asserts exactly 2 `code-fence-open` buttons
+  // for 2 fences, not 4), so a page-wide lookup is unambiguous here.
+  const inlineFence = page.getByTestId('code-fence')
+  await expect(inlineFence).toHaveCount(1)
+  await expect(inlineFence).toHaveAttribute('data-fence-truncated', 'true')
+  await expect(inlineFence.locator('pre.code')).toHaveClass(/code-fence-fade-bottom/)
+  const inlineText = (await inlineFence.locator('code').innerText()).trim()
+  expect(inlineText.split('\n').length).toBeLessThanOrEqual(3)
+  expect(inlineText).not.toContain('$d = 4;')
+
+  // data-fence-code (the preview card's data source) still carries the FULL
+  // code, never shortened.
+  const openButton = page.getByTestId('code-fence-open')
+  await expect(openButton).toHaveAttribute('data-fence-code', fullCode)
+
+  // The preview card below shows the FULL code, all 4 lines.
+  const previewBody = page.getByTestId('code-preview-body').first()
+  await expect(previewBody).toContainText('$a = 1;')
+  await expect(previewBody).toContainText('$d = 4;')
+})

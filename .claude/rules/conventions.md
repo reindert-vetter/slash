@@ -113,6 +113,18 @@ action: the reviewer just refers to "codeblok 3" by number in the embedded
 Claude chat and says in plain language what should happen with it (an
 explicit product decision — see the same doc section).
 
+**`renderMarkdown`'s third argument, `truncate` (default `false`)**, caps every
+fence's INLINE rendering to at most 2 full lines plus one more that fades out
+(`code-fence-fade-bottom`, `index.html`, a `mask-image` gradient — shape, not
+colour, per the colourblind rule) — `data-fence-code` on the fence's own
+`code-fence-open` button still always carries the FULL raw code, since that
+attribute is the code-preview card's only data source (see "The INLINE fence is
+capped to ~2 lines, faded" in `.claude/docs/claude-chat-panel.md`). Only
+`commentBody` (`RelatedPanel.mjs`) and `ClaudeChat.mjs`'s bubble renderers pass
+`true` — the two places a fence's full code is already duplicated in a
+full-size preview card stacked below; `prInfoCard`'s PR summary/description and
+`inbox.mjs`'s task description keep the default, untruncated rendering.
+
 It also exports **`hardBreaks(text)`** — single newlines → Markdown hard breaks
 (`  \n`), fenced blocks untouched — which a caller applies **before**
 `renderMarkdown` when the text is a *typed message* rather than authored

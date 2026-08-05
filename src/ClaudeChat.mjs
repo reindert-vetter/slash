@@ -93,7 +93,7 @@ const claudeMention = CLAUDE_MENTIONS[Math.floor(Math.random() * CLAUDE_MENTIONS
 // behaviour.
 function claudeMessageBody(msg) {
   const body = msg.role === 'user' ? hardBreaks(msg.body || '') : msg.body || ''
-  return () => renderMarkdown(body)
+  return () => renderMarkdown(body, 0, true)
 }
 
 // claudeQuestionOptions renders the up-to-3 choice buttons of a still-open
@@ -199,7 +199,7 @@ function claudePartialBubble(view) {
       <div
         class="markdown-body max-w-[92%] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-700 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-300"
         data-testid="claude-partial-body"
-        .innerHTML="${() => renderMarkdown(p.partial)}"
+        .innerHTML="${() => renderMarkdown(p.partial, 0, true)}"
       ></div>
     </div>
   `
@@ -234,7 +234,7 @@ function claudeQueuedBubbles(view) {
         <div
           class="markdown-body max-w-[92%] rounded-xl border border-dashed border-indigo-300 bg-indigo-50/50 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-600 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-zinc-300"
           data-testid="claude-queued-body"
-          .innerHTML="${() => renderMarkdown(hardBreaks(q.body))}"
+          .innerHTML="${() => renderMarkdown(hardBreaks(q.body), 0, true)}"
         ></div>
       </div>
     `.key('claude-queued:' + q.id),
