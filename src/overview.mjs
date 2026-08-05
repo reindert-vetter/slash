@@ -1249,7 +1249,10 @@ function headerBlock() {
           data-testid="running-count"
           class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
         >
-          <span class="${() => (state.runningCount > 0 ? 'animate-spin' : '')}">${icon('loader', 'h-3 w-3')}</span>
+          <span
+            class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"
+            data-testid="running-count-dot"
+          ></span>
           <span>${() => state.runningCount + ' actief'}</span>
         </span>
         <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"

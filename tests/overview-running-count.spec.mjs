@@ -21,6 +21,10 @@ test.describe('PR overview — live "actief" badge', () => {
     const badge = page.locator('[data-testid="running-count"]')
     await expect(badge).toBeVisible()
     await expect(badge).toContainText('0 actief')
+    // The badge shows a pulsing dot (mirrors the Claude-chat live-status dot
+    // in RelatedPanel.mjs's CommentClaudeFooter), not the earlier spinning
+    // loader icon.
+    await expect(badge.locator('[data-testid="running-count-dot"]')).toHaveClass(/animate-pulse/)
   })
 
   test('reflects a non-zero count', async ({ page }) => {
