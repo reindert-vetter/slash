@@ -21,9 +21,19 @@
 // D2/D3 reversed (reviewer request, see claude-chat-panel.md): the column is
 // no longer opened by clicking a "Bekijk volledig ↗" button and no longer
 // closable — it is ALWAYS on, showing every code fence currently visible in
-// the comment/Claude columns, stacked in ONE column instead of one column per
-// fence (chosen over N columns growing <main>'s horizontal scroll — see the
+// the comment/Claude columns (a `suggestion` fence included, see
+// markdown.mjs), stacked in ONE column instead of one column per fence
+// (chosen over N columns growing <main>'s horizontal scroll — see the
 // reviewer's own "gestapeld in één kolom" answer).
+//
+// D3 reversed AGAIN (a later reviewer request, "Always on, stacked BELOW
+// (reversing D3 again)" in claude-chat-panel.md): this used to be a sibling
+// column to the RIGHT of comment-claude-row with its own fixed w-[42rem].
+// It now renders as a row BELOW comment-claude-row (home.mjs), so
+// `codePreviewColumn`'s root takes the FULL width of that row (`w-full`)
+// instead of a narrow fixed column — home.mjs no longer wraps it in a
+// `flex items-start` row with comment-claude-row, so nothing constrains its
+// width but its own content.
 import { html } from './vendor/arrow.js'
 import { highlightForLang } from './Block.mjs'
 
@@ -76,7 +86,7 @@ function previewCard(it) {
 // static chunk-reuse pitfall in arrowjs-pitfalls.md).
 export function codePreviewColumn(getItems) {
   return html`
-    <div class="flex w-[42rem] shrink-0 flex-col gap-3" data-testid="code-preview-column">
+    <div class="flex w-full shrink-0 flex-col gap-3" data-testid="code-preview-column">
       ${() => getItems().map((it) => previewCard(it))}
     </div>
   `

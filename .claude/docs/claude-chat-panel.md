@@ -1529,7 +1529,9 @@ Four decisions (D1-D4), all made explicitly rather than assumed, since the
 reviewer's own instruction left them open. **D2 and D3 were later reversed**
 by a follow-up reviewer request — see "Always on, stacked in one column
 (reversing D2/D3)" below — kept here verbatim for the reasoning that is still
-current (D1, D4) and as the record of what changed and why:
+current (D1, D4) and as the record of what changed and why. **D3 was reversed
+a second time and D4's `suggestion` exclusion was dropped** — see "Always on,
+stacked BELOW (reversing D3 again)" further down:
 
 - **D1 — no real line-diff.** There is no clientside diff algorithm in this
   codebase: `Block.mjs`'s `codeDiff`/`unifiedCodeDiff` only render `rows` the
@@ -1555,7 +1557,9 @@ current (D1, D4) and as the record of what changed and why:
   `ClaudeChatPanel`'s own root elements (both already receive `commentTarget`,
   needed for D1's "Huidig" side below); a click anywhere in either column
   bubbles up and is a no-op unless it actually lands on such a button.
-- **D3 — a sibling column, not a child of `comment-claude-row`.** `home.mjs`
+- **D3 — a sibling column, not a child of `comment-claude-row`** (superseded,
+  see "Always on, stacked BELOW (reversing D3 again)" below — kept for the
+  original reasoning). `home.mjs`
   wraps `comment-claude-row` and `CodePreviewPanel()` in one
   `flex items-start gap-3` row (`comment-claude-and-preview-row`) inside
   `comments-and-related` — the preview appears to the RIGHT of the merged
@@ -1573,7 +1577,9 @@ current (D1, D4) and as the record of what changed and why:
   until closed or replaced by opening a different fence, same "last thing
   wins" rule `cc` already follows for the Claude conversation itself.
 - **D4 — scope: every fence gets the button (except `suggestion`, GitHub's own
-  "replace these lines" convention, not a code example); only a PHP-or-
+  "replace these lines" convention, not a code example — this exclusion was
+  itself dropped later, see "Always on, stacked BELOW (reversing D3 again)"
+  below); only a PHP-or-
   unlabeled fence AND a resolvable unit get the "Huidig (PR)" comparison
   pane.** `openCodePreview` checks `!lang || lang.toLowerCase() === 'php'`
   before keeping `oldCode` — the same "unlabeled fence defaults to php" rule
@@ -1662,9 +1668,52 @@ next to `comment-claude-row`, now passing `commentTarget` into
 `CodePreviewPanel`).
 
 Test: `tests/code-fence-preview.spec.mjs` — an orphan comment's fence shows its
-preview automatically with only the "Voorgesteld" pane and no button for its
-sibling `suggestion` fence, and no close button anywhere; a block-scoped
+preview automatically with only the "Voorgesteld" pane; a block-scoped
 comment (PR 12903, block 1) gets both panes.
+
+## Always on, stacked BELOW (reversing D3 again), suggestion fences included
+
+Second reviewer follow-up, quoted (translated) as "I actually want the
+related blocks of a Claude conversation (right of the comment block) under
+the block" plus "make sure code suggestions etc. within the conversation are
+also visible the same way": the preview column above (D3, then its own
+"Always on, stacked in one column" reversal) still sat as a **sibling column
+to the RIGHT** of `comment-claude-row` — reversed again, this time to a
+**stacked row BELOW** it, matching the placement the "Underlying code" card
+(`related-code`) already has below `comment-claude-row` in the same
+`comments-and-related` wrapper (see "The block column and its neighbour" in
+`.claude/docs/detail-layout.md`). Two changes, both minimal:
+
+- **Placement (`home.mjs`).** The `comment-claude-and-preview-row` wrapper
+  (the `flex items-start gap-3` row that held `comment-claude-row` and
+  `CodePreviewPanel()` side by side) is gone. `CodePreviewPanel(commentTarget)`
+  is now an ordinary sibling **row** inside `comments-and-related`, directly
+  after `comment-claude-row` and before `RelatedPanel(...)` — the exact same
+  stacking spot `related-code` already occupies one row further down.
+  `RelatedPanel.mjs`'s own `cp` state, `recomputeCodePreviews`, the
+  `MutationObserver` on `comment-claude-columns` and `CodePreviewPanel`'s
+  export are all unchanged — only where `home.mjs` mounts it moved.
+- **Width (`CodePreview.mjs`).** `codePreviewColumn`'s root was
+  `w-[42rem] shrink-0` (sized to sit narrow, next to `comment-claude-row`);
+  now that it stacks below with nothing beside it, it takes the full width of
+  the row instead (`w-full shrink-0`) — so its cards read as wide as the
+  comment/Claude card above them, not as a narrow strip underneath a wide one.
+- **Suggestion fences now also get a preview (`markdown.mjs`).** D4's
+  exclusion — a `` ```suggestion ``` `` fence got no `code-fence-open`
+  button at all, so `recomputeCodePreviews` never saw it — is dropped:
+  `extractCodeFences` now stamps that button onto **every** fence, suggestion
+  included. Its distinct in-bubble header ("Suggestie N", the emerald accent)
+  is untouched — only the underlying full-size preview card was added, using
+  the exact same "unlabeled fence defaults to PHP" path a plain unlabeled
+  fence already took (a suggestion fence never announces a language, so
+  `langWord` stays empty and it gets a "Huidig (PR)" comparison pane under
+  the same D4 rule as any other unlabeled fence).
+
+Test: `tests/code-fence-preview.spec.mjs` updated — asserts
+`code-preview-column` renders as a sibling BELOW `comment-claude-row` (not a
+sibling to its right any more) and that a `suggestion` fence now also gets a
+`code-fence-open` button and its own preview card (title "Codeblok", same as
+any other unlabeled fence), alongside the plain fence's existing preview.
 
 ## Open (frontend gaps)
 

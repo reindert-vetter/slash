@@ -4,14 +4,16 @@ import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 // block inside a comment/Claude-chat body full-size (markdown.mjs's
 // extractCodeFences + RelatedPanel.mjs's recomputeCodePreviews/
 // CodePreviewPanel — see "A full-size code-preview column" in
-// .claude/docs/claude-chat-panel.md for D1-D4, and the reviewer follow-up
-// noted there reversing D2/D3: no click needed, always on). This synthetic
-// PR has no ingested worktree, so the comment renders as an orphan
+// .claude/docs/claude-chat-panel.md for D1-D4, the reviewer follow-up
+// reversing D2/D3 (no click needed, always on), and the later follow-up
+// reversing D3 again — stacked BELOW comment-claude-row instead of a sibling
+// to its right — plus dropping D4's `suggestion`-fence exclusion). This
+// synthetic PR has no ingested worktree, so the comment renders as an orphan
 // (unscoped) item — commentTarget() therefore resolves to null and the
 // preview must show only the "new" side, no "Huidig (PR)" comparison pane
 // (D4). The Claude-chat side reuses the exact same fence markup/data
 // attributes, so this one comment-side test covers the shared mechanism.
-test('every fenced code block shows a full-size preview automatically, a suggestion fence gets no button', async ({
+test('every fenced code block, suggestion included, shows a full-size preview stacked below the comment/Claude block', async ({
   page,
 }, testInfo) => {
   const pr = seededPr(testInfo)
@@ -37,21 +39,34 @@ test('every fenced code block shows a full-size preview automatically, a suggest
   await expect(item).toBeVisible()
   await item.click()
 
-  // Only the plain `php` fence gets the button — the `suggestion` fence is
-  // GitHub's own "replace these lines" convention, not a code example.
+  // Both the plain `php` fence AND the `suggestion` fence now get the
+  // button — the suggestion fence's own distinct in-bubble header
+  // ("Suggestie 1") is untouched, only the underlying preview was added.
   const openButtons = page.getByTestId('code-fence-open')
-  await expect(openButtons).toHaveCount(1)
+  await expect(openButtons).toHaveCount(2)
 
-  // No click needed any more — the preview column appears automatically as
-  // soon as the comment/Claude block (holding the fence) is visible.
+  // No click needed — the preview column appears automatically as soon as
+  // the comment/Claude block (holding the fences) is visible, and shows
+  // both fences' code.
   const column = page.getByTestId('code-preview-column')
   await expect(column).toBeVisible()
   await expect(column).toContainText('$hasRestrictions = $order->products->count() > 0;')
+  await expect(column).toContainText('$hasRestrictions = false;')
+  await expect(page.getByTestId('code-preview-card')).toHaveCount(2)
 
   // No anchor block for this orphan comment (see file-level comment above) —
-  // so no "Huidig (PR)" comparison pane, only the fence's own code.
+  // so no "Huidig (PR)" comparison pane, only each fence's own code.
   await expect(column).not.toContainText('Huidig (PR)')
-  await expect(page.getByTestId('code-preview-body')).toContainText('Codeblok')
+  await expect(page.getByTestId('code-preview-body').first()).toContainText('Codeblok')
+
+  // Stacked BELOW comment-claude-row, not a sibling to its right any more:
+  // the preview column sits at (roughly) the same left edge and starts below
+  // the merged comment/Claude card's own bottom edge.
+  const row = page.getByTestId('comment-claude-row')
+  const rowBox = await row.boundingBox()
+  const columnBox = await column.boundingBox()
+  expect(columnBox.y).toBeGreaterThanOrEqual(rowBox.y + rowBox.height - 1)
+  expect(Math.abs(columnBox.x - rowBox.x)).toBeLessThan(2)
 
   // Always on: there is no close button any more, and the preview stays
   // visible while the comment holding the fence stays visible.

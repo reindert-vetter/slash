@@ -2088,11 +2088,16 @@ export function ClaudeChatPanel(state, commentTarget) {
 //
 // Reviewer follow-up request: "'Bekijk volledig' mag altijd aan, alle
 // blokken rechts daarvan laten zien als comment|claude blok zichtbaar zijn" —
-// reversing D2/D3. There is no click/open/close cycle any more: every
-// non-suggestion fence currently rendered inside the comment/Claude columns
-// gets its preview shown automatically, stacked in ONE column (the
-// reviewer's own "gestapeld in één kolom" answer), for as long as
-// `claudeChatVisible()` holds.
+// reversing D2/D3. There is no click/open/close cycle any more: every fence
+// currently rendered inside the comment/Claude columns (including a
+// `suggestion` one, see markdown.mjs's `extractCodeFences`) gets its preview
+// shown automatically, stacked in ONE column (the reviewer's own "gestapeld
+// in één kolom" answer), for as long as `claudeChatVisible()` holds. A later
+// reviewer request moved this column from a sibling to the RIGHT of
+// `comment-claude-row` to a stacked row BELOW it (see home.mjs's
+// `comments-and-related` and "Always on, stacked BELOW (reversing D3 again)"
+// in claude-chat-panel.md) — this module's own state/logic is unaffected,
+// only home.mjs's mount point changed.
 //
 // `cp` mirrors `cc`/`rc`: this module's own reactive state, now a plain
 // LIST of previews (never mutated in place — recomputeCodePreviews always
@@ -2113,7 +2118,7 @@ let getCommentTarget = () => null
 // recomputeCodePreviews — the single place that turns "what's currently
 // rendered in the comment/Claude columns" into `cp.items`. Reads the fence
 // data straight off the `code-fence-open` buttons markdown.mjs already
-// stamps into every non-suggestion fence's header (data-fence-code/
+// stamps into every fence's header, `suggestion` included (data-fence-code/
 // data-fence-lang) rather than re-parsing message text — those buttons no
 // longer need a click handler, but they're still the simplest, already-
 // correct source of "which fences are visible right now, in reading order"
@@ -2175,15 +2180,15 @@ function scheduleRecomputeCodePreviews() {
 }
 
 // ensureCodePreviewObserver wires a MutationObserver to the comment/Claude
-// COLUMNS container only (`comment-claude-columns`) — deliberately NOT the
-// row that also holds this module's own CodePreviewPanel (a sibling further
-// out, see home.mjs's `comment-claude-and-preview-row`), so the preview
-// column's own re-renders can never feed back into the observer that
-// triggers them. `comment-claude-columns` is always mounted (hidden via CSS
-// while empty, see home.mjs's comment-claude-row), but not necessarily yet
-// at the time CodePreviewPanel first runs (arrow.js builds the template
-// before it's attached to the real DOM) — retried via requestAnimationFrame
-// until the container exists, then set up exactly once.
+// COLUMNS container only (`comment-claude-columns`) — deliberately NOT
+// `comments-and-related`, the outer stack that also holds this module's own
+// CodePreviewPanel (now a sibling row BELOW `comment-claude-row`, see
+// home.mjs), so the preview column's own re-renders can never feed back into
+// the observer that triggers them. `comment-claude-columns` is always mounted
+// (hidden via CSS while empty, see home.mjs's comment-claude-row), but not
+// necessarily yet at the time CodePreviewPanel first runs (arrow.js builds
+// the template before it's attached to the real DOM) — retried via
+// requestAnimationFrame until the container exists, then set up exactly once.
 let codePreviewObserver = null
 function ensureCodePreviewObserver() {
   if (codePreviewObserver) return
@@ -2197,9 +2202,10 @@ function ensureCodePreviewObserver() {
   scheduleRecomputeCodePreviews()
 }
 
-// CodePreviewPanel(commentTarget) — mounted by home.mjs right next to
-// comment-claude-row (see "A full-size code-preview column" in
-// claude-chat-panel.md for exactly where in the layout). Wrapped in a stable
+// CodePreviewPanel(commentTarget) — mounted by home.mjs directly BELOW
+// comment-claude-row, inside the same comments-and-related stack (see "A
+// full-size code-preview column" in claude-chat-panel.md for exactly where in
+// the layout). Wrapped in a stable
 // `contents` root, not a bare toggling expression, mirroring
 // ClaudeChatPanel's own guard against the arrow.js "bare toggling
 // expression" pitfall; the inner list itself is always an array (empty or

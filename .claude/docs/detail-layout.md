@@ -185,12 +185,18 @@ Both of those live in **one shared wrapper column**
 but not as two plain stacked rows any more: the **first** row is itself a
 `flex items-start` (`data-testid=comment-claude-row`) holding
 `inline-comments`, the dashed comment↔Claude connector (below), and
-`claude-chat-column` side by side; the Underlying-code card
-(`related-code`) is the **second** row, stacked below that whole row. See "The
+`claude-chat-column` side by side; a full-width **code-preview row**
+(`data-testid=code-preview-column`, `CodePreviewPanel`, only present when the
+comment/Claude conversation contains at least one fenced code block — see "A
+full-size code-preview column" in `.claude/docs/claude-chat-panel.md`) sits
+directly below that; the Underlying-code card
+(`related-code`) is the **last** row, stacked below both. See "The
 embedded Claude chat column" below for the two narrower clamps
 (`commentColumnWidthCls`/`claudeColumnWidthCls`) that make `inline-comments` +
 the connector + `claude-chat-column` sum to exactly the same width as
-`related-code`'s own `relatedColumnWidthCls()`, so the two rows still line up.
+`related-code`'s own `relatedColumnWidthCls()`, so the two rows still line up
+— the code-preview row is not part of that symmetry, it simply takes the full
+width of `comment-claude-row` above it.
 
 Tasks is **no longer** in this column flow either: it sits under the PR-info
 column (below).

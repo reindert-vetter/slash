@@ -100,20 +100,24 @@ function fenceLabel(counter, isSuggestion) {
 // grammar, so every fence gets the same colour treatment this way without a
 // second CSS block per language.
 //
-// Every non-suggestion fence also gets a native `<button
-// data-testid="code-fence-open">` in its header — no longer a click target
-// (see "A full-size code-preview column" in claude-chat-panel.md: the
-// standalone code-preview column is always on, not opened by clicking), but
-// still the data source `RelatedPanel.mjs`'s `recomputeCodePreviews` reads
-// off the DOM for every fence currently rendered in the comment/Claude
-// columns. The button carries the RAW code + resolved language word as
-// `data-fence-code`/`data-fence-lang` (HTML-entity-encoded via `escapeHtml`,
-// decoded back by the browser's own attribute parsing when read via
-// `.dataset`) — this file has no reactive state of its own (a pure string
-// renderer, see the header comment), so reading it straight off the button
-// avoids re-parsing the message text elsewhere. A `suggestion` fence gets no
-// button: it is GitHub's own "replace these lines" convention, not a
-// general code example to preview/compare.
+// EVERY fence — including a `suggestion` one, since the reviewer explicitly
+// asked for a suggestion to get the same full-size preview as an ordinary
+// code example — also gets a native `<button data-testid="code-fence-open">`
+// in its header — no longer a click target (see "A full-size code-preview
+// column" in claude-chat-panel.md: the standalone code-preview column is
+// always on, not opened by clicking), but still the data source
+// `RelatedPanel.mjs`'s `recomputeCodePreviews` reads off the DOM for every
+// fence currently rendered in the comment/Claude columns. The button carries
+// the RAW code + resolved language word as `data-fence-code`/`data-fence-lang`
+// (HTML-entity-encoded via `escapeHtml`, decoded back by the browser's own
+// attribute parsing when read via `.dataset`) — this file has no reactive
+// state of its own (a pure string renderer, see the header comment), so
+// reading it straight off the button avoids re-parsing the message text
+// elsewhere. A `suggestion` fence still carries no announced language, so
+// `langWord` stays empty and it gets treated the same as any other unlabeled
+// (= PHP) fence by `recomputeCodePreviews`'s D4 rule — its own visually
+// distinct "Suggestie N" header/accent above is unchanged, only the preview
+// button was added.
 function extractCodeFences(text, store, startIndex) {
   let counter = startIndex
   return text.replace(CODE_FENCE_RE, (m, lang, code) => {
@@ -129,10 +133,9 @@ function extractCodeFences(text, store, startIndex) {
     const headerCls = suggestion
       ? 'flex items-center justify-between px-2 py-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 border-b border-emerald-200 dark:border-emerald-500/30'
       : 'flex items-center justify-between px-2 py-1 text-[11px] font-medium text-slate-500 dark:text-zinc-400 bg-slate-50 dark:bg-zinc-800/60 border-b border-slate-200 dark:border-zinc-700'
-    const openButton = suggestion
-      ? ''
-      : `<button type="button" class="ml-2 shrink-0 rounded border border-slate-300 dark:border-zinc-600 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700" ` +
-        `data-testid="code-fence-open" data-fence-code="${escapeHtml(code)}" data-fence-lang="${escapeHtml(langWord)}">Bekijk volledig ↗</button>`
+    const openButton =
+      `<button type="button" class="ml-2 shrink-0 rounded border border-slate-300 dark:border-zinc-600 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700" ` +
+      `data-testid="code-fence-open" data-fence-code="${escapeHtml(code)}" data-fence-lang="${escapeHtml(langWord)}">Bekijk volledig ↗</button>`
     const html =
       `<div class="${wrapperCls}" data-testid="code-fence" data-fence-index="${counter}"` +
       `${suggestion ? ' data-fence-suggestion="true"' : ''}${langWord ? ` data-fence-lang="${escapeHtml(langWord)}"` : ''}>` +
