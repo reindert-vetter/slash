@@ -143,6 +143,7 @@ func TestResolveCleanupTargetsForcePRs(t *testing.T) {
 type cleanupTestManager struct {
 	mgr         *TaskManager
 	gh          *github.Fake
+	store       *tembed.MemoryStore
 	dataDir     string
 	graphDB     *sql.DB
 	comments    *comments.Module
@@ -209,11 +210,12 @@ func newCleanupTestManager(t *testing.T) *cleanupTestManager {
 	t.Cleanup(func() { ci.Close() })
 
 	gh := &github.Fake{}
-	engine := tembed.New(tembed.NewMemoryStore())
+	store := tembed.NewMemoryStore()
+	engine := tembed.New(store)
 	mgr := NewTaskManager(engine, gh, cs, testInbox(t), rel, pm, cr, tc, ap, ex, nil, nil, nil, graphDB, dataDir, "test/repo")
 
 	return &cleanupTestManager{
-		mgr: mgr, gh: gh, dataDir: dataDir, graphDB: graphDB,
+		mgr: mgr, gh: gh, store: store, dataDir: dataDir, graphDB: graphDB,
 		comments: cs, approvals: ap, relations: rel, callresolve: cr, testcovers: tc, prmeta: pm, explain: ex,
 		commentignore: ci,
 	}
@@ -497,5 +499,92 @@ func TestCleanupPurgesRetiredWorkflowRuns(t *testing.T) {
 	}
 	if res2.RetiredRunsDeleted != 0 {
 		t.Fatalf("second pass RetiredRunsDeleted = %d, want 0", res2.RetiredRunsDeleted)
+	}
+}
+
+// startOrphanCandidate starts a real, local (never posted to GitHub, so no
+// poll() goroutine spins up — see StartCodeComment's rootID guard)
+// task_code_comment run and returns its run ID. Local:true keeps this
+// offline, mirroring the existing StartCodeComment tests in workflows_test.go.
+func startOrphanCandidate(t *testing.T, ctm *cleanupTestManager, pr int) string {
+	t.Helper()
+	runID, err := ctm.mgr.StartCodeComment(context.Background(), CodeCommentInput{
+		PR: pr, File: "src/Order.php", Line: 1, Author: "AI check",
+		Body: "test", Source: "ai", Local: true, RowStart: -1, RowEnd: -1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runID
+}
+
+// TestCleanupPurgesOrphanCommentRuns proves the cleanup workflow also removes
+// a task_code_comment run whose own comment has vanished from comments.db —
+// the real-world case that motivated this: 272 of 553 waiting runs pointed at
+// a comment that no longer existed, so they polled GitHub forever with no
+// comment left for a reviewer to ever act on. A `waiting` orphan is removed
+// regardless of age; a `running` orphan only once it's stale
+// (> orphanRunningAge) — a fresh `running` orphan is left alone, to avoid
+// racing a run that's genuinely still mid-Activity. A run whose comment is
+// still present, in either status, must never be touched.
+func TestCleanupPurgesOrphanCommentRuns(t *testing.T) {
+	ctm := newCleanupTestManager(t)
+	ctx := context.Background()
+
+	waitOrphan := startOrphanCandidate(t, ctm, 1)
+	if status, err := ctm.mgr.engine.Status(waitOrphan); err != nil || status != tembed.StatusWaiting {
+		t.Fatalf("waitOrphan status = %q, %v, want waiting", status, err)
+	}
+	if err := ctm.comments.Delete(ctx, waitOrphan); err != nil {
+		t.Fatal(err)
+	}
+
+	waitKept := startOrphanCandidate(t, ctm, 1) // comment row deliberately left in place
+
+	runOrphanStale := startOrphanCandidate(t, ctm, 1)
+	if err := ctm.comments.Delete(ctx, runOrphanStale); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctm.store.SetStatus(runOrphanStale, tembed.StatusRunning, time.Now().Add(-orphanRunningAge-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	runOrphanFresh := startOrphanCandidate(t, ctm, 1)
+	if err := ctm.comments.Delete(ctx, runOrphanFresh); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctm.store.SetStatus(runOrphanFresh, tembed.StatusRunning, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := ctm.mgr.StartCleanup(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.OrphanCommentRunsDeleted != 2 {
+		t.Fatalf("OrphanCommentRunsDeleted = %d, want 2 (waitOrphan + runOrphanStale)", res.OrphanCommentRunsDeleted)
+	}
+
+	if _, err := ctm.mgr.engine.Status(waitOrphan); err == nil {
+		t.Fatal("waiting orphan still present after cleanup")
+	}
+	if _, err := ctm.mgr.engine.Status(runOrphanStale); err == nil {
+		t.Fatal("stale running orphan still present after cleanup")
+	}
+	if _, err := ctm.mgr.engine.Status(waitKept); err != nil {
+		t.Fatalf("waiting run with a live comment was removed: %v", err)
+	}
+	if _, err := ctm.mgr.engine.Status(runOrphanFresh); err != nil {
+		t.Fatalf("fresh running orphan (not yet stale) was removed: %v", err)
+	}
+
+	// A second pass finds nothing new to purge (idempotent) — the surviving
+	// runs above still hold, since runOrphanFresh isn't old enough yet either.
+	res2, err := ctm.mgr.StartCleanup(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.OrphanCommentRunsDeleted != 0 {
+		t.Fatalf("second pass OrphanCommentRunsDeleted = %d, want 0", res2.OrphanCommentRunsDeleted)
 	}
 }

@@ -121,6 +121,11 @@ type CleanupResult struct {
 	// retired Workflow Type (see retiredWorkflowTypes) removed this pass —
 	// unconditional, not scoped to any one PR target above.
 	RetiredRunsDeleted int `json:"retiredRunsDeleted"`
+	// OrphanCommentRunsDeleted is the number of task_code_comment runs removed
+	// this pass because their own comment no longer exists in comments.db (see
+	// purgeOrphanCommentRuns) — unconditional, not scoped to any one PR target
+	// or to the merged/age gate above.
+	OrphanCommentRunsDeleted int `json:"orphanCommentRunsDeleted"`
 }
 
 // reWorktreeDir extracts a PR number from a worktrees dir name: "pr-<n>-base"
@@ -496,6 +501,88 @@ func purgeRetiredWorkflowRuns(engine *tembed.Engine) (int, error) {
 		}
 		if err := engine.DeleteRun(r.ID); err != nil {
 			return n, fmt.Errorf("delete retired run %s (%s): %w", r.ID, r.Workflow, err)
+		}
+		n++
+	}
+	return n, nil
+}
+
+// orphanRunningAge is how long a still-`running` task_code_comment run must
+// sit untouched (see purgeOrphanCommentRuns's UpdatedAt check) before it's
+// eligible to be purged as an orphan, even though its comment is already
+// gone. A `waiting` run is purged regardless of age (see below) — a running
+// one gets this grace window instead, so a run that is merely mid-Activity
+// at the exact moment this pass ticks is never mistaken for a stuck orphan.
+const orphanRunningAge = 24 * time.Hour
+
+// purgeOrphanCommentRuns removes every task_code_comment run whose own
+// comment no longer exists in comments.db — a run left behind after its
+// comment row vanished by some other path than this workflow's own "delete"
+// Signal (which itself deletes the comment AND completes the run in one go,
+// see taskCodeCommentWorkflow's "delete" Action). Left alive, such an orphan
+// stays `waiting` forever: every server (re)start's ResumePolling walks every
+// waiting task_code_comment run and spawns a poll() goroutine per thread that
+// polls GitHub forever for a comment nobody can ever act on again.
+//
+// The comment id and the run id are the SAME value by construction — every
+// caller that mutates a comments.db row (deleteComment, markCommentDeleting,
+// editCommentBody, …) keys it as `{"id": runID}` — so "does this run's
+// comment still exist" is exactly `comments.Get(ctx, r.ID)`.
+//
+// Two run statuses are eligible, with different rules:
+//   - StatusWaiting: purged unconditionally, any age. A waiting run parked on
+//     WaitSignal is, by definition, not mid-flight — there is no race to
+//     protect against.
+//   - StatusRunning, but only once UpdatedAt is older than orphanRunningAge:
+//     a run can be transiently `running` while genuinely mid-Activity (e.g.
+//     the exact moment this pass ticks), so an unconditional purge here could
+//     race a legitimate in-flight comment. Requiring staleness first turns
+//     that race into "can only ever purge a run that's clearly stuck", at the
+//     cost of leaving a genuine such orphan up to a day before it's swept —
+//     an accepted trade, since the goal is bounding this to a small window,
+//     not detecting it the instant it appears.
+//
+// A comments.Get error (a DB hiccup, not "not found") leaves the run alone —
+// this pass only ever removes what it's certain about, same as
+// resolveCleanupTargets. Not scoped to one PR (mirrors
+// purgeRetiredWorkflowRuns) — a stray orphan can belong to any PR, merged or
+// not. Uses the real wall clock (time.Now()), which is fine here: this
+// function is only ever called from an Activity body, never from inside a
+// Workflow function, so it is exempt from the workflow-determinism rule (see
+// .claude/rules/workflow-determinism.md).
+func purgeOrphanCommentRuns(ctx context.Context, engine *tembed.Engine, cm *comments.Module) (int, error) {
+	if cm == nil {
+		return 0, nil
+	}
+	runs, err := engine.Runs()
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now()
+	n := 0
+	for _, r := range runs {
+		if r.Workflow != WorkflowTaskCodeComment {
+			continue
+		}
+		switch r.Status {
+		case tembed.StatusWaiting:
+			// always eligible, any age
+		case tembed.StatusRunning:
+			if now.Sub(r.UpdatedAt) < orphanRunningAge {
+				continue // possibly still mid-Activity, too fresh to call it stuck
+			}
+		default:
+			continue // completed/failed already terminal, nothing to clean up
+		}
+		_, ok, err := cm.Get(ctx, r.ID)
+		if err != nil {
+			continue // uncertain — don't guess, leave it for a later pass
+		}
+		if ok {
+			continue // comment still exists, not an orphan
+		}
+		if err := engine.DeleteRun(r.ID); err != nil {
+			return n, fmt.Errorf("delete orphan comment run %s: %w", r.ID, err)
 		}
 		n++
 	}

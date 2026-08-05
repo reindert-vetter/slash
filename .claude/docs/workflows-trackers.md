@@ -539,6 +539,44 @@ Signal-less, one Execution per run.
   register its type. A name belongs in the map only once its registering code is
   deleted. Since cleanup itself only runs in the server, the CLI never runs this
   purge either.
+- **Also purges orphaned `task_code_comment` runs whose own comment is gone**
+  (`purgeOrphanCommentRuns`, `cleanup.go`), unconditionally, once per pass —
+  not scoped to the merged/age gate above or to any resolved PR target,
+  mirroring the retired-workflow-run purge. Motivating case: 272 of 553
+  waiting `task_code_comment` runs pointed at a comment that no longer existed
+  in `comments.db` (deleted by some path other than this workflow's own
+  `"delete"` Action, which deletes the comment AND completes the run in one
+  step) — left alone, every server (re)start's `ResumePolling` walks every
+  waiting run and spawns a `poll()` goroutine per thread that polls GitHub
+  forever for a comment nobody can ever act on again.
+  - **Detection reuses an existing identity, not a new field:** a
+    `task_code_comment` run's own Run ID **is** its comment's `id` (every
+    write path already keys a comment mutation as `{"id": runID}` — see
+    `deleteComment`/`markCommentDeleting`/`editCommentBody`), so "is this run's
+    comment gone" is exactly `comments.Get(ctx, r.ID)` returning `ok == false`.
+    A `comments.Get` **error** (a DB hiccup, not "not found") leaves the run
+    alone — same "only remove what's certain" spirit as
+    `resolveCleanupTargets`.
+  - **`StatusWaiting` is purged unconditionally, any age** — parked on
+    `WaitSignal`, by definition not mid-flight, so there's no race to protect
+    against.
+  - **`StatusRunning` is purged only once stale** (`UpdatedAt` older than
+    `orphanRunningAge`, 24h): a run can be transiently `running` at the exact
+    moment this pass ticks, so an unconditional purge here could race a
+    genuinely in-flight comment. Requiring staleness first turns that race
+    into "can only ever purge a run that's clearly stuck", at the cost of a
+    real such orphan surviving up to a day before it's swept — an accepted
+    trade. Uses the real wall clock (`time.Now()`), which is fine: this
+    function only ever runs inside an Activity body, never inside the
+    Workflow function itself, so it's exempt from
+    `.claude/rules/workflow-determinism.md`.
+  - Runs of any other status (`completed`/`failed`) are left alone — already
+    terminal, nothing to clean up.
+  - `DeleteRun` (not a Signal): there is nothing left to signal about once the
+    comment is already gone, so removing the run entirely (history + meta) is
+    the sanctioned close, mirroring `purgeRetiredWorkflowRuns`.
+  - `CleanupResult.OrphanCommentRunsDeleted` reports the count, alongside
+    `RetiredRunsDeleted`.
 - **`CleanupInput.ForcePRs` — a deliberate, CLI-only override** to purge
   specific PR numbers unconditionally, bypassing the merged/age gate, for a PR
   that can never pass the gate at all (no real GitHub PR to look up, e.g. a
@@ -550,4 +588,5 @@ Signal-less, one Execution per run.
   exposed over HTTP**, so there is no standing endpoint that can force-purge an
   arbitrary PR's data.
 - Tests: `cleanup_test.go` (candidate discovery, all eligibility branches,
-  force, full purge, idempotency, retired-run purge) — offline.
+  force, full purge, idempotency, retired-run purge, orphan-comment-run purge
+  incl. the `running`-status age threshold) — offline.
