@@ -20,7 +20,7 @@ import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin }
 import { commentMentionsMe, ensureSettings } from './mentions.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
-import { codePreviewPanel } from './CodePreview.mjs'
+import { codePreviewColumn } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { colWidthStyle, startColumnResize, resetColumnWidth, resizeHandle, parseAutoWidthPx } from './columnWidth.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
@@ -2000,7 +2000,6 @@ export function ClaudeChatPanel(state, commentTarget) {
               style="${() => colWidthStyle(state, widthKey())}"
               data-testid="claude-chat-column"
               data-col-resize-root
-              @click="${(e) => handleFenceClick(e, commentTarget)}"
             >
               ${() =>
                 widthKey()
@@ -2031,60 +2030,129 @@ export function ClaudeChatPanel(state, commentTarget) {
 // claude-chat-panel.md", "A full-size code-preview column" for the decisions
 // (D1-D4) this implements.
 //
-// `cp` mirrors `cc`/`rc`: this module's own reactive state for the ONE
-// preview currently open (never more than one, same "one thing in view" rule
-// as `cc`'s single conversation) — the template itself lives in the sibling
-// pure-template file CodePreview.mjs, fed this object directly (its own
-// fields are read through nested `${() => ...}` bindings there, mirroring
-// ClaudeChat.mjs's `view` getters).
-const cp = reactive({ open: false, title: '', lang: '', code: '', oldCode: null })
+// Reviewer follow-up request: "'Bekijk volledig' mag altijd aan, alle
+// blokken rechts daarvan laten zien als comment|claude blok zichtbaar zijn" —
+// reversing D2/D3. There is no click/open/close cycle any more: every
+// non-suggestion fence currently rendered inside the comment/Claude columns
+// gets its preview shown automatically, stacked in ONE column (the
+// reviewer's own "gestapeld in één kolom" answer), for as long as
+// `claudeChatVisible()` holds.
+//
+// `cp` mirrors `cc`/`rc`: this module's own reactive state, now a plain
+// LIST of previews (never mutated in place — recomputeCodePreviews always
+// assigns a fresh array, so a `${() => ...}` reader always sees the latest
+// set) — the template itself lives in the sibling pure-template file
+// CodePreview.mjs, fed this array through a getter (mirrors ClaudeChat.mjs's
+// `view` getters).
+const cp = reactive({ items: [] })
 
-export function closeCodePreview() {
-  cp.open = false
+// getCommentTarget is set once by CodePreviewPanel (see below) to the same
+// live-cursor getter InlineComments/ClaudeChatPanel already receive from
+// home.mjs — recomputeCodePreviews needs it every time it reruns (a
+// MutationObserver callback, not a template binding), so it can't just be a
+// function parameter threaded through like `commentTarget` is everywhere
+// else in this file.
+let getCommentTarget = () => null
+
+// recomputeCodePreviews — the single place that turns "what's currently
+// rendered in the comment/Claude columns" into `cp.items`. Reads the fence
+// data straight off the `code-fence-open` buttons markdown.mjs already
+// stamps into every non-suggestion fence's header (data-fence-code/
+// data-fence-lang) rather than re-parsing message text — those buttons no
+// longer need a click handler, but they're still the simplest, already-
+// correct source of "which fences are visible right now, in reading order"
+// (DOM/document order = comments column first, then the Claude column).
+//
+// D4 (unchanged): the "Huidig (PR)" pane only appears for a PHP (or
+// unlabeled) fence AND when there is a resolvable current-code unit to
+// compare against (oldCode is `null` for a PR-wide comment, which
+// getCommentTarget() itself already returns null for).
+//
+// Skips the reassignment when the recomputed set is identical to the
+// current one (same length, same code/lang/oldCode per item) — this runs
+// off a MutationObserver that also fires on unrelated churn inside the same
+// container (e.g. a live Claude turn streaming its partial reply
+// character-by-character), and an unconditional reassignment would rebuild
+// (and re-highlight) the whole preview column on every one of those, not
+// just when a fence actually changed.
+function recomputeCodePreviews() {
+  if (!claudeChatVisible()) {
+    if (cp.items.length) cp.items = []
+    return
+  }
+  const root = document.querySelector('[data-testid="comment-claude-columns"]')
+  const buttons = root ? Array.from(root.querySelectorAll('[data-testid="code-fence-open"]')) : []
+  const t = getCommentTarget()
+  const currentCode = t && t.file && t.code ? t.code : null
+  const next = buttons.map((btn, i) => {
+    const code = btn.dataset.fenceCode || ''
+    const lang = btn.dataset.fenceLang || ''
+    const isPhp = !lang || lang.toLowerCase() === 'php'
+    return {
+      key: 'fence:' + i,
+      title: lang ? lang.toUpperCase() : 'Codeblok',
+      lang,
+      code,
+      oldCode: isPhp ? currentCode : null,
+    }
+  })
+  const unchanged =
+    next.length === cp.items.length &&
+    next.every(
+      (it, i) =>
+        it.code === cp.items[i].code && it.lang === cp.items[i].lang && it.oldCode === cp.items[i].oldCode,
+    )
+  if (!unchanged) cp.items = next
 }
 
-// openCodePreview — D4: the "Huidig (PR)" pane only appears for a PHP (or
-// unlabeled) fence AND when there is a resolvable current-code unit to show
-// it against (oldCode is `null` for a PR-wide comment, which commentTarget()
-// itself already returns null for — see home.mjs's commentTarget). Every
-// other fence still opens, just without that comparison pane.
-function openCodePreview(code, lang, title, oldCode) {
-  const isPhp = !lang || lang.toLowerCase() === 'php'
-  cp.open = true
-  cp.title = title
-  cp.lang = lang
-  cp.code = code
-  cp.oldCode = isPhp ? oldCode : null
+// scheduleRecomputeCodePreviews coalesces a burst of mutations (e.g. every
+// character of a streaming Claude reply) into one recompute per animation
+// frame, instead of re-scanning the DOM on every single mutation record.
+let recomputeScheduled = false
+function scheduleRecomputeCodePreviews() {
+  if (recomputeScheduled) return
+  recomputeScheduled = true
+  requestAnimationFrame(() => {
+    recomputeScheduled = false
+    recomputeCodePreviews()
+  })
 }
 
-// handleFenceClick — D2: a plain native `<button data-testid=code-fence-open>`
-// (markdown.mjs) inside a raw `.innerHTML` comment/Claude bubble, so it can't
-// carry its own arrow.js `@click` binding. Delegated instead: mounted once on
-// InlineComments'/ClaudeChatPanel's own root element (both already receive
-// `commentTarget`, needed to resolve the "Huidig" side — D1's answer), a click
-// anywhere in either column bubbles up here and is a no-op unless it actually
-// landed on (or inside) such a button. `commentTarget()` is the SAME live
-// cursor value the composer/Claude-context already anchor a NEW comment
-// against — the comment/Claude panel is by construction always scoped to
-// whichever unit is currently in view, so no separate anchor lookup is needed
-// (see the file-level doc comment above).
-function handleFenceClick(e, commentTarget) {
-  const btn = e.target && e.target.closest && e.target.closest('[data-testid="code-fence-open"]')
-  if (!btn) return
-  const code = btn.dataset.fenceCode || ''
-  const lang = btn.dataset.fenceLang || ''
-  const t = commentTarget && commentTarget()
-  const oldCode = t && t.file && t.code ? t.code : null
-  openCodePreview(code, lang, lang ? lang.toUpperCase() : 'Codeblok', oldCode)
+// ensureCodePreviewObserver wires a MutationObserver to the comment/Claude
+// COLUMNS container only (`comment-claude-columns`) — deliberately NOT the
+// row that also holds this module's own CodePreviewPanel (a sibling further
+// out, see home.mjs's `comment-claude-and-preview-row`), so the preview
+// column's own re-renders can never feed back into the observer that
+// triggers them. `comment-claude-columns` is always mounted (hidden via CSS
+// while empty, see home.mjs's comment-claude-row), but not necessarily yet
+// at the time CodePreviewPanel first runs (arrow.js builds the template
+// before it's attached to the real DOM) — retried via requestAnimationFrame
+// until the container exists, then set up exactly once.
+let codePreviewObserver = null
+function ensureCodePreviewObserver() {
+  if (codePreviewObserver) return
+  const root = document.querySelector('[data-testid="comment-claude-columns"]')
+  if (!root) {
+    requestAnimationFrame(ensureCodePreviewObserver)
+    return
+  }
+  codePreviewObserver = new MutationObserver(scheduleRecomputeCodePreviews)
+  codePreviewObserver.observe(root, { childList: true, subtree: true, characterData: true })
+  scheduleRecomputeCodePreviews()
 }
 
-// CodePreviewPanel — mounted by home.mjs right next to comment-claude-row
-// (see "A full-size code-preview column" in claude-chat-panel.md for exactly
-// where in the layout). Wrapped in a stable `contents` root, not a bare
-// toggling expression, mirroring ClaudeChatPanel's own guard against the
-// arrow.js "bare toggling expression" pitfall.
-export function CodePreviewPanel() {
-  return html`<div class="contents">${() => (cp.open ? codePreviewPanel(cp, closeCodePreview) : '')}</div>`
+// CodePreviewPanel(commentTarget) — mounted by home.mjs right next to
+// comment-claude-row (see "A full-size code-preview column" in
+// claude-chat-panel.md for exactly where in the layout). Wrapped in a stable
+// `contents` root, not a bare toggling expression, mirroring
+// ClaudeChatPanel's own guard against the arrow.js "bare toggling
+// expression" pitfall; the inner list itself is always an array (empty or
+// not), never alternating with a scalar, so the single↔array pitfall in
+// arrowjs-pitfalls.md doesn't apply either.
+export function CodePreviewPanel(commentTarget) {
+  getCommentTarget = commentTarget
+  ensureCodePreviewObserver()
+  return html`<div class="contents">${() => (cp.items.length ? codePreviewColumn(() => cp.items) : '')}</div>`
 }
 
 // applyRelRestore re-applies the URL-restored panel cursor (restorePending, set at
@@ -4210,7 +4278,6 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
       style="${() => colWidthStyle(state, widthKey())}"
       data-testid="inline-comments"
       data-col-resize-root
-      @click="${(e) => handleFenceClick(e, commentTarget)}"
     >
       ${() =>
         widthKey()

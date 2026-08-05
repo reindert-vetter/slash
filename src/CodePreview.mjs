@@ -1,10 +1,11 @@
-// CodePreview.mjs — the standalone code-preview column opened from a
-// "Bekijk volledig ↗" button inside a comment/Claude-chat code fence (see
-// markdown.mjs's extractCodeFences and RelatedPanel.mjs's openCodePreview/
-// CodePreviewPanel, which owns the reactive `cp` state this file only
-// renders). Pure template, no reactive() state of its own and no import of
-// RelatedPanel.mjs — the same split ClaudeChat.mjs/translationDiff.mjs
-// already have with their owning module, so there is no circular import.
+// CodePreview.mjs — the standalone code-preview column shown next to the
+// comment/Claude-chat row whenever it contains a fenced code block (see
+// markdown.mjs's extractCodeFences and RelatedPanel.mjs's
+// recomputeCodePreviews/CodePreviewPanel, which owns the reactive `cp` state
+// this file only renders). Pure template, no reactive() state of its own and
+// no import of RelatedPanel.mjs — the same split ClaudeChat.mjs/
+// translationDiff.mjs already have with their owning module, so there is no
+// circular import.
 //
 // D1 (see .claude/docs/claude-chat-panel.md, "A full-size code-preview
 // column"): this is deliberately NOT a real line-diff. There is no
@@ -16,6 +17,13 @@
 // panes, stacked "Huidig" above "Voorgesteld" below — literally what was
 // asked ("onder elkaar, oude boven, nieuwe onder"), without colour-coded
 // line-level comparison. A follow-up can add real diffing later.
+//
+// D2/D3 reversed (reviewer request, see claude-chat-panel.md): the column is
+// no longer opened by clicking a "Bekijk volledig ↗" button and no longer
+// closable — it is ALWAYS on, showing every code fence currently visible in
+// the comment/Claude columns, stacked in ONE column instead of one column per
+// fence (chosen over N columns growing <main>'s horizontal scroll — see the
+// reviewer's own "gestapeld in één kolom" answer).
 import { html } from './vendor/arrow.js'
 import { highlightForLang } from './Block.mjs'
 
@@ -34,37 +42,42 @@ function pane(titleText, code, lang) {
   `
 }
 
-// codePreviewPanel(cp, onClose) — `cp` is the reactive `{ open, lang, code,
-// oldCode, title }` object RelatedPanel.mjs owns; every field that can change
-// is read from inside its own `${() => ...}` binding (mirrors
-// claudeChatColumn's own discipline in ClaudeChat.mjs) so a later open of a
-// DIFFERENT fence — which reuses this same mounted shape — always repaints,
-// never freezing on the first-opened fence's content (the static chunk-reuse
-// pitfall in arrowjs-pitfalls.md).
-export function codePreviewPanel(cp, onClose) {
+// previewCard renders ONE fence's preview ("Huidig (PR)"/"Voorgesteld (chat)"
+// pair, or a single "Codeblok" pane when there is no current-code comparison
+// — D4 in claude-chat-panel.md). `it` is a plain (non-reactive) snapshot
+// object — RelatedPanel.mjs replaces `cp.items` wholesale on every
+// recompute, never mutates an item in place, so nothing here needs its own
+// `${() => ...}` binding on `it`'s fields themselves; only the Prism
+// highlighting (via `pane`) is wrapped reactively, mirroring the previous
+// single-item version.
+function previewCard(it) {
   return html`
     <div
-      class="flex w-[42rem] shrink-0 flex-col gap-2 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-3 ring-1 ring-black/5"
-      data-testid="code-preview-column"
+      class="flex flex-col gap-2 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-3 ring-1 ring-black/5"
+      data-testid="code-preview-card"
     >
-      <div class="flex items-center justify-between gap-2">
-        <span class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="code-preview-title">
-          ${() => cp.title || 'Codeblok'}
-        </span>
-        <button
-          type="button"
-          class="shrink-0 rounded text-slate-400 hover:text-indigo-600 dark:text-zinc-600 dark:hover:text-indigo-400"
-          data-testid="code-preview-close"
-          title="Sluiten"
-          @click="${() => onClose()}"
-        >
-          ✕
-        </button>
-      </div>
+      <span class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="code-preview-title">
+        ${it.title}
+      </span>
       <div class="flex flex-col gap-2" data-testid="code-preview-body">
-        ${() => (cp.oldCode != null ? pane('Huidig (PR)', cp.oldCode, cp.lang) : '')}
-        ${() => pane(cp.oldCode != null ? 'Voorgesteld (chat)' : 'Codeblok', cp.code, cp.lang)}
+        ${() => (it.oldCode != null ? pane('Huidig (PR)', it.oldCode, it.lang) : '')}
+        ${() => pane(it.oldCode != null ? 'Voorgesteld (chat)' : 'Codeblok', it.code, it.lang)}
       </div>
+    </div>
+  `.key(it.key)
+}
+
+// codePreviewColumn(getItems) — `getItems` reads `cp.items`, a plain array
+// RelatedPanel.mjs's recomputeCodePreviews reassigns wholesale (never
+// mutated in place). Called from inside a `${() => ...}` binding here (not
+// read directly) so a later recompute (new fence appearing, a fence's
+// content changing while a Claude turn streams, navigating to a different
+// block) always repaints, never freezing on the first-computed set (the
+// static chunk-reuse pitfall in arrowjs-pitfalls.md).
+export function codePreviewColumn(getItems) {
+  return html`
+    <div class="flex w-[42rem] shrink-0 flex-col gap-3" data-testid="code-preview-column">
+      ${() => getItems().map((it) => previewCard(it))}
     </div>
   `
 }

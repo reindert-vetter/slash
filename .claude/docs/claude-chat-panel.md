@@ -1380,7 +1380,10 @@ full-size, and — when there is a sensible unit to compare against — stacked
 against the current PR code of that unit.
 
 Four decisions (D1-D4), all made explicitly rather than assumed, since the
-reviewer's own instruction left them open:
+reviewer's own instruction left them open. **D2 and D3 were later reversed**
+by a follow-up reviewer request — see "Always on, stacked in one column
+(reversing D2/D3)" below — kept here verbatim for the reasoning that is still
+current (D1, D4) and as the record of what changed and why:
 
 - **D1 — no real line-diff.** There is no clientside diff algorithm in this
   codebase: `Block.mjs`'s `codeDiff`/`unifiedCodeDiff` only render `rows` the
@@ -1447,16 +1450,75 @@ already returns `null` for a PR-wide/orphan comment-index item (`b.kind ===
 gets a "Huidig" pane either — no extra branching needed in `openCodePreview`
 for that case.
 
-**Files:** `markdown.mjs` (the button + its data attributes),
-`src/CodePreview.mjs` (new, pure template — the same
-no-reactive-state/no-import-of-RelatedPanel split as `ClaudeChat.mjs`/
-`translationDiff.mjs`), `RelatedPanel.mjs` (`cp`, `openCodePreview`,
-`closeCodePreview`, `handleFenceClick`, `CodePreviewPanel`), `home.mjs` (the
-mount point next to `comment-claude-row`).
+## Always on, stacked in one column (reversing D2/D3)
 
-Test: `tests/code-fence-preview.spec.mjs` — an orphan comment's fence opens the
-preview with only the "Voorgesteld" pane and no button for its sibling
-`suggestion` fence; a block-scoped comment (PR 12903, block 1) gets both panes.
+Reviewer follow-up: "'Bekijk volledig' mag altijd aan, alle blokken rechts
+daarvan laten zien als comment|claude blok zichtbaar zijn" — the click-driven,
+one-preview-at-a-time design above (D2/D3) is reversed. There is no
+open/close cycle any more: **every** non-`suggestion` fence currently
+rendered inside the comment/Claude columns gets its preview shown
+automatically, for as long as `claudeChatVisible()` holds — the same
+predicate that already gates `comment-claude-row`'s own visibility. D1 (no
+real diff, two stacked Prism panes) and D4 (scope: every fence except
+`suggestion`; only PHP-or-unlabeled + a resolvable unit gets the "Huidig (PR)"
+pane) are unchanged.
+
+- **One column, not one column per fence.** Asked explicitly (a thread with
+  several fences would otherwise spawn several `w-[42rem]` columns, pushing
+  `<main>`'s horizontal scroll out further per fence): `CodePreview.mjs`'s
+  `codePreviewColumn` renders ONE `w-[42rem]` column, `previewCard` per fence
+  stacked inside it with `flex flex-col gap-3`, each card carrying its own
+  title + "Huidig (PR)"/"Voorgesteld (chat)" pane pair (`data-testid=
+  code-preview-card`, keyed `'fence:' + index` — DOM/document order, i.e.
+  comments column first, then the Claude column).
+- **DOM-derived, not markdown-reparsed.** `extractCodeFences`
+  (`markdown.mjs`) already stamps every non-`suggestion` fence's header with a
+  `data-testid="code-fence-open"` button carrying the raw code + resolved
+  language as `data-fence-code`/`data-fence-lang` — originally the click
+  target, D2 above. Reusing those same data attributes as the read source
+  avoids a second, duplicate fence-parsing implementation in
+  `RelatedPanel.mjs`: `recomputeCodePreviews` just
+  `document.querySelector('[data-testid="comment-claude-columns"]')`s and
+  reads every `code-fence-open` button underneath it. The button itself keeps
+  rendering (harmless, no longer wired to a click) — removing it from
+  `markdown.mjs` would mean re-deriving the same data some other way, for no
+  gain.
+- **A `MutationObserver` drives the recompute**, not a `watch` over
+  `cs.list`/`cc.messages`: a live Claude turn's streaming reply
+  (`ClaudeChat.mjs`'s `p.partial`) is a separate, un-exported reactive field
+  local to that module, not something `RelatedPanel.mjs` can subscribe to —
+  and a fence only exists once its closing ` ``` ` has streamed in anyway
+  (`extractCodeFences`' regex requires it). `ensureCodePreviewObserver`
+  observes `[data-testid="comment-claude-columns"]` — the columns container,
+  deliberately **not** the outer row that also holds this module's own
+  `CodePreviewPanel` (a sibling further out, in
+  `comment-claude-and-preview-row`) — so the preview column's own re-renders
+  can never feed back into the observer that triggers them. Retried via
+  `requestAnimationFrame` until the container exists (arrow.js builds the
+  template before it's attached to the real DOM), then set up exactly once.
+  `scheduleRecomputeCodePreviews` coalesces a burst of mutation records into
+  one recompute per animation frame, and `recomputeCodePreviews` itself skips
+  reassigning `cp.items` when the recomputed set is unchanged (same length,
+  same code/lang/oldCode per item) — without that guard, every character of a
+  streaming reply would rebuild (and re-Prism-highlight) the whole column.
+- **No close button any more.** "Always on" means a reviewer can't dismiss one
+  preview — it disappears on its own once the fence holding it is no longer
+  rendered (comment/thread collapsed, different block selected).
+
+**Files:** `markdown.mjs` (the button + its data attributes, now read-only —
+see its own doc comment on `extractCodeFences`), `src/CodePreview.mjs`
+(`codePreviewColumn`/`previewCard`, pure templates — same
+no-reactive-state/no-import-of-RelatedPanel split as `ClaudeChat.mjs`/
+`translationDiff.mjs`), `RelatedPanel.mjs` (`cp.items`,
+`recomputeCodePreviews`, `scheduleRecomputeCodePreviews`,
+`ensureCodePreviewObserver`, `CodePreviewPanel`), `home.mjs` (the mount point
+next to `comment-claude-row`, now passing `commentTarget` into
+`CodePreviewPanel`).
+
+Test: `tests/code-fence-preview.spec.mjs` — an orphan comment's fence shows its
+preview automatically with only the "Voorgesteld" pane and no button for its
+sibling `suggestion` fence, and no close button anywhere; a block-scoped
+comment (PR 12903, block 1) gets both panes.
 
 ## Open (frontend gaps)
 

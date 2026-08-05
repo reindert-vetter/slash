@@ -101,23 +101,19 @@ function fenceLabel(counter, isSuggestion) {
 // second CSS block per language.
 //
 // Every non-suggestion fence also gets a native `<button
-// data-testid="code-fence-open">` in its header — the entry point into the
-// standalone code-preview column (RelatedPanel.mjs's `openCodePreview`/
-// `CodePreviewPanel`, see "A full-size code-preview column" in
-// claude-chat-panel.md) that shows the code full-width instead of scrolling
-// horizontally inside the narrow comment/Claude column, and — for a PHP (or
-// unlabeled, same default as above) fence — stacked against the unit's
-// CURRENT code as a "Huidig"/"Voorgesteld" comparison. The button carries the
-// RAW code + resolved language word as `data-fence-code`/`data-fence-lang`
-// (HTML-entity-encoded via `escapeHtml`, decoded back by the browser's own
-// attribute parsing when read via `.dataset`) rather than a fence index to
-// look up later — this file has no reactive state/click handling of its own
-// (a pure string renderer, see the header comment), so the click is handled
-// by a delegated listener further up the DOM (RelatedPanel.mjs), and reading
-// the code straight off the button avoids re-parsing the message text at
-// click time. A `suggestion` fence gets no button: it is GitHub's own
-// "replace these lines" convention, not a general code example to preview/
-// compare.
+// data-testid="code-fence-open">` in its header — no longer a click target
+// (see "A full-size code-preview column" in claude-chat-panel.md: the
+// standalone code-preview column is always on, not opened by clicking), but
+// still the data source `RelatedPanel.mjs`'s `recomputeCodePreviews` reads
+// off the DOM for every fence currently rendered in the comment/Claude
+// columns. The button carries the RAW code + resolved language word as
+// `data-fence-code`/`data-fence-lang` (HTML-entity-encoded via `escapeHtml`,
+// decoded back by the browser's own attribute parsing when read via
+// `.dataset`) — this file has no reactive state of its own (a pure string
+// renderer, see the header comment), so reading it straight off the button
+// avoids re-parsing the message text elsewhere. A `suggestion` fence gets no
+// button: it is GitHub's own "replace these lines" convention, not a
+// general code example to preview/compare.
 function extractCodeFences(text, store, startIndex) {
   let counter = startIndex
   return text.replace(CODE_FENCE_RE, (m, lang, code) => {

@@ -9703,12 +9703,13 @@ function DetailPanel(state) {
             CommentClaudeFooter()}
         </div>
         ${() =>
-          // The standalone code-preview column opened from a "Bekijk volledig
-          // ↗" button inside a comment/Claude code fence (markdown.mjs) — a
-          // sibling to comment-claude-row rather than a child of it, so it
-          // sits to its RIGHT instead of stretching that card's own height
-          // (see "A full-size code-preview column" in claude-chat-panel.md).
-          CodePreviewPanel()}
+          // The standalone code-preview column — always on, one stacked
+          // column showing every code fence currently visible in the
+          // comment/Claude columns (markdown.mjs) — a sibling to
+          // comment-claude-row rather than a child of it, so it sits to its
+          // RIGHT instead of stretching that card's own height (see "A
+          // full-size code-preview column" in claude-chat-panel.md).
+          CodePreviewPanel(commentTarget)}
         </div>
         ${() =>
           RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
