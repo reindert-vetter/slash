@@ -149,11 +149,13 @@ signal `toNewFocus`'s callers use below. An already-anchored conversation
 this third branch can never keep a genuinely gone conversation visible.
 
 **`isNewChatUnanchored()`** (`RelatedPanel.mjs`, private) names this exact
-"`'new'`, or `'claude'` with no anchor yet" condition once, since three call
+"`'new'`, or `'claude'` with no anchor yet" condition once, since four call
 sites need it identically: `claudeChatVisible()` above,
-`newCommentComposer`'s own visibility toggle, and `ensureClaudeAnchorForNew`'s
-guard (both below) — see "Two bugs the → path never actually exercised" for
-why letting these three drift apart is exactly what broke.
+`newCommentComposer`'s own visibility toggle, `ensureClaudeAnchorForNew`'s
+guard (both below), and `activeComposeTargetHint`'s first branch (see "The
+code card above the comment/Claude row" below) — see "Two bugs the → path
+never actually exercised" for why letting these drift apart is exactly what
+broke.
 
 **Getting back out, with the draft intact.** `newCommentComposer`'s own
 contents-root now toggles on `isNewChatUnanchored()`, not a bare
@@ -306,6 +308,29 @@ the same look as the Onderliggende-code chip connector, `RelatedPanel.mjs`'s
 whenever `claudeChatVisible()` (`home.mjs`, next to the `ClaudeChatPanel(...)`
 call) — built here rather than waiting for TODO 3 (the column-width pass),
 which reuses it once the two columns sit side by side at their final widths.
+
+### The code card above the comment/Claude row must follow the anchor into `'claude'` too
+
+`activeComposeTargetHint` (`RelatedPanel.mjs`, feeds `composeTargetHint` — see
+"The embedded Claude chat column" in `.claude/docs/detail-layout.md` for where
+it renders, spanning the full width of `comment-claude-row`) used to only
+check `cs.focus === 'new'` or `'comment'`/`'thread'`, so the code card
+disappeared the moment `→` moved the keyboard from the comment/thread into its
+own Claude conversation, even though nothing about the anchor changed (`→`
+into an already-anchored `'claude'` never touches `cs.sel`, so
+`selComment()`/`chatAnchorComment()` still resolve to the same comment).
+Reported bug, not a hypothetical: reviewer screenshot showed the card
+rendering above the comment column but vanishing the instant Claude got focus.
+
+Fixed by widening both branches: the first now checks `isNewChatUnanchored()`
+(its FOURTH call site, see above) instead of a bare `cs.focus === 'new'`, so
+an unanchored `'claude'` (reached via `enterClaudeChatFromNew`/"Chat over deze
+regel") still shows the live cursor's target exactly like the still-open `'new'`
+composer does; the second now also matches `cs.focus === 'claude'` alongside
+`'comment'`/`'thread'`, so an already-anchored conversation keeps its code card
+visible the whole time it owns the keyboard. Test: the "code card above the
+comment/Claude row stays visible after → into an anchored Claude conversation"
+case in `tests/claude-chat-panel.spec.mjs`.
 
 ## `RelatedPanel.mjs`: state, not template
 

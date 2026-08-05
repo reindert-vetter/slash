@@ -61,6 +61,14 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   await page.keyboard.press('ArrowUp')
   await page.keyboard.press('ArrowRight')
   await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
+  // Bug fixed: the code card above the merged comment/Claude row
+  // (composeTargetHint, fed by activeComposeTargetHint) used to disappear the
+  // moment → moved the keyboard into an already-anchored Claude conversation,
+  // even though the anchor comment (and its code) never changed — see "The
+  // code card above the comment/Claude row must follow the anchor into
+  // 'claude' too" in claude-chat-panel.md.
+  await expect(page.getByTestId('comment-target')).toBeVisible()
+  await expect(page.getByTestId('comment-target')).toContainText('Order::total')
   // ← goes straight back to the comment card (not to 'thread' in between).
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByTestId('reaction-compose')).toBeFocused()

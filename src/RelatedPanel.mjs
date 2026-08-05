@@ -3008,11 +3008,23 @@ export function composeTargetHint(target) {
 // existing conversation's own anchor (gran/label/code); else null (nothing
 // to show, e.g. while just browsing compact cards or the Onderliggende-code
 // panel).
+//
+// The first branch is `isNewChatUnanchored()` (its FOURTH call site, see the
+// function's own doc comment), not a bare `cs.focus === 'new'`: reaching the
+// Claude composer via `enterClaudeChatFromNew` with no anchor comment yet
+// (`cs.focus === 'claude' && cc.commentId == null`) is the exact same
+// "nothing placed yet, show the live cursor's target" state as `'new'`
+// itself. The second branch now ALSO covers `cs.focus === 'claude'` once it
+// IS anchored (`chatAnchorComment()` resolves to the same `selComment()` this
+// reads) — reported bug: navigating → from a commented line into its Claude
+// conversation dropped the code card, because this function had never grown
+// a 'claude' branch even though the anchor comment (and its code) is exactly
+// as available there as in 'comment'/'thread' focus.
 export function activeComposeTargetHint(commentTarget) {
-  if (cs.focus === 'new') {
+  if (isNewChatUnanchored()) {
     return warningOverride ? warningOverride.target : commentTarget ? commentTarget() : null
   }
-  if (cs.focus === 'comment' || cs.focus === 'thread') {
+  if (cs.focus === 'comment' || cs.focus === 'thread' || cs.focus === 'claude') {
     const c = selComment()
     if (c && c.code) return { gran: c.gran, label: c.label, code: c.code }
   }
