@@ -213,11 +213,13 @@ never opens this menu at all** — see "Space" in
 After approving **via the palette** (not via the block card's own checkbox,
 which stays a plain toggling click), if there is still a next unapproved unit a
 follow-up menu opens immediately (`ms.mode = 'postApprove'`,
-`POSTAPPROVE_COMMANDS`): pinned **"Close menu"** or **"Ga door"** (default, the
-2nd item — it only navigates, never auto-approves). This only triggers when the
-action **added** approval (`toggleApprove`/`toggleCallApprove` detect that via
-`allIn`/`keys.has(key)` **before** the mutation — a retract never opens it) and
-`findNextUnapproved()` actually found something.
+`POSTAPPROVE_COMMANDS`): pinned **"Close menu"** or a 2nd item (default — it
+only navigates, never auto-approves) labelled **"Ga door"** or **"Ga terug"**
+depending on the plan (see "Returning to an unapproved ancestor" below). This
+only triggers when the action **added** approval
+(`toggleApprove`/`toggleCallApprove` detect that via `allIn`/`keys.has(key)`
+**before** the mutation — a retract never opens it) and `findNextUnapproved()`
+actually found something.
 
 Two exceptions skip the menu and navigate straight away, both because there is
 nothing to choose besides continuing:
@@ -239,15 +241,18 @@ nothing to choose besides continuing:
   `target.keepList` and then moves **only** `state.selected` (to `target.root`)
   + `scrollSelectedIntoView()` — `target.path` is ignored, so an index approve
   never drills. Because `postApprove` can therefore never open with `keepList`
-  true, its `postapprove-next` label is a plain string again ("Ga door"), not a
-  keepList-aware function.
+  true, `postapprove-next`'s label function never needs to consider it either.
 
-A diff-mode approve landing on a *different* block still opens the menu.
+A diff-mode approve landing on a *different* block still opens the menu —
+**including** a return to an unapproved ancestor (step 3 below): that always
+lands on a different block than the one just approved, by construction, so
+neither exception applies and the menu always shows for a confirm, just with
+the "Ga terug" wording instead of "Ga door".
 
 ## `findNextUnapproved()` — walking the review tree
 
 "Next" follows the review **tree**, not the flat sidebar list, depth-first
-(`home.mjs`), four steps per call:
+(`home.mjs`):
 
 1. **Further within the column that owns the keyboard** — the top-level block
    (`state.gran`/`state.change`), or the drilled column at `state.focusLevel`
@@ -258,39 +263,72 @@ A diff-mode approve landing on a *different* block still opens the menu.
    cycle), depth-first per child (`firstUnapprovedInSubtree`, cycle-safe via a
    `seen` set): the child itself from its first `'group'` unit, otherwise its
    own children, and so on. See `.claude/docs/underlying-code.md`.
-3. **Up** through the drill stack: back to the parent (an earlier drilled
-   column, or the top-level block) and its **next, not-yet-tried** sibling
-   child, repeated upward.
-   3b. (top level only) the **remaining methods** of the current `test_class`
+3. **Return to an unapproved ancestor** (reviewer request — "als ik een
+   onderliggende code goedkeur, dan wil ik terug naar de bovenliggende code
+   als dat nog niet is goedgekeurd"): only once the focused column's whole
+   subtree (steps 1+2, both exhausted) is fully approved, walk the drill stack
+   from the **deepest** ancestor up (`state.drill[lvl-2]`, or the top-level
+   block for `lvl===1`) and return to the **first** one that still has an
+   unapproved unit of its **own** (`firstUnapprovedOwnUnit(parent, 'group',
+   -1)`, never a sibling or a deeper descendant — those are steps 2/4). Lands
+   on that ancestor's own **SAVED cursor** — its `state.drillCursor` entry (or
+   `state.gran`/`state.change` for the top level) — not its next unapproved
+   line: drilling further IN never touches an ancestor's cursor (`drillIntoChild`
+   only ever *pushes* a fresh entry for the new deepest level; an ancestor's own
+   entry is only ever written by an explicit navigation action taken *at that
+   same level*), so it still holds exactly the position the reviewer left before
+   descending — "waar ik als laatst was", not "de eerstvolgende open regel".
+   Defensively clamped (`Math.min(savedCur.change, units.length - 1)`) against a
+   granularity whose unit count shrank since (a code reload). The returned plan
+   carries `isReturn: true`, which only this step ever sets — `POSTAPPROVE_COMMANDS`'s
+   `postapprove-next` label reads it (`postApproveTarget.isReturn`) to say **"Ga
+   terug"** instead of **"Ga door"**, everything else about the item (its
+   position — 2nd, right after the pinned "Sluit menu", still `defaultSel`'s
+   default Enter action — and its `run`, `applyNextUnapproved(postApproveTarget)`)
+   is unchanged; `applyNextUnapproved` needs no special case either, since a
+   return is just a plan whose `path` is *shorter* than the current
+   `state.drill`, which its existing common-prefix trim already collapses
+   correctly (see below). Only meaningful at `state.focusLevel > 0` — a
+   top-level block (never drilled into anything) has no ancestor to return to.
+4. Failing that (every ancestor up to the top level is itself fully approved),
+   **Up** through the drill stack again: back to the parent (an earlier
+   drilled column, or the top-level block) and its **next, not-yet-tried**
+   sibling child, repeated upward.
+   4b. (top level only) the **remaining methods** of the current `test_class`
    row — see `.claude/docs/test-class-grouping.md`.
-4. **Across `state.blocks`** in sidebar order, also subtree-aware
+5. **Across `state.blocks`** in sidebar order, also subtree-aware
    (`firstUnapprovedInSubtree` per candidate), so a top-level block that only
    has an Underlying-code child still open is not skipped.
 
-With lazy `ensureCode` fetches for every visited block. Only **forward**, no
-wrap, no searching back to skipped units — so a `null` result means "nothing
-left ahead of me", not "the PR is done" (see the review-submit menus below).
+With lazy `ensureCode` fetches for every visited block. Steps 1/2/3 are
+forward-and-then-up **within the current drill stack only**; steps 4/5 are the
+genuinely forward, no-wrap search — so a `null` result means "nothing left
+ahead of me", not "the PR is done" (see the review-submit menus below).
 
 It returns a plan `{ root, path, gran, change }` (`root` = top-level index,
 `path` = the chain of PR blocks to drill through, empty = the top-level block)
-and stashes it in `postApproveTarget`. "Ga door" applies it via
-`applyNextUnapproved`, which trims `state.drill` to the common prefix with
-`path` (mirroring `expandColumn`'s trim) and drills only the remainder
-(`drillIntoChild`) instead of tearing down the whole stack for a nearby sibling
-step; a different `root` resets `state.drill`/`drillCursor`/`focusLevel`. No
-recomputation is needed — the palette owns the keyboard while it's open. This
-is one-off: after navigating, no new follow-up menu opens.
+— plus `isReturn: true` for a step-3 plan — and stashes it in
+`postApproveTarget`. "Ga door"/"Ga terug" applies it via `applyNextUnapproved`,
+which trims `state.drill` to the common prefix with `path` (mirroring
+`expandColumn`'s trim) and drills only the remainder (`drillIntoChild`) instead
+of tearing down the whole stack for a nearby sibling step (or, for a step-3
+return, doesn't drill anything further at all — the trim alone already lands on
+the ancestor); a different `root` resets `state.drill`/`drillCursor`/
+`focusLevel`. No recomputation is needed — the palette owns the keyboard while
+it's open. This is one-off: after navigating, no new follow-up menu opens.
 
-**Steps 2/3/3b run regardless of `inDiff` — only step 1 is genuinely
+**Steps 2/3/4/4b run regardless of `inDiff` — only step 1 is genuinely
 diff-only.** They used to sit inside the same `if (focused && inDiff)` gate as
 step 1, but `inDiff` (`level > 0 || state.mode === 'diff'`) is false in plain
 list mode — exactly where a reviewer approves a small block or a freshly added
 test method without ever pressing `→`. That silently returned `null` while a
 sibling test method still showed `0/N`, or while a resolved-call child (hidden
-from the flat sidebar via `resolvedCallTargetIds`, so unreachable by step 4)
+from the flat sidebar via `resolvedCallTargetIds`, so unreachable by step 5)
 still had unapproved rows. Step 1 staying a no-op in list mode is correct:
 there is no cursor within the block to resume from, and approving the whole
-block from the list already covered all of its own rows. Test:
+block from the list already covered all of its own rows. (Step 3 is moot in
+list mode anyway — it only ever fires at `state.focusLevel > 0`, which implies
+a diff cursor already exists.) Test:
 `tests/findnextunapproved-list-mode.spec.mjs` (PR 110, PR 112).
 
 ## `lastIndexRowRect` — keeping a follow-up menu at the same spot

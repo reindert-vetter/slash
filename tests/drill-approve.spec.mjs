@@ -49,17 +49,33 @@ test.describe('PR Review Tree — approving inside a drilled Onderliggende-code 
     await expect(page.getByTestId('command-row').nth(1)).toContainText('Keur deze regels goed')
     await page.getByTestId('command-row').nth(1).click()
 
-    // This leaves nothing ahead for findNextUnapproved from the drilled
-    // child's own position (its own subtree is done, and the parent has no
-    // OTHER children to try next — see afterApproveAction/findNextUnapproved
-    // in home.mjs), even though the PARENT's own line is still un-approved —
-    // so the PR overall isn't fully approved yet: this opens the
-    // 'reviewChoice' follow-up (Keur de HELE PR goed / Wijs de PR af / Sluit
-    // menu), not a plain close. Dismiss it before checking the approvals API.
+    // The drilled card's own checkbox reflects the approval right away —
+    // checked here, before the drilled column closes below.
+    await expect(drill.locator('input[type=checkbox]')).toBeChecked()
+
+    // The drilled child's own subtree is now done (it has no children of its
+    // own), but the PARENT's own line is still un-approved — so
+    // findNextUnapproved's step 3 (see drilling.md's "Finishing a drilled
+    // column's subtree returns to an unapproved ancestor") returns straight
+    // to the parent instead of descending to siblings or opening the PR-wide
+    // review-submit menus. This still opens the postApprove confirm menu (it
+    // lands on a different block than the one just approved), but the 2nd
+    // item is labelled "Ga terug", not "Ga door".
     await expect(menu).toBeVisible()
-    await expect(page.getByTestId('command-row')).toHaveCount(3)
-    await page.getByTestId('command-row').filter({ hasText: 'Sluit menu' }).click()
+    const postApproveRows = page.getByTestId('command-row')
+    await expect(postApproveRows).toHaveCount(2)
+    await expect(postApproveRows.nth(0)).toContainText('Sluit menu')
+    await expect(postApproveRows.nth(1)).toContainText('Ga terug')
+    await postApproveRows.filter({ hasText: 'Ga terug' }).click()
     await expect(menu).not.toBeVisible()
+
+    // The drilled column closes and focus returns to the parent's own diff,
+    // on the exact position it was left at before drilling in (its saved
+    // cursor — here still the first/only group, since drilling in never
+    // moved it).
+    await expect(page.getByTestId('drill-column')).toHaveCount(0)
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await expect(page.getByTestId('block-column')).toContainText('TreeParentAction::execute')
 
     // The approval must land on the CHILD's block id — never the parent's.
     await expect
@@ -81,8 +97,5 @@ test.describe('PR Review Tree — approving inside a drilled Onderliggende-code 
     expect(!parentRow || ((parentRow.rows || []).length === 0 && (parentRow.calls || []).length === 0)).toBe(
       true,
     )
-
-    // The drilled card's own checkbox reflects the approval too.
-    await expect(drill.locator('input[type=checkbox]')).toBeChecked()
   })
 })

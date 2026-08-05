@@ -129,6 +129,31 @@ the TOP-LEVEL block/cursor while a drilled column held the keyboard (the reporte
 "I can't approve anything in underlying code"). See "Enter — command palette" in
 `.claude/docs/command-palette.md` and `tests/drill-approve.spec.mjs`.
 
+### Finishing a drilled column's subtree returns to an unapproved ancestor
+
+Reviewer request: approving everything reachable from a drilled column (its own
+rows, plus its whole Onderliggende-code subtree) doesn't mean the column you
+drilled **in from** is itself done — you may have drilled in before finishing
+it. `findNextUnapproved()`'s step 3 (`.claude/docs/command-palette.md`) then
+walks the drill stack upward and lands back on the first ancestor that still has
+an unapproved unit of its own, on that ancestor's **saved cursor**
+(`state.drillCursor[lvl-2]`, or `state.gran`/`state.change` for the top level) —
+exactly the position the reviewer left before drilling deeper, since drilling IN
+only ever *pushes* a fresh cursor entry for the new deepest level and never
+touches an ancestor's own entry. `applyNextUnapproved` needs no change for this:
+a step-3 plan's `path` is simply a **prefix** of the current `state.drill`, which
+the existing common-prefix trim already collapses to (closing the drilled
+column(s) below it), including the `markDrillReturn`/`.drill-return` entrance
+animation (see "Return animation" below) since `common === target.path.length`
+in this case.
+
+This still opens the `postApprove` confirm menu (it always lands on a different
+block than the one just approved, so neither of the "skip the menu" exceptions
+in `.claude/docs/command-palette.md` applies) — but with its 2nd item labelled
+**"Ga terug"** instead of **"Ga door"** (`findNextUnapproved`'s `isReturn` flag on
+the plan, read by `POSTAPPROVE_COMMANDS`'s label function). Test:
+`tests/drill-approve-return-to-ancestor.spec.mjs`.
+
 ### Entering, leaving, and what may not happen
 
 - **Right after drilling, focus is on the diff of the new column**, not its

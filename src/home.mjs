@@ -4918,8 +4918,9 @@ function replyPublishCommandsFor() {
 // direct toggle and never opens this menu. "Sluit menu" is pinned first
 // (withClose, with its own onClose so closing also drops the stashed
 // postApproveTarget — mirrors the old dedicated close item's cleanup); the
-// menu opens on the 2nd item (defaultSel), so "Ga door…" stays the default
-// Enter action.
+// menu opens on the 2nd item (defaultSel), so this item stays the default
+// Enter action — its POSITION (index 1, right after the pinned close item)
+// never changes, only its label text.
 const POSTAPPROVE_COMMANDS = withClose(
   [
     {
@@ -4927,8 +4928,17 @@ const POSTAPPROVE_COMMANDS = withClose(
       // A list-mode (`keepList`) approve never reaches this menu anymore — it
       // always jumps straight to the next unapproved block itself (see
       // afterApproveAction's EXCEPTION 2) — so this label only ever needs the
-      // diff-mode wording now.
-      label: 'Ga door',
+      // diff-mode wording. A LABEL FUNCTION (not the earlier plain string),
+      // exactly the COMMANDS 'approve' item's pattern: resolved once by
+      // resolveLabel/snapshotCommands at openMenu() time (never a reactive
+      // binding reaching the CommandMenu tree, see
+      // .claude/rules/arrowjs-pitfalls.md). "Ga terug" when the stashed
+      // postApproveTarget is a RETURN-to-ancestor plan (findNextUnapproved's
+      // `isReturn`, see there) — the reviewer just finished a drilled
+      // column's whole subtree and this jumps back UP to an unapproved
+      // ancestor, not forward to something new — otherwise the existing
+      // "Ga door" wording for every other (forward) plan.
+      label: () => (postApproveTarget && postApproveTarget.isReturn ? 'Ga terug' : 'Ga door'),
       hint: 'volgende',
       run: () => {
         if (postApproveTarget) applyNextUnapproved(postApproveTarget)
@@ -6828,11 +6838,15 @@ async function firstUnapprovedInSubtree(b, seen = new Set()) {
 //  2. Failing that, DOWN into that column's own Onderliggende-code children
 //     (orderedChildBlocks, panel order), depth-first (firstUnapprovedInSubtree).
 //  3. Failing that (the focused column's whole subtree is exhausted), UP
-//     through the current drill stack's ancestors, trying each one's next
-//     not-yet-tried sibling child.
-//  3b. Failing that, and only at the top level, the REMAINING methods of the
+//     through the current drill stack's ancestors, RETURNING to the nearest
+//     one that still has an unapproved unit of its own — see "Returning to
+//     an unapproved ancestor" below.
+//  4. Failing that (every ancestor up to the top level is itself fully
+//     approved), UP through the current drill stack again, this time trying
+//     each ancestor's next not-yet-tried sibling child.
+//  4b. Failing that, and only at the top level, the REMAINING methods of the
 //     current test_class row (see testClassRowItem/recomputeLeftList).
-//  4. Failing that (the entire current top-level block's subtree is done, or
+//  5. Failing that (the entire current top-level block's subtree is done, or
 //     we weren't even in its diff), ACROSS the rest of state.blocks in
 //     sidebar order — subtree-aware too (firstUnapprovedInSubtree), so a
 //     top-level block whose own rows are done but whose Onderliggende-code
@@ -6844,7 +6858,23 @@ async function firstUnapprovedInSubtree(b, seen = new Set()) {
 // ahead anywhere in the tree. Async because a not-yet-visited block's code
 // may still need fetching.
 //
-// Steps 2, 3 and 3b deliberately do NOT require `inDiff` (unlike step 1) —
+// Returning to an unapproved ancestor (step 3, reviewer request): approving
+// everything reachable BELOW a drilled column (steps 1+2 above) doesn't mean
+// the column you drilled IN FROM is itself done — it may still have its own
+// unapproved rows the reviewer never got to before drilling deeper. Step 3
+// walks the drill stack from the deepest ancestor up, and on the first one
+// with `firstUnapprovedOwnUnit(parent, 'group', -1) !== null` returns a plan
+// landing on THAT ancestor — flagged `isReturn: true` so the postApprove menu
+// labels its "continue" item "Ga terug" instead of "Ga door" (see
+// POSTAPPROVE_COMMANDS). It lands on the ancestor's own SAVED cursor (its
+// `state.drillCursor` entry, or state.gran/state.change for the top-level
+// block) — "waar ik als laatst was", not that ancestor's own next unapproved
+// line — because drilling further IN never touches an ancestor's cursor (see
+// the comment at the loop itself). Only when NO ancestor up to the top level
+// has unapproved own work does the function fall through to step 4, the
+// pre-existing sibling-walk (unchanged).
+//
+// Steps 2, 4 and 4b deliberately do NOT require `inDiff` (unlike step 1) —
 // this used to be a real bug: approving a whole block/test-method straight
 // from the "Start" list (never having pressed → into its diff at all — the
 // realistic way to review a freshly ADDED, single-shot test method) skipped
@@ -6858,10 +6888,12 @@ async function firstUnapprovedInSubtree(b, seen = new Set()) {
 // a drilled column's own drillCursor): in list mode there IS no cursor
 // within the block to search forward from — approving "the whole block"
 // from the list already covers every one of its own changed rows in one go,
-// so step 1 is correctly a no-op there, not merely skipped. Steps 2/3/3b are
+// so step 1 is correctly a no-op there, not merely skipped. Steps 2/4/4b are
 // about the currently selected block's own children/siblings, which exist
 // (and can be missing approval) whether or not the reviewer ever stepped
-// into its diff.
+// into its diff. Step 3 (returning to an ancestor) is likewise independent of
+// `inDiff` — it only ever fires at level > 0 anyway, which already implies a
+// diff cursor exists.
 async function findNextUnapproved() {
   const level = state.focusLevel
   const focused = level > 0 ? state.drill[level - 1] : curBlock()
@@ -6887,6 +6919,44 @@ async function findNextUnapproved() {
         }
       }
     }
+    // Only once the focused column's own subtree is exhausted (its own rows,
+    // just checked above, PLUS every Underlying-code descendant, the loop
+    // right above this one): walk UP the drill stack and return to the
+    // nearest ANCESTOR that itself still has an unapproved unit of its OWN
+    // (not a sibling, not a descendant — reviewer request: "als ik een
+    // onderliggende code goedkeur, dan wil ik terug naar de bovenliggende
+    // code als dat nog niet is goedgekeurd; als die al goedgekeurd is en er
+    // is nog een bovenliggende code, ga dan daarnaartoe"). Deepest ancestor
+    // first (lvl = level down to 1) so a partially-reviewed immediate parent
+    // wins over a grandparent. `parent` here means exactly what the sibling
+    // loop below calls `parent` — the ancestor one level up from `state.drill[lvl-1]`.
+    // Lands on that ancestor's OWN SAVED cursor — "waar ik als laatst was",
+    // not its next unapproved line: state.drillCursor[lvl-2] (or
+    // state.gran/state.change for the top-level block) is never touched by
+    // drilling further IN (drillIntoChild only ever PUSHES a fresh entry for
+    // the new deepest level), only by an explicit navigation action AT that
+    // same level — so it still holds exactly the position the reviewer left
+    // before descending. Defensively clamped in case a reload since then
+    // shrank that granularity's unit count. Marked `isReturn: true` so the
+    // postApprove menu can label this "Ga terug" instead of "Ga door" (see
+    // POSTAPPROVE_COMMANDS) — every other branch of this function never sets
+    // that flag. Only meaningful at level > 0, same as the sibling loop.
+    for (let lvl = level; lvl > 0; lvl--) {
+      const parent = lvl > 1 ? state.drill[lvl - 2] : curBlock()
+      if (parent && firstUnapprovedOwnUnit(parent, 'group', -1) !== null) {
+        const savedCur = lvl > 1 ? state.drillCursor[lvl - 2] || { change: 0, gran: 'group' } : { gran: state.gran, change: state.change }
+        const units = navUnitsOf(parent, blockRows(parent), savedCur.gran)
+        const change = units.length ? Math.min(savedCur.change, units.length - 1) : 0
+        return {
+          root: state.selected,
+          path: state.drill.slice(0, lvl - 1),
+          gran: savedCur.gran,
+          change,
+          isReturn: true,
+        }
+      }
+    }
+
     // Only meaningful at level > 0 (a drilled column has ancestors to walk
     // sideways through) — at level === 0 this loop is a no-op by construction
     // (the `lvl > 0` condition never holds), so pulling it out of the
