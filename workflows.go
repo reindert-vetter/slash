@@ -713,12 +713,15 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			m.logf("pr_inbox: refresh skipped: %v", err)
 			return json.Marshal(inboxRefreshResult{})
 		}
-		// The "💬 n" badge counts slash's OWN comments, not GitHub's raw
-		// PullRequest.comments.totalCount (which is issue-conversation comments,
-		// a different category). comments.List includes both slash-placed
-		// (source: ui) and imported GitHub-conversation comments (source:
-		// github), so resolving a comment in slash lowers the badge directly.
-		// Read-only enrichment inside the Activity — no new write path.
+		// The "💬 n" badge counts slash's view of GitHub-imported comments only
+		// (source: github) — never a slash-placed local one (source: ""/"ui",
+		// e.g. a private "Alleen voor mijzelf" note or the auto-created
+		// Claude-chat anchor comment, see ensureClaudeAnchorForNew in
+		// RelatedPanel.mjs). A local comment was never posted to GitHub, so it
+		// must not inflate a count meant to mirror the real GitHub comment
+		// count. comments.List includes both; resolving a real GitHub comment
+		// in slash still lowers the badge directly. Read-only enrichment inside
+		// the Activity — no new write path.
 		if m.comments != nil {
 			for si := range snap.Sections {
 				for pi := range snap.Sections[si].PRs {
@@ -729,6 +732,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 					}
 					open := 0
 					for _, c := range cs {
+						if c.Source != "github" {
+							continue
+						}
 						switch c.Status {
 						case "resolved", "deleting", "deleted":
 							// excluded

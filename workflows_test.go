@@ -1051,9 +1051,15 @@ func TestPRInboxRefreshPopulatesReadModel(t *testing.T) {
 }
 
 // TestPRInboxBadgeCountsOpenSlashComments proves the "💬 n" badge count comes
-// from slash's own comments read-model (open comments only), NOT GitHub's raw
-// PullRequest.comments.totalCount. Seeds 2 open + 1 resolved + 1 deleting
-// comment on a fixture PR and asserts the enriched inbox row reports 2.
+// from slash's own comments read-model (open, GITHUB-SOURCED comments only),
+// NOT GitHub's raw PullRequest.comments.totalCount and NOT a local (source:
+// ""/"ui") comment that was never posted to GitHub — e.g. a private "Alleen
+// voor mijzelf" note or the auto-created Claude-chat anchor comment (see
+// ensureClaudeAnchorForNew in RelatedPanel.mjs) must not inflate a count meant
+// to mirror the real GitHub comment count. Seeds 2 open github-sourced + 1
+// resolved github-sourced + 1 deleting github-sourced + 1 open LOCAL comment
+// on a fixture PR and asserts the enriched inbox row reports 2 (the local one
+// excluded despite being open).
 func TestPRInboxBadgeCountsOpenSlashComments(t *testing.T) {
 	t.Setenv("SLASH_GITHUB", "off")
 	t.Setenv("SLASH_INBOX", "tests/fixtures/inbox.json")
@@ -1070,19 +1076,22 @@ func TestPRInboxBadgeCountsOpenSlashComments(t *testing.T) {
 	}
 	t.Cleanup(func() { cs.Close() })
 
-	// PR 12903 is in the fixture. Seed 2 open + 1 resolved + 1 deleting.
-	seed := func(id, status string) {
+	// PR 12903 is in the fixture. Seed 2 open + 1 resolved + 1 deleting, all
+	// github-sourced, plus 1 open LOCAL (source: "ui") comment that must not
+	// be counted.
+	seed := func(id, status, source string) {
 		if err := cs.Save(context.Background(), comments.Comment{
 			ID: id, RunID: id, PR: 12903, File: "a.php", Line: 1,
-			Author: "reviewer", Body: "b", Status: status,
+			Author: "reviewer", Body: "b", Status: status, Source: source,
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	seed("open-1", "open")
-	seed("open-2", "open")
-	seed("resolved-1", "resolved")
-	seed("deleting-1", "deleting")
+	seed("open-1", "open", "github")
+	seed("open-2", "open", "github")
+	seed("resolved-1", "resolved", "github")
+	seed("deleting-1", "deleting", "github")
+	seed("local-open-1", "open", "ui")
 
 	ib := testInbox(t)
 	engine := tembed.New(tembed.NewMemoryStore())
@@ -1115,7 +1124,7 @@ func TestPRInboxBadgeCountsOpenSlashComments(t *testing.T) {
 		t.Fatalf("PR 12903 not in refreshed inbox: %+v", sections)
 	}
 	if got != 2 {
-		t.Fatalf("badge count = %d, want 2 (only the 2 open comments; resolved/deleting excluded)", got)
+		t.Fatalf("badge count = %d, want 2 (only the 2 open github-sourced comments; resolved/deleting/local excluded)", got)
 	}
 }
 

@@ -323,11 +323,21 @@ before.
 **The "💬 n" comment badge** (`commentsBit`) reads `row.comments`, which is
 **not** GitHub's raw `PullRequest.comments.totalCount` (issue-conversation
 comments, a different category): the `refreshInbox` Activity overwrites it per
-row with the count of slash's **own** open comments — `comments.List(pr)`
-filtered to `status not in {resolved, deleting, deleted}`, covering both
-slash-placed (`source: ui`) and imported (`source: github`) comments, so
-resolving a comment in slash lowers the badge directly. Read-only enrichment
-inside the Activity — no new write path.
+row with the count of slash's own open, **GitHub-imported** comments —
+`comments.List(pr)` filtered to `status not in {resolved, deleting, deleted}`
+**and** `source == "github"`, so resolving an imported comment in slash lowers
+the badge directly. A **local** (`source: ""`/`"ui"`) comment — a private
+"Alleen voor mijzelf" note, or the auto-created Claude-chat anchor comment
+(`ensureClaudeAnchorForNew`, `RelatedPanel.mjs`, see
+`.claude/docs/claude-chat-panel.md`) — was never posted to GitHub and must
+never inflate a count meant to mirror the real GitHub comment count; this was
+reversed from an earlier version that counted both sources, which made the
+badge diverge from GitHub's own comment count the moment a reviewer started a
+Claude conversation before typing an actual comment. The comment(s) themselves
+are unaffected — they still show/work exactly as before in the review tree;
+only this badge's tally changed. Read-only enrichment inside the Activity — no
+new write path. Test: `TestPRInboxBadgeCountsOpenSlashComments`
+(`workflows_test.go`).
 
 **The "Ongepusht N" badge** (`unpushedPill`, backfilled by
 `kickOffPendingPush` from `GET /api/pending-push` exactly like the approval
