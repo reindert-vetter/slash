@@ -46,10 +46,14 @@ test.describe('Publish a local comment thread to GitHub', () => {
     await expect(page.getByTestId('reaction-compose')).toBeFocused()
   }
 
-  // Types a reply and submits it from the field itself — the thread stays open
-  // between sends, so it is only clicked into once (a second click would toggle
-  // it shut).
-  async function typeReply(page, text) {
+  // Types a reply and submits it from the field itself. A reply that actually
+  // sends (not just opens the publish menu — see needsPublishChoice) closes
+  // the thread back to the diff IMMEDIATELY (optimistic exit, see
+  // postThreadReply in RelatedPanel.mjs) — a deliberate, later reversal of
+  // "the thread stays open after a reply". `body` re-opens the thread first
+  // if an earlier send already closed it.
+  async function typeReply(page, body, text) {
+    if (!(await page.getByTestId('reaction-compose').count())) await openThread(page, body)
     const field = page.getByTestId('reaction-compose')
     await field.fill(text)
     await field.press('Enter')
@@ -63,7 +67,7 @@ test.describe('Publish a local comment thread to GitHub', () => {
     await openThread(page, aiBody)
 
     // A first reply, while nothing else was ever written: no history choice yet.
-    await typeReply(page, 'eerste lokale reactie')
+    await typeReply(page, aiBody, 'eerste lokale reactie')
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     let rows = menu.getByTestId('command-row')
@@ -71,14 +75,16 @@ test.describe('Publish a local comment thread to GitHub', () => {
     await expect(rows.nth(1)).toContainText('Alleen voor mijzelf')
     await expect(rows.nth(2)).toContainText('Alleen mijn antwoord op GitHub')
     await expect(rows.nth(3)).toContainText('Ook de AI-melding op GitHub')
-    // The default (2nd item) keeps it local.
+    // The default (2nd item) keeps it local — sending it closes the thread
+    // immediately (optimistic exit), so reopen it to verify the reply landed.
     await page.keyboard.press('Enter')
     await expect(menu).toHaveCount(0)
+    await openThread(page, aiBody)
     await expect(page.getByTestId('comment-thread')).toContainText('eerste lokale reactie')
 
     // A second reply now has an earlier local message to decide about, so the
     // two GitHub items become submenus.
-    await typeReply(page, 'tweede reactie, nu publiek')
+    await typeReply(page, aiBody, 'tweede reactie, nu publiek')
     await expect(menu).toBeVisible()
     rows = menu.getByTestId('command-row')
     await rows.nth(3).click()
@@ -86,6 +92,7 @@ test.describe('Publish a local comment thread to GitHub', () => {
     await expect(menu.getByTestId('command-row').nth(2)).toContainText('Met de eerdere 1 bericht')
     await menu.getByTestId('command-row').nth(2).click()
     await expect(menu).toHaveCount(0)
+    await openThread(page, aiBody)
     await expect(page.getByTestId('comment-thread')).toContainText('tweede reactie, nu publiek')
 
     // The thread now has a GitHub root (github.Fake answers offline). The
@@ -100,10 +107,12 @@ test.describe('Publish a local comment thread to GitHub', () => {
       })
       .toBeGreaterThan(0)
 
-    // So the next reply goes straight out — no menu at all.
-    await typeReply(page, 'derde reactie')
-    await expect(page.getByTestId('comment-thread')).toContainText('derde reactie')
+    // So the next reply goes straight out — no menu at all, and it too
+    // closes the thread immediately.
+    await typeReply(page, aiBody, 'derde reactie')
     await expect(menu).toHaveCount(0)
+    await openThread(page, aiBody)
+    await expect(page.getByTestId('comment-thread')).toContainText('derde reactie')
   })
 
   // Regression: the 'replyPublish' mode had no menuAnchor/menuRegion branch of
@@ -118,7 +127,7 @@ test.describe('Publish a local comment thread to GitHub', () => {
     await seedWarning(page, aiBody)
     await openThread(page, aiBody)
 
-    await typeReply(page, 'positioneringstest')
+    await typeReply(page, aiBody, 'positioneringstest')
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
 
@@ -146,11 +155,14 @@ test.describe('Publish a local comment thread to GitHub', () => {
     await openThread(page, aiBody)
 
     // One local reply first, so the with/without-history choice applies.
-    await typeReply(page, 'lokale aantekening')
+    await typeReply(page, aiBody, 'lokale aantekening')
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     await page.keyboard.press('Enter') // "Alleen voor mijzelf", the default
     await expect(menu).toHaveCount(0)
+    // The reply closed the thread immediately (optimistic exit) — reopen it
+    // to verify it actually landed, and to reach the empty reply field again.
+    await openThread(page, aiBody)
     await expect(page.getByTestId('comment-thread')).toContainText('lokale aantekening')
 
     // Enter on the now-empty reply field opens the comment menu, which offers
@@ -174,7 +186,8 @@ test.describe('Publish a local comment thread to GitHub', () => {
         return (c && c.githubId) || 0
       })
       .toBeGreaterThan(0)
-    // Nothing was added to the thread — publishing is not a message.
+    // Nothing was added to the thread — publishing is not a message, and
+    // publishThreadOnly (unlike postThreadReply) never closes the thread.
     await expect(page.getByTestId('comment-thread')).toContainText('lokale aantekening')
     await expect(page.getByTestId('reaction-compose')).toHaveValue('')
   })

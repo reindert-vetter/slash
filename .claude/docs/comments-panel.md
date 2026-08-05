@@ -915,15 +915,14 @@ attempt, so it weakens nothing: it only means "wait for the render this
 transition caused". `prefillField` does the same, so a missed prefill can't leave
 the composer open but empty.
 
-**The same `focusToken` also guards `placeComment`'s/`createComment`'s async
-tail** (POST + comments reload), not just a deferred DOM focus.
-`COMPOSE_COMMANDS`' `run()` is fired without being awaited (`runCommand`), so the
-reviewer has the keyboard back well before the round-trip settles and can open a
-different comment/composer/panel, possibly on a different block — `cs` is a
-module-level singleton. Without a guard the stale tail's unconditional
-`cs.sel = …` (`createComment`) and `exitRelated()` (`placeComment`) would clobber
-that. Both snapshot `focusToken` before their `await` and only apply their
-follow-up if it's unchanged. Consequence: every function that sets
+**The same `focusToken` also guards `createComment`'s own async tail** (the
+`cs.sel = …` landing on the freshly-placed comment, once the POST + comments
+reload settles) — `COMPOSE_COMMANDS`' `run()` is fired without being awaited
+(`runCommand`), so the reviewer has the keyboard back well before that
+round-trip settles and can open a different comment/composer/panel, possibly
+on a different block — `cs` is a module-level singleton. `createComment`
+snapshots `focusToken` before its `await` and only applies `cs.sel = …` if
+it's still unchanged. Consequence: every function that sets
 `cs.focus`/`cs.composing` directly — `enterRelated`, `toComment`,
 `enterClaudeChat`, and the two direct branches in `applyRelRestore` — must
 also call `releaseFocus()` (directly, or via `focusThread`/`toComment`, which
@@ -933,16 +932,77 @@ do it themselves), so a genuine navigation-away is visible to that guard.
 the same way — they set `cs.focus`/`cs.threadPos` then call `focusThread()`/
 `toComment()`, never bypassing it. Test: `tests/comment-nav-race.spec.mjs`.
 
-### A placed comment gives the keyboard back to its code
+`placeComment`/`postThreadReply`/`postPrCommentReply` themselves no longer
+need this guard for their OWN exit — see the next section, "optimistic exit"
+now happens synchronously, before the token could ever change.
 
-`placeComment` (`RelatedPanel.mjs`), called by both `COMPOSE_COMMANDS` items
-("Place comment"/"Only for myself"), calls `exitRelated()` after a successful
-`createComment`: focus returns to the diff of the block/column the comment was
-attached to (`commentTarget()` follows `focusedBlock()`, so also a drilled
-column). `home.mjs`'s `compose-post`/`compose-self` `run` functions then call
-`scrollFocusIntoView()` to re-align `<main>`. So "type, Enter, Enter" leaves the
-reviewer ready to continue with `↑`/`↓`/`f`/`d`/`s`. Test:
-`tests/place-comment-return-focus.spec.mjs`.
+### Placing a comment or sending a reply hands the keyboard back OPTIMISTICALLY — before the save is even confirmed
+
+Explicit product decision (Reindert): "als ik een comment plaats, dan wil ik
+naar de code diff — direct, al voordat het echt is opgeslagen", later
+extended to cover a reply too, on both surfaces. Three write paths in
+`RelatedPanel.mjs` all follow the same shape now:
+
+- **`placeComment`** (called by both `COMPOSE_COMMANDS` items, "Place
+  comment"/"Only for myself") calls `exitRelated()` **immediately** — before
+  `createComment`'s POST + GET round-trip even starts, not after it succeeds.
+  Focus returns to the diff of the block/column the comment was attached to
+  (`commentTarget()` follows `focusedBlock()`, so also a drilled column).
+  `home.mjs`'s `compose-post`/`compose-self` `run` functions then call
+  `scrollFocusIntoView()` to re-align `<main>`. So "type, Enter, Enter" leaves
+  the reviewer ready to continue with `↑`/`↓`/`f`/`d`/`s` immediately. Test:
+  `tests/place-comment-return-focus.spec.mjs`.
+- **`postThreadReply`** (`sendReaction`'s write half, the block-scoped inline
+  thread) now **also** closes the thread immediately on every reply —
+  `exitRelated()` runs before the reply Signal even fires. This **reverses an
+  earlier, deliberate choice** ("this thread stays open after a reply, the one
+  place `cs.replySent`'s flash is actually visible") — explicitly confirmed to
+  be overridden: a reply now behaves exactly like placing a brand-new comment.
+  The `cs.replySent`/`cs.busy` flash still shows in the shared
+  `comment-claude-footer` (`commentFooterText()` reads them independent of
+  `cs.focus`), just not inside the (already-collapsed) thread card itself.
+  Test: `tests/reaction-status-icon.spec.mjs`.
+- **`postPrCommentReply`** (`sendPrCommentReply`'s write half, a comment-index
+  "Start" row's own reply field) closes back to the item's **rest position**
+  immediately — `cancelPrCommentReply()` (hides the field) +
+  `exitPrCommentThread()` (releases `pct`). Not "back to a diff": a
+  comment-index item structurally has none (see the guards under "Guards on
+  paths that assume a real PR block" above) — the item itself stays selected,
+  only the reply UI closes.
+
+**Load-bearing `e.stopPropagation()` in the Enter handler of `reaction-compose`
+and `comment-detail-reply`** (only when there's actually text to send — an
+EMPTY field must keep bubbling, since that's what opens the
+publish-choice/action menu): `sendReaction()`/`sendPrCommentReply()` now blur
+the very field the keydown originated on, SYNCHRONOUSLY, as part of the same
+call stack the local `@keydown` handler runs in (fired-and-forgotten, but the
+synchronous portion up to the first `await` still runs before that handler
+returns). Without `stopPropagation()`, the same still-bubbling keydown event
+would reach `home.mjs`'s document-level handler AFTER the field was already
+blurred, which would misread "was I just typing in a field?" as false and
+reinterpret the same Enter as an unrelated action (e.g. opening the block's
+own command palette) — the keydown analogue of the "nested `@click`: call
+`stopPropagation()` FIRST" pitfall in `.claude/rules/arrowjs-pitfalls.md`. A
+plain **click** on `reaction-send`/`comment-detail-send` needs no such guard —
+a mouse click was never going to be reinterpreted by a keydown handler.
+
+**A failed save must not vanish silently** now that the reviewer may already
+be looking at something else by the time it resolves. `cs.sendFailed` (a
+plain, session-only `{key: true}` map, reassigned wholesale like
+`state.ignoredComments`) marks it — key `'reply:'+commentId` for a reply,
+`'new:'+draftKey` (the same `draftKeyFor` identity `composeDrafts` uses) for a
+not-yet-created comment — and `sendFailedBadge(key, label)` renders a small
+text/glyph pill (`data-testid=comment-send-failed`, never colour-only, same
+shape as `staleAnchorBadge`) wherever that draft resurfaces:
+`compactConversation`/`expandedConversation` (block-scoped), `commentDetailCard`
+(comment-index item), and `newCommentComposer` (a not-yet-placed comment, next
+to its "Nieuwe comment · …" header). The typed text itself is never lost
+either: `composeDrafts`/`replyDrafts` are unchanged (already only deleted on
+success), and a new, exactly analogous `prReplyDrafts` map was added for
+`comment-detail-reply` (which had no draft persistence at all before this).
+`createComment` additionally wraps its own `fetch` in a `try/catch` (a network
+throw used to propagate as an unhandled rejection with no boolean result at
+all). Test: `tests/comment-send-failed-badge.spec.mjs`.
 
 Placing a comment also **retracts the approval of the unit it hangs on** — see
 `.claude/docs/approval.md`.
@@ -951,5 +1011,6 @@ Placing a comment also **retracts the approval of the unit it hangs on** — see
 comment** (`ensureClaudeAnchorForNew`, see "Optimistically visible while
 composing a brand-new comment" in `.claude/docs/claude-chat-panel.md`),
 `placeComment` does not call `createComment` at all — it posts the typed text
-as a **reply** on that already-existing thread instead, so exactly one comment
-ever exists for that draft.
+as a **reply** on that already-existing thread instead (also optimistic-exit,
+also `cs.sendFailed`-tracked under the same `'reply:'+commentId` key), so
+exactly one comment ever exists for that draft.

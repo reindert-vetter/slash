@@ -65,7 +65,15 @@ test.describe('reaction-status: neutral menu button + shared comment/Claude foot
       .toBe('resolved')
   })
 
-  test('the shared footer shows a busy/sent status while sending, and both buttons stay disabled', async ({
+  // A reply now closes the thread back to the diff IMMEDIATELY (optimistic
+  // exit, see postThreadReply in RelatedPanel.mjs) — this used to keep the
+  // thread open while the Signal was in flight (a deliberate choice that was
+  // later reversed on explicit request: a reply always closes the thread now,
+  // same as placing a brand-new comment already did). expandedConversation's
+  // own send/status buttons are therefore gone the instant "Stuur" is
+  // clicked; only the shared comment-claude-footer (which reads cs.busy
+  // independent of cs.focus) still reports the in-flight/sent status.
+  test('sending a reply closes the thread immediately; the shared footer still reports busy/sent', async ({
     page,
   }, testInfo) => {
     const pr = seededPr(testInfo)
@@ -92,26 +100,25 @@ test.describe('reaction-status: neutral menu button + shared comment/Claude foot
     await reply.fill('bedankt voor de review')
 
     const sendButton = page.getByTestId('reaction-send')
-    const statusButton = page.getByTestId('reaction-status')
     await sendButton.click()
 
-    // In flight: the shared footer says so in words, both buttons disabled
-    // (no double-submit / no opening the menu mid-send). The status button
-    // itself keeps showing its plain menu icon throughout — it no longer
-    // carries the send status.
+    // The thread is already collapsed — before the (still held-open) reply
+    // Signal resolves.
+    const collapsedRow = page.getByTestId('comment-item').filter({ hasText: body })
+    await expect(collapsedRow).toHaveAttribute('data-expanded', 'false')
+    await expect(page.getByTestId('reaction-compose')).toHaveCount(0)
+
+    // The shared footer still says so in words — it reads cs.busy regardless
+    // of which (if any) conversation is currently expanded.
     const footer = page.getByTestId('comment-claude-footer')
     await expect(footer.getByTestId('comment-claude-footer-comment')).toContainText('Bezig')
-    await expect(statusButton.getByTestId('reaction-status-icon')).toBeVisible()
-    await expect(sendButton).toBeDisabled()
-    await expect(statusButton).toBeDisabled()
 
     releaseReply()
 
     // Done: a brief "sent" confirmation in the shared footer, then it
-    // disappears again once the field is empty and idle.
+    // disappears again.
     await expect(footer.getByTestId('comment-claude-footer-comment')).toContainText('Verstuurd')
     await expect(footer).toHaveCount(0, { timeout: 3000 })
-    await expect(reply).toHaveValue('')
   })
 
   // reaction-compose used to be a plain single-line <input> — no Shift+Enter,
@@ -119,7 +126,7 @@ test.describe('reaction-status: neutral menu button + shared comment/Claude foot
   // other three composers (comment-compose, comment-detail-reply, the Claude
   // chat composer — see textareaAutoGrow.mjs and
   // .claude/docs/claude-chat-panel.md).
-  test('reaction-compose is a textarea: Shift+Enter adds a newline, it grows with content, and resets on send', async ({
+  test('reaction-compose is a textarea: Shift+Enter adds a newline, it grows with content, and sending closes the thread', async ({
     page,
   }, testInfo) => {
     const pr = seededPr(testInfo)
@@ -149,13 +156,11 @@ test.describe('reaction-status: neutral menu button + shared comment/Claude foot
       expect(grownHeight).toBeGreaterThan(startHeight)
     }).toPass()
 
-    // Plain Enter sends and clears the field — and the grown height resets
-    // back down (the field stays mounted, unlike comment-compose).
+    // Plain Enter sends — and now closes the thread immediately (optimistic
+    // exit, see postThreadReply), unmounting reaction-compose entirely, same
+    // as comment-compose already did.
     await page.keyboard.press('Enter')
-    await expect(reply).toHaveValue('')
-    await expect(async () => {
-      const resetHeight = (await reply.boundingBox()).height
-      expect(resetHeight).toBe(startHeight)
-    }).toPass()
+    await expect(page.getByTestId('reaction-compose')).toHaveCount(0)
+    await expect(page.getByTestId('comment-item').filter({ hasText: body })).toHaveAttribute('data-expanded', 'false')
   })
 })

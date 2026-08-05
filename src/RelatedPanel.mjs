@@ -87,6 +87,17 @@ const cs = reactive({
   // button — see sendStatusIcon/sendReaction below. Reset by a timer, never
   // bound to the URL.
   replySent: false,
+  // sendFailed — a session-only map of "this send/placement failed" flags,
+  // keyed by a small string ('reply:'+commentId for a reply on an existing
+  // thread, 'new:'+draftKey for a not-yet-created comment) — see
+  // markSendFailed/clearSendFailed/sendFailedBadge below. Needed because
+  // placeComment/sendReaction/sendPrCommentReply now hand the keyboard back
+  // to the diff BEFORE the save is confirmed (optimistic exit, see their own
+  // doc comments) — a silent failure would otherwise be very easy to miss,
+  // since the reviewer is by then often looking at something else entirely.
+  // Always reassigned wholesale (never mutated in place), same convention as
+  // state.ignoredComments in home.mjs, so the reactive read re-triggers.
+  sendFailed: {},
   focus: null,
   threadPos: 0,
   // claudePos is threadPos's twin for the embedded Claude conversation
@@ -503,15 +514,22 @@ export { exitRelated as leaveRelated }
 // focusToken counts every sidebar-focus transition. Originally only guarded
 // focusEl's own deferred DOM focus (below): the request is only allowed to
 // land while the token still matches the value at request time — i.e. while
-// the reviewer has not moved on since. It now ALSO guards placeComment's/
-// createComment's async tail (see there): both capture the token before
-// their network round-trip and only apply their own follow-up state
-// (cs.sel / exitRelated's cs.focus reset) if it's still unchanged by the time
-// that await resolves — otherwise the reviewer has since moved the keyboard
-// to a different comment/composer/Onderliggende-code panel (possibly on a
-// different block entirely, since cs is a module-level singleton) and that
-// stale cleanup must not clobber it. See tests/place-comment-return-focus.spec.mjs
-// and the "async tail after navigating away" regression this addresses.
+// the reviewer has not moved on since. It now ALSO guards createComment's
+// own async tail (see there): it captures the token before its network
+// round-trip and only applies its own follow-up state (cs.sel, "land the
+// selection on the freshly placed comment") if it's still unchanged by the
+// time that await resolves — otherwise the reviewer has since moved the
+// keyboard to a different comment/composer/Onderliggende-code panel
+// (possibly on a different block entirely, since cs is a module-level
+// singleton) and that stale cleanup must not clobber it.
+//
+// placeComment/postThreadReply/postPrCommentReply themselves no longer need
+// this guard for their OWN exit (exitRelated/cancelPrCommentReply+
+// exitPrCommentThread): they now call it synchronously, BEFORE their network
+// round-trip even starts (optimistic exit, see placeComment's own doc
+// comment) — there is no window left in which a later navigation could race
+// with it. See tests/place-comment-return-focus.spec.mjs and
+// tests/comment-nav-race.spec.mjs.
 let focusToken = 0
 
 // releaseFocus invalidates any focus request/pending async tail still in
@@ -633,6 +651,14 @@ let warningOverride = null
 const composeDrafts = new Map()
 let composeDraftKey = null
 const replyDrafts = new Map()
+
+// prReplyDrafts mirrors replyDrafts above for the comment-index item's own
+// reply field (comment-detail-reply, commentDetailCard) — a plain, session-
+// only Map keyed by comment id, so a reply that never got the chance to be
+// typed-and-sent in one go (the field closes as soon as it's submitted, per
+// the optimistic exit in sendPrCommentReply/postPrCommentReply) can still be
+// recovered, and so a failed save doesn't also lose the typed text.
+const prReplyDrafts = new Map()
 
 // draftKeyFor mirrors the same anchor identity commentPath/commentTarget()
 // use server-side (file + label + gran + row-range + seg) — stable across
@@ -2757,36 +2783,43 @@ export async function createComment({
   const token = focusToken
   cs.busy = true
   try {
-    const res = await fetch('/api/workflows/task_code_comment', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        pr,
-        file,
-        line,
-        author: 'reviewer',
-        body,
-        code,
-        gran,
-        label,
-        rowStart: rowStart == null ? -1 : rowStart,
-        rowEnd: rowEnd == null ? -1 : rowEnd,
-        seg: seg || '',
-        // A private note ("alleen voor mijzelf"): stored but never posted to
-        // GitHub (the workflow skips postGithubComment). Default false, so the
-        // existing composer/fallback paths are unchanged.
-        local: !!local,
-        // The unit's real source line range/side (see home.mjs' commentTarget/
-        // unitLineRange) +, for a 'call' unit, its segment text — lets the
-        // workflow post a correctly-anchored (multi-line, right side) GitHub
-        // comment instead of always the block's first line.
-        startLine: startLine || 0,
-        endLine: endLine || 0,
-        side: side || 'RIGHT',
-        segment: segment || '',
-        kind: kind || '',
-      }),
-    })
+    let res
+    try {
+      res = await fetch('/api/workflows/task_code_comment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pr,
+          file,
+          line,
+          author: 'reviewer',
+          body,
+          code,
+          gran,
+          label,
+          rowStart: rowStart == null ? -1 : rowStart,
+          rowEnd: rowEnd == null ? -1 : rowEnd,
+          seg: seg || '',
+          // A private note ("alleen voor mijzelf"): stored but never posted to
+          // GitHub (the workflow skips postGithubComment). Default false, so the
+          // existing composer/fallback paths are unchanged.
+          local: !!local,
+          // The unit's real source line range/side (see home.mjs' commentTarget/
+          // unitLineRange) +, for a 'call' unit, its segment text — lets the
+          // workflow post a correctly-anchored (multi-line, right side) GitHub
+          // comment instead of always the block's first line.
+          startLine: startLine || 0,
+          endLine: endLine || 0,
+          side: side || 'RIGHT',
+          segment: segment || '',
+          kind: kind || '',
+        }),
+      })
+    } catch (_) {
+      // Network-level failure (offline, etc.) — never let it become an
+      // unhandled rejection; the caller only ever checks the boolean result.
+      return false
+    }
     await loadComments(pr)
     // The fresh comment sits on the unit we just placed it on, so it's the last
     // entry of the (order-preserving) visible list — land the selection there.
@@ -2910,14 +2943,28 @@ async function sendClaudeMessageFromNew(state, commentTarget, text, action) {
 // placeComment submits the composer's text as a comment on the current unit.
 // Exported so the comment-kind menu (home.mjs COMPOSE_COMMANDS) can place a
 // private note via opts.local; the composer button routes through the menu too.
-// COMPOSE_COMMANDS' `run()` is fired without being awaited (home.mjs's
-// runCommand), so the menu closes and the reviewer gets the keyboard back
-// immediately — well before createComment's POST + GET round-trip below
-// settles. `token` snapshots focusToken before that await so the tail below
-// can tell whether the reviewer has since moved the keyboard elsewhere (a
-// different comment/composer/Onderliggende-code panel, possibly on a
-// different block — cs is a module-level singleton) — see the focusToken doc
-// comment. Regression test: tests/comment-nav-race.spec.mjs.
+//
+// The keyboard goes back to the diff (exitRelated) IMMEDIATELY, before the
+// POST + GET round-trip below even starts — an explicit, optimistic-UI
+// product decision (Reindert: "als ik een comment plaats, wil ik naar de
+// code diff — direct, al voordat het echt is opgeslagen"). This used to wait
+// for a successful createComment first; now the exit happens synchronously,
+// so there is no window in which a later, unrelated navigation could race
+// with it (see the focusToken doc comment for what that race used to look
+// like) — everything that still runs AFTER the await below (composeDrafts
+// cleanup, the AI-finding replacement's delete, cs.sel landing inside
+// createComment itself) is pure background bookkeeping for a panel the
+// reviewer has, by definition, already left. Regression test:
+// tests/comment-nav-race.spec.mjs (now passes structurally rather than via
+// the token-guard timing it originally exercised).
+//
+// A failed save is easy to miss once the reviewer has already moved on, so a
+// failure marks cs.sendFailed (see its own doc comment) instead of vanishing
+// silently — surfaced as a small badge (sendFailedBadge) wherever this draft
+// resurfaces: reopening "+ Nieuwe comment" on the same unit, or, for the
+// claudeAutoAnchor branch below, the resulting thread itself. The typed text
+// itself is NOT lost either way: composeDrafts already only gets cleared on
+// success (unchanged), so reopening the composer on the same unit restores it.
 //
 // `warningOverride`, if set (see convertWarningToComment), forces the anchor
 // to the AI finding's OWN file/label/gran/rowStart/rowEnd/code instead of
@@ -2926,9 +2973,9 @@ async function sendClaudeMessageFromNew(state, commentTarget, text, action) {
 // replacement comment must land exactly where the finding itself was, not
 // wherever the cursor happens to sit now. It's consumed (nulled) right away,
 // before the async createComment call, mirroring every other "capture once,
-// before the await" convention in this file (token above, focusToken
-// elsewhere) — a second, unrelated "+ Nieuwe comment" started while this one
-// is still in flight must never see a stale override.
+// before the await" convention in this file — a second, unrelated "+ Nieuwe
+// comment" started while this one is still in flight must never see a stale
+// override.
 export async function placeComment(state, commentTarget, opts = {}) {
   const b = state && state.blocks && state.blocks[state.selected]
   const el = document.querySelector('[data-testid=comment-compose]')
@@ -2940,7 +2987,6 @@ export async function placeComment(state, commentTarget, opts = {}) {
   // in home.mjs), but guard here too rather than post a bogus, unanchored
   // comment if it somehow does.
   if (!b || b.kind === 'comment' || !body) return
-  const token = focusToken
   const override = warningOverride
   warningOverride = null
   // Capture the exact unit the composer is previewing so the placed comment's
@@ -2950,6 +2996,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
   // selected block `b` — so t.file/t.startLine (not b.file/b.line) are the
   // ones that must anchor the comment when a drilled column is focused.
   const t = override ? override.target : (commentTarget && commentTarget()) || null
+  const draftKey = draftKeyFor(t)
 
   // A Claude message already lazily created the ONE backing comment for this
   // exact draft (see ensureClaudeAnchorForNew) — "Plaats…" must not start a
@@ -2960,28 +3007,41 @@ export async function placeComment(state, commentTarget, opts = {}) {
   // creating a new one. The anchor's own local-ness (fixed at creation,
   // always private, see ensureClaudeAnchorForNew) wins over opts.local here:
   // chatting with Claude first already made this a private thread.
-  if (claudeAutoAnchor && claudeAutoAnchor.draftKey === draftKeyFor(t)) {
+  if (claudeAutoAnchor && claudeAutoAnchor.draftKey === draftKey) {
     claudeAutoAnchor = null
     const c = chatAnchorComment()
     if (c && c.runId) {
+      composeDrafts.delete(draftKey)
+      el.value = ''
+      exitRelated()
       cs.busy = true
       try {
-        await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ author: 'reviewer', body, done: false }),
-        })
-        await loadComments(state.pr)
+        let res
+        try {
+          res = await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ author: 'reviewer', body, done: false }),
+          })
+        } catch (_) {
+          res = null
+        }
+        if (res && res.ok) {
+          clearSendFailed('reply:' + c.id)
+          await loadComments(state.pr)
+        } else {
+          markSendFailed('reply:' + c.id)
+          replyDrafts.set(c.id, body)
+        }
       } finally {
         cs.busy = false
       }
-      composeDrafts.delete(draftKeyFor(t))
-      if (token !== focusToken) return
-      el.value = ''
-      exitRelated()
       return
     }
   }
+
+  el.value = ''
+  exitRelated()
 
   const ok = await createComment({
     pr: state.pr,
@@ -3005,7 +3065,14 @@ export async function placeComment(state, commentTarget, opts = {}) {
   })
   // The typed text just became a real, placed comment — the draft that was
   // standing in for it (see composeDrafts above) has nothing left to hold.
-  if (ok) composeDrafts.delete(draftKeyFor(t))
+  // A failed placement instead marks cs.sendFailed and KEEPS the draft, so
+  // the reviewer can reopen the composer on this unit and retry.
+  if (ok) {
+    composeDrafts.delete(draftKey)
+    clearSendFailed('new:' + draftKey)
+  } else {
+    markSendFailed('new:' + draftKey)
+  }
   // Only delete the AI finding this comment replaces once the replacement
   // itself is confirmed placed — a failed POST must never discard the
   // finding without anything taking its place.
@@ -3013,18 +3080,6 @@ export async function placeComment(state, commentTarget, opts = {}) {
     await deleteComment(override.original)
     await loadComments(state.pr)
   }
-  // Only while still relevant (see the doc comment above): if the token
-  // changed, the reviewer has already navigated the keyboard elsewhere since
-  // starting this comment, and both of the below would clobber that —
-  // clearing a composer textarea the reviewer may since be reusing for a
-  // fresh comment on a different unit, and forcing whatever now owns the
-  // keyboard (e.g. another block's Onderliggende-code panel) back to the
-  // diff via exitRelated()'s unconditional cs.focus/cs.composing reset.
-  if (token !== focusToken) return
-  el.value = ''
-  // The reviewer placed a comment tied to a piece of code — hand the keyboard
-  // back to that code's diff instead of leaving it sitting on the composer.
-  exitRelated()
 }
 
 // GRAN_LABEL — how each navigation granularity is described in the composer's
@@ -3254,36 +3309,60 @@ async function sendReaction() {
 // the reviewer picked what may reach GitHub. `publish`/`withHistory` ride
 // along on the same "reply" Signal (see ReactionSignal.Publish in
 // workflows.go); the ordinary, already-public path passes neither.
+//
+// The keyboard goes back to the diff (exitRelated) IMMEDIATELY, before the
+// Signal POST + GET below even starts — the same optimistic-exit decision as
+// placeComment (see its doc comment), extended to a reply on purpose:
+// Reindert explicitly confirmed the thread should close on every reply now,
+// reversing the earlier deliberate "this thread stays open after a reply"
+// choice (a bare-Enter reply was the one send-status spot where "sent" was
+// actually visible — that reasoning no longer applies). cs.replySent's brief
+// flash still fires: commentFooterText() reads it regardless of cs.focus, so
+// it's still visible in the shared comment/Claude footer for as long as the
+// reviewer happens to still be looking at this unit.
+//
+// A failed send marks cs.sendFailed('reply:'+c.id) (see its own doc comment)
+// instead of vanishing silently, and restores the typed text into
+// replyDrafts (normally only cleared on success) so reopening this thread
+// recovers it.
 async function postThreadReply(c, body, publish, withHistory) {
   const el = document.querySelector('[data-testid=reaction-compose]')
+  if (el) {
+    el.value = ''
+    resetTextareaHeight(el)
+  }
+  exitRelated()
   cs.busy = true
   try {
-    await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        author: 'reviewer',
-        body,
-        done: false,
-        ...(publish ? { publish, publishHistory: !!withHistory } : {}),
-      }),
-    })
-    if (el) {
-      el.value = ''
-      resetTextareaHeight(el)
+    let res
+    try {
+      res = await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          author: 'reviewer',
+          body,
+          done: false,
+          ...(publish ? { publish, publishHistory: !!withHistory } : {}),
+        }),
+      })
+    } catch (_) {
+      res = null
     }
-    // The typed reply just went out — the draft standing in for it (see
-    // replyDrafts above) has nothing left to hold.
-    replyDrafts.delete(c.id)
-    // Brief confirmation flash — unlike the composer/PR-wide reply (which
-    // both close their input on success, see placeComment/sendPrCommentReply),
-    // this thread stays open, so this is the one send-status spot where
-    // "sent" is actually visible.
-    cs.replySent = true
-    setTimeout(() => {
-      cs.replySent = false
-    }, 1200)
-    await loadComments(cs.pr)
+    if (res && res.ok) {
+      // The typed reply went out — the draft standing in for it (see
+      // replyDrafts above) has nothing left to hold.
+      replyDrafts.delete(c.id)
+      clearSendFailed('reply:' + c.id)
+      cs.replySent = true
+      setTimeout(() => {
+        cs.replySent = false
+      }, 1200)
+      await loadComments(cs.pr)
+    } else {
+      markSendFailed('reply:' + c.id)
+      replyDrafts.set(c.id, body)
+    }
   } finally {
     cs.busy = false
   }
@@ -3428,6 +3507,34 @@ function staleAnchorBadge(c) {
     class="inline-flex shrink-0 items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
     data-testid="comment-stale-anchor"
     >${text}</span
+  >`
+}
+
+// markSendFailed/clearSendFailed — write cs.sendFailed (see its own doc
+// comment above, next to cs's declaration). Reassigned wholesale so the
+// reactive read re-triggers, same convention as state.ignoredComments.
+function markSendFailed(key) {
+  cs.sendFailed = { ...cs.sendFailed, [key]: true }
+}
+function clearSendFailed(key) {
+  if (!cs.sendFailed[key]) return
+  const next = { ...cs.sendFailed }
+  delete next[key]
+  cs.sendFailed = next
+}
+
+// sendFailedBadge marks a comment/reply/not-yet-placed comment whose most
+// recent save attempt failed — see cs.sendFailed's own doc comment for why
+// this needed adding: the reviewer's keyboard already left for the diff by
+// the time the fetch settles, so a silently swallowed failure would be very
+// easy to miss. The word carries the meaning, the amber tint only decorates
+// it on top — same rule as staleAnchorBadge right above.
+function sendFailedBadge(key, label) {
+  if (!cs.sendFailed[key]) return ''
+  return html`<span
+    class="inline-flex shrink-0 items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
+    data-testid="comment-send-failed"
+    >${label || 'verzenden mislukt — probeer opnieuw'}</span
   >`
 }
 
@@ -3793,6 +3900,7 @@ function compactConversation(c, i) {
           ${() => sourceBadge(c)}
           ${() => aiWarningBadge(c)}
           ${() => staleAnchorBadge(c)}
+          ${() => sendFailedBadge('reply:' + c.id)}
         </span>
         <span
           class="line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200"
@@ -3842,6 +3950,7 @@ function expandedConversation(c, openCommentMenu) {
     >
       <div class="flex items-center justify-end gap-2" data-testid="comment-meta-line">
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
+        ${() => sendFailedBadge('reply:' + c.id)}
         ${() => commentStatusMark(c)}
       </div>
       <div
@@ -3864,6 +3973,19 @@ function expandedConversation(c, openCommentMenu) {
           @keydown="${(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
+              // stopPropagation (only when there's actually text to send) is
+              // load-bearing, not defensive: sendReaction now calls
+              // exitRelated() SYNCHRONOUSLY (optimistic exit, see
+              // postThreadReply's doc comment), which blurs this very field —
+              // changing document.activeElement while this same keydown is
+              // still bubbling. Without stopping it here, home.mjs's
+              // document-level handler would see the (already blurred) field
+              // and misread this Enter as "not typing in a field", opening
+              // an unrelated menu (mirrors the "nested @click" pitfall in
+              // arrowjs-pitfalls.md, for a keydown instead of a click). An
+              // EMPTY field must keep bubbling — that's what opens the
+              // comment-scoped command menu (commentReplyEmpty(), home.mjs).
+              if (e.target.value.trim()) e.stopPropagation()
               sendReaction()
             }
           }}"
@@ -3977,6 +4099,7 @@ function newCommentComposer(state, commentTarget, openCompose) {
                 <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">
                   ${() => (warningOverride ? 'Comment van AI-controle' : 'Nieuwe comment') + ' · ' + target()}
                 </p>
+                ${() => sendFailedBadge('new:' + draftKeyFor(effectiveTarget()), 'plaatsen mislukt — probeer opnieuw')}
                 <textarea
                   rows="1"
                   class="min-h-20 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
@@ -3993,6 +4116,7 @@ function newCommentComposer(state, commentTarget, openCompose) {
                     @click="${() => {
                       warningOverride = null
                       composeDrafts.delete(composeDraftKey)
+                      clearSendFailed('new:' + composeDraftKey)
                       cs.composing = false
                     }}"
                   >
@@ -5212,9 +5336,10 @@ export function handlePrCommentThreadKey(c, key) {
 // elsewhere.
 // sending is this reply's own in-flight flag (mirrors cs.busy for the
 // block-scoped thread) — drives the send-status icon on comment-detail-send.
-// No "sent" flash here: sendPrCommentReply calls cancelPrCommentReply() on
-// success, which hides this whole reply row immediately (see below), so a
-// transient "sent" state would never actually be visible.
+// No "sent" flash here: sendPrCommentReply now calls cancelPrCommentReply()/
+// exitPrCommentThread() IMMEDIATELY (optimistic exit, see postPrCommentReply's
+// own doc comment), which hides this whole reply row before the send even
+// resolves — so a transient "sent" state would never actually be visible.
 // `mode` distinguishes what the SAME textarea+button slot in commentDetailCard
 // does with the typed text: 'reply' (default, startPrCommentReply) posts a
 // reaction on this thread; 'convert' (startPrCommentConvert, see
@@ -5228,12 +5353,16 @@ const picm = reactive({ replying: false, commentId: null, sending: false, mode: 
 // startPrCommentReply reveals the reply textarea in commentDetailCard (only
 // for the comment `c` it was opened for, see picm's own comment) and focuses
 // it — called by the "Beantwoorden" command (home.mjs's prCommentCommandsFor).
-// Mirrors toNew()'s focus-immediately convention.
+// Mirrors toNew()'s focus-immediately convention. Restores a draft left
+// behind by a failed send (see prReplyDrafts/postPrCommentReply) if there is
+// one for this exact comment.
 export function startPrCommentReply(c) {
   picm.replying = true
   picm.commentId = c ? c.id : null
   picm.mode = 'reply'
   focusEl('[data-testid=comment-detail-reply]')
+  const draft = c && prReplyDrafts.get(c.id)
+  if (draft) prefillField('[data-testid=comment-detail-reply]', draft)
 }
 
 // startPrCommentConvert is startPrCommentReply's "convert" sibling — reveals
@@ -5290,23 +5419,49 @@ export async function sendPrCommentReply(c, body) {
 
 // postPrCommentReply is sendPrCommentReply's write half, split out for the
 // publish menu (sendPendingReply) exactly like postThreadReply above.
+//
+// The reply row closes back to the item's rest position IMMEDIATELY —
+// cancelPrCommentReply() (hides the field) + exitPrCommentThread() (releases
+// pct back to the same "Start" row, per the confirmed decision: a comment-
+// index item has no diff of its own to return to, unlike a block-scoped
+// thread) — before the Signal POST + GET below even starts. Same optimistic-
+// exit family as placeComment/postThreadReply; see placeComment's doc
+// comment for the reasoning.
+//
+// A failed send marks cs.sendFailed('reply:'+c.id) and keeps the typed text
+// recoverable via prReplyDrafts (normally only cleared on success) — see
+// startPrCommentReply, which restores it the next time this item's reply
+// field reopens.
 async function postPrCommentReply(c, body, publish, withHistory) {
   const text = (body || '').trim()
   if (!c || !c.runId || !text) return
+  cancelPrCommentReply()
+  exitPrCommentThread()
   picm.sending = true
   try {
-    await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        author: 'reviewer',
-        body: text,
-        done: false,
-        ...(publish ? { publish, publishHistory: !!withHistory } : {}),
-      }),
-    })
-    cancelPrCommentReply()
-    await loadComments(cs.pr)
+    let res
+    try {
+      res = await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          author: 'reviewer',
+          body: text,
+          done: false,
+          ...(publish ? { publish, publishHistory: !!withHistory } : {}),
+        }),
+      })
+    } catch (_) {
+      res = null
+    }
+    if (res && res.ok) {
+      prReplyDrafts.delete(c.id)
+      clearSendFailed('reply:' + c.id)
+      await loadComments(cs.pr)
+    } else {
+      markSendFailed('reply:' + c.id)
+      prReplyDrafts.set(c.id, text)
+    }
   } finally {
     picm.sending = false
   }
@@ -5429,6 +5584,7 @@ export function commentDetailCard(c, opts) {
           >${COMMENT_KIND_LABEL[c.kind] || c.kind || 'Regelcomment'}</span
         >
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
+        ${() => sendFailedBadge('reply:' + c.id)}
         <span class="ml-auto shrink-0 text-[10px] text-slate-500 dark:text-zinc-500">${relTime(c.createdAt)}</span>
       </div>
       <div
@@ -5453,10 +5609,23 @@ export function commentDetailCard(c, opts) {
                   class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2 py-1 text-xs leading-[1.625rem] text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
                   placeholder="${() => (picm.mode === 'convert' ? 'Nieuwe comment op basis van deze melding…' : 'Reageer…')}"
                   data-testid="comment-detail-reply"
-                  @input="${(e) => autoGrowTextarea(e.target)}"
+                  @input="${(e) => {
+                    if (picm.mode === 'reply' && c) prReplyDrafts.set(c.id, e.target.value)
+                    autoGrowTextarea(e.target)
+                  }}"
                   @keydown="${(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()
+                      // See reaction-compose's own @keydown for why this is
+                      // load-bearing (only when there's actually text to
+                      // send — an EMPTY field must keep bubbling, that's what
+                      // opens the publish-choice/action menu, see
+                      // needsPublishChoice/prCommentCommandsFor): sendPrCommentReply
+                      // now closes this field SYNCHRONOUSLY (optimistic exit)
+                      // before the Signal even fires, which would otherwise
+                      // let this same keydown be reinterpreted by home.mjs's
+                      // document-level handler.
+                      if (e.target.value.trim()) e.stopPropagation()
                       if (picm.mode === 'convert') sendConvertedPrWideComment(c, e.target.value)
                       else sendPrCommentReply(c, e.target.value)
                     } else if (e.key === 'Escape') {
