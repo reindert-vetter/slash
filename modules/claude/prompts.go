@@ -33,8 +33,22 @@ var PRSummarySystemPrompt string
 // prompt (built by warningPrompt in code_warning.go) only needs to name the
 // changed files in scope + the finding cap, not any pre-gathered context.
 //
+// It is the concatenation of TWO embeds, kept as separate files on purpose:
+// prompts/code_warning.md is the fixed task framing + JSON contract (rarely
+// changes), prompts/code_warning_patterns.md is plug-and-pay/plug-and-pay's
+// own, team-specific checklist of recurring review patterns (mined from real
+// PR comments) that is expected to keep growing over time. Splitting them
+// means a future addition to the checklist is a diff of one file, never a
+// touch to the contract file. A new team pattern belongs in
+// code_warning_patterns.md, never inline here.
+//
 //go:embed prompts/code_warning.md
-var CodeWarningSystemPrompt string
+var codeWarningTaskPrompt string
+
+//go:embed prompts/code_warning_patterns.md
+var codeWarningPatternsPrompt string
+
+var CodeWarningSystemPrompt = codeWarningTaskPrompt + "\n" + codeWarningPatternsPrompt
 
 // CommentRemovalSystemPrompt is the static instruction block for the
 // auto-resolve check that runs when a comment's row anchor becomes orphaned

@@ -597,6 +597,25 @@ a manually triggered, low-frequency action.
   call would only duplicate). An old AI-authored comment never appears here:
   `supersedeFileWarnings` already deleted every one in scope earlier in the
   same workflow.
+- **`CodeWarningSystemPrompt` (`modules/claude/prompts.go`) is the
+  concatenation of TWO embedded files, deliberately kept separate.**
+  `prompts/code_warning.md` is the fixed task framing + JSON contract (the
+  agentic-review instruction, the hyphen style rule, the "skip a duplicate of
+  an existing comment" rule) — it changes rarely. `prompts/
+  code_warning_patterns.md` is plug-and-pay/plug-and-pay's own, team-specific
+  checklist of recurring review patterns (Backend/Laravel, Frontend Vue/TS,
+  Tests, Copy & translations, Naming — mined from real inline PR comments by
+  the team's most active reviewers) and is expected to **keep growing**. The
+  patterns file is explicitly additive — its own opening line says so — never
+  a replacement for what the agentic review already finds on its own, and
+  every pattern in it is phrased so the model verifies it with
+  Read/Grep/Glob against the checked-out worktree before flagging (e.g. Glob
+  the module's test directory before claiming "no test", Grep the sibling
+  locale file before claiming a missing translation key) rather than
+  pattern-matching from a bullet's title. A new recurring team pattern is
+  added to `code_warning_patterns.md`, never inline into
+  `code_warning.md` — that keeps the contract file stable and the checklist a
+  one-file diff.
 - **Auto-supersede, scoped per file** (`supersedeFileWarnings`, run **before**
   the agentic call): for each file in scope, every existing `Source:"ai"`
   comment on it is deleted via the **existing delete Signal** on its own
