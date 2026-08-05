@@ -271,6 +271,18 @@ share the keep set and need no prune scope of their own.
   action, so `claude`'s own prompt cache can reuse it.
 - Both changes live inside `Module.Run`/the payload, so the number and order of
   `cl.Run` calls per workflow body is unchanged.
+- **Shared style rules for reviewer-facing text:** every prompt whose output
+  the reviewer reads as prose (`chat.md`, `chat_shell.md`, `explain_code.md`,
+  `pr_summary.md`, `code_warning.md`'s Dutch `text` finding) forbids a hyphen
+  ("-") within a sentence unless the phrasing truly requires one (compound
+  words like "code-wijzigingen" are fine — only a sentence-level hyphen is
+  banned). A new prompt file that produces reviewer-facing prose should carry
+  the same line. On top of that, `chat.md`/`chat_shell.md` alone cap the
+  conversational answer (and the `comment_action` reply `body`) at roughly 700
+  characters, excluding any ` ``` ` code example — a code example is never
+  truncated to fit. `explain_code.md`/`pr_summary.md`/`code_warning.md` keep
+  their own, already-fitting length constraints (the ~275-character footer cap,
+  "2-4 sentences", "1-3 sentences" per finding) instead of a second, looser cap.
 
 ### Workflow `resolve_call`
 

@@ -9,4 +9,5 @@ Rules:
 - "file" must be exactly one of the changed files listed in the prompt — never a different path, even one you found while exploring.
 - "line" must be a real line number in that file's current content that best anchors the finding.
 - Respect the finding cap given in the prompt — prioritize the most important, best-justified risks over completeness.
+- The Dutch "text" must not use a hyphen ("-") within a sentence, unless there is truly no other way to phrase it.
 - If you find nothing worth flagging, respond with an empty array: []

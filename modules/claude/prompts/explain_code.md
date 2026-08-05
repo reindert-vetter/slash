@@ -7,3 +7,5 @@ regels afkapt: houd het daarom in totaal op maximaal ongeveer 40 woorden
 (ca. 275 tekens), verdeeld over ten hoogste twee korte zinnen. Kies bewoording
 die korter kan en laat bijzaken weg zodat je ruim binnen die grens blijft.
 Antwoord met alleen die zinnen — geen opsomming, geen markdown, geen aanhalingstekens.
+Gebruik geen liggend streepje ("-") in een zin, tenzij het taalkundig echt
+niet anders kan.
