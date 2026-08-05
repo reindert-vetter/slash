@@ -22,6 +22,14 @@ const PROBLEMS = {
       updatedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
       error: 'tembed: workflow failed: resolveCalls: no such worktree',
     },
+    {
+      runId: 'run-boom-2',
+      workflow: 'task_code_comment',
+      pr: 12903,
+      updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+      error: 'tembed: workflow failed: save reaction: database is locked (5)',
+      comment: { file: 'src/Billing/Invoice.php', line: 42, snippet: 'Kun je hier een guard clause van maken?' },
+    },
   ],
   logErrors: [
     {
@@ -31,6 +39,8 @@ const PROBLEMS = {
       message: 'import comments: fetch review comments pr=970099: gh api ...: exit status 1',
     },
   ],
+  // A row names the PR, not just its number — see problemPrChip.
+  prTitles: { 12903: 'Refactor de facturatie-export' },
 }
 
 function stubProblems(page, body) {
@@ -47,20 +57,27 @@ test.describe('PR overview — "Mislukte taken" block', () => {
 
     const toggle = page.locator('[data-testid="problems-drawer"]')
     await expect(toggle).toBeVisible()
-    // Collapsed: the count is readable without expanding (2 = 1 failed run + 1
-    // mirrored log line).
-    await expect(page.locator('[data-testid="problems-count"]')).toHaveText('Mislukte taken · 2')
+    // Collapsed: the count is readable without expanding (3 = 2 failed runs +
+    // 1 mirrored log line).
+    await expect(page.locator('[data-testid="problems-count"]')).toHaveText('Mislukte taken · 3')
     await expect(page.locator('[data-testid="problem-run"]')).toHaveCount(0)
 
     await toggle.click()
 
-    const run = page.locator('[data-testid="problem-run"]')
-    await expect(run).toHaveCount(1)
+    const run = page.locator('[data-testid="problem-run"]').first()
+    await expect(page.locator('[data-testid="problem-run"]')).toHaveCount(2)
     // The failure is carried by a word (+ a ⚠ glyph), never colour alone.
     await expect(run).toContainText('mislukt')
     await expect(run).toContainText('Relaties') // the workflow's Dutch label
     await expect(run).toContainText('#12903')
+    await expect(run).toContainText('Refactor de facturatie-export') // the PR title
     await expect(run).toContainText('no such worktree')
+
+    // A failed comment thread says WHICH comment: file:line + a body snippet.
+    const commentLine = page.locator('[data-testid="problem-run-comment"]')
+    await expect(commentLine).toHaveCount(1)
+    await expect(commentLine).toContainText('Invoice.php:42')
+    await expect(commentLine).toContainText('guard clause')
 
     const logRow = page.locator('[data-testid="problem-log"]')
     await expect(logRow).toHaveCount(1)
@@ -88,7 +105,7 @@ test.describe('PR overview — "Mislukte taken" block', () => {
     await appReady(page)
 
     await page.locator('[data-testid="problems-drawer"]').click()
-    await expect(page.locator('[data-testid="problem-run"]')).toHaveCount(1)
+    await expect(page.locator('[data-testid="problem-run"]')).toHaveCount(2)
 
     // paintSelection() iterates every [data-nav-row]; a failure line must not
     // be one, or the selection ring could land on it.

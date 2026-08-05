@@ -850,7 +850,30 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 	if logs == nil {
 		logs = []LogProblem{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "failedRuns": failed, "logErrors": logs})
+	// Resolve every referenced PR number to its stored title (read-only
+	// prmeta.Get), so a row can say what the PR is instead of only its number.
+	// A separate map rather than a field on both structs: it serves failedRuns
+	// and logErrors alike, and LogProblem is built at record time when no title
+	// lookup is possible. A PR prmeta doesn't know simply gets no entry and the
+	// client falls back to the bare number.
+	titles := map[string]string{}
+	seen := map[int]bool{}
+	addTitle := func(pr int) {
+		if pr <= 0 || seen[pr] {
+			return
+		}
+		seen[pr] = true
+		if meta, ok, err := s.tasks.prmeta.Get(r.Context(), pr); err == nil && ok && meta.Title != "" {
+			titles[strconv.Itoa(pr)] = meta.Title
+		}
+	}
+	for _, f := range failed {
+		addTitle(f.PR)
+	}
+	for _, l := range logs {
+		addTitle(l.PR)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "failedRuns": failed, "logErrors": logs, "prTitles": titles})
 }
 
 // handleWorkflows routes /api/workflows/{runID} (GET status) and

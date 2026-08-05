@@ -59,6 +59,10 @@ const state = reactive({
   problemsLoaded: false,
   failedRuns: [],
   logErrors: [],
+  // prTitles: { "<pr>": "<title>" } for every PR either list references, so a
+  // row can name the PR instead of only its number (see problemPrChip). A PR
+  // prmeta has no title for is simply absent.
+  prTitles: {},
 })
 
 // ui is separate from state so opening/closing a popover doesn't touch the
@@ -1635,6 +1639,39 @@ function problemMark(word) {
 const PROBLEM_ROW_CLASS =
   'flex items-start gap-3 border-b border-slate-100 dark:border-zinc-800/70 px-4 py-3 last:border-b-0'
 
+// problemPrChip — "#13098 · <PR title>", or the bare number when prmeta knows
+// no title (an old/purged PR). Shared by both row kinds: a number alone tells
+// the reviewer nothing about which PR went wrong. The whole chip may shrink so
+// the timestamp beside it never gets pushed out.
+function problemPrChip(pr) {
+  if (!pr) return ''
+  const title = state.prTitles[String(pr)] || ''
+  return html`<span class="min-w-0 truncate text-[12px] text-slate-500 dark:text-zinc-500" title="${'#' + pr + (title ? ' · ' + title : '')}"
+    >#${pr}${title ? ' · ' + title : ''}</span
+  >`
+}
+
+// problemCommentLine — WHICH comment a failed task_code_comment run was about:
+// the file (basename) + line, then a snippet of the body. Only the wording
+// carries the meaning (no colour-only signal, see the colorblind rule).
+// Both slots are always STRINGS — never a conditionally interpolated template,
+// which a static slot would render as the template function's source text (see
+// the arrow.js pitfalls).
+function problemCommentLine(c) {
+  const where = baseName(c.file) + (c.line ? ':' + c.line : '')
+  const snippet = c.snippet ? ' · “' + c.snippet + '”' : ''
+  return html`<p data-testid="problem-run-comment" class="line-clamp-1 text-[12px] text-slate-600 dark:text-zinc-400">
+    <span class="font-mono">${where}</span><span>${snippet}</span>
+  </p>`
+}
+
+// baseName trims a repo path down to its file name for the comment line above.
+function baseName(path) {
+  const s = String(path || '')
+  const i = s.lastIndexOf('/')
+  return i < 0 ? s : s.slice(i + 1)
+}
+
 // problemRunRow — one workflow run that ended in `failed`.
 function problemRunRow(run) {
   return html`
@@ -1642,10 +1679,11 @@ function problemRunRow(run) {
       ${problemMark('mislukt')}
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
-          <span class="truncate text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${labelForWorkflow(run.workflow)}</span>
-          ${() => (run.pr ? html`<span class="shrink-0 text-[12px] text-slate-500 dark:text-zinc-500">#${run.pr}</span>` : '')}
+          <span class="shrink-0 text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${labelForWorkflow(run.workflow)}</span>
+          ${() => problemPrChip(run.pr)}
           <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-600">${relativeTime(run.updatedAt)}</span>
         </div>
+        <div class="contents">${() => (run.comment ? problemCommentLine(run.comment) : '')}</div>
         <p class="line-clamp-2 text-[12px] text-slate-500 dark:text-zinc-500" title="${run.error || ''}">${run.error || 'geen foutmelding vastgelegd'}</p>
       </div>
     </div>
@@ -1661,8 +1699,8 @@ function problemLogRow(entry, i) {
       ${problemMark('overgeslagen')}
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
-          <span class="truncate text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${entry.scope || 'Achtergrondtaak'}</span>
-          ${() => (entry.pr ? html`<span class="shrink-0 text-[12px] text-slate-500 dark:text-zinc-500">#${entry.pr}</span>` : '')}
+          <span class="shrink-0 truncate text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${entry.scope || 'Achtergrondtaak'}</span>
+          ${() => problemPrChip(entry.pr)}
           <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-600">${relativeTime(entry.at)}</span>
         </div>
         <p class="line-clamp-2 text-[12px] text-slate-500 dark:text-zinc-500" title="${entry.message || ''}">${entry.message || ''}</p>
@@ -2529,6 +2567,7 @@ async function loadProblems() {
     if (!body || !body.ok) return
     state.failedRuns = Array.isArray(body.failedRuns) ? body.failedRuns : []
     state.logErrors = Array.isArray(body.logErrors) ? body.logErrors : []
+    state.prTitles = body.prTitles && typeof body.prTitles === 'object' ? body.prTitles : {}
     state.problemsLoaded = true
   } catch (e) {
     // keep whatever we already showed — a transient failure here must never

@@ -425,7 +425,14 @@ server was started from. Two categories, both surfaced:
   readable form, so the row keeps `err.Error()` as its text. Deliberately
   **repo-wide**, which is why `RunsForPR` couldn't be reused: that filters on
   the input's `pr`, so a per-repo tracker structurally never appears there; here
-  it shows with `pr: 0`. Capped at 50, newest-updated first.
+  it shows with `pr: 0`. Capped at 50, newest-updated first. A failure that a
+  **later attempt at the same task** took over is filtered out first
+  (`supersededRuns`/`runIdentity`) — a tracker that failed and was replaced by a
+  fresh `running`/`waiting` one is no longer news. Exception: a per-item
+  deterministic Run ID (`perItemRunID`) is never superseded, because
+  `startWorkflowID` is idempotent so it can never be retried at all. Full rules:
+  "A failure that was later retried successfully drops out of the list" in
+  `.claude/docs/pr-overview.md`.
 - **The log mirror** — an in-memory **ring buffer** (100 lines) fed by wrapping
   **`TaskManager.logf`**, the single funnel every glue-level error already goes
   through, so one wrapper covers them all and a future call site is free.

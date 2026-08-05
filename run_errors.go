@@ -65,6 +65,45 @@ type FailedRun struct {
 	// Error is the recorded failure message, or "" when the run's history holds
 	// no readable one.
 	Error string `json:"error"`
+	// Comment describes WHICH comment a failed task_code_comment run was about
+	// (file/line + a body snippet), parsed from the run's own immutable input —
+	// the same CommentRef the "Taken" column already shows (see RunsForPR). nil
+	// for every other Workflow Type. Without it a row only names the PR, and a
+	// PR with a dozen failed comment threads is unreadable.
+	Comment *CommentRef `json:"comment,omitempty"`
+}
+
+// perItemRunID lists the Workflow Types started through StartWorkflowID with a
+// per-ITEM deterministic Run ID (a comment id, a call/explain key, a chat
+// conversation, the per-PR chat-merge queue). Two things follow, and both
+// matter for supersededRuns below:
+//
+//   - Their identity is the Run ID itself, never workflow+pr — a PR has many
+//     comment threads, so a succeeded one must never hide a failed sibling.
+//   - A retry is structurally impossible: startWorkflowID is idempotent, so
+//     starting the same ID again is a no-op that returns the very same failed
+//     run. Such a failure is permanently open work and must keep showing.
+//
+// Deliberately a hand-maintained list (like retiredWorkflowTypes): add a name
+// here when a new workflow starts using a deterministic Run ID.
+var perItemRunID = map[string]bool{
+	WorkflowTaskCodeComment: true, // importedRunID(rootID) / the comment id
+	WorkflowResolveCall:     true, // resolveCallRunID(in)
+	WorkflowExplainCode:     true, // explainRunID(in)
+	WorkflowClaudeChat:      true, // the conversation id
+	WorkflowChatMerge:       true, // chatMergeQueueRunID(pr)
+}
+
+// runIdentity answers "which task is this run an attempt at?" — the key
+// supersededRuns groups on. Ordinarily workflow+pr, which is exactly what the
+// app itself already treats as one task (findPRStatusLocked looks for "a
+// pr_status run for this PR"); pr 0 covers the repo-wide trackers and the
+// nightly cleanup pass. See perItemRunID for the exception.
+func runIdentity(workflow, runID string, pr int) string {
+	if perItemRunID[workflow] {
+		return "run#" + runID
+	}
+	return workflow + "#" + strconv.Itoa(pr)
 }
 
 var (
@@ -152,27 +191,93 @@ func problemMirrorLogger() tembed.Option {
 	})
 }
 
+// runPR parses the "pr" field out of a run's stored input — the same field
+// RunsForPR matches on. 0 when the input names none (a repo-wide tracker).
+func (m *TaskManager) runPR(runID string) int {
+	in, err := m.engine.Input(runID)
+	if err != nil {
+		return 0
+	}
+	var input struct {
+		PR int `json:"pr"`
+	}
+	if json.Unmarshal(in, &input) != nil {
+		return 0
+	}
+	return input.PR
+}
+
+// supersededRuns maps each run identity (see runIdentity) to the newest
+// CreatedAt of a run that is NOT failed. A failed run created before that time
+// was superseded: the same task was started again and either completed or is
+// still alive, so it is no longer something the reviewer has to act on.
+//
+// running/waiting count too, deliberately: a pr_status tracker stays `waiting`
+// forever and never reaches `completed`, so without them the single most common
+// case — findPRStatusLocked starting a fresh tracker after one failed — would
+// never clear. Another `failed` run never supersedes anything.
+//
+// CreatedAt, not UpdatedAt: a long-lived tracker's UpdatedAt keeps moving, which
+// would hide a failure that happened after that tracker started.
+func supersededRuns(runs []tembed.RunRecord, prOf func(string) int) map[string]time.Time {
+	alive := map[string]time.Time{}
+	for _, r := range runs {
+		if r.Status == tembed.StatusFailed {
+			continue
+		}
+		k := runIdentity(r.Workflow, r.ID, prOf(r.ID))
+		if t, ok := alive[k]; !ok || r.CreatedAt.After(t) {
+			alive[k] = r.CreatedAt
+		}
+	}
+	return alive
+}
+
 // FailedRuns lists, newest-updated first, up to limit workflow runs that ended
-// in tembed.StatusFailed — repo-wide, so a per-repo tracker (no "pr" in its
-// input, hence PR 0) is included too. Read-only: it only inspects
-// engine.Runs()/Input()/Result(), it never starts or signals anything.
+// in tembed.StatusFailed and have NOT been superseded by a later attempt at the
+// same task (see supersededRuns) — repo-wide, so a per-repo tracker (no "pr" in
+// its input, hence PR 0) is included too. Read-only: it only inspects
+// engine.Runs()/Input()/Result(), it never starts, signals, or deletes
+// anything; the superseded run itself stays in the tembed store (cleanup
+// removes it once its PR is merged and old, see cleanup.go).
 func (m *TaskManager) FailedRuns(limit int) []FailedRun {
 	runs, err := m.engine.Runs()
 	if err != nil {
 		return nil
 	}
+	// One input parse per run, memoized, so the identity pass below and the
+	// per-row PR both read the same value without a second store call.
+	prCache := map[string]int{}
+	prOf := func(runID string) int {
+		if pr, ok := prCache[runID]; ok {
+			return pr
+		}
+		pr := m.runPR(runID)
+		prCache[runID] = pr
+		return pr
+	}
+	alive := supersededRuns(runs, prOf)
+
 	out := make([]FailedRun, 0, len(runs))
 	for _, r := range runs {
 		if r.Status != tembed.StatusFailed {
 			continue
 		}
-		f := FailedRun{RunID: r.ID, Workflow: r.Workflow, UpdatedAt: r.UpdatedAt}
-		if in, err := m.engine.Input(r.ID); err == nil {
-			var input struct {
-				PR int `json:"pr"`
-			}
-			if json.Unmarshal(in, &input) == nil {
-				f.PR = input.PR
+		pr := prOf(r.ID)
+		if t, ok := alive[runIdentity(r.Workflow, r.ID, pr)]; ok && t.After(r.CreatedAt) {
+			continue // a later attempt at the same task took over
+		}
+		f := FailedRun{RunID: r.ID, Workflow: r.Workflow, PR: pr, UpdatedAt: r.UpdatedAt}
+		if r.Workflow == WorkflowTaskCodeComment {
+			if in, err := m.engine.Input(r.ID); err == nil {
+				var cc CodeCommentInput
+				if json.Unmarshal(in, &cc) == nil && cc.File != "" {
+					f.Comment = &CommentRef{
+						File: cc.File, Label: cc.Label, Gran: cc.Gran, Line: cc.Line,
+						RowStart: cc.RowStart, RowEnd: cc.RowEnd,
+						Snippet: commentSnippet(cc.Body, 60),
+					}
+				}
 			}
 		}
 		// Result reports a failed run as an error carrying the recorded

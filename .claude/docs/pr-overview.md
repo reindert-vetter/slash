@@ -179,6 +179,8 @@ deliberately both shown:
   reused: that filters on the run input's `pr`, so a per-repo tracker
   (`pr_inbox`/`task_inbox`/`task_snooze`) structurally never appears there;
   here it shows with `pr: 0`.
+  **Superseded failures are filtered out** (`supersededRuns`/`runIdentity`, see
+  the section below) so a task that later succeeded stops showing.
 - **An error that only ever reached the log** (`data-testid=problem-log`) —
   poller/startup glue that is no workflow run at all. See "Surfacing failures"
   in `.claude/docs/workflows-trackers.md` for the in-memory ring buffer and
@@ -202,6 +204,21 @@ Load-bearing frontend properties:
   `watch` that drives `scheduleRepaint()` though — it changes document height,
   the exact scroll-clamp case where a row slides under a parked cursor (see the
   `hoverEnabled` gate below).
+- **A row names the PR and the comment, not just numbers.**
+  `problemPrChip(pr)` renders `#13098 · <PR title>` (both row kinds), fed by the
+  response's `prTitles` map — a `{"<pr>": "<title>"}` side map the handler fills
+  from `prmeta.Get` per referenced PR. Deliberately a map instead of a `title`
+  field on both structs: it serves `failedRuns` and `logErrors` alike, and
+  `LogProblem` is built at record time when no lookup is possible; an unknown PR
+  is simply absent and the chip falls back to the bare number. A failed
+  `task_code_comment` run additionally gets a middle line
+  (`data-testid=problem-run-comment`, `problemCommentLine`): `<basename>:<line>`
+  plus a snippet of the body, from the `comment` field — the same `CommentRef`
+  the "Taken" column uses, parsed in `FailedRuns` from the run's own immutable
+  input. Without it, a PR with a dozen broken comment threads is a wall of
+  identical rows. Both of that line's slots are precomputed **strings**: a
+  conditionally interpolated `html` template in a static slot renders as the
+  template function's source text (see `.claude/rules/arrowjs-pitfalls.md`).
 - **The failure is carried by a word + a `⚠` glyph** (`problemMark`: "mislukt"
   for a failed run, "overgeslagen" for a mirrored log line, since every `logf`
   call site reports work that was skipped) — the rose tint is decoration only
@@ -216,6 +233,48 @@ Load-bearing frontend properties:
   review-tree state: comment cursors, url-state bindings, watches).
   `STATUS_BADGES`/`WORKFLOW_STATUS_NOTE` stayed behind: they describe runs still
   in progress, this block only shows runs that already failed.
+
+### A failure that was later retried successfully drops out of the list
+
+A tembed run can never leave `failed` (`SignalWorkflow`/`advance` refuse a
+terminal run, `Recover()` only picks up `running`/`waiting`), and nothing
+deletes it except the `cleanup` workflow — and only once its PR is merged and
+older than `cleanupMergedAge`. So the list used to keep showing failures whose
+work had long since succeeded: `ensurePRStatus`/`findPRStatusLocked` look for a
+`running`/`waiting` tracker only, so after a failure they simply start a **new**
+run, and the daily `cleanup` pass does the same. It saturated at the cap
+(50 runs + 100 log lines) with mostly stale rows.
+
+`FailedRuns` therefore drops a failed run that a **later attempt at the same
+task** took over — read-time only: nothing is deleted, `FailedRuns` stays a pure
+read (the run itself is still in the tembed store, and still purged by
+`cleanup`).
+
+- **Identity** (`runIdentity`) is ordinarily `workflow + "#" + pr` — exactly what
+  the app itself already treats as one task. `pr: 0` covers the repo-wide
+  trackers and the `cleanup` pass.
+- **Superseded** means a run with that identity exists with a **later
+  `CreatedAt`** and status `completed`, `running`, **or** `waiting`.
+  `waiting` is load-bearing: a `pr_status` tracker stays `waiting` forever and
+  never reaches `completed`, so without it the most common case would never
+  clear. Another `failed` run supersedes nothing. `CreatedAt`, not `UpdatedAt`:
+  a long-lived tracker's `UpdatedAt` keeps moving and would hide a failure that
+  happened *after* that tracker started.
+- **Exception — a per-item deterministic Run ID never gets superseded**
+  (`perItemRunID`: `task_code_comment`, `resolve_call`, `explain_code`,
+  `claude_chat`, `chat_merge`; identity is the Run ID itself). Two reasons, both
+  required: a PR has many comment threads, so a succeeded one must not hide a
+  failed sibling on the same PR; and `startWorkflowID` is **idempotent**, so a
+  retry is a no-op returning that same failed run — such a failure is
+  permanently open work and *must* keep showing. Hand-maintained list, like
+  `retiredWorkflowTypes`: extend it when a new workflow adopts a deterministic
+  Run ID.
+
+Not covered by this: the `logErrors` half. Those are no runs, have no status and
+no identity, so there is nothing to supersede them with; they still only clear
+on a restart or by ageing out of the ring buffer. Tests:
+`TestFailedRunsHidesSupersededRun`, `TestFailedRunsCarriesCommentRef`
+(`run_errors_test.go`).
 
 ⚠ **Deliberately not in v1: the rows aren't clickable** — a click target would
 make them navigation elements, with the keyboard/popover consequences above. No
@@ -294,7 +353,7 @@ alone; `Push mislukt` (rose) when the last attempt was refused. Full mechanism:
 | `GET /api/reviewers` | Read-only candidate reviewers → `{ok, reviewers:[{login,avatarUrl,count}]}`, most-used-first. |
 | `GET /api/names?logins=a,b` | Login → real name + avatar. See "Real names instead of logins" in `.claude/docs/pages-and-routing.md`. |
 | `POST /api/workflows/ready_for_review` | `{pr, reviewers?}` → flip a draft to ready + request reviewers. 400 on an invalid pr/login. |
-| `GET /api/problems` | Read-only → `{ok, failedRuns:[{runId,workflow,pr,updatedAt,error}], logErrors:[{at,scope,pr,message}]}`. Feeds "Mislukte taken". |
+| `GET /api/problems` | Read-only → `{ok, failedRuns:[{runId,workflow,pr,updatedAt,error,comment?}], logErrors:[{at,scope,pr,message}], prTitles:{"<pr>":"<title>"}}`. Feeds "Mislukte taken"; superseded failures are already filtered out. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 
 ### "Recent gegenereerd" rows are enriched from the SAME local prmeta read, no extra request

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/reindert-vetter/tembed"
 
@@ -158,5 +159,103 @@ func TestFailedRunsReportsOnlyFailures(t *testing.T) {
 	// The limit is honoured (newest-updated first).
 	if one := m.FailedRuns(1); len(one) != 1 {
 		t.Fatalf("FailedRuns(1) = %d runs, want 1", len(one))
+	}
+}
+
+// TestFailedRunsHidesSupersededRun covers the "later attempt took over" filter:
+// a failed run disappears once the same task ran again (workflow+pr identity,
+// including the repo-wide pr=0 shape), while a per-item deterministic-Run-ID
+// workflow — where a retry is structurally impossible — always keeps showing,
+// even when a sibling item on the same PR succeeded.
+func TestFailedRunsHidesSupersededRun(t *testing.T) {
+	clock := time.Now()
+	engine := tembed.New(tembed.NewMemoryStore(), tembed.WithClock(func() time.Time { return clock }))
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+
+	boom := func(w *tembed.Workflow, input []byte) ([]byte, error) { return nil, errors.New("boom") }
+	fine := func(w *tembed.Workflow, input []byte) ([]byte, error) { return nil, nil }
+	engine.RegisterWorkflow(WorkflowPRStatus, boom)
+	engine.RegisterWorkflow(WorkflowCleanup, boom)
+	engine.RegisterWorkflow(WorkflowTaskCodeComment, boom)
+	engine.RegisterWorkflow("test_fine", fine)
+
+	type prInput struct {
+		PR int `json:"pr"`
+	}
+	// tick advances the shared clock so the next run is unambiguously newer.
+	tick := func() { clock = clock.Add(time.Minute) }
+
+	// (1) a failed pr_status for PR 1 — later replaced by a live one.
+	stale, _ := engine.StartWorkflow(WorkflowPRStatus, prInput{PR: 1})
+	// (2) a failed pr_status for PR 2 — never replaced, so it must stay.
+	tick()
+	lonely, _ := engine.StartWorkflow(WorkflowPRStatus, prInput{PR: 2})
+	// (3) two failed comment threads on PR 1 (deterministic Run IDs).
+	tick()
+	comment, _ := engine.StartWorkflowID("comment-a", WorkflowTaskCodeComment, prInput{PR: 1})
+	engine.StartWorkflowID("comment-b", WorkflowTaskCodeComment, prInput{PR: 1})
+	// (4) a failed repo-wide cleanup pass — later replaced by a good one.
+	tick()
+	staleCleanup, _ := engine.StartWorkflow(WorkflowCleanup, struct{}{})
+
+	// The successors, all created after their failed predecessor.
+	tick()
+	engine.RegisterWorkflow(WorkflowPRStatus, fine)
+	engine.RegisterWorkflow(WorkflowCleanup, fine)
+	if _, err := engine.StartWorkflow(WorkflowPRStatus, prInput{PR: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.StartWorkflow(WorkflowCleanup, struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	// A succeeded comment thread on PR 1 must NOT hide the failed ones.
+	engine.RegisterWorkflow(WorkflowTaskCodeComment, fine)
+	if _, err := engine.StartWorkflowID("comment-ok", WorkflowTaskCodeComment, prInput{PR: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]bool{}
+	for _, f := range m.FailedRuns(failedRunCap) {
+		got[f.RunID] = true
+	}
+	if got[stale] {
+		t.Errorf("superseded pr_status run %s still listed: %v", stale, got)
+	}
+	if got[staleCleanup] {
+		t.Errorf("superseded repo-wide cleanup run %s still listed: %v", staleCleanup, got)
+	}
+	if !got[lonely] {
+		t.Errorf("pr_status failure without a successor is missing: %v", got)
+	}
+	if !got[comment] || !got["comment-b"] {
+		t.Errorf("a per-item comment failure must never be superseded: %v", got)
+	}
+}
+
+// TestFailedRunsCarriesCommentRef proves a failed comment thread says WHICH
+// comment it was: file/line plus a body snippet, parsed from the run input.
+func TestFailedRunsCarriesCommentRef(t *testing.T) {
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	engine.RegisterWorkflow(WorkflowTaskCodeComment, func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		return nil, errors.New("save reaction: database is locked")
+	})
+
+	if _, err := engine.StartWorkflowID("c-1", WorkflowTaskCodeComment, CodeCommentInput{
+		PR: 13098, File: "src/Billing/Invoice.php", Line: 42, Body: "Kun je hier een guard clause van maken?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := m.FailedRuns(failedRunCap)
+	if len(got) != 1 || got[0].Comment == nil {
+		t.Fatalf("FailedRuns = %+v, want one run carrying a comment ref", got)
+	}
+	c := got[0].Comment
+	if c.File != "src/Billing/Invoice.php" || c.Line != 42 {
+		t.Fatalf("comment ref = %+v, want the file/line from the run input", c)
+	}
+	if !strings.Contains(c.Snippet, "guard clause") {
+		t.Fatalf("snippet = %q, want a preview of the comment body", c.Snippet)
 	}
 }
