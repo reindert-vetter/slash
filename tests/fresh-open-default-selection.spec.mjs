@@ -122,9 +122,35 @@ test.describe('PR Review Tree — fresh open with no ?sel lands on the first una
     await waitApproved(page, BLOCK_A_ID, APPROVE_ALL_ROWS.length)
     await waitApproved(page, BLOCK_B_ID, APPROVE_ALL_ROWS.length)
 
-    await page.goto(`/pr/${PR}`)
+    // keepDescription: true — the _fixtures.mjs goto() wrapper otherwise
+    // auto-presses ArrowRight right after load to skip past stop 1 for the
+    // rest of the suite (see its own comment); this test needs to land ON
+    // stop 1 itself to exercise the regression below, so it opts out of that
+    // auto-skip and drives stop 1's own ArrowRight by hand instead.
+    await page.goto(`/pr/${PR}`, { keepDescription: true })
 
-    // Both blocks are fully approved and hidden — nothing left to select.
+    // A fresh open lands on stop 1 (the PR summary) first, WITH
+    // state.toggleFocused already true underneath it (the pick below) —
+    // applyDefaultUnapprovedSelection sets both at once when every block is
+    // already approved.
+    await expect(page.getByTestId('pr-info-column')).toBeVisible()
+
+    // Regression: ArrowRight must still close stop 1 despite toggleFocused
+    // already being set. A guard meant for the toggle row (excluding
+    // ArrowRight there because there's no diff to step into) used to sit
+    // BEFORE the showDescription branch in onKeydown and fire first,
+    // swallowing the key — leaving stop 1 stuck open with no way to close it
+    // or exit to /pr-overview. See .claude/docs/keyboard-navigation.md and
+    // the same comment in BlockList.mjs's toggleRow. (The _fixtures.mjs
+    // goto() wrapper's own auto-skip ArrowRight used to hit exactly this bug
+    // too, silently — its `.catch(() => {})` on the "detached" wait swallowed
+    // the failure, which is why the rest of the suite never caught it.)
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('pr-info-column')).toHaveCount(0)
+
+    // Both blocks are fully approved and hidden — nothing left to select —
+    // and stepping right out of stop 1 lands the keyboard right back on the
+    // already-picked toggle row, not on nothing.
     await expect(page.getByTestId('block-row')).toHaveCount(0)
     const toggle = page.getByTestId('toggle-approved')
     await expect(toggle).toBeVisible()

@@ -45,4 +45,40 @@ test.describe('PR Review Tree — ingest button', () => {
     resolveIngest()
     await expect.poll(() => ingestCalls).toBe(1)
   })
+
+  // Regression for: onKeydown's `if (state.blocks.length === 0) return` guard
+  // used to sit BEFORE the state.showDescription ArrowRight/ArrowLeft branch,
+  // so a genuinely block-less PR (nothing ingested yet — state.blocks really
+  // is empty here, unlike the "everything approved" case in
+  // fresh-open-default-selection.spec.mjs, where state.blocks keeps every
+  // block regardless of approval) could never close or exit stop 1: the empty
+  // guard ate the key first. See .claude/docs/keyboard-navigation.md.
+  test('stop 1 still closes/exits on a genuinely block-less PR (state.blocks.length === 0)', async ({
+    page,
+  }) => {
+    // keepDescription: true — see the _fixtures.mjs goto() wrapper's own
+    // comment: it otherwise auto-presses ArrowRight to skip stop 1, which
+    // hit this very bug too (silently, via its own `.catch(() => {})`).
+    await page.goto('/pr/900001', { keepDescription: true })
+    await appReady(page)
+
+    await expect(page.getByTestId('pr-info-column')).toBeVisible()
+    await page.keyboard.press('ArrowRight')
+    // Lands on the empty state (nothing ingested yet) — a sensible landing
+    // spot: the ingest button is the one actionable thing there.
+    await expect(page.getByTestId('pr-info-column')).toHaveCount(0)
+    await expect(page.locator('[data-testid="ingest-btn"]')).toBeVisible()
+  })
+
+  // Mirror of the above for ←, checked separately (a fresh page instead of
+  // continuing from the ArrowRight above) since the block-less index has no
+  // block/search context to walk back out of first.
+  test('← on stop 1 still exits to /pr-overview on a genuinely block-less PR', async ({ page }) => {
+    await page.goto('/pr/900001', { keepDescription: true })
+    await appReady(page)
+
+    await expect(page.getByTestId('pr-info-column')).toBeVisible()
+    await page.keyboard.press('ArrowLeft')
+    await expect(page).toHaveURL(/\/pr-overview/)
+  })
 })

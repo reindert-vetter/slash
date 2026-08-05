@@ -7965,6 +7965,36 @@ function onKeydown(e) {
     return
   }
 
+  // Stop 1 of the nav chain (the PR-description column) sits to the left of the
+  // block-index and owns the keyboard while open: → closes it back to stop 2,
+  // ← exits the chain entirely to the PR overview (/pr-overview) — there's
+  // nothing further left than stop 1. Any other key is a no-op and doesn't move
+  // the block selection underneath it. The `?pr=`/`?sel=` params let
+  // /pr-overview auto-select the PR — and hand back the same block reference on
+  // return — we just came from (see overviewExitUrl above, and
+  // trySelectPendingPr()/originPr/originSel in overview.mjs).
+  //
+  // Deliberately checked here, BEFORE the `state.blocks.length === 0` guard and
+  // the toggle-row guard right below: a fresh, fully-approved-PR open (or a
+  // genuinely block-less PR) can land BOTH state.showDescription and
+  // state.toggleFocused true at once (applyDefaultUnapprovedSelection), or leave
+  // state.blocks empty — either guard sitting first used to swallow ArrowRight/
+  // ArrowLeft before this branch ever saw them, leaving stop 1 permanently
+  // stuck open with no way to close or exit it. See "toggleRow" in
+  // BlockList.mjs and .claude/docs/keyboard-navigation.md for the corrected
+  // account of both root causes.
+  if (state.showDescription) {
+    e.preventDefault()
+    if (e.key === 'ArrowRight') {
+      state.showDescription = false
+      // A real crossing into the block index — from here on a selected row
+      // reads as a genuine choice, not the fresh-open default (see
+      // state.blockIndexEntered's own comment).
+      state.blockIndexEntered = true
+    } else if (e.key === 'ArrowLeft') location.href = overviewExitUrl()
+    return
+  }
+
   if (state.blocks.length === 0) return
 
   // Same trailing-row special case as Enter above: none of these diff-only
@@ -8174,26 +8204,6 @@ function onKeydown(e) {
       else if (claudeChatVisible()) enterClaudeChat(state.pr)
       else enterRelated()
     }
-    return
-  }
-
-  // Stop 1 of the nav chain (the PR-description column) sits to the left of the
-  // block-index and owns the keyboard while open: → closes it back to stop 2,
-  // ← exits the chain entirely to the PR overview (/pr-overview) — there's
-  // nothing further left than stop 1. Any other key is a no-op and doesn't move
-  // the block selection underneath it. The `?pr=`/`?sel=` params let
-  // /pr-overview auto-select the PR — and hand back the same block reference on
-  // return — we just came from (see overviewExitUrl above, and
-  // trySelectPendingPr()/originPr/originSel in overview.mjs).
-  if (state.showDescription) {
-    e.preventDefault()
-    if (e.key === 'ArrowRight') {
-      state.showDescription = false
-      // A real crossing into the block index — from here on a selected row
-      // reads as a genuine choice, not the fresh-open default (see
-      // state.blockIndexEntered's own comment).
-      state.blockIndexEntered = true
-    } else if (e.key === 'ArrowLeft') location.href = overviewExitUrl()
     return
   }
 

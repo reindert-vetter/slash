@@ -209,16 +209,44 @@ selected.
 
 **`toggleRow` (the toggle-approved row) deliberately does NOT get the same
 treatment**, even though `applyDefaultUnapprovedSelection` can land
-`state.toggleFocused` there on a fresh, fully-approved-PR open: with
-`state.blocks.length === 0` in that case, `onKeydown`'s
-`if (state.blocks.length === 0) return` guard sits BEFORE the
-`state.showDescription` `ArrowRight`/`ArrowLeft` branch, so stop 1 never
-actually closes on its own there — gating the highlight the same way would
-hide a real, reachable selection indefinitely rather than just briefly. See
+`state.toggleFocused` there on a fresh, fully-approved-PR open: gating the
+highlight the same way as `rowFocused` would hide a real, reachable selection
+until the reviewer crosses into the index for real — worse than the rare
+visual overlap that gating would have prevented. See
 `tests/fresh-open-default-selection.spec.mjs`'s "everything approved" case and
-`toggleRow`'s own comment in `BlockList.mjs`. (A follow-up could reorder those
-two `onKeydown` branches so stop 1 always closes regardless of block count —
-out of scope here.)
+`toggleRow`'s own comment in `BlockList.mjs`.
+
+That test used to also double as the regression case for a real bug, now
+fixed: `onKeydown`'s `state.showDescription` `ArrowRight`/`ArrowLeft` branch
+(closing/exiting stop 1) sat AFTER two earlier guards that could each swallow
+the key first — `if (state.blocks.length === 0) return` (a genuinely
+block-less PR, see `emptyState` in `BlockList.mjs`) and the toggle-row guard
+right below it (`(state.toggleFocused || state.ignoreToggleFocused ||
+state.pushTodoFocused) && [...].includes(e.key)`, which also excludes
+`ArrowRight`). A fresh, fully-approved-PR open lands `state.toggleFocused` AND
+`state.showDescription` true at the same time
+(`applyDefaultUnapprovedSelection`), so it was the **toggle-row guard** — not
+the `state.blocks.length === 0` guard, which never actually fires there
+(`state.blocks` keeps every block regardless of approval, only the display
+loop in `BlockList.mjs`'s `renderList` hides fully-approved rows) — that
+silently ate `ArrowRight` and left stop 1 permanently stuck open, with no way
+to close it or exit to `/pr-overview`. (An earlier version of this note
+mis-attributed the bug entirely to the `blocks.length === 0` guard; corrected
+here.) The fix moved the whole `state.showDescription` branch to run
+immediately after the `Enter`-opens-menu branch, before both guards — stop 1
+now uniformly claims every key while open, regardless of block count or which
+sidebar row/toggle happens to also carry `state.toggleFocused`-like state.
+
+A genuinely block-less PR (`state.blocks.length` truly 0 — nothing ingested
+yet, `emptyState` in `BlockList.mjs`) hit the OTHER guard the same way, and is
+covered separately in `tests/ingest-btn-disabled.spec.mjs` (PR 900001, never
+seeded by any fixture): `→` from stop 1 lands on the empty state's own "Ingest
+#\<pr\>" button — the one actionable thing there — and `←` still exits to
+`/pr-overview`, same as everywhere else. The `_fixtures.mjs` `goto()` wrapper's
+own auto-skip-stop-1 `ArrowRight` (added so the rest of the suite doesn't have
+to know about stop 1 at all) hit this exact bug too, silently, via its own
+`.catch(() => {})` on the "detached" wait — which is also why the wider suite
+never caught it before now.
 
 ### Comment-index items (PR-wide comments as ordinary "Start" rows)
 

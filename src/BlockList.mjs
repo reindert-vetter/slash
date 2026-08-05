@@ -418,14 +418,16 @@ function unpushedPill(state, b) {
 // Deliberately NOT gated on state.showDescription/blockIndexEntered like
 // rowFocused above: a genuinely fresh, fully-approved-PR open can land
 // state.toggleFocused here (applyDefaultUnapprovedSelection, home.mjs) while
-// state.blocks.length is 0 — and `if (state.blocks.length === 0) return` in
-// onKeydown sits BEFORE the showDescription ArrowRight/ArrowLeft branch, so
-// stop 1 never actually closes on its own in that corner case. Suppressing
-// this highlight the same way rowFocused does would make it stay
-// (indefinitely, not just briefly) invisible, hiding a real, reachable
-// selection — worse than the rare visual overlap this would have prevented.
+// state.showDescription is still true (stop 1). Suppressing this highlight
+// the same way rowFocused does would make it stay invisible until the
+// reviewer actually crosses into the index — hiding a real, reachable
+// selection, worse than the rare visual overlap this would have prevented.
 // See tests/fresh-open-default-selection.spec.mjs's "everything approved"
-// case.
+// case and the corrected account of the (now-fixed) related keyboard bug in
+// .claude/docs/keyboard-navigation.md — state.blocks.length never actually
+// hits 0 here (approved blocks stay in state.blocks; only this render's own
+// display loop below hides them), so that guard was never the culprit; the
+// toggle-row ArrowRight-exclusion guard in onKeydown was.
 function toggleRow(state, count) {
   return html`
     <button
