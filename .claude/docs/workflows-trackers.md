@@ -14,6 +14,23 @@ One Execution per PR that receives `state` Signals from the pollers and
 pollers read to stop. `ensurePRStatus(pr)` starts/reuses one per PR, also after
 a restart.
 
+`ensurePRStatus` caches PR → Run ID in `m.prRuns`; a cache miss falls back to
+`findPRStatusLocked`, which does its own full `engine.Runs()`/`ListRuns()`
+scan to find the tracker. That cache starts **cold** after a restart — it is
+only bulk-filled by `ResumePRStatusPolling`, which runs strictly **after**
+`ResumePolling` (see `newTasks`, `tasks_api.go`) — so `ResumePolling`'s own
+loop over every waiting `task_code_comment` run used to call `ensurePRStatus`
+per run, and thus `findPRStatusLocked`'s full scan once per **distinct PR** it
+encountered: O(waiting runs × total runs), the dominant stack in a profile
+with hundreds of waiting comment threads spread over many PRs.
+**Don't reintroduce this:** `ResumePolling` already has the one `runs` slice
+it needs in hand, so it primes `m.prRuns` from that single slice
+(`primePRRunsLocked`, `workflows.go`) **before** its loop starts, so every
+`ensurePRStatus` call inside that loop hits the cache and the whole pass costs
+exactly one `ListRuns` call. Test: `TestResumePollingDoesNotRescanRunsPerPR`
+(`resume_polling_scale_test.go`) asserts this count directly via a counting
+`Store` wrapper.
+
 **On start** it runs three Activities in sequence, each with its own targeted
 read-model write, so the UI can render **progressively** instead of waiting for
 everything (see "Progressive loading" in `.claude/docs/detail-layout.md`):

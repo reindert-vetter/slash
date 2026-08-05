@@ -416,6 +416,17 @@ func (m *TaskManager) ResumePolling(ctx context.Context) {
 		m.logf("task_code_comment: resume polling: %v", err)
 		return
 	}
+	// Prime the pr_status cache from this single runs fetch, before the loop
+	// below starts calling ensurePRStatus per waiting comment-run. Without
+	// this, a cold m.prRuns cache (the common case: this runs before
+	// ResumePRStatusPolling on startup) makes ensurePRStatus fall back to
+	// findPRStatusLocked's own full runs scan once per distinct PR the loop
+	// below encounters — O(runs) per PR, i.e. quadratic in the number of
+	// waiting comment-runs across many PRs. Priming once here keeps the
+	// whole pass O(runs).
+	m.mu.Lock()
+	m.primePRRunsLocked(runs)
+	m.mu.Unlock()
 	for _, r := range runs {
 		if r.Workflow != WorkflowTaskCodeComment || r.Status != tembed.StatusWaiting {
 			continue

@@ -3992,6 +3992,36 @@ func (m *TaskManager) findPRStatusLocked(pr int) string {
 	return ""
 }
 
+// primePRRunsLocked fills m.prRuns, for every pr not already cached, from a
+// single already-fetched runs slice — the bulk counterpart of
+// findPRStatusLocked. ResumePolling calls this once, before its loop over
+// (potentially many) waiting comment-runs, so that loop's per-comment
+// m.ensurePRStatus never has to fall back to findPRStatusLocked's own
+// O(runs) scan (which would otherwise run once per distinct PR the loop
+// encounters, i.e. an O(runs) rescan per PR on top of the O(runs) this
+// function already does once). Must be called while holding m.mu.
+func (m *TaskManager) primePRRunsLocked(runs []tembed.RunRecord) {
+	for _, r := range runs {
+		if r.Workflow != WorkflowPRStatus {
+			continue
+		}
+		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var pin PRStatusInput
+		if json.Unmarshal(in, &pin) != nil {
+			continue
+		}
+		if _, ok := m.prRuns[pin.PR]; !ok {
+			m.prRuns[pin.PR] = r.ID
+		}
+	}
+}
+
 // EnsureRelations makes sure a build_relations Execution exists for pr and has
 // (re)built its relations. It starts one if none is live (the initial build runs
 // synchronously inside StartWorkflow); otherwise it signals a rebuild. One
