@@ -388,7 +388,7 @@ index, for `cc.conversations`) exactly like `'comment'`/`'thread'` wait for
 theirs, and only ever restores onto an EXISTING comment — restoring a position
 must not itself write. See skill `url-state`.
 
-**`Enter`** on the card (or a **mouse click** on `data-testid=related-item`)
+**`Enter`/`Space`** on the card (or a **mouse click** on `data-testid=related-item`)
 **drills** the focused child (`focusedRelatedChild()` → `drillIntoChild`): it
 opens as its own diff column, and the Underlying-code panel + inline comment
 blocks jump along to that level (`focusedBlock()`). With no child focused

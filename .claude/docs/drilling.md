@@ -5,13 +5,13 @@ the column-navigation model (`state.focusLevel`) that follows from it.
 
 ## Opening a column (`drillIntoChild`)
 
-`Enter` on a **resolved** child in the Underlying-code card (a relation child or a
-resolved method call — `isCodeFocused`/`focusedRelatedChild` in
+`Enter`/`Space` on a **resolved** child in the Underlying-code card (a relation
+child or a resolved method call — `isCodeFocused`/`focusedRelatedChild` in
 `RelatedPanel.mjs`) **or a click on it** (`@click` on
 `data-testid=related-item`, via the `drill` callback `home.mjs` passes to
 `RelatedPanel`) opens that child as a full diff column to the right of the
 existing columns (between the diff and `RelatedPanel`) instead of just the flat
-excerpt. Both go through the same `drillIntoChild(child)`.
+excerpt. All three go through the same `drillIntoChild(child)`.
 
 `home.mjs` keeps a **stack**, `state.drill`: every `drillIntoChild` pushes one
 entry plus a matching cursor entry onto `state.drillCursor` (`{change:0}`) and

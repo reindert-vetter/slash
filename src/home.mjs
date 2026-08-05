@@ -7663,16 +7663,17 @@ function onKeydown(e) {
       e.preventDefault()
       openMenu('claude')
     }
-    // Enter on the Onderliggende-code block drills into the resolved child the
-    // cursor is sitting on as its own diff column (see drillIntoChild) — recursing
-    // into its Onderliggende code. Unresolved calls no longer need a manual Enter:
-    // the LLM search runs automatically (see the setRelated watch / startCallSearch).
+    // Enter (or Space — same action, reviewer request) on the Onderliggende-code
+    // block drills into the resolved child the cursor is sitting on as its own
+    // diff column (see drillIntoChild) — recursing into its Onderliggende code.
+    // Unresolved calls no longer need a manual Enter/Space: the LLM search runs
+    // automatically (see the setRelated watch / startCallSearch).
     // If the cursor instead sits on a drill-hint chip (cs.chipPath, → descended
-    // into it — see RelatedPanel's handleRelatedKey), Enter drills through the
-    // WHOLE chain (the card, then every intermediate chip, then the focused
+    // into it — see RelatedPanel's handleRelatedKey), Enter/Space drills through
+    // the WHOLE chain (the card, then every intermediate chip, then the focused
     // chip) in one go — exactly what a click on that chip already does (see
     // nestedChip's own @click), just via the keyboard.
-    if (e.key === 'Enter' && isCodeFocused()) {
+    if ((e.key === 'Enter' || e.key === ' ') && isCodeFocused()) {
       e.preventDefault()
       const chain = focusedChipChain()
       if (chain) {
