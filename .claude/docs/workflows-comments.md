@@ -786,7 +786,11 @@ it at all.
   `.claude/docs/pending-push.md`). A dirty
   or ahead-of-remote shadow is **left exactly as is** — an in-progress or
   already-committed-but-unpushed edit must never be silently discarded/rebased,
-  the same "degrade rather than guess" rule the re-anchor pass follows.
+  the same "degrade rather than guess" rule the re-anchor pass follows. Both
+  the `worktree add` and the `reset --hard` run with **`-c
+  submodule.recurse=false`**, and the status/ahead check
+  (`chatShadowPendingState`/`chatShadowLocalPendingState`) with **`--ignore-
+  submodules=all`** — see "Incident: a wedged shadow worktree…" below for why.
 - **Concurrency: only the shared-clone git plumbing is serialized, never a
   Claude turn or a local commit.** `ensureChatShadowWorktreeAt`'s
   `worktree add`/`fetch` and `commitChatShadowEditsAt`'s `fetch`+`push` reuse
@@ -837,8 +841,52 @@ it at all.
   PATH-shim fake `gh` script (`stubReachableGh`/`stubUnreachableGh`, the same
   technique as `modules/claude/timeout_test.go`'s `writeSlowBinary`) makes
   `fetchPRMeta` itself succeed or fail deterministically offline, so the
-  reachable→widened-Tools and unreachable→silent-degrade paths are both
-  covered without ever touching the real `gh` CLI/network.
+  reachable→widened-Tools and unreachable→degrade paths are both
+  covered without ever touching the real `gh` CLI/network — including,
+  now, that the degraded turn's saved message carries `NoShell: true`.
+
+#### Incident: a wedged shadow worktree degraded every turn to tool-less, silently
+
+The reviewed repo (plug-and-pay) carries real, active submodules
+(`forks/nova`, `modules/Ai`), and its shared local clone sets
+`submodule.recurse=true`. A plain `git reset --hard <tip>` on an existing
+shadow worktree — combined with those two settings — makes git try to
+(re)initialize the submodule's own gitdir in a PER-WORKTREE location
+(`<clone>/.git/worktrees/<shadow>/modules/forks/nova`). That can fail partway
+(no credentials/network for a second, separate clone from this subprocess's
+environment) and leaves a HALF-INITIALIZED gitdir behind: just a `config`
+file, no `HEAD`/`objects`/`refs`. Every later git command touching that path
+then aborts with `fatal: not a git repository: .../modules/forks/nova` /
+`fatal: could not reset submodule index` — **permanently**, since nothing
+about the corruption heals itself. In practice this wedged a conversation to
+tool-less for every subsequent turn, and struck several PRs the same day (a
+shadow only needs to live long enough for one refresh).
+
+Fixed in `chat_shadow.go`: the shadow worktree never needs a submodule's own
+content (Claude only edits app code), so every git call that could touch one
+says so explicitly, per-invocation — never by writing to the shared clone's
+own `.gitconfig`:
+- `git worktree add`/`git reset --hard` get `-c submodule.recurse=false`
+  (git-reset(1)'s own gate for whether reset touches a submodule's index/
+  working tree at all). This also makes a refresh **self-healing** for a
+  worktree wedged by an older build, since reset then never looks at the
+  broken gitdir at all.
+- `chatShadowPendingState`/`chatShadowLocalPendingState`'s `git status
+  --porcelain` gets `--ignore-submodules=all` — without it, `status` itself
+  aborts on an already-wedged submodule, turning the "can't tell, leave the
+  worktree untouched" branch into a permanent no-op.
+
+And the **degradation is no longer silent to the reviewer** either way it
+happens: `runOneClaudeTurn` sets `chat.Message.NoShell` on the turn's own
+saved reply, surfaced as the "Geen bestandstoegang" pill
+(`claudeNoShellPill`, `ClaudeChat.mjs`) — see "Every turn gets a real shell by
+default" in `.claude/docs/claude-chat-panel.md`.
+
+Regression test: `TestEnsureChatShadowWorktreeRefreshSurvivesBrokenSubmodule`
+(`chat_shadow_test.go`) builds a real local submodule with an unresolvable
+URL, reproduces the exact production failure on a plain `git reset --hard`,
+and asserts the actual `ensureChatShadowWorktreeAt` survives it — both on the
+first affected refresh and on a worktree already wedged by an older build.
 
 ### Serializing concurrent commits (`chat_merge`)
 

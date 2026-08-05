@@ -514,7 +514,9 @@ const maxChatQuestionOptions = 3
 // prepareChatShellWorkDir turns any such failure into "not available this
 // turn" rather than an error, and the turn simply falls back to the original
 // tool-less completion (claude.ChatSystemPrompt, no WorkDir/Tools) so a pure
-// conversational turn never breaks because of it. See
+// conversational turn never breaks because of it — but that fallback is not
+// silent: the saved reply carries chat.Message.NoShell so the reviewer sees a
+// "Geen bestandstoegang" pill on it (ClaudeChat.mjs). See
 // .claude/docs/claude-chat-panel.md and .claude/docs/workflows-comments.md.
 //
 // arg.Action == chatActionEdit is kept only for backward compatibility with
@@ -592,7 +594,9 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			sink(ev)
 		},
 	}
+	hadShell := false
 	if dir, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.PR, arg.ConversationID); ok {
+		hadShell = true
 		req.WorkDir = dir
 		req.Tools = []string{"Read", "Grep", "Glob", "Edit", "Bash"}
 		req.SystemPrompt = claude.ChatShellSystemPrompt
@@ -630,6 +634,12 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// Which model actually answered — the reviewer sees it on the bubble when it
 	// isn't the default one (see the model pill in ClaudeChat.mjs).
 	msg.Model = model
+	// Whether this turn had Read/Grep/Glob/Edit/Bash — surfaced via the "Geen
+	// bestandstoegang" pill (ClaudeChat.mjs) so a silently degraded turn is
+	// never invisible to the reviewer. See prepareChatShellWorkDir's own doc
+	// comment for why this can legitimately fail (gh/git unreachable, a git
+	// plumbing error).
+	msg.NoShell = !hadShell
 	if action == nil {
 		_ = cm.SaveMessage(ctx, msg)
 	}

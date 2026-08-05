@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   options_json    TEXT NOT NULL DEFAULT '', -- JSON array of up to a few option strings ('question' only)
   answer          TEXT NOT NULL DEFAULT '', -- filled once the reviewer responds to a 'question' turn
   model           TEXT NOT NULL DEFAULT '', -- the claude model that produced an assistant turn ('' = unknown/user turn)
+  no_shell        INTEGER NOT NULL DEFAULT 0, -- 1 when this assistant turn ran WITHOUT Read/Grep/Glob/Edit/Bash (see NoShell)
   created_at      TEXT NOT NULL
 );
 
@@ -107,7 +108,17 @@ type Message struct {
 	// chat workflow stores — including a failed/retrying one, so the reviewer
 	// can see WHICH model could not be reached. Empty for a reviewer turn and
 	// for rows written before this column existed.
-	Model     string `json:"model,omitempty"`
+	Model string `json:"model,omitempty"`
+	// NoShell is true when this assistant turn ran WITHOUT Read/Grep/Glob/Edit/
+	// Bash access to the conversation's shadow worktree — prepareChatShellWorkDir
+	// (chat_shadow.go) failed to set one up for this turn (gh/git unreachable,
+	// or a git plumbing error such as the submodule-reset failure documented in
+	// .claude/docs/workflows-comments.md). Set only for a genuine content reply
+	// (see runOneClaudeTurn), never for a KindError/KindRetrying system message,
+	// where tool availability isn't the point. Surfaced to the reviewer via the
+	// "Geen bestandstoegang" pill (ClaudeChat.mjs) so a silently degraded turn —
+	// one that talks as if it looked at the code but didn't — is never invisible.
+	NoShell   bool   `json:"noShell,omitempty"`
 	CreatedAt string `json:"createdAt"`
 }
 
@@ -144,6 +155,7 @@ func New(db *sql.DB) (*Module, error) {
 func migrate(db *sql.DB) {
 	for _, col := range []string{
 		`ALTER TABLE chat_messages ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE chat_messages ADD COLUMN no_shell INTEGER NOT NULL DEFAULT 0`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -202,11 +214,11 @@ func (m *Module) SaveMessage(ctx context.Context, msg Message) error {
 	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO chat_messages
-		   (id, conversation_id, pr, role, kind, body, options_json, answer, model, created_at)
+		   (id, conversation_id, pr, role, kind, body, options_json, answer, model, no_shell, created_at)
 		 VALUES (?,?,?,?,?,?,?,
 		   COALESCE((SELECT answer FROM chat_messages WHERE id = ?), ''),
-		   ?,?)`,
-		msg.ID, msg.ConversationID, msg.PR, msg.Role, msg.Kind, msg.Body, optsJSON, msg.ID, msg.Model, msg.CreatedAt)
+		   ?,?,?)`,
+		msg.ID, msg.ConversationID, msg.PR, msg.Role, msg.Kind, msg.Body, optsJSON, msg.ID, msg.Model, msg.NoShell, msg.CreatedAt)
 	return err
 }
 
@@ -278,7 +290,7 @@ func (m *Module) ConversationsWithMessages(ctx context.Context, pr int) ([]strin
 // for the UI/API.
 func (m *Module) List(ctx context.Context, conversationID string) ([]Message, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT id, conversation_id, pr, role, kind, body, options_json, answer, model, created_at
+		`SELECT id, conversation_id, pr, role, kind, body, options_json, answer, model, no_shell, created_at
 		 FROM chat_messages WHERE conversation_id = ? ORDER BY created_at`, conversationID)
 	if err != nil {
 		return nil, err
@@ -289,7 +301,7 @@ func (m *Module) List(ctx context.Context, conversationID string) ([]Message, er
 		var msg Message
 		var optsJSON string
 		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.PR, &msg.Role, &msg.Kind,
-			&msg.Body, &optsJSON, &msg.Answer, &msg.Model, &msg.CreatedAt); err != nil {
+			&msg.Body, &optsJSON, &msg.Answer, &msg.Model, &msg.NoShell, &msg.CreatedAt); err != nil {
 			return nil, err
 		}
 		if optsJSON != "" {

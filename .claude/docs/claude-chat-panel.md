@@ -846,15 +846,68 @@ Claude chat turn may act through a shell", `runOneClaudeTurn`
   `acli` via Bash (including committing/pushing) **only** when the reviewer
   explicitly asks for it in the message, never on its own initiative.
 - **Fails** (gh/git unreachable, no network, a plumbing error) →
-  `prepareChatShellWorkDir` swallows the error (best-effort `tm.logf`, never
-  surfaced to the reviewer) and the turn falls back to exactly the original
-  tool-less completion: no `WorkDir`/`Tools`, `claude.ChatSystemPrompt`. A pure
-  conversational turn therefore **never** fails because of this — this is the
-  fix for an earlier, reverted attempt that defaulted every turn to the old
-  `'edit'` action and made ordinary Q&A hard-depend on a live `gh pr view` +
-  `git fetch` round trip (see `chat_shadow.go`'s doc comment and
+  `prepareChatShellWorkDir` swallows the error (best-effort `tm.logf` — the
+  exact reason stays server-log-only) and the turn falls back to exactly the
+  original tool-less completion: no `WorkDir`/`Tools`, `claude.ChatSystemPrompt`.
+  A pure conversational turn therefore **never** fails because of this — this
+  is the fix for an earlier, reverted attempt that defaulted every turn to the
+  old `'edit'` action and made ordinary Q&A hard-depend on a live `gh pr view`
+  + `git fetch` round trip (see `chat_shadow.go`'s doc comment and
   `chat_workflow_test.go`'s `stubUnreachableGh`/`stubReachableGh` for the two
   regression tests, `chat_shell_test.go`).
+
+  **The degradation itself is not silent, only its reason is.** `runOneClaudeTurn`
+  sets `chat.Message.NoShell` on the turn's own saved reply (`msg.NoShell =
+  !hadShell`, right next to `msg.Model`) — never on a `KindError`/`KindRetrying`
+  system message, where tool availability isn't the point. `ClaudeChat.mjs`'s
+  `claudeNoShellPill` renders a "Geen bestandstoegang" badge (amber, WORD +
+  glyph, never colour alone) next to the model pill whenever it's set, same
+  "presence itself is the signal" shape as `claudeModelPill`: an ordinary turn
+  with shell access shows nothing extra. Without this a reviewer had no way to
+  tell that a reply which *talks* about the code never actually looked at
+  it — see the wedged-submodule incident below for why this can happen for
+  every turn of a conversation, not just a one-off network blip.
+
+### Incident: a wedged shadow worktree degraded every turn to tool-less, silently
+
+The reviewed repo (plug-and-pay) carries real, active submodules
+(`forks/nova`, `modules/Ai`) and its shared local clone sets
+`submodule.recurse=true`. `ensureChatShadowWorktreeAt`'s refresh path used to
+run a plain `git reset --hard <tip>` on an existing shadow worktree — which,
+combined with those two settings, makes git try to (re)initialize the
+submodule's own gitdir in a PER-WORKTREE location
+(`<clone>/.git/worktrees/<shadow>/modules/forks/nova`). That attempt could
+fail partway (no credentials/network for a second, separate clone from this
+subprocess's environment) and leave a HALF-INITIALIZED gitdir behind — just a
+`config` file, no `HEAD`/`objects`/`refs`. Every later git command that
+touches that path then aborts with `fatal: not a git repository: .../modules/
+forks/nova` / `fatal: could not reset submodule index` — **permanently**,
+since the corruption doesn't heal itself. This is why it looked like a
+one-off ("gh/git happened to be unreachable") but actually wedged an entire
+conversation to tool-less for every subsequent turn, and hit several PRs on
+the same day (the shadow worktree only needs to live long enough for one
+refresh).
+
+Fix, in `chat_shadow.go`: the shadow worktree never needs a submodule's own
+content (Claude only edits app code), so every git call that could touch one
+now says so explicitly, per-invocation (never by writing to the shared
+clone's `.gitconfig`):
+- `git worktree add`/`git reset --hard` get `-c submodule.recurse=false`
+  (git-reset(1)'s own gate for whether reset touches a submodule's index/
+  working tree at all) — this also makes a refresh **self-healing** for a
+  worktree wedged by an older build, since reset then never looks at the
+  broken gitdir in the first place.
+- `chatShadowPendingState`/`chatShadowLocalPendingState`'s `git status
+  --porcelain` gets `--ignore-submodules=all` — dirty/ahead detection was
+  never about submodule content, and without this flag `status` itself
+  aborts on an already-wedged submodule (turning "can't tell, leave it alone"
+  into a permanent no-op).
+
+Regression test: `TestEnsureChatShadowWorktreeRefreshSurvivesBrokenSubmodule`
+(`chat_shadow_test.go`) builds a real local submodule with a URL no init can
+ever resolve, reproduces the exact production error on a plain `git reset
+--hard`, and asserts `ensureChatShadowWorktreeAt` survives it — both on the
+first refresh and on a worktree already wedged by an older build.
 
 `ChatMessageSignal.Action`'s `""`/`"edit"`/`"commit"` trichotomy
 (`tasks_api.go` validation) is otherwise unchanged: `"edit"` is now a no-op

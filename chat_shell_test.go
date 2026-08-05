@@ -19,8 +19,10 @@ import (
 // turn may act through a shell". The two tests below exercise the same
 // runOneClaudeTurn call with the ONLY difference being whether gh/git are
 // reachable, asserting the observable difference in what gets sent to
-// claude.Client (RunRequest.WorkDir/Tools/SystemPrompt) and, in the failure
-// case, that the turn still succeeds as an ordinary reply.
+// claude.Client (RunRequest.WorkDir/Tools/SystemPrompt), the saved message's
+// NoShell flag (see chat.Message.NoShell / the "Geen bestandstoegang" pill in
+// ClaudeChat.mjs), and, in the failure case, that the turn still succeeds as
+// an ordinary reply.
 
 // stubReachableGh drops a fake "gh" script on PATH that answers `gh pr view
 // ... --json ...` with valid PR metadata for headRefName, so fetchPRMeta
@@ -57,6 +59,9 @@ func TestRunOneClaudeTurnUsesShellByDefaultWhenReachable(t *testing.T) {
 
 	if msg.Kind == chat.KindError {
 		t.Fatalf("expected an ordinary reply, got an error turn: %+v", msg)
+	}
+	if msg.NoShell {
+		t.Fatal("expected NoShell=false when the shadow worktree is available (no 'Geen bestandstoegang' pill)")
 	}
 	if len(fake.Calls) != 1 {
 		t.Fatalf("expected exactly 1 RunChat call, got %d", len(fake.Calls))
@@ -106,6 +111,9 @@ func TestRunOneClaudeTurnDegradesWhenGhUnreachable(t *testing.T) {
 	}
 	if msg.Body != "Hallo!" {
 		t.Fatalf("saved assistant body = %q", msg.Body)
+	}
+	if !msg.NoShell {
+		t.Fatal("expected NoShell=true when the shadow worktree is unavailable, so the reviewer sees the 'Geen bestandstoegang' pill")
 	}
 	if len(fake.Calls) != 1 {
 		t.Fatalf("expected exactly 1 RunChat call, got %d", len(fake.Calls))

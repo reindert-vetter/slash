@@ -389,6 +389,37 @@ function claudeModelPill(msg) {
   >`
 }
 
+// claudeNoShellPill flags an assistant turn that ran WITHOUT Read/Grep/Glob/
+// Edit/Bash access to the conversation's shadow worktree (chat.Message.NoShell,
+// set by runOneClaudeTurn when prepareChatShellWorkDir — chat_shadow.go —
+// could not set one up: gh/git unreachable, or a git plumbing error). A WORD
+// ("Geen bestandstoegang"), not a colour: the reviewer must be able to tell
+// that this reply talks about the PR without having actually looked at the
+// code. Same "presence itself is the signal" shape as claudeModelPill above —
+// a normal turn WITH shell access shows nothing extra.
+function claudeNoShellPill(msg) {
+  if (msg.role === 'user' || !msg.noShell) return ''
+  return html`<span
+    class="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
+    data-testid="claude-message-no-shell"
+  >
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="h-2.5 w-2.5"
+    >
+      <circle cx="12" cy="12" r="10"></circle>
+      <path d="m4.9 4.9 14.2 14.2"></path>
+    </svg>
+    Geen bestandstoegang</span
+  >`
+}
+
 // claudeBubble — one turn. `claudePos` is a getter; `active` marks the
 // bubble the cursor currently points at (mirrors reactionBubble's own
 // active-highlight rule, counting from the bottom the same way). A `kind:
@@ -415,7 +446,7 @@ function claudeBubble(msg, i, total, claudePos, onSend, onRetry, busy) {
         <span class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">
           ${mine ? 'Jij' : CLAUDE_NAME}
         </span>
-        ${() => chatKindBadge(msg)} ${() => claudeModelPill(msg)}
+        ${() => chatKindBadge(msg)} ${() => claudeModelPill(msg)} ${() => claudeNoShellPill(msg)}
       </div>
       <div
         class="${() => {

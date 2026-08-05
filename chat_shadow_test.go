@@ -147,6 +147,154 @@ func TestEnsureChatShadowWorktreeRefreshesWhenClean(t *testing.T) {
 	}
 }
 
+// TestEnsureChatShadowWorktreeRefreshSurvivesBrokenSubmodule reproduces the
+// production incident documented in .claude/docs/workflows-comments.md
+// ("Agentic edits"): the reviewed repo carries a real, active submodule
+// (plug-and-pay's forks/nova) whose URL a submodule content refresh cannot
+// resolve (in production: no credentials/network for a second, separate
+// clone from this subprocess's environment; here: a submodule URL pointing
+// at a path that doesn't exist), and the shared clone sets
+// submodule.recurse=true + marks the submodule active — plug-and-pay's own
+// convention. A brand new `git worktree add` does not touch the submodule (no
+// prior state to update FROM), but the very next `git reset --hard` to a
+// moved-on tip does try to (re)initialize it, fails partway, and leaves a
+// HALF-INITIALIZED gitdir behind at the per-worktree metadata path — just a
+// `config` file, no HEAD/objects/refs — which then wedges every later
+// git status/reset on that worktree: "fatal: not a git repository:
+// .../modules/forks/nova" / "fatal: could not reset submodule index".
+//
+// This test builds that exact scenario and asserts that a refresh (second
+// ensureChatShadowWorktreeAt call, once the real branch has moved on) still
+// succeeds — i.e. it never lets git touch the submodule at all.
+func TestEnsureChatShadowWorktreeRefreshSurvivesBrokenSubmodule(t *testing.T) {
+	run := func(dir string, args ...string) []byte {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
+		}
+		return out
+	}
+
+	root := t.TempDir()
+	subBare := filepath.Join(root, "sub.git")
+	if out, err := exec.Command("git", "init", "--bare", subBare).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare sub: %v: %s", err, out)
+	}
+	subSeed := filepath.Join(root, "sub-seed")
+	if err := os.MkdirAll(subSeed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(subSeed, "init")
+	run(subSeed, "config", "user.email", "test@example.com")
+	run(subSeed, "config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(subSeed, "sub.txt"), []byte("sub\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(subSeed, "add", "sub.txt")
+	run(subSeed, "commit", "-m", "sub seed")
+	run(subSeed, "remote", "add", "origin", subBare)
+	run(subSeed, "push", "origin", "HEAD:master")
+
+	bareDir, cloneDir := setupChatShadowRepo(t, "feature/x", "v1\n")
+	// The submodule is added on top of setupChatShadowRepo's own seed commit,
+	// pushed as further commits on the same branch — via a throwaway clone, the
+	// same pattern pushToBare uses, so the shared clone (cloneDir) stays
+	// untouched until the SHA it fetches already contains the submodule.
+	seed2 := filepath.Join(root, "seed2")
+	if out, err := exec.Command("git", "clone", "--branch", "feature/x", bareDir, seed2).CombinedOutput(); err != nil {
+		t.Fatalf("clone to add submodule: %v: %s", err, out)
+	}
+	run(seed2, "config", "user.email", "test@example.com")
+	run(seed2, "config", "user.name", "test")
+	run(seed2, "-c", "protocol.file.allow=always", "submodule", "add", subBare, "forks/nova")
+	run(seed2, "commit", "-m", "add submodule")
+	// Break the URL to something no clone/init can ever resolve — the gitlink
+	// SHA already committed above stays valid regardless of the URL, exactly
+	// how the reviewer never notices anything is wrong until an init is tried.
+	gitmodules, err := os.ReadFile(filepath.Join(seed2, ".gitmodules"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := strings.ReplaceAll(string(gitmodules), subBare, "/nonexistent/sub.git")
+	if err := os.WriteFile(filepath.Join(seed2, ".gitmodules"), []byte(broken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(seed2, "add", ".gitmodules")
+	run(seed2, "commit", "-m", "break submodule url")
+	run(seed2, "push", "origin", "feature/x")
+
+	// Mirror plug-and-pay's own convention (see the incident writeup): the
+	// shared clone sets submodule.recurse=true and marks the submodule active.
+	run(cloneDir, "config", "submodule.recurse", "true")
+	run(cloneDir, "config", "submodule.forks/nova.active", "true")
+
+	dataDir := t.TempDir()
+	ctx := context.Background()
+
+	// First ensure: a brand new worktree add. Confirmed to not touch the
+	// submodule (no prior state to reconcile against), matching production.
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1010, "conv-sub", "feature/x")
+	if err != nil {
+		t.Fatalf("first ensure (create): %v", err)
+	}
+
+	// The real branch moves on — the next refresh must reset the shadow onto a
+	// DIFFERENT tip, which is exactly what makes git attempt to (re)initialize
+	// the submodule.
+	pushToBare(t, bareDir, "feature/x", "v2\n")
+
+	// Sanity check the fixture itself reproduces the incident: with plain git
+	// (no -c submodule.recurse=false), resetting to the new tip must fail with
+	// the exact production symptom.
+	sanityDir := filepath.Join(root, "sanity-shadow")
+	run(cloneDir, "-c", "protocol.file.allow=always", "fetch", "origin", "feature/x")
+	dirSHA := strings.TrimSpace(string(run(dir, "rev-parse", "HEAD")))
+	run(cloneDir, "worktree", "add", "-b", "sanity", sanityDir, dirSHA)
+	if out, err := exec.Command("git", "-C", sanityDir, "reset", "--hard", "origin/feature/x").CombinedOutput(); err == nil {
+		t.Fatalf("expected the broken submodule to break a plain `git reset --hard`, it didn't: %s", out)
+	} else if !strings.Contains(string(out), "could not reset submodule index") {
+		t.Fatalf("fixture did not reproduce the expected submodule failure, got: %s", out)
+	}
+
+	// The actual assertion: ensureChatShadowWorktreeAt's own refresh (second
+	// call, existing clean worktree, branch moved on) must still succeed.
+	dir2, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1010, "conv-sub", "feature/x")
+	if err != nil {
+		t.Fatalf("refresh across a moved-on branch with a broken submodule: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir2, "foo.txt")); string(got) != "v2\n" {
+		t.Fatalf("shadow content after refresh = %q, want v2\\n (should still fast-forward)", got)
+	}
+
+	// And a THIRD call, now that a half-initialized submodule gitdir may have
+	// been left behind by an OLDER build without the fix, must also succeed
+	// (self-healing) — simulate that exact wedge and prove it's never touched.
+	worktreeGitFile, err := os.ReadFile(filepath.Join(dir2, ".git"))
+	if err != nil {
+		t.Fatalf("read shadow .git file: %v", err)
+	}
+	gitdir := strings.TrimSpace(strings.TrimPrefix(string(worktreeGitFile), "gitdir:"))
+	subGitdir := filepath.Join(gitdir, "modules", "forks", "nova")
+	if err := os.MkdirAll(subGitdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subGitdir, "config"), []byte("[core]\n\trepositoryformatversion = 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir2, "forks", "nova"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir2, "forks", "nova", ".git"), []byte("gitdir: "+subGitdir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pushToBare(t, bareDir, "feature/x", "v3\n")
+	if _, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1010, "conv-sub", "feature/x"); err != nil {
+		t.Fatalf("refresh on a shadow worktree already wedged by a broken submodule: %v", err)
+	}
+}
+
 func TestEnsureChatShadowWorktreeNeverDiscardsPendingEdit(t *testing.T) {
 	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
 	dataDir := t.TempDir()

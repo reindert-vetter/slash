@@ -168,7 +168,19 @@ func ensureChatShadowWorktreeAt(ctx context.Context, dataDir string, pr int, con
 	dir := chatShadowDir(dataDir, pr, conversationID)
 	if _, err := os.Stat(dir); err != nil {
 		branch := chatShadowBranch(conversationID)
-		if _, err := runGit(ctx, "worktree", "add", "-b", branch, dir, tip); err != nil {
+		// -c submodule.recurse=false: the reviewed repo (plug-and-pay) carries
+		// real submodules (forks/nova, modules/Ai) that this shadow worktree
+		// never needs — Claude only edits app code, never a submodule's own
+		// content. Without this, an active submodule (forks/nova is
+		// `active=true` in the shared clone's config, and the shared clone sets
+		// submodule.recurse=true) makes git try to (re)initialize a PER-WORKTREE
+		// submodule gitdir under <clone>/.git/worktrees/<name>/modules/..., which
+		// can fail partway (no credentials/network for a second, separate clone
+		// in this subprocess's environment) and leave a half-initialized gitdir
+		// (just a `config` file, no HEAD/objects/refs) behind. See
+		// .claude/docs/workflows-comments.md ("Agentic edits") for the full
+		// incident writeup.
+		if _, err := runGit(ctx, "-c", "submodule.recurse=false", "worktree", "add", "-b", branch, dir, tip); err != nil {
 			return "", fmt.Errorf("create chat shadow worktree: %w", err)
 		}
 		return dir, nil
@@ -186,7 +198,15 @@ func ensureChatShadowWorktreeAt(ctx context.Context, dataDir string, pr int, con
 		return dir, nil
 	}
 	if !dirty && ahead == 0 {
-		if _, err := runGitIn(ctx, dir, "reset", "--hard", tip); err != nil {
+		// Same -c submodule.recurse=false as the worktree-add above: a plain
+		// `reset --hard` here is exactly what used to try to reset a submodule's
+		// index/working tree (git-reset(1)'s own --recurse-submodules gate) and
+		// hit the half-initialized gitdir left behind by a prior attempt —
+		// "fatal: not a git repository: .../modules/forks/nova" / "fatal: could
+		// not reset submodule index". With recursion off, reset never touches
+		// the submodule gitlink at all, which also makes this call self-healing
+		// for a shadow worktree that got wedged by an OLDER build of this code.
+		if _, err := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "reset", "--hard", tip); err != nil {
 			return "", fmt.Errorf("refresh chat shadow worktree: %w", err)
 		}
 	}
@@ -197,7 +217,12 @@ func ensureChatShadowWorktreeAt(ctx context.Context, dataDir string, pr int, con
 // many commits its own HEAD is ahead of tip (local commits that have not landed
 // on the PR's pending ref yet — see chatShadowBaseTip for what tip is).
 func chatShadowPendingState(ctx context.Context, dir, tip string) (dirty bool, ahead int, err error) {
-	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain")
+	// --ignore-submodules=all: a submodule's own content is never part of what
+	// makes this shadow "dirty" (Claude never edits forks/nova/modules/Ai), and
+	// without this flag `git status` opens the submodule gitdir to check it —
+	// which fails outright on an already wedged one (see the reset comment
+	// above), turning "can't tell, leave it alone" into a permanent no-op.
+	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
 		return false, 0, err
 	}
@@ -221,7 +246,10 @@ func chatShadowPendingState(ctx context.Context, dir, tip string) (dirty bool, a
 // the UI runs BEFORE warning the reviewer about "wis gesprek") and by
 // clearChatShadow below, so both agree on what counts as "pending".
 func chatShadowLocalPendingState(ctx context.Context, dir string) (dirty bool, ahead int, err error) {
-	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain")
+	// --ignore-submodules=all: same reason as chatShadowPendingState above —
+	// submodule content is never what "pending" means here, and status would
+	// otherwise choke on an already wedged submodule gitdir.
+	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
 		return false, 0, err
 	}
@@ -269,11 +297,14 @@ func clearChatShadow(ctx context.Context, tm *TaskManager, dataDir string, pr in
 // propagate. This is the graceful-degrade half of
 // .claude/rules/workflows-write-boundary.md's "Exception: the Claude chat
 // turn may act through a shell" — every turn tries to get shell/file access,
-// but a reviewer just chatting must never see a failure turn merely because
+// but a reviewer just chatting must never see a FAILURE turn merely because
 // gh/git happened to be unreachable at that moment; the turn simply falls
 // back to a tool-less completion (see runOneClaudeTurn). Logged best-effort
-// via tm.logf, same convention as chat_merge.go's own degrade logging — never
-// promoted to a reviewer-facing message.
+// via tm.logf, same convention as chat_merge.go's own degrade logging — the
+// exact reason stays server-log-only, but the DEGRADATION itself is not
+// silent: runOneClaudeTurn sets chat.Message.NoShell on the turn's own reply,
+// which ClaudeChat.mjs shows as a "Geen bestandstoegang" pill — a reviewer
+// must be able to tell that Claude answered without looking at the code.
 func prepareChatShellWorkDir(ctx context.Context, tm *TaskManager, dataDir string, pr int, conversationID string) (string, bool) {
 	dir, err := ensureChatShadowWorktree(ctx, dataDir, pr, conversationID)
 	if err != nil {

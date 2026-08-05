@@ -40,7 +40,10 @@ func TestChatRoundTrip(t *testing.T) {
 	if err := m.SetSession(ctx, convID, "sess-abc"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.SaveMessage(ctx, Message{ID: "m2", ConversationID: convID, PR: 5, Role: "assistant", Body: "hallo terug"}); err != nil {
+	if err := m.SaveMessage(ctx, Message{
+		ID: "m2", ConversationID: convID, PR: 5, Role: "assistant", Body: "hallo terug",
+		Model: "claude-sonnet-5", NoShell: true,
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -54,6 +57,14 @@ func TestChatRoundTrip(t *testing.T) {
 	}
 	if len(list) != 2 || list[0].Role != "user" || list[1].Role != "assistant" {
 		t.Fatalf("List order/roles = %+v", list)
+	}
+	// NoShell round-trips just like Model does — the "Geen bestandstoegang"
+	// pill (ClaudeChat.mjs) depends on it surviving a save/list cycle.
+	if !list[1].NoShell || list[1].Model != "claude-sonnet-5" {
+		t.Fatalf("Model/NoShell round trip = %+v", list[1])
+	}
+	if list[0].NoShell {
+		t.Fatalf("a reviewer (user) turn must never carry NoShell: %+v", list[0])
 	}
 }
 
