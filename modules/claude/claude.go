@@ -180,11 +180,15 @@ func New(scratchDir string) *Module {
 // in text mode; the caller's prompt is responsible for constraining it to JSON.
 func (m *Module) Run(ctx context.Context, req RunRequest) (string, error) {
 	args := []string{"-p", req.Prompt, "--model", req.Model}
+	args = append(args, coldStartArgs()...)
 	if len(req.Tools) > 0 {
 		// Restrict the agentic run to read-only tools and auto-approve them so it
-		// stays non-interactive.
+		// stays non-interactive. --tools additionally shrinks the CLI's own
+		// built-in tool UNIVERSE (as opposed to --allowedTools, which only gates
+		// permission within the existing universe) — see agenticToolUniverse.
 		args = append(args, "--allowedTools", strings.Join(req.Tools, ","),
-			"--permission-mode", "acceptEdits")
+			"--permission-mode", "acceptEdits",
+			"--tools", strings.Join(agenticToolUniverse(req.Tools), ","))
 	} else {
 		// No tools: a pure context-only completion.
 		args = append(args, "--allowedTools", "")
@@ -241,12 +245,14 @@ func (m *Module) Run(ctx context.Context, req RunRequest) (string, error) {
 // asked for when someone is actually listening.
 func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) {
 	args := []string{"-p", req.Prompt, "--model", req.Model, "--output-format", "stream-json", "--verbose"}
+	args = append(args, coldStartArgs()...)
 	if req.OnEvent != nil {
 		args = append(args, "--include-partial-messages")
 	}
 	if len(req.Tools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(req.Tools, ","),
-			"--permission-mode", "acceptEdits")
+			"--permission-mode", "acceptEdits",
+			"--tools", strings.Join(agenticToolUniverse(req.Tools), ","))
 	} else {
 		args = append(args, "--allowedTools", "")
 	}
@@ -434,6 +440,77 @@ func newSessionID() string {
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// coldStartArgs are two CLI flags applied to EVERY invocation (agentic or
+// context-only), aimed at the ~45k cache_creation_input_tokens a brand-new
+// claude_chat conversation pays before its first token (see
+// .claude/docs/workflows-comments.md, "Cold-start cost of a brand-new
+// conversation"):
+//
+//   - --strict-mcp-config: this module never passes --mcp-config, so this
+//     simply makes sure NO MCP server configured anywhere on the machine
+//     (project or personal, e.g. a personal Atlassian/Jira MCP server) is
+//     loaded into a review-chat turn. Review-chat never needs an MCP tool, so
+//     this can only remove content, never behaviour.
+//   - --exclude-dynamic-system-prompt-sections: moves the per-machine parts of
+//     the DEFAULT system prompt (cwd, env info, git status) out of the cached
+//     prefix and into the first user message. Every claude_chat conversation
+//     gets its OWN shadow worktree directory (chat_shadow.go), so without this
+//     flag the cwd path is baked into the cached prefix and no two
+//     conversations can ever share a prompt cache entry, however identical
+//     their tool/system-prompt setup otherwise is. Measured directly (manual
+//     `claude -p` runs against copies of a real shadow worktree, haiku model):
+//     repeating the SAME flag combination from DIFFERENT scratch directories
+//     showed the second+ run reading back the bulk of the first run's prefix
+//     via cache_read instead of paying it again as cache_creation — something
+//     that structurally cannot happen at all without this flag, since today
+//     every conversation's cwd is unique.
+//
+// Deliberately NOT included here: any setting-sources/plugin restriction
+// (Reindert: the risk of breaking plug-and-pay's project-level
+// claude-security plugin isn't worth the win) and any skills-disabling flag
+// (Reindert: skills stay on unconditionally, even accounting for their token
+// cost — see the exact "Skill" handling in agenticToolUniverse below).
+func coldStartArgs() []string {
+	return []string{"--strict-mcp-config", "--exclude-dynamic-system-prompt-sections"}
+}
+
+// agenticToolUniverse is what an agentic run passes to --tools: req.Tools
+// (the caller's read-only-plus-Edit/Bash allowlist) PLUS "Skill". --tools
+// shrinks the CLI's own built-in tool UNIVERSE, unlike --allowedTools, which
+// only gates permission within whatever universe already exists — so leaving
+// a tool out here removes it, and everything it advertises, entirely; a tool
+// left IN stays available but not auto-approved unless it's also in
+// req.Tools/--allowedTools (same as today, before --tools existed here).
+//
+// Verified directly (manual `claude -p --output-format stream-json --verbose`
+// runs against a copy of a real chat shadow worktree, so numbers are
+// measured, not estimated): restricting the universe to
+// "Read,Grep,Glob,Edit,Bash" (no Skill) cut the steady-state cache_creation +
+// cache_read total roughly in half versus the CLI's default (unrestricted)
+// universe — from ~31.2k to ~15.6k tokens — because the CLI no longer has to
+// describe the ~25 tools req.Tools structurally can never reach anyway: Task
+// (no subagent can ever run — req.Tools never includes Task, so every
+// subagent this call is told about, including plug-and-pay's own
+// project-configured ones, is unreachable dead weight), the background-agent
+// family (CronCreate/CronList/DesignSync/PushNotification/RemoteTrigger/
+// SendMessage/TaskCreate/…), NotebookEdit, Monitor, Write, and the MCP
+// resource tools (already moot given --strict-mcp-config above).
+//
+// "Skill" is added back explicitly — NOT because pruning it failed to save
+// tokens (it does: ~2.6k tokens in the same measurement) but because
+// Reindert decided skills stay on unconditionally, and dropping "Skill" from
+// the universe removes the ONLY tool the model would need to actually invoke
+// one autonomously (confirmed: omitting it from --tools removes "Skill" from
+// the CLI's own reported tool universe entirely). It is deliberately not
+// added to req.Tools/--allowedTools itself — that mirrors exactly how skills
+// already work today (available in the default, unrestricted universe,
+// without being explicitly allow-listed), so this change doesn't alter
+// skill-permission behaviour, only removes what was never reachable.
+func agenticToolUniverse(tools []string) []string {
+	universe := append([]string{}, tools...)
+	return append(universe, "Skill")
 }
 
 // Fake is an in-memory Client for tests. Outputs are keyed by model id; each

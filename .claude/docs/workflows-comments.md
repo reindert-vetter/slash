@@ -622,6 +622,107 @@ own history via the Signal); the CLI/backend's own session state carries
 everything earlier. `modules/chat.Module.GetSession`/`SetSession` persist the
 one session id per conversation.
 
+### Cold-start cost of a brand-new conversation (`coldStartArgs`/`agenticToolUniverse`)
+
+A brand-new `claude_chat` conversation's first turn pays a large,
+**one-time-per-conversation** `cache_creation_input_tokens` bill before the
+first token comes back (measured on a real conversation: ~47k tokens,
+against ~5k for that same conversation's second turn) — this is most of the
+3-7s time-to-first-token a reviewer sees on a fresh chat. Root cause: each
+conversation gets its own shadow worktree (a fresh cwd, see "Agentic edits"
+below), so the CLI's per-session context-discovery (skill listing, agent
+listing, deferred-tool descriptions, MCP server instructions, plus the
+default system prompt's cwd/env/git-status section) is both freshly injected
+AND, because the cwd is unique per conversation, never eligible for the
+provider-side prompt cache to reuse across conversations — every single one
+starts stone cold.
+
+Traced (via real session logs under `~/.claude/projects/...` plus manual
+`claude -p --output-format stream-json --verbose` runs against a copy of a
+real shadow worktree) to four `attachment` frames the CLI injects on session
+init: `skill_listing` (~14.6k chars), `agent_listing_delta` (~10.4k chars),
+`deferred_tools_delta` (~5.6k chars) and `mcp_instructions_delta` (~0.5k
+chars, a **personal** MCP server, not project config). `Module.Run`/`RunChat`
+(`modules/claude/claude.go`) now pass three additional CLI flags,
+`coldStartArgs()`/`agenticToolUniverse()`, deliberately narrow in scope after
+weighing what's actually safe to cut:
+
+- **`--strict-mcp-config`** (both Run/RunChat, always) — this module never
+  passes `--mcp-config`, so this just guarantees no MCP server anywhere on
+  the machine (project or personal) loads into a review-chat turn. Pure
+  removal, no behaviour change: review-chat never needs an MCP tool.
+- **`--exclude-dynamic-system-prompt-sections`** (both, always) — moves the
+  per-machine parts of the default system prompt (cwd, env info, git status)
+  out of the cached prefix into the first user message. This is what makes
+  the REST of the prefix shareable **across different shadow-worktree
+  directories** — verified directly: repeating the identical flag/tool
+  combination from a different scratch directory read back the bulk of an
+  earlier run's prefix via `cache_read_input_tokens` instead of paying it
+  again, which cannot happen at all without this flag (today's cwd-baked
+  prefix is unique per conversation, by construction).
+- **`--tools`** (agentic runs only, `agenticToolUniverse`) — shrinks the
+  CLI's own built-in tool UNIVERSE to `req.Tools` (`Read,Grep,Glob,Edit,Bash`)
+  plus `Skill` — unlike `--allowedTools`, which only gates permission within
+  whatever universe already exists, `--tools` removes a name (and everything
+  the CLI advertises about it) entirely. A `claude_chat` turn is never
+  granted `Task`, so **every** subagent it's told about — plug-and-pay's own
+  13 project agents, the `claude-security` plugin's subagents, personal
+  agents — was, and remains, structurally unreachable; same for the
+  background-agent tool family (`CronCreate`/`DesignSync`/`PushNotification`/
+  `RemoteTrigger`/`SendMessage`/`TaskCreate`/…), `NotebookEdit`, `Monitor`,
+  `Write`, and the MCP resource tools (already moot given
+  `--strict-mcp-config`). Measured, same manual-run method: shrinking the
+  universe to just the five granted tools roughly **halved** the
+  steady-state `cache_creation + cache_read` total (~31.2k → ~15.6k tokens);
+  keeping `Skill` in the universe (required — see below) still cut it to
+  ~18.2k.
+
+**Explicitly NOT changed, after discussion:**
+
+- **Skills stay on, unconditionally — never disabled, not even later "based
+  on the numbers".** `skill_listing` is real, valuable, mostly
+  plug-and-pay's own committed playbooks (`module-boundary`,
+  `git-and-release-workflow`, `new-api-endpoint`, …) that a reviewer chat can
+  legitimately benefit from Claude auto-applying while editing code — worth
+  the ~3.6k tokens even though, unlike agents, skill invocation IS reachable
+  from this turn's tool set. Concretely this means `agenticToolUniverse`
+  keeps `"Skill"` in the `--tools` universe: measured omitting it removes
+  `"Skill"` from the CLI's own reported tool set entirely, which would
+  silently break autonomous skill invocation. `Skill` is deliberately **not**
+  added to `req.Tools`/`--allowedTools` itself — that exactly mirrors how
+  skills already worked before this change (available in the default,
+  unrestricted universe, without being explicitly allow-listed), so nothing
+  about skill *permission* behaviour changes, only what was already
+  unreachable is removed.
+- **No `--setting-sources` restriction.** Would additionally drop personal
+  `~/.claude` config (a small further win — a personal MCP server, a couple
+  of personal agents/skills), but plug-and-pay's own `.claude/settings.json`
+  enables the `claude-security` plugin at the PROJECT level while that
+  plugin's actual marketplace/catalog registration may live as machine state
+  under `~/.claude/plugins/`; restricting setting sources risks silently
+  breaking that plugin's resolution for an unverified, comparatively small
+  gain. Not attempted.
+- `CLAUDE.md` auto-discovery and the project's own `SessionStart`/
+  `PreToolUse` hooks (`session-context.sh`'s branch/uncommitted-files hint,
+  `scan-secrets.sh`'s safety net before every Write/Edit) are untouched —
+  cheap and functionally valuable, see "Agentic edits" below.
+
+**Honest result:** the measurement environment (a shared account, with other
+concurrent `claude` sessions/background agents running on the same machine)
+made a clean single-number "before vs. after" comparison unreliable — a
+truly cold, flag-free baseline run measured *lower* than a cold run with the
+new flags in one sample, almost certainly because the flag-free baseline
+incidentally reused a provider-side cache warmed by unrelated background
+activity on the same account, not because the new flags cost more. The
+robust, repeatable finding (controlled, same worktree, same model, flags
+isolated one at a time, repeated until stable) is the `--tools` universe
+restriction: it consistently and reproducibly roughly **halves** the
+steady-state per-conversation token total once a conversation with the same
+flag/tool combination has run once. That reuse is the mechanism, not a fixed
+guaranteed-first-token discount — the very first `claude_chat` conversation
+after a cache TTL expiry (or after a `claude` CLI upgrade changes the
+cacheable prefix) still pays close to the full cold cost.
+
 ### The optional clarifying-question turn (`KindQuestion`)
 
 Per product decision, Claude can ask the reviewer a short clarifying question
