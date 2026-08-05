@@ -1889,6 +1889,14 @@ const originSel = new URLSearchParams(location.search).get('sel') || null
 const originDrill = new URLSearchParams(location.search).get('drill') || null
 const originDrillGran = new URLSearchParams(location.search).get('dgran') || null
 const originDrillChange = new URLSearchParams(location.search).get('dchg') || null
+// originDrillCursorRef — the per-level cursor path (`?dcur=`, see
+// state.drillCursorRef in home.mjs), forwarded the same way so an ANCESTOR
+// drilled column's own {gran, change} — not just the deepest, focused one —
+// survives this round trip too. Without it, returning via "Open review-boom"
+// would restore the drill path but reset every ancestor's cursor back to
+// {group, 0}, exactly the bug this round-trip already avoided for the
+// deepest level.
+const originDrillCursorRef = new URLSearchParams(location.search).get('dcur') || null
 
 // treeUrl(pr) — the URL to navigate into pr's review tree (/pr/<n>), used by
 // every place that opens/redirects into the tree (generatePage's redirect,
@@ -1897,12 +1905,13 @@ const originDrillChange = new URLSearchParams(location.search).get('dchg') || nu
 // same block instead of the default first one — see the ← nav-chain exit /
 // overviewExitUrl in home.mjs, and the "?pr=<id> auto-selecteert…" section in
 // .claude/docs/pages-and-routing.md. Also hands back a drilled column
-// (originDrill/originDrillGran/originDrillChange), so leaving a drilled
-// Onderliggende-code column open and returning via "Open review-boom" lands
-// back in that same column instead of just the top-level block — this also
-// needs `mode=diff` (a drill path only has meaning inside a diff session, see
-// applyDrillRefRestore in home.mjs), which overviewExitUrl only added to the
-// URL we left from when there actually was a drilled column.
+// (originDrill/originDrillGran/originDrillChange/originDrillCursorRef), so
+// leaving a drilled Onderliggende-code column open and returning via "Open
+// review-boom" lands back in that same column — with every level's own
+// cursor, not just the deepest one — instead of just the top-level block —
+// this also needs `mode=diff` (a drill path only has meaning inside a diff
+// session, see applyDrillRefRestore in home.mjs), which overviewExitUrl only
+// added to the URL we left from when there actually was a drilled column.
 function treeUrl(pr) {
   let url = '/pr/' + pr.number
   if (pr.number === originPr && originSel) {
@@ -1912,6 +1921,7 @@ function treeUrl(pr) {
       url += '&drill=' + encodeURIComponent(originDrill)
       if (originDrillGran) url += '&dgran=' + encodeURIComponent(originDrillGran)
       if (originDrillChange) url += '&dchg=' + encodeURIComponent(originDrillChange)
+      if (originDrillCursorRef) url += '&dcur=' + encodeURIComponent(originDrillCursorRef)
     }
   }
   return url

@@ -147,12 +147,12 @@ shared link returns exactly where you were. `src/urlState.mjs` provides
 the URL into the reactive `state` and afterwards writes back every change via
 `history.replaceState` (an arrow.js `watch`, so no history spam). `home.mjs`
 binds the main navigation (`blockRef`→`sel`, `mode`, `change`→`chg`,
-`gran`→`gran`, `drillRef`→`drill`, `drillGran`→`dgran`, `drillChange`→`dchg`);
-the **PR lives in the path** (`/pr/<id>`, see
+`gran`→`gran`, `drillRef`→`drill`, `drillGran`→`dgran`, `drillChange`→`dchg`,
+`drillCursorRef`→`dcur`); the **PR lives in the path** (`/pr/<id>`, see
 `.claude/docs/pages-and-routing.md`), not in the query. A `default` value is
 omitted from the URL so it stays short/canonical (so `gran` only appears for
-`line`/`call`, not for the default `group`; `drill`/`dgran`/`dchg` only while
-something is actually drilled into).
+`line`/`call`, not for the default `group`; `drill`/`dgran`/`dchg`/`dcur` only
+while something is actually drilled into).
 `sel` encodes the **block reference** `${file}:${line}` — not the raw index in
 `state.blocks` — because that index shifts whenever the left-hand list
 reorders (searching, or a block that moves to "Underlying code" via a
@@ -172,17 +172,25 @@ the URL as soon as the PR is loaded. That same `sel` also travels along in the
 "`?sel=` travels along in the same round trip" in
 `.claude/docs/pages-and-routing.md`.
 An open **drilled Underlying-code column** (`state.drill`/`drillCursor`, see
-"Drilling" in `.claude/docs/detail-layout.md`) survives a refresh the same
-way: `drillRef` mirrors each entry's stable `.id` (joined with `>`),
+"Drilling" in `.claude/docs/drilling.md`) survives a refresh the same way:
+`drillRef` mirrors each entry's stable `.id` (joined with `>`),
 `drillGran`/`drillChange` mirror only the cursor (`{gran, change}`) of the
-deepest (focused) column — every ancestor column collapses to a rail anyway,
-so its own cursor is never visible. `drillRefPending`/`drillCursorPending`
-snapshot the restore before their own mirror `watch` would overwrite it (same
-pattern as `blockRefPending`), and `applyDrillRefRestore`/
-`applyDrillCursorRestore` resolve them — only after `loadBlocks` has loaded
-not just the blocks but also callresolve/testcovers (needed because the walk
-reuses `relatedChildren` to find each path segment again). This path also
-travels along in the `/pr-overview` round trip.
+deepest (focused) column (kept for an older shared link/the round-trip's
+convenience pair), and `drillCursorRef` mirrors **every** level's own cursor
+(`${gran}:${change}` per entry, joined with `>`, index-aligned with
+`drillRef`'s id path) — including an ancestor column, even though it's
+collapsed to a rail and its cursor is never itself visible on screen: a
+"return to an unapproved ancestor" (see "Finishing a drilled column's subtree
+returns to an unapproved ancestor" in `.claude/docs/drilling.md`) reads that
+exact saved cursor once the reviewer pops back out of a finished subtree, so
+it must survive a refresh too, not just the deepest column's own.
+`drillRefPending`/`drillCursorPending`/`drillCursorRefPending` snapshot the
+restore before their own mirror `watch` would overwrite it (same pattern as
+`blockRefPending`), and `applyDrillRefRestore`/`applyDrillCursorRestoreAt`
+resolve them per level as the path is walked back in — only after `loadBlocks`
+has loaded not just the blocks but also callresolve/testcovers (needed
+because the walk reuses `relatedChildren` to find each path segment again).
+This path also travels along in the `/pr-overview` round trip.
 Every **extra window/panel** gets its own `ns` so its params sit alongside the
 main navigation in the same URL without colliding. `RelatedPanel` really uses
 this: `bindUrlState(cs, …, { ns: 'rel' })` binds the **panel cursor**

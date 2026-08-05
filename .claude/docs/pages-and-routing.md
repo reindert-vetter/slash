@@ -118,17 +118,20 @@ the canonical shareable navigation position.
 - **Block no longer found** (removed, or fully approved and thus hidden) relies
   on the existing `applyBlockRefRestore` fallback (clamp to the default) — same
   behaviour as an expired/shared `?sel=` link, no extra edge-case code.
-- **`?drill=`/`?dgran=`/`?dchg=` travel along with `?sel=`** — an open drilled
-  Underlying-code column is also a navigation position (see
+- **`?drill=`/`?dgran=`/`?dchg=`/`?dcur=` travel along with `?sel=`** — an open
+  drilled Underlying-code column is also a navigation position (see
   `.claude/docs/drilling.md`), so `overviewExitUrl()` appends them whenever
   `state.drillRef` isn't empty, **only together with `sel`** (drilling has no
-  meaning without a selected block). `overview.mjs` reads them in the same step
-  as `originSel` (`originDrill`/`originDrillGran`/`originDrillChange`, three
-  more never-nulled module `let`s) and `treeUrl(pr)` only adds them when `sel`
-  is also added. Back in `/pr/<n>`,
-  `applyDrillRefRestore`/`applyDrillCursorRestore` (`home.mjs`) resolve them
-  into real drilled columns; not found (relation gone, resolver rerun) → the
-  same silent fallback as `sel` itself.
+  meaning without a selected block). `dcur` carries EVERY level's own
+  `{gran, change}` cursor (not just the deepest, which `dgran`/`dchg` alone
+  cover) — needed so an ancestor column's exact position also survives the
+  round trip, not just resets to `{group, 0}`. `overview.mjs` reads them in
+  the same step as `originSel` (`originDrill`/`originDrillGran`/
+  `originDrillChange`/`originDrillCursorRef`, four more never-nulled module
+  `let`s) and `treeUrl(pr)` only adds them when `sel` is also added. Back in
+  `/pr/<n>`, `applyDrillRefRestore`/`applyDrillCursorRestoreAt` (`home.mjs`)
+  resolve them into real drilled columns; not found (relation gone, resolver
+  rerun) → the same silent fallback as `sel` itself.
 
 Test: `tests/overview-pr-select-block.spec.mjs`.
 

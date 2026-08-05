@@ -41,37 +41,71 @@ A drill entry is **one of two forms**:
   synthetic frame). With zero changed rows its card also shows **no approve
   checkbox** at all (`Block.mjs` hides it for `b.status === 'unchanged'`).
 
-## Refresh restore (`?drill=`/`?dgran=`/`?dchg=`)
+## Refresh restore (`?drill=`/`?dgran=`/`?dchg=`/`?dcur=`)
 
 `state.drill`/`drillCursor` don't live in the URL themselves (too large/not
 serializable, same reason as `state.blocks`), but `home.mjs` mirrors them into
-three plain URL-facing fields, exactly like `blockRef` mirrors `state.selected`
+plain URL-facing fields, exactly like `blockRef` mirrors `state.selected`
 (URL-state section in `CLAUDE.md`):
 
 - `state.drillRef` → `?drill=` — each entry's stable `.id` (a real block id, or a
   synthetic call frame's caller-scoped `b.id + '::' + callKey`) joined with `>`,
   which occurs in no id.
 - `state.drillGran`/`drillChange` → `?dgran=`/`?dchg=` — only of the **deepest,
-  focused** column (`drillCursor`'s last entry); every ancestor collapses to a
-  rail anyway, so its cursor is never visible.
+  focused** column (`drillCursor`'s last entry). Kept for backward
+  compatibility with an older shared link and as the round-trip's convenience
+  pair, but no longer the primary restore path — see `?dcur=` below.
+- `state.drillCursorRef` → `?dcur=` — **every** level's own `{gran, change}`
+  cursor, index-aligned with `drillRef`'s id path, each entry encoded as
+  `${gran}:${change}` and joined with `>` (same separator/convention as
+  `drillRef`). This is what makes an **ancestor** (non-focused, rail-collapsed)
+  column's exact position survive a refresh too — not just the focused one.
+  It matters even though an ancestor's cursor is never itself visible on
+  screen (it collapses to a rail, see "Unfocused columns collapse into a
+  narrow rail" below): **"Finishing a drilled column's subtree returns to an
+  unapproved ancestor"** (below) reads exactly that saved cursor once the
+  reviewer pops back out of a finished subtree — without `?dcur=` every
+  ancestor's cursor silently reset to `{group, 0}` on refresh, so "Ga terug"
+  landed at the top of the column instead of where the reviewer had actually
+  left it.
 
 Restore follows the same snapshot-before-the-clobbering-watch pattern as
-`blockRefPending`: `drillRefPending` (the path, split on `>`) and
-`drillCursorPending` (`{gran, change}`) are captured right after `bindUrlState`
-and applied by **`applyDrillRefRestore`** once `loadBlocks` has loaded the
-blocks/relations **and** callresolve/testcovers (normally fire-and-forget — only
-with a `drillRef` to restore do we await them, so a method-call/covers child is
-findable via `relatedChildren`). The walk starts at `curBlock()` and looks, per
-level, for the child in `relatedChildren(parent)` whose `(c.blockId || c.id)`
-matches, reusing **`drillIntoChild`** itself so every side effect (`ensureCode`,
+`blockRefPending`: `drillRefPending` (the path, split on `>`), `drillCursorPending`
+(`{gran, change}`, the legacy deepest-only pair) and `drillCursorRefPending`
+(an array of `{gran, change}`, one per path entry, parsed from `?dcur=`) are
+captured right after `bindUrlState` and applied by **`applyDrillRefRestore`**
+once `loadBlocks` has loaded the blocks/relations **and**
+callresolve/testcovers (normally fire-and-forget — only with a `drillRef` to
+restore do we await them, so a method-call/covers child is findable via
+`relatedChildren`). The walk starts at `curBlock()` and looks, per level, for
+the child in `relatedChildren(parent)` whose `(c.blockId || c.id)` matches,
+reusing **`drillIntoChild`** itself so every side effect (`ensureCode`,
 `focusLevel`, scroll, the entrance animation) is identical to a real drill. Not
 found (deleted relation, resolver rerun, expired link) → stops silently, like
-`applyBlockRefRestore`; whatever was drilled so far stays.
+`applyBlockRefRestore`; whatever was drilled so far stays (and so does any
+still-unconsumed tail of `drillCursorRefPending` — it's simply never applied).
 
-The deepest cursor is applied only once its rows are known
-(`applyDrillCursorRestore`, guarded on `b.synthetic || b.code`) — synchronous for
-a synthetic frame, otherwise once `ensureCode`'s fetch completes. All three fields
-also travel along in the `/pr-overview` round trip
+The path is walked back in FIRST, entirely, at every level's default
+`{group, 0}` cursor (`drillIntoChild`'s own fresh push) — only THEN does a
+second pass apply each level's own `drillCursorRefPending[i]` entry
+(**`applyDrillCursorRestoreAt`**), once its rows are known (guarded on
+`b.synthetic || b.code`) — synchronous for a synthetic frame, otherwise
+deferred until `ensureCode`'s fetch for that specific level completes
+(`ensureCode`'s "drilled column's code arrived" branch now checks
+`state.drill.indexOf(b)` generically, not only
+`state.drill[state.focusLevel - 1] === b`, so an ancestor whose code was still
+in flight while the path was walked back in also gets its cursor once it
+loads). This two-pass order is load-bearing, not incidental: applying an
+ancestor's restored cursor DURING the walk — before the next path segment is
+resolved — can make that very next lookup fail, because `relatedChildren`
+hides a relation child while ITS PARENT's own cursor sits at `line`/`call`
+granularity (see `relatedChildren`'s `scoped` guard) — exactly the
+granularity an ancestor deep enough to have a restored non-`group` cursor is
+likely to carry. The legacy `applyDrillCursorRestore` (deepest-only, from
+`?dgran=`/`?dchg=`) only still runs when `drillCursorRefPending` itself is
+absent (an older link with no `?dcur=` at all) — once `?dcur=` is present it
+already covers the deepest level too. All of `drill`/`dgran`/`dchg`/`dcur`
+travel along in the `/pr-overview` round trip
 (`overviewExitUrl()`/`treeUrl()`, see "`?sel=` travels along…" in
 `.claude/docs/pages-and-routing.md`).
 
@@ -180,7 +214,12 @@ an unapproved unit of its own, on that ancestor's **saved cursor**
 (`state.drillCursor[lvl-2]`, or `state.gran`/`state.change` for the top level) —
 exactly the position the reviewer left before drilling deeper, since drilling IN
 only ever *pushes* a fresh cursor entry for the new deepest level and never
-touches an ancestor's own entry. `applyNextUnapproved` needs no change for this:
+touches an ancestor's own entry. That saved cursor also survives a **refresh**
+in the middle of a multi-level drill session: `?dcur=` mirrors every level's
+own `{gran, change}`, not just the deepest one (see "Refresh restore" above),
+specifically so this ancestor lookup still finds the real pre-refresh position
+rather than the `{group, 0}` default `drillIntoChild` pushes for a fresh
+column. `applyNextUnapproved` needs no change for this:
 a step-3 plan's `path` is simply a **prefix** of the current `state.drill`, which
 the existing common-prefix trim already collapses to (closing the drilled
 column(s) below it), including the `markDrillReturn`/`.drill-return` entrance

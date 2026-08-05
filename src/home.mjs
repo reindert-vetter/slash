@@ -224,6 +224,22 @@ const state = reactive({
   // exists once the drill path itself has been walked back in.
   drillGran: 'group',
   drillChange: 0,
+  // drillCursorRef — the URL-facing mirror of EVERY level's own {gran, change}
+  // cursor in state.drillCursor, not just the deepest one above — each entry
+  // encoded as `${gran}:${change}`, joined with `>` (index-aligned with
+  // drillRef's own id path). Unlike drillGran/drillChange this restores an
+  // ANCESTOR (non-focused, rail-collapsed) drilled column's own cursor too:
+  // it's invisible while collapsed, but it's exactly the position
+  // findNextUnapproved's "return to an unapproved ancestor" step (see
+  // .claude/docs/drilling.md) reads once the reviewer finishes the deeper
+  // subtree and pops back out — without this an ancestor's cursor silently
+  // reset to {group, 0} on every refresh, so "Ga terug" landed at the top of
+  // the column instead of where the reviewer actually left it. Mirrored to
+  // `?dcur=` by the same watch as drillGran/drillChange; restored via
+  // drillCursorRefPending/applyDrillCursorRestoreAt, applied per level as
+  // applyDrillRefRestore walks the path back in (or once that level's code
+  // arrives, mirroring drillCursorPending's own deferral).
+  drillCursorRef: '',
   // focusLevel — which column currently owns the diff keyboard (↑/↓ walk its
   // changes, → opens its Onderliggende-code panel): 0 is the top-level selected
   // block (state.change/state.gran), 1..drill.length indexes drill[level-1] /
@@ -783,6 +799,7 @@ bindUrlState(state, [
   { key: 'drillRef', param: 'drill', default: '' },
   { key: 'drillGran', param: 'dgran', default: 'group' },
   { key: 'drillChange', param: 'dchg', parse: num(0), default: 0 },
+  { key: 'drillCursorRef', param: 'dcur', default: '' },
   { key: 'testMethodRef', param: 'tmethod', default: '' },
 ])
 
@@ -836,6 +853,22 @@ let drillCursorPending =
     ? { gran: state.drillGran, change: state.drillChange }
     : null
 
+// drillCursorRefPending mirrors drillCursorPending, but for EVERY level of the
+// restored path (`?dcur=gran:change>gran:change>...`, see state.drillCursorRef's
+// own comment) — snapshotted before the same mirror watch below can clobber it
+// back to '' against the still-empty state.drill/drillCursor. An entry is
+// consumed (set to null in place) by applyDrillCursorRestoreAt once applied, so
+// a level whose code is still loading can be retried later without redoing the
+// ones already applied. null when there's nothing to restore (no `?dcur=`, e.g.
+// an older shared link that only carries dgran/dchg for the deepest level —
+// applyDrillRefRestore falls back to drillCursorPending for that case).
+let drillCursorRefPending = state.drillCursorRef
+  ? state.drillCursorRef.split('>').map((entry) => {
+      const [gran, change] = entry.split(':')
+      return { gran: gran || 'group', change: Number(change) || 0 }
+    })
+  : null
+
 // Keep blockRef mirroring the selected block (by file:line, not index) so a
 // refresh/shared link restores the same block regardless of how the left
 // list has since been filtered/reordered. Reads state.blocks/selected inline
@@ -872,11 +905,14 @@ watch(
   },
 )
 
-// Keep drillRef/drillGran/drillChange mirroring state.drill/drillCursor — see
-// their own comments on `state` above. Only state.drillCursor's LAST entry
-// (the focused, deepest column — always drillCursor[drillCursor.length - 1],
-// since focusLevel always equals drill.length whenever drilling is active)
-// feeds drillGran/drillChange; every entry's id feeds the drillRef path.
+// Keep drillRef/drillGran/drillChange/drillCursorRef mirroring
+// state.drill/drillCursor — see their own comments on `state` above.
+// drillGran/drillChange still only mirror the LAST entry (the focused, deepest
+// column — always drillCursor[drillCursor.length - 1], since focusLevel always
+// equals drill.length whenever drilling is active), kept for the existing
+// round-trip consumers (overviewExitUrl/overview.mjs); drillCursorRef mirrors
+// EVERY entry so an ancestor's own cursor also survives a refresh. Every
+// entry's id feeds the drillRef path.
 watch(
   () => [state.drill, state.drillCursor],
   () => {
@@ -884,6 +920,7 @@ watch(
     const last = state.drillCursor[state.drillCursor.length - 1]
     state.drillGran = last ? last.gran : 'group'
     state.drillChange = last ? last.change : 0
+    state.drillCursorRef = state.drillCursor.map((c) => `${c.gran}:${c.change}`).join('>')
   },
 )
 
@@ -983,12 +1020,26 @@ function applyCommentRefRestore() {
 // stays, the rest of the path is silently dropped. Requires an actual diff
 // session (mode==='diff') — drilling only has meaning inside one, see
 // detail-layout.md.
+//
+// Walks the whole path FIRST, at every level's default {group, 0} cursor
+// (drillIntoChild's own fresh push), before applying any restored cursor —
+// only afterwards does a second pass apply each level's own
+// drillCursorRefPending entry (applyDrillCursorRestoreAt). This order matters:
+// relatedChildren(parent) — used to resolve the NEXT path segment — hides a
+// relation child while its parent's OWN cursor sits at 'line'/'call'
+// granularity (the `scoped` guard, see relatedChildren's own comment above).
+// Applying an ancestor's restored (possibly non-'group') cursor DURING the
+// walk would make that same ancestor's own next-child lookup fail — a level
+// deep enough to have a `line`/`call` cursor restored is, by construction,
+// also the parent the walk needs relatedChildren for on the very next
+// iteration.
 function applyDrillRefRestore() {
   if (!drillRefPending) return
   const path = drillRefPending
   drillRefPending = null
   if (state.mode !== 'diff') {
     drillCursorPending = null
+    drillCursorRefPending = null
     return
   }
   let parent = curBlock()
@@ -999,19 +1050,26 @@ function applyDrillRefRestore() {
     drillIntoChild(match)
     parent = state.drill[state.drill.length - 1]
   }
-  if (state.drill.length) applyDrillCursorRestore(state.drill[state.drill.length - 1])
-  else drillCursorPending = null
+  state.drill.forEach((b, idx) => applyDrillCursorRestoreAt(idx + 1, b))
+  // The deepest level also still honours the legacy `?dgran=`/`?dchg=` pair
+  // (drillCursorPending) for an older shared link that predates `?dcur=` and
+  // so never had drillCursorRefPending populated in the first place — once
+  // dcur IS present it already covers the deepest level too, so this is a
+  // pure no-op then (drillCursorRefPending truthy → skip).
+  if (!drillCursorRefPending && state.drill.length) applyDrillCursorRestore(state.drill[state.drill.length - 1])
+  else if (!state.drill.length) drillCursorPending = null
 }
 
 // applyDrillCursorRestore re-applies the URL-restored {gran, change} cursor
-// (drillCursorPending) onto the deepest drilled column `b` — one-shot, and a
-// no-op once already applied (drillCursorPending is nulled on success) or
-// while `b`'s rows aren't known yet: a synthetic call-frame's code is ready
-// synchronously (drillIntoChild builds it inline), but a real PR block's code
-// may still be an in-flight /api/code fetch — in that case this simply no-ops
-// here and is called again from ensureCode's own "drilled column's code
-// arrived" branch once b.code lands. Clamps `change` into the restored gran's
-// actual unit count, mirroring ensureCode's own top-level change/gran clamp.
+// (drillCursorPending) onto the deepest drilled column `b` — the legacy,
+// deepest-only path kept for an older `?dgran=`/`?dchg=` shared link with no
+// `?dcur=` (see applyDrillRefRestore above). One-shot, and a no-op once
+// already applied (drillCursorPending is nulled on success) or while `b`'s
+// rows aren't known yet: a synthetic call-frame's code is ready synchronously
+// (drillIntoChild builds it inline), but a real PR block's code may still be
+// an in-flight /api/code fetch — in that case this simply no-ops here and is
+// called again from ensureCode's own "drilled column's code arrived" branch
+// once b.code lands.
 function applyDrillCursorRestore(b) {
   if (!drillCursorPending || !b) return
   if (!b.synthetic && !b.code) return
@@ -1019,6 +1077,35 @@ function applyDrillCursorRestore(b) {
   drillCursorPending = null
   const level = state.focusLevel
   if (level < 1 || state.drill[level - 1] !== b) return
+  applyCursorAt(level, b, gran, change)
+}
+
+// applyDrillCursorRestoreAt applies drillCursorRefPending's entry for `level`
+// (1-based, matching state.focusLevel's own numbering) onto the drilled column
+// `b` at that level — one-shot per level: the entry is consumed (nulled in
+// place) once applied, and a no-op while `b`'s rows aren't known yet (see
+// applyDrillCursorRestore's own comment on that race). Unlike the legacy
+// deepest-only path this runs for EVERY level, ancestor or focused, which is
+// exactly the point — see state.drillCursorRef's own comment. Retried from
+// ensureCode's "drilled column's code arrived" branch (generalized below to
+// any drilled level, not just the focused one) once a not-yet-loaded level's
+// code lands.
+function applyDrillCursorRestoreAt(level, b) {
+  if (!drillCursorRefPending || !b) return
+  const entry = drillCursorRefPending[level - 1]
+  if (!entry) return
+  if (!b.synthetic && !b.code) return
+  if (state.drill[level - 1] !== b) return
+  drillCursorRefPending[level - 1] = null
+  applyCursorAt(level, b, entry.gran, entry.change)
+}
+
+// applyCursorAt is the shared clamp+assign step behind both restore paths
+// above: clamps `change` into the restored gran's actual unit count (mirroring
+// ensureCode's own top-level change/gran clamp) and writes it onto
+// state.drillCursor[level - 1] without touching that entry's other fields
+// (e.g. a live rangeAnchor).
+function applyCursorAt(level, b, gran, change) {
   const units = unitsFor(blockRows(b), gran)
   state.drillCursor = state.drillCursor.map((c, i) =>
     i === level - 1 ? { ...c, gran, change: units.length ? Math.min(Math.max(change, 0), units.length - 1) : 0 } : c,
@@ -1032,9 +1119,10 @@ function applyDrillCursorRestore(b) {
 // originPr/originSel round-trip in overview.mjs, and the "?pr=<id> auto-
 // selecteert…" section in .claude/docs/pages-and-routing.md). Only appended
 // when there's a current selection to remember — a block-less PR (still
-// loading) shouldn't force an empty `sel=` onto the URL. `drill`/`dgran`/`dchg`
-// piggyback on the same round-trip, only when there's an actual drilled
-// column to remember — see treeUrl's origin* counterpart in overview.mjs.
+// loading) shouldn't force an empty `sel=` onto the URL.
+// `drill`/`dgran`/`dchg`/`dcur` piggyback on the same round-trip, only when
+// there's an actual drilled column to remember — see treeUrl's origin*
+// counterpart in overview.mjs.
 // Also carries `mode=diff` in that case: a drill path only has meaning inside
 // a diff session (applyDrillRefRestore requires it), and without it the
 // returned-to page would restore in list mode and the app's own URL-mirror
@@ -1048,6 +1136,7 @@ function overviewExitUrl() {
       url += '&drill=' + encodeURIComponent(state.drillRef)
       url += '&dgran=' + encodeURIComponent(state.drillGran)
       url += '&dchg=' + encodeURIComponent(String(state.drillChange))
+      url += '&dcur=' + encodeURIComponent(state.drillCursorRef)
     }
   }
   return url
@@ -3948,20 +4037,35 @@ async function ensureCode(b) {
       // tests/drill-mode-flip.spec.mjs for the drilled case (focusLevel > 0),
       // which was already exempt from this and is unaffected.
       scrollChangeIntoView(state.mode === 'diff')
-    } else if (state.drill[state.focusLevel - 1] === b) {
-      // A restored ?dgran=/?dchg= cursor (see applyDrillCursorRestore) can
-      // only be applied once this column's rows are actually known — do that
-      // first so the scroll below centres the RESTORED unit, not the default
-      // first one.
-      applyDrillCursorRestore(b)
-      // A focused drilled column's code just arrived (a real PR block whose
-      // source wasn't fetched yet — see drillIntoChild) — jump straight to its
-      // first change group now that the rows/anchor can be rendered, mirroring
-      // the top-level scroll-on-load above. Without this the reviewer lands on
-      // the top of the (often large) function body with the actual diff hunk
-      // scrolled out of view, looking as if the red/green formatting is simply
-      // missing.
-      scrollChangeIntoView(false)
+    } else {
+      // A drilled column's code just arrived (a real PR block whose source
+      // wasn't fetched yet — see drillIntoChild) — any level, not only the
+      // focused/deepest one: an ANCESTOR drilled while its own code was still
+      // in flight (applyDrillRefRestore walks the whole path synchronously)
+      // needs its restored cursor applied here too, once its rows are known —
+      // see applyDrillCursorRestoreAt/state.drillCursorRef's own comment.
+      const drillIdx = state.drill.indexOf(b)
+      if (drillIdx >= 0) {
+        if (drillIdx === state.focusLevel - 1) {
+          // A restored ?dgran=/?dchg= cursor (see applyDrillCursorRestore) can
+          // only be applied once this column's rows are actually known — do
+          // that first so the scroll below centres the RESTORED unit, not the
+          // default first one.
+          applyDrillCursorRestore(b)
+        }
+        applyDrillCursorRestoreAt(drillIdx + 1, b)
+        if (drillIdx === state.focusLevel - 1) {
+          // A focused drilled column's code just arrived — jump straight to
+          // its first (or just-restored) change group now that the
+          // rows/anchor can be rendered, mirroring the top-level
+          // scroll-on-load above. Without this the reviewer lands on the top
+          // of the (often large) function body with the actual diff hunk
+          // scrolled out of view, looking as if the red/green formatting is
+          // simply missing. An ancestor column is collapsed to a rail and
+          // never scrolled to, so this stays scoped to the focused one.
+          scrollChangeIntoView(false)
+        }
+      }
     }
     // Show the out-of-view hints for this freshly-rendered diff (its own card and
     // the look-ahead preview both land here). scrollChangeIntoView only fires for
