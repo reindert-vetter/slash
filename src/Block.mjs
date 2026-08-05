@@ -1741,7 +1741,7 @@ function collapsedRunHTML(start, end, breadcrumb) {
     ` data-collapsed-run="${start}-${end}" data-testid="collapsed-run" title="Klik om deze regels te tonen">` +
     `⋯ ${n} ongewijzigde regels` +
     (breadcrumb
-      ? `<div data-testid="collapsed-run-breadcrumb" class="mt-0.5 truncate text-slate-400 dark:text-zinc-500">Pad: ${escapeHtml(breadcrumb)}</div>`
+      ? `<div data-testid="collapsed-run-breadcrumb" class="mt-0.5 truncate text-slate-400 dark:text-zinc-500">${escapeHtml(breadcrumb)}</div>`
       : '') +
     `</div>`
   )

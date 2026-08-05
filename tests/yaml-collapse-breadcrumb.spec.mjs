@@ -69,7 +69,7 @@ test.describe('yaml collapsed-run breadcrumb', () => {
     // The breadcrumb reflects the ancestor chain of the next visible line
     // (summary:), not the last hidden key's own siblings.
     await expect(yaml.locator('[data-testid=collapsed-run-breadcrumb]').first()).toHaveText(
-      'Pad: paths > /products/{id}/clone > post',
+      'paths > /products/{id}/clone > post',
     )
 
     // A non-yaml file collapses the same run but never gets a breadcrumb.
