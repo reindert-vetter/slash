@@ -2746,10 +2746,18 @@ async function pollWorkflows() {
 // is the absolute source line, within b's own text, where the backend detector
 // found this relation's trigger (relations.Relation.Line, see relations.go's
 // matchLine) — used by relatedChildren's group-level reordering below.
+//
+// `r.childId === b.id` (a self-loop edge — the backend detector matching a
+// block's own relation trigger back to itself, e.g. a recursive dispatch/call)
+// is filtered out here, mirroring the existing `kid.id === parentId` guard in
+// nestedChangedKids. Without it the Onderliggende-code panel showed the
+// selected block as its OWN child: identical title/file/line, its own code —
+// literally a duplicate of the card being viewed. See "Open investigation…" in
+// drilling.md (now resolved) and tests/drill-self-loop-relation.spec.mjs.
 function childrenOf(b) {
   if (!b || !state.relations || state.relations.length === 0) return []
   return state.relations
-    .filter((r) => r.parentId === b.id)
+    .filter((r) => r.parentId === b.id && r.childId !== b.id)
     .map((r) => {
       const block = state.allBlocks.find((x) => x.id === r.childId)
       return block ? { block, kind: r.kind, line: r.line } : null
