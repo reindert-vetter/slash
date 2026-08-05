@@ -877,10 +877,13 @@ entry:
   conversation if one exists (`enterCommentsTail()`, highlight-only — no
   reply-field focus steal, and no thread-walk either — landing on a
   conversation this way starts fresh), else also exits to the diff. **`←` on
-  the Onderliggende-code card keeps its own unconditional behaviour at ANY
-  child position** — `hasVisibleComments() ? enterCommentsTail() :
-  exitRelated()` — so one `←` always fully leaves the panel when there are no
-  comments.
+  the Onderliggende-code card always exits straight to the diff, at ANY child
+  position** — unconditionally `exitRelated()`, never `enterCommentsTail()`,
+  even when the unit has visible comments (explicit request: `←` means "go to
+  the code to the left", not "walk back through the previous stop") — mirrors
+  `Escape`, which already skipped the comments detour here. `↑` on the first
+  child is the one place that still detours through the last conversation, as
+  above.
 - **`→`** on a conversation (`cs.focus==='comment'` OR `'thread'`) steps
   straight into the embedded Claude conversation hanging off that same
   comment (`enterClaudeChat`, `cs.focus==='claude'`, stop 5b) — one press from

@@ -139,8 +139,10 @@ Transitions, and how they differ from the older per-mechanism behaviour:
   conversation, exit straight to the diff — the "+ Nieuwe comment" trigger row
   and its `cs.focus==='trigger'` stop were removed; starting a comment goes
   exclusively through the palette's "Comment op deze regel" (`startComment`).
-  `←` on stop 6 keeps its unconditional "leave the panel" behaviour at any
-  child position. Full mechanism: `.claude/docs/comments-panel.md`.
+  `←` on stop 6 always lands directly on the diff (stop 3/4), skipping stop 5
+  even when a comment thread exists — deliberately asymmetric with `↑` just
+  above, which still detours there from the first child. Full mechanism:
+  `.claude/docs/comments-panel.md`.
 - `state.showDescription` deliberately lives **outside** the URL — ephemeral
   cursor state, not a navigation position worth restoring.
 

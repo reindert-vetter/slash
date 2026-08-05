@@ -140,9 +140,18 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     await page.keyboard.press('ArrowDown')
     await expect.poll(relFoc).toBe('code')
 
-    // ← peels back to the comment stop, then to the diff.
-    await page.keyboard.press('ArrowLeft')
+    // ↑ on the first child still detours through the last comment
+    // conversation (unchanged) — only ← was asked to skip it.
+    await page.keyboard.press('ArrowUp')
     await expect.poll(relFoc).toBe('comment')
+
+    // Back onto Onderliggende code (↓ falls through again, same as above).
+    await page.keyboard.press('ArrowDown')
+    await expect.poll(relFoc).toBe('code')
+
+    // ← now goes straight to the diff in one press — it never lands back on
+    // the comment stop, even though this unit has one (explicit request: ←
+    // means "the code to the left", not "the previous stop").
     await page.keyboard.press('ArrowLeft')
     await expect.poll(relFoc).toBe(null)
   })

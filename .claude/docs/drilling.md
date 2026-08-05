@@ -163,10 +163,13 @@ the TOP-LEVEL block/cursor while a drilled column held the keyboard (the reporte
   `tests/drill-mode-flip.spec.mjs`.
 - **`→` still opens the Underlying-code panel** of the focused column
   (`enterRelated()`) — still the only way to drill **deeper**.
-- From within the panel (`relatedActive()`), `←`/`Escape` at the first position
-  returns focus to the diff of **that same** column (`handleRelatedKey`'s
-  `exitRelated`) — that no longer closes a column; the column-by-column
-  navigation above only follows once `relatedActive()` is `false` again.
+- From within the panel (`relatedActive()`), `←`/`Escape` unconditionally
+  return focus to the diff of **that same** column (`handleRelatedKey`'s
+  `exitRelated`), at any child position and regardless of whether the unit
+  has visible comments (only `↑` from the first child still detours through
+  the last comment conversation, see `.claude/docs/comments-panel.md`) —
+  that no longer closes a column; the column-by-column navigation above only
+  follows once `relatedActive()` is `false` again.
 
 ## Reactivity: no flicker on a gran/change step
 

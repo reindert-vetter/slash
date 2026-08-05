@@ -2157,7 +2157,8 @@ function applyRelRestore() {
 //  - the inline Onderliggende-code card ('code', reached by → from the diff
 //    when the unit has no comments, or by ↓ falling through the last comment
 //    conversation — see advanceFromComment/enterRelated) — ↓/↑ walk its
-//    children, ← exits to the diff (or back into comments, see below); ↑
+//    children, ← always exits straight to the diff (never onto comments,
+//    even when the unit has them — explicit request, mirrors Escape); ↑
 //    from the FIRST child steps back onto the last comment conversation if
 //    one exists, else exits to the diff (there is no trigger stop above it
 //    any more — see the removed enterTrigger).
@@ -2316,8 +2317,9 @@ export function handleRelatedKey(key) {
         // Nothing further up in this list — step back to the last comment
         // conversation of the unit, if there is one, else leave the panel
         // entirely (there's no trigger stop above it any more — see the
-        // removed enterTrigger). ← (below) keeps its own, unconditional
-        // "leave the panel" behaviour regardless of codeSel.
+        // removed enterTrigger). ← (below) is deliberately NOT the mirror of
+        // this: it always exits straight to the diff, regardless of codeSel
+        // or comments — see its own branch below.
         if (hasVisibleComments()) {
           enterCommentsTail()
         } else {
@@ -2338,9 +2340,12 @@ export function handleRelatedKey(key) {
       if (cs.chipPath.length) {
         cs.chipPath = cs.chipPath.slice(0, -1)
         scrollChipIntoView()
-      } else if (hasVisibleComments()) {
-        enterCommentsTail()
       } else {
+        // Unconditionally straight to the diff — never onto the comments,
+        // even when hasVisibleComments() (unlike ↑ on the first child, just
+        // above, which still detours there). Explicit request: ← is "go to
+        // the code to the left", not "walk back through the previous stop".
+        // Mirrors Escape, which already skipped the comments detour here.
         exitRelated()
         return 'exit'
       }

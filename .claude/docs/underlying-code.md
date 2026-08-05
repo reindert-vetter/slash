@@ -114,10 +114,12 @@ conversation (see `.claude/docs/comments-panel.md`) or the embedded Claude chat
 (`.claude/docs/claude-chat-panel.md`), which is where a bare `→` from the diff
 now lands — selects the **first** item (`cs.codeSel=0`); `↓`/`↑` move through them (clamping at the last — `↑` on the
 first steps back onto the last inline comment conversation if the unit has one,
-else out to the diff, via `hasVisibleComments`/`enterCommentsTail`); `←` steps back
-the same way from any position. The selected item gets an indigo ring
-(`data-active=true`). All items stack **vertically** at full width. Full chain:
-`.claude/docs/keyboard-navigation.md`.
+else out to the diff, via `hasVisibleComments`/`enterCommentsTail`); `←`, from
+ANY position, always exits straight to the diff instead — unlike `↑` it never
+detours through the comments, even when the unit has them (explicit request:
+`←` means "the code to the left", not "the previous stop"). The selected item
+gets an indigo ring (`data-active=true`). All items stack **vertically** at
+full width. Full chain: `.claude/docs/keyboard-navigation.md`.
 
 The card has **no fixed height cap**: it grows with its content up to the block
 column's full height and then scrolls internally (`min-h-0`, body
