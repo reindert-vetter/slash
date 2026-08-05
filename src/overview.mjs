@@ -55,6 +55,7 @@ const state = reactive({
   // restart (see run_errors.go). Loaded on page load — not lazily on open,
   // unlike "Recent gegenereerd" — because the count shows on the closed
   // button.
+  runningCount: 0, // GET /api/running-count — repo-wide count of tembed.StatusRunning runs
   problemsOpen: false,
   problemsLoaded: false,
   failedRuns: [],
@@ -1244,6 +1245,13 @@ function headerBlock() {
         </p>
       </div>
       <div class="flex items-center gap-2">
+        <span
+          data-testid="running-count"
+          class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
+        >
+          <span class="${() => (state.runningCount > 0 ? 'animate-spin' : '')}">${icon('loader', 'h-3 w-3')}</span>
+          <span>${() => state.runningCount + ' actief'}</span>
+        </span>
         <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
           >${() => {
             const n = state.sections.reduce((acc, s) => acc + s.prs.length, 0)
@@ -2591,6 +2599,24 @@ async function loadProblems() {
   }
 }
 
+// loadRunningCount pulls the live "how much is running right now" figure
+// (GET /api/running-count, read-only) for the badge next to the PR count in
+// headerBlock(). Its own fetch, same reasoning as loadProblems: unrelated to
+// reloadSnapshot's author-name priming, and rides along on the same
+// RELOAD_MS cadence in startLiveSync rather than a timer of its own.
+async function loadRunningCount() {
+  try {
+    const res = await fetch('/api/running-count')
+    if (!res.ok) return
+    const body = await res.json()
+    if (!body || !body.ok) return
+    state.runningCount = typeof body.running === 'number' ? body.running : 0
+  } catch (e) {
+    // keep whatever we already showed — a transient failure here must never
+    // blank the badge back to 0.
+  }
+}
+
 function startLiveSync() {
   if (liveSyncStarted || !state.inboxRunId) return
   liveSyncStarted = true
@@ -2602,8 +2628,9 @@ function startLiveSync() {
   setInterval(() => {
     if (activeTab()) {
       reloadSnapshot()
-      // Rides along on the existing cadence — no timer of its own.
+      // Both ride along on the existing cadence — no timer of their own.
       loadProblems()
+      loadRunningCount()
     }
   }, RELOAD_MS)
   document.addEventListener('visibilitychange', sendHeartbeat)
@@ -2612,4 +2639,5 @@ function startLiveSync() {
 App()(document.getElementById('app'))
 loadInbox()
 loadProblems()
+loadRunningCount()
 scheduleRepaint()

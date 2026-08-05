@@ -761,6 +761,12 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// workflow runs (repo-wide) + the mirrored glue log lines. Feeds the
 	// "Mislukte taken" block at the bottom of /pr-overview. See run_errors.go.
 	mux.HandleFunc("/api/problems", s.handleProblems)
+	// GET /api/running-count → read-only: how many workflow runs are
+	// tembed.StatusRunning RIGHT NOW, repo-wide. Feeds the live badge next to
+	// the PR count on /pr-overview. A separate top-level path, not
+	// /api/workflows/…, so it needs no entry in the POST reserved-name guard
+	// in handleWorkflows. See run_errors.go's RunningCount.
+	mux.HandleFunc("/api/running-count", s.handleRunningCount)
 	// GET /api/prs/filter?preset=<key> → live gh-search for a fixed, allow-listed
 	// preset query (never raw UI text — see handleFilter).
 	mux.HandleFunc("/api/prs/filter", s.handleFilter)
@@ -823,6 +829,17 @@ func (s *server) handleTaskCodeComment(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleRunningCount serves GET /api/running-count — the read-only repo-wide
+// count of workflow runs currently tembed.StatusRunning (never StatusWaiting).
+// See run_errors.go's RunningCount.
+func (s *server) handleRunningCount(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": s.tasks.manager.RunningCount()})
 }
 
 // handleWorkflowsList serves GET /api/workflows?pr=N — the read-only list of

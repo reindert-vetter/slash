@@ -293,3 +293,24 @@ func (m *TaskManager) FailedRuns(limit int) []FailedRun {
 	}
 	return out
 }
+
+// RunningCount is how many workflow runs (repo-wide, across every PR) are
+// tembed.StatusRunning RIGHT NOW — deliberately NOT tembed.StatusWaiting, which
+// is what a long-lived tracker (pr_status, approve, …) sits in between actual
+// steps, most of the time. StatusRunning is the narrow window a run spends
+// actively executing an Activity, so this answers "how much background work is
+// genuinely in flight", not "how many trackers exist". Feeds the live badge
+// next to the PR count on /pr-overview. Read-only, same shape as FailedRuns.
+func (m *TaskManager) RunningCount() int {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, r := range runs {
+		if r.Status == tembed.StatusRunning {
+			n++
+		}
+	}
+	return n
+}
