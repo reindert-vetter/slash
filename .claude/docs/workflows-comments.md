@@ -13,12 +13,15 @@ ID is the comment id**.
 **Flow:** `saveComment` + `postGithubComment` (best-effort), then a loop on
 `reply` Signals. A reaction arrives from the UI **and** from a per-thread
 poller, both as the same Signal; every reaction is stored, a UI reaction is
-mirrored to GitHub, and `Done`/`/resolve` closes the thread.
+mirrored to GitHub, and `Done`/`/resolve` resolves the thread — which it can be
+brought back out of again, see "Resolve is reversible" below. Only a **delete**
+ends the Execution.
 
 ### The three modules it drives
 
 - **`modules/comments`** (`data/comments.db`, tables `comments`/`reactions`):
-  counts reactions and sets `status` to `resolved` on `/resolve`.
+  counts reactions and sets `status` to `resolved` on `/resolve` (and back to
+  `open` via `SetStatus`, see the `unresolve` action below).
   Each comment also stores:
   - **the code fragment it hangs on** (`code`/`gran`/`label`) — the exact
     navigation unit at placing time, so the thread shows the same code as the
@@ -296,6 +299,54 @@ not read-only copies.
     as a **new issue comment** (the Activity returns the new id so it lands in
     history, for the dedup below). A resolve is **local only** — GitHub has no
     concept for it, so the workflow never calls out (`if !r.Done`).
+
+### Resolve is reversible — the `unresolve` action
+
+A resolve used to `break` out of the reactions loop, which **completed** the
+Execution; a completed Execution accepts no Signals, so there was no way back.
+It no longer does: the loop keeps waiting after a resolve, and only a `delete`
+ends the thread. That makes the mirror action possible.
+
+**`Action: "unresolve"`** (a `reply` Signal like every other action, validated
+in `tasks_api.go`'s action switch, sent by `unresolveFocusedComment` /
+`unresolvePrCommentItem` in `RelatedPanel.mjs`) does three things, all
+input-driven so replay stays deterministic:
+
+1. **`reopenComment`** — `comments.SetStatus(id, "open")`, plus it restarts the
+   thread's GitHub reply poller (see below).
+2. **`saveReaction`** with the body `reopenSentinel` — the visible trace in the
+   conversation. **Local only**: the branch `continue`s before the mirror path,
+   because GitHub's own thread state already says it.
+3. **`unresolveGithubThread`** → `github.UnresolveReviewThread` (the
+   `unresolveReviewThread` mutation, sharing `reviewThreadMutation`'s lookup
+   with the resolve direction) — review-diff threads only, best-effort, same
+   PR-wide carve-out as the resolve.
+
+**The two sentinel bodies** live in `workflows.go` as `resolveSentinel`
+(`"/resolve"`) and `reopenSentinel` (`"/reopen"`). `"/unresolve"` would have
+been the obvious name and is deliberately **not** used: `modules/github`
+detects a GitHub-side resolve with `strings.Contains(body, "/resolve")`, which
+that string matches — a reopen coming back from GitHub would be read as a
+resolve. Both are stored verbatim and rendered as a **status line** by the
+frontend (`threadStatusSentinel`, see `comments-panel.md`).
+
+**The poller now stops while a thread is resolved.** Without the `break` a
+resolved thread would poll GitHub forever, so `poll` returns as soon as the
+comment's read-model status is `resolved`, and the `reopenComment` Activity
+starts a fresh one (under `m.baseCtx`). `beginPolling`/`endPolling` keep that to
+**one** poller per thread and close the race where a reopen lands exactly while
+the old poller is exiting (`pollRestart` → the exiting poller relaunches). This
+is in-memory only — no read-model, no history, gone after a restart — so it
+falls under the same operational carve-out as the heartbeat map
+(`.claude/rules/workflows-write-boundary.md`); the actual write is still the
+Activity.
+
+**Only threads resolved after this change can be reopened.** One resolved
+earlier already completed its Execution, and nothing can signal it again — the
+"Unresolve comment" command then simply fails server-side and the status stays
+`resolved`. Accepted deliberately: the alternative (a second Execution per
+comment, with the comment id no longer equal to its Run ID) is a far larger
+change for a one-off backlog.
 - **Echo-of-self guard on an INCOMING `github` reply:** `replyGithubIDs` (the
   in-memory map, keyed by our own reply's Signal id, of the GitHub comment id
   each UI reply was mirrored to — same map the "edit" action above uses,
@@ -405,8 +456,10 @@ So the run tree says what is true: the conversation belongs to the comment
   that way.
 
 **Carve-out — a thread that can no longer be signalled:**
-`taskCodeCommentWorkflow` **ends** on a resolve (`r.Done` → `break`) and on a
-delete, and a completed/failed Execution accepts no Signals. `StartClaudeChat`
+`taskCodeCommentWorkflow` **ends** on a delete (and used to on a resolve too,
+before that became reversible — see "Resolve is reversible" above; threads
+resolved back then are still completed), and a completed/failed Execution
+accepts no Signals. `StartClaudeChat`
 therefore checks the thread's status first (the same shape
 `applyChatCommentAction` uses) and falls back to the original top-level
 `StartWorkflowID` when the thread is unknown or terminal, logging it via

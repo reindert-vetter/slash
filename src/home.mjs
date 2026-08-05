@@ -48,6 +48,7 @@ import RelatedPanel, {
   commentSelIndex,
   deleteFocusedComment,
   resolveFocusedComment,
+  unresolveFocusedComment,
   focusedCommentGithubId,
   focusedComment,
   convertWarningToComment,
@@ -66,6 +67,7 @@ import RelatedPanel, {
   startPrCommentReply,
   cancelPrCommentReply,
   resolvePrCommentItem,
+  unresolvePrCommentItem,
   enterPrCommentThread,
   isPrCommentThreadFocused,
   exitPrCommentThread,
@@ -4326,7 +4328,10 @@ async function deleteCommentAndSelectRow() {
 // selected block/diff. "Resolve comment" also resolves the conversation on
 // GitHub (for a review-diff thread) — see resolveFocusedComment
 // (RelatedPanel.mjs) and the reply-loop's resolveGithubThread Activity
-// (workflows.go). "Sluit menu" is pinned first (withClose); the menu opens on
+// (workflows.go). On an already resolved thread that first item is
+// "Unresolve comment" instead (isResolvedComment → unresolveFocusedComment,
+// which mirrors both halves: the status AND the GitHub conversation).
+// "Sluit menu" is pinned first (withClose); the menu opens on
 // the 2nd item (defaultSel), so "Resolve comment" stays the default Enter
 // action. This is already true regardless of who wrote the comment — unlike
 // prCommentCommandsFor below, this menu has no "Beantwoorden" item to reorder
@@ -4399,14 +4404,30 @@ function publishThreadCommand(c) {
   }
 }
 
+// isResolvedComment — whether a comment thread is currently resolved, i.e.
+// whether its menu offers "Unresolve comment" instead of "Resolve comment".
+// Both menus below show exactly ONE of the two, in the same slot, so the
+// default-Enter item keeps meaning "flip this thread's state".
+function isResolvedComment(c) {
+  return !!c && c.status === 'resolved'
+}
+
 function commentCommandsFor() {
+  const focused = focusedComment()
   const items = [
-    {
-      id: 'resolve-comment',
-      label: 'Resolve comment',
-      hint: 'resolve',
-      run: () => resolveFocusedComment(),
-    },
+    isResolvedComment(focused)
+      ? {
+          id: 'unresolve-comment',
+          label: 'Unresolve comment',
+          hint: 'heropen',
+          run: () => unresolveFocusedComment(),
+        }
+      : {
+          id: 'resolve-comment',
+          label: 'Resolve comment',
+          hint: 'resolve',
+          run: () => resolveFocusedComment(),
+        },
     {
       id: 'delete-comment',
       label: 'Verwijder comment',
@@ -4414,7 +4435,7 @@ function commentCommandsFor() {
       run: () => deleteCommentAndSelectRow(),
     },
   ]
-  const c = focusedComment()
+  const c = focused
   // "Bewerk bericht" edits whichever message the keyboard is currently ON —
   // the root/opening message at rest, or the specific reply stepped into via
   // ↑ (see focusedThreadMessage's own doc comment) — only ever shown for the
@@ -4571,7 +4592,10 @@ function isOwnComment(c) {
 // resolves the thread via the existing reply Signal (done:true,
 // RelatedPanel.mjs's resolvePrCommentItem) — the same write path as the
 // block-scoped "Resolve comment" command above, just against this item's own
-// comment instead of cs's selected one.
+// comment instead of cs's selected one. On an ALREADY resolved thread that
+// same slot reads "Unresolve comment" instead (isResolvedComment →
+// unresolvePrCommentItem) — never both, so the ordering rule above is
+// unaffected.
 //
 // "Comment hiervan maken" — the PR-wide (unanchored) equivalent of
 // commentCommandsFor's own item above — only appears for an AI-authored
@@ -4591,15 +4615,25 @@ function prCommentCommandsFor() {
     hint: 'reply',
     run: () => startPrCommentReply(selectedComment()),
   }
-  const resolveItem = {
-    id: 'pr-comment-resolve',
-    label: 'Resolve comment',
-    hint: 'resolve',
-    run: () => {
-      const c = selectedComment()
-      if (c) resolvePrCommentItem(c)
-    },
-  }
+  const resolveItem = isResolvedComment(c)
+    ? {
+        id: 'pr-comment-unresolve',
+        label: 'Unresolve comment',
+        hint: 'heropen',
+        run: () => {
+          const sel = selectedComment()
+          if (sel) unresolvePrCommentItem(sel)
+        },
+      }
+    : {
+        id: 'pr-comment-resolve',
+        label: 'Resolve comment',
+        hint: 'resolve',
+        run: () => {
+          const sel = selectedComment()
+          if (sel) resolvePrCommentItem(sel)
+        },
+      }
   const items = isOwnComment(c) ? [resolveItem, replyItem] : [replyItem, resolveItem]
   // "Bewerk bericht" edits whichever message the keyboard is currently ON in
   // this item's own thread (→/enterPrCommentThread + pct, see

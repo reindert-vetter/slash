@@ -58,7 +58,7 @@ than as their own signal names.
 
 | Signal | Payload | Target | Variants riding along |
 |---|---|---|---|
-| `reply` | `{author, body, done}` | `task_code_comment` | `body == "/resolve"` + `done` = resolve (never posted as text). |
+| `reply` | `{author, body, done, action?, targetId?, publish?}` | `task_code_comment` | `body == "/resolve"` + `done` = resolve (never posted as text); `action: "unresolve"` = reopen that resolved thread (no body — the workflow writes the `"/reopen"` trace itself, see "Resolve is reversible" in `.claude/docs/workflows-comments.md`); `action: "edit"`/`"publish"` = the two other message-less variants. The handler validates `action` before it reaches the workflow. |
 | `delete` | `{author?}` | `task_code_comment` | Handler builds a `ReactionSignal{Action:"delete"}` — i.e. it *is* the reply signal underneath. |
 | `set` | `ApprovalSignal{blockId, rows, calls}` | `approve` | `{file, viewed}` instead = GitHub "Viewed" checkbox (`Viewed != nil`). |
 | `snooze` | `{taskId, until}` or `{taskId, clear}` | `task_snooze` | `until` is an absolute ms expiry computed client-side (keeps the workflow clock-free). |
@@ -69,9 +69,9 @@ than as their own signal names.
 | `merge` | `ChatMergeRequest{conversationId?, turnId?, action?}` | `chat_merge` | The PR's own commit queue. `action` `""` = land one conversation's edit (only ever sent from inside `claudeChatWorkflow`'s Activity, never from the UI); `action: "push"` = push the PR's pending ref to GitHub, carries no conversation and comes straight from the reviewer's todo row (`pushPendingWork`, `src/home.mjs`). See `.claude/docs/pending-push.md`. |
 
 **Not reachable from the UI, by design:** the `reanchor` and `avatar` actions
-on `ReactionSignal` — the generic reply handler decodes only
-`author`/`body`/`done` and drops `action`/`anchor`, so only a backend Activity
-can move a comment's anchor. A Playwright spec therefore can't drive that state
+on `ReactionSignal` — the generic reply handler only accepts the `action`
+values in its own switch (`""`/`edit`/`publish`/`unresolve`) and never decodes
+`anchor`, so only a backend Activity can move a comment's anchor. A Playwright spec therefore can't drive that state
 through the API; use `slash seed -comments <json>`.
 
 `state` (pr_status) has no endpoint at all — it comes from the pollers only.

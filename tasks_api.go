@@ -1067,10 +1067,11 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown signal", http.StatusBadRequest)
 			return
 		}
-		// action ("" | "edit") is validated here, before it ever reaches the
-		// workflow — mirrors the message-signal switch above. "edit" changes the
-		// wording of an EXISTING message (targetId names it: the run's own id for
-		// the root comment, or an existing reply's id) instead of adding a new one.
+		// action ("" | "edit" | "publish" | "unresolve") is validated here, before
+		// it ever reaches the workflow — mirrors the message-signal switch above.
+		// "edit" changes the wording of an EXISTING message (targetId names it:
+		// the run's own id for the root comment, or an existing reply's id)
+		// instead of adding a new one; "unresolve" reopens a resolved thread.
 		var body struct {
 			Author   string `json:"author"`
 			Body     string `json:"body"`
@@ -1100,6 +1101,10 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		case "publish":
 			// Carries no message: it publishes the thread as it stands (see
 			// ReactionSignal's "publish" Action), so an empty body is correct.
+		case "unresolve":
+			// Carries no message either: the workflow writes the "/reopen" trace
+			// itself (reopenSentinel), so an empty body is correct here too — and
+			// a body sent along anyway is ignored rather than stored.
 		default:
 			http.Error(w, "invalid action", http.StatusBadRequest)
 			return

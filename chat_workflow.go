@@ -106,7 +106,9 @@ func chatConversationRunID(commentID string) string {
 // inline too), so by the time this returns the chat run exists and can be
 // signalled itself.
 //
-// CARVE-OUT: taskCodeCommentWorkflow ENDS on a resolve/delete, and a completed
+// CARVE-OUT: taskCodeCommentWorkflow ENDS on a delete (and, before resolving
+// became reversible, also on a resolve — threads resolved back then are still
+// completed, see workflows-comments.md), and a completed
 // Execution can no longer receive a Signal. A thread whose Execution is gone or
 // unreachable must not lose its chat, so those cases fall back to the original
 // top-level StartWorkflowID (the run then simply has no ParentRunID — exactly
@@ -647,7 +649,7 @@ func applyChatCommentAction(ctx context.Context, tm *TaskManager, arg chatCommen
 	// A deterministic reaction id for the same reason chatMessageID exists: a
 	// replayed Activity must not post the SAME reply into the comment thread
 	// twice (comments.AddReaction is an INSERT OR IGNORE on this id).
-	sig := ReactionSignal{ID: chatActionReactionID(arg.TurnID), Source: "ai", Author: "Claude", Body: "/resolve", Done: true}
+	sig := ReactionSignal{ID: chatActionReactionID(arg.TurnID), Source: "ai", Author: "Claude", Body: resolveSentinel, Done: true}
 	if err := tm.Signal(c.RunID, sig); err != nil {
 		tm.logf("claude_chat: comment_action signal failed for %s: %v", c.RunID, err)
 		saveChatActionOutcome(ctx, tm.chat, arg, "Kon de comment-thread niet bijwerken. Probeer het opnieuw.")

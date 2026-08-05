@@ -140,13 +140,17 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 		return len(l) == 1 && l[0].ReactionCount == 2
 	})
 
-	// A resolving reaction (Done, no "/resolve" text) closes the thread and
-	// completes the execution — the Done flag alone must resolve the comment.
+	// A resolving reaction (Done, no "/resolve" text) resolves the comment — the
+	// Done flag alone must do it. The Execution deliberately stays alive (it can
+	// be unresolved again, see TestTaskCodeCommentUnresolveReopensThread).
 	gh.EnqueueReply(github.Reply{ID: 502, Author: "colleague", Body: "looks fine now", Done: true})
 	waitFor(t, func() bool {
-		s, _ := m.engine.Status(runID)
-		return s == tembed.StatusCompleted
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && l[0].Status == "resolved"
 	})
+	if s, _ := m.engine.Status(runID); s != tembed.StatusWaiting {
+		t.Fatalf("status = %q, want waiting (a resolve no longer ends the thread)", s)
+	}
 
 	l, _ := cs.List(ctx, 42)
 	if l[0].Status != "resolved" {
@@ -600,8 +604,8 @@ func TestTaskCodeCommentUIResolveResolvesGithubThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		s, _ := m.engine.Status(runID)
-		return s == tembed.StatusCompleted
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && l[0].Status == "resolved"
 	})
 
 	// The GitHub conversation was resolved for the root comment id (1)...
@@ -615,6 +619,76 @@ func TestTaskCodeCommentUIResolveResolvesGithubThread(t *testing.T) {
 	l, _ := cs.List(ctx, 42)
 	if len(l) != 1 || l[0].Status != "resolved" {
 		t.Fatalf("comments = %+v, want one resolved", l)
+	}
+}
+
+// An "unresolve" action reopens a resolved review-diff thread: the read-model
+// goes back to "open", the conversation is unresolved on GitHub, a "/reopen"
+// trace message is stored WITHOUT being posted to GitHub as text, and the
+// thread accepts an ordinary reply again afterwards (the whole point: a resolve
+// no longer ends the Execution).
+func TestTaskCodeCommentUnresolveReopensThread(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reindert",
+		Body: "Check this.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-r", Source: "ui", Author: "reindert", Body: resolveSentinel, Done: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && l[0].Status == "resolved"
+	})
+
+	// Reopen it.
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-u", Source: "ui", Author: "reindert", Action: "unresolve",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && l[0].Status == "open"
+	})
+
+	// The GitHub conversation was reopened for the same root comment id (1)...
+	if gh.UnresolvedThreadCount() != 1 || gh.LastUnresolvedThread() != 1 {
+		t.Fatalf("unresolved threads = %d (last %d), want 1 (1)", gh.UnresolvedThreadCount(), gh.LastUnresolvedThread())
+	}
+	// ...and neither sentinel was posted as a reply comment (still just the root).
+	if gh.PostedCount() != 1 {
+		t.Fatalf("github posted %d, want 1 (no sentinel text)", gh.PostedCount())
+	}
+	// The reopen left a visible trace in the conversation.
+	l, _ := cs.List(ctx, 42)
+	if len(l) != 1 || len(l[0].Reactions) != 2 || l[0].Reactions[1].Body != reopenSentinel {
+		t.Fatalf("reactions = %+v, want the /resolve trace plus a %q one", l[0].Reactions, reopenSentinel)
+	}
+
+	// And the thread is a normal, live conversation again.
+	if err := m.Signal(runID, ReactionSignal{
+		ID: "ui-2", Source: "ui", Author: "reindert", Body: "one more thing",
+	}); err != nil {
+		t.Fatalf("reply after unresolve: %v", err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, 42)
+		return len(l) == 1 && len(l[0].Reactions) == 3 && l[0].Status == "open"
+	})
+	// That reply — and only that one — mirrored to GitHub (Fake.Reply records
+	// into the same Posted list as the root, so: root + this reply).
+	if gh.PostedCount() != 2 {
+		t.Fatalf("github posted %d, want 2 (root + the reply after reopening)", gh.PostedCount())
 	}
 }
 
@@ -1159,8 +1233,13 @@ func TestTaskSurvivesRestart(t *testing.T) {
 	if err := e2.SignalWorkflow(runID, SignalReply, ReactionSignal{ID: "gh-9", Source: "github", Body: "done /resolve", Done: true}); err != nil {
 		t.Fatal(err)
 	}
-	if s, _ := e2.Status(runID); s != tembed.StatusCompleted {
-		t.Fatalf("status = %s, want completed", s)
+	// The recovered run accepts the resolve and keeps waiting (a resolve no
+	// longer ends the thread, so it can be unresolved later).
+	if s, _ := e2.Status(runID); s != tembed.StatusWaiting {
+		t.Fatalf("status = %s, want waiting", s)
+	}
+	if l, _ := cs.List(context.Background(), 1); len(l) != 1 || l[0].Status != "resolved" {
+		t.Fatalf("comments = %+v, want one resolved", l)
 	}
 }
 

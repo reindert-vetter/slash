@@ -20,13 +20,14 @@ import (
 // Activity does internally, exactly like its existing per-comment/per-block
 // Signal loop already does).
 //
-// This is a one-way, IRREVERSIBLE action: resolving a comment thread
-// completes its Workflow Execution (taskCodeCommentWorkflow returns as soon
-// as a reply Signal carries Done=true), and a completed Execution can never
-// receive another Signal — there is no "reopen" anywhere in this codebase.
-// The guardrails in shouldConsiderAutoResolve are deliberately strict for
-// that reason, and the reply text below is the ONLY place a reviewer will
-// ever see this happened, so it has to explain itself on its own.
+// Resolving used to be IRREVERSIBLE (it completed the thread's Execution, and
+// a completed Execution can never receive another Signal). It no longer is —
+// the reviewer can unresolve a thread, see the "unresolve" action in
+// taskCodeCommentWorkflow — but the guardrails in shouldConsiderAutoResolve
+// stay deliberately strict anyway: an automated pass silently closing a live
+// conversation is still wrong, just no longer permanent. The reply text below
+// remains the main place a reviewer sees this happened, so it has to explain
+// itself on its own.
 
 // autoResolveAuthor is the display name the auto-resolve reply carries —
 // reuses the same "AI-controle" branding as the code_warning feature
@@ -54,9 +55,9 @@ type removalAnswer struct {
 // checked first because it costs nothing, so a comment that fails it never
 // triggers an LLM call at all:
 //
-//   - Only Status "open" — an already resolved/deleting/deleted comment's
-//     Execution has very likely already completed, so signalling it again
-//     would just fail; skip the wasted classification too.
+//   - Only Status "open" — an already resolved/deleting/deleted comment needs
+//     no second resolve (and a deleted or long-ago-resolved one can't even be
+//     signalled any more); skip the wasted classification too.
 //   - Only Kind "" (an ordinary block-scoped comment) — true by construction
 //     already (planCommentReanchor never orphans a Kind != "" / PR-wide
 //     comment), checked explicitly anyway so this function's own contract

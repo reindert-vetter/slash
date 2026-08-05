@@ -205,9 +205,9 @@ func TestAutoResolveOrphanedRemovalRequestResolvesComment(t *testing.T) {
 	// Resolves itself isn't a persisted column (comments.Module.AddReaction only
 	// uses it, at write time, to flip the comment's status) — c.Status ==
 	// "resolved" above is the durable proof the thread actually closed.
-	// The reply text is the ONLY trace of this ever having happened (resolving
-	// is irreversible), so it must explain both what happened and why on its
-	// own — check both, not just a generic "automatic" marker.
+	// The reply text is the main trace of this ever having happened, so it must
+	// explain both what happened and why on its own — check both, not just a
+	// generic "automatic" marker.
 	lower := strings.ToLower(r.Body)
 	if !strings.Contains(lower, "automatisch") {
 		t.Errorf("reply body = %q, want it to say this happened automatically", r.Body)
@@ -215,9 +215,10 @@ func TestAutoResolveOrphanedRemovalRequestResolvesComment(t *testing.T) {
 	if !strings.Contains(lower, "niet meer aanwezig") && !strings.Contains(lower, "verwijder") {
 		t.Errorf("reply body = %q, want it to explain the code is gone", r.Body)
 	}
-	// The Execution is genuinely done — the comment can no longer be signalled.
-	if status, _ := engine.Status(runID); status != tembed.StatusCompleted {
-		t.Errorf("run status = %v, want completed", status)
+	// The Execution stays alive: an auto-resolve is no longer irreversible — the
+	// reviewer can unresolve the thread, which needs a signallable run.
+	if status, _ := engine.Status(runID); status != tembed.StatusWaiting {
+		t.Errorf("run status = %v, want waiting", status)
 	}
 }
 

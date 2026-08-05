@@ -57,7 +57,11 @@ type Reply struct {
 	// ("kilo-code-bot[bot]") has no github.com/<login>.png shorthand.
 	AvatarURL string `json:"avatarUrl"`
 	Body      string `json:"body"`
-	Done      bool   `json:"done"` // reviewer resolved the thread (body contains /resolve)
+	// Done says the reviewer resolved the thread: the body contains "/resolve".
+	// A substring match, so the app's own unresolve trace is deliberately named
+	// "/reopen" and not "/unresolve" — the latter would match here and be read
+	// back as a resolve (see resolveSentinel/reopenSentinel in workflows.go).
+	Done bool `json:"done"`
 }
 
 // ReviewComment is a top-level (thread-root) review comment on the diff of a PR:
@@ -136,6 +140,10 @@ type Client interface {
 	// thread is found. GitHub only supports resolving review-diff threads, not
 	// PR-wide issue comments.
 	ResolveReviewThread(ctx context.Context, pr int, commentID int64) error
+	// UnresolveReviewThread reopens ("Unresolve conversation") the review-diff
+	// thread whose root comment has REST id commentID — the mirror image of
+	// ResolveReviewThread, with the same no-op-if-not-found behaviour.
+	UnresolveReviewThread(ctx context.Context, pr int, commentID int64) error
 	// MarkFileViewed sets (viewed=true) or clears (viewed=false) the "Viewed"
 	// checkbox for path in the Files-changed tab of pr.
 	MarkFileViewed(ctx context.Context, pr int, path string, viewed bool) error
@@ -475,10 +483,28 @@ func (m *Module) EditIssueComment(ctx context.Context, commentID int64, body str
 
 // ResolveReviewThread resolves the review thread whose root comment has REST id
 // commentID. GitHub's REST API has no such endpoint, so this goes through the
-// GraphQL API: first find the review thread's global node ID by matching the
-// commentID against each thread's root comment databaseId, then run the
-// resolveReviewThread mutation. No-op if the comment/thread cannot be found.
+// GraphQL API — see reviewThreadMutation for the shared lookup+mutate path.
+// No-op if the comment/thread cannot be found.
 func (m *Module) ResolveReviewThread(ctx context.Context, pr int, commentID int64) error {
+	const mutation = `mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}`
+	return m.reviewThreadMutation(ctx, pr, commentID, "resolveReviewThread", mutation)
+}
+
+// UnresolveReviewThread reopens the review thread whose root comment has REST id
+// commentID — the exact mirror of ResolveReviewThread (same thread lookup, the
+// unresolveReviewThread mutation instead). No-op if the comment/thread cannot be
+// found. See the Client interface doc.
+func (m *Module) UnresolveReviewThread(ctx context.Context, pr int, commentID int64) error {
+	const mutation = `mutation($id:ID!){unresolveReviewThread(input:{threadId:$id}){thread{id}}}`
+	return m.reviewThreadMutation(ctx, pr, commentID, "unresolveReviewThread", mutation)
+}
+
+// reviewThreadMutation is the shared body of ResolveReviewThread and
+// UnresolveReviewThread: find the review thread's global node ID by matching
+// commentID against each thread's root comment databaseId, then run `mutation`
+// against it. `label` only names the mutation in the error message. No-op when
+// no thread matches.
+func (m *Module) reviewThreadMutation(ctx context.Context, pr int, commentID int64, label, mutation string) error {
 	owner, name, ok := strings.Cut(m.repo, "/")
 	if !ok {
 		return fmt.Errorf("invalid repo slug %q", m.repo)
@@ -488,9 +514,8 @@ func (m *Module) ResolveReviewThread(ctx context.Context, pr int, commentID int6
 		return err
 	}
 	if threadID == "" {
-		return nil // no matching thread on GitHub — nothing to resolve
+		return nil // no matching thread on GitHub — nothing to do
 	}
-	const mutation = `mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}`
 	ctx, cancel := context.WithTimeout(ctx, cliTimeout) // see cliTimeout doc
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
@@ -498,7 +523,7 @@ func (m *Module) ResolveReviewThread(ctx context.Context, pr int, commentID int6
 		"-F", "id="+threadID,
 	)
 	if out, err := cmd.Output(); err != nil {
-		return fmt.Errorf("gh api graphql resolveReviewThread: %w (%s)", err, out)
+		return fmt.Errorf("gh api graphql %s: %w (%s)", label, err, out)
 	}
 	return nil
 }

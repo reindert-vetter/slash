@@ -282,6 +282,15 @@ change also resets it, mirroring how the same watch resets
   a PR-wide thread, GitHub-resolved for a review-diff thread, see
   `.claude/docs/workflows-comments.md`. Both reply and resolve go through the
   existing `POST /api/workflows/{runId}/signals/reply` — no new write path.
+- **"Unresolve comment"** (`unresolvePrCommentItem`) takes that same slot
+  instead — never alongside it — once `c.status === 'resolved'`
+  (`isResolvedComment`, `home.mjs`; the block-scoped menu does exactly the same
+  with `unresolveFocusedComment`). Same Signal, `action:'unresolve'` and no
+  body: the workflow flips the status back to `open`, writes the `"/reopen"`
+  trace itself and unresolves the GitHub conversation for a review-diff thread.
+  A thread resolved before resolve became reversible can no longer be
+  signalled, so the command is a silent no-op there — see "Resolve is
+  reversible" in `.claude/docs/workflows-comments.md`.
 - **"Bewerk bericht"** edits whichever OWN message the keyboard is currently
   on — see "Editing an own message" below.
 - **"Ignore"** (`toggleIgnoreComment`, label flips to "Ignore ongedaan maken"
@@ -592,6 +601,31 @@ conversation is done and should recede like already-reviewed reference code. The
 border stays the neutral `border-slate-300 dark:border-zinc-700` in both states;
 `expandedConversation`'s indigo focus border is untouched (an orthogonal focus
 cue, not a status colour).
+
+### A state-change message renders as a status line, not as a chat bubble
+
+The resolve and unresolve actions each store their command-like body as an
+ordinary reaction (`"/resolve"`, `"/reopen"` — `resolveSentinel`/
+`reopenSentinel`, `workflows.go`), so the conversation records **when** the
+thread changed state and **by whom**. Showing that raw was ugly: a bubble
+reading `/resolve`.
+
+`threadStatusSentinel(body)` (`RelatedPanel.mjs`) maps such a body onto
+`{icon, text}` — `✓ Thread opgelost` / `↩ Thread heropend` — on an exact,
+trimmed, lowercased match, so a real reply merely mentioning `/resolve` in a
+sentence stays ordinary text. `commentBody` (the single render point for every
+comment/reaction body, see `conventions.md`) returns that status line instead of
+`renderMarkdown`'s output, and `viewingBubble` drops the bubble chrome for it
+(no border/tint, small italic) plus the edit pencil — there is no wording to
+edit. The author line above it stays.
+
+This is a **display-time** transform, exactly like `identityOf`: the stored body
+keeps the literal command, because the GitHub-side resolve detection
+(`modules/github`) and the workflow's "never mirror this as text" guard both key
+on it — and every `"/resolve"` reaction stored before this existed renders as a
+proper status line too, with no backfill. Per the colorblind rule the meaning is
+in the **word**; the glyph is a second cue and colour carries nothing.
+Test: `tests/comment-unresolve.spec.mjs`.
 
 ### The menu button (`reaction-status`) and the shared comment/Claude footer
 

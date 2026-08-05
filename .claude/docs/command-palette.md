@@ -431,7 +431,9 @@ reply field is empty**, `Enter` opens this menu instead of the block palette —
 three to seven rows:
 
 1. **"Close menu"** (pinned).
-2. **"Resolve comment"** (default, 2nd item).
+2. **"Resolve comment"** (default, 2nd item) — or **"Unresolve comment"** in
+   that same slot once the thread is resolved (`isResolvedComment`); never
+   both.
 3. **"Verwijder comment"**.
 4. **"Bewerk bericht"** — only for the reviewer's OWN message
    (`isOwnMessage`), which the keyboard is currently on
@@ -482,6 +484,12 @@ keyboard. See the send-status paragraph in
   resolves the conversation on GitHub too; a PR-wide thread has no GitHub
   resolve concept, so it stays local. See
   `.claude/docs/workflows-comments.md`.
+- **"Unresolve comment"** → `unresolveFocusedComment` sends that same Signal
+  with `action:'unresolve'` and no body: the status goes back to `open`, the
+  workflow stores the `"/reopen"` trace itself and reopens the GitHub
+  conversation for a review-diff thread. Only for a thread resolved after
+  resolve became reversible — see "Resolve is reversible" in
+  `.claude/docs/workflows-comments.md`.
 - **"Bewerk bericht"** → `startEditMessage` opens an inline editor on the
   focused message in place; sending posts the `edit` Action of the same
   `reply` Signal (`sendMessageEdit`, `RelatedPanel.mjs`). See "Editing an own
@@ -517,7 +525,9 @@ menu" is just a consequence of the anchoring, not a separate menu variant.
 textarea in the detail card; typing + `Enter` (or the send button) sends, via
 the same `reply` Signal (`done:false`). **"Resolve comment"**
 (`resolvePrCommentItem`) sends that Signal with the `"/resolve"` sentinel +
-`done:true`. No new write path either way.
+`done:true` — and reads **"Unresolve comment"** (`unresolvePrCommentItem`,
+`action:'unresolve'`) in that same slot on an already resolved thread. No new
+write path either way.
 
 ## The compose (comment-kind) menu (`compose`, `COMPOSE_COMMANDS`)
 

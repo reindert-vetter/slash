@@ -2403,6 +2403,33 @@ export async function resolveFocusedComment() {
   }
 }
 
+// unresolveFocusedComment is resolveFocusedComment's mirror image: it reopens
+// the focused comment's thread through the SAME "reply" Signal, but with
+// `action:'unresolve'` instead of `done:true` — the workflow flips the
+// read-model status back to "open", stores the "/reopen" trace message (shown
+// as a status line, see threadStatusSentinel) and, for a review-diff thread,
+// unresolves the conversation on GitHub too.
+//
+// Only a thread resolved AFTER resolve stopped ending its Execution can be
+// reopened: an older one already completed, and a completed Execution can never
+// accept a Signal again (see taskCodeCommentWorkflow). The Signal then simply
+// fails server-side and the status stays "resolved".
+export async function unresolveFocusedComment() {
+  const c = selComment()
+  if (!c || !c.runId) return
+  cs.busy = true
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ author: 'reviewer', action: 'unresolve' }),
+    })
+    await loadComments(cs.pr)
+  } finally {
+    cs.busy = false
+  }
+}
+
 // commentAuthors collects every login a comment list can show: the thread roots
 // plus each reaction, plus the local reviewer (own messages resolve through
 // identityOf to `me`, whose own first name we want too).
@@ -3458,6 +3485,12 @@ function reactionBubble(c, r, i, total, isActive) {
 
 function viewingBubble(c, r, i, total, isActive) {
   const mine = r.source === 'ui'
+  // A state-change message ("/resolve", "/reopen") is not a chat message: it
+  // renders as a plain status line (see threadStatusSentinel/commentBody), so
+  // it drops the bubble chrome (border/tint/max-width) and the edit pencil —
+  // there is no wording to edit. The author line above it stays, so you still
+  // see WHO resolved or reopened the thread.
+  const status = threadStatusSentinel(r.body)
   // An own message carries no GitHub author/avatar — identityOf fills in the
   // local reviewer for it (see avatar.mjs), so the name and the picture always
   // describe the same person.
@@ -3481,7 +3514,7 @@ function viewingBubble(c, r, i, total, isActive) {
           >${who.name || 'onbekend'}</span
         >
         ${() =>
-          isOwnMessage(r)
+          isOwnMessage(r) && !status
             ? html`<button
                 type="button"
                 class="text-slate-400 hover:text-indigo-600 dark:text-zinc-600 dark:hover:text-indigo-400"
@@ -3496,6 +3529,12 @@ function viewingBubble(c, r, i, total, isActive) {
       <div
         class="${() => {
           const sel = active()
+          if (status) {
+            return (
+              'max-w-[92%] px-1 py-1 text-[11px] italic leading-relaxed text-slate-500 dark:text-zinc-400' +
+              (sel ? ' rounded-md ring-2 ring-indigo-400' : '')
+            )
+          }
           return (
             'markdown-body max-w-[92%] rounded-xl border px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] ' +
             (mine
@@ -4875,7 +4914,51 @@ const COMMENT_KIND_LABEL = { issue: 'PR-comment', review: 'PR-comment', review_s
 // bubble — see threadFenceStartIndexes, which computes the value callers pass
 // here.
 export function commentBody(c, startIndex = 0) {
-  return () => (c ? renderMarkdown(c.body, startIndex) : '')
+  return () => {
+    if (!c) return ''
+    const st = threadStatusSentinel(c.body)
+    if (st) return statusLineHTML(st)
+    return renderMarkdown(c.body, startIndex)
+  }
+}
+
+// THREAD_STATUS_SENTINELS — the two command-like reply bodies the backend
+// stores to mark a thread's state change (resolveSentinel/reopenSentinel,
+// workflows.go) mapped onto what a reader should actually SEE. Rendering these
+// is a DISPLAY-time transform, exactly like identityOf's own-message identity
+// (see conventions.md): the stored body stays the literal command — the
+// GitHub-side resolve detection and the workflow's "never mirror this as text"
+// guard both key on it — so every already-stored "/resolve" reaction from
+// before this existed renders as a proper status line too, without a backfill.
+//
+// Meaning lives in the WORD ("opgelost" / "heropend"); the glyph is a second,
+// redundant cue and colour carries nothing at all (colorblind rule,
+// conventions.md).
+const THREAD_STATUS_SENTINELS = {
+  '/resolve': { icon: '✓', text: 'Thread opgelost' },
+  '/reopen': { icon: '↩', text: 'Thread heropend' },
+}
+
+// threadStatusSentinel maps a message body onto its status line, or null for an
+// ordinary message. Exact (trimmed, lowercased) match only — a real reply that
+// merely mentions "/resolve" somewhere in a sentence stays ordinary text.
+export function threadStatusSentinel(body) {
+  if (typeof body !== 'string') return null
+  return THREAD_STATUS_SENTINELS[body.trim().toLowerCase()] || null
+}
+
+// statusLineHTML renders such a status line as the safe HTML string the
+// `.innerHTML` bindings expect. Both parts are module constants (never user
+// input), so there is nothing to escape here.
+function statusLineHTML(st) {
+  return (
+    '<span class="inline-flex items-center gap-1 font-medium" data-testid="thread-status-line">' +
+    '<span aria-hidden="true">' +
+    st.icon +
+    '</span>' +
+    st.text +
+    '</span>'
+  )
 }
 
 // pct ("PR-comment thread") is the ephemeral thread cursor for a selected
@@ -5100,6 +5183,20 @@ export async function resolvePrCommentItem(c) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ author: 'reviewer', body: '/resolve', done: true }),
+  })
+  await loadComments(cs.pr)
+}
+
+// unresolvePrCommentItem reopens a comment-index item's thread — the same
+// `action:'unresolve'` Signal as unresolveFocusedComment above (see its doc
+// comment, including why a thread resolved long ago can no longer be reopened).
+// Called by the "Unresolve comment" command.
+export async function unresolvePrCommentItem(c) {
+  if (!c || !c.runId) return
+  await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ author: 'reviewer', action: 'unresolve' }),
   })
   await loadComments(cs.pr)
 }

@@ -280,6 +280,25 @@ type CodeCommentInput struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+// resolveSentinel / reopenSentinel are the two command-like reply bodies that
+// mark a thread's state change instead of carrying real text: a resolve
+// (Done, sent by the UI's resolve commands) and an unresolve (Action
+// "unresolve"). Both are stored as an ordinary reaction so the conversation
+// shows WHEN and BY WHOM it happened, and neither is ever posted to GitHub as
+// text — the frontend renders them as a status line rather than as a literal
+// command (threadStatusSentinel, RelatedPanel.mjs).
+//
+// resolveSentinel's exact value is load-bearing in two directions: the mirror
+// path below skips a reply with this body, and modules/github detects a
+// GitHub-side resolve by looking for it in a reply body. reopenSentinel is
+// deliberately NOT "/unresolve" for exactly that reason — that string CONTAINS
+// "/resolve", so such a body coming back from GitHub would be read as a
+// resolve.
+const (
+	resolveSentinel = "/resolve"
+	reopenSentinel  = "/reopen"
+)
+
 // ReactionSignal is the payload of a "reply" Signal. It carries either a
 // reaction hooking onto the comment (Action "" / "reply", from the UI or from
 // GitHub) or a request to delete the comment (Action "delete") — both ride the
@@ -303,12 +322,12 @@ type ReactionSignal struct {
 	// Body is the reply text (Action "" / "reply"), or the new wording (Action
 	// "edit").
 	Body string `json:"body"`
-	Done bool   `json:"done"` // resolves the thread
+	Done bool   `json:"done"` // resolves the thread (Body is then resolveSentinel)
 	// Action "publish" carries no message at all: it publishes the thread AS IT
 	// STANDS (the root, plus the earlier local replies with PublishHistory) —
 	// the reviewer moving an existing local conversation to GitHub without
 	// typing a new reply first. Stores no reaction.
-	Action string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor" | "chat" | "edit" | "publish"
+	Action string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor" | "chat" | "edit" | "publish" | "unresolve"
 	// Publish promotes a thread that has never touched GitHub (a private note,
 	// or an "ai" code_warning finding — both start with posted.RootID == 0) to a
 	// real GitHub thread, as part of delivering THIS reply. Empty (the default)
@@ -643,6 +662,15 @@ type TaskManager struct {
 	autoWarnRun  string               // auto_warn Run ID (one per repo/process)
 	importPolled map[string]bool      // imported-thread Run ID → poller running (dedup, operational)
 	avatarTried  map[string]bool      // imported-thread Run ID → avatar backfill attempted (dedup, operational)
+	// polling/pollRestart gate the ONE GitHub reply poller per comment thread
+	// (see beginPolling/endPolling). A thread's poller now stops while the
+	// comment is resolved and is restarted by the reopenComment Activity, so
+	// several callers (that Activity, ResumePolling, importPRComments) can race
+	// to start one; pollRestart closes the "a restart was requested exactly
+	// while the old poller was exiting" window. Purely in-memory/operational,
+	// like lastBeat.
+	polling     map[string]bool
+	pollRestart map[string]bool
 
 	// meCache caches the authenticated GitHub user (see CurrentUser) for the
 	// process lifetime: it never changes while the server runs, so one `gh api
@@ -663,6 +691,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{}, ignRuns: map[int]string{},
 		importPolled: map[string]bool{},
 		avatarTried:  map[string]bool{},
+		polling:      map[string]bool{},
+		pollRestart:  map[string]bool{},
 		logf:         log.Printf,
 		ready:        closedGate,
 		// Buffered generously: enqueue must never block the deterministic
@@ -939,6 +969,39 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, cs.SetStatus(ctx, arg.ID, "deleting")
 	})
 
+	// Activity: put a resolved comment back on "open" (write, workflow-driven) —
+	// the read-model half of the "unresolve" action. It also restarts the
+	// thread's GitHub reply poller, which stopped itself while the thread was
+	// resolved (see poll/beginPolling): starting a goroutine writes nothing
+	// durable, so that part is operational bookkeeping, not a second write path.
+	// Idempotent: re-running it on replay just re-sets the same status and
+	// re-claims the same single poller slot.
+	engine.RegisterActivity("reopenComment", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			ID     string `json:"id"`
+			PR     int    `json:"pr"`
+			RootID int64  `json:"rootId"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if err := cs.SetStatus(ctx, arg.ID, "open"); err != nil {
+			return nil, err
+		}
+		// Only a thread with a GitHub root has replies to poll for, and only a
+		// running server has a context to poll under (a one-shot CLI caller has
+		// neither, see baseCtx).
+		if arg.RootID != 0 && m.baseCtx != nil {
+			prRunID, err := m.ensurePRStatus(arg.PR)
+			if err != nil {
+				m.logf("task_code_comment: reopen ensure pr_status pr=%d: %v", arg.PR, err)
+				prRunID = ""
+			}
+			go m.poll(m.baseCtx, arg.ID, arg.PR, arg.RootID, prRunID)
+		}
+		return nil, nil
+	})
+
 	// Activity: delete the GitHub review comment (best-effort — a failure must
 	// not block removing our own record of it).
 	engine.RegisterActivity("deleteGithubComment", func(ctx context.Context, in []byte) ([]byte, error) {
@@ -1011,6 +1074,26 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		if err := gh.ResolveReviewThread(ctx, arg.PR, arg.RootID); err != nil {
 			m.logf("task_code_comment: github resolve thread skipped: %v", err)
+		}
+		return nil, nil
+	})
+
+	// Activity: reopen ("Unresolve conversation") the GitHub review-diff thread
+	// of a comment the reviewer just unresolved in the app (best-effort) — the
+	// exact mirror of resolveGithubThread above, same PR-wide carve-out.
+	engine.RegisterActivity("unresolveGithubThread", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR     int   `json:"pr"`
+			RootID int64 `json:"rootId"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if arg.RootID == 0 {
+			return nil, nil
+		}
+		if err := gh.UnresolveReviewThread(ctx, arg.PR, arg.RootID); err != nil {
+			m.logf("task_code_comment: github unresolve thread skipped: %v", err)
 		}
 		return nil, nil
 	})
@@ -3557,6 +3640,37 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			continue
 		}
 
+		// An "unresolve" action reopens a resolved thread — the mirror image of a
+		// resolve (r.Done below), and the reason a resolve no longer ends this
+		// Execution. Three steps: the read-model goes back to "open" (which also
+		// restarts this thread's GitHub poller, see the reopenComment Activity), a
+		// visible trace is stored in the conversation (the reopenSentinel body,
+		// rendered as a status line rather than as literal text — see
+		// threadStatusSentinel in RelatedPanel.mjs), and a review-diff thread is
+		// unresolved on GitHub too. That trace is deliberately LOCAL-only: it is
+		// never mirrored to GitHub (this branch continues before the mirror path
+		// below), because GitHub's own thread state already says it.
+		// Input-driven, so replay-deterministic.
+		if r.Action == "unresolve" {
+			if err := w.ExecuteActivity("reopenComment", map[string]any{
+				"id": runID, "pr": in.PR, "rootId": posted.RootID,
+			}, nil); err != nil {
+				return nil, fmt.Errorf("reopen comment: %w", err)
+			}
+			if err := w.ExecuteActivity("saveReaction", comments.Reaction{
+				ID: r.ID, CommentID: runID, Source: r.Source, Author: r.Author,
+				AvatarURL: r.AvatarURL, Body: reopenSentinel,
+			}, nil); err != nil {
+				return nil, fmt.Errorf("save reopen reaction: %w", err)
+			}
+			if !isPRWide(in.Kind) && posted.RootID != 0 {
+				_ = w.ExecuteActivity("unresolveGithubThread", map[string]any{
+					"pr": in.PR, "rootId": posted.RootID,
+				}, nil)
+			}
+			continue
+		}
+
 		// An "edit" action changes the wording of an already-placed message the
 		// reviewer wrote themselves — either the thread's own root comment
 		// (r.ID == runID) or one of its replies (r.ID names that reply's own
@@ -3627,7 +3741,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			if err := w.ExecuteActivity("deleteComment", map[string]any{"id": runID}, nil); err != nil {
 				return nil, fmt.Errorf("delete comment: %w", err)
 			}
-			return json.Marshal(map[string]any{"comment": runID, "deleted": true})
+			return json.Marshal(map[string]any{"comment": runID, "deleted": true, "reactions": reactions})
 		}
 
 		// A "github" reply can be an ECHO of our own reply: the per-thread
@@ -3694,7 +3808,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// Still local after this reply — remember it, so a later publish can
 		// offer to bring the earlier conversation along (PublishHistory).
 		if r.Source == "ui" && posted.RootID == 0 {
-			if body := strings.TrimSpace(r.Body); body != "" && body != "/resolve" {
+			if body := strings.TrimSpace(r.Body); body != "" && body != resolveSentinel {
 				localReplies = append(localReplies, localReply{ID: r.ID, Body: r.Body})
 			}
 		}
@@ -3724,7 +3838,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 					}
 				}
 			} else {
-				if body := strings.TrimSpace(r.Body); body != "" && body != "/resolve" {
+				if body := strings.TrimSpace(r.Body); body != "" && body != resolveSentinel {
 					var mirrored postResult
 					_ = w.ExecuteActivity("replyGithub", map[string]any{
 						"pr": in.PR, "rootId": posted.RootID, "body": r.Body,
@@ -3743,11 +3857,15 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				}
 			}
 		}
-		if r.Done {
-			break
-		}
+		// A resolve deliberately does NOT end this Execution any more: the
+		// reviewer can unresolve the thread again (the "unresolve" action above),
+		// and a completed Execution could never accept that Signal. The thread
+		// therefore keeps waiting, like claudeChatWorkflow's own loop — only a
+		// "delete" ends it. Consequence, recorded on purpose: a thread resolved
+		// BEFORE this change has already completed and stays unresolvable
+		// forever. The thread's GitHub poller stops itself while the comment is
+		// resolved (see poll) so a resolved thread costs nothing.
 	}
-	return json.Marshal(map[string]any{"comment": runID, "reactions": reactions})
 }
 
 // StartCodeComment posts the comment (synchronously, inside StartWorkflow) and
@@ -4689,6 +4807,17 @@ func (m *TaskManager) knownGithubIDs(pr int) map[int64]bool {
 // heartbeatWindow, else slow (m.idle). On the slow cadence it also checks whether
 // the PR is merged/closed, records it on the pr_status tracker, and stops.
 func (m *TaskManager) poll(ctx context.Context, runID string, pr int, rootID int64, prRunID string) {
+	// One poller per thread, and it exits again while the comment is resolved
+	// (see the resolvedComment check below) — so a later reopen can start a
+	// fresh one. See beginPolling for the handshake that makes that safe.
+	if !m.beginPolling(runID) {
+		return
+	}
+	defer func() {
+		if m.endPolling(runID) {
+			go m.poll(ctx, runID, pr, rootID, prRunID)
+		}
+	}()
 	seen := map[int64]bool{}
 	// Wake at the fast cadence and re-evaluate each time, so a heartbeat arriving
 	// mid-idle switches to fast promptly instead of after a full idle sleep. The
@@ -4718,6 +4847,14 @@ func (m *TaskManager) poll(ctx context.Context, runID string, pr int, rootID int
 
 		status, err := m.engine.Status(runID)
 		if err != nil || status == tembed.StatusCompleted || status == tembed.StatusFailed {
+			return
+		}
+		// Stop while the thread is resolved. A resolve no longer completes the
+		// Execution (it can be unresolved again, see the "unresolve" action in
+		// taskCodeCommentWorkflow), so this is what keeps a resolved thread from
+		// polling GitHub forever. The reopenComment Activity starts a fresh
+		// poller when the thread is unresolved.
+		if m.resolvedComment(runID) {
 			return
 		}
 		// Stop once the PR is no longer open — another poller for the same PR may
@@ -4764,6 +4901,50 @@ func (m *TaskManager) poll(ctx context.Context, runID string, pr int, rootID int
 			}
 		}
 	}
+}
+
+// beginPolling claims the single poller slot for thread runID, reporting
+// whether this caller may run it. When a poller is already registered it
+// instead records a restart request: the running poller may be on its way out
+// (it exits while the comment is resolved), and without this handshake a reopen
+// that lands in exactly that window would leave the thread with no poller at
+// all until the next server restart. Purely in-memory bookkeeping — no durable
+// state, so it sits outside the workflow write boundary, like the heartbeat map.
+func (m *TaskManager) beginPolling(runID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.polling[runID] {
+		m.pollRestart[runID] = true
+		return false
+	}
+	m.polling[runID] = true
+	delete(m.pollRestart, runID)
+	return true
+}
+
+// endPolling releases the poller slot for runID and reports whether someone
+// asked for a restart while this poller was still registered (see
+// beginPolling). The caller then starts a fresh poller, which immediately
+// re-checks the thread's state and exits again if there is still nothing to do.
+func (m *TaskManager) endPolling(runID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.polling, runID)
+	restart := m.pollRestart[runID]
+	delete(m.pollRestart, runID)
+	return restart
+}
+
+// resolvedComment reports whether the comment thread runID is currently
+// resolved — a read-only read-model lookup (Comment.ID == its thread's Run ID),
+// so it is allowed anywhere. A missing comment or a read error reports false:
+// the poller then just keeps running, which is the pre-existing behaviour.
+func (m *TaskManager) resolvedComment(runID string) bool {
+	if m.comments == nil {
+		return false
+	}
+	c, found, err := m.comments.Get(context.Background(), runID)
+	return err == nil && found && c.Status == "resolved"
 }
 
 // rootID reads the GitHub root comment ID recorded by postGithubComment.

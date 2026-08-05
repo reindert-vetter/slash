@@ -15,6 +15,9 @@ type Fake struct {
 	IssuePosted     []string         // issue-comment bodies posted (PR-wide replies), in order
 	Deleted         []int64          // comment IDs deleted, in order
 	ResolvedThreads []int64          // root comment IDs whose thread was resolved, in order
+	// UnresolvedThreads mirrors ResolvedThreads for the reopen direction: root
+	// comment IDs whose thread was unresolved, in order.
+	UnresolvedThreads []int64
 	EditedReviews   map[int64]string // review-comment id -> its last edited body
 	EditedIssues    map[int64]string // issue-comment id -> its last edited body
 	replies         []Reply
@@ -261,6 +264,31 @@ func (f *Fake) ResolveReviewThread(_ context.Context, pr int, commentID int64) e
 	defer f.mu.Unlock()
 	f.ResolvedThreads = append(f.ResolvedThreads, commentID)
 	return nil
+}
+
+func (f *Fake) UnresolveReviewThread(_ context.Context, pr int, commentID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.UnresolvedThreads = append(f.UnresolvedThreads, commentID)
+	return nil
+}
+
+// UnresolvedThreadCount returns how many review threads have been unresolved.
+func (f *Fake) UnresolvedThreadCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.UnresolvedThreads)
+}
+
+// LastUnresolvedThread returns the root comment ID of the most recently
+// unresolved thread (0 if none).
+func (f *Fake) LastUnresolvedThread() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.UnresolvedThreads) == 0 {
+		return 0
+	}
+	return f.UnresolvedThreads[len(f.UnresolvedThreads)-1]
 }
 
 // ResolvedThreadCount returns how many review threads have been resolved.
