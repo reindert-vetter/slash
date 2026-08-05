@@ -1243,9 +1243,11 @@ function applyChatProgress(p) {
 // refetch the transcript when that is also the one currently in view.
 async function sendClaudeMessage(text, action = '', context = '', target = null) {
   const trimmed = (text || '').trim()
-  // 'commit'/'clear' both need no typed text — commit pushes whatever Claude
-  // already changed, clear wipes the conversation; neither asks it anything.
-  const needsNoText = action === 'commit' || action === 'clear'
+  // 'commit'/'clear'/'retry' need no typed text — commit pushes whatever
+  // Claude already changed, clear wipes the conversation, retry re-runs the
+  // turn that finally failed from the workflow's own recorded input; none of
+  // them asks anything new.
+  const needsNoText = action === 'commit' || action === 'clear' || action === 'retry'
   const runId = target ? target.runId : cc.runId
   const commentId = target ? target.commentId : cc.commentId
   if (!runId) return
@@ -1329,6 +1331,21 @@ function drainClaudeQueue() {
 // palette's confirm-gated "Wis Claude-gesprek" item (home.mjs), which already
 // ran the extra pending-work warning (chatShadowPendingWarning below) before
 // this point — so this itself asks for no further confirmation.
+// retryClaudeTurn sends the "retry" ChatMessageSignal (chatActionRetry in
+// chat_workflow.go): re-run the turn whose automatic backoff ladder
+// (3/6/12/24/48 seconds, escalating to Sonnet) ran out, from the workflow's
+// OWN recorded input — nothing about the failed turn is re-sent from here, so
+// there is no way for this to post a different message than the one that
+// failed. A no-op on the workflow side when nothing failed.
+//
+// Two entry points, one function, per the mouse/keyboard rule in
+// .claude/docs/mouse-navigation.md: the "Opnieuw proberen" button on the
+// failed bubble (ClaudeChat.mjs) and the Enter-palette item in the Claude
+// column (claudeChatCommandsFor in home.mjs).
+export async function retryClaudeTurn() {
+  await sendClaudeMessage('', 'retry')
+}
+
 export async function clearClaudeChat() {
   await sendClaudeMessage('', 'clear')
   // Belt-and-braces local reset, same reasoning as sendClaudeMessage's own
@@ -1755,6 +1772,7 @@ function claudeChatView() {
 function claudeChatCallbacks(state, commentTarget) {
   return {
     onSend: (text) => sendClaudeMessageFromNew(state, commentTarget, text),
+    onRetry: () => retryClaudeTurn(),
   }
 }
 

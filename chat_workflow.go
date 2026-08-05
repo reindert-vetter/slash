@@ -81,7 +81,69 @@ const (
 	// chatShadowPendingWarning (RelatedPanel.mjs) — so this proceeds
 	// unconditionally once the Signal arrives.
 	chatActionClear = "clear"
+	// chatActionRetry re-runs the LAST turn that finally failed (the automatic
+	// backoff ladder below gave up on it), reusing that turn's own input —
+	// same TurnID, same Body, same Context — so the failed bubble is replaced
+	// rather than joined by a second copy of the reviewer's message. Carries no
+	// Body of its own, like "commit"/"clear". A no-op when nothing failed.
+	chatActionRetry = "retry"
 )
+
+// chatRetryDelays is the automatic backoff ladder for a failed Claude call:
+// the wait AFTER attempt i, so len(chatRetryDelays)+1 attempts in total (~93s
+// of waiting). A var, not a const slice, purely so a test can shrink it —
+// nothing else ever writes it.
+//
+// The waiting itself happens through w.Sleep (a durable timer that survives a
+// restart), never a wall-clock sleep inside the workflow body, and the index
+// is the loop counter — so which delay is used follows from the recorded
+// history alone (.claude/rules/workflow-determinism.md).
+var chatRetryDelays = []time.Duration{
+	3 * time.Second,
+	6 * time.Second,
+	12 * time.Second,
+	24 * time.Second,
+	48 * time.Second,
+}
+
+// chatModelForAttempt picks the model for one attempt of a chat turn: Opus
+// first, Sonnet from the third attempt on.
+//
+// Why not switch on the FIRST retry: the common failure here is a short
+// capacity blip (an overloaded/aborted stream), which is usually gone after
+// three seconds — and the reviewer picked this panel for Opus-quality answers,
+// so a one-off hiccup should not cost that. Why switch at all: if TWO Opus
+// attempts three seconds apart both fail, it is not a moment but a sustained
+// capacity/quota problem on that model, and another model is then a better bet
+// than waiting even longer.
+//
+// Deliberately NOT sticky for the rest of the conversation: the next reviewer
+// turn starts at attempt 0 again, hence at Opus. A temporary outage must not
+// silently downgrade the whole conversation, and keeping the choice a pure
+// function of the attempt counter is exactly what keeps it deterministic under
+// replay — nothing about it is stored or read from outside the workflow. The
+// CLI session is unaffected: the model is a per-invocation flag, --resume
+// keeps the same transcript either way.
+func chatModelForAttempt(attempt int) string {
+	if attempt < 2 {
+		return claude.ModelOpus
+	}
+	return claude.ModelSonnet
+}
+
+// chatModelLabel is the short, reviewer-facing name of a model id (mirrored by
+// MODEL_LABEL in src/ClaudeChat.mjs). An unknown id is shown verbatim.
+func chatModelLabel(model string) string {
+	switch model {
+	case claude.ModelOpus:
+		return "Opus"
+	case claude.ModelSonnet:
+		return "Sonnet"
+	case claude.ModelHaiku:
+		return "Haiku"
+	}
+	return model
+}
 
 // chatConversationRunID derives the claude_chat Execution's Run ID from the
 // comment thread it hangs on. The comment id is already a short, filename-safe
@@ -164,6 +226,12 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 
 	pendingQuestionID := ""
+	// lastFailedTurn is the input of the turn whose automatic retry ladder ran
+	// out, kept so a later chatActionRetry Signal can run exactly that turn
+	// again. Reconstructed identically on every replay (it only ever holds
+	// values that came from a recorded Signal), so it is as deterministic as
+	// pendingQuestionID above.
+	var lastFailedTurn *chatTurnInput
 	for {
 		var sig ChatMessageSignal
 		w.WaitSignal(SignalMessage, &sig)
@@ -180,6 +248,7 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				return nil, fmt.Errorf("clear chat conversation: %w", err)
 			}
 			pendingQuestionID = ""
+			lastFailedTurn = nil
 			continue
 		}
 
@@ -201,30 +270,53 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			continue
 		}
 
-		// The reviewer's next message answers the assistant's last question turn,
-		// if there was one still open.
-		if pendingQuestionID != "" {
-			if err := w.ExecuteActivity("saveChatAnswer", map[string]any{
-				"id": pendingQuestionID, "answer": sig.Body,
-			}, nil); err != nil {
-				return nil, fmt.Errorf("save chat answer: %w", err)
-			}
-			pendingQuestionID = ""
-		}
-
-		if err := w.ExecuteActivity("saveChatMessage", chat.Message{
-			ID: sig.ID, ConversationID: in.CommentID, PR: in.PR, Role: "user", Body: sig.Body,
-		}, nil); err != nil {
-			return nil, fmt.Errorf("save chat user message: %w", err)
-		}
-
-		var result chatTurnResult
-		if err := w.ExecuteActivity("runClaudeTurn", chatTurnInput{
+		// "Opnieuw proberen": re-run the turn whose automatic ladder ran out,
+		// with its OWN recorded input — same TurnID, so its failed bubble is
+		// replaced rather than joined by a second copy of the reviewer's
+		// message — and no new user turn/answer bookkeeping. Nothing failed
+		// (yet) means nothing to do. Decided purely by sig.Action plus
+		// lastFailedTurn, which itself only ever holds recorded values.
+		turn := chatTurnInput{
 			PR: in.PR, ConversationID: in.CommentID, Body: sig.Body, Action: sig.Action, TurnID: sig.ID,
 			Context: sig.Context,
-		}, &result); err != nil {
-			return nil, fmt.Errorf("run claude turn: %w", err)
 		}
+		if sig.Action == chatActionRetry {
+			if lastFailedTurn == nil {
+				continue
+			}
+			turn = *lastFailedTurn
+		} else {
+			// The reviewer's next message answers the assistant's last question turn,
+			// if there was one still open.
+			if pendingQuestionID != "" {
+				if err := w.ExecuteActivity("saveChatAnswer", map[string]any{
+					"id": pendingQuestionID, "answer": sig.Body,
+				}, nil); err != nil {
+					return nil, fmt.Errorf("save chat answer: %w", err)
+				}
+				pendingQuestionID = ""
+			}
+
+			if err := w.ExecuteActivity("saveChatMessage", chat.Message{
+				ID: sig.ID, ConversationID: in.CommentID, PR: in.PR, Role: "user", Body: sig.Body,
+			}, nil); err != nil {
+				return nil, fmt.Errorf("save chat user message: %w", err)
+			}
+		}
+
+		result, err := runChatTurnWithRetries(w, turn)
+		if err != nil {
+			return nil, err
+		}
+		// The ladder is exhausted: the turn stands as "mislukt" until the
+		// reviewer asks for it again (chatActionRetry above). Its input is kept
+		// verbatim so that retry is the very same turn.
+		if result.Message.Kind == chat.KindError {
+			failed := turn
+			lastFailedTurn = &failed
+			continue
+		}
+		lastFailedTurn = nil
 		if result.Message.Kind == chat.KindQuestion {
 			pendingQuestionID = result.Message.ID
 		}
@@ -241,7 +333,7 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// records the one visible outcome turn (success or KindError).
 		if result.Action != nil {
 			if err := w.ExecuteActivity("applyChatCommentAction", chatCommentActionInput{
-				PR: in.PR, ConversationID: in.CommentID, Directive: *result.Action, TurnID: sig.ID,
+				PR: in.PR, ConversationID: in.CommentID, Directive: *result.Action, TurnID: turn.TurnID,
 			}, nil); err != nil {
 				return nil, fmt.Errorf("apply chat comment action: %w", err)
 			}
@@ -262,6 +354,10 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 // chatMessageID for why every message this turn writes derives its id from it.
 // Context mirrors ChatMessageSignal.Context — folded into the CLI prompt by
 // buildChatPrompt, never into the saved chat.Message.Body.
+// Attempt/MaxAttempts are the position in runChatTurnWithRetries' backoff
+// ladder (0-based / total). They decide the model (chatModelForAttempt) and
+// the wording of a failed attempt's bubble, and they come from the workflow's
+// own loop counter, so both stay deterministic under replay.
 type chatTurnInput struct {
 	PR             int    `json:"pr"`
 	ConversationID string `json:"conversationId"`
@@ -269,6 +365,36 @@ type chatTurnInput struct {
 	Action         string `json:"action,omitempty"`
 	TurnID         string `json:"turnId,omitempty"`
 	Context        string `json:"context,omitempty"`
+	Attempt        int    `json:"attempt,omitempty"`
+	MaxAttempts    int    `json:"maxAttempts,omitempty"`
+}
+
+// runChatTurnWithRetries drives one reviewer turn through the automatic
+// backoff ladder: run it, and while the Activity reports a still-retryable
+// failure (chat.KindRetrying), wait chatRetryDelays[attempt] on a DURABLE
+// timer and run it again. It returns the final result — a normal/question
+// turn, a comment_action directive, or a chat.KindError message meaning the
+// ladder is exhausted.
+//
+// Deterministic: the number of iterations and the delay index follow only from
+// the recorded Activity results and the loop counter, the wait is w.Sleep (a
+// timer event in the history, rescheduled after a restart), and nothing reads
+// a live clock. Every attempt reuses the same TurnID, so each one REPLACES the
+// previous attempt's row instead of adding a bubble (see chatMessageID).
+func runChatTurnWithRetries(w *tembed.Workflow, turn chatTurnInput) (chatTurnResult, error) {
+	var result chatTurnResult
+	for attempt := 0; ; attempt++ {
+		arg := turn
+		arg.Attempt = attempt
+		arg.MaxAttempts = len(chatRetryDelays) + 1
+		if err := w.ExecuteActivity("runClaudeTurn", arg, &result); err != nil {
+			return result, fmt.Errorf("run claude turn: %w", err)
+		}
+		if result.Message.Kind != chat.KindRetrying {
+			return result, nil
+		}
+		w.Sleep(chatRetryDelays[attempt])
+	}
 }
 
 // chatCommitInput is commitChatShadowEdits's own Activity input (chat_shadow.go).
@@ -372,8 +498,12 @@ const maxChatQuestionOptions = 3
 // claude for the next turn (resuming that session, or starting one), persist
 // the assistant's reply (parsed into a question turn when it matches the
 // directive shape) plus the (possibly new) session id, and return the saved
-// message. A failed claude call is stored as a KindError turn rather than
-// failing the workflow, so the reviewer can simply try again.
+// message. A failed claude call is stored as a visible turn rather than
+// failing the workflow: chat.KindRetrying while runChatTurnWithRetries still
+// has a rung left on its backoff ladder (that Kind is precisely what tells the
+// workflow to sleep and call this again), chat.KindError once it is exhausted.
+// The model is not fixed here either — chatModelForAttempt derives it from
+// arg.Attempt, so the third attempt onward runs on Sonnet.
 //
 // Every turn — regardless of arg.Action — first tries prepareChatShellWorkDir
 // (chat_shadow.go) to get real shell/file access in the conversation's own
@@ -426,8 +556,9 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	defer finishChatProgress(arg.PR, arg.ConversationID)
 
 	sessionID, _ := cm.GetSession(ctx, arg.ConversationID)
+	model := chatModelForAttempt(arg.Attempt)
 	req := claude.RunRequest{
-		Model:        claude.ModelOpus,
+		Model:        model,
 		Prompt:       buildChatPrompt(arg.Context, arg.Body),
 		SessionID:    sessionID,
 		SystemPrompt: claude.ChatSystemPrompt,
@@ -447,10 +578,10 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	req.SystemPrompt += "\n\nHet id van DEZE comment-thread (gebruik dit exact als \"commentId\" in het comment_action-format): " + arg.ConversationID
 	result, err := cl.RunChat(ctx, req)
 	if err != nil {
+		kind, body := chatFailureTurn(arg.Attempt, model)
 		msg := chat.Message{
 			ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
-			Role: "assistant", Kind: chat.KindError,
-			Body: "Er ging iets mis bij het praten met Claude. Probeer het opnieuw.",
+			Role: "assistant", Kind: kind, Body: body, Model: model,
 		}
 		_ = cm.SaveMessage(ctx, msg)
 		return msg, nil
@@ -461,10 +592,35 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		_ = err
 	}
 	msg, action := parseAssistantTurn(arg.PR, arg.ConversationID, arg.TurnID, result.Text)
+	// Which model actually answered — the reviewer sees it on the bubble when it
+	// isn't the default one (see the model pill in ClaudeChat.mjs).
+	msg.Model = model
 	if action == nil {
 		_ = cm.SaveMessage(ctx, msg)
 	}
 	return msg, action
+}
+
+// chatFailureTurn words one failed attempt for the reviewer and says, through
+// its Kind, whether the workflow will try again by itself.
+//
+// KindRetrying while there is a next rung on the ladder ("nieuwe poging over N
+// seconden"), KindError once it is exhausted — at which point only the manual
+// "Opnieuw proberen" (chatActionRetry) starts it over. The wording names the
+// model of the attempt that failed and of the next one, because a switch from
+// Opus to Sonnet is exactly the kind of thing a reviewer should not have to
+// guess at; the meaning lives in those words, never in the bubble's colour
+// (the colourblind rule).
+func chatFailureTurn(attempt int, model string) (kind, body string) {
+	total := len(chatRetryDelays) + 1
+	failed := fmt.Sprintf("Er ging iets mis bij het praten met Claude (%s). Poging %d van %d mislukt",
+		chatModelLabel(model), attempt+1, total)
+	if attempt >= len(chatRetryDelays) {
+		return chat.KindError, failed + " — dat was de laatste automatische poging. Probeer het handmatig opnieuw."
+	}
+	next := chatModelForAttempt(attempt + 1)
+	return chat.KindRetrying, fmt.Sprintf("%s — nieuwe poging over %d seconden met %s.",
+		failed, int(chatRetryDelays[attempt].Seconds()), chatModelLabel(next))
 }
 
 // chatProgressThrottle bounds how often a text delta is pushed to the browser.

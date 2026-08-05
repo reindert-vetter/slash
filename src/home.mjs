@@ -83,6 +83,7 @@ import RelatedPanel, {
   hasCommentClaudeFooter,
   isClaudeChatFocused,
   clearClaudeChat,
+  retryClaudeTurn,
   claudeChatShadowWarning,
   sendPendingReply,
   pendingPublishInfo,
@@ -4495,12 +4496,24 @@ function claudeChatClearConfirmCommandsFor() {
 
 // claudeChatCommandsFor — the root list for Enter on the Claude column (see
 // isClaudeChatFocused/claudeComposeEmpty below, mirrors commentCommandsFor's
-// own role for the comment column). Just the one command, gated behind its
+// own role for the comment column). "Wis Claude-gesprek" is gated behind its
 // own confirm submenu (see claudeChatClearConfirmCommandsFor) rather than
 // running directly — the same two-step pattern REVIEW_APPROVE_COMMANDS uses
-// for "Keur de HELE PR goed".
+// for "Keur de HELE PR goed"; "Probeer de mislukte turn opnieuw" runs
+// straight away (it re-runs one failed turn, nothing destructive) and is the
+// keyboard twin of the "Opnieuw proberen" button on the failed bubble itself
+// (ClaudeChat.mjs) — same function either way, per
+// .claude/docs/mouse-navigation.md. It is listed unconditionally: the
+// workflow ignores the Signal when no turn failed, which is cheaper than
+// teaching this menu to inspect the transcript.
 function claudeChatCommandsFor() {
   return withClose([
+    {
+      id: 'retry-claude-turn',
+      label: 'Probeer de mislukte turn opnieuw',
+      hint: 'opnieuw',
+      run: () => retryClaudeTurn(),
+    },
     {
       id: 'clear-claude-chat',
       label: 'Wis Claude-gesprek',

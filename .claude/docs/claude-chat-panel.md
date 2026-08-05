@@ -319,8 +319,9 @@ The "Embedded Claude conversation" section owns:
   `progress`/`tick` are the live turn, see "Live progress"). `status` is the
   PANEL's own loading/error state (ensuring the
   workflow, fetching the transcript) — a genuinely **failed Claude turn** is
-  a normal message with `kind: 'error'` (see `chat_workflow.go`'s
-  `runOneClaudeTurn`), not this field.
+  a normal message with `kind: 'error'` (ladder exhausted) or `'retrying'`
+  (another attempt coming) — see `chat_workflow.go`'s `runOneClaudeTurn` and
+  "Opnieuw proberen" below — not this field.
 - **`cs.claudePos`** — added to the existing `cs` reactive alongside
   `threadPos`, bound in the same `bindUrlState(cs, [...], { ns: 'rel' })`
   list as `rel.cpos`, so a refresh restores the exact turn the reviewer was
@@ -712,12 +713,22 @@ marks all three kinds distinctly, mirroring `RelatedPanel.mjs`'s
 `aiWarningBadge`/`staleAnchorBadge`: a small pill with a word + a shape glyph
 (a checkmark for `'action'`, a pencil for `'draft_reply'`, the same
 warning-triangle SVG as `aiWarningBadge`/`related-covers-warning` for
-`'error'`) — the tint (emerald/sky/rose respectively) is decoration on top,
-never the sole carrier, per the colourblind rule. `msg.kind` is fixed at
-message creation (unlike `answer`, which fills in later on the same row), so
-the badge needs no `${() => ...}` getter wrapper of its own — same reasoning
-as the existing `isError`/`mine` locals just below it. Testids
-`claude-message-action`/`claude-message-draft-reply`/`claude-message-error`.
+`'error'`, a circular-arrows glyph for `'retrying'`) — the tint
+(emerald/sky/rose/amber respectively) is decoration on top, never the sole
+carrier, per the colourblind rule. Testids
+`claude-message-action`/`claude-message-draft-reply`/`claude-message-error`/
+`claude-message-retrying`.
+
+**`msg.kind` is NOT fixed at message creation any more** (it used to be, and
+the badge was interpolated statically because of it): the automatic retry
+ladder rewrites the SAME row id per attempt, so one bubble walks
+`'retrying' → 'retrying' → 'error'` or is replaced by a plain reply (see "A
+failed Claude call degrades to a visible turn" in
+`.claude/docs/workflows-comments.md`). The key is that row id, so arrow.js
+reuses the node and only re-applies function-valued slots — hence
+`${() => chatKindBadge(msg)}` and `${() => claudeModelPill(msg)}` at the call
+site, and hence the class binding (already a function) picking up the new
+tint for free. Keep them functions.
 Test: the "action turn and an error turn each get their own badge" case in
 `tests/claude-chat-panel.spec.mjs` (a direct-mount unit test of
 `claudeChatColumn`, since driving a real `comment_action` directive through
@@ -1070,6 +1081,41 @@ folded into `claudeThreadContextBlock`'s text (above) share ONE mechanism:
   falls back to numbering continuously within just that one thread instead
   (`threadFenceStartIndexes`' own `inScope` check) — nothing to keep in sync
   with there, but still nicer than resetting to 1 in every bubble.
+
+## "Opnieuw proberen" — a failed turn, and which model answered
+
+The backend half (the 3/6/12/24/48s ladder, the `retrying`/`error` Kinds, the
+Opus→Sonnet escalation, the `"retry"` Signal) is in
+`.claude/docs/workflows-comments.md`; this is what the reviewer sees.
+
+- **A `kind: 'retrying'` bubble** is the failure with another attempt already
+  coming: amber tint, badge word "nieuwe poging", and a body naming the
+  attempt, the wait and the model of the next try ("Poging 2 van 6 mislukt —
+  nieuwe poging over 6 seconden met Sonnet."). No button: nothing for the
+  reviewer to do. Each attempt rewrites the same row, so the text updates in
+  place — the panel refetches because every attempt's Activity ends in
+  `publishChatChanged`. Deliberately **no live countdown**: that would need a
+  UI timer for a number the reviewer does not act on.
+- **A `kind: 'error'` bubble** is the exhausted ladder: rose tint, badge word
+  "foutmelding", body ending in "Probeer het handmatig opnieuw."
+- **The "Opnieuw proberen" button** (`data-testid=claude-retry`, word + glyph)
+  renders **only** on a `'error'` bubble that is the **last** message of the
+  transcript — that is the one whose input the workflow still holds in
+  `lastFailedTurn`. `disabled="${() => busy()}"` uses the plain attribute name
+  (never `?disabled=`, see `.claude/rules/arrowjs-pitfalls.md`).
+- **Keyboard twin:** `claudeChatCommandsFor()` (`home.mjs`) lists "Probeer de
+  mislukte turn opnieuw" as the Claude column's first Enter-palette item, no
+  confirm submenu (re-running one turn is not destructive). Both it and the
+  button call the same `retryClaudeTurn()` (`RelatedPanel.mjs`), per
+  `.claude/docs/mouse-navigation.md`. It is listed unconditionally — the
+  workflow ignores the Signal when nothing failed, which is cheaper than
+  teaching the menu to inspect the transcript.
+- **The model pill** (`claudeModelPill`, `data-testid=claude-message-model`)
+  names the model behind an assistant turn **only when it isn't the default**
+  (`DEFAULT_MODEL`/`MODEL_LABEL` mirror `chatModelLabel` in
+  `chat_workflow.go`). So an ordinary Opus turn looks exactly as before, and
+  the pill's mere presence already means "another model answered this one" —
+  a word, never a colour.
 
 ## "Wis Claude-gesprek" — clearing a conversation (chatActionClear)
 

@@ -456,6 +456,13 @@ type Fake struct {
 	chatPos   map[string]int
 	chatErr   error
 	chatSeq   int
+	// chatModelErrs fails RunChat only for the given model ids, and
+	// chatFailures fails the next N calls whatever the model — the two shapes a
+	// retry/escalation test needs: "this model is unreachable" and "it was down
+	// for a moment". Both are checked before the ordinary chatQueue script.
+	chatModelErrs map[string]error
+	chatFailures  int
+	chatFailErr   error
 	// chatEvents are replayed to req.OnEvent (when set) before each RunChat
 	// call returns, so a test can drive the progress/streaming path without a
 	// real subprocess. Programmed once and reused for every call — a test that
@@ -531,6 +538,31 @@ func (f *Fake) SetChatError(err error) {
 	f.chatErr = err
 }
 
+// SetChatModelError makes every RunChat call for one model id fail with err
+// (pass nil to reset it). Lets a test model "this model is unreachable while
+// that one answers" — what an Opus→Sonnet escalation needs.
+func (f *Fake) SetChatModelError(model string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.chatModelErrs == nil {
+		f.chatModelErrs = map[string]error{}
+	}
+	if err == nil {
+		delete(f.chatModelErrs, model)
+		return
+	}
+	f.chatModelErrs[model] = err
+}
+
+// SetChatFailures makes the next n RunChat calls fail with err, after which
+// the ordinary programmed script takes over again — a transient outage.
+func (f *Fake) SetChatFailures(n int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatFailures = n
+	f.chatFailErr = err
+}
+
 // RunChat returns this session's next programmed text off chatQueue (or ""
 // once that session ran past the end of the script) and a session id:
 // req.SessionID echoed back if set, otherwise a
@@ -549,6 +581,13 @@ func (f *Fake) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) 
 	}
 	if f.chatErr != nil {
 		return ChatResult{}, f.chatErr
+	}
+	if err := f.chatModelErrs[req.Model]; err != nil {
+		return ChatResult{}, err
+	}
+	if f.chatFailures > 0 {
+		f.chatFailures--
+		return ChatResult{}, f.chatFailErr
 	}
 	sessionID := req.SessionID
 	if sessionID == "" {

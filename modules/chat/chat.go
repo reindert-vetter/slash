@@ -42,10 +42,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   conversation_id TEXT NOT NULL,
   pr              INTEGER NOT NULL,
   role            TEXT NOT NULL,           -- 'user' | 'assistant'
-  kind            TEXT NOT NULL DEFAULT '', -- '' (plain text) | 'question' | 'error' | 'action' | 'draft_reply'
+  kind            TEXT NOT NULL DEFAULT '', -- '' (plain text) | 'question' | 'error' | 'retrying' | 'action' | 'draft_reply'
   body            TEXT NOT NULL,
   options_json    TEXT NOT NULL DEFAULT '', -- JSON array of up to a few option strings ('question' only)
   answer          TEXT NOT NULL DEFAULT '', -- filled once the reviewer responds to a 'question' turn
+  model           TEXT NOT NULL DEFAULT '', -- the claude model that produced an assistant turn ('' = unknown/user turn)
   created_at      TEXT NOT NULL
 );
 
@@ -56,7 +57,18 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_pr ON chat_messages(pr);
 // Kind values a message row can carry. "" is the default (a plain text turn).
 const (
 	KindQuestion = "question" // an assistant turn asking the reviewer to pick (or type) an answer
-	KindError    = "error"    // an assistant turn reporting a failed Claude call
+	// KindError is an assistant turn reporting a Claude call that FINALLY
+	// failed: the workflow's automatic backoff ladder is exhausted and only a
+	// manual retry (chatActionRetry, chat_workflow.go) will try again.
+	KindError = "error"
+	// KindRetrying is the same failure while the workflow is still going to try
+	// again by itself — one durable w.Sleep of the next backoff step away (see
+	// chatRetryDelays in chat_workflow.go). It occupies the SAME row id as the
+	// eventual reply/final error of that turn, so a turn never leaves a trail of
+	// attempt bubbles: each attempt REPLACES this row. The distinct Kind is what
+	// lets the UI say "another attempt is coming" instead of "it failed", and
+	// what keeps the manual-retry button off a turn that is still running.
+	KindRetrying = "retrying"
 	// KindAction marks the confirmation turn shown after Claude — on the
 	// reviewer's explicit request — successfully resolved the comment thread
 	// this conversation hangs on (see chat_workflow.go's
@@ -89,7 +101,13 @@ type Message struct {
 	// message answers it (SetAnswer), so a refresh still shows the picked
 	// option (or typed free text) tied to its own question, regardless of
 	// message ordering.
-	Answer    string `json:"answer,omitempty"`
+	Answer string `json:"answer,omitempty"`
+	// Model is the claude model id that produced this assistant turn (see
+	// modules/claude's ModelOpus/ModelSonnet). Set for every assistant turn the
+	// chat workflow stores — including a failed/retrying one, so the reviewer
+	// can see WHICH model could not be reached. Empty for a reviewer turn and
+	// for rows written before this column existed.
+	Model     string `json:"model,omitempty"`
 	CreatedAt string `json:"createdAt"`
 }
 
@@ -106,6 +124,7 @@ func Open(path string) (*Module, error) {
 		db.Close()
 		return nil, fmt.Errorf("chat: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
 }
 
@@ -114,7 +133,20 @@ func New(db *sql.DB) (*Module, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("chat: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
+}
+
+// migrate adds columns introduced after the first release. CREATE TABLE IF NOT
+// EXISTS does not touch an existing table, so a column added later needs an
+// explicit ADD; a duplicate-column error just means the DB is already up to
+// date. Same shape as modules/comments' own migrate.
+func migrate(db *sql.DB) {
+	for _, col := range []string{
+		`ALTER TABLE chat_messages ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, _ = db.Exec(col) // ignore "duplicate column name"
+	}
 }
 
 func (m *Module) Close() error { return m.db.Close() }
@@ -170,11 +202,11 @@ func (m *Module) SaveMessage(ctx context.Context, msg Message) error {
 	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO chat_messages
-		   (id, conversation_id, pr, role, kind, body, options_json, answer, created_at)
+		   (id, conversation_id, pr, role, kind, body, options_json, answer, model, created_at)
 		 VALUES (?,?,?,?,?,?,?,
 		   COALESCE((SELECT answer FROM chat_messages WHERE id = ?), ''),
-		   ?)`,
-		msg.ID, msg.ConversationID, msg.PR, msg.Role, msg.Kind, msg.Body, optsJSON, msg.ID, msg.CreatedAt)
+		   ?,?)`,
+		msg.ID, msg.ConversationID, msg.PR, msg.Role, msg.Kind, msg.Body, optsJSON, msg.ID, msg.Model, msg.CreatedAt)
 	return err
 }
 
@@ -246,7 +278,7 @@ func (m *Module) ConversationsWithMessages(ctx context.Context, pr int) ([]strin
 // for the UI/API.
 func (m *Module) List(ctx context.Context, conversationID string) ([]Message, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT id, conversation_id, pr, role, kind, body, options_json, answer, created_at
+		`SELECT id, conversation_id, pr, role, kind, body, options_json, answer, model, created_at
 		 FROM chat_messages WHERE conversation_id = ? ORDER BY created_at`, conversationID)
 	if err != nil {
 		return nil, err
@@ -257,7 +289,7 @@ func (m *Module) List(ctx context.Context, conversationID string) ([]Message, er
 		var msg Message
 		var optsJSON string
 		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.PR, &msg.Role, &msg.Kind,
-			&msg.Body, &optsJSON, &msg.Answer, &msg.CreatedAt); err != nil {
+			&msg.Body, &optsJSON, &msg.Answer, &msg.Model, &msg.CreatedAt); err != nil {
 			return nil, err
 		}
 		if optsJSON != "" {

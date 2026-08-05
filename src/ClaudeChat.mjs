@@ -231,13 +231,20 @@ function claudeQueuedBubbles(view) {
 // 'draft_reply' (chat.KindDraftReply — Claude drafted a reply for that same
 // thread, but it only landed in the comment composer for the reviewer to edit
 // and send themselves; see RelatedPanel.mjs's applyPendingDraftReplies) or
-// 'error' (chat.KindError — an attempted action/resolve failed). Mirrors
-// RelatedPanel.mjs's aiWarningBadge/staleAnchorBadge: a small pill carrying a
-// WORD (+ a shape glyph), the tint decoration on top — never colour alone,
-// per the colourblind rule. `kind` is set once at message creation and never
-// mutated afterward (unlike `answer`), so — like `mine`/`isError` below — this
-// needs no `${() => ...}` getter wrapper of its own; it can't go stale on a
-// later re-render of the same keyed bubble. Returns '' for a plain turn.
+// 'error' (chat.KindError — an attempted action/resolve failed, or a Claude
+// call whose automatic retry ladder is exhausted) or 'retrying'
+// (chat.KindRetrying — that same failure with another attempt still coming).
+// Mirrors RelatedPanel.mjs's aiWarningBadge/staleAnchorBadge: a small pill
+// carrying a WORD (+ a shape glyph), the tint decoration on top — never colour
+// alone, per the colourblind rule. Returns '' for a plain turn.
+//
+// `kind` DOES change on an existing row: every attempt of one turn rewrites
+// the same message id (chatMessageID, chat_workflow.go), walking
+// 'retrying' → 'retrying' → 'error' or → a plain reply. The bubble's key is
+// that id, so arrow.js reuses the node and only re-applies slots whose value
+// is a function — which is why the call site wraps this in its own
+// `${() => chatKindBadge(msg)}` binding (see the file-level doc comment).
+// Same for claudeModelPill below.
 function chatKindBadge(msg) {
   if (msg.kind === 'action') {
     return html`<span
@@ -279,6 +286,29 @@ function chatKindBadge(msg) {
       concept in comment-veld gezet</span
     >`
   }
+  if (msg.kind === 'retrying') {
+    return html`<span
+      class="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
+      data-testid="claude-message-retrying"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-2.5 w-2.5"
+      >
+        <path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>
+        <path d="M21 3v5h-5"></path>
+        <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
+        <path d="M3 21v-5h5"></path>
+      </svg>
+      nieuwe poging</span
+    >`
+  }
   if (msg.kind === 'error') {
     return html`<span
       class="inline-flex shrink-0 items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[9px] font-medium text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
@@ -304,16 +334,63 @@ function chatKindBadge(msg) {
   return ''
 }
 
+// MODEL_LABEL — the short, reviewer-facing name of a model id, mirroring
+// chatModelLabel in chat_workflow.go. DEFAULT_MODEL is the one this panel
+// normally runs on; a turn answered by that model shows no pill at all, so
+// the pill's presence itself already means "not the usual model".
+const MODEL_LABEL = { 'claude-opus-5': 'Opus', 'claude-sonnet-5': 'Sonnet', 'claude-haiku-4-5': 'Haiku' }
+const DEFAULT_MODEL = 'claude-opus-5'
+
+// claudeModelPill names the model behind an assistant turn when it isn't the
+// default one — which happens when the automatic retry ladder escalated to
+// Sonnet (chatModelForAttempt, chat_workflow.go). A WORD, not a colour: the
+// reviewer must be able to see that this answer came from a different model
+// than the rest of the conversation.
+function claudeModelPill(msg) {
+  if (msg.role === 'user') return ''
+  const model = msg.model || ''
+  if (!model || model === DEFAULT_MODEL) return ''
+  return html`<span
+    class="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+    data-testid="claude-message-model"
+  >
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="h-2.5 w-2.5"
+    >
+      <path d="M12 2 4 7v10l8 5 8-5V7Z"></path>
+      <path d="M12 22V12"></path>
+      <path d="m4 7 8 5 8-5"></path>
+    </svg>
+    ${MODEL_LABEL[model] || model}</span
+  >`
+}
+
 // claudeBubble — one turn. `claudePos` is a getter; `active` marks the
 // bubble the cursor currently points at (mirrors reactionBubble's own
 // active-highlight rule, counting from the bottom the same way). A `kind:
-// 'error'` turn (a failed Claude call, see chat_workflow.go's
-// runOneClaudeTurn) gets a rose tint instead of the ordinary assistant/own
-// tint, plus chatKindBadge's word+glyph — the tint alone never carries the
-// meaning, per the colorblind rule.
-function claudeBubble(msg, i, total, claudePos, onSend) {
+// 'error'` turn (a Claude call whose automatic retry ladder is exhausted, see
+// chat_workflow.go's runChatTurnWithRetries) gets a rose tint, a `kind:
+// 'retrying'` one (the same failure with another attempt still coming) an
+// amber tint, instead of the ordinary assistant/own tint — always alongside
+// chatKindBadge's word+glyph, since the tint alone never carries the meaning,
+// per the colorblind rule.
+//
+// Only a finally-failed turn — and only the LAST message of the transcript,
+// since that is the one whose input the workflow still holds — offers
+// "Opnieuw proberen" (`onRetry`, the chatActionRetry Signal). A 'retrying'
+// bubble deliberately does not: another attempt is already on its way.
+function claudeBubble(msg, i, total, claudePos, onSend, onRetry, busy) {
   const mine = msg.role === 'user'
   const isError = msg.kind === 'error'
+  const isRetrying = msg.kind === 'retrying'
+  const canRetry = isError && i === total - 1
   return html`
     <div class="${'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}" data-testid="claude-message">
       <div class="flex items-center gap-2 py-0.5">
@@ -321,7 +398,7 @@ function claudeBubble(msg, i, total, claudePos, onSend) {
         <span class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">
           ${mine ? 'Jij' : CLAUDE_NAME}
         </span>
-        ${chatKindBadge(msg)}
+        ${() => chatKindBadge(msg)} ${() => claudeModelPill(msg)}
       </div>
       <div
         class="${() => {
@@ -330,7 +407,9 @@ function claudeBubble(msg, i, total, claudePos, onSend) {
             'markdown-body max-w-[92%] rounded-xl border px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] ' +
             (isError
               ? 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300'
-              : mine
+              : isRetrying
+                ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300'
+                : mine
                 ? 'border-indigo-300 bg-indigo-50 text-slate-800 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-zinc-200'
                 : 'border-slate-300 bg-slate-100 text-slate-800 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300') +
             (active ? ' ring-2 ring-indigo-400' : '')
@@ -345,6 +424,32 @@ function claudeBubble(msg, i, total, claudePos, onSend) {
               >→ ${msg.answer}</span
             >`
           : claudeQuestionOptions(msg, onSend)}
+      ${() =>
+        canRetry
+          ? html`<button
+              class="mt-0.5 inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              data-testid="claude-retry"
+              disabled="${() => busy()}"
+              @click="${() => onRetry()}"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="h-3 w-3"
+              >
+                <path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>
+                <path d="M21 3v5h-5"></path>
+                <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
+                <path d="M3 21v-5h5"></path>
+              </svg>
+              Opnieuw proberen
+            </button>`
+          : ''}
     </div>
   `
 }
@@ -422,7 +527,9 @@ export function claudeChatColumn(view, callbacks) {
             ]
           }
           return messages.map((m, i) =>
-            claudeBubble(m, i, total, view.claudePos, callbacks.onSend).key('claude-msg:' + m.id),
+            claudeBubble(m, i, total, view.claudePos, callbacks.onSend, callbacks.onRetry, view.busy).key(
+              'claude-msg:' + m.id,
+            ),
           )
         }}
         ${() => claudePartialBubble(view)}

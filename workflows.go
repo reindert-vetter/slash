@@ -2136,11 +2136,14 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		return nil, m.chat.SetAnswer(ctx, arg.ID, arg.Answer)
 	})
-	// Activity: run one conversational Claude turn (side effect: shells out via
-	// claude.Client.RunChat) and persist the assistant's reply + the
-	// conversation's (possibly new) session id. Returns the saved chat.Message
-	// so the workflow can tell a "question" turn apart from a plain one. See
-	// chat_workflow.go for runOneClaudeTurn/parseAssistantTurn.
+	// Activity: run one ATTEMPT of a conversational Claude turn (side effect:
+	// shells out via claude.Client.RunChat) and persist the assistant's reply +
+	// the conversation's (possibly new) session id. Returns the saved
+	// chat.Message so the workflow can tell a "question" turn apart from a
+	// plain one — and a chat.KindRetrying message apart from both, which is how
+	// runChatTurnWithRetries knows to sleep and call this again (with a higher
+	// Attempt, hence possibly another model). See chat_workflow.go for
+	// runOneClaudeTurn/parseAssistantTurn.
 	engine.RegisterActivity("runClaudeTurn", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg chatTurnInput
 		if err := json.Unmarshal(in, &arg); err != nil {

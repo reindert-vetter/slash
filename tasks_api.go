@@ -1023,7 +1023,7 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		}
 		// The message signal carries one reviewer turn to a claude_chat
 		// conversation — the UI write path for the embedded Claude panel.
-		// action ("" | "edit" | "commit") is validated here, BEFORE it ever
+		// action ("" | "edit" | "commit" | "clear" | "retry") is validated here, BEFORE it ever
 		// reaches the workflow/git-plumbing, per the validate-before-exec rule —
 		// see ChatMessageSignal's own doc comment for what each value means.
 		if parts[2] == SignalMessage {
@@ -1040,14 +1040,16 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			switch body.Action {
 			case "", chatActionEdit:
 				// A plain question or an edit instruction both need real text —
-				// only "commit"/"clear" (below) need none.
+				// only "commit"/"clear"/"retry" (below) need none.
 				if strings.TrimSpace(body.Body) == "" {
 					http.Error(w, "invalid message", http.StatusBadRequest)
 					return
 				}
-			case chatActionCommit, chatActionClear:
+			case chatActionCommit, chatActionClear, chatActionRetry:
 				// No text required — "commit" pushes whatever Claude already
-				// changed, "clear" wipes the conversation; neither asks it anything.
+				// changed, "clear" wipes the conversation, "retry" re-runs the
+				// turn that finally failed (its body comes from the workflow's own
+				// recorded input, never from here); none of them asks anything new.
 			default:
 				http.Error(w, "invalid action", http.StatusBadRequest)
 				return

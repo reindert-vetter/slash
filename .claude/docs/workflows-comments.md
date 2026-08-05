@@ -643,26 +643,77 @@ choices; **`Answer` is filled in on that SAME row** once the reviewer's next
 message arrives (step 1 above) — deliberately not a separate "answer" row, so
 a refresh shows question+answer tied together regardless of ordering.
 
-### A failed Claude call degrades to a visible error turn
+### A failed Claude call degrades to a visible turn — and is retried by itself
 
-`runOneClaudeTurn` never fails the workflow on a `RunChat` error — it stores a
-`Kind: chat.KindError` assistant message with a fixed apology text instead, so
-the conversation stays alive and the reviewer can simply try again. Mirrors
+`runOneClaudeTurn` never fails the workflow on a `RunChat` error: it stores a
+visible assistant message instead, so the conversation stays alive. Mirrors
 the "best-effort, log and carry on" convention used elsewhere for
 GitHub/Claude side effects, except here the failure is surfaced **in the
 transcript itself** (not just the log) since the reviewer is actively waiting
 on it.
 
+On top of that, `runChatTurnWithRetries` (`chat_workflow.go`) drives a turn
+through an **automatic backoff ladder**: `chatRetryDelays` = 3, 6, 12, 24, 48
+seconds, so six attempts in total (~93s). The two Kinds are what steer it:
+
+- **`chat.KindRetrying`** — the attempt failed and another one is coming. This
+  Kind is literally the loop condition: the workflow `w.Sleep`s the next rung
+  and calls the Activity again.
+- **`chat.KindError`** — the ladder is exhausted. The turn stands as "mislukt"
+  until the reviewer asks for it again (manual retry, below).
+
+**Every attempt reuses the same `TurnID`**, so `chatMessageID` yields the same
+row id and `SaveMessage` (INSERT OR REPLACE) makes each attempt **replace** the
+previous one. A turn therefore never leaves a trail of attempt bubbles: one row
+walks `retrying → retrying → error`, or is overwritten by the real answer.
+
+**Model escalation, per turn only.** `chatModelForAttempt` returns Opus for
+attempts 0-1 and **Sonnet from attempt 2 on**. Not on the first retry: the
+common failure is a short capacity blip that is gone after three seconds, and
+the reviewer picked this panel for Opus answers. But two Opus failures three
+seconds apart mean a sustained capacity problem, where another model beats
+waiting longer. Deliberately **not sticky**: the next reviewer turn (and a
+manual retry) starts at attempt 0, hence at Opus again — a temporary outage
+must not silently downgrade the whole conversation, and keeping the choice a
+pure function of the attempt counter is exactly what keeps it deterministic.
+The CLI session is unaffected; the model is a per-invocation `--model` flag,
+`--resume` keeps the same transcript. `chat.Message.Model` records which model
+answered, which the UI shows as a pill when it isn't the default one.
+
+**Determinism** (`.claude/rules/workflow-determinism.md`): the iteration count
+and the delay index follow only from the recorded Activity results and the loop
+counter, the waiting is `w.Sleep` (a durable timer event, rescheduled after a
+restart — this is the first place in slash that uses it), and nothing reads a
+live clock. `chatRetryDelays` is a `var` purely so a test can shrink it.
+
+**Manual retry** — `chatActionRetry` ("retry"), the fourth
+`ChatMessageSignal.Action` variant, validated in `tasks_api.go` next to
+`commit`/`clear` as a no-text action. The workflow keeps the finally-failed
+turn's own input in `lastFailedTurn` and re-runs **that** through the same
+ladder: same `TurnID`/`Body`/`Context`, so no second user bubble appears and
+the failed row is replaced. Nothing about the turn is re-sent from the browser.
+A Signal with nothing failed is a no-op; a `clear` drops `lastFailedTurn`. On
+the frontend both entry points call the one `retryClaudeTurn`
+(`RelatedPanel.mjs`): the button on the failed bubble and the Claude-column
+palette item — see `.claude/docs/claude-chat-panel.md`.
+
+Tests: `TestClaudeChatRetriesTransientFailure`, `TestClaudeChatEscalatesToSonnet`,
+`TestClaudeChatGivesUpAfterLadder`, `TestClaudeChatManualRetryRerunsFailedTurn`
+(all shrink the ladder to milliseconds via `shrinkChatRetryDelays`).
+
 ### `modules/chat` (`data/chat.db`)
 
 `chat_conversations(id, pr, session_id, created_at, updated_at)` +
 `chat_messages(id, conversation_id, pr, role, kind, body, options_json,
-answer, created_at)` — `options_json` round-trips `Message.Options`
+answer, model, created_at)` — `options_json` round-trips `Message.Options`
 ([]string) through the SQLite TEXT column. Write methods
 (`EnsureConversation`/`SaveMessage`/`SetAnswer`/`SetSession`) are
 workflow-Activity-only; `List`/`GetSession` back the read-only UI/API. `Purge`
 is wired into the `cleanup` workflow's `purgeDeps`/`purgePR` like every other
-PR-scoped module.
+PR-scoped module. `model` was added later and therefore also lives in a small
+`migrate(db)` (`ALTER TABLE … ADD COLUMN`, duplicate-column error ignored),
+same shape as `modules/comments`' own — a row written before it exists simply
+reads back as `""`, which the UI treats as "no pill".
 
 ### Agentic edits (Phase 3): a per-conversation shadow worktree, never the shared head
 

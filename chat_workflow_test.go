@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -602,10 +603,12 @@ func waitForComment(t *testing.T, m *TaskManager, runID string, ok func([]commen
 	})
 }
 
-// A failing Claude call is stored as a KindError turn instead of failing the
-// whole workflow, so the reviewer can simply try again in the same
-// conversation.
+// A failing Claude call is stored as a visible turn instead of failing the
+// whole workflow, so the conversation stays alive: KindRetrying while the
+// automatic ladder still has a rung left, KindError once it is exhausted.
 func TestClaudeChatFailedTurnStoresErrorMessage(t *testing.T) {
+	stubUnreachableGh(t)
+	shrinkChatRetryDelays(t)
 	m, engine, cm, fake := newChatManager(t)
 	ctx := context.Background()
 	const pr, commentID = 970702, "comment-fail"
@@ -623,7 +626,7 @@ func TestClaudeChatFailedTurnStoresErrorMessage(t *testing.T) {
 	}
 	waitFor(t, func() bool {
 		list, _ := cm.List(ctx, commentID)
-		return len(list) == 2
+		return len(list) == 2 && list[1].Kind == chat.KindError
 	})
 
 	list, _ := cm.List(ctx, commentID)
@@ -863,5 +866,206 @@ func TestChatTurnContextEnrichesPromptNotBody(t *testing.T) {
 	}
 	if got := fake.Calls[1].Prompt; got != "En dit?" {
 		t.Fatalf("prompt without context = %q, want the plain body unchanged", got)
+	}
+}
+
+// shrinkChatRetryDelays makes the automatic backoff ladder run in milliseconds
+// for the duration of one test. Same number of rungs (so the attempt counter,
+// the model escalation and the wording stay exactly what production sees) —
+// only the durable timers are short.
+func shrinkChatRetryDelays(t *testing.T) {
+	t.Helper()
+	orig := chatRetryDelays
+	chatRetryDelays = []time.Duration{
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
+	}
+	t.Cleanup(func() { chatRetryDelays = orig })
+}
+
+// A transient Claude failure is retried automatically: the reviewer's turn
+// ends up as ONE assistant reply (the failed attempt's bubble is REPLACED, not
+// joined by a second row) and never needs a manual retry.
+func TestClaudeChatRetriesTransientFailure(t *testing.T) {
+	stubUnreachableGh(t)
+	shrinkChatRetryDelays(t)
+	m, engine, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970710, "comment-retry-transient"
+
+	fake.SetChatTurns("Alsnog een antwoord.")
+	fake.SetChatFailures(1, errors.New("claude: overloaded"))
+
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-1", Author: "reviewer", Body: "Wat doet dit?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2 && list[1].Kind == ""
+	})
+
+	list, err := cm.List(ctx, commentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected the user turn + ONE assistant turn, got %d rows: %+v", len(list), list)
+	}
+	if list[1].Body != "Alsnog een antwoord." || list[1].Kind != "" {
+		t.Fatalf("assistant turn = %+v, want the retried reply", list[1])
+	}
+	if list[1].Model != claude.ModelOpus {
+		t.Fatalf("first retry should still run on Opus, got model %q", list[1].Model)
+	}
+	if len(fake.Calls) != 2 {
+		t.Fatalf("expected 2 RunChat calls (fail + retry), got %d", len(fake.Calls))
+	}
+}
+
+// After two failed Opus attempts the ladder escalates to Sonnet, and the
+// answer records WHICH model produced it (the reviewer sees that as a pill on
+// the bubble).
+func TestClaudeChatEscalatesToSonnet(t *testing.T) {
+	stubUnreachableGh(t)
+	shrinkChatRetryDelays(t)
+	m, engine, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970711, "comment-retry-sonnet"
+
+	fake.SetChatTurns("Sonnet springt bij.")
+	fake.SetChatModelError(claude.ModelOpus, errors.New("claude: overloaded"))
+
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-1", Author: "reviewer", Body: "Wat doet dit?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2 && list[1].Kind == ""
+	})
+
+	list, _ := cm.List(ctx, commentID)
+	if list[1].Body != "Sonnet springt bij." {
+		t.Fatalf("assistant turn = %+v, want Sonnet's reply", list[1])
+	}
+	if list[1].Model != claude.ModelSonnet {
+		t.Fatalf("assistant turn model = %q, want %q", list[1].Model, claude.ModelSonnet)
+	}
+	if len(fake.Calls) != 3 {
+		t.Fatalf("expected 3 RunChat calls (Opus, Opus, Sonnet), got %d", len(fake.Calls))
+	}
+	for i, want := range []string{claude.ModelOpus, claude.ModelOpus, claude.ModelSonnet} {
+		if fake.Calls[i].Model != want {
+			t.Fatalf("call %d ran on %q, want %q", i+1, fake.Calls[i].Model, want)
+		}
+	}
+}
+
+// With every model down the ladder gives up: one KindError turn (not a trail
+// of attempt bubbles), a bounded number of calls, and the workflow still
+// alive.
+func TestClaudeChatGivesUpAfterLadder(t *testing.T) {
+	stubUnreachableGh(t)
+	shrinkChatRetryDelays(t)
+	m, engine, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970712, "comment-retry-exhausted"
+
+	fake.SetChatError(errors.New("claude: overloaded"))
+
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-1", Author: "reviewer", Body: "Wat doet dit?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2 && list[1].Kind == chat.KindError
+	})
+
+	list, _ := cm.List(ctx, commentID)
+	if len(list) != 2 {
+		t.Fatalf("expected the user turn + ONE failure turn, got %d rows: %+v", len(list), list)
+	}
+	if list[1].Kind != chat.KindError {
+		t.Fatalf("expected a KindError turn once the ladder is exhausted, got %+v", list[1])
+	}
+	if !strings.Contains(list[1].Body, "handmatig") {
+		t.Fatalf("final failure body = %q, want it to point at the manual retry", list[1].Body)
+	}
+	if want := len(chatRetryDelays) + 1; len(fake.Calls) != want {
+		t.Fatalf("expected exactly %d RunChat calls, got %d", want, len(fake.Calls))
+	}
+}
+
+// The manual "Opnieuw proberen" Signal re-runs the SAME failed turn: no second
+// user bubble, the failure row is replaced by the answer, and it starts at
+// Opus again (the escalation is per turn, never sticky).
+func TestClaudeChatManualRetryRerunsFailedTurn(t *testing.T) {
+	stubUnreachableGh(t)
+	shrinkChatRetryDelays(t)
+	m, engine, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970713, "comment-retry-manual"
+
+	fake.SetChatError(errors.New("claude: overloaded"))
+
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-1", Author: "reviewer", Body: "Wat doet dit?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2 && list[1].Kind == chat.KindError
+	})
+	callsBefore := len(fake.Calls)
+
+	// Claude is reachable again; the reviewer presses "Opnieuw proberen".
+	fake.SetChatError(nil)
+	fake.SetChatTurns("Nu lukt het wel.")
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-2", Author: "reviewer", Action: chatActionRetry,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2 && list[1].Kind == ""
+	})
+
+	list, _ := cm.List(ctx, commentID)
+	if len(list) != 2 {
+		t.Fatalf("a manual retry must not add a second user turn, got %d rows: %+v", len(list), list)
+	}
+	if list[0].Role != "user" || list[0].Body != "Wat doet dit?" {
+		t.Fatalf("the reviewer's own turn changed: %+v", list[0])
+	}
+	if list[1].Body != "Nu lukt het wel." || list[1].Kind != "" {
+		t.Fatalf("failed turn was not replaced by the answer: %+v", list[1])
+	}
+	if list[1].Model != claude.ModelOpus {
+		t.Fatalf("a manual retry should start at Opus again, got %q", list[1].Model)
+	}
+	if got := fake.Calls[callsBefore].Model; got != claude.ModelOpus {
+		t.Fatalf("first call of the manual retry ran on %q, want Opus", got)
 	}
 }
