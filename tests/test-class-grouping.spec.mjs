@@ -250,4 +250,63 @@ test.describe('test methods group per class', () => {
     const [done] = text.match(/(\d+)\/(\d+)/).slice(1).map(Number)
     expect(done).toBeGreaterThanOrEqual(1)
   })
+
+  // Approving a method straight from the list (Space, mirroring the palette's
+  // "Keur ... goed" → "Ga door") must behave exactly like the general blokken
+  // index: jump straight to the next not-yet-approved method with no menu, AND
+  // keep the methodes-kolom itself focused so ↑/↓ keeps walking its methods —
+  // see applyNextUnapproved's `keepList` branch in home.mjs. Regression: that
+  // branch used to reset state.testColumnFocused to false right after the
+  // jump, silently handing keyboard ownership of ↑/↓ back to the pr-index.
+  test('Space on a method row jumps to the next unapproved method and keeps the column focused', async ({
+    page,
+  }) => {
+    await page.goto(`/pr/${PR}`)
+    await page.getByTestId('block-row').filter({ hasText: 'TriggersIndexTest' }).click()
+    await page.keyboard.press('ArrowRight') // focus the methodes-kolom, method 0 active
+
+    const column = page.getByTestId('test-methods-column')
+    const rows = page.getByTestId('test-method-row')
+    await page.keyboard.press(' ') // approve method 0, jump to method 1
+
+    await expect(rows.nth(0)).toContainText('✓ 1/1')
+    await expect(rows.nth(1)).toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
+    await expect(page).not.toHaveURL(/mode=diff/)
+    // The column itself must still show as focused (not just the active row
+    // inside it) — otherwise the next ↑/↓ would move the sidebar instead.
+    await expect(column).toHaveClass(/border-indigo-300|dark:border-indigo-500/)
+
+    // Proof the column, not the pr-index, still owns ↑/↓: it walks back to
+    // method 0 instead of moving the top-level selection.
+    await page.keyboard.press('ArrowUp')
+    await expect(rows.nth(0)).toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
+    await expect(
+      page.getByTestId('block-row').filter({ hasText: 'TriggersIndexTest' }),
+    ).toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
+  })
+
+  // Regression: spaceKey's own "already approved → just continue" branch used
+  // to call applyNextUnapproved without `keepList`, which unconditionally sets
+  // state.mode = 'diff' — so Space on an already-done unit while still in the
+  // list forced the diff open instead of just moving the cursor.
+  test('Space on an already-approved method row stays in the list instead of forcing the diff open', async ({
+    page,
+  }) => {
+    await page.goto(`/pr/${PR}`)
+    await page.getByTestId('block-row').filter({ hasText: 'TriggersIndexTest' }).click()
+    await page.keyboard.press('ArrowRight')
+    const rows = page.getByTestId('test-method-row')
+    await page.keyboard.press(' ') // approve method 0, jump to method 1
+
+    // Re-select the already-approved method 0 (still list mode).
+    await rows.nth(0).click()
+    await expect(page).not.toHaveURL(/mode=diff/)
+
+    await page.keyboard.press(' ') // "Ga door" only: method 0 is already done
+
+    await expect(page).not.toHaveURL(/mode=diff/)
+    await expect(page.getByTestId('test-methods-column')).toBeVisible()
+    await expect(rows.nth(1)).toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
+  })
 })

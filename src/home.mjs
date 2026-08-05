@@ -6871,13 +6871,19 @@ async function findNextUnapproved() {
 // blokken-index (state.mode was 'list', not 'diff'): stay there — only move
 // the sidebar selection forward, ignoring `path` entirely — never step into
 // the diff/drill, so approving from the index keeps you in the index instead
-// of dropping you into a block's diff or a drilled child.
+// of dropping you into a block's diff or a drilled child. A test_class plan
+// (`target.methodIdx`) keeps `state.testColumnFocused` TRUE here — the
+// reviewer was already working the methodes-kolom (that's how they approved
+// a method from the list in the first place), so the column must stay
+// focused/highlighted and keep owning ↑/↓, exactly like the non-keepList
+// branch below already does. Resetting it to false used to silently kick
+// keyboard ownership back to the pr-index right after the first auto-jump.
 function applyNextUnapproved(target) {
   if (target.keepList) {
     state.selected = target.root
     if (target.methodIdx != null) {
       state.classMethodSel = target.methodIdx
-      state.testColumnFocused = false
+      state.testColumnFocused = true
     }
     scrollSelectedIntoView()
     return
@@ -7075,6 +7081,11 @@ function isApproveDone(ctx) {
 // nothing to approve here — Space then behaves purely as "Ga door" would:
 // jump to the next unapproved unit via the same findNextUnapproved/
 // applyNextUnapproved pair the postApprove menu itself uses, with no toggle.
+// `keepList` is captured HERE, synchronously, exactly like afterApproveAction
+// does (state.mode can't have changed yet) — without it, applyNextUnapproved's
+// non-keepList path unconditionally sets state.mode = 'diff', so pressing
+// Space on an already-done unit while still in the block/methodes-kolom LIST
+// would silently force the diff open instead of just moving the cursor.
 // If nothing is left ahead either, this mirrors afterApproveAction's own
 // "nothing left ahead" branch (the same two microtask ticks to let the
 // decoupled state.approvalTotal watch flush) and opens the same
@@ -7087,9 +7098,10 @@ function spaceKey() {
     toggleApprove(true)
     return
   }
+  const keepList = state.mode !== 'diff'
   findNextUnapproved().then(async (target) => {
     if (target) {
-      applyNextUnapproved(target)
+      applyNextUnapproved({ ...target, keepList })
       return
     }
     await Promise.resolve()

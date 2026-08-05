@@ -131,6 +131,25 @@ siblings and wrongly reported nothing left to approve. See
 regardless of `inDiff`" in `.claude/docs/command-palette.md` and
 `tests/findnextunapproved-list-mode.spec.mjs`.
 
+**Approving a method straight from the list (Space, or the palette's "Keur
+... goed") jumps to the next unapproved method exactly like the general
+blokken-index jumps to the next unapproved block** — `applyNextUnapproved`'s
+`keepList` branch (`state.mode` was `'list'`, not `'diff'`, see
+`.claude/docs/command-palette.md`'s "EXCEPTION 2") sets `state.classMethodSel`
+to `target.methodIdx` **and keeps `state.testColumnFocused` TRUE**, so the
+methodes-kolom stays focused/highlighted and keeps owning `↑`/`↓`
+(`isTestColumnActive()`) right after the jump — the reviewer was already
+working that column, so the jump must not silently hand keyboard ownership
+back to the pr-index. `spaceKey`'s own "already approved → just continue"
+branch captures `keepList` (`state.mode !== 'diff'`) the same synchronous way
+`afterApproveAction` does and merges it into the plan for the same reason:
+without it, `applyNextUnapproved`'s non-`keepList` path unconditionally sets
+`state.mode = 'diff'`, so pressing Space on an already-done method while still
+in the list forced the diff open instead of just moving the cursor. Test:
+`tests/test-class-grouping.spec.mjs` ("Space on a method row jumps to the
+next unapproved method and keeps the column focused" / "...stays in the list
+instead of forcing the diff open").
+
 ## Approve rollup — two deliberately different numbers
 
 `blockApproveCount`/`subtreeApproveCount` (`home.mjs`), reconciled rather than in
