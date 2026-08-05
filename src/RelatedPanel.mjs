@@ -4270,6 +4270,15 @@ const KIND_LABEL = {
   // "Ongewijzigd" badge (DIFFSTAT_KINDS below) since an implementation MAY
   // itself be a changed PR block.
   interface_impl: 'implementatie',
+  // A <class-header> block's own declared members, broken out of that one
+  // coarse block into a card each (resolveClassMembers), plus a Foo::MAX_TRIES
+  // reference resolved to its declaration (rule 6b). All four are read-only
+  // leaves — the gewijzigd/ongewijzigd distinction rides on memberStatusBadge
+  // below, not on this role badge.
+  class_property: 'property',
+  class_constant_changed: 'constante',
+  class_constant: 'constante',
+  const_ref: 'constante',
 }
 
 // diffStatBadge shows, for a called method (or a test's covered method), how
@@ -4319,6 +4328,32 @@ function leftStatusBadge(r) {
       data-testid="related-diffstat"
       title="Aangeroepen definitie is niet gewijzigd in deze PR"
       >Ongewijzigd</span
+    >
+  `
+}
+
+// memberStatusBadge says, in a WORD, whether a class-member card is one the PR
+// changed — the members are shown side by side (a changed $listen next to an
+// untouched MAX_TRIES, see resolveClassMembers), so without this they'd be
+// indistinguishable. Colour is decoration only; the word carries the meaning.
+//
+// Only for the three <class-header> member kinds. `const_ref` (a reference to
+// some other class's constant, rule 6b) deliberately gets nothing: it is pure
+// reference material, and claiming it is "ongewijzigd" would assert something
+// this rule never checked.
+const MEMBER_CHANGED_KINDS = new Set(['class_property', 'class_constant_changed'])
+function memberStatusBadge(r) {
+  const changed = MEMBER_CHANGED_KINDS.has(r.kind)
+  if (!changed && r.kind !== 'class_constant') return ''
+  return html`
+    <span
+      class="${'shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide ' +
+      (changed
+        ? 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+        : 'bg-slate-100 dark:bg-zinc-800 text-slate-400 dark:text-zinc-500')}"
+      data-testid="related-member-status"
+      title="${changed ? 'Deze PR wijzigt deze declaratie' : 'Deze PR wijzigt deze declaratie niet'}"
+      >${changed ? 'Gewijzigd' : 'Ongewijzigd'}</span
     >
   `
 }
@@ -4696,6 +4731,7 @@ function relatedCard(r, i, drill) {
         <div class="flex items-baseline gap-2">
           ${() => categoryBadge(r)}
           ${() => leftStatusBadge(r)}
+          ${() => memberStatusBadge(r)}
           <span class="min-w-0 flex-1 truncate font-mono text-xs font-semibold text-slate-700 dark:text-zinc-300">${r.label}</span>
           ${() =>
             KIND_LABEL[r.kind]

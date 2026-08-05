@@ -85,6 +85,17 @@ const (
 	KindDataProvider   = "data_provider"   // a test's #[DataProvider('m')]/@dataProvider m → the provider method
 	KindTranslation    = "translation"     // a trans('file.key')/__(...)/@lang(...) call → the lang file value, one per locale
 	KindTraitUsage     = "trait_usage"     // a class's `use TraitName;` → the trait as a whole
+	// The class-member kinds below are the declared properties/constants of a
+	// <class-header> block, shown as their own Underlying-code cards instead of
+	// only as part of that block's one big diff (resolveClassMembers). They are
+	// always leaves: no PR block, no approval, no drill-hint chips.
+	KindClassProperty       = "class_property"         // a property the PR changed/added (unchanged ones are never emitted)
+	KindClassConstantChange = "class_constant_changed" // a constant the PR changed/added
+	KindClassConstant       = "class_constant"         // a constant the PR did NOT change — shown anyway, on request
+	// KindConstRef is a reference to a constant on a plain class
+	// (Foo::MAX_TRIES) resolved to its declaration — the non-enum sibling of
+	// the enum-case rule (resolveCalls rule 6).
+	KindConstRef = "const_ref"
 	// KindInterfaceImplementation marks a changed interface method that has
 	// no concrete "A" parent in this PR (see interfaces.go): up to
 	// MaxInterfaceImplementations concrete implementations — possibly

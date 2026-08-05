@@ -176,9 +176,20 @@ Rules, in order:
   `unresolved`, never silently nothing, since the call site is on a changed line.
 - **6 — enum cases.** `Foo::NAME` **without** parentheses resolves to the enum
   declaration when `Foo` is an indexed enum defining that case (`scanEnums` →
-  synthetic block; `child_method` = the case name). `Foo::class` and constants
-  on non-enum classes are ignored; the same case on several enums →
-  `unresolved`. The frontend's `findCallSites` therefore also matches `::name`.
+  synthetic block; `child_method` = the case name). `Foo::class` is ignored; the
+  same case on several enums → `unresolved`. The frontend's `findCallSites`
+  therefore also matches `::name`.
+- **6b — constants on a plain class.** No enum by that name → `classConstDecl`
+  looks the class up in the symbol index (which indexes the `<class-header>`
+  block too, so a class with **no methods at all** is still found) and returns
+  the constant's **own declaration**, not the whole class — for an enum the
+  entire declaration is the useful unit, for an ordinary class it would be a
+  wall of unrelated methods. Kind `const_ref`, call key the bare constant name
+  (a real literal, so it stays scoped to the line it's used on, unlike the
+  `class_member:` keys below). Two files declaring the same short class name
+  with that constant → **silently nothing**, never `unresolved`. A reference to
+  the caller's **own** class is skipped: rule 9 already emits that declaration
+  as its own card, and two cards for one declaration is worse than none.
 - **7 — API Resource `toArray()`.** A Resource used on a changed line surfaces
   its own `toArray()`, since that's where the output is defined — even when the
   Resource class itself isn't changed (unlike `controllerResourceDetector`'s
@@ -194,15 +205,41 @@ Rules, in order:
   (`{ A::foo insteadof B; }`) is out of v1 scope, as is a `use` after the first
   method (that text falls outside every scanned block). Call key
   `trait_usage:<trait>`; an unindexed name (vendor, typo) → nothing.
+- **9 — class members (`resolveClassMembers`).** A `<class-header>` block is one
+  coarse blob (trait uses, constants, properties — see `phpscan.go`'s
+  `classHeaderSentinel`). This rule breaks its **declared members** out into a
+  card each, so `$listen` or `MAX_TRIES` sits next to the diff as its own unit:
+  **every constant**, changed or not (explicitly requested — an untouched
+  constant is reference material the reviewer wants to see), and **only a
+  changed/added property** (an unchanged one is noise). A **removed** member is
+  never emitted: it doesn't exist on the head side, and the header's own diff
+  already shows the deletion. Changed-ness comes from comparing the same region
+  on the base worktree (`normalizeMemberText`; no base file → everything counts
+  as changed), and rides on the **kind**: `class_property` /
+  `class_constant_changed` / `class_constant`. Call key
+  `class_member:const:<NAME>` / `class_member:prop:$<name>`.
+  `scanClassMembers` (`phpscan.go`) does the splitting with the same lexer
+  primitives as `scanPHP`, so a `;` inside a string/comment/heredoc/bracket pair
+  never ends a statement — that is what keeps a multi-line array default one
+  member. Silent limits: a grouped declaration (`const A = 1, B = 2;`) is one
+  member named after the first name; a leading PHPDoc/attribute is not folded
+  into the member's text; an unterminated statement is dropped rather than
+  swallowing the rest; an enum `case X = 'x';` and a `use Trait;` match nothing
+  (the latter has rule 8). Same scope boundary rule 8 accepts: only the
+  `<class-header>` region is scanned, so a constant declared **after** the first
+  method is silently missed. **A member never becomes a block** — no id, no
+  approval, no row in the block index (see `.claude/docs/underlying-code.md`).
+  Tests: `TestResolveClassMembers`/`TestResolveClassMembersAddedFile` and
+  `TestResolveCallsConstRef` (`callresolve_analysis_test.go`).
 - **Laravel macros** (`scanMacros`): a `Builder::macro('joinAddress',
   function …)` inside a boot method is a closure and thus invisible to
   `ScanBlocks` (`skipBody` swallows it), so the registration is detected by
   regex and turned into a synthetic block. Its code comes from `blockSource`'s
   line-slicing fallback (the symbol lookup fails for a nested block).
 - **A call key containing `:`** (`migration_model:`, `data_provider:`,
-  `resource:`, `trait_usage:`, `translation:`, a command name) can never match
-  a real call-site identifier in `findCallSites`, so such a child shows at
-  group/list level and isn't tied to one line/call.
+  `resource:`, `trait_usage:`, `class_member:`, `translation:`, a command name)
+  can never match a real call-site identifier in `findCallSites`, so such a
+  child shows at group/list level and isn't tied to one line/call.
 
 ### Rule-based extras, all merged into the same `UpsertGo`/`Prune`
 

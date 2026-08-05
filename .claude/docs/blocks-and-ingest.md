@@ -192,6 +192,21 @@ Tests: `phpscan_test.go` (`TestPHPDocDescriptionCapturedForMethod`,
 `TestPHPDocPullsBlockLineLikeAttribute`, `TestPHPDocAndAttributeBothPullBlockLine`);
 `classify_test.go` (`TestPHPDocOnlyChangeClassifiesAsModified`).
 
+### `scanClassMembers`: properties/constants are NOT blocks
+
+`phpscan.go` also exports a member splitter — it cuts a class body (in practice
+the `<class-header>` region) into its `;`-terminated property/constant
+declarations, reusing the same lexer primitives as `scanPHP` so a `;` inside a
+string/comment/heredoc/bracket pair never ends a statement. It is used only by
+`callresolve_analysis.go` (rule 9 "class members" and rule 6b "constants on a
+plain class", see `.claude/docs/workflows-analysis.md`).
+
+Deliberately **outside** the block model: a member yields a `classMember`
+value, never a `Block`. It therefore has no id, no category, no approval and no
+row in the block index — it exists only as an "Onderliggende code" card. Making
+a member a block instead would drag classification, ids, approvals and the left
+list along with it, for a unit nobody reviews on its own.
+
 ## `codesig.go`: display transforms on a block's source
 
 Because `Block.Line` now includes a leading PHPDoc, `extractBlockSource`/

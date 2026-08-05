@@ -869,9 +869,10 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			}
 		}
 		// 6. Foo::NAME (no parens) → an enum case (or const) reference, e.g.
-		// AddressType::BILLING. Only receivers that are an indexed enum count
-		// (a constant on a plain class is ignored); the child is the whole enum
-		// declaration. Runs after rule 3, so a static call wins the key.
+		// AddressType::BILLING. For a receiver that is an indexed enum the
+		// child is the whole enum declaration; for a plain class, rule 6b
+		// below resolves the constant to its own declaration line instead.
+		// Runs after rule 3, so a static call wins the key.
 		for _, loc := range reStaticRef.FindAllStringSubmatchIndex(scan, -1) {
 			rest := scan[loc[1]:]
 			if strings.HasPrefix(strings.TrimLeft(rest, " \t"), "(") {
@@ -894,6 +895,30 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 				})
 			case len(enums) > 1:
 				emit(key, nil) // same case on several enums → unresolved
+			default:
+				// 6b. No enum by that name → a constant on a PLAIN class
+				// (Foo::MAX_TRIES). Resolves to the constant's own
+				// DECLARATION, not to the whole class: for an enum the entire
+				// declaration is the useful unit, for an ordinary class it
+				// would be a wall of unrelated methods. Go-only and silent on
+				// ambiguity, like the enum branch above.
+				//
+				// A reference to the caller's OWN class is skipped: on a
+				// <class-header> block resolveClassMembers already emits that
+				// very constant as its own card, and two cards for one
+				// declaration is worse than none.
+				if shortName(recv) == shortName(b.Class) {
+					continue
+				}
+				if cfile, cm, cok := classConstDecl(headDir, idx, recv, key); cok {
+					seen[key] = true
+					out = append(out, callresolve.Entry{
+						PR: pr, CallerID: callerID, CallKey: key,
+						Status: callresolve.StatusResolved, Kind: callresolve.KindConstRef,
+						ChildFile: cfile, ChildClass: shortName(recv), ChildMethod: key,
+						ChildLine: cm.Line, ChildCode: cm.Text,
+					})
+				}
 			}
 		}
 		// 7. Resource usage (new XResource(/XResource::make|collection(/a
@@ -1179,6 +1204,134 @@ func resolveTranslations(dataDir string, pr int, blocks []Block) []callresolve.E
 		}
 	}
 	return out
+}
+
+// resolveClassMembers breaks a <class-header> block's declared members —
+// properties and constants — out of that one coarse block into their own
+// "Onderliggende code" cards, so a reviewer sees `$listen` or `MAX_TRIES` as a
+// separate unit next to the diff instead of only inside the header's single
+// blob (Reindert, request: "alle aangepaste properties en constanten wil ik
+// rechts als onderliggende code zien; ook alle constanten, ook als die niet
+// aangepast zijn").
+//
+// What it emits, per changed <class-header> block:
+//   - EVERY constant, changed or not — an unchanged constant is reference
+//     material the reviewer explicitly asked to always see.
+//   - ONLY a changed/added property — an unchanged property is noise.
+//
+// A REMOVED member is deliberately never emitted: it no longer exists on the
+// head side, and the header block's own diff already shows the deletion.
+//
+// Deliberately a callresolve rule, not a relations detector or a phpscan
+// block: it points at (possibly) unchanged code, and a member must never
+// become a PR block — no id, no approval, no row in the block index. Go-only,
+// no LLM fallback: an unparsable member simply yields no card, never an
+// "unresolved" row (mirrors resolveMigrationModels/resolveDataProviders).
+//
+// Scope boundary, same one rule 8 (trait usage) already accepts: only the
+// <class-header> region is scanned, so a constant declared AFTER the first
+// method (unusual PHP) is silently missed.
+//
+// The call key is "class_member:const:"/"class_member:prop:"+name — it
+// contains ':', so like migration_model:/data_provider:/trait_usage: it never
+// matches a real call-site literal and the card shows at group/list level
+// instead of being scoped to one line (see isBlockLevelCallKey in home.mjs).
+func resolveClassMembers(dataDir string, pr int, blocks []Block) []callresolve.Entry {
+	baseDir, headDir := worktreeDirs(dataDir, pr)
+
+	var out []callresolve.Entry
+	for _, b := range blocks {
+		if b.Side == SideOld || b.Name != classHeaderSentinel {
+			continue
+		}
+		head := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name)
+		if head.Text == "" {
+			continue
+		}
+		// The same region on the base side, to tell a changed member from an
+		// untouched one. A missing base file/class (an added file) leaves the
+		// map empty, so every member counts as changed — which is correct.
+		baseText := map[string]string{}
+		base := extractBlockSource(filepath.Join(baseDir, b.File), b.File, b.Class, b.Name)
+		if base.Text != "" {
+			for _, m := range scanClassMembers(base.Text, base.Start) {
+				baseText[m.Kind+":"+m.Name] = normalizeMemberText(m.Text)
+			}
+		}
+
+		callerID := b.ID()
+		for _, m := range scanClassMembers(head.Text, head.Start) {
+			was, existed := baseText[m.Kind+":"+m.Name]
+			changed := !existed || was != normalizeMemberText(m.Text)
+
+			var kind string
+			switch {
+			case m.Kind == "prop" && changed:
+				kind = callresolve.KindClassProperty
+			case m.Kind == "prop":
+				continue // an unchanged property is not worth a card
+			case changed:
+				kind = callresolve.KindClassConstantChange
+			default:
+				kind = callresolve.KindClassConstant
+			}
+			out = append(out, callresolve.Entry{
+				PR: pr, CallerID: callerID,
+				CallKey: "class_member:" + m.Kind + ":" + m.Name,
+				Status:  callresolve.StatusResolved, Kind: kind,
+				ChildFile: b.File, ChildClass: b.Class, ChildMethod: m.Name,
+				ChildLine: m.Line, ChildCode: m.Text,
+			})
+		}
+	}
+	return out
+}
+
+// normalizeMemberText is the comparison form of a member declaration: trailing
+// whitespace per line dropped, so a pure line-ending/trailing-space difference
+// between base and head doesn't read as a change. Indentation IS significant —
+// a re-indent shows up in the header's diff too, so calling it "changed" is
+// consistent rather than surprising.
+func normalizeMemberText(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, ln := range lines {
+		lines[i] = strings.TrimRight(ln, " \t\r")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// classConstDecl finds the declaration of constant `name` on class `class` in
+// the head worktree, for resolveCalls' rule 6b (a Foo::MAX_TRIES reference on a
+// plain, non-enum class). It looks the class up through the symbol index —
+// which indexes the <class-header> block too, so a class with no methods at all
+// is still found — and scans that header region with the same scanClassMembers
+// used by resolveClassMembers.
+//
+// ok=false when nothing matches OR when two different files declare a class
+// with this short name and that constant: an ambiguous hit stays silent (no
+// entry, no "unresolved" row), like every other Go-only rule here.
+func classConstDecl(headDir string, idx *symbolIndex, class, name string) (file string, m classMember, ok bool) {
+	seenFile := map[string]bool{}
+	for _, hb := range idx.byClass[shortName(class)] {
+		if hb.Name != classHeaderSentinel || seenFile[hb.File] {
+			continue
+		}
+		seenFile[hb.File] = true
+		src := blockSource(headDir, hb)
+		if src.Text == "" {
+			continue
+		}
+		for _, cm := range scanClassMembers(src.Text, src.Start) {
+			if cm.Kind != "const" || cm.Name != name {
+				continue
+			}
+			if ok {
+				return "", classMember{}, false // ambiguous — stay silent
+			}
+			file, m, ok = hb.File, cm, true
+		}
+	}
+	return file, m, ok
 }
 
 // translationKeysIn scans a changed-lines excerpt for every recognized

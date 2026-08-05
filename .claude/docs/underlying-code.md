@@ -36,6 +36,26 @@ Each child is one card (`data-testid=related-item`). It follows
   (`data-testid=related-covers-warning`, custom inline SVG + explanation — never
   an AI guess). See "Linking test coverage" in
   `.claude/docs/workflows-analysis.md`.
+- A **class member** — the declared properties/constants of a `<class-header>`
+  block, broken out of that one coarse blob into a card each (kinds
+  `class_property`/`class_constant_changed`/`class_constant`), plus a
+  `Foo::MAX_TRIES` reference resolved to its declaration (`const_ref`). All four
+  are read-only **leaves**, like `translation`: no PR block, so no diff stat, no
+  approval, no drill-hint chips, and — load-bearing, on explicit request —
+  **never a row of their own in the block index** (`resolvedCallTargetIds` skips
+  them outright, and nothing ever scans a member into a `Block`). The
+  `<class-header>` block itself stays in the index with its full diff; these
+  cards are an addition, not a replacement, so a changed member is deliberately
+  visible twice. Which members appear (every constant, only changed properties)
+  and why: "9 — class members" in `.claude/docs/workflows-analysis.md`.
+  Since they sit side by side, each of the three header kinds carries a **word**
+  badge — `Gewijzigd`/`Ongewijzigd` (`data-testid=related-member-status`,
+  `memberStatusBadge`); colour is decoration only. `const_ref` deliberately gets
+  no such word: it is pure reference material, and calling it "ongewijzigd"
+  would assert something that rule never checked. Drilling into one is left on
+  the default path (`resolveChildBlock` builds a synthetic read-only frame from
+  the embedded code). Test: `tests/related-class-members.spec.mjs` (mocked
+  `/api/callresolve` on PR 91, like `callresolve-live-update.spec.mjs`).
 - An **approval badge** (`data-testid=related-approval`, `done/total`, green + ✓
   when fully approved) on any child that is itself a PR block, rendered in that
   child's own header (`approvalBadge`). Per-child only — there is **no**
@@ -419,11 +439,18 @@ a fixture that never set one): "nothing to compare", not "line 0, presumably out
 of range". Three exemptions follow:
 
 1. **A block-level synthetic callKey**
-   (`resource:`/`migration_model:`/`data_provider:`/`trait_usage:`, see
-   `isBlockLevelCallKey`) has no site to compare — always kept, as at
+   (`resource:`/`migration_model:`/`data_provider:`/`trait_usage:`/
+   `class_member:`, see `isBlockLevelCallKey`) has no site to compare — always
+   kept, as at
    `line`/`call`. `trait_usage:` was added *because* of this change: `group` is the
    **default** granularity, so once it hard-filtered, `findCallSites` silently
    finding no site would have made a trait-usage child disappear almost always.
+   `class_member:` is in the set for a slightly different reason — its key is
+   synthetic too, so there is no literal to find either, but the members it
+   names *are* the header block's own diff lines: scoping them away per selected
+   group would hide exactly the declarations the reviewer came for. The
+   `const_ref` rule is deliberately **not** in the set — its key is a real
+   literal on a real line, like any ordinary call.
 2. **A `covered_by` child** (`coveredByChildren`) never carries a site of its own —
    the annotation lives in the *test's* file, not the viewed block's. Explicitly
    kept **always** visible: a hard filter would hide "covered by TestX::testY"

@@ -2165,3 +2165,219 @@ trait Loggable
 		}
 	}
 }
+
+// writeWorktreeFiles materializes rel→body under dir (used by the class-member
+// tests, which need a base side as well as a head side).
+func writeWorktreeFiles(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for rel, body := range files {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestResolveClassMembers covers the four outcomes of the class-header member
+// rule: a changed property is a card, an unchanged property is not, and a
+// constant is always a card — tagged changed or unchanged.
+func TestResolveClassMembers(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 71
+	baseDir, headDir := worktreeDirs(dataDir, pr)
+	const file = "app/Providers/EventServiceProvider.php"
+
+	writeWorktreeFiles(t, baseDir, map[string]string{file: `<?php
+namespace App\Providers;
+
+class EventServiceProvider
+{
+    public const MAX_TRIES = 3;
+    private const OLD_VALUE = 'a';
+
+    protected $listen = [
+        OrderPaid::class => [SendReceipt::class],
+    ];
+
+    protected $untouched = ['stays'];
+
+    public function boot()
+    {
+    }
+}
+`})
+	writeWorktreeFiles(t, headDir, map[string]string{file: `<?php
+namespace App\Providers;
+
+class EventServiceProvider
+{
+    public const MAX_TRIES = 3;
+    private const OLD_VALUE = 'b';
+
+    protected $listen = [
+        OrderPaid::class => [SendReceipt::class],
+        OrderRefunded::class => [SendCreditNote::class],
+    ];
+
+    protected $untouched = ['stays'];
+
+    public function boot()
+    {
+    }
+}
+`})
+
+	caller := Block{PR: pr, File: file, Class: "EventServiceProvider", Name: classHeaderSentinel, Side: SideNew, Status: StatusModified}
+	entries := resolveClassMembers(dataDir, pr, []Block{caller})
+
+	// A changed property gets a card, tagged as a property.
+	e, ok := findEntry(entries, "class_member:prop:$listen")
+	if !ok {
+		t.Fatalf("no entry for the changed $listen property, got %+v", entries)
+	}
+	if e.Kind != callresolve.KindClassProperty {
+		t.Errorf("$listen kind=%q, want %q", e.Kind, callresolve.KindClassProperty)
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("$listen status=%q, want resolved", e.Status)
+	}
+	if !strings.Contains(e.ChildCode, "OrderRefunded::class") {
+		t.Errorf("$listen ChildCode misses the multi-line array body: %q", e.ChildCode)
+	}
+	if e.ChildClass != "EventServiceProvider" || e.ChildMethod != "$listen" {
+		t.Errorf("$listen descriptor = %q::%q, want EventServiceProvider::$listen", e.ChildClass, e.ChildMethod)
+	}
+	if e.ChildLine != 9 {
+		t.Errorf("$listen ChildLine=%d, want 9 (absolute line in the head file)", e.ChildLine)
+	}
+
+	// An unchanged property is deliberately NOT a card.
+	if _, ok := findEntry(entries, "class_member:prop:$untouched"); ok {
+		t.Errorf("unchanged property $untouched must not get a card, got %+v", entries)
+	}
+
+	// An unchanged constant IS a card — explicitly requested — tagged unchanged.
+	e, ok = findEntry(entries, "class_member:const:MAX_TRIES")
+	if !ok {
+		t.Fatalf("no entry for the unchanged MAX_TRIES constant, got %+v", entries)
+	}
+	if e.Kind != callresolve.KindClassConstant {
+		t.Errorf("MAX_TRIES kind=%q, want %q", e.Kind, callresolve.KindClassConstant)
+	}
+
+	// A changed constant is a card too, tagged as changed.
+	e, ok = findEntry(entries, "class_member:const:OLD_VALUE")
+	if !ok {
+		t.Fatalf("no entry for the changed OLD_VALUE constant, got %+v", entries)
+	}
+	if e.Kind != callresolve.KindClassConstantChange {
+		t.Errorf("OLD_VALUE kind=%q, want %q", e.Kind, callresolve.KindClassConstantChange)
+	}
+}
+
+// TestResolveClassMembersAddedFile: with no base side at all every member
+// counts as changed, so an added file's properties all get a card.
+func TestResolveClassMembersAddedFile(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 72
+	_, headDir := worktreeDirs(dataDir, pr)
+	const file = "app/Services/Fresh.php"
+	writeWorktreeFiles(t, headDir, map[string]string{file: `<?php
+namespace App\Services;
+
+class Fresh
+{
+    private string $name = 'x';
+
+    public function run() {}
+}
+`})
+
+	caller := Block{PR: pr, File: file, Class: "Fresh", Name: classHeaderSentinel, Side: SideNew, Status: StatusAdded}
+	entries := resolveClassMembers(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "class_member:prop:$name")
+	if !ok {
+		t.Fatalf("no entry for $name on an added file, got %+v", entries)
+	}
+	if e.Kind != callresolve.KindClassProperty {
+		t.Errorf("$name kind=%q, want %q", e.Kind, callresolve.KindClassProperty)
+	}
+}
+
+// TestResolveCallsConstRef covers rule 6b: a Foo::MAX_TRIES reference on a
+// PLAIN (non-enum) class resolves to that constant's own declaration, and an
+// ambiguous short class name stays silent.
+func TestResolveCallsConstRef(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 73
+	_, headDir := worktreeDirs(dataDir, pr)
+	writeWorktreeFiles(t, headDir, map[string]string{
+		"app/Services/RetryService.php": `<?php
+namespace App\Services;
+
+class RetryService
+{
+    public function attempt()
+    {
+        return Config::MAX_TRIES + Ambiguous::LIMIT;
+    }
+}
+`,
+		"app/Support/Config.php": `<?php
+namespace App\Support;
+
+class Config
+{
+    public const MAX_TRIES = 5;
+}
+`,
+		"app/A/Ambiguous.php": `<?php
+namespace App\A;
+
+class Ambiguous
+{
+    public const LIMIT = 1;
+}
+`,
+		"app/B/Ambiguous.php": `<?php
+namespace App\B;
+
+class Ambiguous
+{
+    public const LIMIT = 2;
+}
+`,
+	})
+
+	caller := Block{PR: pr, File: "app/Services/RetryService.php", Class: "RetryService", Name: "attempt", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "MAX_TRIES")
+	if !ok {
+		t.Fatalf("no entry for the Config::MAX_TRIES reference, got %+v", entries)
+	}
+	if e.Kind != callresolve.KindConstRef {
+		t.Errorf("MAX_TRIES kind=%q, want %q", e.Kind, callresolve.KindConstRef)
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("MAX_TRIES status=%q, want resolved", e.Status)
+	}
+	if !strings.Contains(e.ChildCode, "const MAX_TRIES = 5") {
+		t.Errorf("MAX_TRIES ChildCode=%q, want just the constant declaration", e.ChildCode)
+	}
+	if strings.Contains(e.ChildCode, "class Config") {
+		t.Errorf("MAX_TRIES ChildCode must be the declaration only, not the class: %q", e.ChildCode)
+	}
+	if e.ChildFile != "app/Support/Config.php" {
+		t.Errorf("MAX_TRIES ChildFile=%q, want app/Support/Config.php", e.ChildFile)
+	}
+
+	// Two classes with the same short name both declaring LIMIT → stay silent.
+	if _, ok := findEntry(entries, "LIMIT"); ok {
+		t.Errorf("an ambiguous constant reference must not produce an entry, got %+v", entries)
+	}
+}

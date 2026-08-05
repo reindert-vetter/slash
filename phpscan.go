@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -502,6 +503,161 @@ func phpDocDescription(raw string) string {
 		parts = append(parts, ln)
 	}
 	return strings.Join(parts, " ")
+}
+
+// --- class members (properties/constants) ----------------------------------
+
+// classMember is one property or constant declaration inside a class body —
+// the unit the "Onderliggende code" panel shows as its own card for a
+// <class-header> block (see resolveClassMembers in callresolve_analysis.go).
+// Deliberately NOT a Block: a member never becomes a PR block, never gets an
+// id, an approval or a row in the block index; it only ever exists as a
+// callresolve child descriptor.
+type classMember struct {
+	Kind    string // "const" | "prop"
+	Name    string // "MAX_TRIES" resp. "$listen"
+	Line    int    // absolute 1-based first line of the declaration
+	EndLine int    // absolute 1-based line of its terminating ';'
+	Text    string // the declaration source, verbatim
+}
+
+// reMemberConst matches a `const NAME =` declaration, with any modifier run
+// (final/public/protected/private) already consumed by the statement split and
+// an optional PHP 8.3 type between `const` and the name. Greedy-optional type
+// group: for a plain `const FOO =` it backtracks to empty and NAME wins.
+var reMemberConst = regexp.MustCompile(`\bconst\s+(?:[?\w\\|]+\s+)?([A-Za-z_]\w*)\s*=`)
+
+// reMemberProp matches a property declaration at the START of a statement: at
+// least one modifier keyword, an optional type, then `$name`. Anchored, so a
+// `$var` deeper inside some other statement never counts.
+var reMemberProp = regexp.MustCompile(`^(?:(?:public|protected|private|static|readonly|var|final)\s+)+(?:[?\w\\|]+\s+)?\$([A-Za-z_]\w*)`)
+
+// scanClassMembers splits a class body (typically the <class-header> region,
+// whose first line is startLine) into `;`-terminated statements and returns
+// the ones that declare a property or a constant. It reuses the same lexer
+// primitives as scanPHP, so a `;` inside a string, comment, heredoc, attribute
+// or bracket pair never ends a statement — which is what keeps a multi-line
+// array default (`protected $listen = [...]`) one single member.
+//
+// Deliberate limits, all silent (a member that doesn't fit is simply not
+// returned, never a half-parsed one):
+//   - A grouped declaration (`const A = 1, B = 2;`) yields ONE member, named
+//     after the first name, whose Text is the whole statement.
+//   - A leading PHPDoc/`#[...]` above the declaration is not folded into the
+//     member's Text (unlike a method block's Line, see blocks-and-ingest.md).
+//   - A trailing statement with no terminating `;` (truncated source) is
+//     dropped rather than swallowing the remainder.
+//   - An enum `case X = 'x';` matches neither regex and is skipped, as is a
+//     `use TraitName;` (which has its own callresolve rule 8).
+func scanClassMembers(src string, startLine int) []classMember {
+	var out []classMember
+	if startLine < 1 {
+		startLine = 1
+	}
+	line := startLine
+	depth := 0
+	stmtStart, stmtLine := -1, 0
+	n := len(src)
+	// begin marks the current position as the statement's first character if
+	// no statement is open yet.
+	begin := func(i int) {
+		if stmtStart < 0 {
+			stmtStart, stmtLine = i, line
+		}
+	}
+
+	i := 0
+	for i < n {
+		c := src[i]
+		switch {
+		case c == '\n':
+			line++
+			i++
+		case c == ' ' || c == '\t' || c == '\r':
+			i++
+		case c == '/' && i+1 < n && src[i+1] == '/':
+			i = skipToEOL(src, i)
+		case c == '#' && i+1 < n && src[i+1] == '[':
+			j, nl, closed := skipAttribute(src, i)
+			if !closed {
+				return out
+			}
+			line += nl
+			i = j
+		case c == '#':
+			i = skipToEOL(src, i)
+		case c == '/' && i+1 < n && src[i+1] == '*':
+			j, nl, closed := skipBlockComment(src, i)
+			if !closed {
+				return out
+			}
+			line += nl
+			i = j
+		case c == '<' && i+2 < n && src[i+1] == '<' && src[i+2] == '<':
+			begin(i)
+			j, nl, closed := skipHeredoc(src, i)
+			if !closed {
+				return out
+			}
+			line += nl
+			i = j
+		case c == '\'':
+			begin(i)
+			j, nl, closed := skipSingleQuote(src, i)
+			if !closed {
+				return out
+			}
+			line += nl
+			i = j
+		case c == '"':
+			begin(i)
+			j, nl, closed := skipDoubleQuote(src, i)
+			if !closed {
+				return out
+			}
+			line += nl
+			i = j
+		case c == '(' || c == '[' || c == '{':
+			begin(i)
+			depth++
+			i++
+		case c == ')' || c == ']' || c == '}':
+			begin(i)
+			depth--
+			i++
+			if depth < 0 {
+				return out // left the class body — stop, don't guess
+			}
+		case c == ';' && depth == 0:
+			if stmtStart >= 0 {
+				if m, ok := classifyMemberStatement(src[stmtStart:i], stmtLine, line); ok {
+					out = append(out, m)
+				}
+			}
+			stmtStart = -1
+			i++
+		default:
+			begin(i)
+			i++
+		}
+	}
+	return out
+}
+
+// classifyMemberStatement turns one `;`-terminated statement into a member, or
+// reports ok=false when it declares neither a property nor a constant.
+func classifyMemberStatement(text string, startLine, endLine int) (classMember, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return classMember{}, false
+	}
+	if m := reMemberProp.FindStringSubmatch(trimmed); m != nil {
+		return classMember{Kind: "prop", Name: "$" + m[1], Line: startLine, EndLine: endLine, Text: trimmed}, true
+	}
+	if m := reMemberConst.FindStringSubmatch(trimmed); m != nil {
+		return classMember{Kind: "const", Name: m[1], Line: startLine, EndLine: endLine, Text: trimmed}, true
+	}
+	return classMember{}, false
 }
 
 // --- lexer primitives ------------------------------------------------------

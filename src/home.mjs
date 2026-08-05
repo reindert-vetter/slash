@@ -2358,6 +2358,12 @@ function resolvedCallTargetIds() {
     // TRANSLATION block from the left list — both stay visible (the block in the
     // list, the key value as a child), like test coverage.
     if (r.kind === 'translation') continue
+    // A class-member child (a property/constant declaration, see
+    // CLASS_MEMBER_KINDS) is never a block at all — it must neither gain a row
+    // in the index nor hide one. Its composed id could only ever collide with a
+    // real block by accident (a method named exactly like a constant), so skip
+    // it outright rather than rely on that never happening.
+    if (CLASS_MEMBER_KINDS.has(r.kind)) continue
     const childId =
       state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
     if (prBlockIds.has(childId) && !testTargets.has(childId)) ids.add(childId)
@@ -2681,8 +2687,15 @@ function childrenOf(b) {
 // here — that prefix DOES have a real literal site (the quoted key string
 // inside a trans()/__()/@lang() call, matched separately below), so it stays
 // properly scoped to the line it's actually used on.
+// `class_member:` (a <class-header> block's own declared property/constant, see
+// resolveClassMembers in callresolve_analysis.go) is here for the same reason as
+// `trait_usage`: the card describes the class as a whole, and its declaration
+// lines are the very lines the header block's diff shows, so scoping it to one
+// selected group would hide exactly the members the reviewer is looking at.
+// The `const_ref` rule (6b, a Foo::MAX_TRIES reference) is deliberately NOT
+// here — its key IS a real literal on a real line, like an ordinary call.
 function isBlockLevelCallKey(name) {
-  return /^(resource|migration_model|data_provider|trait_usage):/.test(name)
+  return /^(resource|migration_model|data_provider|trait_usage|class_member):/.test(name)
 }
 
 // findCallSites locates, in a block's aligned diff rows, every place method
@@ -3004,6 +3017,13 @@ function groupTestChildren(b, sorted) {
     .concat([group], state.testsExpanded ? tests : [], others.slice(at))
 }
 
+// CLASS_MEMBER_KINDS are the callresolve kinds whose child is a single declared
+// class member (a property or a constant) rather than a callable definition —
+// see resolveClassMembers (a <class-header> block's own members) and rule 6b (a
+// Foo::MAX_TRIES reference) in callresolve_analysis.go. They render as read-only
+// leaf cards; see the branch in resolvedCallChildren.
+const CLASS_MEMBER_KINDS = new Set(['class_property', 'class_constant_changed', 'class_constant', 'const_ref'])
+
 // resolvedCallChildren maps the caller block's resolved/found call rows to child
 // descriptors for the Onderliggende-code panel — tagged with an ordering
 // priority, and HIDDEN outright at every diff granularity ('call'/'line'/
@@ -3056,6 +3076,35 @@ function resolvedCallChildren(b) {
           commentActivity: null,
           diff: null,
           prio: 2,
+          groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
+          nested: [],
+          nestedSig: nestedSigOf([]),
+        }
+      }
+      // A class-member child — a <class-header> block's own declared property/
+      // constant (resolveClassMembers), or a Foo::MAX_TRIES reference resolved
+      // to its declaration (rule 6b) — is, like a translation child, always a
+      // read-only leaf: it is not a PR block, so it has no diff-stat, no
+      // approval, no drill-hint chips and no row of its own in the block index.
+      // A changed member sorts above the reference material (prio 0 vs 2).
+      if (CLASS_MEMBER_KINDS.has(r.kind)) {
+        const memberChanged = r.kind === 'class_property' || r.kind === 'class_constant_changed'
+        return {
+          id: b.id + '::' + r.callKey,
+          blockId: '',
+          label: r.childClass ? `${r.childClass}::${r.childMethod}` : r.childMethod || r.callKey,
+          file: r.childFile,
+          line: r.childLine,
+          kind: r.kind,
+          category: '',
+          code: r.childCode || '',
+          loading: false,
+          size: codeSize(r.childCode || ''),
+          source: '',
+          approve: null,
+          commentActivity: null,
+          diff: null,
+          prio: memberChanged ? 0 : 2,
           groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
           nested: [],
           nestedSig: nestedSigOf([]),
