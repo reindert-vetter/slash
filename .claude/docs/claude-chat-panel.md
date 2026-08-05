@@ -1104,12 +1104,15 @@ Opus→Sonnet escalation, the `"retry"` Signal) is in
   `lastFailedTurn`. `disabled="${() => busy()}"` uses the plain attribute name
   (never `?disabled=`, see `.claude/rules/arrowjs-pitfalls.md`).
 - **Keyboard twin:** `claudeChatCommandsFor()` (`home.mjs`) lists "Probeer de
-  mislukte turn opnieuw" as the Claude column's first Enter-palette item, no
-  confirm submenu (re-running one turn is not destructive). Both it and the
-  button call the same `retryClaudeTurn()` (`RelatedPanel.mjs`), per
-  `.claude/docs/mouse-navigation.md`. It is listed unconditionally — the
-  workflow ignores the Signal when nothing failed, which is cheaper than
-  teaching the menu to inspect the transcript.
+  mislukte turn opnieuw" in the Claude column's Enter palette, **below** "Wis
+  Claude-gesprek", with no confirm submenu (re-running one turn is not
+  destructive). Both it and the button call the same `retryClaudeTurn()`
+  (`RelatedPanel.mjs`), per `.claude/docs/mouse-navigation.md`. It is listed
+  unconditionally — the workflow ignores the Signal when nothing failed, which
+  is cheaper than teaching the menu to inspect the transcript. That is exactly
+  why it must NOT be first: `defaultSel` selects the list's first real item, and
+  a reflexive Enter should never land on an action that is a silent no-op
+  whenever nothing failed. See the order note on `claudeChatCommandsFor`.
 - **The model pill** (`claudeModelPill`, `data-testid=claude-message-model`)
   names the model behind an assistant turn **only when it isn't the default**
   (`DEFAULT_MODEL`/`MODEL_LABEL` mirror `chatModelLabel` in

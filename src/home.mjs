@@ -4507,19 +4507,29 @@ function claudeChatClearConfirmCommandsFor() {
 // .claude/docs/mouse-navigation.md. It is listed unconditionally: the
 // workflow ignores the Signal when no turn failed, which is cheaper than
 // teaching this menu to inspect the transcript.
+//
+// ORDER IS LOAD-BEARING: withClose pins "Sluit menu" at index 0 and defaultSel
+// starts the selection on index 1, so whatever comes FIRST here is the default
+// Enter action. That must stay "Wis Claude-gesprek" — the item that means
+// something in every state, and that has its own confirm step. The retry only
+// means something after a turn finally failed; anywhere else it is a silent
+// no-op, so it must never be what a reflexive second Enter runs. Putting it
+// first broke exactly that (tests/claude-chat-panel.spec.mjs's
+// "Wis Claude-gesprek" spec pressed Enter and got the no-op instead of the
+// confirm submenu).
 function claudeChatCommandsFor() {
   return withClose([
-    {
-      id: 'retry-claude-turn',
-      label: 'Probeer de mislukte turn opnieuw',
-      hint: 'opnieuw',
-      run: () => retryClaudeTurn(),
-    },
     {
       id: 'clear-claude-chat',
       label: 'Wis Claude-gesprek',
       hint: 'wis',
       children: claudeChatClearConfirmCommandsFor(),
+    },
+    {
+      id: 'retry-claude-turn',
+      label: 'Probeer de mislukte turn opnieuw',
+      hint: 'opnieuw',
+      run: () => retryClaudeTurn(),
     },
   ])
 }
