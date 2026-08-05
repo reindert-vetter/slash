@@ -459,6 +459,20 @@ const state = reactive({
   // URL — ephemeral UI state, like `menu`/`ui.task`, not a navigation position a
   // refresh needs to restore.
   showDescription: false,
+  // blockIndexEntered — whether the reviewer has actually stepped INTO the
+  // block index during this session, as opposed to state.selected merely
+  // holding its just-loaded default (0) or the fresh-open automatic
+  // applyDefaultUnapprovedSelection pick. Only flips to true at a real
+  // stop-1 <-> block-index crossing (the ArrowRight/ArrowLeft branches around
+  // showDescription toggles, and a direct row click) — never by the load
+  // path itself. Ephemeral, like showDescription, and used ONLY to gate the
+  // ordinary block row highlight while state.showDescription is true: on a
+  // genuinely fresh open (no ?sel=) the reviewer is looking at the PR
+  // summary, so no block row should read as "selected" underneath it — see
+  // rowFocused in BlockList.mjs and .claude/docs/keyboard-navigation.md.
+  // Deliberately NOT applied to toggleRow — see its own comment in
+  // BlockList.mjs for why.
+  blockIndexEntered: false,
   // descriptionExpanded — whether the PR description (Omschrijving) in the
   // PR-info column is shown in full or truncated (the default). Toggled by both
   // the "Toon volledige omschrijving"/"Omschrijving inklappen" PR-menu item and
@@ -7627,6 +7641,7 @@ function onKeydown(e) {
       state.ignoreToggleFocused = false
       state.pushTodoFocused = false
       state.showDescription = true
+      state.blockIndexEntered = true
       return
     }
     if (e.key === 'ArrowDown') {
@@ -8123,8 +8138,13 @@ function onKeydown(e) {
   // trySelectPendingPr()/originPr/originSel in overview.mjs).
   if (state.showDescription) {
     e.preventDefault()
-    if (e.key === 'ArrowRight') state.showDescription = false
-    else if (e.key === 'ArrowLeft') location.href = overviewExitUrl()
+    if (e.key === 'ArrowRight') {
+      state.showDescription = false
+      // A real crossing into the block index — from here on a selected row
+      // reads as a genuine choice, not the fresh-open default (see
+      // state.blockIndexEntered's own comment).
+      state.blockIndexEntered = true
+    } else if (e.key === 'ArrowLeft') location.href = overviewExitUrl()
     return
   }
 
@@ -8184,6 +8204,7 @@ function onKeydown(e) {
     state.ignoreToggleFocused = false
     state.pushTodoFocused = false
     state.showDescription = true // step left out of the list into stop 1 (the description)
+    state.blockIndexEntered = true
   }
 }
 
@@ -9683,7 +9704,14 @@ ProgressBar(state)(app)
 // state.searchLoopFocused true from the very first paint, so a completely
 // ordinary first ArrowDown/ArrowUp would misfire straight into the loop-exit
 // behaviour instead of simply walking the list.
-if (state.mode === 'list') requestAnimationFrame(focusSearchBox)
+// ALSO gated on hadInitialSelParam: a genuinely fresh open (no `?sel=` at
+// all) lands on stop 1 instead (see loadBlocks' own `!hadSelParam ->
+// showDescription = true`), so the reviewer is looking at the PR summary,
+// not the block index — grabbing real keyboard focus into the search box
+// here would contradict that (see "act as if the PR-summary block is
+// selected" in keyboard-navigation.md). A restored `?sel=` keeps the
+// existing convenience unchanged.
+if (state.mode === 'list' && hadInitialSelParam) requestAnimationFrame(focusSearchBox)
 
 // Kick off the initial load.
 loadBlocks()

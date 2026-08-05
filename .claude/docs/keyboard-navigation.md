@@ -190,6 +190,36 @@ more like a bordered table — a conscious trade-off, revertible locally (back t
 `border-b border-slate-100 dark:border-zinc-800/60`) without touching the rest
 of this rule.
 
+**On a genuinely fresh open, NO ordinary block row reads as selected at all** —
+the reviewer is looking at stop 1 (the PR summary), and `state.selected` only
+holds its just-loaded default (or `applyDefaultUnapprovedSelection`'s
+automatic pick, see point 1 above); neither is the reviewer's own choice, so
+highlighting a row underneath the summary would read as "I already picked this
+block" when nobody did. `state.blockIndexEntered` (`home.mjs`, ephemeral, not
+in the URL) gates this: `false` until the reviewer actually crosses between
+stop 1 and the block index for real (the `ArrowRight`/`ArrowLeft` branches
+around `showDescription` in `onKeydown`, or a direct click on a row in
+`BlockList.mjs`), then stays `true` for the rest of the session.
+`rowFocused`'s own highlight condition short-circuits to "not focused" while
+`state.showDescription && !state.blockIndexEntered`. The same load-time open
+also skips the search box's usual auto-focus (see "The search box does NOT
+grab keyboard focus on a genuinely fresh open" below) — together, stop 1 truly
+owns the keyboard with nothing in the ordinary block list looking or acting
+selected.
+
+**`toggleRow` (the toggle-approved row) deliberately does NOT get the same
+treatment**, even though `applyDefaultUnapprovedSelection` can land
+`state.toggleFocused` there on a fresh, fully-approved-PR open: with
+`state.blocks.length === 0` in that case, `onKeydown`'s
+`if (state.blocks.length === 0) return` guard sits BEFORE the
+`state.showDescription` `ArrowRight`/`ArrowLeft` branch, so stop 1 never
+actually closes on its own there — gating the highlight the same way would
+hide a real, reachable selection indefinitely rather than just briefly. See
+`tests/fresh-open-default-selection.spec.mjs`'s "everything approved" case and
+`toggleRow`'s own comment in `BlockList.mjs`. (A follow-up could reorder those
+two `onKeydown` branches so stop 1 always closes regardless of block count —
+out of scope here.)
+
 ### Comment-index items (PR-wide comments as ordinary "Start" rows)
 
 PR-wide comments have no keyboard cursor of their own — a comment
@@ -326,6 +356,17 @@ existing "browse the filtered matches while focus stays in the box" behaviour
 with its own wrap, and reach only `toggle-approved`, never `toggle-ignored`.
 Typing (`setSearch`), `→`/`Enter` (into the diff) and `Escape` (back to the
 list) all clear the flag via `exitSearch`, however the box got focus.
+
+**The search box does NOT grab keyboard focus on a genuinely fresh open.** The
+load-time `if (state.mode === 'list') requestAnimationFrame(focusSearchBox)`
+call at the bottom of `home.mjs` is additionally gated on `hadInitialSelParam`
+(`… && hadInitialSelParam`): on a bare `/pr/<id>` link etc. (no `?sel=` at
+all — the same condition point 1 above uses to force `state.showDescription`),
+the reviewer is looking at stop 1, so nothing in the block index — neither a
+row highlight (`state.blockIndexEntered`, above) nor real DOM/`searchActive`
+focus — should look or act selected underneath it. A restored `?sel=` keeps
+the existing convenience unchanged (search box focused immediately, as
+before).
 
 ## `'diff'` mode
 

@@ -414,6 +414,18 @@ function unpushedPill(state, b) {
 // sibling ignoreToggleRow and the search box): state.toggleFocused gives it
 // the same indigo highlight as a selected row (data-idx rows above) while the
 // keyboard sits on it, rather than on any block.
+//
+// Deliberately NOT gated on state.showDescription/blockIndexEntered like
+// rowFocused above: a genuinely fresh, fully-approved-PR open can land
+// state.toggleFocused here (applyDefaultUnapprovedSelection, home.mjs) while
+// state.blocks.length is 0 — and `if (state.blocks.length === 0) return` in
+// onKeydown sits BEFORE the showDescription ArrowRight/ArrowLeft branch, so
+// stop 1 never actually closes on its own in that corner case. Suppressing
+// this highlight the same way rowFocused does would make it stay
+// (indefinitely, not just briefly) invisible, hiding a real, reachable
+// selection — worse than the rare visual overlap this would have prevented.
+// See tests/fresh-open-default-selection.spec.mjs's "everything approved"
+// case.
 function toggleRow(state, count) {
   return html`
     <button
@@ -433,6 +445,7 @@ function toggleRow(state, count) {
         state.showApproved = !state.showApproved
         state.toggleFocused = true
         state.ignoreToggleFocused = false
+        state.blockIndexEntered = true
       }}"
     >
       ${() =>
@@ -505,7 +518,21 @@ function approvalSummaryLine(state) {
 // feature already did before the toggle-ignored/search loop existed (see
 // stepListSelection/searchStepSelection in home.mjs) — the search box gets
 // its own, separate ring for that.
+//
+// While state.showDescription is true AND state.blockIndexEntered is still
+// false, no row reads as focused at all — a genuinely fresh open (no ?sel=)
+// lands on stop 1 (the PR summary) with state.selected sitting on its
+// just-loaded default (or applyDefaultUnapprovedSelection's automatic pick,
+// home.mjs), and the reviewer never actually looked at the block index yet.
+// Showing an indigo row there would read as "I already picked this block",
+// which isn't true — see CLAUDE.md's URL-state note and
+// .claude/docs/keyboard-navigation.md. blockIndexEntered flips to true at the
+// first real stop-1<->block-index crossing (ArrowRight/ArrowLeft around
+// showDescription, or a direct row click below) and then stays true for the
+// rest of the session, so a restored `?sel=`/later revisit of stop 1 is
+// unaffected.
 function rowFocused(state, i) {
+  if (state.showDescription && !state.blockIndexEntered) return false
   return i === state.selected && !state.toggleFocused && !state.ignoreToggleFocused
 }
 
@@ -563,6 +590,10 @@ function row(state, b, i) {
         // home.mjs's own selectRow helper for the keyboard paths.
         state.classMethodSel = 0
         state.testColumnFocused = false
+        // A direct click IS a real choice, even while stop 1 (the PR
+        // summary) is still showing next to the shifted-right index — see
+        // rowFocused's own comment above.
+        state.blockIndexEntered = true
       }}"
     >
       <span
