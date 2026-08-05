@@ -1,5 +1,56 @@
 import { test, expect, seededPr, evaluateSettled, leaveSearchBox } from './_fixtures.mjs'
 
+// The indigo focus border must follow cs.focus, never sit permanently on the
+// comment side while the keyboard is actually in Claude — see "The focus
+// border follows the keyboard, not 'which side is merely shown'" in
+// .claude/docs/claude-chat-panel.md. Deliberately checks CLASS membership
+// (border-indigo-300 vs border-transparent), not the colourblind-relevant
+// on-screen appearance — this assertion is about the mechanism, not about
+// what a reviewer perceives.
+test('the focus border follows cs.focus: only the column with the keyboard shows an indigo border', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kan dit sneller?',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click() // -> cs.focus = 'comment'
+
+  const expandedItem = page.getByTestId('comment-item').first()
+  await expect(expandedItem).toHaveAttribute('data-expanded', 'true')
+  await expect(expandedItem).toHaveClass(/border-indigo-300/)
+
+  const claudeCard = page.getByTestId('claude-chat-card')
+  await expect(claudeCard).toBeVisible()
+  await expect(claudeCard).toHaveClass(/border-transparent/)
+  await expect(claudeCard).not.toHaveClass(/border-indigo-300/)
+
+  await page.keyboard.press('ArrowRight') // comment -> claude
+  await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
+
+  await expect(claudeCard).toHaveClass(/border-indigo-300/)
+  await expect(claudeCard).not.toHaveClass(/border-transparent/)
+  // The comment card stays expanded for context (commentCard's own rule),
+  // but must now show NO border at all — never a neutral fallback.
+  await expect(expandedItem).toHaveAttribute('data-expanded', 'true')
+  await expect(expandedItem).toHaveClass(/border-transparent/)
+  await expect(expandedItem).not.toHaveClass(/border-indigo-300/)
+})
+
 // Verifies the embedded Claude conversation column (claude_chat workflow,
 // see .claude/docs/comments-panel.md's "Embedded Claude chat" section):
 // it renders as its own column next to the comment thread, → deepens one
@@ -689,6 +740,10 @@ test('Claude chat: an action turn and an error turn each get their own badge, no
       // claudeChatView in RelatedPanel.mjs): the turns typed while an earlier
       // one is still running. None here.
       queued: () => [],
+      // Part of the render contract since the focus-border fix landed (see
+      // claudeChatView in RelatedPanel.mjs) — drives claude-chat-card's own
+      // border. Irrelevant to what this test asserts, so a fixed value.
+      focused: () => true,
     }
     const host = document.createElement('div')
     host.id = 'claude-chat-badge-host'
@@ -722,6 +777,10 @@ test('Claude chat: an action turn and an error turn each get their own badge, no
       // claudeChatView in RelatedPanel.mjs): the turns typed while an earlier
       // one is still running. None here.
       queued: () => [],
+      // Part of the render contract since the focus-border fix landed (see
+      // claudeChatView in RelatedPanel.mjs) — drives claude-chat-card's own
+      // border. Irrelevant to what this test asserts, so a fixed value.
+      focused: () => true,
     }
     const host = document.createElement('div')
     host.id = 'claude-chat-plain-host'
@@ -820,6 +879,10 @@ test('Claude chat composer grows with multi-line content and resets after sendin
       // claudeChatView in RelatedPanel.mjs): the turns typed while an earlier
       // one is still running. None here.
       queued: () => [],
+      // Part of the render contract since the focus-border fix landed (see
+      // claudeChatView in RelatedPanel.mjs) — drives claude-chat-card's own
+      // border. Irrelevant to what this test asserts, so a fixed value.
+      focused: () => true,
     }
     const host = document.createElement('div')
     host.id = 'claude-chat-grow-host'

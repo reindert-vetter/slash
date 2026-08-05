@@ -1845,6 +1845,13 @@ function claudeChatView() {
     // conversation in view, since an entry keeps the one it was typed against
     // (see queueClaudeMessage).
     queued: () => cc.queued.filter((q) => q.commentId === cc.commentId),
+    // Whether the KEYBOARD is actually sitting in this column right now —
+    // reuses the same isClaudeChatFocused() predicate the visibility rules
+    // above use. Drives claudeChatColumn's own focus border (see its doc
+    // comment in ClaudeChat.mjs): the border must follow cs.focus, not
+    // "is a conversation merely shown here for context" (expandedConversation
+    // stays expanded while cs.focus === 'claude', but that is NOT this).
+    focused: () => isClaudeChatFocused(),
     // Seconds since the running turn started. cc.tick is read purely to
     // register the reactive dependency that makes this re-render every second
     // (the value itself is irrelevant — the real number comes from the clock).
@@ -3943,7 +3950,18 @@ function expandedConversation(c, openCommentMenu) {
   return html`
     <div
       class="${() =>
-        'flex flex-col gap-2 rounded-xl border border-indigo-300 dark:border-indigo-500/40 p-3 ring-1 ring-black/5 ' +
+        'flex flex-col gap-2 rounded-xl border p-3 ring-1 ring-black/5 ' +
+        // The indigo focus border follows the KEYBOARD (cs.focus), not merely
+        // "this thread is the one shown here" — this card also stays expanded
+        // while cs.focus === 'claude' (see commentCard's doc comment), and in
+        // that case the reviewer's cursor is actually in the Claude column, so
+        // this side gets NO border at all (never a neutral gray fallback —
+        // explicit reviewer request: only the truly focused column ever shows
+        // a border).
+        (cs.focus === 'comment' || cs.focus === 'thread'
+          ? 'border-indigo-300 dark:border-indigo-500/40'
+          : 'border-transparent') +
+        ' ' +
         (c.status === 'resolved' ? 'bg-slate-50/60 dark:bg-zinc-800/40' : 'bg-white dark:bg-zinc-900')}"
       data-testid="comment-item"
       data-expanded="true"

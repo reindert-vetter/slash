@@ -466,10 +466,16 @@ function claudeBubble(msg, i, total, claudePos, onSend, onRetry, busy) {
 // ("pas de foutafhandeling aan", "commit dit") instead of picking a separate
 // action first. See "Triggering agentic actions" in claude-chat-panel.md.
 //
-// No own border/bg/rounded any more — the comment block and this Claude
-// block merge into ONE visual card (that styling lives on the shared
+// No own bg/rounded of its own — the comment block and this Claude block
+// merge into ONE visual card (that styling lives on the shared
 // `comment-claude-row` wrapper in home.mjs instead), separated only by a
-// vertical dashed line (`comment-claude-connector`). `flex-1` makes this
+// vertical dashed line (`comment-claude-connector`). It DOES carry its own
+// conditional focus border (`view.focused()`, mirrors expandedConversation's
+// identical rule in RelatedPanel.mjs): indigo while the keyboard is actually
+// in this column (`cs.focus === 'claude'`), `border-transparent` — never a
+// neutral gray — the rest of the time, so exactly one side of the merged
+// card ever shows a border, following cs.focus rather than which side merely
+// happens to be visible. `flex-1` makes this
 // column fill the full height of that shared row (`items-stretch`), so both
 // blocks always end up exactly the same height. It DOES keep its own `p-3`:
 // InlineComments' cards (compactConversation/expandedConversation/
@@ -499,7 +505,12 @@ function claudeBubble(msg, i, total, claudePos, onSend, onRetry, busy) {
 // turn in view at the rest position.
 export function claudeChatColumn(view, callbacks) {
   return html`
-    <div class="flex min-h-0 flex-1 flex-col gap-2 p-3" data-testid="claude-chat-card">
+    <div
+      class="${() =>
+        'flex min-h-0 flex-1 flex-col gap-2 rounded-xl border p-3 ' +
+        (view.focused() ? 'border-indigo-300 dark:border-indigo-500/40' : 'border-transparent')}"
+      data-testid="claude-chat-card"
+    >
 
       <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="claude-chat-header">
         ${claudeMention}
