@@ -1236,6 +1236,98 @@ overflow deterministically via an injected `max-height`, regardless of how
 short the fixture replies are, and polls `scrollHeight - scrollTop -
 clientHeight` after two sends.
 
+## A full-size code-preview column
+
+Reviewer request: "code blokken uit comments blok (+claude conversatie), als
+je code examples hebt, maar dan losse blokken rechts daarvan die de code
+volledig laten zien. laat het ook een diff zien (onder elkaar, oude boven,
+nieuwe onder)." A fenced code block inside a comment/Claude bubble
+(`markdown.mjs`'s `extractCodeFences`) sits in the narrow comment/Claude
+column (half of `relatedColumnWidthCls()` each) and gets its own horizontal
+scrollbar as soon as a line is wide — unreadable without scrolling
+line-by-line. This is a click-driven side column that shows the same code
+full-size, and — when there is a sensible unit to compare against — stacked
+against the current PR code of that unit.
+
+Four decisions (D1-D4), all made explicitly rather than assumed, since the
+reviewer's own instruction left them open:
+
+- **D1 — no real line-diff.** There is no clientside diff algorithm in this
+  codebase: `Block.mjs`'s `codeDiff`/`unifiedCodeDiff` only render `rows` the
+  backend already shaped from the PR's own git hunks, never two arbitrary
+  strings. Vendoring/writing a diff algorithm for this one feature was judged
+  out of proportion, so `CodePreview.mjs`'s `codePreviewPanel` renders two
+  independently Prism-highlighted panes, stacked "Huidig (PR)" above
+  "Voorgesteld (chat)" below — literally what was asked, without colour-coded
+  line-level comparison. A real diff is a possible follow-up, not this one.
+- **D2 — click-driven, a native `<button>`.** `extractCodeFences` gives every
+  non-`suggestion` fence a `data-testid="code-fence-open"` button in its
+  header (`Bekijk volledig ↗`) carrying the RAW code + resolved language word
+  as `data-fence-code`/`data-fence-lang` (HTML-entity-encoded, decoded back by
+  the browser's own attribute parsing when read via `.dataset`) — chosen over
+  a new per-fence keyboard cursor, which doesn't exist anywhere in this app
+  (`cs.claudePos`/`cs.threadPos` navigate per *message*, not per *codeblock
+  within* a message) and would be disproportionate for this feature. A native
+  `<button>` is still reachable by Tab/Enter/Space, so this isn't purely
+  mouse-only. `markdown.mjs` itself stays a pure string renderer with no
+  reactive state (see its own file header), so the click is handled by ONE
+  delegated listener per owning column instead — `handleFenceClick`
+  (`RelatedPanel.mjs`) is wired via `@click` onto `InlineComments`' and
+  `ClaudeChatPanel`'s own root elements (both already receive `commentTarget`,
+  needed for D1's "Huidig" side below); a click anywhere in either column
+  bubbles up and is a no-op unless it actually lands on such a button.
+- **D3 — a sibling column, not a child of `comment-claude-row`.** `home.mjs`
+  wraps `comment-claude-row` and `CodePreviewPanel()` in one
+  `flex items-start gap-3` row (`comment-claude-and-preview-row`) inside
+  `comments-and-related` — the preview appears to the RIGHT of the merged
+  comment+Claude card instead of stretching its height, and (since
+  `comments-and-related`'s own width is auto/shrink-to-fit inside `<main>`'s
+  horizontal scroll, same as every width variation already documented in
+  `diff-card.md`) `<main>` simply scrolls further to show it, exactly like an
+  uncapped `fit`-width diff card already does. Not built as a real drilled
+  column (own rail, `←`/`→` stop, `Escape` handling) — that infrastructure is
+  disproportionate for "show this one block bigger"; `cp` (RelatedPanel.mjs's
+  own reactive state, mirrors `cc`/`rc`: exactly one preview open at a time)
+  only opens/closes via the button/its own close (✕) button, with no new stop
+  in the keyboard chain in `keyboard-navigation.md`. Resetting it on every
+  navigation step was deliberately NOT added either — it simply stays open
+  until closed or replaced by opening a different fence, same "last thing
+  wins" rule `cc` already follows for the Claude conversation itself.
+- **D4 — scope: every fence gets the button (except `suggestion`, GitHub's own
+  "replace these lines" convention, not a code example); only a PHP-or-
+  unlabeled fence AND a resolvable unit get the "Huidig (PR)" comparison
+  pane.** `openCodePreview` checks `!lang || lang.toLowerCase() === 'php'`
+  before keeping `oldCode` — the same "unlabeled fence defaults to php" rule
+  `highlightForLang` already uses. Comparing a PHP unit's current code against
+  a JSON/bash/SQL example makes no sense, so those fences still open (solving
+  the readability problem) but without a "Huidig" pane.
+
+**D1's answer to "wat is oud/nieuw"** (the reviewer's own words, verbatim
+minus an evident typo): "dat wat niet is in de pr vergelijken met wat er in de
+chat is voorgesteld" — the "old"/"Huidig" side is the CURRENT PR code of
+whichever unit the comment/Claude panel is scoped to, the "new"/"Voorgesteld"
+side is the fenced code itself. `handleFenceClick` gets that current code from
+**`commentTarget()`** — the exact same live-cursor value the composer/
+`claudeContextBlock` already anchor a NEW comment/the first Claude turn's
+context against (see "Invisible selection context" above) — never a second,
+separate anchor lookup: the comment/Claude panel is by construction always
+scoped to whichever unit is currently in view. `commentTarget()` itself
+already returns `null` for a PR-wide/orphan comment-index item (`b.kind ===
+'comment'`, see `home.mjs`), which is exactly why such an item's fence never
+gets a "Huidig" pane either — no extra branching needed in `openCodePreview`
+for that case.
+
+**Files:** `markdown.mjs` (the button + its data attributes),
+`src/CodePreview.mjs` (new, pure template — the same
+no-reactive-state/no-import-of-RelatedPanel split as `ClaudeChat.mjs`/
+`translationDiff.mjs`), `RelatedPanel.mjs` (`cp`, `openCodePreview`,
+`closeCodePreview`, `handleFenceClick`, `CodePreviewPanel`), `home.mjs` (the
+mount point next to `comment-claude-row`).
+
+Test: `tests/code-fence-preview.spec.mjs` — an orphan comment's fence opens the
+preview with only the "Voorgesteld" pane and no button for its sibling
+`suggestion` fence; a block-scoped comment (PR 12903, block 1) gets both panes.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat

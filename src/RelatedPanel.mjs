@@ -20,6 +20,7 @@ import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin }
 import { commentMentionsMe, ensureSettings } from './mentions.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
+import { codePreviewPanel } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { colWidthStyle, startColumnResize, resetColumnWidth, resizeHandle, parseAutoWidthPx } from './columnWidth.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
@@ -1900,6 +1901,7 @@ export function ClaudeChatPanel(state, commentTarget) {
               style="${() => colWidthStyle(state, widthKey())}"
               data-testid="claude-chat-column"
               data-col-resize-root
+              @click="${(e) => handleFenceClick(e, commentTarget)}"
             >
               ${() =>
                 widthKey()
@@ -1914,6 +1916,76 @@ export function ClaudeChatPanel(state, commentTarget) {
           : ''}
     </div>
   `
+}
+
+// ── Standalone code-preview column ──────────────────────────────────────────
+// "code blokken uit comments blok (+claude conversatie) ... losse blokken
+// rechts daarvan die de code volledig laten zien ... diff (onder elkaar, oude
+// boven, nieuwe onder)". A fenced code block inside a comment/Claude bubble
+// (markdown.mjs's extractCodeFences) sits in the narrow comment/Claude column
+// and gets its own horizontal scrollbar as soon as a line is wide — this
+// column shows the SAME code full-size instead, and — when the fence is PHP
+// (or unlabeled, the same default `highlightForLang` already uses) — stacked
+// against the CURRENT PR code of whichever unit the comment/Claude panel is
+// scoped to ("dat wat niet is in de pr vergelijken met wat er in de chat is
+// voorgesteld", the reviewer's own words). See ".claude/docs/
+// claude-chat-panel.md", "A full-size code-preview column" for the decisions
+// (D1-D4) this implements.
+//
+// `cp` mirrors `cc`/`rc`: this module's own reactive state for the ONE
+// preview currently open (never more than one, same "one thing in view" rule
+// as `cc`'s single conversation) — the template itself lives in the sibling
+// pure-template file CodePreview.mjs, fed this object directly (its own
+// fields are read through nested `${() => ...}` bindings there, mirroring
+// ClaudeChat.mjs's `view` getters).
+const cp = reactive({ open: false, title: '', lang: '', code: '', oldCode: null })
+
+export function closeCodePreview() {
+  cp.open = false
+}
+
+// openCodePreview — D4: the "Huidig (PR)" pane only appears for a PHP (or
+// unlabeled) fence AND when there is a resolvable current-code unit to show
+// it against (oldCode is `null` for a PR-wide comment, which commentTarget()
+// itself already returns null for — see home.mjs's commentTarget). Every
+// other fence still opens, just without that comparison pane.
+function openCodePreview(code, lang, title, oldCode) {
+  const isPhp = !lang || lang.toLowerCase() === 'php'
+  cp.open = true
+  cp.title = title
+  cp.lang = lang
+  cp.code = code
+  cp.oldCode = isPhp ? oldCode : null
+}
+
+// handleFenceClick — D2: a plain native `<button data-testid=code-fence-open>`
+// (markdown.mjs) inside a raw `.innerHTML` comment/Claude bubble, so it can't
+// carry its own arrow.js `@click` binding. Delegated instead: mounted once on
+// InlineComments'/ClaudeChatPanel's own root element (both already receive
+// `commentTarget`, needed to resolve the "Huidig" side — D1's answer), a click
+// anywhere in either column bubbles up here and is a no-op unless it actually
+// landed on (or inside) such a button. `commentTarget()` is the SAME live
+// cursor value the composer/Claude-context already anchor a NEW comment
+// against — the comment/Claude panel is by construction always scoped to
+// whichever unit is currently in view, so no separate anchor lookup is needed
+// (see the file-level doc comment above).
+function handleFenceClick(e, commentTarget) {
+  const btn = e.target && e.target.closest && e.target.closest('[data-testid="code-fence-open"]')
+  if (!btn) return
+  const code = btn.dataset.fenceCode || ''
+  const lang = btn.dataset.fenceLang || ''
+  const t = commentTarget && commentTarget()
+  const oldCode = t && t.file && t.code ? t.code : null
+  openCodePreview(code, lang, lang ? lang.toUpperCase() : 'Codeblok', oldCode)
+}
+
+// CodePreviewPanel — mounted by home.mjs right next to comment-claude-row
+// (see "A full-size code-preview column" in claude-chat-panel.md for exactly
+// where in the layout). Wrapped in a stable `contents` root, not a bare
+// toggling expression, mirroring ClaudeChatPanel's own guard against the
+// arrow.js "bare toggling expression" pitfall.
+export function CodePreviewPanel() {
+  return html`<div class="contents">${() => (cp.open ? codePreviewPanel(cp, closeCodePreview) : '')}</div>`
 }
 
 // applyRelRestore re-applies the URL-restored panel cursor (restorePending, set at
@@ -3913,6 +3985,7 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
       style="${() => colWidthStyle(state, widthKey())}"
       data-testid="inline-comments"
       data-col-resize-root
+      @click="${(e) => handleFenceClick(e, commentTarget)}"
     >
       ${() =>
         widthKey()

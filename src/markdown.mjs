@@ -99,6 +99,25 @@ function fenceLabel(counter, isSuggestion) {
 // (keyword/string/comment/number/operator/…) are shared across every vendored
 // grammar, so every fence gets the same colour treatment this way without a
 // second CSS block per language.
+//
+// Every non-suggestion fence also gets a native `<button
+// data-testid="code-fence-open">` in its header — the entry point into the
+// standalone code-preview column (RelatedPanel.mjs's `openCodePreview`/
+// `CodePreviewPanel`, see "A full-size code-preview column" in
+// claude-chat-panel.md) that shows the code full-width instead of scrolling
+// horizontally inside the narrow comment/Claude column, and — for a PHP (or
+// unlabeled, same default as above) fence — stacked against the unit's
+// CURRENT code as a "Huidig"/"Voorgesteld" comparison. The button carries the
+// RAW code + resolved language word as `data-fence-code`/`data-fence-lang`
+// (HTML-entity-encoded via `escapeHtml`, decoded back by the browser's own
+// attribute parsing when read via `.dataset`) rather than a fence index to
+// look up later — this file has no reactive state/click handling of its own
+// (a pure string renderer, see the header comment), so the click is handled
+// by a delegated listener further up the DOM (RelatedPanel.mjs), and reading
+// the code straight off the button avoids re-parsing the message text at
+// click time. A `suggestion` fence gets no button: it is GitHub's own
+// "replace these lines" convention, not a general code example to preview/
+// compare.
 function extractCodeFences(text, store, startIndex) {
   let counter = startIndex
   return text.replace(CODE_FENCE_RE, (m, lang, code) => {
@@ -114,12 +133,16 @@ function extractCodeFences(text, store, startIndex) {
     const headerCls = suggestion
       ? 'flex items-center justify-between px-2 py-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 border-b border-emerald-200 dark:border-emerald-500/30'
       : 'flex items-center justify-between px-2 py-1 text-[11px] font-medium text-slate-500 dark:text-zinc-400 bg-slate-50 dark:bg-zinc-800/60 border-b border-slate-200 dark:border-zinc-700'
+    const openButton = suggestion
+      ? ''
+      : `<button type="button" class="ml-2 shrink-0 rounded border border-slate-300 dark:border-zinc-600 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700" ` +
+        `data-testid="code-fence-open" data-fence-code="${escapeHtml(code)}" data-fence-lang="${escapeHtml(langWord)}">Bekijk volledig ↗</button>`
     const html =
       `<div class="${wrapperCls}" data-testid="code-fence" data-fence-index="${counter}"` +
       `${suggestion ? ' data-fence-suggestion="true"' : ''}${langWord ? ` data-fence-lang="${escapeHtml(langWord)}"` : ''}>` +
-      `<div class="${headerCls}"><span>${escapeHtml(label)}</span>` +
-      (langWord ? `<span class="uppercase tracking-wide">${escapeHtml(langWord)}</span>` : '') +
-      `</div><pre class="code m-0"><code class="language-php">${highlighted}</code></pre></div>`
+      `<div class="${headerCls}"><span class="flex items-center">${escapeHtml(label)}` +
+      (langWord ? `<span class="ml-2 uppercase tracking-wide">${escapeHtml(langWord)}</span>` : '') +
+      `</span>${openButton}</div><pre class="code m-0"><code class="language-php">${highlighted}</code></pre></div>`
     const token = ` MD${store.length} `
     store.push(html)
     return `\n\n${token}\n\n`

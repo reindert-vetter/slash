@@ -91,6 +91,7 @@ import RelatedPanel, {
   needsPublishChoice,
   localReplyCount,
   publishThreadOnly,
+  CodePreviewPanel,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
@@ -9464,6 +9465,7 @@ function DetailPanel(state) {
         })
       }}
       <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="comments-and-related">
+        <div class="flex items-start gap-3" data-testid="comment-claude-and-preview-row">
         <div
           class="${() =>
             // Hidden (not unmounted!) while neither InlineComments/
@@ -9555,6 +9557,14 @@ function DetailPanel(state) {
             // comment. Renders nothing at all when neither side has anything
             // to report.
             CommentClaudeFooter()}
+        </div>
+        ${() =>
+          // The standalone code-preview column opened from a "Bekijk volledig
+          // ↗" button inside a comment/Claude code fence (markdown.mjs) — a
+          // sibling to comment-claude-row rather than a child of it, so it
+          // sits to its RIGHT instead of stretching that card's own height
+          // (see "A full-size code-preview column" in claude-chat-panel.md).
+          CodePreviewPanel()}
         </div>
         ${() =>
           RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
