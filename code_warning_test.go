@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -304,6 +305,45 @@ func TestCodeWarningCapsFindingsPerBlock(t *testing.T) {
 	}
 	if !got["a"] || !got["b"] {
 		t.Fatalf("kept findings = %+v, want the two lowest-line findings (a, b)", list)
+	}
+}
+
+// An existing open, human-authored comment on a file in scope is handed to
+// the model as context in the prompt, so it can decide whether a finding on
+// that line would just repeat what's already been said (see
+// existingLineCommentsInScope, code_warning.md).
+func TestCodeWarningPromptsExistingComments(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 40
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelOpus, `[]`)
+	m, cs, _ := warningManager(t, dataDir, fake)
+
+	if err := cs.Save(context.Background(), comments.Comment{
+		ID: "c-existing", RunID: "r-existing", PR: pr,
+		File: "app/Services/OrderService.php", Line: 6,
+		Author: "reindert", Body: "This VAT rate should be a named constant.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(fake.Calls) != 1 {
+		t.Fatalf("claude calls = %d, want 1", len(fake.Calls))
+	}
+	prompt := fake.Calls[0].Prompt
+	if !strings.Contains(prompt, "app/Services/OrderService.php:6") ||
+		!strings.Contains(prompt, "reindert") ||
+		!strings.Contains(prompt, "This VAT rate should be a named constant.") {
+		t.Fatalf("prompt does not mention the existing comment: %s", prompt)
 	}
 }
 

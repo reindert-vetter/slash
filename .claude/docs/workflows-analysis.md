@@ -584,6 +584,19 @@ a manually triggered, low-frequency action.
   (`Kind ""`, `Gran "line"`); not inside one (an unchanged/context line, or a
   slightly-off line) → **PR-wide** (`Kind "ai_warning"`, added to `isPRWide`)
   instead of being discarded, with `File` still set as a hint.
+- **Existing open comments on a scope file are handed to the model as
+  context, so it can skip a duplicate.** `existingLineCommentsInScope`
+  (`code_warning.go`, called from the `runAgenticReview` Activity right before
+  `runCodeWarningReview`) reads `cs.List` and keeps the open,
+  line-anchored (`Kind ""`), non-AI comments on a file in scope, sorted by
+  file/line, into `warningReviewArg.Existing` → rendered by `warningPrompt` as
+  a `file:line — author: body` list. Deciding whether a finding on such a
+  line still adds something new is the **model's** call, per an instruction
+  in `code_warning.md`'s system prompt — deliberately not a Go-side dedup
+  filter (that would need the same semantic judgment a second, redundant
+  call would only duplicate). An old AI-authored comment never appears here:
+  `supersedeFileWarnings` already deleted every one in scope earlier in the
+  same workflow.
 - **Auto-supersede, scoped per file** (`supersedeFileWarnings`, run **before**
   the agentic call): for each file in scope, every existing `Source:"ai"`
   comment on it is deleted via the **existing delete Signal** on its own

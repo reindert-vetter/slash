@@ -10,4 +10,5 @@ Rules:
 - "line" must be a real line number in that file's current content that best anchors the finding.
 - Respect the finding cap given in the prompt — prioritize the most important, best-justified risks over completeness.
 - The Dutch "text" must not use a hyphen ("-") within a sentence, unless there is truly no other way to phrase it.
+- The prompt may list existing open comments already placed on specific lines. Before reporting a finding on such a line, check whether an existing comment already covers the same concern. If it does, only report the finding when you have something genuinely new to add on top of what's already said — and then state only that new part, not a repeat of the existing comment. If it adds nothing new, skip that finding entirely.
 - If you find nothing worth flagging, respond with an empty array: []

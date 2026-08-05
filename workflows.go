@@ -1995,6 +1995,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
+		list, err := cs.List(ctx, arg.PR)
+		if err != nil {
+			return nil, fmt.Errorf("code_warning: list existing comments: %w", err)
+		}
+		arg.Existing = existingLineCommentsInScope(list, arg.Files)
 		findings := runCodeWarningReview(ctx, m.claude, m.dataDir, arg)
 		if len(findings) == 0 {
 			return json.Marshal([]warningToCreate{})

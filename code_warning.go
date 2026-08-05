@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"slash/modules/claude"
+	"slash/modules/comments"
 )
 
 // This file is the LLM side of the code_warning workflow (package main; it
@@ -33,6 +34,24 @@ type warningReviewArg struct {
 	Files       []string `json:"files"`
 	BlockCount  int      `json:"blockCount"`
 	MaxFindings int      `json:"maxFindings"`
+	// Existing is every open, human/GitHub-authored line comment already sitting
+	// on a file in scope (Source != "ai" — an old AI comment in scope was already
+	// deleted by supersedeFileWarnings before this Activity runs), so the model
+	// can tell whether a risk it wants to flag has already been raised. Whether a
+	// finding on such a line still adds something new is the model's own call
+	// (see code_warning.md's system prompt) — this is context, not a Go-side
+	// dedup filter.
+	Existing []existingLineComment `json:"existing,omitempty"`
+}
+
+// existingLineComment is one open, non-AI comment already anchored to a
+// file+line in the review scope, handed to the model as context (see
+// warningReviewArg.Existing).
+type existingLineComment struct {
+	File   string `json:"file"`
+	Line   int    `json:"line"`
+	Author string `json:"author"`
+	Body   string `json:"body"`
 }
 
 // warningFinding is one entry of the JSON array the model is asked to return.
@@ -108,6 +127,12 @@ func warningPrompt(arg warningReviewArg) string {
 	}
 	fmt.Fprintf(&b, "\nThese files together touch %d changed function(s)/method(s). Report at most %d findings in total across all of them — on average about %d per changed function, never a fixed count per file — prioritizing the most important, best-justified risks over completeness.\n",
 		arg.BlockCount, arg.MaxFindings, warningsPerBlock)
+	if len(arg.Existing) > 0 {
+		b.WriteString("\nExisting open comments already on these files (see the system prompt's rule about them before reporting a finding on the same line):\n")
+		for _, c := range arg.Existing {
+			fmt.Fprintf(&b, "- %s:%d — %s: %s\n", c.File, c.Line, c.Author, c.Body)
+		}
+	}
 	return b.String()
 }
 
@@ -124,6 +149,36 @@ func parseWarningFindings(raw string) []warningFinding {
 		return nil
 	}
 	return findings
+}
+
+// existingLineCommentsInScope filters a PR's comments down to the open,
+// non-AI, line-anchored ones sitting on a file in scope — the context handed
+// to the model via warningReviewArg.Existing so it can tell whether a risk it
+// wants to flag has already been raised (see runAgenticReview,
+// code_warning.md). Kind "" excludes a PR-wide comment (no real line);
+// Source "ai" is excluded defensively — supersedeFileWarnings already deletes
+// every AI comment in scope before this runs — and Status must be "open" (a
+// resolved comment is treated as already handled). Sorted by file, line for a
+// deterministic prompt.
+func existingLineCommentsInScope(list []comments.Comment, files []string) []existingLineComment {
+	allowed := make(map[string]bool, len(files))
+	for _, f := range files {
+		allowed[f] = true
+	}
+	out := make([]existingLineComment, 0, len(list))
+	for _, c := range list {
+		if c.Kind != "" || c.Source == "ai" || c.Status != "open" || c.Line <= 0 || !allowed[c.File] {
+			continue
+		}
+		out = append(out, existingLineComment{File: c.File, Line: c.Line, Author: c.Author, Body: c.Body})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		return out[i].Line < out[j].Line
+	})
+	return out
 }
 
 // anchoredWarning maps one LLM finding onto the existing comment-anchoring
