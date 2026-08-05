@@ -1,4 +1,4 @@
-import { test, expect, appReady } from './_fixtures.mjs'
+import { test, expect, appReady, evaluateSettled } from './_fixtures.mjs'
 
 // Task 29: a look-ahead preview card must never be WIDER than the ACTIVE
 // (selected) card it's stacked next to. PR 105
@@ -92,5 +92,141 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
     await expect(page.locator('[data-testid="block-column"] article')).toHaveCount(2)
     await expect(page.getByTestId('block-row')).toHaveCount(2)
     expect(errors).toEqual([])
+  })
+
+  // Regression: singleSide(b) used to be a denylist (`added`→'right',
+  // `removed`→'left', everything else → null/two-sided), so a synthetic
+  // 'unchanged' block (a drilled call-frame pointing at a file this PR
+  // doesn't touch — resolveChildBlock in home.mjs, old === new) fell through
+  // to the two-sided branch: it showed BOTH (identical) panes and rendered at
+  // the wide 70rem tier, wider than the one-sided active card next to it —
+  // reported live: a drilled `added` method's own card stayed narrow while an
+  // 'unchanged' RuleData::__construct call target beneath it rendered wide.
+  // singleSide is now an allowlist (only 'modified' keeps both panes), so
+  // 'unchanged' narrows to a single pane like 'added'/'removed'.
+  test('an unchanged block renders single-pane and narrow, never the two-sided width', async ({ page }) => {
+    await page.goto('/pr/105')
+    await appReady(page)
+
+    const widths = await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const { default: Block } = await import('/src/Block.mjs')
+      const longLine = 'return $this->fooBarValuesFromRequestPayloadDataThatIsGenuinelyMuchLonger($a, $b, $c);'
+      const active = reactive({
+        category: 'CONTROLLER',
+        label: 'MoneybirdController::createRulesWhenPluginIsActive',
+        status: 'added',
+        file: 'app/Http/Controllers/MoneybirdController.php',
+        line: 145,
+        name: 'createRulesWhenPluginIsActive',
+        class: 'MoneybirdController',
+        approved: false,
+        code: { new: { start: 145, end: 147, text: 'public function createRulesWhenPluginIsActive(): void {\n    x();\n}' } },
+      })
+      // Same source on both sides — a genuinely 'unchanged' drilled frame
+      // (resolveChildBlock builds exactly this shape: old === new).
+      const unchangedSrc = `public function __construct() {\n    ${longLine}\n}`
+      const preview = reactive({
+        category: 'OTHER',
+        label: 'RuleData::__construct',
+        status: 'unchanged',
+        file: 'app/Data/RuleData.php',
+        line: 12,
+        name: '__construct',
+        class: 'RuleData',
+        approved: false,
+        code: { old: { start: 12, end: 14, text: unchangedSrc }, new: { start: 12, end: 14, text: unchangedSrc } },
+      })
+
+      const activeHost = document.createElement('div')
+      activeHost.id = 'unchanged-active-host'
+      document.body.appendChild(activeHost)
+      Block(active, { viewMode: () => 'split' })(activeHost)
+
+      const previewHost = document.createElement('div')
+      previewHost.id = 'unchanged-preview-host'
+      document.body.appendChild(previewHost)
+      Block(preview, { viewMode: () => 'split', preview: true })(previewHost)
+
+      const activeCard = activeHost.querySelector('article')
+      const previewCard = previewHost.querySelector('article')
+      return {
+        activeWidth: activeCard.getBoundingClientRect().width,
+        previewWidth: previewCard.getBoundingClientRect().width,
+        previewOldPanes: previewCard.querySelectorAll('[data-pane="old"]').length,
+        previewNewPanes: previewCard.querySelectorAll('[data-pane="new"]').length,
+      }
+    })
+
+    expect(widths.previewOldPanes).toBe(0)
+    expect(widths.previewNewPanes).toBe(1)
+    expect(widths.previewWidth).toBeLessThanOrEqual(widths.activeWidth + 1)
+  })
+
+  // Regression: the "preview never wider than active" guarantee must also
+  // hold when the ACTIVE card itself is two-sided (`modified`) — the
+  // `activeSingleSided` override (home.mjs) only forces the preview's
+  // viewMode to 'unified' for a one-sided active card, so a two-sided active
+  // card relies entirely on both cards sharing the same fixed split/unified
+  // width tier (widthCls, Block.mjs). Confirms that still holds across all
+  // three `a` stands even when the preview's own code is genuinely much
+  // longer than the active card's.
+  test('a modified active card is never smaller than a wider modified preview, in every stand', async ({
+    page,
+  }) => {
+    await page.goto('/pr/105')
+    await appReady(page)
+
+    for (const stand of ['split', 'unified', 'fit']) {
+      const widths = await evaluateSettled(page, async (viewMode) => {
+        const { reactive } = await import('/src/vendor/arrow.js')
+        const { default: Block, fitCapCharsFor } = await import('/src/Block.mjs')
+        const makeBlock = (name, line, newLine) =>
+          reactive({
+            category: 'ACTION',
+            label: 'Foo::' + name,
+            status: 'modified',
+            file: 'app/Foo.php',
+            line,
+            name,
+            class: 'Foo',
+            approved: false,
+            code: {
+              old: { start: line, end: line + 2, text: `public function ${name}(): int {\n    return 1;\n}` },
+              new: { start: line, end: line + 2, text: `public function ${name}(): int {\n    ${newLine}\n}` },
+            },
+          })
+        const active = makeBlock('map', 60, 'return $short;')
+        const preview = makeBlock(
+          'headings',
+          70,
+          'return $this->fooBarValuesFromRequestPayloadDataThatIsGenuinelyMuchLongerThanTheActiveOne($a, $b, $c, $d);',
+        )
+
+        document.querySelectorAll('#modified-active-host, #modified-preview-host').forEach((n) => n.remove())
+        const activeHost = document.createElement('div')
+        activeHost.id = 'modified-active-host'
+        document.body.appendChild(activeHost)
+        Block(active, { viewMode: () => viewMode })(activeHost)
+
+        const previewHost = document.createElement('div')
+        previewHost.id = 'modified-preview-host'
+        document.body.appendChild(previewHost)
+        Block(preview, {
+          viewMode: () => viewMode,
+          preview: true,
+          capFitChars: () => fitCapCharsFor(active),
+        })(previewHost)
+
+        const activeCard = activeHost.querySelector('article')
+        const previewCard = previewHost.querySelector('article')
+        return {
+          activeWidth: activeCard.getBoundingClientRect().width,
+          previewWidth: previewCard.getBoundingClientRect().width,
+        }
+      }, stand)
+
+      expect(widths.previewWidth, `stand=${stand}`).toBeLessThanOrEqual(widths.activeWidth + 1)
+    }
   })
 })

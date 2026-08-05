@@ -122,6 +122,46 @@ simple). `dKey`'s `call`-level guard (`cur.change > 0`) is extended with
 to the previous sibling, mirroring the top-level `dKey`'s `sameFileNeighbour(-1)`
 check. See `tests/drill-sibling-walk.spec.mjs`.
 
+### Open investigation: an occasional literal duplicate of the SELECTED card
+
+Reported live (screenshot: `.claude/scratch/child-card-wider-than-selected.png`),
+**not yet reproduced deterministically or fixed**: a second card appearing
+directly below the selected/focused one, with the exact same title,
+`file:line` and approve count as the card being viewed, but no diff body — as
+if the parent card were shown twice. Not a guess-fix; recorded here so the
+next person doesn't start from zero.
+
+Two static candidates found while investigating, neither confirmed live yet:
+
+- **`childrenOf(b)`** (`home.mjs`) maps every `state.relations` row with
+  `r.parentId === b.id` straight to a child descriptor with **no self-loop
+  guard** — unlike `nestedChangedKids`, which explicitly skips
+  `kid.id === parentId`. If a relation edge (`event_listener`,
+  `route_controller`, …) is ever emitted with `childId === parentId` (a
+  backend bug, not confirmed), `relatedChildren(b)` would list `b` as its own
+  child: literally the same title/file/line/approve count, since it IS the
+  same block object.
+- **`resolvedCallChildren`**'s PR-block branch (`byId.get(callChildId(r))`)
+  has the same gap for a resolved call that resolves back to its own caller
+  (e.g. genuine recursion, or a callresolve mis-match) — not checked against
+  the reported callresolve data (the previous investigation found no
+  duplicate ROW there, but didn't check for a row whose resolved target
+  equals the caller itself).
+- A third possibility, not yet weighed against the other two: a duplicate
+  entry landing in `state.blocks` itself (so the top-level look-ahead
+  `pair.forEach`, not the Onderliggende-code panel, renders the same block at
+  both `sel` and `sel+1`) — the "no diff-body" detail would then most likely
+  be the preview's own `collapsed`/`previewTooTallForActive` state, not a
+  distinct render path.
+
+Whoever picks this up next: reproduce first (a live PR page with a real
+self-referencing relation/call is the fastest path — synthesizing one via
+`page.route` interception on `/api/relations`/`/api/callresolve`, mirroring
+`tests/drill-preview.spec.mjs`'s fixture-override style, rather than trying to
+find one in real ingest data), THEN fix — don't add a defensive self-loop
+guard to `childrenOf`/`resolvedCallChildren` speculatively without a failing
+test to prove it's the actual cause.
+
 ### Approve follows `focusLevel` too
 
 `approveContext()` (`home.mjs`): without it, "Approve …" would invisibly approve

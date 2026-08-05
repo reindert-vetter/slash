@@ -108,16 +108,25 @@ const REMOVED_BADGE_CLS =
 
 // singleSide returns which pane to show when a block is one-sided: an added block
 // has no old source (show only 'right'/new), a removed block has no new source
-// (show only 'left'/old). Modified blocks keep both panes (null). This lets the
-// card drop the empty pane and render narrower. Driven by status so the width is
-// stable even before b.code loads. Exported so home.mjs can check whether the
-// ACTIVE/selected block is one-sided, to make a look-ahead preview card match
-// its shape (see the "preview never wider/richer than active" note below and
-// detail-layout.md).
+// (show only 'left'/old), an unchanged block has identical old/new source so
+// showing both would just duplicate the same text (show only 'right'/current).
+// A modified block genuinely has two different sides to compare (null). This
+// lets the card drop the empty/redundant pane and render narrower. Driven by
+// status so the width is stable even before b.code loads. Exported so
+// home.mjs can check whether the ACTIVE/selected block is one-sided, to make
+// a look-ahead preview card match its shape (see the "preview never
+// wider/richer than active" note below and detail-layout.md).
+//
+// Deliberately an allowlist of the ONE status that genuinely needs both
+// panes ('modified') rather than a denylist of the ones that don't: a future
+// status defaults to single-pane here unless it's explicitly known to carry
+// two genuinely different sides, so a status this file hasn't been taught
+// about yet can't silently fall through to the wide two-pane tier again (see
+// the 'unchanged' bug this replaced, diff-card.md).
 export function singleSide(b) {
-  if (b.status === 'added') return 'right'
+  if (b.status === 'modified') return null
   if (b.status === 'removed') return 'left'
-  return null
+  return 'right'
 }
 
 // fitOnly returns which single pane the `a` toggle's THIRD ('fit') stand

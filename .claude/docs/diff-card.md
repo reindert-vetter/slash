@@ -55,12 +55,29 @@ being active, so a repeated click is genuinely free.
   | `narrowed(viewMode) \|\| singleSide(b)` | `w-[42rem] narrow:w-[28rem] 2xl:w-[49.2rem]` |
   | otherwise (a two-sided block in `split`) | `w-[70rem] narrow:w-[42rem] 2xl:w-[82rem]` |
 
-**`singleSide(b)`** is status-driven, not code-driven: `added` → `'right'`,
-`removed` → `'left'`, `modified` → `null`. Deliberately derived from `b.status`
-rather than from `b.code`, so the width is **stable before the code has lazily
-loaded** and the card never resizes underneath the reviewer when the fetch lands.
-It is exported because `home.mjs` needs the same answer for the preview rule
-below.
+**`singleSide(b)`** is status-driven, not code-driven: `modified` → `null`
+(genuinely two different sides to compare), `removed` → `'left'`, everything
+else (`added`, and the synthetic `unchanged` status, see below) → `'right'`.
+Deliberately derived from `b.status` rather than from `b.code`, so the width is
+**stable before the code has lazily loaded** and the card never resizes
+underneath the reviewer when the fetch lands. It is exported because
+`home.mjs` needs the same answer for the preview rule below.
+
+**Deliberately an allowlist of the one status that needs both panes
+(`modified`), not a denylist of the ones that don't.** It used to be
+`added`→`'right'`/`removed`→`'left'`/everything else→`null` — which silently
+put the synthetic `'unchanged'` status (a drilled call-frame pointing at a
+file this PR doesn't touch, `resolveChildBlock` in `home.mjs`, old === new) on
+the two-sided branch: it showed both (identical) panes and rendered at the
+wide `70rem`/`82rem` tier. Reported live: a drilled `added` method's own card
+stayed narrow while an `'unchanged'` call target (`RuleData::__construct`)
+beneath it rendered wide, nearly touching the Onderliggende-code column.
+Backend blocks only ever carry `added`/`removed`/`modified` (`model.go`); the
+allowlist means a status this file hasn't been taught about yet also defaults
+to single-pane here, rather than silently falling through to the wide tier
+again. Regression test:
+`tests/preview-matches-active-width.spec.mjs`'s "an unchanged block renders
+single-pane and narrow" test.
 
 **`narrowed(viewMode)`** is simply `viewMode() === 'unified'`. Since the unified
 stand collapses a two-sided block into ONE "old above new" column
@@ -229,6 +246,25 @@ Three properties of this rule are deliberate:
 
 The selected/active card itself is never given this override. Test:
 `tests/preview-matches-active-width.spec.mjs` (fixture PR 105).
+
+**Why a two-sided (`modified`) ACTIVE card needs no override of its own.**
+When `activeSingleSided` is `false` (the active card is itself `modified`),
+the preview's `viewMode` closure falls through to the same
+`state.diffViewMode` the active card reads — so in `split`/`unified` both
+cards resolve `widthCls`'s binary tier from the identical `narrowed(viewMode)`
+value and their own `singleSide(b)`; a `modified` active card always has
+`singleSide(active) === null`, so it always sits on the wide `70rem`/`82rem`
+tier itself, which is the ceiling every fixed-tier width in `split`/`unified`
+can reach. A preview can therefore never render **wider** than a `modified`
+active card in those two stands — only narrower or equal — with no fourth
+mechanism needed; this was verified in code (not just asserted) after a
+suspected gap here turned out to already be closed by the two mechanisms
+above (`activeSingleSided` and `singleSide`'s own allowlist fix). Only `fit`
+has genuinely per-card, content-driven widths — see `fitCapCharsFor` next —
+which is why the cap below is scoped to that one stand. Regression test:
+`tests/preview-matches-active-width.spec.mjs`'s "a modified active card is
+never smaller than a wider modified preview, in every stand" (loops all three
+`a` stands with a preview whose own code is deliberately much longer).
 
 ### The `fit` stand needed a SECOND mechanism: `fitCapCharsFor`/`capFitChars`
 
