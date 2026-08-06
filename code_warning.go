@@ -183,15 +183,30 @@ func existingLineCommentsInScope(list []comments.Comment, files []string) []exis
 
 // anchoredWarning maps one LLM finding onto the existing comment-anchoring
 // model, reusing blockForLine/rowForLine exactly as an imported GitHub review
-// comment does (see comment_import.go): a finding whose file+line falls
-// inside one of this PR's blocks becomes a normal, block-scoped warning
-// (Kind "", Gran "line") anchored to its row like any other line comment; a
-// finding that can't be pinned to a block — an unchanged/context line, or a
-// line the model got slightly wrong — becomes a PR-wide warning (Kind
-// "ai_warning") instead of being dropped, so the reviewer still sees it (just
-// without a precise row). File is kept either way, as a hint of what the
-// finding is about. Every warning is Source "ai" + Local true (never posted
-// to GitHub), regardless of whether it anchors.
+// comment does (see comment_import.go). Three outcomes:
+//
+//   - The file+line pins to an exact row (rowForLine succeeds): a normal,
+//     block-scoped warning (Kind "", Gran "line") anchored to that row like
+//     any other line comment.
+//   - The file+line falls inside a block, but not on a row rowForLine can
+//     find (an unchanged/context line the finding is ABOUT rather than
+//     about a change on — e.g. a docblock promise) — Kind still "", but
+//     anchored on the block's own FIRST changed row instead of left
+//     unpinned. Unpinned (row -1) used to mean "shown anywhere within this
+//     block" for EVERY selection inside it (see commentUnder,
+//     RelatedPanel.mjs) — reported bug: the finding kept surfacing under a
+//     completely unrelated line/group of the same block. A real row anchor
+//     fixes that; BlockWide (true here) tells the frontend to still badge it
+//     as being about the whole block, not specifically that first row (see
+//     comments.Comment.BlockWide).
+//   - The file+line can't be pinned to any block at all — an unchanged/
+//     context line outside every block, or a line the model got slightly
+//     wrong — becomes a PR-wide warning (Kind "ai_warning") instead of being
+//     dropped, so the reviewer still sees it (just without a precise row).
+//
+// File is kept in all three cases, as a hint of what the finding is about.
+// Every warning is Source "ai" + Local true (never posted to GitHub),
+// regardless of whether/how it anchors.
 //
 // The second return value is the anchored block's id ("" when the finding
 // didn't anchor to a block) — codeWarningWorkflow needs it to know which
@@ -212,6 +227,18 @@ func anchoredWarning(dataDir string, pr int, blocks []Block, f warningFinding) (
 	if row, ok := rowForLine(baseDir, headDir, b, f.Line, "RIGHT"); ok {
 		in.RowStart = row
 		in.RowEnd = row
+		return in, b.ID()
+	}
+	// Couldn't pin the exact row — anchor on the block's own first changed
+	// row instead of leaving it unpinned, so this finding only ever shows
+	// under a navigation unit that actually covers that row (in practice:
+	// the block's first group/line), never under every other line of the
+	// same block. The label says it's about the whole block, not that row.
+	rows, _, _ := blockAlignedRows(baseDir, headDir, b)
+	if row, ok := firstChangedRowIndex(rows); ok {
+		in.RowStart = row
+		in.RowEnd = row
+		in.BlockWide = true
 	}
 	return in, b.ID()
 }

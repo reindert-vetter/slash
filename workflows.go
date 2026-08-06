@@ -235,6 +235,10 @@ type CodeCommentInput struct {
 	RowStart int    `json:"rowStart"`
 	RowEnd   int    `json:"rowEnd"`
 	Seg      string `json:"seg"`
+	// BlockWide mirrors comments.Comment.BlockWide — see its own doc comment.
+	// Set by anchoredWarning (code_warning.go) for a finding that pins to a
+	// block but not to a specific row.
+	BlockWide bool `json:"blockWide"`
 	// StartLine/EndLine are the source line numbers (on Side) the GitHub review
 	// comment anchors to: a single line when equal (or when StartLine is 0), a
 	// multi-line range otherwise (GitHub requires StartLine < EndLine). Falls
@@ -3451,6 +3455,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		Code: in.Code, Gran: in.Gran, Label: in.Label,
 		RowStart: in.RowStart, RowEnd: in.RowEnd, Seg: in.Seg,
 		Path: commentPath(in, runID), Source: in.Source, Kind: in.Kind,
+		BlockWide: in.BlockWide,
 	}
 	if err := w.ExecuteActivity("saveComment", comment, nil); err != nil {
 		return nil, fmt.Errorf("save comment: %w", err)

@@ -164,6 +164,56 @@ func TestCodeWarningAnchorsToBlock(t *testing.T) {
 	}
 }
 
+// A finding whose line falls inside a block's declared range but isn't a row
+// rowForLine can actually find (e.g. a docblock line enrichedCodeSide drops,
+// or — as reproduced here — a line beyond the block's real extracted source
+// despite still being <= its EndLine) anchors on the block's own first
+// changed row instead of being left unpinned. Unpinned (RowStart -1) used to
+// mean "shown anywhere within this block" for EVERY selection inside it, not
+// just the block-wide one it's actually about (see commentUnder,
+// RelatedPanel.mjs) — reported bug. BlockWide=true tells the frontend to
+// badge it as being about the whole block, not specifically that first row.
+// Exercises anchoredWarning directly (no need to drive the whole workflow).
+func TestAnchoredWarningFallsBackToBlockWideFirstRow(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 34
+	baseDir, headDir := worktreeDirs(dataDir, pr)
+	// Unlike writeWarningFixtureRepo (base == head, no real diff — fine for
+	// the row-math-only tests above), this needs a GENUINE change so a "first
+	// changed row" actually exists to fall back onto.
+	baseBody := strings.Replace(warningFixtureBody, "1.21", "1.19", 1)
+	for _, dir := range []struct{ path, body string }{{baseDir, baseBody}, {headDir, warningFixtureBody}} {
+		p := filepath.Join(dir.path, "app/Services/OrderService.php")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(dir.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := warningFixtureBlock(pr)
+	b.EndLine = 12 // past the fixture file's actual last line (10)
+
+	f := warningFinding{File: b.File, Line: 11, Text: "Dit raakt de hele methode, niet één regel."}
+	in, blockID := anchoredWarning(dataDir, pr, []Block{b}, f)
+
+	if in.Kind != "" {
+		t.Errorf("kind = %q, want \"\" (still block-scoped, not PR-wide)", in.Kind)
+	}
+	if blockID != b.ID() {
+		t.Errorf("blockID = %q, want %q", blockID, b.ID())
+	}
+	if in.RowStart < 0 || in.RowEnd < 0 {
+		t.Errorf("rowStart/rowEnd = %d/%d, want a pinned row (>= 0) — the block's first changed row", in.RowStart, in.RowEnd)
+	}
+	if in.RowStart != in.RowEnd {
+		t.Errorf("rowStart=%d rowEnd=%d, want a single row", in.RowStart, in.RowEnd)
+	}
+	if !in.BlockWide {
+		t.Errorf("blockWide = false, want true")
+	}
+}
+
 // A Sonnet finding on a line outside any block becomes a PR-wide warning
 // (Kind "ai_warning") instead of being dropped.
 func TestCodeWarningFallsBackToPRWide(t *testing.T) {

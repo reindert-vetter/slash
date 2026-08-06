@@ -3570,6 +3570,40 @@ function sendStatusIcon(status) {
   ><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>`
 }
 
+// blockWideBadge marks a comment anchored on a stand-in row (Comment.
+// BlockWide, see its own doc comment/comments.go): the finding is genuinely
+// about the WHOLE block, not specifically the row it happens to hang off (its
+// RowStart/RowEnd point at the block's first changed row only so the index/💬
+// marker have somewhere to attach). Without this label a reviewer would read
+// it as being about that one row, which is misleading — the row is a
+// placeholder, not the actual subject. Word-first per the colorblind rule (no
+// color-only signal): a small map/layers glyph plus explicit text. Returns ''
+// for anything else (mirrors sourceBadge/aiWarningBadge's shape).
+function blockWideBadge(c) {
+  if (!c || !c.blockWide) return ''
+  return html`<span
+    class="inline-flex shrink-0 items-center gap-1 rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-700 dark:bg-sky-500/15 dark:text-sky-300"
+    data-testid="comment-block-wide"
+  >
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="h-2.5 w-2.5"
+    >
+      <rect x="3" y="3" width="7" height="7"></rect>
+      <rect x="14" y="3" width="7" height="7"></rect>
+      <rect x="3" y="14" width="7" height="7"></rect>
+      <rect x="14" y="14" width="7" height="7"></rect>
+    </svg>
+    Geldt voor het hele blok</span
+  >`
+}
+
 // commentStatusMark is the colorblind-friendly replacement for the former
 // color-only status dot (CSTATUS_DOT: open amber / resolved emerald) — a
 // reviewer who can't tell amber from emerald gets nothing useful out of a
@@ -4048,6 +4082,7 @@ function compactConversation(c, i) {
           >
           ${() => sourceBadge(c)}
           ${() => aiWarningBadge(c)}
+          ${() => blockWideBadge(c)}
           ${() => staleAnchorBadge(c)}
           ${() => sendFailedBadge('reply:' + c.id)}
         </span>
@@ -4109,7 +4144,7 @@ function expandedConversation(c, openCommentMenu) {
       data-expanded="true"
     >
       <div class="flex items-center justify-end gap-2" data-testid="comment-meta-line">
-        ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
+        ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => blockWideBadge(c)} ${() => staleAnchorBadge(c)}
         ${() => sendFailedBadge('reply:' + c.id)}
         ${() => commentStatusMark(c)}
       </div>

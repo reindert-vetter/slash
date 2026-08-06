@@ -397,6 +397,61 @@ Test: the "the Claude column blanks when browsing to a comment with no
 conversation, and loads read-only for one that has one" case in
 `tests/claude-chat-panel.spec.mjs`.
 
+### A genuine block switch must also release a `cs.focus === 'claude'` panel
+
+`syncClaudeAnchorForSelection` above deliberately skips its own re-sync while
+`cs.focus === 'claude'` (so it never fights with an active conversation) —
+but that guard is exactly why a SECOND gap survived that fix: chatting with
+Claude on block A's comment (`cs.focus === 'claude'`) and then landing on a
+completely different block B via a plain mouse click on the sidebar — not one
+of the dedicated exits that already release the panel (`→`/`←`/`Escape`, `↓`
+at the bottom of the Claude chat, see "The chain, key by key" above) — left
+`cs.focus` stuck at `'claude'`. Block B's Claude column then kept showing
+block A's stale transcript (or, if B had its own conversation, never picked
+it up) instead of B's own state. Reported bug, distinct from the one above:
+that one was about switching COMMENTS within the same block/scope; this one
+is about switching BLOCKS while the keyboard was still inside the panel.
+
+Fixed in `home.mjs`, not `RelatedPanel.mjs`: the existing `watch(() =>
+state.selected, …)` (which already resets `cancelPrCommentReply`/
+`exitPrCommentThread`/`closePrCommentChat` on every selection change, and —
+scoped to a comment-index item only — `leaveRelated()`, see "Fix Enter being
+swallowed in the PR-comment Claude composer") now ALSO calls `leaveRelated()`
+on a genuine switch to a different ORDINARY block. Once `cs.focus` is back to
+`null`, `syncClaudeAnchorForSelection`'s existing guard no longer blocks it,
+and the passive sync picks up block B's own anchor (or empty state) exactly
+like the comment-switch case above.
+
+**Identity-based, not index-based** — the same reason the comment-index
+branch stays scoped to that one kind (see its own doc comment in `home.mjs`):
+`recomputeLeftList` can legitimately reindex the CURRENT, still-logically-
+unchanged block out from under a background reload (a landed comment
+shifting every row by one — see conventions.md's "Snapshot a selection by
+stable ID, never by raw array index"), and a bare index compare would
+misread that reindex as a real navigation move — this exact failure mode is
+what `tests/comment-nav-race.spec.mjs` guards against, and a first attempt at
+a blanket `state.selected` reset broke it. `lastSelectedBlockRef` (plain
+module state in `home.mjs`, not reactive) tracks the previously-selected
+block's own stable `file:line`/`.id` (mirroring `state.blockRef`'s own
+computation, kept separate so this doesn't depend on cross-watch ordering)
+and only calls `leaveRelated()` when that identity actually changes.
+
+**The very first real block observed is a baseline, never a "change"** —
+this watch's callback can run more than once while `state.blocks` is still
+loading (`state.selected` itself moving before blocks arrive), every time
+with no block yet; recording a baseline THEN would make the tick that
+finally sees a real block look like a change and fire `leaveRelated()`,
+clobbering a `cs.focus` that `bindUrlState`/`applyRelRestore` already
+restored from the URL (`rel.foc=new`/`code`/…) around that same moment —
+regression caught by `tests/urlstate.spec.mjs`'s `rel.foc` round-trip tests
+and `tests/inline-comments.spec.mjs`'s fresh-composer test. So the baseline
+is only recorded once a real block (`b` truthy) is actually seen; every tick
+before that is a no-op.
+
+Test: the "a mouse click straight onto a different block releases a stale
+claude-focused panel, not just the dedicated exits" case in
+`tests/claude-chat-panel.spec.mjs`.
+
 ## `RelatedPanel.mjs`: state, not template
 
 The "Embedded Claude conversation" section owns:

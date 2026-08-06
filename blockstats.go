@@ -89,6 +89,24 @@ func countChangedRows(rows []alignRow) int {
 	return n
 }
 
+// firstChangedRowIndex returns the index of the first approvable (changed,
+// non-ws-only) row, for a caller that needs ONE representative row to anchor
+// something onto the block as a whole — see anchoredWarning (code_warning.go)
+// for why: a finding that pins to a block but not to any specific row still
+// needs a real row_start/row_end (an unpinned -1/-1 falls back to "shown
+// anywhere in the block" for EVERY selection within it, not just the block-wide
+// one, see commentUnder in RelatedPanel.mjs). false when the block has no
+// changed row at all (shouldn't happen for a block the diff ever surfaced, but
+// checked rather than assumed).
+func firstChangedRowIndex(rows []alignRow) (int, bool) {
+	for i, r := range rows {
+		if rowChanged(r) && rowHasContent(r) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
 // alignRow mirrors one row of the frontend alignRows output. A nil pointer means
 // the side is absent (a filler row); leftMark/rightMark are "del"/"ins" or "".
 type alignRow struct {

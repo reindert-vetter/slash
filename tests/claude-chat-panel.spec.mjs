@@ -282,6 +282,75 @@ test('the Claude column follows the selected comment: blanks for one with no con
   expect(claudeChatStarted).toBe(false)
 })
 
+// Regression test for the reported bug: chatting with Claude on block A
+// (cs.focus === 'claude') and then landing on a DIFFERENT block via a plain
+// mouse click on the sidebar — not one of the dedicated exits that already
+// release the panel (→/←/Escape, ↓ at the bottom of the Claude chat, see the
+// test below) — left cs.focus stuck at 'claude'. RelatedPanel.mjs's
+// syncClaudeAnchorForSelection deliberately skips its own re-sync while
+// cs.focus === 'claude' (so it never fights with an active conversation), so
+// block B's Claude column kept showing block A's stale transcript. Fixed by
+// home.mjs's state.selected watch also releasing cs.focus on a genuine block
+// switch (identity-based, not index-based — see its own doc comment for why a
+// blanket reset would break tests/comment-nav-race.spec.mjs).
+test('a mouse click straight onto a different block releases a stale claude-focused panel, not just the dedicated exits', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await page.locator('[data-idx="1"]').click()
+  const card = page.getByTestId('block-column').locator('article').first()
+  await expect(card).toBeVisible()
+  const label = (await card.locator('h2').first().innerText()).trim()
+  const file = (await card.locator('.font-mono.text-slate-500').first().innerText()).trim().split(':')[0]
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: { pr: 12903, file, line: 1, author: 'reviewer', body: 'kan dit anders?', label, rowStart: -1, rowEnd: -1 },
+  })
+  const runId = (await start.json()).runId
+  expect(runId).toBeTruthy()
+  await expect
+    .poll(async () => {
+      const list = await (await page.request.get('/api/comments?pr=12903')).json()
+      return list.some((x) => x.runId === runId)
+    })
+    .toBe(true)
+
+  try {
+    // Reload so the comment is present from the start (avoids racing the
+    // frontend's own poll cadence, same as related-nav.spec.mjs).
+    await page.goto('/pr/12903')
+    await page.locator('[data-idx="1"]').click()
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowRight') // list -> diff
+    await page.keyboard.press('ArrowRight') // diff -> the comment conversation
+    await page.keyboard.press('ArrowRight') // comment -> claude
+    const composer = page.getByTestId('claude-chat-compose')
+    await expect(composer).toBeFocused()
+
+    await composer.fill('Kun je hier iets over zeggen?')
+    await composer.press('Enter')
+    await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+
+    // Back to the sidebar (still translated off-screen while relatedActive(),
+    // see detail-layout.md) and a plain mouse click onto a DIFFERENT block —
+    // never through →/←/Escape or ↓ at claudePos === 0.
+    await page.keyboard.press('ArrowLeft') // claude -> comment
+    await page.keyboard.press('ArrowLeft') // comment -> diff
+    await page.keyboard.press('ArrowLeft') // diff -> list
+    await page.locator('[data-idx="2"]').click()
+    await page.keyboard.press('ArrowRight') // list -> diff on block B
+
+    // Block B carries no comment of its own — the panel must show ITS own
+    // empty state, not block A's stale transcript.
+    await expect(page.getByTestId('comment-item')).toHaveCount(0)
+    await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
+  } finally {
+    await page.request.post('/api/workflows/' + runId + '/signals/delete', {
+      data: { author: 'reviewer' },
+    })
+  }
+})
+
 // ↓ at the bottom of the Claude conversation (claudePos === 0) used to fall
 // into the Onderliggende-code panel — an unwanted extra "menu" in the way of
 // just continuing the review (explicit request). It now advances straight to

@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS comments (
   path           TEXT NOT NULL DEFAULT '',
   source         TEXT NOT NULL DEFAULT '',
   kind           TEXT NOT NULL DEFAULT '',
-  github_id      INTEGER NOT NULL DEFAULT 0
+  github_id      INTEGER NOT NULL DEFAULT 0,
+  block_wide     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS reactions (
@@ -91,6 +92,16 @@ type Comment struct {
 	RowStart int    `json:"rowStart"`
 	RowEnd   int    `json:"rowEnd"`
 	Seg      string `json:"seg,omitempty"`
+	// BlockWide marks a comment that is genuinely ABOUT the whole block (its
+	// RowStart/RowEnd still point at one real row — the block's first changed
+	// row, chosen only so the comment index/💬 marker have somewhere to hang —
+	// but that row is a stand-in, not the actual subject). Set by
+	// anchoredWarning (code_warning.go) for an LLM finding that pins to a
+	// block but not to any one specific row (e.g. it's about a docblock
+	// promise, not a changed line) — the frontend badges it "Geldt voor het
+	// hele blok" instead of implying it's about that one row specifically.
+	// False for every ordinary line/call comment.
+	BlockWide bool `json:"blockWide,omitempty"`
 	// AnchorState says how much the row anchor above can still be trusted after a
 	// new commit re-scanned the block (see reanchor.go — the anchor is re-derived
 	// from Code on every ingest refresh):
@@ -204,6 +215,7 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE comments ADD COLUMN github_id INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE comments ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE comments ADD COLUMN anchor_state TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE comments ADD COLUMN block_wide INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE reactions ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE reactions ADD COLUMN github_id INTEGER NOT NULL DEFAULT 0`,
 	} {
@@ -237,14 +249,14 @@ func (m *Module) Save(ctx context.Context, c Comment) error {
 	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO comments
-		   (id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, anchor_state, path, source, kind, github_id)
+		   (id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, anchor_state, path, source, kind, github_id, block_wide)
 		 VALUES (?,?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT reaction_count FROM comments WHERE id = ?), 0),
 		   COALESCE((SELECT status FROM comments WHERE id = ?), ?),
 		   ?,?,?,?,?,?,?,?,?,?,
-		   COALESCE((SELECT github_id FROM comments WHERE id = ?), ?))`,
+		   COALESCE((SELECT github_id FROM comments WHERE id = ?), ?),?)`,
 		c.ID, c.RunID, c.PR, c.File, c.Line, c.Author, c.AvatarURL, c.Body, c.CreatedAt, c.ID, c.ID, c.Status,
-		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg, c.AnchorState, c.Path, c.Source, c.Kind, c.ID, c.GithubID)
+		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg, c.AnchorState, c.Path, c.Source, c.Kind, c.ID, c.GithubID, c.BlockWide)
 	return err
 }
 
@@ -438,7 +450,7 @@ func (m *Module) Search(ctx context.Context, prefix string) ([]Comment, error) {
 // query runs the comment select with an optional WHERE clause + args and
 // attaches each comment's reactions. Shared by List and Search.
 func (m *Module) query(ctx context.Context, where string, args ...any) ([]Comment, error) {
-	q := `SELECT id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, anchor_state, path, source, kind, github_id
+	q := `SELECT id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, anchor_state, path, source, kind, github_id, block_wide
 	      FROM comments`
 	if where != "" {
 		q += ` ` + where
@@ -456,7 +468,7 @@ func (m *Module) query(ctx context.Context, where string, args ...any) ([]Commen
 		var c Comment
 		if err := rows.Scan(&c.ID, &c.RunID, &c.PR, &c.File, &c.Line, &c.Author, &c.AvatarURL,
 			&c.Body, &c.CreatedAt, &c.ReactionCount, &c.Status, &c.Code, &c.Gran, &c.Label,
-			&c.RowStart, &c.RowEnd, &c.Seg, &c.AnchorState, &c.Path, &c.Source, &c.Kind, &c.GithubID); err != nil {
+			&c.RowStart, &c.RowEnd, &c.Seg, &c.AnchorState, &c.Path, &c.Source, &c.Kind, &c.GithubID, &c.BlockWide); err != nil {
 			return nil, err
 		}
 		byID[c.ID] = len(out)

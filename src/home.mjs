@@ -929,6 +929,40 @@ watch(
 // from the URL that resolves to nothing gets dropped, not because anything
 // was actually repaired). Test: tests/pr-comment-claude-chat.spec.mjs's "a
 // stale block-scoped cs.focus…" case.
+//
+// A genuine switch to a DIFFERENT ordinary block also gets leaveRelated() —
+// second reported bug: chatting with Claude on block A (cs.focus === 'claude')
+// and then landing on a different block B (e.g. a plain sidebar click, not
+// one of the dedicated exits that already release the panel — →/←/Escape,
+// ↓ at the bottom of the Claude chat) left cs.focus stuck at 'claude'.
+// RelatedPanel.mjs's syncClaudeAnchorForSelection deliberately skips its own
+// re-sync while cs.focus === 'claude' (so it never fights with an active
+// conversation) — so block B's Claude column kept showing block A's stale
+// transcript instead of B's own (or B's lack of one).
+//
+// lastSelectedBlockRef makes this identity-based, not index-based, for the
+// same reason the comment-index branch above must stay scoped to that one
+// kind: recomputeLeftList can reindex the CURRENT, still-logically-unchanged
+// block out from under a background reload (see the paragraph above), and a
+// bare index compare would misread that reindex as a real navigation move.
+// Mirrors state.blockRef's own file:line/id computation just above, kept
+// separate (plain module state, not reactive) so this watch's own "did the
+// block actually change" check never depends on cross-watch ordering.
+//
+// undefined is the deliberate "no real block observed yet" sentinel — distinct
+// from a genuine block's ref (always a non-empty string) or "nothing
+// selected" (''). This watch can fire more than once while state.blocks is
+// still loading (state.selected itself moving, e.g. clamped then restored to
+// a specific index by loadBlocks/applyBlockRefRestore) with `b` undefined
+// every time — recording a baseline THEN would make the first tick that
+// finally sees a real block look like "a change" and call leaveRelated(),
+// clobbering a genuinely restored cs.focus ('new'/'code'/…) that
+// bindUrlState/applyRelRestore already applied from the URL (rel.foc=…)
+// before or around that same tick — reported regression: a fresh
+// rel.foc=new/code deep link (and a reload of one) lost its restored focus
+// immediately. So the baseline is only ever recorded once `b` is truthy, and
+// only a SUBSEQUENT, real block-to-block change may release the panel.
+let lastSelectedBlockRef = undefined
 watch(
   () => state.selected,
   () => {
@@ -936,7 +970,19 @@ watch(
     exitPrCommentThread()
     closePrCommentChat()
     const b = state.blocks[state.selected]
-    if (b && b.kind === 'comment') leaveRelated()
+    if (b && b.kind === 'comment') {
+      // Unconditional, even before a baseline exists — unlike the ordinary-
+      // block case below, cs.focus can NEVER legitimately be
+      // 'comment'/'thread'/'claude' for a comment-index item (see the commit
+      // this branch first landed in), so there is no restored value here
+      // worth preserving.
+      leaveRelated()
+      return
+    }
+    if (!b) return // state.blocks hasn't loaded yet — nothing to compare
+    const ref = b.kind === 'test_class' ? b.id : `${b.file}:${b.line}`
+    if (lastSelectedBlockRef !== undefined && ref !== lastSelectedBlockRef) leaveRelated()
+    lastSelectedBlockRef = ref
   },
 )
 

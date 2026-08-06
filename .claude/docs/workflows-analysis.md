@@ -646,10 +646,30 @@ a manually triggered, low-frequency action.
   finding is trusted only if its `file` is literally one of the files the prompt
   named — a made-up path is silently rejected. `anchoredWarning` then reuses
   **literally** `blockForLine`/`rowForLine`, the same mechanism an imported
-  GitHub review comment uses: inside a block → a normal block-scoped warning
-  (`Kind ""`, `Gran "line"`); not inside one (an unchanged/context line, or a
-  slightly-off line) → **PR-wide** (`Kind "ai_warning"`, added to `isPRWide`)
-  instead of being discarded, with `File` still set as a hint.
+  GitHub review comment uses, with THREE outcomes:
+  - **Pinned to an exact row** (`blockForLine` and `rowForLine` both succeed):
+    a normal block-scoped warning (`Kind ""`, `Gran "line"`), anchored on that
+    row like any other line comment.
+  - **Pinned to a block, not to a row** (`blockForLine` succeeds,
+    `rowForLine` doesn't — the finding is genuinely ABOUT an unchanged/context
+    line inside the block, e.g. a docblock promise, rather than about a
+    changed line): still `Kind ""`, but anchored on the block's own **first
+    changed row** (`firstChangedRowIndex`, `blockstats.go`) instead of being
+    left unpinned, with **`BlockWide: true`** on the comment
+    (`comments.Comment.BlockWide`). Reported bug this replaced: an unpinned
+    anchor (`RowStart -1`) used to mean "shown anywhere within this block" for
+    EVERY selection inside it (`commentUnder`, `RelatedPanel.mjs`) — a finding
+    about a docblock on line 88 kept surfacing under a completely unrelated
+    line/group of the same block. A real row anchor makes the EXISTING
+    row-containment filter apply normally (no frontend filtering change
+    needed); the frontend badges `BlockWide` as
+    **"Geldt voor het hele blok"** (`blockWideBadge`, `RelatedPanel.mjs`) so
+    the reviewer doesn't read it as being about that one row specifically —
+    word-first per the colorblind rule, not a colour-only signal.
+  - **Not inside any block at all** (`blockForLine` fails — an unchanged/
+    context line outside every block, or a line the model got slightly
+    wrong) → **PR-wide** (`Kind "ai_warning"`, added to `isPRWide`) instead of
+    being discarded, with `File` still set as a hint.
 - **Existing open comments on a scope file are handed to the model as
   context, so it can skip a duplicate.** `existingLineCommentsInScope`
   (`code_warning.go`, called from the `runAgenticReview` Activity right before
@@ -720,7 +740,11 @@ a manually triggered, low-frequency action.
   as an `aiWarningBadge` pill; the Taken card shows the run as "Risk check" with
   either "searching the PR for risks…" or the **exact** number of findings —
   including "no risks found" — via `WorkflowRunView.WarningsFound`.
-- Tests: `code_warning_test.go` (anchoring, PR-wide fallback, hallucination
-  guard, supersede, the findings cap, the once-only revoke, and the automatic
-  trigger firing/skipping-when-disabled/not-on-a-bare-rebuild),
-  `modules/autowarn/autowarn_test.go`, `modules/warnrevoke/warnrevoke_test.go`.
+- Tests: `code_warning_test.go` (anchoring, the block-wide-first-row fallback
+  — `TestAnchoredWarningFallsBackToBlockWideFirstRow`, exercising
+  `anchoredWarning` directly rather than the whole workflow — PR-wide
+  fallback, hallucination guard, supersede, the findings cap, the once-only
+  revoke, and the automatic trigger firing/skipping-when-disabled/not-on-a-
+  bare-rebuild), `modules/autowarn/autowarn_test.go`,
+  `modules/warnrevoke/warnrevoke_test.go`; the frontend badge/scoping side:
+  `tests/comment-block-wide-anchor.spec.mjs`.
