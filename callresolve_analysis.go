@@ -459,6 +459,13 @@ var (
 	// (or ordinary) property accessed via $this, called from a method OTHER
 	// than the one declaring its type (resolveCalls rule 3a).
 	reThisPropCall = regexp.MustCompile(`\$this->([A-Za-z_]\w*)->([A-Za-z_]\w*)\s*\(`)
+	// reActivityStubVar matches `$var = Workflow::newActivityStub(FooActivity::class,
+	// ...)` — a Temporal workflow method creating a stub for an Activity, whose
+	// variable name rarely follows the class-name convention rule 3b relies on
+	// (`$runCommand` for `RunCommandActivity`). Captures the variable + the
+	// Activity's short class name (resolveCalls rule 3a2). `\s*` also bridges the
+	// multi-line call form (`Workflow::newActivityStub(\n    FooActivity::class,`).
+	reActivityStubVar = regexp.MustCompile(`\$([A-Za-z_]\w*)\s*=\s*Workflow::newActivityStub\(\s*([\\A-Za-z0-9_]+)::class`)
 	// reRelationCall recognises an Eloquent relationship method body — a method
 	// returning $this->hasMany(...) / morphOne(...) / belongsTo(...) etc. is the
 	// definition a magic property like $order->billingAddress resolves to.
@@ -550,6 +557,16 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 	// code"). Cached like diffByFile below, so a class with several changed
 	// methods only re-reads/re-scans its own file once.
 	interfaceVarsByFile := map[string]map[string]string{}
+	// activityStubVarsByFile caches, per file, the "$var name → Temporal Activity
+	// short class name" map rule 3a2 needs — built from the WHOLE file for the
+	// same reason as interfaceVarsByFile: `Workflow::newActivityStub(...)` often
+	// sits a few lines above the `$var->method(...)` call it's used from, both
+	// still inside the same block's body in practice, but scanning the whole
+	// file is simplest and mirrors the existing cache. Silent limit, accepted:
+	// a variable name reused for a different Activity in another method of the
+	// same file collides (last assignment in the file wins) — same trade-off
+	// interfaceVarsByFile already accepts.
+	activityStubVarsByFile := map[string]map[string]string{}
 
 	var out []callresolve.Entry
 	for _, b := range blocks {
@@ -739,6 +756,40 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			}
 			for _, m := range reThisPropCall.FindAllStringSubmatch(scan, -1) {
 				resolveInterfaceVar(m[1], m[2])
+			}
+		}
+		// 3a2. $var = Workflow::newActivityStub(FooActivity::class, ...) then
+		// $var->m( → a Temporal Activity's method — a workflow's "underlying
+		// code" that the receiver-NAME heuristic (3b) usually misses, since the
+		// stub variable is rarely named after the Activity class
+		// ($runCommand for RunCommandActivity). Runs before 3b/4 and marks
+		// `seen`, mirroring 3a, so a bare-name guess or an ambiguous global
+		// match never overrides this explicit, mechanically-derived relation.
+		// An Activity class the worktree doesn't index (framework/vendor) still
+		// resolves to `unresolved` rather than falling through silently — the
+		// call site sits on a changed line, so the reviewer gets "Zoek" instead
+		// of nothing.
+		activityStubClass, ok := activityStubVarsByFile[b.File]
+		if !ok {
+			activityStubClass = map[string]string{}
+			if wholeFile, err := os.ReadFile(filepath.Join(headDir, b.File)); err == nil {
+				for _, m := range reActivityStubVar.FindAllStringSubmatch(string(wholeFile), -1) {
+					activityStubClass[m[1]] = shortName(m[2])
+				}
+			}
+			activityStubVarsByFile[b.File] = activityStubClass
+		}
+		if len(activityStubClass) > 0 {
+			for _, m := range reVarCall.FindAllStringSubmatch(scan, -1) {
+				class, ok := activityStubClass[m[1]]
+				if !ok {
+					continue
+				}
+				key := m[2]
+				if seen[key] {
+					continue
+				}
+				emit(key, methodOnClass(idx, class, key))
 			}
 		}
 		// 3b. $var->m( → infer the receiver class from the variable name

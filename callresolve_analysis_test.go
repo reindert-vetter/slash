@@ -346,6 +346,105 @@ class Invoice {
 	}
 }
 
+// TestResolveCallsTemporalActivityStub covers rule 3a2: a workflow method
+// assigns Workflow::newActivityStub(FooActivity::class, ...) to a variable
+// whose name does not follow the class-name convention (like $runCommand for
+// RunCommandActivity), then calls a method on that stub — which the plain
+// receiver-name heuristic (3b) can't resolve on its own.
+func TestResolveCallsTemporalActivityStub(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 21
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Workflows/ImportStatsFlow.php": `<?php
+namespace App\Workflows;
+use App\Workflows\Activities\RunCommandActivity;
+class ImportStatsFlow {
+    public function run(): \Generator {
+        $runCommand = Workflow::newActivityStub(
+            RunCommandActivity::class,
+            $options,
+        );
+        yield $runCommand->run($command);
+    }
+}
+`,
+		"app/Workflows/Activities/RunCommandActivity.php": `<?php
+namespace App\Workflows\Activities;
+final class RunCommandActivity {
+    public function run(string $command): array {
+        return [];
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Workflows/ImportStatsFlow.php", Class: "ImportStatsFlow", Name: "run", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "run")
+	if !ok {
+		t.Fatal("no entry for call 'run'")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("run: status=%q, want resolved", e.Status)
+	}
+	if got := e.ChildClass + "::" + e.ChildMethod; got != "RunCommandActivity::run" {
+		t.Errorf("run: child=%q, want RunCommandActivity::run", got)
+	}
+}
+
+// TestResolveCallsTemporalActivityStubUnknownClass covers 3a2's unresolved
+// path: the stub names an Activity class the worktree doesn't index (e.g. a
+// vendor/framework Activity), so the call still becomes unresolved rather
+// than silently nothing — the call site sits on a changed line.
+func TestResolveCallsTemporalActivityStubUnknownClass(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 22
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Workflows/ImportStatsFlow.php": `<?php
+namespace App\Workflows;
+use Some\Vendor\FrameworkActivity;
+class ImportStatsFlow {
+    public function run(): \Generator {
+        $runCommand = Workflow::newActivityStub(FrameworkActivity::class, $options);
+        yield $runCommand->doSomething();
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Workflows/ImportStatsFlow.php", Class: "ImportStatsFlow", Name: "run", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "doSomething")
+	if !ok {
+		t.Fatal("no entry for call 'doSomething'")
+	}
+	if e.Status != callresolve.StatusUnresolved {
+		t.Errorf("doSomething: status=%q, want unresolved", e.Status)
+	}
+}
+
 // TestResolveCallsMacro covers a ->name( call resolving to a Laravel macro
 // (Receiver::macro('name', function ...)), which lives inside a boot method's
 // body and is therefore invisible to ScanBlocks.

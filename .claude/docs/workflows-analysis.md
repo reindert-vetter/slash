@@ -161,6 +161,18 @@ Rules, in order:
   first token). The **call key is the command name**, so different scheduled
   commands stay separate children and the generic `->command(` arrow call is
   suppressed. A framework command (`queue:work`) → `unresolved`.
+- **3a2 — Temporal Activity stubs.** `$var = Workflow::newActivityStub(FooActivity::class,
+  …)` then `$var->m(` → the Activity's method, via `reActivityStubVar` mapping
+  the stub variable to the Activity's short class name (whole-file scan,
+  cached like the rule-3a interface map). Exists because the plain
+  receiver-name heuristic (3b) assumes the variable is named after its class
+  (`$order` → `Order`), which a Temporal stub variable usually isn't
+  (`$runCommand` for `RunCommandActivity`) — so without this rule a workflow's
+  `->run(`/`->handle(` call on its own Activity stub fell through to rule 4's
+  global unique-match (ambiguous for a common method name) or `unresolved`.
+  Runs before 3b/4 and marks the call key `seen`, mirroring 3a. An
+  unindexed Activity class (vendor/framework) still resolves to `unresolved`,
+  never silently nothing — the call sits on a changed line.
 - **5/5a — Eloquent magic properties.** `->name` without parentheses is the
   relation **method** `name()`; treated as a call only when `name`'s body is a
   relation (`morphOne`/`hasMany`/`belongsTo`), so bare attribute access (`->id`)
