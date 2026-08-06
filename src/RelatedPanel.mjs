@@ -104,6 +104,20 @@ const cs = reactive({
   // ('claude', see the "Embedded Claude conversation" section below): 0 = the
   // composer (typing), 1..n = the n-th turn from the bottom.
   claudePos: 0,
+  // claudeOptionSel is claudePos's own sub-cursor for the still-open
+  // question's choice buttons (see claudeQuestionOptions in ClaudeChat.mjs):
+  // 0 = none highlighted (composer/rest), 1..N = the N-th option counting
+  // from the BOTTOM of the options list (mirrors claudePos'/threadPos' own
+  // "counted from the bottom" convention) — so 1 is the option closest to the
+  // composer, N the option closest to the question bubble above it. Only
+  // meaningful while claudePos === 0 AND the newest message is a still-open,
+  // unanswered question with options (pendingClaudeQuestion() below); ↑/↓
+  // walk through it before falling through to claudePos itself, forming one
+  // continuous chain composer → options → transcript (see handleRelatedKey's
+  // 'claude' branch). Deliberately NOT bound to the URL — an ephemeral
+  // keyboard highlight, like state.rangeAnchor, not a navigation position
+  // worth restoring after a refresh.
+  claudeOptionSel: 0,
   scope: null,
   scopeSig: '',
   codeSel: 0,
@@ -505,6 +519,7 @@ export function enterRelated() {
 function exitRelated() {
   cs.focus = null
   cs.composing = false
+  cs.claudeOptionSel = 0
   releaseFocus() // a focus request still in flight must not land after this
   const el = document.activeElement
   if (el && el.blur) el.blur()
@@ -725,6 +740,7 @@ function toNew(commentTargetFn) {
 // original toNew() call, so it always resolves the SAME draft either way.
 function toNewFocus() {
   cs.focus = 'new'
+  cs.claudeOptionSel = 0
   focusEl('[data-testid=comment-compose]')
   const draft = composeDrafts.get(composeDraftKey)
   if (draft) prefillField('[data-testid=comment-compose]', draft)
@@ -748,6 +764,7 @@ function toComment(focusInput = true) {
   cs.composing = false
   cs.focus = 'comment'
   cs.threadPos = 0
+  cs.claudeOptionSel = 0
   scrollCommentIntoView()
   scrollCommentThreadToBottom()
   if (focusInput) {
@@ -1062,6 +1079,19 @@ const cc = reactive({
   // isn't sitting on a visible comment itself.
   conversations: [],
 })
+
+// pendingClaudeQuestion returns the newest message when it is a still-open
+// question with clickable options (kind 'question', no answer yet, at least
+// one option) — the one case claudeQuestionOptions (ClaudeChat.mjs) actually
+// renders buttons for — else null. Used by handleRelatedKey's 'claude' branch
+// to fold the options into the ↑/↓ chain (see cs.claudeOptionSel's own doc
+// comment) and by selectHighlightedClaudeOption below.
+function pendingClaudeQuestion() {
+  const total = cc.messages.length
+  if (total === 0) return null
+  const m = cc.messages[total - 1]
+  return m && m.kind === 'question' && !m.answer && m.options && m.options.length ? m : null
+}
 
 // chatAnchorComment answers "which comment does a Claude conversation on this
 // unit hang on". A chat ALWAYS hangs on an existing comment (the backend's own
@@ -1506,6 +1536,7 @@ export async function clearClaudeChat() {
   // but the reviewer's OWN action shouldn't wait on that round trip.
   cc.progress = null
   cs.claudePos = 0
+  cs.claudeOptionSel = 0
 }
 
 // shadowWarning/shadowWarningFor cache the last-known shadow-pending check
@@ -1704,6 +1735,7 @@ export async function enterClaudeChat(pr) {
   const token = focusToken
   cs.focus = 'claude'
   cs.claudePos = 0
+  cs.claudeOptionSel = 0
   await ensureAndLoadChat(pr, c.id)
   if (token !== focusToken) return
   ensureChatEvents(pr)
@@ -1731,6 +1763,7 @@ export async function enterClaudeChat(pr) {
 function enterClaudeChatFromNew() {
   cs.focus = 'claude'
   cs.claudePos = 0
+  cs.claudeOptionSel = 0
   focusClaudeComposer()
 }
 
@@ -1806,13 +1839,32 @@ function focusClaudeComposer() {
   requestAnimationFrame(() => {
     if (want !== focusToken) return
     const input = document.querySelector('[data-testid=claude-chat-compose]')
-    if (cs.claudePos === 0) {
+    // Blur while an option is highlighted too (claudePos stays 0 through the
+    // options rung of the chain, see cs.claudeOptionSel's own doc comment) —
+    // the highlighted button, not the empty composer, should read as "focused".
+    if (cs.claudePos === 0 && cs.claudeOptionSel === 0) {
       if (input) input.focus()
       scrollClaudeThreadToBottom()
     } else {
       if (input && document.activeElement === input) input.blur()
-      scrollClaudeMessageIntoView()
+      if (cs.claudePos === 0) scrollClaudeMessageIntoView0Options()
+      else scrollClaudeMessageIntoView()
     }
+  })
+}
+
+// scrollClaudeMessageIntoView0Options keeps the still-open question's bubble
+// in view while an option is highlighted (claudePos === 0, claudeOptionSel >
+// 0) — scrollClaudeMessageIntoView itself indexes off cs.claudePos, which
+// stays 0 through the whole options rung, so it would resolve to the WRONG
+// (newest) DOM node here; the question message is always the actual newest
+// one in this state (pendingClaudeQuestion() only ever reads the last
+// message), so this is simply "keep the last rendered message in view".
+function scrollClaudeMessageIntoView0Options() {
+  requestAnimationFrame(() => {
+    const nodes = document.querySelectorAll('[data-testid=claude-message]')
+    const el = nodes[nodes.length - 1]
+    if (el) scrollIntoViewVertical(el)
   })
 }
 
@@ -1902,6 +1954,9 @@ function claudeChatView() {
     // none. See sendClaudeMessage/sendErrorText.
     sendError: () => cc.sendError,
     claudePos: () => cs.claudePos,
+    // The still-open question's option highlight (see cs.claudeOptionSel's own
+    // doc comment) — 0 while nothing is highlighted.
+    claudeOptionSel: () => cs.claudeOptionSel,
     // The live turn: null when nothing is running. See cc.progress.
     progress: () => cc.progress,
     // The reviewer's own not-yet-sent turns, oldest first — scoped to the
@@ -1937,6 +1992,28 @@ function claudeChatCallbacks(state, commentTarget) {
     onSend: (text) => sendClaudeMessageFromNew(state, commentTarget, text),
     onRetry: () => retryClaudeTurn(),
   }
+}
+
+// selectHighlightedClaudeOption — the Enter-key counterpart of clicking a
+// claudeQuestionOption button (see the ↑/↓ chain in handleRelatedKey's
+// 'claude' branch above): sends whichever option cs.claudeOptionSel is
+// currently pointing at, through the exact same path a click already uses
+// (sendClaudeMessageFromNew), and resets the highlight. A no-op — returning
+// false — when nothing is highlighted (cs.claudeOptionSel === 0) or the
+// question the highlight was built against is no longer the pending one
+// (answered/superseded meanwhile), so home.mjs's caller can fall through to
+// whatever Enter would otherwise do in the Claude column.
+export function selectHighlightedClaudeOption(state, commentTarget) {
+  if (cs.focus !== 'claude' || cs.claudePos !== 0 || cs.claudeOptionSel === 0) return false
+  const q = pendingClaudeQuestion()
+  if (!q) return false
+  const idx = q.options.length - cs.claudeOptionSel
+  const text = q.options[idx]
+  if (text == null) return false
+  cs.claudeOptionSel = 0
+  focusClaudeComposer()
+  sendClaudeMessageFromNew(state, commentTarget, text)
+  return true
 }
 
 // commentFooterText — the comment-side half of CommentClaudeFooter below.
@@ -2323,8 +2400,18 @@ function applyRelRestore() {
 //    level further, into the embedded Claude conversation attached to this
 //    same comment thread ('claude', see enterClaudeChat).
 //  - the embedded Claude conversation ('claude') — ↑/↓ walk older/newer
-//    turns exactly like 'thread' does (its own claudePos cursor); ↓ at the
-//    bottom (claudePos === 0) does NOT fall into the Onderliggende-code panel
+//    turns exactly like 'thread' does (its own claudePos cursor). When the
+//    NEWEST turn is a still-open, unanswered question with clickable options
+//    (pendingClaudeQuestion()), that cursor grows one extra rung: composer
+//    (claudePos 0, claudeOptionSel 0) → the question's own options, bottom to
+//    top (claudeOptionSel 1..N, claudePos still 0) → the question bubble
+//    itself (claudePos 1, claudeOptionSel back to 0, same as an ordinary
+//    turn) → older turns (claudePos 2..). ↑/↓ walk this ONE continuous chain
+//    in both directions (reviewer request — not two disjoint modes); Enter
+//    while an option is highlighted sends it (selectHighlightedClaudeOption,
+//    home.mjs), exactly like clicking it. ↓ at the very bottom
+//    (claudePos === 0 && claudeOptionSel === 0) does NOT fall into the
+//    Onderliggende-code panel
 //    any more (explicit request: that read as an unwanted extra "menu" in the
 //    way of continuing to review) — it releases the panel focus and returns
 //    the 'advance' sentinel so home.mjs's onKeydown can select the next
@@ -2351,18 +2438,41 @@ export function handleRelatedKey(key) {
   }
   if (cs.focus === 'claude') {
     if (key === 'ArrowUp') {
-      cs.claudePos = Math.min(cs.claudePos + 1, cc.messages.length)
+      const q = cs.claudePos === 0 ? pendingClaudeQuestion() : null
+      if (q) {
+        if (cs.claudeOptionSel < q.options.length) {
+          // Still walking the options, bottom to top.
+          cs.claudeOptionSel += 1
+        } else {
+          // Past the topmost option: step onto the question bubble itself,
+          // exactly like an ordinary newest turn.
+          cs.claudeOptionSel = 0
+          cs.claudePos = 1
+        }
+      } else {
+        cs.claudePos = Math.min(cs.claudePos + 1, cc.messages.length)
+      }
       focusClaudeComposer()
     } else if (key === 'ArrowDown') {
-      if (cs.claudePos === 0) {
+      if (cs.claudePos === 0 && cs.claudeOptionSel > 0) {
+        // Walking the options back down, toward the composer.
+        cs.claudeOptionSel -= 1
+      } else if (cs.claudePos === 0) {
         // Nothing further within this unit's own chain any more (no
         // Onderliggende-code detour, per the explicit request above) —
         // release the panel focus and let home.mjs advance to the next
         // visible block's diff.
         exitRelated()
         return 'advance'
+      } else if (cs.claudePos === 1 && pendingClaudeQuestion()) {
+        // Leaving the question bubble back down re-enters its own options,
+        // starting from the topmost one (mirrors the ArrowUp path above).
+        const q = pendingClaudeQuestion()
+        cs.claudePos = 0
+        cs.claudeOptionSel = q.options.length
+      } else {
+        cs.claudePos -= 1
       }
-      cs.claudePos -= 1
       focusClaudeComposer()
     } else if (key === 'ArrowLeft') {
       if (cc.commentId == null) {

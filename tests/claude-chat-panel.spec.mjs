@@ -198,6 +198,83 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   await expect(page.getByTestId('reaction-compose')).toBeFocused()
 })
 
+// ↑/↓ must walk a still-open question's own options before falling through
+// to the transcript (older turns) — one continuous chain, composer → options
+// → transcript, in both directions (reviewer request, see
+// cs.claudeOptionSel's own doc comment in RelatedPanel.mjs). Enter while an
+// option is highlighted sends it, exactly like clicking it.
+test('↑/↓ walks the question options before the transcript, Enter sends the highlighted one', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kan dit sneller?',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+  await page.keyboard.press('ArrowRight') // comment -> claude
+
+  const composer = page.getByTestId('claude-chat-compose')
+  await expect(composer).toBeFocused()
+
+  // First turn: plain reply (see tests/fixtures/claude-chat-turns.json).
+  await composer.fill('Kun je hier iets over zeggen?')
+  await composer.press('Enter')
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+
+  // Second turn: the "question with choices" directive.
+  await composer.fill('Stel een aanpak voor.')
+  await composer.press('Enter')
+  const options = page.getByTestId('claude-question-option')
+  await expect(options).toHaveCount(3)
+  await expect(composer).toBeFocused()
+
+  // ↑ from the rest position highlights the option closest to the composer
+  // first (Optie C, the last one), then the one above it (Optie B) — walking
+  // the list bottom to top, exactly as it appears on screen.
+  await page.keyboard.press('ArrowUp')
+  await expect(options.nth(2)).toHaveAttribute('data-active', 'true')
+  await expect(composer).not.toBeFocused()
+  await page.keyboard.press('ArrowUp')
+  await expect(options.nth(1)).toHaveAttribute('data-active', 'true')
+  await expect(options.nth(2)).toHaveAttribute('data-active', 'false')
+
+  // ↓ walks back down toward the composer.
+  await page.keyboard.press('ArrowDown')
+  await expect(options.nth(2)).toHaveAttribute('data-active', 'true')
+  await expect(options.nth(1)).toHaveAttribute('data-active', 'false')
+
+  // ↑ again, then Enter sends the highlighted option — same effect as a click.
+  await page.keyboard.press('ArrowUp')
+  await expect(options.nth(1)).toHaveAttribute('data-active', 'true')
+  const [msgReq] = await Promise.all([
+    page.waitForRequest((req) => req.url().includes('/signals/message') && req.method() === 'POST'),
+    page.keyboard.press('Enter'),
+  ])
+  expect(msgReq.postDataJSON().body).toBe('Optie B')
+  await expect(page.getByTestId('claude-question-answer')).toContainText('Optie B')
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('Bedankt, ik ga verder met Optie B.')
+
+  // The chain keeps going past the topmost option now that the question is
+  // answered (no more pending options): ↑ walks straight onto the newest
+  // turn itself, never a dead end.
+  await page.keyboard.press('ArrowUp')
+  await expect(page.getByTestId('claude-message-body').last()).toHaveClass(/ring-2/)
+})
+
 // The visible Claude column must follow whichever comment is currently
 // selected, even without the keyboard explicitly entering 'claude' — see
 // "The Claude column must follow the browsed comment, not just the

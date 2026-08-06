@@ -86,6 +86,7 @@ import RelatedPanel, {
   isClaudeChatFocused,
   clearClaudeChat,
   retryClaudeTurn,
+  selectHighlightedClaudeOption,
   claudeChatShadowWarning,
   sendPendingReply,
   pendingPublishInfo,
@@ -8147,6 +8148,16 @@ function onKeydown(e) {
     if (e.key === 'Enter' && isCommentOrThreadFocused() && commentReplyEmpty()) {
       e.preventDefault()
       openMenu('comment')
+    }
+    // Enter while a question's option is highlighted (↑/↓ walked into it, see
+    // the 'claude' branch of handleRelatedKey / cs.claudeOptionSel) sends that
+    // option, exactly like clicking it — checked BEFORE the "open the Claude
+    // menu" branch right below, since the composer is deliberately blurred
+    // while an option is highlighted (focusClaudeComposer) and would otherwise
+    // match that branch's own DOM-focus check instead.
+    if (e.key === 'Enter' && isClaudeChatFocused() && selectHighlightedClaudeOption(state, commentTarget)) {
+      e.preventDefault()
+      return
     }
     // Enter on the focused Claude column opens its own small menu ("Wis
     // Claude-gesprek", behind a confirm submenu — see claudeChatCommandsFor)

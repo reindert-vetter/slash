@@ -105,19 +105,35 @@ function claudeMessageBody(msg) {
 // one while an earlier turn is still running QUEUES it, exactly like a typed
 // message (queueClaudeMessage in RelatedPanel.mjs) — which is why these
 // buttons are no longer disabled while busy.
-function claudeQuestionOptions(msg, onSend) {
+//
+// `optionSel` is `view.claudeOptionSel` (a getter, see the file-level doc
+// comment) — the ↑/↓ highlight cs.claudeOptionSel drives (RelatedPanel.mjs's
+// handleRelatedKey 'claude' branch): 0 = nothing highlighted, 1..N = the
+// N-th option counted from the BOTTOM of this list (mirrors claudePos'/
+// threadPos' own "counted from the bottom" convention, since the option
+// closest to the composer is reached first walking up from it). Highlight is
+// a ring PLUS a leading glyph (›), never a colour/ring alone — the colorblind
+// rule — so a keyboard-driven pick reads the same as reactionBubble's own
+// active-turn marker elsewhere in this file.
+function claudeQuestionOptions(msg, onSend, optionSel) {
   if (msg.kind !== 'question' || msg.answer || !msg.options || !msg.options.length) return ''
+  const total = msg.options.length
   return html`
     <div class="flex flex-wrap gap-1.5 pl-7" data-testid="claude-question-options">
       ${msg.options.map((opt, i) =>
         html`
           <button
             type="button"
-            class="rounded-full border border-indigo-300 dark:border-indigo-500/40 px-2.5 py-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-500/15"
+            class="${() =>
+              'rounded-full border px-2.5 py-1 text-left text-[11px] font-medium hover:bg-indigo-50 dark:hover:bg-indigo-500/15 ' +
+              (optionSel() > 0 && total - optionSel() === i
+                ? 'border-indigo-500 ring-2 ring-indigo-300 text-indigo-700 dark:border-indigo-400 dark:ring-indigo-500/40 dark:text-indigo-200'
+                : 'border-indigo-300 dark:border-indigo-500/40 text-indigo-600 dark:text-indigo-300')}"
             data-testid="claude-question-option"
+            data-active="${() => (optionSel() > 0 && total - optionSel() === i ? 'true' : 'false')}"
             @click="${() => onSend(opt)}"
           >
-            ${opt}
+            ${() => (optionSel() > 0 && total - optionSel() === i ? '› ' : '')}${opt}
           </button>
         `.key('claude-opt:' + msg.id + ':' + i),
       )}
@@ -434,7 +450,7 @@ function claudeNoShellPill(msg) {
 // since that is the one whose input the workflow still holds — offers
 // "Opnieuw proberen" (`onRetry`, the chatActionRetry Signal). A 'retrying'
 // bubble deliberately does not: another attempt is already on its way.
-function claudeBubble(msg, i, total, claudePos, onSend, onRetry, busy) {
+function claudeBubble(msg, i, total, claudePos, optionSel, onSend, onRetry, busy) {
   const mine = msg.role === 'user'
   const isError = msg.kind === 'error'
   const isRetrying = msg.kind === 'retrying'
@@ -471,7 +487,7 @@ function claudeBubble(msg, i, total, claudePos, onSend, onRetry, busy) {
           ? html`<span class="pl-1 text-[11px] text-slate-500 dark:text-zinc-500" data-testid="claude-question-answer"
               >→ ${msg.answer}</span
             >`
-          : claudeQuestionOptions(msg, onSend)}
+          : claudeQuestionOptions(msg, onSend, optionSel)}
       ${() =>
         canRetry
           ? html`<button
@@ -629,7 +645,16 @@ export function claudeChatColumn(view, callbacks) {
             ]
           }
           return messages.map((m, i) =>
-            claudeBubble(m, i, total, view.claudePos, callbacks.onSend, callbacks.onRetry, view.busy).key(
+            claudeBubble(
+              m,
+              i,
+              total,
+              view.claudePos,
+              view.claudeOptionSel,
+              callbacks.onSend,
+              callbacks.onRetry,
+              view.busy,
+            ).key(
               'claude-msg:' + m.id,
             ),
           )

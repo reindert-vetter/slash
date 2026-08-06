@@ -95,7 +95,12 @@ code).
      leaving; `←`/`Escape` step back directly to `'comment'` (not to
      `'thread'`) — or, reached via the composer (no anchor comment exists yet,
      `cc.commentId == null`), back to the still-open `'new'` composer instead,
-     draft intact; `→` does nothing (there is no stop past it).
+     draft intact; `→` does nothing (there is no stop past it). When the
+     NEWEST turn is a still-open question with clickable options, this same
+     `↑`/`↓` chain grows one extra rung between the composer and that turn —
+     the question's own options, bottom to top — and `Enter` sends whichever
+     one is highlighted; see "↑/↓ walks a still-open question's options
+     before the transcript" in `.claude/docs/claude-chat-panel.md`.
 6. **Underlying code** (`RelatedPanel`, `cs.focus==='code'`) — the last stop of
    the chain reachable via `→`: `→` there leaves the card nowhere to go. Note
    that "last" is about the `→` chain, not the screen — the stop-5b Claude

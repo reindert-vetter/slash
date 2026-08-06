@@ -847,6 +847,69 @@ Concretely wrapped, each in its own `${() => ...}`:
 - the send button's class + `disabled="${() => view.busy()}"` and the
   question-option buttons' `disabled`.
 
+## ↑/↓ walks a still-open question's options before the transcript
+
+Reviewer request: pick one of a still-open question's (up to 3) options with
+the keyboard, not only a click — and the option buttons' text must be
+left-aligned, not centered (the browser's own UA default for `<button>`,
+which showed up as centered text on a two-line option — `text-left` on the
+button fixes that on its own, no layout change needed since the buttons
+already wrap onto their own line as soon as the text fills the row).
+
+The keyboard part folds into the EXISTING `cs.claudePos` chain
+(composer → turns, see "The chain, key by key" above) rather than adding a
+second, disjoint arrow-key mode — explicit reviewer answer, not a guess:
+"↑/↓ moet eerst door de keuze-opties lopen en daarna doorlopen naar het
+transcript (oudere beurten) — één doorlopende cursorketen: composer → opties →
+transcript, en omgekeerd terug."
+
+**`cs.claudeOptionSel`** (`RelatedPanel.mjs`, ephemeral, not URL-bound — a
+keyboard highlight, not a navigation position) is `cs.claudePos`'s own
+sub-cursor for exactly this: `0` = nothing highlighted (composer/rest),
+`1..N` = the N-th option counted from the BOTTOM of the options list (mirrors
+`claudePos`'/`threadPos`' own "counted from the bottom" convention — the
+option closest to the composer is reached first walking up from it). Only
+meaningful while `cs.claudePos === 0` **and** the newest message is a
+still-open, unanswered question with options (`pendingClaudeQuestion()`).
+
+The chain, walking up from the composer: `claudePos 0, optionSel 0` (rest) →
+`claudePos 0, optionSel 1..N` (the options, bottom to top) → `claudePos 1`
+(the question bubble itself, `optionSel` back to `0`, same as an ordinary
+turn) → `claudePos 2..` (older turns) — and the exact mirror walking down.
+`handleRelatedKey`'s `'claude'` branch (`RelatedPanel.mjs`) implements this:
+`ArrowUp` at `claudePos === 0` with a pending question increments
+`claudeOptionSel` until it exceeds the option count, then hands off to
+`claudePos = 1`; `ArrowDown` is the exact reverse, and re-entering `claudePos
+1`'s question from above (its OWN `ArrowDown`) re-enters the options at the
+topmost one. `focusClaudeComposer()` blurs the composer through the whole
+options rung too (`claudePos === 0 && claudeOptionSel === 0` is now the ONLY
+state that keeps it focused) — the highlighted button, not an empty
+textarea, should read as "focused" — and
+`scrollClaudeMessageIntoView0Options()` keeps the (always-newest) question
+bubble in view while `claudePos` stays `0` there (`scrollClaudeMessageIntoView`
+itself indexes off `claudePos`, which stays `0` through this whole rung and
+would resolve to the wrong node).
+
+**`Enter` sends the highlighted option** — `selectHighlightedClaudeOption(state,
+commentTarget)` (`RelatedPanel.mjs`, exported) is the keyboard counterpart of
+clicking a `claude-question-option` button: same `sendClaudeMessageFromNew`
+path, then resets the highlight. A no-op (returns `false`) when nothing is
+highlighted, so `home.mjs`'s `onKeydown` calls it unconditionally right before
+the existing "Enter opens the Claude menu" branch and only falls through to
+that branch when it returns `false` — load-bearing ordering, since the
+composer is deliberately blurred while an option is highlighted and would
+otherwise ALSO match that branch's own DOM-focus check.
+
+**Highlight is a ring plus a leading `›` glyph** on the button's own text,
+never a ring/colour alone (`claudeQuestionOptions`, `ClaudeChat.mjs`,
+colorblind rule) — `data-active="true"/"false"` per option, mirroring the
+app-wide `data-active` convention (`related-item`, `nestedChip`, …).
+`cs.claudeOptionSel` is reset on every transition that already resets
+`cs.claudePos`/leaves `'claude'` focus (`exitRelated`, `toComment`,
+`toNewFocus`, `enterClaudeChat`, `enterClaudeChatFromNew`, `clearClaudeChat`).
+Test: the "↑/↓ walks the question options before the transcript…" case in
+`tests/claude-chat-panel.spec.mjs`.
+
 `.innerHTML` bodies go through the same `renderMarkdown` convention as
 `commentBody` (own small `claudeMessageBody(msg)` helper, `()=>
 renderMarkdown(msg.body)`) — Claude's replies render as Markdown like any
