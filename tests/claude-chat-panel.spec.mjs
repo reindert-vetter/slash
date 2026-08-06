@@ -747,6 +747,53 @@ test('"Chat over deze regel" opens the Claude composer directly, keeps the comme
   }
 })
 
+// A multi-line Shift+↑/↓ selection left no visible trace of what it was
+// about once sent — the (invisible) `context` field never renders in the
+// transcript, only the reviewer's own typed text does (reported bug, see
+// RelatedPanel.mjs's `anchorHint`). The reviewer explicitly allowed anchoring
+// on the FIRST line of the selection as a simplification. Uses PR 102 (see
+// range-select.spec.mjs — RangeSelectAction::execute, two changed lines in
+// its first group).
+test('a multi-line Shift selection shows a "regel N" hint above the first Claude message it was sent with', async ({
+  page,
+}) => {
+  await page.goto('/pr/102')
+  await leaveSearchBox(page)
+
+  await page.keyboard.press('ArrowRight') // step into execute's diff (gran 'group', first group: $a/$b)
+  await expect(page.locator('[data-change-active]').first()).toBeVisible()
+  await page.keyboard.press('Shift+ArrowDown') // merges in the second group ($c/$d) — a real multi-line range
+
+  await page.keyboard.press('Enter') // block command palette
+  await page.getByTestId('command-row').filter({ hasText: 'Chat over deze regel' }).click()
+
+  const claudeComposer = page.getByTestId('claude-chat-compose')
+  await expect(claudeComposer).toBeFocused()
+
+  await claudeComposer.fill('Kun je dit toelichten?')
+  const [createRes] = await Promise.all([
+    page.waitForResponse(
+      (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
+    ),
+    claudeComposer.press('Enter'),
+  ])
+  const runId = (await createRes.json()).runId
+  expect(runId).toBeTruthy()
+
+  try {
+    await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+    // The hint sits above the FIRST (own) message only — anchored on the
+    // range's own gran ('group') + the first line of the merged range.
+    await expect(page.getByTestId('claude-message-anchor')).toHaveCount(1)
+    await expect(page.getByTestId('claude-message-anchor')).toContainText(/regel \d+/)
+  } finally {
+    // Never leave this real comment behind on the shared PR 102 fixture.
+    await page.request.post('/api/workflows/' + runId + '/signals/delete', {
+      data: { author: 'reviewer' },
+    })
+  }
+})
+
 // A brand-new "Comment op deze regel" on a unit that ALREADY has a comment
 // (with its own Claude conversation, complete with prior turns) must get its
 // own, wholly separate comment + Claude block — never silently continue the

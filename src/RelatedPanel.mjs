@@ -1957,6 +1957,26 @@ function claudeChatView() {
     // The still-open question's option highlight (see cs.claudeOptionSel's own
     // doc comment) — 0 while nothing is highlighted.
     claudeOptionSel: () => cs.claudeOptionSel,
+    // anchorHint — a short, human sentence naming where THIS conversation's
+    // very first turn was sent from (e.g. "Regel 42"), for claudeBubble to
+    // show above that one turn. '' when there's nothing to say (no anchor, or
+    // the anchor carries no line — a block-level target).
+    //
+    // The invisible `context` a first turn carries (claudeContextBlock) is
+    // never itself rendered in the transcript — only the reviewer's typed
+    // text is (see sendClaudeMessage's `body: trimmed`) — so a multi-line
+    // Shift+↑/↓ selection left no visible trace of what was actually sent
+    // (reported bug). Deliberately anchored on the FIRST line of that
+    // selection only (`c.line`, already how ensureClaudeAnchorForNew stores
+    // it — see its own doc comment), not the full range: the reviewer
+    // explicitly said anchoring on the first line is an acceptable
+    // simplification, and Comment carries no separate end-line field of its
+    // own to show more than that anyway.
+    anchorHint: () => {
+      const c = cs.list.find((x) => x.id === cc.commentId)
+      if (!c || !c.line) return ''
+      return (GRAN_LABEL[c.gran] || 'deze context') + ' · regel ' + c.line
+    },
     // The live turn: null when nothing is running. See cc.progress.
     progress: () => cc.progress,
     // The reviewer's own not-yet-sent turns, oldest first — scoped to the

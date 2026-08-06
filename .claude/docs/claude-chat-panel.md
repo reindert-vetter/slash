@@ -910,6 +910,36 @@ app-wide `data-active` convention (`related-item`, `nestedChip`, …).
 Test: the "↑/↓ walks the question options before the transcript…" case in
 `tests/claude-chat-panel.spec.mjs`.
 
+## A "regel N" hint above the first message shows what a multi-line selection sent
+
+Reported bug: a multi-line `Shift+↑/↓` range selection (see "Shift+↑/↓" in
+`.claude/docs/keyboard-navigation.md`) left **no visible trace** of what was
+actually referenced once sent to Claude. The selection's code/line range
+(`commentTarget()`) travels along as the `context` field of
+`sendClaudeMessage`'s Signal (`claudeContextBlock`), but that field is
+**never rendered** — only the reviewer's own typed text becomes the stored
+message body (`body: trimmed`) — so the transcript showed the question with
+zero indication of which lines it was about, most confusing for a range wider
+than one line.
+
+Fix is display-only, using data already stored: the anchor comment
+`ensureClaudeAnchorForNew` creates for a conversation's first turn already
+stores `line: t.startLine` — the FIRST line of the (possibly multi-line)
+selection (`Comment` has no separate end-line column, and the reviewer
+explicitly accepted anchoring on the first line as a simplification, so no
+backend change was needed). `claudeChatView().anchorHint` (`RelatedPanel.mjs`)
+resolves that comment (`cs.list.find(x => x.id === cc.commentId)`, not
+`chatAnchorComment()`/`selComment()` — those follow the currently SELECTED
+comment, which can drift from the conversation actually in view while
+browsing) into a short sentence, e.g. `"deze regel · regel 42"`
+(`GRAN_LABEL[c.gran] + ' · regel ' + c.line`). `claudeBubble` (`ClaudeChat.mjs`)
+renders it (`data-testid=claude-message-anchor`) above the conversation's
+FIRST message only (`i === 0 && mine`) — the one turn that ever actually
+carried this context (`claudeContextBlock` only attaches it on
+`cc.messages.length === 0`), so it can never drift out of sync with which
+turn the hint is shown on. Test: the "a multi-line Shift selection shows a
+'regel N' hint…" case in `tests/claude-chat-panel.spec.mjs`.
+
 `.innerHTML` bodies go through the same `renderMarkdown` convention as
 `commentBody` (own small `claudeMessageBody(msg)` helper, `()=>
 renderMarkdown(msg.body)`) — Claude's replies render as Markdown like any

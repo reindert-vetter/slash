@@ -450,13 +450,28 @@ function claudeNoShellPill(msg) {
 // since that is the one whose input the workflow still holds — offers
 // "Opnieuw proberen" (`onRetry`, the chatActionRetry Signal). A 'retrying'
 // bubble deliberately does not: another attempt is already on its way.
-function claudeBubble(msg, i, total, claudePos, optionSel, onSend, onRetry, busy) {
+function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, onRetry, busy) {
   const mine = msg.role === 'user'
   const isError = msg.kind === 'error'
   const isRetrying = msg.kind === 'retrying'
   const canRetry = isError && i === total - 1
+  // Only the conversation's very first turn ever carried the (invisible)
+  // selection context (claudeContextBlock only attaches it on the first turn
+  // — see RelatedPanel.mjs), so this is the one bubble a visible reminder of
+  // that context belongs above. `i`/`mine` are fixed for a given message
+  // (never change over its lifetime), so the plain JS condition here is
+  // fine; only the hint TEXT itself is read through its own `${() => ...}`.
+  const showAnchor = i === 0 && mine
   return html`
     <div class="${'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}" data-testid="claude-message">
+      ${() =>
+        showAnchor && anchorHint()
+          ? html`<span
+              class="pr-1 text-[10px] text-slate-400 dark:text-zinc-500"
+              data-testid="claude-message-anchor"
+              >${anchorHint()}</span
+            >`
+          : ''}
       <div class="flex items-center gap-2 py-0.5">
         ${mine ? '' : avatarHTML(CLAUDE_NAME, '', 'h-5 w-5')}
         <span class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">
@@ -651,6 +666,7 @@ export function claudeChatColumn(view, callbacks) {
               total,
               view.claudePos,
               view.claudeOptionSel,
+              view.anchorHint,
               callbacks.onSend,
               callbacks.onRetry,
               view.busy,
