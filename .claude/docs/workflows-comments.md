@@ -787,6 +787,20 @@ counter, the waiting is `w.Sleep` (a durable timer event, rescheduled after a
 restart — this is the first place in slash that uses it), and nothing reads a
 live clock. `chatRetryDelays` is a `var` purely so a test can shrink it.
 
+**`runChatTurnWithRetries` allocates a FRESH `chatTurnResult` every loop
+iteration — never reuse one across iterations.** `chat.Message.Kind` is
+`json:"kind,omitempty"`, so a successful attempt's encoded Activity result
+OMITS `"kind"` entirely; `tembed.Workflow.ExecuteActivity`'s decode is a plain
+`json.Unmarshal` into whatever pointer it's given, which only overwrites
+fields that ARE present. Reusing one `result` variable across the loop
+therefore left a PRIOR failed attempt's `chat.KindRetrying` sitting in
+`Message.Kind` even once a LATER attempt genuinely succeeded — the loop then
+read that stale value as "still retrying" and drove the ladder through every
+remaining rung for real, in the background, well after the turn already had
+its final answer (a long-lived tracker never gets torn down, so this kept
+running/logging long past the reviewer's own turn). Test:
+`TestRunChatTurnWithRetriesResetsResultPerAttempt`.
+
 **Manual retry** — `chatActionRetry` ("retry"), the fourth
 `ChatMessageSignal.Action` variant, validated in `tasks_api.go` next to
 `commit`/`clear` as a no-text action. The workflow keeps the finally-failed
@@ -828,26 +842,61 @@ worktree, not a repurposed base/head one, and deliberately checked out **on a
 real local branch** rather than detached (unlike `ensureWorktree`'s base/head
 worktrees), so it can be committed and pushed with an ordinary git flow.
 
-**No separate action needed — every turn tries this, and gracefully degrades
-when it can't.** `runOneClaudeTurn` (`chat_workflow.go`) calls
-`prepareChatShellWorkDir` (`chat_shadow.go`) at the start of EVERY turn
-(`sig.Action` is irrelevant to this decision — see above): on success the CLI
-gets `WorkDir` set to the shadow worktree and `Tools:
-["Read","Grep","Glob","Edit","Bash"]`; on any failure (gh/git unreachable, no
-network, a plumbing error) `prepareChatShellWorkDir` swallows the error
-(best-effort `tm.logf`, never a reviewer-facing message) and the turn falls
-back to exactly the original context-only completion. This is the graceful-
-degrade half of `.claude/rules/workflows-write-boundary.md`'s "Exception: the
-Claude chat turn may act through a shell" — an earlier, reverted attempt made
-`chatActionEdit` the unconditional default instead, which tied every plain
-conversational turn to a live `gh pr view` + `git fetch` round trip with no
-fallback and made ordinary Q&A hard-fail whenever gh was unreachable (see
-`chat_shadow_test.go`/`chat_shell_test.go`'s `stubReachableGh`/
-`stubUnreachableGh` for the regression tests covering both outcomes).
-`chatActionEdit` itself still exists as a Signal value (`tasks_api.go`
-validation, `ChatMessageSignal.Action`) purely for backward compatibility — it
-is now a no-op synonym of `""`, since `runOneClaudeTurn` no longer branches on
-it at all.
+**No separate action needed — every turn tries to get real tool access, and
+gracefully degrades when it can't.** `chatActionEdit` itself still exists as a
+Signal value (`tasks_api.go` validation, `ChatMessageSignal.Action`) purely for
+backward compatibility — it is a no-op synonym of `""`, since `runOneClaudeTurn`
+no longer branches on it at all.
+
+#### Two-step tool access: a cheap read-only first attempt, the shadow only when asked for (task 3)
+
+Materializing the shadow worktree (a `git fetch` plus `worktree add`/`reset
+--hard`, under `ingestMu`) has a real, avoidable cost for the large majority of
+turns, which never edit anything — a plain "wat doet deze functie?" paid the
+exact same setup as a genuine "commit dit". `runOneClaudeTurn`
+(`chat_workflow.go`) therefore makes **up to two** `RunChat` calls per turn
+instead of committing upfront to full shell access:
+
+1. **Attempt 1 (always).** `prepareChatReadOnlyWorkDir` (`chat_shadow.go`) — a
+   plain `os.Stat` against the PR's already-ingested, **shared** head worktree
+   (`worktreeDirs`, `ingest.go`; the same directory `/api/code`/`blockstats.go`
+   already read from, never written to here). No `git fetch`, no `ingestMu`
+   lock, no `gh` call at all. On success the CLI gets `Tools:
+   ["Read","Grep","Glob"]` and `claude.ChatReadOnlySystemPrompt`; on failure (no
+   PR ingested yet — in practice unreachable for an existing comment thread) it
+   falls back to the plain, tool-less `claude.ChatSystemPrompt`. Either way this
+   ONE call answers the large majority of turns (explaining code, answering a
+   question) at essentially zero extra cost over the old tool-less baseline.
+2. **Attempt 2 (only on request).** The read-only prompt teaches the model one
+   more strict JSON directive, `{"type":"need_write"}` — Claude's own signal
+   that the reviewer's request genuinely needs to edit/run something.
+   `isNeedWriteDirective` recognizes exactly this shape (nothing else). Only
+   then does `runOneClaudeTurn` call `prepareChatShellWorkDir` (unchanged, see
+   below) and make a SECOND call, **resuming the same CLI session** attempt 1
+   used (so Claude keeps whatever it already learned there, plus the
+   reviewer's own original message already in that session's history) via the
+   synthetic continuation prompt `chatNeedWriteContinuationPrompt`. That call's
+   reply is what actually gets saved/parsed; attempt 1's bare directive is not.
+
+Bounded to exactly one escalation, mirroring the "one begrensde Claude attempt"
+shape used elsewhere in this file — no retry loop if the second attempt also
+happens to reply with a directive (it just degrades to plain text, same as any
+malformed directive). Attempt 2 can itself fail to get the shadow worktree
+(gh/git unreachable) — that degrades to a plain, `NoShell: true` reviewer-facing
+explanation rather than an error turn, the same graceful-degrade philosophy as
+attempt 1's own fallback. `chat.Message.NoShell` is therefore true only when
+**neither** attempt got any real tool access at all — a turn that only ever
+needed the read-only pass is not degraded, it simply never asked to escalate.
+Tests: `chat_shell_test.go`'s
+`TestRunOneClaudeTurnUsesReadOnlyHeadWorktreeWithoutEscalating` (no gh/git
+round trip at all for a plain question),
+`TestRunOneClaudeTurnEscalatesToShellOnNeedWrite` (the session-resuming
+second call), `TestRunOneClaudeTurnDegradesWhenShellUnavailableAfterEscalating`.
+
+This is orthogonal to `sig.Action`'s dispatch (`chatActionCommit`/`chatActionClear`/
+`chatActionRetry`, handled by the workflow body before `runOneClaudeTurn` is
+even called) and to the automatic landing described below — a turn escalates
+or not purely based on what Claude itself says on its first, cheap attempt.
 
 - **Location/identity**: `chatShadowDir(dataDir, pr, conversationId)` →
   `data/worktrees/pr-<n>-chatshadow-<conversationId>`, checked out on local
@@ -859,17 +908,29 @@ it at all.
   same PR chatting about edits get fully independent shadows/branches — no
   shared mutable workspace, so "commit deze wijziging" on thread A can never
   accidentally sweep up thread B's still-in-progress edit.
-- **Prompt:** a turn that got shell/file access swaps the system prompt from
-  `claude.ChatSystemPrompt` to its sibling **`claude.ChatShellSystemPrompt`**
+- **Prompt:** a turn that escalates to the shadow (see "Two-step tool access"
+  above) swaps the system prompt to **`claude.ChatShellSystemPrompt`**
   (`modules/claude/prompts/chat_shell.md`) — the CLI only takes one
   `--append-system-prompt`, so this is a full replacement, not an addition. It
   keeps the same assistant framing + question/`comment_action` JSON contracts
   and adds that the Edit tool **and Bash** are available **this turn**, scoped
   to the conversation's own disposable shadow worktree — including running
-  `git`/`gh`/`acli` to commit and push — but only ever on the reviewer's
-  explicit request, never on Claude's own initiative, and never a force-push
-  (the git-level fast-forward-only guarantee is enforced outside the model,
-  see `landAndReclaimChatShadow` below). `chat_edit.md`/
+  `git`/`gh`/`acli` — but only ever on the reviewer's explicit request, never on
+  Claude's own initiative. **Task 1: it does NOT need to decide where a commit
+  lands, or push.** The prompt now says so explicitly: a plain "commit dit"
+  needs only a local `git add`/`git commit` in the shadow's own branch —
+  Claude never has to check out/create the real PR branch, never has to ask
+  the reviewer where a commit should land, and never has to push itself,
+  because the app now lands every such commit automatically (see "Automatic
+  landing after a shell turn" below). Push stays available on the reviewer's
+  own EXPLICIT request only (e.g. "push dit naar GitHub"), never on Claude's
+  own initiative and never `--force` (the git-level fast-forward-only
+  guarantee is enforced outside the model, see `landAndReclaimChatShadow`
+  below). This closed a real, observed failure mode: without it, Claude's own
+  `git branch`/`git status` inside the shadow would surface the developer's
+  OWN, unrelated local checkout state (e.g. "`feature/X` is nergens
+  uitgecheckt") and it would ask the reviewer where to land the commit instead
+  of just committing locally and trusting the app. `chat_edit.md`/
   `ChatEditSystemPrompt` (the earlier Edit-only, no-Bash, no-`comment_action`
   sibling) have been folded into `chat_shell.md` and removed — there was no
   longer a separate "edit action" for them to belong to.
@@ -923,7 +984,52 @@ it at all.
   design, will not signal for a commit GitHub cannot see —
   `ingestRefreshNeeded`). **This is no longer called directly from
   `claudeChatWorkflow`** — see "Serializing concurrent commits (`chat_merge`)"
-  below for what wraps it and why.
+  below for what wraps it and why. `chatActionCommit` itself is still a valid
+  Signal value, kept for backward compatibility, but nothing in the UI sends it
+  any more (see "No UI trigger needed any more" below) — see the next bullet
+  for what replaced it as the practical trigger.
+
+#### Automatic landing after a shell turn (tasks 1+2+4)
+
+Since the reviewer only ever asks Claude to commit in plain words (no button),
+and Claude's own `git commit` (chat_shell.md, task 1 above) never itself lands
+anything on the PR branch or cleans up its worktree, something has to notice
+that a commit happened and finish the job — otherwise a Claude-made commit sat
+in the shadow's own local branch forever: never on the PR branch as slash sees
+it, never visible in the review tree/diff, and the shadow worktree never
+reclaimed.
+
+- **`chatShadowNeedsLanding` (`chat_shadow.go`)** answers, purely locally (no
+  network — it reuses `chatShadowLocalPendingState`, the same cheap check the
+  shadow-status endpoint and "wis gesprek" already use): does this
+  conversation's shadow worktree have an uncommitted edit OR a local commit
+  that never made it onto the PR's pending ref? The `runClaudeTurn` Activity's
+  own registration (`workflows.go`) calls it right after `runOneClaudeTurn`
+  returns — regardless of whether THIS turn escalated to the shell, since an
+  earlier turn may have committed without managing to land — and carries the
+  answer on `chatTurnResult.NeedsLand`.
+- **`claudeChatWorkflow`'s own loop** (`chat_workflow.go`), after every
+  ordinary (non-error) turn, checks that STORED `result.NeedsLand` field — never
+  a live git read of its own, so this stays a deterministic function of the
+  turn's own recorded Activity result (`.claude/rules/workflow-determinism.md`)
+  — and, if true, runs the exact SAME `enqueueChatMerge` Activity the (now
+  unused-by-the-UI) manual "commit" action already used: land
+  fast-forward-only on the PR's pending ref, auto-merge/one-begrensde-Claude-
+  attempt on a real conflict, refresh the review tree
+  (`refreshTreeAfterLanding`), and reclaim the shadow worktree — all via the
+  PR's own `chat_merge` queue, so it still serializes against every other
+  conversation's landing/push request for that PR. Never a push — that stays
+  the reviewer-gated todo row (`.claude/docs/pending-push.md`).
+- **A dedicated `TurnID`** (`turn.TurnID + chatAutoLandTurnSuffix`, never the
+  bare turn id) keeps the outcome message ("✓ … staat op `<headRef>` en is
+  meteen zichtbaar in de review-tree…") under its OWN `chatMessageID`, so it can
+  never overwrite the assistant's own reply to that same turn (both would
+  otherwise collide on the same `INSERT OR REPLACE` id). Test:
+  `chat_workflow_test.go`'s
+  `TestClaudeChatAutoLandsPendingShadowWorkAfterATurn` (pre-seeds a real local
+  commit in the shadow exactly like Claude's own `git commit` would leave one,
+  then asserts an ordinary follow-up turn lands it, refreshes the tree, and
+  reclaims the worktree, with no "commit" action ever sent).
 - **Cleanup:** `cleanup.go`'s `reWorktreeDir`/`removePRWorktrees` were extended
   to also discover/sweep any `pr-<n>-chatshadow-*` directory (plus its
   `chat/<conversationId>` branch) once the PR itself is purged — covers a
@@ -1217,14 +1323,17 @@ recognizes the `question` shape:
   `POST .../signals/message` call; those buttons (plus the commit confirm
   menu) were **removed again** on reviewer request — "I'll just say what I
   want in the message". Unlike the earlier state of this doc, there is now
-  **no replacement trigger to wait for**: `runOneClaudeTurn` widens every
-  turn's tool scope itself (see "Agentic edits" above), so a reviewer who
-  wants Claude to edit/commit/push/open Jira just says so in a plain message
-  and Claude reaches for Bash on its own, gated only by the system prompt's
-  "only on explicit request" instruction. The blocker this bullet used to
-  describe — defaulting every turn to `chatActionEdit` hard-depended on a live
-  `gh`/git round trip with no degraded fallback — is fixed by
-  `prepareChatShellWorkDir`'s graceful degrade, not by a frontend trigger.
+  **no replacement trigger to wait for**: `runOneClaudeTurn` widens a turn's
+  tool scope itself, on request (see "Two-step tool access" above), so a
+  reviewer who wants Claude to edit/commit/open Jira just says so in a plain
+  message and Claude reaches for Bash once it says `{"type":"need_write"}`,
+  gated only by the system prompt's "only on explicit request" instruction.
+  The blocker this bullet used to describe — defaulting every turn to
+  `chatActionEdit` hard-depended on a live `gh`/git round trip with no
+  degraded fallback — is fixed by `prepareChatShellWorkDir`'s graceful degrade,
+  not by a frontend trigger. Landing a commit onto the PR branch and cleaning
+  up the shadow worktree afterwards is likewise automatic now, not a second
+  reviewer step — see "Automatic landing after a shell turn" above.
 
 ### "Wis gesprek" (`chatActionClear`) — clearing a conversation
 
@@ -1317,3 +1426,20 @@ conflict, and the merge is aborted without touching the remote; plus
 `chatMergeQueueWorkflow`'s own ordering guarantee against a bare tembed engine
 with a stub Activity, and `EnsureChatMergeQueue`'s idempotency) — all offline,
 no live `claude`/`gh`/network call.
+
+`chat_shell_test.go` additionally covers the two-step tool-access design
+(task 3): `TestRunOneClaudeTurnUsesReadOnlyHeadWorktreeWithoutEscalating` (a
+plain question costs exactly 1 `RunChat` call against the SHARED head
+worktree, no gh/git round trip at all), `TestRunOneClaudeTurnEscalatesToShellOnNeedWrite`
+(a `{"type":"need_write"}` reply triggers a second, session-resuming call with
+the full shadow worktree), `TestRunOneClaudeTurnDegradesWhenShellUnavailableAfterEscalating`
+(escalating but failing to get the shadow degrades to a visible, `NoShell`
+reply, never an error turn) and the pre-existing `TestRunOneClaudeTurnDegradesWhenGhUnreachable`
+(no head worktree and gh unreachable still degrades cleanly). `chat_workflow_test.go`'s
+`TestClaudeChatAutoLandsPendingShadowWorkAfterATurn` covers the automatic
+landing (tasks 1+2+4): pre-seeds a real local commit in the shadow — exactly
+what Claude's own `git commit` leaves behind — and asserts an ORDINARY
+follow-up turn (no "commit" action ever sent) lands it on the pending ref,
+reclaims the shadow worktree, and reports the outcome under its own message
+id; `TestRunChatTurnWithRetriesResetsResultPerAttempt` guards the
+stale-`Kind`-across-retries bug documented above.

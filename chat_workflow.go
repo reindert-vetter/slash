@@ -338,8 +338,36 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				return nil, fmt.Errorf("apply chat comment action: %w", err)
 			}
 		}
+
+		// Tasks 1+2+4 (see "Automatic landing after a shell turn" in
+		// .claude/docs/workflows-comments.md): whenever this turn's own Activity
+		// result says the shadow worktree has something pending — an uncommitted
+		// edit Claude left behind, or a local commit that never made it onto the
+		// PR's pending ref — hand it to the SAME per-PR chat_merge queue the
+		// (now unused-by-the-UI) manual "commit" action already used: it lands
+		// fast-forward-only on the PR's local pending ref, auto-merges/resolves a
+		// real conflict, refreshes the review tree, and reclaims the shadow
+		// worktree — never a push, which stays the reviewer-gated todo row. A
+		// dedicated TurnID (never the bare turn.TurnID) keeps the resulting
+		// outcome message under its own id, so it can never overwrite the
+		// assistant's own reply to this same turn (see chatMessageID). Decided
+		// purely by result.NeedsLand, part of this turn's own recorded Activity
+		// result — deterministic under replay.
+		if result.NeedsLand {
+			if err := w.ExecuteActivity("enqueueChatMerge", chatCommitInput{
+				PR: in.PR, ConversationID: in.CommentID, TurnID: turn.TurnID + chatAutoLandTurnSuffix,
+			}, nil); err != nil {
+				return nil, fmt.Errorf("enqueue chat merge (auto-land): %w", err)
+			}
+		}
 	}
 }
+
+// chatAutoLandTurnSuffix separates an automatic post-turn landing's own
+// outcome message from the assistant's ordinary reply to the same reviewer
+// turn — both would otherwise derive the same chatMessageID and the second
+// SaveMessage (INSERT OR REPLACE) would silently overwrite the first.
+const chatAutoLandTurnSuffix = "-autoland"
 
 // chatTurnInput is runClaudeTurn's own Activity input — deliberately not
 // ClaudeChatInput + a DB read of the transcript: the CLI's own --resume
@@ -382,8 +410,19 @@ type chatTurnInput struct {
 // a live clock. Every attempt reuses the same TurnID, so each one REPLACES the
 // previous attempt's row instead of adding a bubble (see chatMessageID).
 func runChatTurnWithRetries(w *tembed.Workflow, turn chatTurnInput) (chatTurnResult, error) {
-	var result chatTurnResult
 	for attempt := 0; ; attempt++ {
+		// A FRESH zero value every iteration — load-bearing, not cosmetic.
+		// chat.Message.Kind is `json:"kind,omitempty"`, so a successful attempt's
+		// encoded result OMITS "kind" entirely; ExecuteActivity's decode (a plain
+		// json.Unmarshal into this same pointer, see tembed's Workflow.ExecuteActivity)
+		// only overwrites fields that ARE present, so reusing one `result`
+		// variable across iterations would leave a PRIOR failed attempt's
+		// chat.KindRetrying sitting in Message.Kind even once the retry
+		// genuinely succeeded — which reads as "still retrying" below and drives
+		// the ladder through every remaining rung for real, well past the
+		// attempt that actually answered. Regression test:
+		// TestRunChatTurnWithRetriesResetsResultPerAttempt.
+		var result chatTurnResult
 		arg := turn
 		arg.Attempt = attempt
 		arg.MaxAttempts = len(chatRetryDelays) + 1
@@ -447,9 +486,19 @@ func chatActionReactionID(turnID string) string {
 // reflection — see modules/chat.SaveMessage) so this workflow-only handoff
 // never leaks into modules/chat, which knows nothing about
 // task_code_comment/ReactionSignal addressing.
+// NeedsLand (tasks 1+2+4) is computed by the runClaudeTurn Activity's own
+// registration in workflows.go, right after runOneClaudeTurn returns, via
+// chatShadowNeedsLanding — never inside runOneClaudeTurn itself, so that
+// function's own (chat.Message, *commentActionDirective) signature and its
+// existing direct-call tests stay unchanged. Kept on this result (not
+// re-derived in the workflow body) for the same determinism reason
+// Action/pendingQuestionID are: the workflow body must decide whether to run
+// a further Activity purely from a STORED Activity result, never from a live
+// git read of its own.
 type chatTurnResult struct {
-	Message chat.Message            `json:"message"`
-	Action  *commentActionDirective `json:"action,omitempty"`
+	Message   chat.Message            `json:"message"`
+	Action    *commentActionDirective `json:"action,omitempty"`
+	NeedsLand bool                    `json:"needsLand,omitempty"`
 }
 
 // commentActionDirective is the parsed, but NOT YET validated, shape of a
@@ -492,46 +541,6 @@ type assistantDirective struct {
 // needs a real 4th option).
 const maxChatQuestionOptions = 3
 
-// runOneClaudeTurn is the runClaudeTurn Activity's body (a plain function so
-// it's directly testable, mirroring resolveCallsWithModel/
-// runCodeWarningReview): read the conversation's stored session id, ask
-// claude for the next turn (resuming that session, or starting one), persist
-// the assistant's reply (parsed into a question turn when it matches the
-// directive shape) plus the (possibly new) session id, and return the saved
-// message. A failed claude call is stored as a visible turn rather than
-// failing the workflow: chat.KindRetrying while runChatTurnWithRetries still
-// has a rung left on its backoff ladder (that Kind is precisely what tells the
-// workflow to sleep and call this again), chat.KindError once it is exhausted.
-// The model is not fixed here either — chatModelForAttempt derives it from
-// arg.Attempt, so the third attempt onward runs on Sonnet.
-//
-// Every turn — regardless of arg.Action — first tries prepareChatShellWorkDir
-// (chat_shadow.go) to get real shell/file access in the conversation's own
-// disposable shadow worktree: Read/Grep/Glob/Edit plus Bash, so Claude can run
-// git/gh/acli itself when the reviewer asks for it in plain text, per
-// .claude/rules/workflows-write-boundary.md's "Exception: the Claude chat
-// turn may act through a shell". That setup can fail (gh/git unreachable) —
-// prepareChatShellWorkDir turns any such failure into "not available this
-// turn" rather than an error, and the turn simply falls back to the original
-// tool-less completion (claude.ChatSystemPrompt, no WorkDir/Tools) so a pure
-// conversational turn never breaks because of it — but that fallback is not
-// silent: the saved reply carries chat.Message.NoShell so the reviewer sees a
-// "Geen bestandstoegang" pill on it (ClaudeChat.mjs). See
-// .claude/docs/claude-chat-panel.md and .claude/docs/workflows-comments.md.
-//
-// arg.Action == chatActionEdit is kept only for backward compatibility with
-// any already-recorded history/external caller — it is now a no-op synonym of
-// the default, since every turn already gets the same widened access. Do NOT
-// reintroduce a gate on it; that was the exact mistake this comment exists to
-// prevent (see the git history of this file for the broken attempt that made
-// 'edit' the unconditional default and, with it, tied every turn to a live
-// gh/git round trip with no fallback).
-//
-// A comment_action directive is deliberately NOT saved here as a message —
-// applyChatCommentAction (called by the workflow right after this Activity,
-// only when the returned action is non-nil) is the sole place that records the
-// one visible outcome turn, so the reviewer only ever sees "it happened" or
-// "it failed", never an optimistic message that turns out wrong.
 // buildChatPrompt folds the reviewer's selection context (if any — only sent
 // for a conversation's first turn, see RelatedPanel.mjs's claudeContextBlock)
 // in FRONT of the typed message for the CLI's own Prompt, so Claude sees what
@@ -539,8 +548,12 @@ const maxChatQuestionOptions = 3
 // what gets SAVED as chat.Message.Body (see saveChatMessage in
 // claudeChatWorkflow above) — the reviewer's own bubble must show only what
 // they typed. context == "" (every turn after the first, or no cursor info
-// available) is a plain pass-through, unchanged from before this field
-// existed.
+// available) is a plain pass-through.
+//
+// arg.Action == chatActionEdit is kept only for backward compatibility with
+// any already-recorded history/external caller — runOneClaudeTurn no longer
+// branches on it at all (see that function's own doc comment for the current,
+// two-step tool-access design, task 3).
 func buildChatPrompt(selectionContext, body string) string {
 	if selectionContext == "" {
 		return body
@@ -548,6 +561,97 @@ func buildChatPrompt(selectionContext, body string) string {
 	return selectionContext + "\n\n" + body
 }
 
+// chatCommentIDNote is the dynamic, call-specific tail every chat system
+// prompt gets appended (the static prompt files are call-independent text —
+// see modules/claude/prompts.go): the conversation's own comment id, which
+// the comment_action directive needs to echo back as "commentId". Harmless
+// for a turn that never uses the directive. Shared by both attempts of a
+// two-step turn (see runOneClaudeTurn) so neither has to repeat the wording.
+func chatCommentIDNote(conversationID string) string {
+	return "\n\nHet id van DEZE comment-thread (gebruik dit exact als \"commentId\" in het comment_action-format): " + conversationID
+}
+
+// chatNeedWriteContinuationPrompt is the synthetic user prompt sent on a
+// turn's SECOND, shell-enabled call (see runOneClaudeTurn) — resuming the
+// SAME session Claude used for its cheap read-only first attempt, so it
+// keeps whatever it already learned there, plus the reviewer's own original
+// message (already part of that session's history). Claude's own first-call
+// reply was the bare {"type":"need_write"} directive and carries no content
+// of its own, so this is what actually prompts the second call.
+const chatNeedWriteContinuationPrompt = "Je hebt nu Edit en een echte shell (Bash) beschikbaar, in je eigen wegwerpbare werkkopie. Ga verder met het oorspronkelijke verzoek."
+
+// chatFailureMessage words + persists one failed claude CLI call as a visible
+// turn (see chatFailureTurn) — shared by both attempts of runOneClaudeTurn's
+// two-step call, so a CLI failure on either one degrades the same way.
+func chatFailureMessage(ctx context.Context, cm *chat.Module, arg chatTurnInput, model string) chat.Message {
+	kind, body := chatFailureTurn(arg.Attempt, model)
+	msg := chat.Message{
+		ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
+		Role: "assistant", Kind: kind, Body: body, Model: model,
+	}
+	_ = cm.SaveMessage(ctx, msg)
+	return msg
+}
+
+// isNeedWriteDirective reports whether text is exactly the strict
+// {"type":"need_write"} directive (task 3's escalation signal) — the cheap
+// read-only first attempt's way of saying "I need Edit/Bash to do this".
+// Anything else (plain text, a question/comment_action directive, malformed
+// JSON) is not an escalation and is left for parseAssistantTurn to interpret
+// as usual.
+func isNeedWriteDirective(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "{") {
+		return false
+	}
+	var d struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &d); err != nil {
+		return false
+	}
+	return d.Type == "need_write"
+}
+
+// runOneClaudeTurn is the runClaudeTurn Activity's body (a plain function so
+// it's directly testable): read the conversation's stored session id, ask
+// claude for the next turn, persist the assistant's reply (parsed into a
+// question turn when it matches the directive shape) plus the (possibly new)
+// session id, and return the saved message. A failed claude call is stored as
+// a visible turn rather than failing the workflow: chat.KindRetrying while
+// runChatTurnWithRetries still has a rung left on its backoff ladder,
+// chat.KindError once it is exhausted. The model is not fixed here either —
+// chatModelForAttempt derives it from arg.Attempt.
+//
+// Task 3 ("een read-only vraag hoeft geen hele werkkopie op te bouwen"): every
+// turn now makes up to TWO claude calls instead of committing upfront to full
+// shell access.
+//
+//  1. A cheap first attempt with only Read/Grep/Glob, scoped to the PR's
+//     already-ingested, SHARED head worktree (prepareChatReadOnlyWorkDir) — no
+//     shadow worktree, no git fetch, no ingestMu lock. This is enough for the
+//     large majority of turns (explaining code, answering a question) and pays
+//     none of the shadow-worktree setup cost.
+//  2. ONLY when that first attempt's reply is the strict {"type":"need_write"}
+//     directive (isNeedWriteDirective) — Claude's own signal that the
+//     reviewer's request needs real edits/commands — a second call resumes the
+//     SAME session with full Read/Grep/Glob/Edit/Bash in the conversation's own
+//     disposable shadow worktree (prepareChatShellWorkDir, unchanged from
+//     before this task). That call's reply is what actually gets saved/parsed.
+//
+// Either attempt can fail to get its tools at all (gh/git unreachable, no
+// worktree yet) — both degrade gracefully to a plain completion rather than an
+// error turn, per .claude/rules/workflows-write-boundary.md's "Exception: the
+// claude_chat turn may act through a shell". chat.Message.NoShell is true only
+// when NEITHER attempt got any real tool access at all (see the "Geen
+// bestandstoegang" pill, ClaudeChat.mjs) — a turn that only ever needed
+// Read/Grep/Glob is not degraded, it simply never needed to escalate.
+//
+// A comment_action directive is deliberately NOT saved here as a message —
+// applyChatCommentAction (called by the workflow right after this Activity,
+// only when the returned action is non-nil) is the sole place that records the
+// one visible outcome turn, so the reviewer only ever sees "it happened" or
+// "it failed", never an optimistic message that turns out wrong.
 func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl claude.Client, dataDir string, arg chatTurnInput) (chat.Message, *commentActionDirective) {
 	// Volatile live progress for the reviewer (chat_progress.go + the SSE
 	// stream): a turn is a real subprocess call that can run for minutes, so
@@ -577,69 +681,99 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	model := chatModelForAttempt(arg.Attempt)
 	sink := chatProgressSink(arg.PR, arg.ConversationID)
 	loggedFirstEvent, loggedFirstContent := false, false
+	onEvent := func(ev claude.ChatEvent) {
+		if !loggedFirstEvent {
+			loggedFirstEvent = true
+			logTurnMilestone("first CLI event (%s) after %v", ev.Kind, time.Since(t0))
+		}
+		if !loggedFirstContent && ev.Kind != claude.ChatEventStatus {
+			loggedFirstContent = true
+			logTurnMilestone("first content event (%s) after %v", ev.Kind, time.Since(t0))
+		}
+		sink(ev)
+	}
+
+	// Attempt 1: the cheap read-only pass (task 3).
+	hadReadOnly := false
 	req := claude.RunRequest{
 		Model:        model,
 		Prompt:       buildChatPrompt(arg.Context, arg.Body),
 		SessionID:    sessionID,
 		SystemPrompt: claude.ChatSystemPrompt,
-		OnEvent: func(ev claude.ChatEvent) {
-			if !loggedFirstEvent {
-				loggedFirstEvent = true
-				logTurnMilestone("first CLI event (%s) after %v", ev.Kind, time.Since(t0))
-			}
-			if !loggedFirstContent && ev.Kind != claude.ChatEventStatus {
-				loggedFirstContent = true
-				logTurnMilestone("first content event (%s) after %v", ev.Kind, time.Since(t0))
-			}
-			sink(ev)
-		},
+		OnEvent:      onEvent,
 	}
-	hadShell := false
-	if dir, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.PR, arg.ConversationID); ok {
-		hadShell = true
+	if dir, ok := prepareChatReadOnlyWorkDir(dataDir, arg.PR); ok {
+		hadReadOnly = true
 		req.WorkDir = dir
-		req.Tools = []string{"Read", "Grep", "Glob", "Edit", "Bash"}
-		req.SystemPrompt = claude.ChatShellSystemPrompt
+		req.Tools = []string{"Read", "Grep", "Glob"}
+		req.SystemPrompt = claude.ChatReadOnlySystemPrompt
 	}
-	logTurnMilestone("local prep done after %v, invoking claude CLI", time.Since(t0))
-	// The embedded prompt files are static, call-independent text (see
-	// modules/claude/prompts.go), so the conversation's own comment id — which
-	// chat.md's comment_action directive needs to echo back as "commentId" —
-	// is appended here in Go, the same "static block + dynamic call-specific
-	// content" split every other prompt already uses. Harmless for a turn that
-	// never uses the directive.
-	req.SystemPrompt += "\n\nHet id van DEZE comment-thread (gebruik dit exact als \"commentId\" in het comment_action-format): " + arg.ConversationID
-	// Local prep (gh/git worktree refresh above) is done; the CLI is about to
-	// be invoked. This is the "sessie gestart — wachten op Claude" phase, kept
-	// distinct from the preceding "Werkmap klaarzetten…" — see chatPhaseStarting
-	// / chatPhasePreparing in chat_progress.go.
+	req.SystemPrompt += chatCommentIDNote(arg.ConversationID)
+	logTurnMilestone("local prep done after %v, invoking claude CLI (read-only attempt)", time.Since(t0))
+	// Local prep is done; the CLI is about to be invoked. This is the "sessie
+	// gestart — wachten op Claude" phase, kept distinct from the preceding
+	// "Werkmap klaarzetten…" — see chatPhaseStarting/chatPhasePreparing in
+	// chat_progress.go.
 	advanceChatProgress(arg.PR, arg.ConversationID, chatPhaseStarting)
 	result, err := cl.RunChat(ctx, req)
-	logTurnMilestone("claude CLI returned after %v (err=%v)", time.Since(t0), err)
+	logTurnMilestone("claude CLI (read-only attempt) returned after %v (err=%v)", time.Since(t0), err)
 	if err != nil {
-		kind, body := chatFailureTurn(arg.Attempt, model)
-		msg := chat.Message{
-			ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
-			Role: "assistant", Kind: kind, Body: body, Model: model,
-		}
-		_ = cm.SaveMessage(ctx, msg)
-		return msg, nil
+		return chatFailureMessage(ctx, cm, arg, model), nil
 	}
 	if err := cm.SetSession(ctx, arg.ConversationID, result.SessionID); err != nil {
-		// Best-effort: losing the session id only means the NEXT turn starts a
-		// fresh session instead of resuming this one — degraded, not broken.
+		// Best-effort: losing the session id only means the NEXT call/turn starts
+		// a fresh session instead of resuming this one — degraded, not broken.
 		_ = err
 	}
+
+	// Attempt 2 (task 1/2/3): only when Claude itself asked for it — resumes
+	// the SAME session, so it keeps whatever it already learned above, plus the
+	// reviewer's own original message (already in that session's history).
+	hadShell := false
+	if isNeedWriteDirective(result.Text) {
+		dir, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.PR, arg.ConversationID)
+		if !ok {
+			msg := chat.Message{
+				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
+				Role: "assistant", Model: model, NoShell: true,
+				Body: "Voor dit verzoek heb ik schrijftoegang nodig, maar kon geen werkkopie klaarzetten (gh/git niet bereikbaar). Probeer het straks nog eens.",
+			}
+			_ = cm.SaveMessage(ctx, msg)
+			return msg, nil
+		}
+		hadShell = true
+		shellReq := claude.RunRequest{
+			Model:        model,
+			Prompt:       chatNeedWriteContinuationPrompt,
+			SessionID:    result.SessionID,
+			SystemPrompt: claude.ChatShellSystemPrompt + chatCommentIDNote(arg.ConversationID),
+			WorkDir:      dir,
+			Tools:        []string{"Read", "Grep", "Glob", "Edit", "Bash"},
+			OnEvent:      onEvent,
+		}
+		logTurnMilestone("local prep done after %v, invoking claude CLI (shell attempt)", time.Since(t0))
+		result2, err2 := cl.RunChat(ctx, shellReq)
+		logTurnMilestone("claude CLI (shell attempt) returned after %v (err=%v)", time.Since(t0), err2)
+		if err2 != nil {
+			return chatFailureMessage(ctx, cm, arg, model), nil
+		}
+		if err := cm.SetSession(ctx, arg.ConversationID, result2.SessionID); err != nil {
+			_ = err
+		}
+		result = result2
+	}
+
 	msg, action := parseAssistantTurn(arg.PR, arg.ConversationID, arg.TurnID, result.Text)
 	// Which model actually answered — the reviewer sees it on the bubble when it
 	// isn't the default one (see the model pill in ClaudeChat.mjs).
 	msg.Model = model
-	// Whether this turn had Read/Grep/Glob/Edit/Bash — surfaced via the "Geen
+	// Whether this turn had NO real tool access AT ALL — surfaced via the "Geen
 	// bestandstoegang" pill (ClaudeChat.mjs) so a silently degraded turn is
-	// never invisible to the reviewer. See prepareChatShellWorkDir's own doc
-	// comment for why this can legitimately fail (gh/git unreachable, a git
-	// plumbing error).
-	msg.NoShell = !hadShell
+	// never invisible to the reviewer. False as soon as EITHER attempt got real
+	// access (a read-only-only turn is not degraded — it simply never asked to
+	// escalate). See prepareChatReadOnlyWorkDir/prepareChatShellWorkDir's own
+	// doc comments for why either can legitimately fail.
+	msg.NoShell = !(hadReadOnly || hadShell)
 	if action == nil {
 		_ = cm.SaveMessage(ctx, msg)
 	}

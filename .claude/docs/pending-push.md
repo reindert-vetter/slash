@@ -9,6 +9,17 @@ bottom of the block index**. In between, the change is fully part of the review
 tree: it is ingested, diffed, approvable, commentable — the reviewer reviews his
 own change before anyone else sees it, and nothing stays behind in a worktree.
 
+**The landing itself is automatic, not a second reviewer step.** The reviewer
+only ever asks Claude to commit in plain words; Claude's own `git commit` (run
+via Bash in its shadow worktree, see "Two-step tool access"/chat_shell.md in
+`.claude/docs/workflows-comments.md`) never itself moves anything onto the PR
+branch or touches the worktree afterwards — the `runClaudeTurn` Activity
+notices the shadow has something pending after EVERY turn
+(`chatShadowNeedsLanding`) and lands/merges/reclaims it the same way an
+explicit "commit deze wijziging" always did (see "Automatic landing after a
+shell turn" in that same doc). Push, unlike landing, stays a deliberate,
+reviewer-only step — never automatic, never `--force`.
+
 Mechanics of the chat turn itself (shadow worktree, the `chat_merge` queue,
 conflict resolution) live in `.claude/docs/workflows-comments.md`; this file is
 about the landing target, the visibility, and the push.

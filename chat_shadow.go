@@ -262,6 +262,32 @@ func chatShadowLocalPendingState(ctx context.Context, dir string) (dirty bool, a
 	return dirty, n, nil
 }
 
+// chatShadowNeedsLanding is runOneClaudeTurn's own end-of-turn check (tasks 1
+// + 2 + 4, see "Automatic landing after a shell turn" in
+// .claude/docs/workflows-comments.md): does this conversation's shadow
+// worktree have anything — an uncommitted edit, or a local commit — that
+// hasn't made it onto the PR's pending ref yet? Reuses
+// chatShadowLocalPendingState (the same cheap, local-only check the
+// shadow-status endpoint already runs), so this never touches the network.
+//
+// Deliberately checked regardless of whether THIS turn escalated to the
+// shell: an earlier turn/attempt may have committed locally without managing
+// to land (a transient landing failure, or a reviewer message split across
+// several Claude turns before asking to commit) — every turn is a chance to
+// notice and land it, so nothing sits unlanded (and therefore invisible in
+// the review tree) longer than necessary.
+func chatShadowNeedsLanding(ctx context.Context, dataDir string, pr int, conversationID string) bool {
+	dir := chatShadowDir(dataDir, pr, conversationID)
+	if _, err := os.Stat(dir); err != nil {
+		return false
+	}
+	dirty, ahead, err := chatShadowLocalPendingState(ctx, dir)
+	if err != nil {
+		return false
+	}
+	return dirty || ahead > 0
+}
+
 // clearChatShadow is "wis gesprek"'s (chatActionClear) best-effort removal of
 // a conversation's agentic-edit shadow worktree + branch, called from the
 // clearChatConversation Activity right after the transcript itself is wiped.
@@ -288,6 +314,27 @@ func clearChatShadow(ctx context.Context, tm *TaskManager, dataDir string, pr in
 			tm.logf("claude_chat: clear could not delete shadow branch for conversation %s: %v", conversationID, err)
 		}
 	}
+}
+
+// prepareChatReadOnlyWorkDir is runOneClaudeTurn's entry point into the CHEAP
+// first attempt of every turn (task 3, see the "Two-step tool access" section
+// in .claude/docs/workflows-comments.md): a plain os.Stat against the PR's
+// already-ingested, shared HEAD worktree (worktreeDirs, ingest.go) — never the
+// per-conversation shadow. No git fetch, no ingestMu lock, no gh call at all:
+// this directory is already on disk for any PR a comment (hence a chat) can
+// exist on, and it is read by several other callers (blockstats.go, /api/code)
+// without any locking, so a concurrent Read/Grep/Glob tool call here is no
+// riskier than those.
+//
+// Returns false only when the directory genuinely isn't there yet (a PR that
+// was never ingested — not reachable in practice for an existing comment
+// thread, but degrading gracefully costs nothing).
+func prepareChatReadOnlyWorkDir(dataDir string, pr int) (string, bool) {
+	_, headDir := worktreeDirs(dataDir, pr)
+	if _, err := os.Stat(headDir); err != nil {
+		return "", false
+	}
+	return headDir, true
 }
 
 // prepareChatShellWorkDir is runOneClaudeTurn's own entry point into the

@@ -68,20 +68,37 @@ var CommentRemovalSystemPrompt string
 //go:embed prompts/chat.md
 var ChatSystemPrompt string
 
+// ChatReadOnlySystemPrompt is ChatSystemPrompt's sibling for the CHEAP first
+// attempt of every turn (chat_workflow.go's runOneClaudeTurn): Read/Grep/Glob
+// against the PR's already-ingested, shared head worktree — no shadow
+// worktree, no git fetch, no ingestMu lock (see .claude/docs/
+// workflows-comments.md, "Two-step tool access: a cheap read-only first
+// attempt"). The same assistant framing plus question/comment_action
+// contracts, plus the "need_write" escalation directive a turn emits when it
+// decides it actually needs to edit/run something — which triggers a SECOND,
+// more expensive call with the full shadow worktree (ChatShellSystemPrompt
+// below). Used whenever the shared head worktree exists on disk; falls back
+// to the plain ChatSystemPrompt when it doesn't (no PR ingested yet — in
+// practice never true for an existing comment thread).
+//
+//go:embed prompts/chat_readonly.md
+var ChatReadOnlySystemPrompt string
+
 // ChatShellSystemPrompt is ChatSystemPrompt's sibling for a turn that got real
 // shell/file access this turn (chat_workflow.go's runOneClaudeTurn, via
 // prepareChatShellWorkDir/chat_shadow.go): the same assistant framing plus
 // question/comment_action contracts, plus an explicit note that the Edit tool
 // AND a real shell (Bash) are available THIS turn, scoped to the
 // conversation's own disposable shadow worktree, so Claude can run
-// git/gh/acli itself — including committing and pushing — when the reviewer
-// explicitly asks for it in the message. See
-// .claude/rules/workflows-write-boundary.md's "Exception: the Claude chat
-// turn may act through a shell". A full replacement of ChatSystemPrompt
-// rather than a second --append-system-prompt (the CLI only takes one), used
-// whenever RunRequest.WorkDir/Tools were successfully set up for this turn —
-// which is the normal case, not a special "edit action" (see
-// runOneClaudeTurn's doc comment for why arg.Action no longer gates this).
+// git/gh/acli itself — including committing — when the reviewer explicitly
+// asks for it in the message. See .claude/rules/workflows-write-boundary.md's
+// "Exception: the Claude chat turn may act through a shell". A full
+// replacement of ChatSystemPrompt/ChatReadOnlySystemPrompt rather than a
+// second --append-system-prompt (the CLI only takes one), used only on the
+// SECOND call of a turn that escalated via "need_write" (see
+// ChatReadOnlySystemPrompt above) — not the default any more, task 3's whole
+// point being that materializing this worktree is deferred until a turn
+// actually needs to write.
 //
 //go:embed prompts/chat_shell.md
 var ChatShellSystemPrompt string

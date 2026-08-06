@@ -2179,8 +2179,14 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return json.Marshal(chatTurnResult{})
 		}
 		msg, action := runOneClaudeTurn(ctx, m, m.chat, m.claude, m.dataDir, arg)
+		// Tasks 1+2+4: computed here, right after the turn, rather than inside
+		// runOneClaudeTurn itself — keeps that function's own signature/tests
+		// unchanged and keeps the "should the workflow run a further Activity"
+		// decision a plain, STORED field of this Activity's result (see
+		// chatTurnResult.NeedsLand's own doc comment).
+		needsLand := chatShadowNeedsLanding(ctx, m.dataDir, arg.PR, arg.ConversationID)
 		publishChatChanged(arg.PR, arg.ConversationID)
-		return json.Marshal(chatTurnResult{Message: msg, Action: action})
+		return json.Marshal(chatTurnResult{Message: msg, Action: action, NeedsLand: needsLand})
 	})
 	// Activity (Phase 4): apply a validated comment_action directive — reply to
 	// or resolve the comment thread this conversation hangs on, ONLY on the

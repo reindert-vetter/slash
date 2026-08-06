@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -927,6 +928,54 @@ func TestClaudeChatRetriesTransientFailure(t *testing.T) {
 	}
 }
 
+// TestRunChatTurnWithRetriesResetsResultPerAttempt guards a bug in
+// runChatTurnWithRetries's OWN loop (not runOneClaudeTurn): chat.Message.Kind
+// is `json:"kind,omitempty"`, so a successful attempt's encoded Activity
+// result OMITS "kind" — reusing one `result` variable across ladder
+// iterations then leaves a PRIOR failed attempt's chat.KindRetrying sitting in
+// Message.Kind even once a later attempt genuinely succeeded, which the loop
+// then reads as "still retrying" and drives the ladder through every
+// remaining rung for REAL, in the background, well after this turn already
+// had its final answer. A short sleep after the reviewer's own answer arrives
+// gives any such leaked retry a real chance to fire before asserting.
+func TestRunChatTurnWithRetriesResetsResultPerAttempt(t *testing.T) {
+	stubUnreachableGh(t)
+	shrinkChatRetryDelays(t)
+	m, engine, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970715, "comment-retry-reset"
+
+	fake.SetChatTurns("Nu werkt het.")
+	fake.SetChatFailures(1, errors.New("claude: overloaded"))
+
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-1", Author: "reviewer", Body: "Hoi",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2 && list[1].Kind == ""
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	list, err := cm.List(ctx, commentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || list[1].Body != "Nu werkt het." || list[1].Kind != "" {
+		t.Fatalf("assistant turn should stay the successful retry's own reply, got %+v", list)
+	}
+	if len(fake.Calls) != 2 {
+		t.Fatalf("expected exactly 2 RunChat calls total (fail + succeed) — the ladder kept running after success, got %d", len(fake.Calls))
+	}
+}
+
 // After two failed Opus attempts the ladder escalates to Sonnet, and the
 // answer records WHICH model produced it (the reviewer sees that as a pill on
 // the bubble).
@@ -1067,5 +1116,105 @@ func TestClaudeChatManualRetryRerunsFailedTurn(t *testing.T) {
 	}
 	if got := fake.Calls[callsBefore].Model; got != claude.ModelOpus {
 		t.Fatalf("first call of the manual retry ran on %q, want Opus", got)
+	}
+}
+
+// TestClaudeChatAutoLandsPendingShadowWorkAfterATurn is tasks 1+2+4's own
+// end-to-end regression: the reviewer never sends a "commit" action (that
+// button is gone, see .claude/docs/workflows-comments.md) — a plain reviewer
+// message that finds the shadow worktree already holding a local commit
+// (exactly what Claude's own `git commit` in the shadow, per
+// chat_shell.md, leaves behind) must, by itself, land that commit on the PR's
+// pending ref, refresh the review tree, and reclaim the worktree — with no
+// further reviewer action needed.
+func TestClaudeChatAutoLandsPendingShadowWorkAfterATurn(t *testing.T) {
+	const headRefName = "feature/autoland"
+	_, cloneDir := setupChatShadowRepo(t, headRefName, "v1\n")
+	stubReachableGh(t, headRefName)
+
+	cs, err := comments.Open(filepath.Join(t.TempDir(), "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+	cm, err := chat.Open(filepath.Join(t.TempDir(), "chat.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cm.Close() })
+	fake := claude.NewFake()
+	engine := tembed.New(tembed.NewMemoryStore())
+	dataDir := t.TempDir()
+	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, fake, nil, nil, dataDir, "test/repo")
+	m.chat = cm
+	ctx := context.Background()
+
+	const pr, commentID = 970740, "comment-autoland"
+
+	// Simulate what Claude's own `git commit`, run via Bash in a PREVIOUS turn
+	// (or this same turn — the check doesn't care which), leaves behind: a real
+	// local commit in the shadow worktree that never made it onto the PR's
+	// pending ref.
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, pr, commentID, headRefName)
+	if err != nil {
+		t.Fatalf("ensure shadow worktree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited by claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", dir, "add", "-A").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", dir, "commit", "-m", "Claude: reviewer-requested edit").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+
+	fake.SetChatTurns("Oké, ik heb het aangepast.")
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-1", Author: "reviewer", Body: "Hoe staat het ermee?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The user turn + the assistant's own reply + the auto-land outcome (a
+	// SEPARATE message id — chatAutoLandTurnSuffix — so it can never overwrite
+	// the assistant's own reply, see chatMessageID).
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 3
+	})
+
+	list, _ := cm.List(ctx, commentID)
+	landed := false
+	for _, msg := range list {
+		if msg.Kind == chat.KindError {
+			t.Fatalf("no message should report an error: %+v", msg)
+		}
+		if strings.Contains(msg.Body, pendingLandedMsg(headRefName)) {
+			landed = true
+		}
+	}
+	if !landed {
+		t.Fatalf("expected one message to report the successful auto-land, got %+v", list)
+	}
+
+	// The pending ref now really holds the edit...
+	ref := prPendingRef(pr, headRefName)
+	sha := pendingRefSHA(ctx, ref)
+	if sha == "" {
+		t.Fatal("pending ref does not exist after the auto-land")
+	}
+	out, err := exec.Command("git", "-C", cloneDir, "show", sha+":foo.txt").Output()
+	if err != nil || string(out) != "edited by claude\n" {
+		t.Fatalf("pending ref content = %q, err %v; want the edit", out, err)
+	}
+	// ...and the shadow worktree was reclaimed, exactly like an explicit
+	// "commit deze wijziging" action already did.
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("expected the shadow worktree to be reclaimed after landing, got err=%v", err)
 	}
 }
