@@ -47,6 +47,7 @@ test.describe('Ignoring a PR-comment index item', () => {
     await expect(menu).toBeVisible()
     await expect(menu).toContainText('Ignore')
     await page.keyboard.press('ArrowDown') // "Resolve comment"
+    await page.keyboard.press('ArrowDown') // "Chat met Claude"
     await page.keyboard.press('ArrowDown') // "Ignore"
     await page.keyboard.press('Enter')
     await expect(menu).toHaveCount(0)
@@ -74,8 +75,9 @@ test.describe('Ignoring a PR-comment index item', () => {
     await page.keyboard.press('Enter')
     await expect(menu).toBeVisible()
     await expect(menu).toContainText('Ignore ongedaan maken')
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('ArrowDown') // "Resolve comment"
+    await page.keyboard.press('ArrowDown') // "Chat met Claude"
+    await page.keyboard.press('ArrowDown') // "Ignore ongedaan maken"
     await page.keyboard.press('Enter')
     await expect(menu).toHaveCount(0)
 

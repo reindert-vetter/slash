@@ -150,8 +150,9 @@ test.describe('Convert an AI-controle finding into a real comment', () => {
     await expect(menu).toBeVisible()
     const rows = menu.getByTestId('command-row')
     // "Sluit menu", "Beantwoorden" (default), "Resolve comment", "Comment
-    // hiervan maken", "Zet op GitHub" (the finding is local), "Ignore".
-    await expect(rows).toHaveCount(6)
+    // hiervan maken", "Chat met Claude", "Zet op GitHub" (the finding is
+    // local), "Ignore".
+    await expect(rows).toHaveCount(7)
     await expect(rows.nth(1)).toContainText('Beantwoorden')
     await expect(rows.nth(3)).toContainText('Comment hiervan maken')
     await rows.nth(3).click()

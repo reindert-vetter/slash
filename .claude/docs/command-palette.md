@@ -101,6 +101,28 @@ inner scrollers), after every keystroke (the filter list changes height) and
 220ms after opening (the panel width animates 200ms when stepping into the
 diff).
 
+### The highlighted row scrolls itself into view on `↑`/`↓`
+
+`command-list` (`CommandMenu.mjs`) is a fixed `max-h-72` box with its
+scrollbar hidden (`no-scrollbar`) — a list long enough to overflow it (e.g.
+`prCommentCommandsFor`'s menu once it grew past "Chat met Claude") used to
+leave the keyboard-highlighted row (`menu.sel`) genuinely invisible below the
+fold, with no visual affordance that more rows even existed: `↑`/`↓`
+(`home.mjs`'s `onKeydown`) only ever moved `menu.sel`, nothing scrolled the
+list itself. `CommandMenu()` now sets up a `watch(() => menu.sel, ...)`
+(inside the component function body, not a template binding) that finds the
+row via `data-cmd-idx="${i}"` (a static attribute per row, added purely for
+this) and calls `el.scrollIntoView({ block: 'nearest' })` — safe here without
+the axis rule's `inline` guard (see `.claude/rules/arrowjs-pitfalls.md`)
+because `command-list` is its own vertical-only scrolling box, never nested in
+`<main>`'s horizontal scroller. The watch is set up fresh on every open
+(`CommandMenu()` runs anew each time, per the disposable-`ms` shape above) and
+deliberately never disposed — it only ever reads that one open's own
+`menu.sel`, which nothing touches again after close, so it stays dormant
+rather than becoming an actively-growing leak (contrast the label-function
+leak the `ms` swap above exists to prevent, which depends on continuously
+changing GLOBAL state). Test: `tests/command-menu-scroll.spec.mjs`.
+
 ### Ephemeral state: a stable `menu` plus a disposable `ms`
 
 The menu state is deliberately **not** in the URL. It is split in two: a stable
@@ -562,9 +584,14 @@ order changes → optionally **"Bewerk bericht"** (only for the reviewer's OWN
 message the keyboard is currently on — `focusedPrThreadMessage(c)` walking
 `pct`, see "Editing an own message" in `.claude/docs/comments-panel.md`) →
 optionally **"Comment hiervan maken"** (only `source === 'ai'`, never true at
-the same time as "own") → **"Ignore"** ("Ignore ongedaan maken" once ignored —
-`toggleIgnoreComment`, a durable sidebar-visibility flag through the per-PR
-`ignore_comment` tracker).
+the same time as "own") → **"Chat met Claude"** (`startPrCommentChat`, always
+present — opens the embedded conversation right under this item's own detail
+card, since a comment-index item has no diff/`→` chain to reach the
+block-scoped chat through; see "A PR-wide comment-index item can also start a
+conversation" in `.claude/docs/claude-chat-panel.md`) → optionally **"Zet op
+GitHub"** (`needsPublishChoice`) → **"Ignore"** ("Ignore ongedaan maken" once
+ignored — `toggleIgnoreComment`, a durable sidebar-visibility flag through the
+per-PR `ignore_comment` tracker).
 
 Because the detail card already shows on selection, "the thread shows above the
 menu" is just a consequence of the anchoring, not a separate menu variant.

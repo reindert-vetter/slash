@@ -66,6 +66,8 @@ import RelatedPanel, {
   commentDetailCard,
   startPrCommentReply,
   cancelPrCommentReply,
+  startPrCommentChat,
+  closePrCommentChat,
   resolvePrCommentItem,
   unresolvePrCommentItem,
   enterPrCommentThread,
@@ -902,6 +904,7 @@ watch(
   () => {
     cancelPrCommentReply()
     exitPrCommentThread()
+    closePrCommentChat()
   },
 )
 
@@ -4862,6 +4865,19 @@ function prCommentCommandsFor() {
       run: () => convertPrWideWarningToComment(c),
     })
   }
+  // "Chat met Claude" — reviewer request: chat about THIS PR-wide item (an
+  // AI-controle finding, or any other comment-index item) right away, without
+  // a code context to hang a → chain off (unlike a block-scoped comment,
+  // which already reaches Claude via →, see claude-chat-panel.md). Opens the
+  // embedded column startPrCommentChat reveals under this item's own detail
+  // card (RelatedPanel.mjs). Always present, regardless of source/ownership —
+  // there's nothing here that would make chatting inappropriate.
+  items.push({
+    id: 'pr-comment-claude-chat',
+    label: 'Chat met Claude',
+    hint: 'claude',
+    run: () => startPrCommentChat(selectedComment()),
+  })
   if (needsPublishChoice(c)) items.push(publishThreadCommand(c))
   items.push({
     id: 'pr-comment-ignore',
@@ -6120,7 +6136,12 @@ function segKey(unit) {
 // apart.
 function commentScope() {
   const b = focusedBlock()
-  if (b && b.kind === 'comment') return { none: true }
+  // prComment rides along on the same sentinel scope so RelatedPanel's
+  // syncClaudeAnchorForSelection/chatAnchorComment (see their own doc
+  // comments) can anchor the embedded Claude column on THIS PR-wide item
+  // exactly like they already do for a block-scoped comment — see
+  // "Chat met Claude" (prCommentCommandsFor, startPrCommentChat).
+  if (b && b.kind === 'comment') return { none: true, prComment: b.comment }
   const t = commentTarget()
   if (!t) return null
   return {

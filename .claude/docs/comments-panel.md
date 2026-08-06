@@ -293,6 +293,14 @@ change also resets it, mirroring how the same watch resets
   reversible" in `.claude/docs/workflows-comments.md`.
 - **"Bewerk bericht"** edits whichever OWN message the keyboard is currently
   on — see "Editing an own message" below.
+- **"Chat met Claude"** (`startPrCommentChat`, `RelatedPanel.mjs`) opens the
+  embedded Claude conversation directly under this item's own detail card —
+  a comment-index item has no diff/`→` chain to reach the block-scoped chat
+  through, so this command is its only entry point. See "A PR-wide
+  comment-index item can also start a conversation" in
+  `.claude/docs/claude-chat-panel.md` for the mechanism (it reuses the SAME
+  `claude_chat` conversation/`cc` state as the block-scoped chat — no second
+  writer, no new backend endpoint).
 - **"Ignore"** (`toggleIgnoreComment`, label flips to "Ignore ongedaan maken"
   once ignored — resolved once by `snapshotCommands` at open time) is a
   **durable** flag (`state.ignoredComments`, a plain `{blockId: true}` map) bound

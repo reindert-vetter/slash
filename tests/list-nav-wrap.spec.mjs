@@ -51,6 +51,7 @@ async function ignoreCommentRow(page) {
   const menu = page.getByTestId('command-menu')
   await expect(menu).toBeVisible()
   await page.keyboard.press('ArrowDown') // "Resolve comment"
+  await page.keyboard.press('ArrowDown') // "Chat met Claude"
   await page.keyboard.press('ArrowDown') // "Ignore"
   await page.keyboard.press('Enter')
   await expect(menu).toHaveCount(0)

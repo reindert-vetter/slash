@@ -492,6 +492,88 @@ The "Embedded Claude conversation" section owns:
   (`ClaudeChat.mjs`'s `claude-chat-actions` button row also wraps, rather
   than stretching the column, at this narrower width).
 
+## A PR-wide comment-index item can also start a conversation
+
+`ClaudeChatPanel`/`comment-claude-row` above is strictly the **block-scoped**
+chat — a comment-index item (`commentDetailCard`, see "The detail card, in
+place of a `Block` diff card" in `.claude/docs/comments-panel.md`) has no diff
+and no `→` chain to reach it through, so until this feature it had no way to
+chat with Claude at all. **"Chat met Claude"** (`prCommentCommandsFor`'s own
+command, `home.mjs`) fixes that by opening the SAME `claude_chat` conversation
+directly under the item's own detail card instead.
+
+- **`chatAnchorComment()` grew a third branch.** `home.mjs`'s `commentScope()`
+  already returns a sentinel `{ none: true }` scope while a comment-index item
+  is selected (see "Selecting a Start item empties the block-scoped index" in
+  `.claude/docs/comments-panel.md`); it now carries the actual comment too —
+  `{ none: true, prComment: b.comment }` — and `chatAnchorComment()`'s
+  `s.none` branch returns it. The pre-existing `syncClaudeAnchorForSelection`
+  watch (see "The Claude column must follow the browsed comment" above) then
+  keeps `cc` anchored on whichever comment-index item is selected exactly like
+  it already does for a block-scoped comment — **no second writer of `cc`**,
+  no risk of the two contexts racing. This is why "Chat met Claude" needs no
+  new fetch of its own for the anchor: by the time the reviewer opens the
+  menu, `cc.commentId` already matches the selected item.
+- **`pcc`** (`RelatedPanel.mjs`, `{ open, commentId }`) is the ephemeral
+  visibility toggle, mirroring `picm`/`pct`'s own shape (scoped to ONE
+  comment id, since the selected AND the look-ahead preview item both render
+  through the very same `commentDetailCard`). It only toggles whether the
+  column is SHOWN — the conversation data stays `cc`.
+- **`startPrCommentChat(c)`** sets `pcc.open`/`pcc.commentId`, then `await`s
+  `ensureAndLoadChat(cs.pr, c.id)` (the same idempotent
+  `POST /api/workflows/claude_chat` call `enterClaudeChat` makes) **before**
+  focusing the composer — mirroring `enterClaudeChat`'s own ordering. Skipping
+  that `await` is a real bug, not just untidy: `cc.runId` is only populated
+  once the Execution-ensure request resolves, and `sendClaudeMessage`/
+  `queueClaudeMessage` silently no-op on `!runId` — a reviewer who types and
+  presses Enter before that resolves loses the message with no feedback (only
+  ever hits, in practice, an automated test that doesn't wait for the natural
+  round-trip a human's own typing speed provides; see
+  `tests/pr-comment-claude-chat.spec.mjs`, which this exact race broke before
+  the `await` was added).
+- **`closePrCommentChat()`** just resets `pcc` — the conversation itself is
+  untouched (mirrors `←` out of the block-scoped chat never deleting it).
+  Called from the "Sluit" button inside the embedded column, and from
+  `home.mjs`'s existing `state.selected` reset watch (alongside
+  `cancelPrCommentReply`/`exitPrCommentThread`) so a stray open column never
+  leaks onto whatever gets selected next.
+- **`prCommentClaudeView()`** is `claudeChatView()`'s sibling: same `cc`-backed
+  fields, but `claudePos`/`focused` come from `pcc` instead of the
+  block-scoped panel's `cs.claudePos`/`cs.focus` (an unrelated, URL-bound
+  keyboard cursor for the diff-mode column — must never be touched from here).
+  **Deliberately smaller scope**: no `↑`/`↓` turn-walking cursor of its own
+  yet (`claudePos` always `0`) — mouse/click only. `claudeChatColumn`
+  (`ClaudeChat.mjs`) is reused as-is, rendered inside `commentDetailCard`
+  behind its own `${() => pcc.open && pcc.commentId === c.id ? html\`...\` :
+  ''}` toggle (same "toggling template↔string needs a function binding" shape
+  as the reply composer right above it in the same card — see
+  `.claude/rules/arrowjs-pitfalls.md`); mutual exclusivity with the
+  block-scoped column's own `claude-chat-compose`/`claude-chat-send` (both
+  reused testids, one global `document.querySelector` inside
+  `claudeChatColumn`'s send button) is guaranteed by construction — a
+  comment-index item (`b.kind === 'comment'`) never also renders
+  `comments-and-related`'s block-scoped `ClaudeChatPanel` content, see "The
+  detail card, in place of a `Block` diff card" in
+  `.claude/docs/comments-panel.md`.
+- **`handleClaudeChatStart` (`tasks_api.go`) needs a REAL comment record**,
+  regardless of `Kind` — it 400s "unknown comment" when `commentId` isn't
+  found via `s.tasks.comments.List`. This is stricter than
+  `chat_workflow.go`'s own directive handling (which tolerates an unresolvable
+  comment and starts the turn "top-level" anyway) — that leniency is for a
+  Claude-issued `comment_action` directive mid-conversation, not for starting
+  a brand-new Execution. A genuinely PR-wide `ai_warning`/`issue` comment
+  always satisfies this in practice: "File is kept either way, as a hint of
+  what the finding is about" (`anchoredWarning`, `code_warning.go`) — a
+  code_warning finding that can't be pinned to a block still keeps a non-empty
+  `File`, it just has no row anchor. "PR-wide" here means *no row anchor
+  within a block* (`Kind !== ''`), not *no file at all*; a genuinely file-less
+  general PR comment only ever arrives via GitHub import (an Activity calling
+  the comments module directly, bypassing this HTTP validation).
+
+Test: `tests/pr-comment-claude-chat.spec.mjs` — seeds a real PR-wide
+`ai_warning` comment via `task_code_comment`, opens "Chat met Claude", sends a
+message, asserts the fake reply lands, then closes the column.
+
 ## Live progress: what Claude is doing, and the answer as it is written
 
 A turn is a real `claude` subprocess call that can run for minutes, so the

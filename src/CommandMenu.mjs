@@ -6,7 +6,7 @@
 // its own — home.mjs builds the commands (they close over its nav functions) and
 // drives selection from the global keydown handler, so this stays generic.
 
-import { html } from './vendor/arrow.js'
+import { html, watch } from './vendor/arrow.js'
 
 // labelOf resolves a command's label, which may be a plain string or a function
 // (so a toggle command like approve can show a live label).
@@ -81,7 +81,9 @@ function commandIcon(icon) {
 }
 
 // commandRow — one entry. Clicking runs it; hovering moves the selection so
-// mouse and keyboard share one highlighted row.
+// mouse and keyboard share one highlighted row. data-cmd-idx (static — `i`
+// never changes for a given row) is only read by scrollSelectedRowIntoView
+// below, to find the currently highlighted row after a keyboard step.
 function commandRow(c, i, menu, onRun) {
   return html`
     <button
@@ -91,6 +93,7 @@ function commandRow(c, i, menu, onRun) {
           ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       data-testid="command-row"
+      data-cmd-idx="${i}"
       @click="${() => onRun(c)}"
       @mousemove="${() => (menu.sel = i)}"
     >
@@ -116,6 +119,28 @@ function commandRow(c, i, menu, onRun) {
  * @returns arrow.js template.
  */
 export default function CommandMenu(menu, resolve, onRun) {
+  // Keyboard ↑/↓ (menu.sel, home.mjs's onKeydown) never used to scroll the
+  // highlighted row into view — command-list is a fixed max-h-72 box with its
+  // scrollbar hidden (no-scrollbar), so arrowing past the visible rows left
+  // the reviewer's own selection invisible below the card's rounded bottom
+  // edge (reported: "menu is niet volledig zichtbaar"). CommandMenu() runs
+  // fresh on every open (a toggling template↔'' slot, see menuOverlay in
+  // home.mjs, never a reused chunk), so this watch is set up once per open and
+  // left dormant — never disposed — once the menu closes, same accepted shape
+  // as the `ms` swap documented in command-palette.md (it only ever reads
+  // this open's own `menu.sel`, never touched again after close, so it can't
+  // become an actively-growing leak like an orphan binding on global state
+  // would). command-list is its own vertical-only scrolling box (not nested in
+  // <main>'s horizontal scroller), so a plain scrollIntoView({block:'nearest'})
+  // is safe here — see the scrollIntoView axis rule in arrowjs-pitfalls.md.
+  watch(
+    () => menu.sel,
+    (sel) => {
+      const list = document.querySelector('[data-testid="command-list"]')
+      const el = list && list.querySelector(`[data-cmd-idx="${sel}"]`)
+      if (el) el.scrollIntoView({ block: 'nearest' })
+    },
+  )
   return html`
     <div
       class="flex max-h-72 min-h-0 w-full flex-col overflow-hidden rounded-xl border border-indigo-300 dark:border-indigo-500 bg-white dark:bg-zinc-900 shadow-2xl ring-1 ring-indigo-500/20"
