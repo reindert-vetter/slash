@@ -445,6 +445,106 @@ class ImportStatsFlow {
 	}
 }
 
+// TestResolveCallsClassRef covers rule 6c: a bare Foo::class reference with
+// no $var assignment, no ->method() call, no $casts entry — the shape a
+// Temporal workflow's `'activities' => [FooActivity::class, ...]`
+// registration array has, which 3a2's newActivityStub heuristic can't key on
+// at all. It should resolve to the whole class, Kind class_ref.
+func TestResolveCallsClassRef(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 23
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"config/workflows.php": `<?php
+return [
+    'activities' => [
+        RunCommandActivity::class,
+    ],
+];
+`,
+		"app/Workflows/Activities/RunCommandActivity.php": `<?php
+namespace App\Workflows\Activities;
+final class RunCommandActivity {
+    public function run(string $command): array {
+        return [];
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "config/workflows.php", Class: "", Name: "workflows.php", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "RunCommandActivity")
+	if !ok {
+		t.Fatal("no entry for call 'RunCommandActivity'")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("RunCommandActivity: status=%q, want resolved", e.Status)
+	}
+	if e.Kind != callresolve.KindClassRef {
+		t.Errorf("RunCommandActivity: kind=%q, want %q", e.Kind, callresolve.KindClassRef)
+	}
+	if e.ChildClass != "RunCommandActivity" {
+		t.Errorf("RunCommandActivity: child class=%q, want RunCommandActivity", e.ChildClass)
+	}
+}
+
+// TestResolveCallsClassRefModel covers rule 6c's model branch: a bare
+// Model::class reference (no new/method call) merges into the SAME
+// model_usage kind (and call key) that new Model()/Model::method() already
+// produce, so a model referenced both ways in one block never shows two
+// duplicate cards.
+func TestResolveCallsClassRefModel(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 24
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Jobs/SyncOrders.php": `<?php
+namespace App\Jobs;
+class SyncOrders {
+    public function handle(): void {
+        $map = ['model' => Order::class];
+    }
+}
+`,
+		"app/Models/Order.php": `<?php
+namespace App\Models;
+class Order extends Model {
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Jobs/SyncOrders.php", Class: "SyncOrders", Name: "handle", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "Order")
+	if !ok {
+		t.Fatal("no entry for call 'Order'")
+	}
+	if e.Kind != callresolve.KindModelUsage {
+		t.Errorf("Order: kind=%q, want %q", e.Kind, callresolve.KindModelUsage)
+	}
+}
+
 // TestResolveCallsMacro covers a ->name( call resolving to a Laravel macro
 // (Receiver::macro('name', function ...)), which lives inside a boot method's
 // body and is therefore invisible to ScanBlocks.

@@ -972,6 +972,41 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 				}
 			}
 		}
+		// 6c. Foo::class (no parens, no assignment to a $var, no $casts array
+		// entry) → the class as a whole — the generic sibling of 3a2 (which
+		// only covers Workflow::newActivityStub(FooActivity::class, ...)):
+		// a plain array of class references, e.g. a Temporal workflow's
+		// `'activities' => [FooActivity::class, ...]` registration, has no
+		// $var/->method() to key a call to, so rules 1-6b never produced
+		// underlying code for it at all. Reuses rule 6's own reStaticRef
+		// matches (which deliberately skip key=="class") for exactly the
+		// opposite case. Runs last among the class/static rules, after its
+		// `seen` guard, so a class already claimed under this same key
+		// (constructor 2b, model usage 2c, an Activity stub 3a2) is never
+		// duplicated — this rule only fills the gap those left. An
+		// unindexed class (vendor/framework/exception) resolves to
+		// silently NOTHING, never `unresolved`: unlike a method call,
+		// `::class` is used constantly for purposes that have no
+		// "underlying code" at all (type hints, exception classes), so
+		// treating every miss as an LLM-search candidate would flood the
+		// panel — the same trade-off rule 6b/8/trait-usage already make.
+		for _, loc := range reStaticRef.FindAllStringSubmatchIndex(scan, -1) {
+			recv, key := scan[loc[2]:loc[3]], scan[loc[4]:loc[5]]
+			if key != "class" {
+				continue
+			}
+			class := shortName(recv)
+			if seen[class] || class == shortName(b.Class) {
+				continue
+			}
+			if def, ok := idx.models[class]; ok {
+				emitKind(class, &def, callresolve.KindModelUsage)
+				continue
+			}
+			if hb, ok := classHeaderBlockFor(idx, class); ok {
+				emitKind(class, &hb, callresolve.KindClassRef)
+			}
+		}
 		// 7. Resource usage (new XResource(/XResource::make|collection(/a
 		// `): XResource` return type — the same forms relations.go's
 		// controllerResourceDetector matches) → the toArray() method of that
@@ -1383,6 +1418,64 @@ func classConstDecl(headDir string, idx *symbolIndex, class, name string) (file 
 		}
 	}
 	return file, m, ok
+}
+
+// classHeaderBlockFor returns a single block spanning the whole class body
+// for a short class name across the whole worktree — resolveCalls rule 6c's
+// "point at the class as a whole" target for a plain Foo::class reference
+// that no more specific rule (constructor, model usage, Activity stub, ...)
+// already claimed. It prefers the real <class-header> block (constants and
+// properties declared before the first method); a class with NO header
+// region at all — no content between `class X {` and its first method,
+// exactly the common shape of a small Temporal Activity — never gets one
+// (see phpscan.go's headerLine<=declLine-1 guard), so it falls back to the
+// UNION (min Line, max EndLine) of every OTHER block the worktree indexed
+// for that class in one file, which for such a class spans its methods
+// end-to-end and reads as "the whole class" all the same.
+//
+// Ambiguous (two files declaring the same short name) or not found at all →
+// ok=false, silent — the caller never turns that into an `unresolved` row.
+func classHeaderBlockFor(idx *symbolIndex, class string) (Block, bool) {
+	blocks := idx.byClass[shortName(class)]
+	var found Block
+	ok := false
+	seenFile := map[string]bool{}
+	for _, hb := range blocks {
+		if hb.Name != classHeaderSentinel || seenFile[hb.File] {
+			continue
+		}
+		seenFile[hb.File] = true
+		if ok {
+			return Block{}, false // ambiguous — stay silent
+		}
+		found, ok = hb, true
+	}
+	if ok {
+		return found, true
+	}
+	byFile := map[string]*Block{}
+	for _, b := range blocks {
+		u, ok := byFile[b.File]
+		if !ok {
+			cp := b
+			byFile[b.File] = &cp
+			continue
+		}
+		if b.Line < u.Line {
+			u.Line = b.Line
+		}
+		if b.EndLine > u.EndLine {
+			u.EndLine = b.EndLine
+		}
+	}
+	if len(byFile) != 1 {
+		return Block{}, false // no blocks at all, or ambiguous across files
+	}
+	for _, u := range byFile {
+		u.Name = classHeaderSentinel
+		return *u, true
+	}
+	return Block{}, false
 }
 
 // translationKeysIn scans a changed-lines excerpt for every recognized

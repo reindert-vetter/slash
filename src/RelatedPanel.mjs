@@ -4377,6 +4377,10 @@ const KIND_LABEL = {
   // its methods (see .claude/docs/tembed-workflows.md, "migration → model").
   model_usage: 'model',
   migration_model: 'model',
+  // A bare Foo::class reference (no call, no cast, no Activity-stub var) →
+  // the class as a whole — the generic sibling of model_usage for any other
+  // indexed class (resolveCalls rule 6c, see .claude/docs/workflows-analysis.md).
+  class_ref: 'klasse',
   // A test's #[DataProvider('m')]/@dataProvider m → the provider method (see
   // .claude/docs/tembed-workflows.md, "PHPUnit data providers").
   data_provider: 'provider',
@@ -4425,6 +4429,7 @@ const DIFFSTAT_KINDS = new Set([
   'data_provider',
   'trait_usage',
   'interface_impl',
+  'class_ref',
 ])
 function diffStatBadge(r) {
   if (!DIFFSTAT_KINDS.has(r.kind) || !r.diff) return ''

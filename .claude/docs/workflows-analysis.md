@@ -188,9 +188,9 @@ Rules, in order:
   `unresolved`, never silently nothing, since the call site is on a changed line.
 - **6 — enum cases.** `Foo::NAME` **without** parentheses resolves to the enum
   declaration when `Foo` is an indexed enum defining that case (`scanEnums` →
-  synthetic block; `child_method` = the case name). `Foo::class` is ignored; the
-  same case on several enums → `unresolved`. The frontend's `findCallSites`
-  therefore also matches `::name`.
+  synthetic block; `child_method` = the case name). `Foo::class` is handled
+  separately by rule 6c below; the same case on several enums →
+  `unresolved`. The frontend's `findCallSites` therefore also matches `::name`.
 - **6b — constants on a plain class.** No enum by that name → `classConstDecl`
   looks the class up in the symbol index (which indexes the `<class-header>`
   block too, so a class with **no methods at all** is still found) and returns
@@ -202,6 +202,23 @@ Rules, in order:
   with that constant → **silently nothing**, never `unresolved`. A reference to
   the caller's **own** class is skipped: rule 9 already emits that declaration
   as its own card, and two cards for one declaration is worse than none.
+- **6c — bare `Foo::class`.** The generic sibling of 3a2: a plain class
+  reference with no call, no `$var` assignment, no `$casts` entry — e.g. a
+  Temporal workflow's `'activities' => [FooActivity::class, ...]` array, which
+  has no `$var->method()` for 3a2's stub-variable heuristic to key on at all.
+  Reuses rule 6's own `Foo::class` matches (which rule 6 itself skips via
+  `key == "class"`). A model → `model_usage` (the same kind `new Model()`/
+  `Model::method()` already produce, so the two never show duplicate cards for
+  one model); anything else → `classHeaderBlockFor` looks up the `<class-header>`
+  block across the worktree and emits `Kind: class_ref`. A class already
+  claimed under this key by an earlier rule (constructor 2b, model usage 2c, an
+  Activity stub 3a2) is skipped via `seen`, so this rule only fills the gap
+  those left. An unindexed class (vendor/framework/exception) resolves to
+  **silently nothing**, never `unresolved` — `::class` is used far too often
+  for purposes with no "underlying code" at all (type hints, exception
+  classes) to treat every miss as an LLM-search candidate. The frontend's
+  `findCallSites` matches `\bname\s*::\s*class\b` for this (the class name
+  sits BEFORE the `::`, unlike rule 6's own `::name`).
 - **7 — API Resource `toArray()`.** A Resource used on a changed line surfaces
   its own `toArray()`, since that's where the output is defined — even when the
   Resource class itself isn't changed (unlike `controllerResourceDetector`'s

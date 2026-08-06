@@ -2833,7 +2833,15 @@ function findCallSites(rows, name) {
   } else if (isCommand) {
     re = new RegExp("command\\s*\\(\\s*['\"]" + esc + "(?=[\\s'\"])", 'g')
   } else {
-    re = new RegExp('->\\s*' + name + '\\b|::\\s*' + name + '\\b|\\b' + name + '\\s*\\(', 'g')
+    // `\bname\s*::\s*class\b` is the bare Foo::class literal (rule 6c's
+    // class_ref/model_usage-via-::class children, e.g. a Temporal
+    // `'activities' => [FooActivity::class, ...]` array entry) — the class
+    // name sits BEFORE the `::`, unlike the enum-case `::name` alternative
+    // above, so it needs its own branch.
+    re = new RegExp(
+      '->\\s*' + name + '\\b|::\\s*' + name + '\\b|\\b' + name + '\\s*\\(|\\b' + name + '\\s*::\\s*class\\b',
+      'g',
+    )
   }
   for (let i = 0; i < rows.length; i++) {
     const text = rows[i].right

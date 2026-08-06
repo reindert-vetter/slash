@@ -102,6 +102,11 @@ const (
 	// entirely unchanged — are attached as its own children instead, so the
 	// interface method's own Underlying-code panel shows what implements it.
 	KindInterfaceImplementation = "interface_impl"
+	// KindClassRef is a bare `Foo::class` reference (no call, no $casts
+	// entry, no Activity-stub assignment) resolved to the class as a
+	// whole — the generic sibling of KindModelUsage for any indexed class
+	// that isn't an Eloquent model (resolveCalls rule 6c).
+	KindClassRef = "class_ref"
 )
 
 // Entry is one call-site → definition resolution.
