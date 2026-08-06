@@ -271,8 +271,20 @@ Rules, in order:
   `<class-header>` region is scanned, so a constant declared **after** the first
   method is silently missed. **A member never becomes a block** — no id, no
   approval, no row in the block index (see `.claude/docs/underlying-code.md`).
-  Tests: `TestResolveClassMembers`/`TestResolveClassMembersAddedFile` and
-  `TestResolveCallsConstRef` (`callresolve_analysis_test.go`).
+  **The `CallerID` is the header's OWN block only when the class has no other
+  changed block in this PR** (`classSiblingIDs`) — otherwise every OTHER
+  changed, non-header top-level block of the same file/class becomes a caller
+  (ALL of them, when several changed, never a single "chosen" one), so the
+  `<class-header>` block's own top-level row can be hidden from the index
+  entirely (`swallowedClassHeaderIds`, `home.mjs`) — see
+  `.claude/docs/underlying-code.md`. Reversed on explicit request: the header
+  used to always stay visible, with the members as a pure addition; a header
+  with no sibling at all still behaves exactly like before, since there is
+  nowhere else to hang its members. Tests:
+  `TestResolveClassMembers`/`TestResolveClassMembersAddedFile`/
+  `TestResolveClassMembersAttachedToSibling`/
+  `TestResolveClassMembersAttachedToEverySibling` and `TestResolveCallsConstRef`
+  (`callresolve_analysis_test.go`).
 - **Laravel macros** (`scanMacros`): a `Builder::macro('joinAddress',
   function …)` inside a boot method is a closure and thus invisible to
   `ScanBlocks` (`skipBody` swallows it), so the registration is detected by

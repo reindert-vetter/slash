@@ -2627,6 +2627,97 @@ class Fresh
 	}
 }
 
+// TestResolveClassMembersAttachedToSibling: with another changed, non-header
+// top-level block of the SAME class in this PR, the header's member cards
+// attach to that sibling's CallerID instead of the header's own — on
+// explicit request, so the reviewer can hide the <class-header> block from
+// the index entirely once its content is reachable via a sibling (see
+// swallowedClassHeaderIds, home.mjs). The header itself, if also passed in,
+// gets NO member entries of its own in this case.
+func TestResolveClassMembersAttachedToSibling(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 74
+	_, headDir := worktreeDirs(dataDir, pr)
+	const file = "app/Flows/ImportSubscriptionStatsFlow.php"
+	writeWorktreeFiles(t, headDir, map[string]string{file: `<?php
+namespace App\Flows;
+
+class ImportSubscriptionStatsFlow
+{
+    private const int BATCH_SIZE = 100;
+
+    public function run()
+    {
+    }
+}
+`})
+
+	header := Block{PR: pr, File: file, Class: "ImportSubscriptionStatsFlow", Name: classHeaderSentinel, Side: SideNew, Status: StatusModified}
+	sibling := Block{PR: pr, File: file, Class: "ImportSubscriptionStatsFlow", Name: "run", Side: SideNew, Status: StatusModified}
+	entries := resolveClassMembers(dataDir, pr, []Block{header, sibling})
+
+	var forSibling, forHeader []callresolve.Entry
+	for _, e := range entries {
+		if e.CallKey != "class_member:const:BATCH_SIZE" {
+			continue
+		}
+		if e.CallerID == sibling.ID() {
+			forSibling = append(forSibling, e)
+		}
+		if e.CallerID == header.ID() {
+			forHeader = append(forHeader, e)
+		}
+	}
+	if len(forSibling) != 1 {
+		t.Fatalf("sibling caller got %d BATCH_SIZE entries, want 1 (entries: %+v)", len(forSibling), entries)
+	}
+	if len(forHeader) != 0 {
+		t.Fatalf("header caller got %d BATCH_SIZE entries, want 0 once a sibling exists", len(forHeader))
+	}
+}
+
+// TestResolveClassMembersAttachedToEverySibling: with TWO changed siblings,
+// every one of them gets the SAME member cards — no single "chosen" host.
+func TestResolveClassMembersAttachedToEverySibling(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 75
+	_, headDir := worktreeDirs(dataDir, pr)
+	const file = "app/Flows/ImportSubscriptionStatsFlow.php"
+	writeWorktreeFiles(t, headDir, map[string]string{file: `<?php
+namespace App\Flows;
+
+class ImportSubscriptionStatsFlow
+{
+    private const int BATCH_SIZE = 100;
+
+    public function run()
+    {
+    }
+
+    public function finish()
+    {
+    }
+}
+`})
+
+	header := Block{PR: pr, File: file, Class: "ImportSubscriptionStatsFlow", Name: classHeaderSentinel, Side: SideNew, Status: StatusModified}
+	run := Block{PR: pr, File: file, Class: "ImportSubscriptionStatsFlow", Name: "run", Side: SideNew, Status: StatusModified}
+	finish := Block{PR: pr, File: file, Class: "ImportSubscriptionStatsFlow", Name: "finish", Side: SideNew, Status: StatusModified}
+	entries := resolveClassMembers(dataDir, pr, []Block{header, run, finish})
+
+	for _, want := range []Block{run, finish} {
+		found := false
+		for _, e := range entries {
+			if e.CallKey == "class_member:const:BATCH_SIZE" && e.CallerID == want.ID() {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no BATCH_SIZE entry for sibling %q, got %+v", want.ID(), entries)
+		}
+	}
+}
+
 // TestResolveCallsConstRef covers rule 6b: a Foo::MAX_TRIES reference on a
 // PLAIN (non-enum) class resolves to that constant's own declaration, and an
 // ambiguous short class name stays silent.

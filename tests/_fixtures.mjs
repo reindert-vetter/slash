@@ -393,6 +393,25 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // <class-header>-swallowed-into-sibling fixture (PR 114,
+  // related-class-header-sibling.spec.mjs): a class with a changed header PLUS
+  // a changed sibling method (ImportSubscriptionStatsFlow) — the header row
+  // must hide from the index, its member cards attach to the sibling — versus
+  // a class with ONLY a changed header (LonelyHeaderFlow), which stays
+  // visible with its own member card, unchanged from before.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/classheader-blocks.json',
+      '-callresolve',
+      'tests/fixtures/classheader-callresolve.json',
+    ],
+    { stdio: 'ignore' },
+  )
 }
 
 function canConnect(port) {

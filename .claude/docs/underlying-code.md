@@ -43,11 +43,9 @@ Each child is one card (`data-testid=related-item`). It follows
   are read-only **leaves**, like `translation`: no PR block, so no diff stat, no
   approval, no drill-hint chips, and — load-bearing, on explicit request —
   **never a row of their own in the block index** (`resolvedCallTargetIds` skips
-  them outright, and nothing ever scans a member into a `Block`). The
-  `<class-header>` block itself stays in the index with its full diff; these
-  cards are an addition, not a replacement, so a changed member is deliberately
-  visible twice. Which members appear (every constant, only changed properties)
-  and why: "9 — class members" in `.claude/docs/workflows-analysis.md`.
+  them outright, and nothing ever scans a member into a `Block`). Which members
+  appear (every constant, only changed properties) and why: "9 — class members"
+  in `.claude/docs/workflows-analysis.md`.
   Since they sit side by side, each of the three header kinds carries a **word**
   badge — `Gewijzigd`/`Ongewijzigd` (`data-testid=related-member-status`,
   `memberStatusBadge`); colour is decoration only. `const_ref` deliberately gets
@@ -56,6 +54,21 @@ Each child is one card (`data-testid=related-item`). It follows
   the default path (`resolveChildBlock` builds a synthetic read-only frame from
   the embedded code). Test: `tests/related-class-members.spec.mjs` (mocked
   `/api/callresolve` on PR 91, like `callresolve-live-update.spec.mjs`).
+  **The `<class-header>` block itself is a LAST RESORT, not a permanent
+  addition (reversed on explicit request).** `resolveClassMembers` attaches its
+  member entries to every OTHER changed, non-header top-level block of the
+  SAME class/file in this PR (`classSiblingIDs`, `callresolve_analysis.go`) —
+  several changed siblings all get the SAME member cards, there is no single
+  "chosen" host. Only when a class's ONLY change in this PR is its header (no
+  such sibling exists) does the header stay its own caller, exactly as before.
+  `swallowedClassHeaderIds` (`home.mjs`, folded into `recomputeLeftList`'s
+  `hidden` set alongside `resolvedCallTargetIds`) hides a header block from the
+  index whenever a sibling exists — its raw diff is then only reviewable via
+  the member cards, never as its own coarse-blob card. Tests:
+  `TestResolveClassMembersAttachedToSibling`/
+  `TestResolveClassMembersAttachedToEverySibling`
+  (`callresolve_analysis_test.go`), `tests/related-class-header-sibling.spec.mjs`
+  (PR 114: a class with a sibling vs. a header-only class).
 - An **approval badge** (`data-testid=related-approval`, `done/total`, green + ✓
   when fully approved) on any child that is itself a PR block, rendered in that
   child's own header (`approvalBadge`). Per-child only — there is **no**

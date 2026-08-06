@@ -1,0 +1,26 @@
+[
+  {
+    "pr": 114,
+    "callerId": "114:app/Flows/ImportSubscriptionStatsFlow.php:ImportSubscriptionStatsFlow::run",
+    "callKey": "class_member:const:BATCH_SIZE",
+    "status": "resolved",
+    "kind": "class_constant",
+    "childFile": "app/Flows/ImportSubscriptionStatsFlow.php",
+    "childClass": "ImportSubscriptionStatsFlow",
+    "childMethod": "BATCH_SIZE",
+    "childLine": 3,
+    "childCode": "private const int BATCH_SIZE = 100"
+  },
+  {
+    "pr": 114,
+    "callerId": "114:app/Flows/LonelyHeaderFlow.php:LonelyHeaderFlow::<class-header>",
+    "callKey": "class_member:const:NAME",
+    "status": "resolved",
+    "kind": "class_constant",
+    "childFile": "app/Flows/LonelyHeaderFlow.php",
+    "childClass": "LonelyHeaderFlow",
+    "childMethod": "NAME",
+    "childLine": 3,
+    "childCode": "private const string NAME = 'lonely'"
+  }
+]

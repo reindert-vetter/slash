@@ -2025,7 +2025,7 @@ function recomputeLeftList() {
   // hidden set the same way a testCoverTargetIds() target is exempt — see
   // resolvedCallTargetIds/testCallTargetIds — so it joins the relation
   // children here instead of vanishing.
-  const hidden = resolvedCallTargetIds()
+  const hidden = new Set([...resolvedCallTargetIds(), ...swallowedClassHeaderIds()])
   const childIds = new Set([...state.relations.map((r) => r.childId), ...testCallTargetIds()])
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
   const q = (state.search || '').trim().toLowerCase()
@@ -2559,6 +2559,35 @@ function testCallTargetIds() {
     const childId =
       state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
     if (prBlockIds.has(childId)) ids.add(childId)
+  }
+  return ids
+}
+
+// swallowedClassHeaderIds returns the ids of <class-header> PR blocks whose
+// declared members (resolveClassMembers, backend rule 9) are shown as
+// Onderliggende code under a SIBLING block instead — every other changed,
+// non-header top-level block of that same class/file — rather than under the
+// header's own coarse-diff card. Mirrors resolvedCallTargetIds' "pull it from
+// the index, it surfaces elsewhere" pattern, but only within the SAME class:
+// on explicit request ("laat de headerkaart alleen zien als je het echt niet
+// onder aangepaste code kan plaatsen"), a header with NO sibling stays
+// visible exactly as before (the member cards then still hang off the header
+// itself — resolveClassMembers' own fallback). Every sibling gets the SAME
+// member cards (no single "chosen" host) — also explicit: with several
+// changed methods in one class there is no natural single place to put them.
+function swallowedClassHeaderIds() {
+  const ids = new Set()
+  const byFileClass = new Map()
+  for (const b of state.allBlocks) {
+    if (b.name === '<class-header>') continue
+    const key = b.file + '::' + (b.class || '')
+    if (!byFileClass.has(key)) byFileClass.set(key, [])
+    byFileClass.get(key).push(b)
+  }
+  for (const b of state.allBlocks) {
+    if (b.name !== '<class-header>') continue
+    const key = b.file + '::' + (b.class || '')
+    if ((byFileClass.get(key) || []).length > 0) ids.add(b.id)
   }
   return ids
 }

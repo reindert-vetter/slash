@@ -1359,7 +1359,20 @@ func resolveClassMembers(dataDir string, pr int, blocks []Block) []callresolve.E
 			}
 		}
 
-		callerID := b.ID()
+		// A <class-header> block is one coarse blob the reviewer would rather
+		// not review as its own top-level card, ON EXPLICIT REQUEST — but ONLY
+		// when there is somewhere else to hang its members: every OTHER
+		// changed, non-header top-level block of the SAME class (a method that
+		// also changed in this PR). classSiblingIDs is empty for a class whose
+		// ONLY change in this PR is its header — the header then stays its own
+		// caller, exactly as before (the frontend keeps such a header visible,
+		// see swallowedClassHeaderIds in home.mjs). With several changed
+		// siblings, every one of them gets the SAME member cards — no single
+		// "chosen" host, since there is no natural way to pick one.
+		callerIDs := classSiblingIDs(blocks, b)
+		if len(callerIDs) == 0 {
+			callerIDs = []string{b.ID()}
+		}
 		for _, m := range scanClassMembers(head.Text, head.Start) {
 			was, existed := baseText[m.Kind+":"+m.Name]
 			changed := !existed || was != normalizeMemberText(m.Text)
@@ -1375,16 +1388,37 @@ func resolveClassMembers(dataDir string, pr int, blocks []Block) []callresolve.E
 			default:
 				kind = callresolve.KindClassConstant
 			}
-			out = append(out, callresolve.Entry{
-				PR: pr, CallerID: callerID,
-				CallKey: "class_member:" + m.Kind + ":" + m.Name,
-				Status:  callresolve.StatusResolved, Kind: kind,
-				ChildFile: b.File, ChildClass: b.Class, ChildMethod: m.Name,
-				ChildLine: m.Line, ChildCode: m.Text,
-			})
+			for _, callerID := range callerIDs {
+				out = append(out, callresolve.Entry{
+					PR: pr, CallerID: callerID,
+					CallKey: "class_member:" + m.Kind + ":" + m.Name,
+					Status:  callresolve.StatusResolved, Kind: kind,
+					ChildFile: b.File, ChildClass: b.Class, ChildMethod: m.Name,
+					ChildLine: m.Line, ChildCode: m.Text,
+				})
+			}
 		}
 	}
 	return out
+}
+
+// classSiblingIDs returns the block IDs of every OTHER top-level, new-side,
+// non-header PR block that shares b's file+class — the changed methods a
+// <class-header>'s own member cards (resolveClassMembers) attach to instead
+// of the header itself, once at least one exists. Deliberately scoped to the
+// SAME file, not just the same class short name — two same-named classes in
+// different files must never share member cards.
+func classSiblingIDs(blocks []Block, header Block) []string {
+	var ids []string
+	for _, sib := range blocks {
+		if sib.Side == SideOld || sib.Name == classHeaderSentinel {
+			continue
+		}
+		if sib.File == header.File && sib.Class == header.Class {
+			ids = append(ids, sib.ID())
+		}
+	}
+	return ids
 }
 
 // normalizeMemberText is the comparison form of a member declaration: trailing
