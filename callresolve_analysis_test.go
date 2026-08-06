@@ -171,6 +171,126 @@ class TestCase {
 	}
 }
 
+// TestResolveCallsStaticInheritedMethod: Foo::m( where Foo does NOT declare m()
+// itself but INHERITS it from an abstract base class (methodOnClass has no
+// extends-chain awareness) must still resolve when m() is declared exactly
+// once in the whole worktree — the same unique-global-candidate fallback rule
+// 4 already applies to an unknown ->m( receiver. Regression fixture: a
+// feature-flag class `final class PromotionsV2 extends UnleashFeature`
+// calling PromotionsV2::isEnabled(), which is only ever declared on the
+// abstract base UnleashFeature (real-world case found in PR 13259).
+func TestResolveCallsStaticInheritedMethod(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 13259
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Features/PromotionsV2.php": `<?php
+namespace App\Features;
+use PlugAndPay\Features\UnleashFeature;
+final class PromotionsV2 extends UnleashFeature {
+    public static function getName(): string { return 'promotions-v2'; }
+}
+`,
+		"packages/plugandpay/Features/UnleashFeature.php": `<?php
+namespace PlugAndPay\Features;
+abstract class UnleashFeature {
+    public static function isEnabled(): bool { return true; }
+}
+`,
+		"app/Services/CheckoutService.php": `<?php
+namespace App\Services;
+use App\Features\PromotionsV2;
+class CheckoutService {
+    public function build() {
+        $isActive = PromotionsV2::isEnabled();
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Services/CheckoutService.php", Class: "CheckoutService", Name: "build", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "isEnabled")
+	if !ok {
+		t.Fatalf("no entry for call %q", "isEnabled")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Fatalf("isEnabled: status = %q, want %q (inherited static method must resolve via the unique-candidate fallback)", e.Status, callresolve.StatusResolved)
+	}
+	if got := e.ChildClass + "::" + e.ChildMethod; got != "UnleashFeature::isEnabled" {
+		t.Fatalf("isEnabled: child = %q, want %q", got, "UnleashFeature::isEnabled")
+	}
+}
+
+// TestResolveCallsStaticInheritedMethodAmbiguous: the same shape as above, but
+// TWO unrelated classes declare a method of that name — the fallback must
+// stay unresolved (LLM territory) rather than guessing.
+func TestResolveCallsStaticInheritedMethodAmbiguous(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 13260
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"app/Features/PromotionsV2.php": `<?php
+namespace App\Features;
+use PlugAndPay\Features\UnleashFeature;
+final class PromotionsV2 extends UnleashFeature {
+    public static function getName(): string { return 'promotions-v2'; }
+}
+`,
+		"packages/plugandpay/Features/UnleashFeature.php": `<?php
+namespace PlugAndPay\Features;
+abstract class UnleashFeature {
+    public static function isEnabled(): bool { return true; }
+}
+`,
+		"app/Billing/Invoice.php": `<?php
+namespace App\Billing;
+class Invoice {
+    public static function isEnabled(): bool { return false; }
+}
+`,
+		"app/Services/CheckoutService.php": `<?php
+namespace App\Services;
+use App\Features\PromotionsV2;
+class CheckoutService {
+    public function build() {
+        $isActive = PromotionsV2::isEnabled();
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Services/CheckoutService.php", Class: "CheckoutService", Name: "build", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "isEnabled")
+	if !ok {
+		t.Fatalf("no entry for call %q", "isEnabled")
+	}
+	if e.Status != callresolve.StatusUnresolved {
+		t.Fatalf("isEnabled: status = %q, want %q (ambiguous global match must not guess)", e.Status, callresolve.StatusUnresolved)
+	}
+}
+
 // TestResolveCallsChangedLinesOnly: when a base worktree exists, only calls on
 // lines the PR changed produce entries — a call on an untouched line must not
 // surface as underlying code (that was the unrelated-children bug).

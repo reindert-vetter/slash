@@ -701,6 +701,20 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 					def = methodOnClass(idx, acc, m[2])
 				}
 			}
+			if def == nil {
+				// Foo doesn't declare m() itself and isn't a facade — it may be
+				// INHERITED from a base class (methodOnClass has no extends-chain
+				// awareness at all). Mirrors rule 4's own fallback for an unknown
+				// ->m( receiver: fall back to the unique global candidate, e.g. a
+				// feature-flag class `final class PromotionsV2 extends
+				// UnleashFeature` calling PromotionsV2::isEnabled(), which is only
+				// ever declared once, on the abstract base UnleashFeature. Several
+				// same-named methods elsewhere in the app still stay unresolved
+				// (LLM territory), same ambiguity rule as rule 4.
+				if cands := idx.candidates(m[2]); len(cands) == 1 {
+					def = &cands[0]
+				}
+			}
 			emit(m[2], def)
 		}
 		// 3a. $var->m( (a plain local/parameter) OR $this->prop->m( (a

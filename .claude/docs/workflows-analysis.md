@@ -142,6 +142,19 @@ Rules, in order:
   `->m(` on a **unique** global or scope match. Ambiguous (>1 candidate) →
   `unresolved`; a method that exists nowhere in the app worktree (framework
   calls like `->where(`) also → `unresolved`, since it sits on a changed line
+  and the automatic search should try. **`Foo::m(` also falls back to the same
+  unique-global-candidate rule** when `Foo` itself doesn't declare `m()` and
+  isn't a facade — `methodOnClass` has no `extends`-chain awareness, so a
+  static call **inherited** from a base class (`final class PromotionsV2
+  extends UnleashFeature` calling `PromotionsV2::isEnabled()`, only ever
+  declared on the abstract `UnleashFeature`) used to fall through to
+  `unresolved` and then usually `notfound` (no visible card at all — a
+  `method_call` child only renders once `resolved`/`found`, unlike
+  `testcovers`' `unannotated`/`notfound`, which get their own warning icon).
+  Several same-named methods elsewhere in the app still stay `unresolved`,
+  same ambiguity rule as the `->m(` case. Tests:
+  `TestResolveCallsStaticInheritedMethod`/
+  `TestResolveCallsStaticInheritedMethodAmbiguous`.
   and the automatic search should try.
 - **2b/2c/2d — Eloquent models.** `new Foo(` on a model class explicitly
   **excludes** the constructor even when one exists (the reviewer wants the
