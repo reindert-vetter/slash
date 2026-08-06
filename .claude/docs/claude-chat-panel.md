@@ -536,7 +536,23 @@ directly under the item's own detail card instead.
   Called from the "Sluit" button inside the embedded column, and from
   `home.mjs`'s existing `state.selected` reset watch (alongside
   `cancelPrCommentReply`/`exitPrCommentThread`) so a stray open column never
-  leaks onto whatever gets selected next.
+  leaks onto whatever gets selected next. **That same watch also calls
+  `leaveRelated()`** (releases the BLOCK-SCOPED panel's own `cs.focus`), but
+  only when the NEWLY selected item is itself a comment-index item
+  (`kind:'comment'`) — never on an ordinary block-to-block selection change,
+  see the watch's own doc comment in `home.mjs` for why a blanket reset there
+  is unsafe. `pcc` never touches `cs.focus` itself (it has no keyboard cursor
+  of its own, mouse only, see `prCommentClaudeView()` below), so a stale
+  `cs.focus` left over from a DIFFERENT block's comment/thread/claude panel
+  (never explicitly exited via `←`/Escape) used to survive a plain mouse click
+  straight onto a comment-index item's "Chat met Claude" composer — reported
+  bug: typing into that composer and pressing Enter did nothing, swallowed by
+  `home.mjs`'s `relatedActive()`-gated Enter/arrow handling instead of
+  reaching `ClaudeChat.mjs`'s own send handler, "fixed" by a refresh only
+  because a `cs.focus` restored from the URL that resolves to nothing gets
+  dropped, not because anything was actually repaired. Test:
+  `tests/pr-comment-claude-chat.spec.mjs`'s "a stale block-scoped cs.focus…"
+  case.
 - **`prCommentClaudeView()`** is `claudeChatView()`'s sibling: same `cc`-backed
   fields, but `claudePos`/`focused` come from `pcc` instead of the
   block-scoped panel's `cs.claudePos`/`cs.focus` (an unrelated, URL-bound

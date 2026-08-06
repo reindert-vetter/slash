@@ -899,12 +899,44 @@ watch(
 // thread (see enterPrCommentThread), must never leak onto whatever gets
 // selected next — reset both on every selection change (mirrors how the
 // composer/reply focus elsewhere always resets on a block switch).
+//
+// A comment-index item (kind:'comment') also gets leaveRelated() — releasing
+// the BLOCK-SCOPED panel's own cs.focus — for the same reason, but ONLY for
+// that one kind, not on every selection change: commentScope()'s own `none`
+// sentinel (home.mjs) forces RelatedPanel's cs.view to [] for ANY comment-
+// index item, so cs.focus legitimately can never be 'comment'/'thread' there
+// (isCommentOrThreadFocused() needs a resolvable selComment(), which can't
+// exist) — resetting it here is always safe. A blanket reset on every
+// state.selected change is NOT safe: recomputeLeftList can legitimately
+// reindex the CURRENT, still-logically-unchanged selection out from under a
+// background reload (a landed comment shifting every row by one, see
+// conventions.md's "Snapshot a selection by stable ID, never by raw array
+// index") — an earlier version of this fix did exactly that and broke
+// tests/comment-nav-race.spec.mjs: a stale, unrelated placeComment tail
+// settling on a DIFFERENT block reindexed state.selected for the block the
+// reviewer was actually still on, which this watch then (wrongly) read as "a
+// real navigation move" and wiped its live Onderliggende-code focus.
+//
+// `pcc` (RelatedPanel.mjs's PR-comment Claude composer) never touches
+// cs.focus itself (no keyboard cursor of its own, mouse only) — so a stale
+// cs.focus left over from a DIFFERENT block's comment/thread/claude panel
+// (never explicitly exited via ←/Escape) used to survive a plain mouse click
+// straight onto a comment-index item's "Chat met Claude" composer:
+// home.mjs's global onKeydown still gated its whole relatedActive()-driven
+// Enter/arrow handling on that stale value, unconditionally swallowing the
+// very next Enter (reported bug: typing into that composer and pressing
+// Enter did nothing, "fixed" by a refresh only because a cs.focus restored
+// from the URL that resolves to nothing gets dropped, not because anything
+// was actually repaired). Test: tests/pr-comment-claude-chat.spec.mjs's "a
+// stale block-scoped cs.focus…" case.
 watch(
   () => state.selected,
   () => {
     cancelPrCommentReply()
     exitPrCommentThread()
     closePrCommentChat()
+    const b = state.blocks[state.selected]
+    if (b && b.kind === 'comment') leaveRelated()
   },
 )
 
