@@ -69,6 +69,25 @@ Each child is one card (`data-testid=related-item`). It follows
   `TestResolveClassMembersAttachedToEverySibling`
   (`callresolve_analysis_test.go`), `tests/related-class-header-sibling.spec.mjs`
   (PR 114: a class with a sibling vs. a header-only class).
+  **Attached to a sibling, a member card is now itself scoped to the selected
+  group/line/call** — sharpened on explicit request, since attaching to
+  *every* changed sibling used to also mean showing on every one of that
+  sibling's groups/lines regardless of whether the member is actually used
+  there ("gerelateerde constanten en properties wil ik alleen zien als het te
+  maken heeft met de geselecteerde groep/regel", Reindert).
+  `callScopeMethods`/`findCallSites` (`home.mjs`) treat `class_member:` as
+  block-level (`isBlockLevelCallKey`, never scoped away) **only** while the
+  caller is the `<class-header>` block itself (the no-sibling fallback above,
+  where the member's declaration line IS the header's own diff and there is
+  no other usage site to look for); attached to a sibling they instead match a
+  real usage site — the bare member name as a property access (`->name`) or a
+  constant/static-property access (`::name`/`::$name`) inside that sibling's
+  code — and hide/show exactly like an ordinary resolved call at every
+  granularity. A member never referenced anywhere in a given sibling
+  disappears there in diff mode entirely (no fallback to the hidden
+  `<class-header>` card); **list mode is unaffected** (no active cursor to
+  scope by, same as every other call type) and keeps showing the full
+  reference list. Test: `tests/related-class-member-scope.spec.mjs` (PR 115).
 - An **approval badge** (`data-testid=related-approval`, `done/total`, green + ✓
   when fully approved) on any child that is itself a PR block, rendered in that
   child's own header (`approvalBadge`). Per-child only — there is **no**
@@ -452,18 +471,30 @@ a fixture that never set one): "nothing to compare", not "line 0, presumably out
 of range". Three exemptions follow:
 
 1. **A block-level synthetic callKey**
-   (`resource:`/`migration_model:`/`data_provider:`/`trait_usage:`/
-   `class_member:`, see `isBlockLevelCallKey`) has no site to compare — always
-   kept, as at
-   `line`/`call`. `trait_usage:` was added *because* of this change: `group` is the
-   **default** granularity, so once it hard-filtered, `findCallSites` silently
-   finding no site would have made a trait-usage child disappear almost always.
-   `class_member:` is in the set for a slightly different reason — its key is
-   synthetic too, so there is no literal to find either, but the members it
-   names *are* the header block's own diff lines: scoping them away per selected
-   group would hide exactly the declarations the reviewer came for. The
-   `const_ref` rule is deliberately **not** in the set — its key is a real
-   literal on a real line, like any ordinary call.
+   (`resource:`/`migration_model:`/`data_provider:`/`trait_usage:`, see
+   `isBlockLevelCallKey`) has no site to compare — always kept, as at
+   `line`/`call`. `trait_usage:` was added *because* of this change: `group` is
+   the **default** granularity, so once it hard-filtered, `findCallSites`
+   silently finding no site would have made a trait-usage child disappear
+   almost always.
+   `class_member:` is in `isBlockLevelCallKey`'s regex too, but is only
+   actually treated as block-level **while the caller IS the `<class-header>`
+   block itself** (the no-sibling fallback, see the class-member paragraph
+   below) — there the members it names *are* the header block's own diff
+   lines, so scoping them away per selected group would hide exactly the
+   declarations the reviewer came for. Attached to a **sibling** method
+   instead (the common case since `3228440`), `callScopeMethods`/
+   `findCallSites` fall through to a real usage-site match (the member's own
+   name as a property/constant access, `->name`/`::name`/`::$name`) and it is
+   scoped exactly like an ordinary call — "alleen zien als het te maken heeft
+   met de geselecteerde groep/regel" (Reindert, sharpening the earlier
+   always-block-level behaviour). A member never referenced anywhere in that
+   sibling's code disappears at every diff granularity for that sibling —
+   there is deliberately no fallback back to the (hidden) `<class-header>`
+   card; list mode still shows the full, unscoped reference list, same as
+   before. The `const_ref` rule is deliberately **not** in the set at all —
+   its key is a real literal on a real line, like any ordinary call, for
+   every caller.
 2. **A `covered_by` child** (`coveredByChildren`) never carries a site of its own —
    the annotation lives in the *test's* file, not the viewed block's. Explicitly
    kept **always** visible: a hard filter would hide "covered by TestX::testY"

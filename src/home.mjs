@@ -2896,12 +2896,19 @@ function childrenOf(b) {
 // inside a trans()/__()/@lang() call, matched separately below), so it stays
 // properly scoped to the line it's actually used on.
 // `class_member:` (a <class-header> block's own declared property/constant, see
-// resolveClassMembers in callresolve_analysis.go) is here for the same reason as
-// `trait_usage`: the card describes the class as a whole, and its declaration
-// lines are the very lines the header block's diff shows, so scoping it to one
-// selected group would hide exactly the members the reviewer is looking at.
-// The `const_ref` rule (6b, a Foo::MAX_TRIES reference) is deliberately NOT
-// here — its key IS a real literal on a real line, like an ordinary call.
+// resolveClassMembers in callresolve_analysis.go) is ONLY block-level while the
+// caller IS that <class-header> block itself (the no-sibling fallback,
+// resolveClassMembers/classSiblingIDs) — there the card's declaration lines
+// ARE the header's own diff, so scoping it to one selected group would hide
+// exactly the members the reviewer is looking at. Once the card is attached to
+// a SIBLING method instead (the common case — see classSiblingIDs), it DOES
+// have a real usage site to look for (the member's own name used as a
+// property/constant access inside that sibling), so callScopeMethods/
+// findCallSites special-case it back OUT of this bypass for that caller —
+// see their own doc comments — "alleen zien als het te maken heeft met de
+// geselecteerde groep/regel" (Reindert). The `const_ref` rule (6b, a
+// Foo::MAX_TRIES reference) is deliberately NOT here at all — its key IS a
+// real literal on a real line, like an ordinary call, for every caller.
 function isBlockLevelCallKey(name) {
   return /^(resource|migration_model|data_provider|trait_usage|class_member):/.test(name)
 }
@@ -2918,41 +2925,60 @@ function isBlockLevelCallKey(name) {
 // static reference — how an enum case (AddressType::BILLING) reaches its enum.
 function findCallSites(rows, name) {
   const sites = []
-  // A block-level synthetic key (resource:/migration_model:/data_provider:,
-  // see isBlockLevelCallKey) never appears as a literal anywhere in the
-  // caller's own text — there is no single call site to find, by design.
-  // Return no sites rather than falling into the "isCommand" branch below,
-  // which would build a `command('resource:Foo'...)` regex that can never
-  // match — callScopeMethods special-cases this key shape to stay in scope
-  // regardless, so an empty result here is harmless (only used elsewhere for
-  // the "is this call on a changed line" ordering heuristic).
-  if (isBlockLevelCallKey(name)) return sites
-  // A translation callKey (translation:<locale>:<file.key>, see resolveTranslations)
-  // couples via the KEY string literal inside a trans()/__()/@lang()/trans_choice()
-  // call — the same literal for every locale, so nl and en children both point at
-  // the one call site.
-  // An artisan command key (accounting:import, foo-bar) carries characters no PHP
-  // identifier has (':', '-'), so it can never be a method/property/enum name — it
-  // appears only as the string literal of a ->command('name …') scheduler call.
-  // Match that literal instead of the identifier forms.
-  const isCommand = /[^\w]/.test(name)
-  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   let re
-  if (name.startsWith('translation:')) {
-    const escKey = name.replace(/^translation:[^:]*:/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    re = new RegExp("['\"]" + escKey + "['\"]", 'g')
-  } else if (isCommand) {
-    re = new RegExp("command\\s*\\(\\s*['\"]" + esc + "(?=[\\s'\"])", 'g')
+  // `class_member:prop:$name` / `class_member:const:NAME` (resolveClassMembers,
+  // see isBlockLevelCallKey's own doc comment): unlike the other four
+  // block-level prefixes this ONE has a real usage site to look for once it's
+  // attached to a sibling method rather than the <class-header> block itself —
+  // the bare member name used as a property access (`->name`, sigil dropped)
+  // or a constant/static-property access (`::name`/`::$name`, sigil kept).
+  // Matching stays deliberately loose (any receiver before `->`/`::`, like the
+  // ordinary method-call regex below) — this is textual, not semantic.
+  if (name.startsWith('class_member:')) {
+    const raw = name.replace(/^class_member:[^:]*:/, '')
+    const isProp = raw.startsWith('$')
+    const bare = (isProp ? raw.slice(1) : raw).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    re = isProp
+      ? new RegExp('->\\s*' + bare + '\\b|::\\s*\\$' + bare + '\\b', 'g')
+      : new RegExp('::\\s*' + bare + '\\b', 'g')
+  } else if (isBlockLevelCallKey(name)) {
+    // A block-level synthetic key (resource:/migration_model:/data_provider:/
+    // trait_usage:, see isBlockLevelCallKey) never appears as a literal
+    // anywhere in the caller's own text — there is no single call site to
+    // find, by design. Return no sites rather than falling into the
+    // "isCommand" branch below, which would build a `command('resource:Foo'...)`
+    // regex that can never match — callScopeMethods special-cases this key
+    // shape to stay in scope regardless, so an empty result here is harmless
+    // (only used elsewhere for the "is this call on a changed line" ordering
+    // heuristic).
+    return sites
   } else {
-    // `\bname\s*::\s*class\b` is the bare Foo::class literal (rule 6c's
-    // class_ref/model_usage-via-::class children, e.g. a Temporal
-    // `'activities' => [FooActivity::class, ...]` array entry) — the class
-    // name sits BEFORE the `::`, unlike the enum-case `::name` alternative
-    // above, so it needs its own branch.
-    re = new RegExp(
-      '->\\s*' + name + '\\b|::\\s*' + name + '\\b|\\b' + name + '\\s*\\(|\\b' + name + '\\s*::\\s*class\\b',
-      'g',
-    )
+    // A translation callKey (translation:<locale>:<file.key>, see resolveTranslations)
+    // couples via the KEY string literal inside a trans()/__()/@lang()/trans_choice()
+    // call — the same literal for every locale, so nl and en children both point at
+    // the one call site.
+    // An artisan command key (accounting:import, foo-bar) carries characters no PHP
+    // identifier has (':', '-'), so it can never be a method/property/enum name — it
+    // appears only as the string literal of a ->command('name …') scheduler call.
+    // Match that literal instead of the identifier forms.
+    const isCommand = /[^\w]/.test(name)
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (name.startsWith('translation:')) {
+      const escKey = name.replace(/^translation:[^:]*:/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      re = new RegExp("['\"]" + escKey + "['\"]", 'g')
+    } else if (isCommand) {
+      re = new RegExp("command\\s*\\(\\s*['\"]" + esc + "(?=[\\s'\"])", 'g')
+    } else {
+      // `\bname\s*::\s*class\b` is the bare Foo::class literal (rule 6c's
+      // class_ref/model_usage-via-::class children, e.g. a Temporal
+      // `'activities' => [FooActivity::class, ...]` array entry) — the class
+      // name sits BEFORE the `::`, unlike the enum-case `::name` alternative
+      // above, so it needs its own branch.
+      re = new RegExp(
+        '->\\s*' + name + '\\b|::\\s*' + name + '\\b|\\b' + name + '\\s*\\(|\\b' + name + '\\s*::\\s*class\\b',
+        'g',
+      )
+    }
   }
   for (let i = 0; i < rows.length; i++) {
     const text = rows[i].right
@@ -2992,15 +3018,25 @@ function callScopeMethods(b, rows) {
   const unit = unitsFor(rows, cur.gran)[cur.change]
   if (!unit) return null
   const methods = new Set()
+  // b's own name decides whether a class_member: key stays block-level (see
+  // isBlockLevelCallKey's own doc comment) — only true while b IS the
+  // <class-header> block itself (the no-sibling fallback). '<class-header>' is
+  // the same literal swallowedClassHeaderIds compares against.
+  const bIsClassHeader = b.name === '<class-header>'
   for (const r of callRows(b)) {
-    // A block-level synthetic key (resource:/migration_model:/data_provider:)
-    // has no line to check against — findCallSites deliberately returns no
-    // sites for it (see isBlockLevelCallKey) — so treat it as always in
-    // scope instead of letting the empty site list read as "not here",
-    // which would otherwise make hideOutOfScope filter it out entirely at
-    // 'line'/'call' granularity even though its underlying call genuinely
-    // sits on the selected line.
-    if (isBlockLevelCallKey(r.callKey)) {
+    // A block-level synthetic key (resource:/migration_model:/data_provider:/
+    // trait_usage:) has no line to check against — findCallSites deliberately
+    // returns no sites for it (see isBlockLevelCallKey) — so treat it as
+    // always in scope instead of letting the empty site list read as "not
+    // here", which would otherwise make hideOutOfScope filter it out entirely
+    // at 'line'/'call' granularity even though its underlying call genuinely
+    // sits on the selected line. `class_member:` only gets that same free pass
+    // while b is the <class-header> block itself — attached to a SIBLING
+    // method it DOES have a real usage site (findCallSites' own class_member
+    // branch), so it falls through to the real scoping below like an
+    // ordinary call: "alleen zien als het te maken heeft met de geselecteerde
+    // groep/regel" (Reindert).
+    if (isBlockLevelCallKey(r.callKey) && !(r.callKey.startsWith('class_member:') && !bIsClassHeader)) {
       methods.add(r.callKey)
       continue
     }

@@ -53,6 +53,7 @@ export default function globalSetup() {
   materializeSvgWorktrees()
   materializeTestClassGroupWorktrees()
   materializeLineSummaryWorktrees()
+  materializeClassMemberScopeWorktrees()
 }
 
 // materializeMainWorktrees writes the base/head worktrees for the suite's MAIN
@@ -982,4 +983,37 @@ class LineSummarySecondService
   write('head', 'app/Services/LineSummaryFirstService.php', first(2))
   write('base', 'app/Services/LineSummarySecondService.php', second(1, 2))
   write('head', 'app/Services/LineSummarySecondService.php', second(10, 20))
+}
+
+// materializeClassMemberScopeWorktrees writes the synthetic PR 115 fixture
+// worktrees for related-class-member-scope.spec.mjs: a class-member card
+// (resolveClassMembers, rule 9 in workflows-analysis.md) attached to a
+// SIBLING method that has TWO separate changed groups — one that actually
+// uses the constant (`self::MAX_TRIES`) and one that doesn't
+// (`$unrelated = …`) — so the group/line scoping sharpened on top of
+// `3228440` has something real to prove: the member card shows only next to
+// the group/line that uses it, not next to every changed group of that
+// sibling. The two changed lines (11 and 13) are separated by an unchanged
+// filler line (12) so changeGroups splits them into two independent groups
+// rather than one run.
+function materializeClassMemberScopeWorktrees() {
+  const action = (unrelated, tries) => `<?php
+
+namespace App\\Actions;
+
+class ScopeMemberAction
+{
+    public const MAX_TRIES = 3;
+
+    public function run()
+    {
+        $unrelated = ${unrelated};
+        $filler = 1;
+        $tries = ${tries};
+    }
+}
+`
+  const write = worktreeWriter(115)
+  write('base', 'app/Actions/ScopeMemberAction.php', action(0, 0))
+  write('head', 'app/Actions/ScopeMemberAction.php', action(1, 'self::MAX_TRIES'))
 }

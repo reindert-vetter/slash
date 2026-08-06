@@ -412,6 +412,24 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Class-member group/line scoping fixture (PR 115,
+  // related-class-member-scope.spec.mjs): a class-member card attached to a
+  // sibling method with two separate changed groups, only one of which
+  // actually uses the constant — see materializeClassMemberScopeWorktrees
+  // (tests/_setup.mjs) for the exact diff shape.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/scopemember-blocks.json',
+      '-callresolve',
+      'tests/fixtures/scopemember-callresolve.json',
+    ],
+    { stdio: 'ignore' },
+  )
 }
 
 function canConnect(port) {

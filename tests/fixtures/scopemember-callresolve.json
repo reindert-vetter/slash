@@ -1,0 +1,14 @@
+[
+  {
+    "pr": 115,
+    "callerId": "115:app/Actions/ScopeMemberAction.php:ScopeMemberAction::run",
+    "callKey": "class_member:const:MAX_TRIES",
+    "status": "resolved",
+    "kind": "class_constant",
+    "childFile": "app/Actions/ScopeMemberAction.php",
+    "childClass": "ScopeMemberAction",
+    "childMethod": "MAX_TRIES",
+    "childLine": 7,
+    "childCode": "public const MAX_TRIES = 3"
+  }
+]

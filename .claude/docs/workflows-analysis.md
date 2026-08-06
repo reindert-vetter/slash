@@ -285,15 +285,24 @@ Rules, in order:
   `TestResolveClassMembersAttachedToSibling`/
   `TestResolveClassMembersAttachedToEverySibling` and `TestResolveCallsConstRef`
   (`callresolve_analysis_test.go`).
+  **Frontend-only sharpening (no change to the Go emission above):** attached
+  to a sibling, `class_member:` is no longer unconditionally block-level in
+  `home.mjs` — `callScopeMethods`/`findCallSites` treat it that way only while
+  the caller is the header block itself; against a sibling caller they match a
+  real usage site (`->name`/`::name`/`::$name`) and scope the card to the
+  selected group/line/call like an ordinary call. See "Attached to a sibling…"
+  in `.claude/docs/underlying-code.md`.
 - **Laravel macros** (`scanMacros`): a `Builder::macro('joinAddress',
   function …)` inside a boot method is a closure and thus invisible to
   `ScanBlocks` (`skipBody` swallows it), so the registration is detected by
   regex and turned into a synthetic block. Its code comes from `blockSource`'s
   line-slicing fallback (the symbol lookup fails for a nested block).
 - **A call key containing `:`** (`migration_model:`, `data_provider:`,
-  `resource:`, `trait_usage:`, `class_member:`, `translation:`, a command name)
-  can never match a real call-site identifier in `findCallSites`, so such a
-  child shows at group/list level and isn't tied to one line/call.
+  `resource:`, `trait_usage:`, `translation:`, a command name) can never match
+  a real call-site identifier in `findCallSites`, so such a child shows at
+  group/list level and isn't tied to one line/call. `class_member:` is the one
+  exception attached to a sibling caller — `findCallSites` has a dedicated
+  branch for it there, see above.
 
 ### Rule-based extras, all merged into the same `UpsertGo`/`Prune`
 

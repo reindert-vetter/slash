@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 115,
+    "file": "app/Actions/ScopeMemberAction.php",
+    "class": "ScopeMemberAction",
+    "name": "run",
+    "category": "ACTION",
+    "line": 9,
+    "endLine": 14,
+    "status": "modified",
+    "side": "new"
+  }
+]
