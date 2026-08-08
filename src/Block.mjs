@@ -1402,7 +1402,7 @@ function commentMarkerHtml() {
 // index ambiguous. Exactly one line per row keeps carrying metadata: the
 // same canonical side approveHere/commentedHere below already single out
 // (the new/right side, or the old/left side when there's no right at all).
-function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = true, opts = {}, lineSummaries = null) {
+function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = true, opts = {}, lineSummaries = null, segDots = null) {
   const { gutter = false, emitMeta = true } = opts
   const text = sideKey === 'left' ? r.left : r.right
   const mark = sideKey === 'left' ? r.leftMark : r.rightMark
@@ -1462,13 +1462,23 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // characters are marked, not just the whole line. One-sided rows (a pure
   // add or remove) have nothing to diff against, so they highlight plainly.
   const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
+  // The call-approval dot markers (segDots, see segDotMarkers) ride along on
+  // the same markChars pass as the underline: both are per-character classes on
+  // this line, so they compose without a second render path — a segment can be
+  // underlined (active) and carry its dot at the same time.
+  const segDotCls = (pi) => (segDots && segDots.get(pi)) || ''
+  const segDotAttr = (pi) => (segDots && segDots.has(pi) ? ` data-seg-dot="${pi}"` : '')
   let body
   if (text === null) body = '&nbsp;'
-  else if (paired) body = highlightChanges(r, sideKey, ws, underline)
-  else if (underline && underline.size)
+  else if (paired) body = highlightChanges(r, sideKey, ws, underline, segDots)
+  else if ((underline && underline.size) || (segDots && segDots.size))
     // A one-sided change (pure add / remove): its whole line is the single
     // edit, so underline it end to end.
-    body = markChars(highlight(text), (pi) => (underline.has(pi) ? UNDERLINE_CLS : ''))
+    body = markChars(
+      highlight(text),
+      (pi) => [underline && underline.has(pi) ? UNDERLINE_CLS : '', segDotCls(pi)].filter(Boolean).join(' '),
+      segDotAttr,
+    )
   else body = highlight(text)
   // A 💬 marks a row that carries a comment — presence only (the count
   // doesn't matter). Shown once per row: on the new (right) pane for a normal
@@ -1520,8 +1530,8 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
       ? '<span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">✓</span>'
       : ''
   // data-row carries the aligned-row index: the DOM child index can't be used
-  // to find a row (the partial-call circle rows below insert extra divs), and
-  // only the active group's first row has an anchor otherwise. Used by the
+  // to find a row (a collapsed run renders one spacer for many rows), and only
+  // the active group's first row has an anchor otherwise. Used by the
   // call-arrow overlay (src/callArrows.mjs) to anchor an arrow on the exact
   // call-site row. Suppressed when emitMeta is false, see above.
   const dataRow = emitMeta ? ` data-row="${i}"` : ''
@@ -1840,23 +1850,18 @@ function paneHTML(
   const parts = []
   const pushRow = (i) => {
     const r = rows[i]
-    parts.push(rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused, {}, lineSummaries))
-
     // Partial call approval: once at least one — but not all — of this row's
-    // call segments is approved, an open circle marks every segment still
-    // waiting, positioned under it via a second monospace row. Both panes
-    // evaluate the exact same (row, approval-state) inputs, so they insert this
-    // extra row at the same index on both sides and stay line-for-line aligned:
-    // only the side that actually shows the segments draws the dots, the other
-    // gets a blank filler row of equal height.
+    // call segments is approved, every segment gets a dot marker (solid =
+    // approved, hollow = waiting) UNDER its own first character, inside the
+    // code line itself (see segDotMarkers). Only the side that actually shows
+    // the segments draws them — the same canonical side the ✓/💬 use — and
+    // since they are ::after pseudo-elements they add no row and no width, so
+    // both panes stay line-for-line aligned for free.
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
-    if (partial) {
-      const text = sideKey === 'left' ? r.left : r.right
-      const approveHere = sideKey === 'right' || r.right == null
-      parts.push(
-        approveHere ? circleRowHTML(text, partial.segs, partial.approvedStarts) : BLANK_MARK_ROW,
-      )
-    }
+    const approveHere = sideKey === 'right' || r.right == null
+    const segDots =
+      partial && approveHere ? segDotMarkers(sideKey === 'left' ? r.left : r.right, partial) : null
+    parts.push(rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused, {}, lineSummaries, segDots))
   }
   const plan = collapsePlan(rows, commented)
   if (!plan) {
@@ -1881,30 +1886,24 @@ function paneHTML(
 // whitespace-only re-alignment, see wsOnly) renders both lines. See
 // rowCellHTML's own doc comment for why exactly one of the two lines (the
 // canonical, metadata-carrying one) ever gets `data-row`/etc.
-function unifiedRowHTML(r, i, group, approved, commented, focused = true, lineSummaries = null) {
+function unifiedRowHTML(r, i, group, approved, commented, focused = true, lineSummaries = null, segDots = null) {
   const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
   if (paired) {
     return (
       rowCellHTML(r, i, 'left', group, approved, commented, false, focused, { gutter: true, emitMeta: false }, lineSummaries) +
-      rowCellHTML(r, i, 'right', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries)
+      rowCellHTML(r, i, 'right', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries, segDots)
     )
   }
   if (r.right != null) {
-    return rowCellHTML(r, i, 'right', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries)
+    return rowCellHTML(r, i, 'right', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries, segDots)
   }
   if (r.left != null) {
-    return rowCellHTML(r, i, 'left', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries)
+    return rowCellHTML(r, i, 'left', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries, segDots)
   }
   return ''
 }
 
-// unifiedCallText picks the same "current" text a call-segment progress row
-// (circleRowHTML) needs to align its dots against — the new/right text when
-// there is one, otherwise the old/left text (a pure deletion) — mirroring
-// paneHTML's own approveHere-driven side choice.
-function unifiedCallText(r) {
-  return r.right != null ? r.right : r.left
-}
+
 
 // unifiedHTML builds the innerHTML string of the unified stand's single
 // column: one (or, for a paired change, two) unifiedRowHTML lines per
@@ -1924,9 +1923,14 @@ function unifiedHTML(
 ) {
   const parts = []
   const pushRow = (i) => {
-    parts.push(unifiedRowHTML(rows[i], i, group, approved, commented, focused, lineSummaries))
+    const r = rows[i]
+    // Same per-segment dot markers as paneHTML, on the same "current" side
+    // (the new/right line when there is one, else the old/left line of a pure
+    // deletion) — which in the unified stand is exactly the line carrying the
+    // row's metadata (emitMeta), see unifiedRowHTML.
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
-    if (partial) parts.push(circleRowHTML(unifiedCallText(rows[i]), partial.segs, partial.approvedStarts))
+    const segDots = partial ? segDotMarkers(r.right != null ? r.right : r.left, partial) : null
+    parts.push(unifiedRowHTML(r, i, group, approved, commented, focused, lineSummaries, segDots))
   }
   const plan = collapsePlan(rows, commented)
   if (!plan) {
@@ -1979,12 +1983,6 @@ function unifiedCodeDiff(
   `
 }
 
-// BLANK_MARK_ROW is the filler used on the pane that doesn't draw the
-// call-approval circles, so both panes keep the same row count and stay
-// vertically aligned (see paneHTML). Not used by unifiedHTML above (one
-// column, no second pane to keep aligned with).
-const BLANK_MARK_ROW = '<div class="block whitespace-pre px-3 leading-none">&nbsp;</div>'
-
 // partialCallApproval decides whether row `i` should show the per-segment
 // open-circle indicator: it has more than one call segment (rowCallSegments),
 // isn't already fully approved (that gets the plain checkmark instead), and at
@@ -2008,26 +2006,38 @@ function partialCallApproval(rows, i, approved, approvedCalls) {
   return { segs, approvedStarts }
 }
 
-// circleRowHTML renders the per-segment progress row: one dot under every call
-// segment, positioned at its (whitespace-trimmed) start column via literal
-// leading spaces — works without any JS measurement because the row shares the
-// exact same monospace font/size as the code line above it, so columns line up
-// 1:1. An already-approved segment gets a solid green dot, a still-waiting one
-// a hollow (open) one — so the row reads at a glance as a progress strip.
-function circleRowHTML(text, segs, approvedStarts) {
-  let out = ''
-  let col = 0
-  for (const s of segs) {
-    let start = s.start
-    while (start < s.end && /\s/.test(text[start])) start++
-    if (start < col) continue
-    out += ' '.repeat(start - col)
-    out += approvedStarts.has(s.start)
-      ? '<span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 align-middle" title="Goedgekeurd"></span>'
-      : '<span class="inline-block h-1.5 w-1.5 rounded-full border border-emerald-500 align-middle" title="Nog niet goedgekeurd"></span>'
-    col = start + 1
+// SEG_DOT_* are the per-segment call-approval markers: a small dot drawn just
+// UNDER the segment's own first character, via a ::after pseudo-element on that
+// character's own span. It lives inside the code line on purpose — the earlier
+// version was a separate monospace row below the line that positioned its dots
+// with literal leading spaces and a `col = start + 1` step, which assumed a dot
+// is exactly one character cell wide (it isn't: ~6px in a ~6.6px cell, so every
+// dot after the first drifted left) and could not follow a WRAPPED line at all
+// in the `fit` stand. Rendered as ::after it needs no column arithmetic and no
+// second row, so it is aligned by construction in every stand.
+// An approved segment gets a SOLID dot, a still-waiting one a HOLLOW (ring)
+// one, so the strip reads at a glance as progress — shape carries the meaning,
+// the emerald tint is decoration on top (the reviewer is colourblind, see
+// CLAUDE.md).
+const SEG_DOT_BASE =
+  "relative after:pointer-events-none after:absolute after:left-0 after:top-[1em] after:h-1.5 after:w-1.5 after:rounded-full after:content-['']"
+const SEG_DOT_DONE_CLS = SEG_DOT_BASE + ' after:bg-emerald-500'
+const SEG_DOT_TODO_CLS = SEG_DOT_BASE + ' after:border after:border-emerald-500'
+
+// segDotMarkers maps the char index each dot marker sits on -> its class, for
+// one partially approved row: the segment's first NON-SPACE character (a dot
+// under the indentation of a segment that starts mid-line would read as
+// belonging to nothing). `partial` is partialCallApproval's own return value.
+function segDotMarkers(text, partial) {
+  const map = new Map()
+  if (!partial || text == null) return map
+  for (const seg of partial.segs) {
+    let ci = seg.start
+    while (ci < seg.end && /\s/.test(text[ci])) ci++
+    if (ci >= text.length) continue
+    map.set(ci, partial.approvedStarts.has(seg.start) ? SEG_DOT_DONE_CLS : SEG_DOT_TODO_CLS)
   }
-  return `<div class="block whitespace-pre px-3 leading-none">${out || '&nbsp;'}</div>`
+  return map
 }
 
 // wsOnly reports whether a row differs on both sides purely in whitespace
@@ -2065,18 +2075,25 @@ export const UNDERLINE_CLS = 'underline decoration-2 decoration-[#6366f1] underl
 // itself stays untinted (see paneHTML), so the shifted whitespace still needs
 // its own soft marker to be visible at all — see `wsOnly` in blocks-and-ingest.md.
 // `underline` is an optional Set of char indices (the active call-segment) that
-// gets the indigo underline regardless of `ws`.
-function highlightChanges(r, sideKey, ws, underline) {
+// gets the indigo underline regardless of `ws`; `segDots` is the optional
+// char-index -> class Map of the call-approval dot markers (segDotMarkers).
+function highlightChanges(r, sideKey, ws, underline, segDots = null) {
   const text = sideKey === 'left' ? r.left : r.right
   const markCls = ws ? (sideKey === 'left' ? 'bg-rose-200 dark:bg-rose-500/30' : 'bg-emerald-200 dark:bg-emerald-500/30') : ''
   const { leftMarked, rightMarked } = ws ? charDiffSides(r.left, r.right) : {}
   const marked = ws ? (sideKey === 'left' ? leftMarked : rightMarked) : null
-  return markChars(highlight(text), (pi) => {
-    const parts = []
-    if (marked && marked.has(pi)) parts.push(markCls)
-    if (underline && underline.has(pi)) parts.push(UNDERLINE_CLS)
-    return parts.join(' ')
-  })
+  return markChars(
+    highlight(text),
+    (pi) => {
+      const parts = []
+      if (marked && marked.has(pi)) parts.push(markCls)
+      if (underline && underline.has(pi)) parts.push(UNDERLINE_CLS)
+      const dot = segDots && segDots.get(pi)
+      if (dot) parts.push(dot)
+      return parts.join(' ')
+    },
+    (pi) => (segDots && segDots.has(pi) ? ` data-seg-dot="${pi}"` : ''),
+  )
 }
 
 // charDiffSides diffs the two sides at *token* granularity and returns, per side,
@@ -2175,18 +2192,26 @@ function diffChars(a, b) {
 // one span, and a span is always closed before a tag, so a marker never
 // straddles a Prism token boundary (it nests inside or sits between tokens) and
 // the markup stays well-formed.
-export function markChars(html, classOf) {
+// `attrOf(plaintextIndex)` is optional and returns EXTRA attributes for that
+// char's span (a leading-space-prefixed string like ` data-seg-dot="8"`, `''`
+// for none) — used by the call-approval dot markers, which need a test/query
+// hook next to their class. It takes part in the "same span" comparison, so two
+// neighbouring chars only share a span when class AND attributes match.
+export function markChars(html, classOf, attrOf = null) {
   let out = ''
   let pi = 0 // plaintext index into the original line
   let i = 0
   let open = '' // the class string of the currently-open span ('' = none)
-  const ensure = (cls) => {
-    if (cls === open) return
-    if (open) out += '</span>'
+  let openAttr = ''
+  const ensure = (cls, attr = '') => {
+    if (cls === open && attr === openAttr) return
+    if (open || openAttr) out += '</span>'
     open = ''
-    if (cls) {
-      out += `<span class="${cls}">`
+    openAttr = ''
+    if (cls || attr) {
+      out += `<span class="${cls}"${attr}>`
       open = cls
+      openAttr = attr
     }
   }
   while (i < html.length) {
@@ -2204,13 +2229,13 @@ export function markChars(html, classOf) {
       // An HTML entity stands for a single source char.
       const end = html.indexOf(';', i)
       const to = end === -1 ? i + 1 : end + 1
-      ensure(classOf(pi))
+      ensure(classOf(pi), attrOf ? attrOf(pi) : '')
       out += html.slice(i, to)
       pi++
       i = to
       continue
     }
-    ensure(classOf(pi))
+    ensure(classOf(pi), attrOf ? attrOf(pi) : '')
     out += ch
     pi++
     i++

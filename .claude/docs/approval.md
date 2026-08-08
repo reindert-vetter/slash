@@ -36,14 +36,25 @@ group/line approval and the block checkbox simply see it; withdrawing one
 segment of an already-full row splits it back into explicit keys
 (`toggleCallApprove` in `home.mjs`).
 
-While a row is *partially* approved (not 0, not all) it shows a dot per segment
-on a second, compact row below — aligned under the segment column via literal
-spaces (no JS measurement needed, the code is monospace): an approved segment
-gets a **solid green** dot, a pending one an **open** dot, so the row reads as a
-progress strip. Nothing approved → nothing shown; everything approved → dots go
-away and the checkmark returns (`partialCallApproval`/`circleRowHTML` in
-`Block.mjs`). Both panes compute the dots row from the same deterministic input,
-so they insert it at the same row index and stay aligned.
+While a row is *partially* approved (not 0, not all) every segment gets a dot
+marker directly **under its own first non-space character**: an approved segment
+a **solid** dot, a pending one an **open** ring, so the line reads as a progress
+strip. Nothing approved → nothing shown; everything approved → the dots go away
+and the checkmark returns (`partialCallApproval`/`segDotMarkers` in
+`Block.mjs`).
+
+**The dot lives INSIDE the code line**, as a `::after` pseudo-element on that
+character's own `markChars` span (`SEG_DOT_DONE_CLS`/`SEG_DOT_TODO_CLS`,
+`data-seg-dot="<charIndex>"`), composing with the active-segment underline on
+the same pass. It replaced a separate monospace row below the line that placed
+its dots with literal leading spaces and a `col = start + 1` step: that assumed
+a dot is exactly one character cell wide (≈6px in a ≈6.6px cell), so every dot
+after the first drifted left — the reported "the dots aren't under the start of
+their call" — and it could not follow a **wrapped** line in the `fit` stand at
+all. As a pseudo-element it needs no column arithmetic, adds no row and no flow
+width, so both panes stay line-for-line aligned for free (the `BLANK_MARK_ROW`
+filler the old second row needed is gone). Don't reintroduce the column
+arithmetic. Test: `tests/call-approval-dots.spec.mjs`.
 
 `b.approvedRows`/`b.approvedCalls` are always **reassigned**, never mutated in
 place, so arrow.js re-renders the checkbox and the indicators.
