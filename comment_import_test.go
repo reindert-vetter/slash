@@ -504,3 +504,74 @@ func TestImportSkipsAvatarBackfillOnFailedRun(t *testing.T) {
 		}
 	}
 }
+
+// TestImportAppliesGithubResolvedState covers the other half of a comment's
+// lifecycle the import used to ignore entirely: somebody hits "Resolve
+// conversation" on github.com, and slash never noticed — the thread stayed
+// `open` here forever (no ✓, not dimmed, still marking its diff row), because
+// the only local resolve trigger was a reply body containing "/resolve".
+// isResolved lives on the GraphQL reviewThread node, hence the separate
+// ResolvedReviewThreads read.
+func TestImportAppliesGithubResolvedState(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+
+	gh.SetReviewComments([]github.ReviewComment{
+		{ID: 100, Author: "colleague", Body: "resolved on github", Path: "src/Order.php", Line: 10, Side: "RIGHT"},
+		{ID: 101, Author: "colleague", Body: "still open", Path: "src/Order.php", Line: 12, Side: "RIGHT"},
+	})
+	gh.SetGeneralComments([]github.GeneralComment{
+		{ID: 200, Author: "colleague", Body: "a PR-wide one", Kind: "issue"},
+	})
+	m.importPRComments(ctx, pr)
+
+	statusOf := func() map[string]string {
+		list, _ := cs.List(ctx, pr)
+		out := map[string]string{}
+		for _, c := range list {
+			out[c.ID] = c.Status
+		}
+		return out
+	}
+	if got := statusOf(); got["gh-100"] != "open" || got["gh-101"] != "open" {
+		t.Fatalf("statuses after the first import = %v, want both open", got)
+	}
+
+	// Now one of them is resolved on GitHub. The next import tick picks it up.
+	gh.SetResolvedOnGithub(100)
+	m.importPRComments(ctx, pr)
+
+	got := statusOf()
+	if got["gh-100"] != "resolved" {
+		t.Fatalf("gh-100 status = %q, want resolved", got["gh-100"])
+	}
+	if got["gh-101"] != "open" {
+		t.Fatalf("gh-101 status = %q, want open (its thread is not resolved on GitHub)", got["gh-101"])
+	}
+	// An issue comment's id is never in the review-thread set, so a genuinely
+	// thread-less PR-wide comment can't be swept along.
+	if got["gh-200"] != "open" {
+		t.Fatalf("gh-200 status = %q, want open (an issue comment has no review thread)", got["gh-200"])
+	}
+
+	// Nothing is written BACK to GitHub — the thread is already resolved there,
+	// and the mirror path only ever fires for a Source "ui" reaction.
+	if n := gh.ResolvedThreadCount(); n != 0 {
+		t.Fatalf("ResolveReviewThread called %d times, want 0", n)
+	}
+
+	// The resolve trace is stored once, and a further tick is a no-op (the
+	// Status check keeps it quiet) rather than a growing pile of reactions.
+	m.importPRComments(ctx, pr)
+	list, _ := cs.List(ctx, pr)
+	for _, c := range list {
+		if c.ID != "gh-100" {
+			continue
+		}
+		if c.ReactionCount != 1 {
+			t.Fatalf("gh-100 reactionCount = %d, want exactly 1 (/resolve trace)", c.ReactionCount)
+		}
+	}
+}

@@ -144,6 +144,12 @@ type Client interface {
 	// thread whose root comment has REST id commentID — the mirror image of
 	// ResolveReviewThread, with the same no-op-if-not-found behaviour.
 	UnresolveReviewThread(ctx context.Context, pr int, commentID int64) error
+	// ResolvedReviewThreads returns the REST ids of the ROOT comments of every
+	// review-diff thread currently marked resolved ("Resolve conversation") on
+	// pr. It is the read direction of Resolve/UnresolveReviewThread and the
+	// only way to learn that state: it lives on the GraphQL reviewThread node
+	// (isResolved), never on the REST comment FetchReviewComments returns.
+	ResolvedReviewThreads(ctx context.Context, pr int) (map[int64]bool, error)
 	// MarkFileViewed sets (viewed=true) or clears (viewed=false) the "Viewed"
 	// checkbox for path in the Files-changed tab of pr.
 	MarkFileViewed(ctx context.Context, pr int, path string, viewed bool) error
@@ -528,10 +534,21 @@ func (m *Module) reviewThreadMutation(ctx context.Context, pr int, commentID int
 	return nil
 }
 
-// reviewThreadID returns the GraphQL node ID of the review thread whose root
-// comment has REST id commentID, or "" if none matches.
-func (m *Module) reviewThreadID(ctx context.Context, owner, name string, pr int, commentID int64) (string, error) {
-	const query = `query($o:String!,$n:String!,$pr:Int!){repository(owner:$o,name:$n){pullRequest(number:$pr){reviewThreads(first:100){nodes{id comments(first:1){nodes{databaseId}}}}}}}`
+// reviewThread is one GraphQL reviewThread node, reduced to the three things
+// this module needs: the node id (to mutate it), the root comment's REST id
+// (how the rest of the app addresses a thread) and whether it is resolved.
+type reviewThread struct {
+	ID         string
+	RootID     int64
+	IsResolved bool
+}
+
+// reviewThreads lists pr's review threads. The single GraphQL round-trip both
+// reviewThreadID (the mutate direction) and ResolvedReviewThreads (the read
+// direction) build on — `isResolved` rides along for free, and keeping one
+// query means the two can't drift apart on pagination or shape.
+func (m *Module) reviewThreads(ctx context.Context, owner, name string, pr int) ([]reviewThread, error) {
+	const query = `query($o:String!,$n:String!,$pr:Int!){repository(owner:$o,name:$n){pullRequest(number:$pr){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{databaseId}}}}}}}`
 	ctx, cancel := context.WithTimeout(ctx, cliTimeout) // see cliTimeout doc
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
@@ -542,7 +559,7 @@ func (m *Module) reviewThreadID(ctx context.Context, owner, name string, pr int,
 	)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("gh api graphql review threads: %w", err)
+		return nil, fmt.Errorf("gh api graphql review threads: %w", err)
 	}
 	var res struct {
 		Data struct {
@@ -550,8 +567,9 @@ func (m *Module) reviewThreadID(ctx context.Context, owner, name string, pr int,
 				PullRequest struct {
 					ReviewThreads struct {
 						Nodes []struct {
-							ID       string `json:"id"`
-							Comments struct {
+							ID         string `json:"id"`
+							IsResolved bool   `json:"isResolved"`
+							Comments   struct {
 								Nodes []struct {
 									DatabaseID int64 `json:"databaseId"`
 								} `json:"nodes"`
@@ -563,16 +581,52 @@ func (m *Module) reviewThreadID(ctx context.Context, owner, name string, pr int,
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out, &res); err != nil {
-		return "", fmt.Errorf("parse review threads: %w", err)
+		return nil, fmt.Errorf("parse review threads: %w", err)
 	}
+	threads := make([]reviewThread, 0, len(res.Data.Repository.PullRequest.ReviewThreads.Nodes))
 	for _, t := range res.Data.Repository.PullRequest.ReviewThreads.Nodes {
-		for _, c := range t.Comments.Nodes {
-			if c.DatabaseID == commentID {
-				return t.ID, nil
-			}
+		var root int64
+		if len(t.Comments.Nodes) > 0 {
+			root = t.Comments.Nodes[0].DatabaseID
+		}
+		threads = append(threads, reviewThread{ID: t.ID, RootID: root, IsResolved: t.IsResolved})
+	}
+	return threads, nil
+}
+
+// reviewThreadID returns the GraphQL node ID of the review thread whose root
+// comment has REST id commentID, or "" if none matches.
+func (m *Module) reviewThreadID(ctx context.Context, owner, name string, pr int, commentID int64) (string, error) {
+	threads, err := m.reviewThreads(ctx, owner, name, pr)
+	if err != nil {
+		return "", err
+	}
+	for _, t := range threads {
+		if t.RootID == commentID {
+			return t.ID, nil
 		}
 	}
 	return "", nil
+}
+
+// ResolvedReviewThreads reports which of pr's review threads are resolved on
+// GitHub, keyed by their root comment's REST id. See the Client interface doc.
+func (m *Module) ResolvedReviewThreads(ctx context.Context, pr int) (map[int64]bool, error) {
+	owner, name, ok := strings.Cut(m.repo, "/")
+	if !ok {
+		return nil, fmt.Errorf("invalid repo slug %q", m.repo)
+	}
+	threads, err := m.reviewThreads(ctx, owner, name, pr)
+	if err != nil {
+		return nil, err
+	}
+	resolved := map[int64]bool{}
+	for _, t := range threads {
+		if t.IsResolved && t.RootID != 0 {
+			resolved[t.RootID] = true
+		}
+	}
+	return resolved, nil
 }
 
 // MarkFileViewed sets or clears the "Viewed" checkbox for path in the PR's

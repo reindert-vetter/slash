@@ -381,6 +381,38 @@ change for a one-off backlog.
   the heartbeat cadence, stopping once `pr_status` is done. For each imported
   **review-diff** thread it starts the per-thread reply `poll`; an in-memory
   `importPolled` set prevents a second poller per run.
+- **A thread resolved ON GitHub is mirrored back** (`applyGithubResolves`, run
+  at the end of every `importPRComments`). Nothing did this before: the import
+  reads comment **bodies**, and the only local resolve trigger was a reply
+  literally containing `"/resolve"` (`FetchReplies`' `Done`), so a thread
+  somebody resolved on github.com stayed `open` here forever — no ✓, not
+  dimmed, still marking its diff row with a 💬, never folding into "Toon N
+  goedgekeurde blokken". `isResolved` exists only on the GraphQL `reviewThread`
+  node, never on the REST comment, hence a new read-only
+  **`ResolvedReviewThreads(ctx, pr) map[int64]bool`**; it shares one
+  `reviewThreads` helper (and thus one query) with `reviewThreadID`, the lookup
+  the resolve/unresolve **mutations** already used.
+
+  It rides entirely on the **existing** resolve path — the same `reply` Signal
+  with the `resolveSentinel` body + `Done` the reviewer's own "Resolve comment"
+  sends — so there is no new workflow branch, Action or endpoint. Sent with
+  `Source: "github"`, which is exactly what keeps it from being mirrored back
+  out (the loop only mirrors `Source == "ui"`), and it renders as the ordinary
+  "✓ Thread opgelost" status line (`threadStatusSentinel`).
+
+  Two deliberate scoping choices: keyed on the comment's own **`GithubID`**
+  rather than on "was this imported", so it also covers a thread the app placed
+  itself and the reviewer then resolved on github.com; and **not** filtered by
+  `Kind`, because a review comment that merely failed to map to a block is
+  stored as the PR-wide `Kind "review"` yet still has a real, resolvable
+  thread. Membership in the resolved set is the only filter needed — an issue
+  comment's id is never in it. No in-memory dedup: signalling is synchronous,
+  so the `Status == "open"` check is already false on the next tick, and a
+  local **unresolve** unresolves the GitHub conversation too, so it leaves the
+  set at the same moment. Terminal runs are skipped with the same
+  `engine.Status` check as the avatar backfill (a thread resolved back when a
+  resolve still completed the Execution can never be signalled again). Test:
+  `TestImportAppliesGithubResolvedState`.
 - **Restart:** an imported thread's root id lives in the **input**, not in a
   post event, so `ResumePolling` reads it from there.
 - **Reply dedup relies on the DB, not the poller's `seen` map:** that map is a

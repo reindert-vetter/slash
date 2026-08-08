@@ -4759,10 +4759,13 @@ func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
 	// backfilled through the workflow below instead. Read-only lookup here; the
 	// write is the "avatar" Signal's own Activity.
 	avatarMissing := map[string]bool{}
+	// The same read-model list also feeds applyGithubResolves below.
+	var existing []comments.Comment
 	if m.comments != nil {
 		if list, err := m.comments.List(ctx, pr); err != nil {
 			m.logf("import comments: list pr=%d: %v", pr, err)
 		} else {
+			existing = list
 			for _, c := range list {
 				if c.AvatarURL == "" {
 					avatarMissing[c.ID] = true
@@ -4829,6 +4832,86 @@ func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
 		m.mu.Unlock()
 		if !already {
 			go m.poll(ctx, runID, pr, in.ImportedRootID, prRunID)
+		}
+	}
+
+	m.applyGithubResolves(ctx, pr, existing)
+}
+
+// applyGithubResolves mirrors GitHub's own "Resolve conversation" state onto
+// the read-model. Nothing else did: the import reads comment BODIES, and the
+// only way a thread used to become resolved locally was a reply literally
+// containing "/resolve" (see FetchReplies). A thread someone resolved on
+// github.com therefore stayed `open` here forever — no ✓, not dimmed, still
+// marking its diff row with a 💬, and never folding into "Toon N goedgekeurde
+// blokken" — which is exactly the "resolved op GitHub maar niet zichtbaar"
+// report this exists for. `isResolved` lives only on the GraphQL reviewThread
+// node, hence the separate ResolvedReviewThreads read (one round-trip per
+// poll, alongside the two comment fetches this function's caller already
+// does).
+//
+// It rides entirely on the EXISTING resolve path — the same `reply` Signal
+// with the resolveSentinel body + Done that the reviewer's own "Resolve
+// comment" sends — so there is no new workflow branch, Action or endpoint.
+// Crucially it is sent with Source "github", and the reactions loop only
+// mirrors OUT for Source "ui": nothing is written back to GitHub, which would
+// be a pointless re-resolve of a thread that is already resolved there.
+//
+// Deliberately keyed on the comment's own GithubID rather than on "was this
+// imported", so it covers a thread this app placed itself and the reviewer
+// then resolved on github.com just as well — and deliberately NOT filtered by
+// Kind: a review comment that simply couldn't be mapped to a block is stored
+// as the PR-wide Kind "review" (mapReviewComment) yet still has a genuine,
+// resolvable review thread behind it. Membership in the resolved set is the
+// only filter needed; an issue comment's id is never in it, so a genuinely
+// thread-less PR-wide comment can't match.
+//
+// No in-memory dedup is needed. Signalling is synchronous, so the status has
+// already flipped to "resolved" by the time this returns, and the Status
+// check below is what keeps the next poll tick quiet. A locally unresolved
+// thread doesn't get re-resolved behind the reviewer's back either: the
+// "unresolve" action unresolves the GitHub conversation too, so it drops out
+// of this set at the same moment.
+func (m *TaskManager) applyGithubResolves(ctx context.Context, pr int, existing []comments.Comment) {
+	if m.comments == nil || m.gh == nil || len(existing) == 0 {
+		return
+	}
+	// Cheap pre-check: don't ask GitHub at all when nothing could change.
+	candidates := false
+	for _, c := range existing {
+		if c.Status == "open" && c.GithubID != 0 {
+			candidates = true
+			break
+		}
+	}
+	if !candidates {
+		return
+	}
+	resolved, err := m.gh.ResolvedReviewThreads(ctx, pr)
+	if err != nil {
+		m.logf("import comments: resolved threads pr=%d: %v", pr, err)
+		return
+	}
+	for _, c := range existing {
+		if c.Status != "open" || c.GithubID == 0 || !resolved[c.GithubID] {
+			continue
+		}
+		// A terminal run can never accept a Signal again — same check, and the
+		// same "not an error, just permanently unreachable" reading, as the
+		// avatar backfill above. A thread resolved back when a resolve still
+		// completed the Execution is exactly such a run.
+		switch status, err := m.engine.Status(c.ID); {
+		case err != nil:
+			m.logf("import comments: github resolve run=%s: status: %v", c.ID, err)
+		case status == tembed.StatusFailed || status == tembed.StatusCompleted:
+			// Nothing to do.
+		default:
+			if err := m.Signal(c.ID, ReactionSignal{
+				ID: fmt.Sprintf("ghres-%d", c.GithubID), Source: "github",
+				Body: resolveSentinel, Done: true,
+			}); err != nil {
+				m.logf("import comments: github resolve run=%s: %v", c.ID, err)
+			}
 		}
 	}
 }

@@ -11,22 +11,29 @@ import (
 type Fake struct {
 	mu              sync.Mutex
 	nextID          int64
-	Posted          []string         // review comment/reply bodies posted, in order
-	IssuePosted     []string         // issue-comment bodies posted (PR-wide replies), in order
-	Deleted         []int64          // comment IDs deleted, in order
-	ResolvedThreads []int64          // root comment IDs whose thread was resolved, in order
+	Posted          []string // review comment/reply bodies posted, in order
+	IssuePosted     []string // issue-comment bodies posted (PR-wide replies), in order
+	Deleted         []int64  // comment IDs deleted, in order
+	ResolvedThreads []int64  // root comment IDs whose thread was resolved, in order
 	// UnresolvedThreads mirrors ResolvedThreads for the reopen direction: root
 	// comment IDs whose thread was unresolved, in order.
 	UnresolvedThreads []int64
-	EditedReviews   map[int64]string // review-comment id -> its last edited body
-	EditedIssues    map[int64]string // issue-comment id -> its last edited body
-	replies         []Reply
-	reviewComments  []ReviewComment
-	general         []GeneralComment
-	prState         string          // "" reads as "open"
-	prMeta          Meta            // returned by PRMeta (SetPRMeta overrides), PR-independent fallback
-	prMetas         map[int]Meta    // per-PR override (SetPRMetaFor), checked first
-	viewed          map[string]bool // "pr|path" -> viewed
+	// resolvedOnGithub is the READ direction: root comment IDs whose thread is
+	// already resolved on GitHub, as ResolvedReviewThreads reports them.
+	// Deliberately separate from ResolvedThreads above (what this app itself
+	// resolved during the test) — the import path exists precisely for threads
+	// resolved OUTSIDE the app, so a test must be able to seed one without the
+	// app having touched it. Seeded via SetResolvedOnGithub.
+	resolvedOnGithub map[int64]bool
+	EditedReviews    map[int64]string // review-comment id -> its last edited body
+	EditedIssues     map[int64]string // issue-comment id -> its last edited body
+	replies          []Reply
+	reviewComments   []ReviewComment
+	general          []GeneralComment
+	prState          string          // "" reads as "open"
+	prMeta           Meta            // returned by PRMeta (SetPRMeta overrides), PR-independent fallback
+	prMetas          map[int]Meta    // per-PR override (SetPRMetaFor), checked first
+	viewed           map[string]bool // "pr|path" -> viewed
 
 	lastStartLine int
 	lastEndLine   int
@@ -271,6 +278,30 @@ func (f *Fake) UnresolveReviewThread(_ context.Context, pr int, commentID int64)
 	defer f.mu.Unlock()
 	f.UnresolvedThreads = append(f.UnresolvedThreads, commentID)
 	return nil
+}
+
+// SetResolvedOnGithub seeds the threads ResolvedReviewThreads reports as
+// resolved — "somebody hit Resolve conversation on github.com", which is what
+// the comment import has to pick up.
+func (f *Fake) SetResolvedOnGithub(rootIDs ...int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.resolvedOnGithub == nil {
+		f.resolvedOnGithub = map[int64]bool{}
+	}
+	for _, id := range rootIDs {
+		f.resolvedOnGithub[id] = true
+	}
+}
+
+func (f *Fake) ResolvedReviewThreads(_ context.Context, pr int) (map[int64]bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[int64]bool{}
+	for id := range f.resolvedOnGithub {
+		out[id] = true
+	}
+	return out, nil
 }
 
 // UnresolvedThreadCount returns how many review threads have been unresolved.
