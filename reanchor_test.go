@@ -303,7 +303,10 @@ func TestReanchorApprovalsRemapAndDrop(t *testing.T) {
 	}
 }
 
-// An approval set that still maps onto exactly the same rows produces no remap.
+// An approval set that still maps onto exactly the same rows AND already carries
+// accurate anchors produces no remap at all. A legacy one (no anchors yet) does
+// emit exactly one — the upgrade that gives it anchors — after which a second
+// pass is silent.
 func TestReanchorApprovalsUnchangedEmitsNothing(t *testing.T) {
 	dir, pr := t.TempDir(), 940012
 	src := fooPHP("$x = 1;", "return $x;")
@@ -318,8 +321,133 @@ func TestReanchorApprovalsUnchangedEmitsNothing(t *testing.T) {
 
 	got := planApprovalRemap(baseDir, headDir, oldBase, oldHead,
 		[]approvals.Approval{ap}, []Block{b}, map[string]bool{"Foo.php": true})
-	if len(got) != 0 {
-		t.Fatalf("remaps = %+v, want none", got)
+	if len(got) != 1 {
+		t.Fatalf("remaps = %+v, want one anchor upgrade", got)
+	}
+	if len(got[0].Rows) != 2 || got[0].Rows[0] != 1 || got[0].Rows[1] != 2 {
+		t.Errorf("rows = %v, want them unchanged", got[0].Rows)
+	}
+	if len(got[0].Anchors) != 2 {
+		t.Fatalf("anchors = %+v, want one per approved row", got[0].Anchors)
+	}
+
+	ap.Anchors = got[0].Anchors
+	again := planApprovalRemap(baseDir, headDir, oldBase, oldHead,
+		[]approvals.Approval{ap}, []Block{b}, map[string]bool{"Foo.php": true})
+	if len(again) != 0 {
+		t.Fatalf("second pass = %+v, want none", again)
+	}
+}
+
+// THE reported bug: the reviewer approves a few lines, the PR owner pushes new
+// commits that shift them, and the approval silently disappears. With its own
+// anchors the approval no longer depends on the previous base/head sides being
+// recoverable at all (a rebase of the base branch, a force-push or a full
+// re-ingest all make that impossible) — here NO old worktree exists whatsoever,
+// yet every still-present line keeps its approval at its new index.
+func TestReanchorApprovalsFollowShiftedRowsViaAnchors(t *testing.T) {
+	dir, pr := t.TempDir(), 940014
+	prevSrc := fooPHP("$x = 1;", "$y = 2;", "return $x + $y;")
+	// Two lines inserted above; everything the reviewer approved shifts down.
+	newSrc := fooPHP("$guard = true;", "$log = null;", "$x = 1;", "$y = 2;", "return $x + $y;")
+	writeWorktreeFile(t, dir, pr, "Foo.php", prevSrc, newSrc)
+
+	b := fooBlock(pr)
+	baseDir, headDir := worktreeDirs(dir, pr)
+	ap := approvals.Approval{
+		PR: pr, BlockID: b.ID(), Rows: []int{1, 2},
+		Anchors: []approvals.RowAnchor{
+			{Row: 1, Text: bodySnippet("$x = 1;"), Prev: "public function total() {", Next: bodySnippet("$y = 2;")},
+			{Row: 2, Text: bodySnippet("$y = 2;"), Prev: bodySnippet("$x = 1;"), Next: bodySnippet("return $x + $y;")},
+		},
+	}
+
+	empty := t.TempDir() // no previous revision on disk at all
+	got := planApprovalRemap(baseDir, headDir, empty, empty,
+		[]approvals.Approval{ap}, []Block{b}, map[string]bool{"Foo.php": true})
+	if len(got) != 1 {
+		t.Fatalf("remaps = %+v, want 1", got)
+	}
+	if len(got[0].Rows) != 2 {
+		t.Fatalf("rows = %v, want both approvals to survive the shift", got[0].Rows)
+	}
+	newRows, _, _ := blockAlignedRows(baseDir, headDir, b)
+	for i, want := range []string{"$x = 1;", "$y = 2;"} {
+		if got := rowDisplayText(newRows[got[0].Rows[i]]); got != bodySnippet(want) {
+			t.Errorf("row %d now holds %q, want %q", i, got, bodySnippet(want))
+		}
+	}
+	// The anchors were rewritten to the new indices, so the next refresh starts
+	// from an accurate description again.
+	for i, an := range got[0].Anchors {
+		if an.Row != got[0].Rows[i] {
+			t.Errorf("anchor %d row = %d, want %d", i, an.Row, got[0].Rows[i])
+		}
+	}
+}
+
+// A line whose text repeats within the block is resolved by its neighbours, and
+// dropped rather than guessed at when even those don't single one out.
+func TestReanchorApprovalsDuplicateRowUsesContext(t *testing.T) {
+	dir, pr := t.TempDir(), 940015
+	prevSrc := fooPHP("$a = 1;", "return $a;", "$b = 2;", "return $a;")
+	newSrc := fooPHP("$log = null;", "$a = 1;", "return $a;", "$b = 2;", "return $a;")
+	writeWorktreeFile(t, dir, pr, "Foo.php", prevSrc, newSrc)
+
+	b := fooBlock(pr)
+	baseDir, headDir := worktreeDirs(dir, pr)
+	// The SECOND `return $a;` (the one after `$b = 2;`) is what was approved.
+	ap := approvals.Approval{
+		PR: pr, BlockID: b.ID(), Rows: []int{4},
+		Anchors: []approvals.RowAnchor{
+			{Row: 4, Text: bodySnippet("return $a;"), Prev: bodySnippet("$b = 2;"), Next: "}"},
+		},
+	}
+
+	empty := t.TempDir()
+	got := planApprovalRemap(baseDir, headDir, empty, empty,
+		[]approvals.Approval{ap}, []Block{b}, map[string]bool{"Foo.php": true})
+	if len(got) != 1 || len(got[0].Rows) != 1 {
+		t.Fatalf("remaps = %+v, want the duplicate row resolved by its context", got)
+	}
+	newRows, _, _ := blockAlignedRows(baseDir, headDir, b)
+	at := got[0].Rows[0]
+	if rowDisplayText(newRows[at]) != bodySnippet("return $a;") ||
+		rowDisplayText(newRows[at-1]) != bodySnippet("$b = 2;") {
+		t.Errorf("landed on row %d (%q, after %q), want the SECOND occurrence",
+			at, rowDisplayText(newRows[at]), rowDisplayText(newRows[at-1]))
+	}
+}
+
+// An approved line that was genuinely rewritten is dropped: you did not approve
+// the code that replaced it.
+func TestReanchorApprovalsDropRewrittenRowViaAnchors(t *testing.T) {
+	dir, pr := t.TempDir(), 940016
+	prevSrc := fooPHP("$x = 1;", "return $x;")
+	newSrc := fooPHP("$x = 1;", "return $x * 2;")
+	writeWorktreeFile(t, dir, pr, "Foo.php", prevSrc, newSrc)
+
+	b := fooBlock(pr)
+	baseDir, headDir := worktreeDirs(dir, pr)
+	ap := approvals.Approval{
+		PR: pr, BlockID: b.ID(), Rows: []int{1, 2}, Calls: []string{"2:4"},
+		Anchors: []approvals.RowAnchor{
+			{Row: 1, Text: bodySnippet("$x = 1;"), Prev: "public function total() {", Next: bodySnippet("return $x;")},
+			{Row: 2, Text: bodySnippet("return $x;"), Prev: bodySnippet("$x = 1;"), Next: "}"},
+		},
+	}
+
+	empty := t.TempDir()
+	got := planApprovalRemap(baseDir, headDir, empty, empty,
+		[]approvals.Approval{ap}, []Block{b}, map[string]bool{"Foo.php": true})
+	if len(got) != 1 {
+		t.Fatalf("remaps = %+v, want 1", got)
+	}
+	if len(got[0].Rows) != 1 {
+		t.Errorf("rows = %v, want only the untouched line to survive", got[0].Rows)
+	}
+	if len(got[0].Calls) != 0 {
+		t.Errorf("calls = %v, want the rewritten row's call key dropped too", got[0].Calls)
 	}
 }
 

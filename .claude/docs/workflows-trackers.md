@@ -115,8 +115,17 @@ run **before** the relations rebuild.
   **whitespace-insensitively** (`wsKey`, the same way `diffLines` pairs lines,
   so a pure re-indent still matches). Blank/filler rows are skipped inside a
   multi-line match.
-- **An approval stores no text**, only indices — which is why the pass needs the
-  PREVIOUS sides. `refreshIngestDelta` therefore reports
+- **An approval carries its own per-row anchors** (`approvals.RowAnchor`: the
+  row's displayed text plus its two neighbours, written by the UI at approve
+  time — see "An approval carries the CODE it approved" in
+  `.claude/docs/approval.md`), so it re-anchors from data it holds itself:
+  unique text wins, several candidates must be singled out by their neighbours,
+  a tie is dropped (`remapFromAnchors`/`anchorContextMatches`). That is what
+  makes it survive the cases the fallback below cannot handle at all — the base
+  branch moving (a rebase/merge of main re-diffs the whole PR), a force-push, or
+  a full re-ingest.
+- **An approval stored BEFORE those anchors existed** has only indices, and
+  falls back to the PREVIOUS sides. `refreshIngestDelta` therefore reports
   `PrevBaseSHA`/`PrevHeadSHA`/`ChangedFiles` on its result (reading them back
   afterwards is impossible — the refresh has overwritten `pr_ingest` — and
   wouldn't be replay-safe), and `planReanchor` materialises those two revisions
@@ -124,7 +133,9 @@ run **before** the relations rebuild.
   (`git show <sha>:<path>`, stdout only — `runGit`'s `CombinedOutput` would
   splice stderr into the file content) so `blockAlignedRows` can be reused
   verbatim on a historical revision. The real head worktree is no help: it has
-  already been checked out to the new SHA.
+  already been checked out to the new SHA. Every remap — from either source —
+  emits **fresh** anchors for the rows that survived, so a legacy approval
+  upgrades itself on the first refresh and never needs this fallback again.
 - **It degrades instead of guessing.** No match, or several (a snippet like a
   bare `}` recurs) → the comment **unpins** to `row_start -1`, so it shows
   anywhere in its block and claims no 💬 row. Symbol gone entirely →
@@ -214,9 +225,14 @@ read-model having a snapshot the instant the server starts serving.
 One Execution per PR, making approval durable across a refresh.
 
 - **`modules/approvals`** (`data/approvals.db`):
-  `approvals(pr, block_id, rows, calls)` with the arrays as JSON — the
-  client-side `b.approvedRows`/`b.approvedCalls`. `Replace` is a full swap per
-  block and an **empty** set removes the row → replay-safe.
+  `approvals(pr, block_id, rows, calls, anchors)` with the arrays as JSON — the
+  client-side `b.approvedRows`/`b.approvedCalls`, plus the **code each approved
+  row pointed at** (`RowAnchor{row,text,prev,next}`), which is what makes an
+  approval survive new commits (see "An approval carries the CODE it approved"
+  in `.claude/docs/approval.md`). `Replace` is a full swap per block and an
+  **empty** set removes the row → replay-safe; a `nil` anchor list means "keep
+  the stored anchors" so a caller that can't describe the rows never erases
+  them.
 - **Workflow:** a loop on **`set`** Signals; each runs one `saveApproval`
   Activity. Deterministic (the Activity count equals the Signal count; no clock,
   no live state). Never completes — a long-lived per-PR tracker.

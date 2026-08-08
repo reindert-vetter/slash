@@ -2333,6 +2333,19 @@ function displayText(r) {
   return r.rightMark === 'ins' ? r.right : r.left
 }
 
+// rowAnchorText returns the text a reviewer actually SEES on a row: the new
+// (right) side when the row has one, else the old (left) side of a pure
+// deletion. Deliberately keyed off presence rather than displayText's
+// `rightMark === 'ins'` test, because this is the exact rule the Go side uses
+// (rowDisplayText, blockstats.go) — the two must agree character for character,
+// since an approval anchor written here is matched against it after new commits
+// land (see approvalAnchors in home.mjs and reanchor.go).
+export function rowAnchorText(r) {
+  if (!r) return ''
+  if (r.right != null) return r.right
+  return r.left || ''
+}
+
 // rowHasContent reports whether a changed row actually carries visible text on
 // its display side. A row can be `rowChanged` (it carries a del/ins mark) yet
 // be a blank/whitespace-only line that's purely part of the diff — e.g. a

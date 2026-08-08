@@ -75,9 +75,44 @@ restores every block's arrays from `GET /api/approvals?pr=N`. Every mutation
 (`toggleApprove`/`toggleCallApprove`, plus the card checkbox via `Block.mjs`'s
 `onApprove` callback) sends, after the local reassignment, the **complete** set
 for that block as a Signal (`POST /api/workflows/{runId}/signals/set {blockId,
-rows, calls}`, `persistApproval`). The UI never writes directly — only this
-Signal, within the write boundary. See "Persisting reviewer approval" in
+rows, calls, anchors}`, `persistApproval`). The UI never writes directly — only
+this Signal, within the write boundary. See "Persisting reviewer approval" in
 `.claude/docs/workflows-trackers.md`.
+
+### An approval carries the CODE it approved, not just a row index
+
+`anchors` (`approvalAnchors` in `home.mjs` → `approvals.RowAnchor` → the
+`anchors` column) describes every row the approval covers — the approved rows
+plus the rows its call keys sit on — as `{row, text, prev, next}`, using
+`rowAnchorText` (`Block.mjs`, the exact rule Go's `rowDisplayText` uses; keep
+the two in lockstep). Neighbours included, because that is what tells a repeated
+line (a bare `}`, a mirrored array literal) from its twins.
+
+**Why:** a row index means nothing once the PR gets new commits.
+`reanchor.go` remaps approvals on an ingest refresh, but it used to have to
+recover the old text from the **previous base/head SHAs** — which is exactly
+what cannot work when the base branch moved (a rebase/merge of main makes every
+file "changed" and re-diffs the whole PR), after a force-push, or on a full
+re-ingest. The reported symptom was an approval that had simply vanished after
+the PR owner processed feedback. With its own anchors an approval re-anchors the
+same way a comment does, from data it carries itself.
+
+- **Never sent → never cleared.** `approvalAnchors` returns `null` (the field is
+  then omitted) when the block's code isn't loaded, and `approvals.Replace`
+  reads `nil` as "keep what is stored". An explicitly empty list does clear.
+- **A legacy approval upgrades itself:** `planApprovalRemap` falls back to the
+  old shadow-worktree path when there are no anchors, and always emits **fresh**
+  anchors for the rows that survived — so the first refresh after this change
+  gives every stored approval a proper description, and the remap plan rewrites
+  them to the new indices on every later refresh.
+- **Ambiguity is still dropped, never guessed** (`remapFromAnchors`): unique
+  text wins outright; several candidates must be singled out by
+  `anchorContextMatches`; a tie drops the row. A wrong ✓ on code the reviewer
+  never read is worse than an approval they have to redo.
+
+Tests: `reanchor_test.go` (`TestReanchorApprovalsFollowShiftedRowsViaAnchors`
+— no previous worktree at all — plus the duplicate-context and rewritten-row
+cases), `approvals_test.go`, `tests/space-descends-into-call.spec.mjs`.
 
 ## Placing a comment (or an AI finding) does NOT retract an approval
 

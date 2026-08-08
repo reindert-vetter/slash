@@ -108,3 +108,43 @@ test('Space approves the unit normally when the calls underneath have nothing op
     })
     .toBeGreaterThan(0)
 })
+
+// Every approve write carries the code the approved rows pointed at
+// (persistApproval -> approvalAnchors, home.mjs), so the backend can find those
+// rows again after the PR gets new commits instead of re-applying a stale index
+// (reanchor.go). Without this the approval of a line that merely SHIFTED was
+// silently dropped.
+test('an approval stores the text of the rows it covers, plus their neighbours', async ({
+  page,
+}) => {
+  await clearApproval(page)
+  await page.goto('/pr/100')
+  await leaveSearchBox(page)
+
+  await page.keyboard.press('ArrowRight')
+  await expect(page.locator('[data-change-active]').first()).toBeVisible()
+  await page.keyboard.press(' ')
+
+  await expect
+    .poll(async () => {
+      const a = await callerApproval(page)
+      return a && a.anchors ? a.anchors.length : 0
+    })
+    .toBeGreaterThan(0)
+
+  const approval = await callerApproval(page)
+  expect(approval.anchors.map((an) => an.row).sort((x, y) => x - y)).toEqual(
+    [...approval.rows].sort((x, y) => x - y),
+  )
+  for (const an of approval.anchors) {
+    expect(typeof an.text).toBe('string')
+    expect(an.text.trim().length).toBeGreaterThan(0)
+    // The neighbours are what disambiguate a repeated line. Both are always
+    // present as strings (only a block's very first/last row has none), though
+    // a neighbour may legitimately be an empty source line — as it is here for
+    // the blank line right below this fixture's first group.
+    expect(typeof an.prev).toBe('string')
+    expect(typeof an.next).toBe('string')
+    expect(an.prev.trim().length).toBeGreaterThan(0)
+  }
+})

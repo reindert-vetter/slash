@@ -424,8 +424,14 @@ type ApprovalSignal struct {
 	BlockID string   `json:"blockId"`
 	Rows    []int    `json:"rows"`
 	Calls   []string `json:"calls"`
-	File    string   `json:"file"`
-	Viewed  *bool    `json:"viewed"`
+	// Anchors is the code each approved row pointed at, sent along by the UI
+	// (persistApproval, home.mjs) so the row can be found again after the PR
+	// gets new commits — see reanchor.go. An older client, or a caller that
+	// only trims an existing set, may leave it empty; the row indices then
+	// still apply, they just can't be re-anchored from text.
+	Anchors []approvals.RowAnchor `json:"anchors"`
+	File    string                `json:"file"`
+	Viewed  *bool                 `json:"viewed"`
 }
 
 // TaskSnoozeInput starts a task_snooze Execution — one tracker per repo.
@@ -1283,7 +1289,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			} else {
 				for _, r := range plan.Approvals {
 					if err := m.engine.SignalWorkflow(runID, SignalSet, ApprovalSignal{
-						BlockID: r.BlockID, Rows: r.Rows, Calls: r.Calls,
+						BlockID: r.BlockID, Rows: r.Rows, Calls: r.Calls, Anchors: r.Anchors,
 					}); err != nil {
 						m.logf("reanchor: approvals for %s skipped: %v", r.BlockID, err)
 						continue
@@ -1675,10 +1681,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// The approvals module is the only writer of the approvals read-model.
 	engine.RegisterActivity("saveApproval", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
-			PR      int      `json:"pr"`
-			BlockID string   `json:"blockId"`
-			Rows    []int    `json:"rows"`
-			Calls   []string `json:"calls"`
+			PR      int                   `json:"pr"`
+			BlockID string                `json:"blockId"`
+			Rows    []int                 `json:"rows"`
+			Calls   []string              `json:"calls"`
+			Anchors []approvals.RowAnchor `json:"anchors"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
@@ -1686,7 +1693,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.approvals == nil {
 			return nil, nil
 		}
-		return nil, m.approvals.Replace(ctx, arg.PR, arg.BlockID, arg.Rows, arg.Calls)
+		return nil, m.approvals.Replace(ctx, arg.PR, arg.BlockID, arg.Rows, arg.Calls, arg.Anchors)
 	})
 
 	// Activity: persist one task's snooze state (write, workflow-driven). The
@@ -2784,11 +2791,12 @@ func approveWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			continue
 		}
 		arg := struct {
-			PR      int      `json:"pr"`
-			BlockID string   `json:"blockId"`
-			Rows    []int    `json:"rows"`
-			Calls   []string `json:"calls"`
-		}{PR: in.PR, BlockID: sig.BlockID, Rows: sig.Rows, Calls: sig.Calls}
+			PR      int                   `json:"pr"`
+			BlockID string                `json:"blockId"`
+			Rows    []int                 `json:"rows"`
+			Calls   []string              `json:"calls"`
+			Anchors []approvals.RowAnchor `json:"anchors"`
+		}{PR: in.PR, BlockID: sig.BlockID, Rows: sig.Rows, Calls: sig.Calls, Anchors: sig.Anchors}
 		if err := w.ExecuteActivity("saveApproval", arg, nil); err != nil {
 			return nil, fmt.Errorf("save approval: %w", err)
 		}

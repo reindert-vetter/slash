@@ -20,10 +20,10 @@ func TestApprovalsModuleRoundTrip(t *testing.T) {
 	defer m.Close()
 	ctx := context.Background()
 
-	if err := m.Replace(ctx, 1, "1:a.php:A::x", []int{2, 5, 7}, []string{"5:10"}); err != nil {
+	if err := m.Replace(ctx, 1, "1:a.php:A::x", []int{2, 5, 7}, []string{"5:10"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Replace(ctx, 1, "1:b.php:B::y", []int{3}, nil); err != nil {
+	if err := m.Replace(ctx, 1, "1:b.php:B::y", []int{3}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, err := m.List(ctx, 1)
@@ -42,7 +42,7 @@ func TestApprovalsModuleRoundTrip(t *testing.T) {
 	}
 
 	// Full swap: re-approving A::x with a smaller set overwrites the larger one.
-	if err := m.Replace(ctx, 1, "1:a.php:A::x", []int{2}, nil); err != nil {
+	if err := m.Replace(ctx, 1, "1:a.php:A::x", []int{2}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = m.List(ctx, 1)
@@ -57,7 +57,7 @@ func TestApprovalsModuleRoundTrip(t *testing.T) {
 	}
 
 	// An empty set clears the block's row entirely.
-	if err := m.Replace(ctx, 1, "1:a.php:A::x", nil, nil); err != nil {
+	if err := m.Replace(ctx, 1, "1:a.php:A::x", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = m.List(ctx, 1)
@@ -165,5 +165,54 @@ func TestApproveWorkflowFileViewed(t *testing.T) {
 	// The approvals read-model was never touched by the viewed requests.
 	if got, _ := ap.List(context.Background(), pr); len(got) != 0 {
 		t.Fatalf("approvals List = %+v, want none (viewed-only signals)", got)
+	}
+}
+
+// Anchors round-trip through the store, and a nil (absent) anchor list on a
+// later write must NOT wipe them: a caller that only trims an existing set, or
+// one whose block code wasn't loaded, can't describe the rows — see Replace.
+func TestApprovalAnchorsRoundTripAndPreserve(t *testing.T) {
+	m, err := approvals.Open(filepath.Join(t.TempDir(), "approvals.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	ctx := context.Background()
+	anchors := []approvals.RowAnchor{
+		{Row: 2, Text: "$x = 1;", Prev: "public function total() {", Next: "return $x;"},
+	}
+	if err := m.Replace(ctx, 7, "7:a.php:A::x", []int{2}, nil, anchors); err != nil {
+		t.Fatal(err)
+	}
+	list, err := m.List(ctx, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || len(list[0].Anchors) != 1 || list[0].Anchors[0] != anchors[0] {
+		t.Fatalf("anchors = %+v, want %+v", list, anchors)
+	}
+
+	// nil → keep what is stored.
+	if err := m.Replace(ctx, 7, "7:a.php:A::x", []int{2, 3}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	list, err = m.List(ctx, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list[0].Anchors) != 1 || list[0].Anchors[0] != anchors[0] {
+		t.Fatalf("anchors = %+v after a nil write, want them preserved", list[0].Anchors)
+	}
+
+	// An explicitly empty slice does clear them.
+	if err := m.Replace(ctx, 7, "7:a.php:A::x", []int{2}, nil, []approvals.RowAnchor{}); err != nil {
+		t.Fatal(err)
+	}
+	list, err = m.List(ctx, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list[0].Anchors) != 0 {
+		t.Fatalf("anchors = %+v, want cleared", list[0].Anchors)
 	}
 }

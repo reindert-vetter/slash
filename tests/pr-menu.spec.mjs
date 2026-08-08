@@ -66,7 +66,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(rows.nth(0)).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('Open op GitHub')
     await expect(rows.nth(2)).toContainText('PR keuren')
-    await expect(rows.nth(3)).toContainText('Comment plaatsen')
+    await expect(rows.nth(3)).toContainText('Algemene comment plaatsen')
 
     // Esc backs out to the root, then Jira → its three children (plus its own
     // pinned "Sluit menu" first).

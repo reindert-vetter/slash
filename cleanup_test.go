@@ -244,7 +244,7 @@ func (ctm *cleanupTestManager) seedAllPRData(t *testing.T, pr int) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ctm.approvals.Replace(ctx, pr, blockID, []int{0}, nil); err != nil {
+	if err := ctm.approvals.Replace(ctx, pr, blockID, []int{0}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := ctm.relations.Replace(ctx, pr, []relations.Relation{

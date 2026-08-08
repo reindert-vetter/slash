@@ -416,7 +416,7 @@ func TestCodeWarningKeepsApproval(t *testing.T) {
 	ctx := context.Background()
 
 	// The reviewer approved this row before the risk check ever ran.
-	if err := ap.Replace(ctx, pr, blockID, []int{row}, nil); err != nil {
+	if err := ap.Replace(ctx, pr, blockID, []int{row}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

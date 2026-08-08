@@ -16,6 +16,7 @@ import Block, {
   callKey,
   callUnitApproved,
   rowCallSegments,
+  rowAnchorText,
   unitsFor,
   updateHints,
   blockLabel,
@@ -1791,11 +1792,42 @@ function persistIgnoredComment(commentId, ignored) {
   }).catch(() => {})
 }
 
+// approvalAnchors describes, in the block's CURRENT aligned rows, every row the
+// approval covers — the approved rows plus the rows its call keys sit on — as
+// { row, text, prev, next }. A row index on its own means nothing once the PR
+// gets new commits, so this is what lets the backend find the same code back
+// afterwards instead of re-applying a stale index (see reanchor.go, and
+// "Durable persistence" in .claude/docs/approval.md). The neighbours are what
+// tell a repeated line (a bare `}`, a mirrored array literal) from its twins.
+//
+// Returns null — NOT an empty array — when the block has no rows to describe
+// (its code isn't loaded), which the backend reads as "leave the stored anchors
+// alone" rather than "clear them".
+function approvalAnchors(b) {
+  const rows = blockRows(b)
+  if (!rows.length) return null
+  const want = new Set(b.approvedRows || [])
+  for (const key of b.approvedCalls || []) {
+    const row = Number(String(key).split(':')[0])
+    if (Number.isInteger(row)) want.add(row)
+  }
+  return [...want]
+    .filter((r) => r >= 0 && r < rows.length)
+    .sort((x, y) => x - y)
+    .map((r) => ({
+      row: r,
+      text: rowAnchorText(rows[r]),
+      prev: r > 0 ? rowAnchorText(rows[r - 1]) : '',
+      next: r < rows.length - 1 ? rowAnchorText(rows[r + 1]) : '',
+    }))
+}
+
 // persistApproval signals a block's full approved state to the durable approve
 // tracker — the ONLY write path (the UI never writes a read-model directly). A
 // no-op until approveRunId is known (offline); fire-and-forget, best-effort.
 function persistApproval(b) {
   if (!b || !state.approveRunId) return
+  const anchors = approvalAnchors(b)
   fetch(`/api/workflows/${state.approveRunId}/signals/set`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1803,6 +1835,7 @@ function persistApproval(b) {
       blockId: b.id,
       rows: b.approvedRows || [],
       calls: b.approvedCalls || [],
+      ...(anchors ? { anchors } : {}),
     }),
   }).catch(() => {
     /* best-effort — the local state is already updated */

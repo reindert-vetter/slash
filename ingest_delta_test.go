@@ -48,10 +48,10 @@ func TestUpsertPRFileBlocksPreservesLinkedData(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ap.Close()
-	if err := ap.Replace(ctx, pr, idA, []int{1, 2}, nil); err != nil {
+	if err := ap.Replace(ctx, pr, idA, []int{1, 2}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := ap.Replace(ctx, pr, idB, []int{0}, nil); err != nil {
+	if err := ap.Replace(ctx, pr, idB, []int{0}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

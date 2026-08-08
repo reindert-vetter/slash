@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -36,11 +37,19 @@ import (
 //     pre-existing "block known, row unknown" convention: the comment then shows
 //     anywhere within its block and claims no 💬 row. Block gone entirely →
 //     AnchorOrphan, so the frontend can surface it instead of losing it.
-//   - APPROVALS store no text, only row indices, so their old text has to be
-//     recovered from the previous base/head SHAs (planReanchor materializes those
-//     two sides into a shadow worktree pair) and looked up in the new rows. A row
-//     that can't be found is DROPPED — you did not approve the code that replaced
-//     it. That needs no new state: the row is simply unapproved again.
+//   - APPROVALS carry their own per-row anchors (approvals.RowAnchor: the row's
+//     displayed text plus its two neighbours, written by persistApproval), so
+//     they re-anchor exactly like a comment does: find that text again in the new
+//     rows, disambiguating a repeated line by its neighbours. A row that can't be
+//     found is DROPPED — you did not approve the code that replaced it. That
+//     needs no new state: the row is simply unapproved again.
+//     An approval stored BEFORE those anchors existed has only row indices, and
+//     falls back to the older path: recover its old text from the previous
+//     base/head SHAs (planReanchor materializes those two sides into a shadow
+//     worktree pair) and look that up in the new rows. That fallback is exactly
+//     what could not work when the PR's base moved (a rebase/merge of main makes
+//     every file a "changed" file and the previous SHAs may not even resolve), so
+//     the anchors are what make this robust rather than best-effort.
 //
 // READ-only, like blockstats.go: it reads worktree files and runs `git show`, but
 // mutates nothing. The plan it returns is applied by the caller through the
@@ -59,11 +68,14 @@ type commentAnchorUpdate struct {
 }
 
 // approvalRemap is one block's remapped approval set — the same shape the
-// approve tracker's existing `set` Signal already takes.
+// approve tracker's existing `set` Signal already takes. The anchors move along
+// with the rows (same text, new row index), so a second refresh re-anchors from
+// where this one left off instead of from stale indices.
 type approvalRemap struct {
-	BlockID string   `json:"blockId"`
-	Rows    []int    `json:"rows"`
-	Calls   []string `json:"calls"`
+	BlockID string                `json:"blockId"`
+	Rows    []int                 `json:"rows"`
+	Calls   []string              `json:"calls"`
+	Anchors []approvals.RowAnchor `json:"anchors"`
 }
 
 // reanchorPlan is everything a refresh wants to change. Empty means every anchor
@@ -267,14 +279,24 @@ func firstNonBlankLine(snippet string) string {
 	return ""
 }
 
-// planApprovalRemap remaps every approved row index of the touched blocks from the
-// PREVIOUS aligned-row space (built from oldBaseDir/oldHeadDir — the worktree pair
-// as of the last ingest) into the current one, by looking up the text each index
-// used to display. An index whose text is gone, or now ambiguous, is dropped:
-// approval means "I read this code", and the code it pointed at is no longer there.
+// planApprovalRemap remaps every approved row index of the touched blocks into
+// the CURRENT aligned-row space and returns only the blocks that actually
+// change. An index whose code can no longer be found, or has become ambiguous,
+// is dropped: approval means "I read this code", and the code it pointed at is
+// no longer there.
 //
-// Approvals store no snippet of their own (unlike comments), which is exactly why
-// this needs the old sides at all.
+// Two sources for "what did this row say":
+//
+//   - the approval's OWN anchors (approvals.RowAnchor, written by the UI at
+//     approve time) — self-contained, so it works no matter what happened to the
+//     PR in between (new commits, a rebase of the base branch, a force-push, a
+//     full re-ingest);
+//   - failing that (an approval stored before anchors existed), the previous
+//     base/head sides materialized by planReanchor into oldBaseDir/oldHeadDir.
+//
+// Either way the result carries FRESH anchors for the rows that survived, built
+// from the new rows — so a legacy approval upgrades itself on the first refresh
+// and every later refresh starts from an accurate description again.
 func planApprovalRemap(baseDir, headDir, oldBaseDir, oldHeadDir string, aps []approvals.Approval, blocks []Block, touched map[string]bool) []approvalRemap {
 	byID := make(map[string]Block, len(blocks))
 	for _, b := range blocks {
@@ -289,15 +311,42 @@ func planApprovalRemap(baseDir, headDir, oldBaseDir, oldHeadDir string, aps []ap
 			// approval at restore); file untouched → its rows still line up.
 			continue
 		}
-		oldRows, _, _ := blockAlignedRows(oldBaseDir, oldHeadDir, b)
 		newRows, _, _ := blockAlignedRows(baseDir, headDir, b)
-		if len(oldRows) == 0 {
-			// The previous sides couldn't be read (a `git show` miss for this
-			// path, e.g. the file was added since). Leave the approval alone
-			// rather than dropping rows on a guess.
+		if len(newRows) == 0 {
 			continue
 		}
-		moved := remapRows(oldRows, newRows)
+
+		// textAt reports the text an approved row USED to hold, for the
+		// call-key check below (a "<row>:<segStart>" offset only survives while
+		// the row's text is byte-identical).
+		var moved map[int]int
+		var textAt func(row int) (string, bool)
+		if len(a.Anchors) > 0 {
+			byRow := make(map[int]approvals.RowAnchor, len(a.Anchors))
+			for _, an := range a.Anchors {
+				byRow[an.Row] = an
+			}
+			moved = remapFromAnchors(a.Anchors, newRows)
+			textAt = func(row int) (string, bool) {
+				an, ok := byRow[row]
+				return an.Text, ok
+			}
+		} else {
+			oldRows, _, _ := blockAlignedRows(oldBaseDir, oldHeadDir, b)
+			if len(oldRows) == 0 {
+				// No anchors AND the previous sides couldn't be read (a
+				// `git show` miss, e.g. the file was added since). Leave the
+				// approval alone rather than dropping rows on a guess.
+				continue
+			}
+			moved = remapRows(oldRows, newRows)
+			textAt = func(row int) (string, bool) {
+				if row < 0 || row >= len(oldRows) {
+					return "", false
+				}
+				return rowDisplayText(oldRows[row]), true
+			}
+		}
 
 		rows := make([]int, 0, len(a.Rows))
 		for _, r := range a.Rows {
@@ -319,17 +368,147 @@ func planApprovalRemap(baseDir, headDir, oldBaseDir, oldHeadDir string, aps []ap
 				continue
 			}
 			to, ok := moved[from]
-			if !ok || rowDisplayText(oldRows[from]) != rowDisplayText(newRows[to]) {
+			if !ok {
+				continue
+			}
+			was, known := textAt(from)
+			if !known || was != rowDisplayText(newRows[to]) {
 				continue
 			}
 			calls = append(calls, strconv.Itoa(to)+key[sep:])
 		}
-		if sameInts(a.Rows, rows) && sameStrings(a.Calls, calls) {
+		anchors := anchorsForRows(newRows, rows, calls)
+		if sameInts(a.Rows, rows) && sameStrings(a.Calls, calls) && sameAnchors(a.Anchors, anchors) {
 			continue
 		}
-		out = append(out, approvalRemap{BlockID: a.BlockID, Rows: rows, Calls: calls})
+		out = append(out, approvalRemap{BlockID: a.BlockID, Rows: rows, Calls: calls, Anchors: anchors})
 	}
 	return out
+}
+
+// remapFromAnchors resolves each stored anchor onto its row in the new rows.
+// A text that occurs exactly once (among the rows not already claimed) wins
+// outright — the same strict rule remapRows uses. Several candidates are only
+// resolved when the anchor's recorded NEIGHBOURS single one out, and a tie is
+// dropped rather than guessed at, mirroring contextRemap: a wrong ✓ on code the
+// reviewer never read is worse than an approval they have to redo.
+//
+// Anchors are processed in ascending stored-row order and a claimed new row is
+// removed from consideration for the rest of the pass, so two duplicate rows can
+// never both land on the same one.
+func remapFromAnchors(anchors []approvals.RowAnchor, newRows []alignRow) map[int]int {
+	groups := groupRowsByKey(newRows)
+	sorted := append([]approvals.RowAnchor(nil), anchors...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Row < sorted[j].Row })
+
+	used := map[int]bool{}
+	moved := map[int]int{}
+	for _, an := range sorted {
+		key := wsKey(an.Text)
+		if key == "" {
+			continue
+		}
+		var cands []int
+		for _, idx := range groups[key] {
+			if !used[idx] {
+				cands = append(cands, idx)
+			}
+		}
+		pick := -1
+		switch len(cands) {
+		case 0:
+			continue
+		case 1:
+			pick = cands[0]
+		default:
+			ambiguous := false
+			for _, idx := range cands {
+				if !anchorContextMatches(an, newRows, idx) {
+					continue
+				}
+				if pick != -1 {
+					ambiguous = true
+					break
+				}
+				pick = idx
+			}
+			if ambiguous {
+				pick = -1
+			}
+		}
+		if pick < 0 {
+			continue
+		}
+		moved[an.Row] = pick
+		used[pick] = true
+	}
+	return moved
+}
+
+// anchorContextMatches checks whether the rows around idx are the ones the
+// anchor recorded. Whitespace-insensitive, like every other comparison in this
+// file; a missing neighbour (the block's very first/last row) is the empty
+// string on both sides, so an edge row still matches an edge row.
+func anchorContextMatches(an approvals.RowAnchor, rows []alignRow, idx int) bool {
+	prev, next := "", ""
+	if idx > 0 {
+		prev = wsKey(rowDisplayText(rows[idx-1]))
+	}
+	if idx < len(rows)-1 {
+		next = wsKey(rowDisplayText(rows[idx+1]))
+	}
+	return prev == wsKey(an.Prev) && next == wsKey(an.Next)
+}
+
+// anchorsForRows describes, in the CURRENT rows, every row an approval still
+// covers — the approved rows themselves plus the rows its call keys sit on, so
+// a partially approved row can be found back too. Sorted by row, so the stored
+// value is stable and sameAnchors can compare it cheaply.
+func anchorsForRows(rows []alignRow, approvedRows []int, calls []string) []approvals.RowAnchor {
+	want := map[int]bool{}
+	for _, r := range approvedRows {
+		want[r] = true
+	}
+	for _, key := range calls {
+		if sep := strings.IndexByte(key, ':'); sep >= 0 {
+			if row, err := strconv.Atoi(key[:sep]); err == nil {
+				want[row] = true
+			}
+		}
+	}
+	idxs := make([]int, 0, len(want))
+	for r := range want {
+		idxs = append(idxs, r)
+	}
+	sort.Ints(idxs)
+
+	out := make([]approvals.RowAnchor, 0, len(idxs))
+	for _, r := range idxs {
+		if r < 0 || r >= len(rows) {
+			continue
+		}
+		an := approvals.RowAnchor{Row: r, Text: rowDisplayText(rows[r])}
+		if r > 0 {
+			an.Prev = rowDisplayText(rows[r-1])
+		}
+		if r < len(rows)-1 {
+			an.Next = rowDisplayText(rows[r+1])
+		}
+		out = append(out, an)
+	}
+	return out
+}
+
+func sameAnchors(a, b []approvals.RowAnchor) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // remapRows maps old row indices to new ones by their displayed text, keeping only
