@@ -59,6 +59,12 @@ arithmetic. Test: `tests/call-approval-dots.spec.mjs`.
 `b.approvedRows`/`b.approvedCalls` are always **reassigned**, never mutated in
 place, so arrow.js re-renders the checkbox and the indicators.
 
+**Partial-up-to-a-call approval** (`approveThroughCall`, `home.mjs`) is the one
+writer that approves *part* of a unit: `Space` on a unit that calls into code
+with unapproved work of its own approves only up to and including that call's
+segment and drills there — see "`Space` — approve + continue in one keypress"
+in `.claude/docs/keyboard-navigation.md`.
+
 ## Durable persistence (client side)
 
 Approval survives a refresh via the `approvals` read model

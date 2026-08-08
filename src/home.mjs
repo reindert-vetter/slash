@@ -7458,6 +7458,126 @@ function isApproveDone(ctx) {
   return target.length > 0 && target.every((i) => set.has(i))
 }
 
+// callSegmentApproved reports whether one call segment of a row already counts
+// as approved — either individually (an approvedCalls key) or because the whole
+// row graduated into approvedRows (see toggleCallApprove).
+function callSegmentApproved(b, row, segStart) {
+  return approvedRowSet(b).has(row) || approvedCallSet(b).has(callKey(row, segStart))
+}
+
+// firstUnapprovedCallSiteInUnit finds, within the rows a navigation unit
+// covers, the FIRST call site (in reading order: row, then segment) that
+// (a) resolves to a PR block of its own, (b) still has something unapproved
+// somewhere in its subtree, and (c) whose own segment isn't approved yet.
+// Returns { row, segStart, kid, found } — `found` being firstUnapprovedInSubtree's
+// landing plan relative to `kid` — or null when the unit has no such call.
+//
+// (c) is what keeps this from ping-ponging: a reviewer who drills in, decides
+// NOT to approve the child and comes back would otherwise be sent straight
+// back down by the next Space. Once the call itself is approved this site is
+// simply passed over.
+// Deliberately only resolved METHOD CALLS (callRows): "de call waar dat
+// onderliggende blok aan gekoppeld is" has to name a real segment in this
+// line, which a relation child (a line anchor without a segment) and a
+// block-level synthetic call key (resource:/migration_model:/…, no literal
+// site at all — see findCallSites) don't have.
+async function firstUnapprovedCallSiteInUnit(b, unit) {
+  const rows = blockRows(b)
+  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const sites = []
+  for (const r of callRows(b)) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    const kid = byId.get(callChildId(r))
+    if (!kid || kid.id === b.id) continue
+    for (const site of findCallSites(rows, r.callKey)) {
+      if (site.row < unit.start || site.row > unit.end) continue
+      if (callSegmentApproved(b, site.row, site.segStart)) continue
+      sites.push({ row: site.row, segStart: site.segStart, kid })
+    }
+  }
+  sites.sort((x, y) => x.row - y.row || x.segStart - y.segStart)
+  // One subtree walk per child, however many sites it has in this unit.
+  const walked = new Map()
+  for (const s of sites) {
+    if (!walked.has(s.kid.id)) walked.set(s.kid.id, await firstUnapprovedInSubtree(s.kid))
+    const found = walked.get(s.kid.id)
+    if (found) return { ...s, found }
+  }
+  return null
+}
+
+// approveThroughCall approves everything in `unit` up to AND INCLUDING the call
+// segment at (siteRow, siteSegStart), leaving the rest of the unit alone: every
+// changed row of the unit before siteRow in full, plus the segments of siteRow
+// itself that start at or before that call. Same bookkeeping as
+// toggleCallApprove — a row whose every segment ends up approved graduates into
+// approvedRows and drops its approvedCalls keys; both arrays are reassigned
+// wholesale so arrow.js repaints — and persisted through the same `set` Signal.
+function approveThroughCall(b, unit, siteRow, siteSegStart) {
+  const rows = blockRows(b)
+  const rowSet = approvedRowSet(b)
+  const callSet = approvedCallSet(b)
+  for (const i of changedRows(rows)) {
+    if (i >= unit.start && i < siteRow) rowSet.add(i)
+  }
+  const segs = rowCallSegments(rows, siteRow)
+  const keys = new Set(
+    rowSet.has(siteRow)
+      ? segs.map((sg) => callKey(siteRow, sg.start))
+      : [...callSet].filter((k) => k.startsWith(siteRow + ':')),
+  )
+  for (const sg of segs) if (sg.start <= siteSegStart) keys.add(callKey(siteRow, sg.start))
+  const others = [...callSet].filter((k) => !k.startsWith(siteRow + ':'))
+  if (keys.size === segs.length) {
+    rowSet.add(siteRow)
+    b.approvedCalls = others
+  } else {
+    rowSet.delete(siteRow)
+    b.approvedCalls = [...others, ...keys]
+  }
+  b.approvedRows = [...rowSet].sort((x, y) => x - y)
+  persistApproval(b)
+}
+
+// descendIntoUnapprovedCall is Space's "don't approve past unread code" step
+// (reviewer request: "als ik spatie druk op een selectie, en die selectie heeft
+// nog onderliggende blokken (ook dieper) die nog niet zijn goedgekeurd, ga daar
+// dan naartoe, keur dan alleen de call goed waar die onderliggende blok aan
+// gekoppeld is (en alle calls daarvoor)"). Approving a whole group in one press
+// would otherwise silently tick off call sites whose underlying code the
+// reviewer never opened.
+//
+// It approves the unit only UP TO AND INCLUDING that call (approveThroughCall)
+// and then drills to the child's own first unapproved unit, so the rest of the
+// group stays for the next Space once the reviewer comes back up. Returns true
+// when it handled the keypress; false means "nothing underneath, approve
+// normally".
+//
+// Only in diff mode (a list-mode approve covers the whole block and has no
+// cursor unit to split at) and never for a TRANSLATION block (its per-key units
+// have no call segments). Deliberately NO afterApproveAction here: the landing
+// spot is already decided, so running the whole findNextUnapproved chain again
+// would only fight it.
+async function descendIntoUnapprovedCall(ctx) {
+  const b = ctx.b
+  if (!b || ctx.mode !== 'diff' || b.category === 'TRANSLATION') return false
+  const rows = blockRows(b)
+  const units = navUnitsOf(b, rows, ctx.gran)
+  const unit = isRangeGran(ctx.gran) ? rangeUnit(units, ctx.change, ctx.anchor) : units[ctx.change]
+  if (!unit) return false
+  const site = await firstUnapprovedCallSiteInUnit(b, unit)
+  if (!site) return false
+  approveThroughCall(b, unit, site.row, site.segStart)
+  const level = state.focusLevel
+  applyNextUnapproved({
+    root: state.selected,
+    path: [...state.drill.slice(0, level), site.kid, ...site.found.path],
+    gran: site.found.gran,
+    change: site.found.change,
+  })
+  return true
+}
+
 // spaceKey — Space is a one-key shortcut for exactly what the block palette's
 // "Keur ... goed" already does, immediately followed by "Ga door": it reuses
 // toggleApprove/toggleCallApprove (via approveContext, same as the palette
@@ -7483,7 +7603,12 @@ function spaceKey() {
   const ctx = approveContext()
   if (!ctx.b) return
   if (!isApproveDone(ctx)) {
-    toggleApprove(true)
+    // Before approving the unit, check whether it calls into code that itself
+    // still has unapproved work — then approve only up to that call and go
+    // there instead (see descendIntoUnapprovedCall).
+    descendIntoUnapprovedCall(ctx).then((handled) => {
+      if (!handled) toggleApprove(true)
+    })
     return
   }
   const keepList = state.mode !== 'diff'

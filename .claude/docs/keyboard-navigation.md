@@ -654,6 +654,21 @@ same functions — no second approve/continue implementation:
   no-menu exceptions (staying within the same block, approving from the
   blokken-index) still short-circuit exactly as before, `auto` is just a third
   way to skip the same menu.
+- **Underlying code first:** before approving, Space checks whether the unit
+  contains a **resolved method call whose target block still has unapproved
+  work anywhere in its subtree** (`descendIntoUnapprovedCall` →
+  `firstUnapprovedCallSiteInUnit`, `home.mjs`). If so it approves the unit only
+  **up to and including that call's own segment** (`approveThroughCall`: every
+  changed row of the unit before that row in full, plus the segments of that
+  row starting at or before the call) and drills straight to the child's first
+  unapproved unit — the rest of the group waits for the next Space once the
+  reviewer comes back up. Reviewer request: approving a whole group in one
+  press otherwise silently ticks off call sites whose code was never opened.
+  A site whose own segment is **already approved** is skipped, so declining to
+  approve the child and coming back up doesn't send you straight back down;
+  only `callRows` count (a relation child or a synthetic block-level call key
+  has no segment in this line to stop at), never in list mode, never for a
+  TRANSLATION block. Test: `tests/space-descends-into-call.spec.mjs`.
 - **Already approved → only continue:** if the unit under the keyboard is
   already fully approved (`isApproveDone(ctx)`, extracted out of the
   `COMMANDS` 'approve' label so both agree on the same "done" check), `spaceKey`
