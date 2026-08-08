@@ -64,7 +64,11 @@ export function statusInfo(status) {
   return STATUS_STYLE[status] || { cls: 'text-slate-500 dark:text-zinc-500', mark: status }
 }
 
-export default function BlockList(state) {
+// `isPrWideComposing` is handed in by home.mjs rather than imported from
+// RelatedPanel.mjs: RelatedPanel already imports THIS module (statusInfo/
+// categoryClass), so importing it back would make the two modules circular for
+// one boolean. Optional, so every existing caller/test keeps working.
+export default function BlockList(state, isPrWideComposing = () => false) {
   return html`
     <aside
       data-testid="pr-index"
@@ -82,13 +86,17 @@ export default function BlockList(state) {
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5') +
         ' ' +
-        (state.mode === 'diff' || state.testColumnFocused
+        (state.mode === 'diff' || state.testColumnFocused || isPrWideComposing()
           ? // Slides fully away in diff mode, and equally once the
             // methodes-kolom (stop 2b) owns the keyboard in list mode —
             // stepping right past this index hides it either way;
             // testColumnFocused survives the diff→list transition, so ←
             // from a method's diff lands on the methodes-kolom with this
             // index still hidden, and only a second ← brings it back.
+            // Third case: while an "algemene" (PR-wide) comment is being
+            // written, so the composer isn't squeezed in beside an index and
+            // a diff it has nothing to do with — ← closes the composer and
+            // brings this straight back (see comments-panel.md/detail-layout.md).
             '-translate-x-[28rem] opacity-0 pointer-events-none'
           : // showDescription (stop 1, list-mode only) slides this pr-index one
             // column-width right so the PR-description panel can take its usual

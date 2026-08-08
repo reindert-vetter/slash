@@ -29,6 +29,7 @@ import RelatedPanel, {
   ClaudeChatPanel,
   enterClaudeChat,
   claudeChatVisible,
+  claudeColumnVisible,
   TasksPanel,
   hasVisibleComments,
   enterCommentsHead,
@@ -8592,7 +8593,7 @@ function onKeydown(e) {
       // nothing auto-creates a comment to hang a chat on.
       clearRangeAnchor()
       if (hasVisibleComments()) enterCommentsHead()
-      else if (claudeChatVisible()) enterClaudeChat(state.pr)
+      else if (claudeColumnVisible()) enterClaudeChat(state.pr)
       else enterRelated()
     }
     return
@@ -9512,14 +9513,25 @@ function DetailPanel(state) {
         // scrollable width. Deliberately asymmetric with every other panel
         // (sidebar/footer/PrInfoPanel), which keep their own 1.5rem edge.
         'right-0 ' +
-        (state.mode === 'diff' || state.testColumnFocused
-          ? // Flush to the left edge too, for the same reason — in diff mode
-            // there's no sidebar to clear, so no reason to reserve a margin.
-            // Same while the methodes-kolom (stop 2b) owns the keyboard: the
-            // pr-index slides away then too (see BlockList.mjs's matching
-            // testColumnFocused branch), so <main> reclaims its space.
-            'left-0'
-          : // showDescription (list-mode only) pushes PrInfoPanel to left-6 and
+        (isPrWideComposing()
+          ? // Writing an "algemene" (PR-wide) comment: the pr-index is hidden
+            // (BlockList.mjs's matching branch) and the block column below
+            // renders nothing, so the composer is the only column left. The
+            // PR-description column deliberately STAYS if it was open — the
+            // request was to hide the index and the code blocks — so clear
+            // its 40.5rem (1.5rem gutter + 39rem) plus the usual 1.5rem gap;
+            // that is exactly left-[69.5rem] minus the pr-index's own 27.5rem.
+            state.showDescription
+            ? 'left-[42rem]'
+            : 'left-0'
+          : state.mode === 'diff' || state.testColumnFocused
+            ? // Flush to the left edge too, for the same reason — in diff mode
+              // there's no sidebar to clear, so no reason to reserve a margin.
+              // Same while the methodes-kolom (stop 2b) owns the keyboard: the
+              // pr-index slides away then too (see BlockList.mjs's matching
+              // testColumnFocused branch), so <main> reclaims its space.
+              'left-0'
+            : // showDescription (list-mode only) pushes PrInfoPanel to left-6 and
             // slides the pr-index right by one column-width (40.5rem, see
             // BlockList.mjs) — <main> needs to clear both, so it shifts the same
             // 40.5rem past its usual left-[29rem].
@@ -9552,11 +9564,30 @@ function DetailPanel(state) {
         // like the pr-index does (testColumnFocused survives the transition,
         // so ← from that diff brings it straight back — see
         // keyboard-navigation.md, stop 2b).
-        if (!row || state.focusLevel !== 0 || state.mode === 'diff') return []
+        // Hidden while an "algemene" (PR-wide) comment is being written for
+        // the same reason the block column below is (see cs.prWideCompose):
+        // that composer is about the PR, not about any code on screen.
+        if (!row || state.focusLevel !== 0 || state.mode === 'diff' || isPrWideComposing()) return []
         return [TestMethodsColumn(state, row, toggleTestClassApproval).key('testmethods:' + row.id)]
       }}
-      <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="block-column">
+      <div
+        class="${() =>
+          // `hidden` (display:none), not an empty column: an empty flex child
+          // would still cost one of <main>'s own gap-4 gaps. Whole-value
+          // binding per the arrow.js attribute rule, and its ONLY dependency
+          // is cs.prWideCompose — no navigation step touches that, so this
+          // adds no per-step attribute mutation (see navigate.spec.mjs's
+          // flicker assertion).
+          'flex min-h-0 shrink-0 flex-col gap-3' + (isPrWideComposing() ? ' hidden' : '')}"
+        data-testid="block-column"
+      >
       ${() => {
+        // While an "algemene" (PR-wide) comment is being written there is no
+        // block/diff to show at all — the composer is about the PR itself.
+        // ← closes it and everything comes straight back (exitRelated clears
+        // the flag). See "Placing a PR-wide comment yourself" in
+        // comments-panel.md.
+        if (isPrWideComposing()) return []
         const sel = state.selected
         // Subscribe this binding to codeVersion so it re-runs when a block's code
         // loads (ensureCode bumps it). That re-run re-reads b.code for each card's
@@ -10083,10 +10114,12 @@ function DetailPanel(state) {
               // the comment and Claude blocks merge into ONE visual card (the
               // border/bg above), so this is an internal divider, not a
               // connector between two separate cards. Visible only alongside
-              // the Claude column itself (claudeChatVisible()), so there's
-              // never a floating dash with nothing to its right. `self-stretch`
+              // the Claude column itself (claudeColumnVisible() — the narrower
+              // predicate, so no dash while an "algemene" comment is being
+              // written and there is no Claude half at all), so there's never
+              // a floating dash with nothing to its right. `self-stretch`
               // spans the row's full (items-stretch-driven, equal) height.
-              claudeChatVisible()
+              claudeColumnVisible()
                 ? html`<div
                     class="w-3 shrink-0 self-stretch border-l border-dashed border-slate-300 dark:border-zinc-700"
                     data-testid="comment-claude-connector"
@@ -10125,7 +10158,7 @@ function DetailPanel(state) {
 // DetailPanel's <main>, Tasks inside PrInfoPanel's own column.
 const app = document.getElementById('app')
 PrInfoPanel(state)(app)
-BlockList(state)(app)
+BlockList(state, isPrWideComposing)(app)
 DetailPanel(state)(app)
 MenuHost()(app)
 // The call-arrow overlay: one static fixed <svg> drawn imperatively (see

@@ -1840,14 +1840,22 @@ export function isClaudeChatFocused() {
 function isNewChatUnanchored() {
   return cs.focus === 'new' || (cs.focus === 'claude' && cc.commentId == null)
 }
-// A PR-wide compose gets NO Claude column: ensureClaudeAnchorForNew would
-// lazily create a backing comment ANCHORED on the current diff unit, which is
-// precisely what an "algemene comment" is not. The composer column itself
-// stays (it keys off isNewChatUnanchored above); only the Claude half beside
-// it is suppressed, and with it the → that would step into it.
 export function claudeChatVisible() {
-  if (cs.prWideCompose) return false
   return hasVisibleComments() || isNewChatUnanchored()
+}
+
+// claudeColumnVisible is the narrower question "does the CLAUDE HALF of that
+// merged card render". It differs from claudeChatVisible() in exactly one
+// case: while an "algemene" (PR-wide) comment is being written there must be
+// no Claude column, because ensureClaudeAnchorForNew would lazily create a
+// backing comment ANCHORED on the current diff unit — precisely what a
+// general comment is not. The two must stay separate: claudeChatVisible()
+// also gates the merged row's own `hidden` class in home.mjs, so returning
+// false there would display:none the very composer the reviewer is typing in
+// (which silently swallows its focus, too — a display:none element can't take
+// DOM focus at all).
+export function claudeColumnVisible() {
+  return !cs.prWideCompose && claudeChatVisible()
 }
 
 // focusClaudeComposer/scrollClaudeMessageIntoView mirror focusThread/
@@ -2181,7 +2189,7 @@ export function ClaudeChatPanel(state, commentTarget) {
   return html`
     <div class="contents">
       ${() =>
-        claudeChatVisible()
+        claudeColumnVisible()
           ? html`<div
               class="${() => 'relative flex min-h-0 flex-col shrink-0 ' + claudeColumnWidthCls()}"
               style="${() => colWidthStyle(state, widthKey())}"
@@ -2268,7 +2276,7 @@ let getCommentTarget = () => null
 // (and re-highlight) the whole preview column on every one of those, not
 // just when a fence actually changed.
 function recomputeCodePreviews() {
-  if (!claudeChatVisible()) {
+  if (!claudeColumnVisible()) {
     if (cp.items.length) cp.items = []
     return
   }

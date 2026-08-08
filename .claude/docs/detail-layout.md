@@ -304,6 +304,40 @@ get clipped before it was scrolled fully into view, so that margin was traded
 for usable scroll width. The bottom offset tracks the footer's real height —
 see `.claude/docs/footer.md`.
 
+### Writing an "algemene" (PR-wide) comment clears the screen for it
+
+While `isPrWideComposing()` (`cs.prWideCompose`, see "Placing a PR-wide comment
+yourself" in `.claude/docs/comments-panel.md`) the composer is the only thing
+worth looking at — it is about the PR, not about any code on screen — so:
+
+- the **pr-index** slides away through the exact same branch
+  `state.testColumnFocused` already uses (`BlockList.mjs`; the predicate is
+  **passed in** as `BlockList(state, isPrWideComposing)` rather than imported,
+  because `RelatedPanel` already imports `BlockList` and the two must not
+  become circular for one boolean);
+- the **block column** gets `hidden` (`display:none`, not an empty column — an
+  empty flex child would still cost one of `<main>`'s `gap-4` gaps) and its
+  binding returns `[]`; the **methodes-kolom** (stop 2b) likewise;
+- the **Claude column** does not render — see `claudeColumnVisible()` below;
+- `<main>` moves to `left-0`, or `left-[42rem]` when the PR-description column
+  was open. That column deliberately **stays** (explicit decision: hide the
+  index and the code blocks, not the description); `42rem` = the existing
+  `69.5rem` minus the pr-index's own `27.5rem`.
+
+`←` closes the composer (`exitRelated`, which clears the flag) and everything
+comes straight back. The flag's only dependency-free consumer is that one class
+binding, so it adds no per-navigation-step attribute mutation (see
+`navigate.spec.mjs`'s flicker assertion).
+
+**`claudeChatVisible()` vs `claudeColumnVisible()`** — these had to be split
+for this. The first still answers "does the merged comment+Claude ROW show at
+all" and gates that row's own `hidden` class; the second ("does the Claude HALF
+render") is the one that goes false during a PR-wide compose. Collapsing them
+into one predicate `display:none`d the whole row — including the very composer
+being typed in, which then **silently could not take DOM focus at all**
+(`focusEl` called `.focus()` on a `display:none` element and it stayed on
+`<body>`). Test: `tests/prwide-comment.spec.mjs`.
+
 ## Tasks: a block under the PR-description column
 
 Workflow runs of the current PR sit in a **`shrink-0`** block
