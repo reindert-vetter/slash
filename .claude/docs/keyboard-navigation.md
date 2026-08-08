@@ -436,7 +436,12 @@ removed or modified); `state.change` is the index. Navigation units come from
 group, but a run longer than 5 rows is cut into chunks of 5 (`MAX_GROUP`). The
 cut only happens on a row containing a **letter** — a bracket/punctuation-only
 changed row is pulled into the current group (`hasLetter`), so a group never
-ends right before or on a bare-bracket line. `blockRows(b)` produces exactly the
+ends right before or on a bare-bracket line — and never on a **pure deletion**
+(`isPureDeletionRow`: the other pane stays empty), so a removed run of any
+length is ONE group the reviewer can approve in a single action instead of a
+chain of 5-row chunks (reviewer request; there is nothing to read in chunks
+there, the code is gone). An unchanged row still breaks the run, so a deletion
+group never swallows the code around it. `blockRows(b)` produces exactly the
 same aligned rows as the render, so navigation and highlight never diverge.
 
 The selected block gets the active group as a reactive `activeGroup` function

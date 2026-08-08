@@ -2527,7 +2527,20 @@ function approveSummary(b) {
 // a changed row whose text is just braces/punctuation (e.g. `}` or `{`) is
 // pulled into the current group instead of starting a fresh one, so a group
 // never ends right before — or begins on — a bare bracket line.
+//
+// A PURE DELETION never splits either (isPureDeletionRow: the row's other pane
+// stays empty). Reviewer request: "verwijderde regels, waarbij de andere pane
+// leeg blijft, moet als group volledig geselecteerd kunnen worden" — a removed
+// run of 20 lines used to become four separate 5-row groups, so acknowledging
+// one deletion cost four approve actions. There is also nothing to read in
+// chunks there: the code is gone, the reviewer judges the removal as a whole.
+// The cap still applies to every other run (added/modified code), and an
+// unchanged row still breaks the run, so a deletion group never swallows the
+// code around it.
 const MAX_GROUP = 5
+function isPureDeletionRow(r) {
+  return !!r.leftMark && r.rightMark !== 'ins'
+}
 export function changeGroups(rows) {
   const groups = []
   let run = null
@@ -2538,7 +2551,7 @@ export function changeGroups(rows) {
       run = null
       continue
     }
-    if (!run || (run.end - run.start + 1 >= MAX_GROUP && hasLetter(r))) {
+    if (!run || (run.end - run.start + 1 >= MAX_GROUP && hasLetter(r) && !isPureDeletionRow(r))) {
       run = { start: i, end: i }
       groups.push(run)
     } else {

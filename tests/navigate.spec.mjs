@@ -56,6 +56,39 @@ test.describe('PR Review Tree — change navigation', () => {
     expect(groups).toEqual([{ start: 0, end: 6 }])
   })
 
+  // A run of PURE deletions (the other pane stays empty) is never split by
+  // MAX_GROUP: a removed block of 20 lines is one group the reviewer can
+  // approve in a single action, instead of four 5-row groups.
+  test('a long run of pure deletions stays ONE group', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+    const groups = await evaluateSettled(page, async () => {
+      const { changeGroups } = await import('/src/Block.mjs')
+      // 12 removed lines with real letter text (so the split WOULD fall on them
+      // were they not deletions), then an unchanged row, then 8 added lines —
+      // which do still split every 5 rows.
+      const del = Array.from({ length: 12 }, (_, i) => ({
+        left: `gone${i}`,
+        right: null,
+        leftMark: 'del',
+        rightMark: null,
+      }))
+      const keep = [{ left: 'kept', right: 'kept', leftMark: null, rightMark: null }]
+      const ins = Array.from({ length: 8 }, (_, i) => ({
+        left: null,
+        right: `new${i}`,
+        leftMark: null,
+        rightMark: 'ins',
+      }))
+      return changeGroups([...del, ...keep, ...ins])
+    })
+    expect(groups).toEqual([
+      { start: 0, end: 11 },
+      { start: 13, end: 17 },
+      { start: 18, end: 20 },
+    ])
+  })
+
   test('an active group is highlighted with an anchor on both panes', async ({ page }) => {
     await page.goto('/pr/12903')
     await appReady(page)
