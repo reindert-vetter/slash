@@ -799,7 +799,19 @@ func (s *server) handleTaskCodeComment(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
 		var in CodeCommentInput
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.File == "" || in.Body == "" {
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Body == "" {
+			http.Error(w, "invalid comment", http.StatusBadRequest)
+			return
+		}
+		// A PR-wide comment (Kind issue/review_summary/review/ai_warning) has no
+		// file:line to anchor to BY DEFINITION — an imported general PR comment
+		// already carries File "" (mapGeneralComment, comment_import.go), and the
+		// workflow's own isPRWide branch posts it as a top-level issue comment.
+		// Requiring a file here was what made the `/`-menu's "Algemene comment
+		// plaatsen" (and convertPrWideWarningToComment's unanchored AI finding)
+		// structurally impossible to place. A block-scoped comment still must
+		// name its file — without one there is nothing to anchor it to at all.
+		if in.File == "" && !isPRWide(in.Kind) {
 			http.Error(w, "invalid comment", http.StatusBadRequest)
 			return
 		}

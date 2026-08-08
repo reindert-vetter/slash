@@ -34,6 +34,8 @@ import RelatedPanel, {
   enterCommentsHead,
   enterRelated,
   startComment,
+  startPrWideComment,
+  isPrWideComposing,
   startClaudeChat,
   createComment,
   placeComment,
@@ -91,6 +93,7 @@ import RelatedPanel, {
   sendPendingReply,
   pendingPublishInfo,
   setReplyPublishMenuOpener,
+  setCommentSelectRequest,
   needsPublishChoice,
   localReplyCount,
   publishThreadOnly,
@@ -5078,7 +5081,11 @@ const COMPOSE_COMMANDS = withClose([
       // Capture the anchor BEFORE the async post — see revokeApprovalForComment's
       // own doc comment for why (a concurrent nav step could otherwise shift it).
       const revokeBlock = focusedBlock()
-      const revokeTarget = commentTarget()
+      // A PR-wide ("algemene") comment hangs on no unit at all, so it must not
+      // retract the approval of whatever the cursor happened to sit on —
+      // captured before the await, like the anchor itself, since placeComment
+      // clears the flag on its way out.
+      const revokeTarget = isPrWideComposing() ? null : commentTarget()
       await placeComment(state, commentTarget)
       revokeApprovalForComment(revokeBlock, revokeTarget)
       pollWorkflows()
@@ -5112,7 +5119,8 @@ const COMPOSE_COMMANDS = withClose([
       // Same revoke as compose-post — a private note is still the reviewer
       // flagging "this isn't OK after all", even though it never reaches GitHub.
       const revokeBlock = focusedBlock()
-      const revokeTarget = commentTarget()
+      // See compose-post above for why a PR-wide comment revokes nothing.
+      const revokeTarget = isPrWideComposing() ? null : commentTarget()
       await placeComment(state, commentTarget, { local: true })
       revokeApprovalForComment(revokeBlock, revokeTarget)
       pollWorkflows()
@@ -7651,9 +7659,15 @@ const PR_COMMANDS = withClose([
       },
       {
         id: 'pr-github-comment',
-        label: 'Comment plaatsen',
+        // "Algemene", not just "Comment plaatsen": this is the PR-WIDE
+        // comment (a GitHub issue comment on the PR conversation), which the
+        // block palette's own "Comment op deze regel" is not. It used to run
+        // startComment — the line-comment composer — which meant this item
+        // either placed an ordinary line comment or (with a PR-comment index
+        // row selected) did nothing at all. See startPrWideComment.
+        label: 'Algemene comment plaatsen',
         hint: 'comment',
-        run: () => startComment(commentTarget),
+        run: () => startPrWideComment(),
       },
     ]),
   },
@@ -7948,6 +7962,18 @@ function openMenu(mode = 'block') {
 // send that needs it starts in RelatedPanel (which never imports from this
 // module). Hand the opener down once, at module load.
 setReplyPublishMenuOpener(() => openMenu('replyPublish'))
+
+// Same downward-injection shape, for the other direction a comment write needs
+// to reach into this module: a freshly placed PR-wide comment must land the
+// sidebar selection on its own brand-new index row. That row is created by the
+// comment poll, not by loadBlocks, so it may not exist for another tick —
+// which is exactly what blockRefPending + the indexComments() watch's
+// applyCommentRefRestore retry already solve for `?sel=comment:<id>`. Reuse
+// them rather than inventing a second "wait for that row" mechanism.
+setCommentSelectRequest((commentId) => {
+  blockRefPending = 'comment:' + commentId
+  applyCommentRefRestore()
+})
 
 function closeMenu() {
   // Only flip `open`; the volatile state is replaced wholesale on the next

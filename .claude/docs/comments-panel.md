@@ -70,6 +70,64 @@ index past the end is structurally unrenderable — and a stale index still *in*
 range would mark the wrong row, which no bound can catch, only re-anchoring can.
 Same reasoning for `approvedRowSet`.
 
+### Placing a PR-wide comment yourself (`startPrWideComment`)
+
+Until this existed, PR-wide comments could only ever *arrive* (the GitHub
+import), never be *created*: every layer of the write path demanded a
+`file:line` anchor — `handleTaskCodeComment` 400'd on `File == ""`,
+`createComment` bailed on `!file`, `placeComment` bailed on
+`b.kind === 'comment'`, and `newCommentComposer`'s header read the selected
+item's `file`/`line`. The `/`-menu's "Comment plaatsen" therefore ran
+`startComment` — the ordinary **line**-comment composer — so it either placed a
+line comment on whatever unit the cursor happened to sit on, or (with a
+comment-index row selected, and those rank first in the sidebar) did nothing at
+all while showing `Nieuwe comment · undefined:undefined`.
+
+`startPrWideComment()` (`RelatedPanel.mjs`, wired to `PR_COMMANDS`'
+**"Algemene comment plaatsen"**) opens the same composer in a PR-wide mode,
+marked by **`cs.prWideCompose`** — one reactive flag that changes exactly four
+things and nothing else:
+
+- the composer header/placeholder ("Nieuwe algemene comment · hele PR", no
+  `file:line`, no `composeTargetHint` — there is no code to preview), plus its
+  own draft identity `PRWIDE_DRAFT_KEY`;
+- `placeComment`'s write: a branch **before** the block guards that posts
+  `{file:'', line:0, kind:'issue'}` — the same `Kind` an imported general PR
+  comment gets, which is precisely what makes it a navigable "PR-comments"
+  index row (`prWideComments`/`commentBlockItem`) rather than an invisible line
+  comment. `opts.local` ("Alleen voor mijzelf") still works;
+- **no Claude column** (`claudeChatVisible()` returns false, and `→` from the
+  composer doesn't `enterClaudeChatFromNew`): `ensureClaudeAnchorForNew` would
+  lazily create a backing comment **anchored on the current diff unit**, which
+  is exactly what a general comment is not;
+- **no approval revoke** — `COMPOSE_COMMANDS`' `compose-post`/`compose-self`
+  pass a `null` revoke target, since a PR-wide comment hangs on no unit (see
+  `.claude/docs/approval.md`).
+
+The flag is cleared by every ordinary composer open (`toNew`) and every exit
+(`exitRelated`, "Annuleer"), so it can never leak into the next line comment.
+Ephemeral, not URL-bound, like `cs.composing` itself.
+
+**Landing on the fresh row** (the reported "ik zie hem niet in de index
+lijst"): the row is produced by the comment poll, not by `loadBlocks`, so it may
+not exist for another tick. `createComment` records the POST's `runId`
+(`lastCreatedCommentId`) and `placeComment` hands it to
+**`setCommentSelectRequest`** — a downward-injected callback (same shape as
+`setReplyPublishMenuOpener`, since `RelatedPanel` never imports `home.mjs`)
+that sets `blockRefPending = 'comment:<id>'` and reuses the **existing**
+`applyCommentRefRestore` retry the `?sel=comment:<id>` deep link already drives.
+No second "wait for that row" mechanism.
+
+Backend: nothing new. `handleTaskCodeComment` merely exempts a PR-wide `Kind`
+from the file requirement (`isPRWide`, mirrored client-side by
+`PR_WIDE_KINDS`/`isPrWideKind`), and `taskCodeCommentWorkflow`'s "PR-wide,
+freshly created" branch — which already existed for
+`convertPrWideWarningToComment` — posts it as a top-level issue comment. That
+same relaxation also un-breaks `sendConvertedPrWideComment`, which passed the
+finding's empty `file` and was silently rejected for it. While composing, the
+pr-index and block columns are hidden — see `.claude/docs/detail-layout.md`.
+Tests: `prwide_comment_test.go`.
+
 ### The synthetic item
 
 `commentBlockItem` (`recomputeLeftList`, `home.mjs`):

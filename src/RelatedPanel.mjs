@@ -134,6 +134,18 @@ const cs = reactive({
   // above): a sub-cursor one level deeper than anything else in this panel
   // has ever restored, purely ephemeral.
   chipPath: [],
+  // prWideCompose marks the new-comment composer as composing a PR-WIDE
+  // ("algemene") comment instead of one anchored on the current diff unit —
+  // set by startPrWideComment (the `/`-menu's "Algemene comment plaatsen"),
+  // cleared by every ordinary composer open (toNew) and every composer exit
+  // (exitRelated / "Annuleer"). It changes three things and nothing else:
+  // the composer header/placeholder (no meaningless file:line — see
+  // newCommentComposer), placeComment's write (Kind "issue", no anchor), and
+  // the surrounding layout (home.mjs/BlockList.mjs hide the pr-index and the
+  // block column while it's true — see detail-layout.md). Reactive so those
+  // bindings repaint; deliberately NOT bound to the URL, like cs.composing
+  // itself.
+  prWideCompose: false,
 })
 
 // The panel cursor survives a browser refresh: focus/codeSel/sel/threadPos live in
@@ -519,6 +531,10 @@ export function enterRelated() {
 function exitRelated() {
   cs.focus = null
   cs.composing = false
+  // Leaving the composer always ends a PR-wide compose, which is what brings
+  // the pr-index/block column back (see cs.prWideCompose) — this is the ←
+  // path handleRelatedKey's own 'new' branch ends in.
+  cs.prWideCompose = false
   cs.claudeOptionSel = 0
   releaseFocus() // a focus request still in flight must not land after this
   const el = document.activeElement
@@ -696,6 +712,11 @@ function draftKeyFor(t) {
 function toNew(commentTargetFn) {
   releaseFocus()
   warningOverride = null
+  // Every ORDINARY composer open is anchored on the current unit — a stale
+  // PR-wide flag from an earlier "Algemene comment plaatsen" must never leak
+  // into it (it would post the next line comment as an unanchored issue
+  // comment). startPrWideComment sets it back AFTER calling this.
+  cs.prWideCompose = false
   // A stale ensureClaudeAnchorForNew pointer from a PREVIOUS draft (on a
   // different unit) must never be reused by placeComment below — see its own
   // doc comment. draftKeyFor's own unit-scoped compare is a second safety
@@ -1819,7 +1840,13 @@ export function isClaudeChatFocused() {
 function isNewChatUnanchored() {
   return cs.focus === 'new' || (cs.focus === 'claude' && cc.commentId == null)
 }
+// A PR-wide compose gets NO Claude column: ensureClaudeAnchorForNew would
+// lazily create a backing comment ANCHORED on the current diff unit, which is
+// precisely what an "algemene comment" is not. The composer column itself
+// stays (it keys off isNewChatUnanchored above); only the Claude half beside
+// it is suppressed, and with it the → that would step into it.
 export function claudeChatVisible() {
+  if (cs.prWideCompose) return false
   return hasVisibleComments() || isNewChatUnanchored()
 }
 
@@ -2652,9 +2679,11 @@ export function handleRelatedKey(key) {
       // reached only via ↑, not as a horizontal stop (see TODO 2 in
       // todo-claude-chat-blok.md).
       enterClaudeChat(cs.pr)
-    } else if (cs.focus === 'new') {
+    } else if (cs.focus === 'new' && !cs.prWideCompose) {
       // Same one-step jump, but there is no anchor comment yet — see
-      // enterClaudeChatFromNew.
+      // enterClaudeChatFromNew. Never during a PR-wide compose: that column
+      // isn't rendered at all (claudeChatVisible) and its lazy anchor comment
+      // would be anchored on the diff unit, see cs.prWideCompose.
       enterClaudeChatFromNew()
     }
   }
@@ -2674,6 +2703,44 @@ export function handleRelatedKey(key) {
 // composeDrafts above.
 export function startComment(commentTargetFn) {
   toNew(commentTargetFn)
+}
+
+// startPrWideComment opens that same composer for a PR-WIDE ("algemene")
+// comment — the `/`-menu's "Algemene comment plaatsen" (PR_COMMANDS,
+// home.mjs). Until this existed that menu item ran startComment, i.e. the
+// ordinary LINE-comment composer: with a real block selected it silently
+// placed a line comment on whatever unit the cursor sat on, and with a
+// PR-comment index row selected (they rank first in the sidebar, so often the
+// default selection) placeComment's own `b.kind === 'comment'` guard made it
+// a silent no-op with an "undefined:undefined" header. A PR-wide comment has
+// no file:line by definition, so it takes the anchorless path all the way
+// down: no commentTarget, Kind "issue" in placeComment, and the backend's own
+// isPRWide branch posts it as a top-level issue comment.
+//
+// It deliberately reuses toNew() (draft handling, Claude reset, focus) and
+// only then flips the flag — toNew clears it, so the order matters.
+export function startPrWideComment() {
+  toNew(null)
+  cs.prWideCompose = true
+  // Its own draft identity — draftKeyFor(null) would be '__none__', which a
+  // line-comment composer opened with no resolvable target also uses, and the
+  // two drafts have nothing to do with each other.
+  composeDraftKey = PRWIDE_DRAFT_KEY
+  const draft = composeDrafts.get(PRWIDE_DRAFT_KEY)
+  if (draft) prefillField('[data-testid=comment-compose]', draft)
+}
+
+// PRWIDE_DRAFT_KEY is that identity, shared by the composer's draft
+// (composeDrafts), its failed-send badge ('new:' + it, see cs.sendFailed) and
+// placeComment's PR-wide branch — one constant so the three can't drift.
+const PRWIDE_DRAFT_KEY = '__prwide__'
+
+// isPrWideComposing is the exported read of that flag, so home.mjs/
+// BlockList.mjs can hide the pr-index and the block column while a general
+// comment is being written (see detail-layout.md). Reading the reactive `cs`
+// from inside their bindings is what makes them repaint on the toggle.
+export function isPrWideComposing() {
+  return cs.prWideCompose
 }
 
 // startClaudeChat is the "Chat over deze regel" palette command's own entry
@@ -3040,6 +3107,18 @@ function syncComments(pr) {
 // the same focusToken every cs.focus-owning transition bumps (see its doc
 // comment). A stale token means the reviewer moved on; skip the landing
 // rather than clobber whatever they're now looking at.
+// PR_WIDE_KINDS / isPrWideKind mirror the Go-side isPRWide (comment_import.go)
+// — the kinds that carry no file:line anchor at all. Kept as a literal copy
+// rather than derived from anything: the backend's list is the contract, and
+// the two are asserted against each other by the comment tests.
+const PR_WIDE_KINDS = ['issue', 'review_summary', 'review', 'ai_warning']
+// lastCreatedCommentId holds the Run ID (== comment id) of the most recent
+// successful createComment — see its assignment below.
+let lastCreatedCommentId = ''
+function isPrWideKind(kind) {
+  return PR_WIDE_KINDS.includes(kind)
+}
+
 export async function createComment({
   pr,
   file,
@@ -3058,7 +3137,13 @@ export async function createComment({
   segment,
   kind,
 }) {
-  if (pr == null || !file || !body) return false
+  // A PR-wide kind carries no file:line at all (an imported general comment
+  // stores File "" too), so only a block-scoped comment must name its file —
+  // mirrors handleTaskCodeComment's own validation (tasks_api.go). Requiring
+  // it unconditionally is what silently rejected every unanchored comment,
+  // including convertPrWideWarningToComment's replacement for a PR-wide AI
+  // finding (whose `file` is empty).
+  if (pr == null || !body || (!file && !isPrWideKind(kind))) return false
   const token = focusToken
   cs.busy = true
   try {
@@ -3098,6 +3183,21 @@ export async function createComment({
       // Network-level failure (offline, etc.) — never let it become an
       // unhandled rejection; the caller only ever checks the boolean result.
       return false
+    }
+    // The Run ID the POST returns IS the new comment's id (see
+    // StartCodeComment) — recorded here so a caller that has to address the
+    // fresh comment itself can, without guessing at "the last entry" of a
+    // list it doesn't control. Only placeComment's PR-wide branch uses it so
+    // far, to land the sidebar selection on the brand-new index row. Parsed
+    // best-effort: an unreadable body just leaves it null, never throws.
+    lastCreatedCommentId = ''
+    if (res.ok) {
+      try {
+        const j = await res.clone().json()
+        lastCreatedCommentId = (j && j.runId) || ''
+      } catch (_) {
+        /* keep '' */
+      }
     }
     await loadComments(pr)
     // The fresh comment sits on the unit we just placed it on, so it's the last
@@ -3259,13 +3359,50 @@ export async function placeComment(state, commentTarget, opts = {}) {
   const b = state && state.blocks && state.blocks[state.selected]
   const el = document.querySelector('[data-testid=comment-compose]')
   const body = el && el.value.trim()
+  if (!body) return
+  // A PR-WIDE ("algemene") comment is deliberately handled BEFORE the guards
+  // below: it has no block and no unit by definition, so `b` may be missing
+  // or be a comment-index item and neither disqualifies it. It writes through
+  // the same createComment/workflow path as every other comment, only with
+  // Kind "issue" (the same Kind an imported general PR comment gets) and no
+  // anchor at all — which is exactly what turns it into a navigable
+  // "PR-comments" index row (prWideComments/commentBlockItem) instead of an
+  // invisible line comment. See startPrWideComment.
+  if (cs.prWideCompose) {
+    el.value = ''
+    const key = 'new:' + PRWIDE_DRAFT_KEY
+    exitRelated() // optimistic exit, and it restores the hidden columns
+    const ok = await createComment({
+      pr: state.pr,
+      file: '',
+      line: 0,
+      body,
+      kind: 'issue',
+      local: !!opts.local,
+    })
+    if (ok) {
+      composeDrafts.delete(PRWIDE_DRAFT_KEY)
+      clearSendFailed(key)
+      // Land the sidebar selection on the brand-new index row. It is
+      // populated by the comment list, not by loadBlocks, so it may not exist
+      // for another tick — blockRefPending is exactly the existing
+      // "resolve this comment ref as soon as it turns up" retry
+      // (applyCommentRefRestore, home.mjs), reused rather than duplicated.
+      if (lastCreatedCommentId && commentSelectRequest) commentSelectRequest(lastCreatedCommentId)
+    } else {
+      markSendFailed(key)
+      composeDrafts.set(PRWIDE_DRAFT_KEY, body)
+    }
+    return
+  }
   // A synthetic comment-index item (kind:'comment', see home.mjs's
   // recomputeLeftList/commentBlockItem) has no file/line to anchor a NEW
-  // comment to — the composer for such an item should never even open (the
-  // block palette isn't reachable while one is selected, see selectedComment
-  // in home.mjs), but guard here too rather than post a bogus, unanchored
-  // comment if it somehow does.
-  if (!b || b.kind === 'comment' || !body) return
+  // block-scoped comment to — the composer for such an item should never even
+  // open (the block palette isn't reachable while one is selected, see
+  // selectedComment in home.mjs), but guard here too rather than post a bogus,
+  // unanchored comment if it somehow does. A PR-wide comment took the branch
+  // above and never reaches this.
+  if (!b || b.kind === 'comment') return
   const override = warningOverride
   warningOverride = null
   // Capture the exact unit the composer is previewing so the placed comment's
@@ -3491,6 +3628,17 @@ let replyPublishOpener = null
 
 export function setReplyPublishMenuOpener(fn) {
   replyPublishOpener = fn
+}
+
+// commentSelectRequest is the same downward-injected callback shape for "put
+// the sidebar selection on this comment's own index row" — home.mjs owns
+// state.selected and the blockRefPending retry that waits for a row the
+// comment poll has yet to produce, and this module never imports from it.
+// Only placeComment's PR-wide branch uses it so far.
+let commentSelectRequest = null
+
+export function setCommentSelectRequest(fn) {
+  commentSelectRequest = fn
 }
 
 // pendingPublishInfo exposes the waiting send to home.mjs so the menu can
@@ -4400,10 +4548,19 @@ function newCommentComposer(state, commentTarget, openCompose) {
   // unrelated open — so a fresh read at render/mount time is never stale.
   const effectiveTarget = () => (warningOverride ? warningOverride.target : commentTarget && commentTarget())
   const target = () => {
+    // A PR-wide ("algemene") comment hangs on the PR itself, so a file:line
+    // here is not just unknown but meaningless — and reading one off a
+    // selected comment-index item is exactly what printed the reported
+    // "undefined:undefined". See startPrWideComment.
+    if (cs.prWideCompose) return 'hele PR'
     const t = effectiveTarget()
     if (t) return t.file + ':' + (t.startLine || t.line)
     const b = state && state.blocks && state.blocks[state.selected]
     return b ? b.file + ':' + b.line : 'geen regel geselecteerd'
+  }
+  const heading = () => {
+    if (cs.prWideCompose) return 'Nieuwe algemene comment'
+    return warningOverride ? 'Comment van AI-controle' : 'Nieuwe comment'
   }
   return html`
     <div class="contents">
@@ -4422,13 +4579,17 @@ function newCommentComposer(state, commentTarget, openCompose) {
                 data-testid="comment-composer"
               >
                 <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">
-                  ${() => (warningOverride ? 'Comment van AI-controle' : 'Nieuwe comment') + ' · ' + target()}
+                  ${() => heading() + ' · ' + target()}
                 </p>
-                ${() => sendFailedBadge('new:' + draftKeyFor(effectiveTarget()), 'plaatsen mislukt — probeer opnieuw')}
+                ${() =>
+                  sendFailedBadge(
+                    'new:' + (cs.prWideCompose ? PRWIDE_DRAFT_KEY : draftKeyFor(effectiveTarget())),
+                    'plaatsen mislukt — probeer opnieuw',
+                  )}
                 <textarea
                   rows="1"
                   class="min-h-20 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
-                  placeholder="Je comment op deze regel…"
+                  placeholder="${() => (cs.prWideCompose ? 'Je algemene comment op deze PR…' : 'Je comment op deze regel…')}"
                   data-testid="comment-compose"
                   @input="${(e) => {
                     composeDrafts.set(composeDraftKey, e.target.value)
@@ -4443,6 +4604,9 @@ function newCommentComposer(state, commentTarget, openCompose) {
                       composeDrafts.delete(composeDraftKey)
                       clearSendFailed('new:' + composeDraftKey)
                       cs.composing = false
+                      // Ends a PR-wide compose too, which brings the hidden
+                      // pr-index/block column back (see cs.prWideCompose).
+                      cs.prWideCompose = false
                     }}"
                   >
                     Annuleer
@@ -5897,6 +6061,12 @@ async function postPrCommentReply(c, body, publish, withHistory) {
   }
 }
 
+// Its `file`/`line` are passed through only because a PR-wide finding
+// sometimes still knows which file it was about; an ai_warning that has
+// neither used to make this whole call fail on createComment's (and the
+// backend's) unconditional "a comment must name a file" rule — both now
+// exempt a PR-wide kind, see createComment/handleTaskCodeComment.
+//
 // sendConvertedPrWideComment is sendPrCommentReply's 'convert'-mode sibling:
 // instead of replying on `c`'s own thread, it starts a genuinely NEW,
 // unanchored PR-wide comment (Kind "issue", the same Kind an imported

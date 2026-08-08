@@ -660,7 +660,10 @@ The same overlay, with actions on the **whole PR**. Five root items:
 1. **"Sluit menu"** (pinned).
 2. **"GitHub"** (submenu, thus the default item — a submenu rather than a
    direct action, deliberately left as-is): *Open on GitHub*, **"PR keuren"**
-   and *Place comment* (reuses `startComment`). **"PR keuren"** is a manual
+   and **"Algemene comment plaatsen"** (`startPrWideComment` — a PR-WIDE issue
+   comment, not a line comment; it used to run `startComment` and therefore
+   placed an ordinary line comment, or nothing at all, see "Placing a PR-wide
+   comment yourself" in `.claude/docs/comments-panel.md`). **"PR keuren"** is a manual
    entry point into the exact same approve/reject flow as the automatic
    review-submit follow-up below (`children: REVIEW_CHOICE_COMMANDS`, the
    identical array, no second implementation) — so a reviewer can approve or
