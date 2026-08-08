@@ -5079,16 +5079,7 @@ const COMPOSE_COMMANDS = withClose([
     label: 'Plaats comment',
     hint: 'post',
     run: async () => {
-      // Capture the anchor BEFORE the async post — see revokeApprovalForComment's
-      // own doc comment for why (a concurrent nav step could otherwise shift it).
-      const revokeBlock = focusedBlock()
-      // A PR-wide ("algemene") comment hangs on no unit at all, so it must not
-      // retract the approval of whatever the cursor happened to sit on —
-      // captured before the await, like the anchor itself, since placeComment
-      // clears the flag on its way out.
-      const revokeTarget = isPrWideComposing() ? null : commentTarget()
       await placeComment(state, commentTarget)
-      revokeApprovalForComment(revokeBlock, revokeTarget)
       pollWorkflows()
       // placeComment (RelatedPanel.mjs) already handed the keyboard back to
       // the diff (exitRelated) — re-align <main> on it, mirroring the same
@@ -5117,13 +5108,7 @@ const COMPOSE_COMMANDS = withClose([
     label: 'Alleen voor mijzelf',
     hint: 'privé',
     run: async () => {
-      // Same revoke as compose-post — a private note is still the reviewer
-      // flagging "this isn't OK after all", even though it never reaches GitHub.
-      const revokeBlock = focusedBlock()
-      // See compose-post above for why a PR-wide comment revokes nothing.
-      const revokeTarget = isPrWideComposing() ? null : commentTarget()
       await placeComment(state, commentTarget, { local: true })
-      revokeApprovalForComment(revokeBlock, revokeTarget)
       pollWorkflows()
       scrollFocusIntoView()
     },
@@ -6996,78 +6981,6 @@ function toggleCallApprove(b, change = state.change, auto = false) {
   b.approvedRows = [...rowSet].sort((x, y) => x - y)
   persistApproval(b)
   afterApproveAction(approving, b.id, auto)
-}
-
-// revokeApprovalForComment retracts approval for the row(s)/call segment a
-// freshly placed comment anchors on: "if someone places a comment, then the
-// corresponding line is no longer approved" — placing a comment signals the
-// reviewer that the code isn't OK after all. `t` is the exact commentTarget()
-// snapshot the caller captured BEFORE the async placeComment call (so a
-// concurrent navigation step can't shift the anchor out from under us); `b`
-// is the block that target belongs to — the caller's own focusedBlock() (may
-// be a drilled column's block), the same block commentTarget() itself
-// follows. No-op for an unknown anchor (t.rowStart < 0 — a block with no
-// navigable changes, see commentTarget's own fallback).
-// At gran !== 'call' (group/line, or a TRANSLATION per-key unit — both flow
-// through the same aligned-row range) this drops every row in
-// [t.rowStart, t.rowEnd] from b.approvedRows, plus any b.approvedCalls
-// entries whose row falls in that range — a coarser comment supersedes a
-// finer, partial call approval on the same rows.
-// At gran === 'call' it's precise instead: only the ONE segment the comment
-// is on (found via t.seg, the same segKey() commentTarget() itself computed)
-// loses its approval — sibling segments on the same row keep theirs. A row
-// that had graduated into b.approvedRows (every segment already approved,
-// see toggleCallApprove above) is first expanded back into explicit
-// per-segment keys, mirroring toggleCallApprove's own "wasFullRow" branch,
-// so the OTHER segments don't lose their approval along with it.
-// Both arrays are always reassigned wholesale (never mutated in place), so
-// arrow.js re-renders the checkmark/dot indicators; a genuine change is
-// persisted via the existing `set` Signal (persistApproval) — never a direct
-// write, per the write-boundary rule.
-function revokeApprovalForComment(b, t) {
-  if (!b || !t || t.rowStart == null || t.rowStart < 0) return
-  const rowSet = approvedRowSet(b)
-  const callSet = approvedCallSet(b)
-  let changed = false
-
-  if (t.gran === 'call' && t.seg) {
-    const row = t.rowStart
-    const rows = blockRows(b)
-    const units = unitsFor(rows, 'call')
-    const unit = units.find((u) => u.start === row && segKey(u) === t.seg)
-    if (!unit) return
-    const segs = rowCallSegments(rows, row)
-    const wasFullRow = rowSet.has(row)
-    const keys = new Set(
-      wasFullRow ? segs.map((s) => callKey(row, s.start)) : [...callSet].filter((k) => k.startsWith(row + ':')),
-    )
-    const key = callKey(row, unit.segStart)
-    if (keys.has(key)) {
-      keys.delete(key)
-      changed = true
-    }
-    if (!changed) return
-    if (wasFullRow) rowSet.delete(row)
-    const others = [...callSet].filter((k) => !k.startsWith(row + ':'))
-    b.approvedCalls = [...others, ...keys]
-    b.approvedRows = [...rowSet].sort((x, y) => x - y)
-  } else {
-    for (let i = t.rowStart; i <= t.rowEnd; i++) {
-      if (rowSet.delete(i)) changed = true
-    }
-    const remaining = [...callSet].filter((k) => {
-      const row = Number(k.split(':')[0])
-      if (row >= t.rowStart && row <= t.rowEnd) {
-        changed = true
-        return false
-      }
-      return true
-    })
-    if (!changed) return
-    b.approvedRows = [...rowSet].sort((x, y) => x - y)
-    b.approvedCalls = remaining
-  }
-  persistApproval(b)
 }
 
 // unitFullyApproved reports whether every changed row (or, at gran==='call', the

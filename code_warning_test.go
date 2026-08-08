@@ -17,7 +17,6 @@ import (
 	"slash/modules/comments"
 	"slash/modules/github"
 	"slash/modules/relations"
-	"slash/modules/warnrevoke"
 )
 
 // warningFixtureBody is the fixture PHP file both worktrees carry: a single
@@ -81,9 +80,9 @@ func warningManager(t *testing.T, dataDir string, fake *claude.Fake) (*TaskManag
 	return m, cs, gh
 }
 
-// warningManagerWithApprovals is warningManager plus a real approvals module
-// (constructor param) and a real warnrevoke module (post-construction, like
-// production wiring) — for exercising code_warning's approval-revoke path.
+// warningManagerWithApprovals is warningManager plus a real approvals module,
+// for asserting that a risk-check finding leaves the reviewer's approval of
+// the row it anchors to untouched.
 func warningManagerWithApprovals(t *testing.T, dataDir string, fake *claude.Fake) (*TaskManager, *comments.Module, *approvals.Module) {
 	t.Helper()
 	cs, err := comments.Open(filepath.Join(dataDir, "comments.db"))
@@ -96,11 +95,6 @@ func warningManagerWithApprovals(t *testing.T, dataDir string, fake *claude.Fake
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ap.Close() })
-	wr, err := warnrevoke.Open(filepath.Join(dataDir, "warnrevoke.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { wr.Close() })
 	db, err := openDB(filepath.Join(dataDir, "graph.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +103,6 @@ func warningManagerWithApprovals(t *testing.T, dataDir string, fake *claude.Fake
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
 	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, ap, nil, nil, fake, nil, db, dataDir, "test/repo")
-	m.warnrevoke = wr
 	return m, cs, ap
 }
 
@@ -396,13 +389,12 @@ func TestCodeWarningPromptsExistingComments(t *testing.T) {
 		t.Fatalf("prompt does not mention the existing comment: %s", prompt)
 	}
 }
-
-// A code_warning finding retracts the reviewer's approval of the row it
-// anchors to — but only the FIRST time that (pr, block, row) triggers a
-// warning. A re-run whose finding lands on the SAME row again (e.g. a trivial
-// re-ingest that doesn't change the underlying issue) must not undo an
-// approval the reviewer gave again after already seeing the warning once.
-func TestCodeWarningRevokesApprovalOnlyOnce(t *testing.T) {
+// A finding that anchors to a row the reviewer already approved leaves that
+// approval alone: an AI risk check is a hint to look again, never a verdict
+// that the row was never reviewed (see .claude/docs/approval.md — the same
+// decision as "placing a comment keeps the approval"). The warning comment
+// itself is still created.
+func TestCodeWarningKeepsApproval(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 36
 	writeWarningFixtureRepo(t, dataDir, pr)
@@ -423,14 +415,11 @@ func TestCodeWarningRevokesApprovalOnlyOnce(t *testing.T) {
 	m, cs, ap := warningManagerWithApprovals(t, dataDir, fake)
 	ctx := context.Background()
 
-	// The reviewer had already approved this row before the risk check ever ran.
+	// The reviewer approved this row before the risk check ever ran.
 	if err := ap.Replace(ctx, pr, blockID, []int{row}, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	// Run 1: the finding anchors to the already-approved row — this is the
-	// FIRST time this (pr, block, row) triggers a warning, so the approval is
-	// retracted.
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
@@ -439,34 +428,14 @@ func TestCodeWarningRevokesApprovalOnlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(list) != 1 {
-		t.Fatalf("after run 1: comments = %d, want 1: %+v", len(list), list)
+		t.Fatalf("comments = %d, want 1: %+v", len(list), list)
 	}
-	approvals1, err := ap.List(ctx, pr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(approvals1) != 0 && (len(approvals1) != 1 || len(approvals1[0].Rows) != 0) {
-		t.Fatalf("after run 1: approvals = %+v, want the row retracted", approvals1)
-	}
-
-	// The reviewer looks at the (still open) warning, decides the code is fine
-	// after all, and approves the row again.
-	if err := ap.Replace(ctx, pr, blockID, []int{row}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	// Run 2: the SAME finding recurs on the SAME row (e.g. a trivial re-ingest)
-	// — this (pr, block, row) already triggered a warning once, so the
-	// reviewer's fresh approval must survive.
-	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
-		t.Fatal(err)
-	}
-	approvals2, err := ap.List(ctx, pr)
+	after, err := ap.List(ctx, pr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := false
-	for _, a := range approvals2 {
+	for _, a := range after {
 		if a.BlockID != blockID {
 			continue
 		}
@@ -478,11 +447,11 @@ func TestCodeWarningRevokesApprovalOnlyOnce(t *testing.T) {
 			}
 		}
 		if !hasRow {
-			t.Fatalf("after run 2: row %d was retracted again, want it to survive: %+v", row, a)
+			t.Fatalf("row %d was retracted by the risk check, want it to survive: %+v", row, a)
 		}
 	}
 	if !found {
-		t.Fatalf("after run 2: no approval row for block %q at all: %+v", blockID, approvals2)
+		t.Fatalf("no approval row for block %q at all: %+v", blockID, after)
 	}
 }
 

@@ -1073,7 +1073,7 @@ success), and a new, exactly analogous `prReplyDrafts` map was added for
 throw used to propagate as an unhandled rejection with no boolean result at
 all). Test: `tests/comment-send-failed-badge.spec.mjs`.
 
-Placing a comment also **retracts the approval of the unit it hangs on** — see
+Placing a comment **never touches the approval of the unit it hangs on** — see
 `.claude/docs/approval.md`.
 
 **If a Claude message already lazily created this exact draft's backing

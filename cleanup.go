@@ -25,7 +25,6 @@ import (
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/testcovers"
-	"slash/modules/warnrevoke"
 )
 
 // This file holds the pure, directly testable pieces of the `cleanup`
@@ -283,10 +282,6 @@ type purgeDeps struct {
 	// each hangs off a comment thread that is itself purged via d.comments, but
 	// the chat rows have their own store and need their own sweep.
 	chat *chat.Module
-	// warnrevoke holds the (pr, blockId, row) bookkeeping that suppresses a
-	// repeat approval-revoke for the same code_warning finding (see
-	// modules/warnrevoke); keyed per PR so this sweep picks it up.
-	warnrevoke *warnrevoke.Module
 }
 
 // purgePR removes every trace of one PR's data: its worktrees, its workflow
@@ -388,13 +383,6 @@ func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, erro
 			return res, fmt.Errorf("purge chat: %w", err)
 		}
 		res.RowsDeleted["chat"] = int(n)
-	}
-	if d.warnrevoke != nil {
-		n, err := d.warnrevoke.Purge(ctx, pr)
-		if err != nil {
-			return res, fmt.Errorf("purge warnrevoke: %w", err)
-		}
-		res.RowsDeleted["warnrevoke"] = int(n)
 	}
 
 	log.Printf("cleanup pr %d: worktrees=%d workflow_runs=%d rows=%v",

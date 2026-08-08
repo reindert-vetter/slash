@@ -31,7 +31,6 @@ import (
 	"slash/modules/taskinbox"
 	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
-	"slash/modules/warnrevoke"
 )
 
 // This file wires the first task as a durable tembed Workflow. Terminology
@@ -614,12 +613,6 @@ type TaskManager struct {
 	// NewTaskManager param; a nil store makes AutoWarnEnabled report "enabled"
 	// (the default) and saveAutoWarnEnabled a no-op.
 	autowarn *autowarn.Module
-	// warnrevoke remembers which (pr, blockId, row) already had an approval
-	// retracted by a code_warning finding once, so a repeat finding on a
-	// re-ingest doesn't retract it again (see revokeApprovalForWarning). Set
-	// post-construction, same reasoning as autowarn; a nil store makes
-	// markWarningRevocation always report "new" (never suppresses a revoke).
-	warnrevoke *warnrevoke.Module
 	claude     claude.Client
 	jira       jira.Client
 	db         *sql.DB
@@ -1751,90 +1744,6 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, nil
 	})
 
-	// Activity: check-and-mark whether (pr, blockId, row) already triggered an
-	// approval revoke before (write, workflow-driven — see modules/warnrevoke's
-	// doc comment for why identity is the anchor, not the comment id/wording).
-	// Returns isNew=true only the first time; codeWarningWorkflow only calls
-	// revokeApprovalForWarning when this is true.
-	engine.RegisterActivity("markWarningRevocation", func(ctx context.Context, in []byte) ([]byte, error) {
-		var arg struct {
-			PR      int    `json:"pr"`
-			BlockID string `json:"blockId"`
-			Row     int    `json:"row"`
-		}
-		if err := json.Unmarshal(in, &arg); err != nil {
-			return nil, err
-		}
-		if m.warnrevoke == nil {
-			return json.Marshal(true)
-		}
-		isNew, err := m.warnrevoke.MarkIfNew(ctx, arg.PR, arg.BlockID, arg.Row)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(isNew)
-	})
-
-	// Activity: retract the reviewer's approval of the exact row an AI warning
-	// just anchored to (write, workflow-driven). Reuses the SAME "set" Signal
-	// route the frontend's own revokeApprovalForComment uses (see
-	// .claude/docs/approval.md, "Placing a comment retracts the approval it
-	// hangs on") instead of a second, competing approvals.Replace call site: it
-	// reads the block's current approved state, drops the row range (plus any
-	// call-segment key whose row falls in it), and signals the PR's approve
-	// tracker with the trimmed set — exactly what the UI would send.
-	engine.RegisterActivity("revokeApprovalForWarning", func(ctx context.Context, in []byte) ([]byte, error) {
-		var arg struct {
-			PR       int    `json:"pr"`
-			BlockID  string `json:"blockId"`
-			RowStart int    `json:"rowStart"`
-			RowEnd   int    `json:"rowEnd"`
-		}
-		if err := json.Unmarshal(in, &arg); err != nil {
-			return nil, err
-		}
-		if m.approvals == nil {
-			return nil, nil
-		}
-		list, err := m.approvals.List(ctx, arg.PR)
-		if err != nil {
-			return nil, fmt.Errorf("code_warning: list approvals: %w", err)
-		}
-		var rows []int
-		var calls []string
-		found := false
-		for _, a := range list {
-			if a.BlockID != arg.BlockID {
-				continue
-			}
-			found = true
-			rows, calls = a.Rows, a.Calls
-			break
-		}
-		if !found || (len(rows) == 0 && len(calls) == 0) {
-			return nil, nil // nothing approved there yet — nothing to retract
-		}
-		newRows, newCalls, changed := removeApprovalRowRange(rows, calls, arg.RowStart, arg.RowEnd)
-		if !changed {
-			return nil, nil
-		}
-		runID, err := m.EnsureApprovals(arg.PR)
-		if err != nil {
-			return nil, fmt.Errorf("code_warning: ensure approvals: %w", err)
-		}
-		sig := ApprovalSignal{BlockID: arg.BlockID, Rows: newRows, Calls: newCalls}
-		if sig.Rows == nil {
-			sig.Rows = []int{}
-		}
-		if sig.Calls == nil {
-			sig.Calls = []string{}
-		}
-		if err := m.engine.SignalWorkflow(runID, SignalSet, sig); err != nil {
-			return nil, fmt.Errorf("code_warning: signal revoke: %w", err)
-		}
-		return nil, nil
-	})
-
 	// Activity: store one comment's ignored state (write, workflow-driven —
 	// the commentignore module is the only writer of that read-model). Set is
 	// idempotent in both directions, so a replay is safe.
@@ -1999,8 +1908,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// maps every accepted finding onto the existing comment-anchoring model
 	// (anchoredWarning, code_warning.go), ready to hand to createWarningComment.
 	// Also carries each finding's anchored block id (empty for an unanchored
-	// PR-wide "ai_warning") so codeWarningWorkflow knows whether/what to
-	// revoke via revokeApprovalForWarning.
+	// PR-wide "ai_warning"), see warningToCreate.
 	engine.RegisterActivity("runAgenticReview", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg warningReviewArg
 		if err := json.Unmarshal(in, &arg); err != nil {
@@ -2063,7 +1971,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			engine: m.engine, db: m.db, dataDir: m.dataDir,
 			comments: m.comments, approvals: m.approvals, relations: m.relations,
 			callresolve: m.callresolve, testcovers: m.testcovers, prmeta: m.prmeta, explain: m.explain,
-			commentignore: m.commentignore, chat: m.chat, warnrevoke: m.warnrevoke,
+			commentignore: m.commentignore, chat: m.chat,
 		}
 		res, err := purgePR(ctx, deps, t.PR)
 		if err != nil {
@@ -2818,39 +2726,14 @@ func codeWarningWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("run agentic review: %w", err)
 	}
 
+	// A finding NEVER retracts the reviewer's approval of the row it anchors
+	// to — an AI risk check is a hint to look again, not a verdict that the
+	// reviewer never read the code. Mirrors the same decision on the frontend
+	// side (placing a comment leaves the approval alone too), see
+	// .claude/docs/approval.md.
 	for _, item := range toCreate {
 		if err := w.ExecuteActivity("createWarningComment", item.Comment, nil); err != nil {
 			return nil, fmt.Errorf("create warning comment: %w", err)
-		}
-		// Retract the approval of the exact row this warning anchors to — but
-		// only the FIRST time this (pr, blockId, row) triggers a warning; a
-		// repeat of the same warning on a re-ingest must not undo an approval
-		// the reviewer deliberately gave again after already seeing it once
-		// (see modules/warnrevoke's doc comment). Unanchored PR-wide findings
-		// (BlockID == "") have no row to retract.
-		if item.BlockID == "" || item.Comment.RowStart < 0 {
-			continue
-		}
-		var isNew bool
-		markArg := struct {
-			PR      int    `json:"pr"`
-			BlockID string `json:"blockId"`
-			Row     int    `json:"row"`
-		}{PR: in.PR, BlockID: item.BlockID, Row: item.Comment.RowStart}
-		if err := w.ExecuteActivity("markWarningRevocation", markArg, &isNew); err != nil {
-			return nil, fmt.Errorf("mark warning revocation: %w", err)
-		}
-		if !isNew {
-			continue
-		}
-		revokeArg := struct {
-			PR       int    `json:"pr"`
-			BlockID  string `json:"blockId"`
-			RowStart int    `json:"rowStart"`
-			RowEnd   int    `json:"rowEnd"`
-		}{PR: in.PR, BlockID: item.BlockID, RowStart: item.Comment.RowStart, RowEnd: item.Comment.RowEnd}
-		if err := w.ExecuteActivity("revokeApprovalForWarning", revokeArg, nil); err != nil {
-			return nil, fmt.Errorf("revoke approval for warning: %w", err)
 		}
 	}
 	return json.Marshal(map[string]int{"found": len(toCreate)})

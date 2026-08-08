@@ -33,7 +33,6 @@ import (
 	"slash/modules/taskinbox"
 	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
-	"slash/modules/warnrevoke"
 )
 
 // tasks holds the workflow engine + the module read sides. It is built once at
@@ -239,25 +238,6 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ch.Close()
 		return nil, nil, err
 	}
-	wr, err := warnrevoke.Open(dataDir + "/warnrevoke.db")
-	if err != nil {
-		sq.Close()
-		cs.Close()
-		ib.Close()
-		rel.Close()
-		pm.Close()
-		cr.Close()
-		tc.Close()
-		ap.Close()
-		ex.Close()
-		ru.Close()
-		ts.Close()
-		ci.Close()
-		ti.Close()
-		ch.Close()
-		aw.Close()
-		return nil, nil, err
-	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -333,9 +313,6 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// AutoWarnEnabled report "enabled" (the default) and saveAutoWarnEnabled a
 	// no-op.
 	mgr.autowarn = aw
-	// Same pattern for the warning-revocation bookkeeping: a nil store makes
-	// markWarningRevocation always report "new" (never suppresses a revoke).
-	mgr.warnrevoke = wr
 	// Mirror every glue-level log line (poller/startup errors that are not a
 	// workflow run of their own) into the in-memory problem buffer behind
 	// GET /api/problems — see run_errors.go.
@@ -402,7 +379,6 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = ci.Close()
 		_ = ch.Close()
 		_ = aw.Close()
-		_ = wr.Close()
 		return cs.Close()
 	}
 	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, tasksnooze: ts, taskinbox: ti, commentignore: ci, chat: ch}, closeFn, nil

@@ -621,8 +621,8 @@ stores a private note that never reaches GitHub (see the `local` flag in
 `.claude/docs/workflows-comments.md`). Both `run`s are `async` and call
 `pollWorkflows()` after a successful place, so the new `task_code_comment` run
 shows in the "Taken" card immediately instead of at the next
-`WORKFLOWS_POLL_MS` tick. Placing a comment also retracts the approval of the
-unit it hangs on — see `.claude/docs/approval.md`.
+`WORKFLOWS_POLL_MS` tick. Placing a comment leaves the approval of the unit it
+hangs on **untouched** — see `.claude/docs/approval.md`.
 
 The Enter branch sits in `onKeydown` **before** the `relatedActive()` branch
 (`isComposeOpen()` + `composeHasText()`), so it works whether the composer was

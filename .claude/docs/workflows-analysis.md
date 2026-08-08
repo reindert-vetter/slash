@@ -745,31 +745,16 @@ a manually triggered, low-frequency action.
   machinery: `createWarningComment` calls `StartCodeComment` with `Source:"ai"`
   + `Local:true` (never to GitHub) and `Author:"AI check"`. Being a full
   Execution, the reviewer can resolve or delete it like any other comment.
-- **A block-anchored finding retracts the reviewer's approval of that exact
-  row — but only the FIRST time.** Mirrors "Placing a comment retracts the
-  approval it hangs on" (`.claude/docs/approval.md`) and **reuses the same
-  mechanism** rather than a second write path: `revokeApprovalForWarning`
-  (Activity) reads the block's current approved state (`approvals.List`),
-  drops the row (plus any call-segment key whose row falls in it — same
-  group/line logic as `revokeApprovalForComment`, factored out as
-  `removeApprovalRowRange` in `code_warning.go`), and signals the PR's
-  `approve` tracker with the trimmed set via the existing `SignalSet` route
-  (`EnsureApprovals` + `engine.SignalWorkflow(runID, SignalSet, …)`) — exactly
-  what the UI itself would send. **Identity for "already revoked once" is
-  `(pr, blockId, row)`** — the anchor, never the comment id (a stale AI comment
-  is deleted and a fresh one created on every run via `supersedeFileWarnings`)
-  and never the finding's wording (the model may rephrase the same issue
-  between runs). `modules/warnrevoke`'s `MarkIfNew` records that tuple once;
-  `codeWarningWorkflow` only calls `revokeApprovalForWarning` when
-  `markWarningRevocation`'s Activity result says it's new. Consequence: if the
-  reviewer sees the warning, decides the code is fine, and re-approves that
-  row, a **later** run whose finding recurs on the same row does **not** undo
-  that approval again — only a warning on a **different** row is treated as
-  new. An unanchored `ai_warning` (no block/row) never revokes anything.
+- **A finding never touches the reviewer's approval.** It used to retract the
+  approval of the exact row it anchored to, once per `(pr, blockId, row)`
+  (`revokeApprovalForWarning`/`markWarningRevocation` + `modules/warnrevoke`);
+  all of that is **removed** — see "Placing a comment (or an AI finding) does
+  NOT retract an approval" in `.claude/docs/approval.md`. An automatic risk
+  check runs on every ingest refresh, so a recurring finding kept silently
+  eating approvals the reviewer had already given.
 - **Determinism:** the body only does `ExecuteActivity` calls in a fixed order
-  (scope → supersede → the one Opus call → per finding: `createWarningComment`,
-  then `markWarningRevocation` + conditionally `revokeApprovalForWarning`), and
-  every count comes from a **stored** Activity result — never a live check.
+  (scope → supersede → the one Opus call → `createWarningComment` per finding),
+  and every count comes from a **stored** Activity result — never a live check.
 - **Frontend:** the same warning-triangle SVG as `related-covers-warning`, now
   as an `aiWarningBadge` pill; the Taken card shows the run as "Risk check" with
   either "searching the PR for risks…" or the **exact** number of findings —
@@ -777,8 +762,8 @@ a manually triggered, low-frequency action.
 - Tests: `code_warning_test.go` (anchoring, the block-wide-first-row fallback
   — `TestAnchoredWarningFallsBackToBlockWideFirstRow`, exercising
   `anchoredWarning` directly rather than the whole workflow — PR-wide
-  fallback, hallucination guard, supersede, the findings cap, the once-only
-  revoke, and the automatic trigger firing/skipping-when-disabled/not-on-a-
-  bare-rebuild), `modules/autowarn/autowarn_test.go`,
-  `modules/warnrevoke/warnrevoke_test.go`; the frontend badge/scoping side:
+  fallback, hallucination guard, supersede, the findings cap,
+  `TestCodeWarningKeepsApproval`, and the automatic trigger
+  firing/skipping-when-disabled/not-on-a-bare-rebuild),
+  `modules/autowarn/autowarn_test.go`; the frontend badge/scoping side:
   `tests/comment-block-wide-anchor.spec.mjs`.

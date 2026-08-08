@@ -62,35 +62,24 @@ rows, calls}`, `persistApproval`). The UI never writes directly — only this
 Signal, within the write boundary. See "Persisting reviewer approval" in
 `.claude/docs/workflows-trackers.md`.
 
-## Placing a comment retracts the approval it hangs on
+## Placing a comment (or an AI finding) does NOT retract an approval
 
-`revokeApprovalForComment` (`home.mjs`): a reviewer who comments on an
-already-approved unit is saying "this isn't OK after all", so that anchor's
-approval is retracted right after the comment is placed — via the same `set`
-Signal, never a direct write. Hooked into **both** `COMPOSE_COMMANDS` items that
-actually place a comment ("Plaats comment" and "Alleen voor mijzelf" — a private
-note counts, the reviewer is still flagging the code). A **reply** in an
-existing thread (`sendReaction`) retracts nothing.
+Deliberately reversed, on explicit request: a comment on an already-approved
+unit used to retract that unit's approval (`revokeApprovalForComment`,
+`home.mjs`, hooked into both `COMPOSE_COMMANDS` items that place a comment),
+and an AI `code_warning` finding did the same server-side
+(`revokeApprovalForWarning` + `markWarningRevocation`, driven by
+`codeWarningWorkflow`, with `modules/warnrevoke` remembering the
+`(pr, blockId, row)` tuple so it only fired once). **All of it is gone** — the
+function, both Activities, the `warnrevoke` module, and its purge sweep in
+`cleanup.go`.
 
-Both call sites capture `focusedBlock()` + `commentTarget()` **before** the
-`await placeComment(...)`, so the revoke targets the block/unit the comment was
-actually anchored to — including a drilled column, mirroring `approveContext()`'s
-own `focusLevel` handling (see `.claude/docs/command-palette.md`).
-
-- `gran !== 'call'` (group/line, or a TRANSLATION per-key unit — same aligned-row
-  range): every row in `[t.rowStart, t.rowEnd]` drops from `b.approvedRows`, plus
-  any `b.approvedCalls` entry whose row falls in that range (a coarser comment
-  supersedes a finer partial call approval).
-- `gran === 'call'`: only the **one** segment the comment sits on (via `t.seg`,
-  the same `segKey()` `commentTarget()` computed) loses approval; sibling
-  segments keep theirs, and a row that had graduated into `b.approvedRows` is
-  first expanded back into explicit per-segment keys (mirrors
-  `toggleCallApprove`'s "wasFullRow" branch).
-
-A comment created by the system itself (an imported GitHub comment, an AI
-`code_warning` finding) never triggers this — those come from a backend Activity,
-not this frontend `placeComment`/`createComment` path. Test:
-`tests/comment-revokes-approval.spec.mjs`.
+An approval means "I have read this code", and neither a comment nor a risk
+hint changes that fact; retracting it silently cost the reviewer work they had
+already done (an automatic risk check runs on every ingest refresh, so a
+recurring finding kept eating approvals unattended). Both the comment and the
+warning still appear exactly as before — only the retraction is gone. Don't
+reintroduce either half without asking.
 
 ## Combined approval per tree (sidebar + Underlying code)
 
