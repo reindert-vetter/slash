@@ -19,8 +19,10 @@ import { test, expect } from './_fixtures.mjs'
 // Approving the whole PR is a deliberate TWO-STEP choice: "Keur de HELE PR
 // goed" no longer submits directly — it has `children` (the ordinary submenu
 // mechanism, like "Open GitHub") that opens a one-item confirm step
-// ("Sluit menu" / "Ja, keur de hele PR goed"); only THAT item actually calls
-// submit_review. Both "Ja, keur de hele PR goed" and (after typing a reason)
+// ("Sluit menu" / "Goedkeuren en ga naar overzicht" / "Goedkeuren en
+// sluiten"); only one of those two actually calls submit_review — they post
+// the identical review and differ only in where the reviewer lands afterwards.
+// Both confirm items and (after typing a reason)
 // "Wijs de PR af" call the real submit_review endpoint — SLASH_GITHUB=off
 // (forced by the test harness, see _fixtures.mjs) means the backend's
 // github.Fake accepts it without touching the network, so no mocking is
@@ -132,17 +134,21 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     // decoration only — the icon must be present regardless.
     await expect(rows.nth(1).getByTestId('command-icon-approve-pr')).toBeVisible()
 
-    // Choosing it must NOT submit yet — it opens the confirm submenu instead.
+    // Choosing it must NOT submit yet — it opens the confirm submenu instead,
+    // which offers the same review twice, differing only in where you land
+    // afterwards: "ga naar overzicht" (the default, 2nd item) and "sluiten".
     await rows.filter({ hasText: 'Keur de HELE PR goed' }).click()
     await expect(menu).toBeVisible()
-    await expect(rows).toHaveCount(2)
+    await expect(rows).toHaveCount(3)
     await expect(rows.nth(0)).toContainText('Sluit menu')
-    await expect(rows.nth(1)).toContainText('Ja, keur de hele PR goed')
+    await expect(rows.nth(1)).toContainText('Goedkeuren en ga naar overzicht')
+    await expect(rows.nth(2)).toContainText('Goedkeuren en sluiten')
     await expect(rows.nth(1).getByTestId('command-icon-approve-pr')).toBeVisible()
+    await expect(rows.nth(2).getByTestId('command-icon-approve-pr')).toBeVisible()
 
     const [request] = await Promise.all([
       page.waitForRequest('**/api/workflows/submit_review'),
-      rows.filter({ hasText: 'Ja, keur de hele PR goed' }).click(),
+      rows.filter({ hasText: 'Goedkeuren en sluiten' }).click(),
     ])
     expect(request.method()).toBe('POST')
     expect(request.postDataJSON()).toEqual({ pr: 12903, event: 'APPROVE', body: '' })
@@ -227,6 +233,48 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     expect(copied).not.toMatch(/[✅❌]/)
   })
 
+  // The second confirm item posts the identical review and then leaves for the
+  // PR overview, carrying the round-trip state (?pr/?sel) exactly like the ←
+  // exit does (overviewExitUrl, see .claude/docs/pages-and-routing.md). The
+  // navigation must happen only AFTER the submit resolved.
+  test('"Goedkeuren en ga naar overzicht" submits and then leaves for /pr-overview', async ({
+    page,
+  }) => {
+    await clearBlockApproval(page, BLOCK1_ID)
+    await clearBlockApproval(page, BLOCK6_ID)
+    await mockClipboard(page)
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.press('Escape')
+
+    await page.locator('[data-idx="1"]').click()
+    await page.keyboard.press('ArrowRight')
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await approveViaPalette(page)
+
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await page.getByTestId('command-row').filter({ hasText: 'Ga door' }).click()
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await approveViaPalette(page)
+
+    const rows = page.getByTestId('command-row')
+    await expect(menu).toBeVisible()
+    await rows.filter({ hasText: 'Keur de HELE PR goed' }).click()
+
+    const [request] = await Promise.all([
+      page.waitForRequest('**/api/workflows/submit_review'),
+      rows.filter({ hasText: 'Goedkeuren en ga naar overzicht' }).click(),
+    ])
+    expect(request.postDataJSON()).toEqual({ pr: 12903, event: 'APPROVE', body: '' })
+
+    await page.waitForURL(/\/pr-overview\?/)
+    const url = new URL(page.url())
+    expect(url.pathname).toBe('/pr-overview')
+    expect(url.searchParams.get('pr')).toBe('12903')
+    expect(url.searchParams.get('sel')).toBe(BLOCK6_SEL)
+  })
+
   // buildReviewClipboardText (home.mjs) counts the reviewer's OWN comments
   // that are not (yet) resolved, across the whole PR — not scoped to any one
   // block. Seeded here via the sanctioned task_code_comment write path;
@@ -282,7 +330,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
 
     const [request] = await Promise.all([
       page.waitForRequest('**/api/workflows/submit_review'),
-      rows.filter({ hasText: 'Ja, keur de hele PR goed' }).click(),
+      rows.filter({ hasText: 'Goedkeuren en sluiten' }).click(),
     ])
     const response = await request.response()
     expect(response.status()).toBe(200)
@@ -317,7 +365,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await expect(rows.nth(0)).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('Open op GitHub')
     await expect(rows.nth(2)).toContainText('PR keuren')
-    await expect(rows.nth(3)).toContainText('Comment plaatsen')
+    await expect(rows.nth(3)).toContainText('Algemene comment plaatsen')
     await expect(rows.nth(2).getByTestId('command-icon-approve-pr')).toBeVisible()
 
     await rows.filter({ hasText: 'PR keuren' }).click()

@@ -5403,10 +5403,29 @@ async function checkPRWarnings() {
 // (defaultSel), so a reviewer who really means it can still confirm with one
 // more Enter — but it is a genuinely separate keypress/click from the one
 // that opened this submenu, not the same one.
+// TWO confirm items, both submitting the exact same review — they differ only
+// in where the reviewer ends up afterwards. Finishing a PR is almost always
+// followed by picking up the next one, so "en ga naar overzicht" is the
+// DEFAULT (the 2nd item, i.e. the one Enter lands on); "en sluiten" stays for
+// a reviewer who wants to keep looking at this PR. The navigation deliberately
+// happens only AFTER the submit resolved (submitReview also copies the summary
+// to the clipboard on success), and reuses overviewExitUrl() so the round-trip
+// state (?pr/?sel/drill) travels along exactly like the ← exit does — see
+// .claude/docs/pages-and-routing.md.
 const REVIEW_APPROVE_CONFIRM_COMMANDS = withClose([
   {
-    id: 'review-approve-confirm',
-    label: 'Ja, keur de hele PR goed',
+    id: 'review-approve-confirm-overview',
+    label: 'Goedkeuren en ga naar overzicht',
+    hint: 'overzicht',
+    icon: 'approve-pr',
+    run: async () => {
+      await submitReview('APPROVE')
+      location.href = overviewExitUrl()
+    },
+  },
+  {
+    id: 'review-approve-confirm-close',
+    label: 'Goedkeuren en sluiten',
     hint: 'bevestig',
     icon: 'approve-pr',
     run: () => submitReview('APPROVE'),

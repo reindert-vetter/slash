@@ -390,10 +390,14 @@ watch is decoupled and only fills as a microtask):
 **Approving the whole PR is deliberately a TWO-STEP choice** (a real GitHub
 review was "too easy to hit by accident"). Neither "Approve the whole PR" item
 carries a `run`; both carry `children: REVIEW_APPROVE_CONFIRM_COMMANDS`, so
-choosing it opens a one-item confirmation submenu through the ordinary
-`children` mechanism (no new mode). That submenu also goes through `withClose`,
-so its one real item ("Yes, approve the whole PR") is the default 2nd item, and
-only that calls `submitReview('APPROVE')`. Both "Approve" items carry a
+choosing it opens a confirmation submenu through the ordinary `children`
+mechanism (no new mode). That submenu also goes through `withClose` and holds
+**two** real items, which post the *identical* review and differ only in where
+the reviewer ends up: **"Goedkeuren en ga naar overzicht"** (the default 2nd
+item — finishing a PR is almost always followed by picking up the next one; it
+awaits `submitReview('APPROVE')` and only then goes to `overviewExitUrl()`, so
+the `?pr`/`?sel`/drill round-trip travels along exactly like the `←` exit) and
+**"Goedkeuren en sluiten"** (submit and stay). Both "Approve" items carry a
 check-in-circle icon, and "Reject the PR" carries an X-in-circle icon (`c.icon`,
 `commandIcon` in `CommandMenu.mjs`, `'approve-pr'`/`'reject-pr'`) — the icon
 **shape** plus the label text carry the meaning (which of the two opposite
