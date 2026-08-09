@@ -97,6 +97,17 @@ Each child is one card (`data-testid=related-item`). It follows
   `relatedChildren`/`resolvedCallChildren` via `blockApproveCount`); the same
   `{done,total}` also feeds the sidebar pill — see
   `.claude/docs/approval.md`.
+- **An eye glyph** (`viewOnlyBadge`, `data-testid=related-view-only`) in the
+  same header slot whenever the card has **neither** an approve counter
+  (`approvalBadge`) **nor** a comment avatar (`commentActivityBadge`) —
+  reviewer's own wording: "als er geen avatar aanwezig is en geen aantal
+  approved aantal regels is, laat dan een oogje zien". That is exactly the
+  reference material: a call/covered method into a file this PR doesn't change,
+  and the read-only class members — reachable (since reference units, also from
+  an UNCHANGED line: see "Reference units" in
+  `.claude/docs/keyboard-navigation.md`) but never approvable. Colourblind
+  rule: the meaning sits in the SHAPE plus its title text, the glyph is drawn
+  in the ordinary neutral slate/zinc.
 - A child found by an LLM carries a **`source: haiku/sonnet`** badge;
   Go-resolved children show none.
 - Selecting an `Unchanged` child gets the same indigo border as any other selected

@@ -1412,7 +1412,13 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // rows are marked on the left, ins rows via their filler row, so both are
   // covered. Whitespace-only re-alignments don't count (see rowChanged/wsOnly).
   const changed = rowChanged(r)
-  const active = changed && group && i >= group.start && i <= group.end
+  // A REFERENCE unit (group.ref — an unchanged line that only carries a
+  // resolved call, see withReferenceUnits above) is landable too, so the
+  // cursor bar has to show there as well; `changed` alone would leave the
+  // reviewer standing on an invisible selection. Everything else follows from
+  // the existing branches: with no del/ins mark the row keeps its ordinary
+  // (untinted) background and only gains the inset cursor bar.
+  const active = !!group && i >= group.start && i <= group.end && (changed || !!group.ref)
   // At call granularity the active unit is a single row plus the char indices
   // of the one call segment being navigated; underline those (per side) so the
   // exact segment within the line is marked. null at group/line granularity.
@@ -2056,8 +2062,10 @@ function wsOnly(r) {
 }
 
 // rowChanged reports whether a row counts as a change for navigation and hints:
-// it carries a del/ins mark and isn't a whitespace-only re-alignment.
-function rowChanged(r) {
+// it carries a del/ins mark and isn't a whitespace-only re-alignment. Exported
+// for home.mjs's referenceRows, which needs the exact same "is this row
+// changed?" answer to decide which call sites sit on an UNCHANGED line.
+export function rowChanged(r) {
   return !!(r.leftMark || r.rightMark) && !wsOnly(r)
 }
 
@@ -2311,10 +2319,62 @@ export function blockRows(b) {
 // lines (changeLines), or single call-chain segments within a line (changeCalls).
 // Shared by home.mjs (diff navigation) and Footer.mjs (the one-line preview) so
 // both agree on what the currently-selected unit is.
-export function unitsFor(rows, gran) {
-  if (gran === 'line') return changeLines(rows)
-  if (gran === 'call') return changeCalls(rows)
-  return changeGroups(rows)
+export function unitsFor(rows, gran, extraRows = []) {
+  const base = gran === 'line' ? changeLines(rows) : gran === 'call' ? changeCalls(rows) : changeGroups(rows)
+  if (!extraRows || extraRows.length === 0) return base
+  return withReferenceUnits(base, rows, gran, extraRows)
+}
+
+// withReferenceUnits merges "reference" units — landable but NOT approvable —
+// into a granularity's ordinary unit list. `extraRows` are row indices that
+// carry no change of their own yet are worth standing on anyway: an
+// UNCHANGED line that holds a resolved call into underlying code (see
+// referenceRows in home.mjs). Reviewer request: "er zijn uitzonderlijke
+// situaties waarbij je onderliggende code hebt gelinkt aan regels die niet
+// zijn aangepast, zoals bij tests blokken. In dat geval wil ik ook de regel
+// kunnen selecteren (niet approven enzo) zodat ik ook naar die onderliggende
+// code kan gaan".
+//
+// Every such unit is tagged **`ref: true`**, which is the ONLY thing that
+// makes it different from an ordinary unit — approval never had to learn about
+// it, because approval is derived exclusively from changedRows and a reference
+// unit contains none (see approveTargetRows/unitFullyApproved in home.mjs).
+// A row already covered by a real unit is skipped, so nothing is ever
+// duplicated (structurally impossible for group/line — a change run never
+// spans an unchanged row — but guarded rather than assumed).
+//
+// The merged list stays in row order; Array#sort is stable, so a 'call'
+// row's own several segment units keep their relative order.
+function withReferenceUnits(base, rows, gran, extraRows) {
+  const out = base.slice()
+  for (const i of extraRows) {
+    if (i < 0 || i >= rows.length) continue
+    if (base.some((u) => u.start <= i && i <= u.end)) continue
+    out.push(referenceUnit(rows, i, gran))
+  }
+  return out.sort((a, b) => a.start - b.start)
+}
+
+// referenceUnit builds the single unit an unchanged row contributes at `gran`.
+// At 'group'/'line' that is the plain { start, end } shape every consumer
+// already reads. At 'call' it is ONE unit spanning the whole line (never a
+// per-segment split like changeCalls does): there is nothing changed on this
+// row to zoom into, and callScopeMethods matches a call site's segStart
+// against the unit's, which rowCallSegments reports as 0 for a row that isn't
+// an `ins` — so a single whole-line segment is exactly what lines up.
+function referenceUnit(rows, i, gran) {
+  if (gran !== 'call') return { start: i, end: i, ref: true }
+  const r = rows[i]
+  const useRight = r.right != null
+  return {
+    start: i,
+    end: i,
+    ref: true,
+    char: true,
+    left: useRight ? new Set() : fullSet(r.left || ''),
+    right: useRight ? fullSet(r.right) : new Set(),
+    segStart: 0,
+  }
 }
 
 // ── Approval ───────────────────────────────────────────────────────────────

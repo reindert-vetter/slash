@@ -17,6 +17,7 @@ import Block, {
   callUnitApproved,
   rowCallSegments,
   rowAnchorText,
+  rowChanged,
   unitsFor,
   updateHints,
   blockLabel,
@@ -1193,7 +1194,7 @@ function applyDrillCursorRestoreAt(level, b) {
 // state.drillCursor[level - 1] without touching that entry's other fields
 // (e.g. a live rangeAnchor).
 function applyCursorAt(level, b, gran, change) {
-  const units = unitsFor(blockRows(b), gran)
+  const units = navUnitsOf(b, blockRows(b), gran)
   state.drillCursor = state.drillCursor.map((c, i) =>
     i === level - 1 ? { ...c, gran, change: units.length ? Math.min(Math.max(change, 0), units.length - 1) : 0 } : c,
   )
@@ -1265,7 +1266,49 @@ function translationNavUnits(b) {
 // ("Translation blocks — per-key navigation").
 function navUnitsOf(b, rows, gran) {
   if (b && b.category === 'TRANSLATION') return translationNavUnits(b)
-  return unitsFor(rows, gran)
+  return unitsFor(rows, gran, referenceRows(b, rows))
+}
+
+// referenceRows returns the row indices of b that carry a resolved call into
+// underlying code but are NOT changed by this PR — the rows unitsFor turns
+// into landable-but-not-approvable "reference" units (see withReferenceUnits
+// in Block.mjs). Reviewer request: a test method often calls the very
+// production method it exercises from a line the PR never touched, and that
+// call site was unreachable — no unit sat on it, so callScopeMethods could
+// never scope to it and → could never reach that child.
+//
+// Deliberately ONLY resolved/found method calls (callRows + findCallSites, the
+// same pair callScopeMethods scopes by), so a reference unit always has
+// something concrete behind it. A block-level synthetic callKey yields no
+// sites at all (see isBlockLevelCallKey) and therefore never creates one.
+//
+// Memoized per block on the identity of its code + the callresolve list, both
+// of which are reassigned wholesale rather than mutated: findCallSites runs a
+// regex over every row per callKey, and this is reached from navigation
+// bindings on every keystroke.
+const referenceRowsCache = new WeakMap()
+const NO_REFERENCE_ROWS = []
+function referenceRows(b, rows) {
+  if (!b || !rows || rows.length === 0) return NO_REFERENCE_ROWS
+  const resolve = state.callResolve
+  const hit = referenceRowsCache.get(b)
+  if (hit && hit.code === b.code && hit.resolve === resolve) return hit.rows
+  const out = []
+  const seen = new Set()
+  for (const r of callRows(b)) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    for (const site of findCallSites(rows, r.callKey)) {
+      if (seen.has(site.row)) continue
+      const row = rows[site.row]
+      if (!row || rowChanged(row)) continue
+      seen.add(site.row)
+      out.push(site.row)
+    }
+  }
+  out.sort((x, y) => x - y)
+  const result = out.length ? out : NO_REFERENCE_ROWS
+  referenceRowsCache.set(b, { code: b.code, resolve, rows: result })
+  return result
 }
 
 // groupsFor returns the group-granularity change runs of a block (empty until its
@@ -1358,7 +1401,7 @@ function setGran(delta) {
   if (b && b.category === 'TRANSLATION') return
   const rows = blockRows(b)
   const from = GRANS.indexOf(state.gran)
-  const cur = unitsFor(rows, state.gran)[state.change]
+  const cur = navUnitsOf(b, rows, state.gran)[state.change]
   const anchorRow = cur ? cur.start : 0
   let to = Math.min(GRANS.length - 1, Math.max(0, from + delta))
   // Refining a group that already spans a single row has no meaningful 'line'
@@ -1369,7 +1412,7 @@ function setGran(delta) {
   if (to === from) return
   clearRangeAnchor(0)
   state.gran = GRANS[to]
-  const units = unitsFor(rows, state.gran)
+  const units = navUnitsOf(b, rows, state.gran)
   state.change = units.length ? unitAtRow(units, anchorRow) : 0
   scrollChangeIntoView()
 }
@@ -3089,7 +3132,7 @@ function callScopeMethods(b, rows) {
   // by, so it always shows its full call list, like list mode.
   if (b !== focusedBlock()) return null
   const cur = focusedGranCursor()
-  const unit = unitsFor(rows, cur.gran)[cur.change]
+  const unit = navUnitsOf(b, rows, cur.gran)[cur.change]
   if (!unit) return null
   const methods = new Set()
   // b's own name decides whether a class_member: key stays block-level (see
@@ -3142,7 +3185,7 @@ function groupLineRange(b, rows) {
   if (b !== focusedBlock()) return null
   const cur = focusedGranCursor()
   if (cur.gran !== 'group') return null
-  const unit = unitsFor(rows, 'group')[cur.change]
+  const unit = navUnitsOf(b, rows, 'group')[cur.change]
   if (!unit) return null
   const { startLine, endLine, side } = unitLineRange(b, rows, unit)
   if (side !== 'RIGHT' || !startLine) return null
@@ -3533,7 +3576,7 @@ function callArrowPairs(b) {
   const level = state.focusLevel
   const cur = level > 0 ? state.drillCursor[level - 1] || { change: 0, gran: 'group' } : { gran: state.gran, change: state.change }
   const rows = blockRows(b)
-  const unit = unitsFor(rows, cur.gran)[cur.change]
+  const unit = navUnitsOf(b, rows, cur.gran)[cur.change]
   if (!unit) return []
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
   const pairs = []
@@ -5704,7 +5747,7 @@ function focusedActiveUnit() {
   const b = state.drill[state.focusLevel - 1]
   if (!b) return null
   const cur = state.drillCursor[state.focusLevel - 1] || { change: 0, gran: 'group' }
-  const units = unitsFor(blockRows(b), cur.gran)
+  const units = navUnitsOf(b, blockRows(b), cur.gran)
   return isRangeGran(cur.gran) ? rangeUnit(units, cur.change, cur.rangeAnchor) : units[cur.change] || null
 }
 
@@ -5824,7 +5867,7 @@ function drillToSibling(sibling, atEnd) {
   drillIntoChild(sibling)
   if (atEnd) {
     const b = state.drill[state.drill.length - 1]
-    const units = unitsFor(blockRows(b), 'group')
+    const units = navUnitsOf(b, blockRows(b), 'group')
     if (units.length > 1) setDrillChange(state.focusLevel, units.length - 1)
   }
 }
@@ -5844,7 +5887,7 @@ function drillNextChange() {
   const level = state.focusLevel
   const b = state.drill[level - 1]
   const cur = state.drillCursor[level - 1] || { change: 0, gran: 'group' }
-  const units = unitsFor(blockRows(b), cur.gran)
+  const units = navUnitsOf(b, blockRows(b), cur.gran)
   if (cur.change < units.length - 1) {
     setDrillChange(level, cur.change + 1)
     scrollChangeIntoView()
@@ -5899,7 +5942,7 @@ function setDrillGran(level, delta) {
   const rows = blockRows(b)
   const cur = state.drillCursor[level - 1] || { change: 0, gran: 'group' }
   const from = GRANS.indexOf(cur.gran)
-  const curUnit = unitsFor(rows, cur.gran)[cur.change]
+  const curUnit = navUnitsOf(b, rows, cur.gran)[cur.change]
   const anchorRow = curUnit ? curUnit.start : 0
   let to = Math.min(GRANS.length - 1, Math.max(0, from + delta))
   // Same single-row-group shortcut as setGran: skip 'line' straight to 'call'.
@@ -5908,7 +5951,7 @@ function setDrillGran(level, delta) {
   }
   if (to === from) return
   const gran = GRANS[to]
-  const units = unitsFor(rows, gran)
+  const units = navUnitsOf(b, rows, gran)
   const change = units.length ? unitAtRow(units, anchorRow) : 0
   state.drillCursor = state.drillCursor.map((c, i) => (i === level - 1 ? { gran, change } : c))
   scrollChangeIntoView()
@@ -5924,7 +5967,7 @@ function drillExtendRange(level, delta) {
   const b = state.drill[level - 1]
   const cur = state.drillCursor[level - 1] || { change: 0, gran: 'group' }
   if (!b || !isRangeGran(cur.gran)) return
-  const units = unitsFor(blockRows(b), cur.gran)
+  const units = navUnitsOf(b, blockRows(b), cur.gran)
   if (!units.length) return
   const anchor = cur.rangeAnchor != null ? cur.rangeAnchor : cur.change
   const change = Math.min(units.length - 1, Math.max(0, cur.change + delta))
@@ -6598,7 +6641,7 @@ function footerUnitInfo() {
       ? state.drillCursor[level - 1] || { change: 0, gran: 'group' }
       : { change: state.change, gran: state.gran }
   const rows = blockRows(b)
-  const unit = unitsFor(rows, cur.gran)[cur.change]
+  const unit = navUnitsOf(b, rows, cur.gran)[cur.change]
   if (!unit) return null
   // unit.left/right (the char-underline Sets) only exist for a 'call' unit,
   // which is always single-row — so reading them inside this loop naturally
@@ -6998,10 +7041,24 @@ function approveTargetRows(ctx = approveContext()) {
 // `auto` (default false, only passed `true` by spaceKey below) skips the
 // postApprove confirm menu and jumps straight to the next unapproved unit
 // instead — see afterApproveAction's own `auto` doc comment.
+// activeUnitIsReference reports whether the unit an approve action would act
+// on is a reference unit (an unchanged line carrying only a resolved call, see
+// referenceRows): landable, but with nothing to approve. Used both to make
+// approving a no-op and to leave the "Keur ... goed" item out of the palette
+// entirely, so the reviewer is never offered an action that can't do anything.
+function activeUnitIsReference(ctx = approveContext()) {
+  const b = ctx.b
+  if (!b || ctx.mode !== 'diff') return false
+  const unit = navUnitsOf(b, blockRows(b), ctx.gran)[ctx.change]
+  return !!(unit && unit.ref)
+}
+
 function toggleApprove(auto = false) {
   const ctx = approveContext()
   const b = ctx.b
   if (!b) return
+  // Nothing to approve on a reference unit — see activeUnitIsReference.
+  if (activeUnitIsReference(ctx)) return
   if (ctx.mode === 'diff' && ctx.gran === 'call') {
     toggleCallApprove(b, ctx.change, auto)
     return
@@ -7066,8 +7123,11 @@ async function toggleTestClassApproval(row) {
 // through to afterApproveAction (see toggleApprove's own doc comment).
 function toggleCallApprove(b, change = state.change, auto = false) {
   const rows = blockRows(b)
-  const unit = unitsFor(rows, 'call')[change]
-  if (!unit) return
+  const unit = navUnitsOf(b, rows, 'call')[change]
+  // A reference unit (an unchanged line that only carries a call, see
+  // referenceRows) has nothing to approve — landing on it is for stepping
+  // INTO its underlying code, not for signing anything off.
+  if (!unit || unit.ref) return
   const row = unit.start
   const segs = rowCallSegments(rows, row)
   const rowSet = approvedRowSet(b)
@@ -7104,6 +7164,13 @@ function toggleCallApprove(b, change = state.change, auto = false) {
 // action would actually cover. `all` is the block's changedRows, passed in so
 // callers that already have it don't recompute it per unit.
 function unitFullyApproved(b, unit, gran, all) {
+  // A reference unit — an unchanged line that only carries a resolved call
+  // (see referenceRows/withReferenceUnits) — has no changed rows at all, so
+  // there is nothing in it to approve and it must never read as "still open"
+  // to findNextUnapproved. The group/line branch below already concludes that
+  // via its empty rowsInUnit; 'call' needs saying explicitly, since
+  // callUnitApproved keys off approvedRows/approvedCalls instead.
+  if (unit && unit.ref) return true
   if (gran === 'call') return callUnitApproved(b, unit)
   const rowsInUnit = all.filter((i) => i >= unit.start && i <= unit.end)
   if (!rowsInUnit.length) return true
@@ -7546,7 +7613,9 @@ function afterApproveAction(approving, blockId, auto = false) {
 function isApproveDone(ctx) {
   const b = ctx.b
   if (b && ctx.mode === 'diff' && ctx.gran === 'call') {
-    const unit = unitsFor(blockRows(b), 'call')[ctx.change]
+    const unit = navUnitsOf(b, blockRows(b), 'call')[ctx.change]
+    // A reference unit is never "open work": there is nothing in it to approve.
+    if (unit && unit.ref) return true
     return callUnitApproved(b, unit)
   }
   const set = b ? approvedRowSet(b) : new Set()
@@ -7893,7 +7962,7 @@ function githubFileLine() {
   const rows = blockRows(b)
   const gran = state.mode === 'diff' ? state.gran : 'group'
   const idx = state.mode === 'diff' ? state.change : 0
-  const unit = unitsFor(rows, gran)[idx]
+  const unit = navUnitsOf(b, rows, gran)[idx]
   const startRow = unit ? unit.start : 0
   let seen = 0
   for (let i = 0; i <= startRow && i < rows.length; i++) {
@@ -7942,7 +8011,17 @@ function rootCommandsFor(mode) {
   if (mode === 'reviewReject') return []
   if (mode === 'pr') return PR_COMMANDS
   if (mode === 'compose') return COMPOSE_COMMANDS
-  return COMMANDS
+  return blockCommands()
+}
+
+// blockCommands is COMMANDS, minus the approve item while the cursor sits on a
+// reference unit (an unchanged line that only carries a call — see
+// referenceRows): there is nothing there to approve, so offering "Keur deze
+// regel goed" would be a dead row. Everything else (comment, chat, GitHub)
+// applies to such a line exactly as it does to a changed one. The pinned
+// "Sluit menu" stays index 0, so defaultSel keeps opening on the 2nd row.
+function blockCommands() {
+  return activeUnitIsReference() ? COMMANDS.filter((c) => c.id !== 'approve') : COMMANDS
 }
 
 // resolveCommands returns the commands to show for `query`: the fuzzy-matched

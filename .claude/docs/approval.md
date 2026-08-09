@@ -387,3 +387,15 @@ avoid the arrow.js single↔array slot pitfall (see
 `state.pinnedApprovedId` names stays visible while it is also the current
 selection — see "Load/refresh-restore → reveal" in
 `.claude/docs/keyboard-navigation.md`.
+
+## A reference unit has nothing to approve
+
+An unchanged line that only carries a resolved call is a landable navigation
+unit (`unit.ref` — see "Reference units" in
+`.claude/docs/keyboard-navigation.md`) but contributes **nothing** to any
+counter: it holds no `changedRows`, so `approveTargetRows`, `blockApproveCount`,
+`subtreeApproveCount`, the PR-wide total and the Go port in `blockstats.go` are
+all untouched by design. `unitFullyApproved` short-circuits on `unit.ref` (its
+`'call'` branch would otherwise report such a unit as permanently unapproved to
+`findNextUnapproved`), `toggleApprove`/`toggleCallApprove` no-op there, and
+`blockCommands()` leaves the "Keur … goed" item out of the palette.

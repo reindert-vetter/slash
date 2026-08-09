@@ -4904,6 +4904,40 @@ function approvalBadge(a) {
   `
 }
 
+// viewOnlyBadge is the "there is nothing to sign off here, only to look at"
+// mark: a small eye glyph in the slot where a child would otherwise show its
+// approve counter (approvalBadge, e.g. `0/16`) or a comment avatar
+// (commentActivityBadge). Reviewer's own wording: "als er geen avatar
+// aanwezig is en geen aantal approved aantal regels is, laat dan een oogje
+// zien". That is exactly a call/covered method into a file this PR doesn't
+// change, and the read-only class members — reference material, reachable
+// (now also from an unchanged line, see referenceRows in home.mjs) but never
+// approvable.
+//
+// Colorblind rule: the meaning is carried by the SHAPE (an eye) plus its
+// title text, never by colour — it is drawn in the same neutral slate/zinc as
+// the rest of the header.
+function viewOnlyBadge(r) {
+  if ((r.approve && r.approve.total) || r.commentActivity) return ''
+  return html`
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-zinc-500"
+      data-testid="related-view-only"
+    >
+      <title>Alleen bekijken — hier valt niets goed te keuren</title>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+  `
+}
+
 // commentActivityBadge mirrors BlockList.mjs's commentActivityPill (same
 // avatar + "+N-1" text badge, never color-only — the reviewer is
 // colorblind, see conventions.md), but for a child card in the
@@ -5265,6 +5299,7 @@ function relatedCard(r, i, drill) {
           ${() => diffStatBadge(r)}
           ${() => approvalBadge(r.approve)}
           ${() => commentActivityBadge(r.commentActivity)}
+          ${() => viewOnlyBadge(r)}
         </div>
         <span class="block truncate font-mono text-[10px] text-slate-400 dark:text-zinc-500" title="${() => r.file + ':' + r.line}"
           >${r.file}:${r.line}</span

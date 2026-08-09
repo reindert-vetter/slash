@@ -571,6 +571,55 @@ segments and **every** segment is landable, changed or not; a pure deletion is
 landable there too, as one empty new segment with the whole old line underlined
 on the old side. `'group'` stays a whole run including removed lines.
 
+### Reference units: an UNCHANGED line that carries a resolved call
+
+Landable, but deliberately **not approvable**. Reviewer request: "er zijn
+uitzonderlijke situaties waarbij je onderliggende code hebt gelinkt aan regels
+die niet zijn aangepast, zoals bij tests blokken. In dat geval wil ik ook de
+regel kunnen selecteren (niet approven enzo) zodat ik ook naar die
+onderliggende code kan gaan (door wederom naar rechts te drukken)." A test
+method typically calls the very production method it exercises from a line the
+PR never touched: no unit sat on that row, so `callScopeMethods` could never
+scope to it and `→` could never reach that child at all.
+
+- **Which rows** — `referenceRows(b, rows)` (`home.mjs`): the sites
+  `findCallSites` reports for b's own **resolved/found `callRows`**, minus every
+  row that is `rowChanged`. Only real resolved method calls, so a reference unit
+  always has something concrete behind it; a block-level synthetic callKey
+  yields no sites and therefore never creates one. Memoized per block on the
+  identity of `b.code` + `state.callResolve` (both reassigned wholesale), since
+  this is reached from navigation bindings on every keystroke.
+- **How they become units** — `unitsFor(rows, gran, extraRows)`
+  (`Block.mjs`, `withReferenceUnits`), fed by `navUnitsOf`, which is now the
+  single entry point every consumer in `home.mjs` goes through (the remaining
+  raw `unitsFor` call sites were converted, so navigation, scoping, approving,
+  comment anchoring and the call arrows can't disagree about unit indices).
+  At `group`/`line` a reference unit is the ordinary `{start, end}` shape; at
+  `call` it is ONE whole-line unit, never a per-segment split — there is
+  nothing changed to zoom into, and `rowCallSegments` reports `segStart 0` for
+  a non-`ins` row, which is exactly what `callScopeMethods` matches against.
+- **Why "not approvable" needed almost no code:** approval is derived
+  exclusively from `changedRows`, and a reference unit contains none — so
+  `approveTargetRows` yields `[]` and `unitFullyApproved`'s group/line branch
+  already returns `true`. Only three things were added: an explicit
+  `unit.ref` short-circuit in `unitFullyApproved` (the `'call'` branch keys off
+  `approvedRows`/`approvedCalls` instead and would otherwise report "still
+  open" forever), a no-op guard in `toggleApprove`/`toggleCallApprove`, and
+  `blockCommands()`, which drops the "Keur … goed" row from the palette
+  entirely on such a unit rather than offering a dead action.
+- **It is visible:** `rowCellHTML`'s `active` flag (`Block.mjs`) now also
+  covers a reference unit's row, so the inset cursor bar shows there. With no
+  del/ins mark the row keeps its ordinary untinted background — the bar alone
+  marks the cursor.
+- **The card says "look only":** a child with neither an approve counter nor a
+  comment avatar gets an **eye glyph** (`viewOnlyBadge`,
+  `data-testid=related-view-only`) in that same header slot — see
+  `.claude/docs/underlying-code.md`.
+- **Accepted:** reference units shift `state.change` indices, so an older
+  shared `?chg=` link can land one unit off in a block that has them.
+
+Test: `tests/reference-unit-unchanged-line.spec.mjs`.
+
 **A completely blank (after `trim()`) added/removed line is not a landable unit
 at `'line'`/`'call'` and doesn't count toward the approve counter.** Such a row
 is `rowChanged` but has nothing to read or judge, so `changedRows`/`changeLines`/
