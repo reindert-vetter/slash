@@ -84,3 +84,38 @@ func TestEventHubUnsubscribe(t *testing.T) {
 	}
 	h.unsubscribe(id) // idempotent
 }
+
+// publishBlocksChanged emits a PR-scoped, payload-less "refetch me" frame on
+// the process-wide hub — the nudge an already-open review tree needs after an
+// ingest refresh swapped its blocks (see .claude/docs/server-events.md).
+func TestPublishBlocksChangedIsPRScopedAndEmpty(t *testing.T) {
+	id1, sub := events.subscribe(13255)
+	defer events.unsubscribe(id1)
+	id2, other := events.subscribe(13263)
+	defer events.unsubscribe(id2)
+
+	publishBlocksChanged(13255)
+
+	select {
+	case ev := <-sub.ch:
+		if ev.Type != eventBlocksChanged {
+			t.Fatalf("expected type %q, got %q", eventBlocksChanged, ev.Type)
+		}
+		if ev.PR != 13255 {
+			t.Fatalf("expected pr 13255, got %d", ev.PR)
+		}
+		if ev.Key != "" {
+			t.Fatalf("expected no key (PR-wide), got %q", ev.Key)
+		}
+		if len(ev.Data) != 0 {
+			t.Fatalf("expected no payload — the event is never the truth — got %s", ev.Data)
+		}
+	default:
+		t.Fatal("expected a blocks.changed event")
+	}
+	select {
+	case ev := <-other.ch:
+		t.Fatalf("a tab on another PR got %+v", ev)
+	default:
+	}
+}

@@ -1164,6 +1164,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err != nil {
 			return nil, fmt.Errorf("ingest: scan and store blocks: %w", err)
 		}
+		// The blocks table was just fully swapped, so a tab already open on this
+		// PR is showing a stale tree (see eventBlocksChanged, eventbus.go).
+		publishBlocksChanged(arg.PR)
 		return json.Marshal(res)
 	})
 
@@ -1184,6 +1187,12 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		res, err := refreshIngestDelta(ctx, m.db, m.dataDir, arg.PR, arg.BaseSHA, arg.HeadSHA)
 		if err != nil {
 			return nil, fmt.Errorf("pr_status: refresh ingest delta: %w", err)
+		}
+		// Only when blocks really moved: a Skipped refresh (head SHA unchanged,
+		// or a delta with no changed files) wrote nothing, so nudging the tab
+		// would put a "new commits" notice on screen with nothing behind it.
+		if res != nil && !res.Skipped {
+			publishBlocksChanged(arg.PR)
 		}
 		return json.Marshal(res)
 	})

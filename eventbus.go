@@ -64,6 +64,18 @@ const (
 	// GET /api/pending-push, which reads git itself, so a dropped event costs a
 	// refetch and never correctness (see .claude/docs/server-events.md).
 	eventPendingPushChanged = "pendingpush.changed"
+	// eventBlocksChanged says a PR's blocks table was swapped: new commits were
+	// pulled in by the ingest refresh, or a full (re-)ingest ran (no Key —
+	// PR-wide, no payload). Without this, an already-open review tree keeps
+	// showing whatever /api/blocks returned at page load: home.mjs calls
+	// loadBlocks() exactly once and there is no poll, so a push by a COLLEAGUE
+	// (the motivating case, PR 13255) stayed invisible until a manual reload
+	// while the server had long since re-ingested it.
+	//
+	// Unlike the events above, the client does NOT refetch on its own: it shows
+	// a notice the reviewer clicks, because reloading the tree mid-review would
+	// swap blocks out from under an active cursor. See .claude/docs/server-events.md.
+	eventBlocksChanged = "blocks.changed"
 	// eventResync is emitted by the connection itself after it had to drop an
 	// event: "you may have missed something, refetch everything you track".
 	eventResync = "resync"
@@ -79,6 +91,12 @@ func publishTestCoversChanged(pr int)  { events.publish(eventTestCoversChanged, 
 // GET /api/pending-push (the todo row at the bottom of the block index and the
 // PR-overview's own "ongepusht" pill).
 func publishPendingPushChanged(pr int) { events.publish(eventPendingPushChanged, pr, "", nil) }
+
+// publishBlocksChanged nudges every tab watching this PR that its blocks were
+// swapped (an ingest refresh pulled in new commits, or a full re-ingest ran).
+// Same rule as every other event: it carries nothing and is never the truth —
+// GET /api/blocks stays the read, so a dropped frame costs at most one notice.
+func publishBlocksChanged(pr int) { events.publish(eventBlocksChanged, pr, "", nil) }
 
 // busEvent is one multiplexed message. Data is pre-marshalled at publish time
 // so the hub never holds a live pointer into a caller's struct (which the
