@@ -661,13 +661,19 @@ a manually triggered, low-frequency action.
   (the gate defaults to already-open), so this is invisible outside the real
   server boot path.
 - **Reviewer on/off switch (`modules/autowarn` + `WorkflowAutoWarn`/
-  `SignalAutoWarn`):** a toggle next to the theme button in `prInfoCard`
-  (`data-testid=auto-warn-toggle`, `src/autowarn.mjs`) turns the AUTOMATIC
-  trigger above off entirely — `autoStartCodeWarning` (the `TaskManager`
+  `SignalAutoWarn`):** the **"Live AI assistent"** toggle next to the theme
+  button in `prInfoCard` (`data-testid=auto-warn-toggle`, `src/autowarn.mjs`)
+  turns the AUTOMATIC trigger above off entirely — `autoStartCodeWarning` (the `TaskManager`
   method, not the Activity) checks `AutoWarnEnabled` first and does nothing
   when it's off. Manually starting it from the menu is **never** gated by this.
   Default is **enabled** (the reviewer's own words: "gewoon toch altijd doen…
-  het moet een optie zijn die je aan en uit kan zetten"). Deliberately **not**
+  het moet een optie zijn die je aan en uit kan zetten").
+  **The same switch also gates `explain_code`** — the footer's AI description
+  is neither requested nor shown while it is off ("als dat uit staat, ook geen
+  live descriptions toevoegen aan geselecteerde dingen"), which is why it is
+  named for the assistant rather than for the risk check. Deliberately NOT
+  `resolve_call`/`resolve_test_covers`: those derive the navigation structure,
+  not a description. See `.claude/docs/footer.md` and `src/autowarn.mjs`. Deliberately **not**
   `localStorage` (like the theme preference) or `settings.json` (read once per
   process — see `settings.go`): the toggle gates a **backend** decision that
   must be readable the instant the trigger wants to fire, so it rides the same

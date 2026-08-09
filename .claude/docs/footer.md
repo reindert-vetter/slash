@@ -164,6 +164,17 @@ unit+code-hash). While the run is in progress the line shows "Generating AI
 description…" (pulsing); a `failed` row (offline, `SLASH_CLAUDE=off`) hides the
 line again.
 
+**The "Live AI assistent" switch turns this off** (`autoWarn.enabled`,
+`src/autowarn.mjs` — the same toggle that gates the `code_warning` risk
+check): with it off, `computeFooterSnapshots` clears `state.footerExplain`
+and never calls `scheduleExplain`, so no description is requested **and an
+already-generated one is hidden too** — "as dat uit staat, ook geen live
+descriptions toevoegen aan geselecteerde dingen"; the switch reads as "the
+assistant is quiet", not "quiet from now on". The unit's own inline diff
+preview is untouched (that is not AI output). `autoWarn.enabled` is named
+INLINE among the footer watch's dependencies, so flipping it repaints at
+once. Test: `tests/auto-warn-gates-explain.spec.mjs`.
+
 A row matches on `blockId|unitKey` (unitKey = `${gran}-<start>-<end>`, e.g.
 `group-2-4`/`line-2-2` — both `start` and `end`, even for a single line: a
 merged Shift+arrow range can share a start row with an unrelated single line,

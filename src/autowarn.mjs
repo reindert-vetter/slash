@@ -1,10 +1,25 @@
-// autowarn.mjs — the reviewer's on/off switch for the AUTOMATIC AI risk check
-// (code_warning), placed next to the theme toggle in prInfoCard's
-// pr-info-theme-row (see .claude/rules/conventions.md, "Theme" — same slot,
-// same style). A manual "Diepgravend onderzoek" from the "/" menu is NEVER
-// gated by this switch — only the automatic trigger (fired from
-// build_relations on real new code, see .claude/docs/workflows-analysis.md,
-// "AI risk check") checks it.
+// autowarn.mjs — the reviewer's on/off switch for the automatic AI work the
+// review tree does on its own: the "Live AI assistent". Placed next to the
+// theme toggle in prInfoCard's pr-info-theme-row (see
+// .claude/rules/conventions.md, "Theme" — same slot, same style).
+//
+// Two consumers, both automatic and both unasked-for:
+//
+//   1. the AI risk check (code_warning), fired from build_relations/pr_status
+//      on real new code — see .claude/docs/workflows-analysis.md;
+//   2. the footer's AI description of the focused unit (explain_code), fired
+//      by home.mjs's footer watch — see .claude/docs/footer.md.
+//
+// Off means neither fires, so no Claude call happens without the reviewer
+// asking for one. What stays ON deliberately: resolve_call and
+// resolve_test_covers. Those build the navigation structure itself (which
+// child a call points at, which method a test covers) rather than describing
+// anything, so turning them off would break the tree rather than quieten it.
+// A manual "Diepgravend onderzoek" from the "/" menu is likewise NEVER gated
+// by this switch — an explicit request is always honoured.
+//
+// The store/endpoint/workflow keep their original `autowarn` names: renaming
+// them would be a migration with no functional gain.
 //
 // Unlike the dark/light theme (a pure frontend preference, localStorage is
 // enough — see theme.mjs), this switch gates BACKEND behaviour: a workflow
@@ -90,7 +105,10 @@ export function autoWarnToggleButton(cls = '') {
     <button
       type="button"
       data-testid="auto-warn-toggle"
-      title="${() => 'Automatische risicocontrole: ' + (autoWarn.enabled ? 'aan' : 'uit') + ' (klik om te wisselen)'}"
+      title="${() =>
+        'Live AI assistent: ' +
+        (autoWarn.enabled ? 'aan' : 'uit') +
+        ' — automatische risicocontrole en beschrijvingen (klik om te wisselen)'}"
       class="${() =>
         'inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium ring-1 ring-inset transition-colors ' +
         (autoWarn.enabled
@@ -106,7 +124,7 @@ export function autoWarnToggleButton(cls = '') {
           'inline-block h-2 w-2 shrink-0 rounded-full ' +
           (autoWarn.enabled ? 'bg-emerald-500' : 'border border-slate-400 dark:border-zinc-500')}"
       ></span>
-      <span>${() => (autoWarn.enabled ? 'Risicocontrole aan' : 'Risicocontrole uit')}</span>
+      <span>${() => (autoWarn.enabled ? 'Live AI assistent aan' : 'Live AI assistent uit')}</span>
     </button>
   `
 }

@@ -363,12 +363,19 @@ used by both pages.
   (`overview.mjs`'s `headerBlock`, next to the PR-count pill); that page has no
   `showDescription` gating.
 - **A second, unrelated toggle sits in the same `pr-info-theme-row`:**
-  `autoWarnToggleButton` (`src/autowarn.mjs`, `data-testid=auto-warn-toggle`)
-  turns the automatic AI risk check (`code_warning`) on/off. It only shares the
-  row/style with the theme button — its state is **not** `localStorage` like
-  the theme, because it gates backend behaviour the server must read at
-  trigger time; see "AI risk check of the whole PR" in
-  `.claude/docs/workflows-analysis.md` for the full mechanism.
+  `autoWarnToggleButton` (`src/autowarn.mjs`, `data-testid=auto-warn-toggle`),
+  labelled **"Live AI assistent aan/uit"** — it turns off *every* automatic
+  Claude call the review tree makes on its own: the AI risk check
+  (`code_warning`) **and** the footer's AI description (`explain_code`, hidden
+  as well as unrequested — see `.claude/docs/footer.md`). Deliberately NOT
+  `resolve_call`/`resolve_test_covers`: those build the navigation structure
+  rather than describing anything, so switching them off would break the tree
+  instead of quietening it; a manual "Diepgravend onderzoek" is never gated
+  either. It only shares the row/style with the theme button — its state is
+  **not** `localStorage` like the theme, because it gates backend behaviour
+  the server must read at trigger time; see "AI risk check of the whole PR" in
+  `.claude/docs/workflows-analysis.md` for the full mechanism. The store,
+  endpoint and workflow keep the original `autowarn` name.
 
 `overview.html` once forced dark mode (`<html class="dark">` +
 `darkMode:'class'`, bare `zinc-*` classes with no `dark:` variant); removed —

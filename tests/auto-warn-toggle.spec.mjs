@@ -1,6 +1,8 @@
 import { test, expect, appReady } from './_fixtures.mjs'
 
-// The on/off switch for the AUTOMATIC AI risk check (code_warning), placed
+// The "Live AI assistent" switch — the on/off control for every automatic
+// Claude call the review tree makes on its own (the code_warning risk check
+// and the footer's explain_code description), placed
 // next to the theme toggle (src/autowarn.mjs). Default is enabled; a click
 // persists the toggle server-side via the auto_warn workflow (never a direct
 // write) so GET /api/autowarn reflects it after a reload — unlike the theme
@@ -26,10 +28,10 @@ test('auto-warn toggle sits next to the theme toggle and persists across reload'
   const toggle = page.getByTestId('auto-warn-toggle')
   await expect(toggle).toBeVisible()
   // Default is enabled — text label carries the state, not just colour.
-  await expect(toggle).toHaveText(/Risicocontrole aan/)
+  await expect(toggle).toHaveText(/Live AI assistent aan/)
 
   await toggle.click()
-  await expect(toggle).toHaveText(/Risicocontrole uit/)
+  await expect(toggle).toHaveText(/Live AI assistent uit/)
 
   // Persisted server-side (not localStorage): a reload still shows "uit".
   // showDescription itself is ephemeral (not URL state), so reach stop 1 again.
@@ -37,9 +39,9 @@ test('auto-warn toggle sits next to the theme toggle and persists across reload'
   await appReady(page)
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByTestId('pr-info-column')).toBeVisible()
-  await expect(page.getByTestId('auto-warn-toggle')).toHaveText(/Risicocontrole uit/)
+  await expect(page.getByTestId('auto-warn-toggle')).toHaveText(/Live AI assistent uit/)
 
   // Restore to enabled for any later spec sharing this worker's DB.
   await page.getByTestId('auto-warn-toggle').click()
-  await expect(page.getByTestId('auto-warn-toggle')).toHaveText(/Risicocontrole aan/)
+  await expect(page.getByTestId('auto-warn-toggle')).toHaveText(/Live AI assistent aan/)
 })

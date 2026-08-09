@@ -111,7 +111,7 @@ import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { commentMentionsMe } from './mentions.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
-import { ensureAutoWarn, autoWarnToggleButton } from './autowarn.mjs'
+import { ensureAutoWarn, autoWarnToggleButton, autoWarn } from './autowarn.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 import { meLogin } from './avatar.mjs'
@@ -7027,7 +7027,14 @@ function computeFooterSnapshots() {
   // arrow.js single↔array slot pitfall in Footer.mjs (see conventions.md).
   state.footerUnit = info && info.unitRows.length ? info.unitRows : null
   const req = info && info.explain
-  if (!req) {
+  // "Live AI assistent uit" means no automatic Claude call at all, so the AI
+  // description of the focused unit is skipped along with the risk check —
+  // the reviewer's own words: "als dat uit staat, ook geen live descriptions
+  // toevoegen aan geselecteerde dingen". An already-generated description is
+  // hidden too, not just future ones: the switch should read as "the
+  // assistant is quiet", not "quiet from now on". The unit's own code preview
+  // is untouched — that is not AI output. See src/autowarn.mjs.
+  if (!req || !autoWarn.enabled) {
     state.footerExplain = null
     explainPendingKey = ''
     return
@@ -7064,6 +7071,10 @@ watch(
     state.drillCursor,
     state.codeVersion,
     state.explanations,
+    // Flipping the "Live AI assistent" switch must repaint the footer at once
+    // (the description appears/disappears), so it is a dependency of this
+    // watch like any other — named INLINE, per the arrow.js watch rule.
+    autoWarn.enabled,
     focusedBlock() && focusedBlock().code,
   ],
   () => updateFooter(),
