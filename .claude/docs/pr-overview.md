@@ -85,7 +85,14 @@ in sync by hand.
   each hang off their **own** nested `${() => …}` binding
   (`ingestBusy`/`ingestLabel`/`ingestIcon`), never a plain-JS ternary on a
   once-captured variable — otherwise the button never updates while the popover
-  is already open (see `.claude/rules/arrowjs-pitfalls.md`). `handleIngest`
+  is already open (see `.claude/rules/arrowjs-pitfalls.md`). Its **idle** glyph
+  is the `tree` icon (`ICON_PATHS`), the same one `graphChip` uses for a PR
+  without a tree: this row *builds* the tree, so it shows what it produces,
+  while `sparkles` stays the "there IS a tree" glyph ("Open review tree" and
+  `graphChip`'s `hasGraph` branch). That `tree` path is Lucide's
+  **`tree-deciduous`** — a rounded crown on a visible **trunk**; it replaced
+  `tree-pine`, whose stacked triangles read as a Christmas tree rather than a
+  review tree (Reindert). `handleIngest`
   (`api.go`) responds 200 only once the pipeline **and** `EnsureRelations`
   finished, so success is a plain full `location.href = '/pr/<n>'` redirect. On
   failure the popover stays open with the message (`ui.ingestError`,

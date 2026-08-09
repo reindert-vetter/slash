@@ -125,12 +125,17 @@ const ICON_PATHS = {
   // 'arrow-up' — the "still has to go up to GitHub" glyph next to the
   // "Ongepusht" chip (unpushedPill).
   'arrow-up': '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
-  // 'tree' — the graphChip glyph for a PR that has no review tree yet
-  // ("Op GitHub"), replacing the earlier external-link icon there (that
-  // icon stays in use for the real link-open actions, see popover()).
-  // Lucide's stacked-triangle "tree-pine" outline, same 24x24/stroke-2
-  // convention as the rest of this set.
-  tree: '<path d="m17 14 3 3.3a1 1 0 0 1-.7 1.7H4.7a1 1 0 0 1-.7-1.7L7 14h-.3a1 1 0 0 1-.7-1.7L9 9h-.2A1 1 0 0 1 8 7.3L12 3l4 4.3a1 1 0 0 1-.8 1.7H15l3 3.3a1 1 0 0 1-.7 1.7H17Z"/><path d="M12 22v-3"/>',
+  // 'tree' — the "review tree" glyph: the graphChip for a PR that has no
+  // review tree yet ("Op GitHub"), and the idle icon of the generate /
+  // regenerate action in the row popover (ingestIcon). It replaced the
+  // earlier external-link icon on the chip (that icon stays in use for the
+  // real link-open actions, see popover()).
+  //
+  // Lucide's "tree-deciduous" — a rounded crown on a visible TRUNK. It
+  // deliberately replaced Lucide's "tree-pine", whose stacked triangles read
+  // as a CHRISTMAS tree rather than as the review tree this app is named
+  // after (Reindert). Same 24x24/stroke-2 convention as the rest of this set.
+  tree: '<path d="M8 19a4 4 0 0 1-2.24-7.32A3.5 3.5 0 0 1 9 6.03V6a3 3 0 1 1 6 0v.04a3.5 3.5 0 0 1 3.24 5.65A4 4 0 0 1 16 19Z"/><path d="M12 19v3"/>',
 }
 
 // icon renders one outline SVG (24x24 viewBox, stroke=currentColor). The path
@@ -708,8 +713,15 @@ function ingestLabel(pr, idleLabel) {
   return ingestBusy(pr) ? INGEST_STAGE_LABELS[ui.ingestStage] || 'Bezig met genereren…' : idleLabel
 }
 
+// The idle glyph is the TREE, not the sparkles: this row BUILDS the review
+// tree ("Genereer review-boom"/"Opnieuw genereren"), so it should show the
+// thing it produces — the same glyph graphChip already uses for a PR that has
+// no tree yet. `sparkles` stays the "there IS a tree" glyph (graphChip's
+// hasGraph branch, and the "Open review-boom" row right above this one), so
+// the two icons now read as build-it vs. it-exists instead of both meaning
+// "ingest".
 function ingestIcon(pr) {
-  return ingestBusy(pr) ? icon('loader', 'h-3.5 w-3.5 animate-spin') : icon('sparkles', 'h-3.5 w-3.5')
+  return ingestBusy(pr) ? icon('loader', 'h-3.5 w-3.5 animate-spin') : icon('tree', 'h-3.5 w-3.5')
 }
 
 // Shared Tailwind building blocks for every popover row/link (close button,
