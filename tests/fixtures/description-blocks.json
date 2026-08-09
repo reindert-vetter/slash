@@ -1,0 +1,14 @@
+[
+  {
+    "pr": 117,
+    "file": "app/Workflows/ImportSubscriptionStatsFlow.php",
+    "class": "ImportSubscriptionStatsFlow",
+    "name": "run",
+    "category": "OTHER",
+    "line": 72,
+    "endLine": 96,
+    "status": "modified",
+    "side": "new",
+    "description": "Imports the nightly statistics for every tenant that has contracts, in ascending id order.\n\nIt only ever works inside a nightly window and stops before the billing chain in \\App\\Console\\Kernel starts — `pay:contracts-due` runs at 00:05 UTC."
+  }
+]

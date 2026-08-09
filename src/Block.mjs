@@ -7,6 +7,7 @@ import { html, reactive } from './vendor/arrow.js'
 import { categoryClass } from './BlockList.mjs'
 import { translationBlockView, translationChangeUnits } from './translationDiff.mjs'
 import { avatarHtmlString } from './avatar.mjs'
+import { renderMarkdown } from './markdown.mjs'
 import { parseAutoWidthPx, resizeHandle } from './columnWidth.mjs'
 import Prism from './vendor/prism.js'
 
@@ -531,6 +532,30 @@ function viewModeIndicator(viewModeFn, setViewMode) {
   `
 }
 
+// descriptionHtml renders a block's PHPDoc description (b.description, see
+// phpDocDescription in phpscan.go) as a safe HTML string for the card's
+// description strip.
+//
+// It splits on the blank line FIRST and renders each paragraph separately,
+// because snarkdown — deliberately minimal — turns a blank line into a single
+// `<br />` and never emits a `<p>` of its own. A real `<p>` per paragraph
+// picks up the `.markdown-body p { margin: .4em 0 }` rule that already exists
+// in index.html, so a multi-paragraph docblock finally reads as prose instead
+// of as one dense run. That is the whole point here: the description used to
+// be a single plain-text slot, which (together with the multi-line-tag leak
+// fixed in phpscan.go) made a long docblock an unreadable wall of text.
+//
+// Each paragraph still goes through renderMarkdown, so the escaping/XSS layer,
+// the inline-code styling and the link sanitizing are unchanged.
+function descriptionHtml(text) {
+  return String(text || '')
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => '<p>' + renderMarkdown(p) + '</p>')
+    .join('')
+}
+
 /**
  * @param {object} b - one block from state.blocks (reactive).
  * @param {object} [opts] - { preview: boolean } dims the look-ahead card;
@@ -813,11 +838,24 @@ export default function Block(b, opts = {}) {
         // flag for b.description, so this also hides the strip while an
         // AI description is still in flight; it appears the moment
         // b.description is populated, same as any other reactive field here.
+        // Rendered as MARKDOWN, not as one plain-text run (descriptionHtml):
+        // phpDocDescription (phpscan.go) preserves the docblock's paragraph
+        // breaks, and a PHPDoc's prose routinely uses `backticks` around
+        // identifiers and command names. Same renderMarkdown + `.markdown-body`
+        // typography every comment body and chat bubble already goes through
+        // (see conventions.md's "Markdown rendering"), so it also inherits the
+        // XSS layer — which matters here too: the text is source-derived, and
+        // this used to be an escaping-free plain-text slot.
+        //
+        // A <div> root, not the <p> this was: it now contains block-level
+        // elements of its own.
         collapsedFn() || !b.description
           ? ''
-          : html`<p class="border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-sm leading-relaxed">
-              <span class="text-slate-600 dark:text-zinc-400">${() => b.description}</span>
-            </p>`}
+          : html`<div
+              class="markdown-body border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-sm leading-relaxed text-slate-600 dark:text-zinc-400"
+              data-testid="block-description"
+              .innerHTML="${() => descriptionHtml(b.description)}"
+            ></div>`}
       ${() =>
         collapsedFn()
           ? ''

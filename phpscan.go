@@ -503,10 +503,13 @@ func skipBody(s string, open int, line *int) (endLine, next int) {
 // phpDocDescription extracts the free-text description from a PHPDoc
 // comment's raw source text (raw = the full `/** ... */`, delimiters
 // included). Every line has its leading `*`/whitespace stripped; the scan
-// STOPS at the first tag line (`@param`, `@return`, `@var`, ...) and the
-// remaining free-text lines are joined with a single space into one
-// paragraph. Returns "" for a tags-only or empty doc. Deterministic, plain
-// text extraction — no AI (.claude/docs/blocks-and-ingest.md).
+// STOPS at the first tag line (`@param`, `@return`, `@var`, ...). The
+// remaining free text keeps its PARAGRAPH structure: lines are joined with a
+// space within a paragraph, paragraphs are separated by "\n\n" (the frontend
+// renders the result as Markdown, see src/Block.mjs). `{@see X}`/`{@link X}`
+// are unwrapped to `X`. Returns "" for a tags-only or empty doc.
+// Deterministic, plain text extraction — no AI
+// (.claude/docs/blocks-and-ingest.md).
 //
 // Stopping at the first tag — rather than skipping tag lines individually,
 // which is what this did originally — is what keeps a MULTI-LINE tag out of
@@ -525,9 +528,28 @@ func skipBody(s string, open int, line *int) (endLine, next int) {
 // because PHPDoc puts the summary/description FIRST and the tag block after
 // it; free text placed BELOW the tags is not a convention we support, and
 // losing it is much better than showing raw type syntax to a reviewer.
+// A PHPDoc INLINE tag that only wraps a symbol reference: `{@see Foo::bar()}`
+// and `{@link https://…}`. The braces and the tag word are pure docblock
+// framing that means nothing to a reviewer reading prose, so they are unwrapped
+// to the reference itself. Deliberately only these two — any other inline tag
+// (`{@inheritDoc}`, …) is left verbatim rather than guessed at.
+var reDocInlineRef = regexp.MustCompile(`\{@(?:see|link)\s+([^}]+)\}`)
+
 func phpDocDescription(raw string) string {
 	body := strings.TrimSuffix(strings.TrimPrefix(raw, "/**"), "*/")
-	var parts []string
+	// One entry per PARAGRAPH; a blank doc line starts a new one. Lines inside
+	// a paragraph are joined with a space (a docblock hard-wraps its prose at
+	// ~110 columns, so a lone newline is never meant as a line break), but the
+	// blank line between two paragraphs IS meant, and flattening it turned a
+	// well-structured docblock into one unreadable run-on.
+	var paras []string
+	var cur []string
+	flush := func() {
+		if len(cur) > 0 {
+			paras = append(paras, strings.Join(cur, " "))
+			cur = nil
+		}
+	}
 	for _, ln := range strings.Split(body, "\n") {
 		ln = strings.TrimSpace(ln)
 		ln = strings.TrimPrefix(ln, "*")
@@ -536,11 +558,16 @@ func phpDocDescription(raw string) string {
 			break
 		}
 		if ln == "" {
+			flush()
 			continue
 		}
-		parts = append(parts, ln)
+		cur = append(cur, ln)
 	}
-	return strings.Join(parts, " ")
+	flush()
+	// "\n\n" so the frontend can render this as Markdown paragraphs — see the
+	// b.description binding in src/Block.mjs. Harmless for any plain-text
+	// consumer: a single-paragraph description is byte-identical to before.
+	return reDocInlineRef.ReplaceAllString(strings.Join(paras, "\n\n"), "$1")
 }
 
 // --- class members (properties/constants) ----------------------------------

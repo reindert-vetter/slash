@@ -451,6 +451,16 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // PHPDoc-description fixture (PR 117, block-description-markdown.spec.mjs):
+  // one block whose `description` carries a TWO-paragraph docblock summary
+  // with a backticked identifier — the shape phpDocDescription now produces
+  // ("\n\n" between paragraphs, see .claude/docs/blocks-and-ingest.md). Drives
+  // the card's `block-description` strip, which renders that through
+  // renderMarkdown instead of as one plain-text run. No worktrees needed (the
+  // strip reads b.description directly, like the rename fixture's path badge).
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/description-blocks.json'], {
+    stdio: 'ignore',
+  })
 }
 
 function canConnect(port) {

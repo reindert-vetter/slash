@@ -768,6 +768,62 @@ class Svc {
 	}
 }
 
+// TestPHPDocDescriptionKeepsParagraphs: a blank doc line is a real paragraph
+// break and survives as "\n\n" (the frontend renders the description as
+// Markdown). Lines WITHIN a paragraph still join with a space — a docblock
+// hard-wraps its prose, so a lone newline there is not a line break.
+func TestPHPDocDescriptionKeepsParagraphs(t *testing.T) {
+	src := `<?php
+class Flow {
+    /**
+     * Imports the nightly statistics for every tenant that has
+     * contracts, in ascending id order.
+     *
+     * It only ever works inside a nightly window and stops before
+     * the billing chain starts.
+     */
+    public function run() {
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Workflows/Flow.php")
+	b, ok := blockByName(got, "Flow::run")
+	if !ok {
+		t.Fatalf("expected Flow::run, got %v", symbols(got))
+	}
+	want := "Imports the nightly statistics for every tenant that has contracts, in ascending id order." +
+		"\n\n" +
+		"It only ever works inside a nightly window and stops before the billing chain starts."
+	if b.Description != want {
+		t.Fatalf("Description = %q, want %q", b.Description, want)
+	}
+}
+
+// TestPHPDocDescriptionUnwrapsInlineRefs: `{@see X}`/`{@link X}` are docblock
+// framing, not prose — the reviewer wants the reference, not the braces. Any
+// OTHER inline tag is deliberately left verbatim rather than guessed at.
+func TestPHPDocDescriptionUnwrapsInlineRefs(t *testing.T) {
+	src := `<?php
+class Flow {
+    /**
+     * Stops before the chain in {@see \App\Console\Kernel} starts, see
+     * {@link https://example.test/docs} and {@inheritDoc}.
+     */
+    public function run() {
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Workflows/Flow.php")
+	b, ok := blockByName(got, "Flow::run")
+	if !ok {
+		t.Fatalf("expected Flow::run, got %v", symbols(got))
+	}
+	want := `Stops before the chain in \App\Console\Kernel starts, see https://example.test/docs and {@inheritDoc}.`
+	if b.Description != want {
+		t.Fatalf("Description = %q, want %q", b.Description, want)
+	}
+}
+
 // TestInterfaceMethodIsFlaggedIsInterface: a method declared directly inside
 // an `interface` body gets Block.IsInterface=true, so classify.go can
 // override its category to "INTERFACE" regardless of the file's path — see

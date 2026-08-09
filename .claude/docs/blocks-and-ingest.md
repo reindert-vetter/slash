@@ -246,9 +246,29 @@ corrupted `methodZone`/`onlyBareTestAttributeLinesChanged`/the data-provider
 resolution. Test: `TestFuncDeclLineIgnoresFunctionWordInDocProse`
 (`testcovers_analysis_test.go`).
 
-**Display:** no new UI — `src/Block.mjs` already had a section on the card showing
-`b.description` (italic "no description yet" fallback when empty, and no label in
-front of it, see the PHPDoc-fold section below); only the field was never filled.
+**Paragraph structure survives.** A blank doc line separates two paragraphs and
+is kept as a **`"\n\n"`**; lines *within* a paragraph still join with a space (a
+docblock hard-wraps its prose at ~110 columns, so a lone newline there is never
+meant as a break). Flattening everything into one line is what made a
+well-written multi-paragraph docblock read as a single dense run. The inline
+tags **`{@see X}`/`{@link X}` are unwrapped to `X`** — braces and tag word are
+docblock framing, not prose. Any other inline tag (`{@inheritDoc}`, …) is left
+verbatim rather than guessed at. Tests:
+`TestPHPDocDescriptionKeepsParagraphs`, `TestPHPDocDescriptionUnwrapsInlineRefs`.
+
+**Display:** `src/Block.mjs`'s card strip renders `b.description` through
+**`descriptionHtml`** — split on the blank line, each paragraph through the
+shared `renderMarkdown` (see "Markdown rendering" in
+`.claude/rules/conventions.md`), each wrapped in its own `<p>` inside a
+`.markdown-body` container. The split is load-bearing: snarkdown is
+deliberately minimal and turns a blank line into a bare `<br />`, never a `<p>`,
+so without it the paragraph gap the Go side preserves would not survive to the
+screen; a real `<p>` picks up the `.markdown-body p { margin: .4em 0 }` rule
+that already exists in `index.html`. Going through `renderMarkdown` also means
+the strip inherits the **XSS layer** — it was previously an escaping-free
+plain-text slot fed by source-derived text — and that a PHPDoc's customary
+`` `backticked` `` identifiers/command names render as inline code. Test:
+`tests/block-description-markdown.spec.mjs` (fixture PR 117).
 Tests: `phpscan_test.go` (`TestPHPDocDescriptionCapturedForMethod`,
 `TestPHPDocDescriptionSurvivesLeadingAttribute`,
 `TestPHPDocDescriptionNotLeakedAcrossProperty`,
