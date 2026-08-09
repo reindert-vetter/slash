@@ -387,6 +387,14 @@ export function commentListSnapshot() {
 // open thread in scope) so BlockList.mjs's nested slot can render '' — never
 // an object with count 0.
 //
+// The returned `local` flag says every counted thread is a LOCAL one — never
+// posted to GitHub (see isLocalComment). The per-line badge in the diff swaps
+// the author avatar for a note glyph in that case (Block.mjs's
+// lineSummaryParts): an avatar answers "who is waiting for you", which is
+// meaningless when the only thing on that line is your own private note. As
+// soon as ONE real GitHub thread is in scope the flag is false and the avatar
+// comes back — a mixed scope still has someone in it.
+//
 // `matchesRow` (optional) additionally restricts which matched comments
 // count — home.mjs's lineChildSummaries uses this to fold a comment placed
 // directly on the block's OWN row into its per-line avatar+N badge (not just
@@ -399,12 +407,14 @@ export function commentActivitySummary(keys, matchesRow) {
   if (!keys || !keys.size) return null
   let count = 0
   let lastMsg = null
+  let local = true
   for (const c of cs.list) {
     if (c.kind) continue // PR-wide comment — no file:label anchor, can't be in scope
     if (c.status === 'resolved') continue
     if (!keys.has(c.file + '|' + c.label)) continue
     if (matchesRow && !matchesRow(c)) continue
     count++
+    if (!isLocalComment(c)) local = false
     const reactions = c.reactions || []
     const msg = reactions.length
       ? reactions[reactions.length - 1]
@@ -412,7 +422,7 @@ export function commentActivitySummary(keys, matchesRow) {
     if (!lastMsg || (msg.createdAt || '') > (lastMsg.createdAt || '')) lastMsg = msg
   }
   if (!count) return null
-  return { count, last: identityOf(lastMsg.source, lastMsg.author, lastMsg.avatarUrl) }
+  return { count, local, last: identityOf(lastMsg.source, lastMsg.author, lastMsg.avatarUrl) }
 }
 
 // ── Keyboard focus in the right-hand panel ────────────────────────────────────
@@ -3778,14 +3788,25 @@ export function activeComposeTargetHint(commentTarget) {
 // menu simply stops appearing — that is the whole "once it's a GitHub chat,
 // the next messages go to GitHub too" rule.
 
-// needsPublishChoice reports whether replying to `c` should ask the publish
-// question first: only while the thread has no GitHub root of its own.
-// Deliberately also true for a post that failed earlier (githubId stayed 0) —
-// asking again is the correct behaviour there. A github-SOURCED thread is
-// excluded regardless: it was written on GitHub in the first place, so it can
-// never be a local thread even if its id never made it into our read-model.
-export function needsPublishChoice(c) {
+// isLocalComment reports whether `c` is a thread that never reached GitHub: no
+// GitHub root id of its own, and not github-SOURCED either (a thread written
+// on GitHub in the first place can never be local, even if its id never made
+// it into our read-model). Deliberately also true for a post that FAILED
+// earlier — githubId stayed 0, so it is, factually, still only local.
+//
+// The single definition of "local" on the frontend: needsPublishChoice (the
+// reply-publish menu) and commentActivitySummary (the per-line note glyph)
+// both go through it. The backend has the matching rule for the pr-overview
+// comment badge (`Source != "github"`, workflows.go).
+export function isLocalComment(c) {
   return !!c && !c.githubId && (c.source || 'ui') !== 'github'
+}
+
+// needsPublishChoice reports whether replying to `c` should ask the publish
+// question first: only while the thread has no GitHub root of its own — i.e.
+// exactly while it is still local.
+export function needsPublishChoice(c) {
+  return isLocalComment(c)
 }
 
 // localLocalReplyCount counts the reviewer's OWN replies in `c` that never

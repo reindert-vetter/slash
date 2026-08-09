@@ -352,6 +352,27 @@ predicate: a child's own comments still count regardless of row (a child's
 are restricted to the rows rolling up onto that anchor — so a comment on one line
 never bleeds onto every other line's badge.
 
+**A row whose comment threads are ALL local shows a note glyph, not an avatar.**
+`commentActivitySummary` also returns `local` (every counted thread satisfies
+`isLocalComment` — no `githubId` of its own and not github-sourced; the single
+frontend definition of "local", shared with `needsPublishChoice`), and
+`lineSummaryParts` then renders `noteIconHtmlString` instead of
+`avatarHtmlString`. Reindert: *"als ik alleen een local comment heb op een
+regel, maak hier dan een note icoontje van ipv mijn avatar"* — an avatar answers
+"who is waiting for you", which says nothing about a private "Alleen voor
+mijzelf" note, and your own face on your own note is noise. **One real GitHub
+thread in scope flips it back to the avatar**: a mixed scope genuinely has
+someone in it. The distinction is carried by **shape** (square note vs. round
+avatar) plus the badge's `title` ("eigen notitie(s)" vs "open reactie(s)"),
+never by colour — the colorblind rule. Deliberately **only** this per-line
+badge: the sidebar pill (`commentActivityPill`) and the Underlying-code card
+(`commentActivityBadge`) keep the avatar, per Reindert's explicit scope. Note a
+comment placed through the ordinary "Plaats comment" path is **not** local — it
+gets a GitHub root — so this only ever fires for a private note (or a post that
+failed). Test: the two comment cases in `tests/line-underlying-summary.spec.mjs`
+(the posted one on PR 100, the private note on PR 112 — deliberately different
+PRs, since a row holding both is a mixed scope).
+
 **TRANSLATION per-key rows get both markers too.** `Block.mjs`'s
 `translationSlot` threads `commentedFn`/`lineSummaryFn` into
 `translationBlockView` as two callbacks (`commentMarkerFor`/`lineSummaryFor`,

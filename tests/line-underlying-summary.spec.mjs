@@ -128,7 +128,53 @@ test.describe('PR Review Tree — per-line onderliggende-code badge', () => {
     await expect(badge).toBeVisible()
     // No underlying code here, so no done/total fraction — only the avatar.
     await expect(badge).not.toContainText('/')
+    // This one WAS posted (it has a GitHub root of its own), so the badge
+    // names its author. See the private-note counterpart below.
     await expect(badge.getByTestId('avatar-fallback')).toBeVisible()
+    await expect(badge).toHaveAttribute('title', /open reactie/)
+  })
+
+  // Reindert: "als ik alleen een local comment heb op een regel, maak hier dan
+  // een note icoontje van ipv mijn avatar". A private "Alleen voor mijzelf"
+  // note never reaches GitHub (createComment with local:true — the workflow
+  // skips the post, so githubId stays 0; see isLocalComment in
+  // RelatedPanel.mjs), and an avatar answers "who is waiting for you", which
+  // says nothing about your own note — seeing your own face on it is noise.
+  //
+  // The distinction is carried by SHAPE (a square note vs. the round avatar)
+  // plus the badge's own title text, never by colour — the colorblind rule.
+  test('a line whose only comment is a private note shows the note glyph, not the avatar', async ({
+    page,
+  }) => {
+    // PR 112, not the PR 100 the sibling test above uses: comments persist for
+    // the rest of a worker's run (see "A spec that SEEDS data" in
+    // .claude/docs/testing-playwright.md), and a row carrying BOTH a posted
+    // comment and a private note is a mixed scope that deliberately keeps the
+    // avatar — so the two tests must not share a PR. PR 112's own spec (below)
+    // asserts badge counts and the "0/1"/"0/2" fractions, neither of which a
+    // comment changes, so this is safe in either order.
+    await page.goto('/pr/112')
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowRight') // step into the diff
+
+    await page.keyboard.press('Enter')
+    await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
+    const composer = page.getByTestId('comment-compose')
+    await expect(composer).toBeFocused()
+    await composer.fill('even bij mezelf checken')
+    await page.keyboard.press('Enter') // opens the compose-kind menu
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await page.getByTestId('command-row').filter({ hasText: 'Alleen voor mijzelf' }).click()
+
+    // Located BY the glyph rather than by row text, so this holds whichever
+    // row the step landed on — and the count doubles as the "a private note
+    // never renders an avatar" assertion.
+    const noteBadge = page
+      .getByTestId('line-underlying-summary')
+      .filter({ has: page.getByTestId('line-note-icon') })
+    await expect(noteBadge).toHaveCount(1)
+    await expect(noteBadge).toHaveAttribute('title', /eigen notitie/)
+    await expect(noteBadge.getByTestId('avatar-fallback')).toHaveCount(0)
   })
 })
 

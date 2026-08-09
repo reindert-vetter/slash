@@ -1586,6 +1586,30 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}>${check}${gutterHtml}${body}${marker}${lineSummaryHtml}</div>`
 }
 
+// noteIconHtmlString — the per-line indicator's glyph for a row whose only
+// open comment threads are LOCAL ones (never posted to GitHub, see
+// isLocalComment in RelatedPanel.mjs). Reindert: "als ik alleen een local
+// comment heb op een regel, maak hier dan een note icoontje van ipv mijn
+// avatar" — an avatar answers "who is waiting for you", which says nothing
+// when the only thing on that line is your own private note, and seeing your
+// own face on your own note is just noise.
+//
+// A plain HTML string, not an arrow.js template, because the whole pane it
+// lands in is assigned via `.innerHTML` (same reason avatarHtmlString exists
+// rather than avatarHTML — see the statically-interpolated-template pitfall in
+// .claude/rules/arrowjs-pitfalls.md).
+//
+// The distinction is carried by SHAPE (a square note vs. the round avatar),
+// not by colour — the colorblind rule — and the badge's `title` names it in
+// words too ("eigen notitie(s)" vs "open reactie(s)").
+function noteIconHtmlString(sizeCls) {
+  return (
+    `<svg data-testid="line-note-icon" class="${sizeCls} shrink-0 text-slate-500 dark:text-zinc-400" viewBox="0 0 24 24" fill="none" ` +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 9h8"/><path d="M8 14h5"/></svg>'
+  )
+}
+
 // lineSummaryParts builds the shared INNER content (avatar+"+N"
 // comment-activity indicator + a done/total approve fraction) and title for
 // the "onderliggende code" per-line indicator — factored out of
@@ -1604,7 +1628,9 @@ function lineSummaryParts(summary) {
   const parts = []
   if (commentActivity) {
     parts.push(
-      avatarHtmlString(commentActivity.last.name, commentActivity.last.avatarUrl, 'h-3 w-3') +
+      (commentActivity.local
+        ? noteIconHtmlString('h-3 w-3')
+        : avatarHtmlString(commentActivity.last.name, commentActivity.last.avatarUrl, 'h-3 w-3')) +
         (commentActivity.count > 1
           ? `<span class="text-[9px] font-semibold text-slate-500 dark:text-zinc-500">+${commentActivity.count - 1}</span>`
           : ''),
@@ -1622,7 +1648,15 @@ function lineSummaryParts(summary) {
     'Onderliggende code' +
     (hasApprove ? ' — ' + approve.done + '/' + approve.total + ' regels goedgekeurd' : '') +
     (commentActivity
-      ? ' — ' + commentActivity.count + (commentActivity.count === 1 ? ' open reactie' : ' open reacties')
+      ? ' — ' +
+        commentActivity.count +
+        (commentActivity.local
+          ? commentActivity.count === 1
+            ? ' eigen notitie'
+            : ' eigen notities'
+          : commentActivity.count === 1
+            ? ' open reactie'
+            : ' open reacties')
       : '')
   return { html: parts.join(''), title }
 }
