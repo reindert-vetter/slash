@@ -2298,10 +2298,26 @@ let getCommentTarget = () => null
 // button is gone (see extractCodeFences' own comment) and the attributes moved
 // up to the wrapper.
 //
-// D4 (unchanged): the "Huidig (PR)" pane only appears for a PHP (or
-// unlabeled) fence AND when there is a resolvable current-code unit to
-// compare against (oldCode is `null` for a PR-wide comment, which
-// getCommentTarget() itself already returns null for).
+// D4, SHARPENED on explicit request: the "Huidig (PR)"/"Voorgesteld (chat)"
+// pair only makes sense for a ```suggestion fence — GitHub's own "replace
+// these lines with this" convention, the one case where the fenced code
+// really is a proposed replacement for the unit the conversation hangs on.
+// For an ORDINARY fence the comparison was misleading: "Huidig (PR)" showed
+// whatever line the conversation is anchored to (say a YAML line) next to a
+// PHP snippet from the chat, two unrelated things stacked under
+// "huidig/voorgesteld" headings. Such a fence now gets ONE pane with just its
+// own code (the reviewer explicitly still wants to see that code full-size),
+// titled "Codeblok" instead of "Voorgesteld (chat)".
+//
+// The rest of D4 is unchanged and still applies ON TOP for a suggestion
+// fence: PHP (or unlabeled — a suggestion fence never announces a language)
+// AND a resolvable current-code unit (oldCode stays `null` for a PR-wide
+// comment, which getCommentTarget() itself already returns null for).
+//
+// `title` is the fence's own "Codeblok N"/"Suggestie N" label
+// (data-fence-label), so the card and the inline badge carry the same name —
+// a reviewer saying "codeblok 3" means one thing on screen. The language word
+// rides along behind it when the fence announced one.
 //
 // Skips the reassignment when the recomputed set is identical to the
 // current one (same length, same code/lang/oldCode per item) — this runs
@@ -2322,20 +2338,25 @@ function recomputeCodePreviews() {
   const next = fences.map((el, i) => {
     const code = el.dataset.fenceCode || ''
     const lang = el.dataset.fenceLang || ''
+    const label = el.dataset.fenceLabel || 'Codeblok'
     const isPhp = !lang || lang.toLowerCase() === 'php'
+    const suggestion = el.dataset.fenceSuggestion === 'true'
     return {
       key: 'fence:' + i,
-      title: lang ? lang.toUpperCase() : 'Codeblok',
+      title: lang ? label + ' · ' + lang.toUpperCase() : label,
       lang,
       code,
-      oldCode: isPhp ? currentCode : null,
+      oldCode: suggestion && isPhp ? currentCode : null,
     }
   })
   const unchanged =
     next.length === cp.items.length &&
     next.every(
       (it, i) =>
-        it.code === cp.items[i].code && it.lang === cp.items[i].lang && it.oldCode === cp.items[i].oldCode,
+        it.code === cp.items[i].code &&
+        it.lang === cp.items[i].lang &&
+        it.title === cp.items[i].title &&
+        it.oldCode === cp.items[i].oldCode,
     )
   if (!unchanged) cp.items = next
 }

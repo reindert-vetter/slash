@@ -106,7 +106,11 @@ function fenceLabel(counter, isSuggestion) {
 // the RAW code + resolved language word as `data-fence-code`/`data-fence-lang`
 // (HTML-entity-encoded via `escapeHtml`, decoded back by the browser's own
 // attribute parsing when read via `.dataset`), next to the pre-existing
-// `data-fence-index`/`data-fence-suggestion`/`data-fence-truncated`. That is
+// `data-fence-index`/`data-fence-suggestion`/`data-fence-truncated`, plus
+// `data-fence-label` — the very same "Codeblok N"/"Suggestie N" text the
+// header shows (`fenceLabel`), so the preview card below can carry the exact
+// name the reviewer reads on the bubble instead of inventing a second one.
+// That is
 // the data source `RelatedPanel.mjs`'s `recomputeCodePreviews` reads off the
 // DOM for every fence currently rendered in the comment/Claude columns — this
 // file has no reactive state of its own (a pure string renderer, see the
@@ -160,7 +164,8 @@ function extractCodeFences(text, store, startIndex, truncate) {
     const html =
       `<div class="${wrapperCls}" data-testid="code-fence" data-fence-index="${counter}"` +
       `${suggestion ? ' data-fence-suggestion="true"' : ''}${langWord ? ` data-fence-lang="${escapeHtml(langWord)}"` : ''}` +
-      `${isLong ? ' data-fence-truncated="true"' : ''} data-fence-code="${escapeHtml(code)}">` +
+      `${isLong ? ' data-fence-truncated="true"' : ''} data-fence-label="${escapeHtml(label)}"` +
+      ` data-fence-code="${escapeHtml(code)}">` +
       `<div class="${headerCls}"><span class="flex items-center">${escapeHtml(label)}` +
       (langWord ? `<span class="ml-2 uppercase tracking-wide">${escapeHtml(langWord)}</span>` : '') +
       `</span></div><pre class="${preCls}"><code class="language-php">${highlighted}</code></pre></div>`

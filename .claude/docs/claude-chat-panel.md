@@ -1962,6 +1962,37 @@ sibling to its right any more) and that a `suggestion` fence now also gets a
 preview card (title "Codeblok", same as
 any other unlabeled fence), alongside the plain fence's existing preview.
 
+## "Huidig (PR)" only for a `suggestion` fence (sharpening D4)
+
+Reviewer report: "huidig en voorgesteld klopt niet echt als het niet een
+```suggestion blok is. ik wil wel die 2e code daar zien, maar wat nu bij Huidig
+PR staat, is niet nuttig." D4 gave the comparison pane to every PHP-or-
+unlabeled fence, and a `suggestion` fence is unlabeled by definition — so an
+ORDINARY php/unlabeled fence got it too, stacking the anchored unit's current
+code (possibly a YAML line, possibly an unrelated method) under "Huidig (PR)"
+above a chat snippet under "Voorgesteld (chat)". Two unrelated things, framed
+as a before/after.
+
+- **`recomputeCodePreviews` (`RelatedPanel.mjs`) now requires
+  `data-fence-suggestion="true"`** on top of D4's existing conditions (PHP or
+  unlabeled + a resolvable `commentTarget()` unit). Everything else about D4 is
+  unchanged.
+- **An ordinary fence keeps its full-size pane** — explicitly requested, that
+  code is the whole point of the preview column — it just renders as the single
+  "Codeblok" pane `CodePreview.mjs` already had for the no-comparison case
+  (`oldCode == null`), never as "Voorgesteld (chat)" without a counterpart.
+- **The card title is now the fence's own label**, `data-fence-label`
+  ("Codeblok 3"/"Suggestie 2", straight from `fenceLabel` in `markdown.mjs`),
+  with the announced language appended (`Codeblok 3 · SQL`). It used to be just
+  the uppercased language or the bare word "Codeblok", so the card and the
+  inline badge named the same block differently — and the running number is the
+  ONE handle a reviewer has on a fence (see "Codeblok numbering must match what
+  Claude sees").
+
+Test: `tests/code-fence-preview.spec.mjs`'s "only a suggestion fence gets the
+\"Huidig (PR)\" comparison pane" — one body with both fence kinds, asserting
+one pane on the ordinary one and both on the suggestion.
+
 ## The dead "Bekijk volledig" button is gone; the wrapper carries the data
 
 Once the preview column became always-on (the two reversals above), the

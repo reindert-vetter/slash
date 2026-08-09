@@ -79,10 +79,13 @@ test('every fenced code block, suggestion included, shows a full-size preview st
 // D1's answer to "wat is oud/nieuw": the "Huidig (PR)" pane is the CURRENT
 // code of the unit the comment is scoped to (commentTarget().code), not the
 // comment's own file/line in the abstract — only present when such a unit
-// actually resolves (unlike the orphan-comment case above). Uses the shared
+// actually resolves (unlike the orphan-comment case above) AND the fence is a
+// ```suggestion one (the sharpened D4: for an ordinary fence the comparison
+// compared two unrelated things, so it now shows a single pane — asserted in
+// the same test, since both fences sit in one body). Uses the shared
 // anchor fixture (PR 12903), whose comments are wiped before every test (see
 // "Shared state is reset per test" in testing-playwright.md).
-test('a block-scoped comment\'s fence gets a "Huidig (PR)" comparison pane', async ({ page }) => {
+test('only a suggestion fence gets the "Huidig (PR)" comparison pane', async ({ page }) => {
   await page.goto('/pr/12903')
   await leaveSearchBox(page)
   // Block 1 (CreatePaymentAction::execute) reliably carries a real changed
@@ -101,7 +104,9 @@ test('a block-scoped comment\'s fence gets a "Huidig (PR)" comparison pane', asy
       file,
       line: 1,
       author: 'reviewer',
-      body: 'zie voorstel:\n```php\n$hasRestrictions = false;\n```',
+      body:
+        'ter illustratie:\n```php\n$dit = "een gewoon voorbeeld";\n```\n' +
+        'zie voorstel:\n```suggestion\n$hasRestrictions = false;\n```',
       label,
       gran: 'group',
       rowStart: 0,
@@ -123,9 +128,22 @@ test('a block-scoped comment\'s fence gets a "Huidig (PR)" comparison pane', asy
 
   const column = page.getByTestId('code-preview-column')
   await expect(column).toBeVisible()
-  await expect(column).toContainText('Huidig (PR)')
-  await expect(column).toContainText('Voorgesteld (chat)')
-  await expect(column).toContainText('$hasRestrictions = false;')
+  const cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(2)
+
+  // Card 1 — the ordinary ```php fence: its own code, one pane, no comparison
+  // against the anchored unit (which has nothing to do with this snippet).
+  await expect(cards.nth(0).getByTestId('code-preview-title')).toContainText('Codeblok 1')
+  await expect(cards.nth(0)).not.toContainText('Huidig (PR)')
+  await expect(cards.nth(0)).not.toContainText('Voorgesteld (chat)')
+  await expect(cards.nth(0)).toContainText('$dit = "een gewoon voorbeeld";')
+
+  // Card 2 — the ```suggestion fence: really is a proposed replacement for the
+  // unit, so it keeps both panes.
+  await expect(cards.nth(1).getByTestId('code-preview-title')).toContainText('Suggestie 2')
+  await expect(cards.nth(1)).toContainText('Huidig (PR)')
+  await expect(cards.nth(1)).toContainText('Voorgesteld (chat)')
+  await expect(cards.nth(1)).toContainText('$hasRestrictions = false;')
 })
 
 // The INLINE fence (inside the comment bubble itself) is capped to a couple

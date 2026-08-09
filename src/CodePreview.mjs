@@ -54,7 +54,9 @@ function pane(titleText, code, lang) {
 
 // previewCard renders ONE fence's preview ("Huidig (PR)"/"Voorgesteld (chat)"
 // pair, or a single "Codeblok" pane when there is no current-code comparison
-// — D4 in claude-chat-panel.md). `it` is a plain (non-reactive) snapshot
+// — D4 in claude-chat-panel.md; since that rule was sharpened, only a
+// ```suggestion fence ever gets the pair, an ordinary fence always shows the
+// single pane). `it` is a plain (non-reactive) snapshot
 // object — RelatedPanel.mjs replaces `cp.items` wholesale on every
 // recompute, never mutates an item in place, so nothing here needs its own
 // `${() => ...}` binding on `it`'s fields themselves; only the Prism
