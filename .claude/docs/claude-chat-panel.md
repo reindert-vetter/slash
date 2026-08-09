@@ -1493,6 +1493,55 @@ compute for the comment index itself. Deliberately **not** every comment on
 the whole PR — reviewer's explicit choice, "de tussenvorm": own thread plus
 same-unit threads, not PR-wide.
 
+### Chat over een heel bereik (`startRangeChat`, an index-level Shift-selection)
+
+"Chat met Claude over dit bereik" (`rangeCommandsFor`, see
+`.claude/docs/command-palette.md`) opens the same brand-new `'claude'` state as
+"Chat over deze regel" (`startClaudeChat`) — `startRangeChat` is its twin, just
+also flagging `cs.rangeCompose = true` and capturing the whole Shift-selection
+(`rangeComposeItems`, `RelatedPanel.mjs`). The anchor is still ONE real block —
+the cursor's own, exactly like an ordinary chat (see "The anchor is
+deliberately the CURSOR's own item" in `command-palette.md`) — only the
+**context sent on the first turn** widens to cover the whole selection.
+
+`claudeContextBlock` branches on `cs.rangeCompose`: instead of the single-unit
+snippet (file/old-new-lines/label/code, above) it calls
+**`claudeRangeContextBlock(rangeComposeItems)`**, which sends a plain
+**manifest** — one line per block/method: its label, file, and start line
+(plus its old/new start line too, but only when its code happens to already be
+loaded from earlier browsing — never fetched just for this) — and explicitly
+**no source code for any of them**.
+
+This is a deliberate, discussed product decision, not an oversight or a
+reused cap: a Shift+↑/↓ **line**-range within one block already has a size
+question, but it's bounded by `MAX_EXPLAIN_LINES` only for the *automatic*
+explain, and an explicit chat about it is exempt (see "Shift+↑/↓ — selecting
+multiple lines/groups at once" in `.claude/docs/keyboard-navigation.md`) — a
+reviewer-initiated chat about a handful of rows within ONE block was judged
+cheap enough to just send. An index-level range is a different kind of size
+problem: it can cover any number of **whole blocks**, each with its own diff,
+so embedding every one's code would make the prompt grow with the size of the
+selection rather than with one unit's row count — unbounded, unlike the
+line-range case. Sending only a manifest keeps the prompt small and
+predictable regardless of how many blocks are selected. Claude already has
+Read/Bash access in its own shadow worktree for this very conversation (see
+the carve-out in `.claude/rules/workflows-write-boundary.md`), so nothing is
+actually lost: Claude opens a listed file itself the moment it needs to see
+the code, rather than every block's code being pushed into the prompt whether
+it turns out to be needed or not.
+
+Two alternatives were considered and explicitly rejected in favour of this one:
+embedding full code but capping the combined total row count across the whole
+selection (would still need an arbitrary cutoff, and silently drops blocks past
+it), and capping the number of whole blocks the action works on at all (turns
+a large, legitimate selection into a dead action instead of a smaller prompt).
+
+`placeComment`'s equivalent for "Plaats comment over dit bereik"
+(`startRangeComment`) is much simpler and needs no such cap: a placed GitHub
+comment has no invisible context field, so the scope is made visible by
+prepending a short, capped label list (`rangeCommentPrefix`) to the reviewer's
+own typed text — see `command-palette.md`.
+
 Reviewer's second explicit requirement: it must be unambiguous which remark is
 the standing one to react to, not an unordered dump. So every message
 (comment openings + reactions, across every thread on the unit) is sorted

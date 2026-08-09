@@ -146,7 +146,27 @@ const cs = reactive({
   // bindings repaint; deliberately NOT bound to the URL, like cs.composing
   // itself.
   prWideCompose: false,
+  // rangeCompose marks the composer/Claude chat as opened for a Shift-arrow
+  // multi-row selection in the index/methodes-kolom ("Plaats comment over dit
+  // bereik" / "Chat met Claude over dit bereik", rangeCommandsFor in
+  // home.mjs) — set by startRangeComment/startRangeChat below, cleared by
+  // every ordinary composer open (toNew) and every composer exit (exitRelated
+  // / "Annuleer"), same lifecycle as prWideCompose. Unlike prWideCompose the
+  // anchor stays a REAL block/unit (the cursor's own, via the untouched
+  // commentTarget()) — this flag only widens what gets SENT alongside it: see
+  // rangeComposeItems below.
+  rangeCompose: false,
 })
+
+// rangeComposeItems — the blocks/methods a Shift-arrow index/methodes-kolom
+// multi-selection covered when cs.rangeCompose was set (see
+// startRangeComment/startRangeChat). Plain module state, not reactive — read
+// exactly once each, by placeComment (rangeCommentPrefix) and
+// claudeContextBlock (claudeRangeContextBlock), both of which fire at most
+// once per composer open. Captured once at open time so a later Shift+↑/↓
+// that grows/shrinks the selection doesn't retroactively change what an
+// already-open composer claims to cover.
+let rangeComposeItems = []
 
 // The panel cursor survives a browser refresh: focus/codeSel/sel/threadPos live in
 // the URL under their own `rel` namespace, alongside the main navigation (sel/mode/
@@ -559,6 +579,12 @@ function exitRelated() {
   // the pr-index/block column back (see cs.prWideCompose) — this is the ←
   // path handleRelatedKey's own 'new' branch ends in.
   cs.prWideCompose = false
+  // Same for a range-scoped compose (see startRangeComment/startRangeChat) —
+  // leaving the composer without placing/sending anything must not leave a
+  // stale item list for the NEXT ordinary composer open to accidentally see
+  // (toNew already resets both too, this is belt-and-braces on the exit path).
+  cs.rangeCompose = false
+  rangeComposeItems = []
   cs.claudeOptionSel = 0
   releaseFocus() // a focus request still in flight must not land after this
   const el = document.activeElement
@@ -741,6 +767,11 @@ function toNew(commentTargetFn) {
   // into it (it would post the next line comment as an unanchored issue
   // comment). startPrWideComment sets it back AFTER calling this.
   cs.prWideCompose = false
+  // Same reasoning for a stale range-compose flag/item list from an earlier
+  // "… over dit bereik" action — startRangeComment/startRangeChat set both
+  // back AFTER calling toNew().
+  cs.rangeCompose = false
+  rangeComposeItems = []
   // A stale ensureClaudeAnchorForNew pointer from a PREVIOUS draft (on a
   // different unit) must never be reused by placeComment below — see its own
   // doc comment. draftKeyFor's own unit-scoped compare is a second safety
@@ -1651,20 +1682,58 @@ export function claudeChatShadowWarning() {
 function claudeContextBlock(commentTarget) {
   if (cc.messages.length > 0) return '' // not this conversation's first turn
   const parts = []
-  const t = commentTarget && commentTarget()
-  if (t && t.file && t.code) {
-    const lines = ['Context van de reviewer-selectie (niet door de reviewer getypt):', 'Bestand: ' + t.file]
-    if (t.oldStartLine)
-      lines.push('Oude regels: ' + t.oldStartLine + (t.oldEndLine > t.oldStartLine ? '-' + t.oldEndLine : ''))
-    if (t.newStartLine)
-      lines.push('Nieuwe regels: ' + t.newStartLine + (t.newEndLine > t.newStartLine ? '-' + t.newEndLine : ''))
-    if (t.label) lines.push('Onderdeel: ' + t.label)
-    lines.push('Voorbeeldcode:', '```php', t.code, '```')
-    parts.push(lines.join('\n'))
+  // A range-scoped chat (startRangeChat, see cs.rangeCompose) sends a
+  // MANIFEST of the whole Shift-selection instead of the single-unit
+  // snippet below — see claudeRangeContextBlock's own doc comment for why.
+  if (cs.rangeCompose && rangeComposeItems.length) {
+    parts.push(claudeRangeContextBlock(rangeComposeItems))
+  } else {
+    const t = commentTarget && commentTarget()
+    if (t && t.file && t.code) {
+      const lines = ['Context van de reviewer-selectie (niet door de reviewer getypt):', 'Bestand: ' + t.file]
+      if (t.oldStartLine)
+        lines.push('Oude regels: ' + t.oldStartLine + (t.oldEndLine > t.oldStartLine ? '-' + t.oldEndLine : ''))
+      if (t.newStartLine)
+        lines.push('Nieuwe regels: ' + t.newStartLine + (t.newEndLine > t.newStartLine ? '-' + t.newEndLine : ''))
+      if (t.label) lines.push('Onderdeel: ' + t.label)
+      lines.push('Voorbeeldcode:', '```php', t.code, '```')
+      parts.push(lines.join('\n'))
+    }
   }
   const threadBlock = claudeThreadContextBlock()
   if (threadBlock) parts.push(threadBlock)
   return parts.join('\n\n')
+}
+
+// claudeRangeContextBlock builds the invisible first-turn context for "Chat
+// met Claude over dit bereik" (startRangeChat) — a plain MANIFEST (label,
+// file, and the block's own start line; the old/new start line too, when
+// its code happens to be ALREADY loaded, never fetched for this alone) per
+// block/method the Shift-selection covered. Deliberately NO source code:
+// unlike a single-unit chat (claudeContextBlock's own branch above), an
+// index-level range has no size ceiling on the number of blocks it can
+// cover, and embedding every block's own diff snippet would make the prompt
+// grow unboundedly with the selection instead of with one unit's row count
+// (the existing MAX_EXPLAIN_LINES cap only bounds the AUTOMATIC per-unit
+// explain, and only ever within one block — see keyboard-navigation.md).
+// Explicit product decision (Reindert, not a guess): Claude already has
+// Read/Bash access in its own shadow worktree for this conversation (see the
+// carve-out in .claude/rules/workflows-write-boundary.md), so it can open a
+// listed file itself the moment it actually needs to see the code, rather
+// than every block's code being pushed into the prompt whether needed or not.
+function claudeRangeContextBlock(items) {
+  const lines = [
+    'Context van de reviewer-selectie (niet door de reviewer getypt):',
+    `Bereik van ${items.length} ${items.length === 1 ? 'blok' : 'blokken'} uit de PR-index — ` +
+      'geen broncode meegestuurd, open het bestand zelf (je hebt hier leestoegang) als je de code nodig hebt:',
+  ]
+  for (const b of items) {
+    let loc = 'regel ' + (b.line || '?')
+    const c = b && b.code
+    if (c && c.new && c.new.start) loc = 'nieuw vanaf regel ' + c.new.start + (c.old && c.old.start ? ', oud vanaf regel ' + c.old.start : '')
+    lines.push('- ' + (b.label || b.file || '?') + (b.file ? ' (' + b.file + ')' : '') + ' — ' + loc)
+  }
+  return lines.join('\n')
 }
 
 // orderedThreadMessages returns every message across every comment thread on
@@ -2823,6 +2892,36 @@ export function startClaudeChat(commentTargetFn) {
   enterClaudeChatFromNew()
 }
 
+// startRangeComment is startComment's twin for a Shift-arrow multi-row
+// selection in the index/methodes-kolom — "Plaats comment over dit bereik"
+// (rangeCommandsFor, home.mjs). It anchors on the CURSOR's own block/method,
+// exactly like startComment (commentTargetFn is the ordinary commentTarget()
+// callback, untouched) — deliberately NOT the literal first item of the
+// selection, since the composer can only ever render under the column
+// currently on screen (Reindert's own call, see command-palette.md). `items`
+// is the full list of blocks/methods the selection covered at the moment the
+// palette item ran; placeComment (rangeCommentPrefix) prepends a short
+// "which blocks does this cover" line built from it to the posted body — the
+// only way to make the wider scope visible, since a GitHub comment has no
+// separate invisible context field the way a Claude turn does.
+export function startRangeComment(commentTargetFn, items) {
+  toNew(commentTargetFn)
+  rangeComposeItems = Array.isArray(items) ? items : []
+  cs.rangeCompose = true
+}
+
+// startRangeChat is startClaudeChat's twin for the same selection — "Chat met
+// Claude over dit bereik". Same anchor (the cursor's own block/method); the
+// wider scope reaches Claude instead via claudeContextBlock's own
+// cs.rangeCompose branch (claudeRangeContextBlock), sent once on the
+// conversation's first turn.
+export function startRangeChat(commentTargetFn, items) {
+  toNew(commentTargetFn)
+  rangeComposeItems = Array.isArray(items) ? items : []
+  cs.rangeCompose = true
+  enterClaudeChatFromNew()
+}
+
 // convertWarningToComment opens the "+ Nieuwe comment" composer prefilled
 // with an ANCHORED (kind '') AI finding's own text, anchored on that
 // finding's own file/label/gran/rowStart/rowEnd/code — not the current
@@ -3419,11 +3518,34 @@ async function sendClaudeMessageFromNew(state, commentTarget, text, action) {
 // before the await" convention in this file — a second, unrelated "+ Nieuwe
 // comment" started while this one is still in flight must never see a stale
 // override.
+//
+// rangeCommentPrefix builds the short "which blocks does this cover" line
+// prepended to a range-scoped comment's body (startRangeComment) — capped at
+// a handful of names so a very large selection doesn't turn the actual
+// reviewer text into an afterthought below a wall of labels.
+function rangeCommentPrefix(items) {
+  const MAX_LISTED = 5
+  const names = items.slice(0, MAX_LISTED).map((b) => b.label || b.file || '?')
+  let list = names.join(', ')
+  if (items.length > MAX_LISTED) list += ` en ${items.length - MAX_LISTED} meer`
+  return `_Comment over ${items.length} ${items.length === 1 ? 'blok' : 'blokken'}: ${list}_\n\n`
+}
 export async function placeComment(state, commentTarget, opts = {}) {
   const b = state && state.blocks && state.blocks[state.selected]
   const el = document.querySelector('[data-testid=comment-compose]')
-  const body = el && el.value.trim()
+  let body = el && el.value.trim()
   if (!body) return
+  // A range-scoped compose (startRangeComment, "Plaats comment over dit
+  // bereik") still anchors on ONE block below (the cursor's own, via
+  // commentTarget() — untouched) — this is what makes the wider scope
+  // visible in the posted text itself, since a GitHub comment has no
+  // separate invisible context field the way claudeContextBlock's Signal
+  // has. Consumed (nulled) right away, mirroring warningOverride/
+  // claudeAutoAnchor below, before either the PR-wide branch or the
+  // ordinary anchor path reads `body`.
+  if (cs.rangeCompose && rangeComposeItems.length) body = rangeCommentPrefix(rangeComposeItems) + body
+  cs.rangeCompose = false
+  rangeComposeItems = []
   // A PR-WIDE ("algemene") comment is deliberately handled BEFORE the guards
   // below: it has no block and no unit by definition, so `b` may be missing
   // or be a comment-index item and neither disqualifies it. It writes through

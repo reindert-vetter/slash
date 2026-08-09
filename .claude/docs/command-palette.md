@@ -241,17 +241,67 @@ page*.
 While a Shift+arrow multi-row selection is active in the index or the
 methodes-kolom (`hasMultiSelection()`, see "Shift+↑/↓ in the INDEX" in
 `.claude/docs/keyboard-navigation.md`), `blockCommands()` returns
-`rangeCommandsFor()` instead of `COMMANDS`: the pinned "Sluit menu" plus one
-real action, **"Keur deze N blokken/methodes goed"** (reading "Trek goedkeuring
-van … in" once every row in the selection is approved). `COMMANDS`' own items
-all speak about ONE line/block ("Comment op deze regel", "Open GitHub"), which
-a selection of several rows has no single answer for.
+`rangeCommandsFor()` instead of `COMMANDS`: the pinned "Sluit menu" plus up to
+four real actions. `COMMANDS`' own items all speak about ONE line/block
+("Comment op deze regel", "Open GitHub"), which a selection of several rows has
+no single answer for — hence this separate, smaller list instead of reusing
+`COMMANDS` with a wider target.
 
-⚠ **Only the approve action exists so far.** The other range actions the
-reviewer asked for — commenting on, ignoring, or chatting with Claude about a
-whole selection — are NOT implemented; each needs a product decision about what
-"one comment/chat over N blocks" even anchors to. Adding them means extending
-this one list, nothing more.
+- **"Keur deze N blokken/methodes goed"** (`toggleRangeApproval`, reading "Trek
+  goedkeuring van … in" once every row in the selection is approved) — always
+  present, default (2nd) item, unchanged since this feature's first cut.
+- **"Plaats comment over deze N blokken/methodes"** (`startRangeComment`) and
+  **"Chat met Claude over deze N blokken/methodes"** (`startRangeChat`) — both
+  only shown when the CURSOR's own block/method isn't itself a PR-comment
+  index row (`rangeChatEligible()`; a comment item has no diff/code to anchor
+  a NEW comment or chat to, the same reason `COMMANDS` never opens there
+  either). **The anchor is deliberately the CURSOR's own item, not the literal
+  first (lowest-index) item of the Shift-selection** — explicit reviewer
+  decision: the composer/Claude column can only ever render under the block
+  column that's actually on screen (the cursor's), so anchoring anywhere else
+  would show a composer under one block while claiming to be about a
+  different one. The wider scope still reaches both surfaces:
+  - **Comment:** `placeComment` (`RelatedPanel.mjs`) prepends a short
+    "_Comment over N blokken: label1, label2, … en M meer_" line
+    (`rangeCommentPrefix`, capped at 5 names) to the reviewer's typed text
+    before posting — there is no separate invisible context field on a real
+    GitHub comment, so the scope has to be visible in the body itself.
+  - **Claude:** `claudeContextBlock`'s `cs.rangeCompose` branch
+    (`claudeRangeContextBlock`) sends a plain **manifest** — label, file, and
+    the block's own start line (plus its old/new start line when its code
+    happens to already be loaded) — instead of the single-unit code snippet a
+    normal chat sends. **Deliberately no source code for any block**, however
+    many the range covers: unlike a Shift+↑/↓ **line**-range within one block
+    (capped only for the *automatic* explain via `MAX_EXPLAIN_LINES`, never
+    for an explicit chat, see keyboard-navigation.md), an index-level range
+    has no ceiling on the number of *whole blocks* it can cover, and embedding
+    every one's own diff would make the prompt grow with the selection size
+    instead of staying a small, predictable manifest. Claude already has
+    Read/Bash access in its own shadow worktree for this conversation (see
+    `.claude/rules/workflows-write-boundary.md`'s carve-out), so it opens a
+    listed file itself the moment it actually needs the code. Explicit
+    product decision (Reindert), see `.claude/docs/claude-chat-panel.md`'s
+    "Chat over een heel bereik" section.
+  Both are captured once, at the moment the palette item runs
+  (`rangeComposeItems`, `RelatedPanel.mjs`) — a later Shift+↑/↓ that grows or
+  shrinks the same selection while the composer is still open never
+  retroactively changes what it claims to cover.
+- **"Ignore N comments in dit bereik"** (`toggleRangeIgnore`, reading "Ignore
+  ongedaan maken voor N comments" once every one of them is already ignored)
+  — only shown when the selection contains at least one PR-comment index row
+  (`rangeIgnorableComments()`). An ordinary block/test method has **no**
+  ignore concept of its own (only a PR-comment index item does, via the
+  existing single-item `toggleIgnoreComment`/`prCommentCommandsFor`'s
+  "Ignore"), so this reuses that exact per-comment action across every
+  ignorable row in the selection and silently skips every other row — the
+  same kind-based split `toggleRangeApproval` already makes, just in the
+  opposite direction (there a comment item is the one skipped, since
+  "approved" means "resolved", a real GitHub-side action).
+
+Every range action still writes **one Signal per affected block/comment**,
+never a batch write — `toggleRangeIgnore` calls the ordinary
+`toggleIgnoreComment` per row exactly like `toggleRangeApproval` calls
+`persistApproval` per row.
 
 ## The postApprove follow-up menu
 
