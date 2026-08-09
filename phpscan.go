@@ -7,12 +7,13 @@ import (
 )
 
 // ScanBlocks splits a PHP source into blocks (functions/methods). If that fails
-// (not .php, or an imbalance in braces/strings) it returns one whole-file block.
+// (not .php, a Blade template, or an imbalance in braces/strings) it returns one
+// whole-file block.
 //
 // It is a single-pass lexer with contexts (code/comment/string/heredoc) so that
 // braces inside strings, comments and heredocs do not count toward the body span.
 func ScanBlocks(src []byte, filename string) []Block {
-	if strings.ToLower(filepath.Ext(filename)) != ".php" {
+	if strings.ToLower(filepath.Ext(filename)) != ".php" || isBladeTemplate(filename) {
 		return []Block{wholeFileBlock(src, filename)}
 	}
 	blocks, ok := scanPHP(string(src), filename)
@@ -20,6 +21,22 @@ func ScanBlocks(src []byte, filename string) []Block {
 		return []Block{wholeFileBlock(src, filename)}
 	}
 	return blocks
+}
+
+// isBladeTemplate reports whether the path is a Laravel Blade template
+// (`*.blade.php`). Such a file ends in `.php` but is a TEMPLATE, not a class:
+// its reviewable content lives in markup, `@php`/`@json` directives and inline
+// `<script>` blocks, none of which the PHP block model describes.
+//
+// It gets the whole-file treatment for the same reason a non-.php file does,
+// but it needs its own check because "scanPHP found nothing" is NOT the signal
+// here: the brace lexer happily reads the JAVASCRIPT function declarations in
+// an inline <script> as PHP functions, so a Blade template can yield one or
+// more blocks that are real code but the wrong code. Every changed line outside
+// those decoy spans then belongs to no block at all and silently disappears
+// from the review tree — see .claude/docs/blocks-and-ingest.md.
+func isBladeTemplate(filename string) bool {
+	return strings.HasSuffix(strings.ToLower(filename), ".blade.php")
 }
 
 func wholeFileBlock(src []byte, filename string) Block {

@@ -647,3 +647,50 @@ func writeFileT(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+// TestBladeTemplateChangeOutsideScriptFunctionsClassifies: the end-to-end
+// consequence of the whole-file treatment in ScanBlocks. The changed line sits
+// in an `@php` directive, outside the inline <script>'s JavaScript function —
+// which is exactly where the brace lexer's decoy blocks did NOT reach, so this
+// file used to classify into nothing at all and disappeared from the tree.
+func TestBladeTemplateChangeOutsideScriptFunctionsClassifies(t *testing.T) {
+	oldSrc := `<div>
+    @php
+        $key = null;
+    @endphp
+    <script>
+        function getFBCookie(name) {
+            return name;
+        }
+    </script>
+</div>
+`
+	newSrc := `<div>
+    @php
+        $key = 'orders.purchase.' . $order->id;
+    @endphp
+    <script>
+        function getFBCookie(name) {
+            return name;
+        }
+    </script>
+</div>
+`
+	file := "resources/views/partials/scripts/fb.blade.php"
+	oldBlocks := ScanBlocks([]byte(oldSrc), file)
+	newBlocks := ScanBlocks([]byte(newSrc), file)
+
+	// One line replaced, at line 3 on both sides.
+	fd := &fileDiff{changedOld: lineSet{3: true}, changedNew: lineSet{3: true}}
+
+	out := classifyFile(1, file, "", oldBlocks, newBlocks, fd, false, false, oldSrc, newSrc)
+	if len(out) != 1 {
+		t.Fatalf("expected the blade template to classify as one changed block, got %d: %v", len(out), symbols(out))
+	}
+	if out[0].Status != StatusModified {
+		t.Errorf("expected status=%q, got %q", StatusModified, out[0].Status)
+	}
+	if out[0].Line > 3 || out[0].EndLine < 3 {
+		t.Errorf("expected the changed line 3 to fall inside the block span, got %d-%d", out[0].Line, out[0].EndLine)
+	}
+}

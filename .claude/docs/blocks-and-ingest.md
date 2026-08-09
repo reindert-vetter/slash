@@ -107,6 +107,48 @@ under `pr_status` in `.claude/docs/workflows-trackers.md`.
 
 ## `phpscan.go`: what belongs to a block
 
+### A `.blade.php` template is ONE whole-file block
+
+`ScanBlocks` sends a Laravel Blade template down the same whole-file path as a
+non-`.php` file (`isBladeTemplate`), **before** it ever calls `scanPHP`. A Blade
+file is a template, not a class: its reviewable content is markup, `@php`/`@json`
+directives and inline `<script>` blocks, none of which the block model describes.
+
+**It needs its own check because "scanPHP found nothing" is not the signal
+here.** The existing fallback only fires on **zero** blocks, and the brace lexer
+happily reads the **JavaScript** function declarations inside an inline
+`<script>` as PHP functions. So a Blade file yields one or more blocks that are
+real code but the *wrong* code, the fallback never fires, and every changed line
+outside those decoy spans belongs to no block at all — `classifyFile` emits
+nothing and **the entire file disappears from the review tree, silently**.
+
+Found on PR 13263: `resources/views/partials/scripts/fb.blade.php` scanned into
+`getFBCookie` (lines 8-22) and `getUrlParameter` (24-27), both untouched by the
+PR, while all 25 changed lines (`@php $deduplicationKey = match(true) …`, every
+`eventStorageKey` edit) sat outside them. Nothing about the file reached the
+reviewer. **Don't reintroduce this by treating "≥1 block" as proof the file was
+understood.**
+
+Deliberately narrow — the `.blade.php` suffix only, no general "if a changed
+line lands outside every block, emit a whole-file block anyway" safety net. Such
+a net would add a whole-file block to every PR that merely touches an import,
+which is a much bigger, noisier behaviour change than the one real gap this
+closes.
+
+**Known, accepted residual gap:** a change in a real `.php` file's **preamble**
+— above the class body, i.e. `namespace`/`use` imports — still belongs to no
+block and stays invisible (the class-header sentinel starts at the class's
+opening brace). Measured on PR 13255 this was exactly **one** changed line out
+of the whole PR (`use Tests\Support\Temporal\HasWorkerDatabase;`), against 25/25
+for the Blade case — hence narrow over general. Recorded here so it doesn't get
+re-investigated as a new bug.
+
+Tests: `phpscan_test.go` (`TestBladeTemplateIsOneWholeFileBlock`, which first
+asserts the premise that `scanPHP` *does* return decoy blocks, plus
+`TestPlainPhpFileStillScansIntoBlocks`) and `classify_test.go`
+(`TestBladeTemplateChangeOutsideScriptFunctionsClassifies`, the end-to-end
+"the change now surfaces" proof).
+
 ### Leading attributes (`#[...]`)
 
 A PHP attribute right above a method/function — `#[DataProvider('m')]`,

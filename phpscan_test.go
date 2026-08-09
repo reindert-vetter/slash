@@ -824,3 +824,57 @@ interface Repo {
 		t.Fatalf("expected Repo::find NOT to be flagged IsTrait")
 	}
 }
+
+// TestBladeTemplateIsOneWholeFileBlock: a Laravel Blade template gets the
+// whole-file treatment even though its extension ends in `.php` and even though
+// the brace lexer CAN find "functions" in it — those are the JavaScript
+// declarations of an inline <script>, and trusting them drops every changed
+// line outside their spans from the review tree. Real case: PR 13263's
+// resources/views/partials/scripts/fb.blade.php, where all 25 changed lines
+// sat outside the two decoy blocks and the whole file vanished.
+func TestBladeTemplateIsOneWholeFileBlock(t *testing.T) {
+	src := `<div>
+    @php
+        $key = 'orders.purchase.' . $order->id;
+    @endphp
+    <script>
+        function getFBCookie(name) {
+            return name;
+        }
+    </script>
+</div>
+`
+	file := "resources/views/partials/scripts/fb.blade.php"
+
+	// Guard the premise: the lexer really does report the JS function, so the
+	// existing "zero blocks" fallback would NOT have fired here.
+	if decoys, ok := scanPHP(src, file); !ok || len(decoys) == 0 {
+		t.Fatalf("premise broken: expected scanPHP to find decoy blocks, got ok=%v n=%d", ok, len(decoys))
+	}
+
+	got := ScanBlocks([]byte(src), file)
+	if len(got) != 1 {
+		t.Fatalf("expected exactly one whole-file block, got %d: %v", len(got), symbols(got))
+	}
+	if got[0].Name != "fb.blade.php" || got[0].Line != 1 || got[0].EndLine != 11 {
+		t.Fatalf("expected whole-file block fb.blade.php 1-11, got %s %d-%d",
+			got[0].Name, got[0].Line, got[0].EndLine)
+	}
+}
+
+// TestPlainPhpFileStillScansIntoBlocks: the Blade carve-out keys on the
+// `.blade.php` suffix only — an ordinary .php file (including one that merely
+// has "blade" somewhere in its path) keeps its per-method blocks.
+func TestPlainPhpFileStillScansIntoBlocks(t *testing.T) {
+	src := `<?php
+class BladeCompiler {
+    public function compile(): string {
+        return '';
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Services/blade/BladeCompiler.php")
+	if _, ok := blockByName(got, "BladeCompiler::compile"); !ok {
+		t.Fatalf("expected BladeCompiler::compile, got %v", symbols(got))
+	}
+}
