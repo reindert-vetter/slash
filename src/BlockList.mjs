@@ -189,10 +189,19 @@ export function isIgnoredComment(state, b) {
 // freezes on a single↔array slot-shape switch (see conventions.md): the empty
 // state is wrapped as an array of one keyed element.
 function renderList(state) {
-  if (state.blocks.length === 0) return [emptyState(state).key('empty')]
+  // An empty tree is exactly when the notice matters most (nothing was ingested
+  // yet at page load, the commits landed afterwards), so it survives this early
+  // return instead of only appearing next to a populated list.
+  if (state.blocks.length === 0) {
+    return state.blocksStale ? [staleTreeRow(), emptyState(state).key('empty')] : [emptyState(state).key('empty')]
+  }
   const approvedCount = state.blocks.filter((b) => isFullyApproved(state, b)).length
   const ignoredCount = state.blocks.filter((b) => isIgnoredComment(state, b)).length
   const items = []
+  // The stale-tree notice goes ABOVE everything, including the comment items:
+  // it says the whole list below it is out of date, so it must not sit inside
+  // one of the sections it invalidates.
+  if (state.blocksStale) items.push(staleTreeRow())
   let commentHeadingDone = false
   let underlyingHeadingDone = false
   let hiddenCommentHeadingDone = false
@@ -255,6 +264,42 @@ function renderList(state) {
 // decides whether the keyboard has a stop here.
 export function hasPendingPush(state) {
   return !!(state.pendingPush && state.pendingPush.ahead > 0)
+}
+
+// staleTreeRow is the notice at the very top of the index: the server ingested
+// new commits (someone else pushed, or a chat edit landed) while this tab was
+// open, so everything below it is one version behind. See eventBlocksChanged
+// (eventbus.go) and the blocks.changed handler in home.mjs.
+//
+// Deliberately a NOTICE the reviewer clicks, not an automatic refresh: swapping
+// the blocks under an active cursor would move the selection, drop the loaded
+// diff of the block being read, and reset a half-finished approve pass. The
+// reviewer decides when it is a good moment.
+//
+// Clicking reloads the page rather than refetching in place. That is the neat
+// option here precisely BECAUSE of the URL-state mechanism (see "URL state" in
+// CLAUDE.md): ?sel=/?drill=/?gran= already encode the navigation position, so a
+// reload returns to the same block with a guaranteed-consistent tree, instead of
+// threading a second "load but don't navigate" mode through loadBlocks.
+//
+// The ↻ glyph and the WORDS carry the meaning; the amber tint is decoration
+// only (the colour-blind rule, see pushTodoStatusWord).
+function staleTreeRow() {
+  return html`
+    <button
+      data-testid="blocks-stale"
+      class="w-full border-b border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/15 px-3 py-2 text-left hover:bg-amber-100 dark:hover:bg-amber-500/25"
+      @click="${() => window.location.reload()}"
+    >
+      <span class="flex items-center gap-2 text-xs font-medium text-amber-800 dark:text-amber-200">
+        <span aria-hidden="true">↻</span>
+        <span data-testid="blocks-stale-title">Nieuwe commits in deze PR</span>
+      </span>
+      <span class="mt-0.5 block text-[11px] text-amber-700 dark:text-amber-300"
+        >herlaad de boom om ze te zien</span
+      >
+    </button>
+  `.key('blocks-stale')
 }
 
 // commentHeading titles the comment-index-items section at the top of the

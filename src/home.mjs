@@ -440,6 +440,14 @@ const state = reactive({
   // pendingpush.changed SSE event and on every resync. Ephemeral, never in
   // the URL: it describes the repo's state, not a navigation position.
   pendingPush: null,
+  // blocksStale — the server swapped this PR's blocks (an ingest refresh pulled
+  // in new commits, or a re-ingest ran) AFTER this tab loaded them, so the whole
+  // tree below is one version behind. Set by the blocks.changed SSE handler,
+  // never cleared: the only way back to a fresh tree is the reload the notice
+  // row offers (staleTreeRow, BlockList.mjs). Ephemeral and deliberately not in
+  // the URL — it describes this tab's staleness, not a navigation position, and
+  // a reloaded tab is by definition no longer stale.
+  blocksStale: false,
   // ignoredComments — { blockId: true } of PR-comment index items (kind:'comment',
   // see commentBlockItem) the reviewer explicitly ignored via the "Ignore" action
   // in prCommentCommandsFor. Hidden by default from the "PR-comments" section,
@@ -10818,6 +10826,27 @@ onEvent('testcovers.changed', () => loadTestCovers())
 // bottom of the index and the per-block "ongepusht" marking both read that one
 // read model, so one refetch covers both.
 onEvent('pendingpush.changed', () => loadPendingPush())
+// New commits were ingested while this tab was open (a colleague pushed, or a
+// chat edit landed). loadBlocks() runs exactly once, at page load, so without
+// this the tree silently stays a version behind — the PR 13255 symptom, where
+// the server had re-ingested a colleague's commit within a minute and nothing
+// on screen said so.
+//
+// Deliberately a flag, NOT a refetch: reloading the tree under an active cursor
+// would move the selection and reset a half-finished approve pass. The notice
+// row this drives (staleTreeRow, BlockList.mjs) lets the reviewer pick the
+// moment, and reloads the page so ?sel=/?drill= restore the position against a
+// guaranteed-consistent tree.
+//
+// NOT in onEventsResync: a resync means "you may have missed a frame", which is
+// not evidence that anything actually changed — flagging the tree stale there
+// would put the notice on screen after any ordinary reconnect (a laptop waking
+// up, a server restart). A genuinely missed blocks.changed costs at most one
+// stale tree until the next refresh, which is the same risk the reviewer
+// already had before this existed.
+onEvent('blocks.changed', () => {
+  state.blocksStale = true
+})
 onEventsResync(() => {
   loadCallResolve()
   loadTestCovers()

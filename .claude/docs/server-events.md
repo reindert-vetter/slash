@@ -8,8 +8,9 @@ browser reconnects by itself.
 
 Two features are on it today: the embedded Claude chat (see
 `.claude/docs/claude-chat-panel.md`) and callresolve/testcovers (see
-"Migrating a poller onto this channel" below); the channel is generic from day
-one so the remaining pollers can move over one at a time.
+"Migrating a poller onto this channel" below), plus two plain nudges
+(`pendingpush.changed`, `blocks.changed`); the channel is generic from day one
+so the remaining pollers can move over one at a time.
 
 ## The two rules that make this safe
 
@@ -145,6 +146,48 @@ nothing told the tab that was already open.
   reads git itself — so a dropped frame costs a refetch and never correctness.
   It feeds the todo row at the bottom of the index and the per-block "ongepusht"
   marking at once. See `.claude/docs/pending-push.md`.
+
+### new commits in the tree (`blocks.changed`) — the one event that does NOT refetch
+
+- **Server** (`eventbus.go`'s `publishBlocksChanged`, called from
+  `workflows.go`): after the `scanAndStoreBlocks` Activity (a full ingest or
+  re-ingest) and after a **non-`Skipped`** `refreshIngestDelta`. A `Skipped`
+  refresh wrote nothing, so publishing there would put a "new commits" notice on
+  screen with nothing behind it. PR-wide, no `key`, no payload.
+- **Client** (`src/home.mjs`): the handler sets **`state.blocksStale = true`**
+  and nothing else. `BlockList.mjs`'s `staleTreeRow` then renders a notice at the
+  very top of the index (`data-testid=blocks-stale`, "Nieuwe commits in deze PR —
+  herlaad de boom"), and **clicking it reloads the page**.
+
+**Why this one breaks the "refetch on the event" pattern**, deliberately:
+
+- `loadBlocks()` runs **exactly once**, at page load, and there is no poll. That
+  is the whole bug this closes: on PR 13255 a colleague's commit was re-ingested
+  by `pr_status` within 41 seconds and the open tab kept showing the tree from
+  before it, with nothing on screen saying so.
+- But an **automatic** refetch would swap blocks under an active cursor: the
+  selection moves, the loaded diff of the block being read is dropped, and a
+  half-finished approve pass resets. So the reviewer picks the moment. Explicit
+  product decision, pinned by `tests/blocks-stale-notice.spec.mjs`'s second
+  test — an auto-refreshing variant fails it.
+- **A reload, not an in-place refetch.** That is the neat option here precisely
+  *because* of the URL-state mechanism (see "URL state" in `CLAUDE.md`):
+  `?sel=`/`?drill=`/`?gran=` already encode the navigation position, so a reload
+  returns to the same block against a guaranteed-consistent tree — instead of
+  threading a second "load the data but don't navigate" mode through
+  `loadBlocks`'s first-open treatment (`showDescription`,
+  `applyDefaultUnapprovedSelection`, the `?drill=` restore).
+- **Deliberately NOT in `onEventsResync`**, unlike every other subject here. A
+  resync means "you may have missed a frame", which is not evidence that
+  anything changed — flagging the tree stale there would raise the notice after
+  any ordinary reconnect (a laptop waking up, a server restart). A genuinely
+  missed `blocks.changed` costs at most one stale tree until the next refresh,
+  which is exactly the risk that existed before this event.
+- `state.blocksStale` is never cleared: the reload is the only way back to a
+  fresh tree, and a reloaded tab is by definition no longer stale.
+
+Per the colour-blind rule the ↻ glyph and the words carry the meaning; the amber
+tint is decoration.
 
 Test: `tests/callresolve-live-update.spec.mjs` — mocks `/api/callresolve` to
 hide a real, permanently-seeded row (PR 91) and holds the one `/api/events`

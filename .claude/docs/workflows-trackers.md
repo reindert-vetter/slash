@@ -111,6 +111,12 @@ request.
   - **`pr_ingest` table** (`pr → base_sha, head_sha`) is updated by both a full
     ingest and a delta refresh. No row = never ingested → the poller/Activity do
     nothing (a refresh requires a prior full ingest).
+- **An already-open review tree is told, but not refreshed.** A non-`Skipped`
+  refresh publishes `blocks.changed` (`publishBlocksChanged`), which raises a
+  "Nieuwe commits — herlaad de boom" notice at the top of the block index. It
+  deliberately does not refetch on its own; `home.mjs` loads the blocks exactly
+  once per page load, and swapping them under an active cursor would reset a
+  half-finished approve pass. See `.claude/docs/server-events.md`.
 - **Relations/callresolve keep being recomputed "in full", not delta-scoped:**
   after a non-skipped refresh the workflow simply calls the existing
   `buildRelations` Activity over the PR's **full current** block list. Chosen
