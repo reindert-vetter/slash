@@ -2075,6 +2075,18 @@ function groupTestClasses(blocks) {
   return [...rest, ...rows]
 }
 
+// searchHaystack is the lowercased text one sidebar row is matched against by
+// the "Zoek startpunten…" box: its label, its category and its file path —
+// plus, for a test_class row (which stands in for several methods, see
+// groupTestClasses), the same three of every method it groups. Kept as its own
+// function so the two branches can't drift apart.
+function searchHaystack(b) {
+  const own = [b.label, b.category, b.file].filter(Boolean).join(' ')
+  if (b.kind !== 'test_class' || !Array.isArray(b.methods)) return own.toLowerCase()
+  const methods = b.methods.map((m) => [m.label, m.category, m.file].filter(Boolean).join(' ')).join(' ')
+  return (own + ' ' + methods).toLowerCase()
+}
+
 function recomputeLeftList() {
   // Only the resolved-call targets are hidden from the index (panel-only
   // reference code). Relation children STAY in state.blocks — fully navigable
@@ -2106,12 +2118,13 @@ function recomputeLeftList() {
   const commentItems = indexComments().map(commentBlockItem)
   const visibleBlocks = state.allBlocks.filter((b) => !hidden.has(b.id))
   state.blocks = [...groupTestClasses(visibleBlocks), ...commentItems]
-    .filter(
-      (b) =>
-        !q ||
-        (b.label + ' ' + b.category).toLowerCase().includes(q) ||
-        (b.kind === 'test_class' && b.methods.some((m) => (m.label + ' ' + m.category).toLowerCase().includes(q))),
-    )
+    // The haystack is label + category + FILE PATH (reviewer request: "ik wil
+    // ook op bestandsnaam kunnen zoeken") — the path is what you remember when
+    // you don't recall the method name, and a comment item simply has no
+    // `file`, so it keeps matching on its body snippet alone. A test_class row
+    // has no label/file of its own worth matching beyond its class name, so it
+    // additionally matches on any of its METHODS' label/category/file.
+    .filter((b) => !q || searchHaystack(b).includes(q))
     .sort((a, b) => rank(a) - rank(b))
   const underlying = {}
   for (const b of state.blocks) if (childIds.has(b.id)) underlying[b.id] = true

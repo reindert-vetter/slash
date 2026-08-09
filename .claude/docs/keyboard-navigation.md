@@ -353,6 +353,14 @@ all using the same `isFullyApproved` criterion as `renderList`:
   standing on it still hides immediately (there is no reveal/clamp attached to
   the `approvalSummaries` watch). Test:
   `tests/selected-reveal-hidden.spec.mjs`.
+The search box matches a row's **label + category + file path**
+(`searchHaystack`, `home.mjs`) — the path is what a reviewer remembers when the
+method name escapes them ("ik wil ook op bestandsnaam kunnen zoeken"). A
+`test_class` row has no file of its own worth matching, so it additionally
+matches on any of its grouped **methods'** label/category/file; a comment item
+has no `file` at all and keeps matching on its body snippet. Test:
+`tests/block-search-file.spec.mjs`.
+
 - **Search → clamp.** `setSearch` resets to index 0 — a synthetic landing, not
   the reviewer's own position, and typing must never reveal approved blocks
   PR-wide. `clampSelectedToVisible` moves the selection to the first visible
