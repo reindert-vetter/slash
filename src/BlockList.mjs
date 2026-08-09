@@ -613,18 +613,68 @@ function rowInListRange(state, i) {
   return i >= lo && i <= hi
 }
 
+// isLocalAiWarning — this index item is an automated code_warning finding
+// (source 'ai') that has NOT been put on GitHub yet (githubId 0/absent, the
+// same signal needsPublishChoice reads in RelatedPanel.mjs). Both halves
+// matter: the warning icon below says "a machine wrote this, it is not a
+// human's comment yet", which stops being true the moment the reviewer
+// publishes the finding as a real GitHub comment ("later aanpassen als het is
+// omgezet naar een comment op github geplaatst") — from then on it is an
+// ordinary comment and gets the ordinary author avatar again. A "Comment
+// hiervan maken" conversion needs no special case here: it creates a brand-new
+// comment without source 'ai' and deletes the finding.
+function isLocalAiWarning(c) {
+  return !!c && c.source === 'ai' && !c.githubId
+}
+
+// aiWarningIcon is the leading badge of such a finding: the same
+// warning-triangle glyph the panels already use (aiWarningBadge/
+// related-covers-warning, RelatedPanel.mjs), replacing the author avatar —
+// an "AI" initials circle looked like a person and read as just another
+// commenter. The SHAPE carries the meaning (colorblind rule, see MEMORY.md);
+// the amber tint is decoration, and the title/aria-label spells it out in
+// words for anyone who can't tell the glyph apart at 16px.
+function aiWarningIcon() {
+  return html`
+    <span
+      data-testid="block-row-ai-warning"
+      class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
+      title="AI-risicowaarschuwing"
+      aria-label="AI-risicowaarschuwing"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-3 w-3"
+      >
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path>
+        <line x1="12" y1="9" x2="12" y2="13"></line>
+        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+      </svg>
+    </span>
+  `
+}
+
 // categoryOrAvatar renders the leading badge of a row: for a synthetic
 // comment-index item (kind:'comment', see commentBlockItem in home.mjs) the
 // author's avatar (avatarHTML, shared with RelatedPanel.mjs's comment/reply
 // rows) instead of the generic red "COMMENT" category pill — the avatar names
 // *who* left the comment, which reads better than a category label that's
-// the same for every comment row. Every real PR block keeps the ordinary
+// the same for every comment row — except for a not-yet-published AI risk
+// finding, which gets the warning triangle instead (isLocalAiWarning above).
+// Every real PR block keeps the ordinary
 // category pill. A nested `${() => …}` slot (like removedPill/approvalPill
 // below), so both branches are whole templates — no partial-interpolation or
 // static template↔string pitfall (see conventions.md).
 function categoryOrAvatar(b) {
   if (b.kind === 'comment') {
     const c = b.comment || {}
+    if (isLocalAiWarning(c)) return aiWarningIcon()
     // Through identityOf, like every other author avatar: an own (ui-placed)
     // comment shows the local reviewer, and a GitHub author shows their real
     // first name in the title (see avatar.mjs).

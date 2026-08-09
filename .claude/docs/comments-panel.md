@@ -138,6 +138,17 @@ block-assuming code path guards on; `id` is stable across a recompute so
 selection survives a comment-list reload; `comment` carries the raw row back for
 the detail card/action menu.
 
+A comment item's **leading badge** is the author's avatar instead of a category
+pill (`categoryOrAvatar`, `BlockList.mjs`) — with one exception: an automated
+`code_warning` finding that is **not on GitHub yet** (`source === 'ai'` **and**
+no `githubId`, `isLocalAiWarning`) gets the warning triangle (`aiWarningIcon`,
+`data-testid=block-row-ai-warning`) the panels already use for it, because an
+"AI" initials circle read like just another person's comment. Both halves of
+that condition matter: once the reviewer publishes the finding ("Zet op
+GitHub"), it *is* an ordinary comment and the avatar comes back. Per the
+colorblind rule the SHAPE plus the `title`/`aria-label` carry the meaning, not
+the amber tint. Test: `tests/ai-warning-index-icon.spec.mjs`.
+
 `BlockList.mjs` has a matching `CATEGORY_STYLE.COMMENT` pill colour (`red`, used
 by no real block category) and its own **"PR-comments" heading**
 (`commentHeading`, `data-testid=comment-heading`) above the first visible comment
