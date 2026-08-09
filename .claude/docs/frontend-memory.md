@@ -168,6 +168,119 @@ and never subscribed to — untested, may not cover the actual leak).
 **No code from this attempt is committed.** `src/vendor/arrow.js` is
 unchanged from before this investigation.
 
+## Second attempt: object-reference ids + WeakMap registries — safe, fixes the root cause, still backed out
+
+Written, measured, gated, and reverted in commit "Back out the WeakMap-id
+arrow.js change (LOCAL PATCH 3) — gate not met". Unlike the
+`FinalizationRegistry` attempt above this one is **not unsafe** — it was backed
+out purely because it does not, on its own, make the nav loop flat. Recorded in
+full because it is the closest anyone has got and because it proved the leak has
+**two** independent sources.
+
+**The idea, in one line:** don't change *where* the ids live, change *what an id
+is*. Instead of `const id = ++index`, the id becomes the **raw target object
+itself** (`ids.set(data, data).set(proxy, data)`), and `listeners`/`parents`/
+`computedIds`/`arrayMutationWrappers` become `WeakMap`/`WeakSet`. Every other
+line is untouched, because the rest of the code already treats an id as an
+opaque value it passes around and compares with `===`/`==` — nothing anywhere
+does arithmetic on it.
+
+**Why this closes the hole that killed the `FinalizationRegistry` attempt:**
+`track()` does `trackedDependencies[trackKey].push(id, property)`. Once an id is
+an object reference, a `watch`'s dependency array holds its reactives
+**strongly** — visible to the GC. The situation that crashed the previous
+attempt (a reactive collected while a watch still holds its id as a raw number)
+becomes structurally impossible. No registry, no free-list, no recycling window.
+
+**Size:** 16 exact string replacements, no control-flow change, no new function,
++86 bytes. Far smaller than the "much larger change to the tracking core" the
+previous section assumed.
+
+**Micro-benchmark (isolated page, two copies of the vendor file, forced GC):**
+8 rounds × 8000 iterations *in one page*, bytes retained per iteration:
+
+| test | build | r1 | mean r2–r8 |
+|---|---|---|---|
+| bare `reactive()`, dropped | before | 64.7 | **32.8** |
+| | after | 47.3 | **0.04** |
+| `reactive()` + disposed watch | before | 118.8 | **101.8** |
+| | after | 37.5 | **7.4** |
+| app-shaped (fresh array + object per step) | before | 124.1 | **112.3** |
+| | after | 92.2 | **4.9** |
+
+**Conformance:** 11 assertions (watch firing, nested auto-wrap, fresh-object
+replacement, array mutation, array reassignment, `reactive(fn)` computed, nested
+computed, `$on`/`$off`, dispose, `html` render + keyed list update, deep parent
+propagation) run against both builds: **0 differences, 0 page errors**. A build
+that had broken tracking would also "not leak", so this check is not optional.
+
+**Performance:** +3.0% on a flat set/get hot path, +5.6% on a nested one
+(300k ops, median of 15 interleaved reps). ~10–17 ns per iteration. Negligible.
+
+**App-level gate — this is where it failed.** Rebuilt harness, PR 13255,
+1200 steps, forced GC per sample:
+
+| loop | before | after | controls |
+|---|---|---|---|
+| nav ↑/↓ | 585 B/step, 92% climbing | 403 B/step, 83% climbing | idle 14 B/step / 17%, inert F8 15 B/step / 17% |
+
+A 31% reduction, still monotonic — not the flat, non-monotonic shape of the
+controls. Gate not met.
+
+**Safety, measured (so a future attempt doesn't have to):**
+`tests/drill-refresh-multi-level.spec.mjs` **12/12** at `--workers=1` with
+`pageerror` capture — this is the spec that exposed the `FinalizationRegistry`
+crash, so it is the decisive one. Full suite **458/459**; the one failure
+(`overview.spec.mjs:82`) reproduces identically with the change reverted and is
+unrelated.
+
+## There is a SECOND leak, and it is not arrow.js
+
+The most useful thing the attempt above produced. With it applied, a counter
+probe over 800 nav steps shows **every** arrow.js internal counter flat:
+
+| counter | before | after |
+|---|---|---|
+| `me` / `X.length` / `et.length` | **+2.10 per step**, unbounded | **0.00** |
+| `he`, `tt.length`, `k.length`, `W.length`, `At.length`, `Ht`, `Q.size`, `Et.length` | 0.00 | 0.00 |
+
+So arrow's registries are provably no longer growing — and the heap still climbs
+403 B/step. Two independent confirmations that the remainder is somewhere else:
+
+1. All arrow counters flat while the heap climbs.
+2. Entering the page differently changes the reactive churn without removing the
+   growth. Measured per entry state (before the change): `ArrowRight` →
+   1.76 reactives/step / 363 B/step; `ArrowRight ArrowRight` → **0.00
+   reactives/step but still 146 B/step**; `ArrowRight` + `d` (diff mode) → 2.30
+   / 578 B/step. A state with **zero** reactive churn still leaks.
+
+**So the reported symptom needs both fixes.** Whoever picks this up: the arrow
+side is solved and safe (16 edits, above); the open work is identifying the
+non-arrow ~150–400 B/step. It is not detached DOM and not listeners — `Nodes`
+and `JSEventListeners` are +0 across every run here too.
+
+## Two routes that are closed — do not re-litigate them
+
+- **Periodically compacting the registries at a "quiescent" moment.** Requires
+  proving an id is unused, and the only evidence arrow has is the raw-number
+  `tt[]` arrays — exactly what crashed the `FinalizationRegistry` attempt. It
+  re-adopts that unprovability *and* adds timing non-determinism, making the
+  failure harder to reproduce. Worst possible combination for this codebase.
+- **Shallow reactivity (deleting the auto-wrap in `Ut` entirely).** Mints zero
+  ids, so the leak vanishes at the source — but the app reads deep
+  (`b.approvedRows` on an element of `state.blocks`, and many more), so those
+  reads stop tracking and the UI silently stops updating. The stille-wedge
+  failure mode across the whole app.
+
+## Upstream is a dead end (checked, don't re-check)
+
+`@arrow-js/core` `dist-tags.latest` is **1.0.6** — exactly what is vendored,
+published 2026-04-01. The upstream repo (`standardagents/arrow-js`) has had
+**one** commit since the v1.0.6 release tag, and it is a docs footer credit. And
+the 1.0.6 *source* still does `const id = ++index; listeners[id] = {}` with
+`track()` pushing raw numbers, i.e. **the leak is unchanged in the newest
+upstream code**. There is nothing to upgrade to.
+
 ## Re-measuring
 
 The harness is deliberately **not committed** — it is a throwaway script, and
@@ -203,3 +316,36 @@ the numbers above are the artifact worth keeping. To rebuild it:
    `window.__ntStacks=window.__ntStacks||[];function nt(t){window.__ntStacks
    .push(new Error().stack); …` (again, static copy only) and read
    `window.__ntStacks` after a short burst of steps.
+6. **Warm up before the first sample.** The first pass through a block lazily
+   fetches and renders its code/diff — legitimate, bounded growth that is not
+   the leak. Without a warmup the first sample is dominated by it (measured:
+   8102 B/step with `Nodes` +1884 over the first 50 steps, versus 471 B/step
+   with `Nodes` +0 once warm). Drive ~150–200 steps *before* sampling starts.
+   Check `Nodes` is +0 across the run; if it isn't, you are still measuring
+   cache-fill, not the leak.
+7. **Judge the SHAPE, not the per-step number.** Report "% of samples higher
+   than the previous one" alongside bytes/step. A leak is ~90–100% climbing;
+   the idle and inert controls sit at ~17–33% (GC sawtooth around a flat mean).
+   A per-step number without that shape is not interpretable — the controls
+   themselves measure 14–102 B/step depending on the run.
+
+### The measurement trap that cost a round: a fresh page cannot distinguish a WeakMap from a leak
+
+If a candidate fix stores things in a `WeakMap`, **do not measure it with one
+fresh page per data point.** A `WeakMap` entry has a real one-time cost (V8's
+EphemeronHashTable, roughly 16 B per slot; a reactive takes 3–8 entries across
+the registries). A fresh page per measurement pays that build-up *every time*,
+so it shows up as a constant bytes-per-iteration that is indistinguishable from
+a genuine leak no matter how you vary N. This is exactly what happened: scaling
+N over 2000/8000/32000 in fresh pages said the WeakMap change "barely helped"
+(~92–129 B/iter, flat) and nearly got the whole direction discarded.
+
+**What actually separates them: repeated identical rounds inside ONE page.** A
+true leak charges the same amount every round forever; reclaimed-but-not-shrunk
+capacity is paid once in round 1 and reused afterwards. Same data, correct
+reading: round 1 cost 92.2 B/iter, rounds 2–8 averaged 4.9. Always include a
+no-arrow control loop (allocate and drop a plain object) to establish the floor
+— it decays to ~0.1 B/iter, which is how you know the harness itself is sound.
+
+Corollary worth keeping: "flat" for a WeakMap-based fix means **flat after a
+one-time capacity cost**, never a literal zero on first exposure to new content.
