@@ -31,6 +31,7 @@ import (
 	"slash/modules/taskinbox"
 	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
+	"slash/modules/warndismiss"
 )
 
 // This file wires the first task as a durable tembed Workflow. Terminology
@@ -627,6 +628,12 @@ type TaskManager struct {
 	// NewTaskManager param; a nil store makes AutoWarnEnabled report "enabled"
 	// (the default) and saveAutoWarnEnabled a no-op.
 	autowarn *autowarn.Module
+	// warndismiss remembers which AI risk findings the reviewer already
+	// resolved or deleted, so the next code_warning run does not raise them
+	// again. Set post-construction like the stores above; a nil store makes
+	// the dismissal recording a no-op and the filter a pass-through, i.e.
+	// exactly the pre-existing behaviour.
+	warndismiss *warndismiss.Module
 	claude     claude.Client
 	jira       jira.Client
 	db         *sql.DB
@@ -2002,6 +2009,21 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			if c.Source != "ai" || !fileSet[c.File] {
 				continue
 			}
+			// A finding the reviewer RESOLVED is dismissed for good: remember it
+			// before wiping it, so the fresh pass below can't hand the same
+			// remark straight back as a new open comment (see
+			// modules/warndismiss). Deliberately here rather than in the
+			// comment thread's own resolve branch: this Activity already runs
+			// right before every review, so it needs no new step in
+			// taskCodeCommentWorkflow's signal loop — and inserting one there
+			// would shift the positional history of every comment thread that
+			// is still open. A DELETED finding can't be caught here (its row is
+			// gone), so that half is recorded at delete time instead.
+			if c.Status == "resolved" && m.warndismiss != nil {
+				if err := m.warndismiss.Add(ctx, arg.PR, c.File, warndismiss.Fingerprint(c.Body), time.Now().UTC().Format(time.RFC3339)); err != nil {
+					m.logf("code_warning: record dismissed warning %s: %v", c.RunID, err)
+				}
+			}
 			if err := m.Signal(c.RunID, ReactionSignal{
 				ID: "sys-" + newUIReactionID(), Source: "ai", Action: "delete",
 			}); err != nil {
@@ -2011,6 +2033,28 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			removed++
 		}
 		return json.Marshal(map[string]int{"removed": removed})
+	})
+
+	// Activity: remember that the reviewer dismissed one AI risk finding, so
+	// the next code_warning run skips it (see modules/warndismiss). Driven
+	// from taskCodeCommentWorkflow's delete branch; the resolve half is
+	// recorded by supersedeFileWarnings instead — see its own comment.
+	engine.RegisterActivity("recordWarningDismissed", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR   int    `json:"pr"`
+			File string `json:"file"`
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.warndismiss == nil {
+			return json.Marshal(map[string]bool{"ok": false})
+		}
+		if err := m.warndismiss.Add(ctx, arg.PR, arg.File, warndismiss.Fingerprint(arg.Body), time.Now().UTC().Format(time.RFC3339)); err != nil {
+			return nil, fmt.Errorf("record dismissed warning: %w", err)
+		}
+		return json.Marshal(map[string]bool{"ok": true})
 	})
 
 	// Activity: the one agentic Opus call — reads the head worktree +
@@ -2030,6 +2074,12 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		arg.Existing = existingLineCommentsInScope(list, arg.Files)
 		findings := runCodeWarningReview(ctx, m.claude, m.dataDir, arg)
+		// Drop anything the reviewer already resolved or deleted in an earlier
+		// run (modules/warndismiss). Inside this Activity rather than as a step
+		// of its own in codeWarningWorkflow, so the workflow body's Activity
+		// sequence is unchanged; the filtered result is what gets recorded, so
+		// replay stays deterministic either way.
+		findings = dropDismissedFindings(ctx, m.warndismiss, arg.PR, findings)
 		if len(findings) == 0 {
 			return json.Marshal([]warningToCreate{})
 		}
@@ -3838,6 +3888,22 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			if err := w.ExecuteActivity("deleteComment", map[string]any{"id": runID}, nil); err != nil {
 				return nil, fmt.Errorf("delete comment: %w", err)
+			}
+			// The reviewer threw an AI risk finding away, so the next
+			// code_warning run must not raise it again (modules/warndismiss).
+			// r.Source == "ai" means this delete came from
+			// supersedeFileWarnings itself — the check replacing its own
+			// previous findings, not a reviewer judging one — and must never
+			// count as a dismissal. Input-driven, so replay-deterministic, and
+			// deliberately the LAST step of this branch: the Execution
+			// completes right after, so an already-deleted thread (whose run is
+			// completed and never replayed) can't be shifted by it.
+			if in.Source == "ai" && r.Source != "ai" {
+				if err := w.ExecuteActivity("recordWarningDismissed", map[string]any{
+					"pr": in.PR, "file": in.File, "body": in.Body,
+				}, nil); err != nil {
+					return nil, fmt.Errorf("record dismissed warning: %w", err)
+				}
 			}
 			return json.Marshal(map[string]any{"comment": runID, "deleted": true, "reactions": reactions})
 		}

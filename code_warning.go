@@ -9,6 +9,7 @@ import (
 
 	"slash/modules/claude"
 	"slash/modules/comments"
+	"slash/modules/warndismiss"
 )
 
 // This file is the LLM side of the code_warning workflow (package main; it
@@ -347,6 +348,33 @@ func existingLineCommentsInScope(list []comments.Comment, files []string) []exis
 		out = out[:maxPromptComments]
 	}
 	return out
+}
+
+// dropDismissedFindings removes every finding the reviewer already dealt with
+// in an earlier run of this check — resolved or deleted, recorded per
+// (pr, file, fingerprint) by modules/warndismiss. Without it the automatic
+// re-run after each new commit kept handing the same remark back as a fresh
+// open comment, since supersedeFileWarnings wipes the previous findings first
+// (reported: "ik kan ai waarschuwing niet resolven of verwijderen").
+//
+// Best-effort: a nil store or a read error leaves the findings untouched — a
+// bookkeeping problem must never swallow a real risk.
+func dropDismissedFindings(ctx context.Context, store *warndismiss.Module, pr int, findings []warningFinding) []warningFinding {
+	if store == nil || len(findings) == 0 {
+		return findings
+	}
+	dismissed, err := store.Fingerprints(ctx, pr)
+	if err != nil || len(dismissed) == 0 {
+		return findings
+	}
+	kept := make([]warningFinding, 0, len(findings))
+	for _, f := range findings {
+		if dismissed[warndismiss.Key(f.File, warndismiss.Fingerprint(f.Text))] {
+			continue
+		}
+		kept = append(kept, f)
+	}
+	return kept
 }
 
 // anchoredWarning maps one LLM finding onto the existing comment-anchoring

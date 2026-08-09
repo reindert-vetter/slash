@@ -792,6 +792,38 @@ a manually triggered, low-frequency action.
   added to `code_warning_patterns.md`, never inline into
   `code_warning.md` — that keeps the contract file stable and the checklist a
   one-file diff.
+- **A finding the reviewer dismissed never comes back** (`modules/warndismiss`,
+  `data/warndismiss.db`: `dismissed_warnings(pr, file, fingerprint,
+  created_at)`). The check re-runs automatically on every ingest refresh with
+  new code, and the supersede below wipes the previous findings first — so a
+  resolved or deleted finding used to return as a fresh **open** comment on
+  the very next run ("ik kan ai waarschuwing niet resolven of verwijderen").
+  Neither existing store could answer this: a deleted comment leaves no row,
+  and a resolved one is deleted by that same supersede.
+  - **Identity is the finding's TEXT, not its line**
+    (`warndismiss.Fingerprint`: lowercased, whitespace collapsed, sha256),
+    keyed per `(pr, file)`. A later commit shifts lines; the text is what the
+    reviewer judged. **Known limit, accepted:** a genuinely REPHRASED repeat
+    gets a different fingerprint and surfaces again — normalisation only
+    catches the near-identical wording, which is the common case for the same
+    prompt over the same code.
+  - **Two write points, both chosen to leave every workflow body's Activity
+    order untouched** (tembed replays positionally, so an inserted step would
+    break every still-open comment thread): the **resolved** half is recorded
+    inside `supersedeFileWarnings` itself, right before it deletes a
+    `Status == "resolved"` AI comment; the **deleted** half is the last step of
+    `taskCodeCommentWorkflow`'s delete branch (`recordWarningDismissed`), which
+    is safe because that branch **completes** the Execution — a deleted
+    thread is never replayed. A supersede-driven delete carries
+    `Source: "ai"` and is explicitly **not** counted as a dismissal: that is
+    the check replacing its own findings, not a reviewer judging one.
+  - **The filter** lives inside the existing `runAgenticReview` Activity
+    (`dropDismissedFindings`, `code_warning.go`), not as a step of its own —
+    same reason. Best-effort: a nil store or a read error passes every finding
+    through, since a bookkeeping problem must never swallow a real risk.
+  - Tests: `modules/warndismiss/warndismiss_test.go`,
+    `TestCodeWarningSkipsResolvedFinding`/`TestCodeWarningSkipsDeletedFinding`
+    (the latter also pins that an untouched finding still returns).
 - **Auto-supersede, scoped per file** (`supersedeFileWarnings`, run **before**
   the agentic call): for each file in scope, every existing `Source:"ai"`
   comment on it is deleted via the **existing delete Signal** on its own

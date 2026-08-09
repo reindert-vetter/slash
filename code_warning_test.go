@@ -18,6 +18,7 @@ import (
 	"slash/modules/github"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
+	"slash/modules/warndismiss"
 )
 
 // warningFixtureBody is the fixture PHP file both worktrees carry: a single
@@ -99,6 +100,15 @@ func warningManager(t *testing.T, dataDir string, fake *claude.Fake) (*TaskManag
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
 	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
+	// The dismissed-findings store, wired like production (post-construction,
+	// see newTasks): without it a resolved/deleted finding would come straight
+	// back on the next run.
+	wd, err := warndismiss.Open(filepath.Join(dataDir, "warndismiss.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { wd.Close() })
+	m.warndismiss = wd
 	return m, cs, gh
 }
 
@@ -330,6 +340,115 @@ func TestCodeWarningSupersedesPreviousRun(t *testing.T) {
 	}
 	if second[0].Body != "Second pass finding." {
 		t.Fatalf("after second run: body = %q, want the fresh finding", second[0].Body)
+	}
+}
+
+// A finding the reviewer RESOLVED never comes back: supersedeFileWarnings
+// records its fingerprint before wiping it, and the next run drops the same
+// remark instead of raising it again as a fresh open comment (reported: "ik
+// kan ai waarschuwing niet resolven of verwijderen"). See modules/warndismiss.
+func TestCodeWarningSkipsResolvedFinding(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 43
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+
+	finding := `[{"file":"app/Services/OrderService.php","line":6,"text":"Hardcoded 1.21 VAT rate."}]`
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelOpus, finding)
+	m, cs, _ := warningManager(t, dataDir, fake)
+	ctx := context.Background()
+
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := cs.List(ctx, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("after first run: comments = %d, want 1: %+v", len(list), list)
+	}
+
+	// The reviewer resolves it — the same "/resolve" reply Signal the UI sends.
+	if err := m.Signal(list[0].RunID, ReactionSignal{
+		ID: "ui-1", Source: "ui", Author: "reviewer", Body: resolveSentinel, Done: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same model output on the next run: the finding must not reappear.
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := cs.List(ctx, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("after the second run: comments = %d, want 0 (resolved finding stays dismissed): %+v", len(after), after)
+	}
+}
+
+// Same for a finding the reviewer DELETED: the delete branch of
+// taskCodeCommentWorkflow records the dismissal, so the next run skips it.
+// A delete coming from supersedeFileWarnings itself (Source "ai") is NOT a
+// dismissal — the second half of this test proves an untouched finding still
+// comes back, which is exactly what makes the first half meaningful.
+func TestCodeWarningSkipsDeletedFinding(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 44
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelOpus, `[
+		{"file":"app/Services/OrderService.php","line":5,"text":"Weggegooide bevinding."},
+		{"file":"app/Services/OrderService.php","line":6,"text":"Blijvende bevinding."}
+	]`)
+	m, cs, _ := warningManager(t, dataDir, fake)
+	ctx := context.Background()
+
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := cs.List(ctx, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("after first run: comments = %d, want 2: %+v", len(list), list)
+	}
+	var deleted string
+	for _, c := range list {
+		if c.Body == "Weggegooide bevinding." {
+			deleted = c.RunID
+		}
+	}
+	if deleted == "" {
+		t.Fatalf("could not find the finding to delete: %+v", list)
+	}
+	// The reviewer deletes one — the UI's own delete Signal (no Source "ai").
+	if err := m.Signal(deleted, ReactionSignal{ID: "ui-1", Author: "reviewer", Action: "delete"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := cs.List(ctx, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("after the second run: comments = %d, want only the untouched finding: %+v", len(after), after)
+	}
+	if after[0].Body != "Blijvende bevinding." {
+		t.Fatalf("surviving finding = %q, want the one the reviewer never dismissed", after[0].Body)
 	}
 }
 
