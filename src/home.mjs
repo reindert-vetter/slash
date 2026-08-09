@@ -76,6 +76,7 @@ import RelatedPanel, {
   startPrCommentChat,
   closePrCommentChat,
   resolvePrCommentItem,
+  deletePrCommentItem,
   unresolvePrCommentItem,
   enterPrCommentThread,
   isPrCommentThreadFocused,
@@ -5276,7 +5277,8 @@ function isOwnComment(c) {
 // comment instead of cs's selected one. On an ALREADY resolved thread that
 // same slot reads "Unresolve comment" instead (isResolvedComment →
 // unresolvePrCommentItem) — never both, so the ordering rule above is
-// unaffected.
+// unaffected. "Verwijder comment" follows both, always last of the three and
+// never the default (see deleteItem below).
 //
 // "Comment hiervan maken" — the PR-wide (unanchored) equivalent of
 // commentCommandsFor's own item above — only appears for an AI-authored
@@ -5315,7 +5317,23 @@ function prCommentCommandsFor() {
           if (sel) resolvePrCommentItem(sel)
         },
       }
-  const items = isOwnComment(c) ? [resolveItem, replyItem] : [replyItem, resolveItem]
+  // "Verwijder comment" — the same delete Signal the block-scoped menu has
+  // always offered (deleteFocusedComment), which this menu lacked entirely:
+  // an AI risk finding that couldn't be pinned to a block could be resolved
+  // but never removed, even though the backend supported it all along
+  // (reported bug: "ik kan ai waarschuwing niet resolven of verwijderen").
+  // Always after the two core items, never first/default — it is destructive,
+  // and Resolve/Beantwoorden stay the likely first action.
+  const deleteItem = {
+    id: 'pr-comment-delete',
+    label: 'Verwijder comment',
+    hint: 'delete',
+    run: () => {
+      const sel = selectedComment()
+      if (sel) deletePrCommentItem(sel)
+    },
+  }
+  const items = isOwnComment(c) ? [resolveItem, replyItem, deleteItem] : [replyItem, resolveItem, deleteItem]
   // "Bewerk bericht" edits whichever message the keyboard is currently ON in
   // this item's own thread (→/enterPrCommentThread + pct, see
   // focusedPrThreadMessage) — only for the reviewer's OWN message.

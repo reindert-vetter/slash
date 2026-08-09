@@ -6370,6 +6370,21 @@ export async function resolvePrCommentItem(c) {
   await loadComments(cs.pr)
 }
 
+// deletePrCommentItem deletes the comment-index item's own thread — the same
+// "delete" Signal on its own Execution as deleteFocusedComment above, just
+// against this item instead of the block-scoped focused one. Called by the
+// "Verwijder comment" command in prCommentCommandsFor (home.mjs), which used
+// to have no delete at all: a PR-wide AI risk finding could be resolved but
+// never removed, even though the backend has supported it all along. No
+// cursor fix-up like deleteCommentAndSelectRow's (there is no diff row to
+// land on for a PR-wide item) — recomputeLeftList's own clamp moves the
+// selection off the row that just disappeared.
+export async function deletePrCommentItem(c) {
+  if (!c || !c.runId) return
+  await deleteComment(c)
+  await loadComments(cs.pr)
+}
+
 // unresolvePrCommentItem reopens a comment-index item's thread — the same
 // `action:'unresolve'` Signal as unresolveFocusedComment above (see its doc
 // comment, including why a thread resolved long ago can no longer be reopened).

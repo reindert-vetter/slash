@@ -661,7 +661,8 @@ comment — placed in this app (`!c.source || c.source === 'ui'`) or placed on
 GitHub by them and later imported (`c.source === 'github'` +
 `c.author === meLogin()`) — **"Resolve comment"** comes first (thus default);
 otherwise **"Beantwoorden"** stays first. Both are always present, only the
-order changes → optionally **"Bewerk bericht"** (only for the reviewer's OWN
+order changes → **"Verwijder comment"** (`deletePrCommentItem`, always third,
+never the default: destructive) → optionally **"Bewerk bericht"** (only for the reviewer's OWN
 message the keyboard is currently on — `focusedPrThreadMessage(c)` walking
 `pct`, see "Editing an own message" in `.claude/docs/comments-panel.md`) →
 optionally **"Comment hiervan maken"** (only `source === 'ai'`, never true at
@@ -682,8 +683,13 @@ textarea in the detail card; typing + `Enter` (or the send button) sends, via
 the same `reply` Signal (`done:false`). **"Resolve comment"**
 (`resolvePrCommentItem`) sends that Signal with the `"/resolve"` sentinel +
 `done:true` — and reads **"Unresolve comment"** (`unresolvePrCommentItem`,
-`action:'unresolve'`) in that same slot on an already resolved thread. No new
-write path either way.
+`action:'unresolve'`) in that same slot on an already resolved thread.
+**"Verwijder comment"** (`deletePrCommentItem`) sends the ordinary `delete`
+Signal on the item's own Execution — the same one `deleteFocusedComment` uses
+for a block-scoped comment. This menu had no delete at all, so a PR-wide AI
+risk finding could be resolved but never removed (reported bug); no cursor
+fix-up is needed, unlike `deleteCommentAndSelectRow`, since a PR-wide item has
+no diff row to land on. No new write path anywhere here.
 
 ## The compose (comment-kind) menu (`compose`, `COMPOSE_COMMANDS`)
 
