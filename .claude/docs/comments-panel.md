@@ -605,6 +605,19 @@ attempt** — it deliberately does not repeat either mistake that attempt made:
   conversation that fits entirely inside the cap never shows it — the
   earlier `no-scrollbar` mistake hid the fact that there was more to see at
   all; this fade only ever appears when that is actually true.
+- **Both containers carry a 2px `p-0.5`, and it is not decoration.** The
+  selected bubble's highlight is a Tailwind **`ring-2`** (`reactionBubble`
+  here, `claudeBubble` in `ClaudeChat.mjs`), and a ring paints **outside** the
+  border box — so `overflow-y-auto` clipped it flush against the container's
+  edges. On the newest message that read as *"I can't see the bottom border of
+  the last message"* (Reindert, screenshot), and scrolling did not help,
+  because those 2px were never part of the scrollable area to begin with. The
+  padding gives the ring its room back on all four sides. Keep the two
+  containers in sync: they mirror each other in every other respect too.
+  Regression test: `tests/claude-chat-ring-clipped.spec.mjs`, which asserts
+  the **geometry** (selected bubble's rect + 2px fits inside the thread's
+  client rect), not the class — so dropping the padding while keeping the ring
+  fails again.
 - **No new `overflow-hidden` anywhere in the ancestor chain** — only the two
   innermost message-list containers (`comment-thread`,
   `claude-chat-thread`) got the cap; `comment-claude-row`/

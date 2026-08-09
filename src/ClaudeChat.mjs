@@ -625,6 +625,16 @@ function claudeSendError(view) {
 // (the comment-thread pane in RelatedPanel.mjs mirrors this exactly) and the
 // `scrollClaudeThreadToBottom` calls in RelatedPanel.mjs that keep the newest
 // turn in view at the rest position.
+//
+// That scroll container carries a 2px `p-0.5` for ONE reason: the selected
+// bubble's highlight is a Tailwind `ring-2` (claudeBubble below), and a ring
+// is painted OUTSIDE the border box, so `overflow-y-auto` clipped it flush
+// against the container's edges. On the last message that read as "the bottom
+// border of my newest message is missing" (Reindert) — scrolling didn't help,
+// because the ring was never inside the scrollable area to begin with. The
+// padding gives the ring its 2px back on all four sides. Don't remove it, and
+// keep it in sync with the comment thread's own container (RelatedPanel.mjs's
+// `comment-thread`), which mirrors this pane and has the identical ring.
 export function claudeChatColumn(view, callbacks) {
   return html`
     <div
@@ -638,7 +648,7 @@ export function claudeChatColumn(view, callbacks) {
         ${claudeMention}
       </p>
       <div
-        class="flex max-h-[38vh] min-h-0 flex-1 flex-col gap-2 overflow-y-auto"
+        class="flex max-h-[38vh] min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-0.5"
         data-testid="claude-chat-thread"
         @scroll="${(e) => updateScrollFade(e.target)}"
       >

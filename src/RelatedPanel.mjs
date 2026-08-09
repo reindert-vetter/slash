@@ -4613,7 +4613,7 @@ function expandedConversation(c, openCommentMenu) {
         ${() => commentStatusMark(c)}
       </div>
       <div
-        class="flex max-h-[38vh] min-h-0 flex-col gap-2 overflow-y-auto"
+        class="flex max-h-[38vh] min-h-0 flex-col gap-2 overflow-y-auto p-0.5"
         data-testid="comment-thread"
         @scroll="${(e) => updateScrollFade(e.target)}"
       >
