@@ -112,6 +112,7 @@ import { ensureAutoWarn, autoWarnToggleButton } from './autowarn.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 import { meLogin } from './avatar.mjs'
+import { relativeTime } from './relativeTime.mjs'
 import {
   loadColumnWidths,
   colWidthStyle,
@@ -9811,6 +9812,59 @@ const DESC_TRUNCATE_AT = 280
 // jiraDesc keep getting set, only nothing reads them here anymore), as does
 // the jiraKey pill next to the title (data-testid="pr-info-jira-key",
 // a link, not the "explanation").
+// sinceReviewBlock — the sky block directly under "Doel": what changed on this
+// PR since the reviewer's OWN last review/comment. Three deliberate details:
+//
+//  1. Its first line repeats the PR overview's own line VERBATIM ("Bijgewerkt
+//     … geleden · nieuw sinds jouw review"), reusing the same shared
+//     relativeTime and the same wording as `newSinceMark` (overview.mjs), and
+//     the moment behind it is literally the same one the overview marks —
+//     inbox.go's myLastActivity, carried here through prmeta rather than
+//     recomputed (see .claude/docs/workflows-trackers.md, stage 3/4).
+//  2. It renders NOTHING when there is nothing new, or when this reviewer
+//     never reviewed this PR at all (`newSinceKind` empty) — explicit answer,
+//     the same silence the overview keeps. `sinceFacts` empty means the same,
+//     since the backend clears both halves in that case.
+//  3. The meaning is carried by the WORDS ("Sinds jouw laatste review" plus
+//     the facts themselves); the sky tint is decoration only (colourblind
+//     rule). The AI explanation on top is best-effort and simply absent when
+//     Haiku didn't produce one — the deterministic list below it always
+//     stands on its own.
+//
+// A stable `contents` root, with the toggle INSIDE it, per the "never key a
+// template whose entire body is one toggling expression" pitfall.
+function sinceReviewBlock(state) {
+  return html`<div class="contents">${() => {
+    const meta = state.prMeta || {}
+    if (!meta.newSinceKind || !meta.sinceFacts) return ''
+    const kindWord = meta.newSinceKind === 'review' ? 'nieuw sinds jouw review' : 'nieuw sinds jouw comment'
+    const updated = relativeTime(meta.ghUpdatedAt)
+    return html`
+      <div class="rounded-lg bg-sky-50 dark:bg-sky-500/15 p-2.5" data-testid="pr-info-since-review">
+        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">
+          Sinds jouw laatste review
+        </div>
+        <div class="mb-1.5 text-[12px] font-medium text-slate-600 dark:text-zinc-300" data-testid="pr-info-since-line">
+          ${updated ? 'Bijgewerkt ' + updated + ' · ' + kindWord : kindWord}
+        </div>
+        ${() =>
+          meta.sinceSummary
+            ? html`<div
+                class="markdown-body mb-1.5 text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
+                data-testid="pr-info-since-summary"
+                .innerHTML="${() => renderMarkdown(meta.sinceSummary)}"
+              ></div>`
+            : ''}
+        <div
+          class="markdown-body text-[12.5px] leading-relaxed text-slate-600 dark:text-zinc-400"
+          data-testid="pr-info-since-facts"
+          .innerHTML="${() => renderMarkdown(meta.sinceFacts)}"
+        ></div>
+      </div>
+    `
+  }}</div>`
+}
+
 function prInfoCard(state) {
   return html`
     <div
@@ -9895,6 +9949,7 @@ function prInfoCard(state) {
               ></div>`
             : html`<p class="text-[13px] italic text-slate-400 dark:text-zinc-500">samenvatting genereren…</p>`}
       </div>
+      ${sinceReviewBlock(state)}
       <div
         class="${() =>
           'flex min-h-0 flex-col ' +

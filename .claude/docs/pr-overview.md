@@ -136,6 +136,13 @@ It answers "did anything happen on this PR after I last said something" —
 comment or approve/request-changes — for **every** row, author or reviewer
 alike, in every section.
 
+- **The same signal, and the same moment, also feeds the review tree.**
+  `prStatus` carries `newSinceAt` (the moment itself) and the PR's own
+  `updatedAt` alongside the kind word, which `pr_status`' `fetchPRStatuses`
+  stores in `prmeta` — that is what the "Sinds jouw laatste review" block in
+  the PR-info column renders, repeating this exact line above its own content
+  (see `.claude/docs/detail-layout.md`). The overview itself still only reads
+  the kind; nothing here changed.
 - **Only shown when something is genuinely new** — no "you were last, all
   quiet" affirmative state is rendered; silence covers both "nothing happened
   since" and "you never commented/reviewed this PR" (deliberate, per Reindert:

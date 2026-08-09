@@ -102,6 +102,35 @@ The card reads **exclusively** `state.prMeta`/`state.pr`/`state.prUrl`/
 diff render (the "stuck on loading" pitfall,
 `.claude/rules/arrowjs-pitfalls.md`).
 
+### "Sinds jouw laatste review" (the sky block under Doel)
+
+`sinceReviewBlock(state)` (`home.mjs`, `data-testid=pr-info-since-review`)
+renders directly BELOW the green "Doel" box: what landed on this PR after the
+reviewer's OWN last review/comment. Reviewer request, with three parts that are
+each load-bearing:
+
+- **Its first line is the PR overview's line, verbatim** —
+  `Bijgewerkt <relatief> · nieuw sinds jouw review` (or `… jouw comment`),
+  `data-testid=pr-info-since-line`. Same wording as `newSinceMark`
+  (`overview.mjs`), same `relativeTime`, and the same underlying moment:
+  `myLastActivity` (`inbox.go`) → `prmeta` → `GET /api/pr`'s
+  `newSinceKind`/`newSinceAt`/`ghUpdatedAt`. Explicitly NOT a second
+  "since" of its own next to the overview's — see stage 3/4 of `pr_status` in
+  `.claude/docs/workflows-trackers.md`.
+- **Two stacked halves**: Haiku's short explanation (`sinceSummary`,
+  `pr-info-since-summary`) above the deterministic commit/file list
+  (`sinceFacts`, `pr-info-since-facts`), both through `renderMarkdown`. The AI
+  half is best-effort and simply absent when the call failed; the facts always
+  stand on their own.
+- **Absent entirely** when `newSinceKind`/`sinceFacts` are empty — nothing new,
+  or a PR this reviewer never reviewed. Explicit answer: no "je bent bij"
+  placeholder, the same silence the overview keeps.
+
+Colourblind rule: the sky tint is decoration, the heading word plus the facts
+carry the meaning. `relativeTime` moved out of `overview.mjs` into the shared
+`src/relativeTime.mjs` for this (a pure util like `theme.mjs`), so both pages
+render that line from one implementation.
+
 ### Description truncation (`state.descriptionExpanded`)
 
 Ephemeral, outside the URL. A body longer than `DESC_TRUNCATE_AT` (280
