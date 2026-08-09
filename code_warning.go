@@ -33,24 +33,39 @@ type warningReviewArg struct {
 	Files       []string `json:"files"`
 	BlockCount  int      `json:"blockCount"`
 	MaxFindings int      `json:"maxFindings"`
-	// Existing is every open, human/GitHub-authored line comment already sitting
-	// on a file in scope (Source != "ai" — an old AI comment in scope was already
-	// deleted by supersedeFileWarnings before this Activity runs), so the model
-	// can tell whether a risk it wants to flag has already been raised. Whether a
-	// finding on such a line still adds something new is the model's own call
-	// (see code_warning.md's system prompt) — this is context, not a Go-side
-	// dedup filter.
+	// Title/Description/JiraDescription carry the PR's own stated intent (from
+	// prmeta, see warningScope): the reviewer often explains there WHY a choice
+	// was made, and a "risk" the description already accounts for is noise. The
+	// model is told to weigh them before flagging (code_warning.md).
+	Title           string `json:"title,omitempty"`
+	Description     string `json:"description,omitempty"`
+	JiraDescription string `json:"jiraDescription,omitempty"`
+	// Existing is the open, non-AI conversation already on this PR (Source !=
+	// "ai" — an old AI comment in scope was already deleted by
+	// supersedeFileWarnings before this Activity runs): the line comments on a
+	// file in scope, the PR-wide comments, and each thread's replies. Same
+	// purpose as the two description fields — it says what has already been
+	// discussed — so the model can tell whether a risk it wants to flag has
+	// already been raised. Whether a finding still adds something new is the
+	// model's own call (see code_warning.md's system prompt); this is context,
+	// not a Go-side dedup filter.
 	Existing []existingLineComment `json:"existing,omitempty"`
 }
 
-// existingLineComment is one open, non-AI comment already anchored to a
-// file+line in the review scope, handed to the model as context (see
-// warningReviewArg.Existing).
+// existingLineComment is one open, non-AI thread already on the PR, handed to
+// the model as context (see warningReviewArg.Existing): either anchored to a
+// file+line in the review scope, or PR-wide (File empty, Line 0). Replies are
+// carried along because that is usually where the "yes, deliberate, because
+// …" answer lives.
 type existingLineComment struct {
-	File   string `json:"file"`
-	Line   int    `json:"line"`
-	Author string `json:"author"`
-	Body   string `json:"body"`
+	File    string   `json:"file"`
+	Line    int      `json:"line"`
+	Author  string   `json:"author"`
+	Body    string   `json:"body"`
+	Replies []string `json:"replies,omitempty"` // "<author>: <body>", in stored order
+	// ID is only used to order the PR-wide entries deterministically; it is
+	// never rendered into the prompt.
+	ID string `json:"id,omitempty"`
 }
 
 // warningFinding is one entry of the JSON array the model is asked to return.
@@ -197,6 +212,17 @@ func describeChangedLines(fc *fileChangeSet) string {
 // runCodeWarningReview and modules/claude/prompts.go.
 func warningPrompt(arg warningReviewArg, changed map[string]*fileChangeSet) string {
 	var b strings.Builder
+	// The PR's own intent first, so everything below is read in its light: a
+	// choice the author already explained is not a finding.
+	if t := strings.TrimSpace(arg.Title); t != "" {
+		fmt.Fprintf(&b, "PR title: %s\n\n", t)
+	}
+	if d := clipForPrompt(arg.Description, maxPromptDescription); d != "" {
+		fmt.Fprintf(&b, "PR description:\n%s\n\n", d)
+	}
+	if d := clipForPrompt(arg.JiraDescription, maxPromptDescription); d != "" {
+		fmt.Fprintf(&b, "Description of the linked Jira ticket:\n%s\n\n", d)
+	}
 	b.WriteString("Changed files in this PR to review, with the lines this PR changed in each:\n")
 	for _, f := range arg.Files {
 		fmt.Fprintf(&b, "- %s (changed lines: %s)\n", f, describeChangedLines(changed[f]))
@@ -205,12 +231,43 @@ func warningPrompt(arg warningReviewArg, changed map[string]*fileChangeSet) stri
 	fmt.Fprintf(&b, "\nThese files together touch %d changed function(s)/method(s). Report at most %d findings in total across all of them — on average about %d per changed function, never a fixed count per file — prioritizing the most important, best-justified risks over completeness.\n",
 		arg.BlockCount, arg.MaxFindings, warningsPerBlock)
 	if len(arg.Existing) > 0 {
-		b.WriteString("\nExisting open comments already on these files (see the system prompt's rule about them before reporting a finding on the same line):\n")
+		b.WriteString("\nThe open conversation already on this PR — line comments on the files above, and PR-wide comments — with their replies (see the system prompt's rule about them before reporting a finding they already cover):\n")
 		for _, c := range arg.Existing {
-			fmt.Fprintf(&b, "- %s:%d — %s: %s\n", c.File, c.Line, c.Author, c.Body)
+			where := "(PR-wide)"
+			if c.File != "" && c.Line > 0 {
+				where = fmt.Sprintf("%s:%d", c.File, c.Line)
+			} else if c.File != "" {
+				where = c.File
+			}
+			fmt.Fprintf(&b, "- %s — %s: %s\n", where, c.Author, clipForPrompt(c.Body, maxPromptComment))
+			for _, r := range c.Replies {
+				fmt.Fprintf(&b, "    reply — %s\n", clipForPrompt(r, maxPromptComment))
+			}
 		}
 	}
 	return b.String()
+}
+
+// Prompt budgets. A PR description, a Jira description or a long comment
+// thread can be arbitrarily large, and this prompt already carries the file
+// scope; clipping keeps one runaway field from crowding out everything else.
+// Generous on purpose — the point is a ceiling, not a summary.
+const (
+	maxPromptDescription = 4000
+	maxPromptComment     = 800
+	maxPromptComments    = 60
+)
+
+// clipForPrompt trims a free-text field and cuts it to at most max runes,
+// marking the cut so the model knows it is reading a fragment rather than a
+// complete text.
+func clipForPrompt(s string, max int) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + " […]"
 }
 
 // parseWarningFindings extracts the first [...] JSON array from the model
@@ -228,33 +285,67 @@ func parseWarningFindings(raw string) []warningFinding {
 	return findings
 }
 
-// existingLineCommentsInScope filters a PR's comments down to the open,
-// non-AI, line-anchored ones sitting on a file in scope — the context handed
-// to the model via warningReviewArg.Existing so it can tell whether a risk it
-// wants to flag has already been raised (see runAgenticReview,
-// code_warning.md). Kind "" excludes a PR-wide comment (no real line);
+// existingLineCommentsInScope collects the PR's open, non-AI conversation as
+// context for the model (warningReviewArg.Existing), so it can tell whether a
+// risk it wants to flag has already been raised — and, just as often, already
+// answered in a reply. Two kinds are kept:
+//
+//   - a line comment (Kind "") anchored on a file in scope, and
+//   - a PR-wide comment (issue/review/review_summary — see isPRWide), which
+//     has no file:line but is exactly where "we chose X because Y" tends to
+//     be written.
+//
 // Source "ai" is excluded defensively — supersedeFileWarnings already deletes
 // every AI comment in scope before this runs — and Status must be "open" (a
-// resolved comment is treated as already handled). Sorted by file, line for a
-// deterministic prompt.
+// resolved thread is treated as already handled). Replies come along in
+// stored order, minus this app's own "/resolve"/"/reopen" sentinels (status
+// traces, not text a reader wrote). Ordering is deterministic: scoped line
+// comments by file+line first, then the PR-wide ones by id; the whole list is
+// capped at maxPromptComments so a heavily discussed PR can't crowd the
+// prompt out.
 func existingLineCommentsInScope(list []comments.Comment, files []string) []existingLineComment {
 	allowed := make(map[string]bool, len(files))
 	for _, f := range files {
 		allowed[f] = true
 	}
-	out := make([]existingLineComment, 0, len(list))
+	var scoped, prWide []existingLineComment
 	for _, c := range list {
-		if c.Kind != "" || c.Source == "ai" || c.Status != "open" || c.Line <= 0 || !allowed[c.File] {
+		if c.Source == "ai" || c.Status != "open" {
 			continue
 		}
-		out = append(out, existingLineComment{File: c.File, Line: c.Line, Author: c.Author, Body: c.Body})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].File != out[j].File {
-			return out[i].File < out[j].File
+		inScope := c.Kind == "" && c.Line > 0 && allowed[c.File]
+		if !inScope && !isPRWide(c.Kind) {
+			continue
 		}
-		return out[i].Line < out[j].Line
+		entry := existingLineComment{File: c.File, Author: c.Author, Body: c.Body}
+		if inScope {
+			entry.Line = c.Line
+		}
+		for _, r := range c.Reactions {
+			body := strings.TrimSpace(r.Body)
+			if body == "" || body == resolveSentinel || body == reopenSentinel {
+				continue
+			}
+			entry.Replies = append(entry.Replies, r.Author+": "+body)
+		}
+		if inScope {
+			scoped = append(scoped, entry)
+		} else {
+			entry.ID = c.ID
+			prWide = append(prWide, entry)
+		}
+	}
+	sort.SliceStable(scoped, func(i, j int) bool {
+		if scoped[i].File != scoped[j].File {
+			return scoped[i].File < scoped[j].File
+		}
+		return scoped[i].Line < scoped[j].Line
 	})
+	sort.SliceStable(prWide, func(i, j int) bool { return prWide[i].ID < prWide[j].ID })
+	out := append(scoped, prWide...)
+	if len(out) > maxPromptComments {
+		out = out[:maxPromptComments]
+	}
 	return out
 }
 

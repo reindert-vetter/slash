@@ -16,6 +16,7 @@ import (
 	"slash/modules/claude"
 	"slash/modules/comments"
 	"slash/modules/github"
+	"slash/modules/prmeta"
 	"slash/modules/relations"
 )
 
@@ -408,6 +409,63 @@ func TestCodeWarningPromptsExistingComments(t *testing.T) {
 		!strings.Contains(prompt, "reindert") ||
 		!strings.Contains(prompt, "This VAT rate should be a named constant.") {
 		t.Fatalf("prompt does not mention the existing comment: %s", prompt)
+	}
+}
+
+// The PR's own stated intent — title, description, the linked Jira ticket's
+// description — plus the open conversation on it (a PR-wide comment and a
+// thread reply, not just line comments) travel into the prompt, so the model
+// can skip a "risk" the author already explained or the team already
+// discussed. See warningScope/warningPrompt and code_warning.md.
+func TestCodeWarningPromptsPRIntentAndConversation(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 42
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelOpus, `[]`)
+	m, cs, _ := warningManager(t, dataDir, fake)
+	ctx := context.Background()
+
+	if err := m.prmeta.SaveBasics(ctx, prmeta.Meta{
+		PR: pr, Title: "Bump the VAT rate", Body: "Hardcoded on purpose until PAYM-99 lands.",
+		JiraKey: "PAYM-813", JiraDesc: "Het tarief gaat per 1 januari omhoog.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.Save(ctx, comments.Comment{
+		ID: "c-wide", RunID: "r-wide", PR: pr, Kind: "issue",
+		Author: "reindert", Body: "Waarom staat dit tarief hardcoded?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.AddReaction(ctx, comments.Reaction{
+		ID: "x-1", CommentID: "c-wide", Source: "ui", Author: "dennis",
+		Body: "Bewust, zie de omschrijving.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.Calls) != 1 {
+		t.Fatalf("claude calls = %d, want 1", len(fake.Calls))
+	}
+	prompt := fake.Calls[0].Prompt
+	for _, want := range []string{
+		"Bump the VAT rate",
+		"Hardcoded on purpose until PAYM-99 lands.",
+		"Het tarief gaat per 1 januari omhoog.",
+		"Waarom staat dit tarief hardcoded?",
+		"dennis: Bewust, zie de omschrijving.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt is missing %q:\n%s", want, prompt)
+		}
 	}
 }
 

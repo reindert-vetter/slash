@@ -566,6 +566,14 @@ type CodeWarningInput struct {
 type warningScope struct {
 	Files      []string `json:"files"`
 	BlockCount int      `json:"blockCount"`
+	// Title/Description/JiraDescription are the PR's own intent, read from the
+	// prmeta read-model — the place a reviewer explains WHY something was done
+	// the way it was, which the risk check must weigh before flagging it (see
+	// warningReviewArg's own fields and warningPrompt). Empty when prmeta has
+	// no row for this PR yet, or when the PR has no linked Jira ticket.
+	Title           string `json:"title,omitempty"`
+	Description     string `json:"description,omitempty"`
+	JiraDescription string `json:"jiraDescription,omitempty"`
 }
 
 // inboxRefreshResult is the small summary the refreshInbox Activity returns — the
@@ -1951,7 +1959,19 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				count++
 			}
 		}
-		return json.Marshal(warningScope{Files: files, BlockCount: count})
+		scope := warningScope{Files: files, BlockCount: count}
+		// The PR's own intent, straight from the prmeta read-model — no extra
+		// network call: the title/body and the Jira description are already
+		// fetched and stored by pr_status. Best-effort: a PR whose metadata
+		// hasn't landed yet simply gets a prompt without this context.
+		if m.prmeta != nil {
+			if meta, ok, err := m.prmeta.Get(ctx, arg.PR); err == nil && ok {
+				scope.Title = meta.Title
+				scope.Description = meta.Body
+				scope.JiraDescription = meta.JiraDesc
+			}
+		}
+		return json.Marshal(scope)
 	})
 
 	// Activity: supersede — delete, via the existing delete Signal — every
@@ -2812,6 +2832,7 @@ func codeWarningWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var toCreate []warningToCreate
 	if err := w.ExecuteActivity("runAgenticReview", warningReviewArg{
 		PR: in.PR, Files: scope.Files, BlockCount: scope.BlockCount, MaxFindings: maxFindings,
+		Title: scope.Title, Description: scope.Description, JiraDescription: scope.JiraDescription,
 	}, &toCreate); err != nil {
 		return nil, fmt.Errorf("run agentic review: %w", err)
 	}

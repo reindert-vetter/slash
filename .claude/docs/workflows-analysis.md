@@ -741,19 +741,38 @@ a manually triggered, low-frequency action.
     context line outside every block, or a line the model got slightly
     wrong) → **PR-wide** (`Kind "ai_warning"`, added to `isPRWide`) instead of
     being discarded, with `File` still set as a hint.
-- **Existing open comments on a scope file are handed to the model as
+- **The PR's own stated intent goes into the prompt**, so a choice the author
+  already explained isn't reported back at them as a risk. `resolveWarningScope`
+  reads `prmeta.Get` — **no extra network call**, `pr_status` already fetched
+  and stored all of it — and carries the PR **title**, the PR **description**
+  and the linked **Jira ticket's description** on `warningScope` →
+  `warningReviewArg` → the top of `warningPrompt`. `code_warning.md` tells the
+  model to treat them as intent: only flag what the explanation doesn't
+  actually cover. Missing metadata (no prmeta row yet, no Jira link) just
+  leaves that part of the prompt out.
+  **Jira *comments* are deliberately NOT included**: `modules/jira` fetches
+  `summary,description` via `acli jira workitem view`, and adding a `comment`
+  field could not be verified against a real, authenticated `acli` (it errors
+  out unauthenticated), so the shape stayed a guess. Revisit with an
+  authenticated `acli` if the ticket discussion turns out to matter.
+- **The open conversation already on the PR is handed to the model as
   context, so it can skip a duplicate.** `existingLineCommentsInScope`
   (`code_warning.go`, called from the `runAgenticReview` Activity right before
-  `runCodeWarningReview`) reads `cs.List` and keeps the open,
-  line-anchored (`Kind ""`), non-AI comments on a file in scope, sorted by
-  file/line, into `warningReviewArg.Existing` → rendered by `warningPrompt` as
-  a `file:line — author: body` list. Deciding whether a finding on such a
-  line still adds something new is the **model's** call, per an instruction
-  in `code_warning.md`'s system prompt — deliberately not a Go-side dedup
-  filter (that would need the same semantic judgment a second, redundant
-  call would only duplicate). An old AI-authored comment never appears here:
-  `supersedeFileWarnings` already deleted every one in scope earlier in the
-  same workflow.
+  `runCodeWarningReview`) reads `cs.List` and keeps **two** kinds of open,
+  non-AI thread: the line-anchored (`Kind ""`) comments on a file in scope,
+  and the **PR-wide** ones (`isPRWide` — where "we chose X because Y" usually
+  gets written) — each **with its replies** (the "/resolve"/"/reopen"
+  sentinels filtered out), since a reply is often exactly where the concern
+  was already answered. Scoped entries sort by file+line, PR-wide ones by id,
+  and the list is capped at `maxPromptComments`; every free-text field passes
+  through `clipForPrompt` (`maxPromptDescription`/`maxPromptComment`) so one
+  runaway description or thread can't crowd out the rest of the prompt.
+  Deciding whether a finding still adds something new is the **model's** call,
+  per an instruction in `code_warning.md`'s system prompt — deliberately not a
+  Go-side dedup filter (that would need the same semantic judgment a second,
+  redundant call would only duplicate). An old AI-authored comment never
+  appears here: `supersedeFileWarnings` already deleted every one in scope
+  earlier in the same workflow.
 - **`CodeWarningSystemPrompt` (`modules/claude/prompts.go`) is the
   concatenation of TWO embedded files, deliberately kept separate.**
   `prompts/code_warning.md` is the fixed task framing + JSON contract (the
