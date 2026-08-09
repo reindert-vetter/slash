@@ -149,13 +149,14 @@ test.describe('Convert an AI-controle finding into a real comment', () => {
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     const rows = menu.getByTestId('command-row')
-    // "Sluit menu", "Beantwoorden" (default), "Resolve comment", "Comment
-    // hiervan maken", "Chat met Claude", "Zet op GitHub" (the finding is
-    // local), "Ignore".
-    await expect(rows).toHaveCount(7)
+    // "Sluit menu", "Beantwoorden" (default), "Resolve comment", "Verwijder
+    // comment", "Comment hiervan maken", "Chat met Claude", "Zet op GitHub"
+    // (the finding is local), "Ignore".
+    await expect(rows).toHaveCount(8)
     await expect(rows.nth(1)).toContainText('Beantwoorden')
-    await expect(rows.nth(3)).toContainText('Comment hiervan maken')
-    await rows.nth(3).click()
+    await expect(rows.nth(3)).toContainText('Verwijder comment')
+    await expect(rows.nth(4)).toContainText('Comment hiervan maken')
+    await rows.nth(4).click()
     await expect(menu).toHaveCount(0)
 
     const reply = page.getByTestId('comment-detail-reply')
