@@ -9,6 +9,39 @@ diff stats. `overview.html` → `src/overview.mjs`. Routing/shells live in
 It is **fully read-only** in the sense that it never writes directly to a
 module/table (per `.claude/rules/workflows-write-boundary.md`).
 
+## The general `/` command menu
+
+`/` used to focus the search box. It now opens a **general command menu**
+(`menu`/`omenu`/`MenuHost` in `src/overview.mjs`) built on the **shared
+`CommandMenu.mjs` component** — the same palette `/pr/<id>` opens on every stop
+(see "`/` opens the menu of the CURRENT STOP" in
+`.claude/docs/command-palette.md`), so `/` means the same thing on both pages.
+The search box stays reachable with `↑` from the first row and with the mouse.
+
+- **Deliberately almost empty for now** — a pinned **"Sluit menu"** (mirroring
+  `withClose` in `home.mjs`) plus a free-text field, nothing else
+  (`OVERVIEW_COMMANDS` is an empty array on purpose). Reviewer request: "in pr
+  overview een geheel algemeen menu (nu zonder items behalve het typen en
+  sluiten)". Real actions land here later; a query matching nothing shows
+  `CommandMenu`'s own "Geen commando's." empty state.
+- **Stable `menu` + disposable `omenu`**, replaced wholesale on every open —
+  the exact split `home.mjs` uses, for the exact same reason (arrow.js doesn't
+  fully clean up a dropped subtree, so a previous open's orphaned bindings must
+  point at an object nothing touches again). See "Orphan bindings of a dropped
+  subtree" in `.claude/rules/arrowjs-pitfalls.md`. **Don't collapse the two.**
+- **The open menu owns the keyboard:** `kbHandler`'s very first branch, ahead
+  of the popover branch, so no key reaches `move`/`activateSelected`.
+- **Positioning** (`positionMenu`) anchors under the selected row, else under
+  the search box, flipping above when it wouldn't fit — a deliberately much
+  smaller version of `home.mjs`'s per-mode anchor/region table, since this page
+  has exactly one menu.
+
+**The per-row popover is deliberately NOT folded into this component** (asked
+and confirmed): its reviewer picker and the ingest spinner/stage/error UI are
+not command rows, and it keeps its own focus-based keyboard model — the
+look-only-sharing note below still stands unchanged. Test:
+`tests/overview-command-menu.spec.mjs`.
+
 ## The per-row popover
 
 **Every row** — ingested or not — opens the same popover menu on click
@@ -580,6 +613,8 @@ holding real DOM focus.
   the drawer items in DOM order. Closed, the drawer has no rows in the DOM;
   closing it with the selection inside releases that selection (identity
   re-anchoring above) instead of pasting it onto a leftover pr-row.
+- **`/` opens the general command menu** (above) instead of focusing the
+  search box, and is swallowed while a popover is open, as before.
 - **`Escape` in the search box blurs the field** besides clearing
   `state.query` — otherwise `document.activeElement` stays on the input and
   `kbHandler`'s `typing` guard (`active.tagName === 'INPUT'`) eats every later

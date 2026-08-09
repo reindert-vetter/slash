@@ -8,6 +8,7 @@
 // /data/inbox.json snapshot when the live endpoint is unreachable.
 
 import { reactive, html, watch } from './vendor/arrow.js'
+import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { avatarHTML, avatarUrlOf, displayNameOf, ensureNames, fullNameOf } from './avatar.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
@@ -1770,7 +1771,7 @@ function App() {
   return html`
     <div class="mx-auto max-w-7xl px-6 py-8" data-testid="inbox">
       ${headerBlock()} ${searchBox()}
-      ${() => currentView()} ${filterDrawer()} ${recentDrawer()} ${problemsDrawer()}
+      ${() => currentView()} ${filterDrawer()} ${recentDrawer()} ${problemsDrawer()} ${MenuHost()}
     </div>
   `
 }
@@ -2378,17 +2379,146 @@ function activateSelectedForward() {
   openOrGenerate(pr)
 }
 
+// ── the general command menu (`/`) ──────────────────────────────────────────
+// `/` used to focus the search box. It now opens a general command menu, the
+// same shape /pr/<id> uses for every one of its menus (contextMenuMode, see
+// .claude/docs/command-palette.md): reviewer request — "in pr overview een
+// geheel algemeen menu (nu zonder items behalve het typen en sluiten)". The
+// search box stays reachable with ↑ from the first row and with the mouse.
+//
+// The per-row popover is deliberately NOT folded into this component (see
+// .claude/docs/pr-overview.md): its reviewer picker and ingest spinner/stage/
+// error UI are not command rows.
+const menu = reactive({ open: false })
+
+// omenu is the DISPOSABLE half, replaced wholesale on every open — the same
+// stable-`menu` + fresh-`ms` split home.mjs uses, and for the same reason:
+// arrow.js does not fully clean up a dropped subtree, so a previous open's
+// (orphaned) CommandMenu bindings would otherwise fire against this open's
+// state. See "Orphan bindings of a dropped subtree" in
+// .claude/rules/arrowjs-pitfalls.md.
+let omenu = reactive({ query: '', sel: 0, sub: null, mode: 'overview', commands: [] })
+
+// OVERVIEW_COMMANDS is deliberately empty for now: the menu exists, you can
+// type in it, and the pinned "Sluit menu" (mirroring withClose in home.mjs) is
+// its only item — actions land here later. withClose's own rule applies: since
+// the pinned row is index 0 and there is nothing else yet, defaultSel would
+// clamp to 0 anyway.
+const OVERVIEW_COMMANDS = []
+
+function overviewCommands() {
+  return [{ id: 'close-menu', label: 'Sluit menu', hint: 'esc', run: () => closeMenu() }, ...OVERVIEW_COMMANDS]
+}
+
+function resolveOverviewCommands(query) {
+  return filterCommands(omenu.commands, query)
+}
+
+function openMenu() {
+  omenu = reactive({ query: '', sel: Math.min(1, Math.max(0, overviewCommands().length - 1)), sub: null, mode: 'overview', commands: overviewCommands() })
+  menu.open = true
+  requestAnimationFrame(() => {
+    positionMenu()
+    const el = document.querySelector('[data-testid="command-input"]')
+    if (el) el.focus()
+  })
+}
+
+function closeMenu() {
+  // Only flip `open` — omenu is replaced on the next open, and leaving this
+  // (now orphaned) one untouched is exactly what keeps the torn-down menu's
+  // bindings from firing against freed slots.
+  menu.open = false
+}
+
+function runOverviewCommand(cmd) {
+  closeMenu()
+  if (cmd && cmd.run) requestAnimationFrame(() => cmd.run())
+}
+
+// positionMenu anchors the palette under the selected row when there is one,
+// else under the search box — the same "sit where the reviewer is looking"
+// idea as home.mjs's positionMenu, minus its per-mode anchor/region table
+// (this page has exactly one menu). Clamped inside the viewport, and flipped
+// above its anchor when it would not fit below.
+function positionMenu() {
+  const el = document.querySelector('[data-testid="command-anchor"]')
+  if (!el) return
+  const rows = currentRows()
+  const anchorEl = rows[selIndex] || document.querySelector('[data-testid="search"]')
+  if (!anchorEl) return
+  const a = anchorEl.getBoundingClientRect()
+  const width = Math.min(a.width, window.innerWidth - 16)
+  el.style.width = width + 'px'
+  const h = el.offsetHeight || 320
+  const below = a.bottom + 6
+  const top = below + h > window.innerHeight - 8 ? Math.max(8, a.top - 6 - h) : below
+  el.style.left = Math.max(8, Math.min(a.left, window.innerWidth - width - 8)) + 'px'
+  el.style.top = top + 'px'
+  el.style.visibility = 'visible'
+}
+
+window.addEventListener('resize', () => menu.open && positionMenu())
+window.addEventListener('scroll', () => menu.open && positionMenu(), true)
+
+function menuOverlay() {
+  return html`
+    <div class="fixed inset-0 z-40" data-testid="command-overlay" @click="${() => closeMenu()}">
+      <div
+        class="fixed z-50 max-w-[calc(100vw-1rem)]"
+        style="top:0;left:0;visibility:hidden"
+        data-testid="command-anchor"
+        @click="${(e) => e.stopPropagation()}"
+      >
+        ${CommandMenu(omenu, resolveOverviewCommands, runOverviewCommand)}
+      </div>
+    </div>
+  `
+}
+
+// MenuHost mounts the overlay at the page root (see home.mjs's own MenuHost
+// for the stacking-context reasoning). The toggling slot sits inside a stable
+// element root and returns a keyed template, per the "bare toggling
+// expression" pitfall in .claude/rules/arrowjs-pitfalls.md.
+function MenuHost() {
+  return html` <div>${() => (menu.open ? menuOverlay().key('command-overlay') : '')}</div> `
+}
+
+// handleMenuKey is the entire keyboard surface while the menu is open: it owns
+// the keyboard, exactly like home.mjs's own menu branch. ↑/↓ move the
+// selection, Enter runs it, Escape closes; typed characters flow into the
+// focused input untouched.
+function handleMenuKey(e) {
+  const list = resolveOverviewCommands(omenu.query)
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    closeMenu()
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    omenu.sel = Math.min(omenu.sel + 1, Math.max(0, list.length - 1))
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    omenu.sel = Math.max(omenu.sel - 1, 0)
+  } else if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    if (list[omenu.sel]) runOverviewCommand(list[omenu.sel])
+  }
+  if (menu.open) requestAnimationFrame(positionMenu)
+}
+
 let kbHandler = null
 function setupKeyboard() {
   if (kbHandler) window.removeEventListener('keydown', kbHandler, true)
   kbHandler = (e) => {
+    // The open menu owns the keyboard — checked before everything else,
+    // mirroring home.mjs's own menu branch (and the popover branch below).
+    if (menu.open) return handleMenuKey(e)
     if (ui.openPopover != null) return handlePopoverKey(e)
     const active = document.activeElement
     const typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
     if (e.key === '/' && !typing) {
       e.preventDefault()
-      const el = document.querySelector('[data-testid="search"]')
-      if (el) el.focus()
+      openMenu()
       return
     }
     if (typing) return
