@@ -42,7 +42,7 @@ function mockComments(page) {
 }
 
 // ignoreCommentRow walks the comment-index item's action menu to "Ignore" it
-// (same three key presses as comment-ignore.spec.mjs), producing a
+// (same key presses as comment-ignore.spec.mjs), producing a
 // toggle-ignored row at the bottom of the sidebar.
 async function ignoreCommentRow(page) {
   const commentRow = page.getByTestId('block-row').filter({ hasText: 'Overall this looks great' })
@@ -51,6 +51,7 @@ async function ignoreCommentRow(page) {
   const menu = page.getByTestId('command-menu')
   await expect(menu).toBeVisible()
   await page.keyboard.press('ArrowDown') // "Resolve comment"
+  await page.keyboard.press('ArrowDown') // "Verwijder comment"
   await page.keyboard.press('ArrowDown') // "Chat met Claude"
   await page.keyboard.press('ArrowDown') // "Ignore"
   await page.keyboard.press('Enter')
