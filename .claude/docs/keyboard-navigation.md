@@ -296,6 +296,35 @@ block code, so a further `→` can continue into Underlying code, exactly like
 combination is a deliberately reachable state now, at any `focusLevel`. Tests:
 `tests/enter-diff-zero-groups.spec.mjs`, `tests/drill-mode-flip.spec.mjs`.
 
+### `→` lands on the first unit that still needs approval
+
+Stepping in no longer always lands on the block's **first** change: `enterDiff`
+resolves `state.change` through `firstUnapprovedChange(b)` —
+`firstUnapprovedOwnUnit(b, 'group', -1)`, the exact same walk
+`findNextUnapproved`'s step 1 uses — and only falls back to unit `0` when the
+block is fully approved (or has no units at all). Reviewer request: "als ik naar
+links ga (naar blokken index) en ik ga direct naar rechts, dan wil ik op de
+regel belanden die nog niet approved is, anders wel gewoon de eerste". So
+`←` then `→` resumes where the review actually stands, instead of re-offering
+work that is already ticked off.
+
+Two deliberate scope limits:
+
+- **Only this `list → diff` step.** Drilling into an Onderliggende-code column
+  (`drillIntoChild`) keeps starting at its own first unit, and every other
+  landing (`applyNextUnapproved`, `openTask`, the `?chg=` URL restore) sets
+  `state.change` explicitly and never comes through `enterDiff`.
+- **`curBlock()`, not `state.blocks[state.selected]`** — for a `test_class` row
+  the diff being entered is the ACTIVE method's, not the row's own.
+
+A block whose code hasn't loaded yet can't answer "which unit is unapproved",
+so `enterDiff` sets **`pendingFirstUnapproved`** and `ensureCode` applies the
+landing once the rows are known — the exact mirror of the pre-existing
+`pendingLast` (which defers "land on the LAST unit" for a step *up* into a
+neighbouring block). Both flags are cleared by `stepBlock`/`stepTestMethodChange`,
+whose own landing supersedes a still-pending one. Test:
+`tests/enter-diff-first-unapproved.spec.mjs`.
+
 Fully approved top-level blocks are **hidden** by default (a button at the
 bottom expands them) and the "Start" heading shows a PR-wide approval counter —
 see "Hiding approved blocks" and "Server-side `total`" in

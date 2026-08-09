@@ -1419,6 +1419,24 @@ function sameFileNeighbour(delta) {
 // ensureCode resolves it after the fetch. Kept outside reactive state.
 let pendingLast = false
 
+// pendingFirstUnapproved is enterDiff's mirror image of pendingLast: we stepped
+// INTO a block whose code hasn't loaded yet, so "land on the first unapproved
+// unit" (see enterDiff) can't be resolved here — ensureCode applies it once the
+// rows are known. Kept outside reactive state, like pendingLast.
+let pendingFirstUnapproved = false
+
+// firstUnapprovedChange returns the group-granularity unit index enterDiff
+// should land on: the first unit of `b` that still has unapproved changed rows,
+// or 0 ("anders gewoon de eerste regel") when everything is approved or the
+// block has no units at all. Reuses firstUnapprovedOwnUnit, the exact same walk
+// findNextUnapproved's step 1 uses, so "the next open line" means the same
+// thing however the reviewer gets there.
+function firstUnapprovedChange(b) {
+  if (!b) return 0
+  const at = firstUnapprovedOwnUnit(b, 'group', -1)
+  return at == null ? 0 : at
+}
+
 // stepBlock moves the selection to the neighbouring block while staying in diff
 // mode, so navigating past the last/first change of a block flows straight into
 // the next/previous one instead of stopping. Stepping down lands on the first
@@ -1431,6 +1449,10 @@ function stepBlock(delta) {
   const next = state.selected + delta
   state.selected = next
   clearRangeAnchor(0)
+  // Flowing on to another block supersedes enterDiff's still-pending
+  // "land on the first unapproved unit" landing (its code may only arrive
+  // after this step) — this step's own landing wins.
+  pendingFirstUnapproved = false
   const groups = unitsOf(state.blocks[next])
   if (delta < 0) {
     if (groups.length) {
@@ -1486,6 +1508,8 @@ function stepTestMethod(delta) {
 function stepTestMethodChange(delta) {
   if (!stepTestMethod(delta)) return false
   clearRangeAnchor(0)
+  // See stepBlock: this step's landing supersedes a pending enterDiff one.
+  pendingFirstUnapproved = false
   const groups = unitsOf(curBlock())
   if (delta < 0) {
     if (groups.length) {
@@ -4219,6 +4243,12 @@ async function ensureCode(b) {
       if (pendingLast) {
         state.change = Math.max(0, groups.length - 1)
         pendingLast = false
+      } else if (pendingFirstUnapproved) {
+        // We stepped INTO this block (enterDiff) before its code loaded — now
+        // that its units and their approval state are known, land on the first
+        // one that still needs approval (falling back to the first unit).
+        state.change = firstUnapprovedChange(b)
+        pendingFirstUnapproved = false
       } else if (state.change >= groups.length) {
         // A change index restored from the URL can outrun this block's groups
         // (stale/shared link) — clamp it back into range.
@@ -4489,7 +4519,27 @@ function enterDiff() {
   // Stepping in from the list always starts at the coarsest granularity (a whole
   // change run); the reviewer refines from there with f.
   state.gran = 'group'
-  state.change = 0
+  // Land on the first unit that still needs approval instead of always on the
+  // block's first change (reviewer request: "als ik naar links ga en direct
+  // naar rechts, wil ik op de regel belanden die nog niet approved is, anders
+  // wel gewoon de eerste"). Deliberately scoped to this list→diff step only —
+  // drilling into an Onderliggende-code column keeps starting at its own first
+  // unit (drillIntoChild), and every other landing (applyNextUnapproved,
+  // openTask, the URL restore) sets its own change explicitly and never comes
+  // through here. curBlock() rather than `b`: for a test_class row the diff we
+  // step into is the ACTIVE method's, not the row's own.
+  const target = curBlock()
+  pendingLast = false
+  if (target && target.code) {
+    state.change = firstUnapprovedChange(target)
+    pendingFirstUnapproved = false
+  } else {
+    // Code still loading — ensureCode resolves the landing once the rows (and
+    // thus the units and their approval state) are known, exactly like
+    // pendingLast does for a step UP into a neighbouring block.
+    state.change = 0
+    pendingFirstUnapproved = true
+  }
   state.rangeAnchor = null
   // Defensive: a fresh diff session starts with no drilled columns and the
   // keyboard on the top-level block itself (drill/focusLevel should already be
