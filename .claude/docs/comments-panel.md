@@ -502,6 +502,19 @@ fixes that, and `commentColumnWidthCls() + connector + claudeColumnWidthCls()`
 still sums to exactly `relatedColumnWidthCls()`, so the row lines up with
 `related-code` below it.
 
+### The selected conversation is pulled to the top, with a "hierboven" hint
+
+Stacked comment cards follow the Onderliggende-code column exactly:
+`scrollCommentIntoView` aligns the selected card to the top of its vertical
+scroller (`alignToTopVertical`) and a slim `▲ N hierboven` header
+(`moreAboveHint`, `data-testid=comment-more-above`) appears while `cs.focus` is
+`'comment'`/`'thread'` and `selI() > 0`. Full mechanism, and why the count comes
+from the cursor index rather than a scroll measurement: "The selected child is
+pulled to the TOP" in `.claude/docs/underlying-code.md`. Note the column itself
+usually doesn't scroll (it has no scroller of its own), in which case
+`alignToTopVertical` finds no vertical scroller and is a no-op — the hint still
+tells the reviewer there is something above.
+
 ### One card per conversation, only the focused (or Claude-anchored) one expands
 
 Multiple threads can hang off one unit; each gets its own card

@@ -464,17 +464,41 @@ function chipPathEquals(a, b) {
 // vertical overflow, only horizontal — never matches this check, so the walk
 // naturally stops one level before it).
 export function scrollIntoViewVertical(el) {
+  const node = verticalScroller(el)
+  if (!node) return
+  const cRect = node.getBoundingClientRect()
+  const eRect = el.getBoundingClientRect()
+  if (eRect.top < cRect.top) node.scrollTop -= cRect.top - eRect.top
+  else if (eRect.bottom > cRect.bottom) node.scrollTop += eRect.bottom - cRect.bottom
+}
+
+// verticalScroller is the shared walk both scroll helpers use: the first
+// ancestor of `el` that actually scrolls vertically, or null. Split out of
+// scrollIntoViewVertical so alignToTopVertical below can reuse the exact same
+// "and no further" rule (never <main>'s horizontal scroller — see above).
+function verticalScroller(el) {
   let node = el.parentElement
   while (node && node !== document.documentElement) {
-    if (node.scrollHeight > node.clientHeight) {
-      const cRect = node.getBoundingClientRect()
-      const eRect = el.getBoundingClientRect()
-      if (eRect.top < cRect.top) node.scrollTop -= cRect.top - eRect.top
-      else if (eRect.bottom > cRect.bottom) node.scrollTop += eRect.bottom - cRect.bottom
-      return
-    }
+    if (node.scrollHeight > node.clientHeight) return node
     node = node.parentElement
   }
+  return null
+}
+
+// alignToTopVertical scrolls `el` to the TOP of its vertical scroller instead
+// of merely into view. Reviewer request: selecting an Onderliggende-code child
+// (or a comment card) that sits below another one must bring it to the top,
+// "zodat hij niet buiten beeld komt" — with a "there's something above" hint
+// in the panel header (moreAboveHint) and ↑ still walking back up. Only ever
+// scrolls DOWN to reach that alignment: clamped at 0, so selecting the first
+// item never yanks the panel past its own top, and (unlike scrollIntoView) it
+// never touches the horizontal axis — same axis rule as above.
+function alignToTopVertical(el) {
+  const node = verticalScroller(el)
+  if (!node) return
+  const cRect = node.getBoundingClientRect()
+  const eRect = el.getBoundingClientRect()
+  node.scrollTop = Math.max(0, node.scrollTop + (eRect.top - cRect.top))
 }
 
 // scrollChipIntoView keeps the focused chip in view while walking the chip
@@ -971,10 +995,18 @@ function reactionCount() {
 // scrollCommentIntoView / scrollReactionIntoView keep the active row / bubble in
 // view while walking with the arrows (deferred a frame so the DOM has the new
 // highlight class first), mirroring scrollSelectedIntoView in home.mjs.
+// Both align the selected card to the TOP of its own scroller (see
+// alignToTopVertical) rather than just bringing it into view: a card selected
+// below the fold otherwise stays half out of sight, and a card BELOW the
+// selected one used to look like the top of the list. The moreAboveHint header
+// says how many items sit above.
 function scrollCommentIntoView() {
   requestAnimationFrame(() => {
     const el = document.querySelectorAll('[data-testid=comment-item]')[selI()]
-    if (el) el.scrollIntoView({ block: 'nearest' })
+    // Deliberately alignToTopVertical, not el.scrollIntoView({block:'nearest'}):
+    // the latter also drags <main>'s horizontal scroll along (the axis rule in
+    // .claude/rules/arrowjs-pitfalls.md) — this call site predates that rule.
+    if (el) alignToTopVertical(el)
   })
 }
 
@@ -988,7 +1020,7 @@ function scrollCodeIntoView() {
     const el = document.querySelector(
       '[data-testid=related-item][data-active=true], [data-testid=related-tests-bar][data-active=true]',
     )
-    if (el) scrollIntoViewVertical(el)
+    if (el) alignToTopVertical(el)
   })
 }
 
@@ -4692,6 +4724,10 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
               () => resetColumnWidth(state, widthKey()),
             )
           : ''}
+      ${() =>
+        (cs.focus === 'comment' || cs.focus === 'thread') && selI() > 0
+          ? moreAboveHint(selI(), 'comment-more-above')
+          : ''}
       ${newCommentComposer(state, commentTarget, openCompose)}
       ${() => visibleComments().map((c, i) => commentCard(c, i, openCommentMenu).key('comment:' + c.id))}
     </div>
@@ -5570,7 +5606,31 @@ export default function RelatedPanel(state, commentTarget, search) {
       </p>
     `
   }
-  // Clicking a child drills into it as its own diff column — the same path Enter
+  // moreAboveHint is the "er staat nog iets boven" cue that belongs with
+// alignToTopVertical: since the selected card is scrolled to the TOP of its
+// column, the items before it are off-screen above and the list would
+// otherwise read as if it started here. A slim sticky header naming how many
+// there are (`▲ N hierboven`), so ↑ is an obvious thing to press.
+//
+// Colorblind rule: the meaning sits in the WORD (the count + "hierboven") and
+// in the ▲ SHAPE — there is no colour carrying anything here.
+//
+// `n` is the cursor's own index (cs.codeSel / selI()), not a scroll
+// measurement: deterministic, reactive for free, and it can't disagree with
+// what ↑ would actually do.
+function moreAboveHint(n, testid) {
+  return html`
+    <div
+      class="sticky top-0 z-10 -mt-1 mb-1 flex shrink-0 items-center gap-1 rounded-md border border-slate-200 dark:border-zinc-700 bg-white/95 dark:bg-zinc-900/95 px-2 py-1 text-[11px] text-slate-500 dark:text-zinc-400"
+      data-testid="${testid}"
+    >
+      <span aria-hidden="true">▲</span>
+      <span>${n} hierboven</span>
+    </div>
+  `
+}
+
+// Clicking a child drills into it as its own diff column — the same path Enter
   // takes on a focused child (drillIntoChild in home.mjs), just mouse-driven.
   const drill = (r) => search && search.drill && search.drill(r)
   const widthKey = () => colWidthKeyFor('related', commentTarget)
@@ -5601,6 +5661,7 @@ export default function RelatedPanel(state, commentTarget, search) {
           'no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3 ' +
           (searching() || pending() > 0 ? 'pt-9' : '')}"
       >
+        ${() => (cs.focus === 'code' && cs.codeSel > 0 ? moreAboveHint(cs.codeSel, 'related-more-above') : '')}
         ${() => coversWarning()}
         ${() => {
           // All children render as one flat vertical list, full width, in order.

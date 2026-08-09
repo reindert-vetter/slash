@@ -178,6 +178,37 @@ column's full height and then scrolls internally (`min-h-0`, body
 `flex-1 overflow-auto`). Code excerpts **wrap** (`whitespace-pre-wrap
 break-words`, no horizontal scroll).
 
+### The selected child is pulled to the TOP, with a "hierboven" hint
+
+`scrollCodeIntoView` no longer merely brings the active card into view — it
+calls **`alignToTopVertical(el)`**, which scrolls the first vertically
+scrolling ancestor so the card sits at that container's top. Reviewer request:
+selecting a child that sits below another one must bring it to the top "zodat
+hij niet buiten beeld komt". It only ever scrolls DOWN to reach that alignment
+(clamped at `scrollTop 0`, so selecting the first child never yanks the panel
+past its own top) and it never touches the horizontal axis — it shares
+`verticalScroller` with `scrollIntoViewVertical`, so the `scrollIntoView` axis
+rule in `.claude/rules/arrowjs-pitfalls.md` still holds.
+
+Since the list then visually starts at the selected card, a slim **sticky
+header** (`moreAboveHint`, `data-testid=related-more-above`) says how many
+items sit above it: `▲ N hierboven`. Three deliberate properties:
+
+- **Driven by the cursor index (`cs.codeSel`), not by a scroll measurement** —
+  deterministic, reactive for free, and it can never disagree with what `↑`
+  would actually do.
+- **Only while the panel owns the keyboard** (`cs.focus === 'code'`): it
+  describes that cursor, so it disappears the moment `←` hands focus back.
+- **Colourblind rule:** the meaning is the WORD (the count + "hierboven") plus
+  the ▲ SHAPE; no colour carries anything.
+
+`InlineComments` gets the identical treatment for stacked comment cards
+(`comment-more-above`, gated on `cs.focus` being `'comment'`/`'thread'` and
+`selI() > 0`) — see `.claude/docs/comments-panel.md`. That call site also
+switched from a bare `el.scrollIntoView({block:'nearest'})` (which predates the
+axis rule and dragged `<main>`'s horizontal scroll along) to the same helper.
+Test: `tests/related-more-above-hint.spec.mjs`.
+
 **Refresh restore of the panel cursor:** `cs.focus`/`codeSel`/`sel`/`threadPos`
 live in the URL under their own `rel` namespace
 (`bindUrlState(cs, …, { ns:'rel' })`), so a refresh returns to the same child /
