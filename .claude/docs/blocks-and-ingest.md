@@ -463,6 +463,61 @@ category, so its badge and its `categoryRank` position in the left list change
 too — but only after a **re-ingest**, since `category` is stored per block row in
 `graph.db`.
 
+### Module / layer / type: three optional labels from one path
+
+A path in this repo carries up to **three independent, each optional** pieces of
+meaning, and the review tree shows them as three separate labels:
+
+1. the **module** — `app/…` or `modules/<Name>/…`. **`app` counts as a module
+   name like any other** (Reindert), so there is no special case for it;
+2. the **layer** — an optional `Internal`/`Shared`/`Client` grouping *inside* a
+   module;
+3. the **type** — the directory saying what kind of thing this is
+   (`Services/` → SERVICE, `Features/` → FEATURE, …). That one **is**
+   `Block.Category`.
+
+Two directory styles live side by side in the real repo and both must work —
+`modules/Checkouts/` holds only `Client/ Internal/ Shared/ Tests/` (type one
+level deeper), while `modules/Payments/` holds its type directories directly.
+Plus plain Laravel structure (`config/`, `routes/`) that has no module at all.
+
+**Only the type is derived in Go and stored.** The module and layer are derived
+in the frontend straight from `b.file` (`src/blockPath.mjs`), which needs no new
+column and therefore **no re-ingest** — see `src/blockPath.mjs`'s own header and
+the two pills on the card header in `Block.mjs`. That split makes
+`splitBlockPath` (`classify.go`) a
+**parity implementation**: keep the Go and JS versions in step, or a block can
+show a layer pill Go never treated as a layer.
+
+**The layer guard is the subtle part.** `Client` is genuinely ambiguous:
+`modules/Checkouts/Client/Services/Foo.php` uses it as a **layer**, while
+`modules/Payments/Client/MollieClient.php` and `app/Client/OrderClient.php` hold
+files directly and use it as a **type**. `splitBlockPath` requires **at least
+three remaining segments** (layer / type / file) before treating a segment as a
+layer, which tells the two apart from the path alone — no filesystem access,
+which matters because this runs during ingest against paths, not a checkout.
+Don't "simplify" this to a bare `Internal|Shared|Client` name check.
+
+`typeDirCategory` is a **closed table**; an unknown segment yields `OTHER`,
+never a label invented from whatever the directory happens to be called.
+Deliberately absent from it: `Resources` (under a module that's the assets/lang
+directory — the API resource is `Http/Resources/`, matched earlier), and
+`Http`/`Database`/`Tests` (already covered by the earlier, more specific rules).
+The generic table runs **after** every explicit rule above, so those keep
+winning.
+
+**This replaced the old `app/<Dir>/` handful plus the catch-all
+`modules/` → `MODULE` rule.** That is why `app/Features/…` used to show up as
+`OTHER` (Reindert's own report) and why everything in a module collapsed into one
+undifferentiated `MODULE` pill. It also fixes a silent gap of the same shape as
+the `Http/<Dir>/` one above: `relations.go` filters hard on
+`Category == "MODEL"/"POLICY"/"LISTENER"`, which a module file could never have,
+so those relations never materialised for a module PR. `MODULE` is no longer
+produced at all (its `CATEGORY_STYLE` entry is harmless and stays).
+
+Tests: `TestSplitBlockPath`, `TestCategoryForTypeDirectory` (`classify_test.go`).
+Same re-ingest caveat as above — `category` is a stored column.
+
 ### Trait blocks (`TRAIT`, keyword-based, not path-based)
 
 A method declared directly inside a PHP `trait` body classifies as **`TRAIT`**

@@ -530,12 +530,14 @@ interface Repo {
 // TestCategoryForModuleHttpLayer: a module keeps Laravel's own
 // Http/Controllers|Requests|Resources convention, so those files must get the
 // same category as their app/ counterparts instead of falling through to the
-// generic modules/ → MODULE rule. Without this, relations.go's
+// generic modules/ rule. Without this, relations.go's
 // routeControllerDetector (which filters on Category == "CONTROLLER") never
 // linked a route to a module controller. The last two cases guard the rule
 // ordering that makes this safe: modules/<Name>/Resources/ is a module's
-// asset/lang directory, so a lang file there must still reach TRANSLATION and
-// any other module file must still be MODULE.
+// asset/lang directory, so a lang file there must still reach TRANSLATION,
+// while an ordinary module directory is resolved by the generic type-directory
+// table (Services/ → SERVICE — this used to be the catch-all "MODULE", see
+// TestCategoryForTypeDirectory).
 func TestCategoryForModuleHttpLayer(t *testing.T) {
 	cases := map[string]string{
 		"modules/Sitemaps/Http/Controllers/MerchantFeedController.php": "CONTROLLER",
@@ -543,7 +545,7 @@ func TestCategoryForModuleHttpLayer(t *testing.T) {
 		"modules/Pages/Http/Resources/PageResource.php":                "RESOURCE",
 		"app/Http/Controllers/Api/PluginController.php":                "CONTROLLER",
 		"modules/Affiliates/Resources/lang/en/includes.php":            "TRANSLATION",
-		"modules/Sitemaps/Services/MerchantFeed/GoogleFeedXml.php":     "MODULE",
+		"modules/Sitemaps/Services/MerchantFeed/GoogleFeedXml.php":     "SERVICE",
 	}
 	for path, want := range cases {
 		if got := categoryFor(path); got != want {
@@ -630,6 +632,91 @@ func TestCategoryForTraitPathFallback(t *testing.T) {
 		"packages/plugandpay/Traits/HasIncludeLabel.php": "TRAIT",
 		"app/Traits/Sortable.php":                        "TRAIT",
 		"app/Services/Svc.php":                           "SERVICE",
+	}
+	for path, want := range cases {
+		if got := categoryFor(path); got != want {
+			t.Errorf("categoryFor(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// TestSplitBlockPath covers the three-part module/layer/type split, each part
+// optional. The `Client` cases are the point of the whole exercise: the same
+// segment is a LAYER in one module and a TYPE directory in another, and the
+// "at least three segments left" guard is what tells them apart from the path
+// alone. Mirrored in src/blockPath.mjs — keep the two in step.
+func TestSplitBlockPath(t *testing.T) {
+	cases := []struct {
+		path                   string
+		module, layer, typeDir string
+	}{
+		// app behaves exactly like a module name.
+		{"app/Features/PromotionCodesV2Feature.php", "app", "", "Features"},
+		{"app/Http/Controllers/Api/PluginController.php", "app", "", "Http"},
+		// Old, flat module style: module/type.
+		{"modules/Payments/Services/RefundService.php", "Payments", "", "Services"},
+		// New, three-layer module style: module/layer/type.
+		{"modules/Checkouts/Internal/Services/CheckoutService.php", "Checkouts", "Internal", "Services"},
+		{"modules/Checkouts/Shared/Data/CheckoutData.php", "Checkouts", "Shared", "Data"},
+		{"modules/Checkouts/Client/Services/CheckoutClient.php", "Checkouts", "Client", "Services"},
+		// `Client` holding files DIRECTLY is a type directory, not a layer —
+		// there is no room for a layer/type/file triple below it.
+		{"modules/Payments/Client/MollieClient.php", "Payments", "", "Client"},
+		{"app/Client/OrderClient.php", "app", "", "Client"},
+		// A layer can sit above a nested type directory too.
+		{"modules/Checkouts/Internal/Http/Controllers/PayController.php", "Checkouts", "Internal", "Http"},
+		// Plain Laravel: no module, no layer, just a type directory.
+		{"config/services.php", "", "", "config"},
+		{"routes/web.php", "", "", "routes"},
+		// A file at the repo root has nothing at all to report.
+		{"composer.json", "", "", ""},
+	}
+	for _, c := range cases {
+		m, l, td := splitBlockPath(c.path)
+		if m != c.module || l != c.layer || td != c.typeDir {
+			t.Errorf("splitBlockPath(%q) = (%q, %q, %q), want (%q, %q, %q)",
+				c.path, m, l, td, c.module, c.layer, c.typeDir)
+		}
+	}
+}
+
+// TestCategoryForTypeDirectory: the category comes from the TYPE directory,
+// module- and layer-independent. Before this, only a hard-coded handful of
+// `app/<Dir>/` paths had a category and everything under modules/ collapsed
+// into one catch-all "MODULE" — so app/Features/… showed up as OTHER
+// (Reindert's own example) and a module's models/policies/listeners never got
+// the category relations.go filters on.
+func TestCategoryForTypeDirectory(t *testing.T) {
+	cases := map[string]string{
+		// The reported case.
+		"app/Features/PromotionCodesV2Feature.php": "FEATURE",
+		// Same type directory, three different module/layer shapes.
+		"app/Services/OrderService.php":                           "SERVICE",
+		"modules/Payments/Services/RefundService.php":             "SERVICE",
+		"modules/Checkouts/Internal/Services/CheckoutService.php": "SERVICE",
+		// A module finally gets the categories relations.go filters on.
+		"modules/Forms/Models/Form.php":                 "MODEL",
+		"modules/Redirects/Policies/RedirectPolicy.php": "POLICY",
+		"modules/Products/Listeners/SyncProduct.php":    "LISTENER",
+		// Aliases collapsing onto one tag.
+		"app/Repository/OrderRepository.php":                    "REPOSITORY",
+		"modules/Redirects/Repositories/RedirectRepository.php": "REPOSITORY",
+		"app/Console/Commands/ImportStats.php":                  "COMMAND",
+		"modules/Payments/Commands/SyncPayments.php":            "COMMAND",
+		"modules/Esp/DTO/CampaignDto.php":                       "DTO",
+		"modules/Auth/Data/UserData.php":                        "DTO",
+		// Plain Laravel structure, no module at all.
+		"config/services.php": "CONFIG",
+		// A type directory NOT in the table stays OTHER — never an invented
+		// label from whatever the directory happens to be called.
+		"modules/Esp/Mapping/FieldMap.php": "OTHER",
+		"app/Nonsense/Thing.php":           "OTHER",
+		// Guard the rule ordering the table sits behind: a module's own
+		// Resources/ is its asset/lang directory, so `Resources` is
+		// deliberately NOT a type directory (the API resource is
+		// Http/Resources/, matched earlier).
+		"modules/Affiliates/Resources/lang/en/includes.php": "TRANSLATION",
+		"modules/Pages/Http/Resources/PageResource.php":     "RESOURCE",
 	}
 	for path, want := range cases {
 		if got := categoryFor(path); got != want {

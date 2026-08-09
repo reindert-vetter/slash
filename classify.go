@@ -312,7 +312,6 @@ var categoryRules = []categoryRule{
 	{func(p string) bool { return hasSeg(p, "Traits/") }, "TRAIT"},
 	{func(p string) bool { return hasSeg(p, "database/migrations/") }, "MIGRATION"},
 	{func(p string) bool { return hasSeg(p, "database/factories/") }, "FACTORY"},
-	{func(p string) bool { return hasSeg(p, "app/Actions/") }, "ACTION"},
 	// The three Laravel HTTP-layer directories match on the `Http/<Dir>/`
 	// segment, NOT on an `app/` prefix: a module keeps the very same convention
 	// under modules/<Name>/Http/Controllers|Requests|Resources/, and those files
@@ -328,15 +327,6 @@ var categoryRules = []categoryRule{
 	{func(p string) bool { return hasSeg(p, "Http/Controllers/") }, "CONTROLLER"},
 	{func(p string) bool { return hasSeg(p, "Http/Requests/") }, "REQUEST"},
 	{func(p string) bool { return hasSeg(p, "Http/Resources/") }, "RESOURCE"},
-	{func(p string) bool { return hasSeg(p, "app/Policies/") }, "POLICY"},
-	{func(p string) bool { return hasSeg(p, "app/Models/") }, "MODEL"},
-	{func(p string) bool { return hasSeg(p, "app/Enums/") }, "ENUM"},
-	{func(p string) bool { return hasSeg(p, "app/Jobs/") }, "JOB"},
-	{func(p string) bool { return hasSeg(p, "app/Events/") }, "EVENT"},
-	{func(p string) bool { return hasSeg(p, "app/Listeners/") }, "LISTENER"},
-	{func(p string) bool { return hasSeg(p, "app/Services/") }, "SERVICE"},
-	{func(p string) bool { return hasSeg(p, "app/Repository/") || hasSeg(p, "app/Repositories/") }, "REPOSITORY"},
-	{func(p string) bool { return hasSeg(p, "app/Builders/") }, "BUILDER"},
 	// Laravel translation files: resources/lang/<locale>/<file>.php, the older
 	// top-level lang/<locale>/<file>.php, or a module's own
 	// modules/<Name>/Resources/lang/<locale>/<file>.php. Must come before the
@@ -345,17 +335,174 @@ var categoryRules = []categoryRule{
 	{func(p string) bool {
 		return strings.HasSuffix(p, ".php") && (hasSeg(p, "/lang/") || strings.HasPrefix(p, "lang/"))
 	}, "TRANSLATION"},
-	{func(p string) bool { return hasSeg(p, "modules/") }, "MODULE"},
 	{func(p string) bool { return hasSeg(p, "routes/") }, "ROUTE"},
 	{func(p string) bool { return strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml") }, "CONFIG"},
 }
 
-// categoryFor derives a category tag from the file path.
+// --- module / layer / type directories --------------------------------------
+//
+// A path in this repo carries up to three independent, each OPTIONAL pieces of
+// meaning, which the review tree shows as three separate labels:
+//
+//  1. the MODULE   — `app/…` or `modules/<Name>/…`; `app` counts as a module
+//     name like any other (Reindert), so there is no special case for it;
+//  2. the LAYER    — an optional Internal/Shared/Client grouping *inside* a
+//     module;
+//  3. the TYPE     — the directory saying what kind of thing this is
+//     (`Services/` → SERVICE, `Features/` → FEATURE, …). That one is this
+//     file's `Category`.
+//
+// Two directory styles live side by side in the repo and both must work:
+//
+//	modules/Checkouts/Internal/Services/Foo.php   (new: module/layer/type)
+//	modules/Payments/Services/Foo.php             (old: module/type)
+//	app/Features/PromotionCodesV2Feature.php      (app behaves like a module)
+//	config/services.php                           (plain Laravel: type only)
+//
+// Only the TYPE is derived here and stored on the block. The module and the
+// layer are derived in the frontend straight from `b.file`
+// (src/blockPath.mjs), which needs no new column and therefore no re-ingest —
+// but that split makes splitBlockPath below a PARITY implementation: keep the
+// two in step, or a block could show a layer pill that Go never treated as a
+// layer. See .claude/docs/blocks-and-ingest.md.
+
+// moduleLayerDirs — the optional middle layer. Verified against every module
+// in the real repo: only these three ever occur as a grouping directory.
+var moduleLayerDirs = map[string]bool{
+	"Client":   true,
+	"Internal": true,
+	"Shared":   true,
+}
+
+// typeDirCategory maps a "what kind of thing is this" directory segment to its
+// category tag. Deliberately a closed table with no fuzzy matching: a segment
+// that isn't in it yields "" and the block falls through to OTHER, rather than
+// inventing a label from a directory name nobody agreed on.
+//
+// Deliberately ABSENT, each for its own reason:
+//   - `Resources` — under a module that is the assets/lang directory, not a
+//     Laravel API resource; it must keep reaching the TRANSLATION rule above.
+//     The API resource is `Http/Resources/`, handled there.
+//   - `Http`, `Database`, `Tests` — already covered by the earlier, more
+//     specific rules (Http/<Dir>/, database/migrations|factories/, TEST).
+//   - `Statistics`, `Domain`, `Mapping`, `Application`, `Bridge`, … — too rare
+//     or too vague in this repo to mean anything to a reviewer.
+var typeDirCategory = map[string]string{
+	"Actions":       "ACTION",
+	"Adapters":      "ADAPTER",
+	"Attributes":    "ATTRIBUTE",
+	"Builders":      "BUILDER",
+	"Casts":         "CAST",
+	"Channels":      "CHANNEL",
+	"Charts":        "CHART",
+	"Client":        "CLIENT",
+	"Clients":       "CLIENT",
+	"Collections":   "COLLECTION",
+	"Commands":      "COMMAND",
+	"Console":       "COMMAND",
+	"Config":        "CONFIG",
+	"config":        "CONFIG",
+	"Contract":      "INTERFACE",
+	"Contracts":     "INTERFACE",
+	"Interfaces":    "INTERFACE",
+	"Data":          "DTO",
+	"DTO":           "DTO",
+	"DTOs":          "DTO",
+	"Drivers":       "DRIVER",
+	"Entities":      "ENTITY",
+	"Entity":        "ENTITY",
+	"Enums":         "ENUM",
+	"Events":        "EVENT",
+	"Exceptions":    "EXCEPTION",
+	"Exports":       "EXPORT",
+	"Facades":       "FACADE",
+	"Features":      "FEATURE",
+	"Filters":       "FILTER",
+	"Helpers":       "SUPPORT",
+	"Libs":          "SUPPORT",
+	"Support":       "SUPPORT",
+	"Imports":       "IMPORT",
+	"Jobs":          "JOB",
+	"Listeners":     "LISTENER",
+	"Macros":        "MACRO",
+	"Mail":          "MAIL",
+	"Mcp":           "MCP",
+	"Models":        "MODEL",
+	"Notifications": "NOTIFICATION",
+	"Nova":          "NOVA",
+	"Observers":     "OBSERVER",
+	"Plugins":       "PLUGIN",
+	"Policies":      "POLICY",
+	"Providers":     "PROVIDER",
+	"Queries":       "QUERY",
+	"Repositories":  "REPOSITORY",
+	"Repository":    "REPOSITORY",
+	"Routes":        "ROUTE",
+	"routes":        "ROUTE",
+	"Rules":         "RULE",
+	"Validation":    "RULE",
+	"Scopes":        "SCOPE",
+	"Services":      "SERVICE",
+	"Traits":        "TRAIT",
+	"ValueObjects":  "VALUE_OBJECT",
+	"Workflows":     "WORKFLOW",
+}
+
+// splitBlockPath splits a repo-relative path into its optional module, its
+// optional layer and its type directory. Any of the three may come back "".
+//
+// The layer guard is the subtle part. `Client` is genuinely ambiguous in this
+// repo: `modules/Checkouts/Client/Services/Foo.php` uses it as a LAYER, while
+// `modules/Payments/Client/MollieClient.php` and `app/Client/OrderClient.php`
+// use it as a TYPE directory holding files directly. Requiring at least three
+// remaining segments (layer / type / file) tells the two apart from the path
+// alone, with no filesystem access — which matters, because this runs during
+// ingest against paths, not against a checkout.
+//
+// Mirrored in src/blockPath.mjs for the module/layer labels; keep in step.
+func splitBlockPath(path string) (module, layer, typeDir string) {
+	segs := strings.Split(path, "/")
+	switch {
+	case len(segs) > 1 && segs[0] == "app":
+		module = "app"
+		segs = segs[1:]
+	case len(segs) > 2 && segs[0] == "modules":
+		module = segs[1]
+		segs = segs[2:]
+	}
+	if len(segs) >= 3 && moduleLayerDirs[segs[0]] {
+		layer = segs[0]
+		segs = segs[1:]
+	}
+	// >= 2 so the segment is a real directory and never the file name itself.
+	if len(segs) >= 2 {
+		typeDir = segs[0]
+	}
+	return module, layer, typeDir
+}
+
+// categoryForTypeDir returns the category of a path's type directory, or ""
+// when there is none / it isn't a known type.
+func categoryForTypeDir(path string) string {
+	_, _, typeDir := splitBlockPath(path)
+	if typeDir == "" {
+		return ""
+	}
+	return typeDirCategory[typeDir]
+}
+
+// categoryFor derives a category tag from the file path: the explicit rules
+// above first (they encode conventions a bare directory name can't, like
+// `Http/Controllers/` or a lang file), then the generic module/layer/type
+// directory table.
 func categoryFor(path string) string {
 	for _, r := range categoryRules {
 		if r.match(path) {
 			return r.tag
 		}
+	}
+	if tag := categoryForTypeDir(path); tag != "" {
+		return tag
 	}
 	return "OTHER"
 }
