@@ -236,6 +236,23 @@ the anchor `#diff-<sha256(path)><R|L><line>`, line = the `start` of the code
 side plus the active unit's offset; new side `R`, removed block `L`) and *PR
 page*.
 
+## A multi-row selection replaces the block palette (`rangeCommandsFor`)
+
+While a Shift+arrow multi-row selection is active in the index or the
+methodes-kolom (`hasMultiSelection()`, see "Shift+↑/↓ in the INDEX" in
+`.claude/docs/keyboard-navigation.md`), `blockCommands()` returns
+`rangeCommandsFor()` instead of `COMMANDS`: the pinned "Sluit menu" plus one
+real action, **"Keur deze N blokken/methodes goed"** (reading "Trek goedkeuring
+van … in" once every row in the selection is approved). `COMMANDS`' own items
+all speak about ONE line/block ("Comment op deze regel", "Open GitHub"), which
+a selection of several rows has no single answer for.
+
+⚠ **Only the approve action exists so far.** The other range actions the
+reviewer asked for — commenting on, ignoring, or chatting with Claude about a
+whole selection — are NOT implemented; each needs a product decision about what
+"one comment/chat over N blocks" even anchors to. Adding them means extending
+this one list, nothing more.
+
 ## The postApprove follow-up menu
 
 **`Space` (outside the palette) approves + "Ga door"s in one keypress and

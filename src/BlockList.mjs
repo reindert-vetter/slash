@@ -542,8 +542,30 @@ function approvalSummaryLine(state) {
 // rest of the session, so a restored `?sel=`/later revisit of stop 1 is
 // unaffected.
 function rowFocused(state, i) {
+  return rowIsCursor(state, i) || rowInListRange(state, i)
+}
+
+// rowIsCursor is the strict "this row IS the cursor" half of rowFocused —
+// used on its own for the `›` marker, so that with a Shift+arrow multi-row
+// selection (rowInListRange below) the reviewer can still see WHICH row the
+// arrows will move from. Shape vs. tint, never two shades of the same colour
+// (the reviewer is colourblind, see conventions.md).
+function rowIsCursor(state, i) {
   if (state.showDescription && !state.blockIndexEntered) return false
   return i === state.selected && !state.toggleFocused && !state.ignoreToggleFocused
+}
+
+// rowInListRange reports whether row i falls inside an active Shift+arrow
+// multi-row selection (state.listAnchor..state.selected, see extendListRange
+// in home.mjs). Such a row gets the same selected tint as the cursor itself,
+// so the selection reads as one block of rows.
+function rowInListRange(state, i) {
+  if (state.listAnchor == null) return false
+  if (state.showDescription && !state.blockIndexEntered) return false
+  if (state.toggleFocused || state.ignoreToggleFocused) return false
+  const lo = Math.min(state.listAnchor, state.selected)
+  const hi = Math.max(state.listAnchor, state.selected)
+  return i >= lo && i <= hi
 }
 
 // categoryOrAvatar renders the leading badge of a row: for a synthetic
@@ -591,6 +613,11 @@ function row(state, b, i) {
           : 'border-slate-300 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       @click="${() => {
         state.selected = i
+        // A click is a plain, single-row choice: it supersedes a Shift+arrow
+        // multi-row selection (mirrors home.mjs's selectRow/clearListAnchor,
+        // which this handler deliberately duplicates rather than imports).
+        state.listAnchor = null
+        state.methodAnchor = null
         state.toggleFocused = false
         state.ignoreToggleFocused = false
         state.pushTodoFocused = false
@@ -607,7 +634,7 @@ function row(state, b, i) {
       }}"
     >
       <span
-        class="${() => (rowFocused(state, i) ? 'text-indigo-500 dark:text-indigo-400' : 'text-transparent')}"
+        class="${() => (rowIsCursor(state, i) ? 'text-indigo-500 dark:text-indigo-400' : 'text-transparent')}"
         >›</span
       >
       ${() => categoryOrAvatar(b)}

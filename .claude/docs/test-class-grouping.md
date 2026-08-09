@@ -114,6 +114,15 @@ click, `stepListSelection`, `setSearch`, `clampSelectedToVisible`) resets
 `selectRow` helper (`home.mjs`) — a stale "which method"/"is the column focused"
 must never leak onto whatever gets selected next.
 
+## Shift+↑/↓ selects several methods at once
+
+The methodes-kolom takes the same multi-select gesture as the index
+(`state.methodAnchor`/`extendMethodRange`, clamped at the class edges — it
+never exits into the index the way a plain `↑`/`↓` does, since a selection
+spanning two index rows has no meaning). `Enter` then offers "Keur deze N
+methodes goed" and `Space` runs it. Full mechanism: "Shift+↑/↓ in the INDEX" in
+`.claude/docs/keyboard-navigation.md`.
+
 ## `findNextUnapproved` and the remaining methods
 
 `findNextUnapproved`/`applyNextUnapproved` got a `methodIdx` field on their

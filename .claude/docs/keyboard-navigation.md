@@ -729,6 +729,49 @@ to the PR-wide menu on a stop with no menu of its own. Full table + the
 consequence for reaching `PR_COMMANDS`: "`/` opens the menu of the CURRENT
 STOP" in `.claude/docs/command-palette.md`.
 
+## Shift+↑/↓ in the INDEX — selecting several rows at once
+
+The sidebar cursor gets the same gesture the diff cursor already had, one level
+up: **Shift+ArrowDown/ArrowUp** selects a contiguous range of index rows
+(`state.listAnchor`, `extendListRange`) resp. of a `test_class` row's own
+methods in the methodes-kolom (`state.methodAnchor`, `extendMethodRange`).
+Both are ephemeral (never in the URL, exactly like `rangeAnchor`).
+
+- **It moves like a plain arrow, it just remembers where it started** —
+  `extendListRange` reuses `stepVisibleSelected`, so hidden (approved/ignored)
+  rows are skipped the same way.
+- **It clamps at the first/last visible block** and never continues into the
+  toggle-approved / toggle-ignored / push-todo / search stops of the sidebar
+  loop: those aren't blocks and can't take part in a multi-row action — the
+  same reasoning that makes the diff-level range clamp at the block boundary.
+  `extendMethodRange` clamps at the class edges for the same reason.
+- **The anchor clears on any plain selection change** — `clearListAnchor()`,
+  called from `selectRow` (thus every non-shift `↑`/`↓`), `setSearch`,
+  `enterDiff`, and both row `@click` handlers (`BlockList.mjs`/
+  `TestMethodsColumn.mjs`, which set `state.selected` directly rather than
+  going through `selectRow`).
+- **Tint vs. shape:** every row in the range gets the ordinary selected tint
+  (`rowFocused` → `rowInListRange`), but the `›` marker stays on the cursor row
+  alone (`rowIsCursor`), so it is always visible which row the arrows move from
+  — a shape distinction, not a second colour (the reviewer is colourblind).
+- **What you can do with it:** `Enter` opens a palette scoped to the whole
+  selection (`rangeCommandsFor` — pinned "Sluit menu" plus **"Keur deze N
+  blokken/methodes goed"**, flipping to "Trek goedkeuring … in" once everything
+  in it is approved), and **`Space`** runs that same action in one press
+  (`hasMultiSelection()` is the first thing `spaceKey` checks). The ordinary
+  block palette is deliberately NOT shown for a range: every one of its items
+  ("Comment op deze regel", "Open GitHub", …) speaks about ONE line.
+- **Approving a range reuses the existing per-kind paths** — a `test_class`
+  row goes through `toggleTestClassApproval`, an ordinary block through its own
+  `changedRows` after `ensureCode` (most rows in a range have never had their
+  code fetched), and a comment item is **skipped**: "approved" there means
+  "resolved", a real GitHub-side action that a bulk key must not trigger. One
+  `approve` Signal per block, never a batch write. Like the block/class
+  checkbox this is a bulk toggle, so there is no `afterApproveAction`/
+  postApprove follow-up.
+
+Test: `tests/list-range-select.spec.mjs`.
+
 ## `Space` — approve + continue in one keypress
 
 **`Space`** (`spaceKey`, `home.mjs`) is a one-key shortcut for exactly what the

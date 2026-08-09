@@ -65,8 +65,23 @@ function approvePillCls(done, total) {
 // fills a per-method entry for every method of a test_class row, alongside
 // its existing per-row entry, via commentScopeKeys(m) (which works unchanged
 // for a single real PR block).
+// methodInRange reports whether method `idx` falls inside an active
+// Shift+arrow multi-method selection (state.methodAnchor..classMethodSel, see
+// extendMethodRange in home.mjs) — the methodes-kolom twin of BlockList's
+// rowInListRange.
+function methodInRange(state, idx) {
+  if (state.methodAnchor == null) return false
+  const lo = Math.min(state.methodAnchor, state.classMethodSel)
+  const hi = Math.max(state.methodAnchor, state.classMethodSel)
+  return idx >= lo && idx <= hi
+}
+
 function methodRow(state, row, m, idx) {
-  const active = idx === state.classMethodSel
+  const isCursor = idx === state.classMethodSel
+  // The tint covers the whole Shift+arrow selection; the `›` below stays on
+  // the cursor alone, so shape (not a second colour) says where the arrows
+  // move from.
+  const active = isCursor || methodInRange(state, idx)
   const c = methodApproveCount(state, m)
   const st = statusInfo(m.status)
   return html`
@@ -84,10 +99,12 @@ function methodRow(state, row, m, idx) {
       @click="${() => {
         state.classMethodSel = idx
         state.testColumnFocused = true
+        // A click is a plain single-row choice — see BlockList.mjs's own row.
+        state.methodAnchor = null
       }}"
     >
       <span
-        class="${() => (active ? 'text-indigo-500 dark:text-indigo-400' : 'text-transparent')}"
+        class="${() => (isCursor ? 'text-indigo-500 dark:text-indigo-400' : 'text-transparent')}"
         >›</span
       >
       <span

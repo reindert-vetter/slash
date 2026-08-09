@@ -267,6 +267,10 @@ test.describe('test methods group per class', () => {
 
     const column = page.getByTestId('test-methods-column')
     const rows = page.getByTestId('test-method-row')
+    // Wait for the active method's code to be there: Space approves the rows
+    // of curBlock(), which are empty until /api/code lands, so pressing it
+    // straight after ArrowRight is a race (approving nothing at all).
+    await expect(page.getByTestId('detail-panel').locator('code.language-php').first()).toBeVisible()
     await page.keyboard.press(' ') // approve method 0, jump to method 1
 
     await expect(rows.nth(0)).toContainText('✓ 1/1')
@@ -297,6 +301,9 @@ test.describe('test methods group per class', () => {
     await page.getByTestId('block-row').filter({ hasText: 'TriggersIndexTest' }).click()
     await page.keyboard.press('ArrowRight')
     const rows = page.getByTestId('test-method-row')
+    // Same code-loaded wait as the test above — Space on a method whose rows
+    // aren't loaded yet approves nothing.
+    await expect(page.getByTestId('detail-panel').locator('code.language-php').first()).toBeVisible()
     await page.keyboard.press(' ') // approve method 0, jump to method 1
 
     // Re-select the already-approved method 0 (still list mode).

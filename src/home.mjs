@@ -340,6 +340,17 @@ const state = reactive({
   // comment/highlighting act on. The drilled-column equivalent lives per-entry
   // on state.drillCursor[i] (see drillExtendRange) rather than here.
   rangeAnchor: null,
+  // listAnchor / methodAnchor are rangeAnchor's counterparts one level up, for
+  // the SIDEBAR cursor instead of the diff cursor: Shift+ArrowDown/ArrowUp in
+  // the block index (listAnchor, an index into state.blocks) resp. in the
+  // methodes-kolom (methodAnchor, an index into the selected test_class row's
+  // .methods) select a contiguous RANGE of rows, which an action can then act
+  // on in one go — see extendListRange/extendMethodRange and
+  // toggleRangeApproval. Both are ephemeral (never in the URL, like
+  // rangeAnchor) and cleared by every plain, non-shift selection change
+  // (clearListAnchor, called from selectRow and friends).
+  listAnchor: null,
+  methodAnchor: null,
   // codeVersion bumps every time a block's lazily-loaded `b.code` is filled in
   // (see ensureCode). It is the reliable "code arrived" signal the DetailPanel
   // binding subscribes to so it re-runs and rebuilds the affected card. Why not
@@ -2293,6 +2304,144 @@ function selectRow(idx) {
   state.selected = idx
   state.classMethodSel = 0
   state.testColumnFocused = false
+  // A plain (non-shift) selection change supersedes a Shift+arrow multi-row
+  // selection, exactly as clearRangeAnchor does one level down in the diff.
+  clearListAnchor()
+}
+
+// clearListAnchor drops an active Shift+arrow multi-row selection in the
+// sidebar AND in the methodes-kolom. Called from every plain navigation path
+// that moves the cursor by itself (selectRow, the search box, stepping into a
+// diff) — mirrors clearRangeAnchor's discipline for the diff cursor.
+function clearListAnchor() {
+  state.listAnchor = null
+  state.methodAnchor = null
+}
+
+// listRangeIndices returns the state.blocks indices an active sidebar
+// multi-selection covers (anchor..cursor, inclusive, in list order), or just
+// the cursor's own index when there is no anchor. Skips rows BlockList would
+// not render at all (a hidden approved block / a hidden ignored comment): an
+// action must never silently touch a row the reviewer can't even see.
+function listRangeIndices() {
+  const cur = state.selected
+  if (state.listAnchor == null) return cur >= 0 && state.blocks[cur] ? [cur] : []
+  const lo = Math.min(state.listAnchor, cur)
+  const hi = Math.max(state.listAnchor, cur)
+  const out = []
+  for (let i = lo; i <= hi; i++) {
+    const b = state.blocks[i]
+    if (!b) continue
+    if (!state.showIgnored && isIgnoredComment(state, b)) continue
+    if (!state.showApproved && isFullyApproved(state, b) && i !== cur) continue
+    out.push(i)
+  }
+  return out
+}
+
+// methodRangeIndices is listRangeIndices' methodes-kolom twin: the indices of
+// the selected test_class row's own .methods the Shift+arrow selection covers.
+function methodRangeIndices(row) {
+  const cur = state.classMethodSel
+  if (!row || !Array.isArray(row.methods)) return []
+  if (state.methodAnchor == null) return row.methods[cur] ? [cur] : []
+  const lo = Math.min(state.methodAnchor, cur)
+  const hi = Math.max(state.methodAnchor, cur)
+  const out = []
+  for (let i = lo; i <= hi; i++) if (row.methods[i]) out.push(i)
+  return out
+}
+
+// hasMultiSelection reports whether more than one row is currently selected —
+// in the sidebar or in the methodes-kolom. Drives both the palette's own
+// range-scoped command list and Space's bulk approve.
+function hasMultiSelection() {
+  if (state.mode !== 'list') return false
+  if (isTestColumnActive()) return methodRangeIndices(curTestClassRow()).length > 1
+  return state.listAnchor != null && listRangeIndices().length > 1
+}
+
+// extendListRange is Shift+ArrowDown/ArrowUp in the block index: it moves the
+// cursor exactly like a plain arrow (stepVisibleSelected, so hidden rows are
+// skipped) but REMEMBERS where the selection started, so everything between
+// stays selected. Deliberately clamps at the first/last visible block instead
+// of continuing into the toggle/search stops at the bottom of the loop — those
+// are not blocks and can't take part in a multi-row action, the same reasoning
+// that makes the diff-level range clamp at the block boundary.
+function extendListRange(dir) {
+  if (state.mode !== 'list') return
+  if (state.toggleFocused || state.ignoreToggleFocused || state.pushTodoFocused || state.searchActive) return
+  const next = stepVisibleSelected(dir)
+  if (next === state.selected) return
+  if (state.listAnchor == null) state.listAnchor = state.selected
+  // Deliberately NOT selectRow: that clears the anchor we just set. The two
+  // resets it also does still apply — a range walk changes which row is
+  // current, so a stale test-method cursor must not ride along.
+  state.selected = next
+  state.classMethodSel = 0
+  state.testColumnFocused = false
+  scrollSelectedIntoView()
+}
+
+// extendMethodRange is the same gesture inside the methodes-kolom (stop 2b),
+// over the selected test_class row's own methods. Clamps at the class edges —
+// unlike a plain ↑/↓ there it never exits into the index, since a selection
+// spanning two different rows of the index has no meaning here.
+function extendMethodRange(dir) {
+  const row = curTestClassRow()
+  if (!row || !row.methods.length) return
+  const next = state.classMethodSel + dir
+  if (next < 0 || next >= row.methods.length) return
+  if (state.methodAnchor == null) state.methodAnchor = state.classMethodSel
+  state.classMethodSel = next
+  scrollSelectedIntoView()
+}
+
+// toggleRangeApproval approves — or, when everything in the selection is
+// already fully approved, clears — every row of an active Shift+arrow
+// multi-selection in one action. The bulk twin of toggleBlockApproval/
+// toggleTestClassApproval, and it reuses them rather than reimplementing what
+// "approve this row" means per kind:
+//   • a test_class row  → toggleTestClassApproval (all of its methods)
+//   • an ordinary block → its own changedRows, after ensureCode
+//   • a comment item    → skipped: "approved" there means "resolved", which is
+//     a real GitHub-side action, never something a bulk key should trigger.
+// Each block is persisted individually through the existing single-block
+// `approve` Signal (persistApproval) — one Signal per block, never a batch
+// write. Same scope decision as the block/class checkbox: no
+// afterApproveAction/postApprove follow-up, this is a bulk toggle rather than
+// a step in the review flow.
+async function toggleRangeApproval() {
+  if (isTestColumnActive()) {
+    const row = curTestClassRow()
+    const methods = methodRangeIndices(row).map((i) => row.methods[i])
+    await applyBulkApproval(methods)
+    return
+  }
+  const blocks = listRangeIndices()
+    .map((i) => state.blocks[i])
+    .filter((b) => b && b.kind !== 'comment')
+  const classRows = blocks.filter((b) => b.kind === 'test_class')
+  const plain = blocks.filter((b) => b.kind !== 'test_class')
+  await applyBulkApproval(plain)
+  for (const row of classRows) await toggleTestClassApproval(row)
+}
+
+// applyBulkApproval is toggleRangeApproval's per-block half: approve every
+// changed row of each block, or clear them all when they are already fully
+// approved (so the gesture toggles, like every other approve action).
+async function applyBulkApproval(blocks) {
+  if (!blocks.length) return
+  await Promise.all(blocks.map((b) => ensureCode(b)))
+  const allDone = blocks.every((b) => {
+    const c = blockApproveCount(b)
+    return c.total > 0 && c.done === c.total
+  })
+  for (const b of blocks) {
+    b.approvedRows = allDone ? [] : changedRows(blockRows(b))
+    if (!allDone) b.approvedCalls = []
+    persistApproval(b)
+  }
 }
 
 // stepListSelection is the list-mode ↑/↓ step (dir=+1 down, -1 up) while the
@@ -2576,6 +2725,9 @@ function setSearch(q) {
   state.search = q
   recomputeLeftList()
   state.selected = 0
+  // Typing is a fresh navigation reset — a Shift+arrow multi-row selection
+  // from before the filter changed can't survive it (see clearListAnchor).
+  clearListAnchor()
   state.classMethodSel = 0
   state.testColumnFocused = false
   // Typing is a fresh navigation reset — never leave the keyboard cursor
@@ -4572,6 +4724,8 @@ function enterDiff() {
     if (!b.methods.length) return
   }
   state.mode = 'diff'
+  // Stepping into a diff leaves the sidebar's own multi-row selection behind.
+  clearListAnchor()
   // Stepping in from the list always starts at the coarsest granularity (a whole
   // change run); the reviewer refines from there with f.
   state.gran = 'group'
@@ -7765,6 +7919,14 @@ async function descendIntoUnapprovedCall(ctx) {
 // reviewApprove/reviewChoice review-submit menu — approving/rejecting the
 // whole PR stays a manual, two-step choice, never automatic.
 function spaceKey() {
+  // A Shift+arrow multi-row selection in the index/methodes-kolom takes
+  // precedence: Space then approves (or clears) the WHOLE selection in one
+  // press, exactly what the palette's own range item does — no second
+  // implementation. Bulk, so no "ga door" follow-up (see toggleRangeApproval).
+  if (hasMultiSelection()) {
+    toggleRangeApproval()
+    return
+  }
   const ctx = approveContext()
   if (!ctx.b) return
   if (!isApproveDone(ctx)) {
@@ -8021,7 +8183,53 @@ function rootCommandsFor(mode) {
 // applies to such a line exactly as it does to a changed one. The pinned
 // "Sluit menu" stays index 0, so defaultSel keeps opening on the 2nd row.
 function blockCommands() {
+  // A Shift+arrow multi-row selection has its own, much smaller list: the
+  // block palette's items all speak about ONE line/block ("Comment op deze
+  // regel", "Open GitHub"), which a selection of several rows has no single
+  // answer for. See rangeCommandsFor.
+  if (hasMultiSelection()) return rangeCommandsFor()
   return activeUnitIsReference() ? COMMANDS.filter((c) => c.id !== 'approve') : COMMANDS
+}
+
+// selectionNoun names what a multi-row selection covers, for the labels: N
+// methods inside the methodes-kolom, N blocks in the index.
+function selectionNoun() {
+  if (isTestColumnActive()) return `deze ${methodRangeIndices(curTestClassRow()).length} methodes`
+  return `deze ${listRangeIndices().length} blokken`
+}
+
+// selectionApproveDone reports whether EVERY row of the current multi-row
+// selection is already fully approved — the same done/total check the sidebar
+// pill shows (approvalSummaries via blockApproveCount), so the label and the
+// action agree on which way the toggle goes.
+function selectionApproveDone() {
+  const blocks = isTestColumnActive()
+    ? methodRangeIndices(curTestClassRow()).map((i) => curTestClassRow().methods[i])
+    : listRangeIndices()
+        .map((i) => state.blocks[i])
+        .filter((b) => b && b.kind !== 'comment')
+  if (!blocks.length) return false
+  return blocks.every((b) => {
+    const c = blockApproveCount(b)
+    return c.total > 0 && c.done === c.total
+  })
+}
+
+// rangeCommandsFor is the palette for an active Shift+arrow multi-row
+// selection. One real action for now — approve/retract the whole selection —
+// behind the usual pinned "Sluit menu", so defaultSel opens on it.
+function rangeCommandsFor() {
+  return withClose([
+    {
+      id: 'range-approve',
+      label: () =>
+        selectionApproveDone()
+          ? `Trek goedkeuring van ${selectionNoun()} in`
+          : `Keur ${selectionNoun()} goed`,
+      hint: 'approve',
+      run: () => toggleRangeApproval(),
+    },
+  ])
 }
 
 // resolveCommands returns the commands to show for `query`: the fuzzy-matched
@@ -8763,6 +8971,12 @@ function onKeydown(e) {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
       const dir = e.key === 'ArrowDown' ? 1 : -1
+      // Shift extends a multi-method selection instead of moving the cursor
+      // (see extendMethodRange) — clamped within this class's own methods.
+      if (e.shiftKey) {
+        extendMethodRange(dir)
+        return
+      }
       const row = curTestClassRow()
       const nextMethod = state.classMethodSel + dir
       if (row && nextMethod >= 0 && nextMethod < row.methods.length) {
@@ -8890,11 +9104,22 @@ function onKeydown(e) {
 
   if (e.key === 'ArrowDown') {
     e.preventDefault()
+    // Shift extends a multi-ROW selection in the index instead of moving the
+    // cursor one row (see extendListRange) — the sidebar twin of the diff's
+    // own Shift+arrow line range.
+    if (e.shiftKey) {
+      extendListRange(1)
+      return
+    }
     stepListSelection(1)
     scrollSelectedIntoView()
     scrollChangeIntoView(false)
   } else if (e.key === 'ArrowUp') {
     e.preventDefault()
+    if (e.shiftKey) {
+      extendListRange(-1)
+      return
+    }
     stepListSelection(-1)
     scrollSelectedIntoView()
     scrollChangeIntoView(false)
