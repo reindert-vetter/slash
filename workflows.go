@@ -1674,6 +1674,80 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := m.prmeta.SaveStatuses(ctx, arg.PR, st.ReviewDecision, st.ChecksTotal, checksPassed, reviewers); err != nil {
 			return nil, fmt.Errorf("save pr statuses: %w", err)
 		}
+		// The same query already knows whether anything happened after the
+		// reviewer's OWN last review/comment (myLastActivity, inbox.go) — the
+		// signal the PR overview shows as "nieuw sinds jouw review". Store the
+		// kind AND the moment, so the review tree can render that identical
+		// line and, in the next stage, say what changed since exactly then.
+		if err := m.prmeta.SaveSinceMark(ctx, arg.PR, st.NewSinceKind, st.NewSinceAt, st.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("save pr since mark: %w", err)
+		}
+		return nil, nil
+	})
+
+	// Activity: stage 4 of the pr_status tracker — what changed since the
+	// reviewer's own last review. Two layers, on explicit request: a
+	// deterministic list of the commits that landed since that moment plus the
+	// files they touched (always shown when there is anything), and a Haiku
+	// explanation of those same facts on top (best-effort — a Claude hiccup
+	// leaves the facts standing on their own). Only new CODE counts: comments
+	// and other people's reviews are deliberately NOT part of this block.
+	engine.RegisterActivity("generateSinceReviewSummary", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg PRStatusInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.prmeta == nil || ghDisabled() {
+			return nil, nil
+		}
+		meta, ok, err := m.prmeta.Get(ctx, arg.PR)
+		if err != nil || !ok {
+			return nil, nil
+		}
+		// No "since" moment at all (never reviewed this PR, or nothing
+		// happened after it) → clear whatever an earlier run stored, so the
+		// block disappears instead of going stale.
+		if meta.NewSinceAt == "" {
+			if err := m.prmeta.SaveSinceReview(ctx, arg.PR, "", ""); err != nil {
+				return nil, fmt.Errorf("clear since review: %w", err)
+			}
+			return nil, nil
+		}
+		changes, err := m.gh.ChangesSince(ctx, arg.PR, meta.NewSinceAt)
+		if err != nil {
+			m.logf("pr_status: changes since pr=%d skipped: %v", arg.PR, err)
+			return nil, nil
+		}
+		if len(changes.Commits) == 0 {
+			if err := m.prmeta.SaveSinceReview(ctx, arg.PR, "", ""); err != nil {
+				return nil, fmt.Errorf("clear since review: %w", err)
+			}
+			return nil, nil
+		}
+		// The moment predates every commit of this PR: the "files touched
+		// since" are simply the PR's own changed files (see SinceChanges.Files),
+		// which we already have locally — no second API call for that.
+		files := changes.Files
+		if len(files) == 0 {
+			files, _ = changedFilesFor(m.db, arg.PR)
+		}
+		facts := sinceReviewFacts(changes.Commits, files)
+		summary := ""
+		if m.claude != nil {
+			out, err := m.claude.Run(ctx, claude.RunRequest{
+				Prompt:       facts,
+				Model:        claude.ModelHaiku,
+				SystemPrompt: claude.SinceReviewSystemPrompt,
+			})
+			if err != nil {
+				m.logf("pr_status: since-review summary pr=%d skipped: %v", arg.PR, err)
+			} else {
+				summary = strings.TrimSpace(out)
+			}
+		}
+		if err := m.prmeta.SaveSinceReview(ctx, arg.PR, facts, summary); err != nil {
+			return nil, fmt.Errorf("save since review: %w", err)
+		}
 		return nil, nil
 	})
 
@@ -3144,6 +3218,11 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	if err := w.ExecuteActivity("fetchPRStatuses", in, nil); err != nil {
 		return nil, fmt.Errorf("fetch pr statuses: %w", err)
 	}
+	// Stage 4 runs after the statuses because it reads the "since" moment that
+	// stage stored (SaveSinceMark) — it has no way to know it on its own.
+	if err := w.ExecuteActivity("generateSinceReviewSummary", in, nil); err != nil {
+		return nil, fmt.Errorf("generate since review summary: %w", err)
+	}
 	for {
 		var s PRStateSignal
 		w.WaitSignal(SignalPRState, &s)
@@ -3253,6 +3332,55 @@ func prSummaryPrompt(meta prmeta.Meta, files []string) string {
 		fmt.Fprintf(&b, "Jira-ticket %s: %s\n%s\n", meta.JiraKey, meta.JiraTitle, meta.JiraDesc)
 	}
 	return b.String()
+}
+
+// maxSinceFactLines caps both lists in sinceReviewFacts: the block sits inside
+// the PR-info column, not on a page of its own, and a reviewer who has been
+// away for 40 commits is served by "en 32 meer" plus the AI explanation above
+// it, not by 40 bullet lines.
+const maxSinceFactLines = 8
+
+// sinceReviewFacts renders the deterministic half of the "sinds jouw laatste
+// review" block: the commits that landed since (newest first — the most recent
+// change is the one a returning reviewer cares about) and the files they
+// touched, as a Markdown list. It doubles as the prompt for the Haiku
+// explanation stacked above it, so the AI never sees facts the reviewer can't
+// check for themselves.
+func sinceReviewFacts(commits []github.SinceCommit, files []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "**%s** sinds jouw laatste review:\n\n", plural(len(commits), "nieuwe commit", "nieuwe commits"))
+	for i := len(commits) - 1; i >= 0; i-- {
+		if shown := len(commits) - 1 - i; shown >= maxSinceFactLines {
+			fmt.Fprintf(&b, "- en %d meer\n", i+1)
+			break
+		}
+		c := commits[i]
+		line := "- " + c.Headline
+		if c.Author != "" {
+			line += " (" + c.Author + ")"
+		}
+		fmt.Fprintln(&b, line)
+	}
+	if len(files) > 0 {
+		fmt.Fprintf(&b, "\n**%s** geraakt:\n\n", plural(len(files), "bestand", "bestanden"))
+		for i, f := range files {
+			if i >= maxSinceFactLines {
+				fmt.Fprintf(&b, "- en %d meer\n", len(files)-i)
+				break
+			}
+			fmt.Fprintf(&b, "- `%s`\n", f)
+		}
+	}
+	return b.String()
+}
+
+// plural renders "1 commit" / "3 commits" — the count always leads, so the
+// number is readable even when the words wrap.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // taskCodeCommentWorkflow is the durable definition. It is deterministic: all

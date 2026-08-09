@@ -174,6 +174,30 @@ type Client interface {
 	// User at all (a bot, a team), is simply absent from the result — never an
 	// error, since one bad login must not sink the whole batch.
 	UsersByLogin(ctx context.Context, logins []string) (map[string]User, error)
+	// ChangesSince reports which of pr's commits landed AFTER the RFC3339
+	// moment `since`, plus the files those commits touched — the raw material
+	// for the review tree's "wat is er veranderd sinds jouw laatste review"
+	// block. Nothing new (or an unusable `since`) is an empty result, never an
+	// error.
+	ChangesSince(ctx context.Context, pr int, since string) (SinceChanges, error)
+}
+
+// SinceCommit is one commit of a PR as ChangesSince reports it.
+type SinceCommit struct {
+	SHA      string `json:"sha"`
+	Headline string `json:"headline"` // first line of the commit message
+	Date     string `json:"date"`     // RFC3339 committer date
+	Author   string `json:"author"`   // login, empty for a commit with no GitHub account
+}
+
+// SinceChanges is what happened on a PR after a given moment: the commits that
+// landed since (oldest first) and the files they touched. Files is empty when
+// the moment predates every commit — the caller then already knows the answer
+// ("everything in this PR") from the PR's own changed-file list, so there is no
+// point paying for a second API call to rediscover it.
+type SinceChanges struct {
+	Commits []SinceCommit `json:"commits"`
+	Files   []string      `json:"files"`
 }
 
 // Collaborator is one repo collaborator — a candidate reviewer.
@@ -457,6 +481,83 @@ func (m *Module) PRMeta(ctx context.Context, pr int) (Meta, error) {
 		Additions: meta.Additions, Deletions: meta.Deletions, ChangedFiles: meta.ChangedFiles,
 		HeadRef: meta.Head.Ref, MergedAt: mergedAt,
 	}, nil
+}
+
+// ChangesSince lists the commits of pr that landed after `since` (RFC3339) and
+// the files they touched, in at most two `gh api` calls:
+//
+//  1. the PR's commit list, to split "already seen at `since`" from "new";
+//  2. a compare of the last-seen commit against the newest one, for the file
+//     list (skipped when there is no last-seen commit — see SinceChanges.Files,
+//     or when nothing is new at all).
+//
+// Best-effort by design: an empty/unparsable `since`, a PR with no commits, or
+// nothing new since that moment all return an empty result and no error — the
+// caller renders nothing in that case, it is not a failure.
+func (m *Module) ChangesSince(ctx context.Context, pr int, since string) (SinceChanges, error) {
+	sinceT, err := time.Parse(time.RFC3339, since)
+	if err != nil {
+		return SinceChanges{}, nil
+	}
+	out, err := m.api(ctx, "GET", fmt.Sprintf("repos/%s/pulls/%d/commits?per_page=100", m.repo, pr))
+	if err != nil {
+		return SinceChanges{}, err
+	}
+	var raw []struct {
+		SHA    string `json:"sha"`
+		Commit struct {
+			Message   string `json:"message"`
+			Committer struct {
+				Date string `json:"date"`
+			} `json:"committer"`
+		} `json:"commit"`
+		Author *ghUser `json:"author"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return SinceChanges{}, err
+	}
+	var res SinceChanges
+	lastSeen := ""
+	for _, c := range raw {
+		t, err := time.Parse(time.RFC3339, c.Commit.Committer.Date)
+		if err != nil {
+			continue
+		}
+		if !t.After(sinceT) {
+			lastSeen = c.SHA
+			continue
+		}
+		author := ""
+		if c.Author != nil {
+			author = c.Author.Login
+		}
+		res.Commits = append(res.Commits, SinceCommit{
+			SHA:      c.SHA,
+			Headline: strings.TrimSpace(strings.SplitN(c.Commit.Message, "\n", 2)[0]),
+			Date:     c.Commit.Committer.Date,
+			Author:   author,
+		})
+	}
+	if len(res.Commits) == 0 || lastSeen == "" {
+		return res, nil
+	}
+	newest := res.Commits[len(res.Commits)-1].SHA
+	out, err = m.api(ctx, "GET", fmt.Sprintf("repos/%s/compare/%s...%s", m.repo, lastSeen, newest))
+	if err != nil {
+		return res, nil // the commit list alone is still useful
+	}
+	var cmp struct {
+		Files []struct {
+			Filename string `json:"filename"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(out, &cmp); err != nil {
+		return res, nil
+	}
+	for _, f := range cmp.Files {
+		res.Files = append(res.Files, f.Filename)
+	}
+	return res, nil
 }
 
 // DeleteComment removes the review comment commentID from pr.

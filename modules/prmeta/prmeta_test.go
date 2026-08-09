@@ -108,3 +108,50 @@ func TestGetMissing(t *testing.T) {
 		t.Fatal("want ok=false for a PR never stored")
 	}
 }
+
+// TestSinceReviewRoundTrip covers the two stage-3/4 writers of the "sinds jouw
+// laatste review" block: each only touches its own columns (so neither
+// clobbers the other, nor the basics written before them), and storing empty
+// strings is a real state — it is how a PR with nothing new clears a stale
+// block.
+func TestSinceReviewRoundTrip(t *testing.T) {
+	m := open(t)
+	ctx := context.Background()
+	if err := m.SaveBasics(ctx, Meta{PR: 7, Title: "PS-1 doe iets"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SaveSinceMark(ctx, 7, "review", "2026-08-01T10:00:00Z", "2026-08-04T09:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SaveSinceReview(ctx, 7, "- een commit", "Er is iets veranderd."); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := m.Get(ctx, 7)
+	if err != nil || !ok {
+		t.Fatalf("get: ok=%v err=%v", ok, err)
+	}
+	if got.Title != "PS-1 doe iets" {
+		t.Errorf("basics clobbered: title=%q", got.Title)
+	}
+	if got.NewSinceKind != "review" || got.NewSinceAt != "2026-08-01T10:00:00Z" {
+		t.Errorf("since mark = %q/%q", got.NewSinceKind, got.NewSinceAt)
+	}
+	if got.GhUpdatedAt != "2026-08-04T09:00:00Z" {
+		t.Errorf("gh updatedAt = %q", got.GhUpdatedAt)
+	}
+	if got.SinceFacts != "- een commit" || got.SinceSummary != "Er is iets veranderd." {
+		t.Errorf("since review = %q/%q", got.SinceFacts, got.SinceSummary)
+	}
+
+	// Nothing new any more → both halves cleared, the mark itself untouched.
+	if err := m.SaveSinceReview(ctx, 7, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = m.Get(ctx, 7)
+	if got.SinceFacts != "" || got.SinceSummary != "" {
+		t.Errorf("not cleared: %q/%q", got.SinceFacts, got.SinceSummary)
+	}
+	if got.NewSinceKind != "review" {
+		t.Errorf("since mark cleared as a side effect: %q", got.NewSinceKind)
+	}
+}

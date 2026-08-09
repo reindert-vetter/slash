@@ -1949,6 +1949,12 @@ func (s *server) handlePR(w http.ResponseWriter, r *http.Request) {
 		"jiraKey": meta.JiraKey, "jiraTitle": meta.JiraTitle, "jiraDesc": meta.JiraDesc, "jiraUrl": meta.JiraURL,
 		"reviewDecision": meta.ReviewDecision, "checksTotal": meta.ChecksTotal, "checksPassed": meta.ChecksPassed,
 		"reviewers": meta.Reviewers,
+		// "wat is er veranderd sinds jouw laatste review" (prInfoCard's sky
+		// block): the same moment the PR overview's own "nieuw sinds jouw
+		// review" line marks, the PR's GitHub updatedAt behind "Bijgewerkt …
+		// geleden", and the two halves of the block itself.
+		"ghUpdatedAt": meta.GhUpdatedAt, "newSinceKind": meta.NewSinceKind, "newSinceAt": meta.NewSinceAt,
+		"sinceFacts": meta.SinceFacts, "sinceSummary": meta.SinceSummary,
 	})
 }
 

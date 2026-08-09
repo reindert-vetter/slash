@@ -33,6 +33,7 @@ type Fake struct {
 	prState          string          // "" reads as "open"
 	prMeta           Meta            // returned by PRMeta (SetPRMeta overrides), PR-independent fallback
 	prMetas          map[int]Meta    // per-PR override (SetPRMetaFor), checked first
+	changesSince     map[int]SinceChanges // per-PR ChangesSince stub (SetChangesSince)
 	viewed           map[string]bool // "pr|path" -> viewed
 
 	lastStartLine int
@@ -185,6 +186,25 @@ func (f *Fake) PRMeta(_ context.Context, pr int) (Meta, error) {
 		return m, nil
 	}
 	return f.prMeta, nil
+}
+
+// ChangesSince reports whatever SetChangesSince stored for pr (an empty
+// result by default — "nothing changed since", the state every test that
+// doesn't care about this feature wants).
+func (f *Fake) ChangesSince(_ context.Context, pr int, _ string) (SinceChanges, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.changesSince[pr], nil
+}
+
+// SetChangesSince makes the next ChangesSince call for pr report c.
+func (f *Fake) SetChangesSince(pr int, c SinceChanges) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.changesSince == nil {
+		f.changesSince = map[int]SinceChanges{}
+	}
+	f.changesSince[pr] = c
 }
 
 // SetPRMeta makes the next PRMeta calls report m for every PR that has no

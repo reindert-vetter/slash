@@ -26,6 +26,15 @@ var ExplainCodeSystemPrompt string
 //go:embed prompts/pr_summary.md
 var PRSummarySystemPrompt string
 
+// SinceReviewSystemPrompt frames the fourth context-only Haiku action: explain,
+// in a couple of sentences, what changed on a PR since the reviewer's own last
+// review. Its call-specific content is the very same deterministic fact list
+// the UI renders underneath the explanation (sinceReviewFacts, workflows.go),
+// so the AI never asserts anything the reviewer can't check right below it.
+//
+//go:embed prompts/since_review.md
+var SinceReviewSystemPrompt string
+
 // CodeWarningSystemPrompt is the static instruction block for the
 // code_warning workflow's one agentic Sonnet call: unlike the three above,
 // this is NOT a context-only completion — Sonnet is given Read/Grep/Glob and

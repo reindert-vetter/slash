@@ -38,7 +38,12 @@ CREATE TABLE IF NOT EXISTS pr_meta (
   checks_total     INTEGER NOT NULL DEFAULT 0,
   checks_passed    INTEGER NOT NULL DEFAULT 0,
   reviewers        TEXT NOT NULL DEFAULT '[]',
-  updated_at       TEXT NOT NULL DEFAULT ''
+  updated_at       TEXT NOT NULL DEFAULT '',
+  gh_updated_at    TEXT NOT NULL DEFAULT '',
+  new_since_kind   TEXT NOT NULL DEFAULT '',
+  new_since_at     TEXT NOT NULL DEFAULT '',
+  since_facts      TEXT NOT NULL DEFAULT '',
+  since_summary    TEXT NOT NULL DEFAULT ''
 );
 `
 
@@ -63,6 +68,25 @@ type Meta struct {
 	ChecksPassed   int      `json:"checksPassed"`
 	Reviewers      []string `json:"reviewers"`
 	UpdatedAt      string   `json:"updatedAt"`
+	// GhUpdatedAt is the PR's own GitHub updatedAt — deliberately NOT the same
+	// as UpdatedAt above, which is the local write time of this row. It backs
+	// the "Bijgewerkt … geleden" line the review tree repeats from the PR
+	// overview.
+	GhUpdatedAt string `json:"ghUpdatedAt"`
+	// NewSinceKind/NewSinceAt mirror the overview's "nieuw sinds jouw
+	// review|comment" signal and the moment it refers to (inbox.go's
+	// myLastActivity). Both empty means: nothing happened since, or this
+	// reviewer never commented/reviewed at all.
+	NewSinceKind string `json:"newSinceKind"`
+	NewSinceAt   string `json:"newSinceAt"`
+	// SinceFacts is a ready-to-render Markdown list of what landed since that
+	// moment (commits + touched files), built in Go from the GitHub API —
+	// deterministic, always present when there IS something new. SinceSummary
+	// is Haiku's prose explanation of those same facts and is best-effort: it
+	// can be empty while SinceFacts is not, and the UI then shows the facts
+	// alone.
+	SinceFacts   string `json:"sinceFacts"`
+	SinceSummary string `json:"sinceSummary"`
 }
 
 // Module is the prmeta service (owns its own SQLite read-model).
@@ -112,6 +136,11 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE pr_meta ADD COLUMN checks_total INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE pr_meta ADD COLUMN checks_passed INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE pr_meta ADD COLUMN reviewers TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE pr_meta ADD COLUMN gh_updated_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE pr_meta ADD COLUMN new_since_kind TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE pr_meta ADD COLUMN new_since_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE pr_meta ADD COLUMN since_facts TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE pr_meta ADD COLUMN since_summary TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -170,6 +199,35 @@ func (m *Module) SaveStatuses(ctx context.Context, pr int, reviewDecision string
 	return err
 }
 
+// SaveSinceMark upserts the "nieuw sinds jouw review|comment" signal of stage
+// 3: the kind word, the moment it refers to, and the PR's own GitHub
+// updatedAt. WRITE — workflow-only. Only touches its own three columns, so it
+// never clobbers a since-summary written by the stage after it.
+func (m *Module) SaveSinceMark(ctx context.Context, pr int, kind, at, ghUpdatedAt string) error {
+	_, err := m.db.ExecContext(ctx, `
+		INSERT INTO pr_meta (pr, new_since_kind, new_since_at, gh_updated_at, updated_at)
+		VALUES (?,?,?,?,?)
+		ON CONFLICT(pr) DO UPDATE SET
+			new_since_kind=excluded.new_since_kind, new_since_at=excluded.new_since_at,
+			gh_updated_at=excluded.gh_updated_at, updated_at=excluded.updated_at`,
+		pr, kind, at, ghUpdatedAt, now())
+	return err
+}
+
+// SaveSinceReview upserts stage 4: what changed since the reviewer's own last
+// review — the deterministic facts and Haiku's prose explanation of them.
+// WRITE — workflow-only. Storing empty strings is meaningful: it is how a PR
+// with nothing new (or one this reviewer never reviewed) clears a stale block.
+func (m *Module) SaveSinceReview(ctx context.Context, pr int, facts, summary string) error {
+	_, err := m.db.ExecContext(ctx, `
+		INSERT INTO pr_meta (pr, since_facts, since_summary, updated_at) VALUES (?,?,?,?)
+		ON CONFLICT(pr) DO UPDATE SET
+			since_facts=excluded.since_facts, since_summary=excluded.since_summary,
+			updated_at=excluded.updated_at`,
+		pr, facts, summary, now())
+	return err
+}
+
 // Purge removes the stored pr_meta row of pr, if any. WRITE — workflow-only,
 // the per-PR data-retention cleanup path (see the cleanup workflow). Returns
 // the number of rows removed (0 or 1), for logging.
@@ -190,11 +248,13 @@ func (m *Module) Get(ctx context.Context, pr int) (Meta, bool, error) {
 	err := m.db.QueryRowContext(ctx, `
 		SELECT pr, title, url, body, author, additions, deletions, changed_files, head_ref,
 			summary, jira_key, jira_title, jira_desc, jira_url,
-			review_decision, checks_total, checks_passed, reviewers, updated_at
+			review_decision, checks_total, checks_passed, reviewers, updated_at,
+			gh_updated_at, new_since_kind, new_since_at, since_facts, since_summary
 		FROM pr_meta WHERE pr = ?`, pr).
 		Scan(&meta.PR, &meta.Title, &meta.URL, &meta.Body, &meta.Author, &meta.Additions, &meta.Deletions,
 			&meta.ChangedFiles, &meta.HeadRef, &meta.Summary, &meta.JiraKey, &meta.JiraTitle, &meta.JiraDesc,
-			&meta.JiraURL, &meta.ReviewDecision, &meta.ChecksTotal, &meta.ChecksPassed, &reviewersJSON, &meta.UpdatedAt)
+			&meta.JiraURL, &meta.ReviewDecision, &meta.ChecksTotal, &meta.ChecksPassed, &reviewersJSON, &meta.UpdatedAt,
+			&meta.GhUpdatedAt, &meta.NewSinceKind, &meta.NewSinceAt, &meta.SinceFacts, &meta.SinceSummary)
 	if err == sql.ErrNoRows {
 		return Meta{}, false, nil
 	}

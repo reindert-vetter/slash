@@ -31,7 +31,7 @@ exactly one `ListRuns` call. Test: `TestResumePollingDoesNotRescanRunsPerPR`
 (`resume_polling_scale_test.go`) asserts this count directly via a counting
 `Store` wrapper.
 
-**On start** it runs three Activities in sequence, each with its own targeted
+**On start** it runs four Activities in sequence, each with its own targeted
 read-model write, so the UI can render **progressively** instead of waiting for
 everything (see "Progressive loading" in `.claude/docs/detail-layout.md`):
 
@@ -45,7 +45,28 @@ everything (see "Progressive loading" in `.claude/docs/detail-layout.md`):
 3. **`fetchPRStatuses`** — reuses the inbox status query (`statusesFor`) for
    this one PR → `prmeta.SaveStatuses`. GitHub's rollup gives only a total + an
    overall state, so `checksPassed` is `checksTotal` on `SUCCESS` and otherwise
-   0 — enough for a pill, not an exact count.
+   0 — enough for a pill, not an exact count. It **also** stores that same
+   query's "nieuw sinds jouw review|comment" signal via `prmeta.SaveSinceMark`
+   — the kind word, the moment it refers to (`myLastActivity`'s timestamp,
+   `inbox.go`) and the PR's own GitHub `updatedAt`. The overview only ever
+   needed the word; the review tree needs the moment too, and it must be the
+   SAME moment, not a second approximation beside it.
+4. **`generateSinceReviewSummary`** — what changed since that moment, for the
+   review tree's sky "Sinds jouw laatste review" block (see
+   `.claude/docs/detail-layout.md`). Runs after stage 3 because it reads the
+   moment stage 3 stored. Two layers, both on explicit request:
+   `github.ChangesSince` lists the commits that landed after it plus the files
+   they touched (at most two `gh api` calls: the PR's commit list, then a
+   compare of the last-seen commit against the newest), `sinceReviewFacts`
+   renders that as a capped Markdown list, and Haiku
+   (`SinceReviewSystemPrompt`) explains those same facts in a couple of
+   sentences. The AI half is **best-effort** — a Claude hiccup leaves the facts
+   standing alone — and the facts are the AI's entire prompt, so it can never
+   assert something the reviewer can't check right below it. Only new **code**
+   counts: comments and other people's reviews are deliberately out of scope
+   for this block. Nothing new, or a reviewer who never reviewed this PR, is
+   stored as an empty pair, which is what makes a stale block disappear rather
+   than linger.
 
 ### Ingest refresh (pulling in new commits automatically)
 

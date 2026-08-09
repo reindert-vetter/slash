@@ -51,6 +51,18 @@ type prStatus struct {
 	// when the reviewer never commented/reviewed, or when nothing happened
 	// since. See myLastActivity's doc comment for exactly what counts.
 	NewSinceKind string `json:"newSinceKind,omitempty"`
+	// NewSinceAt is the timestamp NewSinceKind refers to: the reviewer's OWN
+	// last comment/review on this PR (myLastActivity's `at`), empty whenever
+	// NewSinceKind is. The overview only needs the kind word, but the review
+	// tree's "sinds jouw laatste review" block needs the moment itself to say
+	// WHAT changed since — and it must be the very same moment, not a second
+	// approximation next to it, so it is carried here rather than recomputed.
+	NewSinceAt string `json:"newSinceAt,omitempty"`
+	// UpdatedAt is the PR's own GitHub updatedAt, the timestamp behind the
+	// overview's "Bijgewerkt … geleden". Carried along for the same reason as
+	// NewSinceAt: the review tree renders that exact line and has no other
+	// source for it (prmeta's own updated_at is the local write time).
+	UpdatedAt string `json:"updatedAt,omitempty"`
 }
 
 // inboxRow is one PR in the inbox. The status fields carry the heavy data and
@@ -421,8 +433,10 @@ func statusFromNode(n ghPRNode, login string) prStatus {
 			st.ChecksTotal = roll.Contexts.TotalCount
 		}
 	}
+	st.UpdatedAt = n.UpdatedAt
 	if at, kind := myLastActivity(n, login); at != "" && afterRFC3339(n.UpdatedAt, at) {
 		st.NewSinceKind = kind
+		st.NewSinceAt = at
 	}
 	return st
 }
