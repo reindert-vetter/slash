@@ -502,11 +502,29 @@ func skipBody(s string, open int, line *int) (endLine, next int) {
 
 // phpDocDescription extracts the free-text description from a PHPDoc
 // comment's raw source text (raw = the full `/** ... */`, delimiters
-// included). Every line has its leading `*`/whitespace stripped; a line that
-// is empty or starts with `@` (a tag: `@param`, `@return`, `@var`, ...) is
-// dropped. The remaining lines are joined with a single space into one
+// included). Every line has its leading `*`/whitespace stripped; the scan
+// STOPS at the first tag line (`@param`, `@return`, `@var`, ...) and the
+// remaining free-text lines are joined with a single space into one
 // paragraph. Returns "" for a tags-only or empty doc. Deterministic, plain
 // text extraction — no AI (.claude/docs/blocks-and-ingest.md).
+//
+// Stopping at the first tag — rather than skipping tag lines individually,
+// which is what this did originally — is what keeps a MULTI-LINE tag out of
+// the description. Only the `@param` line itself starts with `@`; its
+// continuation lines do not, so an array-shape parameter leaked its whole
+// type declaration plus every following bullet into the description:
+//
+//	@param array{
+//	    tenant_ids?: list<int>|null,
+//	    ...
+//	} $input
+//	  - `tenant_ids`: an explicit, hand-picked set. ...
+//
+// all of which ended up glued into one wall of text on the block card
+// (observed on ImportSubscriptionStatsFlow::run, PR 13255). A break is safe
+// because PHPDoc puts the summary/description FIRST and the tag block after
+// it; free text placed BELOW the tags is not a convention we support, and
+// losing it is much better than showing raw type syntax to a reviewer.
 func phpDocDescription(raw string) string {
 	body := strings.TrimSuffix(strings.TrimPrefix(raw, "/**"), "*/")
 	var parts []string
@@ -514,7 +532,10 @@ func phpDocDescription(raw string) string {
 		ln = strings.TrimSpace(ln)
 		ln = strings.TrimPrefix(ln, "*")
 		ln = strings.TrimSpace(ln)
-		if ln == "" || strings.HasPrefix(ln, "@") {
+		if strings.HasPrefix(ln, "@") {
+			break
+		}
+		if ln == "" {
 			continue
 		}
 		parts = append(parts, ln)

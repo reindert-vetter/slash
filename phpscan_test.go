@@ -704,6 +704,70 @@ class Svc {
 	}
 }
 
+// TestPHPDocDescriptionStopsAtFirstTag: a MULTI-LINE tag must not leak into
+// the description. Only the `@param` line itself starts with `@`; the
+// array-shape continuation lines and the `-` bullets documenting them do not,
+// so the original "skip lines starting with @" rule glued the entire raw type
+// declaration onto the prose — observed on ImportSubscriptionStatsFlow::run
+// (PR 13255), which showed a wall of `tenant_ids?: list<int>|null, ... } $input
+// - ...` on its block card. The scan therefore breaks at the first tag line.
+func TestPHPDocDescriptionStopsAtFirstTag(t *testing.T) {
+	src := `<?php
+class ImportSubscriptionStatsFlow {
+    /**
+     * Walks every tenant and rebuilds the statistics views.
+     *
+     * @param array{
+     *     tenant_ids?: list<int>|null,
+     *     from_tenant_id?: int|null,
+     *     imported_total?: int,
+     * } $input
+     *   - ` + "`tenant_ids`" + `: an explicit, hand-picked set. Leave it out to walk every tenant.
+     *   - ` + "`imported_total`" + `: internal running tally; do not set it yourself.
+     * @return Generator<mixed, mixed, mixed, array{tenants_imported: int}>
+     */
+    public function run(array $input) {
+        return 1;
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Workflows/ImportSubscriptionStatsFlow.php")
+	b, ok := blockByName(got, "ImportSubscriptionStatsFlow::run")
+	if !ok {
+		t.Fatalf("expected ImportSubscriptionStatsFlow::run, got %v", symbols(got))
+	}
+	want := "Walks every tenant and rebuilds the statistics views."
+	if b.Description != want {
+		t.Fatalf("Description = %q, want %q", b.Description, want)
+	}
+}
+
+// TestPHPDocTagsOnlyMeansNoDescription: a docblock that opens straight into
+// its tags has no free text at all, so the description stays empty rather
+// than picking up the tag block's own continuation lines.
+func TestPHPDocTagsOnlyMeansNoDescription(t *testing.T) {
+	src := `<?php
+class Svc {
+    /**
+     * @param array{a?: int,
+     *     b?: string,
+     * } $input
+     * @return void
+     */
+    public function run(array $input) {
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "app/Services/Svc.php")
+	b, ok := blockByName(got, "Svc::run")
+	if !ok {
+		t.Fatalf("expected Svc::run, got %v", symbols(got))
+	}
+	if b.Description != "" {
+		t.Fatalf("expected empty description, got %q", b.Description)
+	}
+}
+
 // TestInterfaceMethodIsFlaggedIsInterface: a method declared directly inside
 // an `interface` body gets Block.IsInterface=true, so classify.go can
 // override its category to "INTERFACE" regardless of the file's path — see

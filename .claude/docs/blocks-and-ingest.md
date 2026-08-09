@@ -188,10 +188,32 @@ Tests: `phpscan_test.go` (`TestLeadingAttributeIncludedInBlock`,
 
 If a `/** ... */` PHPDoc sits directly above a method/function (two asterisks at
 open — a bare `/* ... */` doesn't count), `scanPHP` extracts the **free-text
-lines** (any line that, after stripping the framing and a leading `*`, doesn't
-start with `@`) and joins them into one space-separated paragraph into
-`Block.Description` (`model.go`). Purely textual, so no cost/latency and fully
-deterministic on re-ingest.
+lines** — everything before the **first tag line** — and joins them into one
+space-separated paragraph into `Block.Description` (`model.go`). Purely
+textual, so no cost/latency and fully deterministic on re-ingest.
+
+**It stops at the first `@tag`; it does not skip tag lines one by one.** That
+was the original rule and it leaked badly, because only the `@param` line
+itself starts with `@` — a **multi-line** tag's continuation lines don't:
+
+```
+@param array{
+    tenant_ids?: list<int>|null,
+    ...
+} $input
+  - `tenant_ids`: an explicit, hand-picked set. …
+```
+
+Every one of those lines counted as free text, so the whole raw array-shape
+declaration plus the bullets documenting it were glued onto the prose and shown
+as one wall of text on the block card (found on
+`ImportSubscriptionStatsFlow::run`, PR 13255 — Reindert: "types mogen weg, die
+zijn al verwerkt in de blokken"). Breaking at the first tag is safe because
+PHPDoc puts summary/description first and the tag block after it; free text
+placed *below* the tags is deliberately unsupported. Tests:
+`TestPHPDocDescriptionStopsAtFirstTag`, `TestPHPDocTagsOnlyMeansNoDescription`
+(`phpscan_test.go`). Note this is a **stored** column, so an already-ingested
+PR only loses the type wall after a re-ingest/regenerate.
 
 `scanPHP` keeps its own `pendingDocText`, set whenever a `/**` is scanned
 (`phpDocDescription`, only overwritten by a later non-empty PHPDoc — "last before
