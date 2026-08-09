@@ -1787,7 +1787,11 @@ stacked BELOW (reversing D3 again)" further down:
   independently Prism-highlighted panes, stacked "Huidig (PR)" above
   "Voorgesteld (chat)" below — literally what was asked, without colour-coded
   line-level comparison. A real diff is a possible follow-up, not this one.
-- **D2 — click-driven, a native `<button>`.** `extractCodeFences` gives every
+- **D2 — click-driven, a native `<button>`** (superseded twice: the click went
+  away with "Always on" below, and the button itself was **removed** on request
+  — see "The dead "Bekijk volledig" button is gone" at the end of this
+  section; its data attributes now sit on the fence wrapper).
+  `extractCodeFences` gave every
   non-`suggestion` fence a `data-testid="code-fence-open"` button in its
   header (`Bekijk volledig ↗`) carrying the RAW code + resolved language word
   as `data-fence-code`/`data-fence-lang` (HTML-entity-encoded, decoded back by
@@ -1871,16 +1875,13 @@ pane) are unchanged.
   comments column first, then the Claude column).
 - **DOM-derived, not markdown-reparsed.** `extractCodeFences`
   (`markdown.mjs`) already stamps every non-`suggestion` fence's header with a
-  `data-testid="code-fence-open"` button carrying the raw code + resolved
-  language as `data-fence-code`/`data-fence-lang` — originally the click
-  target, D2 above. Reusing those same data attributes as the read source
+  `data-fence-code`/`data-fence-lang` (at the time on a `code-fence-open`
+  button, now on the fence wrapper itself — see the end of this section).
+  Reusing those same data attributes as the read source
   avoids a second, duplicate fence-parsing implementation in
   `RelatedPanel.mjs`: `recomputeCodePreviews` just
   `document.querySelector('[data-testid="comment-claude-columns"]')`s and
-  reads every `code-fence-open` button underneath it. The button itself keeps
-  rendering (harmless, no longer wired to a click) — removing it from
-  `markdown.mjs` would mean re-deriving the same data some other way, for no
-  gain.
+  reads every `[data-testid="code-fence"]` underneath it.
 - **A `MutationObserver` drives the recompute**, not a `watch` over
   `cs.list`/`cc.messages`: a live Claude turn's streaming reply
   (`ClaudeChat.mjs`'s `p.partial`) is a separate, un-exported reactive field
@@ -1945,9 +1946,9 @@ to the RIGHT** of `comment-claude-row` — reversed again, this time to a
   the row instead (`w-full shrink-0`) — so its cards read as wide as the
   comment/Claude card above them, not as a narrow strip underneath a wide one.
 - **Suggestion fences now also get a preview (`markdown.mjs`).** D4's
-  exclusion — a `` ```suggestion ``` `` fence got no `code-fence-open`
-  button at all, so `recomputeCodePreviews` never saw it — is dropped:
-  `extractCodeFences` now stamps that button onto **every** fence, suggestion
+  exclusion — a `` ```suggestion ``` `` fence carried no preview data at all,
+  so `recomputeCodePreviews` never saw it — is dropped:
+  `extractCodeFences` now stamps that data onto **every** fence, suggestion
   included. Its distinct in-bubble header ("Suggestie N", the emerald accent)
   is untouched — only the underlying full-size preview card was added, using
   the exact same "unlabeled fence defaults to PHP" path a plain unlabeled
@@ -1958,8 +1959,30 @@ to the RIGHT** of `comment-claude-row` — reversed again, this time to a
 Test: `tests/code-fence-preview.spec.mjs` updated — asserts
 `code-preview-column` renders as a sibling BELOW `comment-claude-row` (not a
 sibling to its right any more) and that a `suggestion` fence now also gets a
-`code-fence-open` button and its own preview card (title "Codeblok", same as
+preview card (title "Codeblok", same as
 any other unlabeled fence), alongside the plain fence's existing preview.
+
+## The dead "Bekijk volledig" button is gone; the wrapper carries the data
+
+Once the preview column became always-on (the two reversals above), the
+`code-fence-open` button in every fence header still said "Bekijk volledig ↗"
+but did nothing at all — a click target with no click. Removed on explicit
+request ("bekijk volledig knop moet weg, geen actie nodig"). The only thing it
+still did was CARRY data, so that moved one level up:
+
+- `extractCodeFences` (`markdown.mjs`) puts `data-fence-code` (always the FULL
+  raw code, never the truncated inline copy) next to the pre-existing
+  `data-fence-index`/`data-fence-lang`/`data-fence-suggestion`/
+  `data-fence-truncated` on the fence's own
+  `<div data-testid="code-fence">` wrapper. Nothing is rendered in the header
+  beside the label + language word any more.
+- `recomputeCodePreviews` (`RelatedPanel.mjs`) walks
+  `[data-testid="code-fence"]` instead of `[data-testid="code-fence-open"]`.
+  Same reading order, same data, one element less.
+
+**Don't reintroduce a button to carry data**: the wrapper already exists, is
+already the element the preview walks, and a rendered button that isn't a
+control is exactly what the reviewer asked to get rid of.
 
 ## The INLINE fence is capped to ~2 lines, faded — the full code is already below
 

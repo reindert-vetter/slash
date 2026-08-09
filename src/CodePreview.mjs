@@ -19,8 +19,8 @@
 // line-level comparison. A follow-up can add real diffing later.
 //
 // D2/D3 reversed (reviewer request, see claude-chat-panel.md): the column is
-// no longer opened by clicking a "Bekijk volledig ↗" button and no longer
-// closable — it is ALWAYS on, showing every code fence currently visible in
+// no longer opened by clicking (the "Bekijk volledig ↗" button that used to do
+// that has since been removed entirely) and no longer closable — it is ALWAYS on, showing every code fence currently visible in
 // the comment/Claude columns (a `suggestion` fence included, see
 // markdown.mjs), stacked in ONE column instead of one column per fence
 // (chosen over N columns growing <main>'s horizontal scroll — see the

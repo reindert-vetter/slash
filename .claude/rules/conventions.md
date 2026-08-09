@@ -120,7 +120,7 @@ explicit product decision — see the same doc section).
 fence's INLINE rendering to at most 2 full lines plus one more that fades out
 (`code-fence-fade-bottom`, `index.html`, a `mask-image` gradient — shape, not
 colour, per the colourblind rule) — `data-fence-code` on the fence's own
-`code-fence-open` button still always carries the FULL raw code, since that
+`code-fence` wrapper still always carries the FULL raw code, since that
 attribute is the code-preview card's only data source (see "The INLINE fence is
 capped to ~2 lines, faded" in `.claude/docs/claude-chat-panel.md`). Only
 `commentBody` (`RelatedPanel.mjs`) and `ClaudeChat.mjs`'s bubble renderers pass

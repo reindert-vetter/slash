@@ -2288,12 +2288,15 @@ let getCommentTarget = () => null
 
 // recomputeCodePreviews — the single place that turns "what's currently
 // rendered in the comment/Claude columns" into `cp.items`. Reads the fence
-// data straight off the `code-fence-open` buttons markdown.mjs already
-// stamps into every fence's header, `suggestion` included (data-fence-code/
-// data-fence-lang) rather than re-parsing message text — those buttons no
-// longer need a click handler, but they're still the simplest, already-
-// correct source of "which fences are visible right now, in reading order"
-// (DOM/document order = comments column first, then the Claude column).
+// data straight off the `code-fence` wrapper elements markdown.mjs already
+// stamps for every fence, `suggestion` included (data-fence-code/
+// data-fence-lang/data-fence-suggestion), rather than re-parsing message
+// text — the simplest, already-correct source of "which fences are visible
+// right now, in reading order" (DOM/document order = comments column first,
+// then the Claude column). This used to read the same two attributes off a
+// `code-fence-open` button in each fence header; that dead "Bekijk volledig"
+// button is gone (see extractCodeFences' own comment) and the attributes moved
+// up to the wrapper.
 //
 // D4 (unchanged): the "Huidig (PR)" pane only appears for a PHP (or
 // unlabeled) fence AND when there is a resolvable current-code unit to
@@ -2313,12 +2316,12 @@ function recomputeCodePreviews() {
     return
   }
   const root = document.querySelector('[data-testid="comment-claude-columns"]')
-  const buttons = root ? Array.from(root.querySelectorAll('[data-testid="code-fence-open"]')) : []
+  const fences = root ? Array.from(root.querySelectorAll('[data-testid="code-fence"]')) : []
   const t = getCommentTarget()
   const currentCode = t && t.file && t.code ? t.code : null
-  const next = buttons.map((btn, i) => {
-    const code = btn.dataset.fenceCode || ''
-    const lang = btn.dataset.fenceLang || ''
+  const next = fences.map((el, i) => {
+    const code = el.dataset.fenceCode || ''
+    const lang = el.dataset.fenceLang || ''
     const isPhp = !lang || lang.toLowerCase() === 'php'
     return {
       key: 'fence:' + i,

@@ -39,11 +39,14 @@ test('every fenced code block, suggestion included, shows a full-size preview st
   await expect(item).toBeVisible()
   await item.click()
 
-  // Both the plain `php` fence AND the `suggestion` fence now get the
-  // button — the suggestion fence's own distinct in-bubble header
-  // ("Suggestie 1") is untouched, only the underlying preview was added.
-  const openButtons = page.getByTestId('code-fence-open')
-  await expect(openButtons).toHaveCount(2)
+  // Both the plain `php` fence AND the `suggestion` fence are picked up — the
+  // suggestion fence's own distinct in-bubble header ("Suggestie 1") is
+  // untouched, only the underlying preview was added. The wrapper element
+  // itself carries the preview's data (there is no "Bekijk volledig" button
+  // any more, see markdown.mjs).
+  const fenceEls = page.getByTestId('code-fence')
+  await expect(fenceEls).toHaveCount(2)
+  await expect(page.getByTestId('code-fence-open')).toHaveCount(0)
 
   // No click needed — the preview column appears automatically as soon as
   // the comment/Claude block (holding the fences) is visible, and shows
@@ -158,8 +161,8 @@ test('a >2-line fence renders truncated + faded inline, full code stays in the p
   // Inline: only up to 3 source lines rendered (2 full + 1 fading), never the
   // whole 4-line block, and the fade class/marker are present. Only one place
   // renders the full body with fence markup while the comment is focused (see
-  // the sibling test above, which asserts exactly 2 `code-fence-open` buttons
-  // for 2 fences, not 4), so a page-wide lookup is unambiguous here.
+  // the sibling test above, which asserts exactly 2 `code-fence` wrappers for
+  // 2 fences, not 4), so a page-wide lookup is unambiguous here.
   const inlineFence = page.getByTestId('code-fence')
   await expect(inlineFence).toHaveCount(1)
   await expect(inlineFence).toHaveAttribute('data-fence-truncated', 'true')
@@ -170,8 +173,7 @@ test('a >2-line fence renders truncated + faded inline, full code stays in the p
 
   // data-fence-code (the preview card's data source) still carries the FULL
   // code, never shortened.
-  const openButton = page.getByTestId('code-fence-open')
-  await expect(openButton).toHaveAttribute('data-fence-code', fullCode)
+  await expect(inlineFence).toHaveAttribute('data-fence-code', fullCode)
 
   // The preview card below shows the FULL code, all 4 lines.
   const previewBody = page.getByTestId('code-preview-body').first()
