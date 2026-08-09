@@ -107,6 +107,14 @@ const (
 	// whole — the generic sibling of KindModelUsage for any indexed class
 	// that isn't an Eloquent model (resolveCalls rule 6c).
 	KindClassRef = "class_ref"
+	// KindClassCtor / KindClassFirstMethod are the two extra reference
+	// children a bare `Foo::class` gets alongside its class header (rule
+	// 6c-bis): the class's own __construct and its first other method, shown
+	// even when this PR changed neither — the two blocks a reader opens first
+	// to see what the class actually is. Read-only reference material, like
+	// any other call into an unchanged file.
+	KindClassCtor        = "class_ctor"
+	KindClassFirstMethod = "class_first_method"
 )
 
 // Entry is one call-site → definition resolution.

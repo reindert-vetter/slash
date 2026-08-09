@@ -2804,6 +2804,13 @@ function resolvedCallTargetIds() {
     // real block by accident (a method named exactly like a constant), so skip
     // it outright rather than rely on that never happening.
     if (CLASS_MEMBER_KINDS.has(r.kind)) continue
+    // A class's constructor / first method shown next to a Foo::class
+    // reference (rule 6c-bis) is INCIDENTAL reference material — it is picked
+    // because it introduces the class, not because this PR touched it. On the
+    // rare occasion the PR did change it, it stays a first-class review row of
+    // its own AND shows as this reference card (explicit answer: "gewoon
+    // tonen"), same both-ways rule as translation/test targets above.
+    if (r.kind === 'class_ctor' || r.kind === 'class_first_method') continue
     const childId =
       state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
     if (prBlockIds.has(childId) && !testTargets.has(childId)) ids.add(childId)
@@ -3178,8 +3185,13 @@ function childrenOf(b) {
 // geselecteerde groep/regel" (Reindert). The `const_ref` rule (6b, a
 // Foo::MAX_TRIES reference) is deliberately NOT here at all — its key IS a
 // real literal on a real line, like an ordinary call, for every caller.
+// `class_ctor:`/`class_method:` (a Foo::class reference's constructor and
+// first other method, rule 6c-bis) are block-level for the same reason as the
+// four above: their key names the CLASS, and the caller's own line holds
+// `Foo::class`, never a call to the method being shown — there is no literal
+// site to find, so scoping by one would hide them at every granularity.
 function isBlockLevelCallKey(name) {
-  return /^(resource|migration_model|data_provider|trait_usage|class_member):/.test(name)
+  return /^(resource|migration_model|data_provider|trait_usage|class_member|class_ctor|class_method):/.test(name)
 }
 
 // findCallSites locates, in a block's aligned diff rows, every place method

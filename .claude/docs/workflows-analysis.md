@@ -232,6 +232,27 @@ Rules, in order:
   classes) to treat every miss as an LLM-search candidate. The frontend's
   `findCallSites` matches `\bname\s*::\s*class\b` for this (the class name
   sits BEFORE the `::`, unlike rule 6's own `::name`).
+- **6c-bis — that same `Foo::class` also shows the class's entry points.** On
+  explicit request ("laat ook 2 blokken als onderliggende code zien, ook al
+  zijn ze niet aangepast: de content van `__construct` en de eerste andere
+  method"): a class header on its own is only the declaration region, and only
+  interesting when the PR changed it, so rule 6c additionally emits the class's
+  `__construct` (`Kind: class_ctor`, key `class_ctor:<class>`) and its first
+  OTHER method by declaration line (`Kind: class_first_method`, key
+  `class_method:<class>`). `classEntryPoints` picks both from the worktree-wide
+  symbol index, scoped to the file `classHeaderBlockFor` already resolved the
+  class to — so these are usually blocks the PR never touched at all, which is
+  exactly the point. Either may be absent: **no constructor → only the first
+  method** (deliberately no "then show the first two" fallback). A method the
+  PR DID change is shown here anyway and additionally keeps its own row in the
+  index (`resolvedCallTargetIds` skips these two kinds, like `translation`).
+  Scoped to this rule ONLY: `new Foo(...)`, model usage and an Activity stub
+  already point at the exact method in play, so a constructor + arbitrary first
+  method beside it would be noise. Both keys contain a `:` and are listed in
+  the frontend's `isBlockLevelCallKey` — the caller's line holds `Foo::class`,
+  never a call to the method being shown, so there is no literal site to scope
+  by. Tests: `TestResolveCallsClassRefEntryPoints`,
+  `tests/related-class-ref-entry-points.spec.mjs`.
 - **7 — API Resource `toArray()`.** A Resource used on a changed line surfaces
   its own `toArray()`, since that's where the output is defined — even when the
   Resource class itself isn't changed (unlike `controllerResourceDetector`'s

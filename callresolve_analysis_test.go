@@ -619,6 +619,88 @@ final class RunCommandActivity {
 	}
 }
 
+// TestResolveCallsClassRefEntryPoints covers rule 6c-bis: alongside the class
+// itself, a bare Foo::class reference also yields the class's __construct and
+// its first OTHER method as reference children — neither of which this PR
+// changed (they aren't even blocks of the PR, only worktree symbols). A second
+// class in the same fixture has no constructor at all, to pin down that it
+// then yields only the first method rather than falling back to two.
+func TestResolveCallsClassRefEntryPoints(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 24
+	_, headDir := worktreeDirs(dataDir, pr)
+	files := map[string]string{
+		"config/workflows.php": `<?php
+return [
+    'activities' => [
+        RunCommandActivity::class,
+        PlainActivity::class,
+    ],
+];
+`,
+		"app/Workflows/Activities/RunCommandActivity.php": `<?php
+namespace App\Workflows\Activities;
+final class RunCommandActivity {
+    public function __construct(private Runner $runner) {
+    }
+    public function run(string $command): array {
+        return [];
+    }
+    public function later(): void {
+    }
+}
+`,
+		"app/Workflows/Activities/PlainActivity.php": `<?php
+namespace App\Workflows\Activities;
+final class PlainActivity {
+    public function handle(): void {
+    }
+    public function other(): void {
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "config/workflows.php", Class: "", Name: "workflows.php", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	ctor, ok := findEntry(entries, "class_ctor:RunCommandActivity")
+	if !ok {
+		t.Fatal("no entry for class_ctor:RunCommandActivity")
+	}
+	if ctor.Kind != callresolve.KindClassCtor || ctor.ChildMethod != "__construct" {
+		t.Errorf("ctor: kind=%q method=%q, want %q/__construct", ctor.Kind, ctor.ChildMethod, callresolve.KindClassCtor)
+	}
+
+	first, ok := findEntry(entries, "class_method:RunCommandActivity")
+	if !ok {
+		t.Fatal("no entry for class_method:RunCommandActivity")
+	}
+	if first.Kind != callresolve.KindClassFirstMethod || first.ChildMethod != "run" {
+		t.Errorf("first method: kind=%q method=%q, want %q/run", first.Kind, first.ChildMethod, callresolve.KindClassFirstMethod)
+	}
+
+	if _, ok := findEntry(entries, "class_ctor:PlainActivity"); ok {
+		t.Error("PlainActivity has no constructor, want no class_ctor entry")
+	}
+	plain, ok := findEntry(entries, "class_method:PlainActivity")
+	if !ok {
+		t.Fatal("no entry for class_method:PlainActivity")
+	}
+	if plain.ChildMethod != "handle" {
+		t.Errorf("PlainActivity first method=%q, want handle", plain.ChildMethod)
+	}
+}
+
 // TestResolveCallsClassRefModel covers rule 6c's model branch: a bare
 // Model::class reference (no new/method call) merges into the SAME
 // model_usage kind (and call key) that new Model()/Model::method() already

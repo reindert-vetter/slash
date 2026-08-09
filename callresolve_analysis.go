@@ -1019,6 +1019,26 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			}
 			if hb, ok := classHeaderBlockFor(idx, class); ok {
 				emitKind(class, &hb, callresolve.KindClassRef)
+				// 6c-bis. The <class-header> alone says very little about a
+				// class — it is only the declaration region (constants,
+				// properties), and it is only interesting at all when this PR
+				// changed it. On explicit request a plain `Foo::class`
+				// reference therefore ALSO shows the two blocks a reader opens
+				// first to understand what the class IS: its constructor and
+				// its first other method — even though neither is usually
+				// changed by this PR (they are ordinary "unchanged" reference
+				// children, like a resolved call into an untouched file).
+				// Deliberately scoped to THIS rule only (a bare `Foo::class`),
+				// not to `new Foo(...)`/model usage/an Activity stub: those
+				// already point at the exact method being used, so a
+				// constructor + arbitrary first method next to it is noise.
+				ctor, first := classEntryPoints(idx, class, hb.File)
+				if ctor != nil {
+					emitKind("class_ctor:"+class, ctor, callresolve.KindClassCtor)
+				}
+				if first != nil {
+					emitKind("class_method:"+class, first, callresolve.KindClassFirstMethod)
+				}
 			}
 		}
 		// 7. Resource usage (new XResource(/XResource::make|collection(/a
@@ -1524,6 +1544,40 @@ func classHeaderBlockFor(idx *symbolIndex, class string) (Block, bool) {
 		return *u, true
 	}
 	return Block{}, false
+}
+
+// classEntryPoints returns the two blocks that best introduce a class to a
+// reader: its `__construct` and its first OTHER method (lowest declaration
+// line), both scoped to `file` — the file classHeaderBlockFor already resolved
+// the class to, so an ambiguous short name can never mix methods from two
+// different classes here. Either may be nil: a class without an explicit
+// constructor yields only the first method, and a class whose only member is
+// its constructor yields only that (explicit answer: no "first two methods"
+// fallback when there is no constructor — one method is one method).
+//
+// Both come from the worktree-wide symbol index (idx.byClass), NOT from the
+// PR's own blocks table, which only holds what the PR changed — that is the
+// whole point: these blocks are usually unchanged, and are shown anyway. A
+// method that IS changed by this PR is shown here all the same (it then simply
+// appears both as its own review block and as this reference card).
+func classEntryPoints(idx *symbolIndex, class, file string) (ctor, first *Block) {
+	blocks := idx.byClass[shortName(class)]
+	for i := range blocks {
+		cand := &blocks[i]
+		if cand.File != file || cand.Name == classHeaderSentinel {
+			continue
+		}
+		if cand.Name == "__construct" {
+			if ctor == nil || cand.Line < ctor.Line {
+				ctor = cand
+			}
+			continue
+		}
+		if first == nil || cand.Line < first.Line {
+			first = cand
+		}
+	}
+	return ctor, first
 }
 
 // translationKeysIn scans a changed-lines excerpt for every recognized

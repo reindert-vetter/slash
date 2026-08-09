@@ -4785,6 +4785,13 @@ const KIND_LABEL = {
   // the class as a whole — the generic sibling of model_usage for any other
   // indexed class (resolveCalls rule 6c, see .claude/docs/workflows-analysis.md).
   class_ref: 'klasse',
+  // The same Foo::class reference ALSO pulls in the class's own constructor
+  // and its first other method, even when this PR changed neither (rule
+  // 6c-bis) — the two blocks that tell a reader what the class is. Their
+  // badges name that role, since "klasse" is already taken by the header card
+  // sitting next to them.
+  class_ctor: 'constructor',
+  class_first_method: 'eerste method',
   // A test's #[DataProvider('m')]/@dataProvider m → the provider method (see
   // .claude/docs/tembed-workflows.md, "PHPUnit data providers").
   data_provider: 'provider',
@@ -4834,6 +4841,8 @@ const DIFFSTAT_KINDS = new Set([
   'trait_usage',
   'interface_impl',
   'class_ref',
+  'class_ctor',
+  'class_first_method',
 ])
 function diffStatBadge(r) {
   if (!DIFFSTAT_KINDS.has(r.kind) || !r.diff) return ''

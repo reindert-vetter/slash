@@ -88,6 +88,16 @@ Each child is one card (`data-testid=related-item`). It follows
   `<class-header>` card); **list mode is unaffected** (no active cursor to
   scope by, same as every other call type) and keeps showing the full
   reference list. Test: `tests/related-class-member-scope.spec.mjs` (PR 115).
+- The **entry points of a referenced class** — next to the `<class-header>`
+  card a bare `Foo::class` already produced, its `__construct`
+  (`class_ctor`, badge "constructor") and its first other method
+  (`class_first_method`, badge "eerste method"), see "6c-bis" in
+  `.claude/docs/workflows-analysis.md`. Both are shown **even when this PR
+  changed neither** — the header alone says too little about what a class is —
+  and both behave like an ordinary call into an unchanged file (diffstat or
+  `Ongewijzigd` badge, no index row of their own taken away: a method this PR
+  DID change keeps its own row and shows here as well). Test:
+  `tests/related-class-ref-entry-points.spec.mjs`.
 - An **approval badge** (`data-testid=related-approval`, `done/total`, green + ✓
   when fully approved) on any child that is itself a PR block, rendered in that
   child's own header (`approvalBadge`). Per-child only — there is **no**
