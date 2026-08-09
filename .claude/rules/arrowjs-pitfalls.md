@@ -303,24 +303,38 @@ this app (only `html`/`reactive`/`watch` are ever imported from
 this in app code, and don't assume a disposal fix (PATCH 2/2b) removes it** —
 it doesn't, and no `.key()`/binding change will.
 
-A LOCAL PATCH 3 recycling those ids via `FinalizationRegistry` (freeing an id
-only once the wrapping proxy is provably GC-unreachable, specifically to avoid
-PATCH 2b's "manual teardown hook races a stale in-flight effect" class of bug)
-was attempted, measured to flatten the leak, and then **reverted — it crashes**
-(`Cannot read properties of undefined (reading '<n>')`, reproducible at roughly
-1-in-4 to 1-in-20 runs of `tests/drill-refresh-multi-level.spec.mjs`, absent in
-12+ control runs of the same test against the unpatched file). Root cause:
-`watch()`'s own dependency bookkeeping (`tt[watchId]`) stores raw reactive ids
-as **plain numbers**, not object references — so GC can correctly prove a
-reactive's proxy unreachable (and recycle its id) while a *watch* that read it
-on an earlier run still has that id sitting, uncleaned, in its own `tt[]`
-array; reused (or merely disposed) before that watch's next `Jt` cleanup step
-reaches it, and you get silent subscriber-list corruption or exactly this
-crash. Recycling `nt`'s ids this way is fundamentally incompatible with
-arrow.js's numeric (not weak-object-ref) dependency tracking — not a one-line
-fix. Full writeup, the measured before/after numbers, and what a real fix
-would need: "Status: diagnosed, a fix was attempted and found unsafe — still
-unfixed" in `.claude/docs/frontend-memory.md`.
+**LOCAL PATCH 3 now fixes that arrow-side growth — but read the next paragraph
+before concluding the leak is gone.** The patch makes a reactive's id the **raw
+target object** instead of `++me`, and turns `X`/`et`/`dt`/`$t` into
+`WeakMap`/`WeakSet`, so a dropped reactive's registry entries die with it. 16
+edits, no control-flow change; see the LOCAL PATCH 3 block in
+`src/vendor/arrow.js` for the exact list and the restore instructions. Measured
+with a counter probe over 800 `↑`/`↓` steps: `me`/`X.length`/`et.length` went
+from **+2.10 per step, unbounded** to **0.00**, with every other internal
+counter (`he`, `tt`, `k`, `W`, `At`, `Ht`, `Q`, `Et`) flat too.
+
+**It does NOT make the app leak-free, and nobody should read it that way.** The
+nav loop still climbs — 585 → 403 bytes per step, still monotonic (83% of
+samples rising), against ~15 B/step and 17% for the idle/inert control loops.
+A **second leak, not in arrow.js**, sits underneath: with the patch applied
+every arrow counter is flat while the heap still grows, and an entry state with
+**0.00 reactives per step still leaks 146 B/step**. So arrow's registries are no
+longer a suspect — but "the frontend memory leak" is only half fixed, and the
+remaining half is unidentified. Don't chase it in arrow.js.
+
+Why this shape and not id-recycling: an earlier PATCH 3 attempt recycled ids via
+`FinalizationRegistry` and **crashed** (`Cannot read properties of undefined
+(reading '<n>')`, roughly 1-in-4 to 1-in-20 runs of
+`tests/drill-refresh-multi-level.spec.mjs`). `watch()`'s dependency bookkeeping
+(`tt[watchId]`) stores raw ids as **plain numbers**, so the GC can correctly
+prove a proxy unreachable and recycle its id while a watch still holds that
+number uncleaned. Making the id an object reference closes that hole for free:
+`it` pushes the id into the dep array, so a watch now holds its reactives
+**strongly** and the race cannot exist. The landed patch is 12/12 clean on that
+same spec at `--workers=1`, and a clean-worktree A/B of the full suite was
+460 passed / 1 failed **identically with and without it**. Full writeup, all
+before/after numbers, the measurement trap that nearly sank it, and the open
+second leak: `.claude/docs/frontend-memory.md`.
 
 ## Nested `@click`: call `e.stopPropagation()` FIRST, before the state mutation
 

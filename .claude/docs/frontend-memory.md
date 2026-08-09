@@ -168,14 +168,21 @@ and never subscribed to — untested, may not cover the actual leak).
 **No code from this attempt is committed.** `src/vendor/arrow.js` is
 unchanged from before this investigation.
 
-## Second attempt: object-reference ids + WeakMap registries — safe, fixes the root cause, still backed out
+## LOCAL PATCH 3 — LANDED, as a deliberate PARTIAL fix
 
-Written, measured, gated, and reverted in commit "Back out the WeakMap-id
-arrow.js change (LOCAL PATCH 3) — gate not met". Unlike the
-`FinalizationRegistry` attempt above this one is **not unsafe** — it was backed
-out purely because it does not, on its own, make the nav loop flat. Recorded in
-full because it is the closest anyone has got and because it proved the leak has
-**two** independent sources.
+Object-reference ids + WeakMap registries. This is **in the tree** (see the
+LOCAL PATCH 3 block in `src/vendor/arrow.js`). It removes arrow.js's own
+registry growth completely and is proven safe — but it does **not** make the nav
+loop flat, because a second, arrow-independent leak sits underneath it. It was
+landed on that explicit understanding: fix the half that is understood, then
+hunt the other half separately. Do not close the memory-leak topic on it.
+
+(History note, so the git log reads sensibly: the code first reached `main` by
+accident — commit `93bb173`, and after a revert again via `e3ac65e` — both
+unrelated commits that swept the vendor file up while it was still under
+measurement. It was reverted once in between, in `75e5a97`, when it failed its
+gate. The deliberate landing is the commit that adds the LOCAL PATCH 3 comment
+block and these docs.)
 
 **The idea, in one line:** don't change *where* the ids live, change *what an id
 is*. Instead of `const id = ++index`, the id becomes the **raw target object
@@ -217,22 +224,30 @@ that had broken tracking would also "not leak", so this check is not optional.
 **Performance:** +3.0% on a flat set/get hot path, +5.6% on a nested one
 (300k ops, median of 15 interleaved reps). ~10–17 ns per iteration. Negligible.
 
-**App-level gate — this is where it failed.** Rebuilt harness, PR 13255,
-1200 steps, forced GC per sample:
+**App-level result — a real improvement, but not flat.** Rebuilt harness,
+PR 13255, 1200 steps, forced GC per sample:
 
 | loop | before | after | controls |
 |---|---|---|---|
 | nav ↑/↓ | 585 B/step, 92% climbing | 403 B/step, 83% climbing | idle 14 B/step / 17%, inert F8 15 B/step / 17% |
 
-A 31% reduction, still monotonic — not the flat, non-monotonic shape of the
-controls. Gate not met.
+A 31% reduction, still monotonic — **not** the flat, non-monotonic shape of the
+controls. This is the honest ceiling of this patch, and the reason the second
+leak below is the open work.
 
-**Safety, measured (so a future attempt doesn't have to):**
-`tests/drill-refresh-multi-level.spec.mjs` **12/12** at `--workers=1` with
-`pageerror` capture — this is the spec that exposed the `FinalizationRegistry`
-crash, so it is the decisive one. Full suite **458/459**; the one failure
-(`overview.spec.mjs:82`) reproduces identically with the change reverted and is
-unrelated.
+**Safety, measured:** `tests/drill-refresh-multi-level.spec.mjs` **12/12** at
+`--workers=1` with `pageerror` capture (plus 6 more later: 17/18, the one miss
+being a `spawnSync tests/.tmp/slash ENOENT` from a concurrent rebuild, 0 page
+errors) — this is the spec that exposed the `FinalizationRegistry` crash, so it
+is the decisive one. Full suite in a **clean worktree at HEAD**: 460 passed /
+1 failed **identically with and without the patch** (`overview.spec.mjs:82`,
+pre-existing and unrelated). Zero regressions attributable to it.
+
+**Attribution warning for anyone re-running the suite:** measure in a
+`git worktree` at HEAD, not in a shared working tree. Another agent's
+uncommitted edits to `src/Block.mjs`/`src/RelatedPanel.mjs` produced 16 and then
+48 failures in the main tree during this work, which is noise that can easily be
+mistaken for a regression — the clean worktree gave a stable 460/1 both ways.
 
 ## There is a SECOND leak, and it is not arrow.js
 
@@ -254,10 +269,20 @@ So arrow's registries are provably no longer growing — and the heap still clim
    reactives/step but still 146 B/step**; `ArrowRight` + `d` (diff mode) → 2.30
    / 578 B/step. A state with **zero** reactive churn still leaks.
 
-**So the reported symptom needs both fixes.** Whoever picks this up: the arrow
-side is solved and safe (16 edits, above); the open work is identifying the
-non-arrow ~150–400 B/step. It is not detached DOM and not listeners — `Nodes`
-and `JSEventListeners` are +0 across every run here too.
+**So the reported symptom needs both fixes.** The arrow side is landed and safe
+(LOCAL PATCH 3, above). **The open follow-up task is identifying the non-arrow
+~150–400 B/step**, and until that is done the reported "browser eventually locks
+up" symptom is only partly addressed. It is not detached DOM and not listeners —
+`Nodes` and `JSEventListeners` are +0 across every run here too, so whatever it
+is retains plain JS objects, same as the arrow half did.
+
+Starting points for that hunt, in order of cheapness: the `ArrowRight
+ArrowRight` entry state is the best probe found so far (0.00 reactives/step but
+still 146 B/step, so it isolates the non-arrow component with the reactive
+component switched off); the harness and the `window.__arrowCounters` probe
+technique in "Re-measuring" below are directly reusable; and since the arrow
+counters are now provably flat, any remaining growth can be attributed to app
+code or the browser without having to rule arrow.js out again.
 
 ## Two routes that are closed — do not re-litigate them
 
