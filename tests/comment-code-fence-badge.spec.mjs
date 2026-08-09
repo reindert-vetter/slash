@@ -39,7 +39,13 @@ test('fenced code blocks get a language badge + a running, Claude-matching numbe
   // A reply on the SAME thread carries a third fence — its own number must
   // continue the count (3), not restart at 1.
   await page.request.post('/api/workflows/' + runId + '/signals/reply', {
-    data: { author: 'octocat', body: 'nog een idee:\n```bash\necho "ok"\n```', done: false },
+    data: {
+      author: 'octocat',
+      body:
+        'nog een idee:\n```bash\necho "ok"\n```\n' +
+        'en de spec:\n```yaml\nOrderInclude:\n  name: include\n  in: query\n```',
+      done: false,
+    },
   })
 
   await page.goto('/pr/' + pr)
@@ -83,7 +89,7 @@ test('fenced code blocks get a language badge + a running, Claude-matching numbe
   expect(context).toContain('[Codeblok 3]')
 
   const fences = page.getByTestId('code-fence')
-  await expect(fences).toHaveCount(3)
+  await expect(fences).toHaveCount(4)
 
   // #1 — an ordinary ```sql fence: numbered, labelled with its own language.
   await expect(fences.nth(0)).toHaveAttribute('data-fence-index', '1')
@@ -103,4 +109,12 @@ test('fenced code blocks get a language badge + a running, Claude-matching numbe
   // running count continues rather than resetting to 1 in the new bubble.
   await expect(fences.nth(2)).toHaveAttribute('data-fence-index', '3')
   await expect(fences.nth(2)).toHaveAttribute('data-fence-lang', 'bash')
+
+  // #4 — a ```yaml fence: the grammar is vendored (src/vendor/prism.js), so it
+  // is really tokenised, not shown as colourless escaped text like a language
+  // Prism has no grammar for. Asserting a `.token` node is the only way to see
+  // the difference — the badge/label look identical either way.
+  await expect(fences.nth(3)).toHaveAttribute('data-fence-index', '4')
+  await expect(fences.nth(3)).toHaveAttribute('data-fence-lang', 'yaml')
+  await expect(fences.nth(3).locator('code .token').first()).toBeVisible()
 })

@@ -92,13 +92,16 @@ safeHtmlString`) that adds three things:
 sibling, `highlightForLang(code, lang)`, which maps the free-form word after
 ` ``` ` onto one of the grammars vendored in `src/vendor/prism.js` — now
 `markup`/`css`/`clike`/`javascript`/`php` (as before) **plus `sql`/`json`/
-`bash`/`typescript`**, downloaded from the same cdnjs Prism 1.29.0 release —
+`bash`/`typescript`/`yaml`**, downloaded from the same cdnjs Prism 1.29.0
+release (`yaml` last, on request: an OpenAPI fragment pasted under a comment
+rendered colourless; its component registers the `yml` alias itself, so no
+entry in the alias table below) —
 via a small alias table (`js`→`javascript`, `ts`→`typescript`, `html`/`xml`/
 `svg`→`markup`, `sh`/`shell`→`bash`, and **`vue`→`markup`**: Prism ships no
 dedicated Vue grammar, upstream or vendored, so a `` ```vue `` fence gets the
 outer `<template>`/`<script>`/`<style>` tags tagged and nothing more —
 explicitly accepted, not a bug). A language that isn't vendored at all (e.g.
-`yaml`) falls back to escaped plain text, same as a genuinely missing
+`toml`) falls back to escaped plain text, same as a genuinely missing
 grammar — still labelled with the reviewer's own word in the badge, just
 without token colours.
 

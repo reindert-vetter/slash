@@ -27,9 +27,13 @@ export function highlight(code) {
 // Prism itself ships none — and falls back to `markup`: a .vue single-file
 // component's outer `<template>`/`<script>`/`<style>` tags still get tagged,
 // even though the TS/JS inside `<script>` isn't tokenised on its own terms.
-// A language that isn't vendored at all (e.g. `yaml`) falls through to the
-// same plain-escaped-text path as a missing grammar — still labelled with the
+// A language that isn't vendored at all (e.g. `yaml` used to be, until it was
+// vendored on request — a reviewer pasting an OpenAPI fragment under a comment
+// got a colourless block; `toml`/`ruby`/… still are) falls through to the same
+// plain-escaped-text path as a missing grammar — still labelled with the
 // reviewer's own word in the badge (see markdown.mjs), just without colours.
+// `yml` needs no alias here: the vendored yaml component registers
+// `Prism.languages.yml` itself.
 const LANGUAGE_ALIASES = {
   js: 'javascript',
   jsx: 'javascript',
