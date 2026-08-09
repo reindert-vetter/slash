@@ -40,6 +40,8 @@ import RelatedPanel, {
   startPrWideComment,
   isPrWideComposing,
   startClaudeChat,
+  startRangeComment,
+  startRangeChat,
   createComment,
   placeComment,
   isComposeOpen,
@@ -8275,11 +8277,80 @@ function selectionApproveDone() {
   })
 }
 
+// rangeBlocks returns the actual block/method objects an active Shift+arrow
+// multi-selection covers, in list order — the index/methodes-kolom twin of
+// selectionApproveDone's own local computation, extracted so
+// rangeIgnorableComments/startRangeComment/startRangeChat below can share it.
+// Deliberately unfiltered (unlike selectionApproveDone's `b.kind !== 'comment'`
+// filter): each caller decides for itself what it does with a comment item.
+function rangeBlocks() {
+  if (isTestColumnActive()) {
+    const row = curTestClassRow()
+    return methodRangeIndices(row).map((i) => row.methods[i])
+  }
+  return listRangeIndices()
+    .map((i) => state.blocks[i])
+    .filter(Boolean)
+}
+
+// rangeIgnorableComments is the subset of rangeBlocks() that can actually be
+// ignored — a PR-comment index item (kind:'comment'), the only kind of row
+// the existing single-item "Ignore" action (toggleIgnoreComment,
+// prCommentCommandsFor) applies to. An ordinary block/test method has no
+// ignore concept of its own (yet), so it's simply skipped here — the same
+// split toggleRangeApproval already makes in the opposite direction (a
+// comment item is skipped there because "approved" means "resolved", a real
+// GitHub-side action a bulk key must not trigger).
+function rangeIgnorableComments() {
+  return rangeBlocks().filter((b) => b.kind === 'comment')
+}
+
+// rangeIgnoreDone reports whether every ignorable item in the selection is
+// already ignored — mirrors selectionApproveDone's "does the label say
+// ignore or un-ignore" role.
+function rangeIgnoreDone() {
+  const items = rangeIgnorableComments()
+  return items.length > 0 && items.every((b) => isIgnoredComment(state, b))
+}
+
+// toggleRangeIgnore flips every ignorable item in the selection to one
+// shared target state (ignore everything not yet ignored, or clear
+// everything once it's already all ignored — same toggle shape as
+// toggleRangeApproval). Reuses the existing single-item toggleIgnoreComment
+// per row rather than a second implementation, so each item still signals
+// through the exact same per-comment `ignore_comment` Signal — one Signal
+// per comment, never a batch write.
+function toggleRangeIgnore() {
+  const items = rangeIgnorableComments()
+  if (!items.length) return
+  const target = !rangeIgnoreDone()
+  for (const b of items) {
+    if (isIgnoredComment(state, b) !== target) toggleIgnoreComment(b.comment)
+  }
+}
+
+// rangeChatEligible gates "Plaats comment over dit bereik"/"Chat met Claude
+// over dit bereik": both anchor on the CURSOR's own block/method (see
+// startRangeComment/startRangeChat's own doc comment for why not the
+// selection's literal first item), so neither has anywhere to anchor when the
+// cursor itself sits on a PR-comment index row — the same reason COMMANDS
+// itself never opens there (selectedComment() routes Enter to
+// prCommentCommandsFor instead, see command-palette.md).
+function rangeChatEligible() {
+  const b = curBlock()
+  return !!b && b.kind !== 'comment'
+}
+
 // rangeCommandsFor is the palette for an active Shift+arrow multi-row
-// selection. One real action for now — approve/retract the whole selection —
-// behind the usual pinned "Sluit menu", so defaultSel opens on it.
+// selection. Behind the usual pinned "Sluit menu" (defaultSel opens on
+// "range-approve", unchanged): approve/retract the whole selection, place a
+// comment or start a Claude chat anchored on the cursor's own block/method
+// but describing the WHOLE selection (see the two start* functions and
+// claudeRangeContextBlock in RelatedPanel.mjs), and — only when the selection
+// actually contains at least one ignorable PR-comment row — ignore/un-ignore
+// those.
 function rangeCommandsFor() {
-  return withClose([
+  const items = [
     {
       id: 'range-approve',
       label: () =>
@@ -8289,7 +8360,35 @@ function rangeCommandsFor() {
       hint: 'approve',
       run: () => toggleRangeApproval(),
     },
-  ])
+  ]
+  if (rangeChatEligible()) {
+    items.push(
+      {
+        id: 'range-comment',
+        label: () => `Plaats comment over ${selectionNoun()}`,
+        hint: 'task',
+        run: () => startRangeComment(commentTarget, rangeBlocks()),
+      },
+      {
+        id: 'range-claude',
+        label: () => `Chat met Claude over ${selectionNoun()}`,
+        hint: 'claude',
+        run: () => startRangeChat(commentTarget, rangeBlocks()),
+      },
+    )
+  }
+  if (rangeIgnorableComments().length) {
+    items.push({
+      id: 'range-ignore',
+      label: () =>
+        rangeIgnoreDone()
+          ? `Ignore ongedaan maken voor ${rangeIgnorableComments().length} comments`
+          : `Ignore ${rangeIgnorableComments().length} comments in dit bereik`,
+      hint: 'ignore',
+      run: () => toggleRangeIgnore(),
+    })
+  }
+  return withClose(items)
 }
 
 // resolveCommands returns the commands to show for `query`: the fuzzy-matched
@@ -8531,7 +8630,10 @@ function runCommand(cmd) {
 // looked at (a `/` typed in a composer must reach the field as a character).
 function contextMenuMode() {
   if (state.pushTodoFocused) return 'pushTodo'
-  if (!state.showDescription && selectedComment()) return 'prComment'
+  // Same hasMultiSelection() carve-out as the Enter branch below — an active
+  // range whose cursor sits on a comment row still gets the range palette via
+  // the 'block' mode fallthrough (blockCommands() -> rangeCommandsFor()).
+  if (!state.showDescription && !hasMultiSelection() && selectedComment()) return 'prComment'
   // Stop 1 (the PR description) and the two toggle rows have no block context;
   // so does a PR whose blocks aren't loaded (or a genuinely block-less one).
   if (state.showDescription || state.toggleFocused || state.ignoreToggleFocused || !curBlock()) return 'pr'
@@ -8863,7 +8965,12 @@ function onKeydown(e) {
   // while stop 1 (the PR-description column) owns the keyboard (the reviewer
   // selected a comment row, then stepped left) — Enter there must open the
   // PR-wide menu, not this item's own comment menu.
-  if (e.key === 'Enter' && !state.showDescription && selectedComment()) {
+  // ALSO gated on !hasMultiSelection(): an active Shift+arrow range whose
+  // cursor happens to sit on a comment row must still open the range palette
+  // (rangeCommandsFor, below) — the whole point of "Ignore N comments in dit
+  // bereik" is reachable regardless of which row the cursor ended up on, see
+  // command-palette.md.
+  if (e.key === 'Enter' && !state.showDescription && !hasMultiSelection() && selectedComment()) {
     e.preventDefault()
     openMenu('prComment')
     return

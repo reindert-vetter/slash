@@ -30,14 +30,19 @@ test.describe('PR Review Tree — Shift+arrow multi-row selection in the index',
     const markers = page.locator('[data-testid=block-row] span.text-indigo-500')
     await expect(markers).toHaveCount(1)
 
-    // The palette is scoped to the selection: one real action, naming the count.
+    // The palette is scoped to the selection: approve/comment/chat, all
+    // naming the count — "Ignore" is absent here since none of these three
+    // rows is a PR-comment index item (see tests/list-range-actions.spec.mjs
+    // for that case).
     await page.keyboard.press('Enter')
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     const cmdRows = page.getByTestId('command-row')
-    await expect(cmdRows).toHaveCount(2)
+    await expect(cmdRows).toHaveCount(4)
     await expect(cmdRows.nth(0)).toContainText('Sluit menu')
     await expect(cmdRows.nth(1)).toContainText('Keur deze 3 blokken goed')
+    await expect(cmdRows.nth(2)).toContainText('Plaats comment over deze 3 blokken')
+    await expect(cmdRows.nth(3)).toContainText('Chat met Claude over deze 3 blokken')
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()
 
