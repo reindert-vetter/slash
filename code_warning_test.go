@@ -35,18 +35,39 @@ class OrderService {
 }
 `
 
-// writeWarningFixtureRepo lays out both worktrees with the same fixture file —
-// only the RIGHT (head) side's row math is exercised here, so base/head being
-// identical is enough.
+// warningFixtureBaseBody is the BASE worktree's copy of the same file: lines
+// 2, 5, 6 and 7 differ from the head version above, so those are exactly the
+// lines this fixture PR "changed". That matters since the changed-lines guard
+// (changedLineSets/allows, code_warning.go) drops any finding anchored on a
+// line the PR left alone — line 8 (the closing brace) is deliberately left
+// identical, so the fixture also covers an untouched line inside a changed
+// block.
+const warningFixtureBaseBody = `<?php
+namespace App;
+class OrderService {
+    public function build() {
+        $this->boot();
+        $total = $this->amount;
+        return 0;
+    }
+    public function prepare() {}
+}
+`
+
+// writeWarningFixtureRepo lays out both worktrees with the fixture file: the
+// head version, and the base version it genuinely differs from (see
+// warningFixtureBaseBody — a base identical to head would mean "this PR
+// changed nothing", which the changed-lines guard rightly answers with zero
+// findings).
 func writeWarningFixtureRepo(t *testing.T, dataDir string, pr int) {
 	t.Helper()
 	baseDir, headDir := worktreeDirs(dataDir, pr)
-	for _, dir := range []string{baseDir, headDir} {
-		p := filepath.Join(dir, "app/Services/OrderService.php")
+	for _, w := range []struct{ dir, body string }{{baseDir, warningFixtureBaseBody}, {headDir, warningFixtureBody}} {
+		p := filepath.Join(w.dir, "app/Services/OrderService.php")
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(p, []byte(warningFixtureBody), 0o644); err != nil {
+		if err := os.WriteFile(p, []byte(w.body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -171,9 +192,9 @@ func TestAnchoredWarningFallsBackToBlockWideFirstRow(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 34
 	baseDir, headDir := worktreeDirs(dataDir, pr)
-	// Unlike writeWarningFixtureRepo (base == head, no real diff — fine for
-	// the row-math-only tests above), this needs a GENUINE change so a "first
-	// changed row" actually exists to fall back onto.
+	// Its own worktrees rather than writeWarningFixtureRepo's: this needs the
+	// change to sit on exactly one line (1.21), so the block has a single
+	// "first changed row" to fall back onto.
 	baseBody := strings.Replace(warningFixtureBody, "1.21", "1.19", 1)
 	for _, dir := range []struct{ path, body string }{{baseDir, baseBody}, {headDir, warningFixtureBody}} {
 		p := filepath.Join(dir.path, "app/Services/OrderService.php")
@@ -389,6 +410,51 @@ func TestCodeWarningPromptsExistingComments(t *testing.T) {
 		t.Fatalf("prompt does not mention the existing comment: %s", prompt)
 	}
 }
+
+// A finding must anchor on a line this PR actually changed: the model may
+// read anything, but a remark about untouched code is dropped outright (never
+// demoted to a PR-wide finding). The prompt also names the changed lines per
+// file, so the model can aim rather than spend findings the guard discards.
+// See changedLineSets/describeChangedLines in code_warning.go.
+func TestCodeWarningDropsFindingOnUnchangedLine(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 41
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := claude.NewFake()
+	// Line 8 is the closing brace, identical in both worktrees (see
+	// warningFixtureBaseBody); line 6 is genuinely changed.
+	fake.SetOutput(claude.ModelOpus, `[
+		{"file":"app/Services/OrderService.php","line":8,"text":"Over ongewijzigde code."},
+		{"file":"app/Services/OrderService.php","line":6,"text":"Over de gewijzigde regel."}
+	]`)
+	m, cs, _ := warningManager(t, dataDir, fake)
+
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := cs.List(context.Background(), pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("comments = %d, want 1 (the unchanged-line finding dropped): %+v", len(list), list)
+	}
+	if list[0].Body != "Over de gewijzigde regel." {
+		t.Fatalf("kept finding = %q, want the one on the changed line", list[0].Body)
+	}
+
+	if len(fake.Calls) != 1 {
+		t.Fatalf("claude calls = %d, want 1", len(fake.Calls))
+	}
+	if prompt := fake.Calls[0].Prompt; !strings.Contains(prompt, "changed lines: 2, 5-7") {
+		t.Fatalf("prompt does not name the changed lines: %s", prompt)
+	}
+}
+
 // A finding that anchors to a row the reviewer already approved leaves that
 // approval alone: an AI risk check is a hint to look again, never a verdict
 // that the row was never reviewed (see .claude/docs/approval.md — the same

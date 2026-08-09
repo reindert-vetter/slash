@@ -696,6 +696,22 @@ a manually triggered, low-frequency action.
   block", not a fixed number. The model is told the cap, but it is
   **hard-enforced in Go** (sort on `file, line`, truncate), so a model ignoring
   the instruction can't exceed it.
+- **A finding must anchor on a line the PR CHANGED.** The model may read and
+  reason about anything in the worktree (that is the whole point of the
+  agentic pass), but a finding about code this PR left alone is out of scope —
+  reported bug: a warning hung on an untouched `const searchTerm = …` line far
+  below the real changes. Same instruct-plus-verify shape as the file-scope
+  hallucination guard: `changedLineSets` (`code_warning.go`, reusing
+  `changedNewLines` from `callresolve_analysis.go`) computes the changed
+  head-side lines per scope file, `describeChangedLines` renders them into the
+  prompt as compact ranges per file, `code_warning.md` states the rule, and
+  `allows` then **hard-drops** every finding on any other line. Dropped
+  outright, deliberately **not** demoted to a PR-wide finding: an unrelated
+  remark must disappear, not resurface without an anchor. A file with no base
+  copy (added file) allows everything, matching `keepChanged`'s own fallback.
+  Consequence for the two anchoring fallbacks below: they are now vangnets,
+  not the normal route (see `anchoredWarning`'s doc comment) — the block-wide
+  one only fires when `rowForLine` cannot map a genuinely changed line.
 - **Findings carry their own anchor, mapped onto the existing comment model:**
   the model returns `[{"file","line","text"}]`. **Hallucination protection:** a
   finding is trusted only if its `file` is literally one of the files the prompt

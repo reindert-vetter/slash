@@ -74,10 +74,17 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	if cl == nil || len(arg.Files) == 0 {
 		return nil
 	}
-	_, headDir := worktreeDirs(dataDir, arg.PR)
+	baseDir, headDir := worktreeDirs(dataDir, arg.PR)
+	// Which lines this PR actually changed, per file in scope — used twice: to
+	// TELL the model where it may anchor (warningPrompt) and to ENFORCE it
+	// afterwards (the changed-lines guard below), the same
+	// instruct-plus-verify shape the file-scope hallucination guard already
+	// has. Computed once here rather than per finding: it shells out to git
+	// per file.
+	changed := changedLineSets(baseDir, headDir, arg.Files)
 	req := claude.RunRequest{
 		Model:        claude.ModelOpus,
-		Prompt:       warningPrompt(arg),
+		Prompt:       warningPrompt(arg, changed),
 		SystemPrompt: claude.CodeWarningSystemPrompt,
 		WorkDir:      headDir,
 		Tools:        []string{"Read", "Grep", "Glob"},
@@ -99,6 +106,14 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 		if f.File == "" || f.Line <= 0 || strings.TrimSpace(f.Text) == "" || !allowed[f.File] {
 			continue
 		}
+		// Changed-lines guard (see changedLineSets): the model may LOOK
+		// anywhere, but a finding must anchor on a line this PR actually
+		// touched. Dropped outright — deliberately not demoted to a PR-wide
+		// finding, so an unrelated remark about untouched code simply
+		// disappears instead of resurfacing without an anchor.
+		if !changed[f.File].allows(f.Line) {
+			continue
+		}
 		kept = append(kept, f)
 	}
 	sort.Slice(kept, func(i, j int) bool {
@@ -113,17 +128,80 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	return kept
 }
 
-// warningPrompt builds the call-specific part of the prompt: the scope
-// (changed files) and the finding cap. The call-independent task framing and
-// JSON contract are static across every code_warning run, so they travel
-// separately as claude.CodeWarningSystemPrompt (--append-system-prompt) —
-// see runCodeWarningReview and modules/claude/prompts.go.
-func warningPrompt(arg warningReviewArg) string {
-	var b strings.Builder
-	b.WriteString("Changed files in this PR to review:\n")
-	for _, f := range arg.Files {
-		fmt.Fprintf(&b, "- %s\n", f)
+// changedLineSets returns, per file in scope, the head-side lines this PR
+// changed — reusing changedNewLines (callresolve_analysis.go), so "changed"
+// means exactly what classified a block as modified, and an added file (no
+// base copy) counts as changed in its entirety.
+func changedLineSets(baseDir, headDir string, files []string) map[string]*fileChangeSet {
+	out := make(map[string]*fileChangeSet, len(files))
+	for _, f := range files {
+		out[f] = changedNewLines(baseDir, headDir, f)
 	}
+	return out
+}
+
+// allows reports whether line is one the PR changed. A nil set (a file we
+// never diffed) and a non-restricting one (an added file) allow everything —
+// the same permissive fallback keepChanged already uses, so a missing base
+// worktree can never silently swallow every finding.
+func (fc *fileChangeSet) allows(line int) bool {
+	if fc == nil || !fc.restrict {
+		return true
+	}
+	return fc.set[line]
+}
+
+// describeChangedLines renders a file's changed lines as compact ranges
+// ("12-18, 44") for the prompt, so the model can aim at a line it is allowed
+// to anchor on instead of spending findings that the guard then drops. An
+// added file (nothing to restrict) says so in words rather than listing every
+// line of the file.
+func describeChangedLines(fc *fileChangeSet) string {
+	if fc == nil || !fc.restrict {
+		return "the whole file is new"
+	}
+	lines := make([]int, 0, len(fc.set))
+	for ln := range fc.set {
+		lines = append(lines, ln)
+	}
+	if len(lines) == 0 {
+		return "no changed lines"
+	}
+	sort.Ints(lines)
+	var parts []string
+	start, prev := lines[0], lines[0]
+	flush := func() {
+		if start == prev {
+			parts = append(parts, fmt.Sprintf("%d", start))
+			return
+		}
+		parts = append(parts, fmt.Sprintf("%d-%d", start, prev))
+	}
+	for _, ln := range lines[1:] {
+		if ln == prev+1 {
+			prev = ln
+			continue
+		}
+		flush()
+		start, prev = ln, ln
+	}
+	flush()
+	return strings.Join(parts, ", ")
+}
+
+// warningPrompt builds the call-specific part of the prompt: the scope
+// (changed files + the lines changed in each) and the finding cap. The
+// call-independent task framing and JSON contract are static across every
+// code_warning run, so they travel separately as
+// claude.CodeWarningSystemPrompt (--append-system-prompt) — see
+// runCodeWarningReview and modules/claude/prompts.go.
+func warningPrompt(arg warningReviewArg, changed map[string]*fileChangeSet) string {
+	var b strings.Builder
+	b.WriteString("Changed files in this PR to review, with the lines this PR changed in each:\n")
+	for _, f := range arg.Files {
+		fmt.Fprintf(&b, "- %s (changed lines: %s)\n", f, describeChangedLines(changed[f]))
+	}
+	b.WriteString("\nYou may read anything in the repository, but every finding must anchor on one of those changed lines and must be caused by this change.\n")
 	fmt.Fprintf(&b, "\nThese files together touch %d changed function(s)/method(s). Report at most %d findings in total across all of them — on average about %d per changed function, never a fixed count per file — prioritizing the most important, best-justified risks over completeness.\n",
 		arg.BlockCount, arg.MaxFindings, warningsPerBlock)
 	if len(arg.Existing) > 0 {
@@ -188,8 +266,7 @@ func existingLineCommentsInScope(list []comments.Comment, files []string) []exis
 //     block-scoped warning (Kind "", Gran "line") anchored to that row like
 //     any other line comment.
 //   - The file+line falls inside a block, but not on a row rowForLine can
-//     find (an unchanged/context line the finding is ABOUT rather than
-//     about a change on — e.g. a docblock promise) — Kind still "", but
+//     find — Kind still "", but
 //     anchored on the block's own FIRST changed row instead of left
 //     unpinned. Unpinned (row -1) used to mean "shown anywhere within this
 //     block" for EVERY selection inside it (see commentUnder,
@@ -202,6 +279,14 @@ func existingLineCommentsInScope(list []comments.Comment, files []string) []exis
 //     context line outside every block, or a line the model got slightly
 //     wrong — becomes a PR-wide warning (Kind "ai_warning") instead of being
 //     dropped, so the reviewer still sees it (just without a precise row).
+//
+// Since the changed-lines guard in runCodeWarningReview, every finding
+// reaching here anchors on a line the PR actually changed, so the last two
+// outcomes are vangnets rather than the normal route: the second only fires
+// when rowForLine cannot map a genuinely changed line onto a diff row, the
+// third only when a changed line sits in no scanned block at all. Both are
+// kept — narrowing them away would trade a rare, harmless fallback for a
+// silently dropped finding.
 //
 // File is kept in all three cases, as a hint of what the finding is about.
 // Every warning is Source "ai" + Local true (never posted to GitHub),
@@ -240,4 +325,3 @@ func anchoredWarning(dataDir string, pr int, blocks []Block, f warningFinding) (
 	}
 	return in, b.ID()
 }
-

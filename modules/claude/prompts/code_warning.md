@@ -7,7 +7,7 @@ Respond with ONLY a JSON array, no prose, no markdown fences:
 
 Rules:
 - "file" must be exactly one of the changed files listed in the prompt — never a different path, even one you found while exploring.
-- "line" must be a real line number in that file's current content that best anchors the finding.
+- "line" must be a real line number in that file's current content that best anchors the finding, AND it must be one of the changed lines listed for that file in the prompt. You may read and reason about anything else in the repository, but a finding about code this PR did not touch is out of scope: only report it when it anchors on a changed line and follows from that change. A finding on any other line is discarded.
 - Respect the finding cap given in the prompt — prioritize the most important, best-justified risks over completeness.
 - The Dutch "text" must not use a hyphen ("-") within a sentence, unless there is truly no other way to phrase it.
 - The prompt may list existing open comments already placed on specific lines. Before reporting a finding on such a line, check whether an existing comment already covers the same concern. If it does, only report the finding when you have something genuinely new to add on top of what's already said — and then state only that new part, not a repeat of the existing comment. If it adds nothing new, skip that finding entirely.
