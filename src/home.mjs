@@ -8172,6 +8172,25 @@ function runCommand(cmd) {
   if (cmd && cmd.run) requestAnimationFrame(() => cmd.run())
 }
 
+// contextMenuMode picks the palette mode for a `/` press: the menu belonging to
+// the stop that currently owns the keyboard, else the general PR-wide one.
+// Deliberately mirrors — rather than replaces — the Enter branches further down
+// in onKeydown, which are ordered the same way; `/` is only ever evaluated at
+// one single point in that handler, so this is the whole decision it needs.
+//
+// The modes NOT listed here are unreachable at that point by construction:
+// 'compose'/'comment'/'claude' all sit behind the isComposeOpen()/
+// relatedActive()/isEditableFocused() branches, which return before `/` is ever
+// looked at (a `/` typed in a composer must reach the field as a character).
+function contextMenuMode() {
+  if (state.pushTodoFocused) return 'pushTodo'
+  if (!state.showDescription && selectedComment()) return 'prComment'
+  // Stop 1 (the PR description) and the two toggle rows have no block context;
+  // so does a PR whose blocks aren't loaded (or a genuinely block-less one).
+  if (state.showDescription || state.toggleFocused || state.ignoreToggleFocused || !curBlock()) return 'pr'
+  return 'block'
+}
+
 function onKeydown(e) {
   // While the command palette is open it owns the keyboard: ↑/↓ move the
   // selection, Enter runs it, Esc closes, and any typed characters flow into the
@@ -8438,14 +8457,23 @@ function onKeydown(e) {
     return
   }
 
-  // `/` opens the general PR-wide tree menu (overview / GitHub / Jira). Like
-  // Enter it's handled before the empty-blocks guard so it works while loading.
-  // A focused input (the comment composer/reply) is already handled by the
-  // relatedActive() branch, or by the isEditableFocused() fallback just above,
-  // so a typed `/` there never reaches here.
+  // `/` opens the menu that belongs to WHERE THE KEYBOARD IS — the same
+  // contextual choice Enter makes at this point in the chain (see
+  // contextMenuMode), falling back to the general PR-wide tree menu when the
+  // current stop has no menu of its own. Reviewer request: "als ik `/` typ,
+  // wil ik chatten met claude. Als dat betekent dat ik een code line heb
+  // geselecteerd, wil ik het menu zien dat al bestaat … als er geen menu is,
+  // laat dan in pr tree het algemene menu zien" — with the block palette open,
+  // typing straight into it reaches "Chat over deze regel" (the default
+  // no-match fallback, see resolveCommands). Like Enter it's handled before
+  // the empty-blocks guard so it works while loading. A focused input (the
+  // comment composer/reply) is already handled by the relatedActive() branch,
+  // or by the isEditableFocused() fallback just above, so a typed `/` there
+  // never reaches here — and that also bounds which modes are reachable from
+  // here at all (see contextMenuMode).
   if (e.key === '/') {
     e.preventDefault()
-    openMenu('pr')
+    openMenu(contextMenuMode())
     return
   }
 

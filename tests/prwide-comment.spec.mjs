@@ -10,6 +10,11 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // openPrWideComposer walks the `/` menu to the composer, from the block index.
 async function openPrWideComposer(page) {
+  // `/` opens the menu of the current stop (contextMenuMode, home.mjs), so the
+  // PR-wide menu now lives one step left of the index: stop 1, the PR
+  // description column.
+  await page.keyboard.press('ArrowLeft')
+  await expect(page.getByTestId('pr-info-column')).toBeVisible()
   await page.keyboard.press('/')
   await expect(page.getByTestId('command-menu')).toBeVisible()
   await page.getByTestId('command-row').filter({ hasText: 'GitHub' }).first().click()

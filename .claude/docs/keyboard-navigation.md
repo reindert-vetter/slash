@@ -672,6 +672,14 @@ changed rows within the range.
   `openTask`), and `←`/`→`. Deliberately the same "an ordinary step releases the
   selection" behaviour as a text editor.
 
+## `/` — the menu of the current stop
+
+`/` is no longer "the PR menu key": it opens whichever palette belongs to the
+stop that owns the keyboard (`contextMenuMode`, `home.mjs`) and only falls back
+to the PR-wide menu on a stop with no menu of its own. Full table + the
+consequence for reaching `PR_COMMANDS`: "`/` opens the menu of the CURRENT
+STOP" in `.claude/docs/command-palette.md`.
+
 ## `Space` — approve + continue in one keypress
 
 **`Space`** (`spaceKey`, `home.mjs`) is a one-key shortcut for exactly what the

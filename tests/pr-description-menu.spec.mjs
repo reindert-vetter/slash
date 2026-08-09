@@ -59,22 +59,32 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
     await expect(menu).not.toBeVisible()
   })
 
-  test('`/` outside stop 1 keeps the default diff-region positioning', async ({ page }) => {
+  // Outside stop 1, `/` no longer opens the PR-wide menu at all — it opens the
+  // menu of the current stop (contextMenuMode, home.mjs), here the block
+  // palette — so it is positioned exactly like Enter's own palette, not like
+  // the stop-1 PR menu asserted above.
+  test('`/` outside stop 1 opens the block palette, anchored exactly like Enter', async ({ page }) => {
     await page.goto('/pr/12903')
     // Block 0 (CONTROLLER-first) has no local diff preview; select block 1.
     await page.locator('[data-idx="1"]').click()
     await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
-    await page.keyboard.press('/')
     const menu = page.getByTestId('command-menu')
-    await expect(menu).toBeVisible()
 
-    // No description column open → the palette sits over the diff's NEW pane
-    // (the default region), i.e. to the right of the pr-index.
-    const a = await page.getByTestId('command-anchor').boundingBox()
-    const idx = await page.getByTestId('pr-index').boundingBox()
-    expect(a.x).toBeGreaterThan(idx.x + idx.width - 10)
+    await page.keyboard.press('Enter')
+    await expect(menu).toBeVisible()
+    const viaEnter = await page.getByTestId('command-anchor').boundingBox()
+    await page.keyboard.press('Escape')
+    await expect(menu).not.toBeVisible()
+
+    await page.keyboard.press('/')
+    await expect(menu).toBeVisible()
+    const viaSlash = await page.getByTestId('command-anchor').boundingBox()
+    expect(Math.abs(viaSlash.x - viaEnter.x)).toBeLessThan(2)
+    expect(Math.abs(viaSlash.width - viaEnter.width)).toBeLessThan(2)
+    // Not the description column's anchor: that column isn't even open here.
+    await expect(page.getByTestId('pr-info-column')).toHaveCount(0)
 
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()

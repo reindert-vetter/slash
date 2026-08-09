@@ -15,7 +15,7 @@ Arrow-key navigation of the tree itself lives in
 | `ms.mode` | Opened by | List |
 |---|---|---|
 | `block` | `Enter` in list/diff mode | `COMMANDS` |
-| `pr` | `/` anywhere, and `Enter` at stop 1 (the description column) | `PR_COMMANDS` |
+| `pr` | `Enter` at stop 1 (the description column), and `/` on any stop with no menu of its own (see below) | `PR_COMMANDS` |
 | `comment` | `Enter` on a focused comment row with an empty reply field | `commentCommandsFor()` |
 | `claude` | `Enter` on the Claude column while its composer is NOT the focused element (`cs.claudePos > 0`, stepped up into the transcript) | `claudeChatCommandsFor()` — "Wis Claude-gesprek" (confirm submenu, and deliberately first so it stays the `defaultSel` action) + "Probeer de mislukte turn opnieuw" (direct, the keyboard twin of the failed bubble's own button) |
 | `prComment` | `Enter` on a comment-index row | `prCommentCommandsFor()` |
@@ -667,7 +667,40 @@ time with plain-string labels, per `snapshotCommands`' rule.
 It is **not** an `isReviewFollowup` mode: the reply field it belongs to is
 on-screen, so `positionMenu` anchors it normally.
 
-## `/` — the PR-wide menu (`pr`, `PR_COMMANDS`)
+## `/` opens the menu of the CURRENT STOP (`contextMenuMode`)
+
+`/` used to be hardwired to `openMenu('pr')`. It now opens whatever menu
+belongs to the stop that owns the keyboard — `contextMenuMode()` (`home.mjs`),
+mirroring the Enter branches further down in `onKeydown`:
+
+| stop | mode |
+|---|---|
+| the push-todo row | `pushTodo` |
+| a comment-index row | `prComment` |
+| stop 1 (description), a toggle row, no block loaded | `pr` |
+| anything else (a selected block / a diff / stop 2b) | `block` |
+
+Reviewer request: "als ik `/` typ, wil ik chatten met claude. Als dat betekent
+dat ik een code line heb geselecteerd, wil ik het menu zien dat al bestaat …
+als er geen menu is, laat dan in pr tree het algemene menu zien." The chat part
+follows for free: with the block palette open, typing a question nobody's
+command matches lands on **"Chat over deze regel"**, the default no-match
+fallback (above). So `/`, type, Enter is one flow.
+
+`compose`/`comment`/`claude` are deliberately **absent** from that table: those
+stops all sit behind the `isComposeOpen()`/`relatedActive()`/`isEditableFocused()`
+branches, which return before `/` is ever looked at — a `/` typed into a
+composer must reach the field as a character. They are still reachable exactly
+as before, via `Enter`.
+
+**Accepted consequence, stated so it isn't mistaken for a regression:** the
+PR-wide menu (and thus "PR keuren", "Diepgravend onderzoek", "Algemene comment
+plaatsen") is no longer one keypress away from a selected block — it now takes
+`←` into stop 1 first, or `Enter` there. That is the direct implication of the
+request above; the specs (`tests/pr-menu.spec.mjs`,
+`tests/prwide-comment.spec.mjs`) walk that extra step.
+
+## The PR-wide menu itself (`pr`, `PR_COMMANDS`)
 
 The same overlay, with actions on the **whole PR**. Five root items:
 
@@ -699,7 +732,7 @@ The same overlay, with actions on the **whole PR**. Five root items:
 
 A typed `/` in a focused input never reaches this handler — the
 `relatedActive()` branch catches it earlier, so the character flows into the
-field.
+field. Which stop `/` opens this list from: see `contextMenuMode` above.
 
 The Jira/GitHub links need **PR metadata** (title + URL, and the `KEY-123`
 ticket key derived from the title) from the `prmeta` read model via
