@@ -293,12 +293,34 @@ suspects): plain `↑`/`↓` navigation leaks **~2.9 KB per keystroke**, perfect
 linearly, with the DOM node count byte-constant. The cause is that
 `reactive()`/`watch()` bookkeeping lives in **module-level arrays** (`X`, `et`,
 `tt`, `dt` in `src/vendor/arrow.js`) indexed by **monotonic counters** (`++me`
-in `nt`, `++he` in `rt`) with **no reclamation path** — and `re()`'s component
-mount allocates one such permanent entry per instantiation, so every re-mount
-during navigation is a permanent registry entry. So: **don't chase this in app
-code, and don't assume a disposal fix (PATCH 2/2b) removes it** — it doesn't,
-and no `.key()`/binding change will. Fixing it means a LOCAL PATCH 3 recycling
-those ids, deliberately not attempted yet.
+in `nt`, `++he` in `rt`) with **no reclamation path**. The actual per-step
+trigger is `Ut`, the auto-wrap that mints a fresh `nt()` id every time a
+*freshly created* plain object/array is read off or written onto reactive
+state — **not** `re()`'s official component-mount path (`F`/`Be`, arrow's own
+`component()`/`props()`/`pick()` API), which turned out to be dead code in
+this app (only `html`/`reactive`/`watch` are ever imported from
+`vendor/arrow.js` — see `.claude/rules/conventions.md`). So: **don't chase
+this in app code, and don't assume a disposal fix (PATCH 2/2b) removes it** —
+it doesn't, and no `.key()`/binding change will.
+
+A LOCAL PATCH 3 recycling those ids via `FinalizationRegistry` (freeing an id
+only once the wrapping proxy is provably GC-unreachable, specifically to avoid
+PATCH 2b's "manual teardown hook races a stale in-flight effect" class of bug)
+was attempted, measured to flatten the leak, and then **reverted — it crashes**
+(`Cannot read properties of undefined (reading '<n>')`, reproducible at roughly
+1-in-4 to 1-in-20 runs of `tests/drill-refresh-multi-level.spec.mjs`, absent in
+12+ control runs of the same test against the unpatched file). Root cause:
+`watch()`'s own dependency bookkeeping (`tt[watchId]`) stores raw reactive ids
+as **plain numbers**, not object references — so GC can correctly prove a
+reactive's proxy unreachable (and recycle its id) while a *watch* that read it
+on an earlier run still has that id sitting, uncleaned, in its own `tt[]`
+array; reused (or merely disposed) before that watch's next `Jt` cleanup step
+reaches it, and you get silent subscriber-list corruption or exactly this
+crash. Recycling `nt`'s ids this way is fundamentally incompatible with
+arrow.js's numeric (not weak-object-ref) dependency tracking — not a one-line
+fix. Full writeup, the measured before/after numbers, and what a real fix
+would need: "Status: diagnosed, a fix was attempted and found unsafe — still
+unfixed" in `.claude/docs/frontend-memory.md`.
 
 ## Nested `@click`: call `e.stopPropagation()` FIRST, before the state mutation
 
