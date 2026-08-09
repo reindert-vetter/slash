@@ -313,14 +313,17 @@ with a counter probe over 800 `↑`/`↓` steps: `me`/`X.length`/`et.length` wen
 from **+2.10 per step, unbounded** to **0.00**, with every other internal
 counter (`he`, `tt`, `k`, `W`, `At`, `Ht`, `Q`, `Et`) flat too.
 
-**It does NOT make the app leak-free, and nobody should read it that way.** The
-nav loop still climbs — 585 → 403 bytes per step, still monotonic (83% of
-samples rising), against ~15 B/step and 17% for the idle/inert control loops.
-A **second leak, not in arrow.js**, sits underneath: with the patch applied
-every arrow counter is flat while the heap still grows, and an entry state with
-**0.00 reactives per step still leaks 146 B/step**. So arrow's registries are no
-longer a suspect — but "the frontend memory leak" is only half fixed, and the
-remaining half is unidentified. Don't chase it in arrow.js.
+**The nav loop is flat with it, but only measure that after the JIT has
+settled.** A/B with an identical 2500-step warmup, 1200 sampled steps: unpatched
+**+293 B/step still monotone**, patched **−88 B/step, net negative, oscillating**
+— the shape of the idle/inert controls. Measured after only a 200-step warmup
+the same patched build reads 403 B/step at 83% climbing, which was briefly (and
+wrongly) written up as "a second, arrow-independent leak". A heap-snapshot diff
+by `type|name` settled it: the residual is V8 `code|system / InstructionStream`
++ `TrustedByteArray`, i.e. the optimizing compiler, with **no JS-object category
+growing**. Warm up for thousands of steps and confirm with a category breakdown
+before calling anything a leak — see `.claude/docs/frontend-memory.md`,
+"The second leak that wasn't".
 
 Why this shape and not id-recycling: an earlier PATCH 3 attempt recycled ids via
 `FinalizationRegistry` and **crashed** (`Cannot read properties of undefined

@@ -110,13 +110,16 @@
  * needed changing because the rest of the code only ever passes an id around
  * and compares it with `===`/`==` — nothing anywhere does arithmetic on it.
  *
- * IMPORTANT — THIS DOES NOT MAKE THE APP LEAK-FREE. It removes arrow's own
- * registry growth completely, but the nav loop still climbs (585 → 403 bytes
- * per step, still monotonic, versus ~15 B/step for the idle/inert controls).
- * A SECOND leak, not in arrow.js, sits underneath: with this patch applied
- * every arrow counter is flat while the heap still grows, and an entry state
- * with 0.00 reactives/step still leaks 146 B/step. Do not read this patch as
- * "the frontend memory leak is fixed".
+ * MEASURING IT: warm up for THOUSANDS of steps before sampling, or you will
+ * measure V8's JIT warming up and conclude the leak is still there. A/B with an
+ * identical 2500-step warmup, 1200 sampled steps: unpatched +293 B/step and
+ * still monotone, patched -88 B/step, net negative and oscillating — the shape
+ * of the idle/inert controls. The same patched build reads 403 B/step after
+ * only a 200-step warmup, which was briefly written up as "a second,
+ * arrow-independent leak"; a heap-snapshot diff by type|name disproved it (the
+ * residual is code|system / InstructionStream + TrustedByteArray, with no
+ * JS-object category growing at all). See .claude/docs/frontend-memory.md,
+ * "The second leak that wasn't".
  *
  * THE 16 EDITS (original → patched). Each anchor occurs exactly once:
  *  1. `dt=[],X=[]`                       → `dt=new WeakSet,X=new WeakMap`
@@ -144,8 +147,11 @@
  * (`dt`/`X`/`$t`/`et`), reinstate `let me=-1`, and turn every `.get(x)`/
  * `.set(x,v)`/`.add(x)`/`.has(x)` on them back into `[x]`/`[x]=v`.
  *
- * VERIFY AFTER RESTORING OR UPGRADING: no bare `X[`, `et[`, `dt[` or `$t[`
- * may remain (they must all be map calls), and no identifier `me` may remain.
+ * VERIFY AFTER RESTORING OR UPGRADING: on the CODE line only (the last line of
+ * this file — this comment block quotes the originals, so grepping the whole
+ * file always false-positives), no bare `X[`, `et[`, `dt[` or `$t[` may remain
+ * (they must all be map calls) and no identifier `me` may remain. Quick check:
+ *   tail -1 src/vendor/arrow.js | grep -c 'dt=new WeakSet,X=new WeakMap'   # 1
  *
  * Minified ↔ upstream name map for this patch (traced against
  * `@arrow-js/core@1.0.6`, `dist/chunks/internal-DchK7S7v.mjs` — the chunk hash

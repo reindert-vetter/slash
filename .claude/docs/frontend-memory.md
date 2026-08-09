@@ -168,14 +168,20 @@ and never subscribed to — untested, may not cover the actual leak).
 **No code from this attempt is committed.** `src/vendor/arrow.js` is
 unchanged from before this investigation.
 
-## LOCAL PATCH 3 — LANDED, as a deliberate PARTIAL fix
+## LOCAL PATCH 3 — LANDED, and it does fix the navigation leak
 
 Object-reference ids + WeakMap registries. This is **in the tree** (see the
 LOCAL PATCH 3 block in `src/vendor/arrow.js`). It removes arrow.js's own
-registry growth completely and is proven safe — but it does **not** make the nav
-loop flat, because a second, arrow-independent leak sits underneath it. It was
-landed on that explicit understanding: fix the half that is understood, then
-hunt the other half separately. Do not close the memory-leak topic on it.
+registry growth completely, is proven safe, and — once the measurement is
+corrected for JIT warmup, see below — takes the navigation loop to the flat,
+non-monotonic shape of the control loops.
+
+**Correction, recorded deliberately:** this was first reported as a *partial*
+fix that left "a second, arrow-independent leak" behind. **That was wrong**, and
+the mistake was measurement, not code: the 1200-step run was still inside V8's
+JIT warmup. See "The second leak that wasn't" below. The patch was landed while
+that wrong conclusion still stood, so the commit message for it also says
+"partial fix" — this file is the corrected record.
 
 (History note, so the git log reads sensibly: the code first reached `main` by
 accident — commit `93bb173`, and after a revert again via `e3ac65e` — both
@@ -224,16 +230,21 @@ that had broken tracking would also "not leak", so this check is not optional.
 **Performance:** +3.0% on a flat set/get hot path, +5.6% on a nested one
 (300k ops, median of 15 interleaved reps). ~10–17 ns per iteration. Negligible.
 
-**App-level result — a real improvement, but not flat.** Rebuilt harness,
-PR 13255, 1200 steps, forced GC per sample:
+**App-level result.** Rebuilt harness, PR 13255, 1200 steps, forced GC per
+sample. Two runs, and the difference between them is entirely the **warmup**:
 
-| loop | before | after | controls |
-|---|---|---|---|
-| nav ↑/↓ | 585 B/step, 92% climbing | 403 B/step, 83% climbing | idle 14 B/step / 17%, inert F8 15 B/step / 17% |
+| warmup before sampling | before | after |
+|---|---|---|
+| 200 steps (JIT still warming) | 585 B/step, 92% climbing | 403 B/step, 83% climbing |
+| **2500 steps (JIT settled)** | **+293 B/step, 83% climbing, monotone** | **−88 B/step, net NEGATIVE, oscillating** |
 
-A 31% reduction, still monotonic — **not** the flat, non-monotonic shape of the
-controls. This is the honest ceiling of this patch, and the reason the second
-leak below is the open work.
+Controls for reference: idle 30 B/step / 25% climbing, inert F8 0 B/step / 0%.
+`Nodes` and `JSEventListeners` are +0 in every run.
+
+The second row is the honest one, and it is an A/B with everything else
+identical. Unpatched still climbs monotonically after the JIT has settled;
+patched ends *below* where it started and oscillates. That is the control
+shape, so the gate is met.
 
 **Safety, measured:** `tests/drill-refresh-multi-level.spec.mjs` **12/12** at
 `--workers=1` with `pageerror` capture (plus 6 more later: 17/18, the one miss
@@ -249,40 +260,57 @@ uncommitted edits to `src/Block.mjs`/`src/RelatedPanel.mjs` produced 16 and then
 48 failures in the main tree during this work, which is noise that can easily be
 mistaken for a regression — the clean worktree gave a stable 460/1 both ways.
 
-## There is a SECOND leak, and it is not arrow.js
+## The second leak that wasn't — JIT warmup read as a leak
 
-The most useful thing the attempt above produced. With it applied, a counter
-probe over 800 nav steps shows **every** arrow.js internal counter flat:
+**This section used to claim a second, arrow-independent leak existed. It does
+not.** Kept, corrected, because the false positive is instructive and the
+evidence that killed it is the useful part.
+
+The claim came from measuring 1200 nav steps after only a 200-step warmup: the
+patched build still showed 403 B/step at 83% climbing, and an `ArrowRight
+ArrowRight` entry state showed 146 B/step with 0.00 reactives/step, which looked
+like a leak with the reactive component switched off.
+
+**What it actually was.** A heap-snapshot diff across the loop (survivors of a
+forced GC, aggregated by `type|name`) showed the growth is almost entirely V8's
+own JIT output — `code|system / InstructionStream` ~200 B/step,
+`TrustedByteArray` ~70, `ProtectedFixedArray` ~29 — and **no JS-object category
+grew at all**. Re-run after a 3000-step warmup, only the code categories were
+left (123 + 54 B/step) and total surviving growth was *negative*. Then the
+decisive A/B, same 2500-step warmup on both builds: unpatched +293 B/step still
+monotone, patched −88 B/step oscillating.
+
+So the residual was the optimizing compiler still generating code for functions
+the loop had only just made hot, plus GC sawtooth. Nothing was retaining it.
+
+**The lesson, which is the same one as the WeakMap-capacity trap below:** a
+per-step byte figure taken before the workload reaches steady state is not a
+leak measurement. Warm up until the JIT has settled — thousands of steps, not
+hundreds — and confirm with a snapshot diff that a *JS-object* category is
+actually growing before calling anything a leak. A category breakdown costs one
+extra script and would have prevented this entirely.
+
+**Still genuinely untested:** only the nav loop was re-measured this way. The
+approve (`Space`, ~27 KB/step) and palette open/close (~5 KB/step) loops from
+"Measured leak" above have not been re-run since the patch, and the approve one
+has a known legitimate component (`ensureCode` caching, bounded by block count).
+If a leak is ever reported again, re-measure those two the same way before
+assuming anything.
+
+## Arrow's registries, before and after — the direct counter evidence
+
+Independent of any heap number: a `window.__arrowCounters` probe (see
+"Re-measuring") over 800 nav steps shows every internal counter flat after the
+patch.
 
 | counter | before | after |
 |---|---|---|
 | `me` / `X.length` / `et.length` | **+2.10 per step**, unbounded | **0.00** |
 | `he`, `tt.length`, `k.length`, `W.length`, `At.length`, `Ht`, `Q.size`, `Et.length` | 0.00 | 0.00 |
 
-So arrow's registries are provably no longer growing — and the heap still climbs
-403 B/step. Two independent confirmations that the remainder is somewhere else:
-
-1. All arrow counters flat while the heap climbs.
-2. Entering the page differently changes the reactive churn without removing the
-   growth. Measured per entry state (before the change): `ArrowRight` →
-   1.76 reactives/step / 363 B/step; `ArrowRight ArrowRight` → **0.00
-   reactives/step but still 146 B/step**; `ArrowRight` + `d` (diff mode) → 2.30
-   / 578 B/step. A state with **zero** reactive churn still leaks.
-
-**So the reported symptom needs both fixes.** The arrow side is landed and safe
-(LOCAL PATCH 3, above). **The open follow-up task is identifying the non-arrow
-~150–400 B/step**, and until that is done the reported "browser eventually locks
-up" symptom is only partly addressed. It is not detached DOM and not listeners —
-`Nodes` and `JSEventListeners` are +0 across every run here too, so whatever it
-is retains plain JS objects, same as the arrow half did.
-
-Starting points for that hunt, in order of cheapness: the `ArrowRight
-ArrowRight` entry state is the best probe found so far (0.00 reactives/step but
-still 146 B/step, so it isolates the non-arrow component with the reactive
-component switched off); the harness and the `window.__arrowCounters` probe
-technique in "Re-measuring" below are directly reusable; and since the arrow
-counters are now provably flat, any remaining growth can be attributed to app
-code or the browser without having to rule arrow.js out again.
+This is the cleanest single proof that the mechanism is gone, and it needs no
+GC, no snapshot and no warmup — which is exactly why it should be the *first*
+thing checked next time, before any byte-per-step figure is trusted.
 
 ## Two routes that are closed — do not re-litigate them
 
