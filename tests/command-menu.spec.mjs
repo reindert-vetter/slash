@@ -116,7 +116,7 @@ test.describe('PR Review Tree — command palette', () => {
     await expect(input).toHaveValue('keur ')
   })
 
-  test('no match falls back to "Maak hiermee een comment" and pre-fills the composer', async ({
+  test('no match falls back to chat + comment, and the comment item pre-fills the composer', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -137,16 +137,19 @@ test.describe('PR Review Tree — command palette', () => {
     await page.keyboard.press('Enter')
     const rows = page.getByTestId('command-row')
 
-    // A query matching no command collapses to the two-item fallback, comment
-    // first (the default Enter action — see resolveCommands in home.mjs).
+    // A query matching no command collapses to the two-item fallback: "Chat
+    // over deze regel" FIRST (thus the default Enter action — see
+    // resolveCommands in home.mjs), "Comment op deze regel" below it.
     await page.getByTestId('command-input').fill('dit klopt niet helemaal')
     await expect(rows).toHaveCount(2)
-    await expect(rows.first()).toContainText('Maak hiermee een comment')
-    await expect(rows.nth(1)).toContainText('Chat over deze regel')
+    await expect(rows.first()).toContainText('Chat over deze regel')
+    await expect(rows.nth(1)).toContainText('Comment op deze regel')
 
-    // Enter runs it: the menu closes and the comments composer opens with the
-    // typed text already in the textarea, ready to keep typing — nothing is
-    // posted until the reviewer explicitly sends it.
+    // ↓ selects the comment item; Enter runs it: the menu closes and the
+    // comments composer opens with the typed text already in the textarea,
+    // ready to keep typing — nothing is posted until the reviewer explicitly
+    // sends it.
+    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
     const composer = page.getByTestId('comment-compose')
@@ -172,7 +175,7 @@ test.describe('PR Review Tree — command palette', () => {
     expect(posted.label).toBeTruthy()
   })
 
-  test('no match: second fallback item "Chat over deze regel" pre-fills the Claude composer', async ({
+  test('no match: the default fallback item "Chat over deze regel" pre-fills the Claude composer', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -185,11 +188,11 @@ test.describe('PR Review Tree — command palette', () => {
     await page.getByTestId('command-input').fill('dit klopt niet helemaal')
     await expect(rows).toHaveCount(2)
 
-    // ↓ selects the 2nd row; Enter runs it — the menu closes and the Claude
-    // composer opens with the typed text already in the textarea, focused,
-    // ready to keep typing. Nothing is sent until the reviewer presses
-    // Enter/"Stuur" in that composer.
-    await page.keyboard.press('ArrowDown')
+    // The chat item is the DEFAULT (first row), so a bare Enter runs it — the
+    // menu closes and the Claude composer opens with the typed text already in
+    // the textarea, focused, ready to keep typing. Nothing is sent until the
+    // reviewer presses Enter/"Stuur" in that composer.
+    await expect(rows.first()).toContainText('Chat over deze regel')
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
     const composer = page.getByTestId('claude-chat-compose')

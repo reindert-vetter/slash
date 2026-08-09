@@ -7949,9 +7949,9 @@ function rootCommandsFor(mode) {
 // `ms.commands` (a plain-string-label snapshot of the current mode's root list,
 // built by openMenu/rootCommandsFor+snapshotCommands), or — when nothing
 // matches a non-empty query in the default 'block' mode — a two-item fallback
-// that opens either the comment composer or the Claude composer with the
-// typed text pre-filled, so the reviewer can continue typing ("Maak hiermee
-// een comment", default, and "Chat over deze regel"). Shared by the menu
+// that opens either the Claude composer or the comment composer with the
+// typed text pre-filled, so the reviewer can continue typing ("Chat over deze
+// regel", default, and "Comment op deze regel" below it). Shared by the menu
 // render and the keyboard handler so both walk the same list.
 function resolveCommands(query) {
   // A submenu (ms.sub, set by enterSubmenu when a command has `children` —
@@ -8024,29 +8024,17 @@ function resolveCommands(query) {
   const list = filterCommands(ms.commands, query)
   const q = (query || '').trim()
   if (list.length === 0 && q) {
-    // "Maak hiermee een comment" stays FIRST (thus the default Enter action —
-    // this fallback is a plain array, not run through withClose/defaultSel,
-    // so index 0 IS the default here): unchanged pre-existing behavior. "Chat
-    // over deze regel" is the reviewer's requested second option, same shape
-    // as the comment one but prefilling the Claude composer
-    // (claude-chat-compose) instead of the comment composer — see
-    // startClaudeChat's own doc comment for why it reuses startComment's setup.
+    // "Chat over deze regel" is FIRST, and therefore the default Enter action —
+    // this fallback is a plain array, not run through withClose/defaultSel, so
+    // index 0 IS the default here (and CommandMenu's own @input resets ms.sel
+    // to 0 on every keystroke). Reviewer request: typing something the palette
+    // doesn't know is far more often the start of a question for Claude than
+    // the start of a comment, so chatting is the default and "Comment op deze
+    // regel" sits right below it. Deliberately still only on NO match — with
+    // matches present the palette's own commands keep the field.
+    // Both items only PREFILL their composer (claude-chat-compose resp.
+    // comment-compose); neither sends or places anything on its own.
     return [
-      {
-        id: 'make-comment',
-        label: 'Maak hiermee een comment',
-        hint: 'comment',
-        run: () => {
-          startComment(commentTarget)
-          requestAnimationFrame(() => {
-            const el = document.querySelector('[data-testid=comment-compose]')
-            if (el) {
-              el.value = q
-              el.focus()
-            }
-          })
-        },
-      },
       {
         id: 'make-claude-chat',
         label: 'Chat over deze regel',
@@ -8055,6 +8043,21 @@ function resolveCommands(query) {
           startClaudeChat(commentTarget)
           requestAnimationFrame(() => {
             const el = document.querySelector('[data-testid=claude-chat-compose]')
+            if (el) {
+              el.value = q
+              el.focus()
+            }
+          })
+        },
+      },
+      {
+        id: 'make-comment',
+        label: 'Comment op deze regel',
+        hint: 'comment',
+        run: () => {
+          startComment(commentTarget)
+          requestAnimationFrame(() => {
+            const el = document.querySelector('[data-testid=comment-compose]')
             if (el) {
               el.value = q
               el.focus()

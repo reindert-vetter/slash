@@ -173,17 +173,27 @@ that instead of the root list (without the comment fallback).
 
 If filtering yields **nothing** for a non-empty query, the menu falls back to
 **two** items, both prefilling their own composer with the typed text instead
-of running anything immediately: **"Maak hiermee een comment"** (default, first
-— opens the comment composer via `startComment`, same target as the ordinary
-`comment` row in `COMMANDS`) and **"Chat over deze regel"** (opens the Claude
-composer via `startClaudeChat`, prefilling `claude-chat-compose` instead of
-`comment-compose`). Neither posts/sends on its own — placing the comment still
-goes through the ordinary compose flow (`createComment` from `RelatedPanel.mjs`
-→ `POST /api/workflows/task_code_comment`, within the write boundary), and the
-Claude composer only sends once the reviewer presses Enter/"Stuur" there. This
-is a **plain array, not `withClose`** — so index 0 (not index 1 via
-`defaultSel`) is the default Enter action, which is why the comment item must
-stay first. Filter + fallback both live in `resolveCommands(query)`.
+of running anything immediately: **"Chat over deze regel"** (default, first —
+opens the Claude composer via `startClaudeChat`, prefilling
+`claude-chat-compose`) and **"Comment op deze regel"** (opens the comment
+composer via `startComment`, `comment-compose`, same target as the ordinary
+`comment` row in `COMMANDS`). Neither posts/sends on its own — placing the
+comment still goes through the ordinary compose flow (`createComment` from
+`RelatedPanel.mjs` → `POST /api/workflows/task_code_comment`, within the write
+boundary), and the Claude composer only sends once the reviewer presses
+Enter/"Stuur" there. This is a **plain array, not `withClose`** — so index 0
+(not index 1 via `defaultSel`) is the default Enter action, which is why the
+CHAT item must stay first.
+
+**The chat/comment order was reversed on explicit request** (it used to be
+"Maak hiermee een comment" first): typing something the palette doesn't know is
+far more often the start of a question for Claude than the start of a comment,
+so chatting became the default and the comment item moved right below it —
+"chat over deze regel … dan moet zelfs dan de default worden, daaronder Comment
+op deze regel". Equally deliberate, from the same exchange: the fallback stays
+gated on **no match at all**. It was *not* widened to "always, as soon as
+something is typed" — with real matches present the palette's own commands keep
+the field. Filter + fallback both live in `resolveCommands(query)`.
 
 ## `Enter` — the block palette (`COMMANDS`)
 
