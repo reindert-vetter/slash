@@ -286,6 +286,20 @@ the result as a plain string on `ms.commands`/`ms.sub`, so CommandMenu's
 `${() => labelOf(c)}` only ever sees a string and registers no dependency
 outside `ms`.
 
+**A residual leak survives ALL of the above, and it is arrow.js's own, not
+ours.** Measured against a real PR (see "Measured leak" in
+`.claude/docs/frontend-memory.md` for the numbers, the repro and the ruled-out
+suspects): plain `↑`/`↓` navigation leaks **~2.9 KB per keystroke**, perfectly
+linearly, with the DOM node count byte-constant. The cause is that
+`reactive()`/`watch()` bookkeeping lives in **module-level arrays** (`X`, `et`,
+`tt`, `dt` in `src/vendor/arrow.js`) indexed by **monotonic counters** (`++me`
+in `nt`, `++he` in `rt`) with **no reclamation path** — and `re()`'s component
+mount allocates one such permanent entry per instantiation, so every re-mount
+during navigation is a permanent registry entry. So: **don't chase this in app
+code, and don't assume a disposal fix (PATCH 2/2b) removes it** — it doesn't,
+and no `.key()`/binding change will. Fixing it means a LOCAL PATCH 3 recycling
+those ids, deliberately not attempted yet.
+
 ## Nested `@click`: call `e.stopPropagation()` FIRST, before the state mutation
 
 A nested `@click` handler that synchronously mutates reactive state can remove

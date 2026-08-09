@@ -96,6 +96,9 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
   its state machine, SSE-driven live progress, and its render contract.
 - `footer.md` — the inline preview of the active unit, its content-driven
   height, and the AI description.
+- `frontend-memory.md` — the measured heap leak (per-keystroke numbers, the
+  arrow.js registry root cause, the ruled-out suspects) and how to re-measure
+  it. Read it before investigating "the tab gets slow/freezes".
 - `approval.md` — reviewer approval: the granular row/call model, persistence,
   the tree rollup and its counters/indicators.
 - `test-class-grouping.md` — grouping TEST blocks per class (`test_class` rows
