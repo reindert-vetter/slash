@@ -461,6 +461,16 @@ function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/description-blocks.json'], {
     stdio: 'ignore',
   })
+  // Module/layer-label fixture (PR 118, block-module-layer-labels.spec.mjs):
+  // four blocks covering every shape of the module/layer/type path split
+  // (src/blockPath.mjs, mirroring classify.go's splitBlockPath) — app as an
+  // ordinary module name, an old-style flat module path, a new-style
+  // module/layer/type path, and a plain-Laravel path with neither. No
+  // worktrees needed (the pills read b.file directly, like the rename
+  // fixture's path badge).
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/modulelabel-blocks.json'], {
+    stdio: 'ignore',
+  })
 }
 
 function canConnect(port) {

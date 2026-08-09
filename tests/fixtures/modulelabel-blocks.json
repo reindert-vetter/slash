@@ -1,0 +1,46 @@
+[
+  {
+    "pr": 118,
+    "file": "app/Features/PromotionCodesV2Feature.php",
+    "class": "PromotionCodesV2Feature",
+    "name": "isEnabled",
+    "category": "FEATURE",
+    "line": 10,
+    "endLine": 14,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 118,
+    "file": "modules/Payments/Services/RefundService.php",
+    "class": "RefundService",
+    "name": "refund",
+    "category": "SERVICE",
+    "line": 20,
+    "endLine": 26,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 118,
+    "file": "modules/Checkouts/Internal/Services/CheckoutService.php",
+    "class": "CheckoutService",
+    "name": "finish",
+    "category": "SERVICE",
+    "line": 30,
+    "endLine": 38,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 118,
+    "file": "config/services.php",
+    "class": "",
+    "name": "services.php",
+    "category": "CONFIG",
+    "line": 1,
+    "endLine": 40,
+    "status": "modified",
+    "side": "new"
+  }
+]

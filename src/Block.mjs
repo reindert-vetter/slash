@@ -8,6 +8,7 @@ import { categoryClass } from './BlockList.mjs'
 import { translationBlockView, translationChangeUnits } from './translationDiff.mjs'
 import { avatarHtmlString } from './avatar.mjs'
 import { renderMarkdown } from './markdown.mjs'
+import { splitBlockPath, paletteClass } from './blockPath.mjs'
 import { parseAutoWidthPx, resizeHandle } from './columnWidth.mjs'
 import Prism from './vendor/prism.js'
 
@@ -726,6 +727,7 @@ export default function Block(b, opts = {}) {
             categoryClass(b.category)}"
           >${() => b.category}</span
         >
+        ${() => pathPills(b)}
         <h2 class="flex-1 truncate font-mono text-sm font-semibold text-slate-800 dark:text-zinc-200">
           ${() => b.label}
         </h2>
@@ -1584,6 +1586,54 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // call-site row. Suppressed when emitMeta is false, see above.
   const dataRow = emitMeta ? ` data-row="${i}"` : ''
   return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}>${check}${gutterHtml}${body}${marker}${lineSummaryHtml}</div>`
+}
+
+// pathPills renders the MODULE and LAYER a block lives in, next to the
+// category pill on the card header. Both are optional and each is simply left
+// out when absent — a plain-Laravel path (`config/…`) has neither, an
+// old-style module path (`modules/Payments/Services/…`) has only a module, a
+// new-style one (`modules/Checkouts/Internal/Services/…`) has both. `app`
+// counts as a module name like any other (Reindert), so it gets a pill too.
+//
+// Together with the category pill this is the three-label set: module · layer ·
+// type. Deliberately HERE and not in the sidebar row: the block index is for
+// scanning and its row already carries cursor/category/label/removed/unpushed/
+// comment-activity/approval/status; the card is where there is room for
+// context. (Reindert picked this over "all three in the index".)
+//
+// The module pill's colour comes from the same rotating palette the category
+// fallback uses, so one module always looks the same; the layer pill is
+// deliberately a neutral outline — there are only three layer values and they
+// are a structural detail, not a category. As always the WORD carries the
+// meaning, colour is decoration (the colourblind rule).
+//
+// Returned as a keyed ARRAY, never a bare element or null, so the slot always
+// emits the same kind and can't hit the single↔array freeze (see
+// .claude/rules/arrowjs-pitfalls.md).
+function pathPills(b) {
+  const { module, layer } = splitBlockPath(b.file)
+  const pills = []
+  if (module) {
+    pills.push(
+      html`<span
+        data-testid="block-module-pill"
+        class="${'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide ' + paletteClass(module)}"
+        title="${'Module: ' + module}"
+        >${module}</span
+      >`.key('mod:' + module),
+    )
+  }
+  if (layer) {
+    pills.push(
+      html`<span
+        data-testid="block-layer-pill"
+        class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-slate-600 dark:text-zinc-300 ring-1 ring-inset ring-slate-300 dark:ring-zinc-600"
+        title="${'Laag: ' + layer}"
+        >${layer}</span
+      >`.key('layer:' + layer),
+    )
+  }
+  return pills
 }
 
 // noteIconHtmlString — the per-line indicator's glyph for a row whose only

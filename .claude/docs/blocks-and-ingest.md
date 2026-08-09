@@ -518,6 +518,36 @@ produced at all (its `CATEGORY_STYLE` entry is harmless and stays).
 Tests: `TestSplitBlockPath`, `TestCategoryForTypeDirectory` (`classify_test.go`).
 Same re-ingest caveat as above — `category` is a stored column.
 
+**Display: three pills, module and layer on the card header only.**
+`src/blockPath.mjs` (a pure utility like `urlState.mjs`/`theme.mjs`) exports
+`splitBlockPath(file)` → `{module, layer}` and `paletteClass(label)`.
+`Block.mjs`'s `pathPills(b)` renders them right after the existing category
+pill (`data-testid=block-module-pill`/`block-layer-pill`), each simply left out
+when absent — so the header reads `SERVICE · Checkouts · Internal ·
+CheckoutService::finish`, or just `CONFIG · services.php` for a path with
+neither. Returned as a **keyed array**, never a bare element/null, so the slot
+always emits the same kind (the single↔array freeze,
+`.claude/rules/arrowjs-pitfalls.md`).
+
+Deliberately **not** in the sidebar row (Reindert's own call between the
+options): the block index is for scanning and its row already carries
+cursor/category/label/removed/unpushed/comment-activity/approval/status, while
+the card is where there is room for context.
+
+**Colours start over instead of going neutral.** `categoryClass`'s fallback is
+no longer `OTHER`'s grey but `paletteClass` — a deterministic hash into the
+same Tailwind families the hand-picked `CATEGORY_STYLE` entries use, so the
+much wider tag set the type table produces (FEATURE, WORKFLOW, COMMAND, DTO, …)
+each gets a stable colour of its own instead of all landing on the same pill.
+The module pill uses the same palette (one module always looks the same); the
+layer pill is a neutral outline — three possible values, a structural detail
+rather than a category. Two labels sharing a hue is fine: the **word** carries
+the meaning, colour is decoration (the colourblind rule). `OTHER` itself stays
+grey — it means "we don't know", which should look unremarkable.
+
+Test: `tests/block-module-layer-labels.spec.mjs` (fixture PR 118, covering all
+four path shapes).
+
 ### Trait blocks (`TRAIT`, keyword-based, not path-based)
 
 A method declared directly inside a PHP `trait` body classifies as **`TRAIT`**

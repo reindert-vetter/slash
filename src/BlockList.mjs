@@ -5,6 +5,7 @@
 import { html } from './vendor/arrow.js'
 import { removedLabel } from './Block.mjs'
 import { avatarHTML, identityOf } from './avatar.mjs'
+import { paletteClass } from './blockPath.mjs'
 
 // Tailwind classes per category tag, so the pills read like the screenshot.
 const CATEGORY_STYLE = {
@@ -56,8 +57,18 @@ const STATUS_STYLE = {
   removed: { cls: 'text-rose-600 dark:text-rose-400', mark: '-' },
 }
 
+// An unlisted category falls back to the shared rotating palette
+// (blockPath.mjs's paletteClass), NOT to OTHER's grey. classify.go's
+// type-directory table produces a much wider set of tags than the hand-picked
+// list above (FEATURE, WORKFLOW, COMMAND, DTO, …), and Reindert's call was to
+// "just start over with the colours" rather than let every new tag land on the
+// same neutral pill. The hue is deterministic per tag, so one category always
+// looks the same; the WORD still carries the meaning, so two tags sharing a
+// hue is fine (the colourblind rule). "OTHER" itself is in the table above and
+// keeps its deliberate grey — it means "we don't know", which should look
+// unremarkable.
 export function categoryClass(cat) {
-  return CATEGORY_STYLE[cat] || CATEGORY_STYLE.OTHER
+  return CATEGORY_STYLE[cat] || (cat ? paletteClass(cat) : CATEGORY_STYLE.OTHER)
 }
 
 export function statusInfo(status) {
