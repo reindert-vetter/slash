@@ -589,6 +589,12 @@ scope to it and `→` could never reach that child at all.
   yields no sites and therefore never creates one. Memoized per block on the
   identity of `b.code` + `state.callResolve` (both reassigned wholesale), since
   this is reached from navigation bindings on every keystroke.
+  **Accepted consequence:** because `referenceRows` reads `state.callResolve`,
+  every reactive binding that computes units now also depends on it. That list
+  only changes on `loadCallResolve` (page load, and after a `resolve_call` run
+  lands), which already triggers a `recomputeLeftList` + a `setRelated` rebuild
+  anyway — so this adds no per-keystroke work, unlike the outer-closure
+  coupling warned about in `.claude/rules/arrowjs-pitfalls.md`.
 - **How they become units** — `unitsFor(rows, gran, extraRows)`
   (`Block.mjs`, `withReferenceUnits`), fed by `navUnitsOf`, which is now the
   single entry point every consumer in `home.mjs` goes through (the remaining

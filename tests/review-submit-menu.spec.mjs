@@ -355,6 +355,11 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
     await page.keyboard.press('Escape')
 
+    // `/` opens the menu of the CURRENT stop (contextMenuMode, home.mjs), so
+    // the PR-wide menu lives one step left of the index: stop 1, the PR
+    // description column. See command-palette.md.
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('pr-info-column')).toBeVisible()
     await page.keyboard.press('/')
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
