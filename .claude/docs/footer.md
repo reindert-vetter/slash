@@ -164,8 +164,10 @@ unit+code-hash). While the run is in progress the line shows "Generating AI
 description…" (pulsing); a `failed` row (offline, `SLASH_CLAUDE=off`) hides the
 line again.
 
-A row matches on `blockId|unitKey` (unitKey = `group-<start>-<end>`/
-`line-<row>`, the same codeRef shape as `commentPath`) **plus** a code-hash
+A row matches on `blockId|unitKey` (unitKey = `${gran}-<start>-<end>`, e.g.
+`group-2-4`/`line-2-2` — both `start` and `end`, even for a single line: a
+merged Shift+arrow range can share a start row with an unrelated single line,
+which a bare `line-<row>` key couldn't distinguish) **plus** a code-hash
 check (`fnv1a` over `EXPLAIN_PROMPT_VERSION + '|' + code + context`): a stale
 row from before a new commit — or from before a prompt change that bumped
 `EXPLAIN_PROMPT_VERSION` — is ignored and regenerated. A seeded row with an
@@ -177,3 +179,20 @@ being cut off. While the description shows, the footer's own height grows
 accordingly (`footerBoxPx` above) and `<main>` reserves that same height, so
 nothing shifts behind the footer. Test: `tests/footer-explanation.spec.mjs`
 (incl. the drilled-column case).
+
+### The active unit already widens to a Shift+arrow range — the auto-description is capped, the diff-preview isn't
+
+`footerUnitInfo` resolves its unit via `focusedActiveUnit()` (`home.mjs`), the
+same range-aware helper `activeGroup` uses — so a Shift+↑/↓ multi-line/-group
+selection (`state.rangeAnchor`, see "Shift+↑/↓" in
+`.claude/docs/keyboard-navigation.md`) widens the footer's inline diff-preview
+to every row of the merged range, exactly like a bigger `group` unit would.
+**The automatic AI description does NOT follow it past `MAX_EXPLAIN_LINES`
+(10) rows** — Reindert's explicit answer to "how big may this auto-triggered
+context get": unlike an ordinary `group` (capped at 5 rows, `MAX_GROUP`), a
+Shift-selected range has no ceiling of its own, and this request fires with no
+keypress (debounced). A range over the cap still shows the diff-preview above,
+it just skips `explain`/`scheduleExplain` entirely — never a "genereren…"
+placeholder for a request that was never made. A range within the cap behaves
+exactly like today: seeded/generated normally. Test:
+`tests/footer-explanation-range.spec.mjs`.

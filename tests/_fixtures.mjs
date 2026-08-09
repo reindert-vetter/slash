@@ -113,6 +113,27 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // MAX_EXPLAIN_LINES range fixture (PR 116, footer-explanation-range.spec.mjs):
+  // one block with three separate 2-row change groups, split by 3-row
+  // unchanged filler runs each (worktree materialized in _setup.mjs,
+  // materializeExplainRangeWorktrees) — a Shift+ArrowDown range merging two
+  // groups stays at/under the 10-row cap (seeded here, so the footer shows the
+  // AI text with no LLM run), merging all three goes over it (deliberately NOT
+  // seeded — footerUnitInfo must skip the request entirely, not just show a
+  // "genereren…" placeholder for a row that happens to be missing).
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/explainrange-blocks.json',
+      '-explanations',
+      'tests/fixtures/explanations.json',
+    ],
+    { stdio: 'ignore' },
+  )
   // Orphaned-anchor fixture (PR 970600, comment-orphan-anchor.spec.mjs): one
   // block plus two seeded comments — one whose label no longer matches any block
   // and is marked anchorState 'orphan' by the re-anchor pass (see reanchor.go),

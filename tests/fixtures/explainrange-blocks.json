@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 116,
+    "file": "app/Actions/ExplainRangeAction.php",
+    "class": "ExplainRangeAction",
+    "name": "execute",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 22,
+    "status": "modified",
+    "side": "new"
+  }
+]

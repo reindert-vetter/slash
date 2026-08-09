@@ -11,7 +11,7 @@
   {
     "pr": 97,
     "blockId": "97:app/Actions/ExplainAction.php:ExplainAction::execute",
-    "unitKey": "line-2",
+    "unitKey": "line-2-2",
     "codeHash": "",
     "status": "done",
     "text": "Deze conditie controleert of de waarde positief is; alleen dan loopt de tak.",
@@ -24,6 +24,15 @@
     "codeHash": "",
     "status": "done",
     "text": "Het onderliggende blok krijgt een if: het bedrag wordt alleen op 20 gezet als het boven de 10 ligt.",
+    "model": "haiku"
+  },
+  {
+    "pr": 116,
+    "blockId": "116:app/Actions/ExplainRangeAction.php:ExplainRangeAction::execute",
+    "unitKey": "group-2-8",
+    "codeHash": "",
+    "status": "done",
+    "text": "Deze twee samengevoegde groepen wijzigen a, b, c en d.",
     "model": "haiku"
   }
 ]

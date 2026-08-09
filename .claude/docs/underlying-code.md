@@ -486,6 +486,16 @@ diff segment it sits on.
   `covers`/`covered_by` child of a line you did *not* select
   (`relatedChildren`'s `scoped` flag).
 - **List mode** (no diff) shows **all** resolved calls of the block.
+- **A Shift+arrow range widens `[unit.start, unit.end]` to the merged range**
+  (`state.rangeAnchor`/`rangeUnit`, see "Shift+↑/↓" in
+  `.claude/docs/keyboard-navigation.md`) at both `line` and `group` — every
+  call/relation whose site sits anywhere inside the SELECTED RANGE stays
+  visible, not just under the lone cursor row. `callScopeMethods`/
+  `groupLineRange` resolve their unit via `focusedActiveUnit()` (the same
+  helper `activeGroup` uses for highlighting) rather than a second,
+  range-blind `navUnitsOf(...)[cur.change]` lookup — this used to be the one
+  place a range didn't yet act like a bigger group. Test:
+  `tests/range-select-related-scope.spec.mjs`.
 
 ### `gran==='group'` hides out-of-scope children too
 

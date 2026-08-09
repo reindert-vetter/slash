@@ -3284,7 +3284,11 @@ function callScopeMethods(b, rows) {
   // by, so it always shows its full call list, like list mode.
   if (b !== focusedBlock()) return null
   const cur = focusedGranCursor()
-  const unit = navUnitsOf(b, rows, cur.gran)[cur.change]
+  // focusedActiveUnit() resolves the SAME unit activeGroup already highlights
+  // — including a merged Shift+arrow range (rangeUnit), at any focusLevel —
+  // so a multi-line/multi-group selection widens the Onderliggende-code scope
+  // to every call under it, not just the call under the lone cursor row.
+  const unit = focusedActiveUnit()
   if (!unit) return null
   const methods = new Set()
   // b's own name decides whether a class_member: key stays block-level (see
@@ -3337,7 +3341,10 @@ function groupLineRange(b, rows) {
   if (b !== focusedBlock()) return null
   const cur = focusedGranCursor()
   if (cur.gran !== 'group') return null
-  const unit = navUnitsOf(b, rows, 'group')[cur.change]
+  // Same merged-range reuse as callScopeMethods — a Shift+arrow selection of
+  // several groups widens which relation/testcovers children stay visible to
+  // the whole selected range, not just the lone group under the cursor.
+  const unit = focusedActiveUnit()
   if (!unit) return null
   const { startLine, endLine, side } = unitLineRange(b, rows, unit)
   if (side !== 'RIGHT' || !startLine) return null
@@ -6775,6 +6782,18 @@ function explainContext(b) {
   return text.split('\n').slice(0, EXPLAIN_CONTEXT_LINES).join('\n')
 }
 
+// MAX_EXPLAIN_LINES — the size cap on the automatic AI description
+// (explain_code) footerUnitInfo triggers, in rows. An ordinary 'group' unit
+// is already capped at 5 rows (MAX_GROUP, changeGroups), but a Shift+arrow
+// range (rangeUnit) has no such ceiling — it can merge arbitrarily many
+// groups/lines. Reindert's explicit answer to "how big may the auto-sent
+// context get": "Uitleg maximaal 10 regels" — a range larger than this still
+// shows the ordinary diff preview in the footer, it just gets no automatic
+// AI text. Deliberately does NOT limit the Claude-chat context
+// (claudeContextBlock, RelatedPanel.mjs): that only ever sends on an
+// explicit reviewer send, unlike this debounced, keypress-free trigger.
+const MAX_EXPLAIN_LINES = 10
+
 // footerUnitInfo computes everything the footer needs about the focused unit:
 // the aligned rows spanned by the unit for the inline diff — one row for a
 // line/call unit (always single-row), one row per changed line for a
@@ -6795,7 +6814,12 @@ function footerUnitInfo() {
       ? state.drillCursor[level - 1] || { change: 0, gran: 'group' }
       : { change: state.change, gran: state.gran }
   const rows = blockRows(b)
-  const unit = navUnitsOf(b, rows, cur.gran)[cur.change]
+  // Same merged-range reuse as callScopeMethods/groupLineRange — a Shift+arrow
+  // selection widens the previewed rows to the whole selected range, not just
+  // the lone unit under the cursor. focusedActiveUnit() already resolves the
+  // correct { start, end } for either the top-level cursor or the focused
+  // drilled column's own cur.rangeAnchor.
+  const unit = focusedActiveUnit()
   if (!unit) return null
   // unit.left/right (the char-underline Sets) only exist for a 'call' unit,
   // which is always single-row — so reading them inside this loop naturally
@@ -6819,6 +6843,17 @@ function footerUnitInfo() {
   }
   // Only line/group units get an AI description ('call' and list mode don't).
   if (cur.gran !== 'group' && cur.gran !== 'line') return info
+  // A Shift+arrow range has no upper size limit of its own (unlike an
+  // ordinary 'group', capped at MAX_GROUP=5 rows by changeGroups) — an
+  // unsolicited explain_code call over an arbitrarily large, reviewer-merged
+  // range is a real cost/latency risk the reviewer never asked for (this
+  // fires automatically, debounced, with no keypress). Reindert's explicit
+  // answer: cap it at MAX_EXPLAIN_LINES=10 rows; a bigger selection still
+  // gets the ordinary diff preview above (unitRows), just no auto-generated
+  // AI text. Starting a Claude chat about a bigger range stays possible —
+  // that is an explicit reviewer action (claudeContextBlock), not this
+  // automatic one.
+  if (unit.end - unit.start + 1 > MAX_EXPLAIN_LINES) return info
   let code = ''
   for (let i = unit.start; i <= unit.end; i++) {
     const r = rows[i]
@@ -6834,7 +6869,11 @@ function footerUnitInfo() {
     file: b.file,
     label: b.label,
     gran: cur.gran,
-    unitKey: cur.gran === 'group' ? `group-${unit.start}-${unit.end}` : `line-${unit.start}`,
+    // Both start AND end — a merged Shift+arrow range can share a start row
+    // with a different range/unit (or with an unmerged single line whose
+    // own start happens to coincide), so start alone is no longer a unique
+    // key once ranges exist.
+    unitKey: `${cur.gran}-${unit.start}-${unit.end}`,
     code,
     context,
     codeHash: fnv1a(EXPLAIN_PROMPT_VERSION + '|' + code + '\n ' + context),

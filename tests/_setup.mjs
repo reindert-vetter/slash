@@ -54,6 +54,7 @@ export default function globalSetup() {
   materializeTestClassGroupWorktrees()
   materializeLineSummaryWorktrees()
   materializeClassMemberScopeWorktrees()
+  materializeExplainRangeWorktrees()
 }
 
 // materializeMainWorktrees writes the base/head worktrees for the suite's MAIN
@@ -1016,4 +1017,46 @@ class ScopeMemberAction
   const write = worktreeWriter(115)
   write('base', 'app/Actions/ScopeMemberAction.php', action(0, 0))
   write('head', 'app/Actions/ScopeMemberAction.php', action(1, 'self::MAX_TRIES'))
+}
+
+// materializeExplainRangeWorktrees writes the synthetic PR 116 fixture
+// worktree for the MAX_EXPLAIN_LINES cap in footer-explanation-range.spec.mjs
+// (footerUnitInfo, home.mjs — "Uitleg maximaal 10 regels", Reindert's answer to
+// the auto-explain size question): a function with THREE separate 2-row
+// change groups ($a/$b, $c/$d, $e/$f), each pair split from the next by three
+// UNCHANGED filler rows ($g1a-c, $g2a-c) — a Shift+ArrowDown range merges two
+// groups (row span 2+3+2=7, ≤10) or all three (2+3+2+3+2=12, >10), so the same
+// two changed-row counts sit on either side of the cap depending only on how
+// far the range is extended, with no separate fixture needed per case. Row
+// numbering mirrors materializeExplainWorktrees' own (0: the function
+// signature, 1: its opening brace, 2+: the body) — see that function's doc
+// comment for why unitKey "group-2-8" below is exactly the two-group merge.
+function materializeExplainRangeWorktrees() {
+  const file = (a, b, c, d, e, f) => `<?php
+
+namespace App\\Actions;
+
+class ExplainRangeAction
+{
+    public function execute()
+    {
+        $a = ${a};
+        $b = ${b};
+        $g1a = 0;
+        $g1b = 0;
+        $g1c = 0;
+        $c = ${c};
+        $d = ${d};
+        $g2a = 0;
+        $g2b = 0;
+        $g2c = 0;
+        $e = ${e};
+        $f = ${f};
+        return $a + $b + $c + $d + $e + $f;
+    }
+}
+`
+  const write = worktreeWriter(116)
+  write('base', 'app/Actions/ExplainRangeAction.php', file(0, 0, 0, 0, 0, 0))
+  write('head', 'app/Actions/ExplainRangeAction.php', file(1, 2, 3, 4, 5, 6))
 }

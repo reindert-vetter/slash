@@ -726,6 +726,39 @@ changed rows within the range.
   a fresh cursor without it), a block switch (`stepBlock`, `enterDiff`,
   `openTask`), and `←`/`→`. Deliberately the same "an ordinary step releases the
   selection" behaviour as a text editor.
+- **Onderliggende-code scoping and the footer preview also widen to the merged
+  range** — `callScopeMethods`/`groupLineRange`/`footerUnitInfo` (`home.mjs`)
+  used to look up only the lone cursor unit (`navUnitsOf(...)[cur.change]`),
+  ignoring `cur.rangeAnchor` entirely, so a Shift-selected range of several
+  lines/groups still scoped the Onderliggende-code panel and the footer's
+  diff-preview/AI-description to just the ONE unit under the cursor — the one
+  place a range didn't yet act like a bigger group. Fixed by reusing
+  `focusedActiveUnit()` (the same range-aware computation `activeGroup` already
+  uses) in all three instead of a second, range-blind lookup — no parallel
+  mechanism, same `rangeUnit`/`isRangeGran` gate as everywhere else. This needed
+  no change to `clearRangeAnchor`'s own call sites above: all three read the
+  range while the diff still owns the keyboard (mirroring approve/comment/chat,
+  which are likewise all reached via `Enter` before any `→`), so widening them
+  costs nothing extra and the panel/footer visibly widen live WHILE
+  Shift-selecting, before `→` ever clears the anchor.
+- **The automatic AI-description (`explain_code`) is capped at
+  `MAX_EXPLAIN_LINES` (10) rows** — deliberately, explicit reviewer answer to
+  "how big may the auto-sent context get": unlike an ordinary `'group'` (capped
+  at 5 rows by `MAX_GROUP`), a Shift-selected range has no size ceiling of its
+  own, and this explain request fires automatically (debounced, no keypress) —
+  a large merged range must not silently trigger an unsolicited, possibly
+  expensive LLM call. `footerUnitInfo` still shows the ordinary diff-preview for
+  a bigger range, it just skips the `explain` descriptor (and thus
+  `scheduleExplain`) once `unit.end - unit.start + 1 > MAX_EXPLAIN_LINES`.
+  Starting a Claude chat about a bigger range is unaffected — that's an
+  explicit reviewer action (`claudeContextBlock`, see
+  `.claude/docs/claude-chat-panel.md`), never this automatic one. Also fixed
+  `footerUnitInfo`'s `unitKey` for `'line'` granularity to include the unit's
+  `end` row (`line-${start}-${end}`, not just `line-${start}`) — a merged
+  multi-line range can share a start row with an unrelated single line, which
+  the old key couldn't distinguish. Tests:
+  `tests/range-select-related-scope.spec.mjs`,
+  `tests/footer-explanation-range.spec.mjs`.
 
 ## `/` — the menu of the current stop
 
