@@ -1049,6 +1049,80 @@ test('Claude chat: a drafted reply lands in the comment composer, appended under
   await expect(page.getByTestId('reaction-bubble')).toHaveCount(1)
 })
 
+// A pure, still-unedited Claude draft (the reply field was genuinely EMPTY
+// when it landed, unlike the merge case above) gets select-all'd, and a bare
+// Enter posts it straight to GitHub — no publish-choice menu — see "A pure
+// (still-unedited) Claude draft…" in .claude/docs/claude-chat-panel.md. The
+// seeded comment is explicitly `local: true` (mirrors
+// tests/reply-publish-local-thread.spec.mjs's seedWarning) so the thread
+// genuinely needs the publish choice, and this test asserts that choice is
+// skipped only because of the pure Claude draft.
+test('Claude chat: a pure, unedited Claude draft is select-all\'d and posts straight to GitHub on Enter', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kan dit anders?',
+      local: true,
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  const draftBody = 'Concept van Claude: gebruik hier liever een DTO.'
+  await page.route('**/api/chat?commentId=' + conversationId, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ messages: [{ id: 'draft-1', role: 'assistant', kind: 'draft_reply', body: draftBody }] }),
+    }),
+  )
+
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+
+  const reply = page.getByTestId('reaction-compose')
+  await expect(reply).toBeVisible()
+  await expect(reply).toHaveValue('')
+
+  // comment -> claude: ensureAndLoadChat is AWAITED before focusClaudeComposer
+  // runs (enterClaudeChat, RelatedPanel.mjs), so the draft merge + select-all
+  // happen while the reply field itself still owns the focus — see the doc
+  // section referenced above.
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByTestId('claude-chat-compose')).toBeVisible()
+  await expect(reply).toHaveValue(draftBody)
+  await expect(reply.evaluate((el) => [el.selectionStart, el.selectionEnd])).resolves.toEqual([0, draftBody.length])
+
+  // Back to the comment, then send with a bare Enter — no publish-choice menu.
+  await page.keyboard.press('ArrowLeft')
+  await expect(reply).toBeFocused()
+  await reply.press('Enter')
+  await expect(page.getByTestId('command-menu')).toHaveCount(0)
+
+  await expect
+    .poll(async () => {
+      const res = await page.request.get('/api/comments?pr=' + pr)
+      const list = await res.json()
+      const c = list.find((x) => x.body === 'kan dit anders?')
+      return (c && c.reactions && c.reactions.some((r) => r.body === draftBody && r.githubId)) || false
+    })
+    .toBe(true)
+
+  await item.click()
+  await expect(page.getByTestId('comment-thread')).toContainText(draftBody)
+})
+
 // The composer grows in height as its content grows (textareaAutoGrow.mjs,
 // shared with the comment composers in RelatedPanel.mjs — see
 // .claude/docs/claude-chat-panel.md's "Auto-grow composer textareas"), and

@@ -1265,6 +1265,50 @@ resync, never re-appends the same text twice):
    both survive; a reviewer composing their own reply while Claude is
    mid-conversation keeps their own words on top.
 
+### A pure (still-unedited) Claude draft is select-all'd, and Enter posts it straight to GitHub
+
+A later, explicit reviewer request on top of the three rules above: "als ik
+een comment genereer vanuit Claude chat, dan wil ik dat de input gelijk
+geselecteerd is... [en] hoef ik in dat geval niet nog een menu te zien, maar
+mag het gelijk op GitHub als een comment geplaatst worden." This only applies
+when rule 3 above did NOT fire — `reaction-compose` was genuinely EMPTY the
+moment the draft landed, so the whole field is Claude's own text, nothing
+merged in from an earlier reviewer draft.
+
+- **`applyPendingDraftReplies`** tracks this per comment id in
+  `pureChatDraftReplyIds` (a plain `Set`, mirrors `appliedDraftReplyIds`'s
+  session-only shape) and, when it does focus the field (rule 2's "not
+  currently typing in Claude" gate still applies), calls `el.select()` instead
+  of placing the caret at the end — so a bare Enter sends it as-is, and typing
+  anything replaces the whole draft in one go rather than appending after it.
+- **The mark is cleared by the FIRST edit**: `reaction-compose`'s own `@input`
+  handler deletes the comment's id from `pureChatDraftReplyIds` the moment the
+  reviewer changes so much as one character — from then on this is ordinary
+  reviewer-typed (or reviewer-edited) text and the mark, and the auto-post
+  behavior below, never re-applies to it.
+- **`sendReaction` skips the publish-choice menu** (`needsPublishChoice`/
+  `openPublishMenu`) entirely when the thread's id is still marked pure, and
+  posts straight through `postThreadReply(c, body, 'reply', false)` — the same
+  write the menu's own "Alleen mijn antwoord op GitHub" item makes, not
+  `'thread'`: only Claude's generated text becomes the new public GitHub
+  comment. The thread's own local root — often still the anchor placeholder
+  body Claude's conversation was started against (see "Optimistically visible
+  while composing a brand-new comment" above) or an unfinished reviewer draft —
+  stays local; nothing about it is published without the reviewer separately
+  choosing to. The mark is consumed (deleted) on this send, so a later reply on
+  the same thread, once it carries its own edits, goes through the ordinary
+  publish-choice flow like any other local thread.
+- This is strictly about the drafted TEXT, not a new capability: Enter still
+  requires an explicit reviewer keypress, exactly like the plain "type, Enter"
+  flow `COMPOSE_COMMANDS`'s default item already gives a brand-new comment
+  (see `.claude/docs/command-palette.md`) — nothing here posts on its own
+  while the reviewer is merely chatting with Claude.
+
+Test: the "a pure, unedited Claude draft…" case in
+`tests/claude-chat-panel.spec.mjs` (select-all on arrival, then Enter posts
+directly with no publish menu and a non-zero `githubId` afterwards) — modelled
+on `tests/reply-publish-local-thread.spec.mjs`'s own `githubId` poll.
+
 The core merge (rules 1 and 3, plus "never auto-posts to the comment thread")
 is covered by `tests/claude-chat-panel.spec.mjs`'s "a drafted reply lands in
 the comment composer, appended under an existing draft, never auto-posted" —

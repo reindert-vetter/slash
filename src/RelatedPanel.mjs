@@ -1328,6 +1328,19 @@ async function ensureAndLoadChat(pr, commentId) {
 // one-shot-then-frozen mechanism (Reindert's explicit request).
 const appliedDraftReplyIds = new Set()
 
+// pureChatDraftReplyIds tracks which comment threads currently hold a reply
+// composer whose ENTIRE content is a still-unedited Claude draft — i.e. the
+// field was EMPTY the moment applyPendingDraftReplies wrote into it (rule 3
+// below never fired). Reviewer request: sending such a draft as-is should
+// feel like one action, not two — the field is pre-selected so typing (or
+// just pressing Enter) replaces/keeps it in one go, and sendReaction skips the
+// publish-choice menu entirely and posts it straight to GitHub (see
+// sendReaction's own doc comment for why `publish: 'reply'` specifically).
+// Cleared by reaction-compose's own @input handler the moment the reviewer
+// changes so much as one character — from then on it is the reviewer's own
+// text, mixed or not, and the ordinary publish-choice flow applies again.
+const pureChatDraftReplyIds = new Set()
+
 // applyPendingDraftReplies is the frontend half of the comment_action "reply"
 // draft (see chat_workflow.go's saveChatDraftReply / chat.KindDraftReply):
 // Claude may draft a reply "on the reviewer's behalf", but it must never be
@@ -1348,6 +1361,15 @@ const appliedDraftReplyIds = new Set()
 //      Claude's text is appended UNDERNEATH it (blank line separator), so both
 //      survive.
 //
+// A fourth rule, added later (Reindert's explicit request): when rule 3 above
+// does NOT apply — the field was genuinely empty, so the whole thing is
+// Claude's own text — the field is focused with its content fully SELECTED
+// (`el.select()`, not just a caret at the end) and the thread is marked in
+// `pureChatDraftReplyIds` so a bare Enter posts it straight to GitHub without
+// the publish-choice menu (see sendReaction). A merged draft (rule 3 fired)
+// gets neither: it is no longer purely Claude's text, so it goes through the
+// ordinary flow untouched.
+//
 // Deliberately does NOT reuse prefillField's rAF + focusToken-gated wait: that
 // mechanism exists for a field that is only ABOUT to mount because of the very
 // state change that requested the focus (see prefillField's own doc comment),
@@ -1359,14 +1381,18 @@ const appliedDraftReplyIds = new Set()
 // synchronous DOM read settles it with no race.
 function applyPendingDraftReplies(commentId) {
   let appended = false
+  let pure = false
   for (const m of cc.messages) {
     if (m.kind !== 'draft_reply' || appliedDraftReplyIds.has(m.id)) continue
     appliedDraftReplyIds.add(m.id)
     const existing = replyDrafts.get(commentId) || ''
     replyDrafts.set(commentId, existing ? existing + '\n\n' + m.body : m.body)
     appended = true
+    pure = !existing
   }
   if (!appended) return
+  if (pure) pureChatDraftReplyIds.add(commentId)
+  else pureChatDraftReplyIds.delete(commentId)
   const merged = replyDrafts.get(commentId)
   const el = document.querySelector('[data-testid=reaction-compose]')
   if (!el) return // not currently mounted — replyDrafts already holds it for the next time this thread opens
@@ -1376,7 +1402,8 @@ function applyPendingDraftReplies(commentId) {
   const typingInClaude = !!(active && active.matches && active.matches('[data-testid=claude-chat-compose]'))
   if (typingInClaude) return // never steal the keyboard out from under an in-progress follow-up message
   el.focus()
-  el.setSelectionRange(el.value.length, el.value.length)
+  if (pure) el.select()
+  else el.setSelectionRange(el.value.length, el.value.length)
 }
 
 // loadChatMessages re-fetches the transcript (read-only GET, safe to poll).
@@ -3929,6 +3956,21 @@ async function sendReaction() {
   const el = document.querySelector('[data-testid=reaction-compose]')
   const body = el && el.value.trim()
   if (!body) return
+  // A pure, still-unedited Claude draft (see applyPendingDraftReplies' fourth
+  // rule) skips the publish-choice menu entirely — Reindert's explicit
+  // request: a comment generated from the chat should go straight to GitHub
+  // on Enter, not through one more menu. `publish: 'reply'` specifically (not
+  // 'thread'): only Claude's generated text becomes the new public GitHub
+  // comment, the thread's own local root (often still the
+  // CLAUDE_ANCHOR_PLACEHOLDER body, see chat_workflow.go) stays local, never
+  // published without the reviewer's own say-so. Consumed once, so a later
+  // reply on the same thread (once it has its own edits) goes through the
+  // ordinary flow again.
+  if (pureChatDraftReplyIds.has(c.id) && needsPublishChoice(c)) {
+    pureChatDraftReplyIds.delete(c.id)
+    await postThreadReply(c, body, 'reply', false)
+    return
+  }
   // A thread that has never touched GitHub asks first what may go public —
   // see openPublishMenu / sendPendingReply.
   if (needsPublishChoice(c)) {
@@ -4648,6 +4690,11 @@ function expandedConversation(c, openCommentMenu) {
           data-testid="reaction-compose"
           @input="${(e) => {
             if (c) replyDrafts.set(c.id, e.target.value)
+            // Any reviewer edit — even selecting-all-then-retyping — means the
+            // field is no longer PURELY Claude's unedited draft, so the
+            // select-all-on-arrival/auto-post-on-Enter treatment stops
+            // applying (see applyPendingDraftReplies/sendReaction).
+            if (c) pureChatDraftReplyIds.delete(c.id)
             autoGrowTextarea(e.target)
           }}"
           @keydown="${(e) => {
