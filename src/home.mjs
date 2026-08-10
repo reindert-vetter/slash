@@ -1274,6 +1274,18 @@ function overviewExitUrl() {
   return url
 }
 
+// overviewExitUrlAfterApprove — used ONLY by "Goedkeuren en ga naar overzicht"
+// below. Deliberately NOT overviewExitUrl(): that helper carries
+// `pr`/`sel`/`drill` so /pr-overview selects and remembers the exact block the
+// reviewer leaves from — correct for the plain ← exit, wrong here. Once the
+// WHOLE PR is approved there's nothing left to return to, and the reviewer
+// asked for the opposite: the just-approved PR already gone from the list by
+// the time the page appears, with the top remaining row selected instead of
+// this one. See `approvedPr`/`trySelectTopAfterApprove` in overview.mjs.
+function overviewExitUrlAfterApprove() {
+  return '/pr-overview?approved=' + state.pr
+}
+
 // translationNavUnits adapts translationRowUnits(b) (Block.mjs) — one entry
 // per changed/added/removed KEY, each carrying the blockRows row index it
 // maps onto — into the generic { start, end } row-range shape every other
@@ -5771,9 +5783,11 @@ async function checkPRWarnings() {
 // DEFAULT (the 2nd item, i.e. the one Enter lands on); "en sluiten" stays for
 // a reviewer who wants to keep looking at this PR. The navigation deliberately
 // happens only AFTER the submit resolved (submitReview also copies the summary
-// to the clipboard on success), and reuses overviewExitUrl() so the round-trip
-// state (?pr/?sel/drill) travels along exactly like the ← exit does — see
-// .claude/docs/pages-and-routing.md.
+// to the clipboard on success), and uses overviewExitUrlAfterApprove() —
+// NOT overviewExitUrl() — so the PR just approved is already filtered out of
+// the overview's list by the time it renders, with the top remaining row
+// selected instead of this (now finished) one; see `approvedPr`/
+// `trySelectTopAfterApprove` in overview.mjs.
 const REVIEW_APPROVE_CONFIRM_COMMANDS = withClose([
   {
     id: 'review-approve-confirm-overview',
@@ -5782,7 +5796,7 @@ const REVIEW_APPROVE_CONFIRM_COMMANDS = withClose([
     icon: 'approve-pr',
     run: async () => {
       await submitReview('APPROVE')
-      location.href = overviewExitUrl()
+      location.href = overviewExitUrlAfterApprove()
     },
   },
   {

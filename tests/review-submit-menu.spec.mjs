@@ -234,10 +234,15 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
   })
 
   // The second confirm item posts the identical review and then leaves for the
-  // PR overview, carrying the round-trip state (?pr/?sel) exactly like the ←
-  // exit does (overviewExitUrl, see .claude/docs/pages-and-routing.md). The
-  // navigation must happen only AFTER the submit resolved.
-  test('"Goedkeuren en ga naar overzicht" submits and then leaves for /pr-overview', async ({
+  // PR overview via overviewExitUrlAfterApprove (home.mjs) — deliberately NOT
+  // overviewExitUrl/its `?pr=`/`?sel=` round-trip (there's nothing left to
+  // return to once the whole PR is approved). Instead the just-approved PR
+  // must already be filtered out of every section by the time the page
+  // renders (approvedPr/normalizeSections, overview.mjs), with the new TOP
+  // row of the list selected (trySelectTopAfterApprove) — never a flash of
+  // the approved row followed by it disappearing. The navigation must happen
+  // only AFTER the submit resolved.
+  test('"Goedkeuren en ga naar overzicht" submits, then lands on /pr-overview with that PR already gone and the top row selected', async ({
     page,
   }) => {
     await clearBlockApproval(page, BLOCK1_ID)
@@ -271,8 +276,17 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await page.waitForURL(/\/pr-overview\?/)
     const url = new URL(page.url())
     expect(url.pathname).toBe('/pr-overview')
-    expect(url.searchParams.get('pr')).toBe('12903')
-    expect(url.searchParams.get('sel')).toBe(BLOCK6_SEL)
+    expect(url.searchParams.get('approved')).toBe('12903')
+    expect(url.searchParams.get('pr')).toBeNull()
+    expect(url.searchParams.get('sel')).toBeNull()
+
+    // The fixture's "Needs your review" section is [12888, 12903, 12904] —
+    // 12903 (just approved) must be gone, and the new top row (12888) must
+    // carry the keyboard-selection ring, not merely "still first in the DOM".
+    const navRows = page.locator('[data-nav-row]')
+    await expect(navRows.first()).toHaveAttribute('data-pr', '12888')
+    await expect(page.locator('[data-pr="12903"]')).toHaveCount(0)
+    await expect(navRows.first()).toHaveClass(/ring-indigo-500\/50/)
   })
 
   // buildReviewClipboardText (home.mjs) counts the reviewer's OWN comments

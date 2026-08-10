@@ -93,6 +93,43 @@ restore-then-clear pattern):
 Test: `tests/overview-pr-select.spec.mjs` (in-sections, drawer-only, and the
 silent no-op).
 
+## `?approved=<id>` — the opposite of `?pr=`: hide the row, select the top one
+
+"Goedkeuren en ga naar overzicht" (the confirm step that submits a real
+`APPROVE` review for the WHOLE PR, see `REVIEW_APPROVE_CONFIRM_COMMANDS` in
+`.claude/docs/command-palette.md`) links to
+**`overviewExitUrlAfterApprove()`** (`home.mjs`) — `/pr-overview?approved=<pr>`
+— deliberately **not** `overviewExitUrl()`/its `?pr=`/`?sel=` round trip:
+there's nothing left to return to once the whole PR is approved, and the
+reviewer asked for the opposite of "select the row I came from" — that row
+must already be gone by the time the page renders, with the new top row of
+the list selected instead. Reported as: "als ik een gehele PR goedkeur … wil
+ik dat het al uit het overzicht is, en selecteer dan de bovenste item".
+
+- `overview.mjs` reads `?approved=` once, into a plain, **never-nulled**
+  module const `approvedPr` (unlike `pendingSelectPr` above, it must keep
+  applying on every later `reloadSnapshot` poll too, not just the first
+  paint).
+- `normalizeSections` filters `approvedPr` out of every section's `prs`
+  **before** `state.sections` is ever assigned — so the very first render
+  already excludes it; there is no flash of the just-approved row followed by
+  it disappearing once a background refresh catches up. `applyCached`'s
+  fallback path (the offline/cached snapshot) filters its own flat `prs` array
+  the same way.
+- **`trySelectTopAfterApprove()`** (mirroring `trySelectPendingPr`'s
+  restore-then-clear shape, called right after it in both `applyLive` and
+  `applyCached`): while `pendingSelectTop` (one-shot, set iff `approvedPr !=
+  null`), sets `selKey` to `'row:' + ` the first PR across
+  `state.sections.flatMap(...)` — i.e. whatever is now the top row of the
+  (already filtered) list — and clears the flag. Same `hoverEnabled = false`
+  discipline as every other programmatic selection.
+- Like `?pr=`, `?approved=` is **not** cleaned up from the URL — harmless on a
+  refresh, which simply keeps filtering the same (by then long-gone) PR
+  number.
+
+Test: `tests/review-submit-menu.spec.mjs` ("submits, then lands on
+/pr-overview with that PR already gone and the top row selected").
+
 ## `?sel=` (+ `?drill=`) travels along on the same round trip
 
 Alongside `?pr=` (which **row** to select in the overview), the same round trip

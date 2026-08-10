@@ -1808,10 +1808,15 @@ async function loadInbox() {
 
 // normalizeSections guarantees every section has a prs array. The Go API
 // marshals an empty section's prs slice as null, which would crash the
-// .length/.forEach calls that iterate sections.
+// .length/.forEach calls that iterate sections. Also drops `approvedPr`
+// (below) from every section, so a PR just approved from the review tree is
+// filtered out of the very FIRST render — never a flash of it followed by it
+// disappearing once a background refresh catches up.
 function normalizeSections(sections) {
   if (!Array.isArray(sections)) return []
-  return sections.map((s) => ({ ...s, prs: Array.isArray(s.prs) ? s.prs : [] }))
+  return sections
+    .map((s) => ({ ...s, prs: Array.isArray(s.prs) ? s.prs : [] }))
+    .map((s) => (approvedPr == null ? s : { ...s, prs: s.prs.filter((pr) => pr.number !== approvedPr) }))
 }
 
 // primeAuthorNames resolves the real names behind the author logins of these
@@ -1841,17 +1846,20 @@ async function applyLive(body) {
   // heartbeating so it keeps its fast poll cadence while this tab is active.
   startLiveSync()
   trySelectPendingPr()
+  trySelectTopAfterApprove()
 }
 
 async function applyCached(body) {
   state.repo = body.repo || ''
   state.generatedFor = body.generatedFor || ''
   state.cached = true
-  const prs = Array.isArray(body.prs) ? body.prs : []
+  const allPrs = Array.isArray(body.prs) ? body.prs : []
+  const prs = approvedPr == null ? allPrs : allPrs.filter((pr) => pr.number !== approvedPr)
   await primeAuthorNames(prs)
   state.sections = prs.length ? [{ title: 'Needs your review', prs }] : []
   state.loading = false
   trySelectPendingPr()
+  trySelectTopAfterApprove()
 }
 
 // ── auto-select a PR coming back from /pr/<id> ──────────────────────────────
@@ -1868,6 +1876,33 @@ let pendingSelectPr = (() => {
   const n = raw ? Number(raw) : NaN
   return Number.isFinite(n) ? n : null
 })()
+
+// approvedPr/trySelectTopAfterApprove — the counterpart for the "Goedkeuren en
+// ga naar overzicht" confirm action (home.mjs, overviewExitUrlAfterApprove):
+// that link carries `?approved=<pr>`, never `?pr=<pr>`, precisely so it does
+// NOT trigger the pendingSelectPr behaviour above (select and remember THAT
+// row) — the PR just got fully approved and is done, so instead it must
+// already be gone from every section by the time this page renders
+// (normalizeSections/applyCached's own filter, above) with the new TOP row of
+// the list selected. `approvedPr` is a plain, never-nulled module const (the
+// filter must keep applying on every later reloadSnapshot poll too);
+// `pendingSelectTop` is the one-shot "still need to pick the top row" flag,
+// mirroring pendingSelectPr's clear-after-use.
+const approvedPr = (() => {
+  const raw = new URLSearchParams(location.search).get('approved')
+  const n = raw ? Number(raw) : NaN
+  return Number.isFinite(n) ? n : null
+})()
+let pendingSelectTop = approvedPr != null
+
+function trySelectTopAfterApprove() {
+  if (!pendingSelectTop) return
+  const firstRow = state.sections.flatMap((s) => s.prs)[0]
+  if (!firstRow) return
+  pendingSelectTop = false
+  selKey = 'row:' + firstRow.number
+  hoverEnabled = false
+}
 
 // originPr/originSel — the same `?pr=`/`?sel=` pair as pendingSelectPr above,
 // but read into their own, never-nulled module lets: pendingSelectPr is

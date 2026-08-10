@@ -472,8 +472,12 @@ mechanism (no new mode). That submenu also goes through `withClose` and holds
 **two** real items, which post the *identical* review and differ only in where
 the reviewer ends up: **"Goedkeuren en ga naar overzicht"** (the default 2nd
 item — finishing a PR is almost always followed by picking up the next one; it
-awaits `submitReview('APPROVE')` and only then goes to `overviewExitUrl()`, so
-the `?pr`/`?sel`/drill round-trip travels along exactly like the `←` exit) and
+awaits `submitReview('APPROVE')` and only then goes to
+`overviewExitUrlAfterApprove()` — deliberately NOT `overviewExitUrl()`/its
+`?pr`/`?sel`/drill round-trip, since there's nothing left to return to; instead
+`/pr-overview?approved=<pr>` makes that PR already gone from the list with the
+new top row selected, see "`?approved=<id>`" in
+`.claude/docs/pages-and-routing.md`) and
 **"Goedkeuren en sluiten"** (submit and stay). Both "Approve" items carry a
 check-in-circle icon, and "Reject the PR" carries an X-in-circle icon (`c.icon`,
 `commandIcon` in `CommandMenu.mjs`, `'approve-pr'`/`'reject-pr'`) — the icon
