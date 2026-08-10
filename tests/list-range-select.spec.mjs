@@ -95,6 +95,43 @@ test.describe('PR Review Tree — Shift+arrow multi-row selection in the index',
       .toBe(2)
   })
 
+  test('Escape collapses the selection, and an action on it leaves it standing', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const selected = page.locator('[data-testid=block-row].bg-indigo-50')
+    await page.keyboard.press('Shift+ArrowDown')
+    await expect(selected).toHaveCount(2)
+
+    // Escape drops the selection straight away, with no menu/action involved.
+    await page.keyboard.press('Escape')
+    await expect(selected).toHaveCount(1)
+
+    // Running an action on the selection (via the palette) does NOT clear it
+    // by itself — the tint stays exactly as-is until the reviewer explicitly
+    // moves on (a plain arrow, a click, Escape, …), even once the menu that
+    // ran it has closed again. Uses "Plaats comment" rather than "Keur ...
+    // goed" here — approving these two blocks would fully approve (and thus
+    // hide, see "Hidden (approved) blocks" in keyboard-navigation.md) one of
+    // them, which would drop the visible tint count as a side effect of the
+    // approval itself, not of the selection being cleared.
+    await page.keyboard.press('Shift+ArrowDown')
+    await expect(selected).toHaveCount(2)
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await page.getByTestId('command-row').filter({ hasText: 'Plaats comment over deze 2 blokken' }).click()
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
+    await expect(page.getByTestId('comment-compose')).toBeFocused()
+    await expect(selected).toHaveCount(2)
+
+    // Escape first backs out of the just-opened composer (relatedActive()'s
+    // own Escape handling), THEN a second Escape clears the still-standing
+    // selection.
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Escape')
+    await expect(selected).toHaveCount(1)
+  })
+
   test('the methodes-kolom takes the same gesture over its own methods', async ({ page }) => {
     await page.goto(`/pr/110`)
     await page.getByTestId('block-row').filter({ hasText: 'TriggersIndexTest' }).click()

@@ -725,7 +725,11 @@ changed rows within the range.
   `setDrillChange`), an `f`/`d`/`s` zoom (`setGran`/`setDrillGran` already build
   a fresh cursor without it), a block switch (`stepBlock`, `enterDiff`,
   `openTask`), and `←`/`→`. Deliberately the same "an ordinary step releases the
-  selection" behaviour as a text editor.
+  selection" behaviour as a text editor. Running an approve/comment/chat action
+  ON the range does NOT itself clear it — same reviewer request as the
+  index-level range above (see "Shift+↑/↓ in the INDEX" below) — only a bare
+  `Escape`, checked in its own `onKeydown` branch after the menu/related-panel
+  branches, does that on top of the paths just listed.
 - **Onderliggende-code scoping and the footer preview also widen to the merged
   range** — `callScopeMethods`/`groupLineRange`/`footerUnitInfo` (`home.mjs`)
   used to look up only the lone cursor unit (`navUnitsOf(...)[cur.change]`),
@@ -808,6 +812,18 @@ Both are ephemeral (never in the URL, exactly like `rangeAnchor`).
   `approve` Signal per block, never a batch write. Like the block/class
   checkbox this is a bulk toggle, so there is no `afterApproveAction`/
   postApprove follow-up.
+- **Running an action does NOT clear the selection by itself.** Approving/
+  commenting/chatting/ignoring the range leaves `listAnchor`/`methodAnchor`
+  standing exactly as they were, including once the menu that ran the action
+  has closed — reviewer request: the tint should stay up so a reviewer can
+  see, and keep acting on, the same set of rows across more than one action.
+  It only goes away the way any other selection does: a bare **`Escape`** (a
+  new, dedicated `onKeydown` branch, checked after the menu/search-box/
+  `relatedActive()`/`isEditableFocused()` branches so it never fires while one
+  of those owns the key — opening the range palette and running an action
+  from it therefore never touches the selection either) or one of the
+  existing "this supersedes it" paths above (a plain arrow, a click, stepping
+  into a diff, search).
 
 Test: `tests/list-range-select.spec.mjs`.
 

@@ -9106,6 +9106,34 @@ function onKeydown(e) {
     return
   }
 
+  // Escape drops an active Shift+arrow multi-selection (a list-index range,
+  // a methodes-kolom range, or a diff-level line/group range at the current
+  // focus level) back to a single cursor. Deliberately checked here — AFTER
+  // the menu/search-box/relatedActive()/isEditableFocused() branches above,
+  // which each already claim Escape for their own purpose and return before
+  // reaching this point — so opening the range palette (or any other menu)
+  // and running an action from it never touches the selection; only a bare
+  // Escape, pressed with none of those open, does. Reviewer request: running
+  // an action (approve/comment/chat/ignore) on the selection does NOT clear
+  // it by itself — it stays exactly as-is, including after the action
+  // completes, until either an ordinary plain arrow key or Escape clears it,
+  // or navigation actually moves to a block outside it (both already handled
+  // by the existing clearListAnchor()/clearRangeAnchor() call sites — see
+  // their own doc comments). A no-op when nothing is selected, so a bare
+  // Escape elsewhere keeps doing nothing, as before.
+  if (
+    e.key === 'Escape' &&
+    (state.listAnchor != null ||
+      state.methodAnchor != null ||
+      state.rangeAnchor != null ||
+      (state.drillCursor[state.focusLevel - 1] && state.drillCursor[state.focusLevel - 1].rangeAnchor != null))
+  ) {
+    e.preventDefault()
+    clearListAnchor()
+    clearRangeAnchor()
+    return
+  }
+
   // `/` opens the menu that belongs to WHERE THE KEYBOARD IS — the same
   // contextual choice Enter makes at this point in the chain (see
   // contextMenuMode), falling back to the general PR-wide tree menu when the
