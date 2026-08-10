@@ -761,7 +761,44 @@ a manually triggered, low-frequency action.
   - **Not inside any block at all** (`blockForLine` fails — an unchanged/
     context line outside every block, or a line the model got slightly
     wrong) → **PR-wide** (`Kind "ai_warning"`, added to `isPRWide`) instead of
-    being discarded, with `File` still set as a hint.
+    being discarded, with `File` still set as a hint. The frontend now shows
+    that `File` (+ line) as a mono chip in the comment detail card's header
+    (`commentFileChip`, `RelatedPanel.mjs`, `data-testid=comment-detail-file`):
+    such a finding has no block and no diff row, so without it nothing on the
+    card said what the finding was even about. Generic over every kind, not
+    special-cased on `ai_warning`; an empty `File` renders no chip.
+- **More than `maxOrphanWarnings` (5) unanchored findings in one batch = a bad
+  run: throw it away and review once more.** A whole batch landing PR-wide
+  means the model's line numbers were off across the board, and the reviewer
+  gets a PR-comment list full of findings pointing at nothing (the reported
+  symptom). So `codeWarningWorkflow` counts them (`countOrphanWarnings`,
+  `workflows.go`) right after `runAgenticReview` and, over the threshold,
+  creates **no** comment from that batch, runs the new **`purgeOrphanWarnings`**
+  Activity, and executes `runAgenticReview` a **second** time. Details that are
+  deliberate:
+  - **Exactly one retry**, and its result is created unconditionally — orphans
+    included. A second bad batch is still worth showing, and looping on the
+    outcome of an LLM call would be unbounded and expensive.
+  - Deterministic despite the branch: the count comes from the **recorded**
+    Activity result, so a replay takes the same branch and finds the same fixed
+    number of Activities in the history.
+  - `purgeOrphanWarnings` deletes every `Kind "ai_warning"` + `Source "ai"`
+    comment of the PR through the same delete Signal `supersedeFileWarnings`
+    uses, but **unscoped to the files under review** — that is the whole reason
+    it exists next to the supersede: an orphan naming a file the PR doesn't
+    touch (the model misremembering a path) matches no scope and would
+    otherwise survive every later run and pile up.
+  - **This is also the "a new commit landed" hook.** A commit never turns an
+    existing warning into an orphan by itself — `Kind` is fixed at creation and
+    `planCommentReanchor` skips every `Kind != ""` comment (`reanchor.go`), so
+    re-anchoring only ever moves a block-scoped comment's `anchorState` — but a
+    commit does re-run this workflow (`pr_status` →
+    `autoStartCodeWarning`, see `.claude/docs/workflows-trackers.md`). So the
+    check sits where the orphans are actually born, and needs no trigger of its
+    own. Tests: `TestCodeWarningRetriesOnTooManyOrphans`,
+    `TestCodeWarningKeepsOrphansAfterOneRetry` (`code_warning_test.go`, driven
+    by `scriptedClaude` — the `claude.Fake` programs one fixed output per
+    model, and both passes run inside a single synchronous Execution).
 - **The PR's own stated intent goes into the prompt**, so a choice the author
   already explained isn't reported back at them as a risk. `resolveWarningScope`
   reads `prmeta.Get` — **no extra network call**, `pr_status` already fetched

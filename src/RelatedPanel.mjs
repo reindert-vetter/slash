@@ -4277,6 +4277,27 @@ function staleAnchorBadge(c) {
   >`
 }
 
+// commentFileChip names the file (and, when it has one, the line) a comment is
+// about, in the detail card's header. Added for the PR-wide AI risk findings
+// (kind "ai_warning", see anchoredWarning in code_warning.go): such a finding
+// could not be pinned to a block, so nothing else on the card says WHERE it was
+// about — while the file/line the model named is stored on the comment all
+// along. Generic over every kind rather than special-cased on "ai_warning": a
+// path is just as useful on an orphaned or imported PR-wide comment, and a
+// block-anchored comment's own card is the one place its file isn't repeated
+// anywhere else either. Empty file (a genuinely PR-wide issue comment) → no
+// chip at all.
+function commentFileChip(c) {
+  if (!c || !c.file) return ''
+  const text = truncateMiddle(c.file) + (c.line > 0 ? ':' + c.line : '')
+  return html`<span
+    class="inline-flex shrink-0 items-center rounded-full bg-slate-100 px-1.5 py-0.5 font-mono text-[9px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-400"
+    data-testid="comment-detail-file"
+    title="${c.file + (c.line > 0 ? ':' + c.line : '')}"
+    >${text}</span
+  >`
+}
+
 // markSendFailed/clearSendFailed — write cs.sendFailed (see its own doc
 // comment above, next to cs's declaration). Reassigned wholesale so the
 // reactive read re-triggers, same convention as state.ignoredComments.
@@ -6586,7 +6607,7 @@ export function commentDetailCard(c, opts) {
           >${COMMENT_KIND_LABEL[c.kind] || c.kind || 'Regelcomment'}</span
         >
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
-        ${() => sendFailedBadge('reply:' + c.id)}
+        ${() => commentFileChip(c)} ${() => sendFailedBadge('reply:' + c.id)}
         <span class="ml-auto shrink-0 text-[10px] text-slate-500 dark:text-zinc-500">${relTime(c.createdAt)}</span>
       </div>
       <div

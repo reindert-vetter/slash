@@ -2072,6 +2072,42 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(map[string]int{"removed": removed})
 	})
 
+	// Activity: delete every UNANCHORED AI risk finding of a PR (Kind
+	// "ai_warning", Source "ai"), through the same delete Signal
+	// supersedeFileWarnings uses. Unlike that one this is NOT scoped to the
+	// files under review: an orphan naming a file outside the PR's own changed
+	// set never matches a scope and would otherwise survive every later run.
+	// Only reached from codeWarningWorkflow's "too many orphans" branch, right
+	// before the review is redone — see maxOrphanWarnings. Best-effort per
+	// comment, like supersedeFileWarnings: a run that already closed itself
+	// can't be signalled again and must not sink the rest of the purge.
+	engine.RegisterActivity("purgeOrphanWarnings", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			PR int `json:"pr"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		list, err := cs.List(ctx, arg.PR)
+		if err != nil {
+			return nil, fmt.Errorf("code_warning: list comments: %w", err)
+		}
+		removed := 0
+		for _, c := range list {
+			if c.Source != "ai" || c.Kind != "ai_warning" {
+				continue
+			}
+			if err := m.Signal(c.RunID, ReactionSignal{
+				ID: "sys-" + newUIReactionID(), Source: "ai", Action: "delete",
+			}); err != nil {
+				m.logf("code_warning: orphan purge skipped for %s: %v", c.RunID, err)
+				continue
+			}
+			removed++
+		}
+		return json.Marshal(map[string]int{"removed": removed})
+	})
+
 	// Activity: remember that the reviewer dismissed one AI risk finding, so
 	// the next code_warning run skips it (see modules/warndismiss). Driven
 	// from taskCodeCommentWorkflow's delete branch; the resolve half is
@@ -2920,6 +2956,17 @@ func (m *TaskManager) Reviewers(ctx context.Context) ([]ReviewerCandidate, error
 // that ignores the instruction can never blow past it.
 const warningsPerBlock = 2
 
+// maxOrphanWarnings is how many UNANCHORED findings (Kind "ai_warning", see
+// anchoredWarning in code_warning.go) one review may produce before the whole
+// attempt is treated as a bad run and redone once — see codeWarningWorkflow.
+//
+// Such a finding names a file:line that pins to no block at all, so it lands in
+// the PR-comment index without a diff row to sit on. One or two are the intended
+// vangnet; a whole batch of them means the model's line numbers were off across
+// the board, and the reviewer ends up with a list of findings that point at
+// nothing (the reported symptom).
+const maxOrphanWarnings = 5
+
 // codeWarningWorkflow agentically reviews a PR's changed files for risks. It
 // is deterministic: every side effect (the DB reads, the Sonnet call, the
 // comment reads/deletes/creates) is an Activity, run in a fixed order, and the
@@ -2951,12 +2998,44 @@ func codeWarningWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	if maxFindings < warningsPerBlock {
 		maxFindings = warningsPerBlock
 	}
-	var toCreate []warningToCreate
-	if err := w.ExecuteActivity("runAgenticReview", warningReviewArg{
+	reviewArg := warningReviewArg{
 		PR: in.PR, Files: scope.Files, BlockCount: scope.BlockCount, MaxFindings: maxFindings,
 		Title: scope.Title, Description: scope.Description, JiraDescription: scope.JiraDescription,
-	}, &toCreate); err != nil {
+	}
+	var toCreate []warningToCreate
+	if err := w.ExecuteActivity("runAgenticReview", reviewArg, &toCreate); err != nil {
 		return nil, fmt.Errorf("run agentic review: %w", err)
+	}
+
+	// Too many findings that anchored to nothing → treat this attempt as a bad
+	// run: throw its findings away without creating a single comment, wipe the
+	// orphans still stored from earlier runs, and review once more. Exactly ONE
+	// retry, and its result is then created unconditionally — orphans included:
+	// a second bad batch is still worth showing, and looping on the outcome of
+	// an LLM call would be both unbounded and expensive.
+	//
+	// Deterministic: the count comes from the recorded Activity result, so a
+	// replay takes the same branch and finds the same fixed number of
+	// Activities in the history.
+	//
+	// This is also the "a new commit landed" hook. A commit never turns an
+	// existing warning into an orphan of its own accord — Kind is fixed at
+	// creation and planCommentReanchor skips every Kind != "" comment
+	// (reanchor.go) — but it does re-run this workflow via pr_status's
+	// autoStartCodeWarning, so the check sits exactly where the orphans are
+	// actually born.
+	if countOrphanWarnings(toCreate) > maxOrphanWarnings {
+		// supersedeFileWarnings above only deletes AI comments whose file is in
+		// scope; an orphan naming a file the PR doesn't touch at all (the model
+		// misremembering a path) therefore survives every run and piles up. This
+		// clears them regardless of file.
+		if err := w.ExecuteActivity("purgeOrphanWarnings", map[string]any{"pr": in.PR}, nil); err != nil {
+			return nil, fmt.Errorf("purge orphan warnings: %w", err)
+		}
+		toCreate = nil
+		if err := w.ExecuteActivity("runAgenticReview", reviewArg, &toCreate); err != nil {
+			return nil, fmt.Errorf("rerun agentic review: %w", err)
+		}
 	}
 
 	// A finding NEVER retracts the reviewer's approval of the row it anchors
@@ -2978,6 +3057,18 @@ func codeWarningWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 type warningToCreate struct {
 	Comment CodeCommentInput `json:"comment"`
 	BlockID string           `json:"blockId"`
+}
+
+// countOrphanWarnings counts the findings that anchored to no block at all —
+// the PR-wide "ai_warning" kind, see anchoredWarning (code_warning.go).
+func countOrphanWarnings(list []warningToCreate) int {
+	n := 0
+	for _, item := range list {
+		if item.Comment.Kind == "ai_warning" {
+			n++
+		}
+	}
+	return n
 }
 
 // StartCodeWarning launches a code_warning Execution and runs it to

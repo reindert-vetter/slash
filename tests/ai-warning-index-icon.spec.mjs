@@ -47,6 +47,14 @@ test('a not-yet-published AI finding shows a warning icon in the index, a human 
     const humanRow = page.getByTestId('block-row').filter({ hasText: 'Gewone PR-brede opmerking' })
     await expect(humanRow).toHaveCount(1)
     await expect(humanRow.getByTestId('block-row-ai-warning')).toHaveCount(0)
+
+    // Such a finding anchored to no block at all, so its detail card's only
+    // statement of what it is about is the file it named (commentFileChip,
+    // RelatedPanel.mjs) — which used to be stored but never shown.
+    // .first(): the look-ahead preview card of the next comment item sits in
+    // the same column and, here, names the same file.
+    await warnRow.click()
+    await expect(page.getByTestId('comment-detail-file').first()).toHaveText('app/Foo.php')
   } finally {
     for (const id of [warnRunId, humanRunId]) {
       await page.request.post('/api/workflows/' + id + '/signals/delete', { data: { author: 'reviewer' } })
