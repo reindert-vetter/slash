@@ -5932,6 +5932,35 @@ function curBlock() {
   return row ? row.methods[state.classMethodSel] || null : state.blocks[state.selected]
 }
 
+// isActiveCard reports whether `b` — a block object a DetailPanel card closure
+// has captured (for a test_class row, already the resolved ACTIVE method, see
+// curBlock()'s own comment) — is the one currently selected, by IDENTITY
+// (`b === curBlock()`) rather than by the render-loop position it happened to
+// be built at. Mirrors conventions.md's "snapshot a selection by stable ID,
+// never by raw array index" rule, applied to the DetailPanel's own per-card
+// reactive opts (activeGroup/hintsEnabled/diffActive/viewMode in the
+// pair.forEach loop below): those closures capture the render's own `i`
+// (`state.blocks`' index at build time) as a plain lexical variable, but stay
+// mounted — and keep firing reactively — for as long as the card's `.key(...)`
+// stays unchanged, which it deliberately does across a pure reindex (the key
+// only encodes ROLE — selected vs. preview — plus code/focus/file/label/side,
+// never the numeric position, so a row that merely moves index while staying
+// selected is patched in place rather than torn down and rebuilt). Comparing
+// the frozen `i` against a freshly-read `state.selected` then goes stale the
+// moment recomputeLeftList() (loadRelations/loadCallResolve/loadTestCovers/
+// the comment poll, all of which can legitimately reindex the still-selected
+// row right after a `?sel=`/`?tmethod=` restore) settles on a different index
+// for the same row — `i === state.selected` is then wrong FOREVER (nothing
+// else ever re-triggers that binding), silently and permanently dropping the
+// active-row highlight with no error. `curBlock()` re-resolves through
+// state.selected/state.classMethodSel fresh on every call, so comparing `b`'s
+// own object identity against it is correct regardless of which index this
+// particular closure invocation happened to freeze on. Reported bug + repro:
+// tests/testclass-restore-reindex.spec.mjs.
+function isActiveCard(b) {
+  return b === curBlock()
+}
+
 // selectedComment returns the underlying comment object when the currently
 // selected sidebar item is a synthetic PR-wide-comment entry (kind:'comment',
 // see recomputeLeftList/commentBlockItem) — null for an ordinary PR block.
@@ -10498,16 +10527,40 @@ function DetailPanel(state) {
             // 'fit' stand's width (Block.mjs's fitWidthCls/
             // activeUnitLineChars): the card narrows to just THIS unit's own
             // longest line, see topLevelActiveUnit's own doc comment.
-            activeGroup: () => (i === state.selected && state.focusLevel === 0 ? topLevelActiveUnit(b) : null),
+            //
+            // isActiveCard(), not `i === state.selected`: this closure is a
+            // genuine, persistent reactive binding (Block.mjs re-invokes it on
+            // every relevant state change, for as long as this card's keyed
+            // node stays mounted) — and the card's own `.key(...)` below
+            // deliberately does NOT encode `i` (a card that is still, by
+            // ROLE, "the selected one" must not be torn down and rebuilt just
+            // because its raw array position shifted — see the key's own
+            // comment). `i` is therefore a snapshot frozen at whichever
+            // render happened to build the mounted node, while `state.selected`
+            // is read fresh every time this closure fires. The very
+            // recomputeLeftList() calls that follow a `?sel=`/`?tmethod=`
+            // restore (loadRelations/loadCallResolve/loadTestCovers/the
+            // comment poll landing) can legitimately reindex the still-
+            // selected row (recomputeLeftList re-finds it by id, exactly like
+            // conventions.md's "snapshot a selection by stable ID, never by
+            // raw array index" already requires elsewhere) — once `i` no
+            // longer matches the settled `state.selected`, `i === state.selected`
+            // is wrong forever and the active-row highlight silently,
+            // permanently vanishes with no error (reported bug: the cursor on
+            // a restored diff URL flashes once then disappears). Comparing
+            // `b`'s own IDENTITY against curBlock() — which itself resolves
+            // through state.selected/classMethodSel fresh on every call —
+            // gives the same correct answer regardless of which index this
+            // closure happened to freeze on. See isActiveCard's own comment.
+            activeGroup: () => (isActiveCard(b) && state.focusLevel === 0 ? topLevelActiveUnit(b) : null),
             // Out-of-view change hints belong only to the block being stepped
             // through: the selected card, in diff mode, with the keyboard on it.
-            hintsEnabled: () => i === state.selected && state.mode === 'diff' && state.focusLevel === 0,
+            hintsEnabled: () => isActiveCard(b) && state.mode === 'diff' && state.focusLevel === 0,
             // Light-blue border while the keyboard drives this block's diff
             // (selected card, diff mode) — mirrors the selected comment-index row.
             // Drops once the reviewer steps → into the related panel
             // (relatedActive()) or ← into a drilled column (focusLevel > 0).
-            diffActive: () =>
-              i === state.selected && state.mode === 'diff' && state.focusLevel === 0 && !relatedActive(),
+            diffActive: () => isActiveCard(b) && state.mode === 'diff' && state.focusLevel === 0 && !relatedActive(),
             // Reactive Set of approved row indices → an emerald bar on approved
             // rows. Reads b.approvedRows so the pane re-tints on every approve.
             approvedRows: () => approvedRowSet(b),
@@ -10545,7 +10598,12 @@ function DetailPanel(state) {
             // preview card (i !== sel) additionally forces 'unified' whenever the
             // active card is one-sided (activeSingleSided, see above) — Task 29,
             // never applied to the selected card itself.
-            viewMode: () => (i !== sel && activeSingleSided ? 'unified' : state.diffViewMode),
+            // Same isActiveCard() reasoning as activeGroup/hintsEnabled/
+            // diffActive above — this is the SAME kind of persistent reactive
+            // closure (Block.mjs reads it from its own nested slot), so a raw
+            // `i !== sel` comparison is exposed to the identical frozen-index
+            // hazard.
+            viewMode: () => (!isActiveCard(b) && activeSingleSided ? 'unified' : state.diffViewMode),
             // A click on the compact split/unified/fit indicator (only rendered
             // by Block.mjs while diffActive() above is true, i.e. never on
             // the preview card) jumps state.diffViewMode straight to that
@@ -10595,6 +10653,18 @@ function DetailPanel(state) {
             //    frozen-binding issue would leave the dimming/highlight stale.
             // Rekeying on all three forces a fresh card (fresh bindings) the
             // moment any changes. b.code persists on the block, so the rebuild
+            //
+            // Deliberately NOT keyed on `i` (the render's raw state.blocks
+            // index): a still-selected row's index can legitimately shift
+            // (recomputeLeftList reindexing it by id — see isActiveCard's own
+            // comment) without its ROLE changing, and rebuilding the card on
+            // every such reindex would tear down/remount it far more than
+            // necessary, fighting any in-flight animation/scroll for no
+            // reason. That is exactly why activeGroup/hintsEnabled/diffActive/
+            // viewMode above compare `b`'s identity via isActiveCard() instead
+            // of the frozen `i` — the fix keeps this reuse (patch in place,
+            // don't rebuild) correct instead of forcing a rebuild to route
+            // around it.
             // shows the code immediately — no reload flash.
           })
           // One-shot "return" animation when this card regains the keyboard

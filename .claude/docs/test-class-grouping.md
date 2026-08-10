@@ -217,6 +217,23 @@ method, and clears them again").
 (stale/shared link) → the same silent not-found fallback as every other restore
 path.
 
+**A `mode=diff` restore onto an already-partly-approved method used to show
+the active-row cursor for a split second, then lose it permanently, with no
+console error.** `applyTestClassRefRestore` itself sets `state.selected`/
+`state.classMethodSel` correctly; the bug was downstream, in `DetailPanel`'s
+per-card reactive opts comparing the render loop's raw index instead of
+identity — `recomputeLeftList()` reindexing the still-selected row (any of
+`loadRelations`/`loadCallResolve`/`loadTestCovers`/the comment poll landing
+moments after the restore) desynced a frozen loop index from a freshly-read
+`state.selected`, forever. A partly-approved method just happened to already
+carry comments/resolved relations, which made this reindex far more likely to
+actually fire in that narrow post-restore window — the approval state itself
+was never the cause. Full mechanism, the fix (`isActiveCard`), and why the
+card's own `.key(...)` deliberately doesn't encode that index: "A keyed node
+is reused without re-running its bindings" (third variant) in
+`.claude/rules/arrowjs-pitfalls.md`. Regression test:
+`tests/testclass-restore-reindex.spec.mjs`.
+
 ## `openTask`
 
 A "Taken" row pointing at a comment placed on a test method searches every

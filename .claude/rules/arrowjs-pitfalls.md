@@ -222,6 +222,32 @@ exactly why the diff binding can miss the update, hence rebuilding via the key
 rather than adding another `b.code` reader. See the card `.key()` rules in
 `.claude/docs/drilling.md`.
 
+**Third variant — never compare the render-loop's raw index, compare identity.**
+`DetailPanel`'s `pair.forEach(({ b, i }) => ...)` (`home.mjs`) builds each
+card's reactive opts (`activeGroup`/`hintsEnabled`/`diffActive`/`viewMode`) as
+closures that used to compare the loop's own `i` against `state.selected`
+(`i === state.selected`). The card's `.key(...)` deliberately does **not**
+encode `i` — a still-selected row must not be torn down and rebuilt just
+because its raw position in `state.blocks` shifted — so arrow.js correctly
+**reuses** the mounted node across a pure reindex. But that reuse means the
+closure's captured `i` is now a snapshot frozen at whichever render happened
+to build the currently-mounted node, while `state.selected` is read fresh
+every time the closure fires. `recomputeLeftList()` reindexing the
+still-selected row (any of `loadRelations`/`loadCallResolve`/
+`loadTestCovers`/the comment poll landing, all of which can fire moments
+after a `?sel=`/`?tmethod=` restore) then desyncs the two **permanently** —
+nothing else ever re-triggers that binding — so `i === state.selected` goes
+stale forever and the active-row highlight vanishes with **no error at all**
+(the closure just now legitimately, silently, evaluates to `false`/`null`).
+Same root cause as the two variants above (a keyed node's bindings don't
+re-run on reuse), but the fix here is the general rule from `conventions.md`
+("snapshot a selection by stable ID, never by raw array index") applied to a
+reactive *closure* rather than to a one-shot guard: compare `b`'s own object
+IDENTITY against `curBlock()` (`isActiveCard(b)`, `home.mjs`) instead of the
+frozen `i` — correct regardless of which render's closure ends up being the
+one that stays mounted. Regression test:
+`tests/testclass-restore-reindex.spec.mjs`.
+
 ## A `state.x` read inside an outer array-building closure couples the WHOLE closure
 
 Reading `state.x` synchronously inside an outer array-building
