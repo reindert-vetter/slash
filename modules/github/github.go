@@ -165,6 +165,10 @@ type Client interface {
 	MarkReadyForReview(ctx context.Context, pr int) error
 	// RequestReviewers requests the given user logins as reviewers on pr.
 	RequestReviewers(ctx context.Context, pr int, logins []string) error
+	// RemoveReviewer drops one requested reviewer from pr. Removing someone who
+	// is not (or no longer) a requested reviewer is a no-op on GitHub's side,
+	// never an error worth surfacing.
+	RemoveReviewer(ctx context.Context, pr int, login string) error
 	// CurrentUser returns the authenticated GitHub user (the local reviewer):
 	// their login and profile picture. Used to show "who am I" on the comments
 	// and replies written in this app, which carry no GitHub author of their own.
@@ -918,6 +922,21 @@ func (m *Module) RequestReviewers(ctx context.Context, pr int, logins []string) 
 	_, err := m.api(ctx, "POST",
 		fmt.Sprintf("repos/%s/pulls/%d/requested_reviewers", m.repo, pr),
 		args...,
+	)
+	return err
+}
+
+// RemoveReviewer drops one requested reviewer from pr — the mirror image of
+// RequestReviewers (same endpoint, DELETE instead of POST). The login is
+// validated against GitHub's username charset before it reaches gh, exactly
+// like the request path.
+func (m *Module) RemoveReviewer(ctx context.Context, pr int, login string) error {
+	if !reReviewerLogin.MatchString(login) {
+		return fmt.Errorf("invalid reviewer login %q", login)
+	}
+	_, err := m.api(ctx, "DELETE",
+		fmt.Sprintf("repos/%s/pulls/%d/requested_reviewers", m.repo, pr),
+		"-f", "reviewers[]="+login,
 	)
 	return err
 }

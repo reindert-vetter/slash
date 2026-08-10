@@ -675,6 +675,9 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// (repo collaborators), most-used-first (read-only).
 	mux.HandleFunc("/api/workflows/ready_for_review", s.handleReadyForReview)
 	mux.HandleFunc("/api/reviewers", s.handleReviewers)
+	// POST /api/workflows/remove_reviewer {pr} → drop MYSELF from that PR's
+	// requested reviewers (the row popover's last item on a PR I didn't open).
+	mux.HandleFunc("/api/workflows/remove_reviewer", s.handleRemoveReviewer)
 	// GET /api/me → read-only: the authenticated GitHub user (login + avatar),
 	// so the UI can show who "I" am on the comments/replies written in this app
 	// (they carry no GitHub author of their own). See handleMe.
@@ -920,7 +923,7 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" {
 		http.NotFound(w, r)
 		return
 	}
@@ -2095,6 +2098,33 @@ func (s *server) handleReadyForReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runID, err := s.tasks.manager.StartReadyForReview(in)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleRemoveReviewer starts a remove_reviewer Workflow Execution (POST) — the
+// sanctioned write path for dropping yourself from a PR's requested reviewers.
+// The request carries only the PR number: WHO is removed is resolved inside the
+// workflow's Activity from the authenticated GitHub user, so this endpoint can
+// never remove somebody else.
+func (s *server) handleRemoveReviewer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in RemoveReviewerInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if in.PR <= 0 {
+		http.Error(w, "invalid pr", http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.StartRemoveReviewer(in)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return

@@ -471,6 +471,26 @@ PR-overview popover (see `.claude/docs/pr-overview.md`). Signal-less.
 - Tests: `ready_for_review_test.go`,
   `modules/reviewerusage/reviewerusage_test.go`.
 
+## Take myself off a PR (`remove_reviewer`)
+
+Removes the **local** reviewer from a PR's requested reviewers, driven from the
+last item of the PR-overview row popover ("Verwijder mij als reviewer", see
+`.claude/docs/pr-overview.md`). Signal-less, one Activity, so replay is
+trivially deterministic.
+
+- **`modules/github.RemoveReviewer(pr, login)`** is the mirror image of
+  `RequestReviewers`: the same `requested_reviewers` endpoint with `DELETE`
+  instead of `POST`, login validated against `reReviewerLogin` before `exec`.
+  Removing somebody who is not (or no longer) a requested reviewer is a no-op on
+  GitHub's side.
+- **`removeSelfAsReviewer`** resolves **who** to remove itself, from
+  `TaskManager.CurrentUser` (the cached `gh api user`), and fails loudly when
+  that login is unknown (offline / `SLASH_GITHUB=off`) rather than silently
+  removing nobody. `RemoveReviewerInput` therefore carries only `PR` — a request
+  can never name a different reviewer.
+- Tests: `remove_reviewer_test.go`,
+  `tests/overview-remove-reviewer.spec.mjs`.
+
 ## Surfacing failures (`run_errors.go` + `GET /api/problems`)
 
 Background work here fails quietly by design: nearly every Activity talking to

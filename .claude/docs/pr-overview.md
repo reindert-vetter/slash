@@ -130,6 +130,32 @@ the ephemeral `ui.copiedFor`) — it gets its own **`copy`** icon
 (`ICON_PATHS.copy`) since it navigates nowhere, and flips to a `check` once
 copied, mirroring `ingestIcon`'s reactive icon swap.
 
+### "Verwijder mij als reviewer" — the last item
+
+The popover's **final** item (`data-testid=remove-reviewer`, `user-minus` icon)
+takes me off the PR's requested reviewers. It only renders when `canRemoveSelf`
+holds — i.e. `pr.author !== meLogin()`: dropping yourself from **your own** PR
+makes no sense. An **unknown** local login (offline / `SLASH_GITHUB=off`, where
+`GET /api/me` answers `{ok:false}`) hides it too, since "not my PR" cannot be
+established then; that is why `tests/overview-remove-reviewer.spec.mjs` stubs
+`/api/me`. `meLogin()` is primed by `ensureMe()`, which now rides along inside
+`primeAuthorNames` — the one place every row-loading path already awaits before
+pushing rows into reactive state (both caches are plain and non-reactive, so a
+late arrival could never repaint a mounted row).
+
+Clicking it POSTs the **`remove_reviewer`** workflow with **only** `{pr}` — who
+gets removed is resolved server-side from the authenticated GitHub user, so the
+endpoint can never remove somebody else — then closes the popover and calls
+`reloadSnapshot()` so the row leaves "Needs your review" without waiting for the
+60s poll (mirrors `submitReady`). While in flight the button is really
+`disabled` (the plain attribute, see `.claude/rules/arrowjs-pitfalls.md`) and
+reads "Bezig…"; a failure shows `data-testid=remove-reviewer-error` inline. The
+item is deliberately shown on every foreign PR, also one where I am no longer a
+requested reviewer at all — GitHub treats that DELETE as a no-op, and gating on
+the asynchronously backfilled `status.reviewers` would make the item appear
+late. It sits above the draft-only ready-for-review section, which can never
+co-occur with it (a draft is your own PR).
+
 The row is never an `<a href="/pr/<id>">`, so the old hover-only
 `regenerateButton` and the separate `data-row` wrapper were removed — they only
 existed to avoid nesting an interactive element in an `<a>`.
@@ -410,6 +436,7 @@ alone; `Push mislukt` (rose) when the last attempt was refused. Full mechanism:
 | `GET /api/reviewers` | Read-only candidate reviewers → `{ok, reviewers:[{login,avatarUrl,count}]}`, most-used-first. |
 | `GET /api/names?logins=a,b` | Login → real name + avatar. See "Real names instead of logins" in `.claude/docs/pages-and-routing.md`. |
 | `POST /api/workflows/ready_for_review` | `{pr, reviewers?}` → flip a draft to ready + request reviewers. 400 on an invalid pr/login. |
+| `POST /api/workflows/remove_reviewer` | `{pr}` → drop **myself** from that PR's requested reviewers. No login in the request (resolved server-side). 400 on a non-positive pr. |
 | `GET /api/problems` | Read-only → `{ok, failedRuns:[{runId,workflow,pr,updatedAt,error,comment?}], logErrors:[{at,scope,pr,message}], prTitles:{"<pr>":"<title>"}}`. Feeds "Mislukte taken"; superseded failures are already filtered out. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 

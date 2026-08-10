@@ -103,6 +103,14 @@ const (
 	// bump the local reviewer-usage counts) synchronously and completes — no
 	// signal, mirrors WorkflowSubmitReview.
 	WorkflowReadyForReview = "ready_for_review"
+	// WorkflowRemoveReviewer is the Workflow Type that drops the local
+	// reviewer (me) from a PR's requested reviewers: one Execution per "Verwijder
+	// mij als reviewer" click in the /pr-overview row popover. It runs its one
+	// Activity synchronously and completes — no signal, mirrors
+	// WorkflowReadyForReview. WHO is removed is resolved server-side (the
+	// authenticated GitHub user), never taken from the request, so this can
+	// only ever remove yourself.
+	WorkflowRemoveReviewer = "remove_reviewer"
 	// WorkflowCodeWarning is the Workflow Type that agentically reviews a PR's
 	// changed files for risks (correctness/security/style, and consistency
 	// with the connected code the changes touch — callers, callees, tests,
@@ -549,6 +557,14 @@ type ReadyForReviewInput struct {
 	Reviewers []string `json:"reviewers"`
 }
 
+// RemoveReviewerInput starts a remove_reviewer Workflow Execution: drop the
+// local reviewer from PR's requested reviewers. Deliberately carries no login —
+// the Activity resolves the authenticated GitHub user itself, so a request can
+// never remove somebody else.
+type RemoveReviewerInput struct {
+	PR int `json:"pr"`
+}
+
 // CodeWarningInput starts a code_warning Execution: an agentic Opus review
 // of a PR for risks. Files is reserved for a future incremental fast-follow
 // (re-checking only the files a new commit touched, piggybacking on
@@ -634,14 +650,14 @@ type TaskManager struct {
 	// the dismissal recording a no-op and the filter a pass-through, i.e.
 	// exactly the pre-existing behaviour.
 	warndismiss *warndismiss.Module
-	claude     claude.Client
-	jira       jira.Client
-	db         *sql.DB
-	dataDir    string
-	repo       string
-	interval   time.Duration // fast cadence (reviewer active)
-	idle       time.Duration // slow cadence + PR-state check (reviewer idle)
-	logf       func(string, ...any)
+	claude      claude.Client
+	jira        jira.Client
+	db          *sql.DB
+	dataDir     string
+	repo        string
+	interval    time.Duration // fast cadence (reviewer active)
+	idle        time.Duration // slow cadence + PR-state check (reviewer idle)
+	logf        func(string, ...any)
 
 	// baseCtx is the server-lifetime context background pollers spawned outside
 	// a request (e.g. ensurePRStatus's fresh-poller spawn) run under — a
@@ -1922,6 +1938,27 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		return nil, m.gh.RequestReviewers(ctx, arg.PR, arg.Reviewers)
 	})
+	// Activity for remove_reviewer (write, workflow-driven): drop the local
+	// reviewer from a PR's requested reviewers. The login is resolved here, from
+	// the authenticated GitHub user, so the request itself can never name
+	// somebody else. Not best-effort — a failed GitHub call must surface.
+	engine.RegisterActivity("removeSelfAsReviewer", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg RemoveReviewerInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.gh == nil {
+			return nil, fmt.Errorf("remove reviewer: no github client")
+		}
+		me, err := m.CurrentUser(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("remove reviewer: %w", err)
+		}
+		if me.Login == "" {
+			return nil, fmt.Errorf("remove reviewer: unknown current user")
+		}
+		return nil, m.gh.RemoveReviewer(ctx, arg.PR, me.Login)
+	})
 	engine.RegisterActivity("bumpReviewerUsage", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg ReadyForReviewInput
 		if err := json.Unmarshal(in, &arg); err != nil {
@@ -2330,6 +2367,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowApprove, approveWorkflow)
 	engine.RegisterWorkflow(WorkflowSubmitReview, submitReviewWorkflow)
 	engine.RegisterWorkflow(WorkflowReadyForReview, readyForReviewWorkflow)
+	engine.RegisterWorkflow(WorkflowRemoveReviewer, removeReviewerWorkflow)
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
 	engine.RegisterWorkflow(WorkflowTaskSnooze, taskSnoozeWorkflow)
 	engine.RegisterWorkflow(WorkflowAutoWarn, autoWarnPrefWorkflow)
@@ -2760,6 +2798,40 @@ func (m *TaskManager) StartReadyForReview(in ReadyForReviewInput) (string, error
 	}
 	if status == tembed.StatusFailed {
 		return runID, fmt.Errorf("ready for review failed (run %s)", runID)
+	}
+	return runID, nil
+}
+
+// removeReviewerWorkflow drops the local reviewer from a PR's requested
+// reviewers. One Activity, always in the same position, so replay is trivially
+// deterministic. No signal — it runs straight through and completes, mirroring
+// readyForReviewWorkflow.
+func removeReviewerWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in RemoveReviewerInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	if err := w.ExecuteActivity("removeSelfAsReviewer", in, nil); err != nil {
+		return nil, fmt.Errorf("remove reviewer: %w", err)
+	}
+	return json.Marshal(map[string]any{"pr": in.PR})
+}
+
+// StartRemoveReviewer runs the remove_reviewer Workflow Execution to completion
+// (a signal-less workflow runs synchronously) and returns its Run ID. Starting
+// an Execution is the sanctioned write path; a failed GitHub call reaches the
+// caller as an error, mirroring StartReadyForReview.
+func (m *TaskManager) StartRemoveReviewer(in RemoveReviewerInput) (string, error) {
+	runID, err := m.engine.StartWorkflow(WorkflowRemoveReviewer, in)
+	if err != nil {
+		return "", err
+	}
+	status, err := m.engine.Status(runID)
+	if err != nil {
+		return runID, err
+	}
+	if status == tembed.StatusFailed {
+		return runID, fmt.Errorf("remove reviewer failed (run %s)", runID)
 	}
 	return runID, nil
 }

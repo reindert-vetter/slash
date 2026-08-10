@@ -25,6 +25,7 @@ export const WORKFLOW_LABELS = {
   ingest: 'Review-boom genereren',
   submit_review: 'Review insturen',
   ready_for_review: 'Klaar voor review',
+  remove_reviewer: 'Mijzelf als reviewer verwijderen',
   task_inbox: 'Taken-inbox',
   task_snooze: 'Taken uitstellen',
   cleanup: 'Opruimen',

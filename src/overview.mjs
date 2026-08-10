@@ -10,7 +10,7 @@
 import { reactive, html, watch } from './vendor/arrow.js'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
-import { avatarHTML, avatarUrlOf, displayNameOf, ensureNames, fullNameOf } from './avatar.mjs'
+import { avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureNames, fullNameOf, meLogin } from './avatar.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
 import { relativeTime } from './relativeTime.mjs'
 
@@ -84,6 +84,9 @@ const state = reactive({
 // reviewersLoading/reviewersError: fetch state; selectedReviewers: a login→true
 // map of the checked reviewers (reassigned wholesale so arrow.js re-renders);
 // readySubmitting: a ready_for_review POST in flight.
+// removingReviewer: the pr.number whose remove_reviewer POST is in flight;
+// removeReviewerError: that call's last failure message, shown inline in the
+// popover (both cleared whenever a popover opens or closes).
 // popoverAbove: whether the currently open popover should render ABOVE its row
 // instead of below — measured once right after it mounts (see
 // positionPopover below), so a row near the bottom of the viewport never opens
@@ -91,6 +94,7 @@ const state = reactive({
 const ui = reactive({
   openPopover: null, ingesting: null, ingestStage: '', ingestError: null, ingestErrorFor: null, copiedFor: null,
   readyFor: null, reviewers: [], reviewersLoading: false, reviewersError: null, selectedReviewers: {}, readySubmitting: false,
+  removingReviewer: null, removeReviewerError: null,
   popoverAbove: false,
 })
 
@@ -136,6 +140,10 @@ const ICON_PATHS = {
   // as a CHRISTMAS tree rather than as the review tree this app is named
   // after (Reindert). Same 24x24/stroke-2 convention as the rest of this set.
   tree: '<path d="M8 19a4 4 0 0 1-2.24-7.32A3.5 3.5 0 0 1 9 6.03V6a3 3 0 1 1 6 0v.04a3.5 3.5 0 0 1 3.24 5.65A4 4 0 0 1 16 19Z"/><path d="M12 19v3"/>',
+  // 'user-minus' — the popover's "Verwijder mij als reviewer" glyph (a person
+  // with a minus sign). Lucide's own user-minus, same 24x24/stroke-2 set.
+  'user-minus':
+    '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="22" x2="16" y1="11" y2="11"/>',
 }
 
 // icon renders one outline SVG (24x24 viewBox, stroke=currentColor). The path
@@ -592,6 +600,7 @@ function togglePopover(number) {
   // into a different PR's menu.
   ui.readyFor = null
   ui.reviewersError = null
+  ui.removeReviewerError = null
   // Default focus lands on the 2nd item (the first real action) — the pinned
   // "Sluit menu" item (see popover() below) always sits first so a stray
   // Enter never merely closes the menu; focusPopoverItem clamps, so a
@@ -816,6 +825,74 @@ async function copyGithubUrl(pr) {
   }
 }
 
+// ── remove myself as a reviewer ────────────────────────────────────────────
+
+// canRemoveSelf answers whether this row may offer "Verwijder mij als reviewer":
+// only on a PR somebody ELSE opened — taking yourself off your own PR makes no
+// sense. An unknown local login (offline, SLASH_GITHUB=off, /api/me answering
+// {ok:false}) hides the item: without knowing who I am, "not my PR" cannot be
+// established. `me` is primed by ensureMe in primeAuthorNames, i.e. long before
+// a popover can be opened by hand.
+function canRemoveSelf(pr) {
+  const me = meLogin()
+  return !!me && !!pr.author && pr.author !== me
+}
+
+// removeSelfAsReviewer starts the remove_reviewer workflow (the sanctioned write
+// path — it starts a Workflow Execution, never a direct module write). The POST
+// carries only the PR number: who gets removed is resolved server-side from the
+// authenticated GitHub user. On success it closes the popover and refreshes the
+// inbox snapshot, so the row leaves "Needs your review" without waiting for the
+// 60s poll — mirrors submitReady.
+async function removeSelfAsReviewer(pr) {
+  if (ui.removingReviewer) return // one at a time; the button is disabled anyway
+  ui.removingReviewer = pr.number
+  ui.removeReviewerError = null
+  try {
+    const res = await fetch('/api/workflows/remove_reviewer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr: pr.number }),
+    })
+    if (!res.ok) throw new Error('remove_reviewer failed')
+    closePopover()
+    reloadSnapshot()
+  } catch (e) {
+    ui.removeReviewerError = 'Verwijderen mislukt'
+  } finally {
+    ui.removingReviewer = null
+  }
+}
+
+// removeReviewerAction — the popover's last item on a PR I didn't open. Rendered
+// through a ${() => …} function binding by its caller (never a static
+// template↔'' slot, see .claude/rules/arrowjs-pitfalls.md). The rose tint is
+// decoration only: the WORD carries the meaning (colorblind rule).
+function removeReviewerAction(pr) {
+  return html`
+    <div class="contents">
+      <button
+        type="button"
+        data-testid="remove-reviewer"
+        disabled="${() => ui.removingReviewer === pr.number}"
+        class="${() =>
+          POPOVER_ROW_SHAPE +
+          ' text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-500/15 ' +
+          POPOVER_FOCUS_CLS +
+          (ui.removingReviewer === pr.number ? ' cursor-not-allowed opacity-60' : '')}"
+        @click="${() => removeSelfAsReviewer(pr)}"
+      >
+        ${() => (ui.removingReviewer === pr.number ? icon('loader', 'h-3.5 w-3.5 animate-spin') : icon('user-minus', 'h-3.5 w-3.5'))}
+        ${() => (ui.removingReviewer === pr.number ? 'Bezig…' : 'Verwijder mij als reviewer')}
+      </button>
+      ${() =>
+        ui.removeReviewerError
+          ? html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400 [overflow-wrap:anywhere]" data-testid="remove-reviewer-error">${ui.removeReviewerError}</p>`
+          : ''}
+    </div>
+  `
+}
+
 // ── preset filters (live gh-search for a fixed, allow-listed query) ─────────
 
 let presetSeq = 0
@@ -980,7 +1057,11 @@ function readyForReviewSection(pr) {
 // stray Enter never merely closes the menu), then the ingest-related
 // action(s) (which action depends on pr.hasGraph, see generateAction/
 // ingestedActions above), then a plain link to GitHub, plus a Jira link when
-// the title carries a KEY-123-style ticket key. The panel gets a solid (white
+// the title carries a KEY-123-style ticket key, and finally "Verwijder mij als
+// reviewer" on a PR somebody else opened (canRemoveSelf/removeReviewerAction).
+// That last item and the draft-only ready-for-review section below it are
+// mutually exclusive in practice — a draft is your own PR — so their order
+// never actually shows. The panel gets a solid (white
 // in light mode) background plus a strong shadow + ring: it necessarily
 // overlaps the status pills of the row below, and with a near-page-background
 // tint that overlap read as the pill's text being cut off instead of a
@@ -1053,6 +1134,7 @@ function popover(pr) {
               ${icon('external-link', 'h-3.5 w-3.5')} Open Jira-ticket
             </a>`
           : ''}
+      ${() => (canRemoveSelf(pr) ? removeReviewerAction(pr) : '')}
       ${() => (pr.isDraft ? [readyForReviewSection(pr).key('ready-section')] : [])}
     </div>
   `
@@ -1824,7 +1906,12 @@ function normalizeSections(sections) {
 // ensureNames in avatar.mjs (a late arrival can never repaint a keyed row).
 // Always awaited, never awaited-on-error: ensureNames swallows its own failures.
 function primeAuthorNames(rows) {
-  return ensureNames(rows.map((pr) => pr.author))
+  // ensureMe rides along here because it is the one place EVERY row-loading path
+  // already awaits before pushing rows into reactive state — and the popover's
+  // "Verwijder mij als reviewer" item needs to know who I am to decide whether
+  // this PR is mine (see canRemoveSelf). Both are plain, non-reactive caches, so
+  // a late arrival could never repaint a mounted row (see avatar.mjs).
+  return Promise.all([ensureNames(rows.map((pr) => pr.author)), ensureMe()])
 }
 
 // primeSectionNames is primeAuthorNames over a whole section list.
@@ -2180,6 +2267,7 @@ function closePopover() {
   ui.ingestErrorFor = null
   ui.readyFor = null
   ui.reviewersError = null
+  ui.removeReviewerError = null
 }
 
 // handlePopoverKey is the entire keyboard surface while a popover is open:

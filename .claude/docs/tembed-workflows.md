@@ -114,6 +114,7 @@ See `.claude/rules/workflows-write-boundary.md` and
 | `ingest` | `.claude/docs/workflows-trackers.md` |
 | `submit_review` | `.claude/docs/workflows-trackers.md` |
 | `ready_for_review` | `.claude/docs/workflows-trackers.md` |
+| `remove_reviewer` | `.claude/docs/workflows-trackers.md` |
 | `cleanup` | `.claude/docs/workflows-trackers.md` |
 
 Also in `.claude/docs/workflows-trackers.md`: "Surfacing failures"

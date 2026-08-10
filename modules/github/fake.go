@@ -30,11 +30,11 @@ type Fake struct {
 	replies          []Reply
 	reviewComments   []ReviewComment
 	general          []GeneralComment
-	prState          string          // "" reads as "open"
-	prMeta           Meta            // returned by PRMeta (SetPRMeta overrides), PR-independent fallback
-	prMetas          map[int]Meta    // per-PR override (SetPRMetaFor), checked first
+	prState          string               // "" reads as "open"
+	prMeta           Meta                 // returned by PRMeta (SetPRMeta overrides), PR-independent fallback
+	prMetas          map[int]Meta         // per-PR override (SetPRMetaFor), checked first
 	changesSince     map[int]SinceChanges // per-PR ChangesSince stub (SetChangesSince)
-	viewed           map[string]bool // "pr|path" -> viewed
+	viewed           map[string]bool      // "pr|path" -> viewed
 
 	lastStartLine int
 	lastEndLine   int
@@ -47,8 +47,9 @@ type Fake struct {
 	collaborators    []Collaborator
 	currentUser      Collaborator // returned by CurrentUser (SetCurrentUser seeds it)
 	currentUserCalls int
-	readyPRs         []int      // PRs flipped to ready-for-review, in order
-	requestedRevs    [][]string // reviewer login sets requested, in order
+	readyPRs         []int             // PRs flipped to ready-for-review, in order
+	requestedRevs    [][]string        // reviewer login sets requested, in order
+	removedRevs      []removedReviewer // reviewers dropped from a PR, in order
 
 	users          map[string]User // seeded by SetUser, returned by UsersByLogin
 	userLookups    int             // how often UsersByLogin was called
@@ -498,6 +499,31 @@ func (f *Fake) RequestReviewers(_ context.Context, pr int, logins []string) erro
 	defer f.mu.Unlock()
 	f.requestedRevs = append(f.requestedRevs, append([]string(nil), logins...))
 	return nil
+}
+
+func (f *Fake) RemoveReviewer(_ context.Context, pr int, login string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removedRevs = append(f.removedRevs, removedReviewer{PR: pr, Login: login})
+	return nil
+}
+
+// removedReviewer is one recorded RemoveReviewer call (see LastRemovedReviewer).
+type removedReviewer struct {
+	PR    int
+	Login string
+}
+
+// LastRemovedReviewer returns the PR + login of the most recent RemoveReviewer
+// call, and false when there was none.
+func (f *Fake) LastRemovedReviewer() (int, string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.removedRevs) == 0 {
+		return 0, "", false
+	}
+	last := f.removedRevs[len(f.removedRevs)-1]
+	return last.PR, last.Login, true
 }
 
 // ReadyForReviewCount returns how many PRs were flipped to ready-for-review.
