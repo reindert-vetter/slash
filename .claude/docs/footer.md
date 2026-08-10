@@ -47,6 +47,41 @@ without relying on colour discrimination. Hidden entirely at `total === 0`
 (nothing to review yet), mirroring `footerVisible`'s "nothing to show yet"
 pattern. Purely informational: not clickable, no tooltip/breakdown.
 
+## A separate, animated top loading strip (`src/TopLoadingBar.mjs`)
+
+A very thin (`TOP_LOADING_BAR_PX`, 3px), full-width strip sits at the true
+`top-0` of the screen (`data-testid=top-loading-bar`, fill
+`data-testid=top-loading-bar-fill`): a sliding "indeterminate" segment shown
+while the currently active TOP-LEVEL block's code is still being fetched
+(`/api/code`, `ensureCode` in `home.mjs`) — `undefined` (not requested yet) or
+`null` (fetch in flight). Driven by `home.mjs`'s `topLoadingActive()`
+(`state.mode === 'diff' && state.focusLevel === 0`, `curBlock()` exists and
+isn't a synthetic `comment`/`test_class` row), passed into the component as a
+plain getter (same shape as `Block.mjs`'s `activeGroup`/`hintsEnabled`
+options) since `curBlock()` is local to `home.mjs`.
+
+Reported need: after approving a block's LAST line/call (the approve-triggered
+auto-advance in `afterApproveAction`/`spaceKey` jumping to the next unapproved
+block), the per-card "loading code…" text (`Block.mjs`'s `codeDiff`, shown
+while `b.code` is `null`) sits wherever that new card happens to land — often a
+different, just-rebuilt spot than where the reviewer was looking a moment ago.
+A strip fixed at the very top is visible regardless of where the new card
+lands. Deliberately the SIMPLE variant, on request: it fires for **any**
+not-yet-loaded top-level block — a fresh page load and an ordinary manual
+↓/click as much as the approve auto-advance — no separate "was this an
+auto-advance" flag.
+
+Unlike `ProgressBar`'s static, position-encoded fill (colourblind-safe by
+design, see below), this bar's meaning is "wait a moment, loading" and nothing
+else, so a repeating sliding motion is exactly right instead of a problem —
+the CSS lives in `index.html` next to the one-shot `drillIn`/`drillReturn`
+keyframes, gated the same way behind
+`@media (prefers-reduced-motion: no-preference)`; outside that (or before
+JS/CSS settles) the fallback is a plain static full-width bar, so the
+"something is loading" signal never depends on motion. `z-30`, same stacking
+layer as `ProgressBar`, and `pointer-events-none` since nothing else sits at
+`top-0` to protect.
+
 **Stacking:** `PROGRESS_BAR_PX` is exported from `ProgressBar.mjs` so both
 `Footer.mjs` (whose own fixed root sits at `bottom-[PROGRESS_BAR_PX]px`, not
 `bottom-0`, so the two bars never overlap) and `home.mjs`'s `<main>`

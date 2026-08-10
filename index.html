@@ -132,6 +132,33 @@
         }
       }
 
+      /* TopLoadingBar's fill (src/TopLoadingBar.mjs) — a sliding "indeterminate"
+         segment, distinct from ProgressBar's static, position-encoded fill at
+         the bottom of the screen: this one only ever means "wait a moment,
+         loading", so an eye-catching repeating motion is exactly right (unlike
+         drillIn/drillReturn above, which are deliberately one-shot). Default
+         (reduced motion / no-JS-animation fallback): a plain, full-width,
+         static bar — the "something is loading" signal still reads without any
+         motion. `prefers-reduced-motion: no-preference` then narrows it to a
+         sliding segment instead. */
+      .top-loading-bar-fill {
+        width: 100%;
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        @keyframes topLoadingSlide {
+          0% {
+            transform: translateX(-100%);
+          }
+          100% {
+            transform: translateX(400%);
+          }
+        }
+        .top-loading-bar-fill {
+          width: 25%;
+          animation: topLoadingSlide 1.1s ease-in-out infinite;
+        }
+      }
+
       /* Prism token colours only — scoped to every Prism code excerpt via the
          `.language-php` class it always carries (the diff panes in Block.mjs, the
          Onderliggende-code cards + comment hint in RelatedPanel.mjs, the footer),

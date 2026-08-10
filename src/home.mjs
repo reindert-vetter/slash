@@ -6,6 +6,7 @@ import { reactive, html, watch } from './vendor/arrow.js'
 import BlockList, { isFullyApproved, isIgnoredComment } from './BlockList.mjs'
 import Footer, { footerBoxPx } from './Footer.mjs'
 import ProgressBar, { PROGRESS_BAR_PX } from './ProgressBar.mjs'
+import TopLoadingBar from './TopLoadingBar.mjs'
 import Block, {
   blockRows,
   changedRows,
@@ -6048,6 +6049,25 @@ function isActiveCard(b) {
   return b === curBlock()
 }
 
+// topLoadingActive drives TopLoadingBar (a fixed strip at the very top of the
+// screen): true whenever the currently active top-level card's code hasn't
+// arrived yet (`undefined` = not requested yet, `null` = ensureCode's fetch is
+// in flight — see ensureCode's own doc comment). Restricted to
+// `state.focusLevel === 0` (a drilled Onderliggende-code column loading its
+// own code doesn't drive this — that column already shows its own inline
+// loading state) and to an ordinary block (a synthetic `comment`/`test_class`
+// row never fetches its own code, see ensureCode's early returns). Simple, on
+// purpose: fires for ANY not-yet-loaded top-level block — a fresh page load,
+// a manual ↓/click as much as the approve-triggered auto-advance
+// (afterApproveAction/spaceKey) this was built for — no separate "was this an
+// auto-advance" flag. See "A separate, always-visible progress bar" sibling
+// note for TopLoadingBar in footer.md.
+function topLoadingActive() {
+  if (state.mode !== 'diff' || state.focusLevel !== 0) return false
+  const b = curBlock()
+  return !!b && b.kind !== 'comment' && b.kind !== 'test_class' && (b.code === undefined || b.code === null)
+}
+
 // selectedComment returns the underlying comment object when the currently
 // selected sidebar item is a synthetic PR-wide-comment entry (kind:'comment',
 // see recomputeLeftList/commentBlockItem) — null for an ordinary PR block.
@@ -11097,6 +11117,7 @@ MenuHost()(app)
 CallArrowsHost()(app)
 Footer(state)(app)
 ProgressBar(state)(app)
+TopLoadingBar(state, topLoadingActive)(app)
 
 // Start with the search box already focused so the reviewer can type straight
 // away — a frame later, once BlockList has rendered the input into the DOM.
