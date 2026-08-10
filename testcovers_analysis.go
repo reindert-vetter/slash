@@ -114,7 +114,10 @@ type coverTarget struct {
 	// this annotation sits (see matchLine in relations.go) — carried onto
 	// testcovers.Entry.Line so the frontend can scope/reorder the
 	// "Onderliggende code" panel by the reviewer's selected group/line (see
-	// .claude/docs/detail-layout.md, "Group-herordening").
+	// .claude/docs/detail-layout.md, "Group-herordening"). Deliberately left 0
+	// for a target found via coverTargets' classZoneText fallback (a
+	// class-level annotation, shared by every test method in the file — see
+	// that branch's own comment).
 	line int
 }
 
@@ -139,6 +142,7 @@ func scanTestCovers(dataDir string, pr int, blocks []Block, rels []relations.Rel
 		lines      []string
 		fileBlocks []Block
 		classZone  string
+		classLine  int
 	}
 	cache := map[string]*fileInfo{}
 
@@ -155,10 +159,22 @@ func scanTestCovers(dataDir string, pr int, blocks []Block, rels []relations.Rel
 				continue
 			}
 			text := string(src)
+			cz := classZone(text)
+			// classLine is the absolute file line of the class keyword itself
+			// — one past the number of lines classZone (everything BEFORE
+			// that keyword) contains — or 0 (no bound) when reClassKeyword
+			// found nothing at all, the same defensive fallback classZone
+			// itself falls back to. See methodZone's own comment for why this
+			// bounds a method's own zone.
+			classLine := 0
+			if reClassKeyword.MatchString(text) {
+				classLine = strings.Count(cz, "\n") + 1
+			}
 			fi = &fileInfo{
 				lines:      strings.Split(text, "\n"),
 				fileBlocks: ScanBlocks(src, b.File),
-				classZone:  classZone(text),
+				classZone:  cz,
+				classLine:  classLine,
 			}
 			cache[b.File] = fi
 		}
@@ -166,7 +182,7 @@ func scanTestCovers(dataDir string, pr int, blocks []Block, rels []relations.Rel
 			continue
 		}
 
-		zone, zoneFrom, hasTestAttr := methodZone(fi.lines, fi.fileBlocks, b)
+		zone, zoneFrom, hasTestAttr := methodZone(fi.lines, fi.fileBlocks, b, fi.classLine)
 		if !isTestMethod(b.Name, hasTestAttr) {
 			continue
 		}
@@ -239,7 +255,17 @@ func classZone(src string) string {
 // text starts at (from — the anchor coverTargets converts a match offset into
 // via matchLine), and whether a #[Test] attribute or "@test" docblock tag sits
 // in that zone.
-func methodZone(lines []string, fileBlocks []Block, b Block) (zone string, from int, hasTestAttr bool) {
+//
+// classLine (the class keyword's own absolute line, see scanTestCovers'
+// fi.classZone) is a HARD lower bound on `from`, additional to the
+// prevEnd/40-line one above: for the class's FIRST method, with no preceding
+// block to bound it, `from` would otherwise fall back to file line 1 and
+// sweep the class declaration line (and any #[CoversMethod]/#[CoversClass]
+// stacked directly above it) into THIS one method's own zone — as if that
+// annotation were this method's own, rather than shared by every method in
+// the class (the classZoneText fallback in coverTargets exists precisely to
+// handle that annotation, with no per-test `line`, see its own comment).
+func methodZone(lines []string, fileBlocks []Block, b Block, classLine int) (zone string, from int, hasTestAttr bool) {
 	prevEnd := 0
 	for _, fb := range fileBlocks {
 		if fb.Line == b.Line && fb.Name == b.Name && fb.Class == b.Class {
@@ -256,6 +282,9 @@ func methodZone(lines []string, fileBlocks []Block, b Block) (zone string, from 
 	}
 	if from < 1 {
 		from = 1
+	}
+	if from <= classLine {
+		from = classLine + 1
 	}
 	to := declLine - 1
 	if to < from || to > len(lines) {
@@ -286,10 +315,13 @@ func isTestMethod(name string, hasTestAttr bool) bool {
 // declaration names both class and method just as precisely as one placed
 // above a single test method, so it resolves statically too — and, since
 // every test method's own zone falls through to this same fallback, it
-// applies to every test method of that class, not only one. zoneFrom/
-// classZoneFrom are the absolute file lines zone/classZoneText each start at
-// (see methodZone/classZoneFromLine), used to anchor each target's line via
-// matchLine.
+// applies to every test method of that class, not only one. zoneFrom is the
+// absolute file line `zone` starts at (see methodZone), used to anchor a
+// per-method target's line via matchLine — a classZoneText-fallback target
+// deliberately gets no such line at all (see the comment on that branch
+// below): it's shared verbatim by every test method in the file, so it isn't
+// "this test's own line". classZoneFrom is kept for symmetry with the
+// caller/classZoneFromLine but no longer read here.
 func coverTargets(zone, classZoneText string, zoneFrom, classZoneFrom int) []coverTarget {
 	var targets []coverTarget
 
@@ -313,16 +345,30 @@ func coverTargets(zone, classZoneText string, zoneFrom, classZoneFrom int) []cov
 		targets = append(targets, coverTarget{class: m[1], annotation: "CoversClass", line: matchLine(zone, m[0], zoneFrom)})
 	}
 
+	// A match found here sits ABOVE THE CLASS, not above any one test method
+	// (see the doc comment above) — shared verbatim by every test method in
+	// the file, so its absolute file line (classZoneFrom is always 1) is not
+	// "this test's own line" at all. Unlike the zone/zoneFrom matches above,
+	// these deliberately DON'T carry a `line`: a class-level line would nearly
+	// always fall outside the individual test method's own row range, which
+	// groupTierForLine (home.mjs) would then score as "out of scope" for
+	// every group/line of every test in the class, and newLineToRowOf
+	// (home.mjs) could coincidentally miscount it onto an unrelated row
+	// whenever the (wrong) line number happens to be smaller than that test's
+	// own row count — see the "0/8 badge with no underlying card" bug this
+	// fixed. Leaving `line` at its zero value degrades this target to the
+	// same "not in the group" tier `covered_by`/a `found`-escalated row
+	// already get, per groupTierForLine's "no information ⇒ don't hide" rule.
 	if len(targets) == 0 {
 		for _, m := range reCoversMethodAttr.FindAllStringSubmatch(classZoneText, -1) {
-			targets = append(targets, coverTarget{class: m[1], method: m[2], annotation: "CoversMethod", line: matchLine(classZoneText, m[0], classZoneFrom)})
+			targets = append(targets, coverTarget{class: m[1], method: m[2], annotation: "CoversMethod"})
 		}
 		for _, m := range reCoversClassAttr.FindAllStringSubmatch(classZoneText, -1) {
-			targets = append(targets, coverTarget{class: m[1], annotation: "CoversClass", line: matchLine(classZoneText, m[0], classZoneFrom)})
+			targets = append(targets, coverTarget{class: m[1], annotation: "CoversClass"})
 		}
 		for _, m := range reCoversDocblock.FindAllStringSubmatch(classZoneText, -1) {
 			if !strings.Contains(m[1], "::") && !strings.HasPrefix(m[1], "::") {
-				targets = append(targets, coverTarget{class: m[1], annotation: "@covers-class", line: matchLine(classZoneText, m[0], classZoneFrom)})
+				targets = append(targets, coverTarget{class: m[1], annotation: "@covers-class"})
 			}
 		}
 	}

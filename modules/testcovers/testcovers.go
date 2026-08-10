@@ -98,13 +98,17 @@ type Entry struct {
 	// — distinct from CoveredLine (the covered production method's own
 	// declaration line). Used by the frontend to scope/reorder the
 	// "Onderliggende code" panel by the reviewer's selected group/line
-	// (detail-layout.md). Set on the Go-produced `resolved`/`unresolved` rows
-	// (the annotation lives in the test's own text); an LLM-resolved `found`
-	// row (escalated from an `unresolved` class-only annotation) does not
-	// carry it forward and leaves it 0 — see resolve_test_covers.go. A found
-	// row therefore never sorts into the current-group tier; it degrades to
-	// the same "not in scope" bucket as `covered_by` (see src/home.mjs's
-	// relatedChildren).
+	// (detail-layout.md). Set on a Go-produced `resolved`/`unresolved` row
+	// whose annotation sits directly above the TEST METHOD ITSELF (the
+	// annotation genuinely lives in that one test's own text). Left 0 for two
+	// distinct cases that both degrade to the same "not in scope" bucket as
+	// `covered_by` (see src/home.mjs's relatedChildren): an LLM-resolved
+	// `found` row (escalated from an `unresolved` class-only annotation),
+	// which does not carry it forward — see resolve_test_covers.go — and a
+	// Go-`resolved` row whose annotation instead sits above the CLASS
+	// (testcovers_analysis.go's coverTargets, the classZoneText fallback) —
+	// that line is shared verbatim by every test method in the file, so it is
+	// never "this test's own line" either.
 	Line int `json:"line"`
 }
 

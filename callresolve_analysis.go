@@ -1200,7 +1200,11 @@ func resolveDataProviders(dataDir string, pr int, blocks []Block) []callresolve.
 		if fi == nil {
 			continue
 		}
-		zone, _, _ := methodZone(fi.lines, fi.fileBlocks, b)
+		// classLine 0: a #[DataProvider] is always per-method, never a
+		// class-level annotation shared across methods (unlike testcovers'
+		// #[CoversMethod]), so there's no equivalent "sweeps in the class
+		// declaration for the first method" concern to bound against here.
+		zone, _, _ := methodZone(fi.lines, fi.fileBlocks, b, 0)
 		if zone == "" {
 			continue
 		}

@@ -494,10 +494,20 @@ likewise carries the full child descriptor + code text.
   `method:Class::method` (statically resolved), `class:Class` (AI territory),
   `none`. `line` (distinct from `covered_line`, the tested method's declaration)
   is where the annotation sits **in the test file**, used to reorder the panel
-  around the selected group. Only set on a `resolved`/`unresolved` row; a
-  `found` row that escalated from a class-only annotation deliberately doesn't
-  carry it (too much plumbing for this narrow path), so it degrades to the same
-  "not in the group" tier as `covered_by`.
+  around the selected group. Only set when the annotation sits directly above
+  the TEST METHOD ITSELF. Two cases deliberately leave it 0, both degrading to
+  the same "not in the group" tier as `covered_by`: a `found` row that
+  escalated from a class-only annotation (too much plumbing for this narrow
+  path), and — the bug behind a reported "0/8 badge with no underlying card"
+  on a real PR, 2026-08-10 — a Go-`resolved` row whose `#[CoversMethod]`/
+  `#[CoversClass]`/bare `@covers Class` instead sits **above the class**
+  (`coverTargets`' classZoneText fallback, see below): that line is shared
+  verbatim by every test method in the file, so it's never "this test's own
+  line" — comparing it against one method's own row range made the covers
+  child wrongly score as out-of-scope everywhere, and the frontend's
+  `newLineToRowOf` could coincidentally miscount it onto an unrelated row of
+  that method whenever the (wrong) line number happened to be smaller than
+  the method's own row count.
   Statuses:
   - **`resolved`** — a **method-level** annotation (`#[CoversMethod(X::class,
     'm')]`, `@covers X::m`, `@coversDefaultClass` + `@covers ::m`) always names

@@ -355,6 +355,16 @@ final class ProductGroupUpdateTest extends HttpTestCase
 		if !ok || e.Status != testcovers.StatusResolved || e.Annotation != "CoversMethod" {
 			t.Fatalf("%s: class-level CoversMethod entry = %+v, ok=%v", method, e, ok)
 		}
+		// Line must stay 0 — the annotation sits above the class, shared
+		// verbatim by every test method, so it is never "this test's own
+		// line": home.mjs's groupTierForLine would otherwise wrongly score
+		// this child as out of scope for every group/line of every test in
+		// the class, and newLineToRowOf could coincidentally miscount it onto
+		// an unrelated row of THIS method (reported as "a 0/8 approve badge
+		// with no matching card in the Onderliggende-code panel").
+		if e.Line != 0 {
+			t.Errorf("%s: class-level CoversMethod Line = %d, want 0", method, e.Line)
+		}
 	}
 }
 
