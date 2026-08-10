@@ -2490,6 +2490,36 @@ async function applyBulkApproval(blocks) {
   }
 }
 
+// retractAllApprovalsForPr clears every reviewer approval across the WHOLE PR
+// in one action — the PR-wide bulk counterpart of toggleApprove/
+// toggleTestClassApproval, reached via the "/" PR menu's "Alle goedkeuringen
+// intrekken" confirm submenu (PR_COMMANDS). Walks state.blocks exactly like
+// syncViewedFiles/the approvalSummaries rollup: an ordinary block's own
+// approvedRows/approvedCalls, plus every method of a test_class row (which
+// carries no approval of its own — see toggleTestClassApproval). Each block
+// is persisted individually through the existing single-block `approve`
+// Signal (persistApproval) — one Signal per block, never a batch write, same
+// write path as toggleRangeApproval/applyBulkApproval; no new backend code.
+// Deliberately unconditional (always clears, never toggles) — reached only
+// through its own confirm submenu, not a repeatable keybinding, so there is
+// no "nothing to do" case worth special-casing.
+function retractAllApprovalsForPr() {
+  for (const b of state.blocks) {
+    if (b.kind === 'comment') continue
+    if (b.kind === 'test_class') {
+      for (const m of b.methods) {
+        m.approvedRows = []
+        m.approvedCalls = []
+        persistApproval(m)
+      }
+      continue
+    }
+    b.approvedRows = []
+    b.approvedCalls = []
+    persistApproval(b)
+  }
+}
+
 // stepListSelection is the list-mode ↑/↓ step (dir=+1 down, -1 up) while the
 // keyboard cursor sits on an ordinary block or one of the two toggle rows —
 // NOT already inside the search box itself (see searchStepSelection for that
@@ -5826,35 +5856,6 @@ async function submitReview(event, body = '') {
   }
 }
 
-// checkPRWarnings starts a code_warning Execution — the "Diepgravend
-// onderzoek" ("in-depth investigation") PR_COMMANDS item: an agentic Opus
-// review of every changed file in the whole PR for risks (security/style/
-// consistency with connected code — callers, callees, tests, listeners),
-// creating one AI-authored comment per finding (block-scoped when it anchors
-// to a line, PR-wide otherwise — see .claude/docs/tembed-workflows.md).
-// POST /api/workflows/code_warning is the sanctioned write path (starting an
-// Execution); this is only the call site. Files is omitted — a full baseline
-// run. Same minimal error handling as submitReview (no toast convention in
-// this app, see conventions.md); on success it's itself a fresh workflow run,
-// so pollWorkflows() refreshes the Taken column sooner than the next tick.
-async function checkPRWarnings() {
-  try {
-    const res = await fetch('/api/workflows/code_warning', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: state.pr }),
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      console.error('code_warning failed:', res.status, text)
-      return
-    }
-    pollWorkflows()
-  } catch (err) {
-    console.error('code_warning network error:', err)
-  }
-}
-
 // REVIEW_APPROVE_CONFIRM_COMMANDS — the one-more-step confirmation opened by
 // choosing "Keur de HELE PR goed" below (via the ordinary `children`
 // submenu mechanism runCommand already uses for e.g. "Open GitHub" — no new
@@ -8347,15 +8348,6 @@ const PR_COMMANDS = withClose([
     ]),
   },
   {
-    id: 'pr-check-warnings',
-    label: 'Diepgravend onderzoek',
-    hint: 'risicocontrole',
-    // Starts an agentic Opus review of the whole PR (code_warning); see
-    // checkPRWarnings above. Re-running supersedes the previous run's
-    // findings, so this is a plain, repeatable "refresh the deep review".
-    run: () => checkPRWarnings(),
-  },
-  {
     id: 'pr-toggle-description',
     // Label is a function so it names the current action; snapshotCommands reads
     // it once (non-reactively) at open, so it never leaks a reactive binding into
@@ -8365,6 +8357,24 @@ const PR_COMMANDS = withClose([
     run: () => {
       state.descriptionExpanded = !state.descriptionExpanded
     },
+  },
+  {
+    id: 'pr-retract-all-approvals',
+    // Bulk-clears every approval in the whole PR in one action (reviewer
+    // request). A submenu with a single confirm row rather than a direct
+    // action — same lightweight "one extra Enter" confirm every other
+    // destructive PR-wide action gets via `children` (e.g. "PR keuren"),
+    // deliberate given how much review work this discards at once.
+    label: 'Alle goedkeuringen intrekken',
+    hint: 'intrekken',
+    children: withClose([
+      {
+        id: 'pr-retract-all-approvals-confirm',
+        label: 'Ja, alle goedkeuringen intrekken',
+        hint: 'intrekken',
+        run: () => retractAllApprovalsForPr(),
+      },
+    ]),
   },
 ])
 

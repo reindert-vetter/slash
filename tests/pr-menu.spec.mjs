@@ -8,8 +8,9 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // That PR-wide menu: a pinned "Sluit menu" first (withClose, home.mjs), then
 // "GitHub" (the default item, where the selection opens — defaultSel) and
 // "Jira" (both with their own submenus, each with its own pinned "Sluit
-// menu"), the code_warning risk check, and the description toggle. It
-// reuses the same floating CommandMenu overlay (menu mode 'pr' — see
+// menu"), the description toggle, and "Alle goedkeuringen intrekken" (its own
+// one-row confirm submenu). It reuses the same floating CommandMenu overlay
+// (menu mode 'pr' — see
 // home.mjs PR_COMMANDS + onKeydown, resolveCommands). Reaching /pr-overview
 // itself no longer goes through this menu — only via the ← nav-chain exit
 // (stop 1, state.showDescription, see tests/nav-chain.spec.mjs).
@@ -38,14 +39,14 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
     const rows = page.getByTestId('command-row')
     // 5 root items: a pinned "Sluit menu" (withClose, always first) plus the
-    // 4 real ones — the code_warning PR-wide risk check sits before the
-    // description toggle (see PR_COMMANDS in home.mjs).
+    // 4 real ones — the description toggle sits before the bulk
+    // retract-all-approvals item (see PR_COMMANDS in home.mjs).
     await expect(rows).toHaveCount(5)
     await expect(rows.nth(0)).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('GitHub')
     await expect(rows.nth(2)).toContainText('Jira')
-    await expect(rows.nth(3)).toContainText("Diepgravend onderzoek")
-    await expect(rows.nth(4)).toContainText('Toon volledige omschrijving')
+    await expect(rows.nth(3)).toContainText('Toon volledige omschrijving')
+    await expect(rows.nth(4)).toContainText('Alle goedkeuringen intrekken')
 
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()
@@ -81,7 +82,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     // Esc backs out to the root, then Jira → its three children (plus its own
     // pinned "Sluit menu" first).
     await page.keyboard.press('Escape')
-    await expect(rows).toHaveCount(5) // root: Sluit menu/GitHub/Jira/risk-check/description
+    await expect(rows).toHaveCount(5) // root: Sluit menu/GitHub/Jira/description/retract-all
     await page.getByTestId('command-input').fill('jira')
     await expect(rows).toHaveCount(1)
     await page.keyboard.press('Enter')
@@ -151,8 +152,8 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(rows.nth(0)).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('GitHub')
     await expect(rows.nth(2)).toContainText('Jira')
-    await expect(rows.nth(3)).toContainText("Diepgravend onderzoek")
-    await expect(rows.nth(4)).toContainText('Toon volledige omschrijving')
+    await expect(rows.nth(3)).toContainText('Toon volledige omschrijving')
+    await expect(rows.nth(4)).toContainText('Alle goedkeuringen intrekken')
   })
 
   // `/` is no longer hardwired to the PR-wide menu: it opens the menu of the
@@ -229,5 +230,44 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     // The comment item's own menu (prCommentCommandsFor), not the PR-wide one.
     await expect(page.getByTestId('command-row').filter({ hasText: 'Beantwoorden' })).toHaveCount(1)
     await expect(page.getByTestId('command-row').filter({ hasText: 'Jira' })).toHaveCount(0)
+  })
+
+  // "Alle goedkeuringen intrekken" (PR_COMMANDS, retractAllApprovalsForPr) —
+  // reviewer request: a bulk way to clear every approval in the whole PR in
+  // one go, reached through its own one-row confirm submenu (like "PR
+  // keuren") so a stray Enter can't discard review work by accident.
+  test('"Alle goedkeuringen intrekken" clears an approved block\'s approval', async ({ page }) => {
+    await page.goto('/pr/12903')
+    // Block 1 (CreatePaymentAction::execute) reliably has one changed row —
+    // see command-menu.spec.mjs's own note on why block 0 doesn't work here.
+    await page.locator('[data-idx="1"]').click()
+    await leaveSearchBox(page)
+    const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
+    await expect(approve).not.toBeChecked()
+
+    // Approve it via the block palette; a fully approved top-level block
+    // hides from the "Start" list by default (see approval.md).
+    await page.keyboard.press('Enter')
+    await page.getByTestId('command-input').fill('keur')
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
+    await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
+
+    // Step left into stop 1 and open the PR-wide menu, then run the bulk
+    // retract via its confirm submenu.
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('pr-info-column')).toBeVisible()
+    await page.keyboard.press('/')
+    await page.getByTestId('command-input').fill('intrekken')
+    await expect(page.getByTestId('command-row')).toHaveCount(1)
+    await page.keyboard.press('Enter') // into the confirm submenu
+    await expect(page.getByTestId('command-row')).toHaveCount(2) // pinned "Sluit menu" + confirm
+    await page.getByTestId('command-row').filter({ hasText: 'Ja, alle goedkeuringen intrekken' }).click()
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
+
+    // The block is no longer fully approved, so it reappears in the list.
+    await expect(page.locator('[data-idx="1"]')).toHaveCount(1)
+    await page.locator('[data-idx="1"]').click()
+    await expect(approve).not.toBeChecked()
   })
 })

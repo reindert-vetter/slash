@@ -799,13 +799,34 @@ The same overlay, with actions on the **whole PR**. Five root items:
    (`ms.sub = null`), never "back one level", so extra nesting is free.
 3. **"Jira"** (submenu): *Open in new tab* (deep link), plus *Place comment* and
    *Create subtask* as **placeholders** (no Jira write integration yet).
-4. **"Diepgravend onderzoek"** — starts `code_warning` on Opus
-   (`checkPRWarnings`, see `.claude/docs/workflows-analysis.md`).
-5. **"Show full description" / "Collapse description"** — a label function
+4. **"Show full description" / "Collapse description"** — a label function
    toggling `state.descriptionExpanded`, the same ephemeral flag as the in-card
    "more…" affordance (see `.claude/docs/detail-layout.md`). The label is
    snapshotted at open time by `snapshotCommands`, so no reactive binding leaks
    into the `CommandMenu` tree.
+5. **"Alle goedkeuringen intrekken"** (submenu, one confirm row — same
+   lightweight "one extra Enter" confirm as "PR keuren" above) — clears every
+   approval in the WHOLE PR in one action (`retractAllApprovalsForPr`).
+   Walks `state.blocks` exactly like `syncViewedFiles`/the approval rollup
+   (an ordinary block's own `approvedRows`/`approvedCalls`; every method of a
+   `test_class` row, which carries no approval of its own — see
+   `.claude/docs/test-class-grouping.md`), clearing each and persisting it
+   through the existing single-block `approve` Signal (`persistApproval`) —
+   the same write path `toggleRangeApproval`/`applyBulkApproval` already use,
+   one Signal per block, never a batch write. Reviewer request: a bulk
+   opposite of approving everything, for when a re-review is needed from
+   scratch. Test: the last test in `tests/pr-menu.spec.mjs`.
+
+There used to be a 4th item here, **"Diepgravend onderzoek"**, which manually
+started `code_warning` on Opus. Removed on request ("die wordt toch
+automatisch gedaan toch?") — confirmed still true:
+`.claude/docs/workflows-analysis.md`'s "AI risk check of the whole PR" section
+already fires `code_warning` automatically on a PR's first ingest and on
+every ingest-refresh that finds a newer head SHA, gated only by the "Live AI
+assistent" toggle (which never gated the now-removed manual trigger either).
+The now-unused `checkPRWarnings` function (and its call site) were removed
+along with the menu item — there is no other way left in the UI to force a
+one-off re-run outside of a new commit landing.
 
 A typed `/` in a focused input never reaches this handler — the
 `relatedActive()` branch catches it earlier, so the character flows into the
