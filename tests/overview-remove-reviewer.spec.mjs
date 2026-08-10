@@ -50,6 +50,40 @@ test.describe('PR Review Tree — remove myself as reviewer', () => {
     await expect(popover).toHaveCount(0)
   })
 
+  test('the row leaves the list at once and the top row is selected', async ({ page }) => {
+    let inboxCalls = 0
+    await page.route('**/api/inbox', async (route) => {
+      inboxCalls++
+      await route.continue()
+    })
+    await page.route('**/api/workflows/remove_reviewer', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"runId":"r1"}' })
+    })
+
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    const row = page.locator('[data-testid="pr-row"][data-pr="12888"]')
+    await row.click()
+    await page.locator('[data-testid="pr-popover"] [data-testid="remove-reviewer"]').click()
+
+    // Gone immediately — not after the /api/inbox round trip, which still
+    // serves 12888 from the shared SLASH_INBOX fixture.
+    await expect(row).toHaveCount(0)
+
+    // And it stays gone once that refetch (plus any later poll) has landed:
+    // removedPrs is deliberately never emptied.
+    const before = inboxCalls
+    await expect.poll(() => inboxCalls).toBeGreaterThan(before)
+    await expect(row).toHaveCount(0)
+
+    // The selection lands on the new first row of the overview — the row the
+    // reviewer was standing on just left the list, so without this there'd be
+    // no ring at all. Same behaviour as the just-approved round trip.
+    const firstRow = page.locator('[data-nav-row]').first()
+    await expect(firstRow).toHaveClass(/ring-indigo-500\/50/)
+  })
+
   test('my own PR does not offer it', async ({ page }) => {
     await page.goto('/pr-overview')
     await appReady(page)

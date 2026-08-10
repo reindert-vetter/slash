@@ -145,9 +145,9 @@ late arrival could never repaint a mounted row).
 
 Clicking it POSTs the **`remove_reviewer`** workflow with **only** `{pr}` — who
 gets removed is resolved server-side from the authenticated GitHub user, so the
-endpoint can never remove somebody else — then closes the popover and calls
-`reloadSnapshot()` so the row leaves "Needs your review" without waiting for the
-60s poll (mirrors `submitReady`). While in flight the button is really
+endpoint can never remove somebody else — then closes the popover, drops the row
+from the list **immediately** and selects the new top row (see below). While in
+flight the button is really
 `disabled` (the plain attribute, see `.claude/rules/arrowjs-pitfalls.md`) and
 reads "Bezig…"; a failure shows `data-testid=remove-reviewer-error` inline. The
 item is deliberately shown on every foreign PR, also one where I am no longer a
@@ -155,6 +155,26 @@ requested reviewer at all — GitHub treats that DELETE as a no-op, and gating o
 the asynchronously backfilled `status.reviewers` would make the item appear
 late. It sits above the draft-only ready-for-review section, which can never
 co-occur with it (a draft is your own PR).
+
+**The row goes at once, and the selection moves to the top row.** Waiting for
+`reloadSnapshot()` would not do: `/api/inbox` serves the `pr_inbox` read-model,
+which still lists the PR until a background refresh (and GitHub itself) catches
+up — so the row would linger, then flicker away. Instead the PR number goes into
+**`removedPrs`**, and `state.sections` is filtered right there in
+`removeSelfAsReviewer`. `removedPrs` joins `approvedPr` behind the shared
+**`isHiddenPr`** predicate that `normalizeSections`/`applyCached` apply to every
+later snapshot, and — like `approvedPr` — is **never emptied**, otherwise the row
+would pop back on the next poll. A real page load clears it, by which time the
+server agrees. The repaint after the filter is **explicit** (`scheduleRepaint()`):
+the nav watch keys on `state.sections.length`, which a row leaving a section does
+not change.
+
+Because the row the reviewer was standing on has just left, `reanchorSelection`
+would otherwise release the selection entirely (no ring anywhere). So the flow
+calls **`selectTopRow()`** — the first row of the whole overview, extracted from
+`trySelectTopAfterApprove` and now shared with it, so "just approved" and "just
+removed myself" behave identically. `reloadSnapshot()` still runs afterwards to
+pull in everything else.
 
 The row is never an `<a href="/pr/<id>">`, so the old hover-only
 `regenerateButton` and the separate `data-row` wrapper were removed — they only

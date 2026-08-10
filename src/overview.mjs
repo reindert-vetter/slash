@@ -838,12 +838,26 @@ function canRemoveSelf(pr) {
   return !!me && !!pr.author && pr.author !== me
 }
 
+// removedPrs — the PRs this tab took itself off as a reviewer, hidden from every
+// section from that moment on (see isHiddenPr, the same mechanism `approvedPr`
+// uses). Deliberately never emptied: /api/inbox keeps serving the pr_inbox
+// read-model, which needs a background refresh — and GitHub itself a moment —
+// before it agrees, so a cleared entry would make the row pop back on the very
+// next reloadSnapshot or 60s poll.
+const removedPrs = new Set()
+
 // removeSelfAsReviewer starts the remove_reviewer workflow (the sanctioned write
 // path — it starts a Workflow Execution, never a direct module write). The POST
 // carries only the PR number: who gets removed is resolved server-side from the
-// authenticated GitHub user. On success it closes the popover and refreshes the
-// inbox snapshot, so the row leaves "Needs your review" without waiting for the
-// 60s poll — mirrors submitReady.
+// authenticated GitHub user.
+//
+// On success the row leaves the list IMMEDIATELY — hidden via removedPrs and
+// filtered out of state.sections right here, without waiting for the /api/inbox
+// round trip that would still list it — and the selection moves to the top row
+// of the overview, exactly like the just-approved round trip
+// (trySelectTopAfterApprove/selectTopRow). The repaint is explicit because the
+// nav watch keys on state.sections.LENGTH, which a row leaving a section doesn't
+// change. reloadSnapshot still runs afterwards to pull everything else in.
 async function removeSelfAsReviewer(pr) {
   if (ui.removingReviewer) return // one at a time; the button is disabled anyway
   ui.removingReviewer = pr.number
@@ -856,6 +870,10 @@ async function removeSelfAsReviewer(pr) {
     })
     if (!res.ok) throw new Error('remove_reviewer failed')
     closePopover()
+    removedPrs.add(pr.number)
+    state.sections = state.sections.map((s) => ({ ...s, prs: s.prs.filter((row) => row.number !== pr.number) }))
+    selectTopRow()
+    scheduleRepaint()
     reloadSnapshot()
   } catch (e) {
     ui.removeReviewerError = 'Verwijderen mislukt'
@@ -1898,7 +1916,18 @@ function normalizeSections(sections) {
   if (!Array.isArray(sections)) return []
   return sections
     .map((s) => ({ ...s, prs: Array.isArray(s.prs) ? s.prs : [] }))
-    .map((s) => (approvedPr == null ? s : { ...s, prs: s.prs.filter((pr) => pr.number !== approvedPr) }))
+    .map((s) => ({ ...s, prs: s.prs.filter((pr) => !isHiddenPr(pr.number)) }))
+}
+
+// isHiddenPr — a PR this tab is deliberately no longer showing, whatever the
+// server still says: the one just approved from the review tree (`approvedPr`,
+// below) and every PR I just took myself off as a reviewer (`removedPrs`, see
+// removeSelfAsReviewer). Both outlive a single render on purpose — the pr_inbox
+// read-model (and GitHub itself) needs a moment to catch up, so without this the
+// row would come straight back on the next reloadSnapshot/60s poll. A real page
+// load clears them, by which time the server agrees.
+function isHiddenPr(number) {
+  return number === approvedPr || removedPrs.has(number)
 }
 
 // primeAuthorNames resolves the real names behind the author logins of these
@@ -1941,7 +1970,7 @@ async function applyCached(body) {
   state.generatedFor = body.generatedFor || ''
   state.cached = true
   const allPrs = Array.isArray(body.prs) ? body.prs : []
-  const prs = approvedPr == null ? allPrs : allPrs.filter((pr) => pr.number !== approvedPr)
+  const prs = allPrs.filter((pr) => !isHiddenPr(pr.number))
   await primeAuthorNames(prs)
   state.sections = prs.length ? [{ title: 'Needs your review', prs }] : []
   state.loading = false
@@ -1984,11 +2013,22 @@ let pendingSelectTop = approvedPr != null
 
 function trySelectTopAfterApprove() {
   if (!pendingSelectTop) return
-  const firstRow = state.sections.flatMap((s) => s.prs)[0]
-  if (!firstRow) return
+  if (!selectTopRow()) return
   pendingSelectTop = false
+}
+
+// selectTopRow moves the selection to the FIRST row of the whole overview and
+// reports whether there was one to move to. Shared by the just-approved round
+// trip above and removeSelfAsReviewer: in both cases the row the reviewer was
+// standing on has just left the list, so without this the selection would
+// simply be released (reanchorSelection can't find selKey anymore) and the page
+// would sit there with no ring at all.
+function selectTopRow() {
+  const firstRow = state.sections.flatMap((s) => s.prs)[0]
+  if (!firstRow) return false
   selKey = 'row:' + firstRow.number
   hoverEnabled = false
+  return true
 }
 
 // originPr/originSel — the same `?pr=`/`?sel=` pair as pendingSelectPr above,
