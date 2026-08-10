@@ -3427,6 +3427,83 @@ function groupTierForLine(range, line) {
   return line >= range.startLine && line <= range.endLine ? 0 : 1
 }
 
+// RE_WHEN_COMMENT/RE_ANY_COMMENT back whenSectionRows below — the codebase's
+// Given/When/Then test convention (see .claude/docs/workflows-analysis.md,
+// "Linking test coverage"), matched case-insensitively against a row's own
+// displayed text (rowAnchorText).
+const RE_WHEN_COMMENT = /^\s*\/\/\s*when\b/i
+const RE_ANY_COMMENT = /^\s*\/\//
+
+// whenSectionRows scans a TEST block's own aligned rows for every "// When"
+// comment and returns the row indices of the STATEMENT lines that follow it
+// — never the comment row itself (Reindert, 2026-08-10: "cursor op de
+// comment-regel zelf toont de kaart niet") — up to, but not including, the
+// next comment row (any "//" line, not only another Given/When/Then marker)
+// or a blank row, whichever comes first, or the end of the block. Repeated
+// for every "// When" occurrence in the block (a test can have more than
+// one — e.g. several Given/When/Then cycles in one method), unioned into one
+// Set.
+//
+// Used by resolvedTestCoverChildren/lineChildSummaries as the scope for a
+// `covers` target with no single natural anchor line of its own
+// (testcovers.Entry.Line === 0 — either an LLM `found` row escalated from a
+// class-only annotation, or a Go-`resolved` row whose #[CoversMethod]/
+// #[CoversClass] sits above the CLASS rather than this one test method, see
+// testcovers_analysis.go's coverTargets/classZoneText fallback): the test's
+// own action-under-test is the closest thing that target has to "its own
+// line", closer than "visible on every line" (the previous, too-permissive
+// fallback) or a coincidentally wrong single line (the bug fixed in
+// 121be8d).
+function whenSectionRows(rows) {
+  const out = new Set()
+  for (let i = 0; i < rows.length; i++) {
+    if (!RE_WHEN_COMMENT.test(rowAnchorText(rows[i]))) continue
+    for (let j = i + 1; j < rows.length; j++) {
+      const text = rowAnchorText(rows[j])
+      if (text.trim() === '' || RE_ANY_COMMENT.test(text)) break
+      out.add(j)
+    }
+  }
+  return out
+}
+
+// groupUnitRowRange mirrors groupLineRange's own guards (diff mode, b is the
+// focused block, gran==='group', a Shift-merged range widens it) but returns
+// the row-index range { start, end } of the selected unit directly, instead
+// of converting to absolute source lines — whenSectionRows above already
+// works in row space (the very same `rows` array), so no line round-trip is
+// needed for that comparison.
+function groupUnitRowRange(b) {
+  if (state.mode !== 'diff') return null
+  if (b !== focusedBlock()) return null
+  const cur = focusedGranCursor()
+  if (cur.gran !== 'group') return null
+  const unit = focusedActiveUnit()
+  if (!unit) return null
+  return { start: unit.start, end: unit.end }
+}
+
+// testCoverGroupTier is resolvedTestCoverChildren's own groupTier rule: a row
+// with a real recorded line goes through the ordinary groupTierForLine; a row
+// with none (r.line === 0) falls back to whenSectionRows scoping instead of
+// groupTierForLine's blanket "no information ⇒ never hide" — see
+// whenSectionRows' own doc comment for why. `range` truthy is reused as the
+// "group-diff-mode scoping is actually active right now" guard (the exact
+// condition groupUnitRowRange itself re-checks) — outside that (list mode, or
+// not 'group' granularity), stay permissive like every other exemption here.
+function testCoverGroupTier(b, rows, range, line) {
+  if (line) return groupTierForLine(range, line)
+  if (!range) return 0
+  const whenRows = whenSectionRows(rows)
+  if (whenRows.size === 0) return 0 // no "// When" found at all — no info, don't hide
+  const unitRows = groupUnitRowRange(b)
+  if (!unitRows) return 0
+  for (let i = unitRows.start; i <= unitRows.end; i++) {
+    if (whenRows.has(i)) return 0
+  }
+  return 1
+}
+
 // relatedChildren describes the selected block's children for the RelatedPanel:
 // the resolved method calls it makes (coupled to the call in the diff) plus the
 // event listeners it is linked to. It lazily loads any child block's code and
@@ -3849,17 +3926,19 @@ function coveredChildId(r) {
 // the covering test. Its code + descriptor ride along in the testcovers row
 // (unchanged file → no /api/code fetch), mirroring resolvedCallChildren.
 // range (relatedChildren's groupLineRange result, or null outside group-diff
-// mode) scores each row's groupTier via groupTierForLine: r.line is the
+// mode) scores each row's groupTier via testCoverGroupTier: r.line is the
 // absolute line — within b's own test file — the annotation sits on
-// (testcovers.Entry.Line, only ever set on a Go-resolved row, see
-// modules/testcovers/testcovers.go); an LLM-`found` row that escalated from a
-// class-level-only annotation never carries a Line, so — per
-// groupTierForLine's "no information ⇒ don't hide" rule — it's exempt from
-// group scoping (always tier 0) rather than filtered out.
+// (testcovers.Entry.Line, only ever set on a Go-resolved row whose annotation
+// sits directly above THIS test method, see modules/testcovers/testcovers.go).
+// A row with no such line (an LLM-`found` row escalated from a class-only
+// annotation, or a Go-`resolved` row whose #[CoversMethod]/#[CoversClass]
+// sits above the class instead) falls back to testCoverGroupTier's
+// whenSectionRows scoping — see that function's own doc comment.
 function resolvedTestCoverChildren(b, range) {
   if (!b) return []
   const resolved = testCoverRows(b).filter((r) => r.status === 'resolved' || r.status === 'found')
   if (resolved.length === 0) return []
+  const rows = blockRows(b)
   const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
   return resolved.map((r) => {
     const prBlock = byId.get(coveredChildId(r))
@@ -3890,7 +3969,7 @@ function resolvedTestCoverChildren(b, range) {
       // call is (the annotation covers the whole test), so there's no
       // "on a changed line" middle tier — just changed-in-this-PR (0) or not (2).
       prio: prBlock ? 0 : 2,
-      groupTier: groupTierForLine(range, r.line),
+      groupTier: testCoverGroupTier(b, rows, range, r.line),
       nested,
       nestedSig: nestedSigOf(nested),
     }
@@ -4352,8 +4431,16 @@ function lineChildSummaries(b) {
     if (r.status !== 'resolved' && r.status !== 'found') continue
     const kid = byId.get(coveredChildId(r))
     if (!kid) continue
-    const row = newLineToRowOf(rows, r.line)
-    if (row != null) addTo(row, kid)
+    if (r.line) {
+      const row = newLineToRowOf(rows, r.line)
+      if (row != null) addTo(row, kid)
+    } else {
+      // No natural single line (see testCoverGroupTier's own doc comment) —
+      // anchor the badge on the test's own "// When" statement row(s)
+      // instead of nowhere, mirroring the callRows loop above's multi-site
+      // findCallSites attribution.
+      for (const row of whenSectionRows(rows)) addTo(row, kid)
+    }
   }
 
   // A comment placed directly ON this block's OWN row — not on an

@@ -55,6 +55,7 @@ export default function globalSetup() {
   materializeLineSummaryWorktrees()
   materializeClassMemberScopeWorktrees()
   materializeExplainRangeWorktrees()
+  materializeWhenScopeWorktrees()
 }
 
 // materializeMainWorktrees writes the base/head worktrees for the suite's MAIN
@@ -1059,4 +1060,84 @@ class ExplainRangeAction
   const write = worktreeWriter(116)
   write('base', 'app/Actions/ExplainRangeAction.php', file(0, 0, 0, 0, 0, 0))
   write('head', 'app/Actions/ExplainRangeAction.php', file(1, 2, 3, 4, 5, 6))
+}
+
+// materializeWhenScopeWorktrees writes the synthetic PR 119 fixture worktrees
+// for testcovers-when-scope.spec.mjs: a class-level #[CoversMethod] (PR 119's
+// entry in tests/fixtures/testcovers.json carries no `line` at all, mirroring
+// the classZoneText fallback testcovers_analysis.go leaves at 0 for exactly
+// this shape — see 121be8d and testCoverGroupTier in home.mjs) on a single
+// TEST method with TWO separate Given/When/Then cycles.
+//
+// WhenScopeTest::it_computes_twice is entirely `added`, so every one of its
+// 24 rows is a changed row; MAX_GROUP (5, Block.mjs's changeGroups) splits it
+// into 5 groups: G0 rows[0-4] (#[Test]/signature/{/"// Given"/$subject=...),
+// G1 rows[5-9] ($b/$c/$d/blank/the FIRST "// When" comment itself), G2
+// rows[10-14] (the first "// When" STATEMENT + blank/"// Given"/$e/$f), G3
+// rows[15-19] ($g/blank/the SECOND "// When" comment/its STATEMENT/blank),
+// G4 rows[20-23] ("// Then"/both assertions/the closing brace). Only the two
+// STATEMENT rows (10 and 18) are "// When" section rows per whenSectionRows'
+// own rule (the comment row itself never counts) — and they land in TWO
+// DIFFERENT groups (G2, G3), so the spec's "straddling" case is real: G2 and
+// G3 must each independently show the covers card, G0/G1/G4 must not (G1
+// proves the comment row alone doesn't count).
+//
+// WhenScopeSubject::compute is a genuinely changed (`modified`) production
+// method, so the covers child is a real PR block with its own diff stat, not
+// an "Unchanged" reference.
+function materializeWhenScopeWorktrees() {
+  const test = `<?php
+
+namespace Tests\\Feature;
+
+use App\\Services\\WhenScopeSubject;
+use PHPUnit\\Framework\\Attributes\\CoversMethod;
+use PHPUnit\\Framework\\Attributes\\Test;
+use Tests\\TestCase;
+
+#[CoversMethod(WhenScopeSubject::class, 'compute')]
+final class WhenScopeTest extends TestCase
+{
+    #[Test]
+    public function it_computes_twice(): void
+    {
+        // Given
+        $subject = new WhenScopeSubject();
+        $b = 2;
+        $c = 3;
+        $d = 4;
+
+        // When
+        $first = $subject->compute(1);
+
+        // Given
+        $e = 5;
+        $f = 6;
+        $g = 7;
+
+        // When
+        $second = $subject->compute(2);
+
+        // Then
+        $this->assertSame(1, $first);
+        $this->assertSame(2, $second);
+    }
+}
+`
+  const subject = (body) => `<?php
+
+namespace App\\Services;
+
+class WhenScopeSubject
+{
+    public function compute(int $n): int
+    {
+        return ${body};
+    }
+}
+`
+  const write = worktreeWriter(119)
+  write('head', 'tests/Feature/WhenScopeTest.php', test) // added — no base side
+  write('base', 'app/Services/WhenScopeSubject.php', subject('$n'))
+  write('head', 'app/Services/WhenScopeSubject.php', subject('$n * 10'))
 }

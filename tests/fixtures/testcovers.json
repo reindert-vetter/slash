@@ -39,5 +39,17 @@
     "annotation": "CoversClass",
     "model": "sonnet",
     "confidence": "high"
+  },
+  {
+    "pr": 119,
+    "testId": "119:tests/Feature/WhenScopeTest.php:WhenScopeTest::it_computes_twice",
+    "targetKey": "method:WhenScopeSubject::compute",
+    "status": "resolved",
+    "coveredFile": "app/Services/WhenScopeSubject.php",
+    "coveredClass": "WhenScopeSubject",
+    "coveredMethod": "compute",
+    "coveredLine": 7,
+    "coveredCode": "public function compute(int $n): int\n{\n    return $n * 10;\n}",
+    "annotation": "CoversMethod"
   }
 ]

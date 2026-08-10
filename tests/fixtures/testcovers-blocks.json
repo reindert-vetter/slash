@@ -64,5 +64,27 @@
     "endLine": 8,
     "status": "modified",
     "side": "new"
+  },
+  {
+    "pr": 119,
+    "file": "tests/Feature/WhenScopeTest.php",
+    "class": "WhenScopeTest",
+    "name": "it_computes_twice",
+    "category": "TEST",
+    "line": 13,
+    "endLine": 36,
+    "status": "added",
+    "side": "new"
+  },
+  {
+    "pr": 119,
+    "file": "app/Services/WhenScopeSubject.php",
+    "class": "WhenScopeSubject",
+    "name": "compute",
+    "category": "SERVICE",
+    "line": 7,
+    "endLine": 10,
+    "status": "modified",
+    "side": "new"
   }
 ]

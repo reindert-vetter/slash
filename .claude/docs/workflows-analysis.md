@@ -575,7 +575,12 @@ likewise carries the full child descriptor + code text.
   diffstat/`source` badges as a call child); direction 2 = `coveredByChildren`
   (`covered_by`, reusing the existing test PR block, so no code snapshot). Both
   **block-level**, so they drop out at `gran==='call'` like listener children —
-  coverage is not a line-bound concept. `directChildBlocks`/`nestedPrBlocks`
+  coverage is not a line-bound concept. A `covers` row whose `Line` is 0 (the
+  class-level-annotation case above, or a `found` escalation) is, at
+  `gran==='group'`, scoped to the covering test's own `// When` section
+  instead of shown unconditionally — see "A class-level `#[CoversMethod]`/
+  found-escalated `covers` child scopes to `// When`" in
+  `.claude/docs/underlying-code.md`. `directChildBlocks`/`nestedPrBlocks`
   include **only direction 1**, to avoid a method↔test cycle in the recursive
   approval rollup. **Test coverage hides no block from the left list** — neither
   side: a tested method that is a PR block is always changed, primary reviewable

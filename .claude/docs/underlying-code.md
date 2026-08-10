@@ -562,9 +562,13 @@ of range". Three exemptions follow:
    kept **always** visible: a hard filter would hide "covered by TestX::testY"
    almost every time the reviewer is in diff mode. `coveredByChildren` no longer
    takes a `range` parameter; its `groupTier` is unconditionally `0`.
-3. **A relation/`covers` child with no recorded `line`** — kept, never treated as
-   "line 0 is out of range". This is also what keeps several existing Playwright
+3. **A relation child with no recorded `line`** — kept, never treated as "line 0
+   is out of range". This is also what keeps several existing Playwright
    fixtures correct.
+   **A `covers` child with no recorded `line` is narrower** (`testCoverGroupTier`,
+   `home.mjs`): instead of the blanket "always kept" above, it falls back to
+   scoping by the covering TEST's own `// When` section — see "A class-level
+   `#[CoversMethod]`/found-escalated `covers` child scopes to `// When`" below.
 
 **`translation:` children are NOT exempt** — that callKey couples to a real
 string-literal site (the quoted key inside `trans()`/`__()`/`@lang()`), so it stays
@@ -572,6 +576,42 @@ hard-scoped to the line it's used on, like an ordinary method call.
 
 Outside `gran==='group'`, `groupTierForLine`'s `!range` guard keeps every tier at
 `0` — a no-op, so the ordering below is unchanged.
+
+### A class-level `#[CoversMethod]`/found-escalated `covers` child scopes to `// When`
+
+A `covers` target with no natural single line of its own — either an LLM
+`found` row escalated from a class-only annotation, or (the common shape in
+practice) a Go-`resolved` row whose `#[CoversMethod]`/`#[CoversClass]`/bare
+`@covers Class` sits **above the class**, not above this one test method (see
+"Linking test coverage" in `.claude/docs/workflows-analysis.md`) —
+`testcovers.Entry.Line` is `0` for both. Showing such a card on **every**
+group/line/call of every test method in the class (the original, too-loose
+"no information ⇒ never hide" treatment) reads as "linked to all lines";
+Reindert asked for it to be scoped to the covering test's own `// When`
+section instead — the closest thing that target has to "its own line", since
+that's where the tested action actually runs.
+
+`whenSectionRows(rows)` (`home.mjs`) scans the TEST block's own aligned rows
+for every `// When` comment (case-insensitive, the codebase's Given/When/Then
+convention) and collects the row indices of the **statement lines that
+follow it** — repeated for every `// When` occurrence in the method (a test
+can have more than one Given/When/Then cycle). **The comment row itself is
+deliberately excluded** — Reindert: "cursor op de comment-regel zelf toont
+de kaart niet" — collection starts at the first row after the comment and
+stops at (not including) the next comment row (any `//` line, not only
+another marker) or a blank row, whichever comes first, or the end of the
+block. `testCoverGroupTier` (`home.mjs`) then hides the child (`groupTier 1`)
+at `gran==='group'` unless the selected unit's own row range overlaps one of
+those rows (`groupUnitRowRange`, the row-index counterpart of
+`groupLineRange` — no line round-trip needed since both sides are already in
+row space); no `// When` found at all, or no active group range, both fall
+back to "keep" like every other exemption here. The per-line badge
+(`lineChildSummaries`) mirrors this: such a child's badge now sits on every
+`// When` statement row instead of nowhere (a silent, badge-less consequence
+of leaving `Line` at 0, see 121be8d) or the coincidentally wrong row that bug
+produced. A real per-method annotation (`Line` truthy) is untouched — it
+keeps its own `groupTierForLine` scoping on the annotation's own line, as
+before. Test: `tests/testcovers-when-scope.spec.mjs`.
 
 **Inline comment blocks are unaffected by all of this** —
 `InlineComments`/`commentUnder` already hard-filter by aligned-row range at *every*
