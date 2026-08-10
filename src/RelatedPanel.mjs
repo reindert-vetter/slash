@@ -5774,13 +5774,16 @@ const TASK_STALE_MS = 5 * 60 * 1000
 
 // visibleWorkflowRuns is what TasksPanel (below, mounted under the
 // PR-description column, see detail-layout.md) actually renders: a run shows
-// only while it's genuinely IN PROGRESS (status === 'running' — deliberately
-// not 'waiting' too: several long-lived per-PR trackers, build_relations/
-// approve/pr_status, sit in 'waiting' indefinitely once their initial run is
-// done, without being busy) OR it hasn't been updated in over
-// TASK_STALE_MS — a recently completed/waiting run thus disappears for the
-// first few minutes (nothing to act on), then reappears as a "this has been
-// sitting idle for a while" signal. Running-first, then most-recently-updated.
+// only while it's genuinely IN PROGRESS (status === 'running') OR it hasn't
+// been updated in over TASK_STALE_MS AND isn't sitting in 'waiting' — a
+// recently completed run thus disappears for the first few minutes (nothing
+// to act on), then reappears as a "this has been sitting idle for a while"
+// signal. 'waiting' is excluded even when stale: several long-lived per-PR
+// trackers (build_relations/approve/pr_status) and any other workflow that
+// simply idles on a Signal sit in 'waiting' indefinitely without being busy,
+// so showing it here — however old — is never actionable, just noise (see
+// "laat hier geen taken zien die in de wacht staan"). Running-first, then
+// most-recently-updated.
 export function visibleWorkflowRuns(state) {
   const all = state && Array.isArray(state.workflows) ? state.workflows : []
   const now = Date.now()
@@ -5788,7 +5791,7 @@ export function visibleWorkflowRuns(state) {
     const t = new Date(r.updatedAt).getTime()
     return Number.isNaN(t) || now - t > TASK_STALE_MS
   }
-  const visible = all.filter((r) => r.status === 'running' || stale(r))
+  const visible = all.filter((r) => r.status !== 'waiting' && (r.status === 'running' || stale(r)))
   return visible.sort((a, b) => {
     if ((a.status === 'running') !== (b.status === 'running')) return a.status === 'running' ? -1 : 1
     return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()

@@ -1,22 +1,24 @@
 import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 
 // The "Taken" (workflow runs) block's per-row description + timestamp
-// (workflowNote/relTime in RelatedPanel.mjs), and its 5-minute visibility
-// filter (visibleWorkflowRuns/TasksPanel, RelatedPanel.mjs — see
-// detail-layout.md): a run shows only while it's genuinely `running`, or once
-// it hasn't been updated in over 5 minutes. Taken now lives under the
-// PR-description column (stop 1 of the nav chain), not the Onderliggende-code
-// default export. Like blockstats.spec.mjs, we mount TasksPanel directly with
-// synthetic state on a live page (needed for the Tailwind/Prism CSS from
-// index.html) rather than driving a real build_relations Execution end-to-end
-// (that only ever gets an Execution via a full `POST /api/ingest` — git/gh,
-// offline-unfriendly in this harness, see the SLASH_GITHUB=off note in
-// conventions.md) — this is the established, lower-cost way to exercise the
-// actual rendering code against realistic API-shaped run objects.
+// (workflowNote/relTime in RelatedPanel.mjs), and its visibility filter
+// (visibleWorkflowRuns/TasksPanel, RelatedPanel.mjs — see detail-layout.md): a
+// run shows only while it's genuinely `running`, or once it hasn't been
+// updated in over 5 minutes AND isn't sitting in `waiting` — a `waiting` run
+// is never shown here, however stale, because a long-lived per-PR tracker
+// (build_relations/approve/pr_status, or anything idling on a Signal) sits in
+// `waiting` indefinitely without being busy, so surfacing it is never
+// actionable. Taken now lives under the PR-description column (stop 1 of the
+// nav chain), not the Onderliggende-code default export. Like
+// blockstats.spec.mjs, we mount TasksPanel directly with synthetic state on a
+// live page (needed for the Tailwind/Prism CSS from index.html) rather than
+// driving a real build_relations Execution end-to-end (that only ever gets an
+// Execution via a full `POST /api/ingest` — git/gh, offline-unfriendly in this
+// harness, see the SLASH_GITHUB=off note in conventions.md) — this is the
+// established, lower-cost way to exercise the actual rendering code against
+// realistic API-shaped run objects.
 test.describe('PR Review Tree — Taken panel: waiting note + relative update time + 5-minute filter', () => {
-  test('a stale build_relations "wacht" row summarises what was built instead of saying "opbouwen…", and shows a relative update time', async ({
-    page,
-  }) => {
+  test('a stale build_relations "wacht" row is hidden, however old it is', async ({ page }) => {
     await page.goto('/pr/12903')
 
     await appReady(page)
@@ -29,7 +31,8 @@ test.describe('PR Review Tree — Taken panel: waiting note + relative update ti
         workflows: [
           {
             // 'waiting' + updated 6 minutes ago: not running, and stale
-            // (> 5 min) — visible per visibleWorkflowRuns' filter.
+            // (> 5 min) — still hidden, because visibleWorkflowRuns excludes
+            // 'waiting' unconditionally.
             runId: 'wf-relations-test',
             workflow: 'build_relations',
             status: 'waiting',
@@ -37,8 +40,6 @@ test.describe('PR Review Tree — Taken panel: waiting note + relative update ti
             updatedAt: new Date(Date.now() - 6 * 60000).toISOString(),
           },
         ],
-        // build_relations already produced these — the note should describe
-        // them instead of claiming it's still building.
         relations: [
           { parentId: 'a', childId: 'b', kind: 'event_listener' },
           { parentId: 'c', childId: 'd', kind: 'event_listener' },
@@ -53,21 +54,8 @@ test.describe('PR Review Tree — Taken panel: waiting note + relative update ti
     })
 
     const host = page.locator('#wf-notes-host')
-    const row = host.getByTestId('workflow-row')
-    await expect(row).toHaveCount(1)
-    await expect(row.getByTestId('workflow-status')).toHaveText('wacht')
-
-    // Bugfix under test: "wacht" must never read as active work.
-    const note = row.getByTestId('workflow-note')
-    await expect(note).not.toContainText('opbouwen')
-    await expect(note).toContainText('2 relaties')
-    await expect(note).toContainText('2 calls opgelost')
-    await expect(note).toContainText('wacht op wijzigingen')
-
-    // A relative "last updated" line, derived from run.updatedAt (~6 minutes
-    // ago above).
-    const updated = row.getByTestId('workflow-updated')
-    await expect(updated).toHaveText(/\d+ min geleden/)
+    await expect(host.getByTestId('workflow-row')).toHaveCount(0)
+    await expect(host.getByText('Geen taken.')).toBeVisible()
   })
 
   test('a freshly-placed comment task does not show up yet (not running, not stale)', async ({ page, request }) => {

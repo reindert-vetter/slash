@@ -379,12 +379,15 @@ shares the height with this `shrink-0 max-h-[16rem]` block.
 **Filtered to what needs attention — no Active/Recent split.**
 `visibleWorkflowRuns(state)` (exported from `RelatedPanel.mjs`) shows a run only
 while genuinely **`running`**, or once it hasn't been updated in over **5
-minutes** (`TASK_STALE_MS`) — deliberately **not** `waiting` too: the
-long-lived per-PR trackers (`build_relations`, `approve`, `pr_status`) sit in
-`waiting` indefinitely without being busy. So a just-started or just-finished
-run stays out of view for a few minutes and only resurfaces once it's actively
-running or has been idle long enough to be worth a look. Running-first, then
-most-recently-updated. Test: `tests/workflows-panel-notes.spec.mjs`.
+minutes** (`TASK_STALE_MS`) **AND** it isn't sitting in **`waiting`** —
+`waiting` is excluded unconditionally, however stale: the long-lived per-PR
+trackers (`build_relations`, `approve`, `pr_status`) and any other workflow
+that simply idles on a Signal sit in `waiting` indefinitely without being
+busy, so showing it here is never actionable, just noise. So a just-started
+or just-finished run stays out of view for a few minutes and only resurfaces
+once it's actively running or has been idle long enough to be worth a look
+(and never while `waiting`). Running-first, then most-recently-updated. Test:
+`tests/workflows-panel-notes.spec.mjs`.
 
 **Click-only — no keyboard cursor.** Stop 1 suppresses `↑`/`↓`, so a Taken row
 (`workflowRow`) has no focus ring of its own; only a click on a
