@@ -23,6 +23,7 @@ function** the key runs — never a parallel implementation. Concretely:
 | `pr-info-body-toggle` ("more…") | the PR menu's "Show full description" | `.claude/docs/detail-layout.md` |
 | A `/pr-overview` row → popover | `Enter` on the selected row | `.claude/docs/pr-overview.md` |
 | The Claude chat's "Stuur" button | `Enter` in the chat composer | `.claude/docs/claude-chat-panel.md` |
+| Focusing the Claude chat composer (click or Tab), on an already-anchored conversation | `→` from `'comment'` into it | "Clicking straight into the composer…" in `.claude/docs/claude-chat-panel.md` |
 | A `claude-question-option` chip | typing that same answer as free text (the backend records the next message as the open question's answer either way) | `.claude/docs/claude-chat-panel.md` |
 
 Two consequences worth keeping in mind when adding a click handler:

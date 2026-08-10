@@ -2180,10 +2180,67 @@ function claudeChatView() {
 // exists). There used to be a second `openCommit` parameter (reaching
 // home.mjs's command palette for the "Commit wijziging" confirm menu) — gone
 // along with that button, see sendClaudeMessage's own doc comment.
+// onFocus fires when the Claude composer's `@focus` fires by ANY means — a
+// mouse click straight into it (the case that had no keyboard equivalent at
+// all), Tab, or the reviewer already being there. Mouse-navigation Rule 1 (a
+// click is the Enter/→-equivalent, never its own behaviour) previously had no
+// entry for this target: entering the Claude column via `→` from 'comment'
+// already flips `cs.focus` to `'claude'` (enterClaudeChat), which is what
+// makes the merged comment card expand (commentCard) and is what lets
+// applyPendingDraftReplies actually find and fill `reaction-compose`.
+// Clicking straight into the already-visible composer of an EXISTING,
+// already-anchored conversation (claudeChatVisible() shows it for ANY visible
+// comment, regardless of cs.focus — see syncClaudeAnchorForSelection)
+// bypassed that entirely: the reviewer could chat with Claude and see the
+// "concept in comment-veld gezet" badge with the comment card still collapsed
+// and no reaction-compose in the DOM at all for applyPendingDraftReplies to
+// write into — a genuinely invisible draft until a SEPARATE click on the
+// comment item. Reproduced and fixed after a reviewer bug report with a
+// screenshot (an existing thread, reactionCount already > 0).
+//
+// A no-op once already there (`cs.focus === 'claude'`, the common case: the
+// composer keeps focus across an entire turn) — enterClaudeChat itself is
+// idempotent, but there is no reason to re-run its ensureAndLoadChat/
+// ensureChatEvents/refreshChatShadowWarning side effects on every keystroke's
+// implicit refocus.
+//
+// Deliberately excludes `cs.focus === 'new'` — the still-open, not-yet-placed
+// "Comment op deze regel" composer — and does NOT mirror the
+// enterClaudeChatFromNew half of handleRelatedKey's ArrowRight branch there.
+// Two reasons, both found by a broken regression test, not by inspection:
+//   1. Tried calling enterClaudeChat(cs.pr) whenever chatAnchorComment()
+//      happens to resolve non-null while cs.focus === 'new' — but
+//      chatAnchorComment()'s first branch is selComment() = cs.list[selI()],
+//      and `cs.list`/`cs.sel` are NOT reset by toNew() when the reviewer opens
+//      a brand-new composer on a line that already carries a DIFFERENT,
+//      existing comment: selComment() then still resolves to that unrelated,
+//      already-anchored conversation, so this callback would silently swap
+//      the visible transcript out from under the fresh 'new' composer the
+//      instant the reviewer clicks into the (still correctly empty-rendered)
+//      Claude field to type its first message. Broke "a new comment on an
+//      already-commented line gets its own comment + Claude block, not the
+//      existing one".
+//   2. Also tried calling enterClaudeChatFromNew() for the genuinely
+//      anchor-less case — but that flips cs.focus to 'claude' the moment the
+//      reviewer merely clicks into the Claude field, before ever pressing →.
+//      isNewChatUnanchored() then goes false as soon as Claude's first reply
+//      lazily creates the anchor, which unmounts the still-open
+//      comment-compose composer the reviewer may still be mid-typing in.
+//      Broke "placeComment never creates a SECOND comment once this anchor
+//      exists" (composing-a-new-comment spec).
+// The keyboard's own → still reaches enterClaudeChatFromNew exactly as
+// before for both cases; only the already-anchored, cs.focus !== 'new' case
+// gets a mouse-click equivalent here.
+function onClaudeComposeFocus() {
+  if (cs.focus === 'claude' || cs.focus === 'new') return
+  if (chatAnchorComment()) enterClaudeChat(cs.pr)
+}
+
 function claudeChatCallbacks(state, commentTarget) {
   return {
     onSend: (text) => sendClaudeMessageFromNew(state, commentTarget, text),
     onRetry: () => retryClaudeTurn(),
+    onFocus: () => onClaudeComposeFocus(),
   }
 }
 

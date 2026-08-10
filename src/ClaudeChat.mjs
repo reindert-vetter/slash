@@ -579,7 +579,10 @@ function claudeSendError(view) {
 // claudeChatColumn is the exported render. `view` = { messages, status,
 // busy, claudePos } — each a GETTER function (see the file-level doc
 // comment); `callbacks.onSend(text)` posts a reviewer turn (free text OR a
-// clicked question option, same Signal either way).
+// clicked question option, same Signal either way). `callbacks.onFocus()`
+// fires on the composer's own `@focus` — see its doc comment
+// (`claudeChatCallbacks`, RelatedPanel.mjs) for why a mouse click landing
+// here must act like the keyboard's `→` into this column.
 //
 // The two agentic actions ("Bewerk code"/"Commit wijziging") that used to sit
 // as their own buttons below the composer are GONE — every ordinary "Stuur"
@@ -696,6 +699,7 @@ export function claudeChatColumn(view, callbacks) {
           placeholder="${claudeMention + '…'}"
           title="Enter verstuurt · Shift+Enter nieuwe regel"
           data-testid="claude-chat-compose"
+          @focus="${() => callbacks.onFocus()}"
           @input="${(e) => autoGrowTextarea(e.target)}"
           @keydown="${(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {

@@ -1049,6 +1049,57 @@ test('Claude chat: a drafted reply lands in the comment composer, appended under
   await expect(page.getByTestId('reaction-bubble')).toHaveCount(1)
 })
 
+// Reviewer bug report with a screenshot: clicking straight into the Claude
+// composer with the MOUSE, on an ALREADY-anchored conversation (never
+// pressing → first), left the comment card collapsed and the drafted reply
+// invisible — only the "concept in comment-veld gezet" badge showed anything
+// at all. Root cause: mouse focus on claude-chat-compose never flipped
+// cs.focus to 'claude', so commentCard's expand condition stayed false and
+// reaction-compose was never even mounted for applyPendingDraftReplies to
+// write into. Fixed via ClaudeChat.mjs's `@focus` → RelatedPanel.mjs's
+// onClaudeComposeFocus, the click-equivalent of the → key
+// (mouse-navigation.md Rule 1) — scoped to an already-anchored conversation
+// only, see onClaudeComposeFocus's own doc comment for why.
+test('Claude chat: clicking straight into the composer of an already-anchored conversation (no → first) still expands the comment card and shows the draft', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'is dit nog in gebruik?',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  const draftBody = 'Concept van Claude: maak hiervan een comment.'
+  await page.route('**/api/chat?commentId=' + conversationId, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ messages: [{ id: 'draft-1', role: 'assistant', kind: 'draft_reply', body: draftBody }] }),
+    }),
+  )
+
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await expect(item).toHaveAttribute('data-expanded', 'false')
+
+  // Click DIRECTLY into the Claude composer — never the comment item, never →.
+  await page.getByTestId('claude-chat-compose').click()
+
+  await expect(item).toHaveAttribute('data-expanded', 'true')
+  await expect(page.getByTestId('reaction-compose')).toHaveValue(draftBody)
+})
+
 // A pure, still-unedited Claude draft (the reply field was genuinely EMPTY
 // when it landed, unlike the merge case above) gets select-all'd, and a bare
 // Enter posts it straight to GitHub — no publish-choice menu — see "A pure

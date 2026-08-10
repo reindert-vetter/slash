@@ -1326,6 +1326,60 @@ never touches it, unlike `"resolve"`) is covered by
 `TestClaudeChatCommentActionDraftsReplyEvenOnTerminalRun` in
 `chat_workflow_test.go`.
 
+### Clicking straight into the composer of an already-anchored conversation is the `→`-equivalent
+
+Reviewer bug report with a screenshot: chatting with Claude by clicking
+directly into `claude-chat-compose` with the MOUSE (never pressing `→` first)
+left the drafted reply completely invisible — the comment card stayed
+collapsed (`data-expanded="false"`) and `reaction-compose` was never even
+mounted for `applyPendingDraftReplies` to write into, so nothing appeared
+except the `chatKindBadge` "concept in comment-veld gezet" pill in the Claude
+column itself; the reviewer only saw the draft after a SEPARATE click on the
+comment item. Root cause: entering the Claude column via `→` from `'comment'`
+already flips `cs.focus` to `'claude'` (`enterClaudeChat`), which is exactly
+what `commentCard` (`RelatedPanel.mjs`) checks to stay/become expanded — but a
+mouse click straight into the already-visible composer of an EXISTING
+conversation (`claudeChatVisible()` shows it for ANY visible comment,
+regardless of `cs.focus`, see "The Claude column must follow the browsed
+comment" above) never touched `cs.focus` at all. A genuine gap in
+mouse-navigation.md Rule 1 ("a click is the Enter/→-equivalent, never its own
+behaviour") — there was no click-equivalent for landing in this composer.
+
+**Fix:** `ClaudeChat.mjs`'s composer textarea got a plain `@focus` handler
+(`callbacks.onFocus()`) — deliberately `@focus`, not `@click`, so Tab reaches
+the same behavior — wired in `RelatedPanel.mjs` to `onClaudeComposeFocus`,
+which calls the existing, idempotent `enterClaudeChat(cs.pr)` whenever
+`chatAnchorComment()` resolves to a real, already-anchored comment and
+`cs.focus` isn't already `'claude'`.
+
+**Deliberately scoped to `cs.focus !== 'new'`** — the still-open, not-yet-placed
+"Comment op deze regel" composer. Two regressions, both found by a broken
+Playwright spec rather than by inspection, are why:
+
+1. `chatAnchorComment()`'s first branch is `selComment()` =
+   `cs.list[selI()]`, and neither is reset by `toNew()` when the reviewer opens
+   a brand-new composer on a line that already carries a DIFFERENT, existing
+   comment — `selComment()` then still resolves to that unrelated,
+   already-anchored conversation, so calling `enterClaudeChat` unconditionally
+   here would silently swap the visible (correctly fresh/empty) transcript out
+   from under the new composer the instant the reviewer clicks into the Claude
+   field to type its first message. Broke "a new comment on an
+   already-commented line gets its own comment + Claude block, not the
+   existing one".
+2. Calling `enterClaudeChatFromNew()` instead for the genuinely anchor-less
+   case flips `cs.focus` to `'claude'` the moment the reviewer merely clicks
+   into the Claude field, before ever pressing `→`. `isNewChatUnanchored()`
+   then goes `false` as soon as Claude's first reply lazily creates the
+   anchor, unmounting the still-open `comment-compose` composer the reviewer
+   may still be mid-typing in. Broke "placeComment never creates a SECOND
+   comment once this anchor exists" (the composing-a-new-comment spec).
+
+The keyboard's own `→` still reaches `enterClaudeChatFromNew` exactly as
+before for both cases above — only the mouse-click shortcut is limited to an
+already-anchored conversation. Test: "clicking straight into the composer of
+an already-anchored conversation (no → first)…" in
+`tests/claude-chat-panel.spec.mjs`.
+
 ## Doorpraten tijdens een lopende turn (de wachtrij)
 
 Like the Claude CLI, the reviewer can **keep typing while a turn is still
