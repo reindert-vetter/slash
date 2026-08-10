@@ -993,13 +993,34 @@ watch(
 // immediately. So the baseline is only ever recorded once `b` is truthy, and
 // only a SUBSEQUENT, real block-to-block change may release the panel.
 let lastSelectedBlockRef = undefined
+// lastFiredSelectionRef guards the whole callback below against a SPURIOUS
+// re-fire: arrow.js's reactive `set` trap notifies subscribers on every
+// assignment, even one that writes back the exact same value (no old!==new
+// check — see the LOCAL PATCH 3 area of src/vendor/arrow.js's `set` trap).
+// recomputeLeftList() unconditionally does `state.selected = at` on every
+// call, including a no-op reassignment to the already-selected index — which
+// happens every 5s while a PR-comment index item is selected, since
+// RelatedPanel.mjs's own comment-poll refreshTimer reassigns cs.list on that
+// same cadence, which re-triggers the indexComments() watch just above, which
+// calls recomputeLeftList(). Without this guard, that spurious 5s tick ran
+// this callback again for the SAME comment item and unconditionally closed
+// whatever "Beantwoorden"/thread/Claude-chat state the reviewer had just
+// opened on it — reported bug: replying to a PR comment made the just-opened
+// reply field disappear within a few seconds, before the reviewer could type
+// anything. A genuine navigation still runs the full body below exactly as
+// before; only an unchanged ref short-circuits. See the "watch() fires even on
+// an unchanged value" entry in arrowjs-pitfalls.md.
+let lastFiredSelectionRef = undefined
 watch(
   () => state.selected,
   () => {
+    const b = state.blocks[state.selected]
+    const fireRef = b ? (b.kind === 'comment' || b.kind === 'test_class' ? b.id : `${b.file}:${b.line}`) : null
+    if (fireRef !== null && fireRef === lastFiredSelectionRef) return
+    lastFiredSelectionRef = fireRef
     cancelPrCommentReply()
     exitPrCommentThread()
     closePrCommentChat()
-    const b = state.blocks[state.selected]
     if (b && b.kind === 'comment') {
       // Unconditional, even before a baseline exists — unlike the ordinary-
       // block case below, cs.focus can NEVER legitimately be

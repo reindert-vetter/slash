@@ -345,6 +345,46 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     expect(replyBody.done).toBe(false)
   })
 
+  // Regression: the open reply field used to be closed by the very next
+  // comment poll (RelatedPanel.mjs's 5s refreshTimer), even though the
+  // selection never moved — arrow.js's reactive `set` notifies subscribers on
+  // every assignment, including a same-value no-op, and recomputeLeftList()
+  // unconditionally reassigns state.selected on every poll tick. See the
+  // "watch() fires even on an unchanged value" entry in arrowjs-pitfalls.md
+  // and the lastFiredSelectionRef guard in home.mjs. Wait past one real 5s
+  // poll tick before asserting the field survived and can still send.
+  test('"Beantwoorden" survives a comment-poll tick (reply field must not vanish)', async ({ page }) => {
+    await mockComments(page)
+    let replyBody = null
+    await page.route('**/signals/reply', (route) => {
+      replyBody = route.request().postDataJSON()
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
+    })
+
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await page.keyboard.press('Enter') // run "Beantwoorden"
+    const reply = page.getByTestId('comment-detail-reply')
+    await expect(reply).toBeFocused()
+    await reply.fill('nog aanwezig?')
+
+    // Wait past a full 5s refreshTimer tick — the mocked route keeps serving
+    // the same payload, so this exercises exactly the "poll re-fires with an
+    // unchanged list" case the guard exists for.
+    await page.waitForTimeout(5300)
+
+    await expect(reply).toBeVisible()
+    await expect(reply).toHaveValue('nog aanwezig?')
+
+    await reply.press('Enter')
+    await expect.poll(() => replyBody).not.toBeNull()
+    expect(replyBody.body).toBe('nog aanwezig?')
+  })
+
   test('resolving moves the item into "Toon N goedgekeurde blocks" (1/1)', async ({ page }) => {
     const mock = mockComments(page)
     await mock

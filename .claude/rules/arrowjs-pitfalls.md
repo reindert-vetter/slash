@@ -339,6 +339,38 @@ same spec at `--workers=1`, and a clean-worktree A/B of the full suite was
 before/after numbers, the measurement trap that nearly sank it, and the open
 second leak: `.claude/docs/frontend-memory.md`.
 
+## `watch(getter, cb)` fires even when the write reassigns the SAME value
+
+The vendored proxy's `set` trap (`src/vendor/arrow.js`, the `xe.set` handler)
+calls its notify function (`Gt`) **unconditionally** on every property
+assignment — there is no `oldValue !== newValue` guard anywhere in that path.
+So `state.x = state.x` (or any reassignment that happens to compute back to
+the current value) still re-runs every `watch(() => state.x, ...)` subscribed
+to it, exactly as if the value had actually changed.
+
+This bit `home.mjs`'s `watch(() => state.selected, ...)` (the one that
+releases `RelatedPanel`'s comment/thread/Claude state on a real navigation):
+`recomputeLeftList()` unconditionally does `state.selected = at` on every
+call, including a same-index no-op — and it runs every 5s while a PR-comment
+index item is selected, because `RelatedPanel.mjs`'s comment-poll
+`refreshTimer` reassigns `cs.list` on that same cadence, which re-triggers the
+`indexComments()` watch, which calls `recomputeLeftList()`. Every 5s tick then
+re-ran the selection watch's body for the SAME item and unconditionally closed
+whatever the reviewer had just opened on it (a reply field via "Beantwoorden",
+an open thread, an open Claude chat) — reported bug: the just-opened
+PR-comment reply field disappeared within a few seconds, before the reviewer
+could type anything.
+
+**Fix pattern:** don't rely on the watch firing meaning "it changed" — snapshot
+the value/identity you actually care about in a plain (non-reactive) module
+variable and compare against it yourself inside the callback, short-circuiting
+when nothing really moved. See `lastFiredSelectionRef` next to
+`lastSelectedBlockRef` in `home.mjs`. Any `watch` whose callback has a
+visible, hard-to-reverse side effect (closing a panel, canceling a draft,
+firing a network call) is a candidate for this if something else in the app
+can reassign one of its dependencies on a timer/poll without an actual
+navigational change.
+
 ## Nested `@click`: call `e.stopPropagation()` FIRST, before the state mutation
 
 A nested `@click` handler that synchronously mutates reactive state can remove
