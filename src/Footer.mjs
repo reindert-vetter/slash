@@ -79,10 +79,10 @@ function line(mark, text, underline) {
 // WIDE_AT is the char-count past which a diff line no longer comfortably fits in
 // the centred max-w-5xl column (~1024px at the 11px mono font, minus the +/-
 // gutter). Above it we drop the max-width so the footer uses the full width,
-// AND — for the new/right (ins) line specifically — switch it from
-// whitespace-pre to a wrap so the entire new line is visible without an
-// invisible (no-scrollbar) horizontal scroll. One shared threshold for both,
-// so they can't drift apart.
+// AND — for whichever of the old/left (del) or new/right (ins) line is long —
+// switch that line from whitespace-pre to a wrap so the entire line is
+// visible without an invisible (no-scrollbar) horizontal scroll. One shared
+// threshold for both, so they can't drift apart.
 const WIDE_AT = 110
 
 // footerBoxPx constants — a per-line px estimate, not a measurement (see the
@@ -195,12 +195,14 @@ export default function Footer(state) {
                 // carries (see footerUnitInfo in home.mjs).
                 const ulLeft = r.ulLeft ? new Set(r.ulLeft) : null
                 const ulRight = r.ulRight ? new Set(r.ulRight) : null
-                if (r.left !== null && r.left !== undefined)
-                  s += `<div class="block whitespace-pre bg-rose-100 dark:bg-rose-500/20">${line('del', r.left, ulLeft)}</div>`
+                // A long old/left or new/right line wraps in full (rather than
+                // requiring an invisible no-scrollbar horizontal scroll) so the
+                // reviewer sees the entire line — see the WIDE_AT comment above.
+                if (r.left !== null && r.left !== undefined) {
+                  const leftWrap = r.left.length > WIDE_AT ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
+                  s += `<div class="block ${leftWrap} bg-rose-100 dark:bg-rose-500/20">${line('del', r.left, ulLeft)}</div>`
+                }
                 if (r.right !== null && r.right !== undefined) {
-                  // A long new/right line wraps in full (rather than requiring an
-                  // invisible no-scrollbar horizontal scroll) so the reviewer sees
-                  // the entire new code — see the WIDE_AT comment above.
                   const rightWrap = r.right.length > WIDE_AT ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
                   s += `<div class="block ${rightWrap} bg-emerald-100 dark:bg-emerald-500/20">${line('ins', r.right, ulRight)}</div>`
                 }
