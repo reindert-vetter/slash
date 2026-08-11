@@ -651,6 +651,14 @@ export default function Block(b, opts = {}) {
   // so the panes mark them with a 💬 (presence only). A function so the binding
   // re-runs as comments load/change. Defaults to no comments.
   const commentedFn = opts.commentedRows || (() => new Set())
+  // commentRangeRows is a function returning the Set of rows spanned by the
+  // comment the keyboard is currently IN (RelatedPanel's commentRangeRowSet —
+  // empty whenever no comment owns the keyboard), drawn as a vertical bar
+  // along the RIGHT edge of those rows so it's visible which lines the open
+  // comment was made on. A function, for the same reason commentedFn is one.
+  // Defaults to nothing, so a preview card (which never owns the keyboard)
+  // simply never shows it.
+  const commentRangeFn = opts.commentRangeRows || (() => new Set())
   // approvedCalls is a function returning the Set of approved call-segment keys
   // (finer than approvedRows — see callKey), so a row with more than one call
   // segment can show its per-segment progress before the whole row is signed
@@ -865,7 +873,7 @@ export default function Block(b, opts = {}) {
           ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled, commentedFn, lineSummaryFn, diffActive)
           : isSvgFile(b)
           ? svgSlot(b)
-          : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn, diffActive)}
+          : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn, diffActive, commentRangeFn)}
     </article>
   `
 }
@@ -1148,6 +1156,7 @@ function codeDiff(
   viewMode = () => 'split',
   lineSummaryFn = () => new Map(),
   diffActive = () => false,
+  commentRangeFn = () => new Set(),
 ) {
   const c = b.code
   if (c === undefined) return ''
@@ -1210,7 +1219,7 @@ function codeDiff(
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml)}
+        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml, commentRangeFn)}
         ${scrollHint('up')}
         ${scrollHint('down')}
       </div>
@@ -1238,7 +1247,7 @@ function codeDiff(
               : 'Verwijderd — deze code bestaat niet meer'}
         </div>
         <div class="${'relative flex flex-1 overflow-hidden ' + diffFloorCls(rows.length)}">
-          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml)}
+          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml, commentRangeFn)}
           ${scrollHint('up')}
           ${scrollHint('down')}
         </div>
@@ -1261,8 +1270,13 @@ function codeDiff(
       lineSummaryFn,
       diffActive,
       isYaml,
+      commentRangeFn,
     )
   }
+  // Side-by-side (the default 'split' stand). Only the RIGHTMOST pane gets
+  // commentRangeFn — the old/left pane keeps the empty default, since the
+  // comment-range bar marks the right edge of the diff as a whole, not of
+  // each half (see rowCellHTML's commentRangeBar).
   return html`
     <div
       class="${'relative flex flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60 ' +
@@ -1272,7 +1286,7 @@ function codeDiff(
     >
       ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml)}
       <div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>
-      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml)}
+      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, commentRangeFn)}
       ${scrollHint('up')}
       ${scrollHint('down')}
     </div>
@@ -1432,6 +1446,7 @@ function codePane(
   lineSummaryFn = () => new Map(),
   diffActive = () => false,
   isYaml = false,
+  commentRangeFn = () => new Set(),
 ) {
   return html`
     <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}" data-pane="${side}">
@@ -1440,7 +1455,7 @@ function codePane(
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() =>
-            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn(), isYaml)}"
+            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn(), isYaml, commentRangeFn())}"
         ></code>
       </div>
     </div>
@@ -1456,6 +1471,36 @@ function codePane(
 // so the two never drift apart.
 function commentMarkerHtml() {
   return '<span class="select-none opacity-60" data-comment="1" title="Er zit een comment op deze regel">💬</span>'
+}
+
+// commentRangeBar renders the vertical bar along the RIGHT edge of row `i`
+// when that row falls inside the range of the comment the keyboard currently
+// sits in (RelatedPanel's commentRangeRowSet, threaded down as `commentRange`
+// — null/empty whenever no comment owns the keyboard, which is the common
+// case). Adjacent rows' segments touch, so the range reads as one continuous
+// line, exactly like the active unit's inset left bar; the first/last row of
+// the range get a rounded cap so the extent is unmistakable.
+//
+// RIGHT edge on purpose: the left edge already carries the cursor bar of the
+// active unit, so position alone tells the two apart — colour is never the
+// discriminator here (the reviewer is colourblind, see CLAUDE.md).
+//
+// Absolutely positioned inside the row's own (relative) box, exactly like the
+// approve checkmark on the left. That box is the pane's width, not the code's,
+// so the bar scrolls along when a pane is scrolled horizontally — accepted,
+// same as the checkmark; anchoring it to the viewport would need a measuring
+// overlay (callArrows.mjs) for a purely decorative cue.
+function commentRangeBar(i, commentRange) {
+  if (!commentRange || !commentRange.has(i)) return ''
+  const cap =
+    (commentRange.has(i - 1) ? '' : ' rounded-t-sm') + (commentRange.has(i + 1) ? '' : ' rounded-b-sm')
+  return (
+    '<span class="pointer-events-none absolute right-0 top-0 bottom-0 w-[3px] select-none bg-indigo-400 dark:bg-indigo-400/80' +
+    cap +
+    '" data-testid="comment-range-bar" data-comment-range="' +
+    i +
+    '" title="De open comment gaat over deze regels"></span>'
+  )
 }
 
 // rowCellHTML builds the <div> for ONE (row, side) — the shared building
@@ -1482,7 +1527,7 @@ function commentMarkerHtml() {
 // same canonical side approveHere/commentedHere below already single out
 // (the new/right side, or the old/left side when there's no right at all).
 function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = true, opts = {}, lineSummaries = null, segDots = null) {
-  const { gutter = false, emitMeta = true } = opts
+  const { gutter = false, emitMeta = true, commentRange = null } = opts
   const text = sideKey === 'left' ? r.left : r.right
   const mark = sideKey === 'left' ? r.leftMark : r.rightMark
   const ws = wsOnly(r)
@@ -1620,7 +1665,10 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // call-arrow overlay (src/callArrows.mjs) to anchor an arrow on the exact
   // call-site row. Suppressed when emitMeta is false, see above.
   const dataRow = emitMeta ? ` data-row="${i}"` : ''
-  return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}>${check}${gutterHtml}${body}${marker}${lineSummaryHtml}</div>`
+  return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}>${check}${gutterHtml}${body}${marker}${lineSummaryHtml}${commentRangeBar(
+    i,
+    commentRange,
+  )}</div>`
 }
 
 // pathPills renders the MODULE and LAYER a block lives in, next to the
@@ -2013,6 +2061,7 @@ function paneHTML(
   focused = true,
   lineSummaries = null,
   isYaml = false,
+  commentRange = null,
 ) {
   const parts = []
   const pushRow = (i) => {
@@ -2028,7 +2077,9 @@ function paneHTML(
     const approveHere = sideKey === 'right' || r.right == null
     const segDots =
       partial && approveHere ? segDotMarkers(sideKey === 'left' ? r.left : r.right, partial) : null
-    parts.push(rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused, {}, lineSummaries, segDots))
+    parts.push(
+      rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused, { commentRange }, lineSummaries, segDots),
+    )
   }
   const plan = collapsePlan(rows, commented)
   if (!plan) {
@@ -2053,19 +2104,34 @@ function paneHTML(
 // whitespace-only re-alignment, see wsOnly) renders both lines. See
 // rowCellHTML's own doc comment for why exactly one of the two lines (the
 // canonical, metadata-carrying one) ever gets `data-row`/etc.
-function unifiedRowHTML(r, i, group, approved, commented, focused = true, lineSummaries = null, segDots = null) {
+function unifiedRowHTML(
+  r,
+  i,
+  group,
+  approved,
+  commented,
+  focused = true,
+  lineSummaries = null,
+  segDots = null,
+  commentRange = null,
+) {
   const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
+  // BOTH lines of a paired row draw the comment-range bar (unlike every other
+  // per-row marking here, which is deliberately emitted once): each line is
+  // its own box, so leaving the decorative old/upper half out would break the
+  // bar into a dashed line instead of the continuous range it must read as.
+  const meta = { gutter: true, emitMeta: true, commentRange }
   if (paired) {
     return (
-      rowCellHTML(r, i, 'left', group, approved, commented, false, focused, { gutter: true, emitMeta: false }, lineSummaries) +
-      rowCellHTML(r, i, 'right', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries, segDots)
+      rowCellHTML(r, i, 'left', group, approved, commented, false, focused, { gutter: true, emitMeta: false, commentRange }, lineSummaries) +
+      rowCellHTML(r, i, 'right', group, approved, commented, false, focused, meta, lineSummaries, segDots)
     )
   }
   if (r.right != null) {
-    return rowCellHTML(r, i, 'right', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries, segDots)
+    return rowCellHTML(r, i, 'right', group, approved, commented, false, focused, meta, lineSummaries, segDots)
   }
   if (r.left != null) {
-    return rowCellHTML(r, i, 'left', group, approved, commented, false, focused, { gutter: true, emitMeta: true }, lineSummaries, segDots)
+    return rowCellHTML(r, i, 'left', group, approved, commented, false, focused, meta, lineSummaries, segDots)
   }
   return ''
 }
@@ -2087,6 +2153,7 @@ function unifiedHTML(
   focused = true,
   lineSummaries = null,
   isYaml = false,
+  commentRange = null,
 ) {
   const parts = []
   const pushRow = (i) => {
@@ -2097,7 +2164,7 @@ function unifiedHTML(
     // row's metadata (emitMeta), see unifiedRowHTML.
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
     const segDots = partial ? segDotMarkers(r.right != null ? r.right : r.left, partial) : null
-    parts.push(unifiedRowHTML(r, i, group, approved, commented, focused, lineSummaries, segDots))
+    parts.push(unifiedRowHTML(r, i, group, approved, commented, focused, lineSummaries, segDots, commentRange))
   }
   const plan = collapsePlan(rows, commented)
   if (!plan) {
@@ -2129,6 +2196,7 @@ function unifiedCodeDiff(
   lineSummaryFn = () => new Map(),
   diffActive = () => false,
   isYaml = false,
+  commentRangeFn = () => new Set(),
 ) {
   return html`
     <div
@@ -2142,7 +2210,7 @@ function unifiedCodeDiff(
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() =>
-            unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), diffActive(), lineSummaryFn(), isYaml)}"
+            unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), diffActive(), lineSummaryFn(), isYaml, commentRangeFn())}"
         ></code>
       </div>
       ${scrollHint('up')}

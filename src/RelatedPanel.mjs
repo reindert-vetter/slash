@@ -361,6 +361,36 @@ export function commentRowSet(b) {
   return set
 }
 
+// commentRangeRowSet returns the aligned-diff rows that the comment the
+// KEYBOARD IS CURRENTLY IN spans — Block draws a vertical bar along the right
+// edge of those rows, so the reviewer sees which lines/selection the open
+// comment was actually made on (see "The focused comment's range gets a bar"
+// in comments-panel.md). Empty in every other situation, which is the whole
+// point: unlike commentRowSet (presence of ANY open comment, on every row it
+// covers) this marks exactly one comment, only while it is open.
+//
+// Which comment: the focused one (selComment()), or — while the keyboard has
+// stepped on into the embedded Claude column — the comment that conversation
+// hangs on (chatAnchorComment(), the same comment whose card stays expanded
+// there). Deliberately NOT while composing a new comment (cs.focus === 'new'):
+// that composer targets the live cursor unit, which already carries its own
+// left-hand cursor bar.
+//
+// Reads cs.focus/cs.sel/cs.view, all reactive, so the pane's .innerHTML
+// binding re-runs on every focus/selection change — exactly like commentedFn.
+// Same "no bounds check needed" reasoning as commentRowSet above.
+export function commentRangeRowSet(b) {
+  const set = new Set()
+  if (!b) return set
+  if (cs.focus !== 'comment' && cs.focus !== 'thread' && cs.focus !== 'claude') return set
+  const c = cs.focus === 'claude' ? chatAnchorComment() : selComment()
+  if (!c) return set
+  if (c.file !== b.file || c.label !== b.label) return set
+  if (c.rowStart == null || c.rowStart < 0) return set
+  for (let i = c.rowStart; i <= c.rowEnd; i++) set.add(i)
+  return set
+}
+
 // commentListSnapshot exposes cs.list itself (unconditionally, no early
 // return) so home.mjs's decoupled commentActivity watch can list it as an
 // inline dependency in its getter — the same "call an exported getter that

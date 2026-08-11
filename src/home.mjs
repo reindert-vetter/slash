@@ -62,6 +62,7 @@ import RelatedPanel, {
   convertWarningToComment,
   convertPrWideWarningToComment,
   commentRowSet,
+  commentRangeRowSet,
   commentActivitySummary,
   commentListSnapshot,
   setCommentScope,
@@ -10870,6 +10871,12 @@ function DetailPanel(state) {
             // rows, so it's visible which units already hold a comment (however
             // many). Reads the comments read-model via RelatedPanel.
             commentedRows: () => commentRowSet(b),
+            // Reactive Set of the rows spanned by the comment the keyboard is
+            // currently IN (empty otherwise) → a vertical bar along the right
+            // edge of the diff over exactly those rows, so it's visible which
+            // lines/selection the open comment was made on. See
+            // commentRangeRowSet (RelatedPanel) and comments-panel.md.
+            commentRangeRows: () => commentRangeRowSet(b),
             // Per-line "onderliggende code" rollup (avatar+N comment activity +
             // done/total approve fraction) — see lineChildSummaries' own doc
             // comment. Gran-independent, unlike the panel's own children, so
@@ -11135,6 +11142,7 @@ function DetailPanel(state) {
                   approvedCalls: () => approvedCallSet(b),
                   onApprove: (blk) => persistApproval(blk),
                   commentedRows: () => commentRowSet(b),
+                  commentRangeRows: () => commentRangeRowSet(b),
                   lineSummaries: () => lineChildSummaries(b),
                   viewMode: () => state.diffViewMode,
                   setViewMode: setDiffViewMode,

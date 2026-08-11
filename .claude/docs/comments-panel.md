@@ -509,6 +509,49 @@ noise the block-wide AI anchor fix removed (see `.claude/docs/workflows-analysis
 A disjoint unit stays hidden either way. Test:
 `tests/comment-range-first-row.spec.mjs`.
 
+### The focused comment's range gets a bar along the right edge of the diff
+
+Once the keyboard sits **in** a comment, the diff draws a thin vertical bar over
+exactly the aligned rows that comment is anchored to (`rowStart..rowEnd`), so
+the reviewer can see which lines/selection it was made on — which is precisely
+what the start-row rule above made possible: a comment wider than the selected
+unit is now visible while the cursor sits on one row of it, and without the bar
+its real extent was invisible.
+
+`commentRangeRowSet(b)` (`RelatedPanel.mjs`, exported) is the source: the rows
+of **one** comment — `selComment()`, or `chatAnchorComment()` while the keyboard
+has stepped on into the embedded Claude column (the same comment whose card
+stays expanded there) — and an **empty** set for every other `cs.focus`. Empty
+while composing (`'new'`) on purpose: that composer targets the live cursor
+unit, which already carries its own left-hand cursor bar. `home.mjs` passes it
+as `commentRangeRows` next to the existing `commentedRows`, on the top-level
+card and on a drilled column, **not** on a look-ahead/drill preview card (which
+never owns the keyboard).
+
+Deliberately distinct from `commentRowSet`'s 💬: that marks the *presence* of
+any open comment on every row it covers, permanently; this marks the *extent*
+of exactly one comment, only while it is open.
+
+- **Right edge**, because the left edge already carries the active unit's
+  cursor bar — position alone tells the two apart, never colour (the
+  colourblind rule).
+- Rendered per row by `commentRangeBar` (`Block.mjs`) as an absolutely
+  positioned span inside the row's own box; adjacent rows touch, so the range
+  reads as one continuous line, and the first/last row get a rounded cap. Same
+  trick as the approve checkmark on the left — and the same accepted
+  consequence: the row's box is the pane's width, so the bar scrolls along when
+  a pane is scrolled horizontally. Anchoring it to the viewport would need a
+  measuring overlay (`callArrows.mjs`) for a purely decorative cue.
+- Threaded down the same chain as `commentedRows`
+  (`Block` → `codeDiff` → `codePane` → `paneHTML` → `rowCellHTML`, plus the
+  unified stand's `unifiedCodeDiff`/`unifiedHTML`/`unifiedRowHTML`), and only
+  the **rightmost** pane gets a non-empty set — in the split stand the old/left
+  pane keeps the empty default, since the bar marks the right edge of the diff
+  as a whole. In the unified stand **both** lines of a paired row draw it (the
+  one exception to "emit a per-row marking once"), or the bar would break into
+  a dashed line. A TRANSLATION block has no ordinary code rows and is not
+  covered. Test: `tests/comment-range-bar.spec.mjs`.
+
 **`InlineComments`' wrapper carries its own explicit width**,
 `commentColumnWidthCls()` (exported from `RelatedPanel.mjs`) — 2/3 of
 `related-code`'s own `relatedColumnWidthCls()`, minus the dashed connector to
