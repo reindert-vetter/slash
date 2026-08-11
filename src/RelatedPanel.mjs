@@ -261,12 +261,18 @@ export function setCommentScope(scope) {
 }
 
 // commentUnder reports whether comment c sits at or below the selected unit t in
-// the same block: c's aligned-row range ⊆ t's range and — when t is a single
-// 'call' segment — the same call (gran + seg). A comment with an unknown anchor
-// (rowStart < 0: legacy/seeded) is always shown within its block.
+// the same block: c's aligned-row range ⊆ t's range, OR c starts on exactly the
+// same row as t (a group/multi-line comment stays reachable from its own FIRST
+// row, e.g. after narrowing from group to line granularity — its rows all carry
+// a 💬 marker, see commentRowSet, so it must not become unreachable there);
+// and — when t is a single 'call' segment — the same call (gran + seg). A
+// comment with an unknown anchor (rowStart < 0: legacy/seeded) is always shown
+// within its block. Deliberately NOT plain overlap: a wide comment must not
+// surface under every row it happens to span, only under its start row (which
+// is where the reviewer anchored it).
 function commentUnder(c, t) {
   if (c.rowStart == null || c.rowStart < 0) return true
-  if (c.rowStart < t.rowStart || c.rowEnd > t.rowEnd) return false
+  if (c.rowStart !== t.rowStart && (c.rowStart < t.rowStart || c.rowEnd > t.rowEnd)) return false
   if (t.gran === 'call') return c.gran === 'call' && c.seg === t.seg
   return true
 }

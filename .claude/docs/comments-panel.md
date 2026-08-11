@@ -495,6 +495,20 @@ diff, to the exact unit under the cursor — call ⊂ line ⊂ group ⊂ block).
 presentation changed: that scoped set is now inline and always visible for the
 current unit instead of behind a toggle.
 
+**Plus its own START ROW: a comment WIDER than the selected unit still shows
+when the unit begins on exactly that comment's first row** (`commentUnder`'s
+`c.rowStart === t.rowStart` escape from the containment test). Without it a
+comment placed on a whole group — or on a Shift+↑/↓ range of several lines —
+was reachable *only* at the granularity it was placed on: narrowing to `line`
+made it disappear, while `commentRowSet` kept drawing a 💬 marker on every row
+of its range, so the marker promised a comment the panel then refused to show.
+Deliberately **not** plain overlap (explicitly chosen): a wide comment surfaces
+on its start row, not under every row it happens to span — which would
+reintroduce exactly the "one finding leaks into every unrelated selection"
+noise the block-wide AI anchor fix removed (see `.claude/docs/workflows-analysis.md`).
+A disjoint unit stays hidden either way. Test:
+`tests/comment-range-first-row.spec.mjs`.
+
 **`InlineComments`' wrapper carries its own explicit width**,
 `commentColumnWidthCls()` (exported from `RelatedPanel.mjs`) — 2/3 of
 `related-code`'s own `relatedColumnWidthCls()`, minus the dashed connector to
