@@ -1046,6 +1046,27 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
 			return
 		}
+		// The chat-merge queue's "merge" signal, reached here only for the
+		// reviewer-facing "push" Action (src/home.mjs's pushTodoRow): the "land"
+		// Action (empty string) is only ever sent cross-workflow via a direct
+		// engine.SignalWorkflow call from inside another Activity
+		// (enqueueChatMerge, chat_merge.go) — never from the UI/HTTP — so it is
+		// deliberately rejected here rather than accepted with no ConversationID.
+		if parts[2] == SignalChatMerge {
+			var body struct {
+				Action string `json:"action"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Action != chatMergeActionPush {
+				http.Error(w, "invalid action", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalChatMerge, ChatMergeRequest{Action: body.Action}); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "signalled"})
+			return
+		}
 		// The delete signal carries no comment body — it just asks the workflow
 		// to mark the comment "deleting" and remove it (see ReactionSignal).
 		if parts[2] == SignalDelete {

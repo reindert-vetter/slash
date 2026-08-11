@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -176,5 +179,48 @@ func TestChatMergeQueueDispatchesPushAction(t *testing.T) {
 	mu.Unlock()
 	if want := []string{"land:conv-1", "push"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("activities = %v, want %v", got, want)
+	}
+}
+
+// TestHandleWorkflowsPushSignal pins the UI's own path to the "push" Action:
+// POST /api/workflows/{runID}/signals/merge, exactly what pushPendingWork
+// (src/home.mjs) sends. This route used to fall through to handleWorkflows'
+// "unknown signal" 400 — the chat_merge queue's own SignalChatMerge ("merge")
+// had no case in that dispatcher, so a reviewer's "push" click silently never
+// reached the workflow at all, even though the queue itself (tested above) and
+// the git-level Activity (TestPushPendingPRPushesAndDropsTheRef) both worked
+// fine in isolation. Also pins that the "land" Action (empty string, only ever
+// sent cross-workflow via enqueueChatMerge) is rejected here rather than
+// silently accepted with no ConversationID.
+func TestHandleWorkflowsPushSignal(t *testing.T) {
+	setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	landOneEdit(t, dataDir, 3004, "conv-d", "feature/x", "foo.txt", "edited by claude\n")
+
+	m, _, _ := newTestManager(t)
+	s := &server{tasks: &tasks{manager: m, engine: m.engine}}
+	runID, err := m.EnsureChatMergeQueue(3004)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A "land" Action from the outside is rejected, not silently accepted.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workflows/"+runID+"/signals/merge", strings.NewReader(`{"action":""}`))
+	s.handleWorkflows(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("land action: status = %d, want %d (%s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	// The real "push" Action reaches the queue.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/workflows/"+runID+"/signals/merge", strings.NewReader(`{"action":"push"}`))
+	s.handleWorkflows(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("push action: status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if v := loadPendingPush(context.Background(), 3004); v != nil {
+		t.Fatalf("pending ref survived a push routed through handleWorkflows: %+v", v)
 	}
 }

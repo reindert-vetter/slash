@@ -89,6 +89,17 @@ serializes landings, so a push can never overlap one.
   select over two (`.claude/rules/workflow-determinism.md`). Same shape as
   `ChatMessageSignal.Action`/`ReactionSignal.Action`; branching on recorded
   Signal payload stays replay-deterministic.
+- **`handleWorkflows` (`tasks_api.go`) has its own `case` for `SignalChatMerge`
+  ("merge")** on `POST /api/workflows/{runID}/signals/merge` — the route
+  `pushPendingWork` (`src/home.mjs`) actually calls. It accepts only
+  `{"action":"push"}` and rejects the empty ("land") Action with 400: landing
+  is only ever sent cross-workflow via a direct `engine.SignalWorkflow` call
+  from `enqueueChatMerge` (which carries a real `ConversationID`), never from
+  the UI. This case was missing for a while — every "push" click reached the
+  generic dispatcher's fallback and got "unknown signal" (400), so the queue,
+  the read model and the Activity all worked in isolation while the reviewer's
+  actual button did nothing. Regression test:
+  `TestHandleWorkflowsPushSignal` (`pending_push_test.go`).
 - `git push origin <pendingRef>:refs/heads/<headRef>` — **never `--force`**, so
   git itself refuses a non-fast-forward. The local ref is dropped only after a
   successful push (which is also what lets `ingestRefreshNeeded` fall back to
