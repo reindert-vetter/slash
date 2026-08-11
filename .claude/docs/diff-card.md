@@ -366,3 +366,44 @@ opts, so a resize never forces the outer closures to rebuild.
 
 Test: `tests/preview-collapse-when-active-tall.spec.mjs` (a fabricated 60-row
 active block collapses the preview; a short one leaves it fully expanded).
+
+## A big-enough diff body gets a viewport-relative minimum height
+
+`Block()`'s description strip (`block-description`, above the diff) has no
+height cap of its own — a long PHPDoc/AI-generated docblock used to squeeze
+the diff body's `flex-1` share of the card down to a sliver (a handful of
+visible rows behind a `scrollHint`), even though the diff itself held far more
+code than that. Reported: a 25-row diff rendered ~9 rows tall under a long
+description.
+
+**`diffFloorCls(rowCount)`** (`Block.mjs`, one shared helper used by all five
+`data-testid="code-diff"` wrapper `<div>`s — the two single-pane branches, the
+removed-file banner's inner pane, the default two-pane split, and
+`unifiedCodeDiff`/`translationBlockView`'s own wrapper) gives that wrapper
+`min-h-[45vh]` — a **viewport-relative** floor via a plain CSS `vh` unit, not a
+fixed px value and not a `state.viewportH` read — once `rowCount` (the same
+`blockRows(b).length`/`translationRowUnits(b).length` each branch already
+computes) reaches `DIFF_FLOOR_MIN_ROWS` (20); below that it stays `min-h-0`,
+same as before. **Deliberately conditional on content size:** a genuinely
+short diff (e.g. a 3-line constructor) must never be stretched to fill 45% of
+the screen just because it sits under a long description — that would trade
+one bad look (squeezed code) for another (a mostly-empty card). 20 rows is a
+rough gate, not a live measurement: at `DIFF_FLOOR_ROW_PX` (18, mirroring
+`home.mjs`'s own `PREVIEW_ROW_PX` per-row estimate) a 20-row diff already
+reaches roughly 45vh's own height unaided on a modest laptop screen, so the
+floor only ever kicks in for a diff that would want that much room anyway.
+
+Since `rowCount` is a stable content fact (computed once per `codeDiff()`
+call, not live window size), this needs no reactive slot — it's a plain string
+concatenated into the wrapper's otherwise-static `class` (the same
+"concatenate outside the template" pattern as `narrowed`/`widthCls`, see the
+attribute-interpolation rule in `.claude/rules/arrowjs-pitfalls.md`).
+
+`<main>` already scrolls/clips cleanly (see "The look-ahead preview collapses…"
+above), so growing the active card's diff this way simply pushes whatever
+comes after it (the look-ahead preview card) further down the page — an
+accepted, deliberate trade-off, not a layout bug. This floor applies to every
+card that goes through `codeDiff`/`unifiedCodeDiff`/`translationBlockView`,
+selected or preview alike; a preview card that's tall enough to trigger it is
+generally also the one `previewTooTallForActive` (above) already collapses to
+just its header.

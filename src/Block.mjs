@@ -1011,7 +1011,8 @@ function translationSlot(
   // .claude/docs/keyboard-navigation.md (the green in-card scroll chevron).
   return html`
     <div
-      class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
+      class="${'relative flex flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60 ' +
+      diffFloorCls(units.length)}"
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
@@ -1204,7 +1205,8 @@ function codeDiff(
   if (effectiveOnly === 'right') {
     return html`
       <div
-        class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
+        class="${'relative flex flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60 ' +
+        diffFloorCls(rows.length)}"
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
@@ -1235,7 +1237,7 @@ function codeDiff(
               ? 'Verwijderd bestand — deze code bestaat niet meer'
               : 'Verwijderd — deze code bestaat niet meer'}
         </div>
-        <div class="relative flex min-h-0 flex-1 overflow-hidden">
+        <div class="${'relative flex flex-1 overflow-hidden ' + diffFloorCls(rows.length)}">
           ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml)}
           ${scrollHint('up')}
           ${scrollHint('down')}
@@ -1263,7 +1265,8 @@ function codeDiff(
   }
   return html`
     <div
-      class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
+      class="${'relative flex flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60 ' +
+      diffFloorCls(rows.length)}"
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
@@ -1274,6 +1277,38 @@ function codeDiff(
       ${scrollHint('down')}
     </div>
   `
+}
+
+// diffFloorCls gives the code-diff body a VIEWPORT-RELATIVE minimum height
+// (a vh unit, not a fixed px value) — but only once the block is genuinely
+// long enough to plausibly want that much room. A long PHPDoc/AI description
+// above the diff (Block()'s `block-description` strip, no cap of its own —
+// see .claude/docs/diff-card.md) used to squeeze an unrelated diff's own
+// `flex-1` body down to a sliver, regardless of how much code it actually
+// held; a bare fixed-px floor would fix that but also stretch a genuinely
+// short diff (a one-line getter) into a mostly-empty box. So this floor only
+// kicks in once `rowCount` would, on its own, roughly reach that same share
+// of the viewport anyway: DIFF_FLOOR_ROW_PX mirrors home.mjs's own
+// PREVIEW_ROW_PX per-code-row estimate, so DIFF_FLOOR_MIN_ROWS is simply
+// "how many rows it takes to reach DIFF_FLOOR_VH on a typical viewport" —
+// deliberately a rough content-size gate, not a live window.innerHeight
+// check: rowCount is a stable content fact (computed once per codeDiff()
+// call), so this can stay a plain, non-reactive class string built inline
+// where each wrapper's class is already assembled — no new reactive slot
+// needed. The vh unit itself is pure CSS and needs no JS viewport tracking
+// at all. `<main>` already scrolls/clips cleanly (diff-card.md), so if this
+// floor ends up taller than what's left of the fixed-height column, the rest
+// of the page (the look-ahead preview card) simply sits further down —
+// exactly the accepted trade-off, not a layout bug.
+const DIFF_FLOOR_VH = 45
+const DIFF_FLOOR_ROW_PX = 18
+// 20 rows: on an 800px-tall viewport (a modest laptop, not an ultrawide),
+// 20 * DIFF_FLOOR_ROW_PX (360px) already roughly equals DIFF_FLOOR_VH's own
+// 45% (360px) — i.e. "big enough" means the diff's own natural height would
+// already reach the floor unaided on an average screen.
+const DIFF_FLOOR_MIN_ROWS = 20
+function diffFloorCls(rowCount) {
+  return rowCount >= DIFF_FLOOR_MIN_ROWS ? `min-h-[${DIFF_FLOOR_VH}vh]` : 'min-h-0'
 }
 
 // scrollHint is the little floating bar at the top/bottom edge of the diff body
@@ -2097,7 +2132,8 @@ function unifiedCodeDiff(
 ) {
   return html`
     <div
-      class="relative flex min-h-0 flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60"
+      class="${'relative flex flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60 ' +
+      diffFloorCls(rows.length)}"
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
