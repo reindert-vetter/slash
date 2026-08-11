@@ -811,7 +811,17 @@ export default function Block(b, opts = {}) {
           // slot, same shape as the b.tests/b.author ternaries above (not a
           // keyed list item, so the "bare toggling expression" pitfall in
           // conventions.md doesn't apply here).
-          b.status === 'unchanged'
+          //
+          // Same reasoning for a 'modified' block whose code HAS loaded but
+          // turns out to have zero changed rows once aligned (e.g. a
+          // whitespace/reformat-only diff, see approval.md's "A block with
+          // zero changed rows has nothing to approve") — blockApproved
+          // permanently returns false for it (it must, to not flash
+          // "approved" while the code is still loading), so a visible
+          // checkbox there would be a dead control forever. Gated on b.code
+          // so the checkbox still shows (with a "loading" state) while the
+          // diff hasn't loaded yet.
+          b.status === 'unchanged' || (b.code && !b.code.error && changedRows(blockRows(b)).length === 0)
             ? ''
             : html`<label
                 class="flex cursor-pointer items-center gap-1 text-xs text-slate-600 dark:text-zinc-400"

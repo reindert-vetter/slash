@@ -437,3 +437,46 @@ all untouched by design. `unitFullyApproved` short-circuits on `unit.ref` (its
 `'call'` branch would otherwise report such a unit as permanently unapproved to
 `findNextUnapproved`), `toggleApprove`/`toggleCallApprove` no-op there, and
 `blockCommands()` leaves the "Keur … goed" item out of the palette.
+
+## A block with zero changed rows has nothing to approve
+
+A whole top-level block can itself have a server-confirmed total of **0**
+approvable changed rows (`GET /api/blockstats`'s `blockstats.go`, e.g. a
+whitespace/reformat-only diff that its whitespace-insensitive row alignment
+doesn't count at all — see "Server-side `total`" above) while still carrying
+PR status `modified`. Reported case: PR 13255's `RunCommandActivity::run`.
+
+**The card checkbox is hidden**, same as the existing `b.status === 'unchanged'`
+case right above (`Block.mjs`): `blockApproved` permanently returns `false` for
+a block whose `changedRows(blockRows(b))` is empty — deliberately, so the
+checkbox doesn't flash "approved" while the code is still loading (`blockRows`
+also returns `[]` before `b.code` arrives) — so once the code HAS loaded and
+the count is a genuine zero, a visible checkbox there is a dead control
+forever (`toggleBlockApproval` recomputes the same empty `changedRows(...)` on
+every click, so ticking it is a no-op). The extra `b.code` gate is exactly
+what tells "still loading" apart from "loaded, genuinely empty" here.
+
+**Deliberately NOT folded into `isFullyApproved` (`BlockList.mjs`) — it still
+sits in the visible "nog te reviewen" section, just with no checkbox.** A
+first attempt made a confirmed-zero-total block count as "handled" there too
+(hidden by default, skipped by the arrow-key walk/`findNextUnapproved`), via a
+new `isTriviallyDone(state, b)` reading `state.blockTotals[b.id]` directly
+(the one place that needs "confirmed zero" and "stats not loaded yet" to stay
+distinguishable, since `blockApproveCount`/`state.approvalSummaries` collapse
+both onto the same `{done:0,total:0}`). That broke two existing, deliberately
+built regression tests (`tests/navigate.spec.mjs`'s "↓ flows into the next
+same-file block"/"↑ flows back into the previous same-file block"): PR 12903's
+fixture (`materializeMainWorktrees`, `tests/_setup.mjs`) purposely gives
+`CreatePaymentAction::findOrCreateCustomer` PR status `modified` with zero
+changed rows of its own, specifically so a same-file neighbour with nothing to
+approve still occupies its own sidebar slot and stays a normal navigation
+stop. Hiding every zero-total block by default silently swallowed that block
+too, shifting every `data-idx` after it. So a zero-total block is a narrower
+case than "fully approved": the checkbox-hiding fix above is safe (it only
+ever removes a dead per-card control), but folding it into `isFullyApproved`
+is not — that predicate's callers assume it only ever matches a block the
+reviewer actually finished, not one that was simply never approvable to begin
+with. Left as-is pending a decision on where such a block should actually sit
+in the list (the reported symptom this section opened with — "it sits forever
+in the 12 nog-te-reviewen count" — is a real UX rough edge, but the review
+tree's existing same-file-neighbour navigation is the incumbent here).
