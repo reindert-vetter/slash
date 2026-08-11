@@ -4370,6 +4370,58 @@ function blockApproveCount(b) {
   return { done: Math.min(set.size, backendTotal), total: backendTotal }
 }
 
+// prWideApproveTotal sums blockApproveCount over the UNION of every block in the
+// review tree — each block counted exactly ONCE, no matter how many top-level
+// rows' subtrees it hangs under. That is the difference with summing
+// subtreeApproveCount per row: nestedPrBlocks' cycle guard is per CALL, so a
+// shared descendant (one helper called from twenty blocks) legitimately shows up
+// in twenty subtrees and used to be added twenty times to the PR-wide header
+// count. On a real PR that inflated both halves by the same factor (~5.8x on
+// PR 13255: 10210/10742 instead of 1831/1856), which reads as "there is far more
+// left to review than there is". The per-row PILLS deliberately keep counting
+// their whole subtree and may overlap with a neighbour's — a row's pill answers
+// "how much is left under THIS entry", the header answers "how much is left in
+// the PR", and only the latter has to be a true union.
+function prWideApproveTotal() {
+  const seen = new Set()
+  let done = 0
+  let total = 0
+  const add = (x) => {
+    // Every entry that can reach here carries a unique id: a real block id, a
+    // test method's block id, or a comment item's 'comment:<id>'.
+    if (x.id) {
+      if (seen.has(x.id)) return
+      seen.add(x.id)
+    }
+    const c = blockApproveCount(x)
+    done += c.done
+    total += c.total
+  }
+  const walk = (b) => {
+    // A comment-index item has no nested PR blocks — just its own 0/1 or 1/1.
+    if (b.kind === 'comment') {
+      add(b)
+      return
+    }
+    // A test_class row is a grouping, not a block: its METHODS carry the rows
+    // (mirrors subtreeApproveCount's own test_class branch).
+    if (b.kind === 'test_class') {
+      for (const m of b.methods) walk(m)
+      return
+    }
+    add(b)
+    for (const kid of nestedPrBlocks(b)) add(kid)
+  }
+  for (const b of state.blocks) {
+    // A relation child ("Onderliggende code" index row) is already counted
+    // inside its parent's subtree — but so is every other shared descendant
+    // now, so this skip is only about not walking the same tree twice.
+    if (state.underlyingIds[b.id]) continue
+    walk(b)
+  }
+  return { done, total }
+}
+
 // subtreeApproveCount aggregates blockApproveCount over b and every PR block
 // nested under it — the combined approval progress the sidebar shows.
 function subtreeApproveCount(b) {
@@ -7307,26 +7359,21 @@ watch(
   },
   () => {
     const map = {}
-    let done = 0
-    let total = 0
     for (const b of state.blocks) {
-      const c = subtreeApproveCount(b)
       // The sidebar PILL of a test_class row deliberately shows a NARROWER
-      // number than what feeds the PR-wide total just below (methods' own
-      // rows only, not their nested subtree — see blockApproveCount's own
-      // comment) — map[b.id] is only ever read for per-row display
-      // (BlockList.mjs's approvalPill/isFullyApproved), never for a sum, so
-      // this divergence from `c` is safe and deliberate.
-      map[b.id] = b.kind === 'test_class' ? blockApproveCount(b) : c
-      // A relation child ("Onderliggende code" index row) is already counted
-      // inside its parent's subtree — skipping it here keeps the PR-wide
-      // header count identical to when children weren't index rows at all.
-      if (state.underlyingIds[b.id]) continue
-      done += c.done
-      total += c.total
+      // number than what feeds the PR-wide total (methods' own rows only, not
+      // their nested subtree — see blockApproveCount's own comment) —
+      // map[b.id] is only ever read for per-row display (BlockList.mjs's
+      // approvalPill/isFullyApproved), never for a sum, so this divergence is
+      // safe and deliberate.
+      map[b.id] =
+        b.kind === 'test_class' ? blockApproveCount(b) : subtreeApproveCount(b)
     }
     state.approvalSummaries = map
-    state.approvalTotal = { done, total }
+    // The PR-wide header count is a UNION over the whole tree, not the sum of
+    // the pills above — a block shared by several subtrees counts once. See
+    // prWideApproveTotal.
+    state.approvalTotal = prWideApproveTotal()
   },
 )
 

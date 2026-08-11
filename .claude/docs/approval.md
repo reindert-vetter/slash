@@ -142,6 +142,12 @@ transitively. `home.mjs` rolls this up (`blockApproveCount` per block →
 `subtreeApproveCount` over `[b, ...nestedPrBlocks(b)]`) and pushes it via a
 `watch` into `state.approvalSummaries` (id→`{done,total}`).
 
+**A pill may overlap with its neighbour's, and that is correct.**
+`nestedPrBlocks`' cycle guard is per **call**, so one shared helper hangs under
+every top-level row that calls it and counts in each of their pills — a pill
+answers "how much is left under THIS entry". The PR-wide header count must not
+be the sum of those pills; see `prWideApproveTotal` below.
+
 **Deliberately decoupled from the render** (like `setRelated`/`setCommentScope`):
 the sidebar reads a flat snapshot instead of every block's `b.code`, which would
 make it a co-subscriber on the selected block's `b.code` and re-trigger the
@@ -398,9 +404,20 @@ loaded.
 
 The "Start" heading also shows a PR-wide counter
 (`data-testid=approval-summary`, "X/Y approved · N left to review") from
-`state.approvalTotal`, summed in the same decoupled `watch` that fills
+`state.approvalTotal`, filled in the same decoupled `watch` that fills
 `approvalSummaries` — a flat snapshot, so the heading never co-subscribes on a
 `b.code`.
+
+**That total is a UNION over the whole tree, never the sum of the pills**
+(`prWideApproveTotal`, `home.mjs`): it walks every top-level row's subtree into
+one id-keyed `Set` and calls `blockApproveCount` **once** per block. Summing
+`subtreeApproveCount` per row instead counted every shared descendant once per
+ancestor and inflated both halves by the same factor — measured on PR 13255:
+**10210/10742 instead of the real 1831/1856** ("532 left to review" where 25
+were left), which is exactly the number a reviewer reads as "this PR is endless".
+`ProgressBar.mjs` reads the same `state.approvalTotal`. Don't reintroduce the
+per-row sum; the `state.underlyingIds` skip is not enough, it only covers the
+one case where the shared descendant is itself a top-level index row.
 
 `renderList` **always** returns a keyed array (empty state as an array-of-one) to
 avoid the arrow.js single↔array slot pitfall (see
