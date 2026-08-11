@@ -402,3 +402,50 @@ no-arrow control loop (allocate and drop a plain object) to establish the floor
 
 Corollary worth keeping: "flat" for a WeakMap-based fix means **flat after a
 one-time capacity cost**, never a literal zero on first exposure to new content.
+
+## A separate CPU stall, not a leak: Space felt "traag" on a large PR
+
+Reported symptom (PR 13255, 166 blocks, 45 top-level rows): pressing Space to
+approve-and-continue occasionally froze the tab for a beat. Not the heap leak
+above — a genuine main-thread **longtask**, ~700-800ms, that only showed up
+when a Space press happened to land near the 5s comment/chat/workflows poll
+tick.
+
+**Measured with Playwright + CDP `Profiler`** (not the heap tooling above —
+`Profiler.start`/`Profiler.stop` around a burst of Space presses, plus a page-
+side `PerformanceObserver({entryTypes:['longtask']})`) against the **live**
+dev server (read-only repro: pressing Space does write an approval signal, so
+prefer an isolated server per the heap-measurement recipe above for a repeat
+run). The CPU profile's self-time was dominated by `directChildBlocks`
+(`home.mjs`) and the arrow.js proxy `get` trap underneath it; the call tree
+traced it to `commentScopeKeys` → `nestedPrBlocks` (recursive) →
+`directChildBlocks`, i.e. the **`state.commentActivity` watch**
+(`RelatedPanel.mjs`'s comment poll bumps `commentListSnapshot()`, which this
+watch depends on) re-walking every top-level row's WHOLE subtree on every poll
+tick. `subtreeApproveCount`'s `state.approvalSummaries` watch calls the exact
+same `nestedPrBlocks`/`directChildBlocks` pair for the same reason (on every
+`state.codeVersion` bump instead) — same cost, different trigger; that watch's
+own counting logic is `prWideApproveTotal`'s territory, untouched here.
+
+**Root cause:** `directChildBlocks` rebuilt a fresh `new
+Map(state.allBlocks.map(...))` on every call, and `callRows`/`testCoverRows`
+plus its own relations lookup were plain `.filter()`/`for...of` linear scans
+over `state.callResolve`/`state.testCovers`/`state.relations` — each called
+again from scratch for every node visited by the recursive walk. With ~45 top-
+level rows each re-walking their own subtree, these four O(n) scans ran
+hundreds of times per single watch trigger. **Fixing only the id-Map build
+first barely moved the profile** — the filter/loop scans cost just as much;
+all four needed the same treatment.
+
+**Fix:** four memoized reverse-indexes (`allBlocksById`,
+`relationsByParentId`, `callResolveByCallerId`, `testCoversByTestId`,
+`home.mjs`, next to `referenceRowsCache`) — the same reference-identity cache
+shape as `referenceRowsCache` (`home.mjs`) and `blockRowsCache` (`Block.mjs`):
+`state.allBlocks`/`state.relations`/`state.callResolve`/`state.testCovers` are
+always wholesale-reassigned, never mutated in place, so comparing the stored
+array reference is a correct, exact invalidation check. Result: the same
+25-Space-press burst that reliably produced a 1+ longtask now produces zero,
+and `directChildBlocks`' self-time in the profile dropped from ~200-370ms to
+~12ms. **Don't rebuild one of these Maps inline again** — reuse the shared
+accessor instead, at any new call site that needs an id/caller/parent/test
+lookup into these four arrays.

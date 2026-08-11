@@ -1394,6 +1394,83 @@ function referenceRows(b, rows) {
   return result
 }
 
+// allBlocksById / relationsByParentId / callResolveByCallerId /
+// testCoversByTestId memoize four lookups that used to be a fresh linear
+// scan on every call: `new Map(state.allBlocks.map((x) => [x.id, x]))` at 9
+// separate call sites, and the `.filter(...)` inside callRows/testCoverRows
+// plus the inline `for (const r of state.relations) if (r.parentId === …)`
+// loop in directChildBlocks. All four are on the hot path of a single Space
+// press: directChildBlocks (recursed by nestedChangedKids up to
+// NESTED_DEPTH, and by nestedPrBlocks — subtreeApproveCount's helper for the
+// approvalSummaries watch, AND commentScopeKeys' for the commentActivity
+// watch, both of which call it once per top-level row) and
+// findNextUnapproved's tree walk (firstUnapprovedCallSiteInUnit). Measured on
+// PR 13255 (166 blocks, ~45 top-level rows): a single Space press landed a
+// ~700-800ms main-thread longtask whenever it coincided with the 5s
+// comment/chat/workflows poll tick (which is what actually re-triggers the
+// commentActivity watch — it depends on commentListSnapshot(), not
+// state.codeVersion). A CPU profile's call tree traced that longtask through
+// commentScopeKeys → nestedPrBlocks (recursive) → directChildBlocks: with ~45
+// top-level rows each re-walking their own subtree, directChildBlocks'
+// three per-call linear scans (the id Map build, callRows' filter, and the
+// relations loop) each ran hundreds of times per single watch trigger.
+// Fixing only the id-Map build (the first attempt here) barely moved the
+// profile — the filter/loop scans dominate just as much. All four caches
+// share the same reference-identity shape as referenceRowsCache just above
+// and blockRowsCache (Block.mjs): state.allBlocks/state.relations/
+// state.callResolve/state.testCovers are always wholesale-reassigned, never
+// mutated in place (grep confirms exactly one assignment site each, plus one
+// `= [...x]` refresh for allBlocks), so comparing the stored array reference
+// is a correct, exact invalidation check.
+let allBlocksByIdCache = { src: null, map: null }
+function allBlocksById() {
+  const src = state.allBlocks
+  if (allBlocksByIdCache.src !== src) {
+    allBlocksByIdCache = { src, map: new Map(src.map((x) => [x.id, x])) }
+  }
+  return allBlocksByIdCache.map
+}
+
+function groupBy(arr, keyFn) {
+  const map = new Map()
+  for (const item of arr) {
+    const key = keyFn(item)
+    const list = map.get(key)
+    if (list) list.push(item)
+    else map.set(key, [item])
+  }
+  return map
+}
+
+let relationsByParentIdCache = { src: null, map: null }
+function relationsByParentId() {
+  const src = state.relations || []
+  if (relationsByParentIdCache.src !== src) {
+    relationsByParentIdCache = { src, map: groupBy(src, (r) => r.parentId) }
+  }
+  return relationsByParentIdCache.map
+}
+
+let callResolveByCallerIdCache = { src: null, map: null }
+function callResolveByCallerId() {
+  const src = state.callResolve || []
+  if (callResolveByCallerIdCache.src !== src) {
+    callResolveByCallerIdCache = { src, map: groupBy(src, (r) => r.callerId) }
+  }
+  return callResolveByCallerIdCache.map
+}
+
+let testCoversByTestIdCache = { src: null, map: null }
+function testCoversByTestId() {
+  const src = state.testCovers || []
+  if (testCoversByTestIdCache.src !== src) {
+    testCoversByTestIdCache = { src, map: groupBy(src, (r) => r.testId) }
+  }
+  return testCoversByTestIdCache.map
+}
+
+const NO_ROWS = []
+
 // groupsFor returns the group-granularity change runs of a block (empty until its
 // code has loaded). Used for the list-mode preview, which always previews the
 // first *group* regardless of the diff-mode granularity.
@@ -1875,7 +1952,7 @@ async function loadApprovals() {
     if (!res.ok) return
     const rows = await res.json()
     if (!Array.isArray(rows)) return
-    const byId = new Map(state.allBlocks.map((b) => [b.id, b]))
+    const byId = allBlocksById()
     for (const a of rows) {
       const b = byId.get(a.blockId)
       if (!b) continue
@@ -3764,7 +3841,7 @@ function resolvedCallChildren(b) {
   // for readability at the two call sites below, not because it can now ever
   // differ from `state.mode === 'diff'`.
   const hideOutOfScope = state.mode === 'diff'
-  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const byId = allBlocksById()
   const changed = new Set(changedRows(rows))
   return resolved
     .filter((r) => scope == null || !hideOutOfScope || scope.has(r.callKey))
@@ -3928,7 +4005,7 @@ function callArrowPairs(b) {
   const rows = blockRows(b)
   const unit = navUnitsOf(b, rows, cur.gran)[cur.change]
   if (!unit) return []
-  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const byId = allBlocksById()
   const pairs = []
   for (const r of callRows(b)) {
     if (r.status !== 'resolved' && r.status !== 'found') continue
@@ -3948,8 +4025,8 @@ function callArrowPairs(b) {
 
 // callRows returns the call-resolution rows whose caller is block b.
 function callRows(b) {
-  if (!b || !state.callResolve) return []
-  return state.callResolve.filter((r) => r.callerId === b.id)
+  if (!b || !state.callResolve) return NO_ROWS
+  return callResolveByCallerId().get(b.id) || NO_ROWS
 }
 
 // callChildId builds the PR-block id a call-resolution row points at (empty
@@ -3962,8 +4039,8 @@ function callChildId(r) {
 
 // testCoverRows returns the test-coverage rows whose test is block b.
 function testCoverRows(b) {
-  if (!b || !state.testCovers) return []
-  return state.testCovers.filter((r) => r.testId === b.id)
+  if (!b || !state.testCovers) return NO_ROWS
+  return testCoversByTestId().get(b.id) || NO_ROWS
 }
 
 // coveredChildId builds the PR-block id a test-coverage row's covered method
@@ -3996,7 +4073,7 @@ function resolvedTestCoverChildren(b, range) {
   const resolved = testCoverRows(b).filter((r) => r.status === 'resolved' || r.status === 'found')
   if (resolved.length === 0) return []
   const rows = blockRows(b)
-  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const byId = allBlocksById()
   return resolved.map((r) => {
     const prBlock = byId.get(coveredChildId(r))
     if (prBlock) ensureCode(prBlock)
@@ -4049,7 +4126,7 @@ function resolvedTestCoverChildren(b, range) {
 // entering a diff), which is too much loss for too little gain.
 function coveredByChildren(b) {
   if (!b || !state.testCovers) return []
-  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const byId = allBlocksById()
   const seen = new Set()
   const out = []
   for (const r of state.testCovers) {
@@ -4167,9 +4244,9 @@ async function startTestCoverSearch(b) {
 // create a method↔test cycle in that recursive rollup.
 function directChildBlocks(b) {
   if (!b) return []
-  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const byId = allBlocksById()
   const ids = new Set()
-  for (const r of state.relations || []) if (r.parentId === b.id) ids.add(r.childId)
+  for (const r of relationsByParentId().get(b.id) || NO_ROWS) ids.add(r.childId)
   for (const r of callRows(b)) {
     if (r.status !== 'resolved' && r.status !== 'found') continue
     if (byId.has(callChildId(r))) ids.add(callChildId(r))
@@ -4524,7 +4601,7 @@ function lineChildSummaries(b) {
     buckets.get(row).set(kid.id, kid)
   }
 
-  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const byId = allBlocksById()
 
   for (const { block: kid, line } of childrenOf(b)) {
     const row = newLineToRowOf(rows, line)
@@ -6539,7 +6616,7 @@ function collapsedColumnHTML(b, level, testid, drillIdx = null) {
 // block, caller must handle that case itself — only drillIntoChild does).
 function resolveChildBlock(child) {
   if (!child || child.kind === 'tests_group') return null
-  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const byId = allBlocksById()
   // A method-call child's own `id` is caller-scoped (b.id + '::' + callKey), so it
   // never matches a real block; its `blockId` points at the definition's PR block
   // when that definition is itself changed here. Relation children carry their real
@@ -8138,7 +8215,7 @@ function callSegmentApproved(b, row, segStart) {
 // site at all — see findCallSites) don't have.
 async function firstUnapprovedCallSiteInUnit(b, unit) {
   const rows = blockRows(b)
-  const byId = new Map(state.allBlocks.map((x) => [x.id, x]))
+  const byId = allBlocksById()
   const sites = []
   for (const r of callRows(b)) {
     if (r.status !== 'resolved' && r.status !== 'found') continue
