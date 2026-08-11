@@ -626,6 +626,27 @@ scope to it and `→` could never reach that child at all.
 
 Test: `tests/reference-unit-unchanged-line.spec.mjs`.
 
+**An `added` block's own declaration row (row 0) gets the same treatment when
+it is itself unchanged.** `declarationReferenceRow(b, rows)` (`home.mjs`, next
+to `referenceRows`, merged into the same `extraRows` array in `navUnitsOf`)
+adds row 0 whenever `b.status === 'added'` and `!rowChanged(rows[0])` — e.g. a
+previously-declared/interface method that only now gets a body: the whole
+block reads "added" (`OTHER` category) while its own signature line (`public
+static function decode(...)`) is untouched text (identical to the
+interface's), so it carried no changed mark and fell outside
+`changeGroups`/`changeLines` entirely — `f`/`d` skipped straight past it to
+the opening `{`. Reviewer request: "functie naam is niet selecteerbaar. ik wil
+dat daar de groep of line kan beginnen." Deliberately only `group`/`line`
+(`referenceUnit`'s existing shape already covers both); `call` granularity is
+untouched — the signature carries nothing to segment. Same `ref:true`
+semantics as the call-based reference unit above (landable, not approvable,
+the "look only" eye badge), for a different reason for being unchanged.
+**Deliberately gated on `status === 'added'`** — an ordinary MODIFIED
+function's declaration is almost always unchanged too (only the body
+changed), and turning every one of those into an extra landable stop would
+derail "↑ reaches the first real unit" across virtually every reviewed
+function; only a wholly new function/method gets this treatment.
+
 **A completely blank (after `trim()`) added/removed line is not a landable unit
 at `'line'`/`'call'` and doesn't count toward the approve counter.** Such a row
 is `rowChanged` but has nothing to read or judge, so `changedRows`/`changeLines`/

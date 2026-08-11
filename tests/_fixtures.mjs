@@ -471,6 +471,13 @@ function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/modulelabel-blocks.json'], {
     stdio: 'ignore',
   })
+  // Declaration-reference-unit fixture (PR 120, signature-ref-unit.spec.mjs):
+  // a `status: "added"` block whose own declaration line is byte-identical in
+  // base and head — see materializeSignatureRefWorktrees (tests/_setup.mjs)
+  // for why that combination is real and reachable.
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/signatureref-blocks.json'], {
+    stdio: 'ignore',
+  })
 }
 
 function canConnect(port) {

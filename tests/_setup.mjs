@@ -56,6 +56,7 @@ export default function globalSetup() {
   materializeClassMemberScopeWorktrees()
   materializeExplainRangeWorktrees()
   materializeWhenScopeWorktrees()
+  materializeSignatureRefWorktrees()
 }
 
 // materializeMainWorktrees writes the base/head worktrees for the suite's MAIN
@@ -1140,4 +1141,59 @@ class WhenScopeSubject
   write('head', 'tests/Feature/WhenScopeTest.php', test) // added — no base side
   write('base', 'app/Services/WhenScopeSubject.php', subject('$n'))
   write('head', 'app/Services/WhenScopeSubject.php', subject('$n * 10'))
+}
+
+// materializeSignatureRefWorktrees writes the synthetic PR 120 fixture
+// worktree for signature-ref-unit.spec.mjs: a block whose fixture entry
+// (tests/fixtures/signatureref-blocks.json) is declared `status: "added"` —
+// independent of the classify.go symbol-index lookup that normally derives
+// it, exactly like every other seeded-from-JSON fixture — while its base AND
+// head worktree files share a byte-identical declaration line for
+// SignatureRefAction::decode. /api/code (handleCode → extractBlockSource)
+// scans both worktree files independently of the seeded status, so this
+// reproduces a real, reachable combination: a method the classifier scores as
+// newly added (e.g. a previously interface-only/abstract declaration that
+// only now gets a body) whose signature TEXT still happens to already exist
+// verbatim in the base file — see "functie naam is niet selecteerbaar" in
+// .claude/docs/keyboard-navigation.md ("Reference units"). alignRows then
+// pairs that one line as an unchanged `eq` row while every body row below it
+// is a genuine addition, exactly like the reported ActivityCommandResult
+// card.
+function materializeSignatureRefWorktrees() {
+  const write = worktreeWriter(120)
+  const signature = 'public static function decode(string $output): mixed'
+  write(
+    'base',
+    'app/Actions/SignatureRefAction.php',
+    `<?php
+
+namespace App\\Actions;
+
+class SignatureRefAction
+{
+    ${signature}
+    {
+        return null;
+    }
+}
+`,
+  )
+  write(
+    'head',
+    'app/Actions/SignatureRefAction.php',
+    `<?php
+
+namespace App\\Actions;
+
+class SignatureRefAction
+{
+    ${signature}
+    {
+        \$lines = preg_split('/\\R/', \$output) ?: [];
+
+        return \$lines[0] ?? null;
+    }
+}
+`,
+  )
 }

@@ -1323,7 +1323,33 @@ function translationNavUnits(b) {
 // ("Translation blocks — per-key navigation").
 function navUnitsOf(b, rows, gran) {
   if (b && b.category === 'TRANSLATION') return translationNavUnits(b)
-  return unitsFor(rows, gran, referenceRows(b, rows))
+  const extra = [...new Set([...declarationReferenceRow(b, rows), ...referenceRows(b, rows)])]
+  return unitsFor(rows, gran, extra)
+}
+
+// declarationReferenceRow returns row 0's index in an array on its own when
+// the block is `status === 'added'` (a wholly new function/method) and its
+// very first row — the declaration — does NOT itself carry a changed mark,
+// e.g. a previously-declared/interface method that only now gets a body: the
+// block reads "added" while its signature line is untouched text (identical
+// to the interface's), so that row falls outside changeGroups/changeLines
+// entirely and neither 'group' nor 'line' granularity can ever land on it —
+// the reviewer's first selectable stop is one row too low (the opening `{`).
+// Fed into unitsFor's extraRows next to referenceRows below, so it becomes an
+// ordinary landable-but-not-approvable "reference" unit (withReferenceUnits,
+// Block.mjs) — same semantics as a reference row that carries a resolved
+// call, just a different reason for being unchanged. Reviewer request:
+// "functie naam is niet selecteerbaar. ik wil dat daar de groep of line kan
+// beginnen."
+//
+// Deliberately scoped to `status === 'added'` only, not every block whose
+// declaration happens to be unchanged — an ordinary MODIFIED function almost
+// always has an unchanged signature (only its body changed), so widening this
+// to every block would add a landable "look only" stop above the real change
+// in nearly every reviewed function, which nobody asked for and would derail
+// existing "↑ reaches the first real unit" navigation across the whole suite.
+function declarationReferenceRow(b, rows) {
+  return b && b.status === 'added' && rows && rows.length > 0 && !rowChanged(rows[0]) ? [0] : []
 }
 
 // referenceRows returns the row indices of b that carry a resolved call into

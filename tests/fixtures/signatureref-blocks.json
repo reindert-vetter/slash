@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 120,
+    "file": "app/Actions/SignatureRefAction.php",
+    "class": "SignatureRefAction",
+    "name": "decode",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 12,
+    "status": "added",
+    "side": "new"
+  }
+]
