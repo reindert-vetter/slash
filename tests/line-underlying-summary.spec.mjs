@@ -217,3 +217,104 @@ test.describe('PR Review Tree — per-line onderliggende-code badge — per-line
     await expect(secondRow).toContainText('lineSummarySecond')
   })
 })
+
+// Regression: a not-yet-published AI risk finding (isLocalAiWarning,
+// BlockList.mjs — source 'ai', no githubId yet) satisfies isLocalComment too
+// (it has never reached GitHub), so the per-line badge used to fall through
+// to the ordinary private-note glyph — indistinguishable from the reviewer's
+// own note. The badge now shows the AI-warning triangle SEPARATELY, side by
+// side with the note/avatar icon whenever the line also carries another,
+// ordinary open comment (explicit reviewer decision: never let one icon win
+// over the other, they mean different things).
+test.describe('PR Review Tree — per-line onderliggende-code badge — AI warning icon', () => {
+  test('a line with both an AI finding and a private note shows both icons, side by side', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await page.locator('[data-idx="1"]').click()
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowRight') // list -> diff, lands on the first change group
+
+    const card = page.getByTestId('block-column').locator('article').first()
+    await expect(card).toBeVisible()
+    const label = (await card.locator('h2').first().innerText()).trim()
+    const file = (await card.locator('.font-mono.text-slate-500').first().innerText()).trim().split(':')[0]
+
+    // Learn a real row anchor exactly like comment-block-wide-anchor.spec.mjs
+    // does, via a throwaway reference comment placed through the composer.
+    await page.keyboard.press('Enter')
+    await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
+    const composer = page.getByTestId('comment-compose')
+    await expect(composer).toBeFocused()
+    await composer.fill('referentie voor de rij-anchor')
+    await page.keyboard.press('Enter') // opens the compose-kind menu
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    const [createRes] = await Promise.all([
+      page.waitForResponse(
+        (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
+      ),
+      page.keyboard.press('Enter'), // "Plaats comment" (default, 2nd item)
+    ])
+    const refRunId = (await createRes.json()).runId
+    expect(refRunId).toBeTruthy()
+
+    let aiRunId
+    let noteRunId
+    try {
+      const list = await (await page.request.get('/api/comments?pr=12903')).json()
+      const ref = list.find((c) => c.runId === refRunId)
+      expect(ref).toBeTruthy()
+      await page.request.post('/api/workflows/' + refRunId + '/signals/delete', { data: { author: 'reviewer' } })
+
+      const ai = await page.request.post('/api/workflows/task_code_comment', {
+        data: {
+          pr: 12903,
+          file,
+          line: ref.line,
+          author: 'AI check',
+          body: 'Dit verdient een blik.',
+          label,
+          gran: ref.gran,
+          rowStart: ref.rowStart,
+          rowEnd: ref.rowEnd,
+          source: 'ai',
+          local: true,
+        },
+      })
+      aiRunId = (await ai.json()).runId
+      expect(aiRunId).toBeTruthy()
+
+      const note = await page.request.post('/api/workflows/task_code_comment', {
+        data: {
+          pr: 12903,
+          file,
+          line: ref.line,
+          author: 'reviewer',
+          body: 'even bij mezelf checken',
+          label,
+          gran: ref.gran,
+          rowStart: ref.rowStart,
+          rowEnd: ref.rowEnd,
+          local: true,
+        },
+      })
+      noteRunId = (await note.json()).runId
+      expect(noteRunId).toBeTruthy()
+
+      await page.goto('/pr/12903')
+      await page.locator('[data-idx]').filter({ hasText: label }).first().click()
+      await leaveSearchBox(page)
+      await page.keyboard.press('ArrowRight') // list -> diff, same first change group
+
+      const badge = page.getByTestId('line-underlying-summary')
+      await expect(badge).toBeVisible()
+      await expect(badge.getByTestId('line-ai-warning-icon')).toHaveCount(1)
+      await expect(badge.getByTestId('line-note-icon')).toHaveCount(1)
+      await expect(badge.getByTestId('avatar-fallback')).toHaveCount(0)
+      await expect(badge).toHaveAttribute('title', /AI-risicowaarschuwing/)
+      await expect(badge).toHaveAttribute('title', /eigen notitie/)
+    } finally {
+      for (const id of [aiRunId, noteRunId]) {
+        if (id) await page.request.post('/api/workflows/' + id + '/signals/delete', { data: { author: 'reviewer' } })
+      }
+    }
+  })
+})

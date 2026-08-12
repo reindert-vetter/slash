@@ -1737,6 +1737,26 @@ function noteIconHtmlString(sizeCls) {
   )
 }
 
+// aiWarningIconHtmlString mirrors BlockList.mjs's aiWarningIcon (the same
+// warning-triangle glyph, see isLocalAiWarning there) as a plain HTML string,
+// sized to sit inline with noteIconHtmlString/avatarHtmlString in the
+// "onderliggende code" per-line badge (lineSummaryParts below). A not-yet-
+// published AI risk finding used to fall through to the plain note icon there
+// too (it also satisfies isLocalComment — never posted to GitHub yet), which
+// read exactly like a private reviewer note and hid the fact that a machine
+// flagged the line (reviewer request). Rendered SIDE BY SIDE with the note/
+// avatar icon when both apply to the same line — explicit reviewer decision:
+// never let one win over the other, since they mean different things. The
+// SHAPE carries the meaning (colorblind rule); the amber tint is decoration.
+function aiWarningIconHtmlString(sizeCls) {
+  return (
+    `<svg data-testid="line-ai-warning-icon" class="${sizeCls} shrink-0 text-amber-600 dark:text-amber-400" viewBox="0 0 24 24" fill="none" ` +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>' +
+    '<line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+  )
+}
+
 // lineSummaryParts builds the shared INNER content (avatar+"+N"
 // comment-activity indicator + a done/total approve fraction) and title for
 // the "onderliggende code" per-line indicator — factored out of
@@ -1754,12 +1774,28 @@ function lineSummaryParts(summary) {
   if (!hasApprove && !commentActivity) return null
   const parts = []
   if (commentActivity) {
+    // hasAiWarning (a not-yet-published AI risk finding, see
+    // aiWarningIconHtmlString above) and otherCount > 0 (an ordinary open
+    // comment/note besides it) are independent — both icons render when both
+    // apply, never one instead of the other. `icons.length` is how many
+    // threads are already visually represented (the AI triangle covers every
+    // counted AI finding, the note/avatar icon covers every other counted
+    // comment), so the "+N" suffix is the remainder beyond that, not a flat
+    // count-1 — mirrors the single-icon case exactly when only one applies.
+    const icons = []
+    if (commentActivity.hasAiWarning) icons.push(aiWarningIconHtmlString('h-3 w-3'))
+    if (commentActivity.otherCount > 0) {
+      icons.push(
+        commentActivity.local
+          ? noteIconHtmlString('h-3 w-3')
+          : avatarHtmlString(commentActivity.last.name, commentActivity.last.avatarUrl, 'h-3 w-3'),
+      )
+    }
+    const remaining = commentActivity.count - icons.length
     parts.push(
-      (commentActivity.local
-        ? noteIconHtmlString('h-3 w-3')
-        : avatarHtmlString(commentActivity.last.name, commentActivity.last.avatarUrl, 'h-3 w-3')) +
-        (commentActivity.count > 1
-          ? `<span class="text-[9px] font-semibold text-slate-500 dark:text-zinc-500">+${commentActivity.count - 1}</span>`
+      icons.join('') +
+        (remaining > 0
+          ? `<span class="text-[9px] font-semibold text-slate-500 dark:text-zinc-500">+${remaining}</span>`
           : ''),
     )
   }
@@ -1771,20 +1807,28 @@ function lineSummaryParts(summary) {
       }">${done ? '✓ ' : ''}${approve.done}/${approve.total}</span>`,
     )
   }
+  const activityWords = []
+  if (commentActivity && commentActivity.hasAiWarning) {
+    activityWords.push(
+      commentActivity.aiCount + (commentActivity.aiCount === 1 ? ' AI-risicowaarschuwing' : ' AI-risicowaarschuwingen'),
+    )
+  }
+  if (commentActivity && commentActivity.otherCount > 0) {
+    activityWords.push(
+      commentActivity.otherCount +
+        (commentActivity.local
+          ? commentActivity.otherCount === 1
+            ? ' eigen notitie'
+            : ' eigen notities'
+          : commentActivity.otherCount === 1
+            ? ' open reactie'
+            : ' open reacties'),
+    )
+  }
   const title =
     'Onderliggende code' +
     (hasApprove ? ' — ' + approve.done + '/' + approve.total + ' regels goedgekeurd' : '') +
-    (commentActivity
-      ? ' — ' +
-        commentActivity.count +
-        (commentActivity.local
-          ? commentActivity.count === 1
-            ? ' eigen notitie'
-            : ' eigen notities'
-          : commentActivity.count === 1
-            ? ' open reactie'
-            : ' open reacties')
-      : '')
+    (activityWords.length ? ' — ' + activityWords.join(' + ') : '')
   return { html: parts.join(''), title }
 }
 

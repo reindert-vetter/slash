@@ -13,7 +13,7 @@ import { html } from './vendor/arrow.js'
 import { reactive, watch } from './vendor/arrow.js'
 import { highlight, blockLabel, codeGrowthChars } from './Block.mjs'
 import { translationValueView } from './translationDiff.mjs'
-import { statusInfo, categoryClass } from './BlockList.mjs'
+import { statusInfo, categoryClass, isLocalAiWarning } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown, countCodeFences, annotateFenceNumbers } from './markdown.mjs'
 import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin } from './avatar.mjs'
@@ -425,13 +425,25 @@ export function commentListSnapshot() {
 // open thread in scope) so BlockList.mjs's nested slot can render '' — never
 // an object with count 0.
 //
-// The returned `local` flag says every counted thread is a LOCAL one — never
-// posted to GitHub (see isLocalComment). The per-line badge in the diff swaps
-// the author avatar for a note glyph in that case (Block.mjs's
-// lineSummaryParts): an avatar answers "who is waiting for you", which is
-// meaningless when the only thing on that line is your own private note. As
-// soon as ONE real GitHub thread is in scope the flag is false and the avatar
-// comes back — a mixed scope still has someone in it.
+// The returned `local` flag says every counted OTHER (non-AI-warning, see
+// `hasAiWarning`/`otherCount` below) thread is a LOCAL one — never posted to
+// GitHub (see isLocalComment). The per-line badge in the diff swaps the
+// author avatar for a note glyph in that case (Block.mjs's lineSummaryParts):
+// an avatar answers "who is waiting for you", which is meaningless when the
+// only thing on that line is your own private note. As soon as ONE real
+// GitHub thread is in scope the flag is false and the avatar comes back — a
+// mixed scope still has someone in it.
+//
+// `hasAiWarning`/`aiCount` (isLocalAiWarning, BlockList.mjs — a not-yet-
+// published code_warning finding) is tracked SEPARATELY from `local`/
+// `otherCount`: an AI finding is always local by isLocalComment's own rule
+// too (it has no githubId yet), but folding it into the ordinary local/avatar
+// choice would hide it behind a generic note glyph — the same glyph a plain
+// private note gets — right where the reviewer most needs to tell "a machine
+// flagged this" apart from "I wrote this to myself". lineSummaryParts renders
+// the AI-warning triangle and the note/avatar icon SIDE BY SIDE whenever both
+// are present on the same line (explicit reviewer decision: never let one win
+// over the other) — see `hasAiWarning`/`otherCount` there.
 //
 // `matchesRow` (optional) additionally restricts which matched comments
 // count — home.mjs's lineChildSummaries uses this to fold a comment placed
@@ -444,6 +456,8 @@ export function commentListSnapshot() {
 export function commentActivitySummary(keys, matchesRow) {
   if (!keys || !keys.size) return null
   let count = 0
+  let aiCount = 0
+  let otherCount = 0
   let lastMsg = null
   let local = true
   for (const c of cs.list) {
@@ -452,7 +466,12 @@ export function commentActivitySummary(keys, matchesRow) {
     if (!keys.has(c.file + '|' + c.label)) continue
     if (matchesRow && !matchesRow(c)) continue
     count++
-    if (!isLocalComment(c)) local = false
+    if (isLocalAiWarning(c)) {
+      aiCount++
+    } else {
+      otherCount++
+      if (!isLocalComment(c)) local = false
+    }
     const reactions = c.reactions || []
     const msg = reactions.length
       ? reactions[reactions.length - 1]
@@ -460,7 +479,14 @@ export function commentActivitySummary(keys, matchesRow) {
     if (!lastMsg || (msg.createdAt || '') > (lastMsg.createdAt || '')) lastMsg = msg
   }
   if (!count) return null
-  return { count, local, last: identityOf(lastMsg.source, lastMsg.author, lastMsg.avatarUrl) }
+  return {
+    count,
+    local,
+    hasAiWarning: aiCount > 0,
+    aiCount,
+    otherCount,
+    last: identityOf(lastMsg.source, lastMsg.author, lastMsg.avatarUrl),
+  }
 }
 
 // ── Keyboard focus in the right-hand panel ────────────────────────────────────

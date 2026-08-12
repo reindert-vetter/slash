@@ -625,7 +625,7 @@ function rowInListRange(state, i) {
   return i >= lo && i <= hi
 }
 
-// isLocalAiWarning — this index item is an automated code_warning finding
+// isLocalAiWarning reports whether `c` is an automated code_warning finding
 // (source 'ai') that has NOT been put on GitHub yet (githubId 0/absent, the
 // same signal needsPublishChoice reads in RelatedPanel.mjs). Both halves
 // matter: the warning icon below says "a machine wrote this, it is not a
@@ -635,7 +635,12 @@ function rowInListRange(state, i) {
 // ordinary comment and gets the ordinary author avatar again. A "Comment
 // hiervan maken" conversion needs no special case here: it creates a brand-new
 // comment without source 'ai' and deletes the finding.
-function isLocalAiWarning(c) {
+//
+// Exported so RelatedPanel.mjs's commentActivitySummary (the diff's per-line
+// "onderliggende code" badge) can flag the same finding with its own warning
+// triangle instead of duplicating this rule — see the diff-badge doc comment
+// there and lineSummaryParts in Block.mjs.
+export function isLocalAiWarning(c) {
   return !!c && c.source === 'ai' && !c.githubId
 }
 
