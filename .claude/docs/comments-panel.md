@@ -94,7 +94,7 @@ row's own label gets a `· +N` suffix once the group holds more than one
 comment. A solo comment (the common case) is a group of exactly one, so its
 row is unchanged.
 
-### An anchored "Start" item instead opens its block "as if fully expanded" — only on ArrowRight
+### An anchored "Start" item instead opens its block "as if fully expanded" — automatically, but the keyboard only follows on ArrowRight
 
 The section above is for a genuinely unanchored item (a PR-wide comment, an
 orphan, or one with no matching block at all). A comment-index row that DOES
@@ -106,55 +106,54 @@ Underlying-code panel and the embedded Claude column — reviewer request:
 such an item should look "as if the code were already fully expanded", not
 just the bare read-only thread card.
 
-**This no longer happens automatically the moment the row is selected** — a
-later reviewer request reversed that: merely selecting the row (click or
-↑/↓) now leaves it fully at rest, no drilled column, no comment card
-expanded, so the row reads exactly like any other comment item until the
-reviewer explicitly asks to see more. Two keypresses instead:
+`openCommentAnchorDrill(b)` (`home.mjs`, called from the `state.selected`
+watch) opens the anchor as a **drilled column** (`state.drill[0]`) — exactly
+the mechanism `Enter` on an Onderliggende-code child uses (`drillIntoChild`)
+— but **without leaving list mode**. That one difference is deliberate and
+is the whole point: `BlockList` only hides the blokken-index in
+`state.mode === 'diff'`, so it stays visible next to the expanded diff
+(reviewer request: "ook met de blokken index zichtbaar"), and
+`state.selected` is never touched, so the sidebar highlight stays on the
+comment row itself rather than jumping to the block. The top-level
+block-column (which would otherwise render the comment's own
+`commentDetailCard`) collapses to a narrow rail instead, since
+`focusedBlock()` now resolves through `state.focusLevel > 0` to the drilled
+anchor — `commentTarget()`/`commentScope()`/`relatedChildren()` all follow
+that for free, so the comment thread (correctly scoped now, since an
+anchored finding's own `Kind` is `''` per `anchoredWarning` in
+`code_warning.go` — it passes `recomputeView`'s `!c.kind` filter like any
+ordinary comment), the Underlying-code panel and the embedded Claude column
+need no further wiring. The drilled cursor is set from the group's PRIMARY
+comment's own unit (`b.comment.gran`/`b.comment.rowStart`, recomputed once
+the anchor's code — and thus its aligned rows — actually arrives, since the
+very first open has to guess against an empty row list). Since
+`commentScope`'s ordinary row-range filtering (`commentUnder`) then shows
+**every** comment that actually falls under that cursor unit — not only the
+ones in this synthetic sidebar group — the reviewer sees the whole line's
+conversation regardless of the group's own boundaries, exactly as any other
+block's inline comments already work; no separate "show the whole group"
+wiring was needed.
 
-- **First `→`** calls `openCommentAnchorDrill(b)` (`home.mjs`, from
-  `onKeydown`'s ArrowRight branch for a comment item), which opens the anchor
-  as a **drilled column** (`state.drill[0]`) — exactly the mechanism `Enter`
-  on an Onderliggende-code child uses (`drillIntoChild`) — but **without
-  leaving list mode**, and without moving the keyboard into it. That one
-  difference is deliberate and is the whole point: `BlockList` only hides the
-  blokken-index in `state.mode === 'diff'`, so it stays visible next to the
-  expanded diff (reviewer request: "ook met de blokken index zichtbaar"), and
-  `state.selected` is never touched, so the sidebar highlight stays on the
-  comment row itself rather than jumping to the block. The top-level
-  block-column (which would otherwise render the comment's own
-  `commentDetailCard`) collapses to a narrow rail instead, since
-  `focusedBlock()` now resolves through `state.focusLevel > 0` to the drilled
-  anchor — `commentTarget()`/`commentScope()`/`relatedChildren()` all follow
-  that for free, so the comment thread (correctly scoped now, since an
-  anchored finding's own `Kind` is `''` per `anchoredWarning` in
-  `code_warning.go` — it passes `recomputeView`'s `!c.kind` filter like any
-  ordinary comment), the Underlying-code panel and the embedded Claude column
-  need no further wiring. The drilled cursor is set from the group's PRIMARY
-  comment's own unit (`b.comment.gran`/`b.comment.rowStart`, recomputed once
-  the anchor's code — and thus its aligned rows — actually arrives, since the
-  very first open has to guess against an empty row list). Since
-  `commentScope`'s ordinary row-range filtering (`commentUnder`) then shows
-  **every** comment that actually falls under that cursor unit — not only the
-  ones in this synthetic sidebar group — the reviewer sees the whole line's
-  conversation regardless of the group's own boundaries, exactly as any other
-  block's inline comments already work; no separate "show the whole group"
-  wiring was needed.
-- **Second `→`** (the drill is already open for this exact item —
-  `commentAnchorDrillFor === b.id`) hands the keyboard INTO it, by calling the
-  exact same `hasVisibleComments()`/`enterCommentsHead()`/
-  `claudeColumnVisible()`/`enterRelated()` chain the ordinary
-  `state.mode === 'diff'` ArrowRight branch already uses. This is what makes
-  the expanded view fully **keyboard-navigable** (a later reviewer request,
-  reversing the original "mouse/read-only" design) despite `state.mode`
-  staying `'list'`: `relatedActive()`'s `↑`/`↓`/`←`/`→` handling in
-  `onKeydown` is unconditional on `state.mode` — it only checks `cs.focus` —
-  so once `enterCommentsHead()` sets that, the existing generic
-  comment/thread/Claude-column walk takes over exactly as it would for any
-  other block. No comment card is force-expanded before this second `→`;
-  `enterCommentsHead()`'s own landing on the first conversation is the
-  reviewer's explicit choice to step in, same convention as everywhere else
-  in this file.
+**This opens automatically while merely walking ↑/↓ through the index — a
+later reviewer request restored that original behaviour after a brief
+detour where it required an explicit ArrowRight (don't reintroduce that
+detour): "als ik door blokken index langs ga, wil ik dat het al uitgeklapt
+is".** But the keyboard/focus deliberately does NOT follow along: the watch
+calls `leaveRelated()` right before `openCommentAnchorDrill`, and the call
+itself never touches `cs.focus`, so no comment card is ever auto-expanded —
+the row reads "already visible, but not yet selected inside". Only an
+explicit **`→`** hands the keyboard IN, by calling the exact same
+`hasVisibleComments()`/`enterCommentsHead()`/`claudeColumnVisible()`/
+`enterRelated()` chain the ordinary `state.mode === 'diff'` ArrowRight branch
+already uses (`onKeydown`). This is what makes the expanded view fully
+**keyboard-navigable** (a separate, still-standing reviewer request) despite
+`state.mode` staying `'list'`: `relatedActive()`'s `↑`/`↓`/`←`/`→` handling in
+`onKeydown` is unconditional on `state.mode` — it only checks `cs.focus` — so
+once `enterCommentsHead()` sets that, the existing generic
+comment/thread/Claude-column walk takes over exactly as it would for any
+other block. "Uitgeklapt, maar niet direct geselecteerd" — the drilled column
+becomes visible the moment the row is selected; only `→` moves the keyboard
+into it.
 
 Defaults to **Unified** (`state.commentAnchorViewMode`, distinct from the
 global `state.diffViewMode`, per explicit request: only this one view

@@ -141,16 +141,12 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
     await page.keyboard.press('ArrowUp')
     // Landing back on index 1 — the ANCHORED comment (it resolves to a real
-    // block, ContractController::index) — merely selecting it alone leaves
-    // it at rest, exactly like any other (unanchored) comment item: the
-    // plain read-only commentDetailCard (no drilled column yet — see
-    // comment-anchor-expanded-view.spec.mjs). An explicit ArrowRight opens
-    // that block "as if fully expanded" (openCommentAnchorDrill, home.mjs),
-    // collapsing the comment card's own spot into a rail instead. Here just
-    // confirm ↑/↓ still moved the selection.
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
-    await expect(page.getByTestId('drill-column')).toHaveCount(0)
-    await page.keyboard.press('ArrowRight')
+    // block, ContractController::index) — no longer shows commentDetailCard
+    // at all: selecting it opens that block "as if fully expanded" (see
+    // openCommentAnchorDrill, home.mjs), collapsing the comment card's own
+    // spot into a rail instead. See comment-anchor-expanded-view.spec.mjs for
+    // that behaviour in full; here just confirm ↑/↓ still moved the selection.
+    await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
     await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
     await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
   })
@@ -327,14 +323,11 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(page.locator('[data-idx="0"]')).not.toHaveClass(/bg-indigo-50/)
     await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
     // Index 1 is the ANCHORED comment (ContractController::index) — landing
-    // on it shows the plain commentDetailCard, same as any other comment
-    // item, since it does not auto-open the drilled column anymore (only an
-    // explicit ArrowRight does — see comment-anchor-expanded-view.spec.mjs
-    // for that behaviour in full); here just confirm ↓ actually advanced
-    // onto that row.
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
-    await expect(page.getByTestId('drill-column')).toHaveCount(0)
-    await page.keyboard.press('ArrowRight')
+    // on it now opens that block "as if fully expanded" instead of showing
+    // commentDetailCard (see openCommentAnchorDrill, home.mjs, and
+    // comment-anchor-expanded-view.spec.mjs for that behaviour in full); here
+    // just confirm ↓ actually advanced onto that row.
+    await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
     await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
   })
 

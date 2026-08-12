@@ -87,12 +87,9 @@ test.describe('Comment batch', () => {
     await expect(page.getByTestId('block-row').first()).toBeVisible()
     // Both fixture comments are anchored to a real block
     // (ContractController::index) — the default selection lands on the
-    // first one, at rest (no drilled column yet, see
-    // comment-anchor-expanded-view.spec.mjs); an explicit ArrowRight opens
-    // that block "as if fully expanded" instead of showing commentDetailCard
-    // (see openCommentAnchorDrill, home.mjs).
-    await expect(page.getByTestId('drill-column')).toHaveCount(0)
-    await page.keyboard.press('ArrowRight')
+    // first one, which now opens that block "as if fully expanded" instead
+    // of showing commentDetailCard (see openCommentAnchorDrill, home.mjs,
+    // and comment-anchor-expanded-view.spec.mjs for that behaviour in full).
     await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
 
     // Both open comments are index rows of their own.
@@ -123,9 +120,9 @@ test.describe('Comment batch', () => {
     // Enter on a comment row jumps to that comment (and closes the palette).
     await menu.getByTestId('command-row').filter({ hasText: 'deze naam kan korter' }).click()
     await expect(page.getByTestId('command-menu')).toHaveCount(0)
-    // Landing there leaves it at rest, same as any other comment/comment_group
-    // row — check the sidebar landed on the right row instead of
-    // commentDetailCard.
+    // Both comments are anchored to the same block, so this jump also opens
+    // it "as if fully expanded" (same as the default selection above) —
+    // check the sidebar landed on the right row instead of commentDetailCard.
     await expect(page.locator('[data-idx].bg-indigo-50')).toContainText('deze naam kan korter')
   })
 
@@ -142,11 +139,10 @@ test.describe('Comment batch', () => {
     await mock
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    // Anchored to a real block — at rest until an explicit ArrowRight opens
-    // it "as if fully expanded" instead of showing commentDetailCard (see
-    // openCommentAnchorDrill, home.mjs). Space must work without ever
-    // pressing that ArrowRight.
-    await expect(page.getByTestId('drill-column')).toHaveCount(0)
+    // Anchored to a real block — opens "as if fully expanded" instead of
+    // showing commentDetailCard (see openCommentAnchorDrill, home.mjs).
+    // Space must work without the keyboard ever having moved into it.
+    await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
 
     await page.keyboard.press('Space')
     await expect.poll(() => resolved.length).toBe(1)

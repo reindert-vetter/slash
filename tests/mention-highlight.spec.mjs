@@ -202,9 +202,12 @@ test.describe('@mention of the local reviewer', () => {
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
 
-    const card = page.getByTestId('comment-detail-card')
-    await expect(card).toBeVisible()
-    await expect(card).toContainText('hiernaar laten kijken')
+    // Anchored to a real block (ANCHOR_FILE/ANCHOR_LABEL) — restoring the
+    // selection opens it "as if fully expanded" instead of showing
+    // commentDetailCard (openCommentAnchorDrill, home.mjs; see
+    // comment-anchor-expanded-view.spec.mjs for that behaviour in full).
+    await expect(page.getByTestId('drill-column')).toContainText(ANCHOR_LABEL)
+    await expect(page.getByTestId('comment-item').first()).toContainText('hiernaar laten kijken')
     await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
   })
 

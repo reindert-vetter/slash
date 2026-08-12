@@ -1069,15 +1069,18 @@ watch(
     closePrCommentChat()
     if (b && b.kind === 'comment') {
       // Unconditional, even before a baseline exists — unlike the ordinary-
-      // block case below, a restored cs.focus/drill from BEFORE this
-      // selection change is never worth preserving on a comment/comment_group
-      // row: it always starts at rest (no comment card expanded, no drilled
-      // column open) and only opens either via ArrowRight
-      // (openCommentAnchorDrill, reachable only once this exact item is
-      // selected — see onKeydown) or by the reviewer's own further navigation
-      // once inside it.
+      // block case below, cs.focus/the keyboard can NEVER legitimately be
+      // already inside a comment/comment_group row's OWN panel the moment it
+      // is merely selected — a restored value here is never worth
+      // preserving.
       leaveRelated()
-      closeCommentAnchorDrillIfOwned()
+      // "As if the code were already fully expanded" for a comment anchored
+      // to a real block — see openCommentAnchorDrill's own doc comment.
+      // Reviewer request: this opens automatically while walking ↑/↓ through
+      // the index (visible without an extra step), but WITHOUT moving the
+      // keyboard/focus into it — no comment card gets auto-expanded, only an
+      // explicit ArrowRight (onKeydown) hands the keyboard in.
+      openCommentAnchorDrill(b)
       return
     }
     // Landed on anything other than a comment/comment_group item (an
@@ -2263,7 +2266,7 @@ function commentAnchorBlock(c) {
   return state.allBlocks.find((b) => b.file === c.file && b.label === c.label) || null
 }
 
-// openCommentAnchorDrill makes ArrowRight on a PR-comment index item that IS
+// openCommentAnchorDrill makes selecting a PR-comment index item that IS
 // anchored to a real block (commentAnchorBlock) show "as if the code were
 // already fully expanded" — the explicit request behind this function: the
 // comment's own block opens as a drilled column (state.drill[0]), exactly
@@ -2275,12 +2278,16 @@ function commentAnchorBlock(c) {
 // drilled deeper (see the DetailPanel pair.forEach kind==='comment' branch),
 // so this is always exactly one level, state.drill[0].
 //
-// Reviewer request, reversing the ORIGINAL version of this feature: this no
-// longer opens automatically the moment the row is selected — only an
-// explicit ArrowRight opens it (see onKeydown's ArrowRight branch below,
-// which also handles the SECOND ArrowRight that hands the keyboard INTO it).
-// Landing on the row itself now stays fully at rest: no drilled column, no
-// comment card expanded — see the state.selected watch above.
+// Called from the state.selected watch above on every comment-item
+// selection (click or arrow key), so it opens automatically while merely
+// walking ↑/↓ through the index — reviewer request: "als ik door blokken
+// index langs ga, wil ik dat het al uitgeklapt is". Deliberately does NOT
+// move the keyboard/cs.focus into it, though: no comment card ever gets
+// auto-expanded/auto-focused by this call alone (see the watch's own
+// `leaveRelated()` right before it) — only an explicit ArrowRight
+// (onKeydown, below) hands the keyboard IN, mirroring the ordinary
+// state.mode==='diff' ArrowRight flow. "Uitgeklapt, maar niet direct
+// geselecteerd."
 //
 // commentTarget()/commentScope()/relatedChildren() all key off focusedBlock(),
 // which at focusLevel>0 resolves to this drilled entry — so the comment
@@ -2291,8 +2298,8 @@ function commentAnchorBlock(c) {
 // further wiring needed. This is also what makes the drilled column fully
 // KEYBOARD-navigable (reviewer request) despite state.mode staying 'list':
 // relatedActive()'s ↑/↓/←/→ handling in onKeydown is unconditional on mode,
-// so once the SECOND ArrowRight calls enterCommentsHead() (mirroring the
-// ordinary state.mode==='diff' ArrowRight branch), the existing generic
+// so once ArrowRight calls enterCommentsHead() (mirroring the ordinary
+// state.mode==='diff' ArrowRight branch), the existing generic
 // comment/thread/Claude-column walk takes over exactly as it would for any
 // other block — no separate mechanism was needed.
 //
@@ -2328,11 +2335,10 @@ function openCommentAnchorDrill(b) {
     return
   }
   commentAnchorDrillFor = b.id
-  // Already open on this exact anchor (e.g. a second ArrowRight press, or the
-  // comment-poll's 5s tick reassigning cs.list, which can retrigger the
-  // state.selected watch — see lastFiredSelectionRef above) — leave it alone
-  // so a granularity/viewMode change the reviewer just made inside it
-  // survives.
+  // Already open on this exact anchor (e.g. the comment-poll's 5s tick
+  // reassigning cs.list, which can retrigger the state.selected watch — see
+  // lastFiredSelectionRef above) — leave it alone so a granularity/viewMode
+  // change the reviewer just made inside it survives.
   if (state.drill.length === 1 && state.drill[0] === anchor) return
   state.drill = [anchor]
   state.drillCursor = [commentAnchorCursor(anchor, c)]
@@ -10097,14 +10103,13 @@ function onKeydown(e) {
     e.preventDefault()
     // A selected comment-index item (kind:'comment', see recomputeLeftList)
     // has no diff of its own to step into — → instead reaches whatever the
-    // comment's own anchor block offers, via openCommentAnchorDrill:
+    // comment's own anchor block offers:
     //
-    // - Anchored (commentAnchorBlock resolves): the FIRST → opens the
-    //   anchor's block "as if fully expanded" (state.drill[0]) without
-    //   touching the keyboard — no comment card pre-expanded, per reviewer
-    //   request (see openCommentAnchorDrill's own doc comment). A SECOND →
-    //   (commentAnchorDrillFor already owns this exact item) hands the
-    //   keyboard INTO it, mirroring the state.mode==='diff' ArrowRight branch
+    // - Anchored (commentAnchorBlock resolves): the anchor's block is
+    //   already open as a drilled column (state.drill[0], opened
+    //   automatically on selection by openCommentAnchorDrill — see its own
+    //   doc comment), but the keyboard never moved into it. → hands the
+    //   keyboard IN now, mirroring the state.mode==='diff' ArrowRight branch
     //   above verbatim: lands on the first inline comment conversation if
     //   there is one, else the embedded Claude column if one is hanging on
     //   it, else the Onderliggende-code panel. This is what makes the
@@ -10120,15 +10125,10 @@ function onKeydown(e) {
     if (sc) {
       const anchor = commentAnchorBlock(sc)
       if (anchor) {
-        const b = curBlock()
-        if (commentAnchorDrillFor !== b.id) {
-          openCommentAnchorDrill(b)
-        } else {
-          clearRangeAnchor()
-          if (hasVisibleComments()) enterCommentsHead()
-          else if (claudeColumnVisible()) enterClaudeChat(state.pr)
-          else enterRelated()
-        }
+        clearRangeAnchor()
+        if (hasVisibleComments()) enterCommentsHead()
+        else if (claudeColumnVisible()) enterClaudeChat(state.pr)
+        else enterRelated()
       } else if (!isPrCommentThreadFocused(sc)) enterPrCommentThread(sc)
     } else enterDiff()
   } else if (e.key === 'ArrowLeft') {

@@ -63,9 +63,17 @@ test.describe('PR Review Tree — inline comment blocks', () => {
 
     const item = page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: 'commentaar op mijn blok' })
 
-    // Deep-link to the default (first) block — the comment is on another
-    // block, so it never shows as an inline block there.
-    await page.goto('/pr/12903')
+    // Deep-link to the FIRST block explicitly (never a bare `/pr/12903`) — the
+    // comment just placed is itself an unresolved, block-anchored comment,
+    // which now gets its own index row ranked ahead of every block
+    // (recomputeLeftList/indexComments), and — since it's anchored to a REAL
+    // block (`mine`) — a bare reload's fresh-default-selection pick would
+    // race that comment's own poll-triggered retry
+    // (retryDefaultSelectionForComments) and could land there instead,
+    // unrelated to what this assertion actually cares about (the comment
+    // never shows as an inline block on a DIFFERENT block). `?sel=` sidesteps
+    // that race entirely, exactly like the deep link below already does.
+    await page.goto('/pr/12903?sel=' + encodeURIComponent(first.fileLine))
     await waitBlock(page, first.label)
     await expect(item).toHaveCount(0)
 
