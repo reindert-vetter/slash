@@ -22,15 +22,19 @@ const JIRA_BASE = 'https://plugandpaybv.atlassian.net/browse/'
 
 const state = reactive({
   repo: '',
+  // repos — every configured repo in canonical form ("" = the primary one), from
+  // GET /api/inbox. Defaults to just the primary repo so the very first paint
+  // (and the offline /data/inbox.json fallback) behaves like a single-repo build.
+  repos: [''],
   generatedFor: '',
   loading: true,
   error: '',
   cached: false,
   inboxRunId: '', // pr_inbox workflow Run ID — target for refresh signal + heartbeat
   sections: [], // [{ title, prs: Row[] }]
-  statuses: {}, // pr.number -> Status, backfilled async
-  approvals: {}, // pr.number -> { done, total }, backfilled async (ingested PRs only)
-  // pendingPush — pr.number -> the PR's landed-but-unpushed Claude edits
+  statuses: {}, // prUid -> Status, backfilled async
+  approvals: {}, // prUid -> { done, total }, backfilled async (ingested PRs only)
+  // pendingPush — prUid -> the PR's landed-but-unpushed Claude edits
   // ({ headRef, ahead, ... }, see pending_push.go), backfilled async by
   // kickOffPendingPush. Only ingested rows can have any: the edits come from
   // this app's own Claude chat.
@@ -70,7 +74,7 @@ const state = reactive({
 
 // ui is separate from state so opening/closing a popover doesn't touch the
 // bits bound into url-less local reactivity elsewhere.
-// ingesting: the pr.number currently running /api/ingest (disables its "Genereer
+// ingesting: the prUid currently running /api/ingest (disables its "Genereer
 // review-boom"/"Opnieuw genereren" button); ingestStage: the current ingest
 // pipeline stage for that PR ("worktrees"/"scan"/"relations"/""), polled from
 // GET /api/ingest/progress while busy — see INGEST_STAGE_LABELS below;
@@ -79,12 +83,12 @@ const state = reactive({
 // ingestErrorFor lets the standalone regenerate button on an already-ingested
 // row show the error under the right row even though ui.ingesting itself has
 // already reset to null by the time the catch runs.
-// readyFor: the pr.number whose reviewer picker is expanded (null = collapsed);
+// readyFor: the prUid whose reviewer picker is expanded (null = collapsed);
 // reviewers: the fetched candidate list (repo collaborators, most-used-first);
 // reviewersLoading/reviewersError: fetch state; selectedReviewers: a login→true
 // map of the checked reviewers (reassigned wholesale so arrow.js re-renders);
 // readySubmitting: a ready_for_review POST in flight.
-// removingReviewer: the pr.number whose remove_reviewer POST is in flight;
+// removingReviewer: the prUid whose remove_reviewer POST is in flight;
 // removeReviewerError: that call's last failure message, shown inline in the
 // popover (both cleared whenever a popover opens or closes).
 // popoverAbove: whether the currently open popover should render ABOVE its row
@@ -300,12 +304,72 @@ function reviewersStrip(status) {
   `
 }
 
+// prUid(pr) — a row's identity ACROSS repos, and the single key every per-PR
+// map/DOM attribute on this page uses: the bare number for the primary repo
+// (`row.repo` absent — so every existing `data-pr="12801"` selector, nav key and
+// state key is byte-identical to the single-repo build) and `<owner/name>#<n>`
+// for a PR in any other configured repo. Mirrors Go's statusKey (inbox.go)
+// exactly, which is why the same string works as the `?prs=` value for the
+// status/approval/pending-push backfills.
+function prUid(pr) {
+  return pr && pr.repo ? pr.repo + '#' + pr.number : String(pr ? pr.number : '')
+}
+
+// repoLabel(pr) — the short WORD shown on a row from a non-primary repo (never a
+// colour on its own, per the colourblind rule): the repo's bare name without the
+// owner. Empty for the primary repo, whose rows look exactly as before.
+function repoLabel(pr) {
+  if (!pr || !pr.repo) return ''
+  const parts = String(pr.repo).split('/')
+  return parts[parts.length - 1]
+}
+
+// rowRepoSlug(pr) — the "owner/name" a row's "#<number>" line is prefixed with:
+// the row's own repo when it has one, otherwise the snapshot's repo (the primary
+// one). Before multi-repo this was always state.repo.
+function rowRepoSlug(pr) {
+  return (pr && pr.repo) || state.repo || ''
+}
+
+// repoBadge(pr) — a WORD badge marking a row that is NOT from the primary repo
+// ("plug-and-pay-ops"). Returned as a keyed array (never a bare element/null) so
+// the presence/absence flip can't hit arrow.js's single↔array slot pitfall, and
+// the meaning is carried by the word itself, never by the colour alone (Reindert
+// is colourblind). The primary repo gets nothing — its rows look exactly as they
+// did when there was only one repo.
+function repoBadge(pr) {
+  const label = repoLabel(pr)
+  if (!label) return []
+  return [
+    html`<span
+      data-testid="repo-badge"
+      class="shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-600 dark:text-zinc-300 ring-1 ring-slate-300/60 dark:ring-zinc-700"
+      >${label}</span
+    >`.key('repo:' + label),
+  ]
+}
+
+// repoParam(pr) — the `&repo=<owner/name>` suffix a per-PR API call needs for a
+// row outside the primary repo, and the empty string for the primary one (whose
+// requests stay byte-identical to the single-repo build).
+function repoParam(pr) {
+  return pr && pr.repo ? '&repo=' + encodeURIComponent(pr.repo) : ''
+}
+
+// treeSupported(pr) — whether a review tree can exist for this row. The
+// ingest/comment/chat pipeline is repo-aware from the storage layer up; a row
+// whose repo is not configured at all (an unknown `repo` in a stored snapshot)
+// has no clone to scan, so its popover only offers the GitHub actions.
+function treeSupported(pr) {
+  return !pr || !pr.repo || (state.repos || []).some((r) => r === pr.repo)
+}
+
 // statusFor resolves a PR's Status either from the async inbox-status
-// backfill (state.statuses, keyed by number) or, for search results (whose
+// backfill (state.statuses, keyed by prUid) or, for search results (whose
 // Row already carries the Status fields inline per the API contract), from
 // the row itself.
 function statusFor(pr) {
-  const live = state.statuses[pr.number]
+  const live = state.statuses[prUid(pr)]
   if (live) return live
   if (pr.reviewDecision !== undefined || pr.reviewers !== undefined || pr.checksTotal !== undefined) return pr
   return null
@@ -396,6 +460,13 @@ function graphChip(pr) {
   return iconChip('tree', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30', 'graph-chip', 'Op GitHub')
 }
 
+// openOrGenerate's guard: a row whose repo has no local clone configured can
+// never get a tree, so → falls back to opening it on GitHub instead of firing an
+// ingest that would fail.
+function openOnGithub(pr) {
+  window.open(pr.url, '_blank', 'noreferrer')
+}
+
 // approvalPill — the per-PR reviewer-approval badge (done/total changed rows over
 // the whole PR, from GET /api/approvalsummary via kickOffApprovals). Mirrors the
 // /pr/<id> sidebar pill: hidden until total>0, green + ✓ once fully approved,
@@ -403,7 +474,7 @@ function graphChip(pr) {
 // element/null) so the backfill flip from "nothing" → pill can't hit the
 // arrow.js single↔array slot pitfall (see .claude/rules/conventions.md).
 function approvalPill(pr) {
-  const a = pr.hasGraph ? state.approvals[pr.number] : null
+  const a = pr.hasGraph ? state.approvals[prUid(pr)] : null
   if (!a || !a.total) return []
   const done = a.done || 0
   const full = done >= a.total
@@ -423,7 +494,7 @@ function approvalPill(pr) {
 // keyed array like approvalPill, so the async backfill's "nothing" → pill flip
 // can't hit the single↔array slot pitfall (see .claude/rules/conventions.md).
 function unpushedPill(pr) {
-  const p = pr.hasGraph ? state.pendingPush[pr.number] : null
+  const p = pr.hasGraph ? state.pendingPush[prUid(pr)] : null
   if (!p || !p.ahead) return []
   const label = p.state === 'failed' ? 'Push mislukt' : 'Ongepusht ' + p.ahead
   const cls =
@@ -503,7 +574,8 @@ function rowMeta(pr) {
   return html`
     <div class="mt-0.5 text-[11.5px] text-slate-500 dark:text-zinc-500">
       <div class="flex items-center gap-2">
-        <span class="font-mono">${() => state.repo || ''}#${pr.number}</span>
+        <span class="font-mono">${() => rowRepoSlug(pr)}#${pr.number}</span>
+        ${repoBadge(pr)}
         <span class="text-slate-300 dark:text-zinc-700">·</span>
         <span title="${pr.updatedAt || ''}">Bijgewerkt ${relativeTime(pr.updatedAt)}</span>
         ${newSinceMark(pr)}
@@ -590,9 +662,9 @@ function rowInner(pr, opts) {
 // navigation" section near the list keydown handler below): the first
 // actionable item gets focus once arrow.js has painted the menu, so ↑/↓
 // immediately cycle through it instead of the underlying row list.
-function togglePopover(number) {
-  const opening = ui.openPopover !== number
-  ui.openPopover = opening ? number : null
+function togglePopover(uid) {
+  const opening = ui.openPopover !== uid
+  ui.openPopover = opening ? uid : null
   ui.ingestError = null
   ui.ingestErrorFor = null
   ui.popoverAbove = false
@@ -607,7 +679,7 @@ function togglePopover(number) {
   // popover with only that one item still focuses it.
   if (opening)
     requestAnimationFrame(() => {
-      positionPopover(number)
+      positionPopover(uid)
       focusPopoverItem(1)
     })
 }
@@ -619,8 +691,8 @@ function togglePopover(number) {
 // one-shot measurement at open time (no resize/scroll listener like
 // home.mjs's positionMenu) — a row's own position on this page doesn't move
 // while its popover is open, unlike the always-fixed command palette.
-function positionPopover(number) {
-  const row = document.querySelector('[data-testid="pr-row"][data-pr="' + number + '"]')
+function positionPopover(uid) {
+  const row = document.querySelector('[data-testid="pr-row"][data-pr="' + uid + '"]')
   const pop = row && row.querySelector('[data-testid="pr-popover"]')
   if (!row || !pop) return
   const rowRect = row.getBoundingClientRect()
@@ -670,14 +742,14 @@ function stopIngestPoll() {
   }
 }
 
-async function pollIngestStage(prNumber) {
+async function pollIngestStage(pr) {
   try {
-    const res = await fetch('/api/ingest/progress?pr=' + prNumber)
+    const res = await fetch('/api/ingest/progress?pr=' + pr.number + repoParam(pr))
     if (!res.ok) return
     const body = await res.json()
     // Drop a stale response if a different (or no longer active) ingest has
     // since taken over — mirrors the ingestErrorFor guard below.
-    if (ui.ingesting === prNumber && body && body.ok) ui.ingestStage = body.stage || ''
+    if (ui.ingesting === prUid(pr) && body && body.ok) ui.ingestStage = body.stage || ''
   } catch (e) {
     // best-effort — the button just keeps its last-known/generic label
   }
@@ -685,18 +757,18 @@ async function pollIngestStage(prNumber) {
 
 async function generatePage(pr, { redirect = true } = {}) {
   if (ui.ingesting) return // one ingest at a time; button is disabled anyway
-  ui.ingesting = pr.number
+  ui.ingesting = prUid(pr)
   ui.ingestStage = ''
   ui.ingestError = null
   ui.ingestErrorFor = null
   stopIngestPoll()
-  pollIngestStage(pr.number)
-  ingestPollTimer = setInterval(() => pollIngestStage(pr.number), 800)
+  pollIngestStage(pr)
+  ingestPollTimer = setInterval(() => pollIngestStage(pr), 800)
   try {
     const res = await fetch('/api/ingest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: pr.number }),
+      body: JSON.stringify({ pr: pr.number, repo: pr.repo || undefined }),
     })
     if (!res.ok) {
       const body = await res.json().catch(() => null)
@@ -711,7 +783,7 @@ async function generatePage(pr, { redirect = true } = {}) {
   } catch (e) {
     ui.ingesting = null
     ui.ingestError = e.message || 'Genereren mislukt'
-    ui.ingestErrorFor = pr.number
+    ui.ingestErrorFor = prUid(pr)
   } finally {
     stopIngestPoll()
     ui.ingestStage = ''
@@ -727,9 +799,9 @@ async function generatePage(pr, { redirect = true } = {}) {
 // button we just re-enabled only reappears in popoverItems() after arrow.js has
 // repainted it.
 function focusCloseAfterGenerate(pr) {
-  if (ui.openPopover !== pr.number) return
+  if (ui.openPopover !== prUid(pr)) return
   requestAnimationFrame(() => {
-    if (ui.openPopover !== pr.number) return
+    if (ui.openPopover !== prUid(pr)) return
     focusPopoverItem(0)
   })
 }
@@ -742,7 +814,7 @@ function focusCloseAfterGenerate(pr) {
 // a plain-JS ternary computed inside the outer, only-occasionally-rerun
 // ${() => popover(pr)} slot never updates once busy flips mid-render.
 function ingestBusy(pr) {
-  return ui.ingesting === pr.number
+  return ui.ingesting === prUid(pr)
 }
 
 function ingestLabel(pr, idleLabel) {
@@ -845,9 +917,9 @@ function ingestedActions(pr) {
 async function copyGithubUrl(pr) {
   try {
     await navigator.clipboard.writeText(pr.url || '')
-    ui.copiedFor = pr.number
+    ui.copiedFor = prUid(pr)
     setTimeout(() => {
-      if (ui.copiedFor === pr.number) ui.copiedFor = null
+      if (ui.copiedFor === prUid(pr)) ui.copiedFor = null
     }, 1500)
   } catch (e) {
     // ignore — no clipboard permission
@@ -889,18 +961,18 @@ const removedPrs = new Set()
 // change. reloadSnapshot still runs afterwards to pull everything else in.
 async function removeSelfAsReviewer(pr) {
   if (ui.removingReviewer) return // one at a time; the button is disabled anyway
-  ui.removingReviewer = pr.number
+  ui.removingReviewer = prUid(pr)
   ui.removeReviewerError = null
   try {
     const res = await fetch('/api/workflows/remove_reviewer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: pr.number }),
+      body: JSON.stringify({ pr: pr.number, repo: pr.repo || undefined }),
     })
     if (!res.ok) throw new Error('remove_reviewer failed')
     closePopover()
-    removedPrs.add(pr.number)
-    state.sections = state.sections.map((s) => ({ ...s, prs: s.prs.filter((row) => row.number !== pr.number) }))
+    removedPrs.add(prUid(pr))
+    state.sections = state.sections.map((s) => ({ ...s, prs: s.prs.filter((row) => prUid(row) !== prUid(pr)) }))
     selectTopRow()
     scheduleRepaint()
     reloadSnapshot()
@@ -921,16 +993,16 @@ function removeReviewerAction(pr) {
       <button
         type="button"
         data-testid="remove-reviewer"
-        disabled="${() => ui.removingReviewer === pr.number}"
+        disabled="${() => ui.removingReviewer === prUid(pr)}"
         class="${() =>
           POPOVER_ROW_SHAPE +
           ' text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-500/15 ' +
           POPOVER_FOCUS_CLS +
-          (ui.removingReviewer === pr.number ? ' cursor-not-allowed opacity-60' : '')}"
+          (ui.removingReviewer === prUid(pr) ? ' cursor-not-allowed opacity-60' : '')}"
         @click="${() => removeSelfAsReviewer(pr)}"
       >
-        ${() => (ui.removingReviewer === pr.number ? icon('loader', 'h-3.5 w-3.5 animate-spin') : icon('user-minus', 'h-3.5 w-3.5'))}
-        ${() => (ui.removingReviewer === pr.number ? 'Bezig…' : 'Verwijder mij als reviewer')}
+        ${() => (ui.removingReviewer === prUid(pr) ? icon('loader', 'h-3.5 w-3.5 animate-spin') : icon('user-minus', 'h-3.5 w-3.5'))}
+        ${() => (ui.removingReviewer === prUid(pr) ? 'Bezig…' : 'Verwijder mij als reviewer')}
       </button>
       ${() =>
         ui.removeReviewerError
@@ -980,7 +1052,7 @@ function clearPresetView() {
 // candidate reviewers (repo collaborators, most-used-first — see
 // GET /api/reviewers). Read-only; the actual write happens in submitReady.
 async function openReadyPicker(pr) {
-  ui.readyFor = pr.number
+  ui.readyFor = prUid(pr)
   ui.selectedReviewers = {}
   ui.reviewersError = null
   ui.reviewersLoading = true
@@ -1018,7 +1090,7 @@ async function submitReady(pr) {
     const res = await fetch('/api/workflows/ready_for_review', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: pr.number, reviewers }),
+      body: JSON.stringify({ pr: pr.number, repo: pr.repo || undefined, reviewers }),
     })
     if (!res.ok) throw new Error('ready_for_review failed')
     closePopover()
@@ -1038,7 +1110,7 @@ async function submitReady(pr) {
 function readyForReviewSection(pr) {
   return html`<div class="mt-1 border-t border-slate-100 dark:border-zinc-700 pt-1" data-testid="ready-section">
     ${() => {
-      if (ui.readyFor !== pr.number) {
+      if (ui.readyFor !== prUid(pr)) {
         return [
           html`<button
             type="button"
@@ -1167,13 +1239,13 @@ function popover(pr) {
           >esc</span
         >
       </button>
-      ${pr.hasGraph ? ingestedActions(pr) : generateAction(pr)}
+      ${treeSupported(pr) ? (pr.hasGraph ? ingestedActions(pr) : generateAction(pr)) : ''}
       <a href="${pr.url}" target="_blank" rel="noreferrer" class="${popoverRowCls()}">
         ${icon('external-link', 'h-3.5 w-3.5')} Open op GitHub
       </a>
       <button type="button" data-testid="copy-url" class="${popoverRowCls()}" @click="${() => copyGithubUrl(pr)}">
-        ${() => (ui.copiedFor === pr.number ? icon('check', 'h-3.5 w-3.5') : icon('copy', 'h-3.5 w-3.5'))}
-        ${() => (ui.copiedFor === pr.number ? 'Gekopieerd!' : 'Kopieer GitHub URL')}
+        ${() => (ui.copiedFor === prUid(pr) ? icon('check', 'h-3.5 w-3.5') : icon('copy', 'h-3.5 w-3.5'))}
+        ${() => (ui.copiedFor === prUid(pr) ? 'Gekopieerd!' : 'Kopieer GitHub URL')}
       </button>
       ${() =>
         m
@@ -1206,16 +1278,16 @@ function prRow(pr, opts = {}) {
       role="button"
       tabindex="0"
       data-testid="pr-row"
-      data-pr="${pr.number}"
+      data-pr="${prUid(pr)}"
       data-nav-row
-      data-nav-key="${'row:' + pr.number}"
+      data-nav-key="${'row:' + prUid(pr)}"
       class="${'relative ' + ROW_CLASS}"
       style="${indentStyle(opts)}"
-      @click="${() => togglePopover(pr.number)}"
+      @click="${() => togglePopover(prUid(pr))}"
     >
-      ${rowInner(pr, opts)} ${() => (ui.openPopover === pr.number ? popover(pr) : null)}
+      ${rowInner(pr, opts)} ${() => (ui.openPopover === prUid(pr) ? popover(pr) : null)}
     </div>
-  `.key('row:' + pr.number)
+  `.key('row:' + prUid(pr))
 }
 
 // listBox — the framed rounded-xl box every group of rows sits in, with thin
@@ -1253,34 +1325,37 @@ function listBox(items) {
 // `changeGroups` import for the same "import an already-loaded page module,
 // call its exported pure function with synthetic data" pattern).
 export function computeStacks(all) {
+  // Branch names are only unique WITHIN a repo, so both the head index and every
+  // node key are scoped by repo: a `main`→`feature/x` chain in plug-and-pay-ops
+  // must never adopt a same-named branch in plug-and-pay as its parent.
   const byHead = new Map()
   all.forEach((p) => {
-    if (p.headRefName) byHead.set(p.headRefName, p)
+    if (p.headRefName) byHead.set((p.repo || '') + '\u0000' + p.headRefName, p)
   })
-  const parentOf = new Map() // pr.number -> the pr it's stacked on
+  const parentOf = new Map() // prUid -> the pr it's stacked on
   all.forEach((p) => {
-    const parent = p.baseRefName ? byHead.get(p.baseRefName) : null
-    if (parent && parent.number !== p.number) parentOf.set(p.number, parent)
+    const parent = p.baseRefName ? byHead.get((p.repo || '') + '\u0000' + p.baseRefName) : null
+    if (parent && prUid(parent) !== prUid(p)) parentOf.set(prUid(p), parent)
   })
-  const childrenOf = new Map() // parent.number -> PR[] stacked directly on it
-  parentOf.forEach((parent, num) => {
-    const child = all.find((p) => p.number === num)
+  const childrenOf = new Map() // parent prUid -> PR[] stacked directly on it
+  parentOf.forEach((parent, uid) => {
+    const child = all.find((p) => prUid(p) === uid)
     if (!child) return
-    if (!childrenOf.has(parent.number)) childrenOf.set(parent.number, [])
-    childrenOf.get(parent.number).push(child)
+    if (!childrenOf.has(prUid(parent))) childrenOf.set(prUid(parent), [])
+    childrenOf.get(prUid(parent)).push(child)
   })
   childrenOf.forEach((kids) => kids.sort((a, b) => a.number - b.number))
 
   const trees = []
   const consumed = new Set()
   all.forEach((p) => {
-    if (consumed.has(p.number) || parentOf.has(p.number) || !childrenOf.has(p.number)) return
+    if (consumed.has(prUid(p)) || parentOf.has(prUid(p)) || !childrenOf.has(prUid(p))) return
     const nodes = []
     const visit = (pr, depth) => {
-      if (consumed.has(pr.number)) return
-      consumed.add(pr.number)
+      if (consumed.has(prUid(pr))) return
+      consumed.add(prUid(pr))
       nodes.push({ pr, depth })
-      ;(childrenOf.get(pr.number) || []).forEach((kid) => visit(kid, depth + 1))
+      ;(childrenOf.get(prUid(pr)) || []).forEach((kid) => visit(kid, depth + 1))
     }
     visit(p, 0)
     if (nodes.length >= 2) trees.push(nodes)
@@ -1306,13 +1381,24 @@ function stackGroup(nodes, sectionOf) {
           boven</span
         >
       </div>
-      ${listBox(nodes.map(({ pr, depth }) => ({ pr, opts: { depth, badge: sectionOf.get(pr.number) } })))}
+      ${listBox(nodes.map(({ pr, depth }) => ({ pr, opts: { depth, badge: sectionOf.get(prUid(pr)) } })))}
     </div>
   `.key('stack:' + root.number)
 }
 
 // ── sections & layout ────────────────────────────────────────────────────
 
+// The key encodes the section's ROW SET, not just its title. listBox's row array
+// is a STATIC interpolation (`${listBox(...)}`, evaluated eagerly rather than as
+// a `${() => …}` slot), so a re-render that reuses this keyed <section> node goes
+// through arrow.js's static patch path and does NOT reconcile the keyed row list
+// inside it — a row LEAVING a section that still has other rows stayed in the
+// DOM forever (visible as: "Verwijder mij als reviewer" left the row on screen,
+// and a poll that dropped one PR from a multi-row section changed nothing).
+// Encoding the uids forces a fresh node exactly when the row set changed, the
+// same "let the key force a fresh node" pattern the block cards in home.mjs use
+// (see .claude/rules/arrowjs-pitfalls.md). It only fires on a real set change,
+// so an unchanged poll still repaints nothing.
 function sectionBlock(sec, filteredPrs) {
   if (!filteredPrs.length) return null
   return html`
@@ -1322,7 +1408,7 @@ function sectionBlock(sec, filteredPrs) {
       </div>
       ${listBox(filteredPrs.map((pr) => ({ pr })))}
     </section>
-  `.key('section:' + sec.title)
+  `.key('section:' + sec.title + ':' + filteredPrs.map(prUid).join(','))
 }
 
 function loadingSkeletonList() {
@@ -1580,13 +1666,13 @@ function mainContent() {
         state.sections.forEach((sec) => {
           sec.prs.forEach((pr) => {
             all.push(pr)
-            if (!sectionOf.has(pr.number)) sectionOf.set(pr.number, sec.title)
+            if (!sectionOf.has(prUid(pr))) sectionOf.set(prUid(pr), sec.title)
           })
         })
 
         const chains = computeStacks(all)
         const stacked = new Set()
-        chains.forEach((nodes) => nodes.forEach(({ pr }) => stacked.add(pr.number)))
+        chains.forEach((nodes) => nodes.forEach(({ pr }) => stacked.add(prUid(pr))))
 
         const out = []
         if (state.cached) {
@@ -1599,7 +1685,7 @@ function mainContent() {
         // Stacks render as their own group, above every section.
         chains.forEach((chain) => out.push(stackGroup(chain, sectionOf)))
         state.sections.forEach((sec) => {
-          const filtered = sec.prs.filter((pr) => !stacked.has(pr.number))
+          const filtered = sec.prs.filter((pr) => !stacked.has(prUid(pr)))
           const block = sectionBlock(sec, filtered)
           if (block) out.push(block)
         })
@@ -1945,7 +2031,7 @@ function normalizeSections(sections) {
   if (!Array.isArray(sections)) return []
   return sections
     .map((s) => ({ ...s, prs: Array.isArray(s.prs) ? s.prs : [] }))
-    .map((s) => ({ ...s, prs: s.prs.filter((pr) => !isHiddenPr(pr.number)) }))
+    .map((s) => ({ ...s, prs: s.prs.filter((pr) => !isHiddenPr(pr)) }))
 }
 
 // isHiddenPr — a PR this tab is deliberately no longer showing, whatever the
@@ -1955,8 +2041,12 @@ function normalizeSections(sections) {
 // read-model (and GitHub itself) needs a moment to catch up, so without this the
 // row would come straight back on the next reloadSnapshot/60s poll. A real page
 // load clears them, by which time the server agrees.
-function isHiddenPr(number) {
-  return number === approvedPr || removedPrs.has(number)
+function isHiddenPr(pr) {
+  // Both sets hold prUids (see prUid): the approved-PR one comes from the review
+  // tree's own ?approved= param, which carries the primary repo's bare number
+  // today and a full uid once another repo's tree links back here.
+  const uid = prUid(pr)
+  return uid === String(approvedPr) || removedPrs.has(uid)
 }
 
 // primeAuthorNames resolves the real names behind the author logins of these
@@ -1979,6 +2069,8 @@ function primeSectionNames(sections) {
 
 async function applyLive(body) {
   state.repo = body.repo || ''
+  // The configured repos (canonical form, "" = primary) — see treeSupported.
+  if (Array.isArray(body.repos)) state.repos = body.repos
   state.generatedFor = body.generatedFor || ''
   state.inboxRunId = body.runId || ''
   const sections = normalizeSections(body.sections)
@@ -1999,7 +2091,7 @@ async function applyCached(body) {
   state.generatedFor = body.generatedFor || ''
   state.cached = true
   const allPrs = Array.isArray(body.prs) ? body.prs : []
-  const prs = allPrs.filter((pr) => !isHiddenPr(pr.number))
+  const prs = allPrs.filter((pr) => !isHiddenPr(pr))
   await primeAuthorNames(prs)
   state.sections = prs.length ? [{ title: 'Needs your review', prs }] : []
   state.loading = false
@@ -2016,10 +2108,12 @@ async function applyCached(body) {
 // restore-then-clear pattern of applyRelRestore/applyBlockRefRestore. A PR
 // that never turns up anywhere (merged/dropped out of the inbox query, no
 // longer ingested) is a silent no-op, same as an unresolved `sel` restore.
+// Carries a prUid (see prUid): a bare number for the primary repo — the
+// historical form every existing link and test uses — or "<owner/name>#<n>" for
+// a PR from another repo.
 let pendingSelectPr = (() => {
   const raw = new URLSearchParams(location.search).get('pr')
-  const n = raw ? Number(raw) : NaN
-  return Number.isFinite(n) ? n : null
+  return raw ? raw : null
 })()
 
 // approvedPr/trySelectTopAfterApprove — the counterpart for the "Goedkeuren en
@@ -2035,8 +2129,7 @@ let pendingSelectPr = (() => {
 // mirroring pendingSelectPr's clear-after-use.
 const approvedPr = (() => {
   const raw = new URLSearchParams(location.search).get('approved')
-  const n = raw ? Number(raw) : NaN
-  return Number.isFinite(n) ? n : null
+  return raw ? raw : null
 })()
 let pendingSelectTop = approvedPr != null
 
@@ -2055,7 +2148,7 @@ function trySelectTopAfterApprove() {
 function selectTopRow() {
   const firstRow = state.sections.flatMap((s) => s.prs)[0]
   if (!firstRow) return false
-  selKey = 'row:' + firstRow.number
+  selKey = 'row:' + prUid(firstRow)
   hoverEnabled = false
   return true
 }
@@ -2101,8 +2194,8 @@ const originDrillCursorRef = new URLSearchParams(location.search).get('dcur') ||
 // session, see applyDrillRefRestore in home.mjs), which overviewExitUrl only
 // added to the URL we left from when there actually was a drilled column.
 function treeUrl(pr) {
-  let url = '/pr/' + pr.number
-  if (pr.number === originPr && originSel) {
+  let url = '/pr/' + (pr.repo ? repoLabel(pr) + '/' : '') + pr.number
+  if (prUid(pr) === String(originPr) && originSel) {
     url += '?sel=' + encodeURIComponent(originSel)
     if (originDrill) {
       url += '&mode=diff'
@@ -2146,29 +2239,31 @@ async function ensureRecentPrs() {
 
 async function trySelectPendingPr() {
   if (pendingSelectPr == null) return
-  const pr = pendingSelectPr
-  const inSections = state.sections.some((sec) => sec.prs.some((row) => row.number === pr))
+  const uid = pendingSelectPr
+  const inSections = state.sections.some((sec) => sec.prs.some((row) => prUid(row) === uid))
   if (inSections) {
-    selKey = 'row:' + pr
+    selKey = 'row:' + uid
     hoverEnabled = false
     pendingSelectPr = null
     return
   }
   const recent = await ensureRecentPrs()
   pendingSelectPr = null // one-shot regardless of outcome — never re-applied on a later reload
-  if (recent.some((r) => r.pr === pr)) {
+  // The "Recent gegenereerd" drawer is fed by the blocks DB (GET /api/prs), so
+  // its rows carry a bare PR number of whichever repo they were ingested from.
+  if (recent.some((r) => String(r.pr) === uid || r.repo + '#' + r.pr === uid)) {
     state.recentOpen = true
-    selKey = 'recent:' + pr
+    selKey = 'recent:' + uid
     hoverEnabled = false
   }
 }
 
 async function kickOffStatuses(gen) {
-  const numbers = []
-  state.sections.forEach((sec) => sec.prs.forEach((pr) => numbers.push(pr.number)))
-  if (!numbers.length) return
+  const keys = []
+  state.sections.forEach((sec) => sec.prs.forEach((pr) => keys.push(prUid(pr))))
+  if (!keys.length) return
   try {
-    const res = await fetch('/api/inbox/status?prs=' + numbers.join(','))
+    const res = await fetch('/api/inbox/status?prs=' + encodeURIComponent(keys.join(',')))
     if (!res.ok) return
     const body = await res.json()
     if (gen !== loadGen) return // page moved on (reloaded / re-fetched) — drop this response
@@ -2194,11 +2289,11 @@ async function kickOffStatuses(gen) {
 // concept, so we scope the request to those numbers — that also bounds the
 // (worktree/LCS) server-side cost to just the visible ingested rows.
 async function kickOffApprovals(gen) {
-  const numbers = []
-  state.sections.forEach((sec) => sec.prs.forEach((pr) => pr.hasGraph && numbers.push(pr.number)))
-  if (!numbers.length) return
+  const keys = []
+  state.sections.forEach((sec) => sec.prs.forEach((pr) => pr.hasGraph && keys.push(prUid(pr))))
+  if (!keys.length) return
   try {
-    const res = await fetch('/api/approvalsummary?prs=' + numbers.join(','))
+    const res = await fetch('/api/approvalsummary?prs=' + encodeURIComponent(keys.join(',')))
     if (!res.ok) return
     const body = await res.json()
     if (gen !== loadGen) return // page moved on — drop this response
@@ -2217,11 +2312,11 @@ async function kickOffApprovals(gen) {
 // the request is scoped to those numbers. Best-effort — a failure just leaves
 // the rows without the badge.
 async function kickOffPendingPush(gen) {
-  const numbers = []
-  state.sections.forEach((sec) => sec.prs.forEach((pr) => pr.hasGraph && numbers.push(pr.number)))
-  if (!numbers.length) return
+  const keys = []
+  state.sections.forEach((sec) => sec.prs.forEach((pr) => pr.hasGraph && keys.push(prUid(pr))))
+  if (!keys.length) return
   try {
-    const res = await fetch('/api/pending-push?prs=' + numbers.join(','))
+    const res = await fetch('/api/pending-push?prs=' + encodeURIComponent(keys.join(',')))
     if (!res.ok) return
     const body = await res.json()
     if (gen !== loadGen) return // page moved on — drop this response
@@ -2483,7 +2578,7 @@ function activateSelected() {
   el.click()
 }
 
-// findPrByNumber looks up a PR object (carrying hasGraph) by number across
+// findPrByUid looks up a PR object (carrying hasGraph) by prUid across
 // every place a pr-row can currently be rendered from: the live sections
 // (including PRs lifted into a stack — those are the same object references
 // pushed into `all` in mainContent, so they're found here too) and, when the
@@ -2491,13 +2586,13 @@ function activateSelected() {
 // searched: its rows are plain <a href> links (already handled by the
 // a[href] branch in activateSelectedForward below), not popover rows, and it
 // doesn't carry hasGraph anyway.
-function findPrByNumber(number) {
+function findPrByUid(uid) {
   for (const sec of state.sections) {
-    const found = sec.prs.find((p) => p.number === number)
+    const found = sec.prs.find((p) => prUid(p) === uid)
     if (found) return found
   }
   if (Array.isArray(state.searchResults)) {
-    const found = state.searchResults.find((p) => p.number === number)
+    const found = state.searchResults.find((p) => prUid(p) === uid)
     if (found) return found
   }
   return null
@@ -2518,11 +2613,15 @@ function findPrByNumber(number) {
 // itself redirects into /pr/<id>; on failure the popover stays open with the
 // same inline error a mouse-driven attempt would show.
 function openOrGenerate(pr) {
+  if (!treeSupported(pr)) {
+    openOnGithub(pr)
+    return
+  }
   if (pr.hasGraph) {
     location.href = treeUrl(pr)
     return
   }
-  togglePopover(pr.number)
+  togglePopover(prUid(pr))
   generatePage(pr)
 }
 
@@ -2530,7 +2629,7 @@ function openOrGenerate(pr) {
 // activateSelected (which Enter keeps using unchanged). A recent-drawer item
 // is a plain <a href> and already means "go there now", so it's handled
 // identically to Enter. A pr-row instead resolves its PR object (via
-// data-pr + findPrByNumber) and routes through openOrGenerate; if the PR
+// data-pr + findPrByUid) and routes through openOrGenerate; if the PR
 // can't be resolved (shouldn't happen — defensive only) it falls back to the
 // existing activateSelected() so → never becomes a dead key.
 function activateSelectedForward() {
@@ -2541,8 +2640,7 @@ function activateSelectedForward() {
     location.href = el.getAttribute('href')
     return
   }
-  const number = Number(el.dataset.pr)
-  const pr = findPrByNumber(number)
+  const pr = findPrByUid(el.dataset.pr)
   if (!pr) {
     activateSelected()
     return

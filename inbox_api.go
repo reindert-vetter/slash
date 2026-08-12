@@ -16,13 +16,15 @@ import (
 // fixture so tests never touch the network.
 
 // overlayGraph marks each row hasGraph=true when the PR has blocks in the DB.
+// Keyed by (repo, number), so a PR 12 in another repo is not credited with the
+// primary repo's PR 12 tree.
 func overlayGraph(db *sql.DB, rows []inboxRow) {
 	ingested, err := ingestedSet(db)
 	if err != nil {
 		return
 	}
 	for i := range rows {
-		rows[i].HasGraph = ingested[rows[i].Number]
+		rows[i].HasGraph = ingested[prKey{canonRepo(rows[i].Repo), rows[i].Number}]
 	}
 }
 
@@ -52,6 +54,12 @@ func (s *server) handleInbox(w http.ResponseWriter, r *http.Request) {
 		"ok": true, "live": true, "repo": snap.Repo,
 		"generatedFor": snap.GeneratedFor, "updatedAt": snap.UpdatedAt,
 		"runId": s.tasks.manager.InboxRunID(), "sections": sections,
+		// The configured repos, so the client can tell a row from a repo it can
+		// actually open a review tree for from a row of a repo that is only
+		// still present in a stored snapshot (see treeSupported in
+		// src/overview.mjs). The primary repo is listed as "" — the canonical
+		// internal form every row uses.
+		"repos": configuredRepoList(),
 	})
 }
 
@@ -62,9 +70,13 @@ func (s *server) handleInboxStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	numbers := parsePRList(r.URL.Query().Get("prs"))
+	// A `prs=` entry is either a bare number (the primary repo, the historical
+	// form) or "<owner/name>#<number>" for a PR in another repo — the same
+	// statusKey shape the snapshot is keyed by, so the client can echo back
+	// exactly the keys it wants (see statusKeysOf in src/overview.mjs).
+	wanted := parseStatusKeyList(r.URL.Query().Get("prs"))
 	out := map[string]prStatus{}
-	if len(numbers) == 0 {
+	if len(wanted) == 0 {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "statuses": out})
 		return
 	}
@@ -76,9 +88,10 @@ func (s *server) handleInboxStatus(w http.ResponseWriter, r *http.Request) {
 	if snap != nil && len(snap.Statuses) > 0 {
 		var all map[string]prStatus
 		if err := json.Unmarshal(snap.Statuses, &all); err == nil {
-			for _, n := range numbers {
-				if st, has := all[strconv.Itoa(n)]; has {
-					out[strconv.Itoa(n)] = st
+			for _, k := range wanted {
+				key := statusKey(k.Repo, k.PR)
+				if st, has := all[key]; has {
+					out[key] = st
 				}
 			}
 		}
@@ -146,18 +159,53 @@ func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "prs": rows})
 }
 
-// dedupeRowsByNumber drops later duplicates of a PR number, keeping the first
+// dedupeRowsByNumber drops later duplicates of a PR, keeping the first
 // occurrence's ordering — used when merging the title/number text-search rows
-// with the extra author-name matches (the same PR can appear in both).
+// with the extra author-name matches (the same PR can appear in both). Keyed by
+// repo AND number: two repos can each have a PR 12.
 func dedupeRowsByNumber(rows []inboxRow) []inboxRow {
-	seen := map[int]bool{}
+	seen := map[string]bool{}
 	out := make([]inboxRow, 0, len(rows))
 	for _, row := range rows {
-		if seen[row.Number] {
+		k := rowKey(row)
+		if seen[k] {
 			continue
 		}
-		seen[row.Number] = true
+		seen[k] = true
 		out = append(out, row)
+	}
+	return out
+}
+
+// configuredRepoList is the canonical repo string of every configured repo: ""
+// for the primary one, the slug for the others (see repos.go).
+func configuredRepoList() []string {
+	all := allRepos()
+	out := make([]string, 0, len(all))
+	for _, r := range all {
+		if r.Primary {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, r.Slug)
+	}
+	return out
+}
+
+// parseStatusKeyList parses a `prs=` list of statusKey values ("13000",
+// "plug-and-pay/plug-and-pay-ops#12") into a bounded slice of prKeys, dropping
+// anything unparsable. Mirrors parsePRList's cap.
+func parseStatusKeyList(csv string) []prKey {
+	var out []prKey
+	for _, part := range strings.Split(csv, ",") {
+		repo, n := parseStatusKey(part)
+		if n <= 0 {
+			continue
+		}
+		out = append(out, prKey{repo, n})
+		if len(out) >= 100 { // same cap as parsePRList below
+			break
+		}
 	}
 	return out
 }

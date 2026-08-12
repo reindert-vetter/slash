@@ -57,6 +57,40 @@ export default function globalSetup() {
   materializeExplainRangeWorktrees()
   materializeWhenScopeWorktrees()
   materializeSignatureRefWorktrees()
+  materializeSettings()
+}
+
+// materializeSettings writes TEST_DATA_DIR/settings.json with the SECOND
+// reviewed repo configured (see repos.go). The shared inbox fixture carries one
+// plug-and-pay-ops row, and without this entry the server would canonicalize
+// that row's repo to "" (an unknown repo deliberately reads as the primary one)
+// — so the multi-repo behaviour under test would silently not be exercised.
+//
+// Only `repos` is written, deliberately: a `me` block here would change what
+// src/mentions.mjs treats as "me" for every mention spec, which has nothing to
+// do with this. The primary repo is not listed either — the registry always
+// prepends the built-in one and keeps honouring SLASH_REPO_DIR for it. The `dir`
+// points inside tests/.tmp so nothing could ever reach a real clone; no spec
+// runs git against the second repo (SLASH_GITHUB=off).
+function materializeSettings() {
+  mkdirSync(TEST_DATA_DIR, { recursive: true })
+  writeFileSync(
+    `${TEST_DATA_DIR}/settings.json`,
+    JSON.stringify(
+      {
+        repos: [
+          {
+            slug: 'plug-and-pay/plug-and-pay-ops',
+            key: 'ops',
+            dir: 'tests/.tmp/data/ops-clone',
+            baseBranch: 'master',
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  )
 }
 
 // materializeMainWorktrees writes the base/head worktrees for the suite's MAIN

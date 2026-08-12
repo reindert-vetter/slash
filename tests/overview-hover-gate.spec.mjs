@@ -28,7 +28,8 @@ test.describe('PR overview — keyboard nav is not hijacked by a same-position m
     await appReady(page)
 
     const rows = page.locator('[data-nav-row]')
-    await expect(rows).toHaveCount(4)
+    // 5 fixture rows: 4 from the primary repo + plug-and-pay-ops#12.
+    await expect(rows).toHaveCount(5)
 
     const isSelected = (i) =>
       rows.nth(i).evaluate((el) => el.classList.contains('ring-indigo-500/50'))
@@ -90,7 +91,8 @@ test.describe('PR overview — keyboard nav is not hijacked by a same-position m
     await appReady(page)
 
     const rows = page.locator('[data-nav-row]')
-    await expect(rows).toHaveCount(4)
+    // 5 fixture rows: 4 from the primary repo + plug-and-pay-ops#12.
+    await expect(rows).toHaveCount(5)
     const isSelected = (i) =>
       rows.nth(i).evaluate((el) => el.classList.contains('ring-indigo-500/50'))
 

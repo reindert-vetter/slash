@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -308,7 +307,14 @@ func prReviewCandidates(snap *snapshotResult) []taskCandidate {
 			continue
 		}
 		for _, row := range sec.PRs {
-			st := snap.Statuses[strconv.Itoa(row.Number)]
+			// The personal task inbox is deliberately still primary-repo only:
+			// a task id is "pr:<n>" and its link is /pr/<n>, neither of which
+			// carries a repo. A PR from another repo is listed in the overview
+			// (which does know about repos) but does not become a scored task.
+			if canonRepo(row.Repo) != "" {
+				continue
+			}
+			st := snap.Statuses[statusKey("", row.Number)]
 			sig := taskSignals{
 				Kind:          kindPRReview,
 				ChecksFailing: st.ChecksState == "FAILURE" || st.ChecksState == "ERROR",
@@ -368,11 +374,17 @@ func unreadCommentCandidates(ctx context.Context, cs *comments.Module, snap *sna
 			continue
 		}
 		for _, row := range sec.PRs {
+			// Primary repo only, for the same reason as prReviewCandidates
+			// above (and so a foreign PR 12 can never be handed the primary
+			// repo's PR 12 comment threads).
+			if canonRepo(row.Repo) != "" {
+				continue
+			}
 			list, err := cs.List(ctx, row.Number)
 			if err != nil {
 				continue // best-effort per PR, mirrors the rest of this file
 			}
-			reviewDecision := snap.Statuses[strconv.Itoa(row.Number)].ReviewDecision
+			reviewDecision := snap.Statuses[statusKey("", row.Number)].ReviewDecision
 			for _, c := range list {
 				lastAuthor, lastCreatedAt, lastBody := c.Author, c.CreatedAt, c.Body
 				if len(c.Reactions) > 0 {

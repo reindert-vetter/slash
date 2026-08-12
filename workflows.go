@@ -8,7 +8,6 @@ import (
 	"log"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1705,12 +1704,14 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.prmeta == nil || ghDisabled() {
 			return nil, nil
 		}
-		statuses, err := statusesFor(ctx, []int{arg.PR})
+		// Repo is threaded in with the rest of the workflow layer; a tracker
+		// still only ever runs for the primary repo at this point.
+		statuses, err := statusesFor(ctx, []prKey{{"", arg.PR}})
 		if err != nil {
 			m.logf("pr_status: fetch statuses pr=%d skipped: %v", arg.PR, err)
 			return nil, nil
 		}
-		st, ok := statuses[strconv.Itoa(arg.PR)]
+		st, ok := statuses[statusKey("", arg.PR)]
 		if !ok {
 			return nil, nil
 		}

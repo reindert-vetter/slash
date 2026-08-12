@@ -19,9 +19,10 @@ test.describe('PR Review Tree — PR inbox', () => {
     ).toBeVisible()
 
     // Every fixture PR renders as a row (12888 standalone, 12903+12904 stacked,
-    // 12801 ready-to-merge).
+    // 12801 ready-to-merge, plus plug-and-pay-ops#12 from the SECOND configured
+    // repo — see tests/overview-multi-repo.spec.mjs).
     const rows = page.locator('[data-testid="pr-row"]')
-    await expect(rows).toHaveCount(4)
+    await expect(rows).toHaveCount(5)
   })
 
   test('the popover on a lone row in a short section is fully clickable, not clipped', async ({ page }) => {

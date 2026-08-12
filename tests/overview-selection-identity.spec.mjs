@@ -24,7 +24,7 @@ test.describe('PR overview — keyboard selection tracks identity, not position'
     await appReady(page)
 
     const rows = page.locator('[data-nav-row]')
-    await expect(rows).toHaveCount(4)
+    await expect(rows).toHaveCount(5) // 4 primary-repo rows + plug-and-pay-ops#12
 
     const isSelected = (loc) => loc.evaluate((el) => el.classList.contains('ring-indigo-500/50'))
 
@@ -52,7 +52,7 @@ test.describe('PR overview — keyboard selection tracks identity, not position'
     // reanchors back onto 12903 by identity — it was never actually lost,
     // just released while its row was out of scope.
     await page.locator('[data-testid="search"]').fill('')
-    await expect(rows).toHaveCount(4)
+    await expect(rows).toHaveCount(5) // 4 primary-repo rows + plug-and-pay-ops#12
     await expect.poll(() => isSelected(first)).toBe(true)
   })
 
@@ -73,7 +73,7 @@ test.describe('PR overview — keyboard selection tracks identity, not position'
     // Back on the main row list; ArrowDown must move the keyboard selection
     // immediately — no extra click/Tab needed to "escape" the input first.
     const rows = page.locator('[data-nav-row]')
-    await expect(rows).toHaveCount(4)
+    await expect(rows).toHaveCount(5) // 4 primary-repo rows + plug-and-pay-ops#12
     await page.keyboard.press('ArrowDown')
     await expect
       .poll(() => rows.first().evaluate((el) => el.classList.contains('ring-indigo-500/50')))

@@ -106,8 +106,11 @@ func runServe(args []string) {
 	// Workflow/comments stores live next to the DB, so a test DB isolates its
 	// workflow state too. (The worktree data dir is separate — see server below.)
 	// The repo registry must exist before anything resolves a clone dir, a repo
-	// slug or a worktree path (see repos.go).
-	initRepos(filepath.Dir(resolvedDB))
+	// slug or a worktree path (see repos.go). It reads settings.json from the
+	// DATA dir — the same dir /api/settings, names.json and praise-words.json
+	// use — which is not necessarily the DB's dir (a test run points -db and
+	// -data at different trees).
+	initRepos(resolvedData)
 	tk, closeTasks, err := newTasks(context.Background(), db, filepath.Dir(resolvedDB), repoSlug, true)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)
@@ -159,7 +162,7 @@ func runIngestCmd(args []string) {
 	// Build the workflow engine (no server runtime — no poller resume, no inbox
 	// fetch) just to run the ingest workflow, the sole writer of blocks/worktrees.
 	dataDir := filepath.Dir(resolvedDB)
-	initRepos(dataDir)
+	initRepos(dataDirPath("")) // settings.json lives in the data dir, see runServe
 	tk, closeTasks, err := newTasks(context.Background(), db, dataDir, repoSlug, false)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)
@@ -312,7 +315,7 @@ func runCleanupCmd(args []string) {
 	defer db.Close()
 
 	dataDir := filepath.Dir(resolvedDB)
-	initRepos(dataDir)
+	initRepos(dataDirPath("")) // settings.json lives in the data dir, see runServe
 	tk, closeTasks, err := newTasks(context.Background(), db, dataDir, repoSlug, false)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)

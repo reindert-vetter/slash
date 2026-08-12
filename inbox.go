@@ -69,6 +69,12 @@ type prStatus struct {
 // are only populated for the search endpoint (the inbox itself backfills them
 // separately); they are omitted from the light payload.
 type inboxRow struct {
+	// Repo is the CANONICAL repo string this PR belongs to (see repos.go): ""
+	// for the primary repo — so every pre-multi-repo fixture and every stored
+	// snapshot stays valid as-is — and the full "owner/name" slug for any other.
+	// `omitempty` keeps a primary-repo row byte-identical to what a
+	// single-repo build produced.
+	Repo      string `json:"repo,omitempty"`
 	Number    int    `json:"number"`
 	Title     string `json:"title"`
 	Author    string `json:"author"`
@@ -209,6 +215,12 @@ type ghPRNode struct {
 	Author       struct {
 		Login string `json:"login"`
 	} `json:"author"`
+	// Repository names the repo a search hit came from — the search spans every
+	// configured repo (see repoSearchScope), so a row cannot be attributed by
+	// the query alone.
+	Repository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
 	Comments struct {
 		TotalCount int `json:"totalCount"`
 		// Nodes is only requested on the heavy query (see heavyFields) — the
@@ -274,7 +286,8 @@ type ghPRNode struct {
 // that's also where myLastActivity needs the reviewer's own comment authors.
 const lightFields = `
 	number title url updatedAt createdAt isDraft state baseRefName headRefName
-	additions deletions changedFiles author { login }`
+	additions deletions changedFiles author { login }
+	repository { nameWithOwner }`
 
 // reviewsPerPRCap is the `first:` cap on the `reviews` connection below.
 // statusesFor batches EVERY inbox PR into one aliased query, so this cap
@@ -356,9 +369,10 @@ func searchPRsExpr(ctx context.Context, expr string, light bool) ([]inboxRow, er
 	return runPRSearch(ctx, expr, light)
 }
 
-// runPRSearch is the shared gh-search core: it prepends repo:<slug> and runs the
-// GraphQL search, mapping nodes to rows. The caller owns everything after the
-// repo scope (including sort:).
+// runPRSearch is the shared gh-search core: it prepends the repo scope (EVERY
+// configured repo, see repoSearchScope) and runs the GraphQL search, mapping
+// nodes to rows. The caller owns everything after the repo scope (including
+// sort:).
 func runPRSearch(ctx context.Context, expr string, light bool) ([]inboxRow, error) {
 	fields := lightFields
 	if !light {
@@ -369,7 +383,7 @@ func runPRSearch(ctx context.Context, expr string, light bool) ([]inboxRow, erro
 			nodes { ... on PullRequest { %s } }
 		}
 	}`, fields)
-	full := "repo:" + repoSlug + " " + expr
+	full := repoSearchScope() + " " + expr
 	data, err := ghGraphQL(ctx, query, "-f", "q="+full, "-F", "n="+strconv.Itoa(inboxLimit))
 	if err != nil {
 		return nil, err
@@ -390,9 +404,59 @@ func runPRSearch(ctx context.Context, expr string, light bool) ([]inboxRow, erro
 	return rows, nil
 }
 
+// repoSearchScope is the `repo:` prefix of every inbox/search query: one
+// `repo:<slug>` qualifier per configured repo. GitHub search ORs repeated
+// qualifiers of the same kind, so this widens the result set to every reviewed
+// repo without changing anything else about a query. With only the primary repo
+// configured it is byte-identical to the old hardcoded `repo:<slug>`.
+func repoSearchScope() string {
+	var b strings.Builder
+	for i, r := range allRepos() {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString("repo:")
+		b.WriteString(r.Slug)
+	}
+	return b.String()
+}
+
+// rowKey identifies a row across repos: the bare number for the primary repo
+// (unchanged), "<slug>#<n>" for any other. Used for de-duplication and as the
+// key of the statuses map — see statusKey, which is the same function for a
+// (repo, number) pair the caller has separately.
+func rowKey(r inboxRow) string { return statusKey(r.Repo, r.Number) }
+
+// statusKey is the statuses-map key for one PR: the bare number for the primary
+// repo — so an existing fixture, an existing stored snapshot and the frontend's
+// own `?prs=` list all keep working untouched — and "<slug>#<n>" for a PR in any
+// other repo.
+func statusKey(repo string, number int) string {
+	if repo == "" {
+		return strconv.Itoa(number)
+	}
+	return repo + "#" + strconv.Itoa(number)
+}
+
+// parseStatusKey splits a statusKey back into (canonical repo, number). An
+// unparsable value yields (", 0) and is skipped by the caller.
+func parseStatusKey(key string) (string, int) {
+	key = strings.TrimSpace(key)
+	repo := ""
+	if i := strings.LastIndexByte(key, '#'); i >= 0 {
+		repo, key = canonRepo(key[:i]), key[i+1:]
+	}
+	n, err := strconv.Atoi(key)
+	if err != nil || n <= 0 {
+		return "", 0
+	}
+	return repo, n
+}
+
 // mapPRNode turns a GraphQL node into a row; heavy fills the status fields.
 func mapPRNode(n ghPRNode, heavy bool, login string) inboxRow {
 	r := inboxRow{
+		Repo:         canonRepo(n.Repository.NameWithOwner),
 		Number:       n.Number,
 		Title:        n.Title,
 		Author:       n.Author.Login,
@@ -708,7 +772,7 @@ func buildInbox(ctx context.Context, db *sql.DB) ([]inboxSection, error) {
 
 	ingested, _ := ingestedSet(db) // best-effort; hasGraph just stays false on error
 
-	seen := map[int]bool{} // cross-section de-dupe
+	seen := map[string]bool{} // cross-section de-dupe, keyed by repo+number
 	byRef := map[qref][]inboxRow{}
 	for i, ref := range refs {
 		byRef[ref] = results[i]
@@ -716,59 +780,86 @@ func buildInbox(ctx context.Context, db *sql.DB) ([]inboxSection, error) {
 	sections := make([]inboxSection, 0, len(inboxSections))
 	for si, sdef := range inboxSections {
 		var rows []inboxRow
-		local := map[int]bool{}
+		local := map[string]bool{}
 		for qi := range sdef.queries {
 			for _, r := range byRef[qref{si, qi}] {
-				if seen[r.Number] || local[r.Number] {
+				k := rowKey(r)
+				if seen[k] || local[k] {
 					continue
 				}
-				local[r.Number] = true
-				r.HasGraph = ingested[r.Number]
+				local[k] = true
+				r.HasGraph = ingested[prKey{r.Repo, r.Number}]
 				rows = append(rows, r)
 			}
 		}
 		for _, r := range rows {
-			seen[r.Number] = true
+			seen[rowKey(r)] = true
 		}
 		sections = append(sections, inboxSection{Title: sdef.title, PRs: rows})
 	}
 	return sections, nil
 }
 
-// statusesFor fetches the heavy status of several PRs in one aliased query.
-func statusesFor(ctx context.Context, numbers []int) (map[string]prStatus, error) {
-	if len(numbers) == 0 {
+// statusesFor fetches the heavy status of several PRs in one aliased query. The
+// PRs may live in DIFFERENT repos, so the query carries one `repository(...)`
+// alias per repo (`r0`, `r1`, …), each holding that repo's own `pr<n>` aliases;
+// the result map is keyed by statusKey, i.e. still the bare number for the
+// primary repo.
+func statusesFor(ctx context.Context, keys []prKey) (map[string]prStatus, error) {
+	if len(keys) == 0 {
 		return map[string]prStatus{}, nil
 	}
-	owner, name := splitRepo(repoSlug)
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("query {\n repository(owner: %q, name: %q) {\n", owner, name))
-	for _, num := range numbers {
-		// updatedAt is requested here directly (not via lightFields, which
-		// this query otherwise skips) — myLastActivity/afterRFC3339 need it
-		// to decide whether anything happened since the reviewer's own last
-		// comment/review.
-		b.WriteString(fmt.Sprintf("  pr%d: pullRequest(number: %d) { number state updatedAt %s }\n", num, num, heavyFields))
+	// Group per repo, preserving first-seen repo order so the query (and thus
+	// the replayed history of the Activity that runs it) is deterministic.
+	var order []string
+	byRepo := map[string][]int{}
+	for _, k := range keys {
+		if _, seen := byRepo[k.Repo]; !seen {
+			order = append(order, k.Repo)
+		}
+		byRepo[k.Repo] = append(byRepo[k.Repo], k.PR)
 	}
-	b.WriteString(" }\n}")
+
+	var b strings.Builder
+	b.WriteString("query {\n")
+	repoAlias := map[string]string{}
+	for i, repo := range order {
+		alias := fmt.Sprintf("r%d", i)
+		repoAlias[alias] = repo
+		owner, name := splitRepo(repoSlugFor(repo))
+		b.WriteString(fmt.Sprintf(" %s: repository(owner: %q, name: %q) {\n", alias, owner, name))
+		for _, num := range byRepo[repo] {
+			// updatedAt is requested here directly (not via lightFields, which
+			// this query otherwise skips) — myLastActivity/afterRFC3339 need it
+			// to decide whether anything happened since the reviewer's own last
+			// comment/review.
+			b.WriteString(fmt.Sprintf("  pr%d: pullRequest(number: %d) { number state updatedAt %s }\n", num, num, heavyFields))
+		}
+		b.WriteString(" }\n")
+	}
+	b.WriteString("}")
 
 	data, err := ghGraphQL(ctx, b.String())
 	if err != nil {
 		return nil, err
 	}
-	var parsed struct {
-		Repository map[string]ghPRNode `json:"repository"`
-	}
+	var parsed map[string]map[string]ghPRNode
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return nil, fmt.Errorf("parse statuses: %w", err)
 	}
 	login := ghLogin(ctx)
 	out := map[string]prStatus{}
-	for _, n := range parsed.Repository {
-		if n.Number == 0 {
+	for alias, prs := range parsed {
+		repo, ok := repoAlias[alias]
+		if !ok {
 			continue
 		}
-		out[strconv.Itoa(n.Number)] = statusFromNode(n, login)
+		for _, n := range prs {
+			if n.Number == 0 {
+				continue
+			}
+			out[statusKey(repo, n.Number)] = statusFromNode(n, login)
+		}
 	}
 	return out, nil
 }
@@ -780,22 +871,27 @@ func splitRepo(slug string) (owner, name string) {
 	return slug, ""
 }
 
-// ingestedSet returns the set of PR numbers that have blocks (hasGraph=true).
-func ingestedSet(db *sql.DB) (map[int]bool, error) {
+// ingestedSet returns the set of PRs that have blocks (hasGraph=true), keyed by
+// (repo, number) so a foreign-repo row is never mistaken for an ingested one
+// that happens to share its number.
+func ingestedSet(db *sql.DB) (map[prKey]bool, error) {
 	rows, err := db.Query(`SELECT DISTINCT pr FROM blocks`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[int]bool{}
+	out := map[prKey]bool{}
 	for rows.Next() {
 		var pr int
 		if err := rows.Scan(&pr); err != nil {
 			return nil, err
 		}
-		out[pr] = true
+		// Every block stored so far belongs to the primary repo; the `repo`
+		// column that makes this per-repo lands with the storage layer.
+		out[prKey{"", pr}] = true
 	}
 	return out, rows.Err()
+
 }
 
 // --- offline fixture ---------------------------------------------------------
@@ -863,13 +959,13 @@ func buildInboxSnapshot(ctx context.Context, db *sql.DB) (*snapshotResult, error
 	if err != nil {
 		return nil, err
 	}
-	var numbers []int
+	var keys []prKey
 	for _, s := range sections {
 		for _, p := range s.PRs {
-			numbers = append(numbers, p.Number)
+			keys = append(keys, prKey{p.Repo, p.Number})
 		}
 	}
-	statuses, err := statusesFor(ctx, numbers)
+	statuses, err := statusesFor(ctx, keys)
 	if err != nil {
 		// A status failure is non-fatal — serve the rows, skip the pills.
 		statuses = map[string]prStatus{}

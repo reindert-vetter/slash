@@ -49,6 +49,23 @@
           "changedFiles": 1,
           "comments": 0,
           "hasGraph": false
+        },
+        {
+          "repo": "plug-and-pay/plug-and-pay-ops",
+          "number": 12,
+          "title": "Import Mollie Capital records into the ops panel (PAYM-806)",
+          "author": "reindert-vetter",
+          "updatedAt": "2026-07-11T07:30:00Z",
+          "createdAt": "2026-07-09T09:00:00Z",
+          "url": "https://github.com/plug-and-pay/plug-and-pay-ops/pull/12",
+          "isDraft": false,
+          "baseRefName": "master",
+          "headRefName": "feature/PAYM-806-mollie-capital-import",
+          "additions": 899,
+          "deletions": 0,
+          "changedFiles": 13,
+          "comments": 0,
+          "hasGraph": false
         }
       ]
     },
@@ -139,6 +156,21 @@
       ],
       "checksState": "SUCCESS",
       "checksTotal": 10
+    },
+    "plug-and-pay/plug-and-pay-ops#12": {
+      "mergeable": "MERGEABLE",
+      "reviewDecision": "REVIEW_REQUIRED",
+      "state": "OPEN",
+      "reviewers": [
+        {
+          "login": "reindert-vetter",
+          "avatarUrl": "",
+          "state": "PENDING",
+          "team": false
+        }
+      ],
+      "checksState": "SUCCESS",
+      "checksTotal": 3
     }
   }
 }

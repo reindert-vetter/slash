@@ -2,6 +2,7 @@ package main
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -40,6 +41,24 @@ import (
 // Read once per process (settings.go's cache), so adding a repo takes a restart.
 // With no file at all the registry holds exactly one repo — gh.go's built-in
 // primary — which is precisely the pre-registry behaviour.
+
+// prKey is the identity of one pull request across repos: a canonical repo
+// string (see canonRepo — "" for the primary repo) plus its number. Used
+// wherever a bare `int` used to be the key of a map or a lookup, so a PR 12 in
+// plug-and-pay-ops can never collide with a PR 12 in plug-and-pay.
+type prKey struct {
+	Repo string
+	PR   int
+}
+
+// String is the human/log form: "13000" for the primary repo, "ops#12"
+// elsewhere.
+func (k prKey) String() string {
+	if k.Repo == "" {
+		return strconv.Itoa(k.PR)
+	}
+	return repoKeyOf(k.Repo) + "#" + strconv.Itoa(k.PR)
+}
 
 // repoConfig is one reviewed repository.
 type repoConfig struct {
