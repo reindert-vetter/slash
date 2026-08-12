@@ -148,7 +148,11 @@ test.describe('PR Review Tree — PR inbox', () => {
 
   // 12801 has no graph yet (not seeded into the blocks DB), so its row opens
   // the popover instead of linking straight into /pr/<id>.
-  test('generating a review tree from the popover redirects into /pr/<id>', async ({ page }) => {
+  // Clicking the BUTTON deliberately does not navigate: the reviewer carries
+  // on in the overview, with focus parked on the popover's "Sluit menu" item so
+  // Enter/Escape closes the menu. Only the → key still lands in the fresh tree
+  // (see the openOrGenerate test below).
+  test('generating a review tree from the popover stays in the overview, focused on "Sluit menu"', async ({ page }) => {
     await page.goto('/pr-overview')
     await appReady(page)
 
@@ -165,7 +169,14 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(generate).toHaveText(/Genereer review-boom/)
 
     await generate.click()
-    await expect(page).toHaveURL(/\/pr\/12801$/)
+    const close = page.locator('[data-testid="pr-popover"] [data-testid="close-popover"]')
+    await expect(close).toBeFocused()
+    await expect(page).toHaveURL(/\/pr-overview$/)
+
+    // And that focus is real keyboard ownership: Enter closes the menu.
+    await page.keyboard.press('Enter')
+    await expect(page.locator('[data-testid="pr-popover"]')).toHaveCount(0)
+    await expect(page).toHaveURL(/\/pr-overview$/)
   })
 
   // The busy button polls GET /api/ingest/progress (a real, ephemeral
@@ -201,7 +212,10 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(generate).toBeDisabled()
 
     resolveIngest()
-    await expect(page).toHaveURL(/\/pr\/12801$/)
+    // No navigation once it finishes — the button becomes usable again and the
+    // reviewer stays in the overview (see the test above).
+    await expect(generate).toBeEnabled()
+    await expect(page).toHaveURL(/\/pr-overview$/)
   })
 
   test('a failed generate keeps the popover open with an inline error', async ({ page }) => {

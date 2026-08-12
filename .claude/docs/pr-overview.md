@@ -94,7 +94,18 @@ in sync by hand.
   `tree-pine`, whose stacked triangles read as a Christmas tree rather than a
   review tree (Reindert). `handleIngest`
   (`api.go`) responds 200 only once the pipeline **and** `EnsureRelations`
-  finished, so success is a plain full `location.href = '/pr/<n>'` redirect. On
+  finished. It runs with **`{ redirect: false }`**: clicking this button
+  deliberately does **not** navigate into the fresh tree — on success the
+  reviewer stays in the overview, the popover stays open and focus moves to its
+  pinned "Sluit menu" item (`focusCloseAfterGenerate`, one `requestAnimationFrame`
+  later and guarded on `ui.openPopover` still being this row) so Enter/Escape
+  immediately closes the menu instead of re-triggering the button just used
+  (Reindert's explicit request — "generate" means build it and let me carry on
+  triaging, not take me away). The row keeps showing `graphChip`'s "Op GitHub"
+  until the next `refresh`/60s poll recomputes `hasGraph`; no extra
+  `reloadSnapshot()` is fired, which would repaint the popover out from under
+  that focus. The **only** remaining `redirect: true` caller is the `→` key
+  (`openOrGenerate`), where "act now" explicitly means land in the tree. On
   failure the popover stays open with the message (`ui.ingestError`,
   `data-testid=generate-error`) and the row stays `hasGraph:false`.
 - **`pr.hasGraph === true`** (`ingestedActions(pr)`): **"Open review tree"**

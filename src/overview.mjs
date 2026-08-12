@@ -639,12 +639,22 @@ function positionPopover(number) {
 // (generateAction/ingestedActions below); the row itself is untouched, so a
 // retry or a page refresh reflects the real state.
 //
-// `redirect` defaults to true (generateAction's "Genereer review-boom" for a
-// not-yet-ingested row: after generating for the first time you want to land
-// straight in the fresh tree). ingestedActions' "Opnieuw genereren" passes
-// `redirect: false` — an already-ingested row's regenerate only refreshes the
-// existing tree's data in the background; the reviewer is still on the
-// overview and didn't ask to be navigated away.
+// `redirect` defaults to true, which is now used by exactly ONE caller:
+// openOrGenerate (the → key, "act now") — a keystroke that explicitly means
+// "take me into the tree". Both popover BUTTONS pass `redirect: false`:
+// ingestedActions' "Opnieuw genereren" (an already-ingested row's regenerate
+// only refreshes the existing tree's data in the background) and, since
+// Reindert's explicit request, generateAction's "Genereer review-boom" too —
+// clicking that button means "build it, but let me carry on in the overview",
+// not "navigate me away". After such a non-redirecting run the popover stays
+// open and focus moves to its pinned "Sluit menu" item (see
+// focusCloseAfterGenerate below) so Enter/Escape immediately closes the menu
+// instead of re-triggering the generate button the reviewer just used.
+//
+// The row itself keeps showing "Op GitHub" until the next inbox refresh/poll
+// catches up with the freshly ingested PR — deliberately no extra
+// reloadSnapshot() here, which would repaint the popover out from under that
+// focus.
 //
 // While the POST is in flight, generatePage polls GET /api/ingest/progress —
 // a purely in-memory, ephemeral read of which pipeline stage the server is
@@ -696,6 +706,7 @@ async function generatePage(pr, { redirect = true } = {}) {
       location.href = treeUrl(pr)
     } else {
       ui.ingesting = null
+      focusCloseAfterGenerate(pr)
     }
   } catch (e) {
     ui.ingesting = null
@@ -705,6 +716,22 @@ async function generatePage(pr, { redirect = true } = {}) {
     stopIngestPoll()
     ui.ingestStage = ''
   }
+}
+
+// focusCloseAfterGenerate parks keyboard focus on the popover's pinned "Sluit
+// menu" item (index 0, see popover()) after a non-redirecting generate run, so
+// the reviewer can close the menu with Enter/Space right away and carry on in
+// the overview. Guarded on the popover still being the SAME row's (the run is
+// async — the reviewer may have closed it or opened another row meanwhile) and
+// deferred one frame, like togglePopover's own focusPopoverItem(1), because the
+// button we just re-enabled only reappears in popoverItems() after arrow.js has
+// repainted it.
+function focusCloseAfterGenerate(pr) {
+  if (ui.openPopover !== pr.number) return
+  requestAnimationFrame(() => {
+    if (ui.openPopover !== pr.number) return
+    focusPopoverItem(0)
+  })
 }
 
 // ingestBusy(pr) / ingestLabel(pr, idleLabel) / ingestIcon(pr) are read from
@@ -762,7 +789,9 @@ function popoverRowCls(extra = '') {
 }
 
 // generateAction — the not-yet-ingested case: "Genereer review-boom" runs the
-// ingest workflow (generatePage above) and redirects into /pr/<id> on success.
+// ingest workflow (generatePage above) WITHOUT redirecting: on success the
+// reviewer stays in the overview with the popover open and focus on "Sluit
+// menu". Only the → key (openOrGenerate) still lands you in the fresh tree.
 function generateAction(pr) {
   return html`
     <button
@@ -770,7 +799,7 @@ function generateAction(pr) {
       data-testid="generate-page"
       disabled="${() => ingestBusy(pr)}"
       class="${() => popoverRowCls(ingestBusy(pr) ? 'cursor-not-allowed opacity-60' : '')}"
-      @click="${() => generatePage(pr)}"
+      @click="${() => generatePage(pr, { redirect: false })}"
     >
       ${() => ingestIcon(pr)} ${() => ingestLabel(pr, 'Genereer review-boom')}
     </button>
