@@ -124,7 +124,7 @@ test.describe('@mention of the local reviewer', () => {
     await expect(card.getByTestId('mention').first()).toHaveText('@reindert')
   })
 
-  test('a block-anchored comment mentioning me gets exactly ONE index row, and keeps its inline thread', async ({
+  test('a block-anchored comment mentioning me shares its row with any OTHER comment on the same line, under "Mentioned"', async ({
     page,
   }) => {
     await mockSettings(page)
@@ -140,8 +140,10 @@ test.describe('@mention of the local reviewer', () => {
         author: 'reviewer',
         body: `graag @${ME} hiernaar laten kijken`,
       }),
-      // A block-anchored comment WITHOUT a mention stays out of the index
-      // entirely (unchanged behaviour).
+      // A block-anchored comment WITHOUT a mention, on the EXACT SAME line —
+      // it groups into the SAME row (commentGroupKeyOf/commentBlockItem,
+      // comments-panel.md), which is now "Mentioned" as a whole (mentioned:
+      // true once ANY comment in the group mentions me).
       comment({
         id: 'anchored-plain',
         runId: 'run-anchored-plain',
@@ -159,22 +161,22 @@ test.describe('@mention of the local reviewer', () => {
     await expect(page.getByTestId('block-row').first()).toBeVisible()
 
     await expect(page.getByTestId('mention-heading')).toBeVisible()
-    // Exactly one row for it — the dedup in indexComments plus the fact that a
-    // block-anchored comment has no second source of index items. Two rows
-    // would share the same state.blocks id ('comment:' + c.id), which is what
-    // selection preservation and ?sel=comment:<id> resolve through.
-    await expect(page.locator('[data-idx]').filter({ hasText: 'hiernaar laten kijken' })).toHaveCount(1)
-    // The comment that does NOT mention me gets an ordinary index row of its own
-    // too (every unresolved comment does, see indexComments in
-    // RelatedPanel.mjs) — under the plain "PR-comments" heading, BELOW the
-    // "Mentioned" one, which is the whole point of the -2/-1 rank split.
-    await expect(page.locator('[data-idx]').filter({ hasText: 'please rename this variable' })).toHaveCount(1)
-    await expect(page.getByTestId('comment-heading')).toBeVisible()
+    // Exactly ONE row for both comments — the dedup in indexComments plus the
+    // per-line grouping, which merges them since they share file+label+line.
+    // Two rows would share the same state.blocks id ('comment:' + c.id) if it
+    // weren't for the grouping, which is what selection preservation and
+    // ?sel=comment:<id> resolve through.
+    const row = page.locator('[data-idx]').filter({ hasText: 'hiernaar laten kijken' })
+    await expect(row).toHaveCount(1)
+    await expect(row).toContainText('· +1')
+    // The un-mentioning comment does NOT get an ordinary row of its own next
+    // to it — it is folded into the same group/row instead.
+    await expect(page.locator('[data-idx]').filter({ hasText: 'please rename this variable' })).toHaveCount(0)
+    await expect(row.getByTestId('block-approval')).toHaveText('0/2')
 
     // Its own block still shows both comments in the inline index — the index
-    // row is an addition, not a move. Two steps down: past that second comment
-    // row, onto the block itself.
-    await page.keyboard.press('ArrowDown')
+    // row is an addition, not a move. One step down (the group is now a
+    // SINGLE row instead of two), onto the block itself.
     await page.keyboard.press('ArrowDown')
     const inline = page.getByTestId('inline-comments')
     await expect(inline.getByText('please rename this variable')).toBeVisible()

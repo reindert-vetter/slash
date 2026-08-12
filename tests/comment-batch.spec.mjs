@@ -58,7 +58,10 @@ test.describe('Comment batch', () => {
   }) => {
     await mockComments(page, [
       anchoredComment('cb-1', 'graag nullsafe hier'),
-      anchoredComment('cb-2', 'deze naam kan korter', { id: 'cb-2', runId: 'run-cb-2' }),
+      // A DIFFERENT line than cb-1 — comments on the exact same line now
+      // group into one index row (commentGroupKeyOf, see
+      // comments-panel.md), and this test wants two SEPARATE rows.
+      anchoredComment('cb-2', 'deze naam kan korter', { id: 'cb-2', runId: 'run-cb-2', line: 2 }),
       // An AI risk finding: it still gets its own index row (unchanged), but it
       // must never be handed to the batch — "van GitHub + eigen, geen AI".
       {
@@ -84,9 +87,12 @@ test.describe('Comment batch', () => {
     await expect(page.getByTestId('block-row').first()).toBeVisible()
     // Both fixture comments are anchored to a real block
     // (ContractController::index) — the default selection lands on the
-    // first one, which now opens that block "as if fully expanded" instead
-    // of showing commentDetailCard (see openCommentAnchorDrill, home.mjs,
-    // and comment-anchor-expanded-view.spec.mjs for that behaviour in full).
+    // first one, at rest (no drilled column yet, see
+    // comment-anchor-expanded-view.spec.mjs); an explicit ArrowRight opens
+    // that block "as if fully expanded" instead of showing commentDetailCard
+    // (see openCommentAnchorDrill, home.mjs).
+    await expect(page.getByTestId('drill-column')).toHaveCount(0)
+    await page.keyboard.press('ArrowRight')
     await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
 
     // Both open comments are index rows of their own.
@@ -117,9 +123,9 @@ test.describe('Comment batch', () => {
     // Enter on a comment row jumps to that comment (and closes the palette).
     await menu.getByTestId('command-row').filter({ hasText: 'deze naam kan korter' }).click()
     await expect(page.getByTestId('command-menu')).toHaveCount(0)
-    // Both comments are anchored to the same block, so this jump also opens
-    // it "as if fully expanded" (same as the default selection above) —
-    // check the sidebar landed on the right row instead of commentDetailCard.
+    // Landing there leaves it at rest, same as any other comment/comment_group
+    // row — check the sidebar landed on the right row instead of
+    // commentDetailCard.
     await expect(page.locator('[data-idx].bg-indigo-50')).toContainText('deze naam kan korter')
   })
 
@@ -136,9 +142,11 @@ test.describe('Comment batch', () => {
     await mock
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    // Anchored to a real block — opens "as if fully expanded" instead of
-    // showing commentDetailCard (see openCommentAnchorDrill, home.mjs).
-    await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
+    // Anchored to a real block — at rest until an explicit ArrowRight opens
+    // it "as if fully expanded" instead of showing commentDetailCard (see
+    // openCommentAnchorDrill, home.mjs). Space must work without ever
+    // pressing that ArrowRight.
+    await expect(page.getByTestId('drill-column')).toHaveCount(0)
 
     await page.keyboard.press('Space')
     await expect.poll(() => resolved.length).toBe(1)

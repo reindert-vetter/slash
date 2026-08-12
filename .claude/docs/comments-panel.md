@@ -60,40 +60,101 @@ item's own detail card (`commentDetailCard`, reading `prWideComments()`, not
 `cs.view`) and its own thread cursor (`pct`/`enterPrCommentThread`) are a wholly
 separate mechanism and are unaffected.
 
-### An anchored "Start" item instead opens its block "as if fully expanded"
+### Comment-index rows are grouped per source line
+
+`commentGroupKeyOf`/`commentBlockItem` (`home.mjs`, called from
+`recomputeLeftList`) merge every candidate comment that resolves to the same
+real block AND the same source line (`file + '|' + label + '|' + line`) into
+ONE index row instead of one row per comment — reviewer request: several
+open threads on the same line used to clutter the "Start" list with that many
+separate rows. Only a genuinely block-anchored, still-resolvable comment
+groups at all (the same `anchoredBlocks` check `recomputeLeftList` already
+applies to decide whether the comment gets a row in the first place); a
+PR-wide/orphan/`ai_warning` comment has no line worth grouping on and keeps
+its own row, one per comment, exactly as before.
+
+For a comment placed on a whole group or a Shift+↑/↓ range rather than a
+single line, `c.line` is already the range's own FIRST row — every comment is
+created with `line: t.startLine` (`ensureClaudeAnchorForNew` and the plain
+composer, `RelatedPanel.mjs`), never the last or middle row — so
+`commentGroupKeyOf` needs no separate "first row of the range" computation of
+its own.
+
+The resulting item (`kind: 'comment'`, unchanged — no new kind was
+introduced) carries the full group as `comments` alongside the existing
+`comment` field, which stays the group's PRIMARY (first) comment — every
+pre-existing single-comment mechanism (`selectedComment`,
+`prCommentCommandsFor`'s Beantwoorden/Resolve/Chat/Ignore, the unanchored →
+thread-walk below) keeps reading `comment` unchanged and simply acts on the
+line's first comment; only `blockApproveCount` (done/total summed over the
+whole group) and `spaceKey`'s resolve target (`firstUnresolvedComment`, which
+walks to the first still-open comment in the group instead of getting stuck
+once the primary one happens to already be resolved) look at `comments`. The
+row's own label gets a `· +N` suffix once the group holds more than one
+comment. A solo comment (the common case) is a group of exactly one, so its
+row is unchanged.
+
+### An anchored "Start" item instead opens its block "as if fully expanded" — only on ArrowRight
 
 The section above is for a genuinely unanchored item (a PR-wide comment, an
 orphan, or one with no matching block at all). A comment-index row that DOES
-resolve to a real block (`commentAnchorBlock`, `home.mjs` — the same
-`file`+`label` identity `anchoredBlocks` already checks to decide whether the
-comment gets a row at all, per "Every UNRESOLVED comment gets such a row too"
-above) instead shows that block's own diff, its Underlying-code panel and the
-embedded Claude column — reviewer request: selecting such an item should look
-"as if the code were already fully expanded", not just the bare read-only
-thread card.
+resolve to a real block (`commentAnchorBlock(b.comment)`, `home.mjs` — the
+same `file`+`label` identity `anchoredBlocks` already checks to decide
+whether the comment gets a row at all, per "Every UNRESOLVED comment gets
+such a row too" above) instead shows that block's own diff, its
+Underlying-code panel and the embedded Claude column — reviewer request:
+such an item should look "as if the code were already fully expanded", not
+just the bare read-only thread card.
 
-`openCommentAnchorDrill` (`home.mjs`, called from the same `state.selected`
-watch as the sentinel-scope branch above) opens the anchor as a **drilled
-column** (`state.drill[0]`) — exactly the mechanism `Enter` on an
-Onderliggende-code child uses (`drillIntoChild`) — but **without leaving list
-mode**. That one difference is deliberate and is the whole point: `BlockList`
-only hides the blokken-index in `state.mode === 'diff'`, so it stays visible
-next to the expanded diff (reviewer request: "ook met de blokken index
-zichtbaar"), and `state.selected` is never touched, so the sidebar highlight
-stays on the comment row itself rather than jumping to the block. The
-top-level block-column (which would otherwise render the comment's own
-`commentDetailCard`) collapses to a narrow rail instead, since
-`focusedBlock()` now resolves through `state.focusLevel > 0` to the drilled
-anchor — `commentTarget()`/`commentScope()`/`relatedChildren()` all follow
-that for free, so the comment thread (correctly scoped now, since an anchored
-finding's own `Kind` is `''` per `anchoredWarning` in `code_warning.go` — it
-passes `recomputeView`'s `!c.kind` filter like any ordinary comment), the
-Underlying-code panel and the embedded Claude column need no further wiring.
-The drilled cursor is set to the comment's own unit (`c.gran`/`c.rowStart`,
-recomputed once the anchor's code — and thus its aligned rows — actually
-arrives, since the very first open has to guess against an empty row list),
-so the comment that triggered this view is the one that shows up scoped next
-to it.
+**This no longer happens automatically the moment the row is selected** — a
+later reviewer request reversed that: merely selecting the row (click or
+↑/↓) now leaves it fully at rest, no drilled column, no comment card
+expanded, so the row reads exactly like any other comment item until the
+reviewer explicitly asks to see more. Two keypresses instead:
+
+- **First `→`** calls `openCommentAnchorDrill(b)` (`home.mjs`, from
+  `onKeydown`'s ArrowRight branch for a comment item), which opens the anchor
+  as a **drilled column** (`state.drill[0]`) — exactly the mechanism `Enter`
+  on an Onderliggende-code child uses (`drillIntoChild`) — but **without
+  leaving list mode**, and without moving the keyboard into it. That one
+  difference is deliberate and is the whole point: `BlockList` only hides the
+  blokken-index in `state.mode === 'diff'`, so it stays visible next to the
+  expanded diff (reviewer request: "ook met de blokken index zichtbaar"), and
+  `state.selected` is never touched, so the sidebar highlight stays on the
+  comment row itself rather than jumping to the block. The top-level
+  block-column (which would otherwise render the comment's own
+  `commentDetailCard`) collapses to a narrow rail instead, since
+  `focusedBlock()` now resolves through `state.focusLevel > 0` to the drilled
+  anchor — `commentTarget()`/`commentScope()`/`relatedChildren()` all follow
+  that for free, so the comment thread (correctly scoped now, since an
+  anchored finding's own `Kind` is `''` per `anchoredWarning` in
+  `code_warning.go` — it passes `recomputeView`'s `!c.kind` filter like any
+  ordinary comment), the Underlying-code panel and the embedded Claude column
+  need no further wiring. The drilled cursor is set from the group's PRIMARY
+  comment's own unit (`b.comment.gran`/`b.comment.rowStart`, recomputed once
+  the anchor's code — and thus its aligned rows — actually arrives, since the
+  very first open has to guess against an empty row list). Since
+  `commentScope`'s ordinary row-range filtering (`commentUnder`) then shows
+  **every** comment that actually falls under that cursor unit — not only the
+  ones in this synthetic sidebar group — the reviewer sees the whole line's
+  conversation regardless of the group's own boundaries, exactly as any other
+  block's inline comments already work; no separate "show the whole group"
+  wiring was needed.
+- **Second `→`** (the drill is already open for this exact item —
+  `commentAnchorDrillFor === b.id`) hands the keyboard INTO it, by calling the
+  exact same `hasVisibleComments()`/`enterCommentsHead()`/
+  `claudeColumnVisible()`/`enterRelated()` chain the ordinary
+  `state.mode === 'diff'` ArrowRight branch already uses. This is what makes
+  the expanded view fully **keyboard-navigable** (a later reviewer request,
+  reversing the original "mouse/read-only" design) despite `state.mode`
+  staying `'list'`: `relatedActive()`'s `↑`/`↓`/`←`/`→` handling in
+  `onKeydown` is unconditional on `state.mode` — it only checks `cs.focus` —
+  so once `enterCommentsHead()` sets that, the existing generic
+  comment/thread/Claude-column walk takes over exactly as it would for any
+  other block. No comment card is force-expanded before this second `→`;
+  `enterCommentsHead()`'s own landing on the first conversation is the
+  reviewer's explicit choice to step in, same convention as everywhere else
+  in this file.
 
 Defaults to **Unified** (`state.commentAnchorViewMode`, distinct from the
 global `state.diffViewMode`, per explicit request: only this one view
@@ -102,20 +163,19 @@ a given drilled column's `viewMode`/`setViewMode` reads/writes; every OTHER
 drilled column (an ordinary Onderliggende-code child) still follows the
 shared preference.
 
-Deliberately mouse/read-only, not keyboard-interactive: every drilled-column
-key (`↓`/`↑`/`f`/`d`/`s`/`←`/`→`) in `onKeydown` is gated on
-`state.mode === 'diff'`, which this view never enters — `↓`/`↑` keep walking
-the sidebar list as they already do for any comment item, only the mouse (an
-approve checkbox, an Onderliggende-code child, scrolling) reaches inside the
-expanded diff itself. A plain, non-reactive `commentAnchorDrillFor` (the open
-comment's own id) tracks whether this ONE feature is the one that opened the
-current drill, so the cleanup half of the same watch (landing on anything
-else) only ever closes a drill it opened itself — never an ordinary,
-unrelated drill that another code path (`applyNextUnapproved`'s "Ga door",
-`drillIntoChild`, `openTask`) is in the middle of setting up via the very same
-`state.selected` change (arrow.js's `watch` runs its callback once the whole
-synchronous caller has already finished, not before — an unconditional clear
-here wiped a "Ga door" landing the instant it opened, see
+**Stays open until the sidebar selection moves to a DIFFERENT item** — not on
+any ←/Escape inside it (explicit reviewer decision: no extra close gesture was
+added). A plain, non-reactive `commentAnchorDrillFor` (the open comment-index
+**item's** own `.id` — not a single comment's id, since an item can now stand
+for a whole line-group, see "Comment-index rows are grouped per source line"
+above) tracks whether this ONE feature is the one that opened the current
+drill, so `closeCommentAnchorDrillIfOwned()` (shared by both branches of the
+`state.selected` watch) only ever closes a drill it opened itself — never an
+ordinary, unrelated drill that another code path (`applyNextUnapproved`'s "Ga
+door", `drillIntoChild`, `openTask`) is in the middle of setting up via the
+very same `state.selected` change (arrow.js's `watch` runs its callback once
+the whole synchronous caller has already finished, not before — an
+unconditional clear here wiped a "Ga door" landing the instant it opened, see
 `tests/drill-mode-flip.spec.mjs`). Test:
 `tests/comment-anchor-expanded-view.spec.mjs`.
 

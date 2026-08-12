@@ -1030,12 +1030,33 @@ let lastSelectedBlockRef = undefined
 // an unchanged value" entry in arrowjs-pitfalls.md.
 let lastFiredSelectionRef = undefined
 // commentAnchorDrillFor — plain (non-reactive) bookkeeping: the id of the
-// comment (if any) that currently owns the ONE open drilled column via
-// openCommentAnchorDrill (below). Lets the watch's cleanup branch tell "close
-// what THIS feature opened" apart from "leave an ordinary drilled column
-// (applyNextUnapproved/drillIntoChild/openTask) alone" — see that cleanup
-// branch's own doc comment for why an unconditional clear there is wrong.
+// comment-index ITEM (b.id, not a single comment's id — a row can now stand
+// for a whole line-group, see commentBlockItem) that currently owns the ONE
+// open drilled column via openCommentAnchorDrill (below). Lets the watch's
+// cleanup branch tell "close what THIS feature opened" apart from "leave an
+// ordinary drilled column (applyNextUnapproved/drillIntoChild/openTask)
+// alone" — see that cleanup branch's own doc comment for why an
+// unconditional clear there is wrong.
 let commentAnchorDrillFor = null
+// closeCommentAnchorDrillIfOwned closes a comment-anchor drill left open by a
+// PREVIOUSLY selected item, but ONLY if THIS feature is the one that opened
+// it (commentAnchorDrillFor) — never an ordinary, unrelated drill another
+// code path (applyNextUnapproved's "Ga door", drillIntoChild, openTask) is in
+// the middle of setting up via the very same state.selected change (arrow.js
+// runs a watch's callback asynchronously, once the whole synchronous caller
+// has already finished — an unconditional clear here would wipe such a drill
+// the instant it opened, see drill-mode-flip.spec.mjs). Shared by both
+// branches of the watch below, since landing on ANY different item — another
+// comment/comment_group row included, now that a drill only opens via an
+// explicit ArrowRight rather than automatically (see openCommentAnchorDrill's
+// own doc comment) — must close a drill opened for the one left behind.
+function closeCommentAnchorDrillIfOwned() {
+  if (!commentAnchorDrillFor) return
+  state.drill = []
+  state.drillCursor = []
+  state.focusLevel = 0
+  commentAnchorDrillFor = null
+}
 watch(
   () => state.selected,
   () => {
@@ -1048,34 +1069,21 @@ watch(
     closePrCommentChat()
     if (b && b.kind === 'comment') {
       // Unconditional, even before a baseline exists — unlike the ordinary-
-      // block case below, cs.focus can NEVER legitimately be
-      // 'comment'/'thread'/'claude' for a comment-index item (see the commit
-      // this branch first landed in), so there is no restored value here
-      // worth preserving.
+      // block case below, a restored cs.focus/drill from BEFORE this
+      // selection change is never worth preserving on a comment/comment_group
+      // row: it always starts at rest (no comment card expanded, no drilled
+      // column open) and only opens either via ArrowRight
+      // (openCommentAnchorDrill, reachable only once this exact item is
+      // selected — see onKeydown) or by the reviewer's own further navigation
+      // once inside it.
       leaveRelated()
-      // "As if the code were already fully expanded" for a comment anchored
-      // to a real block — see openCommentAnchorDrill's own doc comment.
-      openCommentAnchorDrill(b.comment)
+      closeCommentAnchorDrillIfOwned()
       return
     }
-    // Landed on anything other than an anchored comment item (an ordinary
-    // block, a test_class row, or a comment with no matching block) — close
-    // a comment-anchor drill left open from the PREVIOUS selection, but ONLY
-    // if THIS feature is the one that opened it (commentAnchorDrillFor, see
-    // openCommentAnchorDrill's own doc comment). Never clear state.drill
-    // unconditionally here: this same watch also fires — AFTER, since
-    // arrow.js's watch runs its callback asynchronously, once the whole
-    // synchronous caller has already finished — for a state.selected change
-    // that is itself part of setting up a brand-new, LEGITIMATE drill of its
-    // own (applyNextUnapproved's "Ga door" landing straight into a child
-    // subtree, drillIntoChild, openTask) — an unconditional clear here wiped
-    // that drill the instant it opened. See drill-mode-flip.spec.mjs.
-    if (commentAnchorDrillFor) {
-      state.drill = []
-      state.drillCursor = []
-      state.focusLevel = 0
-      commentAnchorDrillFor = null
-    }
+    // Landed on anything other than a comment/comment_group item (an
+    // ordinary block or a test_class row) — close a comment-anchor drill left
+    // open from the PREVIOUS selection, if any.
+    closeCommentAnchorDrillIfOwned()
     if (!b) return // state.blocks hasn't loaded yet — nothing to compare
     const ref = b.kind === 'test_class' ? b.id : `${b.file}:${b.line}`
     if (lastSelectedBlockRef !== undefined && ref !== lastSelectedBlockRef) leaveRelated()
@@ -2255,7 +2263,7 @@ function commentAnchorBlock(c) {
   return state.allBlocks.find((b) => b.file === c.file && b.label === c.label) || null
 }
 
-// openCommentAnchorDrill makes selecting a PR-comment index item that IS
+// openCommentAnchorDrill makes ArrowRight on a PR-comment index item that IS
 // anchored to a real block (commentAnchorBlock) show "as if the code were
 // already fully expanded" — the explicit request behind this function: the
 // comment's own block opens as a drilled column (state.drill[0]), exactly
@@ -2266,21 +2274,44 @@ function commentAnchorBlock(c) {
 // highlight never jumps to the block) — a comment item can never itself be
 // drilled deeper (see the DetailPanel pair.forEach kind==='comment' branch),
 // so this is always exactly one level, state.drill[0].
+//
+// Reviewer request, reversing the ORIGINAL version of this feature: this no
+// longer opens automatically the moment the row is selected — only an
+// explicit ArrowRight opens it (see onKeydown's ArrowRight branch below,
+// which also handles the SECOND ArrowRight that hands the keyboard INTO it).
+// Landing on the row itself now stays fully at rest: no drilled column, no
+// comment card expanded — see the state.selected watch above.
+//
 // commentTarget()/commentScope()/relatedChildren() all key off focusedBlock(),
 // which at focusLevel>0 resolves to this drilled entry — so the comment
 // thread (now correctly scoped, since an anchored comment's own Kind is ''
 // per anchoredWarning in code_warning.go — it passes recomputeView's
 // `!c.kind` filter like any ordinary block comment), the Onderliggende-code
 // panel and the embedded Claude column all follow along for free, with no
-// further wiring needed.
+// further wiring needed. This is also what makes the drilled column fully
+// KEYBOARD-navigable (reviewer request) despite state.mode staying 'list':
+// relatedActive()'s ↑/↓/←/→ handling in onKeydown is unconditional on mode,
+// so once the SECOND ArrowRight calls enterCommentsHead() (mirroring the
+// ordinary state.mode==='diff' ArrowRight branch), the existing generic
+// comment/thread/Claude-column walk takes over exactly as it would for any
+// other block — no separate mechanism was needed.
+//
+// `b` is the comment-index ITEM (kind:'comment', see commentBlockItem) —
+// possibly standing for a GROUP of several comments on the same line
+// (commentGroupKeyOf). The drilled cursor is set to the group's own shared
+// unit, from its PRIMARY comment `b.comment` (comments[0] — every comment in
+// the group shares the same file+label+line by construction, so any member
+// resolves to the same anchor/cursor). Once open, `commentScope`'s ordinary
+// row-range filtering (commentUnder) shows every comment that actually falls
+// under that cursor unit — not just the ones in this synthetic sidebar
+// group — exactly as it already does for any other block's inline comments,
+// so no separate "show the whole group" wiring is needed here either.
 // The drilled cursor is set to the comment's OWN unit (c.gran/c.rowStart),
 // not drillIntoChild's plain {change:0, gran:'group'} default — commentScope
 // (via focusedBlock()) filters the "in-block" comment index down to whatever
 // unit the cursor sits on, and the whole point here is that the very comment
 // that opened this view shows up in it (mirrors openTask's identical
-// unitAtRow lookup). Called from the state.selected watch above on every
-// comment-item selection (click or arrow key), so this always reflects the
-// CURRENT selection, never stale.
+// unitAtRow lookup).
 function commentAnchorCursor(anchor, c) {
   const gran = c.gran || 'group'
   const rows = blockRows(anchor)
@@ -2289,24 +2320,19 @@ function commentAnchorCursor(anchor, c) {
   return { change, gran }
 }
 
-function openCommentAnchorDrill(c) {
+function openCommentAnchorDrill(b) {
+  const c = b.comment
   const anchor = commentAnchorBlock(c)
   if (!anchor) {
-    // Only close a drill THIS feature opened (commentAnchorDrillFor) — never
-    // an ordinary drill left open some other way, see its own doc comment.
-    if (commentAnchorDrillFor) {
-      state.drill = []
-      state.drillCursor = []
-      state.focusLevel = 0
-      commentAnchorDrillFor = null
-    }
+    closeCommentAnchorDrillIfOwned()
     return
   }
-  commentAnchorDrillFor = c.id
-  // Already open on this exact anchor (e.g. the comment-poll's 5s tick
-  // reassigning cs.list, which can retrigger this watch — see
-  // lastFiredSelectionRef above) — leave it alone so a granularity/
-  // viewMode change the reviewer just made inside it survives.
+  commentAnchorDrillFor = b.id
+  // Already open on this exact anchor (e.g. a second ArrowRight press, or the
+  // comment-poll's 5s tick reassigning cs.list, which can retrigger the
+  // state.selected watch — see lastFiredSelectionRef above) — leave it alone
+  // so a granularity/viewMode change the reviewer just made inside it
+  // survives.
   if (state.drill.length === 1 && state.drill[0] === anchor) return
   state.drill = [anchor]
   state.drillCursor = [commentAnchorCursor(anchor, c)]
@@ -2348,7 +2374,19 @@ function isCommentAnchorDrillActive(level) {
   return !!(b && b.kind === 'comment' && state.drill[0] === commentAnchorBlock(b.comment))
 }
 
-function commentBlockItem(c) {
+// commentBlockItem now takes a GROUP of one or more comments that all sit on
+// the exact same source line (see commentGroupKeyOf/recomputeLeftList —
+// reviewer request: "comments in de blokken index moeten gegroepeerd worden
+// per line"). `comments[0]` stays the item's own PRIMARY comment: every
+// existing single-comment mechanism (selectedComment/prCommentCommandsFor's
+// Beantwoorden/Resolve/Chat/Ignore, the → thread-walk for an UNANCHORED item)
+// keeps reading `b.comment` unchanged and simply acts on the first comment of
+// the line — only blockApproveCount and spaceKey's resolve-progression
+// (firstUnresolvedComment) look at the full `comments` array. A solo comment
+// (the overwhelmingly common case) is a "group" of exactly one, so nothing
+// about its own row changes.
+function commentBlockItem(comments) {
+  const c = comments[0]
   const snippet = (c.body || '').trim().replace(/\s+/g, ' ').slice(0, 60)
   // An orphan is a block comment that lost its block (a commit renamed/removed
   // the symbol — see reanchor.go): it gets a row here instead of vanishing, and
@@ -2362,19 +2400,26 @@ function commentBlockItem(c) {
         // mentions me (see indexComments); with an empty body, naming the block
         // it hangs on says far more than the generic "PR-comment" would.
         (!c.kind && c.label) || 'PR-comment'
+  const base = snippet || fallback
+  const extra = comments.length - 1
   return {
     id: 'comment:' + c.id,
     kind: 'comment',
-    label: snippet || fallback,
+    // "· +N" for a group of more than one — the row otherwise reads exactly
+    // like a single comment's, so the reviewer can still tell several
+    // threads hang on this one line.
+    label: extra > 0 ? `${base} · +${extra}` : base,
     category: 'COMMENT',
     status: '',
-    // mentioned — this comment (or one of its replies) @-mentions the local
-    // reviewer, which sorts it above every other comment item (rank -2 in
-    // recomputeLeftList) under its own "Mentioned" heading (BlockList.mjs).
-    // Computed here, once per recompute, so neither the sort nor the heading
-    // has to re-scan bodies.
-    mentioned: commentMentionsMe(c),
+    // mentioned — this comment OR ANY OTHER ONE IN THE GROUP (or one of
+    // their replies) @-mentions the local reviewer, which sorts the whole
+    // row above every other comment item (rank -2 in recomputeLeftList)
+    // under its own "Mentioned" heading (BlockList.mjs). Computed here, once
+    // per recompute, so neither the sort nor the heading has to re-scan
+    // bodies.
+    mentioned: comments.some(commentMentionsMe),
     comment: c,
+    comments,
   }
 }
 
@@ -2447,6 +2492,28 @@ function searchHaystack(b) {
   return (own + ' ' + methods).toLowerCase()
 }
 
+// commentGroupKeyOf groups a comment-index candidate (see recomputeLeftList)
+// with every OTHER comment anchored to the exact same source line, so a line
+// carrying several open threads gets ONE index row instead of N. Only a
+// genuinely block-anchored (`kind === ''`, not orphaned) comment that still
+// resolves to a real block in this tree groups at all — the same
+// `anchoredBlocks` check recomputeLeftList already applies to decide whether
+// the comment gets a row in the first place; `anchoredBlocks` is passed in
+// rather than recomputed here since the caller already built it once for the
+// whole list. Returns null (never groups) for a PR-wide/`ai_warning`/orphan
+// comment — it has no line worth grouping on and keeps its own row.
+// `c.line` already IS the group/range's own FIRST row for a multi-line
+// comment: RelatedPanel.mjs always creates a comment with `line: t.startLine`
+// (see ensureClaudeAnchorForNew and the plain composer), never the last or
+// middle row — so no separate "first row of the range" computation is needed
+// here, per the reviewer's own instruction ("als het een groep of range
+// betreft, moet je eerste regel aanhouden").
+function commentGroupKeyOf(c, anchoredBlocks) {
+  if (c.kind || isOrphanComment(c)) return null
+  if (!anchoredBlocks.has(c.file + '|' + c.label)) return null
+  return c.file + '|' + c.label + '|' + (c.line || 0)
+}
+
 function recomputeLeftList() {
   // Only the resolved-call targets are hidden from the index (panel-only
   // reference code). Relation children STAY in state.blocks — fully navigable
@@ -2483,15 +2550,24 @@ function recomputeLeftList() {
   // unconditionally, as does a comment that @-mentions me). The check lives here
   // rather than in indexComments because state.blocks is this module's own.
   const anchoredBlocks = new Set(state.allBlocks.map((b) => b.file + '|' + b.label))
-  const commentItems = indexComments()
-    .filter(
-      (c) =>
-        c.kind ||
-        isOrphanComment(c) ||
-        commentMentionsMe(c) ||
-        anchoredBlocks.has(c.file + '|' + c.label),
-    )
-    .map(commentBlockItem)
+  const commentCandidates = indexComments().filter(
+    (c) => c.kind || isOrphanComment(c) || commentMentionsMe(c) || anchoredBlocks.has(c.file + '|' + c.label),
+  )
+  // Group every candidate that resolves to a real anchor (commentGroupKeyOf)
+  // with every OTHER one on the exact same source line into ONE index row
+  // (reviewer request: "comments... gegroepeerd worden per line") — a PR-wide/
+  // orphan comment has no line worth grouping on and keeps its own row, one
+  // per comment, as before (its own unique 'single:'+id key never collides).
+  // Map preserves insertion order, so a group sits at the position of
+  // whichever of its comments appeared FIRST in indexComments()' (i.e.
+  // cs.list's) chronological order — same ordering as before this feature.
+  const commentGroups = new Map() // key -> comment[]
+  for (const c of commentCandidates) {
+    const key = commentGroupKeyOf(c, anchoredBlocks) || 'single:' + c.id
+    if (!commentGroups.has(key)) commentGroups.set(key, [])
+    commentGroups.get(key).push(c)
+  }
+  const commentItems = [...commentGroups.values()].map(commentBlockItem)
   const visibleBlocks = state.allBlocks.filter((b) => !hidden.has(b.id))
   state.blocks = [...groupTestClasses(visibleBlocks), ...commentItems]
     // The haystack is label + category + FILE PATH (reviewer request: "ik wil
@@ -4585,14 +4661,17 @@ function nestedPrBlocks(b, seen = new Set()) {
 // otherwise the size of approvedRows (which only ever holds changed-row indices).
 function blockApproveCount(b) {
   // A synthetic comment-index item (kind:'comment', see commentBlockItem) has
-  // no changed rows to count — "resolved == approved" (Task decision): 1/1
-  // once its comment is resolved, 0/1 otherwise. This is the ONE place that
-  // special-cases kind:'comment' for approval — isFullyApproved itself
-  // (BlockList.mjs) stays generic, reading only state.approvalSummaries[b.id],
-  // which subtreeApproveCount below fills from this branch.
+  // no changed rows to count — "resolved == approved" (Task decision): the
+  // item now stands for a whole GROUP of comments on the same line/range
+  // (b.comments, grouped by commentGroupKeyOf — a solo comment is a group of
+  // one), so done/total sum over every comment in it instead of a fixed 0/1.
+  // This is the ONE place that special-cases kind:'comment' for approval —
+  // isFullyApproved itself (BlockList.mjs) stays generic, reading only
+  // state.approvalSummaries[b.id], which subtreeApproveCount below fills from
+  // this branch.
   if (b.kind === 'comment') {
-    const resolved = !!(b.comment && b.comment.status === 'resolved')
-    return { done: resolved ? 1 : 0, total: 1 }
+    const comments = b.comments || [b.comment]
+    return { done: comments.filter((c) => c && c.status === 'resolved').length, total: comments.length }
   }
   // A test_class row (see testClassRowItem/recomputeLeftList) sums its
   // METHODS' OWN rows only — deliberately NOT their nested Onderliggende-code
@@ -6531,6 +6610,20 @@ function topLoadingActive() {
 function selectedComment() {
   const b = curBlock()
   return b && b.kind === 'comment' ? b.comment : null
+}
+
+// firstUnresolvedComment is spaceKey's own resolve target for a comment row —
+// deliberately NOT always b.comment (the group's primary/first comment):
+// once a line groups several comments (commentGroupKeyOf/commentBlockItem),
+// resolving only ever the primary one would get spaceKey permanently stuck
+// as soon as THAT one comment happens to already be resolved while a sibling
+// in the same group is not — blockApproveCount sums the whole group, so the
+// row would stay "not fully approved" with no way for Space to progress it.
+// Falls back to b.comment for a plain, ungrouped/solo row (comments.length
+// === 1, the overwhelmingly common case) — unchanged behavior there.
+function firstUnresolvedComment(b) {
+  const comments = (b && b.comments) || (b && b.comment ? [b.comment] : [])
+  return comments.find((c) => c && c.status !== 'resolved') || comments[0] || null
 }
 
 // focusedBlock is whichever block the active Onderliggende-code panel (and its
@@ -8637,7 +8730,7 @@ function spaceKey() {
     toggleRangeApproval()
     return
   }
-  // A comment index row: Space RESOLVES the comment. That is this row's whole
+  // A comment index row: Space RESOLVES a comment. That is this row's whole
   // equivalent of approving — blockApproveCount already scores a comment row as
   // "resolved == approved" — and it is what makes the ↑/↓ walk over every open
   // comment (see indexComments in RelatedPanel.mjs) finishable at all. Space
@@ -8645,9 +8738,16 @@ function spaceKey() {
   // approveTargetRows came back empty). Resolving is not undone by a second
   // press: a resolved block-anchored comment leaves the index, and "Unresolve"
   // stays where it was, in the row's own Enter menu (prCommentCommandsFor).
-  const selComment = selectedComment()
-  if (selComment) {
-    if (selComment.status !== 'resolved') resolvePrCommentItem(selComment)
+  // firstUnresolvedComment, not selectedComment/b.comment: a row can now
+  // stand for a GROUP of comments on the same line (commentGroupKeyOf), and
+  // blockApproveCount sums the whole group — always resolving the group's
+  // primary comment would get stuck as soon as it happens to already be
+  // resolved while a sibling in the group isn't, leaving the row forever
+  // "not fully approved" with no way for Space to progress it.
+  const curB = curBlock()
+  const target = curB && curB.kind === 'comment' ? firstUnresolvedComment(curB) : null
+  if (target) {
+    if (target.status !== 'resolved') resolvePrCommentItem(target)
     return
   }
   const ctx = approveContext()
@@ -9996,16 +10096,40 @@ function onKeydown(e) {
   } else if (e.key === 'ArrowRight') {
     e.preventDefault()
     // A selected comment-index item (kind:'comment', see recomputeLeftList)
-    // has no diff to step into — → instead steps into its thread's message
-    // history (its own separate pct/enterPrCommentThread cursor, RelatedPanel.mjs
-    // — NOT the block-scoped cs.focus/'thread' state machine, which reaches
-    // 'thread' only via ↑, see .claude/docs/claude-chat-panel.md), reusing the
-    // same threadMessages rendering; ↑/↓/← are handled above once focused.
-    // Enter still opens the action menu (see the Enter branch above) —
-    // deliberately no longer the same action as →.
+    // has no diff of its own to step into — → instead reaches whatever the
+    // comment's own anchor block offers, via openCommentAnchorDrill:
+    //
+    // - Anchored (commentAnchorBlock resolves): the FIRST → opens the
+    //   anchor's block "as if fully expanded" (state.drill[0]) without
+    //   touching the keyboard — no comment card pre-expanded, per reviewer
+    //   request (see openCommentAnchorDrill's own doc comment). A SECOND →
+    //   (commentAnchorDrillFor already owns this exact item) hands the
+    //   keyboard INTO it, mirroring the state.mode==='diff' ArrowRight branch
+    //   above verbatim: lands on the first inline comment conversation if
+    //   there is one, else the embedded Claude column if one is hanging on
+    //   it, else the Onderliggende-code panel. This is what makes the
+    //   expanded view fully keyboard-navigable (reviewer request) despite
+    //   state.mode staying 'list' — relatedActive()'s ↑/↓/←/→ handling is
+    //   unconditional on mode.
+    // - Unanchored (a genuine PR-wide/orphan comment, nothing to drill into):
+    //   unchanged — steps into the comment's own thread message history
+    //   (its own separate pct/enterPrCommentThread cursor, RelatedPanel.mjs —
+    //   NOT the block-scoped cs.focus/'thread' state machine, which reaches
+    //   'thread' only via ↑, see .claude/docs/claude-chat-panel.md).
     const sc = selectedComment()
     if (sc) {
-      if (!isPrCommentThreadFocused(sc)) enterPrCommentThread(sc)
+      const anchor = commentAnchorBlock(sc)
+      if (anchor) {
+        const b = curBlock()
+        if (commentAnchorDrillFor !== b.id) {
+          openCommentAnchorDrill(b)
+        } else {
+          clearRangeAnchor()
+          if (hasVisibleComments()) enterCommentsHead()
+          else if (claudeColumnVisible()) enterClaudeChat(state.pr)
+          else enterRelated()
+        }
+      } else if (!isPrCommentThreadFocused(sc)) enterPrCommentThread(sc)
     } else enterDiff()
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault()
