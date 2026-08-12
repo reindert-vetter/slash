@@ -20,7 +20,14 @@ automatically anymore — every drilled column stays open for the whole diff
 session (see "Leaving a column" below).
 
 Requires an active diff session (`state.mode==='diff'`); drilling has no meaning
-outside diff mode.
+outside diff mode. **One deliberate exception:** `openCommentAnchorDrill`
+(`home.mjs`) opens a drilled column while STAYING in list mode, for a
+PR-comment index item anchored to a real block — see "An anchored 'Start' item
+instead opens its block 'as if fully expanded'" in `.claude/docs/comments-panel.md`.
+Every mechanism below (opening/closing, `.key()`, scrolling, the rail) is
+otherwise unaware of the distinction — only `BlockList`'s "hide the index in
+diff mode" check and the two `home.mjs` watches noted there needed to special-
+case it.
 
 A drill entry is **one of two forms**:
 

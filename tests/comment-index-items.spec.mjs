@@ -140,7 +140,15 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
     await page.keyboard.press('ArrowUp')
-    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
+    // Landing back on index 1 — the ANCHORED comment (it resolves to a real
+    // block, ContractController::index) — no longer shows commentDetailCard
+    // at all: selecting it now opens that block "as if fully expanded" (see
+    // openCommentAnchorDrill, home.mjs), collapsing the comment card's own
+    // spot into a rail instead. See comment-anchor-expanded-view.spec.mjs for
+    // that behaviour in full; here just confirm ↑/↓ still moved the selection.
+    await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
+    await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
+    await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
   })
 
   test('Enter opens the action menu', async ({ page }) => {
@@ -314,7 +322,13 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await page.keyboard.press('ArrowDown')
     await expect(page.locator('[data-idx="0"]')).not.toHaveClass(/bg-indigo-50/)
     await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
-    await expect(page.getByTestId('comment-detail-card').first()).toContainText('please rename this variable')
+    // Index 1 is the ANCHORED comment (ContractController::index) — landing
+    // on it now opens that block "as if fully expanded" instead of showing
+    // commentDetailCard (see openCommentAnchorDrill, home.mjs, and
+    // comment-anchor-expanded-view.spec.mjs for that behaviour in full); here
+    // just confirm ↓ actually advanced onto that row.
+    await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
+    await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
   })
 
   test('"Beantwoorden" reveals the reply field only after Enter, and sends via the reply Signal', async ({

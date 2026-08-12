@@ -544,6 +544,20 @@ const state = reactive({
   // viewMode opt — see Block.mjs's codeDiff. Ephemeral UI state, not bound to
   // the URL, like showDescription/showApproved above.
   diffViewMode: 'split',
+  // commentAnchorViewMode — the diff-pane preference for ONE specific,
+  // narrow case: a PR-comment index item that is anchored to a real block
+  // (see openCommentAnchorDrill/commentAnchorBlock) is shown "as if the code
+  // were already fully expanded" by drilling into that block automatically,
+  // while staying in list mode (so the pr-index/blokken-index stays visible
+  // — unlike an ordinary drilled column). That expanded view defaults to
+  // 'unified', deliberately independent of the reviewer's own global
+  // diffViewMode preference above (explicit request: only THIS view
+  // defaults differently) — isCommentAnchorDrillActive's viewMode/setViewMode
+  // pair reads/writes this field instead of diffViewMode while such a drill
+  // is the one open. Reset to 'unified' every time a fresh comment-anchor
+  // drill opens (openCommentAnchorDrill), so a toggle on one finding never
+  // carries over to the next. Ephemeral UI state, not bound to the URL.
+  commentAnchorViewMode: 'unified',
   // explanations — the AI unit-explanation read-model (GET /api/explanations):
   // per `${blockId}|${unitKey}` an entry { codeHash, status, text }, generated
   // by the explain_code workflow (Opus) for any line/group unit the reviewer
@@ -1015,6 +1029,13 @@ let lastSelectedBlockRef = undefined
 // before; only an unchanged ref short-circuits. See the "watch() fires even on
 // an unchanged value" entry in arrowjs-pitfalls.md.
 let lastFiredSelectionRef = undefined
+// commentAnchorDrillFor — plain (non-reactive) bookkeeping: the id of the
+// comment (if any) that currently owns the ONE open drilled column via
+// openCommentAnchorDrill (below). Lets the watch's cleanup branch tell "close
+// what THIS feature opened" apart from "leave an ordinary drilled column
+// (applyNextUnapproved/drillIntoChild/openTask) alone" — see that cleanup
+// branch's own doc comment for why an unconditional clear there is wrong.
+let commentAnchorDrillFor = null
 watch(
   () => state.selected,
   () => {
@@ -1032,7 +1053,28 @@ watch(
       // this branch first landed in), so there is no restored value here
       // worth preserving.
       leaveRelated()
+      // "As if the code were already fully expanded" for a comment anchored
+      // to a real block — see openCommentAnchorDrill's own doc comment.
+      openCommentAnchorDrill(b.comment)
       return
+    }
+    // Landed on anything other than an anchored comment item (an ordinary
+    // block, a test_class row, or a comment with no matching block) — close
+    // a comment-anchor drill left open from the PREVIOUS selection, but ONLY
+    // if THIS feature is the one that opened it (commentAnchorDrillFor, see
+    // openCommentAnchorDrill's own doc comment). Never clear state.drill
+    // unconditionally here: this same watch also fires — AFTER, since
+    // arrow.js's watch runs its callback asynchronously, once the whole
+    // synchronous caller has already finished — for a state.selected change
+    // that is itself part of setting up a brand-new, LEGITIMATE drill of its
+    // own (applyNextUnapproved's "Ga door" landing straight into a child
+    // subtree, drillIntoChild, openTask) — an unconditional clear here wiped
+    // that drill the instant it opened. See drill-mode-flip.spec.mjs.
+    if (commentAnchorDrillFor) {
+      state.drill = []
+      state.drillCursor = []
+      state.focusLevel = 0
+      commentAnchorDrillFor = null
     }
     if (!b) return // state.blocks hasn't loaded yet — nothing to compare
     const ref = b.kind === 'test_class' ? b.id : `${b.file}:${b.line}`
@@ -2193,6 +2235,118 @@ function categoryRank(cat) {
 // zone at that first, synchronous call.
 let freshDefaultSelectionPending = false
 let freshDefaultSelectionAt = null // { blockId } | { toggle: true } | null
+
+// commentAnchorBlock resolves a comment's own file+label back to the real PR
+// block it's anchored to, if any — the same identity `anchoredBlocks`
+// (recomputeLeftList) already checks to decide whether the comment even gets
+// its own index row. Purely a lookup: never mutates state.selected/mode/
+// drill. Searches state.allBlocks (the flat, complete /api/blocks list,
+// see loadBlocks) rather than state.blocks (the derived, grouped/filtered
+// DISPLAY list — test methods folded into their test_class row, resolved-
+// call/relation children pulled into "Onderliggende code", approved rows
+// possibly hidden) — a comment must resolve to its anchor regardless of
+// how the sidebar currently happens to be grouped/filtered, and every real
+// block (including a TEST method) is present in state.allBlocks either way.
+// Returns null for a comment with no matching block at all (a genuinely
+// PR-wide issue/review/review_summary comment, an unanchored "ai_warning"
+// finding, or an orphan whose block is gone).
+function commentAnchorBlock(c) {
+  if (!c || !c.file) return null
+  return state.allBlocks.find((b) => b.file === c.file && b.label === c.label) || null
+}
+
+// openCommentAnchorDrill makes selecting a PR-comment index item that IS
+// anchored to a real block (commentAnchorBlock) show "as if the code were
+// already fully expanded" — the explicit request behind this function: the
+// comment's own block opens as a drilled column (state.drill[0]), exactly
+// like Enter on an Onderliggende-code child would (drillIntoChild), but
+// WITHOUT ever leaving list mode. That one difference is what keeps the
+// blokken-index visible (BlockList.mjs only hides it in diff mode) while
+// state.selected stays put on the comment row itself (so the sidebar
+// highlight never jumps to the block) — a comment item can never itself be
+// drilled deeper (see the DetailPanel pair.forEach kind==='comment' branch),
+// so this is always exactly one level, state.drill[0].
+// commentTarget()/commentScope()/relatedChildren() all key off focusedBlock(),
+// which at focusLevel>0 resolves to this drilled entry — so the comment
+// thread (now correctly scoped, since an anchored comment's own Kind is ''
+// per anchoredWarning in code_warning.go — it passes recomputeView's
+// `!c.kind` filter like any ordinary block comment), the Onderliggende-code
+// panel and the embedded Claude column all follow along for free, with no
+// further wiring needed.
+// The drilled cursor is set to the comment's OWN unit (c.gran/c.rowStart),
+// not drillIntoChild's plain {change:0, gran:'group'} default — commentScope
+// (via focusedBlock()) filters the "in-block" comment index down to whatever
+// unit the cursor sits on, and the whole point here is that the very comment
+// that opened this view shows up in it (mirrors openTask's identical
+// unitAtRow lookup). Called from the state.selected watch above on every
+// comment-item selection (click or arrow key), so this always reflects the
+// CURRENT selection, never stale.
+function commentAnchorCursor(anchor, c) {
+  const gran = c.gran || 'group'
+  const rows = blockRows(anchor)
+  const units = rows.length ? navUnitsOf(anchor, rows, gran) : []
+  const change = units.length ? unitAtRow(units, c.rowStart != null && c.rowStart >= 0 ? c.rowStart : 0) : 0
+  return { change, gran }
+}
+
+function openCommentAnchorDrill(c) {
+  const anchor = commentAnchorBlock(c)
+  if (!anchor) {
+    // Only close a drill THIS feature opened (commentAnchorDrillFor) — never
+    // an ordinary drill left open some other way, see its own doc comment.
+    if (commentAnchorDrillFor) {
+      state.drill = []
+      state.drillCursor = []
+      state.focusLevel = 0
+      commentAnchorDrillFor = null
+    }
+    return
+  }
+  commentAnchorDrillFor = c.id
+  // Already open on this exact anchor (e.g. the comment-poll's 5s tick
+  // reassigning cs.list, which can retrigger this watch — see
+  // lastFiredSelectionRef above) — leave it alone so a granularity/
+  // viewMode change the reviewer just made inside it survives.
+  if (state.drill.length === 1 && state.drill[0] === anchor) return
+  state.drill = [anchor]
+  state.drillCursor = [commentAnchorCursor(anchor, c)]
+  state.focusLevel = 1
+  // Standaard Unified diff for this expanded view specifically (explicit
+  // request) — independent of the reviewer's own global diffViewMode
+  // preference, see state.commentAnchorViewMode's own doc comment.
+  state.commentAnchorViewMode = 'unified'
+  scrollFocusIntoView()
+  // commentAnchorCursor's row lookup needs the anchor's own aligned diff rows
+  // (blockRows), which aren't there yet on this block's very first open — it
+  // silently fell back to {change:0}. Recompute once the code (and thus the
+  // real rows) has actually landed, but only if this exact drill is still
+  // the one open (a fast ↓/↑ away from this comment before the fetch settles
+  // must not resurrect/overwrite whatever is open by then).
+  if (!anchor.code) {
+    ensureCode(anchor).then(() => {
+      if (state.drill.length === 1 && state.drill[0] === anchor && state.focusLevel === 1) {
+        state.drillCursor = [commentAnchorCursor(anchor, c)]
+      }
+    })
+  }
+}
+
+// isCommentAnchorDrillActive reports whether the drilled column at `level`
+// is exactly the one openCommentAnchorDrill opened for the CURRENTLY
+// selected comment item — as opposed to an ordinary Onderliggende-code drill
+// (Enter on a related child), which must keep following the shared
+// state.diffViewMode. Only level 1 can ever be a comment anchor (see
+// openCommentAnchorDrill), and only while curBlock() is still that same
+// comment item — stepping the selection away already closes the drill (see
+// the state.selected watch above), but this stays level-scoped rather than
+// stack-length-scoped so drilling further IN from the anchor (a second,
+// ordinary child) still correctly identifies which single level is the
+// special one.
+function isCommentAnchorDrillActive(level) {
+  if (level !== 1) return false
+  const b = curBlock()
+  return !!(b && b.kind === 'comment' && state.drill[0] === commentAnchorBlock(b.comment))
+}
 
 function commentBlockItem(c) {
   const snippet = (c.body || '').trim().replace(/\s+/g, ' ').slice(0, 60)
@@ -11312,8 +11466,16 @@ function DetailPanel(state) {
                   commentedRows: () => commentRowSet(b),
                   commentRangeRows: () => commentRangeRowSet(b),
                   lineSummaries: () => lineChildSummaries(b),
-                  viewMode: () => state.diffViewMode,
-                  setViewMode: setDiffViewMode,
+                  // The one drilled column opened automatically for an
+                  // anchored comment-index item (see openCommentAnchorDrill/
+                  // isCommentAnchorDrillActive) defaults to Unified,
+                  // independent of the reviewer's own global diffViewMode —
+                  // every other drilled column (an ordinary Enter on an
+                  // Onderliggende-code child) keeps following that shared
+                  // preference, unchanged.
+                  viewMode: () => (isCommentAnchorDrillActive(level) ? state.commentAnchorViewMode : state.diffViewMode),
+                  setViewMode: (m) =>
+                    isCommentAnchorDrillActive(level) ? (state.commentAnchorViewMode = m) : setDiffViewMode(m),
                   // Same manual column-width override as the top-level card
                   // (see columnWidth.mjs) — a drilled column gets its own
                   // independent override, keyed by its own block's id (a real

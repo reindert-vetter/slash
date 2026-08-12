@@ -60,6 +60,65 @@ item's own detail card (`commentDetailCard`, reading `prWideComments()`, not
 `cs.view`) and its own thread cursor (`pct`/`enterPrCommentThread`) are a wholly
 separate mechanism and are unaffected.
 
+### An anchored "Start" item instead opens its block "as if fully expanded"
+
+The section above is for a genuinely unanchored item (a PR-wide comment, an
+orphan, or one with no matching block at all). A comment-index row that DOES
+resolve to a real block (`commentAnchorBlock`, `home.mjs` — the same
+`file`+`label` identity `anchoredBlocks` already checks to decide whether the
+comment gets a row at all, per "Every UNRESOLVED comment gets such a row too"
+above) instead shows that block's own diff, its Underlying-code panel and the
+embedded Claude column — reviewer request: selecting such an item should look
+"as if the code were already fully expanded", not just the bare read-only
+thread card.
+
+`openCommentAnchorDrill` (`home.mjs`, called from the same `state.selected`
+watch as the sentinel-scope branch above) opens the anchor as a **drilled
+column** (`state.drill[0]`) — exactly the mechanism `Enter` on an
+Onderliggende-code child uses (`drillIntoChild`) — but **without leaving list
+mode**. That one difference is deliberate and is the whole point: `BlockList`
+only hides the blokken-index in `state.mode === 'diff'`, so it stays visible
+next to the expanded diff (reviewer request: "ook met de blokken index
+zichtbaar"), and `state.selected` is never touched, so the sidebar highlight
+stays on the comment row itself rather than jumping to the block. The
+top-level block-column (which would otherwise render the comment's own
+`commentDetailCard`) collapses to a narrow rail instead, since
+`focusedBlock()` now resolves through `state.focusLevel > 0` to the drilled
+anchor — `commentTarget()`/`commentScope()`/`relatedChildren()` all follow
+that for free, so the comment thread (correctly scoped now, since an anchored
+finding's own `Kind` is `''` per `anchoredWarning` in `code_warning.go` — it
+passes `recomputeView`'s `!c.kind` filter like any ordinary comment), the
+Underlying-code panel and the embedded Claude column need no further wiring.
+The drilled cursor is set to the comment's own unit (`c.gran`/`c.rowStart`,
+recomputed once the anchor's code — and thus its aligned rows — actually
+arrives, since the very first open has to guess against an empty row list),
+so the comment that triggered this view is the one that shows up scoped next
+to it.
+
+Defaults to **Unified** (`state.commentAnchorViewMode`, distinct from the
+global `state.diffViewMode`, per explicit request: only this one view
+defaults differently) — `isCommentAnchorDrillActive(level)` picks which field
+a given drilled column's `viewMode`/`setViewMode` reads/writes; every OTHER
+drilled column (an ordinary Onderliggende-code child) still follows the
+shared preference.
+
+Deliberately mouse/read-only, not keyboard-interactive: every drilled-column
+key (`↓`/`↑`/`f`/`d`/`s`/`←`/`→`) in `onKeydown` is gated on
+`state.mode === 'diff'`, which this view never enters — `↓`/`↑` keep walking
+the sidebar list as they already do for any comment item, only the mouse (an
+approve checkbox, an Onderliggende-code child, scrolling) reaches inside the
+expanded diff itself. A plain, non-reactive `commentAnchorDrillFor` (the open
+comment's own id) tracks whether this ONE feature is the one that opened the
+current drill, so the cleanup half of the same watch (landing on anything
+else) only ever closes a drill it opened itself — never an ordinary,
+unrelated drill that another code path (`applyNextUnapproved`'s "Ga door",
+`drillIntoChild`, `openTask`) is in the middle of setting up via the very same
+`state.selected` change (arrow.js's `watch` runs its callback once the whole
+synchronous caller has already finished, not before — an unconditional clear
+here wiped a "Ga door" landing the instant it opened, see
+`tests/drill-mode-flip.spec.mjs`). Test:
+`tests/comment-anchor-expanded-view.spec.mjs`.
+
 ### An orphaned block comment joins them
 
 `anchorState === 'orphan'` (`isOrphanComment`): a new commit renamed or removed
