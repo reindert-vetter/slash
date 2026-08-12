@@ -110,6 +110,7 @@ import RelatedPanel, {
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
+import { setPrRepo } from './prContext.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { commentMentionsMe } from './mentions.mjs'
@@ -131,13 +132,28 @@ import {
 
 initTheme()
 
-// The PR under review comes from the path: /pr/<id>. Without one there's nothing
-// to show, so bounce to the overview page that lists the ingested PRs.
+// The PR under review comes from the path. Two shapes, and the first one is the
+// historical one, unchanged:
+//
+//   /pr/<id>                      → the PRIMARY repo (see repos.go)
+//   /pr/<repo-name>/<id>          → another configured repo, named by its bare
+//                                   repo name ("/pr/plug-and-pay-ops/12")
+//
+// Reindert chose the full repo NAME in the URL over the short internal key: a URL
+// is read by humans, a run-ID prefix is not. The server canonicalizes whatever we
+// send back in `repo=` (canonRepo accepts the name, the key or the full slug), and
+// an unknown repo simply reads as the primary one.
+//
+// Without a PR there's nothing to show, so bounce to the overview page.
 function prFromPath() {
-  const m = location.pathname.match(/^\/pr\/(\d+)/)
-  return m ? parseInt(m[1], 10) : null
+  const m = location.pathname.match(/^\/pr\/(?:([^/]+)\/)?(\d+)/)
+  return m ? { repo: m[1] ? decodeURIComponent(m[1]) : '', pr: parseInt(m[2], 10) } : null
 }
-const PR = prFromPath()
+const FROM_PATH = prFromPath()
+const PR = FROM_PATH ? FROM_PATH.pr : null
+// REPO is the repo NAME from the path ("" = the primary repo). Every per-PR
+// request carries it as `repo=` (see repoQuery below).
+const REPO = FROM_PATH ? FROM_PATH.repo : ''
 if (PR == null) {
   location.replace('/pr-overview')
 }
@@ -150,11 +166,33 @@ if (PR != null) {
 // JIRA_BASE mirrors the overview page — used to build the "Openen in nieuw tab"
 // link in the `/` PR menu when the PR title carries a KEY-123-style ticket key.
 const JIRA_BASE = 'https://plugandpaybv.atlassian.net/browse/'
-// GITHUB_PR is the fallback PR URL, used until the prmeta read-model loads.
-const GITHUB_PR = `https://github.com/plug-and-pay/plug-and-pay/pull/${PR}`
+// GITHUB_PR is the fallback PR URL, used until the prmeta read-model loads. The
+// owner is the same for every repo slash reviews; only the repo name varies, and
+// the path already carries it (REPO).
+const GITHUB_PR = `https://github.com/plug-and-pay/${REPO || 'plug-and-pay'}/pull/${PR}`
+
+// repoQuery is the `&repo=<name>` suffix every per-PR API call appends — empty
+// for the primary repo, so a primary-repo request is byte-identical to what a
+// single-repo build sent.
+const repoQuery = REPO ? '&repo=' + encodeURIComponent(REPO) : ''
+// Share it with the modules that build their own per-PR URLs (RelatedPanel,
+// commentBatch, events) — see src/prContext.mjs.
+setPrRepo(REPO)
+
+// prUidHere is this page's PR identity when handing off to the overview page: the
+// bare number for the primary repo (the historical form every existing link and
+// test uses) and "<repo-name>#<n>" otherwise. The overview matches either that or
+// its own "<owner/name>#<n>" spelling (see matchesPrRef there) — the path only
+// gives us the repo NAME, never the owner, and inventing one would be a guess.
+function prUidHere() {
+  return REPO ? REPO + '#' + PR : String(PR)
+}
 
 const state = reactive({
   pr: PR,
+  // repo — the repo NAME from the path ("" = the primary repo). Read-only for the
+  // lifetime of the page, like `pr`.
+  repo: REPO,
   // PR metadata from the prmeta read-model (GET /api/pr), filled by the pr_status
   // workflow at start: the title, its GitHub URL, and the Jira key derived from
   // the title (KEY-123). Feeds the `/` PR menu's GitHub/Jira deep-links.
@@ -1317,7 +1355,9 @@ function applyCursorAt(level, b, gran, change) {
 // returned-to page would restore in list mode and the app's own URL-mirror
 // watch would immediately strip drill/dgran/dchg back out again.
 function overviewExitUrl() {
-  let url = '/pr-overview?pr=' + state.pr
+  // The overview keys its rows by (repo, number) — prUid there — so hand back
+  // that same identity, not a bare number.
+  let url = '/pr-overview?pr=' + encodeURIComponent(prUidHere())
   if (state.blockRef) {
     url += '&sel=' + encodeURIComponent(state.blockRef)
     if (state.drillRef) {
@@ -1340,7 +1380,7 @@ function overviewExitUrl() {
 // the time the page appears, with the top remaining row selected instead of
 // this one. See `approvedPr`/`trySelectTopAfterApprove` in overview.mjs.
 function overviewExitUrlAfterApprove() {
-  return '/pr-overview?approved=' + state.pr
+  return '/pr-overview?approved=' + encodeURIComponent(prUidHere())
 }
 
 // translationNavUnits adapts translationRowUnits(b) (Block.mjs) — one entry
@@ -1867,7 +1907,7 @@ function sKey() {
 }
 
 async function loadBlocks() {
-  const res = await fetch(`/api/blocks?pr=${state.pr}`)
+  const res = await fetch(`/api/blocks?pr=${state.pr}${repoQuery}`)
   if (!res.ok) {
     state.error = `load failed: ${res.status}`
     return
@@ -1971,7 +2011,7 @@ async function loadBlocks() {
 // offline, blockApproveCount just falls back to the client-side row count.
 async function loadBlockStats() {
   try {
-    const res = await fetch(`/api/blockstats?pr=${state.pr}`)
+    const res = await fetch(`/api/blockstats?pr=${state.pr}${repoQuery}`)
     if (!res.ok) return
     const data = await res.json()
     if (data && data.totals && typeof data.totals === 'object') {
@@ -1994,7 +2034,7 @@ async function loadApprovals() {
     const res = await fetch('/api/workflows/approve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: state.pr }),
+      body: JSON.stringify({ pr: state.pr, repo: state.repo || undefined }),
     })
     if (res.ok) {
       const { runId } = await res.json()
@@ -2004,7 +2044,7 @@ async function loadApprovals() {
     /* offline — approval stays session-only */
   }
   try {
-    const res = await fetch(`/api/approvals?pr=${state.pr}`)
+    const res = await fetch(`/api/approvals?pr=${state.pr}${repoQuery}`)
     if (!res.ok) return
     const rows = await res.json()
     if (!Array.isArray(rows)) return
@@ -2040,7 +2080,7 @@ async function loadIgnoredComments() {
     const res = await fetch('/api/workflows/ignore_comment', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: state.pr }),
+      body: JSON.stringify({ pr: state.pr, repo: state.repo || undefined }),
     })
     if (res.ok) {
       const { runId } = await res.json()
@@ -2050,7 +2090,7 @@ async function loadIgnoredComments() {
     /* offline — ignoring stays session-only */
   }
   try {
-    const res = await fetch(`/api/commentignores?pr=${state.pr}`)
+    const res = await fetch(`/api/commentignores?pr=${state.pr}${repoQuery}`)
     if (!res.ok) return
     const data = await res.json()
     if (!data || !Array.isArray(data.ignored)) return
@@ -3254,7 +3294,7 @@ function resolvedCallTargetIds() {
     // tonen"), same both-ways rule as translation/test targets above.
     if (r.kind === 'class_ctor' || r.kind === 'class_first_method') continue
     const childId =
-      state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
+      blockIdPrefix() + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
     if (prBlockIds.has(childId) && !testTargets.has(childId)) ids.add(childId)
   }
   return ids
@@ -3276,7 +3316,7 @@ function testCallTargetIds() {
     if (r.status !== 'resolved' && r.status !== 'found') continue
     if (callerCategory.get(r.callerId) !== 'TEST') continue
     const childId =
-      state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
+      blockIdPrefix() + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
     if (prBlockIds.has(childId)) ids.add(childId)
   }
   return ids
@@ -3316,7 +3356,7 @@ function swallowedClassHeaderIds() {
 // re-renders the Onderliggende-code panel when a search completes.
 async function loadCallResolve() {
   try {
-    const res = await fetch(`/api/callresolve?pr=${state.pr}`)
+    const res = await fetch(`/api/callresolve?pr=${state.pr}${repoQuery}`)
     if (!res.ok) return
     const rows = await res.json()
     state.callResolve = Array.isArray(rows) ? rows : []
@@ -3340,7 +3380,7 @@ async function loadCallResolve() {
 // offline simply keeps whatever we had.
 async function loadPendingPush() {
   try {
-    const res = await fetch(`/api/pending-push?prs=${state.pr}`)
+    const res = await fetch(`/api/pending-push?prs=${encodeURIComponent(prUidHere())}`)
     if (!res.ok) return
     const data = await res.json()
     const row = data && data.pending ? data.pending[String(state.pr)] : null
@@ -3390,7 +3430,7 @@ function pendingPushFiles() {
 // generation completes.
 async function loadExplanations() {
   try {
-    const res = await fetch(`/api/explanations?pr=${state.pr}`)
+    const res = await fetch(`/api/explanations?pr=${state.pr}${repoQuery}`)
     if (!res.ok) return
     const rows = await res.json()
     if (!Array.isArray(rows)) return
@@ -3430,7 +3470,7 @@ function testCoverTargetIds() {
 // re-renders the Onderliggende-code panel when a search completes.
 async function loadTestCovers() {
   try {
-    const res = await fetch(`/api/testcovers?pr=${state.pr}`)
+    const res = await fetch(`/api/testcovers?pr=${state.pr}${repoQuery}`)
     if (!res.ok) return
     const rows = await res.json()
     state.testCovers = Array.isArray(rows) ? rows : []
@@ -3444,7 +3484,7 @@ async function loadTestCovers() {
 // transient failure just yields no relations, so every block stays on the left.
 async function loadRelations() {
   try {
-    const res = await fetch(`/api/relations?pr=${state.pr}`)
+    const res = await fetch(`/api/relations?pr=${state.pr}${repoQuery}`)
     if (!res.ok) return []
     const rels = await res.json()
     return Array.isArray(rels) ? rels : []
@@ -3475,7 +3515,7 @@ function loadPRMeta() {
   fetch('/api/workflows/pr_status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pr: state.pr }),
+    body: JSON.stringify({ pr: state.pr, repo: state.repo || undefined }),
   })
     .then((res) => (res.ok ? res.json() : null))
     .then((body) => {
@@ -3522,7 +3562,7 @@ function startPRStatusHeartbeat() {
 
 async function pollPRMeta(count) {
   try {
-    const res = await fetch(`/api/pr?pr=${state.pr}`)
+    const res = await fetch(`/api/pr?pr=${state.pr}${repoQuery}`)
     if (res.ok) {
       const meta = await res.json()
       if (meta && meta.ok) {
@@ -3556,7 +3596,7 @@ const WORKFLOWS_POLL_MS = 2500
 // page. Read-only; best-effort (offline just leaves the last-known list).
 async function pollWorkflows() {
   try {
-    const res = await fetch(`/api/workflows?pr=${state.pr}`)
+    const res = await fetch(`/api/workflows?pr=${state.pr}${repoQuery}`)
     if (res.ok) {
       const data = await res.json()
       if (data && data.ok) {
@@ -4292,11 +4332,26 @@ function callRows(b) {
   return callResolveByCallerId().get(b.id) || NO_ROWS
 }
 
+// blockIdPrefix is the "<pr>" (primary repo) or "<repo-key>#<pr>" prefix every
+// block id of THIS page carries — see Block.ID in model.go. The repo KEY is a
+// server-side notion (settings.json), so it is not derived here but read off a
+// loaded block's own id: everything before the first ":" is exactly that prefix.
+// Falls back to the bare PR number, which is the primary repo's form, before any
+// block is loaded.
+function blockIdPrefix() {
+  const b = state.blocks && state.blocks[0]
+  if (b && typeof b.id === 'string') {
+    const i = b.id.indexOf(':')
+    if (i > 0) return b.id.slice(0, i)
+  }
+  return String(state.pr)
+}
+
 // callChildId builds the PR-block id a call-resolution row points at (empty
 // class → free function). Matches the id scheme in model.go (Block.ID).
 function callChildId(r) {
   return (
-    state.pr + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
+    blockIdPrefix() + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
   )
 }
 
@@ -4477,6 +4532,7 @@ async function startTestCoverSearch(b) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         pr: state.pr,
+        repo: state.repo || undefined,
         testId: b.id,
         testFile: b.file,
         testClass: b.class || '',
@@ -4974,6 +5030,7 @@ async function startCallSearch(b) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         pr: state.pr,
+        repo: state.repo || undefined,
         callerId: b.id,
         callerFile: b.file,
         callerClass: b.class || '',
@@ -5022,6 +5079,7 @@ async function ensureCode(b) {
   b.code = null
   try {
     const params = new URLSearchParams({ pr: state.pr, file: b.file, name: b.name })
+    if (state.repo) params.set('repo', state.repo)
     if (b.class) params.set('class', b.class)
     // A renamed file's OLD source lives at its pre-rename path in the base
     // worktree — tell the server so the old diff side is read from there.
@@ -5144,7 +5202,7 @@ async function ensureLangSiblings(b) {
   if (!b || b.category !== 'TRANSLATION' || langSiblingRequested.has(b.id)) return
   langSiblingRequested.add(b.id)
   try {
-    const res = await fetch(`/api/langsiblings?pr=${state.pr}&file=${encodeURIComponent(b.file)}`)
+    const res = await fetch(`/api/langsiblings?pr=${state.pr}&file=${encodeURIComponent(b.file)}${repoQuery}`)
     if (!res.ok) return
     const body = await res.json()
     const sibs = Array.isArray(body.siblings) ? body.siblings : []
@@ -5162,7 +5220,7 @@ async function ingest() {
     const res = await fetch('/api/ingest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: state.pr }),
+      body: JSON.stringify({ pr: state.pr, repo: state.repo || undefined }),
     })
     const body = await res.json().catch(() => ({}))
     if (!res.ok) {
@@ -6263,7 +6321,7 @@ async function submitReview(event, body = '') {
     const res = await fetch('/api/workflows/submit_review', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: state.pr, event, body }),
+      body: JSON.stringify({ pr: state.pr, repo: state.repo || undefined, event, body }),
     })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
@@ -7680,7 +7738,7 @@ async function requestExplain(req) {
     await fetch('/api/workflows/explain_code', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: state.pr, ...req }),
+      body: JSON.stringify({ pr: state.pr, repo: state.repo || undefined, ...req }),
     })
   } catch (_) {
     /* offline — leave the read-model untouched */

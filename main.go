@@ -360,6 +360,8 @@ func runSeedCmd(args []string) {
 	if *from == "" {
 		log.Fatal("usage: slash seed -db <path> -from <blocks.json> [-relations <relations.json>] [-callresolve <callresolve.json>] [-testcovers <testcovers.json>] [-explanations <explanations.json>] [-comments <comments.json>]")
 	}
+	// The registry must exist before canonRepo() can resolve a fixture's "repo".
+	initRepos(dataDirPath(""))
 	raw, err := os.ReadFile(*from)
 	if err != nil {
 		log.Fatalf("read fixture: %v", err)
@@ -375,14 +377,17 @@ func runSeedCmd(args []string) {
 	}
 	defer db.Close()
 
-	// Group by PR so each PR is a clean replace.
-	byPR := map[int][]Block{}
+	// Group by (repo, PR) so each PR is a clean replace — a fixture may carry a
+	// "repo" per block (see repos.go: "" = the primary repo), which is how a test
+	// seeds a second repository's PR.
+	byPR := map[prKey][]Block{}
 	for _, b := range blocks {
-		byPR[b.PR] = append(byPR[b.PR], b)
+		key := prKey{canonRepo(b.Repo), b.PR}
+		byPR[key] = append(byPR[key], b)
 	}
-	for pr, bs := range byPR {
-		if err := replacePRBlocks(db, "", pr, bs); err != nil {
-			log.Fatalf("seed pr %d: %v", pr, err)
+	for key, bs := range byPR {
+		if err := replacePRBlocks(db, key.Repo, key.PR, bs); err != nil {
+			log.Fatalf("seed pr %s: %v", key, err)
 		}
 	}
 	log.Printf("seeded %d blocks from %s", len(blocks), *from)

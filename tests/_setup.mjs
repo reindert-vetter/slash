@@ -27,9 +27,12 @@ export const TEST_DATA_DIR = 'tests/.tmp/data'
 // base/head worktrees under TEST_DATA_DIR — the shared shape every
 // materialize*Worktrees function below uses (it mirrors the layout
 // worktreeDirs() in ingest.go expects: <data>/worktrees/pr-<n>-{base,head}).
-function worktreeWriter(pr) {
+function worktreeWriter(pr, repoKey = '') {
+  // A second repo's worktrees carry its key up front ("ops-pr-12-base"), exactly
+  // like worktreeDirs in ingest.go — see repos.go.
+  const prefix = repoKey ? `${repoKey}-` : ''
   return (side, relPath, contents) => {
-    const full = `${TEST_DATA_DIR}/worktrees/pr-${pr}-${side}/${relPath}`
+    const full = `${TEST_DATA_DIR}/worktrees/${prefix}pr-${pr}-${side}/${relPath}`
     mkdirSync(full.slice(0, full.lastIndexOf('/')), { recursive: true })
     writeFileSync(full, contents)
   }
@@ -58,6 +61,33 @@ export default function globalSetup() {
   materializeWhenScopeWorktrees()
   materializeSignatureRefWorktrees()
   materializeSettings()
+  materializeOpsRepoWorktrees()
+}
+
+// materializeOpsRepoWorktrees writes the base/head worktrees for the SECOND
+// repo's fixture PR (plug-and-pay-ops#12, seeded by tests/fixtures/ops-blocks.json)
+// — one hand-written PHP file with a real changed line, so the review tree of a
+// non-primary repo has an actual on-disk diff to render. Its directory names carry
+// the repo key ("ops-pr-12-base"), which is precisely the layout the server
+// derives; if the two ever drift apart, the diff simply comes back empty and
+// tests/tree-multi-repo.spec.mjs fails.
+function materializeOpsRepoWorktrees() {
+  const file = (value) => `<?php
+
+namespace App\\Services;
+
+class MollieCapitalImporter
+{
+    public function import()
+    {
+        $rows = ${value};
+        return $rows;
+    }
+}
+`
+  const write = worktreeWriter(12, 'ops')
+  write('base', 'app/Services/MollieCapitalImporter.php', file(1))
+  write('head', 'app/Services/MollieCapitalImporter.php', file(2))
 }
 
 // materializeSettings writes TEST_DATA_DIR/settings.json with the SECOND

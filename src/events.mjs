@@ -26,6 +26,8 @@
 // it. One unnamed stream + client-side fan-out keeps subscription order
 // irrelevant.
 
+import { repoParam } from './prContext.mjs'
+
 let source = null
 let currentPr = null
 const handlers = new Map() // type -> Set(handler)
@@ -42,7 +44,7 @@ export function ensureEvents(pr) {
     source = null
   }
   currentPr = pr
-  const url = '/api/events' + (pr ? '?pr=' + encodeURIComponent(pr) : '')
+  const url = '/api/events' + (pr ? '?pr=' + encodeURIComponent(pr) + repoParam() : '')
   source = new EventSource(url)
   source.onmessage = (e) => {
     let ev = null

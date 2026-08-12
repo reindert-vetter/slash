@@ -19,6 +19,7 @@ import { renderMarkdown, countCodeFences, annotateFenceNumbers } from './markdow
 import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin } from './avatar.mjs'
 import { commentMentionsMe, ensureSettings } from './mentions.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
+import { repoParam, repoField } from './prContext.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
 import { codePreviewColumn } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
@@ -1311,7 +1312,7 @@ watch(() => [cs.sel, cs.focus, cs.list, cs.scopeSig], syncClaudeAnchorForSelecti
 async function loadChatConversations(pr) {
   if (pr == null) return
   try {
-    const res = await fetch('/api/chat?pr=' + encodeURIComponent(pr))
+    const res = await fetch('/api/chat?pr=' + encodeURIComponent(pr) + repoParam())
     if (!res.ok) return
     const json = await res.json()
     // Reassign, never mutate — that is what re-runs the visibility binding.
@@ -1340,7 +1341,7 @@ async function ensureAndLoadChat(pr, commentId) {
     const res = await fetch('/api/workflows/claude_chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr, commentId }),
+      body: JSON.stringify({ pr, repo: repoField(), commentId }),
     })
     if (!res.ok) {
       cc.status = 'error'
@@ -1458,7 +1459,7 @@ function applyPendingDraftReplies(commentId) {
 // the reply-field side effect is skipped.
 async function loadChatMessages(commentId, applyDrafts = true) {
   try {
-    const res = await fetch('/api/chat?commentId=' + encodeURIComponent(commentId))
+    const res = await fetch('/api/chat?commentId=' + encodeURIComponent(commentId) + repoParam())
     if (!res.ok) return
     const json = await res.json()
     if (cc.commentId !== commentId) return // stale — a later switch already won
@@ -1478,7 +1479,7 @@ async function loadChatMessages(commentId, applyDrafts = true) {
 async function loadChatProgress(commentId) {
   const startedAt = Date.now()
   try {
-    const res = await fetch('/api/chat/progress?commentId=' + encodeURIComponent(commentId))
+    const res = await fetch('/api/chat/progress?commentId=' + encodeURIComponent(commentId) + repoParam())
     if (!res.ok) return
     const json = await res.json()
     if (cc.commentId !== commentId) return // stale — a later switch already won
@@ -3329,7 +3330,7 @@ async function loadComments(pr) {
     // and whether its body highlights, and `cfg` in mentions.mjs is plain
     // non-reactive state too. Cached after the first call.
     await ensureSettings()
-    const res = await fetch('/api/comments?pr=' + encodeURIComponent(pr))
+    const res = await fetch('/api/comments?pr=' + encodeURIComponent(pr) + repoParam())
     if (res.ok) {
       const list = await res.json()
       // Same rule, same reason, for the real names behind those authors: resolve
@@ -3625,6 +3626,7 @@ async function ensureClaudeAnchorForNew(state, commentTarget) {
   const typed = el && el.value.trim()
   const ok = await createComment({
     pr: state.pr,
+    repo: repoField(),
     file: (t && t.file) || b.file,
     line: (t && t.startLine) || b.line,
     body: typed || CLAUDE_ANCHOR_PLACEHOLDER,
@@ -3745,6 +3747,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
     exitRelated() // optimistic exit, and it restores the hidden columns
     const ok = await createComment({
       pr: state.pr,
+      repo: repoField(),
       file: '',
       line: 0,
       body,
@@ -3832,6 +3835,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
 
   const ok = await createComment({
     pr: state.pr,
+    repo: repoField(),
     file: (t && t.file) || b.file,
     // Prefer the unit's real source line (see home.mjs' commentTarget/
     // unitLineRange) over the block's own start line; falls back to it when

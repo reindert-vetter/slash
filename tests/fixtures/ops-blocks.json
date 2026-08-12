@@ -1,0 +1,14 @@
+[
+  {
+    "repo": "plug-and-pay/plug-and-pay-ops",
+    "pr": 12,
+    "file": "app/Services/MollieCapitalImporter.php",
+    "class": "MollieCapitalImporter",
+    "name": "import",
+    "category": "SERVICE",
+    "line": 7,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  }
+]

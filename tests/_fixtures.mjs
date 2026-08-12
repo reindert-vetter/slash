@@ -50,8 +50,17 @@ const APPROVAL_RESET_PRS = [95, 102, 106, 107, 108, 110, 112, 12903]
 // deleted-file fixture (PR 98, removed-file.spec.mjs), and the tests-group
 // fixture (PR 99, related-tests-group.spec.mjs).
 // Everything lands next to the DB (tests/.tmp/w<n>/), so the worker is isolated.
+// SEED_ENV points every `slash seed` invocation at the throwaway test data tree,
+// so the repo registry it reads is TEST_DATA_DIR/settings.json (materialized by
+// _setup.mjs) and never the developer's live data/settings.json. Without this a
+// fixture block carrying a "repo" would be resolved against the wrong registry.
+const SEED_ENV = { ...process.env, SLASH_DATA: TEST_DATA_DIR }
+
 function seed(db) {
-  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/blocks.json'], { stdio: 'ignore' })
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/blocks.json'], { stdio: 'ignore', env: SEED_ENV })
+  // The SECOND repo's fixture PR (plug-and-pay-ops#12) — its blocks carry a
+  // "repo", so they land under that repo's key (see tests/tree-multi-repo.spec.mjs).
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/ops-blocks.json'], { stdio: 'ignore', env: SEED_ENV })
   execFileSync(
     BIN,
     [
@@ -65,7 +74,7 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/callresolve.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   execFileSync(
     BIN,
@@ -78,7 +87,7 @@ function seed(db) {
       '-testcovers',
       'tests/fixtures/testcovers.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   execFileSync(
     BIN,
@@ -91,7 +100,7 @@ function seed(db) {
       '-relations',
       'tests/fixtures/tree-relations.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Footer AI-explanation fixture (PR 97, footer-explanation.spec.mjs): a
   // block whose change introduces an if-statement (worktrees materialized in
@@ -111,7 +120,7 @@ function seed(db) {
       '-explanations',
       'tests/fixtures/explanations.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // MAX_EXPLAIN_LINES range fixture (PR 116, footer-explanation-range.spec.mjs):
   // one block with three separate 2-row change groups, split by 3-row
@@ -132,7 +141,7 @@ function seed(db) {
       '-explanations',
       'tests/fixtures/explanations.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Orphaned-anchor fixture (PR 970600, comment-orphan-anchor.spec.mjs): one
   // block plus two seeded comments — one whose label no longer matches any block
@@ -152,7 +161,7 @@ function seed(db) {
       '-comments',
       'tests/fixtures/orphan-comments.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Empty-code fixture (PR 96, related-empty-code.spec.mjs): a resolved call
   // whose embedded childCode is empty — must render "geen code gevonden"
@@ -168,7 +177,7 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/emptycode-callresolve.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Tests-group fixture (PR 99, related-tests-group.spec.mjs): a production
   // method with TWO covering tests (covered_by children) AND a resolved call
@@ -188,7 +197,7 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/testsgroup-callresolve.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Call-arrow fixture (PR 100, call-arrows.spec.mjs): a caller with two
   // adjacent changed call lines — one resolves to a changed PR block (arrow),
@@ -205,7 +214,7 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/arrow-callresolve.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Line-summary per-line-anchoring fixture (PR 112,
   // line-underlying-summary.spec.mjs): a caller whose one change-group spans
@@ -224,7 +233,7 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/linesummary-callresolve.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Migration→model / model-usage fixture (PR 101, migration-model.spec.mjs): one
   // caller with two class-level callresolve children (kind model_usage and
@@ -242,7 +251,7 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/migrationmodel-callresolve.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Translation fixture (PR 107, translation.spec.mjs): a changed lang block
   // (resources/lang/nl/checkout.php → the changes-only key overview + the en
@@ -260,7 +269,7 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/translation-callresolve.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Translation-scroll fixture (PR 111, translation-scroll.spec.mjs): its own
   // lang block with 20 changed keys — dedicated PR number so it can grow
@@ -269,7 +278,7 @@ function seed(db) {
   execFileSync(
     BIN,
     ['seed', '-db', db, '-from', 'tests/fixtures/translationscroll-blocks.json'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Deleted-file fixture (PR 98, removed-file.spec.mjs): one block whose whole
   // file was deleted by the PR (fileDeleted: true) plus a loose removed method
@@ -278,7 +287,7 @@ function seed(db) {
   execFileSync(
     BIN,
     ['seed', '-db', db, '-from', 'tests/fixtures/filedeleted-blocks.json'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Shift+arrow range-select fixture (PR 102, range-select.spec.mjs): two
   // same-file blocks — `execute` changes four contiguous lines (worktree
@@ -306,7 +315,7 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/growcode-callresolve.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Renamed-file fixture (PR 104, rename-file.spec.mjs): two blocks of a file
   // the PR moved (git-detected rename), each carrying oldFile (the pre-rename
@@ -343,7 +352,7 @@ function seed(db) {
       '-relations',
       'tests/fixtures/drilllineskip-relations.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Fresh-open default-selection fixture (PR 108,
   // fresh-open-default-selection.spec.mjs): two independent top-level blocks,
@@ -392,7 +401,7 @@ function seed(db) {
       '-relations',
       'tests/fixtures/commentactivity-relations.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Test-caller-hides-target fixture (PR 113, test-call-target-visible.spec.mjs):
   // one changed ACTION block plus one changed TEST method that resolved-calls
@@ -412,7 +421,7 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/testcallhide-callresolve.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // <class-header>-swallowed-into-sibling fixture (PR 114,
   // related-class-header-sibling.spec.mjs): a class with a changed header PLUS
@@ -431,7 +440,7 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/classheader-callresolve.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // Class-member group/line scoping fixture (PR 115,
   // related-class-member-scope.spec.mjs): a class-member card attached to a
@@ -449,7 +458,7 @@ function seed(db) {
       '-callresolve',
       'tests/fixtures/scopemember-callresolve.json',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: SEED_ENV },
   )
   // PHPDoc-description fixture (PR 117, block-description-markdown.spec.mjs):
   // one block whose `description` carries a TWO-paragraph docblock summary

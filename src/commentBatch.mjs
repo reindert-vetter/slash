@@ -18,6 +18,7 @@
 // thread, which stays the reviewer's own call. So a server restart simply
 // leaves the comments as ordinary open comments again.
 import { reactive } from './vendor/arrow.js'
+import { repoParam, repoField } from './prContext.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 
 // The per-comment states the server reports; the WORD carries the meaning in
@@ -89,7 +90,7 @@ function applySnapshot(p) {
 export async function refreshCommentBatch(pr) {
   if (!pr) return
   try {
-    const res = await fetch('/api/comment-batch?pr=' + encodeURIComponent(pr))
+    const res = await fetch('/api/comment-batch?pr=' + encodeURIComponent(pr) + repoParam())
     const data = await res.json()
     applySnapshot(data && data.progress ? data.progress : null)
   } catch (_) {
@@ -157,7 +158,7 @@ export async function startCommentBatch(pr, commentIds) {
     const res = await fetch('/api/workflows/comment_batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr, commentIds }),
+      body: JSON.stringify({ pr, repo: repoField(), commentIds }),
     })
     if (!res.ok) {
       console.error('comment_batch failed:', res.status, await res.text().catch(() => ''))

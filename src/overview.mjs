@@ -315,6 +315,17 @@ function prUid(pr) {
   return pr && pr.repo ? pr.repo + '#' + pr.number : String(pr ? pr.number : '')
 }
 
+// matchesPrRef(pr, ref) — does this row answer to `ref`, a PR reference handed
+// over by the review tree (?pr= / ?approved=) or held in a nav key? Accepts both
+// spellings, because the two pages know different amounts about a repo: this page
+// has the full "owner/name" slug from the snapshot, while /pr/<repo-name>/<n> only
+// carries the bare repo NAME. A bare number always means the primary repo.
+function matchesPrRef(pr, ref) {
+  if (!ref) return false
+  const s = String(ref)
+  return prUid(pr) === s || (pr.repo ? repoLabel(pr) + '#' + pr.number === s : false)
+}
+
 // repoLabel(pr) — the short WORD shown on a row from a non-primary repo (never a
 // colour on its own, per the colourblind rule): the repo's bare name without the
 // owner. Empty for the primary repo, whose rows look exactly as before.
@@ -2046,7 +2057,7 @@ function isHiddenPr(pr) {
   // tree's own ?approved= param, which carries the primary repo's bare number
   // today and a full uid once another repo's tree links back here.
   const uid = prUid(pr)
-  return uid === String(approvedPr) || removedPrs.has(uid)
+  return matchesPrRef(pr, approvedPr) || removedPrs.has(uid)
 }
 
 // primeAuthorNames resolves the real names behind the author logins of these
@@ -2240,9 +2251,12 @@ async function ensureRecentPrs() {
 async function trySelectPendingPr() {
   if (pendingSelectPr == null) return
   const uid = pendingSelectPr
-  const inSections = state.sections.some((sec) => sec.prs.some((row) => prUid(row) === uid))
-  if (inSections) {
-    selKey = 'row:' + uid
+  // The nav key must be the ROW's own uid, not the incoming reference — the two
+  // can differ in spelling (see matchesPrRef).
+  let match = null
+  state.sections.forEach((sec) => sec.prs.forEach((row) => (match = match || (matchesPrRef(row, uid) ? row : null))))
+  if (match) {
+    selKey = 'row:' + prUid(match)
     hoverEnabled = false
     pendingSelectPr = null
     return
