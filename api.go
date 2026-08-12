@@ -238,6 +238,16 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// Build the block relations (event→listener, …) now that blocks are stored.
 	// The workflow is the only writer; the initial build runs synchronously.
 	s.tasks.manager.EnsureRelations(ctx, req.PR)
+	// Ensure the pr_status tracker exists too (idempotent, non-blocking — see
+	// EnsurePRStatus), so an ingest triggered purely via this endpoint (no
+	// browser tab ever opened on the PR) still gets the PR summary/CI status
+	// AND, more importantly, the ingest-refresh/comment-import pollers that
+	// tracker spawns for a genuinely new run (pollIngestRefresh/
+	// pollImportComments in ensurePRStatus) — without this, such a PR would
+	// never auto-refresh on later commits until someone happened to open it.
+	if _, err := s.tasks.manager.EnsurePRStatus(req.PR); err != nil {
+		s.tasks.manager.logf("ingest: ensure pr_status pr=%d: %v", req.PR, err)
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 

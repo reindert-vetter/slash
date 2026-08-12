@@ -169,6 +169,14 @@ func runIngestCmd(args []string) {
 		log.Fatalf("ingest: %v", err)
 	}
 	tk.manager.EnsureRelations(ctx, pr)
+	// Ensure the pr_status tracker too, mirroring handleIngest — this headless
+	// run has no server runtime (runtimeReady stays false), so the
+	// ingest-refresh/comment-import pollers don't start here, but the tracker
+	// itself (and its one-time basics/summary fetch) is created and picked up
+	// by ResumePRStatusPolling next time the server runs.
+	if _, err := tk.manager.EnsurePRStatus(pr); err != nil {
+		log.Printf("ingest: ensure pr_status pr=%d: %v", pr, err)
+	}
 	out, _ := json.MarshalIndent(res, "", "  ")
 	fmt.Println(string(out))
 }

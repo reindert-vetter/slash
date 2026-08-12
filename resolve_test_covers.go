@@ -2,14 +2,85 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"slash/modules/claude"
 	"slash/modules/testcovers"
 )
+
+// resolveTestCoversRunID derives a deterministic, filename-safe Run ID from
+// the test + the exact (short) class names being searched — mirrors
+// resolveCallRunID. StartWorkflowID then dedups repeated starts for the
+// identical request, whether it comes from the frontend's own automatic
+// trigger (startTestCoverSearch, home.mjs) or the automatic server-side
+// trigger (autoStartResolveTestCovers, workflows.go). Classes is sorted
+// before hashing so the ID doesn't depend on build order.
+func resolveTestCoversRunID(in ResolveTestCoversInput) string {
+	classes := append([]string(nil), in.Classes...)
+	sort.Strings(classes)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%s", in.PR, in.TestID, strings.Join(classes, ","))))
+	return "cover-" + hex.EncodeToString(sum[:12])
+}
+
+// groupUnresolvedTestCovers turns the Go analyzer's freshly scanned
+// test-coverage entries into one ResolveTestCoversInput per test — the
+// payload the automatic server-side search trigger
+// (autoStartResolveTestCovers, workflows.go) starts a resolve_test_covers
+// Execution for. Only a class-level-only target that is currently
+// StatusUnresolved AND was never submitted to a resolve_test_covers
+// Execution before is included: attempted is the set of every
+// (testId, shortClassName) pair that has EVER appeared in a
+// resolve_test_covers Execution's input for this PR
+// (resolveTestCoversAttempted, workflows.go — reads the durable workflow
+// event history, not the testcovers read-model's own status column, for the
+// same reason groupUnresolvedCalls does: UpsertGo resets a notfound row back
+// to unresolved on every rebuild that doesn't touch it). A test whose block id
+// isn't in blocks is skipped (defensive). Pure and deterministic, so it's
+// directly unit-testable without the engine/goroutine, mirroring
+// groupUnresolvedCalls.
+func groupUnresolvedTestCovers(pr int, covers []testcovers.Entry, attempted map[string]bool, blocks []Block) []ResolveTestCoversInput {
+	byID := make(map[string]Block, len(blocks))
+	for _, b := range blocks {
+		byID[b.ID()] = b
+	}
+
+	classesByTest := map[string][]string{}
+	var order []string
+	for _, e := range covers {
+		if e.Status != testcovers.StatusUnresolved {
+			continue
+		}
+		short := shortName(e.CoveredClass)
+		if short == "" || attempted[e.TestID+"\x1f"+short] {
+			continue // no class name, or already submitted before — don't resubmit
+		}
+		if _, ok := classesByTest[e.TestID]; !ok {
+			order = append(order, e.TestID)
+		}
+		classesByTest[e.TestID] = append(classesByTest[e.TestID], short)
+	}
+
+	out := make([]ResolveTestCoversInput, 0, len(order))
+	for _, testID := range order {
+		b, ok := byID[testID]
+		if !ok {
+			continue
+		}
+		classes := classesByTest[testID]
+		sort.Strings(classes)
+		out = append(out, ResolveTestCoversInput{
+			PR: pr, TestID: testID, TestFile: b.File,
+			TestClass: b.Class, TestName: b.Name, Classes: classes,
+		})
+	}
+	return out
+}
 
 // This file is the LLM side of test-coverage resolution (package main; it
 // reads the head worktree and shells out to the claude CLI, so it runs only

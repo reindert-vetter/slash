@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/claude"
@@ -339,4 +341,167 @@ func TestResolveTestCoversReusesResolvedSibling(t *testing.T) {
 	if n := fake.CallCount(); n != 0 {
 		t.Fatalf("claude called %d times, want 0 (reused resolved sibling)", n)
 	}
+}
+
+// --- groupUnresolvedTestCovers (pure, no engine/goroutine) ---
+
+// One start per test: a resolved/unannotated entry is excluded (not
+// Unresolved), a test whose block isn't in blocks is skipped, and a class
+// already submitted to a resolve_test_covers Execution before (via attempted
+// — a durable, ever-tried set, see resolveTestCoversAttempted) is skipped too
+// — a rebuild must never resubmit a class the LLM already attempted. Mirrors
+// TestGroupUnresolvedCalls.
+func TestGroupUnresolvedTestCovers(t *testing.T) {
+	testA := Block{PR: 1, File: "tests/Feature/ATest.php", Class: "ATest", Name: "testA"}
+	testB := Block{PR: 1, File: "tests/Feature/BTest.php", Class: "BTest", Name: "testB"}
+	blocks := []Block{testA, testB}
+
+	covers := []testcovers.Entry{
+		{PR: 1, TestID: testA.ID(), TargetKey: "class:Y", CoveredClass: "Y", Status: testcovers.StatusUnresolved},
+		{PR: 1, TestID: testA.ID(), TargetKey: "class:X", CoveredClass: "X", Status: testcovers.StatusUnresolved},
+		{PR: 1, TestID: testA.ID(), TargetKey: "method:Z::m", CoveredClass: "Z", Status: testcovers.StatusResolved}, // resolved: excluded
+		{PR: 1, TestID: testB.ID(), TargetKey: "class:W", CoveredClass: "W", Status: testcovers.StatusUnresolved},
+		// No block for this test id — must be skipped defensively.
+		{PR: 1, TestID: "1:tests/Ghost.php:GhostTest::boo", TargetKey: "class:V", CoveredClass: "V", Status: testcovers.StatusUnresolved},
+	}
+	attempted := map[string]bool{
+		testB.ID() + "\x1f" + "W": true, // already tried before — skip
+	}
+
+	got := groupUnresolvedTestCovers(1, covers, attempted, blocks)
+	if len(got) != 1 {
+		t.Fatalf("groupUnresolvedTestCovers returned %d group(s), want 1: %+v", len(got), got)
+	}
+	g := got[0]
+	if g.TestID != testA.ID() || g.TestFile != testA.File || g.TestClass != testA.Class || g.TestName != testA.Name {
+		t.Fatalf("group test fields = %+v, want test A's fields", g)
+	}
+	if len(g.Classes) != 2 || g.Classes[0] != "X" || g.Classes[1] != "Y" {
+		t.Fatalf("group.Classes = %v, want sorted [X Y]", g.Classes)
+	}
+}
+
+// A class that was never attempted before (absent from attempted) stays
+// eligible, even if it's the only one for its test.
+func TestGroupUnresolvedTestCoversKeepsNeverAttemptedClass(t *testing.T) {
+	test := Block{PR: 1, File: "tests/Feature/ATest.php", Class: "ATest", Name: "testA"}
+	covers := []testcovers.Entry{
+		{PR: 1, TestID: test.ID(), TargetKey: "class:X", CoveredClass: "X", Status: testcovers.StatusUnresolved},
+	}
+
+	got := groupUnresolvedTestCovers(1, covers, map[string]bool{}, []Block{test})
+	if len(got) != 1 || len(got[0].Classes) != 1 || got[0].Classes[0] != "X" {
+		t.Fatalf("groupUnresolvedTestCovers = %+v, want one group with class X", got)
+	}
+}
+
+// resolveTestCoversRunID: sorting Classes makes the ID independent of build
+// order, while a genuinely different Classes set yields a fresh ID.
+func TestResolveTestCoversRunIDStableAndSensitive(t *testing.T) {
+	a := ResolveTestCoversInput{PR: 1, TestID: "t", Classes: []string{"A", "B"}}
+	b := ResolveTestCoversInput{PR: 1, TestID: "t", Classes: []string{"B", "A"}}
+	if resolveTestCoversRunID(a) != resolveTestCoversRunID(b) {
+		t.Fatalf("resolveTestCoversRunID depends on Classes order: %s != %s", resolveTestCoversRunID(a), resolveTestCoversRunID(b))
+	}
+	c := ResolveTestCoversInput{PR: 1, TestID: "t", Classes: []string{"A", "B", "New"}}
+	if resolveTestCoversRunID(a) == resolveTestCoversRunID(c) {
+		t.Fatal("resolveTestCoversRunID does not change for a different Classes set")
+	}
+}
+
+// --- The automatic server-side trigger, end to end via buildRelations ---
+
+// autoResolveTestCoversManager wires a TaskManager with a real DB (so
+// blocksByPR works inside the buildRelations Activity), a testcovers module,
+// and a claude Fake — everything the automatic resolve_test_covers trigger
+// needs. Mirrors autoResolveCallManager.
+func autoResolveTestCoversManager(t *testing.T, dataDir string, fake *claude.Fake) (*TaskManager, *sql.DB, *testcovers.Module) {
+	t.Helper()
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	tc, err := testcovers.Open(filepath.Join(dataDir, "testcovers.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tc.Close() })
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, tc, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
+	return m, db, tc
+}
+
+// (a) EnsureRelations (the buildRelations Activity) starts a search for a
+// Go-unresolved class-level-only coverage annotation automatically, without
+// the frontend ever calling POST /api/workflows/resolve_test_covers. (b) A
+// rebuild with nothing changed never re-spends an LLM call — even though the
+// search ended in "notfound" and UpsertGo resets a notfound row back to
+// "unresolved" on that very rebuild; resolveTestCoversAttempted's durable,
+// history-based set (not the testcovers read-model's own fluctuating status)
+// is what prevents the resubmit. Mirrors TestAutoStartResolveCallOnBuildRelations.
+//
+// writeTestCoversFixtureRepo's OrderCoverageTest::testCoversClassOnly is the
+// only method with a class-level-only annotation (#[CoversClass(Order::class)],
+// no method named). Only THIS block is stored as a PR block (unlike the other
+// tests above, which store the whole file) — the other methods in that fixture
+// carry an already-RESOLVED annotation for the very same class ("Order"), and
+// reuseSiblingCovers (see resolve_test_covers.go) would otherwise reuse one of
+// those instead of ever asking the LLM, making the auto-search trigger itself
+// unobservable here. So exactly one resolve_test_covers Execution, for exactly
+// one class, is expected.
+func TestAutoStartResolveTestCoversOnBuildRelations(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 211
+	writeTestCoversFixtureRepo(t, dataDir, pr)
+	var testBlock Block
+	for _, b := range testCoversBlocks(t, dataDir, pr, "tests/Feature/OrderCoverageTest.php") {
+		if b.Name == "testCoversClassOnly" {
+			testBlock = b
+		}
+	}
+	if testBlock.Name == "" {
+		t.Fatal("no testCoversClassOnly block found, fixture is stale")
+	}
+	blocks := []Block{testBlock}
+
+	fake := claude.NewFake() // no programmed output → every search ends in "notfound"
+	m, db, tc := autoResolveTestCoversManager(t, dataDir, fake)
+	if err := replacePRBlocks(db, pr, blocks); err != nil {
+		t.Fatal(err)
+	}
+	testID := testBlock.ID()
+
+	ctx := context.Background()
+	m.EnsureRelations(ctx, pr) // must return without waiting for the auto-search
+
+	waitFor(t, func() bool {
+		e, ok := findCoverEntry(mustTestCoversList(t, tc, pr), testID, "class:Order")
+		return ok && e.Status == testcovers.StatusNotfound
+	})
+	if n := fake.CallCount(); n != 1 {
+		t.Fatalf("claude called %d time(s) after the first build, want 1 (Order)", n)
+	}
+
+	// Rebuild with nothing changed: the Go rescan still emits the same
+	// unresolved class-level-only target and UpsertGo resets the notfound row
+	// back to unresolved — but the auto-trigger must not search it again.
+	m.EnsureRelations(ctx, pr)
+	// Nothing SHOULD happen here (already attempted), so there is no positive
+	// condition to poll for — give any (wrongly re-triggered) background
+	// search a moment to run before asserting the count didn't grow.
+	time.Sleep(50 * time.Millisecond)
+	if n := fake.CallCount(); n != 1 {
+		t.Fatalf("claude called %d time(s) after a no-op rebuild, want still 1 (no duplicate search)", n)
+	}
+}
+
+// mustTestCoversList mirrors mustCallresolveList.
+func mustTestCoversList(t *testing.T, tc *testcovers.Module, pr int) []testcovers.Entry {
+	t.Helper()
+	list, err := tc.List(context.Background(), pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return list
 }

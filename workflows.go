@@ -1436,6 +1436,13 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				return nil, fmt.Errorf("build_relations: prune test covers: %w", err)
 			}
 			publishTestCoversChanged(input.PR)
+			// Automatically start an LLM search for every class-level-only
+			// coverage target the Go analyzer just marked unresolved that hasn't
+			// already been attempted — the server-side counterpart of the
+			// frontend's own automatic trigger (startTestCoverSearch, home.mjs),
+			// mirroring the resolve_call auto-search above. Own goroutine, same
+			// reasoning: this Activity must never wait on a live claude call.
+			go m.autoStartResolveTestCovers(input.PR, covers, blocks)
 		}
 		return json.Marshal(map[string]int{"relations": len(rels), "calls": len(calls), "covers": len(covers)})
 	})
@@ -3458,10 +3465,66 @@ func resolveTestCoversWorkflow(w *tembed.Workflow, input []byte) ([]byte, error)
 	return json.Marshal(map[string]int{"found": found})
 }
 
-// StartResolveTestCovers launches a resolve_test_covers Execution and returns
-// its Run ID. Starting an Execution is the sanctioned UI write path.
+// StartResolveTestCovers starts (or idempotently reuses) a resolve_test_covers
+// Execution for the given test + class names, under a deterministic Run ID
+// (resolveTestCoversRunID) — a repeated request for the same not-yet-searched
+// set is a no-op reuse instead of a second LLM call, whether it comes from the
+// frontend's own automatic trigger (startTestCoverSearch, home.mjs) or the
+// automatic server-side trigger (autoStartResolveTestCovers, called from the
+// buildRelations Activity) — mirrors StartResolveCall. Starting an Execution
+// is the sanctioned write path.
 func (m *TaskManager) StartResolveTestCovers(in ResolveTestCoversInput) (string, error) {
-	return m.engine.StartWorkflow(WorkflowResolveTestCovers, in)
+	return m.engine.StartWorkflowID(resolveTestCoversRunID(in), WorkflowResolveTestCovers, in)
+}
+
+// autoStartResolveTestCovers is the server-side counterpart of the frontend's
+// automatic test-coverage search trigger (startTestCoverSearch, home.mjs): it
+// groups every currently unresolved-and-never-yet-attempted class-level-only
+// coverage target of pr per test (groupUnresolvedTestCovers, using
+// resolveTestCoversAttempted's durable "ever submitted" set) and starts a
+// resolve_test_covers Execution for each. Called as its own goroutine from the
+// buildRelations Activity, mirroring autoStartResolveCall, so it never blocks
+// ingest/EnsureRelations/prStatusWorkflow's delta-refresh on a live claude
+// call. Best-effort: a failed start is logged, never surfaced — the
+// frontend's own trigger still covers the gap if this one fails or never ran.
+func (m *TaskManager) autoStartResolveTestCovers(pr int, covers []testcovers.Entry, blocks []Block) {
+	attempted := m.resolveTestCoversAttempted(pr)
+	for _, in := range groupUnresolvedTestCovers(pr, covers, attempted, blocks) {
+		if _, err := m.StartResolveTestCovers(in); err != nil {
+			m.logf("resolve_test_covers: auto-search start pr=%d test=%s: %v", pr, in.TestID, err)
+		}
+	}
+}
+
+// resolveTestCoversAttempted returns every (testId, shortClassName) pair that
+// has EVER been submitted to a resolve_test_covers Execution for pr —
+// durable, since it reads the workflow event history (via
+// engine.Runs()/Input()), not the testcovers read-model's own status column.
+// Mirrors resolveCallAttempted; see groupUnresolvedTestCovers for why the
+// distinction matters.
+func (m *TaskManager) resolveTestCoversAttempted(pr int) map[string]bool {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return nil
+	}
+	attempted := map[string]bool{}
+	for _, r := range runs {
+		if r.Workflow != WorkflowResolveTestCovers {
+			continue
+		}
+		raw, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var in ResolveTestCoversInput
+		if json.Unmarshal(raw, &in) != nil || in.PR != pr {
+			continue
+		}
+		for _, c := range in.Classes {
+			attempted[in.TestID+"\x1f"+shortName(c)] = true
+		}
+	}
+	return attempted
 }
 
 // prStatusWorkflow is the per-PR lifecycle tracker. It is deterministic: it only

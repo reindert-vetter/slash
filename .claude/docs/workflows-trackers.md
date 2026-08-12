@@ -423,6 +423,20 @@ so it runs its two Activities and completes.
   `ResumePolling`/`EnsureInbox`, server-only runtime a one-shot headless ingest
   shouldn't start — then calls `StartIngest` + `EnsureRelations`, like the HTTP
   flow.
+- **Both `handleIngest` and the CLI also call `EnsurePRStatus(pr)`** right after
+  `EnsureRelations`, so an ingest triggered purely via the API/CLI (no browser
+  tab ever opened on that PR) still gets a `pr_status` tracker. That matters
+  beyond the PR summary/CI card: `ensurePRStatus` only spawns
+  `pollIngestRefresh`/`pollImportComments` for a **genuinely new** run — without
+  this call, such a PR would never auto-refresh on later commits or import
+  GitHub comments until someone happened to open it in the browser (which is
+  what previously called `POST /api/workflows/pr_status` on page load).
+  `EnsurePRStatus` is idempotent (reuses an existing tracker) and non-blocking
+  (`StartWorkflowDeferLow`), so calling it on every ingest/"Regenereren" costs
+  nothing extra. The CLI path skips the pollers themselves (`resumeRuntime`
+  false), but the tracker it creates is picked up by `ResumePRStatusPolling`
+  next time the server runs. Test: `TestIngestEnsuresPRStatus`
+  (`ingest_test.go`).
 - `ingestMu` still serialises concurrent ingests of the same PR at the worktree
   level, now inside each Activity instead of around the old unsplit `ingestPR`.
 - See `.claude/docs/blocks-and-ingest.md`; `ingest_test.go` skips itself when

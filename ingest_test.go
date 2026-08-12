@@ -84,3 +84,45 @@ func TestStartIngestSurfacesRealFailure(t *testing.T) {
 		t.Fatalf("StartIngest error does not surface the real cause: %v", err)
 	}
 }
+
+// TestIngestEnsuresPRStatus asserts that handleIngest's (and the `slash
+// ingest` CLI's) own follow-up sequence — StartIngest, then EnsureRelations,
+// then EnsurePRStatus — actually creates the pr_status tracker, so an ingest
+// triggered purely via the API/CLI (no browser tab ever opened on the PR)
+// still gets the PR summary/CI status AND the ingest-refresh/comment-import
+// pollers pr_status spawns for a genuinely new run (see ensurePRStatus). The
+// ingest workflow itself is stubbed (no gh/git access needed, mirrors
+// TestStartIngestSurfacesRealFailure); EnsureRelations then runs against the
+// (empty) blocks table, which is enough for its own Activity to complete.
+func TestIngestEnsuresPRStatus(t *testing.T) {
+	t.Setenv("SLASH_GITHUB", "off") // fetchPRStatuses shells to gh directly; keep this test offline
+	dataDir := t.TempDir()
+	pr := 999998
+
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	gh := &github.Fake{}
+	gh.SetPRMeta(github.Meta{Title: "PS-999 stub", URL: "https://github.com/x/y/pull/999998"})
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
+	engine.RegisterWorkflow(WorkflowIngest, func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		return []byte(`{"stored":0}`), nil
+	})
+
+	ctx := context.Background()
+	if _, err := m.StartIngest(ctx, pr); err != nil {
+		t.Fatalf("StartIngest: %v", err)
+	}
+	m.EnsureRelations(ctx, pr)
+	if _, err := m.EnsurePRStatus(pr); err != nil {
+		t.Fatalf("EnsurePRStatus: %v", err)
+	}
+
+	if id := m.findPRStatusLocked(pr); id == "" {
+		t.Fatal("no pr_status tracker found for pr after ingest")
+	}
+}

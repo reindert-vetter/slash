@@ -567,6 +567,29 @@ likewise carries the full child descriptor + code text.
   function of a recorded result — the same pattern as callresolve's
   `HadCandidates` gate. This only saves Haiku calls; it does not reintroduce
   Sonnet.
+- **The search also starts automatically server-side**, mirroring
+  `autoStartResolveCall` above: right after `buildRelations`' own
+  `UpsertGo`/`Prune` of the testcovers rows, `autoStartResolveTestCovers`
+  groups the fresh scan's `unresolved` class-level-only targets **per test**
+  (`groupUnresolvedTestCovers`) and starts one `resolve_test_covers` Execution
+  per group, fire-and-forget (its own goroutine) so `buildRelations`/
+  `EnsureRelations`/`prStatusWorkflow`'s delta refresh never waits on a live
+  claude call. `StartResolveTestCovers` is now **idempotent**
+  (`resolveTestCoversRunID` over `pr|testId|sorted(classes)`, the same shape as
+  `resolveCallRunID` — it used to be a bare `StartWorkflow`, non-deterministic
+  Run ID, before this trigger existed), so the automatic trigger and the
+  frontend's own `startTestCoverSearch` safety net can never both spend a call.
+  Never re-submits an already-attempted `(testId, class)` pair, across any
+  number of later rebuilds, for the same reason `groupUnresolvedCalls` doesn't:
+  `resolveTestCoversAttempted(pr)` reads the durable event history, not the
+  read model's own fluctuating status. Deliberately **not** gated by the "Live
+  AI assistent" toggle (`autowarn`) — like `resolve_call`, this builds the
+  navigation structure rather than describing anything. Deliberately
+  server-only, same as `resolve_call`: the headless `slash relations <pr>`
+  starts no search. Tests: `TestGroupUnresolvedTestCovers`,
+  `TestResolveTestCoversRunIDStableAndSensitive`,
+  `TestAutoStartResolveTestCoversOnBuildRelations`
+  (`resolve_test_covers_test.go`).
 - **A tab already open on this PR is told when this search lands**, same as
   callresolve above: `saveTestCoverResolutions` (and `buildRelations`' own
   `UpsertGo`) publish `testcovers.changed` over the SSE channel — see
